@@ -1818,8 +1818,8 @@ type TombstoneCache = Arc<DecodedObjectCache<TombstoneOverlay>>;
 #[derive(Debug)]
 struct ResidentGlobalMutationOverlay {
     snapshot_key: [u8; 32],
-    states: FrozenMutationOverlay,
-    _retained: RetainedBytePermit,
+    states: Arc<FrozenMutationOverlay>,
+    _retained: Arc<RetainedBytePermit>,
 }
 
 #[derive(Debug)]
@@ -4907,6 +4907,9 @@ impl BorsukIndex {
         self.manifest = self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
             manifest, &previous,
         )?;
+        self.rekey_resident_global_mutations_after_manifest_publish(
+            Self::mutation_snapshot_key_for(previous.version, &self.cell_wal_snapshot),
+        );
         Ok(())
     }
 
@@ -5142,6 +5145,42 @@ impl BorsukIndex {
         self.resident_global_ann_pins = next;
     }
 
+    /// Rebind an already admitted mutation view to a metadata-only manifest
+    /// advance without decoding objects or acquiring a second memory permit.
+    ///
+    /// State-preserving publishers pass the exact snapshot key they proved
+    /// before publication. A mismatched frontier is dropped fail-closed rather
+    /// than blessed as current. Sharing an eligible immutable state and permit
+    /// makes installation infallible and keeps its reservation continuously
+    /// charged until the replacement wrapper is installed.
+    fn rekey_resident_global_mutations_after_manifest_publish(
+        &mut self,
+        covered_snapshot_key: [u8; 32],
+    ) {
+        self.live_wal_snapshot_cache = Arc::new(Mutex::new(None));
+        if !self.global_leaf_mutation_state_required() {
+            self.resident_global_mutations = None;
+            return;
+        }
+        let Some(previous) = self.resident_global_mutations.as_ref() else {
+            return;
+        };
+        let current_key =
+            Self::mutation_snapshot_key_for(self.manifest.version, &self.cell_wal_snapshot);
+        if previous.snapshot_key == current_key {
+            return;
+        }
+        if previous.snapshot_key != covered_snapshot_key {
+            self.resident_global_mutations = None;
+            return;
+        }
+        self.resident_global_mutations = Some(Arc::new(ResidentGlobalMutationOverlay {
+            snapshot_key: current_key,
+            states: Arc::clone(&previous.states),
+            _retained: Arc::clone(&previous._retained),
+        }));
+    }
+
     /// Load the bounded live mutation frontier before the handle begins
     /// serving. Stable tombstone/statistics pages stay query-paged; only recent
     /// WAL deltas are prepared, so a reader refresh—not an arbitrary first
@@ -5182,7 +5221,7 @@ impl BorsukIndex {
         self.resident_global_mutations
             .as_deref()
             .filter(|overlay| overlay.snapshot_key == snapshot_key)
-            .map(|overlay| Some(&overlay.states))
+            .map(|overlay| Some(overlay.states.as_ref()))
     }
 
     /// Build the complete mutation view V12 needs before the handle serves a
@@ -5252,8 +5291,8 @@ impl BorsukIndex {
         }
         Ok(Some(Arc::new(ResidentGlobalMutationOverlay {
             snapshot_key: Self::mutation_snapshot_key_for(manifest.version, cell_wal_snapshot),
-            states,
-            _retained: retained,
+            states: Arc::new(states),
+            _retained: Arc::new(retained),
         })))
     }
 
@@ -8209,6 +8248,9 @@ impl BorsukIndex {
         self.manifest = self.publish_manifest_metadata_only_reusing_routing_pages_with_recovery(
             manifest, &previous,
         )?;
+        self.rekey_resident_global_mutations_after_manifest_publish(
+            Self::mutation_snapshot_key_for(previous.version, &self.cell_wal_snapshot),
+        );
         Ok(())
     }
 
@@ -9080,6 +9122,9 @@ impl BorsukIndex {
         self.install_resident_global_ann_pins(prepared_global_ann_pins);
         // Purge rebuilt the cell layout; refresh the persisted cold quantizer.
         self.refresh_persisted_quantizer()?;
+        self.rekey_resident_global_mutations_after_manifest_publish(
+            Self::mutation_snapshot_key_for(previous.version, &self.cell_wal_snapshot),
+        );
 
         Ok(PurgeReport {
             segments_rewritten,
@@ -14823,7 +14868,12 @@ impl BorsukIndex {
         for child in self.named.values_mut() {
             child.compact_primary(options.clone())?;
         }
+        let mutation_snapshot_key_before_prune =
+            Self::mutation_snapshot_key_for(self.manifest.version, &self.cell_wal_snapshot);
         self.prune_fully_consumed_collection_transactions(&transactions_before_compaction)?;
+        self.rekey_resident_global_mutations_after_manifest_publish(
+            mutation_snapshot_key_before_prune,
+        );
         Ok(report)
     }
 
@@ -14895,6 +14945,11 @@ impl BorsukIndex {
         clear_frontier: bool,
     ) -> Result<CompactionReport> {
         validate_compaction_options(&options)?;
+        let mutation_overlay_covered_before_compaction = self
+            .resident_global_mutations_for_current_snapshot()
+            .is_some();
+        let mutation_snapshot_key_before_compaction =
+            Self::mutation_snapshot_key_for(self.manifest.version, &self.cell_wal_snapshot);
 
         let max_segments = options.max_segments.unwrap_or(usize::MAX);
         let page_index_read = self.routing_layer_page_index_read_for_compaction()?;
@@ -15084,10 +15139,16 @@ impl BorsukIndex {
             self.manifest.cell_wal_visible_runs = 0;
             self.manifest.cell_wal_visible_tombstone_runs = 0;
         }
+        if !mutation_overlay_covered_before_compaction {
+            self.resident_global_mutations = None;
+        }
         let routing_page_indexes_written = usize::from(self.manifest.routing_max_level) + 1;
         // Compaction rebuilt the cell layout; refresh the persisted cold
         // quantizer so a cold/paged query routes through the IVF probe list.
         self.refresh_persisted_quantizer()?;
+        self.rekey_resident_global_mutations_after_manifest_publish(
+            mutation_snapshot_key_before_compaction,
+        );
 
         Ok(CompactionReport {
             compacted: true,
@@ -15139,6 +15200,8 @@ impl BorsukIndex {
         max_segments: usize,
         page_index_read: RoutingLayerPageIndexRead,
     ) -> Result<CompactionReport> {
+        let mutation_snapshot_key_before_compaction =
+            Self::mutation_snapshot_key_for(self.manifest.version, &self.cell_wal_snapshot);
         let global_base_segments = HashSet::<String>::new();
         let top_routing_level = page_index_read
             .page_refs
@@ -15476,6 +15539,9 @@ impl BorsukIndex {
         // through the IVF probe list instead of the degraded routing tree.
         self.refresh_persisted_quantizer()?;
         self.install_resident_global_ann_pins(prepared_global_ann_pins);
+        self.rekey_resident_global_mutations_after_manifest_publish(
+            mutation_snapshot_key_before_compaction,
+        );
 
         Ok(CompactionReport {
             compacted: true,
@@ -20155,6 +20221,9 @@ impl BorsukIndex {
                     previous.routing_max_level,
                     &top_read.page_refs,
                 )?;
+                self.rekey_resident_global_mutations_after_manifest_publish(
+                    Self::mutation_snapshot_key_for(previous.version, &self.cell_wal_snapshot),
+                );
                 return Ok(());
             }
         }
@@ -20163,6 +20232,9 @@ impl BorsukIndex {
         }
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
+        self.rekey_resident_global_mutations_after_manifest_publish(
+            Self::mutation_snapshot_key_for(previous.version, &self.cell_wal_snapshot),
+        );
         Ok(())
     }
 
@@ -21996,6 +22068,9 @@ impl BorsukIndex {
                 .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         }
         self.install_resident_global_ann_pins(prepared_global_ann_pins);
+        self.rekey_resident_global_mutations_after_manifest_publish(
+            Self::mutation_snapshot_key_for(previous.version, &self.cell_wal_snapshot),
+        );
         Ok(())
     }
 
@@ -40118,6 +40193,18 @@ mod tests {
         assert_eq!(after_delete.segments_total, 6, "{after_delete:?}");
         assert!(after_delete.segments_searched <= 2, "{after_delete:?}");
 
+        index.delete(["v14-life-10"]).unwrap();
+        assert!(
+            !index.cell_wal_snapshot.is_empty(),
+            "the compaction regression must exercise the direct unflushed-tail path"
+        );
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_none(),
+            "the appended delete must make the previously installed overlay stale"
+        );
+
         index
             .compact(CompactionOptions {
                 source_level: 0,
@@ -40128,6 +40215,7 @@ mod tests {
                 target_segment_max_radius: None,
             })
             .unwrap();
+        assert!(index.cell_wal_snapshot.is_empty());
         let rebuilt = index
             .manifest
             .global_cell_card_ann_ref
@@ -40137,6 +40225,21 @@ mod tests {
         assert_eq!(
             rebuilt.source_segments() as usize,
             index.active_segment_summaries().unwrap().len()
+        );
+        let after_compaction = index
+            .search_with_report(
+                &[10.0; 8],
+                SearchOptions::approx(1, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert!(
+            after_compaction
+                .hits
+                .iter()
+                .all(|hit| hit.id != "v14-life-10"),
+            "{after_compaction:?}"
         );
 
         index
@@ -40160,6 +40263,150 @@ mod tests {
             reopened.get_vector("v14-life-fresh").unwrap(),
             Some(vec![-0.5; 8])
         );
+    }
+
+    #[test]
+    fn finish_bulk_load_rekeys_mutation_authority_for_the_rebuilt_global_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 32,
+            ram_budget_bytes: Some(512 * 1024 * 1024),
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| {
+                        VectorRecord::new(
+                            format!("rekey-global-mutation-{row}"),
+                            vec![row as f32; 8],
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index
+            .upsert(vec![VectorRecord::new(
+                "rekey-global-mutation-0",
+                vec![0.25; 8],
+            )])
+            .unwrap();
+        index.flush().unwrap();
+        assert!(index.global_leaf_mutation_state_required());
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_some()
+        );
+
+        index.finish_bulk_load().unwrap();
+
+        assert!(!index.manifest.segments_are_global_delta);
+        assert!(index.manifest.global_cell_card_ann_ref.is_some());
+        assert!(index.global_leaf_mutation_state_required());
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_some(),
+            "the rebuilt epoch must not silently fall back to an unbounded routing scan"
+        );
+        let version_before_resize = index.manifest.version;
+        index.set_segment_max_vectors(64).unwrap();
+        assert!(index.manifest.version > version_before_resize);
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_some(),
+            "metadata-only segment sizing must preserve bounded MVCC authority"
+        );
+        let report = index
+            .search_with_report(
+                &[0.25; 8],
+                SearchOptions::approx(4, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(64),
+            )
+            .unwrap();
+        assert_eq!(report.leaf_mode, "bounded-cell-card-v20", "{report:?}");
+        assert_eq!(report.hits[0].id, RecordId::from("rekey-global-mutation-0"));
+    }
+
+    #[test]
+    fn resident_global_mutation_rekey_reuses_the_existing_memory_reservation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 32,
+            ram_budget_bytes: Some(512 * 1024 * 1024),
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| {
+                        VectorRecord::new(format!("rekey-pressure-{row}"), vec![row as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        index.delete(["rekey-pressure-0"]).unwrap();
+        index.flush().unwrap();
+
+        let before = index
+            .resident_global_mutations
+            .as_ref()
+            .expect("flush must retain the bounded mutation view");
+        let before_entries = before.states.entries.as_ptr();
+        let pool = Arc::clone(
+            index
+                .read_runtime
+                .retained_pool
+                .as_ref()
+                .expect("bounded handle must own a retained pool"),
+        );
+        let remaining = pool.capacity_bytes().saturating_sub(pool.used_bytes());
+        let pressure = pool
+            .try_reserve(remaining)
+            .expect("fixture must consume the remaining retained capacity");
+        let used_before = pool.used_bytes();
+        let requests_before = index.storage.request_counts();
+        let covered_snapshot_key = BorsukIndex::mutation_snapshot_key_for(
+            index.manifest.version,
+            &index.cell_wal_snapshot,
+        );
+        index.manifest = index.manifest.next_version();
+
+        index.rekey_resident_global_mutations_after_manifest_publish(covered_snapshot_key);
+
+        let after = index
+            .resident_global_mutations
+            .as_ref()
+            .expect("re-keying must not lose an already admitted view");
+        assert_eq!(after.states.entries.as_ptr(), before_entries);
+        assert_eq!(pool.used_bytes(), used_before);
+        assert_eq!(
+            index.storage.request_counts().delta(&requests_before),
+            RequestCounts::default(),
+            "post-publish re-keying must be an in-memory operation"
+        );
+        assert!(
+            index
+                .resident_global_mutations_for_current_snapshot()
+                .is_some()
+        );
+        drop(pressure);
     }
 
     #[test]
