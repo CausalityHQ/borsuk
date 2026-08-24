@@ -150,12 +150,12 @@ print(json.dumps({'operation': operation}, sort_keys=True))
                 self.assertNotIn("AWS_WAS_CALLED", completed.stderr)
                 reports.append(json.loads(completed.stdout))
             self.assertEqual(reports[0], reports[1])
-            self.assertFalse(reports[0]["paid_ready"])
-            self.assertEqual(reports[0]["unstaged_datasets"], 11)
-            self.assertEqual(reports[0]["staging_jobs"], 11)
+            self.assertTrue(reports[0]["paid_ready"])
+            self.assertEqual(reports[0]["unstaged_datasets"], 0)
+            self.assertEqual(reports[0]["staging_jobs"], 0)
             self.assertRegex(reports[0]["staging_plan_sha256"], r"^[0-9a-f]{64}$")
-            self.assertEqual(reports[0]["staging_plan"]["job_count"], 11)
-            self.assertEqual(len(reports[0]["staging_plan"]["jobs"]), 11)
+            self.assertEqual(reports[0]["staging_plan"]["job_count"], 0)
+            self.assertEqual(len(reports[0]["staging_plan"]["jobs"]), 0)
             self.assertEqual(
                 reports[0]["staging_plan_sha256"],
                 hashlib.sha256(
@@ -166,9 +166,7 @@ print(json.dumps({'operation': operation}, sort_keys=True))
                 reports[0]["staging_plan"]["manifest_sha256"],
                 reports[0]["manifest_sha256"],
             )
-            self.assertEqual(
-                reports[0]["structural_replay"], "blocked-until-paid-ready"
-            )
+            self.assertEqual(reports[0]["structural_replay"], "structurally-valid")
             materialized = json.loads(
                 (repository / "docs/research/publication-v3-manifest.json").read_text()
             )

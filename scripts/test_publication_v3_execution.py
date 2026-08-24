@@ -220,7 +220,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertEqual(read["repetition_id"], "r01")
         self.assertEqual(read["dataset"]["source"]["state"], "staged")
         self.assertEqual(lifecycle["system"], "borsuk")
-        self.assertEqual(lifecycle["dataset"]["source"]["state"], "generated")
+        self.assertEqual(lifecycle["dataset"]["source"]["state"], "staged-generated")
         self.assertNotEqual(read["index_prefix"], lifecycle["index_prefix"])
 
     def test_build_worker_emits_binary_index_authority_and_terminal_receipt(

@@ -77,6 +77,16 @@ class RunPublicationV3ReadCampaignTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "docs/research/publication-v3-manifest.json").read_text()
         )
+        raw_generated = json.loads(json.dumps(manifest))
+        for dataset in raw_generated["datasets"]:
+            source = dataset["source"]
+            if source["state"] != "staged-generated":
+                continue
+            dataset["source"] = {
+                "state": "generated",
+                "generator": source["generator"],
+                "seed": source["seed"],
+            }
         for workload_id, error in (
             ("durable-lifecycle", "read-recall workload"),
             ("missing", "read-recall workload"),
@@ -84,7 +94,12 @@ class RunPublicationV3ReadCampaignTests(unittest.TestCase):
         ):
             with self.subTest(workload_id=workload_id):
                 with self.assertRaisesRegex(ValueError, error):
-                    campaign_commands(manifest, workload_id)
+                    campaign_commands(
+                        raw_generated
+                        if workload_id == "synthetic-dense-read"
+                        else manifest,
+                        workload_id,
+                    )
 
     def test_promoted_synthetic_campaign_includes_both_100m_datasets(self) -> None:
         manifest = json.loads(

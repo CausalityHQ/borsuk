@@ -50,6 +50,13 @@ class PublicationV3AwsTests(unittest.TestCase):
             "fiqa": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/fiqa.zip",
         }
         for dataset in self.manifest["datasets"]:
+            if dataset["source"]["state"] == "staged-generated":
+                dataset["source"] = {
+                    "state": "generated",
+                    "generator": dataset["source"]["generator"],
+                    "seed": dataset["source"]["seed"],
+                }
+                continue
             expected_source = upstream_sources.get(dataset["id"])
             if expected_source is None:
                 continue
@@ -66,11 +73,10 @@ class PublicationV3AwsTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_committed_manifest_has_only_unpromoted_generated_jobs(self) -> None:
+    def test_committed_manifest_has_only_promoted_dataset_authority(self) -> None:
         manifest = validate_manifest(json.loads(MANIFEST.read_text(encoding="utf-8")))
         jobs = staging_jobs(manifest)
-        self.assertEqual(len(jobs), 11)
-        self.assertTrue(all(job.adapter == "synthetic" for job in jobs))
+        self.assertEqual(jobs, ())
         external = [
             dataset
             for dataset in manifest["datasets"]
@@ -85,6 +91,18 @@ class PublicationV3AwsTests(unittest.TestCase):
                 f"{manifest['prefixes']['dataset']}/{dataset['id']}",
             )
             self.assertRegex(source["sha256"], r"^[0-9a-f]{64}$")
+        synthetic = [
+            dataset
+            for dataset in manifest["datasets"]
+            if dataset["id"].startswith("synthetic-")
+        ]
+        self.assertEqual(len(synthetic), 11)
+        self.assertTrue(
+            all(
+                dataset["source"]["state"] == "staged-generated"
+                for dataset in synthetic
+            )
+        )
 
     def test_staging_jobs_cover_external_and_generated_datasets_with_exact_adapters(
         self,

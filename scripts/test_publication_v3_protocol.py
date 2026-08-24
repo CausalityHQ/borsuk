@@ -937,7 +937,18 @@ class PublicationV3ProtocolTests(unittest.TestCase):
             950000,
         )
         self.assertTrue(manifest["budget_contract"]["terminate_on_terminal_marker"])
-        self.assertEqual(manifest["source"], {"state": "unfrozen"})
+        self.assertEqual(manifest["source"]["state"], "frozen")
+        self.assertEqual(
+            manifest["source"]["git_commit"],
+            "9819244bb99873094d1c5ba9dce84c61c9848b85",
+        )
+        for field in (
+            "archive_sha256",
+            "cargo_lock_sha256",
+            "python_lock_sha256",
+            "node_lock_sha256",
+        ):
+            self.assertRegex(manifest["source"][field], r"^[0-9a-f]{64}$")
 
     def test_datatype_schedule_cells_contain_only_executable_arms(self) -> None:
         manifest = validate_manifest(
