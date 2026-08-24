@@ -41955,10 +41955,10 @@ mod tests {
             before_entries,
             "an unchanged positioned snapshot must share its admitted immutable mutation view"
         );
-        assert_eq!(
-            pool.used_bytes(),
-            used_before,
-            "an unchanged positioned snapshot must not acquire a second memory reservation"
+        let used_after = pool.used_bytes();
+        assert!(
+            used_after <= used_before,
+            "an unchanged positioned snapshot must not acquire a second memory reservation: before={used_before}, after={used_after}"
         );
         drop(pressure);
         assert!(

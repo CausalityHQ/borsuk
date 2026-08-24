@@ -50,7 +50,9 @@ from scripts.test_publication_v3_receipts import (
 from scripts.test_publication_v3_results import runtime_attestation_for
 
 
-def scheduled_cell(*, system: str = "borsuk", kind: str = "read-recall") -> dict[str, object]:
+def scheduled_cell(
+    *, system: str = "borsuk", kind: str = "read-recall"
+) -> dict[str, object]:
     manifest = validate_manifest(paid_v3_manifest())
     return next(
         cell
@@ -87,7 +89,9 @@ def runtime_flow_control(profile: str = "recall") -> dict[str, int]:
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
-    def test_lifecycle_artifacts_require_exact_operations_and_visibility_evidence(self) -> None:
+    def test_lifecycle_artifacts_require_exact_operations_and_visibility_evidence(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as root:
             output = Path(root)
             (output / "bench_write_costs.csv").write_text(
@@ -128,9 +132,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             sample_path = output / "bench_write_samples.csv"
             canonical_samples = sample_path.read_text(encoding="utf-8")
             sample_path.write_text(
-                canonical_samples
-                .replace("insert,0,0,0,64,8", "insert,0,0,0,50,8")
-                .replace("insert,0,1,1,36,15", "insert,0,1,1,50,15"),
+                canonical_samples.replace(
+                    "insert,0,0,0,64,8", "insert,0,0,0,50,8"
+                ).replace("insert,0,1,1,36,15", "insert,0,1,1,50,15"),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "batch schedule"):
@@ -201,14 +205,18 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(summary["storage_bytes_read"], 2300)
         self.assertEqual(summary["storage_bytes_written"], 8200)
 
-    def test_publication_cell_must_match_the_frozen_manifest_prefix_authority(self) -> None:
+    def test_publication_cell_must_match_the_frozen_manifest_prefix_authority(
+        self,
+    ) -> None:
         cell = scheduled_cell()
         with tempfile.TemporaryDirectory() as root:
             manifest_path = Path(root) / "manifest.json"
             manifest_path.write_bytes(
                 canonical_json_bytes(validate_manifest(paid_v3_manifest()))
             )
-            self.assertEqual(validate_publication_cell_authority(cell, manifest_path), cell)
+            self.assertEqual(
+                validate_publication_cell_authority(cell, manifest_path), cell
+            )
             index_root, index_name = cell["index_prefix"].rsplit("/", 1)
             retry = {
                 **cell,
@@ -231,7 +239,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "frozen manifest"):
                 validate_publication_cell_authority(substituted, manifest_path)
 
-    def test_publication_runtime_requires_matching_immutable_build_receipt(self) -> None:
+    def test_publication_runtime_requires_matching_immutable_build_receipt(
+        self,
+    ) -> None:
         cell = scheduled_cell()
         with tempfile.TemporaryDirectory() as root:
             plan = build_execution_plan(
@@ -253,7 +263,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             dataset_materialization_sha256="d" * 64,
             build_attempt_id="build-attempt-01",
             builder_instance_identity="i-builder-01",
-            builder_instance_type=cell["environment_contract"]["build_workers"]["borsuk"]["instance_type"],
+            builder_instance_type=cell["environment_contract"]["build_workers"][
+                "borsuk"
+            ]["instance_type"],
             build_artifact=build_artifact(cell),
             object_roster=data_roster(cell),
             build_metrics=build_metrics(),
@@ -265,7 +277,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             source_archive_sha256="a" * 64,
             dataset_materialization_sha256="d" * 64,
         )
-        self.assertEqual(runtime["index_receipt_sha256"], receipt_document_sha256(receipt))
+        self.assertEqual(
+            runtime["index_receipt_sha256"], receipt_document_sha256(receipt)
+        )
         self.assertEqual(runtime["steps"], plan["runtime"]["steps"])
         self.assertNotIn("build", runtime)
         with self.assertRaises(ValueError):
@@ -277,7 +291,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 dataset_materialization_sha256="d" * 64,
             )
 
-    def test_lifecycle_runtime_requires_a_fresh_verified_clone_and_never_mutates_base(self) -> None:
+    def test_lifecycle_runtime_requires_a_fresh_verified_clone_and_never_mutates_base(
+        self,
+    ) -> None:
         cell = scheduled_cell(kind="write-update-delete-compact")
         arm = next(arm for arm in plan_arms(cell) if arm["writers"] == 4)
         with tempfile.TemporaryDirectory() as root:
@@ -296,7 +312,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             dataset_materialization_sha256="d" * 64,
             build_attempt_id="build-attempt-01",
             builder_instance_identity="i-builder-01",
-            builder_instance_type=cell["environment_contract"]["build_workers"]["borsuk"]["instance_type"],
+            builder_instance_type=cell["environment_contract"]["build_workers"][
+                "borsuk"
+            ]["instance_type"],
             build_artifact=build_artifact(cell),
             object_roster=data_roster(cell),
             build_metrics=build_metrics(),
@@ -390,7 +408,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             runtime_attestation=attestation,
         )
         self.assertTrue(report["publishable"])
-        self.assertEqual(report["result"]["clone_receipt_sha256"], clone_receipt_document_sha256(clone))
+        self.assertEqual(
+            report["result"]["clone_receipt_sha256"],
+            clone_receipt_document_sha256(clone),
+        )
 
         with self.assertRaisesRegex(ValueError, "writers must be in"):
             authorize_publication_mutation_runtime(
@@ -410,8 +431,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     environment.pop(flag)
                 else:
                     environment[flag] = invalid
-                with self.subTest(flag=flag, invalid=invalid), self.assertRaisesRegex(
-                    ValueError, "mutation runtime flags"
+                with (
+                    self.subTest(flag=flag, invalid=invalid),
+                    self.assertRaisesRegex(ValueError, "mutation runtime flags"),
                 ):
                     authorize_publication_mutation_runtime(
                         malformed,
@@ -422,7 +444,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                         cell=cell,
                     )
 
-    def test_build_identity_and_storage_are_read_from_the_real_benchmark_artifact(self) -> None:
+    def test_build_identity_and_storage_are_read_from_the_real_benchmark_artifact(
+        self,
+    ) -> None:
         cell = scheduled_cell()
         with tempfile.TemporaryDirectory() as root:
             output = Path(root)
@@ -461,8 +485,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 }
             )
             (output / "bench_build.csv").write_text(
-                ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
-                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
+                ",".join(PRODUCTION_BUILD_FIELDS)
+                + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS)
+                + "\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "phase timing"):
@@ -511,8 +537,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             )
             row["scan_codec"] = "pq-scan"
             (output / "bench_build.csv").write_text(
-                ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
-                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
+                ",".join(PRODUCTION_BUILD_FIELDS)
+                + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS)
+                + "\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "codec identity differs"):
@@ -520,16 +548,20 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             row["scan_codec"] = cell["index_profile"]["global_scan_codec"]
             row["gc_transaction_states_remaining"] = "1"
             (output / "bench_build.csv").write_text(
-                ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
-                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
+                ",".join(PRODUCTION_BUILD_FIELDS)
+                + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS)
+                + "\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "transaction states remain"):
                 read_build_artifact(output, cell=cell)
             row["gc_transaction_states_remaining"] = "0"
             (output / "bench_build.csv").write_text(
-                ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
-                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
+                ",".join(PRODUCTION_BUILD_FIELDS)
+                + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS)
+                + "\n",
                 encoding="utf-8",
             )
             artifact = read_build_artifact(output, cell=cell)
@@ -554,21 +586,27 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 }
             )
             (output / "bench_build.csv").write_text(
-                ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
-                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
+                ",".join(PRODUCTION_BUILD_FIELDS)
+                + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS)
+                + "\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "codec identity differs"):
                 read_build_artifact(output, cell=turboquant_cell)
             row["turboquant_bits"] = "3"
             (output / "bench_build.csv").write_text(
-                ",".join(PRODUCTION_BUILD_FIELDS) + "\n"
-                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS) + "\n",
+                ",".join(PRODUCTION_BUILD_FIELDS)
+                + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS)
+                + "\n",
                 encoding="utf-8",
             )
             read_build_artifact(output, cell=turboquant_cell)
         metrics = artifact["storage_metrics"]
-        self.assertEqual(artifact["index_stats"]["records"], cell["dataset"]["scale"]["rows"])
+        self.assertEqual(
+            artifact["index_stats"]["records"], cell["dataset"]["scale"]["rows"]
+        )
         self.assertEqual(
             artifact["build_timings"],
             {
@@ -657,7 +695,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 },
             }
             build_output, build_resources, _ = execute_publication_phase(plan, "build")
-            runtime_output, runtime_resources, _ = execute_publication_phase(plan, "runtime")
+            runtime_output, runtime_resources, _ = execute_publication_phase(
+                plan, "runtime"
+            )
         self.assertNotEqual(build_output, runtime_output)
         self.assertGreater(build_resources["cpu_ns"], 0)
         self.assertGreater(runtime_resources["cpu_ns"], 0)
@@ -671,14 +711,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             dataset_materialization_sha256="d" * 64,
             build_attempt_id="build-attempt-01",
             builder_instance_identity="i-builder-01",
-            builder_instance_type=cell["environment_contract"]["build_workers"]["borsuk"]["instance_type"],
+            builder_instance_type=cell["environment_contract"]["build_workers"][
+                "borsuk"
+            ]["instance_type"],
             build_artifact=build_artifact(cell),
             object_roster=data_roster(cell),
             build_metrics=build_metrics(),
         )
-        attestation = runtime_attestation_for(
-            cell, instance_id="i-0123456789abcdef0"
-        )
+        attestation = runtime_attestation_for(cell, instance_id="i-0123456789abcdef0")
         report = build_publication_report(
             cell=cell,
             arm={
@@ -775,7 +815,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "storage_max_data_object_bytes": 8192,
             },
         )
-        with self.assertRaisesRegex(ValueError, "differs from the complete trace") as mismatch:
+        with self.assertRaisesRegex(
+            ValueError, "differs from the complete trace"
+        ) as mismatch:
             reconcile_lifecycle_storage_trace(
                 {
                     "storage_gets": 1,
@@ -817,10 +859,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 runtime_attestation=attestation,
             )
 
-    def test_borsuk_read_smoke_plan_invokes_real_generator_and_production_bench(self) -> None:
+    def test_borsuk_read_smoke_plan_invokes_real_generator_and_production_bench(
+        self,
+    ) -> None:
         cell = next(
             cell
-            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))["cells"]
+            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))[
+                "cells"
+            ]
             if cell["system"] == "borsuk"
             and cell["workload"]["kind"] == "read-recall"
             and cell["dataset"]["source"].get("generator") == "synthetic-clustered-v1"
@@ -846,24 +892,37 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         generator_env = plan["steps"][0]["env"]
         benchmark_env = plan["steps"][1]["env"]
         self.assertEqual(int(generator_env["BORSUK_SYNTHETIC_TRAIN"]), 32_800)
-        self.assertEqual(int(generator_env["BORSUK_SYNTHETIC_DIMENSIONS"]), cell["dataset"]["dimensions"])
+        self.assertEqual(
+            int(generator_env["BORSUK_SYNTHETIC_DIMENSIONS"]),
+            cell["dataset"]["dimensions"],
+        )
         self.assertEqual(
             generator_env["BORSUK_SYNTHETIC_SEED"],
             str(cell["dataset"]["source"]["seed"]),
         )
-        self.assertEqual(benchmark_env["BORSUK_BENCH_QUERY_SEED"], str(cell["query_seed"]))
+        self.assertEqual(
+            benchmark_env["BORSUK_BENCH_QUERY_SEED"], str(cell["query_seed"])
+        )
         self.assertEqual(benchmark_env["BORSUK_BENCH_QUERIES"], "10")
-        self.assertEqual(benchmark_env["BORSUK_BENCH_NPROBES"], str(arm["leaf_page_budget"]))
+        self.assertEqual(
+            benchmark_env["BORSUK_BENCH_NPROBES"], str(arm["leaf_page_budget"])
+        )
         self.assertEqual(benchmark_env["BORSUK_BENCH_CANDIDATES"], "512")
         self.assertEqual(benchmark_env["BORSUK_BENCH_SKIP_EXACT_RECALL"], "1")
         self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELLS"], "128")
-        self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELL_TRAINING_ROWS"], "4096")
+        self.assertEqual(
+            benchmark_env["BORSUK_BENCH_LOGICAL_CELL_TRAINING_ROWS"], "4096"
+        )
         self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELL_ITERATIONS"], "8")
         self.assertEqual(benchmark_env["BORSUK_BENCH_GLOBAL_PQ_CODE_BYTES"], "128")
-        self.assertEqual(benchmark_env["BORSUK_BENCH_RAM_BUDGET_BYTES"], str(2 * 1024**3))
+        self.assertEqual(
+            benchmark_env["BORSUK_BENCH_RAM_BUDGET_BYTES"], str(2 * 1024**3)
+        )
         self.assertEqual(benchmark_env["BORSUK_BENCH_DISK_CACHE_MAX_BYTES"], "0")
         warm_arm = next(
-            candidate for candidate in plan_arms(cell) if candidate["cache_state"] == "warm"
+            candidate
+            for candidate in plan_arms(cell)
+            if candidate["cache_state"] == "warm"
         )
         with tempfile.TemporaryDirectory() as root:
             warm_plan = build_execution_plan(
@@ -880,6 +939,48 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         )
         self.assertEqual(plan["runtime_client"]["instance_type"], "c7g.xlarge")
         self.assertEqual(plan["runtime_storage"]["volume_size_gib"], 32)
+
+    def test_every_frozen_dense_generator_has_an_exact_executable_plan(self) -> None:
+        manifest = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "docs/research/publication-v3-manifest.json"
+            ).read_text()
+        )
+        schedule = build_schedule_document(validate_manifest(manifest))
+        expected = {
+            "synthetic-clustered-v1",
+            "synthetic-uniform-v1",
+            "synthetic-duplicate-v1",
+            "synthetic-adversarial-v1",
+        }
+        observed: set[str] = set()
+        for cell in schedule["cells"]:
+            source = cell["dataset"]["source"]
+            generator_id = source.get("generator")
+            if cell["system"] != "borsuk" or generator_id not in expected:
+                continue
+            if generator_id in observed:
+                continue
+            observed.add(generator_id)
+            with tempfile.TemporaryDirectory() as root:
+                plan = build_execution_plan(
+                    cell,
+                    arm=plan_arms(cell)[0],
+                    workspace=Path(root),
+                    generator=Path("/opt/borsuk/generate_synthetic_dataset"),
+                    borsuk_bench=Path("/opt/borsuk/production_bench"),
+                    mode="smoke",
+                )
+            self.assertEqual(
+                plan["steps"][0]["env"]["BORSUK_SYNTHETIC_GENERATOR"],
+                generator_id,
+            )
+            self.assertEqual(
+                plan["steps"][0]["env"]["BORSUK_SYNTHETIC_DATASET_ID"],
+                cell["dataset"]["id"],
+            )
+        self.assertEqual(observed, expected)
 
     def test_borsuk_turboquant_plan_omits_incompatible_pq_width(self) -> None:
         manifest = paid_v3_manifest()
@@ -898,8 +999,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             for cell in build_schedule_document(validate_manifest(manifest))["cells"]
             if cell["system"] == "borsuk"
             and cell["workload"]["kind"] == "read-recall"
-            and cell["dataset"]["source"].get("generator")
-            == "synthetic-clustered-v1"
+            and cell["dataset"]["source"].get("generator") == "synthetic-clustered-v1"
         )
         with tempfile.TemporaryDirectory() as root:
             plan = build_execution_plan(
@@ -950,7 +1050,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
     def test_smoke_plan_is_scaled_and_cannot_be_published(self) -> None:
         cell = next(
             cell
-            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))["cells"]
+            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))[
+                "cells"
+            ]
             if cell["system"] == "borsuk"
             and cell["workload"]["kind"] == "read-recall"
             and cell["dataset"]["source"].get("generator") == "synthetic-clustered-v1"
@@ -980,10 +1082,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             mode="build",
         )
         self.assertTrue(publication["publishable"])
-        self.assertEqual(publication["effective_rows"], cell["dataset"]["scale"]["rows"])
+        self.assertEqual(
+            publication["effective_rows"], cell["dataset"]["scale"]["rows"]
+        )
         self.assertNotIn("steps", publication)
         self.assertEqual(publication["build"]["worker"]["instance_type"], "r7g.8xlarge")
-        self.assertEqual(publication["runtime"]["client"]["instance_type"], "c7g.xlarge")
+        self.assertEqual(
+            publication["runtime"]["client"]["instance_type"], "c7g.xlarge"
+        )
         build_env = publication["build"]["steps"][-1]["env"]
         runtime_env = publication["runtime"]["steps"][-1]["env"]
         runtime_ram_budget_bytes = (
@@ -1029,16 +1135,22 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             "512",
         )
         self.assertEqual(runtime_env["BORSUK_BENCH_URI"], cell["index_prefix"])
-        self.assertNotEqual(runtime_env["BORSUK_BENCH_DATASET"], build_env["BORSUK_BENCH_DATASET"])
+        self.assertNotEqual(
+            runtime_env["BORSUK_BENCH_DATASET"], build_env["BORSUK_BENCH_DATASET"]
+        )
         self.assertEqual(
             build_env["BORSUK_BENCH_LOGICAL_CELLS"],
             str(cell["index_profile"]["logical_cells"]),
         )
 
-    def test_publication_concurrency_profile_reuses_frozen_index_without_recall_warmup(self) -> None:
+    def test_publication_concurrency_profile_reuses_frozen_index_without_recall_warmup(
+        self,
+    ) -> None:
         cell = next(
             cell
-            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))["cells"]
+            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))[
+                "cells"
+            ]
             if cell["system"] == "borsuk"
             and cell["workload"]["kind"] == "read-recall"
             and cell["dataset"]["source"].get("generator") == "synthetic-clustered-v1"
@@ -1168,7 +1280,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
 
         cell = next(
             cell
-            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))["cells"]
+            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))[
+                "cells"
+            ]
             if cell["system"] == "borsuk"
             and cell["workload"]["kind"] == "read-recall"
             and cell["dataset"]["source"].get("generator") == "synthetic-clustered-v1"
@@ -1191,9 +1305,11 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             ("disk_cache_max_bytes", 1),
             ("cpu_threads", True),
         ):
-            with self.subTest(field=field), self.assertRaisesRegex(
-                ValueError, "flow-control authority"
-            ), tempfile.TemporaryDirectory() as root:
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(ValueError, "flow-control authority"),
+                tempfile.TemporaryDirectory() as root,
+            ):
                 build_execution_plan(
                     cell,
                     arm=arm,
@@ -1270,7 +1386,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             },
         )
 
-    def test_concurrency_artifacts_require_complete_workers_queries_and_recall(self) -> None:
+    def test_concurrency_artifacts_require_complete_workers_queries_and_recall(
+        self,
+    ) -> None:
         summaries = [
             {
                 "schema_version": "borsuk-production-bench-v18",
@@ -1399,8 +1517,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
 
     def test_unavailable_local_system_is_rejected_not_simulated(self) -> None:
         cell = scheduled_cell(system="amazon-s3-vectors")
-        with tempfile.TemporaryDirectory() as root, self.assertRaisesRegex(
-            ValueError, "not available in local execution"
+        with (
+            tempfile.TemporaryDirectory() as root,
+            self.assertRaisesRegex(ValueError, "not available in local execution"),
         ):
             build_execution_plan(
                 cell,
@@ -1411,10 +1530,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 mode="smoke",
             )
 
-    def test_execution_rejects_successful_processes_without_real_query_artifacts(self) -> None:
+    def test_execution_rejects_successful_processes_without_real_query_artifacts(
+        self,
+    ) -> None:
         cell = next(
             cell
-            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))["cells"]
+            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))[
+                "cells"
+            ]
             if cell["system"] == "borsuk"
             and cell["workload"]["kind"] == "read-recall"
             and cell["dataset"]["source"].get("generator") == "synthetic-clustered-v1"
@@ -1436,7 +1559,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         cell = scheduled_cell()
         cell["queries_per_repetition"] = 3
         rows = []
-        for index, (latency, recall) in enumerate(((1.0, 0.96), (2.0, 0.95), (4.0, 0.99))):
+        for index, (latency, recall) in enumerate(
+            ((1.0, 0.96), (2.0, 0.95), (4.0, 0.99))
+        ):
             rows.append(
                 {
                     "schema_version": "borsuk-production-bench-v18",
@@ -1505,14 +1630,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             dataset_materialization_sha256="d" * 64,
             build_attempt_id="build-attempt-01",
             builder_instance_identity="i-builder-01",
-            builder_instance_type=cell["environment_contract"]["build_workers"]["borsuk"]["instance_type"],
+            builder_instance_type=cell["environment_contract"]["build_workers"][
+                "borsuk"
+            ]["instance_type"],
             build_artifact=build_artifact(cell),
             object_roster=data_roster(cell),
             build_metrics=build_metrics(),
         )
-        attestation = runtime_attestation_for(
-            cell, instance_id="i-0123456789abcdef0"
-        )
+        attestation = runtime_attestation_for(cell, instance_id="i-0123456789abcdef0")
         report = build_publication_report(
             cell=cell,
             arm=arm,
@@ -1602,7 +1727,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_queries=3,
             )
 
-    def test_read_arms_expand_one_declared_axis_without_cross_product_aliasing(self) -> None:
+    def test_read_arms_expand_one_declared_axis_without_cross_product_aliasing(
+        self,
+    ) -> None:
         cell = scheduled_cell()
         cell["workload"]["factors"] = {
             "k": [10],
@@ -1644,7 +1771,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(arms[-1]["writers"], 16)
         self.assertEqual(arms[-1]["batch_size"], 1024)
 
-    def test_lifecycle_diagnostic_write_count_is_explicit_and_runtime_only(self) -> None:
+    def test_lifecycle_diagnostic_write_count_is_explicit_and_runtime_only(
+        self,
+    ) -> None:
         cell = scheduled_cell(kind="write-update-delete-compact")
         cell["source"] = {
             "state": "frozen",
@@ -1684,7 +1813,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     diagnostic_write_ops=2_560,
                 )
 
-    def test_lifecycle_diagnostic_cannot_be_mistaken_for_publishable_evidence(self) -> None:
+    def test_lifecycle_diagnostic_cannot_be_mistaken_for_publishable_evidence(
+        self,
+    ) -> None:
         diagnostic = claim_ineligible_lifecycle_diagnostic(
             {"publishable": True, "result": {"status": "complete"}},
             write_ops=2_560,

@@ -35,7 +35,59 @@ const MEMBER_COSINE_STEP: f32 = 0.0003;
 const TRAIN_SHARD_TARGET_BYTES: usize = 64 * 1024 * 1024;
 const TRAIN_SHARD_MAX_BYTES: u64 = 128 * 1024 * 1024;
 const RECORD_BATCH_ROWS: usize = 8_192;
-const MAX_TRAIN_SHARDS: usize = 100_000_000;
+const MAX_TRAIN_SHARDS: usize = 8_189;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneratorKind {
+    Clustered,
+    Uniform,
+    Duplicate,
+    Adversarial,
+    Binary,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GenerationSpec {
+    train: usize,
+    dimensions: usize,
+    queries: usize,
+    group_size: usize,
+    seed: u64,
+    generator: GeneratorKind,
+}
+
+impl GeneratorKind {
+    fn parse(value: &str) -> io::Result<Self> {
+        match value {
+            "synthetic-clustered-v1" => Ok(Self::Clustered),
+            "synthetic-uniform-v1" => Ok(Self::Uniform),
+            "synthetic-duplicate-v1" => Ok(Self::Duplicate),
+            "synthetic-adversarial-v1" => Ok(Self::Adversarial),
+            "synthetic-binary-v1" => Ok(Self::Binary),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "synthetic generator is not supported",
+            )),
+        }
+    }
+
+    const fn id(self) -> &'static str {
+        match self {
+            Self::Clustered => "synthetic-clustered-v1",
+            Self::Uniform => "synthetic-uniform-v1",
+            Self::Duplicate => "synthetic-duplicate-v1",
+            Self::Adversarial => "synthetic-adversarial-v1",
+            Self::Binary => "synthetic-binary-v1",
+        }
+    }
+
+    const fn metric(self) -> &'static str {
+        match self {
+            Self::Binary => "hamming",
+            _ => "cosine",
+        }
+    }
+}
 
 fn main() -> io::Result<()> {
     let output = env::var_os("BORSUK_SYNTHETIC_OUTPUT")
@@ -46,33 +98,42 @@ fn main() -> io::Result<()> {
     let queries = env_usize("BORSUK_SYNTHETIC_QUERIES", DEFAULT_QUERIES)?;
     let group_size = env_usize("BORSUK_SYNTHETIC_GROUP_SIZE", DEFAULT_GROUP_SIZE)?;
     let seed = env_u64("BORSUK_SYNTHETIC_SEED", DEFAULT_SEED)?;
+    let generator = GeneratorKind::parse(
+        &env::var("BORSUK_SYNTHETIC_GENERATOR").unwrap_or_else(|_| GENERATOR_ID.to_owned()),
+    )?;
     let dataset_id =
         env::var("BORSUK_SYNTHETIC_DATASET_ID").unwrap_or_else(|_| DEFAULT_DATASET_ID.to_owned());
-    validate_config(train, dimensions, queries, group_size)?;
-
-    fs::create_dir_all(&output)?;
-    ensure_output_empty(&output)?;
-    write_train_parquet(
-        &output,
-        train,
-        dimensions,
-        group_size,
-        seed,
-        TRAIN_SHARD_TARGET_BYTES,
-    )?;
-    write_queries_and_truth_parquet(
-        &output.join("test.parquet"),
-        &output.join("neighbors.parquet"),
+    let spec = GenerationSpec {
         train,
         dimensions,
         queries,
         group_size,
         seed,
+        generator,
+    };
+    validate_config(train, dimensions, queries, group_size, generator)?;
+
+    fs::create_dir_all(&output)?;
+    ensure_output_empty(&output)?;
+    write_train_parquet(&output, &spec, TRAIN_SHARD_TARGET_BYTES)?;
+    write_queries_and_truth_parquet(
+        &output.join("test.parquet"),
+        &output.join("neighbors.parquet"),
+        &spec,
     )?;
-    write_meta(&output, &dataset_id, train, dimensions, queries, seed)?;
+    write_meta(
+        &output,
+        &dataset_id,
+        train,
+        dimensions,
+        queries,
+        seed,
+        generator,
+    )?;
     eprintln!(
-        "generated output={} train={} dimensions={} queries={} group_size={} seed={}",
+        "generated output={} generator={} train={} dimensions={} queries={} group_size={} seed={}",
         output.display(),
+        generator.id(),
         train,
         dimensions,
         queries,
@@ -97,6 +158,7 @@ fn validate_config(
     dimensions: usize,
     queries: usize,
     group_size: usize,
+    generator: GeneratorKind,
 ) -> io::Result<()> {
     if train == 0 || dimensions == 0 || queries == 0 || group_size < NEIGHBORS {
         return Err(io::Error::new(
@@ -135,22 +197,28 @@ fn validate_config(
             "neighbor ids use i32 and therefore require train <= i32::MAX",
         ));
     }
+    publication_truth_margin(generator, train, dimensions, group_size)?;
     Ok(())
 }
 
 fn write_train_parquet(
     output: &Path,
-    train: usize,
-    dimensions: usize,
-    group_size: usize,
-    seed: u64,
+    spec: &GenerationSpec,
     target_bytes: usize,
 ) -> io::Result<()> {
+    let GenerationSpec {
+        train,
+        dimensions,
+        group_size,
+        seed,
+        generator,
+        ..
+    } = *spec;
     let groups = train / group_size;
     let rows_per_shard = rows_per_train_shard(dimensions, target_bytes)?;
     let schema = embedding_schema(dimensions)?;
     let shard_count = train.div_ceil(rows_per_shard);
-    if shard_count >= MAX_TRAIN_SHARDS {
+    if shard_count > MAX_TRAIN_SHARDS {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "synthetic dataset exceeds its fixed-width shard namespace",
@@ -176,10 +244,18 @@ fn write_train_parquet(
                 let group = row / group_size;
                 let member = row % group_size;
                 if group != current_group {
-                    centroid = synthetic_centroid(group, groups, dimensions, seed);
+                    centroid = generator_centroid(generator, group, groups, dimensions, seed);
                     current_group = group;
                 }
-                append_synthetic_member(&mut values, &centroid, group, member, groups, seed);
+                append_generator_member(
+                    &mut values,
+                    generator,
+                    &centroid,
+                    group,
+                    member,
+                    groups,
+                    seed,
+                );
             }
             writer
                 .write(&embedding_batch(
@@ -208,12 +284,16 @@ fn write_train_parquet(
 fn write_queries_and_truth_parquet(
     test_path: &Path,
     neighbors_path: &Path,
-    train: usize,
-    dimensions: usize,
-    queries: usize,
-    group_size: usize,
-    seed: u64,
+    spec: &GenerationSpec,
 ) -> io::Result<()> {
+    let GenerationSpec {
+        train,
+        dimensions,
+        queries,
+        group_size,
+        seed,
+        generator,
+    } = *spec;
     let groups = train / group_size;
     let mut tests = Vec::with_capacity(queries.saturating_mul(dimensions));
     let mut neighbors = Vec::with_capacity(queries.saturating_mul(NEIGHBORS));
@@ -223,17 +303,13 @@ fn write_queries_and_truth_parquet(
         } else {
             query.saturating_mul(groups.saturating_sub(1)) / (queries - 1)
         };
-        let centroid = synthetic_centroid(group, groups, dimensions, seed);
+        let centroid = generator_centroid(generator, group, groups, dimensions, seed);
         tests.extend_from_slice(&centroid);
         let first = group * group_size;
         let mut ranked_members = (0..group_size)
             .map(|member| {
-                let vector = synthetic_member(group, member, groups, dimensions, seed);
-                let similarity = vector
-                    .iter()
-                    .zip(&centroid)
-                    .map(|(left, right)| left * right)
-                    .sum::<f32>();
+                let vector = generator_member(generator, group, member, groups, dimensions, seed);
+                let similarity = generator_score(generator, &centroid, &vector);
                 (similarity, member)
             })
             .collect::<Vec<_>>();
@@ -354,6 +430,7 @@ fn write_meta(
     dimensions: usize,
     queries: usize,
     seed: u64,
+    generator: GeneratorKind,
 ) -> io::Result<()> {
     if dataset_id.is_empty() || dataset_id.chars().any(|character| character.is_control()) {
         return Err(io::Error::new(
@@ -365,7 +442,7 @@ fn write_meta(
         concat!(
             "{{\n",
             "  \"name\": {:?},\n",
-            "  \"metric\": \"cosine\",\n",
+            "  \"metric\": {:?},\n",
             "  \"dim\": {},\n",
             "  \"n_train\": {},\n",
             "  \"n_test\": {},\n",
@@ -374,9 +451,295 @@ fn write_meta(
             "  \"seed\": {}\n",
             "}}\n"
         ),
-        dataset_id, dimensions, train, queries, NEIGHBORS, GENERATOR_ID, seed,
+        dataset_id,
+        generator.metric(),
+        dimensions,
+        train,
+        queries,
+        NEIGHBORS,
+        generator.id(),
+        seed,
     );
     fs::write(output.join("meta.json"), body)
+}
+
+fn generator_centroid(
+    generator: GeneratorKind,
+    group: usize,
+    groups: usize,
+    dimensions: usize,
+    seed: u64,
+) -> Vec<f32> {
+    match generator {
+        GeneratorKind::Clustered => synthetic_centroid(group, groups, dimensions, seed),
+        GeneratorKind::Uniform => {
+            separated_dense_centroid(group, groups, dimensions, seed, 0x55aa_11ee_7788_33cc)
+        }
+        GeneratorKind::Duplicate => {
+            separated_dense_centroid(group, groups, dimensions, seed, 0xdd44_2299_66bb_00ff)
+        }
+        GeneratorKind::Adversarial => adversarial_centroid(group, groups, dimensions, seed),
+        GeneratorKind::Binary => binary_centroid(group, groups, dimensions, seed),
+    }
+}
+
+fn generator_member(
+    generator: GeneratorKind,
+    group: usize,
+    member: usize,
+    groups: usize,
+    dimensions: usize,
+    seed: u64,
+) -> Vec<f32> {
+    let centroid = generator_centroid(generator, group, groups, dimensions, seed);
+    let mut vector = Vec::with_capacity(dimensions);
+    append_generator_member(
+        &mut vector,
+        generator,
+        &centroid,
+        group,
+        member,
+        groups,
+        seed,
+    );
+    vector
+}
+
+fn append_generator_member(
+    output: &mut Vec<f32>,
+    generator: GeneratorKind,
+    centroid: &[f32],
+    group: usize,
+    member: usize,
+    groups: usize,
+    seed: u64,
+) {
+    match generator {
+        GeneratorKind::Clustered => {
+            append_synthetic_member(output, centroid, group, member, groups, seed)
+        }
+        GeneratorKind::Duplicate => output.extend_from_slice(centroid),
+        GeneratorKind::Uniform => append_tail_member(
+            output,
+            centroid,
+            group,
+            member,
+            seed ^ 0x7123_8899_aabb_ccdd,
+            MEMBER_COSINE_START - MEMBER_COSINE_STEP * member as f32,
+            dense_code_dimensions(groups, centroid.len()),
+        ),
+        GeneratorKind::Adversarial => append_tail_member(
+            output,
+            centroid,
+            group,
+            member,
+            seed ^ 0x93b7_1042_ddee_5511,
+            0.9999 - 0.000001 * member as f32,
+            adversarial_code_dimensions(groups, centroid.len()),
+        ),
+        GeneratorKind::Binary => append_binary_member(output, centroid, member),
+    }
+}
+
+fn required_code_bits(groups: usize) -> usize {
+    usize::try_from(usize::BITS - groups.saturating_sub(1).leading_zeros())
+        .unwrap_or(usize::MAX)
+        .max(1)
+}
+
+fn code_dimensions(dimensions: usize, directions: usize) -> usize {
+    let reserved_tail = (dimensions / 4).max(1).min(dimensions - directions);
+    dimensions - reserved_tail
+}
+
+fn dense_code_dimensions(groups: usize, dimensions: usize) -> usize {
+    code_dimensions(dimensions, required_code_bits(groups))
+}
+
+fn adversarial_code_dimensions(groups: usize, dimensions: usize) -> usize {
+    code_dimensions(dimensions, required_code_bits(groups.div_ceil(2)) + 1)
+}
+
+fn separated_dense_centroid(
+    group: usize,
+    groups: usize,
+    dimensions: usize,
+    seed: u64,
+    salt: u64,
+) -> Vec<f32> {
+    let bits = required_code_bits(groups);
+    let used = dense_code_dimensions(groups, dimensions);
+    let code = (group as u64) ^ splitmix64(seed ^ salt);
+    let scale = (used as f32).sqrt().recip();
+    (0..dimensions)
+        .map(|dimension| {
+            if dimension >= used {
+                return 0.0;
+            }
+            let bit = dimension.saturating_mul(bits) / used;
+            let mask = splitmix64(seed ^ salt ^ dimension as u64) & 1;
+            if ((code >> bit) & 1) ^ mask == 0 {
+                -scale
+            } else {
+                scale
+            }
+        })
+        .collect()
+}
+
+fn binary_centroid(group: usize, groups: usize, dimensions: usize, seed: u64) -> Vec<f32> {
+    let code_bits = usize::try_from(usize::BITS - groups.saturating_sub(1).leading_zeros())
+        .unwrap_or(dimensions)
+        .max(1);
+    let code = (group as u64) ^ splitmix64(seed ^ 0xb170_0f11_5eed_8a5e);
+    (0..dimensions)
+        .map(|dimension| ((code >> (dimension % code_bits)) & 1) as f32)
+        .collect()
+}
+
+fn append_binary_member(output: &mut Vec<f32>, centroid: &[f32], member: usize) {
+    output.extend(centroid.iter().enumerate().map(|(dimension, value)| {
+        if dimension == member % centroid.len() {
+            1.0 - value
+        } else {
+            *value
+        }
+    }));
+}
+
+fn generator_score(generator: GeneratorKind, query: &[f32], vector: &[f32]) -> f32 {
+    match generator {
+        GeneratorKind::Binary => {
+            -(query
+                .iter()
+                .zip(vector)
+                .filter(|(left, right)| left != right)
+                .count() as f32)
+        }
+        _ => query
+            .iter()
+            .zip(vector)
+            .map(|(left, right)| left * right)
+            .sum(),
+    }
+}
+
+fn adversarial_centroid(group: usize, groups: usize, dimensions: usize, seed: u64) -> Vec<f32> {
+    let pairs = groups.div_ceil(2);
+    let bits = required_code_bits(pairs);
+    let used = adversarial_code_dimensions(groups, dimensions);
+    let pair_direction_size = used / (bits + 1);
+    let base_dimensions = used - pair_direction_size;
+    let code = (group as u64 / 2) ^ splitmix64(seed ^ 0xa53c_917e_2244_68bf);
+    let epsilon = if group.is_multiple_of(2) { -0.02 } else { 0.02 };
+    let base_scale = (1.0_f32 - epsilon * epsilon).sqrt();
+    let base_value = base_scale / (base_dimensions as f32).sqrt();
+    let pair_value = epsilon / (pair_direction_size as f32).sqrt();
+    (0..dimensions)
+        .map(|dimension| {
+            if dimension < base_dimensions {
+                let bit = dimension.saturating_mul(bits) / base_dimensions;
+                let mask = splitmix64(seed ^ 0xa53c_917e_2244_68bf ^ dimension as u64) & 1;
+                if ((code >> bit) & 1) ^ mask == 0 {
+                    -base_value
+                } else {
+                    base_value
+                }
+            } else if dimension < used {
+                pair_value
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
+
+fn append_tail_member(
+    output: &mut Vec<f32>,
+    centroid: &[f32],
+    group: usize,
+    member: usize,
+    seed: u64,
+    cosine: f32,
+    code_dimensions: usize,
+) {
+    let tail_dimensions = centroid.len() - code_dimensions;
+    let noise_scale = (1.0 - cosine * cosine).sqrt() / (tail_dimensions as f32).sqrt();
+    let mut state = splitmix64(
+        seed ^ (group as u64).rotate_left(17) ^ (member as u64).wrapping_mul(0x9e37_79b9),
+    );
+    for (dimension, centroid_value) in centroid.iter().enumerate() {
+        if dimension < code_dimensions {
+            output.push(cosine * centroid_value);
+        } else {
+            state = splitmix64(state.wrapping_add(dimension as u64));
+            output.push(if state & 1 == 0 {
+                -noise_scale
+            } else {
+                noise_scale
+            });
+        }
+    }
+}
+
+fn minimum_code_block(code_dimensions: usize, bits: usize) -> usize {
+    code_dimensions / bits
+}
+
+fn publication_truth_margin(
+    generator: GeneratorKind,
+    train: usize,
+    dimensions: usize,
+    group_size: usize,
+) -> io::Result<f32> {
+    if train == 0 || group_size < NEIGHBORS || !train.is_multiple_of(group_size) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "analytic truth requires complete fixed-size groups",
+        ));
+    }
+    let groups = train / group_size;
+    let own = match generator {
+        GeneratorKind::Adversarial => 0.9999 - 0.000001 * (NEIGHBORS - 1) as f32,
+        GeneratorKind::Duplicate => 1.0,
+        GeneratorKind::Binary => -1.0,
+        _ => MEMBER_COSINE_START - MEMBER_COSINE_STEP * (NEIGHBORS - 1) as f32,
+    };
+    let foreign = match generator {
+        GeneratorKind::Clustered => {
+            let bits = required_code_bits(groups);
+            (1.0 - 2.0 / bits as f32) * MEMBER_COSINE_START
+        }
+        GeneratorKind::Uniform | GeneratorKind::Duplicate => {
+            let bits = required_code_bits(groups);
+            let used = dense_code_dimensions(groups, dimensions);
+            if minimum_code_block(used, bits) == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "dense code layout has an empty direction",
+                ));
+            }
+            let centroid = 1.0 - 2.0 * minimum_code_block(used, bits) as f32 / used as f32;
+            if generator == GeneratorKind::Uniform {
+                centroid * MEMBER_COSINE_START
+            } else {
+                centroid
+            }
+        }
+        GeneratorKind::Adversarial => (1.0 - 2.0 * 0.02_f32.powi(2)) * 0.9999,
+        GeneratorKind::Binary => {
+            let bits = required_code_bits(groups);
+            -(minimum_code_block(dimensions, bits) as f32 - 1.0)
+        }
+    };
+    let margin = own - foreign;
+    if !margin.is_finite() || margin <= 0.0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "synthetic recipe cannot prove its analytic top-100 truth",
+        ));
+    }
+    Ok(margin)
 }
 
 fn synthetic_centroid(group: usize, groups: usize, dimensions: usize, seed: u64) -> Vec<f32> {
@@ -400,6 +763,7 @@ fn synthetic_centroid(group: usize, groups: usize, dimensions: usize, seed: u64)
         .collect()
 }
 
+#[cfg(test)]
 fn synthetic_member(
     group: usize,
     member: usize,
@@ -481,6 +845,152 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_publication_dense_generator_is_distinct_deterministic_and_group_local() {
+        let kinds = [
+            GeneratorKind::Clustered,
+            GeneratorKind::Uniform,
+            GeneratorKind::Duplicate,
+            GeneratorKind::Adversarial,
+            GeneratorKind::Binary,
+        ];
+        let generated = kinds
+            .into_iter()
+            .map(|kind| {
+                let centroid = generator_centroid(kind, 7, 1_000, 384, 42);
+                let repeated = generator_centroid(kind, 7, 1_000, 384, 42);
+                let own = generator_member(kind, 7, 0, 1_000, 384, 42);
+                let other = generator_member(kind, 8, 0, 1_000, 384, 42);
+                assert_eq!(centroid, repeated);
+                let cosine = |left: &[f32], right: &[f32]| {
+                    left.iter().zip(right).map(|(a, b)| a * b).sum::<f32>()
+                };
+                assert!(cosine(&centroid, &own) > cosine(&centroid, &other));
+                centroid
+            })
+            .collect::<Vec<_>>();
+        for left in 0..generated.len() {
+            for right in left + 1..generated.len() {
+                assert_ne!(generated[left], generated[right]);
+            }
+        }
+        assert_eq!(
+            GeneratorKind::parse("synthetic-clustered-v1").unwrap(),
+            kinds[0]
+        );
+        assert_eq!(
+            GeneratorKind::parse("synthetic-uniform-v1").unwrap(),
+            kinds[1]
+        );
+        assert_eq!(
+            GeneratorKind::parse("synthetic-duplicate-v1").unwrap(),
+            kinds[2]
+        );
+        assert_eq!(
+            GeneratorKind::parse("synthetic-adversarial-v1").unwrap(),
+            kinds[3]
+        );
+        assert_eq!(
+            GeneratorKind::parse("synthetic-binary-v1").unwrap(),
+            kinds[4]
+        );
+        assert!(GeneratorKind::parse("synthetic-unknown-v1").is_err());
+    }
+
+    #[test]
+    fn every_dense_generator_analytic_top_100_matches_brute_force() {
+        for generator in [
+            GeneratorKind::Clustered,
+            GeneratorKind::Uniform,
+            GeneratorKind::Duplicate,
+            GeneratorKind::Adversarial,
+            GeneratorKind::Binary,
+        ] {
+            let dimensions = 384;
+            let groups = 4;
+            let query_group = 2;
+            let query = generator_centroid(generator, query_group, groups, dimensions, 42);
+            let mut ranked = (0..groups * NEIGHBORS)
+                .map(|row| {
+                    let vector = generator_member(
+                        generator,
+                        row / NEIGHBORS,
+                        row % NEIGHBORS,
+                        groups,
+                        dimensions,
+                        42,
+                    );
+                    let score = generator_score(generator, &query, &vector);
+                    (score, row)
+                })
+                .collect::<Vec<_>>();
+            ranked.sort_by(|left, right| {
+                right
+                    .0
+                    .total_cmp(&left.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            });
+            assert_eq!(
+                ranked
+                    .into_iter()
+                    .take(NEIGHBORS)
+                    .map(|(_, row)| row)
+                    .collect::<std::collections::BTreeSet<_>>(),
+                (query_group * NEIGHBORS..(query_group + 1) * NEIGHBORS).collect(),
+                "{}",
+                generator.id(),
+            );
+        }
+    }
+
+    #[test]
+    fn binary_publication_groups_have_a_guaranteed_repeated_code_distance() {
+        let groups: usize = 1_000_000;
+        let dimensions: usize = 768;
+        let code_bits =
+            usize::try_from(usize::BITS - groups.saturating_sub(1_usize).leading_zeros()).unwrap();
+        for bit in 0..code_bits {
+            let left = binary_centroid(0, groups, dimensions, 42);
+            let right = binary_centroid(1 << bit, groups, dimensions, 42);
+            let distance = left
+                .iter()
+                .zip(&right)
+                .filter(|(left, right)| *left != *right)
+                .count();
+            assert_eq!(
+                distance,
+                dimensions / code_bits + usize::from(bit < dimensions % code_bits)
+            );
+            assert!(distance > 2);
+        }
+    }
+
+    #[test]
+    fn every_frozen_dense_recipe_has_a_strict_analytic_truth_margin() {
+        for (generator, rows, dimensions, seed) in [
+            (GeneratorKind::Clustered, 100_000_000, 768, 1_501_768),
+            (GeneratorKind::Uniform, 100_000_000, 768, 1_601_768),
+            (GeneratorKind::Duplicate, 1_000_000, 768, 1_301_768),
+            (GeneratorKind::Adversarial, 1_000_000, 768, 1_401_768),
+            (GeneratorKind::Binary, 1_000_000, 768, 1_701_768),
+        ] {
+            let margin = publication_truth_margin(generator, rows, dimensions, NEIGHBORS)
+                .expect("frozen recipe must admit an analytic proof");
+            assert!(margin > 0.0, "{} margin={margin}", generator.id());
+
+            let groups = rows / NEIGHBORS;
+            let query = generator_centroid(generator, 0, groups, dimensions, seed);
+            let own = generator_member(generator, 0, NEIGHBORS - 1, groups, dimensions, seed);
+            let foreign = generator_member(generator, 1, 0, groups, dimensions, seed);
+            assert!(
+                generator_score(generator, &query, &own)
+                    > generator_score(generator, &query, &foreign),
+                "{} representative boundary",
+                generator.id(),
+            );
+        }
+    }
+
+    #[test]
     fn centroids_are_deterministic_normalized_and_group_distinct() {
         let first = synthetic_centroid(7, 1_000, 96, 42);
         let repeated = synthetic_centroid(7, 1_000, 96, 42);
@@ -513,9 +1023,9 @@ mod tests {
 
     #[test]
     fn scale_configuration_requires_a_complete_top_100_group() {
-        assert!(validate_config(1_000, 96, 100, 100).is_ok());
-        assert!(validate_config(1_000, 96, 100, 99).is_err());
-        assert!(validate_config(1_001, 96, 100, 100).is_err());
+        assert!(validate_config(1_000, 96, 100, 100, GeneratorKind::Clustered).is_ok());
+        assert!(validate_config(1_000, 96, 100, 99, GeneratorKind::Clustered).is_err());
+        assert!(validate_config(1_001, 96, 100, 100, GeneratorKind::Clustered).is_err());
     }
 
     #[test]
@@ -534,8 +1044,16 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let tests = directory.path().join("test.parquet");
         let neighbors = directory.path().join("neighbors.parquet");
-        write_train_parquet(directory.path(), 200, 4, 100, 0, 400).unwrap();
-        write_queries_and_truth_parquet(&tests, &neighbors, 200, 4, 2, 100, 0).unwrap();
+        let spec = GenerationSpec {
+            train: 200,
+            dimensions: 4,
+            queries: 2,
+            group_size: 100,
+            seed: 0,
+            generator: GeneratorKind::Clustered,
+        };
+        write_train_parquet(directory.path(), &spec, 400).unwrap();
+        write_queries_and_truth_parquet(&tests, &neighbors, &spec).unwrap();
         let train_paths = {
             let mut paths = fs::read_dir(directory.path())
                 .unwrap()

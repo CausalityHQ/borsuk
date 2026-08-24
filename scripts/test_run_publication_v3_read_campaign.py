@@ -86,6 +86,39 @@ class RunPublicationV3ReadCampaignTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, error):
                     campaign_commands(manifest, workload_id)
 
+    def test_promoted_synthetic_campaign_includes_both_100m_datasets(self) -> None:
+        manifest = json.loads(
+            (ROOT / "docs/research/publication-v3-manifest.json").read_text()
+        )
+        for dataset in manifest["datasets"]:
+            source = dataset["source"]
+            if source["state"] != "generated":
+                continue
+            attempt_root = (
+                f"{manifest['prefixes']['dataset']}/{dataset['id']}/attempts/0001"
+            )
+            dataset["source"] = {
+                "state": "staged-generated",
+                "generator": source["generator"],
+                "seed": source["seed"],
+                "generator_source_archive_sha256": "a" * 64,
+                "url": f"{attempt_root}/materialized",
+                "sha256": "b" * 64,
+                "receipt_uri": f"{attempt_root}/STAGING_COMPLETE.json",
+                "receipt_sha256": "c" * 64,
+            }
+        commands = campaign_commands(manifest, "synthetic-dense-read")
+        self.assertEqual(len(commands), 10 * 21)
+        builds = [command for command in commands if command[0] == "--build-read"]
+        self.assertIn(
+            ("--build-read", "synthetic-dense-read", "synthetic-clustered-100m-768"),
+            builds,
+        )
+        self.assertIn(
+            ("--build-read", "synthetic-dense-read", "synthetic-uniform-100m-768"),
+            builds,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

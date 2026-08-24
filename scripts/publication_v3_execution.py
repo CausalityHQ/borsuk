@@ -240,7 +240,7 @@ def build_worker_script(
     cell = {**job.cell, "index_prefix": job.index_uri}
     dataset = cell["dataset"]
     source = dataset["source"]
-    if source.get("state") not in {"staged", "generated"}:
+    if source.get("state") not in {"staged", "staged-generated"}:
         raise ValueError("build worker dataset is not executable")
     prelude = _common_prelude(
         source_revision=str(cell["source"]["git_commit"]),
@@ -254,6 +254,17 @@ def build_worker_script(
     dataset_step = ""
     if source["state"] == "staged":
         dataset_step = f'aws s3 cp {_q(source["url"] + "/")} "$work/cell/dataset/" --recursive --only-show-errors'
+    else:
+        dataset_step = textwrap.dedent(
+            f"""\
+            aws s3 cp {_q(source["receipt_uri"])} "$work/GENERATED_DATASET_COMPLETE.json" --only-show-errors
+            test "$(sha256sum "$work/GENERATED_DATASET_COMPLETE.json" | awk '{{print $1}}')" = {_q(source["receipt_sha256"])}
+            "$work/venv/bin/python" scripts/fetch_publication_v3_dataset.py \
+              --cell "$work/protocol.json" --receipt "$work/GENERATED_DATASET_COMPLETE.json" \
+              --output "$work/cell/dataset" --roles train,query,ground-truth,metadata \
+              --region eu-central-1 --owner 453182569524 --workers 32
+            """
+        )
     return prelude + textwrap.dedent(
         f"""\
         stage=attest-purchase
@@ -298,7 +309,7 @@ def build_worker_script(
         detail_log="$work/cell/build/step-00.log"
         "$work/venv/bin/python" scripts/run_publication_v3_cell.py "$work/protocol.json" "$work/cell" \
           --mode build --manifest "$work/manifest.json" --source-archive-sha256 {_q(source_sha256)} \
-          --dataset-materialization-sha256 {_q(source.get("sha256", "0" * 64))} \
+          --dataset-materialization-sha256 {_q(source["sha256"])} \
           --attempt-id {_q(attempt_id)} --instance-identity "$instance_id" \
           --generator "$work/source/target/release/examples/generate_synthetic_dataset" --borsuk-bench "$binary"
         stage=seal-index
@@ -309,7 +320,7 @@ def build_worker_script(
           --region eu-central-1
         "$work/venv/bin/python" scripts/run_publication_v3_cell.py "$work/protocol.json" "$work/cell" \
           --mode seal --manifest "$work/manifest.json" --source-archive-sha256 {_q(source_sha256)} \
-          --dataset-materialization-sha256 {_q(source.get("sha256", "0" * 64))} \
+          --dataset-materialization-sha256 {_q(source["sha256"])} \
           --attempt-id {_q(attempt_id)} --instance-identity "$instance_id" \
           --build-complete "$work/cell/BUILD_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json"
         stage=publish-receipts
@@ -422,7 +433,7 @@ def runtime_worker_script(
         raise ValueError("read runtime cannot carry lifecycle authority")
     cell = job.cell
     source = cell["dataset"]["source"]
-    if source.get("state") != "staged":
+    if source.get("state") not in {"staged", "staged-generated"}:
         raise ValueError("publication runtime requires a staged dataset")
     prelude = _common_prelude(
         source_revision=str(cell["source"]["git_commit"]),
@@ -453,6 +464,25 @@ def runtime_worker_script(
         clone_arguments = (
             ' --clone-receipt "$work/CLONE_COMPLETE.json"'
             ' --clone-inventory "$work/CLONE_OBJECTS.json"'
+        )
+    if source["state"] == "staged-generated":
+        runtime_dataset_step = textwrap.dedent(
+            f"""\
+            aws s3 cp {_q(source["receipt_uri"])} "$work/GENERATED_DATASET_COMPLETE.json" --only-show-errors
+            test "$(sha256sum "$work/GENERATED_DATASET_COMPLETE.json" | awk '{{print $1}}')" = {_q(source["receipt_sha256"])}
+            "$work/venv/bin/python" "$work/source/scripts/fetch_publication_v3_dataset.py" \
+              --cell "$work/protocol.json" --receipt "$work/GENERATED_DATASET_COMPLETE.json" \
+              --output "$work/cell/runtime-dataset" --roles query,ground-truth,metadata \
+              --region eu-central-1 --owner 453182569524 --workers 8
+            """
+        )
+    else:
+        runtime_dataset_step = textwrap.dedent(
+            f"""\
+            for name in meta.json test.parquet neighbors.parquet; do
+              aws s3 cp {_q(source["url"])}/$name "$work/cell/runtime-dataset/$name" --only-show-errors
+            done
+            """
         )
     diagnostic_arguments = ""
     diagnostic_validation = ""
@@ -516,10 +546,7 @@ diagnostic_result_sha=$(sha256sum \"$work/cell/RESULT_COMPLETE.json\" | awk '{{p
           --output "$work/INDEX_INVENTORY.json" --region eu-central-1
         {clone_step}
         mkdir -p "$work/cell/runtime-dataset"
-        for name in meta.json test.parquet neighbors.parquet; do
-          aws s3 cp {_q(source["url"])}/$name "$work/cell/runtime-dataset/$name" --only-show-errors
-        done
-        stage=execute-runtime
+        {runtime_dataset_step}stage=execute-runtime
         detail_log="$work/cell/runtime/step-00.log"
         mkdir -p "$(dirname "$detail_log")"
         systemd-run --quiet --wait --collect --service-type=exec \

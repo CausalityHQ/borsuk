@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import shutil
 import subprocess
@@ -28,6 +29,7 @@ if __package__:
     )
     from scripts.publication_v3_datasets import (
         build_dataset_descriptor,
+        dataset_materialization_sha256,
         validate_dataset_descriptor,
     )
     from scripts.publication_v3_protocol import canonical_json_bytes, validate_manifest
@@ -43,6 +45,7 @@ else:
     )
     from publication_v3_datasets import (
         build_dataset_descriptor,
+        dataset_materialization_sha256,
         validate_dataset_descriptor,
     )
     from publication_v3_protocol import canonical_json_bytes, validate_manifest
@@ -63,8 +66,8 @@ def _dataset(manifest: dict[str, object], dataset_id: str) -> dict[str, object]:
     if len(matches) != 1:
         raise ValueError(f"manifest has no unique dataset {dataset_id}")
     dataset = matches[0]
-    if dataset["source"]["state"] != "unstaged":
-        raise ValueError("dataset worker requires an unstaged external source")
+    if dataset["source"]["state"] not in {"unstaged", "generated"}:
+        raise ValueError("dataset worker requires an unresolved source")
     return dataset
 
 
@@ -79,6 +82,22 @@ def adapter_command(
         raise ValueError("dataset staging requires a frozen source archive")
     dataset = _dataset(normalized, dataset_id)
     kind = dataset["kind"]
+    if dataset["source"]["state"] == "generated":
+        if source_cache is not None:
+            raise ValueError("synthetic generation does not accept a source cache")
+        source = dataset["source"]
+        return (
+            "env",
+            f"BORSUK_SYNTHETIC_OUTPUT={output}",
+            f"BORSUK_SYNTHETIC_GENERATOR={source['generator']}",
+            f"BORSUK_SYNTHETIC_DATASET_ID={dataset_id}",
+            f"BORSUK_SYNTHETIC_TRAIN={dataset['scale']['rows']}",
+            f"BORSUK_SYNTHETIC_DIMENSIONS={dataset['dimensions']}",
+            f"BORSUK_SYNTHETIC_QUERIES={normalized['queries_per_repetition']}",
+            "BORSUK_SYNTHETIC_GROUP_SIZE=100",
+            f"BORSUK_SYNTHETIC_SEED={source['seed']}",
+            str(ROOT / "target/release/examples/generate_synthetic_dataset"),
+        )
     if kind == "standard-ann":
         expected_source = str(dataset["source"]["expected_source"])
         filename = expected_source.rsplit("/", 1)[-1]
@@ -165,6 +184,49 @@ def _load_provenance(dataset: dict[str, object], path: Path) -> dict[str, object
         raise ValueError(
             "materialized dataset provenance is missing or invalid"
         ) from error
+    if dataset["source"]["state"] == "generated":
+        required_generated = {
+            "schema_version",
+            "dataset",
+            "source",
+            "source_sha256",
+            "materialization_sha256",
+            "generator",
+            "seed",
+            "kind",
+            "rows",
+            "dimensions",
+            "metric",
+            "generator_source_archive_sha256",
+        }
+        source = dataset["source"]
+        if (
+            not isinstance(value, dict)
+            or set(value) != required_generated
+            or value["schema_version"] != 1
+            or value["dataset"] != dataset["id"]
+            or value["source"] != "generated"
+            or value["generator"] != source["generator"]
+            or value["seed"] != source["seed"]
+            or value["kind"] != dataset["kind"]
+            or value["rows"] != dataset["scale"]["rows"]
+            or value["dimensions"] != dataset["dimensions"]
+            or value["metric"] != dataset["metric"]
+            or any(
+                not isinstance(value[field], str)
+                or len(value[field]) != 64
+                or any(
+                    character not in "0123456789abcdef" for character in value[field]
+                )
+                for field in (
+                    "source_sha256",
+                    "materialization_sha256",
+                    "generator_source_archive_sha256",
+                )
+            )
+        ):
+            raise ValueError("generated dataset provenance differs from the manifest")
+        return value
     required = {
         "schema_version",
         "dataset",
@@ -202,12 +264,25 @@ def _descriptor(
     attempt: int,
 ) -> dict[str, object]:
     provenance = _load_provenance(dataset, provenance_path)
+    if (
+        dataset["source"]["state"] == "generated"
+        and provenance["generator_source_archive_sha256"]
+        != manifest["source"]["archive_sha256"]
+    ):
+        raise ValueError("generated dataset provenance uses a different source archive")
     inspected = copy.deepcopy(dataset)
+    if dataset["source"]["state"] == "generated":
+        metadata = json.loads((output / "meta.json").read_text(encoding="utf-8"))
+        if (
+            metadata.get("generator") != dataset["source"]["generator"]
+            or metadata.get("seed") != dataset["source"]["seed"]
+        ):
+            raise ValueError("generated metadata differs from its recipe")
     inspected["source"] = {
         "state": "staged",
         "url": output.resolve().as_uri(),
         "sha256": provenance["materialization_sha256"],
-        "license": dataset["source"]["license"],
+        "license": dataset["source"].get("license", "borsuk-generated"),
     }
     try:
         descriptor = build_dataset_descriptor(inspected)
@@ -220,7 +295,7 @@ def _descriptor(
         "state": "staged",
         "url": _staged_uri(manifest, str(dataset["id"]), attempt),
         "sha256": descriptor["content_sha256"],
-        "license": dataset["source"]["license"],
+        "license": dataset["source"].get("license", "borsuk-generated"),
     }
     descriptor["source"] = staged["source"]
     return validate_dataset_descriptor(descriptor, staged)
@@ -242,6 +317,7 @@ def materialize_dataset(
     attempt: int,
     work_root: Path,
     source_cache: Path | None = None,
+    source_archive_sha256: str | None = None,
 ) -> dict[str, object]:
     normalized = validate_manifest(manifest)
     if normalized["source"]["state"] != "frozen":
@@ -296,6 +372,43 @@ def materialize_dataset(
         if not scratch_output.is_dir():
             raise ValueError(
                 "dataset adapter did not produce a materialization directory"
+            )
+        if dataset["source"]["state"] == "generated":
+            if (
+                source_archive_sha256 is None
+                or len(source_archive_sha256) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in source_archive_sha256
+                )
+            ):
+                raise ValueError(
+                    "generated dataset requires its generator source archive checksum"
+                )
+            recipe = {
+                "dataset": dataset["id"],
+                "generator": dataset["source"]["generator"],
+                "seed": dataset["source"]["seed"],
+                "kind": dataset["kind"],
+                "rows": dataset["scale"]["rows"],
+                "dimensions": dataset["dimensions"],
+                "metric": dataset["metric"],
+            }
+            content_sha256 = dataset_materialization_sha256(
+                scratch_output, kind=str(dataset["kind"])
+            )
+            provenance = {
+                "schema_version": 1,
+                **recipe,
+                "source": "generated",
+                "source_sha256": hashlib.sha256(
+                    canonical_json_bytes(recipe)
+                ).hexdigest(),
+                "materialization_sha256": content_sha256,
+                "generator_source_archive_sha256": source_archive_sha256,
+            }
+            (scratch_root / "materialized.provenance.json").write_bytes(
+                canonical_json_bytes(provenance) + b"\n"
             )
         descriptor = _descriptor(
             normalized,

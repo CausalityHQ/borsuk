@@ -1577,6 +1577,9 @@ fn cli_rebuild_compacts_and_deletes_obsolete_objects_when_requested() {
                         && !path.starts_with("routing/pages/")
                         && !path.starts_with("routing/layers/")
                     || path.starts_with("tombstones/")
+                    || path.starts_with("id-directory-roots/")
+                    || path.starts_with("id-directory/")
+                    || path.starts_with("transactions/")
             })
         })
         .count();
@@ -1585,8 +1588,8 @@ fn cli_rebuild_compacts_and_deletes_obsolete_objects_when_requested() {
         routing_candidates
     );
     assert_eq!(
-        report["garbage_collection"]["tables_deleted"],
-        table_candidates
+        report["garbage_collection"]["tables_deleted"], table_candidates,
+        "candidates={candidates:?}"
     );
     assert!(!candidates.is_empty());
 
@@ -1712,7 +1715,31 @@ fn cli_gc_dry_runs_and_deletes_obsolete_segments() {
     assert_eq!(dry_run["routing_objects_deleted"], 0);
     assert_eq!(dry_run["tables_deleted"], 0);
     let objects_scanned = dry_run["objects_scanned"].as_u64().unwrap();
-    let candidates = dry_run["candidates"].as_array().unwrap().len() as u64;
+    let candidate_paths = dry_run["candidates"].as_array().unwrap();
+    let candidates = candidate_paths.len() as u64;
+    let routing_candidates = candidate_paths
+        .iter()
+        .filter(|candidate| {
+            candidate.as_str().is_some_and(|path| {
+                path.starts_with("routing/pages/") || path.starts_with("routing/layers/")
+            })
+        })
+        .count();
+    let table_candidates = candidate_paths
+        .iter()
+        .filter(|candidate| {
+            candidate.as_str().is_some_and(|path| {
+                path.starts_with("manifests/")
+                    || path.starts_with("routing/")
+                        && !path.starts_with("routing/pages/")
+                        && !path.starts_with("routing/layers/")
+                    || path.starts_with("tombstones/")
+                    || path.starts_with("id-directory-roots/")
+                    || path.starts_with("id-directory/")
+                    || path.starts_with("transactions/")
+            })
+        })
+        .count();
     assert!(objects_scanned > candidates);
     assert!(candidates > 0);
 
@@ -1728,8 +1755,11 @@ fn cli_gc_dry_runs_and_deletes_obsolete_segments() {
     assert_eq!(deleted["dry_run"], false);
     assert_eq!(deleted["objects_scanned"], objects_scanned);
     assert_eq!(deleted["objects_deleted"], candidates);
-    assert_eq!(deleted["routing_objects_deleted"], 3);
-    assert_eq!(deleted["tables_deleted"], 6);
+    assert_eq!(deleted["routing_objects_deleted"], routing_candidates);
+    assert_eq!(
+        deleted["tables_deleted"], table_candidates,
+        "candidates={candidate_paths:?}"
+    );
 
     let search_output = Command::cargo_bin("borsuk")
         .unwrap()

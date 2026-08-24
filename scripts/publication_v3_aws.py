@@ -16,6 +16,7 @@ import copy
 import gzip
 import hashlib
 import json
+import os
 import re
 import shlex
 import sys
@@ -72,6 +73,8 @@ class StagingReconciliation:
 
 
 def _adapter(dataset: dict[str, object]) -> str:
+    if dataset["source"]["state"] == "generated":
+        return "synthetic"
     kind = str(dataset["kind"])
     if kind == "standard-ann":
         return "ann-benchmarks"
@@ -93,7 +96,7 @@ def staging_jobs(
     dataset_prefix = str(normalized["prefixes"]["dataset"]).rstrip("/")
     jobs: list[StagingJob] = []
     for dataset in sorted(normalized["datasets"], key=lambda item: item["id"]):
-        if dataset["source"]["state"] != "unstaged":
+        if dataset["source"]["state"] not in {"unstaged", "generated"}:
             continue
         dataset_id = str(dataset["id"])
         attempt_root = f"{dataset_prefix}/{dataset_id}/attempts/{attempt:04d}"
@@ -174,6 +177,16 @@ def build_staging_worker_script(
     }
     quoted = {key: shlex.quote(value) for key, value in values.items()}
     failure_trap = worker_failure_trap_script(stage_variable="phase")
+    synthetic_setup = ""
+    if job.adapter == "synthetic":
+        synthetic_setup = """phase=rust-runtime
+dnf install -y gcc gcc-c++ make cmake openssl-devel
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+source /root/.cargo/env
+phase=compile-generator
+cd "$work/source"
+cargo build --locked --release --example generate_synthetic_dataset
+"""
     return f"""set -euo pipefail
 export AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=12 PYTHONDONTWRITEBYTECODE=1
 region={quoted["region"]}
@@ -194,7 +207,7 @@ printf '%s  %s\n' {quoted["manifest_sha"]} "$work/manifest.json" | sha256sum -c 
 phase=extract; tar -xzf "$work/source.tar.gz" -C "$work/source"
 phase=python-env; python3.12 --version; python3.12 -m venv "$work/venv"
 phase=dependencies; "$work/venv/bin/pip" install --disable-pip-version-check --no-cache-dir {values["pip_flags"]}-r "$work/source/scripts/{quoted["requirements"]}"
-phase=metadata
+{synthetic_setup}phase=metadata
 token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)
 instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
 az=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/placement/availability-zone)
@@ -427,7 +440,10 @@ def build_launch_request(
     if not terminal_failure_uri.startswith(f"{allowed_failure_root}/"):
         raise ValueError("terminal failure URI escapes its publication prefix")
     _s3_parts(terminal_failure_uri)
-    if not Path(terminal_detail_log_path).is_absolute() or "\x00" in terminal_detail_log_path:
+    if (
+        not Path(terminal_detail_log_path).is_absolute()
+        or "\x00" in terminal_detail_log_path
+    ):
         raise ValueError("terminal detail log path must be absolute UTF-8 text")
     worker_payload = base64.b64encode(
         gzip.compress(worker_script.encode("utf-8"), mtime=0)
@@ -642,7 +658,7 @@ def reconcile_staging_attempt(
 
 
 def _required_roles(adapter: str) -> dict[str, tuple[int, int | None]]:
-    if adapter in {"ann-benchmarks", "vdbbench"}:
+    if adapter in {"ann-benchmarks", "vdbbench", "synthetic"}:
         return {
             "train": (1, None),
             "query": (1, 1),
@@ -789,32 +805,78 @@ def build_staging_receipt(
     dataset = next(
         item for item in normalized_manifest["datasets"] if item["id"] == job.dataset_id
     )
-    required_provenance = {
-        "schema_version",
-        "dataset",
-        "source",
-        "source_sha256",
-        "materialization_sha256",
-    }
-    allowed_provenance = required_provenance | {"source_descriptor_sha256"}
-    digest_fields = {"source_sha256", "materialization_sha256"}
-    if "source_descriptor_sha256" in source_provenance:
-        digest_fields.add("source_descriptor_sha256")
-    if (
-        frozenset(source_provenance) - allowed_provenance
-        or not required_provenance.issubset(source_provenance)
-        or source_provenance["schema_version"] != 1
-        or source_provenance["dataset"] != job.dataset_id
-        or source_provenance["source"] != dataset["source"]["expected_source"]
-        or source_provenance["materialization_sha256"] != dataset_content_sha256
-        or any(
-            HEX_64.fullmatch(str(source_provenance[field])) is None
-            for field in digest_fields
-        )
-    ):
-        raise ValueError(
-            "source provenance differs from the staged dataset or manifest"
-        )
+    if job.adapter == "synthetic":
+        required_generated = {
+            "schema_version",
+            "dataset",
+            "source",
+            "source_sha256",
+            "materialization_sha256",
+            "generator",
+            "seed",
+            "kind",
+            "rows",
+            "dimensions",
+            "metric",
+            "generator_source_archive_sha256",
+        }
+        source = dataset["source"]
+        recipe = {
+            "dataset": dataset["id"],
+            "generator": source["generator"],
+            "seed": source["seed"],
+            "kind": dataset["kind"],
+            "rows": dataset["scale"]["rows"],
+            "dimensions": dataset["dimensions"],
+            "metric": dataset["metric"],
+        }
+        if (
+            set(source_provenance) != required_generated
+            or source_provenance.get("schema_version") != 1
+            or source_provenance.get("dataset") != job.dataset_id
+            or source_provenance.get("source") != "generated"
+            or source_provenance.get("generator") != source["generator"]
+            or source_provenance.get("seed") != source["seed"]
+            or source_provenance.get("kind") != dataset["kind"]
+            or source_provenance.get("rows") != dataset["scale"]["rows"]
+            or source_provenance.get("dimensions") != dataset["dimensions"]
+            or source_provenance.get("metric") != dataset["metric"]
+            or source_provenance.get("generator_source_archive_sha256")
+            != source_archive_sha256
+            or source_provenance.get("materialization_sha256") != dataset_content_sha256
+            or source_provenance.get("source_sha256")
+            != hashlib.sha256(canonical_json_bytes(recipe)).hexdigest()
+        ):
+            raise ValueError(
+                "generated provenance differs from the dataset recipe or materialization"
+            )
+    else:
+        required_provenance = {
+            "schema_version",
+            "dataset",
+            "source",
+            "source_sha256",
+            "materialization_sha256",
+        }
+        allowed_provenance = required_provenance | {"source_descriptor_sha256"}
+        digest_fields = {"source_sha256", "materialization_sha256"}
+        if "source_descriptor_sha256" in source_provenance:
+            digest_fields.add("source_descriptor_sha256")
+        if (
+            frozenset(source_provenance) - allowed_provenance
+            or not required_provenance.issubset(source_provenance)
+            or source_provenance["schema_version"] != 1
+            or source_provenance["dataset"] != job.dataset_id
+            or source_provenance["source"] != dataset["source"]["expected_source"]
+            or source_provenance["materialization_sha256"] != dataset_content_sha256
+            or any(
+                HEX_64.fullmatch(str(source_provenance[field])) is None
+                for field in digest_fields
+            )
+        ):
+            raise ValueError(
+                "source provenance differs from the staged dataset or manifest"
+            )
     return {
         "schema_version": 1,
         "campaign_id": normalized_manifest["campaign_id"],
@@ -936,15 +998,18 @@ def promote_staging_receipts(
         validated_receipt = validate_staging_receipt(historical, receipt)
         dataset_id = str(validated_receipt["dataset_id"])
         historical_dataset = next(
-            (dataset for dataset in historical["datasets"] if dataset["id"] == dataset_id),
+            (
+                dataset
+                for dataset in historical["datasets"]
+                if dataset["id"] == dataset_id
+            ),
             None,
         )
         if historical_dataset != current_datasets.get(dataset_id):
             raise ValueError("historical staging dataset contract differs")
         if (
             historical["campaign_id"] != normalized["campaign_id"]
-            or historical["prefixes"]["dataset"]
-            != normalized["prefixes"]["dataset"]
+            or historical["prefixes"]["dataset"] != normalized["prefixes"]["dataset"]
         ):
             raise ValueError("historical staging campaign authority differs")
         validated.append(validated_receipt)
@@ -960,14 +1025,28 @@ def promote_staging_receipts(
         if receipt is None:
             continue
         source = dataset["source"]
-        if source["state"] != "unstaged":
-            raise ValueError("manifest promotion dataset is not unstaged")
-        dataset["source"] = {
-            "state": "staged",
-            "url": receipt["output_uri"],
-            "sha256": receipt["dataset_content_sha256"],
-            "license": source["license"],
-        }
+        if source["state"] == "generated":
+            dataset["source"] = {
+                "state": "staged-generated",
+                "generator": source["generator"],
+                "seed": source["seed"],
+                "generator_source_archive_sha256": receipt["source_archive_sha256"],
+                "url": receipt["output_uri"],
+                "sha256": receipt["dataset_content_sha256"],
+                "receipt_uri": receipt["terminal_uri"],
+                "receipt_sha256": hashlib.sha256(
+                    canonical_json_bytes(receipt) + b"\n"
+                ).hexdigest(),
+            }
+        elif source["state"] == "unstaged":
+            dataset["source"] = {
+                "state": "staged",
+                "url": receipt["output_uri"],
+                "sha256": receipt["dataset_content_sha256"],
+                "license": source["license"],
+            }
+        else:
+            raise ValueError("manifest promotion dataset is already resolved")
     return validate_manifest(promoted)
 
 
@@ -1015,6 +1094,19 @@ def _reconciliation_value(value: StagingReconciliation) -> dict[str, object]:
     }
 
 
+def _write_new_canonical_json(path: Path, value: dict[str, object]) -> None:
+    body = canonical_json_bytes(value) + b"\n"
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(body)
+            output.flush()
+            os.fsync(output.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="operation", required=True)
@@ -1029,6 +1121,13 @@ def main() -> int:
     reconcile.add_argument("--terminal-marker", action="append", default=[])
     reconcile.add_argument("--receipt", type=Path)
     reconcile.add_argument("--max-attempts", type=int, default=3)
+    promote = subparsers.add_parser("promote-staging")
+    promote.add_argument("manifest", type=Path)
+    promote.add_argument("--receipt", action="append", required=True, type=Path)
+    promote.add_argument(
+        "--historical-manifest", action="append", default=[], type=Path
+    )
+    promote.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     if args.operation == "plan-staging":
@@ -1056,6 +1155,25 @@ def main() -> int:
             max_attempts=args.max_attempts,
         )
         print(canonical_json_bytes(_reconciliation_value(value)).decode("utf-8"))
+        return 0
+    if args.operation == "promote-staging":
+        receipts = [
+            json.loads(path.read_text(encoding="utf-8")) for path in args.receipt
+        ]
+        historical_manifests = {}
+        for path in args.historical_manifest:
+            historical = validate_manifest(json.loads(path.read_text(encoding="utf-8")))
+            digest = hashlib.sha256(canonical_json_bytes(historical)).hexdigest()
+            if digest in historical_manifests:
+                raise ValueError("duplicate historical staging manifest authority")
+            historical_manifests[digest] = historical
+        promoted = promote_staging_receipts(
+            manifest,
+            receipts,
+            historical_manifests=historical_manifests,
+        )
+        _write_new_canonical_json(args.output, promoted)
+        print(hashlib.sha256(canonical_json_bytes(promoted) + b"\n").hexdigest())
         return 0
     raise AssertionError("unreachable operation")
 

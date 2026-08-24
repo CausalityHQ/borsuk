@@ -6,8 +6,7 @@ import unittest
 from pathlib import Path
 
 from scripts.publication_v3_protocol import canonical_json_bytes
-from scripts.test_publication_v3_protocol import paid_v3_manifest
-
+from scripts.test_publication_v3_protocol import paid_ready_v3_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "bench_publication_v3_aws.sh"
@@ -19,7 +18,7 @@ class BenchPublicationV3AwsTests(unittest.TestCase):
             temp = Path(directory)
             manifest = temp / "manifest.json"
             output = temp / "run"
-            manifest.write_bytes(canonical_json_bytes(paid_v3_manifest()) + b"\n")
+            manifest.write_bytes(canonical_json_bytes(paid_ready_v3_manifest()) + b"\n")
             completed = subprocess.run(
                 ["bash", str(SCRIPT)],
                 cwd=ROOT,
@@ -47,7 +46,7 @@ class BenchPublicationV3AwsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
             manifest = temp / "manifest.json"
-            manifest.write_bytes(canonical_json_bytes(paid_v3_manifest()) + b"\n")
+            manifest.write_bytes(canonical_json_bytes(paid_ready_v3_manifest()) + b"\n")
             completed = subprocess.run(
                 ["bash", str(SCRIPT)],
                 cwd=ROOT,

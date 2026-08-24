@@ -435,7 +435,12 @@ def _object_identity(objects: list[dict[str, object]]) -> list[dict[str, object]
 def dataset_materialization_sha256(root: Path, *, kind: str) -> str:
     if kind == "beir-hybrid":
         objects = _beir_objects(root)
-    elif kind in {"standard-ann", "realistic-dense"}:
+    elif kind in {
+        "standard-ann",
+        "realistic-dense",
+        "synthetic-dense",
+        "synthetic-binary",
+    }:
         objects = _dataset_objects(root)
     else:
         raise ValueError(f"unsupported dataset materialization kind: {kind}")

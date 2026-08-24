@@ -70,7 +70,9 @@ MAX_RECEIPT_BYTES = 256 * 1024
 
 def _checksum(value: object, role: str) -> str:
     digest = str(value)
-    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+    if len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
         raise ValueError(f"{role} must be lowercase SHA-256")
     return digest
 
@@ -100,9 +102,10 @@ def _validate_dataset_materialization(
     materialization = _checksum(
         dataset_materialization_sha256, "dataset materialization checksum"
     )
-    if source.get("state") == "staged" and materialization != _checksum(
-        source.get("sha256"), "staged dataset checksum"
-    ):
+    if source.get("state") in {
+        "staged",
+        "staged-generated",
+    } and materialization != _checksum(source.get("sha256"), "staged dataset checksum"):
         raise ValueError("staged dataset materialization differs from its schedule")
     return materialization
 
@@ -124,7 +127,9 @@ def require_verified_index(
     dataset_materialization_sha256: str,
 ) -> tuple[dict[str, object], str]:
     if not payload or len(payload) > MAX_RECEIPT_BYTES or not payload.endswith(b"\n"):
-        raise ValueError("index receipt bytes are missing or exceed their canonical bound")
+        raise ValueError(
+            "index receipt bytes are missing or exceed their canonical bound"
+        )
     try:
         value = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -146,7 +151,9 @@ def require_verified_object_roster(
     reference = receipt.get("object_roster_ref")
     if not isinstance(reference, dict):
         raise ValueError("index receipt has no object roster reference")
-    if len(payload) != reference.get("bytes") or hashlib.sha256(payload).hexdigest() != reference.get("checksum"):
+    if len(payload) != reference.get("bytes") or hashlib.sha256(
+        payload
+    ).hexdigest() != reference.get("checksum"):
         raise ValueError("index object roster differs from its receipt")
     try:
         value = json.loads(payload)
@@ -158,10 +165,16 @@ def require_verified_object_roster(
     profile = cell.get("index_profile")
     summary = validate_object_roster(
         value,
-        logical_rows=dataset.get("scale", {}).get("rows") if isinstance(dataset, dict) else None,
-        logical_cells=profile.get("logical_cells") if isinstance(profile, dict) else None,
+        logical_rows=dataset.get("scale", {}).get("rows")
+        if isinstance(dataset, dict)
+        else None,
+        logical_cells=profile.get("logical_cells")
+        if isinstance(profile, dict)
+        else None,
     )
-    if summary["objects"] != reference.get("objects") or summary["total_object_bytes"] != reference.get("total_bytes"):
+    if summary["objects"] != reference.get("objects") or summary[
+        "total_object_bytes"
+    ] != reference.get("total_bytes"):
         raise ValueError("index object roster summary differs from its receipt")
     return copy.deepcopy(value)
 
@@ -218,12 +231,16 @@ def build_index_receipt(
         "index_uri": cell.get("index_prefix"),
         "system": cell.get("system"),
         "source_archive_sha256": source_archive_sha256,
-        "index_profile_sha256": hashlib.sha256(canonical_json_bytes(profile)).hexdigest(),
+        "index_profile_sha256": hashlib.sha256(
+            canonical_json_bytes(profile)
+        ).hexdigest(),
         "dataset_id": dataset.get("id") if isinstance(dataset, dict) else None,
         "dataset_sha256": _validate_dataset_materialization(
             cell, dataset_materialization_sha256
         ),
-        "dataset_rows": dataset.get("scale", {}).get("rows") if isinstance(dataset, dict) else None,
+        "dataset_rows": dataset.get("scale", {}).get("rows")
+        if isinstance(dataset, dict)
+        else None,
         "build_attempt_id": build_attempt_id,
         "builder_instance_identity": builder_instance_identity,
         "builder_instance_type": builder_instance_type,
@@ -261,37 +278,65 @@ def validate_index_receipt(
 ) -> dict[str, object]:
     if not isinstance(value, dict) or frozenset(value) != RECEIPT_FIELDS:
         raise ValueError("index receipt fields differ")
-    if value["schema_version"] != 1 or value["document_kind"] != "publication-v3-index-complete" or value["status"] != "complete":
+    if (
+        value["schema_version"] != 1
+        or value["document_kind"] != "publication-v3-index-complete"
+        or value["status"] != "complete"
+    ):
         raise ValueError("index receipt schema, kind, or status is invalid")
     expected_index_id = index_id(cell)
     expected_uri = cell.get("index_prefix")
     if value["index_id"] != expected_index_id:
         raise ValueError("index receipt identity differs from the scheduled index")
-    if value["index_uri"] != expected_uri or S3_URI.fullmatch(str(value["index_uri"])) is None or not str(value["index_uri"]).endswith(f"/{expected_index_id}"):
+    if (
+        value["index_uri"] != expected_uri
+        or S3_URI.fullmatch(str(value["index_uri"])) is None
+        or not str(value["index_uri"]).endswith(f"/{expected_index_id}")
+    ):
         raise ValueError("index receipt URI differs from its S3 authority")
     for field in ("campaign_id", "manifest_sha256", "system"):
         if value[field] != cell.get(field):
             raise ValueError(f"index receipt {field} differs from its protocol")
-    if value["source_archive_sha256"] != _checksum(source_archive_sha256, "source archive checksum"):
+    if value["source_archive_sha256"] != _checksum(
+        source_archive_sha256, "source archive checksum"
+    ):
         raise ValueError("index receipt source archive differs")
     profile = cell.get("index_profile")
-    if value["index_profile_sha256"] != hashlib.sha256(canonical_json_bytes(profile)).hexdigest():
+    if (
+        value["index_profile_sha256"]
+        != hashlib.sha256(canonical_json_bytes(profile)).hexdigest()
+    ):
         raise ValueError("index receipt profile differs")
     dataset = cell.get("dataset")
-    if not isinstance(dataset, dict) or value["dataset_id"] != dataset.get("id") or value["dataset_sha256"] != _validate_dataset_materialization(cell, dataset_materialization_sha256) or value["dataset_rows"] != dataset.get("scale", {}).get("rows"):
+    if (
+        not isinstance(dataset, dict)
+        or value["dataset_id"] != dataset.get("id")
+        or value["dataset_sha256"]
+        != _validate_dataset_materialization(cell, dataset_materialization_sha256)
+        or value["dataset_rows"] != dataset.get("scale", {}).get("rows")
+    ):
         raise ValueError("index receipt dataset differs")
     _identity(value["build_attempt_id"], "build attempt id")
     _identity(value["builder_instance_identity"], "builder instance identity")
     environment = cell.get("environment_contract")
-    workers = environment.get("build_workers") if isinstance(environment, dict) else None
+    workers = (
+        environment.get("build_workers") if isinstance(environment, dict) else None
+    )
     worker = workers.get(cell.get("system")) if isinstance(workers, dict) else None
-    if value["builder_instance_type"] != (worker.get("instance_type") if isinstance(worker, dict) else None):
-        raise ValueError("index receipt builder instance type differs from its contract")
+    if value["builder_instance_type"] != (
+        worker.get("instance_type") if isinstance(worker, dict) else None
+    ):
+        raise ValueError(
+            "index receipt builder instance type differs from its contract"
+        )
     stats = value["index_stats"]
     if not isinstance(stats, dict) or frozenset(stats) != INDEX_STATS_FIELDS:
         raise ValueError("index receipt stats fields differ")
     profile_cells = profile.get("logical_cells") if isinstance(profile, dict) else None
-    if stats["logical_cells"] != profile_cells or stats["records"] != value["dataset_rows"]:
+    if (
+        stats["logical_cells"] != profile_cells
+        or stats["records"] != value["dataset_rows"]
+    ):
         raise ValueError("index receipt stats differ from the scheduled index")
     _checksum(stats["logical_cell_catalog_checksum"], "logical cell catalog checksum")
     if _nonnegative(stats["total_active_index_bytes"], "active index bytes") <= 0:
@@ -301,7 +346,11 @@ def validate_index_receipt(
         raise ValueError("index receipt build metric fields differ")
     for field, metric in metrics.items():
         _nonnegative(metric, f"build metric {field}")
-    if metrics["cpu_ns"] <= 0 or metrics["peak_rss_bytes"] <= 0 or metrics["build_elapsed_ns"] <= 0:
+    if (
+        metrics["cpu_ns"] <= 0
+        or metrics["peak_rss_bytes"] <= 0
+        or metrics["build_elapsed_ns"] <= 0
+    ):
         raise ValueError("index receipt CPU, RSS, and elapsed metrics must be positive")
     roster_ref = value["object_roster_ref"]
     if not isinstance(roster_ref, dict) or frozenset(roster_ref) != ROSTER_REF_FIELDS:

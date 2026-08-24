@@ -9029,10 +9029,10 @@ fn gc_preserves_all_live_objects_on_healthy_index() {
     );
 }
 
-/// Positioned deletes remain authoritative until flush materializes one stable
-/// hash page; generic GC must preserve both boundaries and delete visibility.
+/// Positioned deletes remain authoritative until flush materializes the stable
+/// mutation-directory root and data objects; GC must preserve both boundaries.
 #[test]
-fn gc_keeps_positioned_deletes_and_materialized_tombstone_page() {
+fn gc_keeps_positioned_deletes_and_materialized_mutation_directory() {
     let dir = tempfile::tempdir().unwrap();
     let uri = dir.path().to_string_lossy().into_owned();
 
@@ -9109,8 +9109,21 @@ fn gc_keeps_positioned_deletes_and_materialized_tombstone_page() {
     assert_eq!(index.get_vector(&deleted_b).unwrap(), None);
 
     index.flush().unwrap();
-    let stable_pages = collect_files_with_extension(dir.path().join("tombstones"), "parquet");
-    assert_eq!(stable_pages.len(), 1);
+    let stable_directory_objects = storage_file_sizes(dir.path())
+        .into_keys()
+        .filter(|path| path.starts_with("id-directory-roots/") || path.starts_with("id-directory/"))
+        .collect::<BTreeSet<_>>();
+    assert!(
+        stable_directory_objects
+            .iter()
+            .any(|path| path.starts_with("id-directory-roots/"))
+    );
+    assert!(
+        stable_directory_objects
+            .iter()
+            .any(|path| path.starts_with("id-directory/"))
+    );
+    assert!(collect_files_with_extension(dir.path().join("tombstones"), "parquet").is_empty());
     let report = index
         .gc_obsolete_segments(GarbageCollectionOptions {
             dry_run: false,
@@ -9121,14 +9134,17 @@ fn gc_keeps_positioned_deletes_and_materialized_tombstone_page() {
         report
             .candidates
             .iter()
-            .all(|path| !stable_pages.iter().any(|stable| {
-                stable.strip_prefix(dir.path()).unwrap().to_string_lossy() == path.as_str()
-            })),
-        "GC must retain the stable page selected by the active manifest"
+            .all(|path| !stable_directory_objects.contains(path)),
+        "GC must retain the mutation-directory objects selected by the active manifest"
     );
     assert_eq!(
-        collect_files_with_extension(dir.path().join("tombstones"), "parquet"),
-        stable_pages
+        storage_file_sizes(dir.path())
+            .into_keys()
+            .filter(|path| {
+                path.starts_with("id-directory-roots/") || path.starts_with("id-directory/")
+            })
+            .collect::<BTreeSet<_>>(),
+        stable_directory_objects
     );
     assert_eq!(index.get_vector(&deleted_a).unwrap(), None);
     assert_eq!(index.get_vector(&deleted_b).unwrap(), None);

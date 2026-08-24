@@ -210,6 +210,7 @@ def promote_sealed_attempt(
         attempt=attempt,
         work_root=work_root,
         source_cache=source_cache,
+        source_archive_sha256=source_archive_sha256,
     )
     attempt_root = work_root / "attempts" / f"{attempt:04d}"
     provenance_path = attempt_root / "materialized.provenance.json"

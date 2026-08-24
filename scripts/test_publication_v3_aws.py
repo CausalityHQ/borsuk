@@ -7,7 +7,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 from scripts.publication_v3_aws import (
     AttemptObservation,
@@ -15,6 +18,7 @@ from scripts.publication_v3_aws import (
     build_staging_receipt,
     build_staging_worker_script,
     classify_attempt,
+    main,
     promote_staging_receipts,
     reconcile_staging_attempt,
     staging_jobs,
@@ -22,7 +26,7 @@ from scripts.publication_v3_aws import (
     validate_staging_receipt,
     worker_supervisor_script,
 )
-from scripts.publication_v3_protocol import validate_manifest
+from scripts.publication_v3_protocol import canonical_json_bytes, validate_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs/research/publication-v3-manifest.json"
@@ -62,9 +66,11 @@ class PublicationV3AwsTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_committed_manifest_has_no_jobs_after_receipt_promotion(self) -> None:
+    def test_committed_manifest_has_only_unpromoted_generated_jobs(self) -> None:
         manifest = validate_manifest(json.loads(MANIFEST.read_text(encoding="utf-8")))
-        self.assertEqual(staging_jobs(manifest), ())
+        jobs = staging_jobs(manifest)
+        self.assertEqual(len(jobs), 11)
+        self.assertTrue(all(job.adapter == "synthetic" for job in jobs))
         external = [
             dataset
             for dataset in manifest["datasets"]
@@ -80,19 +86,22 @@ class PublicationV3AwsTests(unittest.TestCase):
             )
             self.assertRegex(source["sha256"], r"^[0-9a-f]{64}$")
 
-    def test_staging_jobs_cover_only_external_datasets_with_exact_adapters(
+    def test_staging_jobs_cover_external_and_generated_datasets_with_exact_adapters(
         self,
     ) -> None:
         jobs = staging_jobs(self.manifest)
-        self.assertEqual(len(jobs), 12)
+        self.assertEqual(len(jobs), 23)
         self.assertEqual(
             [job.dataset_id for job in jobs], sorted(job.dataset_id for job in jobs)
         )
-        self.assertFalse(any(job.dataset_id.startswith("synthetic-") for job in jobs))
+        self.assertEqual(
+            sum(job.dataset_id.startswith("synthetic-") for job in jobs), 11
+        )
         by_id = {job.dataset_id: job for job in jobs}
         self.assertEqual(by_id["deep-image-96"].adapter, "ann-benchmarks")
         self.assertEqual(by_id["laion-100m-768"].adapter, "vdbbench")
         self.assertEqual(by_id["scifact"].adapter, "beir")
+        self.assertEqual(by_id["synthetic-clustered-100m-768"].adapter, "synthetic")
         self.assertEqual(
             by_id["scifact"].output_uri,
             "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/scifact/attempts/0001/materialized",
@@ -222,14 +231,12 @@ class PublicationV3AwsTests(unittest.TestCase):
             detail_log = root / "worker.log"
             detail_log.write_text("bounded diagnostic\n", encoding="utf-8")
             worker.write_text(
-                "#!/usr/bin/env bash\n"
-                "trap '' TERM\n"
-                "while :; do sleep 10; done\n",
+                "#!/usr/bin/env bash\ntrap '' TERM\nwhile :; do sleep 10; done\n",
                 encoding="utf-8",
             )
             reporter.write_text(
                 "#!/usr/bin/env bash\n"
-                f"printf '%s\\n%s\\n%s\\n' \"$1\" \"$2\" \"$3\" >{receipt!s}\n",
+                f'printf \'%s\\n%s\\n%s\\n\' "$1" "$2" "$3" >{receipt!s}\n',
                 encoding="utf-8",
             )
             worker.chmod(0o700)
@@ -279,14 +286,14 @@ class PublicationV3AwsTests(unittest.TestCase):
                 "    *) shift;;\n"
                 "  esac\n"
                 "done\n"
-                "target=\"$CAPTURE_DIR/${key##*/}\"\n"
+                'target="$CAPTURE_DIR/${key##*/}"\n'
                 "if [[ $operation = head-object ]]; then\n"
                 "  [[ $query = 'Metadata.\"borsuk-sha256\"' ]]\n"
-                "  test -f \"$target\"\n"
+                '  test -f "$target"\n'
                 "  sha256sum \"$target\" | awk '{print $1}'\n"
                 "  exit 0\n"
                 "fi\n"
-                "if [[ ${AWS_SKIP_PUT_COPY:-0} != 1 ]]; then cp \"$body\" \"$target\"; fi\n"
+                'if [[ ${AWS_SKIP_PUT_COPY:-0} != 1 ]]; then cp "$body" "$target"; fi\n'
                 "if [[ ${AWS_PRECONDITION_AFTER_PUT:-0} = 1 ]]; then\n"
                 "  echo 'PreconditionFailed (412)' >&2\n"
                 "  exit 255\n"
@@ -479,8 +486,8 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertEqual(value["schema_version"], 1)
         self.assertEqual(value["campaign_id"], "publication-v3-20260812")
         self.assertRegex(value["manifest_sha256"], r"^[0-9a-f]{64}$")
-        self.assertEqual(value["job_count"], 12)
-        self.assertEqual(len(value["jobs"]), 12)
+        self.assertEqual(value["job_count"], 23)
+        self.assertEqual(len(value["jobs"]), 23)
         self.assertIn("sift-128", {job["dataset_id"] for job in value["jobs"]})
         self.assertNotIn("instance_id", first.stdout)
 
@@ -660,6 +667,28 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertIn("--only-binary=:all:", script)
         self.assertNotIn("scripts/requirements-format-bench.txt", script)
 
+    def test_synthetic_worker_builds_generator_on_build_class_spot_host(self) -> None:
+        job = next(
+            item
+            for item in staging_jobs(self.manifest)
+            if item.dataset_id == "synthetic-uniform-100m-768"
+        )
+        script = build_staging_worker_script(
+            self.manifest,
+            job,
+            source_uri="s3://borsuk-bench-453182569524-euc1/source/archive.tar.gz",
+            source_archive_sha256="a" * 64,
+            manifest_uri="s3://borsuk-bench-453182569524-euc1/manifests/frozen.json",
+            manifest_sha256="b" * 64,
+        )
+        self.assertIn("rustup.rs", script)
+        self.assertIn(
+            "cargo build --locked --release --example generate_synthetic_dataset",
+            script,
+        )
+        self.assertIn("scripts/promote_publication_v3_dataset.py", script)
+        self.assertIn("--source-archive-sha256", script)
+
     def test_staging_receipt_roundtrip_verifier_rejects_substitution(self) -> None:
         job = next(
             job for job in staging_jobs(self.manifest) if job.dataset_id == "sift-128"
@@ -765,6 +794,137 @@ class PublicationV3AwsTests(unittest.TestCase):
                 [receipt],
                 historical_manifests={receipt["manifest_sha256"]: corrupt_authority},
             )
+
+    def test_generated_receipt_promotes_recipe_to_staged_generated_authority(
+        self,
+    ) -> None:
+        dataset_id = "synthetic-clustered-1m-768"
+        dataset = next(
+            item for item in self.manifest["datasets"] if item["id"] == dataset_id
+        )
+        job = next(
+            item
+            for item in staging_jobs(self.manifest)
+            if item.dataset_id == dataset_id
+        )
+        objects = tuple(
+            {
+                "role": role,
+                "format": "json" if role == "metadata" else "parquet",
+                "uri": f"{job.output_uri}/{name}",
+                "sha256": f"{index + 1:064x}",
+                "bytes": 1024,
+                "rows": rows,
+            }
+            for index, (role, name, rows) in enumerate(
+                (
+                    ("train", "train-00000000.parquet", 1_000_000),
+                    ("query", "test.parquet", 1_000),
+                    ("ground-truth", "neighbors.parquet", 1_000),
+                    ("metadata", "meta.json", 1),
+                )
+            )
+        )
+        identity = [
+            {
+                **{
+                    key: item[key]
+                    for key in ("role", "format", "sha256", "bytes", "rows")
+                },
+                "path": str(item["uri"]).removeprefix(job.output_uri + "/"),
+            }
+            for item in sorted(objects, key=lambda item: str(item["uri"]))
+        ]
+        content_sha = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+        provenance = {
+            "schema_version": 1,
+            "dataset": dataset_id,
+            "source": "generated",
+            "source_sha256": hashlib.sha256(
+                canonical_json_bytes(
+                    {
+                        "dataset": dataset_id,
+                        "generator": dataset["source"]["generator"],
+                        "seed": dataset["source"]["seed"],
+                        "kind": dataset["kind"],
+                        "rows": dataset["scale"]["rows"],
+                        "dimensions": dataset["dimensions"],
+                        "metric": dataset["metric"],
+                    }
+                )
+            ).hexdigest(),
+            "materialization_sha256": content_sha,
+            "generator": dataset["source"]["generator"],
+            "seed": dataset["source"]["seed"],
+            "kind": dataset["kind"],
+            "rows": dataset["scale"]["rows"],
+            "dimensions": dataset["dimensions"],
+            "metric": dataset["metric"],
+            "generator_source_archive_sha256": "a" * 64,
+        }
+        receipt = build_staging_receipt(
+            self.manifest,
+            job,
+            source_archive_sha256="a" * 64,
+            source_provenance=provenance,
+            provenance_sha256="d" * 64,
+            objects=objects,
+            instance_id="i-0123456789abcdef0",
+            instance_type="r7g.8xlarge",
+            availability_zone="eu-central-1a",
+            purchase_option="spot",
+        )
+        promoted = promote_staging_receipts(self.manifest, [receipt])
+        source = next(
+            item for item in promoted["datasets"] if item["id"] == dataset_id
+        )["source"]
+        self.assertEqual(source["state"], "staged-generated")
+        self.assertEqual(source["generator"], dataset["source"]["generator"])
+        self.assertEqual(source["seed"], dataset["source"]["seed"])
+        self.assertEqual(source["generator_source_archive_sha256"], "a" * 64)
+        self.assertEqual(source["url"], job.output_uri)
+        self.assertEqual(source["sha256"], content_sha)
+        self.assertEqual(source["receipt_uri"], job.terminal_uri)
+        self.assertEqual(
+            source["receipt_sha256"],
+            hashlib.sha256(canonical_json_bytes(receipt) + b"\n").hexdigest(),
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "manifest.json"
+            receipt_path = root / "receipt.json"
+            output_path = root / "promoted.json"
+            manifest_path.write_bytes(canonical_json_bytes(self.manifest) + b"\n")
+            receipt_path.write_bytes(canonical_json_bytes(receipt) + b"\n")
+            arguments = [
+                "publication_v3_aws.py",
+                "promote-staging",
+                str(manifest_path),
+                "--receipt",
+                str(receipt_path),
+                "--output",
+                str(output_path),
+            ]
+            with mock.patch.object(sys, "argv", arguments), redirect_stdout(StringIO()):
+                self.assertEqual(main(), 0)
+            promoted_bytes = output_path.read_bytes()
+            self.assertEqual(
+                promoted_bytes,
+                canonical_json_bytes(json.loads(promoted_bytes)) + b"\n",
+            )
+            promoted_source = next(
+                item
+                for item in json.loads(promoted_bytes)["datasets"]
+                if item["id"] == dataset_id
+            )["source"]
+            self.assertEqual(promoted_source["state"], "staged-generated")
+            with self.assertRaisesRegex(FileExistsError, "promoted.json"):
+                with (
+                    mock.patch.object(sys, "argv", arguments),
+                    redirect_stdout(StringIO()),
+                ):
+                    main()
 
     def test_reconciler_validates_success_and_bounds_fresh_attempts(self) -> None:
         job = next(

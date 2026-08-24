@@ -36,7 +36,7 @@ def campaign_commands(
     workload = matches[0]
     datasets = {dataset["id"]: dataset for dataset in normalized["datasets"]}
     if any(
-        datasets[dataset_id]["source"]["state"] != "staged"
+        datasets[dataset_id]["source"]["state"] not in {"staged", "staged-generated"}
         for dataset_id in workload["dataset_ids"]
     ):
         raise ValueError("campaign requires a durable generated dataset handoff")

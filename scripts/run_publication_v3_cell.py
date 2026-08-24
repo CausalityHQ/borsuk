@@ -107,7 +107,9 @@ RUNTIME_FLOW_CONTROL_FIELDS = frozenset(
     }
 )
 PRODUCTION_BUILD_FIELDS = tuple(
-    "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,gc_ms,gc_objects_scanned,gc_objects_deleted,gc_transaction_states_remaining,gc_bytes_read,gc_bytes_reclaimed,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(",")
+    "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,gc_ms,gc_objects_scanned,gc_objects_deleted,gc_transaction_states_remaining,gc_bytes_read,gc_bytes_reclaimed,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(
+        ","
+    )
 )
 BUILD_PHASE_FIELDS = ("schema_version", "group", "phase", "nanos", "calls")
 BUILD_PHASE_NAMES = (
@@ -144,13 +146,19 @@ BUILD_PHASE_NAMES = (
     "locality_sort",
 )
 WRITE_COST_FIELDS = tuple(
-    "op,configured_writers,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written".split(",")
+    "op,configured_writers,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written".split(
+        ","
+    )
 )
 WRITE_SAMPLE_FIELDS = tuple(
-    "op,writer_index,wave_index,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists".split(",")
+    "op,writer_index,wave_index,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists".split(
+        ","
+    )
 )
 LIFECYCLE_FIELDS = tuple(
-    "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,searchability_refresh_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification".split(",")
+    "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,searchability_refresh_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification".split(
+        ","
+    )
 )
 LIFECYCLE_OPERATIONS = (
     "insert",
@@ -200,9 +208,8 @@ def validate_publication_cell_authority(
     )
     normalized = copy.deepcopy(cell)
     normalized["index_prefix"] = expected_index
-    if (
-        canonical_json_bytes(normalized) != canonical_json_bytes(expected)
-        or (candidate_index != expected_index and not retry_index)
+    if canonical_json_bytes(normalized) != canonical_json_bytes(expected) or (
+        candidate_index != expected_index and not retry_index
     ):
         raise ValueError("publication cell differs from its frozen manifest authority")
     return copy.deepcopy(cell)
@@ -255,7 +262,9 @@ def plan_arms(cell: dict[str, object]) -> list[dict[str, object]]:
         raise ValueError(f"workload kind {workload.get('kind')!r} is not executable")
     k_values = factors.get("k")
     if k_values != [10]:
-        unsupported = next((value for value in k_values or [] if value != 10), "missing")
+        unsupported = next(
+            (value for value in k_values or [] if value != 10), "missing"
+        )
         raise ValueError(f"k={unsupported} is not executable by the current benchmark")
     leaf_page_budgets = factors.get("leaf_page_budgets")
     cache_states = factors.get("cache_states")
@@ -346,16 +355,23 @@ def build_execution_plan(
     ):
         raise ValueError("runtime flow-control authority is invalid")
     if cell.get("system") != "borsuk":
-        raise ValueError(f"system {cell.get('system')!r} is not available in local execution")
+        raise ValueError(
+            f"system {cell.get('system')!r} is not available in local execution"
+        )
     workload = cell.get("workload")
     dataset = cell.get("dataset")
     source = cell.get("source")
-    if not isinstance(workload, dict) or workload.get("kind") not in SUPPORTED_LOCAL_KINDS:
+    if (
+        not isinstance(workload, dict)
+        or workload.get("kind") not in SUPPORTED_LOCAL_KINDS
+    ):
         raise ValueError("workload is not supported by the local read runner")
     if not isinstance(dataset, dict) or not isinstance(dataset.get("source"), dict):
         raise ValueError("cell dataset is invalid")
     publication = mode != "smoke"
-    if publication and (not isinstance(source, dict) or source.get("state") != "frozen"):
+    if publication and (
+        not isinstance(source, dict) or source.get("state") != "frozen"
+    ):
         raise ValueError("publication execution requires a frozen source archive")
     environment = cell.get("environment_contract")
     if not isinstance(environment, dict):
@@ -387,7 +403,9 @@ def build_execution_plan(
         raise ValueError("BORSUK runtime-client limits are invalid")
     build_workers = environment.get("build_workers")
     build_storage = environment.get("build_storage")
-    build_worker = build_workers.get("borsuk") if isinstance(build_workers, dict) else None
+    build_worker = (
+        build_workers.get("borsuk") if isinstance(build_workers, dict) else None
+    )
     if not isinstance(build_worker, dict) or not isinstance(build_storage, dict):
         raise ValueError("cell has no BORSUK offline-build contract")
 
@@ -412,7 +430,9 @@ def build_execution_plan(
     ):
         raise ValueError("cell rows and dimensions must be positive integers")
     queries_per_repetition = cell.get("queries_per_repetition")
-    if isinstance(queries_per_repetition, bool) or not isinstance(queries_per_repetition, int):
+    if isinstance(queries_per_repetition, bool) or not isinstance(
+        queries_per_repetition, int
+    ):
         raise ValueError("cell source query count is invalid")
 
     profile_cells = index_profile.get("logical_cells")
@@ -428,10 +448,18 @@ def build_execution_plan(
         raise ValueError("BORSUK logical-cell profile is not executable")
     smoke_cells = min(profile_cells, 128)
     smoke_rows = max(1_000, smoke_cells * minimum_rows_per_cell)
-    if mode == "smoke" and dataset["source"].get("generator") == "synthetic-clustered-v1":
+    dense_generators = {
+        "synthetic-clustered-v1",
+        "synthetic-uniform-v1",
+        "synthetic-duplicate-v1",
+        "synthetic-adversarial-v1",
+    }
+    if mode == "smoke" and dataset["source"].get("generator") in dense_generators:
         smoke_rows = ((smoke_rows + 99) // 100) * 100
     effective_rows = scheduled_rows if publication else min(scheduled_rows, smoke_rows)
-    effective_queries = queries_per_repetition if publication else min(queries_per_repetition, 10)
+    effective_queries = (
+        queries_per_repetition if publication else min(queries_per_repetition, 10)
+    )
     dataset_dir = workspace / "dataset"
     output_dir = workspace / "output"
     index_dir = workspace / "index"
@@ -445,10 +473,8 @@ def build_execution_plan(
             else disk_cache_limit_mib * 1024 * 1024
         )
         if (
-            runtime_flow_control["ram_budget_bytes"]
-            != resident_limit_mib * 1024 * 1024
-            or runtime_flow_control["disk_cache_max_bytes"]
-            != expected_disk_cache_bytes
+            runtime_flow_control["ram_budget_bytes"] != resident_limit_mib * 1024 * 1024
+            or runtime_flow_control["disk_cache_max_bytes"] != expected_disk_cache_bytes
             or runtime_flow_control["cpu_threads"] > runtime_vcpus
             or runtime_flow_control["cpu_threads"] > 64
             or runtime_flow_control["max_active_searches"] > runtime_vcpus * 4
@@ -468,8 +494,7 @@ def build_execution_plan(
             <= 5
             or (
                 runtime_profile == "concurrency"
-                and runtime_flow_control["max_active_searches"]
-                < max(CONCURRENCY_SWEEP)
+                and runtime_flow_control["max_active_searches"] < max(CONCURRENCY_SWEEP)
             )
         ):
             raise ValueError("runtime flow-control authority violates runtime bounds")
@@ -477,15 +502,20 @@ def build_execution_plan(
     steps: list[dict[str, object]] = []
     dataset_source = dataset["source"]
     if dataset_source.get("state") == "generated":
-        if dataset_source.get("generator") != "synthetic-clustered-v1":
+        generator_id = dataset_source.get("generator")
+        if generator_id not in dense_generators:
             raise ValueError("scheduled synthetic generator is not implemented")
         if dataset.get("metric") != "cosine":
-            raise ValueError("the deterministic dense generator supports cosine cells only")
+            raise ValueError(
+                "the deterministic dense generator supports cosine cells only"
+            )
         steps.append(
             {
                 "argv": [str(generator)],
                 "env": {
                     "BORSUK_SYNTHETIC_OUTPUT": str(dataset_dir),
+                    "BORSUK_SYNTHETIC_GENERATOR": str(generator_id),
+                    "BORSUK_SYNTHETIC_DATASET_ID": str(dataset["id"]),
                     "BORSUK_SYNTHETIC_TRAIN": str(effective_rows),
                     "BORSUK_SYNTHETIC_DIMENSIONS": str(dimensions),
                     "BORSUK_SYNTHETIC_QUERIES": str(effective_queries),
@@ -494,7 +524,7 @@ def build_execution_plan(
                 },
             }
         )
-    elif dataset_source.get("state") != "staged":
+    elif dataset_source.get("state") not in {"staged", "staged-generated"}:
         raise ValueError("dataset must be generated or staged before execution")
 
     workload_kind = workload.get("kind")
@@ -550,11 +580,14 @@ def build_execution_plan(
     training_rows_per_cell = index_profile.get("training_rows_per_cell")
     training_iterations = index_profile.get("training_iterations")
     if (
-        (not turboquant and (
-            isinstance(code_bytes, bool)
-            or not isinstance(code_bytes, int)
-            or code_bytes <= 0
-        ))
+        (
+            not turboquant
+            and (
+                isinstance(code_bytes, bool)
+                or not isinstance(code_bytes, int)
+                or code_bytes <= 0
+            )
+        )
         or (
             turboquant
             and any(
@@ -577,7 +610,9 @@ def build_execution_plan(
     )
     training_rows = min(effective_rows, effective_cells * training_rows_per_cell)
     if training_rows < effective_cells:
-        raise ValueError("BORSUK index profile has fewer training rows than logical cells")
+        raise ValueError(
+            "BORSUK index profile has fewer training rows than logical cells"
+        )
     benchmark_env.update(
         {
             "BORSUK_BENCH_LOGICAL_CELLS": str(effective_cells),
@@ -787,7 +822,9 @@ def authorize_publication_runtime(
             raise ValueError("publication runtime step is invalid")
         environment = step["env"]
         if environment.get("BORSUK_BENCH_URI") != validated_receipt["index_uri"]:
-            raise ValueError("runtime index URI differs from the immutable build receipt")
+            raise ValueError(
+                "runtime index URI differs from the immutable build receipt"
+            )
         if environment.get("BORSUK_BENCH_BUILD_INDEX") != "0":
             raise ValueError("publication runtime must disable index construction")
         for forbidden in (
@@ -813,10 +850,17 @@ def authorize_publication_mutation_runtime(
     cell: dict[str, object],
 ) -> dict[str, object]:
     workload = cell.get("workload")
-    if not isinstance(workload, dict) or workload.get("kind") != "write-update-delete-compact":
+    if (
+        not isinstance(workload, dict)
+        or workload.get("kind") != "write-update-delete-compact"
+    ):
         raise ValueError("mutation runtime requires a lifecycle cell")
     writers = arm.get("writers")
-    if isinstance(writers, bool) or not isinstance(writers, int) or not 1 <= writers <= 64:
+    if (
+        isinstance(writers, bool)
+        or not isinstance(writers, int)
+        or not 1 <= writers <= 64
+    ):
         raise ValueError("publication lifecycle writers must be in 1..=64")
     clone = validate_clone_receipt(
         clone_receipt,
@@ -839,7 +883,9 @@ def authorize_publication_mutation_runtime(
             raise ValueError("mutation plan does not originate from its immutable base")
         environment["BORSUK_BENCH_URI"] = clone["clone_index_uri"]
         if environment.get("BORSUK_BENCH_LIFECYCLE_WRITERS") != str(writers):
-            raise ValueError("mutation plan writer count differs from its lifecycle arm")
+            raise ValueError(
+                "mutation plan writer count differs from its lifecycle arm"
+            )
         if environment.get("BORSUK_BENCH_LIFECYCLE_INSERT_MODE") != arm.get(
             "insert_mode"
         ):
@@ -897,7 +943,9 @@ def _execute_steps_with_resources(
             "LANG": "C.UTF-8",
             "PATH": "/usr/bin:/bin",
         }
-        child_environment.update({str(key): str(value) for key, value in environment.items()})
+        child_environment.update(
+            {str(key): str(value) for key, value in environment.items()}
+        )
         log_path = workspace / f"step-{index:02d}.log"
         with log_path.open("wb") as log:
             process = subprocess.Popen(
@@ -952,9 +1000,7 @@ def _nearest_rank(values: list[int], quantile: float) -> int:
     return sorted(values)[max(0, math.ceil(quantile * len(values)) - 1)]
 
 
-def _validated_query_stage_timings(
-    row: dict[str, str], *, role: str
-) -> dict[str, int]:
+def _validated_query_stage_timings(row: dict[str, str], *, role: str) -> dict[str, int]:
     return validate_query_stage_timings(row, role=role)
 
 
@@ -981,7 +1027,9 @@ def summarize_query_samples(
         raise ValueError("query sample artifact is incomplete for its arm")
     index_profile = cell.get("index_profile")
     expected_mode = (
-        index_profile.get("global_scan_codec") if isinstance(index_profile, dict) else None
+        index_profile.get("global_scan_codec")
+        if isinstance(index_profile, dict)
+        else None
     )
     if expected_mode not in BORSUK_GLOBAL_SCAN_CODECS:
         raise ValueError("query sample has no scheduled leaf-codec authority")
@@ -1008,8 +1056,7 @@ def summarize_query_samples(
             or row.get("scan_codec") != expected_mode
             or row.get("execution_engine") != V20_EXECUTION_ENGINE
             or int(row.get("nprobe", "-1")) != arm["leaf_page_budget"]
-            or int(row.get("max_candidates", "-1"))
-            != V20_COMPATIBILITY_CANDIDATES
+            or int(row.get("max_candidates", "-1")) != V20_COMPATIBILITY_CANDIDATES
         ):
             raise ValueError("query sample belongs to a different factor arm")
         sample_index = int(row["sample_index"])
@@ -1018,7 +1065,12 @@ def summarize_query_samples(
         sample_indices.add(sample_index)
         latency = float(row["latency_ms"])
         recall = float(row["recall_at_10"])
-        if not math.isfinite(latency) or latency < 0 or not math.isfinite(recall) or not 0 <= recall <= 1:
+        if (
+            not math.isfinite(latency)
+            or latency < 0
+            or not math.isfinite(recall)
+            or not 0 <= recall <= 1
+        ):
             raise ValueError("query sample latency or recall is invalid")
         latencies_us.append(round(latency * 1_000))
         recalls_ppm.append(round(recall * 1_000_000))
@@ -1100,7 +1152,9 @@ def summarize_concurrency_artifacts(
     ):
         raise ValueError("concurrency scan-codec authority is invalid")
     expected = set(expected_workers)
-    if len(expected) != len(expected_workers) or any(worker <= 0 for worker in expected):
+    if len(expected) != len(expected_workers) or any(
+        worker <= 0 for worker in expected
+    ):
         raise ValueError("concurrency worker authority is invalid")
     by_worker: dict[int, dict[str, str]] = {}
     for row in summaries:
@@ -1255,10 +1309,7 @@ def reconcile_lifecycle_storage_trace(
     trace_bytes = trace.get("storage_bytes_written")
     lifecycle_puts = lifecycle.get("storage_puts")
     trace_puts = trace.get("storage_puts")
-    if (
-        lifecycle_bytes != trace_bytes
-        or lifecycle_puts != trace_puts
-    ):
+    if lifecycle_bytes != trace_bytes or lifecycle_puts != trace_puts:
         raise ValueError(
             "publication lifecycle storage accounting differs from the complete trace: "
             f"lifecycle_puts={lifecycle_puts} trace_puts={trace_puts} "
@@ -1305,10 +1356,16 @@ def summarize_lifecycle_artifacts(
     if isinstance(expected_writers, bool) or not 1 <= expected_writers <= 64:
         raise ValueError("publication lifecycle writer count is invalid")
     costs = _read_exact_csv(output_dir / "bench_write_costs.csv", WRITE_COST_FIELDS)
-    samples = _read_exact_csv(output_dir / "bench_write_samples.csv", WRITE_SAMPLE_FIELDS)
-    lifecycle_rows = _read_exact_csv(output_dir / "bench_lifecycle.csv", LIFECYCLE_FIELDS)
+    samples = _read_exact_csv(
+        output_dir / "bench_write_samples.csv", WRITE_SAMPLE_FIELDS
+    )
+    lifecycle_rows = _read_exact_csv(
+        output_dir / "bench_lifecycle.csv", LIFECYCLE_FIELDS
+    )
     if len(costs) != len(LIFECYCLE_OPERATIONS) or len(lifecycle_rows) != 1:
-        raise ValueError("publication lifecycle artifacts have incomplete operation rows")
+        raise ValueError(
+            "publication lifecycle artifacts have incomplete operation rows"
+        )
     by_operation: dict[str, dict[str, str]] = {}
     for row in costs:
         operation = row.get("op", "")
@@ -1319,17 +1376,23 @@ def summarize_lifecycle_artifacts(
             configured_writers = int(row["configured_writers"])
             configured_batch = int(row["configured_batch_records"])
         except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("publication lifecycle configuration is invalid") from error
+            raise ValueError(
+                "publication lifecycle configuration is invalid"
+            ) from error
         if (
             configured_writers != expected_writers
             or configured_batch != expected_batch_size
         ):
-            raise ValueError("publication lifecycle artifact belongs to another batch arm")
+            raise ValueError(
+                "publication lifecycle artifact belongs to another batch arm"
+            )
     if tuple(sorted(by_operation)) != tuple(sorted(LIFECYCLE_OPERATIONS)):
         raise ValueError("publication lifecycle operations differ")
 
     latencies_us: list[int] = []
-    sample_indices: dict[str, set[int]] = {operation: set() for operation in LIFECYCLE_OPERATIONS}
+    sample_indices: dict[str, set[int]] = {
+        operation: set() for operation in LIFECYCLE_OPERATIONS
+    }
     sample_batch_records: dict[str, dict[int, int]] = {
         operation: {} for operation in LIFECYCLE_OPERATIONS
     }
@@ -1373,7 +1436,9 @@ def summarize_lifecycle_artifacts(
             try:
                 observed = int(row[field])
             except (KeyError, TypeError, ValueError) as error:
-                raise ValueError("publication lifecycle sample request is invalid") from error
+                raise ValueError(
+                    "publication lifecycle sample request is invalid"
+                ) from error
             if observed < 0:
                 raise ValueError("publication lifecycle sample request is invalid")
             sample_request_totals[operation][field] += observed
@@ -1387,7 +1452,9 @@ def summarize_lifecycle_artifacts(
             expected_batches = int(row["batches"])
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("publication lifecycle operation is invalid") from error
-        if expected_batches <= 0 or sample_indices[operation] != set(range(expected_batches)):
+        if expected_batches <= 0 or sample_indices[operation] != set(
+            range(expected_batches)
+        ):
             raise ValueError("publication lifecycle samples are incomplete")
 
     lifecycle = lifecycle_rows[0]
@@ -1396,10 +1463,7 @@ def summarize_lifecycle_artifacts(
         lifecycle_batch = int(lifecycle["configured_batch_records"])
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("publication lifecycle configuration is invalid") from error
-    if (
-        lifecycle_writers != expected_writers
-        or lifecycle_batch != expected_batch_size
-    ):
+    if lifecycle_writers != expected_writers or lifecycle_batch != expected_batch_size:
         raise ValueError("publication lifecycle artifact belongs to another batch arm")
     fractions = []
     for sample_field, fraction_field in (
@@ -1412,7 +1476,9 @@ def summarize_lifecycle_artifacts(
         try:
             sample_count = int(lifecycle[sample_field])
         except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("publication lifecycle verification evidence is invalid") from error
+            raise ValueError(
+                "publication lifecycle verification evidence is invalid"
+            ) from error
         fraction = _finite_nonnegative_float(
             lifecycle.get(fraction_field), "publication lifecycle verification fraction"
         )
@@ -1432,18 +1498,26 @@ def summarize_lifecycle_artifacts(
         try:
             operations = int(row["ops"])
         except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("publication lifecycle operation count is invalid") from error
+            raise ValueError(
+                "publication lifecycle operation count is invalid"
+            ) from error
         if operations <= 0:
             raise ValueError("publication lifecycle operation count is invalid")
         operation_counts[operation] = operations
         if operation in {"insert", "upsert", "delete"}:
-            expected_batches = (operations + expected_batch_size - 1) // expected_batch_size
+            expected_batches = (
+                operations + expected_batch_size - 1
+            ) // expected_batch_size
             try:
                 declared_batches = int(row["batches"])
             except (KeyError, TypeError, ValueError) as error:
-                raise ValueError("publication lifecycle batch schedule is invalid") from error
+                raise ValueError(
+                    "publication lifecycle batch schedule is invalid"
+                ) from error
             expected_records = {
-                index: min(expected_batch_size, operations - index * expected_batch_size)
+                index: min(
+                    expected_batch_size, operations - index * expected_batch_size
+                )
                 for index in range(expected_batches)
             }
             if (
@@ -1456,7 +1530,9 @@ def summarize_lifecycle_artifacts(
                 field: int(row[field]) for field in sample_request_totals[operation]
             }
         except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("publication lifecycle operation request is invalid") from error
+            raise ValueError(
+                "publication lifecycle operation request is invalid"
+            ) from error
         if (
             any(value < 0 for value in declared_requests.values())
             or declared_requests != sample_request_totals[operation]
@@ -1474,7 +1550,9 @@ def summarize_lifecycle_artifacts(
             try:
                 observed = int(row[source])
             except (KeyError, TypeError, ValueError) as error:
-                raise ValueError("publication lifecycle storage telemetry is invalid") from error
+                raise ValueError(
+                    "publication lifecycle storage telemetry is invalid"
+                ) from error
             if observed < 0:
                 raise ValueError("publication lifecycle storage telemetry is invalid")
             storage_totals[destination] += observed
@@ -1491,7 +1569,9 @@ def summarize_lifecycle_artifacts(
         indexed_delta_bytes = int(lifecycle["indexed_delta_bytes"])
         total_indexing_bytes = int(lifecycle["total_indexing_bytes"])
     except (KeyError, TypeError, ValueError) as error:
-        raise ValueError("publication lifecycle operation totals are invalid") from error
+        raise ValueError(
+            "publication lifecycle operation totals are invalid"
+        ) from error
     if (
         inserted_vectors != operation_counts["insert"]
         or logical_vector_bytes <= 0
@@ -1503,19 +1583,27 @@ def summarize_lifecycle_artifacts(
         raise ValueError("publication lifecycle operation totals differ")
 
     first_publish_us = round(
-        _finite_nonnegative_float(lifecycle.get("first_batch_publish_ms"), "first publish")
+        _finite_nonnegative_float(
+            lifecycle.get("first_batch_publish_ms"), "first publish"
+        )
         * 1_000
     )
     searchable_us = round(
-        _finite_nonnegative_float(lifecycle.get("time_to_searchable_ms"), "searchable time")
+        _finite_nonnegative_float(
+            lifecycle.get("time_to_searchable_ms"), "searchable time"
+        )
         * 1_000
     )
     fully_indexed_us = round(
-        _finite_nonnegative_float(lifecycle.get("time_to_fully_indexed_ms"), "indexed time")
+        _finite_nonnegative_float(
+            lifecycle.get("time_to_fully_indexed_ms"), "indexed time"
+        )
         * 1_000
     )
     consolidated_us = round(
-        _finite_nonnegative_float(lifecycle.get("time_to_consolidated_ms"), "consolidated time")
+        _finite_nonnegative_float(
+            lifecycle.get("time_to_consolidated_ms"), "consolidated time"
+        )
         * 1_000
     )
     if not 0 < first_publish_us <= searchable_us <= fully_indexed_us <= consolidated_us:
@@ -1599,7 +1687,9 @@ def _read_build_phase_artifact(output_dir: Path) -> dict[str, object]:
     try:
         text = payload.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise ValueError("publication build phase timing artifact is not UTF-8") from error
+        raise ValueError(
+            "publication build phase timing artifact is not UTF-8"
+        ) from error
     reader = csv.DictReader(text.splitlines())
     if tuple(reader.fieldnames or ()) != BUILD_PHASE_FIELDS:
         raise ValueError("publication build phase timing header differs")
@@ -1620,7 +1710,9 @@ def _read_build_phase_artifact(output_dir: Path) -> dict[str, object]:
             nanos = int(row["nanos"])
             calls = int(row["calls"])
         except (KeyError, TypeError, ValueError) as error:
-            raise ValueError("publication build phase timing value is invalid") from error
+            raise ValueError(
+                "publication build phase timing value is invalid"
+            ) from error
         if nanos < 0 or calls < 0:
             raise ValueError("publication build phase timing value is negative")
         observed[key] = {
@@ -1649,7 +1741,9 @@ def read_build_artifact(
     with path.open(newline="") as source:
         reader = csv.DictReader(source)
         if tuple(reader.fieldnames or ()) != PRODUCTION_BUILD_FIELDS:
-            raise ValueError("publication build artifact header differs from production")
+            raise ValueError(
+                "publication build artifact header differs from production"
+            )
         rows = list(reader)
     if len(rows) != 1:
         raise ValueError("publication build storage artifact must contain one row")
@@ -1678,19 +1772,27 @@ def read_build_artifact(
         try:
             value = int(row[field])
         except (KeyError, TypeError, ValueError) as error:
-            raise ValueError(f"publication build storage field {field} is invalid") from error
+            raise ValueError(
+                f"publication build storage field {field} is invalid"
+            ) from error
         if value < 0:
             raise ValueError(f"publication build storage field {field} is negative")
         parsed[field] = value
     dataset = cell.get("dataset")
     profile = cell.get("index_profile")
-    expected_rows = dataset.get("scale", {}).get("rows") if isinstance(dataset, dict) else None
+    expected_rows = (
+        dataset.get("scale", {}).get("rows") if isinstance(dataset, dict) else None
+    )
     expected_cells = profile.get("logical_cells") if isinstance(profile, dict) else None
     if parsed["records"] != expected_rows or parsed["logical_cells"] != expected_cells:
         raise ValueError("publication build identity differs from its scheduled index")
-    expected_codec = profile.get("global_scan_codec") if isinstance(profile, dict) else None
+    expected_codec = (
+        profile.get("global_scan_codec") if isinstance(profile, dict) else None
+    )
     if row.get("scan_codec") != expected_codec:
-        raise ValueError("publication build codec identity differs from its scheduled index")
+        raise ValueError(
+            "publication build codec identity differs from its scheduled index"
+        )
     if expected_codec in BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS:
         for artifact_field, profile_field in (
             ("turboquant_bits", "turboquant_bits"),
@@ -1702,18 +1804,24 @@ def read_build_artifact(
                     "publication build codec identity differs from its scheduled index"
                 )
     checksum = row.get("logical_cell_catalog_checksum", "")
-    if len(checksum) != 64 or any(character not in "0123456789abcdef" for character in checksum):
+    if len(checksum) != 64 or any(
+        character not in "0123456789abcdef" for character in checksum
+    ):
         raise ValueError("publication build catalog checksum is invalid")
     if parsed["total_active_index_bytes"] <= 0:
         raise ValueError("publication build active index bytes must be positive")
     if parsed["gc_transaction_states_remaining"] != 0:
-        raise ValueError("publication build transaction states remain after finalization")
+        raise ValueError(
+            "publication build transaction states remain after finalization"
+        )
     build_timings: dict[str, int] = {}
     for field in ("ingest_ms", "compaction_ms", "gc_ms"):
         try:
             nanos = Decimal(row[field]) * 1_000_000
         except (KeyError, InvalidOperation) as error:
-            raise ValueError(f"publication build timing field {field} is invalid") from error
+            raise ValueError(
+                f"publication build timing field {field} is invalid"
+            ) from error
         if nanos < 0 or nanos != nanos.to_integral_value():
             raise ValueError(f"publication build timing field {field} is invalid")
         build_timings[field.removesuffix("_ms") + "_ns"] = int(nanos)
@@ -1771,7 +1879,11 @@ def build_receipt_metrics(
         storage_metrics
     ):
         raise ValueError("publication resource inputs differ")
-    if isinstance(elapsed_ns, bool) or not isinstance(elapsed_ns, int) or elapsed_ns <= 0:
+    if (
+        isinstance(elapsed_ns, bool)
+        or not isinstance(elapsed_ns, int)
+        or elapsed_ns <= 0
+    ):
         raise ValueError("publication build elapsed time is invalid")
     return {
         **process_resources,
@@ -1825,7 +1937,11 @@ def build_publication_report(
 ) -> dict[str, object]:
     if runtime_profile not in {"recall", "concurrency"}:
         raise ValueError("publication runtime profile is invalid")
-    if isinstance(elapsed_ns, bool) or not isinstance(elapsed_ns, int) or elapsed_ns <= 0:
+    if (
+        isinstance(elapsed_ns, bool)
+        or not isinstance(elapsed_ns, int)
+        or elapsed_ns <= 0
+    ):
         raise ValueError("publication elapsed time must be a positive integer")
     queries = query_metrics.get("queries")
     if isinstance(queries, bool) or not isinstance(queries, int) or queries <= 0:
@@ -1883,18 +1999,12 @@ def build_publication_report(
             "storage_bytes_written": runtime_write_metrics["storage_bytes_written"],
             "throughput_milli_per_second": max(
                 1,
-                round(
-                    queries
-                    * 1_000_000_000_000
-                    / query_metrics["query_elapsed_ns"]
-                ),
+                round(queries * 1_000_000_000_000 / query_metrics["query_elapsed_ns"]),
             ),
         },
         "index_receipt_sha256": receipt_document_sha256(index_receipt),
         "clone_receipt_sha256": None,
-        "runtime_attestation_sha256": runtime_attestation_sha256(
-            runtime_attestation
-        ),
+        "runtime_attestation_sha256": runtime_attestation_sha256(runtime_attestation),
     }
     validated = validate_cell_result(
         result,
@@ -2073,9 +2183,7 @@ def runtime_execution_contract(
         "max_waiting_searches": positive_environment_integer(
             "BORSUK_BENCH_MAX_WAITING_SEARCHES"
         ),
-        "leaf_read_width": positive_environment_integer(
-            "BORSUK_BENCH_LEAF_READ_WIDTH"
-        ),
+        "leaf_read_width": positive_environment_integer("BORSUK_BENCH_LEAF_READ_WIDTH"),
         "max_inflight_leaf_reads": positive_environment_integer(
             "BORSUK_BENCH_MAX_INFLIGHT_LEAF_READS"
         ),
@@ -2097,9 +2205,13 @@ def runtime_execution_contract(
         not isinstance(effective_flow_control, dict)
         or frozenset(effective_flow_control) != {"schema_version", *requested}
         or effective_flow_control.get("schema_version") != 4
-        or any(effective_flow_control.get(key) != value for key, value in requested.items())
+        or any(
+            effective_flow_control.get(key) != value for key, value in requested.items()
+        )
     ):
-        raise ValueError("effective runtime flow control differs from its frozen request")
+        raise ValueError(
+            "effective runtime flow control differs from its frozen request"
+        )
     return {
         "schema_version": 5,
         "runtime_profile": runtime_profile,
@@ -2188,7 +2300,9 @@ def main() -> int:
                 raise ValueError(f"publication execution requires {role}")
     if args.mode == "seal":
         if args.build_complete is None or args.object_roster is None:
-            raise ValueError("publication seal requires build completion and object roster")
+            raise ValueError(
+                "publication seal requires build completion and object roster"
+            )
         completion = _read_canonical_value(args.build_complete, 256 * 1024)
         if not isinstance(completion, dict) or frozenset(completion) != frozenset(
             {
@@ -2302,7 +2416,9 @@ def main() -> int:
         clone_receipt = None
         if workload_kind == "read-recall":
             if args.clone_receipt is not None or args.clone_inventory is not None:
-                raise ValueError("read-only publication runtime cannot use a mutable clone")
+                raise ValueError(
+                    "read-only publication runtime cannot use a mutable clone"
+                )
             authorized_runtime = authorize_publication_runtime(
                 plan,
                 receipt=receipt,
@@ -2312,7 +2428,9 @@ def main() -> int:
             )
         elif workload_kind == "write-update-delete-compact":
             if args.clone_receipt is None or args.clone_inventory is None:
-                raise ValueError("lifecycle publication runtime requires clone authority")
+                raise ValueError(
+                    "lifecycle publication runtime requires clone authority"
+                )
             clone_value = _read_canonical_value(args.clone_receipt, 256 * 1024)
             if not isinstance(clone_value, dict):
                 raise ValueError("publication clone receipt must be a JSON object")

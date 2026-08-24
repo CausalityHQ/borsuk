@@ -11,9 +11,8 @@ from scripts.publication_v3_protocol import (
     canonical_json_bytes,
     validate_manifest,
 )
-from scripts.test_publication_v3_protocol import paid_v3_manifest
+from scripts.test_publication_v3_protocol import paid_ready_v3_manifest
 from scripts.validate_publication_v3_results import validate_structural_tree
-
 
 ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL = ROOT / "scripts" / "publication_v3_protocol.py"
@@ -25,7 +24,7 @@ def canonical_write(path: Path, value: object) -> None:
 
 
 def structural_manifest(source_archive: bytes) -> dict[str, object]:
-    manifest = paid_v3_manifest()
+    manifest = paid_ready_v3_manifest()
     manifest["source"]["archive_sha256"] = hashlib.sha256(source_archive).hexdigest()
     return validate_manifest(manifest)
 
@@ -83,10 +82,15 @@ class ValidatePublicationV3ResultsTests(unittest.TestCase):
                 },
             )
 
-    def test_structural_validator_rejects_drift_missing_extra_and_measurements(self) -> None:
+    def test_structural_validator_rejects_drift_missing_extra_and_measurements(
+        self,
+    ) -> None:
         mutations = ("protocol", "missing", "extra", "measurement", "source")
         for mutation in mutations:
-            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+            with (
+                self.subTest(mutation=mutation),
+                tempfile.TemporaryDirectory() as directory,
+            ):
                 root = Path(directory)
                 schedule = write_structural_fixture(root)
                 first = root / "cells" / schedule["cells"][0]["cell_id"]
@@ -129,7 +133,9 @@ class ValidatePublicationV3ResultsTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual(validate_structural_tree(output)["status"], "structurally-valid")
+            self.assertEqual(
+                validate_structural_tree(output)["status"], "structurally-valid"
+            )
 
 
 if __name__ == "__main__":

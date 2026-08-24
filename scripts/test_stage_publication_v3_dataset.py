@@ -10,6 +10,8 @@ from unittest import mock
 
 import h5py
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from scripts.fetch_ann_dataset import convert_hdf5_dataset
 from scripts.publication_v3_aws import build_staging_receipt, staging_jobs
@@ -54,6 +56,144 @@ def frozen_manifest() -> dict[str, object]:
 
 
 class StagePublicationV3DatasetTests(unittest.TestCase):
+    def test_generated_adapter_binds_exact_recipe_and_dataset_identity(self) -> None:
+        manifest = frozen_manifest()
+        command = adapter_command(
+            manifest,
+            "synthetic-uniform-100m-768",
+            Path("/work/materialized"),
+            None,
+        )
+        self.assertEqual(command[0], "env")
+        self.assertIn("BORSUK_SYNTHETIC_GENERATOR=synthetic-uniform-v1", command)
+        self.assertIn("BORSUK_SYNTHETIC_DATASET_ID=synthetic-uniform-100m-768", command)
+        self.assertIn("BORSUK_SYNTHETIC_TRAIN=100000000", command)
+        self.assertIn("BORSUK_SYNTHETIC_DIMENSIONS=768", command)
+        self.assertIn("BORSUK_SYNTHETIC_QUERIES=1000", command)
+        self.assertIn("BORSUK_SYNTHETIC_SEED=1601768", command)
+        self.assertEqual(
+            command[-1],
+            str(ROOT / "target/release/examples/generate_synthetic_dataset"),
+        )
+
+    def test_generated_materialization_seals_recipe_provenance_and_resumes(
+        self,
+    ) -> None:
+        manifest = frozen_manifest()
+        dataset_id = "synthetic-uniform-100m-768"
+        dataset = next(
+            item for item in manifest["datasets"] if item["id"] == dataset_id
+        )
+        dataset["scale"]["rows"] = 200
+        dimensions = dataset["dimensions"]
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory) / "work"
+
+            def generate(_command, **_kwargs):
+                output = (
+                    work / "attempts" / f".0001-{dataset_id}.partial" / "materialized"
+                )
+                output.mkdir()
+                values = pa.array(
+                    np.zeros(200 * dimensions, dtype=np.float32), type=pa.float32()
+                )
+                embedding_type = pa.list_(
+                    pa.field("item", pa.float32(), nullable=False), dimensions
+                )
+                embeddings = pa.FixedSizeListArray.from_arrays(values, dimensions).cast(
+                    embedding_type
+                )
+                pq.write_table(
+                    pa.Table.from_arrays(
+                        [embeddings],
+                        schema=pa.schema(
+                            [pa.field("emb", embedding_type, nullable=False)]
+                        ),
+                    ),
+                    output / "train-00000000.parquet",
+                )
+                queries = pa.FixedSizeListArray.from_arrays(
+                    pa.array(
+                        np.zeros(1_000 * dimensions, dtype=np.float32),
+                        type=pa.float32(),
+                    ),
+                    dimensions,
+                ).cast(embedding_type)
+                pq.write_table(
+                    pa.Table.from_arrays(
+                        [queries],
+                        schema=pa.schema(
+                            [pa.field("emb", embedding_type, nullable=False)]
+                        ),
+                    ),
+                    output / "test.parquet",
+                )
+                neighbor_type = pa.list_(
+                    pa.field("item", pa.int32(), nullable=False), 100
+                )
+                neighbors = pa.FixedSizeListArray.from_arrays(
+                    pa.array(list(range(100)) * 1_000, type=pa.int32()), 100
+                ).cast(neighbor_type)
+                pq.write_table(
+                    pa.Table.from_arrays(
+                        [neighbors],
+                        schema=pa.schema(
+                            [pa.field("neighbors_id", neighbor_type, nullable=False)]
+                        ),
+                    ),
+                    output / "neighbors.parquet",
+                )
+                (output / "meta.json").write_text(
+                    json.dumps(
+                        {
+                            "name": dataset_id,
+                            "metric": "cosine",
+                            "dim": dimensions,
+                            "n_train": 200,
+                            "n_test": 1_000,
+                            "k": 100,
+                            "generator": dataset["source"]["generator"],
+                            "seed": dataset["source"]["seed"],
+                        }
+                    )
+                    + "\n"
+                )
+                return mock.Mock(returncode=0, stdout="")
+
+            with (
+                mock.patch("scripts.stage_publication_v3_dataset.require_free_disk"),
+                mock.patch(
+                    "scripts.stage_publication_v3_dataset.subprocess.run",
+                    side_effect=generate,
+                ) as run,
+            ):
+                first = materialize_dataset(
+                    manifest,
+                    dataset_id=dataset_id,
+                    attempt=1,
+                    work_root=work,
+                    source_archive_sha256="2" * 64,
+                )
+                second = materialize_dataset(
+                    manifest,
+                    dataset_id=dataset_id,
+                    attempt=1,
+                    work_root=work,
+                    source_archive_sha256="2" * 64,
+                )
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(first, second)
+            self.assertRegex(first["content_sha256"], r"^[0-9a-f]{64}$")
+            provenance = json.loads(
+                (work / "attempts/0001/materialized.provenance.json").read_text()
+            )
+            self.assertEqual(provenance["generator"], dataset["source"]["generator"])
+            self.assertEqual(provenance["seed"], dataset["source"]["seed"])
+            self.assertEqual(provenance["generator_source_archive_sha256"], "2" * 64)
+            self.assertEqual(
+                provenance["materialization_sha256"], first["content_sha256"]
+            )
+
     def test_ann_fixture_materializes_stock_parquet_and_rerun_is_noop(self) -> None:
         manifest = frozen_manifest()
         dataset = next(

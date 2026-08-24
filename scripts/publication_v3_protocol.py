@@ -56,9 +56,7 @@ SCHEDULE_CELL_FIELDS = frozenset(
         "cache_key",
     }
 )
-DATASET_FIELDS = frozenset(
-    {"id", "kind", "scale", "dimensions", "metric", "source"}
-)
+DATASET_FIELDS = frozenset({"id", "kind", "scale", "dimensions", "metric", "source"})
 WORKLOAD_FIELDS = frozenset({"id", "kind", "dataset_ids", "systems", "factors"})
 ENVIRONMENT_FIELDS = frozenset(
     {
@@ -82,7 +80,21 @@ BORSUK_PQ_GLOBAL_SCAN_CODECS = frozenset({"pq-scan", "srht-pq-scan"})
 BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS = frozenset(
     {"fast-turboquant-mse-scan", "fast-turboquant-scan"}
 )
-BORSUK_GLOBAL_SCAN_CODECS = BORSUK_PQ_GLOBAL_SCAN_CODECS | BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS
+BORSUK_GLOBAL_SCAN_CODECS = (
+    BORSUK_PQ_GLOBAL_SCAN_CODECS | BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS
+)
+SYNTHETIC_DENSE_GENERATORS = frozenset(
+    {
+        "synthetic-clustered-v1",
+        "synthetic-uniform-v1",
+        "synthetic-duplicate-v1",
+        "synthetic-adversarial-v1",
+    }
+)
+SYNTHETIC_BINARY_GENERATORS = frozenset({"synthetic-binary-v1"})
+SYNTHETIC_GROUP_SIZE = 100
+SYNTHETIC_TRAIN_SHARD_TARGET_BYTES = 64 * 1024 * 1024
+MAX_STAGED_DATASET_OBJECTS = 8_192
 IDENTIFIER = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?")
 HEX_40 = re.compile(r"[0-9a-f]{40}")
 HEX_64 = re.compile(r"[0-9a-f]{64}")
@@ -244,9 +256,7 @@ def _validate_workload_factors(kind: str, value: object) -> dict[str, object]:
         return {
             "k": _positive_int_list(factors["k"], "read k"),
             "leaf_page_budgets": _leaf_page_budgets(factors["leaf_page_budgets"]),
-            "cache_states": _unique_strings(
-                factors["cache_states"], "cache states"
-            ),
+            "cache_states": _unique_strings(factors["cache_states"], "cache states"),
             "minimum_recall_ppm": _quality_ppm(
                 factors["minimum_recall_ppm"], "minimum recall ppm"
             ),
@@ -254,12 +264,12 @@ def _validate_workload_factors(kind: str, value: object) -> dict[str, object]:
     if kind == "write-update-delete-compact":
         insert_modes = _unique_strings(factors["insert_modes"], "insert modes")
         if insert_modes != ["general-upsert", "claim-free-put"]:
-            raise ValueError("lifecycle insert modes must pin the paired control and candidate")
+            raise ValueError(
+                "lifecycle insert modes must pin the paired control and candidate"
+            )
         return {
             "writers": _positive_int_list(factors["writers"], "writers"),
-            "batch_sizes": _positive_int_list(
-                factors["batch_sizes"], "batch sizes"
-            ),
+            "batch_sizes": _positive_int_list(factors["batch_sizes"], "batch sizes"),
             "insert_modes": insert_modes,
             "update_percent": _bounded_int_list(
                 factors["update_percent"], "update percent", minimum=1, maximum=100
@@ -390,7 +400,9 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
         if turboquant:
             bits = _positive_int(profile["turboquant_bits"], "borsuk TurboQuant bits")
             if bits > 8 or (global_scan_codec == "fast-turboquant-scan" and bits < 2):
-                raise ValueError("borsuk TurboQuant bits are invalid for the selected codec")
+                raise ValueError(
+                    "borsuk TurboQuant bits are invalid for the selected codec"
+                )
             qjl_bits = profile["turboquant_qjl_bits"]
             if (
                 isinstance(qjl_bits, bool)
@@ -403,9 +415,13 @@ def _validate_index_profile(system: str, value: object) -> dict[str, object]:
                 profile["turboquant_shards"], "borsuk TurboQuant shards"
             )
             if qjl_bits != 0:
-                raise ValueError("borsuk TurboQuant codec does not accept a QJL override")
+                raise ValueError(
+                    "borsuk TurboQuant codec does not accept a QJL override"
+                )
             if global_scan_codec == "fast-turboquant-scan" and shards != 1:
-                raise ValueError("borsuk production TurboQuant codec requires one shard")
+                raise ValueError(
+                    "borsuk production TurboQuant codec requires one shard"
+                )
             codec_parameters = {
                 "turboquant_bits": bits,
                 "turboquant_qjl_bits": qjl_bits,
@@ -487,8 +503,7 @@ def _validate_index_profiles(value: object) -> dict[str, object]:
     profiles = _dict(value, "index_profiles")
     _exact_fields(profiles, frozenset(SYSTEMS), "index_profiles")
     return {
-        system: _validate_index_profile(system, profiles[system])
-        for system in SYSTEMS
+        system: _validate_index_profile(system, profiles[system]) for system in SYSTEMS
     }
 
 
@@ -525,9 +540,7 @@ def _effective_index_profile(
                 result[field] = factors[field]
     elif profile["engine"] == "faiss-ivf-flat":
         training_rows = min(int(profile["training_rows"]), rows)
-        feasible = training_rows // int(
-            profile["minimum_training_rows_per_centroid"]
-        )
+        feasible = training_rows // int(profile["minimum_training_rows_per_centroid"])
         result["training_rows"] = training_rows
         result["nlist"] = _largest_power_of_two_not_exceeding(
             min(int(profile["nlist"]), feasible)
@@ -629,9 +642,41 @@ def _validate_dataset_source(value: object) -> dict[str, object]:
         )
         generator = _identifier(source["generator"], "dataset generator")
         seed = _positive_int(source["seed"], "dataset seed")
+    elif state == "staged-generated":
+        _exact_fields(
+            source,
+            frozenset(
+                {
+                    "state",
+                    "generator",
+                    "seed",
+                    "generator_source_archive_sha256",
+                    "url",
+                    "sha256",
+                    "receipt_uri",
+                    "receipt_sha256",
+                }
+            ),
+            "staged generated dataset source",
+        )
+        generator = _identifier(source["generator"], "dataset generator")
+        seed = _positive_int(source["seed"], "dataset seed")
+        _nonempty_string(source["url"], "staged generated dataset url")
+        _nonempty_string(source["receipt_uri"], "staged generated dataset receipt URI")
+        for field in (
+            "generator_source_archive_sha256",
+            "sha256",
+            "receipt_sha256",
+        ):
+            if not HEX_64.fullmatch(str(source[field])):
+                raise ValueError(
+                    f"staged generated dataset {field} must be lowercase SHA-256"
+                )
     else:
         raise ValueError("dataset source state is invalid")
-    if state == "generated":
+    if state in {"generated", "staged-generated"}:
+        if state == "staged-generated":
+            return copy.deepcopy(source)
         return {"state": "generated", "generator": generator, "seed": seed}
     return copy.deepcopy(source)
 
@@ -656,14 +701,77 @@ def _validate_dataset(value: object) -> dict[str, object]:
     metric = str(dataset["metric"])
     if metric not in METRICS:
         raise ValueError(f"dataset {dataset_id} has unsupported metric {metric!r}")
+    scale = _validate_scale(dataset["scale"])
+    source = _validate_dataset_source(dataset["source"])
+    generated_state = source["state"] in {"generated", "staged-generated"}
+    synthetic_kind = kind in {"synthetic-dense", "synthetic-binary"}
+    if generated_state != synthetic_kind:
+        raise ValueError("synthetic dataset kind and generated source must agree")
+    if synthetic_kind:
+        generator = str(source["generator"])
+        expected_generators = (
+            SYNTHETIC_DENSE_GENERATORS
+            if kind == "synthetic-dense"
+            else SYNTHETIC_BINARY_GENERATORS
+        )
+        expected_metric = "cosine" if kind == "synthetic-dense" else "hamming"
+        if generator not in expected_generators or metric != expected_metric:
+            raise ValueError("synthetic generator, kind, and metric must agree")
+        rows = int(scale["rows"])
+        if rows < SYNTHETIC_GROUP_SIZE or rows % SYNTHETIC_GROUP_SIZE != 0:
+            raise ValueError("synthetic rows must form complete groups of 100")
+        groups = rows // SYNTHETIC_GROUP_SIZE
+        code_bits = max(1, (groups - 1).bit_length())
+        if code_bits >= min(dimensions, 64):
+            raise ValueError("synthetic dimensions do not provide code capacity")
+        if kind == "synthetic-binary" and dimensions // code_bits <= 2:
+            raise ValueError("synthetic binary recipe has no strict truth margin")
+        if rows > 2_147_483_647:
+            raise ValueError("synthetic rows exceed the signed neighbor-id bound")
+        row_bytes = dimensions * 4
+        rows_per_shard = SYNTHETIC_TRAIN_SHARD_TARGET_BYTES // row_bytes
+        if rows_per_shard == 0:
+            raise ValueError("synthetic vector exceeds the dataset object bound")
+        train_shards = (rows + rows_per_shard - 1) // rows_per_shard
+        if train_shards + 3 > MAX_STAGED_DATASET_OBJECTS:
+            raise ValueError("synthetic recipe exceeds the dataset object bound")
     return {
         "id": dataset_id,
         "kind": kind,
-        "scale": _validate_scale(dataset["scale"]),
+        "scale": scale,
         "dimensions": dimensions,
         "metric": metric,
-        "source": _validate_dataset_source(dataset["source"]),
+        "source": source,
     }
+
+
+def _validate_staged_generated_paths(
+    datasets: list[dict[str, object]], prefixes: dict[str, str]
+) -> None:
+    for dataset in datasets:
+        source = dataset["source"]
+        if source["state"] != "staged-generated":
+            continue
+        root = f"{prefixes['dataset']}/{dataset['id']}/attempts/"
+        url = str(source["url"])
+        receipt_uri = str(source["receipt_uri"])
+        if not url.startswith(root):
+            raise ValueError(
+                "staged generated source must use its canonical dataset staging path"
+            )
+        suffix = url.removeprefix(root)
+        attempt, separator, tail = suffix.partition("/")
+        if (
+            separator != "/"
+            or len(attempt) != 4
+            or not attempt.isdigit()
+            or attempt == "0000"
+            or tail != "materialized"
+            or receipt_uri != f"{root}{attempt}/STAGING_COMPLETE.json"
+        ):
+            raise ValueError(
+                "staged generated source must use its canonical dataset staging path"
+            )
 
 
 def _validate_workload(value: object) -> dict[str, object]:
@@ -696,11 +804,17 @@ def _validate_environment(value: object) -> dict[str, object]:
         {"resident_limit_mib", "disk_cache_limit_mib"}
     )
 
-    def normalize_resources(raw: object, role: str, *, query: bool) -> dict[str, object]:
+    def normalize_resources(
+        raw: object, role: str, *, query: bool
+    ) -> dict[str, object]:
         resources = _dict(raw, role)
-        _exact_fields(resources, query_resource_fields if query else resource_fields, role)
+        _exact_fields(
+            resources, query_resource_fields if query else resource_fields, role
+        )
         result = {
-            "instance_type": _identifier(resources["instance_type"], f"{role} instance type"),
+            "instance_type": _identifier(
+                resources["instance_type"], f"{role} instance type"
+            ),
             "vcpus": _positive_int(resources["vcpus"], f"{role} vCPUs"),
             "memory_mib": _positive_int(resources["memory_mib"], f"{role} memory MiB"),
         }
@@ -718,11 +832,15 @@ def _validate_environment(value: object) -> dict[str, object]:
     _exact_fields(workers, frozenset(SYSTEMS), "build_workers")
     _exact_fields(clients, frozenset(SYSTEMS), "runtime_clients")
     normalized_workers = {
-        system: normalize_resources(workers[system], f"{system} build worker", query=False)
+        system: normalize_resources(
+            workers[system], f"{system} build worker", query=False
+        )
         for system in SYSTEMS
     }
     normalized_clients = {
-        system: normalize_resources(clients[system], f"{system} query client", query=True)
+        system: normalize_resources(
+            clients[system], f"{system} query client", query=True
+        )
         for system in SYSTEMS
     }
     query_caps = {
@@ -733,8 +851,13 @@ def _validate_environment(value: object) -> dict[str, object]:
     for system, (memory_cap, resident_cap) in query_caps.items():
         client = normalized_clients[system]
         if client["memory_mib"] > memory_cap:
-            raise ValueError(f"{system} runtime client memory exceeds its small-client cap")
-        if client["resident_limit_mib"] > resident_cap or client["resident_limit_mib"] >= client["memory_mib"]:
+            raise ValueError(
+                f"{system} runtime client memory exceeds its small-client cap"
+            )
+        if (
+            client["resident_limit_mib"] > resident_cap
+            or client["resident_limit_mib"] >= client["memory_mib"]
+        ):
             raise ValueError(f"{system} runtime resident limit exceeds its cap")
         if client["disk_cache_limit_mib"] > 1_024:
             raise ValueError(f"{system} runtime cache exceeds its 1 GiB cap")
@@ -748,20 +871,30 @@ def _validate_environment(value: object) -> dict[str, object]:
         )
         return {
             "volume_type": _identifier(storage["volume_type"], f"{role} volume type"),
-            "volume_size_gib": _positive_int(storage["volume_size_gib"], f"{role} size GiB"),
+            "volume_size_gib": _positive_int(
+                storage["volume_size_gib"], f"{role} size GiB"
+            ),
             "iops": _positive_int(storage["iops"], f"{role} IOPS"),
-            "throughput_mib_s": _positive_int(storage["throughput_mib_s"], f"{role} throughput MiB/s"),
+            "throughput_mib_s": _positive_int(
+                storage["throughput_mib_s"], f"{role} throughput MiB/s"
+            ),
         }
 
-    normalized_build_storage = normalize_storage(environment["build_storage"], "build storage")
-    normalized_runtime_storage = normalize_storage(environment["runtime_storage"], "runtime storage")
+    normalized_build_storage = normalize_storage(
+        environment["build_storage"], "build storage"
+    )
+    normalized_runtime_storage = normalize_storage(
+        environment["runtime_storage"], "runtime storage"
+    )
     if (
         normalized_runtime_storage["volume_size_gib"] > 32
         or normalized_runtime_storage["iops"] > 3_000
         or normalized_runtime_storage["throughput_mib_s"] > 125
     ):
         raise ValueError("runtime storage exceeds the small-client cap")
-    runtime_data_contract = _dict(environment["runtime_data_contract"], "runtime_data_contract")
+    runtime_data_contract = _dict(
+        environment["runtime_data_contract"], "runtime_data_contract"
+    )
     expected_runtime_data_contract = {
         "index_location": "s3",
         "dataset_location": "s3",
@@ -770,9 +903,7 @@ def _validate_environment(value: object) -> dict[str, object]:
     }
     if runtime_data_contract != expected_runtime_data_contract:
         raise ValueError("runtime data contract must be S3-only")
-    interruption = _dict(
-        environment["interruption_contract"], "interruption_contract"
-    )
+    interruption = _dict(environment["interruption_contract"], "interruption_contract")
     expected_interruption = {
         "measurement_unit": "factor-arm",
         "sync_terminal_repetitions": True,
@@ -808,12 +939,14 @@ def _validate_prefixes(value: object) -> dict[str, str]:
         raise ValueError("publication prefixes must be distinct")
     for field in ("result", "index", "dataset"):
         if S3_PREFIX.fullmatch(result[field]) is None:
-            raise ValueError(f"{field} prefix must be an S3 URI without a trailing slash")
+            raise ValueError(
+                f"{field} prefix must be an S3 URI without a trailing slash"
+            )
     for left_name, left in result.items():
         for right_name, right in result.items():
-            if left_name != right_name and (
-                left.rstrip("/") + "/"
-            ).startswith(right.rstrip("/") + "/"):
+            if left_name != right_name and (left.rstrip("/") + "/").startswith(
+                right.rstrip("/") + "/"
+            ):
                 raise ValueError("publication prefixes must not contain one another")
     return result
 
@@ -848,7 +981,9 @@ def validate_manifest(value: dict[str, object]) -> dict[str, object]:
         raise ValueError("datasets must be a nonempty list")
     if not isinstance(workloads_value, list) or not workloads_value:
         raise ValueError("workloads must be a nonempty list")
+    prefixes = _validate_prefixes(manifest["prefixes"])
     datasets = [_validate_dataset(item) for item in datasets_value]
+    _validate_staged_generated_paths(datasets, prefixes)
     workloads = [_validate_workload(item) for item in workloads_value]
     dataset_ids = [item["id"] for item in datasets]
     workload_ids = [item["id"] for item in workloads]
@@ -889,8 +1024,10 @@ def validate_manifest(value: dict[str, object]) -> dict[str, object]:
                     "hamming",
                     "jaccard",
                 }
-                compatible = "binary" in datatypes if binary_dataset else bool(
-                    datatypes - {"binary"}
+                compatible = (
+                    "binary" in datatypes
+                    if binary_dataset
+                    else bool(datatypes - {"binary"})
                 )
                 if not compatible:
                     raise ValueError(
@@ -906,10 +1043,8 @@ def validate_manifest(value: dict[str, object]) -> dict[str, object]:
         "queries_per_repetition": queries,
         "publish_p99": True,
         "source": _validate_campaign_source(manifest["source"]),
-        "environment_contract": _validate_environment(
-            manifest["environment_contract"]
-        ),
-        "prefixes": _validate_prefixes(manifest["prefixes"]),
+        "environment_contract": _validate_environment(manifest["environment_contract"]),
+        "prefixes": prefixes,
         "index_profiles": _validate_index_profiles(manifest["index_profiles"]),
         "budget_contract": _validate_budget(manifest["budget_contract"]),
         "datasets": datasets,
@@ -991,7 +1126,9 @@ def _cell_id(base: dict[str, object]) -> str:
     return f"{base['repetition_id']}-{digest[:24]}"
 
 
-def _finish_cell(base: dict[str, object], prefixes: dict[str, str]) -> dict[str, object]:
+def _finish_cell(
+    base: dict[str, object], prefixes: dict[str, str]
+) -> dict[str, object]:
     cell_id = _cell_id(base)
     dataset = _dict(base["dataset"], "cell dataset")
     return {
@@ -999,9 +1136,7 @@ def _finish_cell(base: dict[str, object], prefixes: dict[str, str]) -> dict[str,
         "cell_id": cell_id,
         "result_prefix": f"{prefixes['result'].rstrip('/')}/{cell_id}",
         "index_prefix": f"{prefixes['index'].rstrip('/')}/{index_id(base)}",
-        "dataset_prefix": (
-            f"{prefixes['dataset'].rstrip('/')}/{dataset['id']}"
-        ),
+        "dataset_prefix": (f"{prefixes['dataset'].rstrip('/')}/{dataset['id']}"),
         "cache_key": f"{prefixes['cache']}-{cell_id}",
     }
 
@@ -1064,7 +1199,10 @@ def validate_schedule_cell(value: dict[str, object]) -> dict[str, object]:
     workload = _validate_workload(cell["workload"])
     if index_profile != _effective_index_profile(index_profile, dataset, workload):
         raise ValueError("schedule cell index profile is infeasible for dataset scale")
-    if dataset["id"] not in workload["dataset_ids"] or system not in workload["systems"]:
+    if (
+        dataset["id"] not in workload["dataset_ids"]
+        or system not in workload["systems"]
+    ):
         raise ValueError("cell dataset/system is not authorized by workload")
     if workload["dataset_ids"] != [dataset["id"]]:
         raise ValueError("schedule cell workload must select exactly its dataset")
@@ -1081,13 +1219,16 @@ def validate_schedule_cell(value: dict[str, object]) -> dict[str, object]:
     for field in ("result_prefix", "index_prefix", "dataset_prefix"):
         if S3_PREFIX.fullmatch(str(cell[field])) is None:
             raise ValueError(f"cell {field} must be an S3 URI without a trailing slash")
-    if len(
-        {
-            str(cell["result_prefix"]),
-            str(cell["index_prefix"]),
-            str(cell["dataset_prefix"]),
-        }
-    ) != 3:
+    if (
+        len(
+            {
+                str(cell["result_prefix"]),
+                str(cell["index_prefix"]),
+                str(cell["dataset_prefix"]),
+            }
+        )
+        != 3
+    ):
         raise ValueError("cell object prefixes must be distinct")
     base = {
         "schema_version": 1,
@@ -1156,7 +1297,9 @@ def validate_schedule_for_manifest(
     try:
         validated = validate_schedule_document(schedule)
     except ValueError as error:
-        raise ValueError("schedule differs from the canonical schedule for manifest") from error
+        raise ValueError(
+            "schedule differs from the canonical schedule for manifest"
+        ) from error
     expected = build_schedule_document(manifest)
     if canonical_json_bytes(validated) != canonical_json_bytes(expected):
         raise ValueError("schedule differs from the canonical schedule for manifest")
@@ -1242,6 +1385,16 @@ def _write_structural_replay(
     )
 
 
+def manifest_is_paid_ready(manifest: dict[str, object]) -> bool:
+    """Require frozen code and durable materialization for every dataset."""
+
+    normalized = validate_manifest(manifest)
+    return normalized["source"]["state"] == "frozen" and all(
+        dataset["source"]["state"] in {"staged", "staged-generated"}
+        for dataset in normalized["datasets"]
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1264,9 +1417,7 @@ def main() -> int:
     args = parser.parse_args()
     if args.command == "protocol":
         schedule = validate_schedule_document(_read_json(args.schedule))
-        cells = {
-            str(cell["cell_id"]): cell for cell in schedule["cells"]
-        }
+        cells = {str(cell["cell_id"]): cell for cell in schedule["cells"]}
         if args.cell_id not in cells:
             raise ValueError("requested cell_id is absent from schedule")
         write_protocol(args.output, cells[args.cell_id])
@@ -1279,9 +1430,10 @@ def main() -> int:
         return 0
     manifest = validate_manifest(_read_json(args.manifest))
     unstaged = sum(
-        dataset["source"]["state"] == "unstaged" for dataset in manifest["datasets"]
+        dataset["source"]["state"] not in {"staged", "staged-generated"}
+        for dataset in manifest["datasets"]
     )
-    paid_ready = manifest["source"]["state"] == "frozen" and unstaged == 0
+    paid_ready = manifest_is_paid_ready(manifest)
     if args.command == "replay":
         if not paid_ready:
             raise ValueError("replay requires paid-ready source and datasets")
@@ -1319,7 +1471,9 @@ def main() -> int:
         return 0
     if args.command == "verify-schedule":
         if not paid_ready:
-            raise ValueError("schedule verification requires paid-ready source and datasets")
+            raise ValueError(
+                "schedule verification requires paid-ready source and datasets"
+            )
         schedule = validate_schedule_for_manifest(_read_json(args.schedule), manifest)
         print(
             json.dumps(

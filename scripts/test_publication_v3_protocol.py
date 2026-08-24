@@ -10,6 +10,7 @@ from scripts.publication_v3_protocol import (
     build_schedule_document,
     canonical_json_bytes,
     index_id,
+    manifest_is_paid_ready,
     read_protocol,
     validate_manifest,
     validate_schedule_cell,
@@ -42,14 +43,44 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
             "architecture": "aarch64",
             "spot_default": True,
             "build_workers": {
-                "borsuk": {"instance_type": "r7g.8xlarge", "vcpus": 32, "memory_mib": 262144},
-                "amazon-s3-vectors": {"instance_type": "r7g.8xlarge", "vcpus": 32, "memory_mib": 262144},
-                "faiss": {"instance_type": "r7g.16xlarge", "vcpus": 64, "memory_mib": 524288},
+                "borsuk": {
+                    "instance_type": "r7g.8xlarge",
+                    "vcpus": 32,
+                    "memory_mib": 262144,
+                },
+                "amazon-s3-vectors": {
+                    "instance_type": "r7g.8xlarge",
+                    "vcpus": 32,
+                    "memory_mib": 262144,
+                },
+                "faiss": {
+                    "instance_type": "r7g.16xlarge",
+                    "vcpus": 64,
+                    "memory_mib": 524288,
+                },
             },
             "runtime_clients": {
-                "borsuk": {"instance_type": "c7g.xlarge", "vcpus": 4, "memory_mib": 8192, "resident_limit_mib": 2048, "disk_cache_limit_mib": 1024},
-                "amazon-s3-vectors": {"instance_type": "c7g.xlarge", "vcpus": 4, "memory_mib": 8192, "resident_limit_mib": 2048, "disk_cache_limit_mib": 1024},
-                "faiss": {"instance_type": "c7g.2xlarge", "vcpus": 8, "memory_mib": 16384, "resident_limit_mib": 12288, "disk_cache_limit_mib": 1024},
+                "borsuk": {
+                    "instance_type": "c7g.xlarge",
+                    "vcpus": 4,
+                    "memory_mib": 8192,
+                    "resident_limit_mib": 2048,
+                    "disk_cache_limit_mib": 1024,
+                },
+                "amazon-s3-vectors": {
+                    "instance_type": "c7g.xlarge",
+                    "vcpus": 4,
+                    "memory_mib": 8192,
+                    "resident_limit_mib": 2048,
+                    "disk_cache_limit_mib": 1024,
+                },
+                "faiss": {
+                    "instance_type": "c7g.2xlarge",
+                    "vcpus": 8,
+                    "memory_mib": 16384,
+                    "resident_limit_mib": 12288,
+                    "disk_cache_limit_mib": 1024,
+                },
             },
             "build_storage": {
                 "volume_type": "gp3",
@@ -217,6 +248,28 @@ def paid_v3_manifest() -> dict[str, object]:
     return value
 
 
+def paid_ready_v3_manifest() -> dict[str, object]:
+    """Return a frozen fixture whose generated recipes have durable authority."""
+
+    value = paid_v3_manifest()
+    for dataset in value["datasets"]:
+        source = dataset["source"]
+        if source["state"] != "generated":
+            continue
+        attempt_root = f"{value['prefixes']['dataset']}/{dataset['id']}/attempts/0001"
+        dataset["source"] = {
+            "state": "staged-generated",
+            "generator": source["generator"],
+            "seed": source["seed"],
+            "generator_source_archive_sha256": "a" * 64,
+            "url": f"{attempt_root}/materialized",
+            "sha256": "b" * 64,
+            "receipt_uri": f"{attempt_root}/STAGING_COMPLETE.json",
+            "receipt_sha256": "c" * 64,
+        }
+    return value
+
+
 class PublicationV3ProtocolTests(unittest.TestCase):
     def test_read_workload_rejects_non_v20_leaf_page_budget(self) -> None:
         manifest = valid_v3_manifest()
@@ -291,7 +344,9 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         self.assertEqual(validated_mse["turboquant_bits"], 1)
         self.assertEqual(validated_mse["turboquant_shards"], 3)
 
-    def test_borsuk_profile_rejects_unknown_global_scan_codec_before_scheduling(self) -> None:
+    def test_borsuk_profile_rejects_unknown_global_scan_codec_before_scheduling(
+        self,
+    ) -> None:
         manifest = paid_v3_manifest()
         manifest["index_profiles"]["borsuk"]["global_scan_codec"] = (
             "fast-turboquant-prod-scan"
@@ -300,7 +355,9 @@ class PublicationV3ProtocolTests(unittest.TestCase):
             validate_manifest(manifest)
 
     def test_protocol_is_exact_scheduled_cell_without_reconstruction(self) -> None:
-        cell = build_schedule_document(validate_manifest(valid_v3_manifest()))["cells"][0]
+        cell = build_schedule_document(validate_manifest(valid_v3_manifest()))["cells"][
+            0
+        ]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "protocol.json"
             write_protocol(path, cell)
@@ -422,7 +479,9 @@ class PublicationV3ProtocolTests(unittest.TestCase):
                 "runtime_clients": {
                     **valid_v3_manifest()["environment_contract"]["runtime_clients"],
                     "borsuk": {
-                        **valid_v3_manifest()["environment_contract"]["runtime_clients"]["borsuk"],
+                        **valid_v3_manifest()["environment_contract"][
+                            "runtime_clients"
+                        ]["borsuk"],
                         "instance_type": "c7g.large",
                         "vcpus": 2,
                         "memory_mib": 4096,
@@ -441,7 +500,9 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         environment = validate_manifest(valid_v3_manifest())["environment_contract"]
         self.assertEqual(environment["build_workers"]["borsuk"]["memory_mib"], 262144)
         self.assertEqual(environment["runtime_clients"]["borsuk"]["memory_mib"], 8192)
-        self.assertLessEqual(environment["runtime_clients"]["borsuk"]["resident_limit_mib"], 2048)
+        self.assertLessEqual(
+            environment["runtime_clients"]["borsuk"]["resident_limit_mib"], 2048
+        )
         self.assertEqual(environment["runtime_storage"]["volume_size_gib"], 32)
         self.assertFalse(environment["runtime_data_contract"]["allow_local_corpus"])
         self.assertFalse(environment["runtime_data_contract"]["allow_local_index"])
@@ -462,9 +523,9 @@ class PublicationV3ProtocolTests(unittest.TestCase):
                 validate_manifest(manifest)
 
     def test_v2_aliases_and_unknown_fields_are_rejected(self) -> None:
-        row = build_schedule_document(validate_manifest(valid_v3_manifest()))[
-            "cells"
-        ][0]
+        row = build_schedule_document(validate_manifest(valid_v3_manifest()))["cells"][
+            0
+        ]
         bad_rows = (
             {**row, "result_key": row["result_prefix"]},
             {**row, "index_key": row["index_prefix"]},
@@ -478,20 +539,18 @@ class PublicationV3ProtocolTests(unittest.TestCase):
     def test_schedule_is_verified_byte_for_byte_against_its_manifest(self) -> None:
         manifest = validate_manifest(valid_v3_manifest())
         schedule = build_schedule_document(manifest)
-        self.assertEqual(
-            validate_schedule_for_manifest(schedule, manifest), schedule
-        )
+        self.assertEqual(validate_schedule_for_manifest(schedule, manifest), schedule)
         tampered = json.loads(json.dumps(schedule))
         tampered["cells"][0]["query_seed"] += 1
         with self.assertRaisesRegex(ValueError, "canonical schedule"):
             validate_schedule_for_manifest(tampered, manifest)
-        moved_manifest = validate_manifest(
-            valid_v3_manifest(master_seed=1702)
-        )
+        moved_manifest = validate_manifest(valid_v3_manifest(master_seed=1702))
         with self.assertRaisesRegex(ValueError, "canonical schedule"):
             validate_schedule_for_manifest(schedule, moved_manifest)
 
-    def test_manifest_rejects_unknown_fields_duplicates_and_invalid_source(self) -> None:
+    def test_manifest_rejects_unknown_fields_duplicates_and_invalid_source(
+        self,
+    ) -> None:
         cases = (
             {**valid_v3_manifest(), "unknown": True},
             valid_v3_manifest(systems=["borsuk", "borsuk"]),
@@ -501,6 +560,124 @@ class PublicationV3ProtocolTests(unittest.TestCase):
             with self.subTest(case=json.dumps(case, sort_keys=True)[:160]):
                 with self.assertRaises(ValueError):
                     validate_manifest(case)
+
+    def test_staged_generated_source_preserves_recipe_and_receipt_authority(
+        self,
+    ) -> None:
+        manifest = valid_v3_manifest()
+        generated = next(
+            dataset
+            for dataset in manifest["datasets"]
+            if dataset["source"]["state"] == "generated"
+        )
+        attempt_root = (
+            f"{manifest['prefixes']['dataset']}/{generated['id']}/attempts/0001"
+        )
+        generated["source"] = {
+            "state": "staged-generated",
+            "generator": "synthetic-clustered-v1",
+            "seed": 4441,
+            "generator_source_archive_sha256": "a" * 64,
+            "url": f"{attempt_root}/materialized",
+            "sha256": "b" * 64,
+            "receipt_uri": f"{attempt_root}/STAGING_COMPLETE.json",
+            "receipt_sha256": "c" * 64,
+        }
+        validated = validate_manifest(manifest)
+        self.assertEqual(
+            next(
+                dataset
+                for dataset in validated["datasets"]
+                if dataset["id"] == generated["id"]
+            )["source"],
+            generated["source"],
+        )
+        for field in ("generator", "receipt_sha256"):
+            malformed = json.loads(json.dumps(manifest))
+            del next(
+                dataset
+                for dataset in malformed["datasets"]
+                if dataset["id"] == generated["id"]
+            )["source"][field]
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate_manifest(malformed)
+
+    def test_generated_contract_rejects_unsupported_or_unbounded_paid_recipes(
+        self,
+    ) -> None:
+        for mutation, error in (
+            (("source", "generator", "synthetic-unknown-v1"), "generator"),
+            (("metric", None, "l2"), "generator.*metric"),
+            (("scale", "rows", 1_000_001), "groups of 100"),
+            (("dimensions", None, 2), "code capacity"),
+            (("scale", "rows", 2_000_000_000), "object bound"),
+        ):
+            manifest = valid_v3_manifest()
+            dataset = manifest["datasets"][1]
+            section, field, value = mutation
+            if field is None:
+                dataset[section] = value
+            else:
+                dataset[section][field] = value
+            with (
+                self.subTest(mutation=mutation),
+                self.assertRaisesRegex(ValueError, error),
+            ):
+                validate_manifest(manifest)
+
+        manifest = valid_v3_manifest()
+        dataset = manifest["datasets"][1]
+        dataset["kind"] = "synthetic-binary"
+        dataset["metric"] = "hamming"
+        dataset["scale"]["rows"] = 1_000_000_000
+        dataset["dimensions"] = 25
+        dataset["source"]["generator"] = "synthetic-binary-v1"
+        with self.assertRaisesRegex(ValueError, "truth margin"):
+            validate_manifest(manifest)
+
+        manifest = valid_v3_manifest()
+        dataset = manifest["datasets"][1]
+        source = dataset["source"]
+        attempt_root = (
+            f"{manifest['prefixes']['dataset']}/{dataset['id']}/attempts/0001"
+        )
+        dataset["source"] = {
+            "state": "staged-generated",
+            "generator": source["generator"],
+            "seed": source["seed"],
+            "generator_source_archive_sha256": "a" * 64,
+            "url": f"{attempt_root}/materialized?foreign=true",
+            "sha256": "b" * 64,
+            "receipt_uri": f"{attempt_root}/STAGING_COMPLETE.json",
+            "receipt_sha256": "c" * 64,
+        }
+        with self.assertRaisesRegex(ValueError, "canonical dataset staging path"):
+            validate_manifest(manifest)
+
+    def test_paid_ready_requires_generated_recipes_to_be_staged(self) -> None:
+        manifest = paid_v3_manifest()
+        self.assertFalse(manifest_is_paid_ready(validate_manifest(manifest)))
+        for dataset in manifest["datasets"]:
+            source = dataset["source"]
+            if source["state"] != "generated":
+                continue
+            dataset["source"] = {
+                "state": "staged-generated",
+                "generator": source["generator"],
+                "seed": source["seed"],
+                "generator_source_archive_sha256": "a" * 64,
+                "url": (
+                    f"{manifest['prefixes']['dataset']}/{dataset['id']}/"
+                    "attempts/0001/materialized"
+                ),
+                "sha256": "b" * 64,
+                "receipt_uri": (
+                    f"{manifest['prefixes']['dataset']}/{dataset['id']}/"
+                    "attempts/0001/STAGING_COMPLETE.json"
+                ),
+                "receipt_sha256": "c" * 64,
+            }
+        self.assertTrue(manifest_is_paid_ready(validate_manifest(manifest)))
 
     def test_numerically_equal_integer_fields_have_one_identity(self) -> None:
         integer_manifest = valid_v3_manifest()
@@ -545,16 +722,14 @@ class PublicationV3ProtocolTests(unittest.TestCase):
             profile = cell["index_profile"]
             if cell["system"] == "borsuk":
                 self.assertLessEqual(
-                    profile["logical_cells"]
-                    * profile["minimum_rows_per_logical_cell"],
+                    profile["logical_cells"] * profile["minimum_rows_per_logical_cell"],
                     rows,
                 )
             elif cell["system"] == "faiss":
                 self.assertLessEqual(profile["training_rows"], rows)
                 self.assertGreaterEqual(
                     profile["training_rows"],
-                    profile["nlist"]
-                    * profile["minimum_training_rows_per_centroid"],
+                    profile["nlist"] * profile["minimum_training_rows_per_centroid"],
                 )
 
     def test_layout_build_factors_change_the_effective_index_profile(self) -> None:
@@ -590,7 +765,9 @@ class PublicationV3ProtocolTests(unittest.TestCase):
             dense_prefixes.isdisjoint({cell["index_prefix"] for cell in layout})
         )
 
-    def test_datatype_manifest_rejects_empty_or_synthesized_projection_arms(self) -> None:
+    def test_datatype_manifest_rejects_empty_or_synthesized_projection_arms(
+        self,
+    ) -> None:
         binary_only = valid_v3_manifest()
         binary_only["workloads"].append(
             {
@@ -715,9 +892,7 @@ class PublicationV3ProtocolTests(unittest.TestCase):
             }.issubset(by_kind["datatype-simd-matrix"]["dataset_ids"])
         )
         self.assertTrue(
-            by_kind["storage-layout-audit"]["factors"][
-                "require_multiple_data_bundles"
-            ]
+            by_kind["storage-layout-audit"]["factors"]["require_multiple_data_bundles"]
         )
         self.assertEqual(
             by_kind["write-update-delete-compact"]["factors"]["writers"],
@@ -792,9 +967,7 @@ class PublicationV3ProtocolTests(unittest.TestCase):
     def test_cli_reports_unfrozen_manifest_as_not_paid_ready(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest_path = Path(directory) / "manifest.json"
-            manifest_path.write_bytes(
-                canonical_json_bytes(valid_v3_manifest()) + b"\n"
-            )
+            manifest_path.write_bytes(canonical_json_bytes(valid_v3_manifest()) + b"\n")
             result = subprocess.run(
                 [
                     sys.executable,
@@ -808,13 +981,30 @@ class PublicationV3ProtocolTests(unittest.TestCase):
             )
         report = json.loads(result.stdout)
         self.assertFalse(report["paid_ready"])
-        self.assertEqual(report["unstaged_datasets"], 2)
+        self.assertEqual(report["unstaged_datasets"], 3)
 
     def test_cli_verifies_schedule_against_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest_path = Path(directory) / "manifest.json"
             schedule_path = Path(directory) / "schedule.json"
             manifest = paid_v3_manifest()
+            for dataset in manifest["datasets"]:
+                source = dataset["source"]
+                if source["state"] != "generated":
+                    continue
+                attempt_root = (
+                    f"{manifest['prefixes']['dataset']}/{dataset['id']}/attempts/0001"
+                )
+                dataset["source"] = {
+                    "state": "staged-generated",
+                    "generator": source["generator"],
+                    "seed": source["seed"],
+                    "generator_source_archive_sha256": "a" * 64,
+                    "url": f"{attempt_root}/materialized",
+                    "sha256": "b" * 64,
+                    "receipt_uri": f"{attempt_root}/STAGING_COMPLETE.json",
+                    "receipt_sha256": "c" * 64,
+                }
             schedule = build_schedule_document(validate_manifest(manifest))
             manifest_path.write_bytes(canonical_json_bytes(manifest) + b"\n")
             schedule_path.write_bytes(canonical_json_bytes(schedule) + b"\n")
@@ -839,9 +1029,7 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             manifest_path = Path(directory) / "manifest.json"
             schedule_path = Path(directory) / "schedule.json"
-            manifest_path.write_bytes(
-                canonical_json_bytes(valid_v3_manifest()) + b"\n"
-            )
+            manifest_path.write_bytes(canonical_json_bytes(valid_v3_manifest()) + b"\n")
             result = subprocess.run(
                 [
                     sys.executable,

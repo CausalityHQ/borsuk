@@ -35,6 +35,51 @@ def frozen_manifest() -> dict[str, object]:
 
 
 class PublicationV3ExecutionTests(unittest.TestCase):
+    def test_generated_build_consumes_staged_roster_without_regeneration(self) -> None:
+        manifest = frozen_manifest()
+        dataset = next(
+            item
+            for item in manifest["datasets"]
+            if item["id"] == "synthetic-uniform-10m-768"
+        )
+        recipe = dataset["source"]
+        attempt_root = (
+            f"{manifest['prefixes']['dataset']}/{dataset['id']}/attempts/0001"
+        )
+        dataset["source"] = {
+            "state": "staged-generated",
+            "generator": recipe["generator"],
+            "seed": recipe["seed"],
+            "generator_source_archive_sha256": "a" * 64,
+            "url": f"{attempt_root}/materialized",
+            "sha256": "b" * 64,
+            "receipt_uri": f"{attempt_root}/STAGING_COMPLETE.json",
+            "receipt_sha256": "c" * 64,
+        }
+        cell = borsuk_cell(
+            manifest,
+            workload_id="synthetic-dense-read",
+            dataset_id=dataset["id"],
+            repetition_id="r01",
+            build_attempt=1,
+        )
+        script = build_worker_script(
+            job=ExecutionJob.build(cell, attempt=1),
+            source_uri="s3://bucket/source/archive.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocol.json",
+            protocol_sha256="7" * 64,
+            attempt_id="build-0001",
+            terminal_prefix="s3://bucket/results/build/attempts/0001",
+        )
+        self.assertIn(dataset["source"]["receipt_uri"], script)
+        self.assertIn(dataset["source"]["receipt_sha256"], script)
+        self.assertIn("fetch_publication_v3_dataset.py", script)
+        self.assertNotIn("BORSUK_SYNTHETIC_GENERATOR", script)
+        self.assertIn(f"--dataset-materialization-sha256 {'b' * 64}", script)
+
     def test_generic_read_cells_and_arms_have_distinct_frozen_authority(self) -> None:
         manifest = frozen_manifest()
         first = borsuk_cell(
@@ -327,6 +372,64 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )
+
+    def test_generated_runtime_fetches_only_authenticated_query_roles(self) -> None:
+        manifest = frozen_manifest()
+        dataset = next(
+            item
+            for item in manifest["datasets"]
+            if item["id"] == "synthetic-clustered-1m-768"
+        )
+        recipe = dataset["source"]
+        attempt_root = (
+            f"{manifest['prefixes']['dataset']}/{dataset['id']}/attempts/0001"
+        )
+        dataset["source"] = {
+            "state": "staged-generated",
+            "generator": recipe["generator"],
+            "seed": recipe["seed"],
+            "generator_source_archive_sha256": "a" * 64,
+            "url": f"{attempt_root}/materialized",
+            "sha256": "b" * 64,
+            "receipt_uri": f"{attempt_root}/STAGING_COMPLETE.json",
+            "receipt_sha256": "c" * 64,
+        }
+        cell = borsuk_cell(
+            manifest,
+            workload_id="synthetic-dense-read",
+            dataset_id=dataset["id"],
+            repetition_id="r01",
+            build_attempt=1,
+        )
+        script = runtime_worker_script(
+            job=ExecutionJob.runtime(cell, attempt=1),
+            source_uri="s3://bucket/source/source.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifests/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocols/cell.json",
+            protocol_sha256="7" * 64,
+            build_prefix="s3://bucket/results/cell/build/attempts/0001",
+            binary_sha256="8" * 64,
+            attempt_id="runtime-0001",
+            terminal_prefix="s3://bucket/results/cell/runtime/attempts/0001",
+            disk_cache_max_bytes=0,
+            exact_read_max_physical_amplification=2,
+            max_active_searches=4,
+            max_waiting_searches=16,
+            leaf_read_width=32,
+            max_inflight_leaf_reads=48,
+            max_parallel_decode_rank_tasks=1,
+            cpu_threads=3,
+            io_threads=88,
+            s3_get_concurrency=64,
+            ram_budget_bytes=2 * 1024 * 1024 * 1024,
+        )
+        self.assertIn(dataset["source"]["receipt_uri"], script)
+        self.assertIn(dataset["source"]["receipt_sha256"], script)
+        self.assertIn("fetch_publication_v3_dataset.py", script)
+        self.assertIn("--roles query,ground-truth,metadata", script)
+        self.assertNotIn("--roles train,", script)
 
     def test_concurrency_runtime_worker_publishes_checked_sidecars(self) -> None:
         script = runtime_worker_script(
