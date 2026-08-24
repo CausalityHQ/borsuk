@@ -8,6 +8,7 @@ from pathlib import Path
 
 from scripts.publication_v3_execution import (
     ExecutionJob,
+    borsuk_cell,
     build_worker_script,
     qualification_cell,
     runtime_worker_script,
@@ -34,6 +35,71 @@ def frozen_manifest() -> dict[str, object]:
 
 
 class PublicationV3ExecutionTests(unittest.TestCase):
+    def test_generic_read_cells_and_arms_have_distinct_frozen_authority(self) -> None:
+        manifest = frozen_manifest()
+        first = borsuk_cell(
+            manifest,
+            workload_id="standard-ann-read",
+            dataset_id="sift-128",
+            repetition_id="r01",
+            build_attempt=1,
+        )
+        fifth = borsuk_cell(
+            manifest,
+            workload_id="standard-ann-read",
+            dataset_id="sift-128",
+            repetition_id="r05",
+            build_attempt=1,
+        )
+
+        first_arm = ExecutionJob.runtime(
+            first, attempt=1, profile="recall", arm_index=0
+        )
+        high_recall_arm = ExecutionJob.runtime(
+            first, attempt=1, profile="recall", arm_index=2
+        )
+        fifth_arm = ExecutionJob.runtime(
+            fifth, attempt=1, profile="recall", arm_index=2
+        )
+
+        self.assertEqual(first["repetition_id"], "r01")
+        self.assertEqual(fifth["repetition_id"], "r05")
+        self.assertEqual(first["workload"]["id"], "standard-ann-read")
+        self.assertNotEqual(first["result_prefix"], fifth["result_prefix"])
+        self.assertEqual(first["index_prefix"], fifth["index_prefix"])
+        self.assertIn(
+            "/runtime-recall/arms/0000/attempts/0001", first_arm.terminal_prefix
+        )
+        self.assertIn(
+            "/runtime-recall/arms/0002/attempts/0001",
+            high_recall_arm.terminal_prefix,
+        )
+        self.assertIn(
+            "/runtime-recall/arms/0002/attempts/0001", fifth_arm.terminal_prefix
+        )
+        self.assertNotEqual(first_arm.terminal_prefix, high_recall_arm.terminal_prefix)
+        self.assertNotEqual(high_recall_arm.terminal_prefix, fifth_arm.terminal_prefix)
+
+    def test_generic_cell_rejects_unscheduled_membership(self) -> None:
+        manifest = frozen_manifest()
+        for workload_id, dataset_id, repetition_id in (
+            ("missing", "sift-128", "r01"),
+            ("standard-ann-read", "laion-100m-768", "r01"),
+            ("standard-ann-read", "sift-128", "r06"),
+        ):
+            with self.subTest(
+                workload_id=workload_id,
+                dataset_id=dataset_id,
+                repetition_id=repetition_id,
+            ):
+                with self.assertRaisesRegex(ValueError, "uniquely scheduled"):
+                    borsuk_cell(
+                        manifest,
+                        workload_id=workload_id,
+                        dataset_id=dataset_id,
+                        repetition_id=repetition_id,
+                    )
+
     def test_worker_signal_trap_delegates_to_preinstalled_reporter(self) -> None:
         with tempfile.TemporaryDirectory(prefix="borsuk-v3-worker-trap-") as directory:
             root = Path(directory)
@@ -43,7 +109,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             detail_log.write_text("runtime failed\n", encoding="utf-8")
             reporter.write_text(
                 "#!/usr/bin/env bash\n"
-                f"printf '%s\\n%s\\n%s\\n' \"$1\" \"$2\" \"$3\" >{receipt!s}\n",
+                f'printf \'%s\\n%s\\n%s\\n\' "$1" "$2" "$3" >{receipt!s}\n',
                 encoding="utf-8",
             )
             reporter.chmod(0o700)
@@ -65,7 +131,9 @@ class PublicationV3ExecutionTests(unittest.TestCase):
                 ["143", "execute-runtime", str(detail_log)],
             )
 
-    def test_build_attempts_use_distinct_index_authority_and_runtime_pins_one(self) -> None:
+    def test_build_attempts_use_distinct_index_authority_and_runtime_pins_one(
+        self,
+    ) -> None:
         manifest = frozen_manifest()
         first_cell = qualification_cell(
             manifest,
@@ -219,8 +287,8 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn("MemoryMax=8589934592", script)
         self.assertIn("MemorySwapMax=0", script)
         self.assertIn("--service-type=exec", script)
-        self.assertIn('StandardOutput=append:$detail_log', script)
-        self.assertIn('StandardError=append:$detail_log', script)
+        self.assertIn("StandardOutput=append:$detail_log", script)
+        self.assertIn("StandardError=append:$detail_log", script)
         self.assertNotIn("--scope", script)
         self.assertIn("--mode runtime", script)
         self.assertIn("observe_publication_v3_index.py", script)
@@ -242,7 +310,9 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn("--disk-cache-max-bytes 0", script)
         self.assertIn("--exact-read-max-physical-amplification 3", script)
         self.assertIn('test "$actual_max_parallel_decode_rank_tasks" = 1', script)
-        self.assertLess(script.index("stage=attest-purchase"), script.index("stage=provision"))
+        self.assertLess(
+            script.index("stage=attest-purchase"), script.index("stage=provision")
+        )
         self.assertIn("stage=mount-cache", script)
         self.assertIn("stage=verify-index", script)
         self.assertIn("stage=execute-runtime", script)

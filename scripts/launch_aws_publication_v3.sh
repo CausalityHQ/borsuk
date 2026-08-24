@@ -8,6 +8,16 @@ if [[ "$#" -eq 2 && "$1" == "--stage-dataset" && -n "$2" ]]; then
 elif [[ "$#" -eq 2 && "$1" == "--build-lifecycle" && -n "$2" ]]; then
   mode="$1"
   lifecycle_dataset="$2"
+elif [[ "$#" -eq 3 && "$1" == "--build-read" && -n "$2" && -n "$3" ]]; then
+  mode="$1"
+  read_workload="$2"
+  read_dataset="$3"
+elif [[ "$#" -eq 5 && "$1" == "--run-read" && -n "$2" && -n "$3" && "$4" =~ ^r[0-9]{2}$ && "$5" =~ ^[0-9]+$ ]]; then
+  mode="$1"
+  read_workload="$2"
+  read_dataset="$3"
+  read_repetition="$4"
+  read_arm_index="$5"
 elif [[ "$#" -eq 2 && "$1" == "--diagnose-lifecycle" && -n "$2" ]]; then
   mode="$1"
   lifecycle_dataset="$2"
@@ -19,7 +29,7 @@ elif [[ "$#" -eq 1 && ( "$1" == "--dry-run" || "$1" == "--build-sift" || "$1" ==
   mode="$1"
 else
   printf 'Publication V3 paid launch is unavailable until the AWS execution plan is implemented and reviewed\n' >&2
-  printf 'usage: %s --dry-run|--build-sift|--read-recall-sift|--read-concurrency-sift|--stage-dataset <manifest-dataset-id>|--build-lifecycle <manifest-dataset-id>|--run-lifecycle <manifest-dataset-id> <arm-index>|--diagnose-lifecycle <manifest-dataset-id>\n' "$0" >&2
+  printf 'usage: %s --dry-run|--build-sift|--read-recall-sift|--read-concurrency-sift|--build-read <workload-id> <dataset-id>|--run-read <workload-id> <dataset-id> <repetition-id> <arm-index>|--stage-dataset <manifest-dataset-id>|--build-lifecycle <manifest-dataset-id>|--run-lifecycle <manifest-dataset-id> <arm-index>|--diagnose-lifecycle <manifest-dataset-id>\n' "$0" >&2
   exit 2
 fi
 
@@ -31,7 +41,7 @@ if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --
 fi
 
 git fetch --quiet origin main
-if [[ "$mode" == "--build-sift" || "$mode" == "--build-lifecycle" || "$mode" == "--run-lifecycle" || "$mode" == "--diagnose-lifecycle" || "$mode" == "--read-recall-sift" || "$mode" == "--read-concurrency-sift" ]]; then
+if [[ "$mode" == "--build-sift" || "$mode" == "--build-read" || "$mode" == "--run-read" || "$mode" == "--build-lifecycle" || "$mode" == "--run-lifecycle" || "$mode" == "--diagnose-lifecycle" || "$mode" == "--read-recall-sift" || "$mode" == "--read-concurrency-sift" ]]; then
   if ! git merge-base --is-ancestor HEAD origin/main; then
     printf 'Publication V3 frozen source commit must be contained in origin/main\n' >&2
     exit 2
@@ -126,6 +136,44 @@ if [[ "$mode" == "--stage-dataset" ]]; then
     --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
     --start-attempt "${BORSUK_PUBLICATION_V3_START_ATTEMPT:-1}" \
     --max-attempts "${BORSUK_PUBLICATION_V3_MAX_ATTEMPTS:-6}"
+  exit 0
+fi
+
+if [[ "$mode" == "--build-read" ]]; then
+  controller="${BORSUK_PUBLICATION_V3_CONTROLLER:-scripts/publication_v3_controller.py}"
+  python3 "$controller" build-read \
+    --manifest "$manifest" \
+    --source-archive "$archive" \
+    --workload "$read_workload" \
+    --dataset "$read_dataset" \
+    --profile "${AWS_PROFILE:-causality}" \
+    --image-id "${BORSUK_PUBLICATION_V3_AMI_ID:-ami-07bcecd13a160173f}" \
+    --subnet-id "${BORSUK_PUBLICATION_V3_SUBNET_ID:-subnet-034528fbd6977848f}" \
+    --security-group-id "${BORSUK_PUBLICATION_V3_SECURITY_GROUP_ID:-sg-0b1fd3e4fbde4af0d}" \
+    --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
+    --attempt "${BORSUK_PUBLICATION_V3_BUILD_ATTEMPT:-0}" \
+    --max-attempts "${BORSUK_PUBLICATION_V3_MAX_ATTEMPTS:-6}"
+  exit 0
+fi
+
+if [[ "$mode" == "--run-read" ]]; then
+  controller="${BORSUK_PUBLICATION_V3_CONTROLLER:-scripts/publication_v3_controller.py}"
+  python3 "$controller" run-read \
+    --manifest "$manifest" \
+    --source-archive "$archive" \
+    --workload "$read_workload" \
+    --dataset "$read_dataset" \
+    --repetition "$read_repetition" \
+    --profile "${AWS_PROFILE:-causality}" \
+    --image-id "${BORSUK_PUBLICATION_V3_AMI_ID:-ami-07bcecd13a160173f}" \
+    --subnet-id "${BORSUK_PUBLICATION_V3_SUBNET_ID:-subnet-034528fbd6977848f}" \
+    --security-group-id "${BORSUK_PUBLICATION_V3_SECURITY_GROUP_ID:-sg-0b1fd3e4fbde4af0d}" \
+    --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
+    --attempt "${BORSUK_PUBLICATION_V3_RUNTIME_ATTEMPT:-0}" \
+    --build-attempt "${BORSUK_PUBLICATION_V3_BUILD_ATTEMPT:-0}" \
+    --max-attempts "${BORSUK_PUBLICATION_V3_MAX_ATTEMPTS:-6}" \
+    --arm-index "$read_arm_index" \
+    --purchase-option "${BORSUK_PUBLICATION_V3_PURCHASE_OPTION:-spot}"
   exit 0
 fi
 

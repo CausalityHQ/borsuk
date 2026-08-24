@@ -81,47 +81,61 @@ class ExecutionJob:
     ) -> "ExecutionJob":
         if profile not in {"recall", "concurrency", "lifecycle"}:
             raise ValueError("runtime execution profile is invalid")
-        if (
-            arm_index < 0
-            or (profile != "lifecycle" and arm_index != 0)
-            or (diagnostic and profile != "lifecycle")
-        ):
+        if arm_index < 0 or (diagnostic and profile != "lifecycle"):
             raise ValueError("runtime execution arm identity is invalid")
         job = cls._new(cell, role="runtime", attempt=attempt)
-        if profile == "recall":
-            return job
-        if profile == "lifecycle":
-            namespace = (
-                "runtime-lifecycle-diagnostic" if diagnostic else "runtime-lifecycle"
-            )
-            terminal_prefix = (
-                f"{str(cell['result_prefix']).rstrip('/')}/{namespace}/"
-                f"arms/{arm_index:04d}/attempts/{attempt:04d}"
-            )
-            return cls(
-                cell=job.cell,
-                role=job.role,
-                attempt=job.attempt,
-                cell_tag=f"{namespace}-{cell['cell_id']}-arm-{arm_index:04d}",
-                terminal_prefix=terminal_prefix,
-                complete_uri=f"{terminal_prefix}/RUNTIME_TERMINAL_COMPLETE.json",
-                failed_uri=f"{terminal_prefix}/RUNTIME_TERMINAL_FAILED.json",
-                index_uri=job.index_uri,
-            )
+        if profile == "lifecycle" and diagnostic:
+            namespace = "runtime-lifecycle-diagnostic"
+        else:
+            namespace = f"runtime-{profile}"
         terminal_prefix = (
-            f"{str(cell['result_prefix']).rstrip('/')}/runtime-concurrency/"
-            f"attempts/{attempt:04d}"
+            f"{str(cell['result_prefix']).rstrip('/')}/{namespace}/"
+            f"arms/{arm_index:04d}/attempts/{attempt:04d}"
         )
         return cls(
             cell=job.cell,
             role=job.role,
             attempt=job.attempt,
-            cell_tag=f"runtime-concurrency-{cell['cell_id']}",
+            cell_tag=f"{namespace}-{cell['cell_id']}-arm-{arm_index:04d}",
             terminal_prefix=terminal_prefix,
             complete_uri=f"{terminal_prefix}/RUNTIME_TERMINAL_COMPLETE.json",
             failed_uri=f"{terminal_prefix}/RUNTIME_TERMINAL_FAILED.json",
             index_uri=job.index_uri,
         )
+
+
+def borsuk_cell(
+    manifest: dict[str, object],
+    *,
+    workload_id: str,
+    dataset_id: str,
+    repetition_id: str,
+    build_attempt: int | None = None,
+) -> dict[str, object]:
+    """Select one exact frozen BORSUK schedule cell."""
+
+    schedule = build_schedule_document(validate_manifest(manifest))
+    matches = [
+        cell
+        for cell in schedule["cells"]
+        if cell["system"] == "borsuk"
+        and cell["repetition_id"] == repetition_id
+        and cell["dataset"]["id"] == dataset_id
+        and cell["workload"]["id"] == workload_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("BORSUK cell is not uniquely scheduled")
+    result = matches[0]
+    if build_attempt is None:
+        return result
+    if not 0 < build_attempt <= 9_999:
+        raise ValueError("BORSUK build attempt is invalid")
+    result = deepcopy(result)
+    index_root, index_name = str(result["index_prefix"]).rsplit("/", 1)
+    result["index_prefix"] = (
+        f"{index_root}/build-attempts/{build_attempt:04d}/{index_name}"
+    )
+    return result
 
 
 def qualification_cell(
@@ -133,28 +147,21 @@ def qualification_cell(
 ) -> dict[str, object]:
     """Select the canonical first BORSUK cell from a partially staged manifest."""
 
-    schedule = build_schedule_document(validate_manifest(manifest))
-    matches = [
-        cell
-        for cell in schedule["cells"]
-        if cell["system"] == "borsuk"
-        and cell["repetition_id"] == "r01"
-        and cell["dataset"]["id"] == dataset_id
-        and cell["workload"]["kind"] == workload_kind
+    normalized = validate_manifest(manifest)
+    workloads = [
+        workload
+        for workload in normalized["workloads"]
+        if workload["kind"] == workload_kind and dataset_id in workload["dataset_ids"]
     ]
-    if len(matches) != 1:
+    if len(workloads) != 1:
         raise ValueError("qualification cell is not uniquely scheduled")
-    result = matches[0]
-    if build_attempt is None:
-        return result
-    if not 0 < build_attempt <= 9_999:
-        raise ValueError("qualification build attempt is invalid")
-    result = deepcopy(result)
-    index_root, index_name = str(result["index_prefix"]).rsplit("/", 1)
-    result["index_prefix"] = (
-        f"{index_root}/build-attempts/{build_attempt:04d}/{index_name}"
+    return borsuk_cell(
+        normalized,
+        workload_id=str(workloads[0]["id"]),
+        dataset_id=dataset_id,
+        repetition_id="r01",
+        build_attempt=build_attempt,
     )
-    return result
 
 
 def _q(value: object) -> str:
@@ -356,18 +363,22 @@ def runtime_worker_script(
         raise ValueError("runtime profile must be recall, concurrency, or lifecycle")
     if arm_index < 0:
         raise ValueError("runtime arm index must be nonnegative")
-    if disk_cache_max_bytes < 0 or min(
-        exact_read_max_physical_amplification,
-        max_active_searches,
-        max_waiting_searches,
-        leaf_read_width,
-        max_inflight_leaf_reads,
-        max_parallel_decode_rank_tasks,
-        cpu_threads,
-        io_threads,
-        s3_get_concurrency,
-        ram_budget_bytes,
-    ) <= 0:
+    if (
+        disk_cache_max_bytes < 0
+        or min(
+            exact_read_max_physical_amplification,
+            max_active_searches,
+            max_waiting_searches,
+            leaf_read_width,
+            max_inflight_leaf_reads,
+            max_parallel_decode_rank_tasks,
+            cpu_threads,
+            io_threads,
+            s3_get_concurrency,
+            ram_budget_bytes,
+        )
+        <= 0
+    ):
         raise ValueError("runtime resource authority must be positive")
     if (
         exact_read_max_physical_amplification > 5
@@ -385,18 +396,22 @@ def runtime_worker_script(
     workload = job.cell.get("workload")
     workload_kind = workload.get("kind") if isinstance(workload, dict) else None
     profile_mismatch = (
-        runtime_profile == "concurrency"
-        and not job.cell_tag.startswith("runtime-concurrency-")
-    ) or (
-        runtime_profile == "recall"
-        and (
-            not job.cell_tag.startswith("runtime-")
-            or job.cell_tag.startswith("runtime-concurrency-")
-            or job.cell_tag.startswith("runtime-lifecycle-")
+        (
+            runtime_profile == "concurrency"
+            and not job.cell_tag.startswith("runtime-concurrency-")
         )
-    ) or (
-        runtime_profile == "lifecycle"
-        and not job.cell_tag.startswith("runtime-lifecycle-")
+        or (
+            runtime_profile == "recall"
+            and (
+                not job.cell_tag.startswith("runtime-")
+                or job.cell_tag.startswith("runtime-concurrency-")
+                or job.cell_tag.startswith("runtime-lifecycle-")
+            )
+        )
+        or (
+            runtime_profile == "lifecycle"
+            and not job.cell_tag.startswith("runtime-lifecycle-")
+        )
     )
     if profile_mismatch:
         raise ValueError("runtime job identity differs from its execution profile")
@@ -424,7 +439,7 @@ def runtime_worker_script(
         clone_step = textwrap.dedent(
             f"""\
             stage=clone-index
-            printf '%s' {_q(canonical_json_bytes(arm).decode('utf-8'))} >"$work/arm.json"
+            printf '%s' {_q(canonical_json_bytes(arm).decode("utf-8"))} >"$work/arm.json"
             "$work/venv/bin/python" "$work/source/scripts/clone_publication_v3_index.py" \
               --cell "$work/protocol.json" --arm "$work/arm.json" \
               --attempt-id {_q(attempt_id)} --base-receipt "$work/INDEX_COMPLETE.json" \
@@ -460,9 +475,9 @@ test \"$actual_claim_eligible\" = false
 diagnostic_result_sha=$(sha256sum \"$work/cell/RESULT_COMPLETE.json\" | awk '{{print $1}}')"""
         diagnostic_receipt_fields = (
             "diagnostic_fields=$(printf ',"
-            f'\"claim_eligible\":false,\"diagnostic_write_ops\":{diagnostic_write_ops},'
-            f'\"diagnostic_timeout_seconds\":{diagnostic_timeout_seconds},'
-            '\"diagnostic_result_sha256\":\"%s\"\' "$diagnostic_result_sha")'
+            f'"claim_eligible":false,"diagnostic_write_ops":{diagnostic_write_ops},'
+            f'"diagnostic_timeout_seconds":{diagnostic_timeout_seconds},'
+            '"diagnostic_result_sha256":"%s"\' "$diagnostic_result_sha")'
         )
     return prelude + textwrap.dedent(
         f"""\

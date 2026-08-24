@@ -19,9 +19,14 @@ from scripts.publication_v3_controller import (
     completed_build_authority,
     prepare_qualification_execution,
     run_execution_job,
+    select_execution_attempt,
     stage_dataset,
 )
-from scripts.publication_v3_execution import ExecutionJob, qualification_cell
+from scripts.publication_v3_execution import (
+    ExecutionJob,
+    borsuk_cell,
+    qualification_cell,
+)
 from scripts.publication_v3_protocol import canonical_json_bytes
 
 MANIFEST = (
@@ -134,6 +139,166 @@ class FakeAws:
 
 
 class PublicationV3ControllerTests(unittest.TestCase):
+    def test_attempt_reconciliation_uses_exact_frozen_job_markers(self) -> None:
+        class MarkerAws:
+            def __init__(self) -> None:
+                self.markers = {1: ("failed",), 3: ("complete",)}
+                self.recorded: list[tuple[int, str, str]] = []
+
+            def execution_markers(self, job: object):
+                return self.markers.get(job.attempt, ())
+
+            def find_execution_instance(self, job: object, *, purchase_option: str):
+                self.purchase_option = purchase_option
+                return ("i-stopped", "shutting-down") if job.attempt == 2 else None
+
+            def record_markerless_execution_failure(
+                self, job: object, *, instance_id: str, instance_state: str
+            ) -> None:
+                self.recorded.append((job.attempt, instance_id, instance_state))
+                self.markers[job.attempt] = ("controller-failed",)
+
+        selected = MarkerAws()
+        self.assertEqual(
+            select_execution_attempt(
+                lambda attempt: type("Job", (), {"attempt": attempt})(),
+                aws=selected,
+                max_attempts=4,
+            ),
+            3,
+        )
+        self.assertEqual(selected.recorded, [(2, "i-stopped", "shutting-down")])
+        skipped = MarkerAws()
+        self.assertEqual(
+            select_execution_attempt(
+                lambda attempt: type("Job", (), {"attempt": attempt})(),
+                aws=skipped,
+                max_attempts=4,
+                purchase_option="on-demand",
+                require_complete=True,
+            ),
+            3,
+        )
+        self.assertEqual(skipped.purchase_option, "on-demand")
+        self.assertEqual(skipped.recorded, [(2, "i-stopped", "shutting-down")])
+
+        class CompletionRaceAws(MarkerAws):
+            def record_markerless_execution_failure(
+                self, job: object, *, instance_id: str, instance_state: str
+            ) -> None:
+                self.recorded.append((job.attempt, instance_id, instance_state))
+                self.markers[job.attempt] = ("complete", "controller-failed")
+
+        raced = CompletionRaceAws()
+        raced.markers = {1: ("failed",)}
+        self.assertEqual(
+            select_execution_attempt(
+                lambda attempt: type("Job", (), {"attempt": attempt})(),
+                aws=raced,
+                max_attempts=4,
+            ),
+            2,
+        )
+
+        class ConflictAws:
+            def execution_markers(self, _job: object):
+                return ("complete", "failed")
+
+        with self.assertRaisesRegex(ValueError, "conflict"):
+            select_execution_attempt(
+                lambda attempt: type("Job", (), {"attempt": attempt})(),
+                aws=ConflictAws(),
+                max_attempts=4,
+            )
+
+    def test_controller_exposes_bounded_generic_read_commands(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "scripts/publication_v3_controller.py", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("build-read", completed.stdout)
+        self.assertIn("run-read", completed.stdout)
+
+    def test_generic_r05_read_reuses_canonical_r01_build_authority(self) -> None:
+        manifest = json.loads(MANIFEST.read_text())
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        build_cell = borsuk_cell(
+            manifest,
+            workload_id="standard-ann-read",
+            dataset_id="sift-128",
+            repetition_id="r01",
+            build_attempt=1,
+        )
+        build_job = ExecutionJob.build(build_cell, attempt=1)
+
+        class GenericReadAws:
+            def execution_markers(self, job: object):
+                self.observed_build = job
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                return {
+                    "schema_version": 1,
+                    "status": "complete",
+                    "role": "build",
+                    "attempt": 1,
+                    "attempt_id": f"{build_job.cell_tag}-a0001",
+                    "source_archive_sha256": "2" * 64,
+                    "manifest_sha256": "6" * 64,
+                    "protocol_sha256": "9" * 64,
+                    "index_uri": build_job.index_uri,
+                    "binary_sha256": "8" * 64,
+                    "purchase_option": "spot",
+                }
+
+        aws = GenericReadAws()
+        prepared = prepare_qualification_execution(
+            manifest,
+            operation="run-read",
+            workload_id="standard-ann-read",
+            dataset_id="sift-128",
+            repetition_id="r05",
+            source_uri="s3://bucket/source.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocol-r05.json",
+            protocol_sha256="7" * 64,
+            build_protocol_sha256="9" * 64,
+            launch=LaunchEnvironment(
+                "ami-x",
+                "subnet-x",
+                "sg-x",
+                "arn:aws:iam::453182569524:instance-profile/x",
+                "aarch64",
+                "eu-central-1",
+            ),
+            aws=aws,
+            attempt=3,
+            build_attempt=1,
+            arm_index=2,
+        )
+
+        self.assertEqual(aws.observed_build.cell["repetition_id"], "r01")
+        self.assertEqual(prepared.job.cell["repetition_id"], "r05")
+        self.assertEqual(prepared.job.index_uri, build_job.index_uri)
+        self.assertIn(
+            "/runtime-recall/arms/0002/attempts/0003",
+            prepared.job.terminal_prefix,
+        )
+        self.assertEqual(prepared.expected["arm_index"], 2)
+
     def test_lifecycle_diagnostic_minimum_matches_runtime_integer_ceiling(self) -> None:
         self.assertEqual(
             _minimum_lifecycle_write_ops(
@@ -376,7 +541,9 @@ class PublicationV3ControllerTests(unittest.TestCase):
             **common, operation="build-lifecycle", attempt=1
         )
         self.assertEqual(build.job.index_uri, build_job.index_uri)
-        self.assertEqual(build.job.cell["workload"]["kind"], "write-update-delete-compact")
+        self.assertEqual(
+            build.job.cell["workload"]["kind"], "write-update-delete-compact"
+        )
         runtime = prepare_qualification_execution(
             **common,
             operation="run-lifecycle",
@@ -433,7 +600,9 @@ class PublicationV3ControllerTests(unittest.TestCase):
             )
         )
         candidate_user_data = base64.b64decode(candidate.request["UserData"]).decode()
-        candidate_payload = candidate_user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
+        candidate_payload = candidate_user_data.split("printf '%s' '", 1)[1].split(
+            "'", 1
+        )[0]
         candidate_worker = gzip.decompress(base64.b64decode(candidate_payload)).decode()
         self.assertIn('"writers":4', candidate_worker)
         self.assertIn('"batch_size":64', candidate_worker)
@@ -477,7 +646,9 @@ class PublicationV3ControllerTests(unittest.TestCase):
                 purchase_option="spot",
             )
 
-    def test_runtime_plan_uses_small_host_exact_build_and_distinct_retry_attempt(self) -> None:
+    def test_runtime_plan_uses_small_host_exact_build_and_distinct_retry_attempt(
+        self,
+    ) -> None:
         manifest = json.loads(MANIFEST.read_text())
         manifest["source"] = {
             "state": "frozen",
@@ -524,7 +695,12 @@ class PublicationV3ControllerTests(unittest.TestCase):
             protocol_uri="s3://bucket/protocol.json",
             protocol_sha256="7" * 64,
             launch=LaunchEnvironment(
-                "ami-x", "subnet-x", "sg-x", "arn:aws:iam::453182569524:instance-profile/x", "aarch64", "eu-central-1"
+                "ami-x",
+                "subnet-x",
+                "sg-x",
+                "arn:aws:iam::453182569524:instance-profile/x",
+                "aarch64",
+                "eu-central-1",
             ),
             aws=RuntimePlanAws(),
             attempt=2,
@@ -533,7 +709,11 @@ class PublicationV3ControllerTests(unittest.TestCase):
         )
         self.assertEqual(prepared.job.role, "runtime")
         self.assertEqual(prepared.job.attempt, 2)
-        self.assertTrue(prepared.job.terminal_prefix.endswith("/runtime/attempts/0002"))
+        self.assertTrue(
+            prepared.job.terminal_prefix.endswith(
+                "/runtime-recall/arms/0000/attempts/0002"
+            )
+        )
         self.assertEqual(prepared.request["InstanceType"], "c7g.xlarge")
         self.assertEqual(len(prepared.request["BlockDeviceMappings"]), 2)
         tags = {
@@ -565,17 +745,28 @@ class PublicationV3ControllerTests(unittest.TestCase):
             protocol_uri="s3://bucket/protocol.json",
             protocol_sha256="7" * 64,
             launch=LaunchEnvironment(
-                "ami-x", "subnet-x", "sg-x", "arn:aws:iam::453182569524:instance-profile/x", "aarch64", "eu-central-1"
+                "ami-x",
+                "subnet-x",
+                "sg-x",
+                "arn:aws:iam::453182569524:instance-profile/x",
+                "aarch64",
+                "eu-central-1",
             ),
             aws=RuntimePlanAws(),
             attempt=3,
             build_attempt=1,
             arm_index=1,
         )
-        concurrency_user_data = base64.b64decode(concurrency.request["UserData"]).decode()
+        concurrency_user_data = base64.b64decode(
+            concurrency.request["UserData"]
+        ).decode()
         self.assertLess(len(concurrency.request["UserData"].encode()), 16 * 1024)
-        concurrency_payload = concurrency_user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
-        concurrency_worker = gzip.decompress(base64.b64decode(concurrency_payload)).decode()
+        concurrency_payload = concurrency_user_data.split("printf '%s' '", 1)[1].split(
+            "'", 1
+        )[0]
+        concurrency_worker = gzip.decompress(
+            base64.b64decode(concurrency_payload)
+        ).decode()
         self.assertIn("--runtime-profile concurrency", concurrency_worker)
         self.assertIn("--arm-index 1", concurrency_worker)
         self.assertEqual(concurrency.expected["runtime_profile"], "concurrency")
@@ -610,7 +801,10 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertEqual(concurrency.expected["cpu_threads"], 3)
         self.assertEqual(concurrency.expected["io_threads"], 160)
         self.assertEqual(concurrency.expected["s3_get_concurrency"], 128)
-        self.assertIn("/runtime-concurrency/attempts/0003", concurrency.job.terminal_prefix)
+        self.assertIn(
+            "/runtime-concurrency/arms/0001/attempts/0003",
+            concurrency.job.terminal_prefix,
+        )
         self.assertTrue(concurrency.job.cell_tag.startswith("runtime-concurrency-"))
 
     def test_runtime_requires_exact_completed_build_authority(self) -> None:
@@ -666,7 +860,10 @@ class PublicationV3ControllerTests(unittest.TestCase):
         ):
             aws = BuildAuthorityAws()
             aws.execution_markers = lambda _job, value=markers: value
-            with self.subTest(markers=markers), self.assertRaisesRegex(ValueError, message):
+            with (
+                self.subTest(markers=markers),
+                self.assertRaisesRegex(ValueError, message),
+            ):
                 completed_build_authority(
                     job,
                     aws=aws,
@@ -732,9 +929,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                 self.terminated: list[str] = []
                 self.observations = 0
 
-            def find_execution_instance(
-                self, _job: object, *, purchase_option: str
-            ):
+            def find_execution_instance(self, _job: object, *, purchase_option: str):
                 self.assert_purchase_option = purchase_option
                 return None
 
@@ -820,9 +1015,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         )
 
         class RuntimeReceiptAws:
-            def find_execution_instance(
-                self, _job: object, *, purchase_option: str
-            ):
+            def find_execution_instance(self, _job: object, *, purchase_option: str):
                 self.purchase_option = purchase_option
                 return None
 
@@ -905,9 +1098,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         }
 
         class RuntimeReceiptAws:
-            def find_execution_instance(
-                self, _job: object, *, purchase_option: str
-            ):
+            def find_execution_instance(self, _job: object, *, purchase_option: str):
                 return None
 
             def execution_markers(self, _job: object):
@@ -1004,6 +1195,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         joined = " ".join(commands[0])
         self.assertIn(f"Name=tag:Cell,Values={job.cell_tag}", joined)
         self.assertIn("Name=tag:Role,Values=build", joined)
+        self.assertIn("stopped,shutting-down,terminated", joined)
 
         on_demand_instance = {
             "InstanceId": "i-0123456789abcdef0",
@@ -1011,7 +1203,10 @@ class PublicationV3ControllerTests(unittest.TestCase):
             "Tags": [
                 {"Key": "Project", "Value": "BorsukBenchmark"},
                 {"Key": "Campaign", "Value": manifest["campaign_id"]},
-                {"Key": "Cell", "Value": ExecutionJob.runtime(cell, attempt=1).cell_tag},
+                {
+                    "Key": "Cell",
+                    "Value": ExecutionJob.runtime(cell, attempt=1).cell_tag,
+                },
                 {"Key": "Attempt", "Value": "1"},
                 {"Key": "Role", "Value": "runtime"},
                 {"Key": "AutoTerminate", "Value": "true"},
@@ -1026,15 +1221,92 @@ class PublicationV3ControllerTests(unittest.TestCase):
             "",
         )
         self.assertEqual(
-            client.find_execution_instance(
-                runtime_job, purchase_option="on-demand"
-            ),
+            client.find_execution_instance(runtime_job, purchase_option="on-demand"),
             ("i-0123456789abcdef0", "running"),
         )
         with self.assertRaisesRegex(ValueError, "identity"):
             client.find_execution_instance(runtime_job, purchase_option="spot")
         with self.assertRaisesRegex(ValueError, "only for runtime"):
             client.find_execution_instance(job, purchase_option="on-demand")
+
+    def test_markerless_terminal_instance_writes_immutable_failure_authority(
+        self,
+    ) -> None:
+        manifest = unstaged_sift_manifest()
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        job = ExecutionJob.build(
+            qualification_cell(
+                manifest, dataset_id="sift-128", workload_kind="read-recall"
+            ),
+            attempt=2,
+        )
+        client = AwsCli(manifest, profile="causality")
+        client.execution_markers = lambda _job: ()
+        uploaded: list[tuple[bytes, str, str]] = []
+        client.upload_immutable = lambda path, uri, sha256: uploaded.append(
+            (path.read_bytes(), uri, sha256)
+        )
+
+        client.record_markerless_execution_failure(
+            job,
+            instance_id="i-0123456789abcdef0",
+            instance_state="terminated",
+        )
+
+        self.assertEqual(len(uploaded), 1)
+        body, uri, digest = uploaded[0]
+        self.assertEqual(
+            uri, f"{job.terminal_prefix}/CONTROLLER_TERMINAL_OBSERVED.json"
+        )
+        self.assertEqual(hashlib.sha256(body).hexdigest(), digest)
+        self.assertEqual(
+            json.loads(body),
+            {
+                "attempt": 2,
+                "attempt_id": f"{job.cell_tag}-a0002",
+                "failure_kind": "instance-terminal-before-marker",
+                "instance_id": "i-0123456789abcdef0",
+                "role": "build",
+                "schema_version": 1,
+                "status": "failed",
+            },
+        )
+
+    def test_immutable_upload_accepts_concurrent_identical_writer(self) -> None:
+        manifest = unstaged_sift_manifest()
+        body = b'{"status":"failed"}'
+        digest = hashlib.sha256(body).hexdigest()
+        checksum = base64.b64encode(bytes.fromhex(digest)).decode("ascii")
+        heads = iter(
+            (
+                None,
+                {
+                    "ContentLength": len(body),
+                    "Metadata": {"borsuk-sha256": digest},
+                    "ChecksumSHA256": checksum,
+                },
+            )
+        )
+        client = AwsCli(manifest, profile="causality")
+        client._head = lambda _uri: next(heads)
+        client._run = lambda command, check=True: subprocess.CompletedProcess(
+            command, 255, "", "PreconditionFailed: 412"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "failure.json"
+            path.write_bytes(body)
+            client.upload_immutable(
+                path,
+                "s3://borsuk-bench-453182569524-euc1/test/failure.json",
+                digest,
+            )
 
     def test_direct_controller_entrypoint_reaches_argparse(self) -> None:
         completed = subprocess.run(
@@ -1051,7 +1323,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn(
-            "{stage,build-sift,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle,diagnose-lifecycle}",
+            "{stage,build-sift,build-read,run-read,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle,diagnose-lifecycle}",
             completed.stdout,
         )
 

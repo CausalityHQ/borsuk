@@ -63,6 +63,68 @@ def make_clean_repository(
 
 
 class LaunchAwsPublicationV3Tests(unittest.TestCase):
+    def test_generic_read_commands_forward_exact_frozen_cell_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            repository = temp / "repository"
+            repository.mkdir()
+            make_clean_repository(repository)
+            fake = temp / "controller.py"
+            fake.write_text(
+                """#!/usr/bin/env python3
+import json, sys
+operation = sys.argv[1]
+assert sys.argv[sys.argv.index('--workload') + 1] == 'realistic-dense-read'
+assert sys.argv[sys.argv.index('--dataset') + 1] == 'laion-100m-768'
+if operation == 'run-read':
+    assert sys.argv[sys.argv.index('--repetition') + 1] == 'r05'
+    assert sys.argv[sys.argv.index('--arm-index') + 1] == '2'
+    assert sys.argv[sys.argv.index('--attempt') + 1] == '7'
+    assert sys.argv[sys.argv.index('--build-attempt') + 1] == '3'
+print(json.dumps({'operation': operation}, sort_keys=True))
+""",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            environment = {
+                **os.environ,
+                "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
+                "BORSUK_PUBLICATION_V3_BUILD_ATTEMPT": "3",
+                "BORSUK_PUBLICATION_V3_RUNTIME_ATTEMPT": "7",
+            }
+            build = subprocess.run(
+                [
+                    "bash",
+                    "scripts/launch_aws_publication_v3.sh",
+                    "--build-read",
+                    "realistic-dense-read",
+                    "laion-100m-768",
+                ],
+                cwd=repository,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(build.returncode, 0, build.stderr)
+            self.assertEqual(json.loads(build.stdout)["operation"], "build-read")
+            runtime = subprocess.run(
+                [
+                    "bash",
+                    "scripts/launch_aws_publication_v3.sh",
+                    "--run-read",
+                    "realistic-dense-read",
+                    "laion-100m-768",
+                    "r05",
+                    "2",
+                ],
+                cwd=repository,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(runtime.returncode, 0, runtime.stderr)
+            self.assertEqual(json.loads(runtime.stdout)["operation"], "run-read")
+
     def test_dry_run_is_deterministic_and_never_calls_aws(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
@@ -243,10 +305,20 @@ print(json.dumps({'dataset_id':'cohere-large-10m-768','attempt':1}, sort_keys=Tr
             make_clean_repository(repository)
             updater = temp / "updater"
             run(
-                ["git", "clone", "--branch", "main", str(temp / "origin.git"), str(updater)],
+                [
+                    "git",
+                    "clone",
+                    "--branch",
+                    "main",
+                    str(temp / "origin.git"),
+                    str(updater),
+                ],
                 temp,
             )
-            run(["git", "config", "user.email", "publication-v3@example.invalid"], updater)
+            run(
+                ["git", "config", "user.email", "publication-v3@example.invalid"],
+                updater,
+            )
             run(["git", "config", "user.name", "Publication V3 Test"], updater)
             (updater / "later-main-change").write_text("later\n", encoding="utf-8")
             run(["git", "add", "later-main-change"], updater)

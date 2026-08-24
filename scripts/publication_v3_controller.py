@@ -25,6 +25,7 @@ if __package__:
     )
     from scripts.publication_v3_execution import (
         ExecutionJob,
+        borsuk_cell,
         build_worker_script,
         qualification_cell,
         runtime_worker_script,
@@ -39,6 +40,7 @@ else:
     )
     from publication_v3_execution import (
         ExecutionJob,
+        borsuk_cell,
         build_worker_script,
         qualification_cell,
         runtime_worker_script,
@@ -80,6 +82,20 @@ def _s3_location(uri: str) -> tuple[str, str]:
     if parsed.scheme != "s3" or not parsed.netloc or not key:
         raise ValueError("publication object URI must be canonical S3")
     return parsed.netloc, key
+
+
+def _execution_marker_outcome(markers: set[str]) -> str | None:
+    """Resolve worker authority with controller observation as failure fallback."""
+
+    if markers - {"complete", "failed", "controller-failed"}:
+        raise ValueError("execution terminal markers differ")
+    if {"complete", "failed"} <= markers:
+        raise ValueError("execution terminal markers conflict")
+    if "complete" in markers:
+        return "complete"
+    if "failed" in markers or "controller-failed" in markers:
+        return "failed"
+    return None
 
 
 class AwsCli:
@@ -150,6 +166,11 @@ class AwsCli:
             markers.append("complete")
         if self._head(job.failed_uri) is not None:
             markers.append("failed")
+        if (
+            self._head(f"{job.terminal_prefix}/CONTROLLER_TERMINAL_OBSERVED.json")
+            is not None
+        ):
+            markers.append("controller-failed")
         return tuple(markers)
 
     def read_receipt(self, job: Any) -> dict[str, object]:
@@ -248,7 +269,7 @@ class AwsCli:
                 f"Name=tag:Cell,Values={job.cell_tag}",
                 f"Name=tag:Attempt,Values={job.attempt}",
                 f"Name=tag:Role,Values={job.role}",
-                "Name=instance-state-name,Values=pending,running,stopping,stopped",
+                "Name=instance-state-name,Values=pending,running,stopping,stopped,shutting-down,terminated",
                 "--output",
                 "json",
             ]
@@ -335,9 +356,9 @@ class AwsCli:
         body = path.read_bytes()
         if hashlib.sha256(body).hexdigest() != sha256:
             raise ValueError("immutable upload checksum differs from local bytes")
-        head = self._head(uri)
-        if head is not None:
-            expected_checksum = base64.b64encode(bytes.fromhex(sha256)).decode("ascii")
+        expected_checksum = base64.b64encode(bytes.fromhex(sha256)).decode("ascii")
+
+        def validate_existing(head: dict[str, object]) -> None:
             if (
                 head.get("ContentLength") != len(body)
                 or head.get("Metadata", {}).get("borsuk-sha256") != sha256
@@ -346,10 +367,13 @@ class AwsCli:
                 raise ValueError(
                     "immutable publication object already exists with different bytes"
                 )
+
+        head = self._head(uri)
+        if head is not None:
+            validate_existing(head)
             return
         bucket, key = _s3_location(uri)
-        checksum = base64.b64encode(bytes.fromhex(sha256)).decode("ascii")
-        self._run(
+        completed = self._run(
             [
                 "s3api",
                 "put-object",
@@ -364,15 +388,57 @@ class AwsCli:
                 "--checksum-algorithm",
                 "SHA256",
                 "--checksum-sha256",
-                checksum,
+                expected_checksum,
                 "--metadata",
                 f"borsuk-sha256={sha256}",
                 "--server-side-encryption",
                 "AES256",
                 "--if-none-match",
                 "*",
-            ]
+            ],
+            check=False,
         )
+        if completed.returncode == 0:
+            return
+        if re.search(r"PreconditionFailed|(^|[^0-9])412([^0-9]|$)", completed.stderr):
+            raced = self._head(uri)
+            if raced is not None:
+                validate_existing(raced)
+                return
+        raise ValueError(completed.stderr.strip() or "immutable S3 upload failed")
+
+    def record_markerless_execution_failure(
+        self, job: Any, *, instance_id: str, instance_state: str
+    ) -> None:
+        """Persist a terminal EC2 attempt that produced no worker marker."""
+
+        if instance_state not in {"stopped", "shutting-down", "terminated"}:
+            raise ValueError("markerless execution failure requires terminal instance")
+        if re.fullmatch(r"i-[0-9a-f]{17}", instance_id) is None:
+            raise ValueError("markerless execution failure instance ID is invalid")
+        if _execution_marker_outcome(set(self.execution_markers(job))) is not None:
+            return
+        receipt = {
+            "schema_version": 1,
+            "status": "failed",
+            "role": job.role,
+            "attempt": job.attempt,
+            "attempt_id": f"{job.cell_tag}-a{job.attempt:04d}",
+            "failure_kind": "instance-terminal-before-marker",
+            "instance_id": instance_id,
+        }
+        body = canonical_json_bytes(receipt)
+        digest = hashlib.sha256(body).hexdigest()
+        with tempfile.TemporaryDirectory(
+            prefix="borsuk-execution-failure-"
+        ) as directory:
+            path = Path(directory) / "failure.json"
+            path.write_bytes(body)
+            self.upload_immutable(
+                path,
+                f"{job.terminal_prefix}/CONTROLLER_TERMINAL_OBSERVED.json",
+                digest,
+            )
 
 
 def stage_dataset(
@@ -494,9 +560,8 @@ def run_execution_job(
     try:
         while True:
             markers = set(aws.execution_markers(job))
-            if markers - {"complete", "failed"} or len(markers) > 1:
-                raise ValueError("execution terminal markers conflict or differ")
-            if "complete" in markers:
+            outcome = _execution_marker_outcome(markers)
+            if outcome == "complete":
                 value = aws.read_receipt(job)
                 required = {
                     "schema_version": 4 if job.role == "runtime" else 1,
@@ -541,13 +606,21 @@ def run_execution_job(
                 if job.role == "build" and value.get("index_uri") != job.index_uri:
                     raise ValueError("build receipt differs from scheduled index")
                 return value
-            if "failed" in markers:
+            if outcome == "failed":
                 raise ValueError(f"{job.role} execution failed")
             if instance is None:
                 instance = (aws.launch(job, request), "pending")
             else:
                 instance = (instance[0], aws.instance_state(instance[0]))
-                if instance[1] in {"stopped", "terminated"}:
+                if instance[1] in {"stopped", "shutting-down", "terminated"}:
+                    aws.record_markerless_execution_failure(
+                        job, instance_id=instance[0], instance_state=instance[1]
+                    )
+                    if (
+                        _execution_marker_outcome(set(aws.execution_markers(job)))
+                        == "complete"
+                    ):
+                        continue
                     raise ValueError(
                         f"{job.role} instance stopped before terminal marker"
                     )
@@ -557,6 +630,67 @@ def run_execution_job(
     finally:
         if instance is not None and instance[1] != "terminated":
             aws.terminate(instance[0])
+
+
+def select_execution_attempt(
+    job_for_attempt: Any,
+    *,
+    aws: Any,
+    max_attempts: int = 6,
+    purchase_option: str = "spot",
+    require_complete: bool = False,
+) -> int:
+    """Select exact frozen authority without ever reusing a failed attempt."""
+
+    if not 1 <= max_attempts <= 9_999:
+        raise ValueError("execution attempt bound is invalid")
+    for attempt in range(1, max_attempts + 1):
+        job = job_for_attempt(attempt)
+        markers = set(aws.execution_markers(job))
+        outcome = _execution_marker_outcome(markers)
+        if outcome == "failed":
+            continue
+        if outcome == "complete" or not require_complete:
+            if outcome == "complete":
+                return attempt
+            instance = aws.find_execution_instance(job, purchase_option=purchase_option)
+            if instance is not None and instance[1] in {
+                "stopped",
+                "shutting-down",
+                "terminated",
+            }:
+                aws.record_markerless_execution_failure(
+                    job, instance_id=instance[0], instance_state=instance[1]
+                )
+                recorded = _execution_marker_outcome(set(aws.execution_markers(job)))
+                if recorded == "complete":
+                    return attempt
+                if recorded != "failed":
+                    raise ValueError(
+                        "markerless execution failure authority was not durable"
+                    )
+                continue
+            return attempt
+        instance = aws.find_execution_instance(job, purchase_option=purchase_option)
+        if instance is not None and instance[1] in {
+            "stopped",
+            "shutting-down",
+            "terminated",
+        }:
+            aws.record_markerless_execution_failure(
+                job, instance_id=instance[0], instance_state=instance[1]
+            )
+            recorded = _execution_marker_outcome(set(aws.execution_markers(job)))
+            if recorded == "complete":
+                return attempt
+            if recorded != "failed":
+                raise ValueError(
+                    "markerless execution failure authority was not durable"
+                )
+            continue
+    if require_complete:
+        raise ValueError("execution has no completed build attempt")
+    raise ValueError("execution exhausted its bounded immutable attempts")
 
 
 def completed_build_authority(
@@ -569,12 +703,7 @@ def completed_build_authority(
 
     if job.role != "build":
         raise ValueError("runtime authority requires a build job")
-    markers = tuple(aws.execution_markers(job))
-    if set(markers) - {"complete", "failed"}:
-        raise ValueError("build terminal markers differ")
-    if len(markers) > 1:
-        raise ValueError("build terminal markers conflict")
-    if markers != ("complete",):
+    if _execution_marker_outcome(set(aws.execution_markers(job))) != "complete":
         raise ValueError("required build is not complete")
     if set(expected) != {
         "source_archive_sha256",
@@ -593,7 +722,9 @@ def completed_build_authority(
         "index_uri": job.index_uri,
         "purchase_option": "spot",
     }
-    if any(value.get(key) != expected_value for key, expected_value in required.items()):
+    if any(
+        value.get(key) != expected_value for key, expected_value in required.items()
+    ):
         raise ValueError("completed build differs from frozen runtime authority")
     binary_sha256 = value.get("binary_sha256")
     if not isinstance(binary_sha256, str) or not re.fullmatch(
@@ -610,13 +741,16 @@ def prepare_qualification_execution(
     manifest: dict[str, object],
     *,
     operation: str,
+    workload_id: str | None = None,
     dataset_id: str | None = None,
+    repetition_id: str = "r01",
     source_uri: str,
     source_sha256: str,
     manifest_uri: str,
     manifest_sha256: str,
     protocol_uri: str,
     protocol_sha256: str,
+    build_protocol_sha256: str | None = None,
     launch: LaunchEnvironment,
     aws: Any,
     attempt: int = 1,
@@ -636,6 +770,8 @@ def prepare_qualification_execution(
         "build-lifecycle",
         "run-lifecycle",
         "diagnose-lifecycle",
+        "build-read",
+        "run-read",
     }
     if operation not in supported:
         raise ValueError("unsupported qualification execution")
@@ -644,9 +780,14 @@ def prepare_qualification_execution(
         "run-lifecycle",
         "diagnose-lifecycle",
     }
+    generic_read = operation in {"build-read", "run-read"}
     diagnostic = operation == "diagnose-lifecycle"
     effective_arm_index = (
-        13 if diagnostic and arm_index is None else 0 if arm_index is None else arm_index
+        13
+        if diagnostic and arm_index is None
+        else 0
+        if arm_index is None
+        else arm_index
     )
     if diagnostic and (
         isinstance(diagnostic_write_ops, bool)
@@ -657,13 +798,18 @@ def prepare_qualification_execution(
         > int(normalized["budget_contract"]["max_cell_seconds"])
     ):
         raise ValueError("lifecycle diagnostic bounds are invalid")
-    if lifecycle:
+    if generic_read:
+        if not workload_id or not dataset_id:
+            raise ValueError("generic read execution requires workload and dataset")
+        if operation == "build-read" and repetition_id != "r01":
+            raise ValueError("generic read builds must use canonical repetition r01")
+    elif lifecycle:
         if not dataset_id:
             raise ValueError("lifecycle qualification requires a dataset")
     elif dataset_id not in {None, "sift-128"}:
         raise ValueError("SIFT qualification dataset differs")
     selected_dataset = dataset_id or "sift-128"
-    build_operation = operation in {"build-sift", "build-lifecycle"}
+    build_operation = operation in {"build-sift", "build-lifecycle", "build-read"}
     if attempt <= 0 or build_attempt <= 0 or effective_arm_index < 0:
         raise ValueError("qualification attempts must be positive")
     if build_operation and effective_arm_index != 0:
@@ -672,14 +818,23 @@ def prepare_qualification_execution(
         raise ValueError("purchase option must be spot or on-demand")
     if build_operation and purchase_option != "spot":
         raise ValueError("build execution must use Spot")
-    cell = qualification_cell(
-        normalized,
-        dataset_id=selected_dataset,
-        workload_kind=(
-            "write-update-delete-compact" if lifecycle else "read-recall"
-        ),
-        build_attempt=attempt if build_operation else build_attempt,
-    )
+    if generic_read:
+        cell = borsuk_cell(
+            normalized,
+            workload_id=str(workload_id),
+            dataset_id=selected_dataset,
+            repetition_id=repetition_id,
+            build_attempt=attempt if build_operation else build_attempt,
+        )
+    else:
+        cell = qualification_cell(
+            normalized,
+            dataset_id=selected_dataset,
+            workload_kind=(
+                "write-update-delete-compact" if lifecycle else "read-recall"
+            ),
+            build_attempt=attempt if build_operation else build_attempt,
+        )
     runtime_profile = (
         "lifecycle"
         if lifecycle
@@ -765,7 +920,7 @@ def prepare_qualification_execution(
             cell,
             attempt=attempt,
             profile=runtime_profile,
-            arm_index=effective_arm_index if lifecycle else 0,
+            arm_index=effective_arm_index,
             diagnostic=diagnostic,
         )
     )
@@ -792,14 +947,25 @@ def prepare_qualification_execution(
         maximum = int(normalized["budget_contract"]["max_index_build_seconds"])
         role = "build"
     else:
-        build_job = ExecutionJob.build(cell, attempt=build_attempt)
+        build_cell = (
+            borsuk_cell(
+                normalized,
+                workload_id=str(workload_id),
+                dataset_id=selected_dataset,
+                repetition_id="r01",
+                build_attempt=build_attempt,
+            )
+            if generic_read
+            else cell
+        )
+        build_job = ExecutionJob.build(build_cell, attempt=build_attempt)
         authority = completed_build_authority(
             build_job,
             aws=aws,
             expected={
                 "source_archive_sha256": source_sha256,
                 "manifest_sha256": manifest_sha256,
-                "protocol_sha256": protocol_sha256,
+                "protocol_sha256": build_protocol_sha256 or protocol_sha256,
             },
         )
         worker = runtime_worker_script(
@@ -907,6 +1073,36 @@ def main() -> int:
     build.add_argument("--security-group-id", required=True)
     build.add_argument("--instance-profile-arn", required=True)
     build.add_argument("--attempt", type=int, default=1)
+    generic_build = subparsers.add_parser("build-read")
+    generic_build.add_argument("--manifest", type=Path, required=True)
+    generic_build.add_argument("--source-archive", type=Path, required=True)
+    generic_build.add_argument("--workload", required=True)
+    generic_build.add_argument("--dataset", required=True)
+    generic_build.add_argument("--profile", default="causality")
+    generic_build.add_argument("--image-id", required=True)
+    generic_build.add_argument("--subnet-id", required=True)
+    generic_build.add_argument("--security-group-id", required=True)
+    generic_build.add_argument("--instance-profile-arn", required=True)
+    generic_build.add_argument("--attempt", type=int, default=0)
+    generic_build.add_argument("--max-attempts", type=int, default=6)
+    generic_runtime = subparsers.add_parser("run-read")
+    generic_runtime.add_argument("--manifest", type=Path, required=True)
+    generic_runtime.add_argument("--source-archive", type=Path, required=True)
+    generic_runtime.add_argument("--workload", required=True)
+    generic_runtime.add_argument("--dataset", required=True)
+    generic_runtime.add_argument("--repetition", required=True)
+    generic_runtime.add_argument("--profile", default="causality")
+    generic_runtime.add_argument("--image-id", required=True)
+    generic_runtime.add_argument("--subnet-id", required=True)
+    generic_runtime.add_argument("--security-group-id", required=True)
+    generic_runtime.add_argument("--instance-profile-arn", required=True)
+    generic_runtime.add_argument("--attempt", type=int, default=0)
+    generic_runtime.add_argument("--build-attempt", type=int, default=0)
+    generic_runtime.add_argument("--max-attempts", type=int, default=6)
+    generic_runtime.add_argument("--arm-index", type=int, required=True)
+    generic_runtime.add_argument(
+        "--purchase-option", choices=("spot", "on-demand"), default="spot"
+    )
     runtime = subparsers.add_parser("read-recall-sift")
     runtime.add_argument("--manifest", type=Path, required=True)
     runtime.add_argument("--source-archive", type=Path, required=True)
@@ -1027,41 +1223,125 @@ def main() -> int:
             "run-lifecycle",
             "diagnose-lifecycle",
         }
-        build_operation = args.operation in {"build-sift", "build-lifecycle"}
-        build_attempt = (
-            args.attempt if build_operation else args.build_attempt
-        )
-        cell = qualification_cell(
-            normalized,
-            dataset_id=args.dataset if lifecycle else "sift-128",
-            workload_kind=(
-                "write-update-delete-compact" if lifecycle else "read-recall"
-            ),
-            build_attempt=build_attempt,
-        )
+        generic_read = args.operation in {"build-read", "run-read"}
+        build_operation = args.operation in {
+            "build-sift",
+            "build-lifecycle",
+            "build-read",
+        }
+        execution_attempt = getattr(args, "attempt", 1)
+        build_attempt = execution_attempt if build_operation else args.build_attempt
+        if generic_read and build_operation and execution_attempt == 0:
+            execution_attempt = select_execution_attempt(
+                lambda attempt: ExecutionJob.build(
+                    borsuk_cell(
+                        normalized,
+                        workload_id=args.workload,
+                        dataset_id=args.dataset,
+                        repetition_id="r01",
+                        build_attempt=attempt,
+                    ),
+                    attempt=attempt,
+                ),
+                aws=aws,
+                max_attempts=args.max_attempts,
+            )
+            build_attempt = execution_attempt
+        elif generic_read and not build_operation and build_attempt == 0:
+            build_attempt = select_execution_attempt(
+                lambda attempt: ExecutionJob.build(
+                    borsuk_cell(
+                        normalized,
+                        workload_id=args.workload,
+                        dataset_id=args.dataset,
+                        repetition_id="r01",
+                        build_attempt=attempt,
+                    ),
+                    attempt=attempt,
+                ),
+                aws=aws,
+                max_attempts=args.max_attempts,
+                require_complete=True,
+            )
+        if generic_read and not build_operation and execution_attempt == 0:
+            execution_attempt = select_execution_attempt(
+                lambda attempt: ExecutionJob.runtime(
+                    borsuk_cell(
+                        normalized,
+                        workload_id=args.workload,
+                        dataset_id=args.dataset,
+                        repetition_id=args.repetition,
+                        build_attempt=build_attempt,
+                    ),
+                    attempt=attempt,
+                    profile="recall",
+                    arm_index=args.arm_index,
+                ),
+                aws=aws,
+                max_attempts=args.max_attempts,
+                purchase_option=args.purchase_option,
+            )
+        if generic_read:
+            cell = borsuk_cell(
+                normalized,
+                workload_id=args.workload,
+                dataset_id=args.dataset,
+                repetition_id="r01" if build_operation else args.repetition,
+                build_attempt=build_attempt,
+            )
+            build_cell = borsuk_cell(
+                normalized,
+                workload_id=args.workload,
+                dataset_id=args.dataset,
+                repetition_id="r01",
+                build_attempt=build_attempt,
+            )
+        else:
+            cell = qualification_cell(
+                normalized,
+                dataset_id=args.dataset if lifecycle else "sift-128",
+                workload_kind=(
+                    "write-update-delete-compact" if lifecycle else "read-recall"
+                ),
+                build_attempt=build_attempt,
+            )
+            build_cell = cell
         protocol_bytes = canonical_json_bytes(cell) + b"\n"
         protocol_sha = hashlib.sha256(protocol_bytes).hexdigest()
         protocol_uri = f"{campaign_root}/protocols/{protocol_sha}.json"
+        build_protocol_bytes = canonical_json_bytes(build_cell) + b"\n"
+        build_protocol_sha = hashlib.sha256(build_protocol_bytes).hexdigest()
+        build_protocol_uri = f"{campaign_root}/protocols/{build_protocol_sha}.json"
         with tempfile.TemporaryDirectory(
             prefix="borsuk-publication-protocol-"
         ) as directory:
             protocol_path = Path(directory) / "protocol.json"
             protocol_path.write_bytes(protocol_bytes)
             aws.upload_immutable(protocol_path, protocol_uri, protocol_sha)
+            build_protocol_path = Path(directory) / "build-protocol.json"
+            build_protocol_path.write_bytes(build_protocol_bytes)
+            aws.upload_immutable(
+                build_protocol_path, build_protocol_uri, build_protocol_sha
+            )
         prepared = prepare_qualification_execution(
             normalized,
             operation=args.operation,
-            dataset_id=args.dataset if lifecycle else None,
+            workload_id=args.workload if generic_read else None,
+            dataset_id=args.dataset if lifecycle or generic_read else None,
+            repetition_id=(
+                "r01" if build_operation or not generic_read else args.repetition
+            ),
             source_uri=source_uri,
             source_sha256=source_sha,
             manifest_uri=manifest_uri,
             manifest_sha256=manifest_sha,
             protocol_uri=protocol_uri,
             protocol_sha256=protocol_sha,
+            build_protocol_sha256=build_protocol_sha,
             launch=launch,
             aws=aws,
-            attempt=getattr(args, "attempt", 1),
-            build_attempt=getattr(args, "build_attempt", 1),
+            attempt=execution_attempt,
+            build_attempt=build_attempt,
             purchase_option=getattr(args, "purchase_option", "spot"),
             arm_index=getattr(args, "arm_index", 0),
             diagnostic_write_ops=getattr(args, "write_ops", 2_560),
