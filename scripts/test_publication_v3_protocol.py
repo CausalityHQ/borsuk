@@ -653,6 +653,18 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         self.assertEqual(profile["turboquant_qjl_bits"], 0)
         self.assertEqual(profile["turboquant_shards"], 1)
         self.assertNotIn("code_bytes", profile)
+        read_workloads = [
+            workload
+            for workload in manifest["workloads"]
+            if workload["kind"] == "read-recall"
+        ]
+        self.assertTrue(read_workloads)
+        self.assertTrue(
+            all(
+                workload["factors"]["leaf_page_budgets"] == [32, 64]
+                for workload in read_workloads
+            )
+        )
         dataset_ids = {dataset["id"] for dataset in manifest["datasets"]}
         self.assertTrue(
             {
