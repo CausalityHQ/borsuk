@@ -882,7 +882,7 @@ fn execute_bulk_add_wave(
             joins.push(scope.spawn(move || -> borsuk::Result<usize> {
                 let rows = vectors.len();
                 let ids = benchmark_row_ids(start, rows);
-                let inserted_ids = writer.add_vectors_with_ids(vectors, ids)?;
+                let inserted_ids = writer.bulk_load_vectors_with_unique_ids(vectors, ids)?;
                 validate_generated_id_range(start, start.saturating_add(rows), &inserted_ids)
                     .map_err(|error| borsuk::BorsukError::InvalidStorage(error.to_string()))?;
                 Ok(rows)
@@ -5874,7 +5874,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_build_finalization_reclaims_committed_transaction_controls() {
+    fn fresh_build_finalization_needs_no_online_claim_transaction_controls() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         BorsukIndex::create(IndexConfig {
@@ -5908,15 +5908,14 @@ mod tests {
                 .count()
         };
         let before = transaction_states();
-        assert!(
-            before >= 8,
-            "expected one authorized prepared-state control per batch"
+        assert_eq!(
+            before, 0,
+            "offline unique-ID build unexpectedly retained online claim transaction state"
         );
 
         let finalized = finalize_fresh_build(&mut index, false).unwrap();
 
         assert_eq!(finalized.layout, "ingest-preserving");
-        assert!(finalized.garbage_collection.objects_deleted >= before);
         assert_eq!(finalized.garbage_collection.transaction_states_remaining, 0);
         let after = transaction_states();
         assert_eq!(
@@ -7066,6 +7065,28 @@ mod tests {
 
         let completed = execute_bulk_add_wave(&mut writers, batches).unwrap();
         assert_eq!(completed, vec![2, 2, 2, 2]);
+
+        fn regular_files(path: &std::path::Path) -> usize {
+            let Ok(entries) = std::fs::read_dir(path) else {
+                return 0;
+            };
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        regular_files(&path)
+                    } else {
+                        1
+                    }
+                })
+                .sum()
+        }
+        assert_eq!(
+            regular_files(&directory.path().join("id-directory/claim-pages")),
+            0,
+            "publication bulk ingestion must not run online duplicate-claim coordination"
+        );
 
         let mut finalizer = BorsukIndex::open(&uri).unwrap();
         finalizer.finish_bulk_load().unwrap();

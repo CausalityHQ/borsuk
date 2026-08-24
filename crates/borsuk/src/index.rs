@@ -9192,6 +9192,77 @@ impl BorsukIndex {
         Ok(ids)
     }
 
+    /// Append an offline build batch whose ids are globally unique across the
+    /// complete bulk-load job.
+    ///
+    /// This preserves the ordinary immutable positioned-log and collection CAS
+    /// durability boundary, but deliberately skips online duplicate-claim and
+    /// distributed mutation-tail coordination. The caller must exclusively own
+    /// the offline build from collection creation through finalization, must
+    /// partition ids so every concurrent writer is disjoint, and must join all
+    /// writers before finalization. No online add, update, delete, or finalizer
+    /// may race that session. Use [`Self::add_vectors_with_ids`] whenever BORSUK
+    /// must enforce those conditions. This method rejects authoritative stable
+    /// finalization and mutation authority already observed by this handle; it
+    /// intentionally does not scan other writers' unmaterialized tails.
+    pub fn bulk_load_vectors_with_unique_ids(
+        &mut self,
+        vectors: Vec<Vec<f32>>,
+        ids: Vec<String>,
+    ) -> Result<Vec<String>> {
+        if self.active_collection_transaction.is_some() {
+            return Err(BorsukError::InvalidStorage(
+                "unique-id bulk load cannot nest inside a collection transaction".to_string(),
+            ));
+        }
+        self.with_mutation_report_scope(move |scoped| {
+            let (_, _, authoritative_manifest) = scoped.load_latest_own_manifest()?;
+            scoped.validate_unique_id_bulk_load_authority(&authoritative_manifest)?;
+            scoped.begin_collection_transaction()?;
+            let result = scoped.bulk_load_vectors_with_unique_ids_inner(vectors, ids);
+            scoped
+                .finish_collection_transaction_value(result)
+                .map(|(ids, _)| ids)
+        })
+    }
+
+    fn bulk_load_vectors_with_unique_ids_inner(
+        &mut self,
+        vectors: Vec<Vec<f32>>,
+        ids: Vec<String>,
+    ) -> Result<Vec<String>> {
+        self.validate_unique_id_bulk_load_authority(&self.manifest)?;
+        let records = records_from_ids_and_vectors(ids.clone(), vectors)?;
+        let next_generated_id = next_generated_id_after_explicit_records(
+            self.cell_wal_next_generated_id_floor()?,
+            &records,
+        )?;
+        self.add_records_with_report_and_tombstone(
+            records,
+            false,
+            false,
+            next_generated_id,
+            None,
+            None,
+        )?;
+        Ok(ids)
+    }
+
+    fn validate_unique_id_bulk_load_authority(&self, manifest: &Manifest) -> Result<()> {
+        if manifest.global_ann_ref.is_some() || manifest.global_cell_card_ann_ref.is_some() {
+            return Err(BorsukError::InvalidStorage(
+                "unique-id bulk load is unavailable after index finalization".to_string(),
+            ));
+        }
+        if Self::global_leaf_mutation_state_required_for(manifest, &self.cell_wal_snapshot) {
+            return Err(BorsukError::InvalidStorage(
+                "unique-id bulk load requires locally observed mutation-free offline authority"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Logically delete records by id and return a request-local receipt.
     ///
     /// Deletes are soft: ids are appended to immutable tombstone deltas and

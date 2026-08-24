@@ -1063,6 +1063,101 @@ fn bulk_add_is_append_only_and_compaction_is_the_single_build() {
     }
 }
 
+/// Offline corpus construction has an explicit high-throughput contract: the
+/// caller partitions globally unique ids across writers, while BORSUK keeps the
+/// ordinary immutable positioned-log/CAS durability boundary without paying
+/// for online duplicate-claim pages or mutation tombstones.
+#[test]
+fn unique_id_bulk_loaders_commit_concurrently_without_claim_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    BorsukIndex::create_with_wal(config(uri.clone()), WalConfig::bulk_load(2)).unwrap();
+
+    std::thread::scope(|scope| {
+        let joins = (0..4)
+            .map(|writer| {
+                let uri = uri.clone();
+                scope.spawn(move || {
+                    let mut index = BorsukIndex::open(&uri).unwrap();
+                    let start = writer * 2;
+                    index
+                        .bulk_load_vectors_with_unique_ids(
+                            vec![vec![start as f32, 1.0], vec![(start + 1) as f32, 1.0]],
+                            vec![start.to_string(), (start + 1).to_string()],
+                        )
+                        .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for join in joins {
+            join.join().unwrap();
+        }
+    });
+
+    assert_eq!(
+        file_count(dir.path(), "positioned-log/claim-authorizations"),
+        0,
+        "offline unique-id batches must not mint online duplicate-claim authority"
+    );
+    let mut finalizer = BorsukIndex::open(&uri).unwrap();
+    assert_eq!(finalizer.manifest().tombstone_delta_run_count(), 0);
+    assert!(!finalizer.manifest().has_mutation_directory());
+    finalizer.finish_bulk_load().unwrap();
+    assert_eq!(finalizer.stats().records, 8);
+    for row in 0..8 {
+        assert_eq!(
+            finalizer.get_vector(&row.to_string()).unwrap(),
+            Some(vec![row as f32, 1.0])
+        );
+    }
+    assert!(
+        finalizer
+            .bulk_load_vectors_with_unique_ids(vec![vec![9.0, 1.0]], vec!["9".to_string()])
+            .is_err(),
+        "a finalized serving index must reject the offline claim-free contract"
+    );
+}
+
+#[test]
+fn unique_id_bulk_load_refreshes_and_rejects_a_finalized_collection() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut finalizer =
+        BorsukIndex::create_with_wal(config(uri.clone()), WalConfig::bulk_load(2)).unwrap();
+    finalizer
+        .bulk_load_vectors_with_unique_ids(vec![vec![0.0, 1.0]], vec!["0".to_string()])
+        .unwrap();
+    let mut stale_writer = BorsukIndex::open(&uri).unwrap();
+
+    finalizer.finish_bulk_load().unwrap();
+
+    assert!(
+        stale_writer
+            .bulk_load_vectors_with_unique_ids(vec![vec![1.0, 1.0]], vec!["1".to_string()])
+            .is_err(),
+        "a handle opened before finalization must not append through stale authority"
+    );
+}
+
+#[test]
+fn unique_id_bulk_load_rejects_delete_authority_in_the_positioned_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index =
+        BorsukIndex::create_with_wal(config(uri.clone()), WalConfig::bulk_load(2)).unwrap();
+    index
+        .bulk_load_vectors_with_unique_ids(vec![vec![0.0, 1.0]], vec!["0".to_string()])
+        .unwrap();
+    index.delete(["0"]).unwrap();
+
+    assert!(
+        index
+            .bulk_load_vectors_with_unique_ids(vec![vec![1.0, 1.0]], vec!["1".to_string()])
+            .is_err(),
+        "claim-free ingestion must stop once positioned mutation authority exists"
+    );
+}
+
 /// MVCC across the un-flushed tail survives the DIRECT compaction that consumes
 /// the tail: an upsert supersedes the earlier add, and a delete suppresses its id,
 /// with the tail folded straight into the single build (no L0 materialize). The
