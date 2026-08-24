@@ -633,6 +633,7 @@ struct BuildIngestReport {
     rows: usize,
     waves: usize,
     materializations: usize,
+    materializer_opens: usize,
     requests: RequestCounts,
     bytes_read: u64,
     bytes_written: u64,
@@ -640,7 +641,8 @@ struct BuildIngestReport {
 
 struct BuildIngestCoordinator {
     writers: Vec<BorsukIndex>,
-    materializer: BorsukIndex,
+    uri: String,
+    materializer_options: OpenOptions,
     pending: Vec<(u8, usize, Vec<Vec<f32>>)>,
     batches_since_materialization: usize,
     next_start: usize,
@@ -656,11 +658,10 @@ impl BuildIngestCoordinator {
                     .map_err(Into::into)
             })
             .collect::<BenchResult<Vec<_>>>()?;
-        let materializer =
-            BorsukIndex::open_with_options(uri, lifecycle_writer_open_options(ram_budget_bytes))?;
         Ok(Self {
             writers,
-            materializer,
+            uri: uri.to_owned(),
+            materializer_options: build_materializer_open_options(ram_budget_bytes),
             pending: Vec::with_capacity(writer_count),
             batches_since_materialization: 0,
             next_start: 0,
@@ -710,18 +711,6 @@ impl BuildIngestCoordinator {
                 .bytes_written
                 .saturating_add(writer.put_payload_bytes());
         }
-        add_request_counts(
-            &mut self.report.requests,
-            self.materializer.request_counts(),
-        );
-        self.report.bytes_read = self
-            .report
-            .bytes_read
-            .saturating_add(self.materializer.backing_bytes_read());
-        self.report.bytes_written = self
-            .report
-            .bytes_written
-            .saturating_add(self.materializer.put_payload_bytes());
         Ok(self.report)
     }
 
@@ -739,8 +728,23 @@ impl BuildIngestCoordinator {
                 self.batches_since_materialization.saturating_add(1);
         }
         if self.batches_since_materialization == BULK_LOAD_SOURCE_SHARDS {
-            self.materializer.refresh()?;
-            self.materializer.flush()?;
+            // Open only after the joined positioned prefix exists. The read
+            // runtime partitions its RAM budget from the resident authority
+            // visible at open; retaining an empty-index handle would freeze
+            // that partition below the later materialized manifest size.
+            let mut materializer =
+                BorsukIndex::open_with_options(&self.uri, self.materializer_options.clone())?;
+            self.report.materializer_opens = self.report.materializer_opens.saturating_add(1);
+            materializer.flush()?;
+            add_request_counts(&mut self.report.requests, materializer.request_counts());
+            self.report.bytes_read = self
+                .report
+                .bytes_read
+                .saturating_add(materializer.backing_bytes_read());
+            self.report.bytes_written = self
+                .report
+                .bytes_written
+                .saturating_add(materializer.put_payload_bytes());
             self.report.materializations = self.report.materializations.saturating_add(1);
             self.batches_since_materialization = 0;
         }
@@ -855,6 +859,12 @@ fn lifecycle_writer_open_options(ram_budget_bytes: Option<u64>) -> OpenOptions {
         wal_tail_cache_max_bytes: 0,
         ..OpenOptions::default()
     }
+}
+
+fn build_materializer_open_options(ram_budget_bytes: Option<u64>) -> OpenOptions {
+    let mut options = lifecycle_writer_open_options(ram_budget_bytes);
+    options.resident_metadata_max_bytes = ram_budget_bytes.map(|bytes| bytes / 2);
+    options
 }
 
 fn validate_claim_free_lifecycle_insert(index: &BorsukIndex) -> BenchResult<()> {
@@ -5481,17 +5491,18 @@ mod tests {
         PreparedRecordBatch, QUERY_SAMPLE_HEADER, QuerySample, QuerySummary, RECALL_LATENCY_HEADER,
         SERVING_CANDIDATES, ServingMode, VectorMetric, VectorRecord, WRITE_COST_HEADER,
         WRITE_SAMPLE_HEADER, allow_missing_corpus_for_phase, approximate_options,
-        benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
-        cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
-        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
-        dollars_per_million_queries, execute_bulk_add_wave, execute_put_wave, finalize_fresh_build,
-        first_logical_batch_publish_ms, ingest_batch_size, is_hot_workload_position,
-        lifecycle_progress_line, lifecycle_query_progress_line, lifecycle_write_operation_count,
-        lifecycle_write_waves, lifecycle_writer_open_options, mixed_concurrency_query_indices,
-        neighbor_row, normalized_cache_access_fractions, parquet_train_files_for_phase,
-        parse_flag_value, parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
-        parse_lifecycle_insert_mode, parse_optional_byte_cap, parse_positive_list,
-        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
+        benchmark_row_ids, build_materializer_open_options, cache_coverage_cohort_size,
+        cache_coverage_enabled, cache_state_summary_enabled, dataset_metric,
+        default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
+        deterministic_mutation_vector, dollars_per_million_queries, execute_bulk_add_wave,
+        execute_put_wave, finalize_fresh_build, first_logical_batch_publish_ms, ingest_batch_size,
+        is_hot_workload_position, lifecycle_progress_line, lifecycle_query_progress_line,
+        lifecycle_write_operation_count, lifecycle_write_waves, lifecycle_writer_open_options,
+        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
+        parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
+        parse_leaf_capability, parse_leaf_mode, parse_lifecycle_insert_mode,
+        parse_optional_byte_cap, parse_positive_list, parse_serving_mode,
+        percentage_operation_count, permuted_positions, preload_query_count,
         read_logical_cell_catalog, rebatch_mutation_vector_chunk, recall_preloads_local_snapshot,
         recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
         serving_cache_dir, update_vector_reservoir, uses_bounded_decoded_cache_phases,
@@ -5642,6 +5653,7 @@ mod tests {
     fn lifecycle_writer_options_inherit_the_runtime_budget_without_retained_caches() {
         let options = lifecycle_writer_open_options(Some(96 * 1024 * 1024));
         assert_eq!(options.ram_budget_bytes, Some(96 * 1024 * 1024));
+        assert_eq!(options.resident_metadata_max_bytes, None);
         assert_eq!(options.cache_dir, None);
         assert_eq!(options.cache_max_bytes, None);
         assert!(!options.resident_routing);
@@ -5653,6 +5665,13 @@ mod tests {
         assert_eq!(options.lexical_term_page_cache_max_bytes, 0);
         assert_eq!(options.late_interaction_batch_cache_max_bytes, 0);
         assert_eq!(options.wal_tail_cache_max_bytes, 0);
+
+        let materializer = build_materializer_open_options(Some(96 * 1024 * 1024));
+        assert_eq!(materializer.ram_budget_bytes, Some(96 * 1024 * 1024));
+        assert_eq!(
+            materializer.resident_metadata_max_bytes,
+            Some(48 * 1024 * 1024)
+        );
     }
 
     #[test]
@@ -7194,13 +7213,21 @@ mod tests {
         })
         .unwrap();
         let mut coordinator = BuildIngestCoordinator::open(&uri, 3, None).unwrap();
+        assert_eq!(coordinator.report.materializer_opens, 0);
         for row in 0..70 {
             coordinator.push(row, vec![vec![row as f32, 3.0]]).unwrap();
+            if row == 62 {
+                assert_eq!(coordinator.report.materializer_opens, 0);
+            }
+            if row == 63 {
+                assert_eq!(coordinator.report.materializer_opens, 1);
+            }
         }
         let report = coordinator.finish().unwrap();
         assert_eq!(report.batches, 70);
         assert_eq!(report.rows, 70);
         assert_eq!(report.materializations, 1);
+        assert_eq!(report.materializer_opens, 1);
 
         let mut finalizer = BorsukIndex::open(&uri).unwrap();
         finalizer.finish_bulk_load().unwrap();

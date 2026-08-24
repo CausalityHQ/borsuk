@@ -1147,6 +1147,13 @@ pub struct OpenOptions {
     pub cache_max_bytes: Option<u64>,
     /// Optional runtime resident manifest/routing memory budget in bytes.
     pub ram_budget_bytes: Option<u64>,
+    /// Optional share of the total RAM budget reserved for immutable resident
+    /// manifest and collection authority. `None` reserves the larger of the
+    /// authority present at open and one quarter of the total budget. Build
+    /// materializers may raise this cap when a large newly staged manifest is
+    /// expected, while leaving the remainder for bounded retained and
+    /// transient work.
+    pub resident_metadata_max_bytes: Option<u64>,
     /// Keep full segment routing summaries resident after open.
     ///
     /// Defaults to `false`: search resolves segments from persisted routing
@@ -1242,6 +1249,7 @@ impl Default for OpenOptions {
             cache_dir: None,
             cache_max_bytes: None,
             ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
+            resident_metadata_max_bytes: None,
             resident_routing: false,
             segment_cache_max_bytes: None,
             routing_page_cache_max_bytes: DEFAULT_ROUTING_PAGE_CACHE_BYTES,
@@ -3564,9 +3572,14 @@ impl CollectionReadRuntime {
         effective_ram_budget: Option<u64>,
         collection_resident_bytes: u64,
     ) -> Arc<Self> {
-        let resident_capacity_bytes = effective_ram_budget.map(|budget| {
-            collection_resident_bytes.max(budget / COLLECTION_RESIDENT_RAM_BUDGET_DIVISOR)
-        });
+        let resident_capacity_bytes =
+            match (effective_ram_budget, options.resident_metadata_max_bytes) {
+                (Some(budget), Some(configured)) => Some(configured.min(budget)),
+                (Some(budget), None) => Some(
+                    collection_resident_bytes.max(budget / COLLECTION_RESIDENT_RAM_BUDGET_DIVISOR),
+                ),
+                (None, configured) => configured,
+            };
         let remaining = effective_ram_budget
             .zip(resident_capacity_bytes)
             .map(|(budget, resident_capacity)| budget.saturating_sub(resident_capacity));
@@ -4843,6 +4856,7 @@ impl BorsukIndex {
                 cache_dir,
                 cache_max_bytes: Some(crate::storage::DEFAULT_DISK_CACHE_BYTES),
                 ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
+                resident_metadata_max_bytes: None,
                 resident_routing: false,
                 segment_cache_max_bytes: None,
                 routing_page_cache_max_bytes: DEFAULT_ROUTING_PAGE_CACHE_BYTES,
@@ -4993,6 +5007,7 @@ impl BorsukIndex {
             effective_ram_budget_bytes(manifest.config.ram_budget_bytes, options.ram_budget_bytes);
         let read_runtime =
             CollectionReadRuntime::new(&options, effective_ram_budget, collection_resident_bytes);
+        read_runtime.enforce_resident_capacity(collection_resident_bytes)?;
         let progress = observability::OpenProgress::start("primary-runtime");
         let mut index = Self::open_with_loaded_manifest(
             storage.clone(),
@@ -30760,6 +30775,11 @@ fn acquire_search_admission(gate: &AdmissionGate) -> Result<AdmissionPermit<'_>>
 }
 
 fn validate_open_options(options: &OpenOptions) -> Result<()> {
+    if options.resident_metadata_max_bytes == Some(0) {
+        return Err(BorsukError::InvalidOpenOptions(
+            "resident_metadata_max_bytes must be greater than zero when configured".to_string(),
+        ));
+    }
     for (field, value) in [
         ("max_active_searches", options.max_active_searches),
         ("leaf_read_width", options.leaf_read_width),
@@ -35048,6 +35068,46 @@ mod tests {
         assert_eq!(fetch.saturating_add(decode), 225);
         assert!(fetch > 0);
         assert!(decode > fetch);
+    }
+
+    #[test]
+    fn explicit_resident_metadata_budget_repartitions_one_total_ram_budget() {
+        let options = OpenOptions {
+            resident_metadata_max_bytes: Some(300),
+            ..OpenOptions::default()
+        };
+        let runtime = CollectionReadRuntime::new(&options, Some(600), 0);
+
+        runtime.enforce_resident_capacity(300).unwrap();
+        assert_eq!(
+            runtime.enforce_resident_capacity(301).unwrap_err().code(),
+            "ram_budget_exceeded"
+        );
+        assert_eq!(
+            runtime.retained_pool.as_ref().unwrap().capacity_bytes(),
+            150
+        );
+        assert_eq!(
+            runtime
+                .transient_admission
+                .as_ref()
+                .unwrap()
+                .capacity_bytes()
+                + runtime.wal_tail_runtime.fetch_admission.capacity_bytes(),
+            150
+        );
+
+        let metadata_only_runtime = CollectionReadRuntime::new(&options, None, 0);
+        metadata_only_runtime
+            .enforce_resident_capacity(300)
+            .unwrap();
+        assert_eq!(
+            metadata_only_runtime
+                .enforce_resident_capacity(301)
+                .unwrap_err()
+                .code(),
+            "ram_budget_exceeded"
+        );
     }
 
     #[test]
@@ -39600,6 +39660,13 @@ mod tests {
             assert!(error.to_string().contains(field));
         }
         validate_open_options(&OpenOptions::default()).unwrap();
+        let error = validate_open_options(&OpenOptions {
+            resident_metadata_max_bytes: Some(0),
+            ..OpenOptions::default()
+        })
+        .unwrap_err();
+        assert!(matches!(error, BorsukError::InvalidOpenOptions(_)));
+        assert!(error.to_string().contains("resident_metadata_max_bytes"));
         for amplification in [0, CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION + 1] {
             let error = validate_open_options(&OpenOptions {
                 exact_read_max_physical_amplification: amplification,
