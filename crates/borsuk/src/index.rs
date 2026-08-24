@@ -105,8 +105,8 @@ use crate::{
         Bm25StatsDeltaPageRef, Bm25StatsDeltaRef, DEFAULT_GRAPH_NEIGHBORS,
         DEFAULT_ROUTING_PAGE_FANOUT, LexicalRootRef, MAX_GLOBAL_DELTA_ROWS,
         MAX_GLOBAL_DELTA_SEGMENTS, MAX_GLOBAL_DELTA_VECTOR_BYTES, Manifest, QuantizerRef,
-        RoutingLayerPageRef, SegmentLexicalShardRef, SegmentSummary, TombstonePageRef,
-        TombstoneSummary, WalConfig, segment_id_bloom, segment_vector_signature_bloom,
+        RoutingLayerPageRef, SegmentLexicalShardRef, SegmentSummary, TombstoneSummary, WalConfig,
+        segment_id_bloom, segment_vector_signature_bloom,
     },
     metric::{
         VectorMetric, angular_distance_with_norms, angular_distance_with_query_norm,
@@ -162,7 +162,6 @@ const LOCAL_GRAPH_NEIGHBORS: usize = DEFAULT_GRAPH_NEIGHBORS;
 const ROUTING_SEARCH_PAGE_OVERFETCH: usize = 8;
 /// Hard entry-count guard for one global term page.
 const DEFAULT_LEXICAL_TERM_PAGE_ENTRIES: usize = 4096;
-const TOMBSTONE_BUCKETS: u16 = 4096;
 const CELL_WAL_MUTATION_METADATA_MAGIC: &[u8; 4] = b"BMM1";
 const CELL_WAL_TOMBSTONE_METADATA_MAGIC: &[u8; 4] = b"BTM1";
 const PACKED_INDEX_CONTROL_VERSION: u8 = 1;
@@ -1408,6 +1407,11 @@ pub struct BorsukIndex {
     /// hash bucket plus the bounded foreground frontier; cloned handles share
     /// the same read-only pages.
     tombstone_cache: TombstoneCache,
+    mutation_directory_batch_cache: Arc<DecodedObjectCache<Vec<crate::row_bundle::DirectoryRow>>>,
+    /// Parsed authenticated mutation-directory roots. The cache is bounded by
+    /// the same configured mutation metadata budget as decoded state batches.
+    mutation_directory_root_cache: Arc<DecodedObjectCache<Vec<crate::row_bundle::DirectoryRunRef>>>,
+    mutation_directory_root_inflight: Arc<InFlightReads<Vec<crate::row_bundle::DirectoryRunRef>>>,
     /// Complete mutation state for the exact pinned snapshot used by V12.
     /// When this bounded, byte-reserved view is unavailable, V12 falls back
     /// before issuing directory or leaf GETs rather than starting a dependent
@@ -1687,6 +1691,9 @@ struct CollectionReadRuntime {
     inflight_lexical_pages: Arc<InFlightReads<LexicalTermPage>>,
     decoded_lexical_pages: Arc<DecodedObjectCache<LexicalTermPage>>,
     tombstone_cache: TombstoneCache,
+    mutation_directory_batch_cache: Arc<DecodedObjectCache<Vec<crate::row_bundle::DirectoryRow>>>,
+    mutation_directory_root_cache: Arc<DecodedObjectCache<Vec<crate::row_bundle::DirectoryRunRef>>>,
+    mutation_directory_root_inflight: Arc<InFlightReads<Vec<crate::row_bundle::DirectoryRunRef>>>,
     inflight_bm25_stats_pages: Arc<InFlightReads<Bm25StatsPage>>,
     decoded_bm25_stats_pages: Arc<DecodedObjectCache<Bm25StatsPage>>,
     vector_sidecar_indexes: Arc<Mutex<SidecarIndexCache>>,
@@ -1735,6 +1742,16 @@ fn decoded_cache_with_pool<T>(
     Arc::new(retained_pool.as_ref().map_or_else(
         || DecodedObjectCache::new(max_bytes),
         |pool| DecodedObjectCache::new_with_pool(max_bytes, Arc::clone(pool)),
+    ))
+}
+
+fn decoded_single_shard_cache_with_pool<T>(
+    max_bytes: u64,
+    retained_pool: &Option<Arc<RetainedBytePool>>,
+) -> Arc<DecodedObjectCache<T>> {
+    Arc::new(retained_pool.as_ref().map_or_else(
+        || DecodedObjectCache::new_with_shard_count(max_bytes, 1),
+        |pool| DecodedObjectCache::new_with_pool_and_shard_count(max_bytes, Arc::clone(pool), 1),
     ))
 }
 
@@ -2208,12 +2225,6 @@ fn global_leaf_mvcc_overlay_count_fits(count: u64) -> bool {
         .and_then(|(fixed, entries)| fixed.checked_add(entries))
         .and_then(|bytes| u64::try_from(bytes).ok())
         .is_some_and(|bytes| bytes <= GLOBAL_LEAF_MVCC_OVERLAY_MAX_BYTES)
-}
-
-fn tombstone_bucket(id: &[u8]) -> u16 {
-    let digest = blake3::hash(id);
-    let bytes = digest.as_bytes();
-    u16::from_le_bytes([bytes[0], bytes[1]]) % TOMBSTONE_BUCKETS
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -3581,6 +3592,12 @@ impl CollectionReadRuntime {
                 ))
             },
         );
+        // One public mutation-metadata budget is shared by legacy tombstone
+        // pages, immutable directory batches, and the directory root. The
+        // retained pool also enforces the process-wide bound, while this split
+        // keeps unbounded-RAM/test handles from silently tripling the option.
+        let mutation_root_cache_bytes = options.tombstone_page_cache_max_bytes / 2;
+        let mutation_data_cache_bytes = options.tombstone_page_cache_max_bytes / 4;
         Arc::new(Self {
             resident_capacity_bytes,
             retained_pool: retained_pool.clone(),
@@ -3624,10 +3641,16 @@ impl CollectionReadRuntime {
                 options.lexical_term_page_cache_max_bytes,
                 &retained_pool,
             ),
-            tombstone_cache: decoded_cache_with_pool(
-                options.tombstone_page_cache_max_bytes,
+            tombstone_cache: decoded_cache_with_pool(mutation_data_cache_bytes, &retained_pool),
+            mutation_directory_batch_cache: decoded_cache_with_pool(
+                mutation_data_cache_bytes,
                 &retained_pool,
             ),
+            mutation_directory_root_cache: decoded_single_shard_cache_with_pool(
+                mutation_root_cache_bytes,
+                &retained_pool,
+            ),
+            mutation_directory_root_inflight: Arc::new(InFlightReads::default()),
             inflight_bm25_stats_pages: Arc::new(InFlightReads::default()),
             decoded_bm25_stats_pages: decoded_cache_with_pool(
                 options.bm25_stats_page_cache_max_bytes,
@@ -4665,6 +4688,13 @@ impl BorsukIndex {
             inflight_lexical_pages: Arc::clone(&read_runtime.inflight_lexical_pages),
             decoded_lexical_pages: Arc::clone(&read_runtime.decoded_lexical_pages),
             tombstone_cache: Arc::clone(&read_runtime.tombstone_cache),
+            mutation_directory_batch_cache: Arc::clone(
+                &read_runtime.mutation_directory_batch_cache,
+            ),
+            mutation_directory_root_cache: Arc::clone(&read_runtime.mutation_directory_root_cache),
+            mutation_directory_root_inflight: Arc::clone(
+                &read_runtime.mutation_directory_root_inflight,
+            ),
             resident_global_mutations: None,
             inflight_bm25_stats_pages: Arc::clone(&read_runtime.inflight_bm25_stats_pages),
             decoded_bm25_stats_pages: Arc::clone(&read_runtime.decoded_bm25_stats_pages),
@@ -5028,6 +5058,13 @@ impl BorsukIndex {
             inflight_lexical_pages: Arc::clone(&read_runtime.inflight_lexical_pages),
             decoded_lexical_pages: Arc::clone(&read_runtime.decoded_lexical_pages),
             tombstone_cache: Arc::clone(&read_runtime.tombstone_cache),
+            mutation_directory_batch_cache: Arc::clone(
+                &read_runtime.mutation_directory_batch_cache,
+            ),
+            mutation_directory_root_cache: Arc::clone(&read_runtime.mutation_directory_root_cache),
+            mutation_directory_root_inflight: Arc::clone(
+                &read_runtime.mutation_directory_root_inflight,
+            ),
             resident_global_mutations: None,
             inflight_bm25_stats_pages: Arc::clone(&read_runtime.inflight_bm25_stats_pages),
             decoded_bm25_stats_pages: Arc::clone(&read_runtime.decoded_bm25_stats_pages),
@@ -5584,7 +5621,7 @@ impl BorsukIndex {
     ) -> bool {
         manifest.tombstone_id_count > 0
             || manifest.tombstone.is_some()
-            || !manifest.tombstone_pages.is_empty()
+            || manifest.mutation_directory_root.is_some()
             || !manifest.tombstone_frontier.is_empty()
             || cell_wal_snapshot.iter().any(|transaction| {
                 transaction
@@ -5647,7 +5684,6 @@ impl BorsukIndex {
             .tombstone
             .iter()
             .map(|summary| summary.count)
-            .chain(manifest.tombstone_pages.iter().map(|page| page.count))
             .chain(
                 manifest
                     .tombstone_frontier
@@ -9482,7 +9518,7 @@ impl BorsukIndex {
         manifest.rebuild_pivots();
         manifest.tombstone = None;
         manifest.tombstone_frontier.clear();
-        manifest.tombstone_pages.clear();
+        manifest.mutation_directory_root = None;
         manifest.tombstone_id_count = 0;
         manifest.bm25_stats_delta = None;
         manifest.bm25_stats_delta_frontier.clear();
@@ -10079,6 +10115,7 @@ impl BorsukIndex {
         })
     }
 
+    #[cfg(test)]
     fn write_tombstone(
         &self,
         states: BTreeMap<Vec<u8>, MutationState>,
@@ -10086,6 +10123,7 @@ impl BorsukIndex {
         self.write_tombstone_with_persistence(states, true)
     }
 
+    #[cfg(test)]
     fn write_tombstone_with_persistence(
         &self,
         states: BTreeMap<Vec<u8>, MutationState>,
@@ -10128,8 +10166,8 @@ impl BorsukIndex {
     ) -> Result<Option<Arc<TombstoneOverlay>>> {
         let cell_tombstones = Self::cell_wal_tombstone_summaries_for(cell_wal_snapshot)?;
         if manifest.tombstone.is_none()
-            && manifest.tombstone_pages.is_empty()
             && manifest.tombstone_frontier.is_empty()
+            && manifest.mutation_directory_root.is_none()
             && cell_tombstones.is_empty()
         {
             return Ok(None);
@@ -10153,14 +10191,16 @@ impl BorsukIndex {
                 }
             }
         }
-        for tombstone in &manifest.tombstone_pages {
-            for (id, state) in self.load_tombstone_page(tombstone)?.iter() {
-                match merged.entry(id.clone()) {
+        if let Some(root) = &manifest.mutation_directory_root {
+            let runs = self.load_mutation_directory_runs(root)?;
+            for (id, row) in self.load_mutation_directory_rows(&runs)? {
+                let state = row.state;
+                match merged.entry(id) {
                     std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(*state);
+                        entry.insert(state);
                     }
                     std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        *entry.get_mut() = entry.get().greatest(*state)?;
+                        *entry.get_mut() = entry.get().greatest(state)?;
                     }
                 }
             }
@@ -10169,10 +10209,6 @@ impl BorsukIndex {
     }
 
     fn load_tombstone_run(&self, tombstone: &TombstoneSummary) -> Result<Arc<TombstoneOverlay>> {
-        self.load_tombstone_object(&tombstone.path, &tombstone.checksum)
-    }
-
-    fn load_tombstone_page(&self, tombstone: &TombstonePageRef) -> Result<Arc<TombstoneOverlay>> {
         self.load_tombstone_object(&tombstone.path, &tombstone.checksum)
     }
 
@@ -10391,21 +10427,51 @@ impl BorsukIndex {
         })
     }
 
+    fn directory_carry_target_level<I>(occupied: I) -> Result<u8>
+    where
+        I: IntoIterator<Item = u8>,
+    {
+        let occupied = occupied.into_iter().collect::<BTreeSet<_>>();
+        if occupied
+            .iter()
+            .any(|level| usize::from(*level) >= crate::row_bundle::MAX_ACTIVE_DIRECTORY_LEVELS)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "mutation directory level exceeds its fixed LSM plane".to_string(),
+            ));
+        }
+        for level in 0..crate::row_bundle::MAX_ACTIVE_DIRECTORY_LEVELS {
+            let level = u8::try_from(level).expect("directory level bound fits u8");
+            if !occupied.contains(&level) {
+                return Ok(level);
+            }
+        }
+        Ok(
+            u8::try_from(crate::row_bundle::MAX_ACTIVE_DIRECTORY_LEVELS - 1)
+                .expect("directory level bound fits u8"),
+        )
+    }
+
     fn consolidate_mutation_frontiers(
         &self,
         manifest: &mut Manifest,
         lexical_roots_will_rebuild: bool,
     ) -> Result<()> {
         if manifest.tombstone.is_some() || !manifest.tombstone_frontier.is_empty() {
-            let mut updates = BTreeMap::<u16, BTreeMap<Vec<u8>, MutationState>>::new();
+            let mut updates = BTreeMap::<
+                crate::row_bundle::DirectoryPartition,
+                BTreeMap<Vec<u8>, MutationState>,
+            >::new();
             for run in manifest
                 .tombstone
                 .iter()
                 .chain(&manifest.tombstone_frontier)
             {
                 for (id, state) in self.load_tombstone_run(run)?.iter() {
-                    let bucket = updates.entry(tombstone_bucket(id)).or_default();
-                    match bucket.entry(id.clone()) {
+                    let partition =
+                        crate::row_bundle::DirectoryPartition::for_record_id(id.as_slice());
+                    let partition_updates = updates.entry(partition).or_default();
+                    match partition_updates.entry(id.clone()) {
                         std::collections::btree_map::Entry::Vacant(entry) => {
                             entry.insert(*state);
                         }
@@ -10415,45 +10481,99 @@ impl BorsukIndex {
                     }
                 }
             }
-            let mut pages = manifest
-                .tombstone_pages
-                .iter()
-                .cloned()
-                .map(|page| (page.bucket, page))
-                .collect::<BTreeMap<_, _>>();
-            for (bucket, mut changes) in updates {
-                if let Some(previous) = pages.get(&bucket) {
-                    for (id, state) in self.load_tombstone_page(previous)?.iter() {
-                        match changes.entry(id.clone()) {
-                            std::collections::btree_map::Entry::Vacant(entry) => {
-                                entry.insert(*state);
-                            }
-                            std::collections::btree_map::Entry::Occupied(mut entry) => {
-                                *entry.get_mut() = entry.get().greatest(*state)?;
-                            }
-                        }
-                    }
+            let mut active = match &manifest.mutation_directory_root {
+                Some(root) => (*self.load_mutation_directory_runs(root)?).clone(),
+                None => Vec::new(),
+            };
+            let options = crate::row_bundle::DirectoryPackOptions::production();
+            let mut direct = BTreeMap::new();
+            let mut carries = Vec::new();
+            for (partition, changes) in updates {
+                let rows = changes
+                    .into_iter()
+                    .map(|(id, state)| crate::row_bundle::DirectoryRow::ownerless(id, state))
+                    .collect::<Vec<_>>();
+                let level = Self::directory_carry_target_level(
+                    active
+                        .iter()
+                        .filter(|run| run.partition == partition)
+                        .map(|run| run.level),
+                )?;
+                let level_runs = active
+                    .iter()
+                    .filter(|run| run.partition == partition && run.level <= level)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if level_runs.is_empty() {
+                    direct.insert(partition, (level, rows));
+                } else {
+                    carries.push((partition, level, level_runs, rows));
                 }
-                let summary = self.write_tombstone(changes)?.ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "non-empty tombstone bucket produced no page".to_string(),
-                    )
-                })?;
-                pages.insert(bucket, TombstonePageRef::from_summary(bucket, summary));
             }
+            if !direct.is_empty() {
+                let packed_objects =
+                    crate::row_bundle::pack_directory_delta_sharded(&direct, options)?;
+                for packed in packed_objects {
+                    let artifact = &packed.references[0].artifact;
+                    if packed.references.iter().any(|reference| {
+                        reference.artifact.path != artifact.path
+                            || reference.artifact.checksum != artifact.checksum
+                            || reference.artifact.encoded_bytes != artifact.encoded_bytes
+                    }) {
+                        return Err(BorsukError::InvalidStorage(
+                            "one ID-directory delta object has inconsistent artifact authority"
+                                .to_string(),
+                        ));
+                    }
+                    self.storage
+                        .write_bytes_content_addressed(&artifact.path, &packed.bytes)?;
+                    active.extend(packed.references);
+                }
+            }
+            for (partition, level, level_runs, rows) in carries {
+                let mut replacement = Vec::new();
+                crate::row_bundle::merge_directory_partition_rows(
+                    crate::row_bundle::DirectoryMergeInput {
+                        partition,
+                        active_levels: &level_runs,
+                        incoming: rows,
+                        target_chunk_bytes: options.hard_max_object_bytes / 2,
+                    },
+                    |path, range| self.storage.read_range(path, range),
+                    |checksum| self.mutation_directory_batch_cache.get(checksum),
+                    |checksum, decoded| {
+                        let resident_bytes =
+                            crate::row_bundle::directory_rows_memory_bytes(&decoded);
+                        self.mutation_directory_batch_cache.insert(
+                            checksum,
+                            decoded,
+                            resident_bytes,
+                        );
+                    },
+                    |chunk| {
+                        for packed in crate::row_bundle::pack_directory_partition_shards(
+                            partition, level, &chunk, options,
+                        )? {
+                            self.storage.write_bytes_content_addressed(
+                                &packed.reference.artifact.path,
+                                &packed.bytes,
+                            )?;
+                            replacement.push(packed.reference);
+                        }
+                        Ok(())
+                    },
+                )?;
+                active.retain(|run| !(run.partition == partition && run.level <= level));
+                active.extend(replacement);
+            }
+            let root = crate::row_bundle::pack_directory_root(&active)?;
+            self.storage
+                .write_bytes_content_addressed(&root.reference.path, &root.bytes)?;
+            manifest.mutation_directory_root = Some(root.reference);
             manifest.tombstone = None;
             manifest.tombstone_frontier.clear();
-            manifest.tombstone_pages = pages.into_values().collect();
+            manifest.tombstone_id_count = crate::row_bundle::directory_state_upper_bound(&active)?;
         }
-        manifest.tombstone_id_count =
-            manifest
-                .tombstone_pages
-                .iter()
-                .try_fold(0_u64, |total, page| {
-                    total.checked_add(page.count).ok_or_else(|| {
-                        BorsukError::InvalidStorage("tombstone id count exceeds u64".to_string())
-                    })
-                })?;
         if lexical_roots_will_rebuild {
             // The rebuild derives corrections from the now-consolidated
             // tombstone and the final physical segment set. This also catches
@@ -10681,18 +10801,15 @@ impl BorsukIndex {
     /// visibility frontier exists. Bloom negatives pay zero object I/O.
     fn mutation_state(&self, id: &[u8]) -> Result<Option<MutationState>> {
         let mut winner: Option<MutationState> = None;
-        let bucket = tombstone_bucket(id);
-        if let Ok(index) = self
-            .manifest
-            .tombstone_pages
-            .binary_search_by_key(&bucket, |page| page.bucket)
-            && self.manifest.tombstone_pages[index].might_contain_record_id(id)
-            && let Some(state) = self
-                .load_tombstone_page(&self.manifest.tombstone_pages[index])?
+        if let Some(root) = &self.manifest.mutation_directory_root {
+            let runs = self.load_mutation_directory_runs(root)?;
+            if let Some(state) = self
+                .lookup_mutation_directory_states(&runs, std::iter::once(id))?
                 .get(id)
                 .copied()
-        {
-            winner = Some(state);
+            {
+                winner = Some(state);
+            }
         }
         for tombstone in self
             .manifest
@@ -10727,6 +10844,73 @@ impl BorsukIndex {
         Ok(winner)
     }
 
+    fn load_mutation_directory_runs(
+        &self,
+        root: &crate::row_bundle::ArtifactRef,
+    ) -> Result<Arc<Vec<crate::row_bundle::DirectoryRunRef>>> {
+        if let Some(runs) = self.mutation_directory_root_cache.get(&root.checksum) {
+            return Ok(runs);
+        }
+        let (runs, resident_bytes, _) =
+            self.mutation_directory_root_inflight
+                .load(&root.checksum, || {
+                    let bytes = self
+                        .storage
+                        .read_known_size_with_cache_status_and_checksum(
+                            &root.path,
+                            root.encoded_bytes,
+                            &root.checksum,
+                        )?
+                        .bytes;
+                    let runs = crate::row_bundle::decode_directory_root(root, bytes.into())?;
+                    let resident_bytes = crate::row_bundle::directory_run_refs_memory_bytes(&runs)?;
+                    Ok((runs, resident_bytes))
+                })?;
+        self.mutation_directory_root_cache.insert(
+            root.checksum.clone(),
+            Arc::clone(&runs),
+            resident_bytes,
+        );
+        Ok(runs)
+    }
+
+    fn lookup_mutation_directory_states<'a, I>(
+        &self,
+        runs: &[crate::row_bundle::DirectoryRunRef],
+        ids: I,
+    ) -> Result<BTreeMap<Vec<u8>, MutationState>>
+    where
+        I: IntoIterator<Item = &'a [u8]>,
+    {
+        crate::row_bundle::lookup_directory_states_cached(
+            runs,
+            ids,
+            |path, range| self.storage.read_range(path, range),
+            |checksum| self.mutation_directory_batch_cache.get(checksum),
+            |checksum, decoded| {
+                let resident_bytes = crate::row_bundle::directory_rows_memory_bytes(&decoded);
+                self.mutation_directory_batch_cache
+                    .insert(checksum, decoded, resident_bytes);
+            },
+        )
+    }
+
+    fn load_mutation_directory_rows(
+        &self,
+        runs: &[crate::row_bundle::DirectoryRunRef],
+    ) -> Result<BTreeMap<Vec<u8>, crate::row_bundle::DirectoryRow>> {
+        crate::row_bundle::load_directory_rows_cached(
+            runs,
+            |path, range| self.storage.read_range(path, range),
+            |checksum| self.mutation_directory_batch_cache.get(checksum),
+            |checksum, decoded| {
+                let resident_bytes = crate::row_bundle::directory_rows_memory_bytes(&decoded);
+                self.mutation_directory_batch_cache
+                    .insert(checksum, decoded, resident_bytes);
+            },
+        )
+    }
+
     /// Resolve mutation states for a request batch while loading every
     /// matching immutable tombstone object at most once. The retained cache is
     /// deliberately not required for this bound: cold production handles and
@@ -10743,31 +10927,14 @@ impl BorsukIndex {
             return Ok(states);
         }
 
-        let mut page_indexes = BTreeSet::new();
-        for id in states.keys() {
-            let bucket = tombstone_bucket(id);
-            if let Ok(index) = self
-                .manifest
-                .tombstone_pages
-                .binary_search_by_key(&bucket, |page| page.bucket)
-                && self.manifest.tombstone_pages[index].might_contain_record_id(id)
-            {
-                page_indexes.insert(index);
-            }
-        }
-        for index in page_indexes {
-            let page = &self.manifest.tombstone_pages[index];
-            let overlay = self.load_tombstone_page(page)?;
-            for (id, winner) in &mut states {
-                if tombstone_bucket(id) == page.bucket
-                    && page.might_contain_record_id(id)
-                    && let Some(state) = overlay.get(id).copied()
-                {
-                    *winner = Some(match *winner {
-                        Some(current) => current.greatest(state)?,
-                        None => state,
-                    });
-                }
+        if let Some(root) = &self.manifest.mutation_directory_root {
+            let runs = self.load_mutation_directory_runs(root)?;
+            let directory_states =
+                self.lookup_mutation_directory_states(&runs, states.keys().map(Vec::as_slice))?;
+            for (id, state) in directory_states {
+                *states
+                    .get_mut(&id)
+                    .expect("directory lookup returns only requested IDs") = Some(state);
             }
         }
 
@@ -10942,8 +11109,8 @@ impl BorsukIndex {
     /// returning how many rows were dropped.
     fn drop_deleted_records(&self, records: &mut Vec<VectorRecord>) -> Result<usize> {
         if self.manifest.tombstone.is_none()
-            && self.manifest.tombstone_pages.is_empty()
             && self.manifest.tombstone_frontier.is_empty()
+            && self.manifest.mutation_directory_root.is_none()
         {
             return Ok(0);
         }
@@ -17132,6 +17299,18 @@ impl BorsukIndex {
                 GarbageCollectionObjectKind::Table,
                 &mut scan,
             )?;
+            self.collect_gc_candidates(
+                "id-directory-roots",
+                is_parquet_path,
+                GarbageCollectionObjectKind::Table,
+                &mut scan,
+            )?;
+            self.collect_gc_candidates(
+                "id-directory",
+                is_arrow_ipc_path,
+                GarbageCollectionObjectKind::Table,
+                &mut scan,
+            )?;
         }
         {
             let mut scan = GarbageCollectionCandidateScan {
@@ -17459,8 +17638,11 @@ impl BorsukIndex {
         for tombstone in &self.manifest.tombstone_frontier {
             paths.insert(tombstone.path.clone());
         }
-        for tombstone in &self.manifest.tombstone_pages {
-            paths.insert(tombstone.path.clone());
+        if let Some(root) = &self.manifest.mutation_directory_root {
+            paths.insert(root.path.clone());
+            for run in self.load_mutation_directory_runs(root)?.iter() {
+                paths.insert(run.artifact.path.clone());
+            }
         }
         if let Some(catalog_ref) = &self.manifest.logical_cell_catalog_ref {
             catalog_ref.validate()?;
@@ -30074,6 +30256,11 @@ fn is_parquet_path(path: &str) -> bool {
     path.ends_with(".parquet")
 }
 
+fn is_arrow_ipc_path(path: &str) -> bool {
+    (path.starts_with("id-directory/deltas/") || path.starts_with("id-directory/partitions/"))
+        && path.ends_with(".arrow")
+}
+
 fn is_segment_table_path(path: &str) -> bool {
     path.ends_with(".parquet")
 }
@@ -34612,7 +34799,7 @@ mod tests {
         // strand a blocked test thread in the process.
         drop(fetch);
         worker.join().unwrap();
-        assert_eq!(completed.unwrap(), true);
+        assert!(completed.unwrap());
     }
 
     #[test]
@@ -35642,10 +35829,7 @@ mod tests {
         group.drain().unwrap();
 
         let materialized = BorsukIndex::open(&uri).unwrap();
-        assert!(
-            materialized.manifest.tombstone_pages.is_empty(),
-            "ordinary lane drain must not rewrite stable generation pages"
-        );
+        assert!(!materialized.manifest.has_mutation_directory());
         assert!(materialized.manifest.tombstone_frontier.is_empty());
         assert_eq!(
             materialized.get_vector("frontier").unwrap(),
@@ -46457,7 +46641,7 @@ mod tests {
     }
 
     #[test]
-    fn tombstone_flush_copy_on_writes_only_the_affected_hash_bucket() {
+    fn mutation_consolidation_emits_one_arrow_delta_for_many_partitions() {
         let dir = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create(IndexConfig {
@@ -46470,88 +46654,273 @@ mod tests {
             named_vectors: Default::default(),
         })
         .unwrap();
-        let first_id = b"first".to_vec();
-        let first_bucket = tombstone_bucket(&first_id);
-        let second_id = (0_u64..)
-            .map(|value| format!("second-{value}").into_bytes())
-            .find(|id| tombstone_bucket(id) != first_bucket)
-            .unwrap();
-        let mut initial = BTreeMap::new();
-        let state = |hlc, writer| {
-            MutationState::new(
-                MutationStamp::new(
-                    crate::mutation::MutationVersion::from_parts(hlc, [writer; 16]),
-                    [writer; 32],
-                ),
-                MutationOperation::Delete,
-            )
-        };
-        initial.insert(first_id.clone(), state(1, 1));
-        initial.insert(second_id, state(1, 1));
+        let mut updates = BTreeMap::new();
+        let mut partitions = BTreeSet::new();
+        let mut candidate = 0_u64;
+        while partitions.len() < 32 {
+            let id = format!("mutation-directory-{candidate:08}").into_bytes();
+            candidate += 1;
+            let partition = crate::row_bundle::DirectoryPartition::for_record_id(&id);
+            if partitions.insert(partition) {
+                updates.insert(
+                    id,
+                    MutationState::new(
+                        MutationStamp::new(
+                            MutationVersion::from_parts(candidate, [9; 16]),
+                            [9; 32],
+                        ),
+                        MutationOperation::Delete,
+                    ),
+                );
+            }
+        }
+        let expected = updates.clone();
         let mut manifest = index.manifest.next_version();
         manifest
             .tombstone_frontier
-            .push(index.write_tombstone(initial).unwrap().unwrap());
-        manifest.tombstone_id_count = 2;
+            .push(index.write_tombstone(updates).unwrap().unwrap());
+
         index
             .consolidate_mutation_frontiers(&mut manifest, false)
             .unwrap();
-        assert_eq!(manifest.tombstone_pages.len(), 2);
-        let before = manifest
-            .tombstone_pages
-            .iter()
-            .map(|page| (page.bucket, page.checksum.clone()))
-            .collect::<BTreeMap<_, _>>();
 
-        let mut update = BTreeMap::new();
-        update.insert(first_id, state(2, 2));
-        manifest
-            .tombstone_frontier
-            .push(index.write_tombstone(update).unwrap().unwrap());
-        index
-            .consolidate_mutation_frontiers(&mut manifest, false)
+        assert!(manifest.mutation_directory_root.is_some());
+        assert_eq!(manifest.tombstone_id_count, expected.len() as u64);
+        let first_delta = index.storage.list_objects("id-directory/deltas").unwrap();
+        assert_eq!(
+            first_delta.len(),
+            1,
+            "one flush must not fan out into one object per touched partition"
+        );
+        let first_delta_path = first_delta[0].path.clone();
+        index.manifest = manifest;
+        let resident_overlay = index
+            .tombstone_overlay_for_snapshot(&index.manifest, &[])
+            .unwrap()
+            .expect("published mutation directory must rebuild the resident MVCC overlay");
+        assert_eq!(resident_overlay.len(), expected.len());
+        let batched = index
+            .mutation_states(expected.keys().map(Vec::as_slice))
             .unwrap();
-        let after = manifest
-            .tombstone_pages
-            .iter()
-            .map(|page| (page.bucket, page.checksum.clone()))
-            .collect::<BTreeMap<_, _>>();
+        for (id, state) in &expected {
+            assert_eq!(batched[id], Some(*state));
+        }
+        let suppressed_id = String::from_utf8(expected.keys().next().unwrap().clone()).unwrap();
+        let mut stale = VectorRecord::new(suppressed_id, vec![0.0, 0.0]);
+        stale.set_mutation_stamp(MutationStamp::new(
+            MutationVersion::from_parts(0, [1; 16]),
+            [1; 32],
+        ));
+        let mut compacted_rows = vec![stale];
+        assert_eq!(index.drop_deleted_records(&mut compacted_rows).unwrap(), 1);
+        assert!(compacted_rows.is_empty());
 
-        assert_ne!(after[&first_bucket], before[&first_bucket]);
-        for (bucket, checksum) in before {
-            if bucket != first_bucket {
-                assert_eq!(after[&bucket], checksum);
+        let updated_id = expected.keys().next().unwrap().clone();
+        let updated_state = MutationState::new(
+            MutationStamp::new(
+                MutationVersion::from_parts(candidate + 1, [10; 16]),
+                [10; 32],
+            ),
+            MutationOperation::Put,
+        );
+        let mut next = index.manifest.next_version();
+        next.tombstone_frontier.push(
+            index
+                .write_tombstone(BTreeMap::from([(updated_id.clone(), updated_state)]))
+                .unwrap()
+                .unwrap(),
+        );
+        index
+            .consolidate_mutation_frontiers(&mut next, false)
+            .unwrap();
+        assert_eq!(
+            next.tombstone_id_count,
+            expected.len() as u64,
+            "binary compaction must rebase repeated IDs instead of counting mutation events"
+        );
+        index.manifest = next;
+        assert_eq!(
+            index.mutation_state(&updated_id).unwrap(),
+            Some(updated_state)
+        );
+        let before_warm = index.storage.request_counts();
+        assert_eq!(
+            index.mutation_state(&updated_id).unwrap(),
+            Some(updated_state)
+        );
+        assert_eq!(
+            index.storage.request_counts().delta(&before_warm).gets,
+            0,
+            "warm point mutation lookup must reuse decoded root and Arrow batch"
+        );
+        for (id, state) in expected.iter().skip(1) {
+            assert_eq!(index.mutation_state(id).unwrap(), Some(*state));
+        }
+        assert!(
+            index
+                .active_segment_object_paths()
+                .unwrap()
+                .paths
+                .contains(&first_delta_path),
+            "GC must retain one shared delta object until every partition ref retires"
+        );
+    }
+
+    #[test]
+    fn mutation_directory_uses_bounded_binary_levels_without_losing_states() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let target = crate::row_bundle::DirectoryPartition::for_record_id(b"level-compaction-0");
+        let mut ids = Vec::new();
+        let mut candidate = 0_u64;
+        while ids.len() <= crate::row_bundle::MAX_ACTIVE_DIRECTORY_LEVELS {
+            let id = format!("level-compaction-{candidate}").into_bytes();
+            candidate += 1;
+            if crate::row_bundle::DirectoryPartition::for_record_id(&id) == target {
+                ids.push(id);
             }
         }
 
-        let page = manifest
-            .tombstone_pages
+        let mut expected = BTreeMap::new();
+        for (ordinal, id) in ids.iter().enumerate() {
+            let state = MutationState::new(
+                MutationStamp::new(
+                    MutationVersion::from_parts(ordinal as u64 + 1, [12; 16]),
+                    [12; 32],
+                ),
+                MutationOperation::Delete,
+            );
+            expected.insert(id.clone(), state);
+            let mut manifest = index.manifest.next_version();
+            manifest.tombstone_frontier.push(
+                index
+                    .write_tombstone(BTreeMap::from([(id.clone(), state)]))
+                    .unwrap()
+                    .unwrap(),
+            );
+            index
+                .consolidate_mutation_frontiers(&mut manifest, false)
+                .unwrap();
+            index.manifest = manifest;
+        }
+
+        let runs = index
+            .load_mutation_directory_runs(index.manifest.mutation_directory_root.as_ref().unwrap())
+            .unwrap();
+        let target_runs = runs
             .iter()
-            .find(|page| page.bucket == first_bucket)
-            .unwrap();
-        index.load_tombstone_page(page).unwrap();
-        let before_second_read = index.storage.request_counts();
-        index.load_tombstone_page(page).unwrap();
-        let second_read = index.storage.request_counts().delta(&before_second_read);
+            .filter(|run| run.partition == target)
+            .collect::<Vec<_>>();
+        assert_eq!(target_runs.len(), 2);
         assert_eq!(
-            second_read.gets, 0,
-            "a decoded immutable tombstone page must be reused in-process"
+            target_runs.iter().map(|run| run.level).collect::<Vec<_>>(),
+            [0, 4],
+            "seventeen deltas must occupy the binary L0 and L4 runs"
         );
-
-        let absent_same_bucket = (0_u64..)
-            .map(|value| format!("absent-{value}").into_bytes())
-            .find(|id| tombstone_bucket(id) == first_bucket && !page.might_contain_record_id(id))
+        let before = index.storage.request_counts();
+        let batched = index
+            .mutation_states(expected.keys().map(Vec::as_slice))
             .unwrap();
-        index.manifest = manifest;
-        index.tombstone_cache =
-            Arc::new(DecodedObjectCache::new(DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES));
-        let before_absent = index.storage.request_counts();
-
-        assert_eq!(index.mutation_state(&absent_same_bucket).unwrap(), None);
+        let requests = index.storage.request_counts().delta(&before);
         assert_eq!(
-            index.storage.request_counts().delta(&before_absent).gets,
+            requests.gets, 2,
+            "an authenticated root needs one Arrow range GET per active binary level"
+        );
+        for (id, state) in expected {
+            assert_eq!(batched[&id], Some(state));
+            assert_eq!(index.mutation_state(&id).unwrap(), Some(state));
+        }
+    }
+
+    #[test]
+    fn mutation_directory_top_level_absorbs_a_full_binary_plane() {
+        assert_eq!(
+            BorsukIndex::directory_carry_target_level(0_u8..16).unwrap(),
+            15,
+            "a full fixed plane must compact into its top level instead of wedging forever"
+        );
+        assert_eq!(
+            BorsukIndex::directory_carry_target_level([0_u8, 1, 3]).unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn mutation_directory_root_cache_retains_one_root_above_generic_shard_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: dir.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let mut rows = BTreeMap::<crate::row_bundle::DirectoryPartition, Vec<Vec<u8>>>::new();
+        let mut candidate = 0_u64;
+        while rows.len() < 256 || rows.values().any(|ids| ids.len() < 2) {
+            let id = format!("root-cache-partition-{candidate:08}").into_bytes();
+            candidate += 1;
+            let partition = crate::row_bundle::DirectoryPartition::for_record_id(&id);
+            let ids = rows.entry(partition).or_default();
+            if ids.len() < 2 {
+                ids.push(id);
+            }
+        }
+        let mut runs = Vec::with_capacity(512);
+        for (partition, ids) in rows {
+            for (level, id) in ids.into_iter().enumerate() {
+                let packed = crate::row_bundle::pack_directory_partition_run(
+                    partition,
+                    u8::try_from(level).unwrap(),
+                    &[crate::row_bundle::DirectoryRow::ownerless(
+                        id,
+                        MutationState::new(
+                            MutationStamp::new(
+                                MutationVersion::from_parts(candidate, [21; 16]),
+                                [21; 32],
+                            ),
+                            MutationOperation::Delete,
+                        ),
+                    )],
+                    crate::row_bundle::DirectoryPackOptions::production(),
+                )
+                .unwrap();
+                runs.push(packed.reference);
+            }
+        }
+        assert!(
+            crate::row_bundle::directory_run_refs_memory_bytes(&runs).unwrap() > 256 * 1024,
+            "fixture must exceed the old generic-cache shard budget"
+        );
+        let root = crate::row_bundle::pack_directory_root(&runs).unwrap();
+        index
+            .storage
+            .write_bytes_content_addressed(&root.reference.path, &root.bytes)
+            .unwrap();
+
+        let before = index.storage.request_counts();
+        index.load_mutation_directory_runs(&root.reference).unwrap();
+        let after_cold = index.storage.request_counts();
+        index.load_mutation_directory_runs(&root.reference).unwrap();
+        let after_warm = index.storage.request_counts();
+        assert_eq!(after_cold.delta(&before).gets, 1);
+        assert_eq!(
+            after_warm.delta(&after_cold).gets,
             0,
-            "a definite-negative stable page bloom must avoid object storage"
+            "one corpus root must use the cache's total budget, not 1/16 of it"
         );
     }
 
@@ -46645,6 +47014,18 @@ mod tests {
         assert!(!is_global_pq_path("global-pq/cell-graphs/a.bin"));
         assert!(!is_global_pq_path("global-pq/bundles/a.arrow"));
         assert!(!is_global_pq_path("vectors/a.arrow"));
+
+        assert!(is_arrow_ipc_path("id-directory/deltas/ab/delta.arrow"));
+        assert!(is_arrow_ipc_path(
+            "id-directory/partitions/001/runs/ab.arrow"
+        ));
+        assert!(!is_arrow_ipc_path(
+            "id-directory/partitions/001/runs/ab.parquet"
+        ));
+        assert!(!is_arrow_ipc_path(
+            "id-directory/claim-pages/001/forged.arrow"
+        ));
+        assert!(!is_arrow_ipc_path("id-directory/unknown/forged.arrow"));
 
         assert!(is_cell_wal_transaction_path("transactions/tx/STATE"));
         assert!(is_cell_wal_transaction_path("transactions/tx/COMMIT"));

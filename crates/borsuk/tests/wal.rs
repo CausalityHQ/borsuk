@@ -541,8 +541,8 @@ fn delete_batches_append_bounded_wal_runs_until_flush() {
     assert!(index.manifest().wal_frontier_is_empty());
     assert_eq!(index.manifest().tombstone_delta_run_count(), 0);
     assert!(
-        index.manifest().tombstone_page_count() > 0,
-        "flush must route deltas into stable hash pages"
+        index.manifest().has_mutation_directory(),
+        "flush must consolidate deltas into the stable mutation directory"
     );
     let reopened = BorsukIndex::open(&uri).unwrap();
     for value in 0..4 {

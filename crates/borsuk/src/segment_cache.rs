@@ -93,25 +93,39 @@ struct ObjectCacheEntry<T> {
 
 impl<T> DecodedObjectCache<T> {
     pub(crate) fn new(max_bytes: u64) -> Self {
-        Self::new_with_optional_pool(max_bytes, None)
+        Self::new_with_optional_pool_and_shards(max_bytes, None, CACHE_SHARDS)
     }
 
     pub(crate) fn new_with_pool(max_bytes: u64, retained_pool: Arc<RetainedBytePool>) -> Self {
-        Self::new_with_optional_pool(max_bytes, Some(retained_pool))
+        Self::new_with_optional_pool_and_shards(max_bytes, Some(retained_pool), CACHE_SHARDS)
     }
 
-    fn new_with_optional_pool(
+    pub(crate) fn new_with_shard_count(max_bytes: u64, shard_count: usize) -> Self {
+        Self::new_with_optional_pool_and_shards(max_bytes, None, shard_count)
+    }
+
+    pub(crate) fn new_with_pool_and_shard_count(
+        max_bytes: u64,
+        retained_pool: Arc<RetainedBytePool>,
+        shard_count: usize,
+    ) -> Self {
+        Self::new_with_optional_pool_and_shards(max_bytes, Some(retained_pool), shard_count)
+    }
+
+    fn new_with_optional_pool_and_shards(
         max_bytes: u64,
         retained_pool: Option<Arc<RetainedBytePool>>,
+        shard_count: usize,
     ) -> Self {
+        let shard_count = shard_count.max(1);
         Self {
-            shards: (0..CACHE_SHARDS)
+            shards: (0..shard_count)
                 .map(|_| Mutex::new(ObjectCacheShard::default()))
                 .collect(),
             shard_budget: if max_bytes == 0 {
                 0
             } else {
-                (max_bytes / CACHE_SHARDS as u64).max(1)
+                (max_bytes / shard_count as u64).max(1)
             },
             retained_pool,
         }
@@ -1290,6 +1304,15 @@ mod tests {
         assert!(cache.get(&first).is_none());
         assert!(Arc::ptr_eq(&cache.get(&second).unwrap(), &second_value));
         assert_eq!(cache.resident_bytes(), 8);
+    }
+
+    #[test]
+    fn single_shard_decoded_cache_can_retain_one_root_up_to_its_total_budget() {
+        let cache = DecodedObjectCache::new_with_shard_count(160, 1);
+        let value = Arc::new(vec![1_u8; 100]);
+        cache.insert("one-root".to_string(), Arc::clone(&value), 100);
+        assert!(Arc::ptr_eq(&cache.get("one-root").unwrap(), &value));
+        assert_eq!(cache.resident_bytes(), 100);
     }
 
     #[test]

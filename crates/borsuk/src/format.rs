@@ -175,7 +175,7 @@ use crate::{
 // Bumped 43 -> 44 when online flushes began retaining a bounded segment L0
 // beside the immutable global ANN base. The manifest must distinguish that
 // overlay from a complete inline segment authority.
-const CURRENT_VERSION: u16 = 44;
+const CURRENT_VERSION: u16 = 45;
 const SEGMENT_HEADER_MAGIC: &[u8; 4] = b"BSH1";
 const SEGMENT_HEADER_CODEC_VERSION: u8 = 1;
 const SEGMENT_HEADER_CHECKSUM_LEN: usize = 32;
@@ -617,8 +617,7 @@ struct WalManifestJson {
     bm25_stats_delta_frontier: Vec<crate::manifest::Bm25StatsDeltaRef>,
     #[serde(default)]
     tombstone_id_count: u64,
-    #[serde(default)]
-    tombstone_pages: Vec<crate::manifest::TombstonePageRef>,
+    mutation_directory_root: Option<crate::row_bundle::ArtifactRef>,
 }
 
 type ManifestWalState = (
@@ -630,7 +629,7 @@ type ManifestWalState = (
     Vec<crate::manifest::TombstoneSummary>,
     Vec<crate::manifest::Bm25StatsDeltaRef>,
     u64,
-    Vec<crate::manifest::TombstonePageRef>,
+    Option<crate::row_bundle::ArtifactRef>,
 );
 
 const fn default_routing_epoch() -> u64 {
@@ -650,7 +649,7 @@ fn wal_manifest_json(manifest: &Manifest) -> Result<Option<String>> {
         tombstone_frontier: manifest.tombstone_frontier.clone(),
         bm25_stats_delta_frontier: manifest.bm25_stats_delta_frontier.clone(),
         tombstone_id_count: manifest.tombstone_id_count,
-        tombstone_pages: manifest.tombstone_pages.clone(),
+        mutation_directory_root: manifest.mutation_directory_root.clone(),
     };
     Ok(Some(serde_json::to_string(&payload).map_err(|err| {
         BorsukError::InvalidStorage(format!("failed to serialize WAL manifest region: {err}"))
@@ -669,7 +668,7 @@ fn manifest_wal(batch: &RecordBatch) -> Result<ManifestWalState> {
             Vec::new(),
             Vec::new(),
             0,
-            Vec::new(),
+            None,
         ));
     };
     if batch.column(column).is_null(0) {
@@ -682,7 +681,7 @@ fn manifest_wal(batch: &RecordBatch) -> Result<ManifestWalState> {
             Vec::new(),
             Vec::new(),
             0,
-            Vec::new(),
+            None,
         ));
     }
     let json = string_value(batch, column, 0, "wal_json")?;
@@ -698,7 +697,7 @@ fn manifest_wal(batch: &RecordBatch) -> Result<ManifestWalState> {
         payload.tombstone_frontier,
         payload.bm25_stats_delta_frontier,
         payload.tombstone_id_count,
-        payload.tombstone_pages,
+        payload.mutation_directory_root,
     ))
 }
 
@@ -861,7 +860,7 @@ pub(crate) fn manifest_from_parquet(
         tombstone_frontier,
         bm25_stats_delta_frontier,
         tombstone_id_count,
-        tombstone_pages,
+        mutation_directory_root,
     ) = manifest_wal(&batch)?;
     let manifest = Manifest {
         version: manifest_version,
@@ -890,7 +889,7 @@ pub(crate) fn manifest_from_parquet(
         build_config: manifest_build_config(&batch)?,
         tombstone: manifest_tombstone(&batch)?,
         tombstone_frontier,
-        tombstone_pages,
+        mutation_directory_root,
         tombstone_id_count,
         wal_config,
         routing_epoch,
@@ -974,7 +973,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         tombstone_frontier,
         bm25_stats_delta_frontier,
         tombstone_id_count,
-        tombstone_pages,
+        mutation_directory_root,
     ) = manifest_wal(&batch)?;
 
     let metric = VectorMetric::from_str(string_value_by_name(&batch, 0, "metric")?)?;
@@ -1011,7 +1010,7 @@ pub(crate) fn manifest_metadata_from_parquet(manifest_bytes: &[u8]) -> Result<Ma
         build_config: manifest_build_config(&batch)?,
         tombstone: manifest_tombstone(&batch)?,
         tombstone_frontier,
-        tombstone_pages,
+        mutation_directory_root,
         tombstone_id_count,
         wal_config,
         routing_epoch,
@@ -9713,7 +9712,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_v44_manifest_is_rejected_instead_of_silently_upgraded() {
+    fn pre_v45_manifest_is_rejected_instead_of_silently_upgraded() {
         let manifest_bytes = legacy_external_manifest_parquet_without_routing_page_fanout(2, 100);
         let routing_bytes = routing_to_parquet(&valid_manifest()).unwrap();
 
@@ -9830,14 +9829,11 @@ mod tests {
             created_at: datetime_from_millis(1234).unwrap(),
         }];
         expected.tombstone_id_count = 2;
-        expected.tombstone_pages = vec![crate::manifest::TombstonePageRef {
-            bucket: 17,
-            path: "tombstones/cd/page.parquet".to_string(),
-            checksum: "cd".repeat(32),
-            count: 9,
-            id_bloom: crate::manifest::tombstone_id_bloom(["page-id"]),
-            created_at: datetime_from_millis(1235).unwrap(),
-        }];
+        expected.mutation_directory_root = Some(crate::row_bundle::ArtifactRef {
+            path: "id-directory/roots/root.parquet".to_string(),
+            checksum: "ef".repeat(32),
+            encoded_bytes: 789,
+        });
         expected.bm25_stats_delta_frontier = vec![crate::manifest::Bm25StatsDeltaRef {
             document_count_delta: -1,
             total_document_length_delta: -3,
@@ -9856,7 +9852,10 @@ mod tests {
 
         assert_eq!(decoded.tombstone_frontier, expected.tombstone_frontier);
         assert_eq!(decoded.tombstone_id_count, expected.tombstone_id_count);
-        assert_eq!(decoded.tombstone_pages, expected.tombstone_pages);
+        assert_eq!(
+            decoded.mutation_directory_root,
+            expected.mutation_directory_root
+        );
         assert_eq!(
             decoded.bm25_stats_delta_frontier,
             expected.bm25_stats_delta_frontier
@@ -10556,7 +10555,7 @@ mod tests {
             build_config: crate::BuildConfig::default(),
             tombstone: None,
             tombstone_frontier: Vec::new(),
-            tombstone_pages: Vec::new(),
+            mutation_directory_root: None,
             tombstone_id_count: 0,
             wal_config: crate::manifest::WalConfig::default(),
             routing_epoch: 1,
@@ -10587,7 +10586,7 @@ mod tests {
             primitive_value_by_name::<UInt16Type>(&batch, 0, "format_version").unwrap(),
             CURRENT_VERSION
         );
-        assert_eq!(CURRENT_VERSION, 44);
+        assert_eq!(CURRENT_VERSION, 45);
         assert_eq!(
             crate::logical_cell_catalog::LOGICAL_CELL_CATALOG_FORMAT_VERSION,
             34

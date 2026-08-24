@@ -12,6 +12,7 @@ use crate::{
     logical_cell_catalog::{LogicalCellCatalog, LogicalCellCatalogRef},
     metric::{VectorMetric, unit_l2_normalized},
     record::{BuildConfig, LeafCapability, LeafMode},
+    row_bundle::ArtifactRef,
     segment::vector_signature,
 };
 
@@ -21,6 +22,7 @@ pub(crate) const TOMBSTONE_ID_BLOOM_BYTES: usize = 128;
 pub(crate) const ID_DIRECTORY_BLOOM_MAX_BYTES: usize = 64 * 1024;
 const ID_DIRECTORY_BLOOM_MIN_BYTES: usize = 128;
 const ID_DIRECTORY_BLOOM_BYTES_PER_ENTRY: usize = 2;
+const MUTATION_DIRECTORY_RUN_BLOOM_MAX_BYTES: usize = 2 * 1024;
 pub(crate) const SEGMENT_VECTOR_SIGNATURE_BLOOM_BYTES: usize = 256;
 /// Default number of routing page refs grouped into each routing parent page.
 pub const DEFAULT_ROUTING_PAGE_FANOUT: usize = 128;
@@ -205,20 +207,18 @@ pub struct Manifest {
     /// config builds byte-identically to before this field existed.
     #[serde(default)]
     pub(crate) build_config: BuildConfig,
-    /// Legacy/unconsolidated tombstone run. Fresh indexes consolidate into
-    /// `tombstone_pages`; retained here only across a mutation boundary.
+    /// Legacy/unconsolidated tombstone run retained only across a mutation
+    /// boundary before it is folded into the immutable mutation directory.
     pub(crate) tombstone: Option<TombstoneSummary>,
-    /// Small immutable tombstone-delta runs committed by foreground mutations.
-    /// They are folded into hash-routed pages at flush/compaction boundaries,
-    /// keeping update/delete latency independent of the accumulated deleted-id
-    /// set.
+    /// Small immutable mutation-delta runs committed by foreground mutations.
+    /// Flush/compaction folds them into the partitioned Arrow directory, so
+    /// update/delete latency is independent of accumulated mutation history.
     #[serde(default)]
     pub(crate) tombstone_frontier: Vec<TombstoneSummary>,
-    /// Hash-routed consolidated tombstone pages. A point lookup reads at most
-    /// one stable page; foreground delta runs remain in `tombstone_frontier`
-    /// until flush copy-on-writes only their affected buckets.
-    #[serde(default)]
-    pub(crate) tombstone_pages: Vec<TombstonePageRef>,
+    /// Authenticated root of the partitioned immutable mutation-state
+    /// directory. Fresh v45 indexes consolidate foreground mutation runs here
+    /// instead of emitting one tiny Parquet page per touched hash bucket.
+    pub(crate) mutation_directory_root: Option<ArtifactRef>,
     /// Conservative upper bound on unique ids represented by the stable
     /// tombstone state. Foreground positioned suffix metadata may overcount
     /// stale-writer duplicates; a fenced materialization rebases this field to
@@ -526,44 +526,6 @@ impl TombstoneSummary {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct TombstonePageRef {
-    pub bucket: u16,
-    pub path: String,
-    pub checksum: String,
-    pub count: u64,
-    /// Resident negative-membership filter for the stable page. Search must
-    /// consult this before fetching the page from object storage.
-    pub id_bloom: Vec<u8>,
-    pub created_at: DateTime<Utc>,
-}
-
-impl TombstonePageRef {
-    pub(crate) fn from_summary(bucket: u16, summary: TombstoneSummary) -> Self {
-        Self {
-            bucket,
-            path: summary.path,
-            checksum: summary.checksum,
-            count: summary.count,
-            id_bloom: summary.id_bloom,
-            created_at: summary.created_at,
-        }
-    }
-
-    /// `false` is an exact negative and lets an unrelated candidate avoid a
-    /// remote stable-page read. A malformed filter fails open for correctness.
-    pub(crate) fn might_contain_record_id(&self, id: impl AsRef<[u8]>) -> bool {
-        if self.id_bloom.len() != TOMBSTONE_ID_BLOOM_BYTES {
-            return true;
-        }
-        bloom_contains_with_bits(&self.id_bloom, id, TOMBSTONE_ID_BLOOM_BYTES * 8)
-    }
-
-    pub(crate) fn resident_bytes_estimate(&self) -> usize {
-        size_of::<Self>() + self.path.len() + self.checksum.len() + self.id_bloom.len()
-    }
-}
-
 impl Manifest {
     pub(crate) fn has_complete_inline_segments(&self) -> bool {
         !self.segments_are_global_delta && !self.segments.is_empty()
@@ -591,7 +553,7 @@ impl Manifest {
             build_config,
             tombstone: None,
             tombstone_frontier: Vec::new(),
-            tombstone_pages: Vec::new(),
+            mutation_directory_root: None,
             tombstone_id_count: 0,
             wal_config: WalConfig::default(),
             routing_epoch: default_routing_epoch(),
@@ -629,7 +591,7 @@ impl Manifest {
             build_config: self.build_config.clone(),
             tombstone: self.tombstone.clone(),
             tombstone_frontier: self.tombstone_frontier.clone(),
-            tombstone_pages: self.tombstone_pages.clone(),
+            mutation_directory_root: self.mutation_directory_root.clone(),
             tombstone_id_count: self.tombstone_id_count,
             wal_config: self.wal_config.clone(),
             routing_epoch: self.routing_epoch,
@@ -742,10 +704,10 @@ impl Manifest {
             + self.bm25_stats_delta_frontier.len()
     }
 
-    /// Number of consolidated hash-routed tombstone pages in this snapshot.
+    /// Whether this snapshot has a stable authenticated mutation directory.
     #[must_use]
-    pub fn tombstone_page_count(&self) -> usize {
-        self.tombstone_pages.len()
+    pub fn has_mutation_directory(&self) -> bool {
+        self.mutation_directory_root.is_some()
     }
 
     /// Number of un-consolidated foreground tombstone WAL runs.
@@ -804,6 +766,7 @@ impl Manifest {
     }
 
     /// Content-addressed path of a cumulative tombstone id-list object.
+    #[cfg(test)]
     pub(crate) fn tombstone_content_file_name(checksum: &str) -> String {
         let prefix = &checksum[..2];
         format!("tombstones/{prefix}/tomb-{checksum}.{TABLE_EXTENSION}")
@@ -849,8 +812,9 @@ impl Manifest {
             for tombstone in &self.tombstone_frontier {
                 add(tombstone.resident_bytes_estimate())?;
             }
-            for page in &self.tombstone_pages {
-                add(page.resident_bytes_estimate())?;
+            if let Some(root) = &self.mutation_directory_root {
+                add(root.path.len())?;
+                add(root.checksum.len())?;
             }
             if let Some(reference) = &self.logical_cell_catalog_ref {
                 add(reference.path.len())?;
@@ -1156,6 +1120,29 @@ pub(crate) fn id_directory_bloom<'a>(
     bloom
 }
 
+pub(crate) fn mutation_directory_run_bloom_bytes(entry_count: usize) -> usize {
+    entry_count
+        .saturating_mul(ID_DIRECTORY_BLOOM_BYTES_PER_ENTRY)
+        .clamp(
+            ID_DIRECTORY_BLOOM_MIN_BYTES,
+            MUTATION_DIRECTORY_RUN_BLOOM_MAX_BYTES,
+        )
+}
+
+pub(crate) fn mutation_directory_run_bloom<'a>(
+    ids: impl IntoIterator<Item = &'a [u8]>,
+    entry_count: usize,
+) -> Vec<u8> {
+    let mut bloom = vec![0_u8; mutation_directory_run_bloom_bytes(entry_count)];
+    let bits = bloom.len() * 8;
+    for id in ids {
+        for position in bloom_positions_with_bits(id, bits) {
+            bloom[position / 8] |= 1_u8 << (position % 8);
+        }
+    }
+    bloom
+}
+
 pub(crate) fn id_directory_bloom_might_contain(bloom: &[u8], id: impl AsRef<[u8]>) -> bool {
     if !(ID_DIRECTORY_BLOOM_MIN_BYTES..=ID_DIRECTORY_BLOOM_MAX_BYTES).contains(&bloom.len()) {
         return true;
@@ -1451,21 +1438,6 @@ mod tests {
     #[test]
     fn tombstone_run_bloom_stays_compact() {
         assert_eq!(tombstone_id_bloom(["deleted"]).len(), 128);
-    }
-
-    #[test]
-    fn stable_tombstone_page_rejects_definitely_absent_ids_without_io() {
-        let summary = TombstoneSummary {
-            path: "tombstones/ab/page.parquet".to_string(),
-            checksum: "ab".repeat(32),
-            count: 1,
-            id_bloom: tombstone_id_bloom(["mutated-id"]),
-            created_at: chrono::Utc::now(),
-        };
-        let page = TombstonePageRef::from_summary(17, summary);
-
-        assert!(page.might_contain_record_id("mutated-id"));
-        assert!(!page.might_contain_record_id("never-mutated-id"));
     }
 
     #[test]

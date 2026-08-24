@@ -5698,7 +5698,7 @@ mod tests {
         index.flush().unwrap();
 
         assert_eq!(index.manifest().tombstone_delta_run_count(), 0);
-        assert_eq!(index.manifest().tombstone_page_count(), 0);
+        assert!(!index.manifest().has_mutation_directory());
         assert_eq!(index.get_vector("0").unwrap(), Some(vec![1.0, 0.0]));
         assert_eq!(index.get_vector("1").unwrap(), Some(vec![0.0, 1.0]));
     }
