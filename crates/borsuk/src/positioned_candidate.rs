@@ -437,12 +437,12 @@ pub(crate) fn build_row_bundle_delta(
         partitions
             .entry(DirectoryPartition::for_record_id(&state.record_id))
             .or_default()
-            .push(DirectoryRow {
-                record_id: state.record_id,
-                routing_epoch: state.routing_epoch,
-                cell_ordinal: state.cell_ordinal,
-                state: state.state,
-            });
+            .push(DirectoryRow::routed(
+                state.record_id,
+                state.routing_epoch,
+                state.cell_ordinal,
+                state.state,
+            )?);
     }
     let mut directory_runs = Vec::new();
     for (partition, mut rows) in partitions {

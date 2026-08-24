@@ -16,10 +16,10 @@ use arrow_array::{
 };
 use arrow_buffer::Buffer;
 use arrow_ipc::{
-    Block, CompressionType, MetadataVersion,
+    Block, CompressionType, MessageHeader, MetadataVersion,
     convert::fb_to_schema,
     reader::{FileDecoder, read_footer_length},
-    root_as_footer,
+    root_as_footer, root_as_message,
     writer::{FileWriter, IpcWriteOptions},
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
@@ -497,9 +497,43 @@ impl DirectoryPartition {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DirectoryRow {
     pub(crate) record_id: Vec<u8>,
-    pub(crate) routing_epoch: u64,
-    pub(crate) cell_ordinal: u32,
+    routing_epoch: u64,
+    cell_ordinal: u32,
     pub(crate) state: MutationState,
+}
+
+impl DirectoryRow {
+    pub(crate) fn routed(
+        record_id: Vec<u8>,
+        routing_epoch: u64,
+        cell_ordinal: u32,
+        state: MutationState,
+    ) -> Result<Self> {
+        if routing_epoch == 0 {
+            return invalid("ID-directory routed owner has epoch zero");
+        }
+        Ok(Self {
+            record_id,
+            routing_epoch,
+            cell_ordinal,
+            state,
+        })
+    }
+
+    /// A mutation fence with no routed cell owner. Epoch zero is reserved by
+    /// the directory format, so `(0, 0)` cannot alias a catalog assignment.
+    pub(crate) fn ownerless(record_id: Vec<u8>, state: MutationState) -> Self {
+        Self {
+            record_id,
+            routing_epoch: 0,
+            cell_ordinal: 0,
+            state,
+        }
+    }
+
+    fn has_owner(&self) -> bool {
+        self.routing_epoch != 0
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -534,6 +568,12 @@ pub(crate) struct PackedDirectoryPartitionRun {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct PackedDirectoryDelta {
+    pub(crate) bytes: Bytes,
+    pub(crate) references: Vec<DirectoryRunRef>,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct PackedDirectoryRoot {
     pub(crate) bytes: Vec<u8>,
     pub(crate) reference: ArtifactRef,
@@ -549,6 +589,7 @@ pub(crate) struct DirectoryOwnerState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DirectoryLookup {
     Found(DirectoryOwnerState),
+    Fenced(MutationState),
     Unknown,
 }
 
@@ -3505,7 +3546,7 @@ fn validate_directory_rows(partition: DirectoryPartition, rows: &[DirectoryRow])
     }
     for row in rows {
         if row.record_id.is_empty()
-            || row.routing_epoch == 0
+            || (row.routing_epoch == 0 && row.cell_ordinal != 0)
             || DirectoryPartition::for_record_id(&row.record_id) != partition
         {
             return invalid("ID-directory row has an invalid fixed partition or owner");
@@ -3518,6 +3559,192 @@ fn validate_directory_rows(partition: DirectoryPartition, rows: &[DirectoryRow])
         return invalid("ID-directory rows must converge to one strictly sorted state per ID");
     }
     Ok(())
+}
+
+enum DirectoryDeltaEncodingAttempt {
+    Packed(PackedDirectoryDelta),
+    BatchTooLarge(DirectoryPartition),
+}
+
+fn encode_directory_delta_file(
+    partitions: &BTreeMap<DirectoryPartition, (u8, Vec<DirectoryRow>)>,
+    rows_per_batch: &BTreeMap<DirectoryPartition, usize>,
+    options: DirectoryPackOptions,
+) -> Result<DirectoryDeltaEncodingAttempt> {
+    let write_options =
+        IpcWriteOptions::default().try_with_compression(Some(CompressionType::ZSTD))?;
+    let mut output = Vec::new();
+    {
+        let mut writer = FileWriter::try_new_with_options(
+            &mut output,
+            directory_schema().as_ref(),
+            write_options,
+        )?;
+        for (partition, (_, rows)) in partitions {
+            let batch_rows = rows_per_batch[partition];
+            for chunk in rows.chunks(batch_rows) {
+                let batch = directory_record_batch(*partition, chunk)?;
+                if batch.get_array_memory_size() as u64 > options.hard_max_batch_bytes {
+                    return Ok(DirectoryDeltaEncodingAttempt::BatchTooLarge(*partition));
+                }
+                writer.write(&batch)?;
+            }
+        }
+        writer.finish()?;
+    }
+    let bytes = Bytes::from(output);
+    if bytes.len() as u64 > options.hard_max_object_bytes {
+        return invalid(
+            "ID-directory delta exceeds its hard cap; split the immutable delta before packing",
+        );
+    }
+    parse_completed_directory_delta(partitions, rows_per_batch, bytes, options)
+}
+
+/// Packs all touched directory partitions for one immutable mutation delta
+/// into one stock Arrow IPC object. Each returned reference authenticates only
+/// its partition batches while sharing the exact object and footer authority.
+pub(crate) fn pack_directory_delta(
+    partitions: &BTreeMap<DirectoryPartition, (u8, Vec<DirectoryRow>)>,
+    options: DirectoryPackOptions,
+) -> Result<PackedDirectoryDelta> {
+    options.validate()?;
+    if partitions.is_empty() || partitions.len() > 256 {
+        return invalid("ID-directory delta must contain between one and 256 partitions");
+    }
+    let total_rows = partitions.values().try_fold(0_usize, |total, (_, rows)| {
+        total.checked_add(rows.len()).ok_or_else(|| {
+            BorsukError::InvalidStorage("ID-directory delta row count overflows".into())
+        })
+    })?;
+    if total_rows > MAX_RUN_ROWS {
+        return invalid("ID-directory delta exceeds its fixed logical row cap");
+    }
+    let mut rows_per_batch = BTreeMap::new();
+    for (partition, (level, rows)) in partitions {
+        if usize::from(*level) >= MAX_ACTIVE_DIRECTORY_LEVELS {
+            return invalid("ID-directory run level is outside the active level bound");
+        }
+        validate_directory_rows(*partition, rows)?;
+        let bytes_per_row = directory_record_batch(*partition, rows)?
+            .get_array_memory_size()
+            .checked_div(rows.len())
+            .unwrap_or(1)
+            .max(1);
+        let batch_rows = checked_usize(options.target_batch_bytes, "directory batch target")?
+            .checked_div(bytes_per_row)
+            .unwrap_or(1)
+            .max(1)
+            .min(rows.len());
+        rows_per_batch.insert(*partition, batch_rows);
+    }
+    loop {
+        match encode_directory_delta_file(partitions, &rows_per_batch, options)? {
+            DirectoryDeltaEncodingAttempt::Packed(packed) => return Ok(packed),
+            DirectoryDeltaEncodingAttempt::BatchTooLarge(partition) => {
+                let batch_rows = rows_per_batch
+                    .get_mut(&partition)
+                    .expect("encoded partition came from the input map");
+                if *batch_rows == 1 {
+                    return invalid(
+                        "one ID-directory row exceeds the authenticated batch hard cap",
+                    );
+                }
+                *batch_rows = batch_rows.div_ceil(2);
+            }
+        }
+    }
+}
+
+fn parse_completed_directory_delta(
+    partitions: &BTreeMap<DirectoryPartition, (u8, Vec<DirectoryRow>)>,
+    rows_per_batch: &BTreeMap<DirectoryPartition, usize>,
+    bytes: Bytes,
+    options: DirectoryPackOptions,
+) -> Result<DirectoryDeltaEncodingAttempt> {
+    if bytes.len() < 10 {
+        return invalid("ID-directory Arrow IPC file is shorter than its trailer");
+    }
+    let trailer_start = bytes.len() - 10;
+    let trailer: [u8; 10] = bytes[trailer_start..]
+        .try_into()
+        .map_err(|_| BorsukError::InvalidStorage("Arrow trailer is truncated".into()))?;
+    let footer_len = read_footer_length(trailer)?;
+    let footer_start = trailer_start.checked_sub(footer_len).ok_or_else(|| {
+        BorsukError::InvalidStorage("Arrow footer length exceeds directory object".into())
+    })?;
+    let footer = root_as_footer(&bytes[footer_start..trailer_start]).map_err(|error| {
+        BorsukError::InvalidStorage(format!("ID-directory Arrow footer is invalid: {error}"))
+    })?;
+    if footer
+        .dictionaries()
+        .is_some_and(|dictionaries| !dictionaries.is_empty())
+    {
+        return invalid("ID-directory Arrow IPC must not use dictionaries");
+    }
+    let decoded_schema = fb_to_schema(footer.schema().ok_or_else(|| {
+        BorsukError::InvalidStorage("ID-directory Arrow footer has no schema".into())
+    })?);
+    if &decoded_schema != directory_schema().as_ref() || footer.version() != MetadataVersion::V5 {
+        return invalid("ID-directory Arrow schema or metadata version is unsupported");
+    }
+    let blocks = footer
+        .recordBatches()
+        .map(|blocks| blocks.iter().copied().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let expected_blocks = partitions
+        .iter()
+        .map(|(partition, (_, rows))| rows.len().div_ceil(rows_per_batch[partition]))
+        .sum::<usize>();
+    if blocks.len() != expected_blocks {
+        return invalid("ID-directory Arrow batch count disagrees with its rows");
+    }
+    let footer_range = authenticated_range(&bytes, footer_start as u64..bytes.len() as u64)?;
+    let checksum = blake3::hash(&bytes).to_hex().to_string();
+    let artifact = ArtifactRef {
+        path: format!("id-directory/deltas/{checksum}.arrow"),
+        checksum,
+        encoded_bytes: bytes.len() as u64,
+    };
+    let mut block_index = 0;
+    let mut references = Vec::with_capacity(partitions.len());
+    for (partition, (level, rows)) in partitions {
+        let batch_rows = rows_per_batch[partition];
+        let mut batches = Vec::with_capacity(rows.len().div_ceil(batch_rows));
+        for chunk in rows.chunks(batch_rows) {
+            let block = blocks.get(block_index).ok_or_else(|| {
+                BorsukError::InvalidStorage("ID-directory Arrow batch mapping is truncated".into())
+            })?;
+            block_index += 1;
+            let range = arrow_block_range(block)?;
+            if range.end > footer_start as u64 {
+                return invalid("ID-directory Arrow batch overlaps its footer");
+            }
+            let authenticated = authenticated_range(&bytes, range)?;
+            if authenticated.length > options.hard_max_batch_bytes {
+                return Ok(DirectoryDeltaEncodingAttempt::BatchTooLarge(*partition));
+            }
+            batches.push(DirectoryBatchRef {
+                min_record_id: chunk.first().expect("non-empty chunk").record_id.clone(),
+                max_record_id: chunk.last().expect("non-empty chunk").record_id.clone(),
+                row_count: chunk.len() as u64,
+                range: authenticated,
+                metadata_length: block.metaDataLength(),
+                body_length: block.bodyLength(),
+            });
+        }
+        references.push(DirectoryRunRef {
+            partition: *partition,
+            level: *level,
+            artifact: artifact.clone(),
+            footer: footer_range.clone(),
+            batches,
+        });
+    }
+    validate_directory_run_refs(&references)?;
+    Ok(DirectoryDeltaEncodingAttempt::Packed(
+        PackedDirectoryDelta { bytes, references },
+    ))
 }
 
 fn directory_record_batch(
@@ -3580,7 +3807,11 @@ fn encode_directory_file(
             write_options,
         )?;
         for chunk in rows.chunks(rows_per_batch) {
-            writer.write(&directory_record_batch(partition, chunk)?)?;
+            let batch = directory_record_batch(partition, chunk)?;
+            if batch.get_array_memory_size() as u64 > options.hard_max_batch_bytes {
+                return Ok(DirectoryEncodingAttempt::BatchTooLarge);
+            }
+            writer.write(&batch)?;
         }
         writer.finish()?;
     }
@@ -3731,6 +3962,7 @@ fn decode_directory_batch(
 ) -> Result<Vec<DirectoryRow>> {
     let verified = VerifiedRange::new(&batch_ref.range, batch_ref.range.offset, bytes)?;
     let stored = verified.bytes.clone();
+    validate_directory_batch_decode_bound(&stored, batch_ref)?;
     let block = Block::new(0, batch_ref.metadata_length, batch_ref.body_length);
     let decoder = FileDecoder::new(directory_schema(), MetadataVersion::V5);
     let decoded = catch_unwind(AssertUnwindSafe(|| {
@@ -3744,6 +3976,7 @@ fn decode_directory_batch(
     })?;
     if decoded.schema().as_ref() != directory_schema().as_ref()
         || decoded.num_rows() as u64 != batch_ref.row_count
+        || decoded.get_array_memory_size() as u64 > FORMAT_MAX_DIRECTORY_BATCH_BYTES
     {
         return invalid("decoded ID-directory rows exceed or disagree with authenticated summary");
     }
@@ -3832,11 +4065,127 @@ fn decode_directory_batch(
     Ok(rows)
 }
 
-pub(crate) fn lookup_directory_owner<F>(
+fn validate_directory_batch_decode_bound(
+    stored: &Bytes,
+    batch_ref: &DirectoryBatchRef,
+) -> Result<()> {
+    let metadata_len = usize::try_from(batch_ref.metadata_length).map_err(|_| {
+        BorsukError::InvalidStorage("ID-directory Arrow metadata length is negative".into())
+    })?;
+    let body_len = usize::try_from(batch_ref.body_length).map_err(|_| {
+        BorsukError::InvalidStorage("ID-directory Arrow body length is negative".into())
+    })?;
+    if metadata_len.checked_add(body_len) != Some(stored.len()) || metadata_len < 4 {
+        return invalid("ID-directory Arrow block lengths disagree with authenticated bytes");
+    }
+    let continuation = stored[..4] == [0xFF; 4];
+    let prefix_len = if continuation { 8 } else { 4 };
+    if metadata_len < prefix_len {
+        return invalid("ID-directory Arrow metadata prefix is truncated");
+    }
+    let message_len_offset = if continuation { 4 } else { 0 };
+    let message_len = u32::from_le_bytes(
+        stored[message_len_offset..message_len_offset + 4]
+            .try_into()
+            .map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "ID-directory Arrow metadata length is truncated".into(),
+                )
+            })?,
+    ) as usize;
+    let message_end = prefix_len.checked_add(message_len).ok_or_else(|| {
+        BorsukError::InvalidStorage("ID-directory Arrow metadata length overflows".into())
+    })?;
+    if message_end > metadata_len {
+        return invalid("ID-directory Arrow metadata exceeds its authenticated block");
+    }
+    let message = root_as_message(&stored[prefix_len..message_end]).map_err(|error| {
+        BorsukError::InvalidStorage(format!("ID-directory Arrow metadata is invalid: {error}"))
+    })?;
+    if message.header_type() != MessageHeader::RecordBatch
+        || usize::try_from(message.bodyLength()).ok() != Some(body_len)
+    {
+        return invalid("ID-directory Arrow message is not the authenticated record batch");
+    }
+    let batch = message.header_as_record_batch().ok_or_else(|| {
+        BorsukError::InvalidStorage("ID-directory Arrow metadata has no record batch".into())
+    })?;
+    if u64::try_from(batch.length()).ok() != Some(batch_ref.row_count) {
+        return invalid("ID-directory Arrow metadata row count disagrees with its authority");
+    }
+    let body = &stored[metadata_len..];
+    let compressed = batch.compression().is_some();
+    let buffers = batch.buffers().ok_or_else(|| {
+        BorsukError::InvalidStorage("ID-directory Arrow metadata has no buffers".into())
+    })?;
+    let mut decoded_bytes = 0_usize;
+    for buffer in buffers {
+        let offset = usize::try_from(buffer.offset()).map_err(|_| {
+            BorsukError::InvalidStorage("ID-directory Arrow buffer offset is negative".into())
+        })?;
+        let length = usize::try_from(buffer.length()).map_err(|_| {
+            BorsukError::InvalidStorage("ID-directory Arrow buffer length is negative".into())
+        })?;
+        let bytes = body
+            .get(
+                offset..offset.checked_add(length).ok_or_else(|| {
+                    BorsukError::InvalidStorage("ID-directory Arrow buffer range overflows".into())
+                })?,
+            )
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "ID-directory Arrow buffer exceeds its authenticated body".into(),
+                )
+            })?;
+        let decoded_len = if compressed && !bytes.is_empty() {
+            let declared = i64::from_le_bytes(
+                bytes
+                    .get(..8)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "ID-directory compressed buffer header is truncated".into(),
+                        )
+                    })?
+                    .try_into()
+                    .map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "ID-directory compressed buffer header is invalid".into(),
+                        )
+                    })?,
+            );
+            match declared {
+                -1 => bytes.len().checked_sub(8).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "ID-directory uncompressed buffer header is truncated".into(),
+                    )
+                })?,
+                0.. => usize::try_from(declared).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "ID-directory decoded buffer length does not fit memory".into(),
+                    )
+                })?,
+                _ => {
+                    return invalid("ID-directory compressed buffer has an invalid decoded length");
+                }
+            }
+        } else {
+            bytes.len()
+        };
+        decoded_bytes = decoded_bytes.checked_add(decoded_len).ok_or_else(|| {
+            BorsukError::InvalidStorage("ID-directory decoded buffer bytes overflow".into())
+        })?;
+        if decoded_bytes as u64 > FORMAT_MAX_DIRECTORY_BATCH_BYTES {
+            return invalid("ID-directory Arrow batch declares an unsafe decoded size");
+        }
+    }
+    Ok(())
+}
+
+fn lookup_directory_row<F>(
     active_levels: &[DirectoryRunRef],
     record_id: &[u8],
     mut fetch: F,
-) -> Result<DirectoryLookup>
+) -> Result<Option<DirectoryRow>>
 where
     F: FnMut(&str, Range<u64>) -> Result<Vec<u8>>,
 {
@@ -3853,7 +4202,7 @@ where
         return invalid("ID-directory lookup exceeds its per-partition active level cap");
     }
     let mut seen_levels = BTreeSet::new();
-    let mut winner = None::<DirectoryOwnerState>;
+    let mut winner = None::<DirectoryRow>;
     for run in active_levels {
         if run.partition != partition {
             continue;
@@ -3881,11 +4230,7 @@ where
         let rows = decode_directory_batch(run, batch, Bytes::from(bytes))?;
         if let Ok(row) = rows.binary_search_by(|row| row.record_id.as_slice().cmp(record_id)) {
             let row = &rows[row];
-            let candidate = DirectoryOwnerState {
-                routing_epoch: row.routing_epoch,
-                cell_ordinal: row.cell_ordinal,
-                state: row.state,
-            };
+            let candidate = row.clone();
             winner = Some(match winner {
                 None => candidate,
                 Some(current) => {
@@ -3894,9 +4239,16 @@ where
                         && (current.routing_epoch, current.cell_ordinal)
                             != (candidate.routing_epoch, candidate.cell_ordinal)
                     {
-                        return invalid("equal ID-directory versions disagree on routed owner");
-                    }
-                    if state == candidate.state {
+                        match (current.has_owner(), candidate.has_owner()) {
+                            (true, false) => current,
+                            (false, true) => candidate,
+                            _ => {
+                                return invalid(
+                                    "equal ID-directory versions disagree on routed owner",
+                                );
+                            }
+                        }
+                    } else if state == candidate.state {
                         candidate
                     } else {
                         current
@@ -3905,7 +4257,39 @@ where
             });
         }
     }
-    Ok(winner.map_or(DirectoryLookup::Unknown, DirectoryLookup::Found))
+    Ok(winner)
+}
+
+pub(crate) fn lookup_directory_state<F>(
+    active_levels: &[DirectoryRunRef],
+    record_id: &[u8],
+    fetch: F,
+) -> Result<Option<MutationState>>
+where
+    F: FnMut(&str, Range<u64>) -> Result<Vec<u8>>,
+{
+    Ok(lookup_directory_row(active_levels, record_id, fetch)?.map(|row| row.state))
+}
+
+pub(crate) fn lookup_directory_owner<F>(
+    active_levels: &[DirectoryRunRef],
+    record_id: &[u8],
+    fetch: F,
+) -> Result<DirectoryLookup>
+where
+    F: FnMut(&str, Range<u64>) -> Result<Vec<u8>>,
+{
+    let Some(row) = lookup_directory_row(active_levels, record_id, fetch)? else {
+        return Ok(DirectoryLookup::Unknown);
+    };
+    if !row.has_owner() {
+        return Ok(DirectoryLookup::Fenced(row.state));
+    }
+    Ok(DirectoryLookup::Found(DirectoryOwnerState {
+        routing_epoch: row.routing_epoch,
+        cell_ordinal: row.cell_ordinal,
+        state: row.state,
+    }))
 }
 
 fn validate_row_bundle_reference(reference: &RowBundleRef) -> Result<()> {
@@ -4579,6 +4963,10 @@ mod tests {
     use arrow_array::{
         ArrayRef, BinaryArray, FixedSizeBinaryArray, RecordBatch, StringArray, UInt8Array,
         UInt16Array, UInt32Array, UInt64Array,
+    };
+    use arrow_ipc::{
+        CompressionType,
+        writer::{FileWriter, IpcWriteOptions},
     };
     use arrow_schema::{DataType, Field, Schema};
     use bytes::Bytes;
@@ -5679,6 +6067,280 @@ mod tests {
             )
             .is_err(),
             "one immutable directory run must converge each ID to one state"
+        );
+    }
+
+    #[test]
+    fn directory_ownerless_fence_round_trips_without_fabricating_a_cell() {
+        let id = b"ownerless-delete-fence".to_vec();
+        let partition = DirectoryPartition::for_record_id(&id);
+        let state = MutationState::new(stamp(91), MutationOperation::Delete);
+        let partitions = BTreeMap::from([(
+            partition,
+            (0_u8, vec![DirectoryRow::ownerless(id.clone(), state)]),
+        )]);
+
+        let packed = super::pack_directory_delta(&partitions, directory_options()).unwrap();
+        assert_eq!(packed.references.len(), 1);
+        let run = &packed.references[0];
+        let decoded = super::lookup_directory_state(
+            std::slice::from_ref(run),
+            &id,
+            |_, range: Range<u64>| {
+                Ok(packed.bytes
+                    [usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()]
+                    .to_vec())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(decoded, Some(state));
+        assert_eq!(
+            lookup_directory_owner(std::slice::from_ref(run), &id, |_, range| {
+                Ok(packed.bytes
+                    [usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()]
+                    .to_vec())
+            })
+            .unwrap(),
+            DirectoryLookup::Fenced(state),
+            "an ownerless mutation fence must never become a routed cell owner",
+        );
+    }
+
+    #[test]
+    fn directory_fence_shadows_older_owner_and_equal_put_prefers_real_owner() {
+        let id = b"fence-owner-resolution".to_vec();
+        let partition = DirectoryPartition::for_record_id(&id);
+        let owned_state = MutationState::new(stamp(1), MutationOperation::Put);
+        let owned = pack_directory_partition_run(
+            partition,
+            1,
+            &[DirectoryRow {
+                record_id: id.clone(),
+                routing_epoch: 7,
+                cell_ordinal: 3,
+                state: owned_state,
+            }],
+            directory_options(),
+        )
+        .unwrap();
+        let deleted_state = MutationState::new(stamp(2), MutationOperation::Delete);
+        let deleted = pack_directory_partition_run(
+            partition,
+            0,
+            &[DirectoryRow::ownerless(id.clone(), deleted_state)],
+            directory_options(),
+        )
+        .unwrap();
+        let objects = [owned.clone(), deleted.clone()]
+            .into_iter()
+            .map(|packed| (packed.reference.artifact.path, packed.bytes))
+            .collect::<BTreeMap<_, _>>();
+        let lookup = lookup_directory_owner(
+            &[deleted.reference, owned.reference.clone()],
+            &id,
+            |path, range: Range<u64>| {
+                let bytes = &objects[path];
+                Ok(bytes
+                    [usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()]
+                    .to_vec())
+            },
+        )
+        .unwrap();
+        assert_eq!(lookup, DirectoryLookup::Fenced(deleted_state));
+
+        let equal_fence = pack_directory_partition_run(
+            partition,
+            0,
+            &[DirectoryRow::ownerless(id.clone(), owned_state)],
+            directory_options(),
+        )
+        .unwrap();
+        let objects = [owned.clone(), equal_fence.clone()]
+            .into_iter()
+            .map(|packed| (packed.reference.artifact.path, packed.bytes))
+            .collect::<BTreeMap<_, _>>();
+        let lookup = lookup_directory_owner(
+            &[equal_fence.reference, owned.reference],
+            &id,
+            |path, range: Range<u64>| {
+                let bytes = &objects[path];
+                Ok(bytes
+                    [usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()]
+                    .to_vec())
+            },
+        )
+        .unwrap();
+        let DirectoryLookup::Found(owner) = lookup else {
+            panic!("an equal-version real row must retain its routed owner")
+        };
+        assert_eq!((owner.routing_epoch, owner.cell_ordinal), (7, 3));
+    }
+
+    #[test]
+    fn directory_delta_packs_many_partitions_into_one_arrow_object() {
+        let mut partitions = BTreeMap::<DirectoryPartition, (u8, Vec<DirectoryRow>)>::new();
+        let mut candidate = 0_u64;
+        while partitions.len() < 32 || partitions.values().any(|(_, rows)| rows.len() < 6) {
+            let id = format!("multi-partition-mutation-{candidate:08}").into_bytes();
+            candidate += 1;
+            let partition = DirectoryPartition::for_record_id(&id);
+            if partitions.len() < 32 || partitions.contains_key(&partition) {
+                let (_, rows) = partitions
+                    .entry(partition)
+                    .or_insert_with(|| (0_u8, Vec::new()));
+                if rows.len() < 6 {
+                    rows.push(DirectoryRow::ownerless(
+                        id,
+                        MutationState::new(stamp(candidate as usize), MutationOperation::Put),
+                    ));
+                }
+            }
+        }
+
+        let packed = super::pack_directory_delta(
+            &partitions,
+            DirectoryPackOptions {
+                target_batch_bytes: 1,
+                ..directory_options()
+            },
+        )
+        .unwrap();
+        assert_eq!(packed.references.len(), 32);
+        assert_eq!(
+            packed
+                .references
+                .iter()
+                .map(|run| (&run.artifact.path, &run.artifact.checksum))
+                .collect::<BTreeSet<_>>()
+                .len(),
+            1,
+            "one flush delta must emit one physical Arrow object, not one object per partition"
+        );
+        for (partition, (_, rows)) in &partitions {
+            let run = packed
+                .references
+                .iter()
+                .find(|run| run.partition == *partition)
+                .unwrap();
+            assert!(run.batches.len() > 1);
+            for row in rows {
+                let state = super::lookup_directory_state(
+                    std::slice::from_ref(run),
+                    &row.record_id,
+                    |_, range: Range<u64>| {
+                        Ok(packed.bytes[usize::try_from(range.start).unwrap()
+                            ..usize::try_from(range.end).unwrap()]
+                            .to_vec())
+                    },
+                )
+                .unwrap();
+                assert_eq!(state, Some(row.state));
+            }
+        }
+    }
+
+    #[test]
+    fn directory_delta_rejects_more_than_the_fixed_logical_row_cap() {
+        let mut partitions = BTreeMap::<DirectoryPartition, (u8, Vec<DirectoryRow>)>::new();
+        for candidate in 0..=super::MAX_RUN_ROWS {
+            let id = format!("directory-delta-cap-{candidate:08}").into_bytes();
+            let partition = DirectoryPartition::for_record_id(&id);
+            partitions
+                .entry(partition)
+                .or_insert_with(|| (0, Vec::new()))
+                .1
+                .push(DirectoryRow::ownerless(
+                    id,
+                    MutationState::new(stamp(candidate), MutationOperation::Put),
+                ));
+        }
+
+        let error = super::pack_directory_delta(&partitions, directory_options())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("row"), "{error}");
+    }
+
+    #[test]
+    fn directory_delta_rejects_one_decoded_row_over_the_batch_cap() {
+        let id = vec![b'x'; directory_options().hard_max_batch_bytes as usize * 4];
+        let partition = DirectoryPartition::for_record_id(&id);
+        let partitions = BTreeMap::from([(
+            partition,
+            (
+                0,
+                vec![DirectoryRow::ownerless(
+                    id,
+                    MutationState::new(stamp(1), MutationOperation::Put),
+                )],
+            ),
+        )]);
+
+        let error = super::pack_directory_delta(&partitions, directory_options())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("batch") || error.contains("decoded"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn directory_lookup_rejects_unsafe_declared_decode_size_before_arrow_decode() {
+        let id = vec![b'z'; super::FORMAT_MAX_DIRECTORY_BATCH_BYTES as usize * 2];
+        let partition = DirectoryPartition::for_record_id(&id);
+        let rows = vec![DirectoryRow::ownerless(
+            id.clone(),
+            MutationState::new(stamp(1), MutationOperation::Put),
+        )];
+        let write_options = IpcWriteOptions::default()
+            .try_with_compression(Some(CompressionType::ZSTD))
+            .unwrap();
+        let mut output = Vec::new();
+        {
+            let mut writer = FileWriter::try_new_with_options(
+                &mut output,
+                super::directory_schema().as_ref(),
+                write_options,
+            )
+            .unwrap();
+            writer
+                .write(&super::directory_record_batch(partition, &rows).unwrap())
+                .unwrap();
+            writer.finish().unwrap();
+        }
+        let bytes = Bytes::from(output);
+        let packed = match super::parse_completed_directory_file(
+            partition,
+            0,
+            &rows,
+            1,
+            bytes.clone(),
+            DirectoryPackOptions::production(),
+        )
+        .unwrap()
+        {
+            super::DirectoryEncodingAttempt::Packed(packed) => packed,
+            super::DirectoryEncodingAttempt::BatchTooLarge => {
+                panic!("compressed bytes should fit while declared decode size is unsafe")
+            }
+        };
+
+        let error = super::lookup_directory_state(
+            std::slice::from_ref(&packed.reference),
+            &id,
+            |_, range: Range<u64>| {
+                Ok(bytes
+                    [usize::try_from(range.start).unwrap()..usize::try_from(range.end).unwrap()]
+                    .to_vec())
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("decoded") || error.contains("unsafe"),
+            "{error}"
         );
     }
 
