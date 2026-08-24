@@ -48,18 +48,14 @@ const SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES: usize = 4;
 /// the PQ/graph/segment build entirely while preserving atomic multi-cell
 /// visibility. Reads double-collect lane heads and union only committed runs.
 ///
-/// The flush thresholds are a **memory-safety cap**, not an eager build trigger:
-/// the un-flushed tail is materialized into segments by the SINGLE build that
-/// [`crate::BorsukIndex::compact`] (or an explicit [`crate::BorsukIndex::flush`])
-/// runs — compaction consumes the tail records directly, so the expensive
-/// per-record encode (Parquet, dense sidecar, graph, PQ, cell clustering) happens
-/// exactly once between ingest and the first compaction rather than twice. Only a
-/// long streaming workload that accumulates past a local cap spills complete
-/// transactions touching the hot logical cell into intermediate L0 segments.
-/// A separate collection ceiling is divided across modalities and drains a
-/// modality only when many individually cold cells would otherwise accumulate
-/// an unbounded aggregate tail. Disable the WAL explicitly for the classic
-/// synchronous segment-per-`add` behavior.
+/// The flush thresholds are a **memory-safety cap**, not foreground build
+/// triggers. Leased background maintenance materializes a tail that crosses a
+/// threshold into bounded L0 segments; explicit [`crate::BorsukIndex::flush`]
+/// does the same on demand. When the tail remains below the cap,
+/// [`crate::BorsukIndex::compact`] can consume it directly in the consolidation
+/// build. A separate collection ceiling is divided across modalities so many
+/// cold cells cannot accumulate one local threshold each. Disable the WAL
+/// explicitly for the classic synchronous segment-per-`add` behavior.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WalConfig {
     /// Whether the write-ahead log is active for this index.

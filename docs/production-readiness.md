@@ -45,12 +45,12 @@ guarantees and the multi-node/bring-your-own-bucket deployment story are
 documented in [consistency.md](consistency.md) and pinned by
 `crates/borsuk/tests/consistency.rs`.
 
-If independent hot cells cross their automatic flush thresholds together, only
-the background materialization attempts contend on `CURRENT`. The losing
-handle refreshes the winning base and leaves its already-committed transaction
-visible in the cell WAL for a later flush; `add`/`delete` does not fail after
-its durability point. Explicit maintenance still surfaces catalog CAS
-conflicts.
+If independent hot cells cross their flush thresholds together, foreground
+`add`/`delete` calls remain durable positioned-log appends and do not inherit
+segment construction. Leased background materialization owns the collection as
+one primary-plus-named unit. A benign catalog CAS loss refreshes the winning
+base and leaves the committed transaction visible for a later pass instead of
+starving compaction, purge, or GC.
 
 Caller-supplied strict insert-only IDs use 4,096 fixed, routing-independent
 claim shards packed into 22 coordination pages. Writers acquire their
@@ -109,9 +109,9 @@ Expired reservations are removed before GC detaches unrooted bundles, and crash
 debris is reclaimable at the configured age without a collection-wide one-hour
 floor. Retained materializing manifests keep consumed descriptors, payloads,
 and metadata references for the configured post-obsolescence window. Consumed transactions are CAS-rebased away after
-every modality has materialized them. Each shard requests cooperative
-materialization at eight active commits and refuses admission at 64 combined
-reservations and commits. Commits are embedded in the mutable HEAD, so failed
+every modality has materialized them. Leased background maintenance uses the
+configured collection WAL thresholds, while each shard refuses admission at 64
+combined reservations and commits. Commits are embedded in the mutable HEAD, so failed
 and successful rebases create no immutable root-history objects.
 
 The suite covers:

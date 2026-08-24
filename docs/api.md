@@ -1290,9 +1290,13 @@ from the live membership automatically.
 
 ## Coordinated Background Maintenance
 
-Incremental maintenance, compaction, purge, and obsolete-object GC can run in the
-background and be shared across several processes that open the same object-store
-index, without any of them duplicating work or corrupting state.
+WAL materialization, incremental maintenance, compaction, purge, and
+obsolete-object GC can run in the background and be shared across several
+processes that open the same object-store index, without any of them duplicating
+work or corrupting state. Sustained WAL-enabled writes must run this maintenance
+loop (or call `run_maintenance_once` from an external scheduler): foreground
+writes normally stop after the durable positioned-log append, while a completely
+full positioned head retains an emergency bounded drain as a safety valve.
 
 `BorsukIndex::run_maintenance_once(&MaintenanceConfig)` runs one pass: it reloads
 the current manifest, writes this instance's heartbeat, learns the live
@@ -1312,19 +1316,22 @@ Coordination uses two families of small objects under `maintenance/`:
   with a create-if-absent put; a healthy instance reclaims a lease once its owner
   stops heartbeating and the lease expires.
 
-Compaction, purge, and GC are sharded by hashing the *unit key* across the live
-membership and guarded by a lease, so N instances split the load and a healthy
-instance takes over a dead one's share. Incremental split/merge is finer-grained:
+WAL materialization, compaction, purge, and GC are sharded by hashing the *unit
+key* across the live membership and guarded by a lease, so N instances split the
+load and a healthy instance takes over a dead one's share. One collection-root
+materialization lease covers primary and named modalities together. Incremental
+split/merge is finer-grained:
 it shards *per segment* and needs no lease, because its rebase-safe delta publish
 lets every node compact its own disjoint bubbles at the same time (see
 [Incremental Maintenance](#incremental-maintenance)).
 Leases only avoid *duplicated* work — correctness still rests on the conditional
 `CURRENT` compare-and-swap every publish performs, so a lease race is at worst
 wasted effort, never corruption. `MaintenanceConfig` gates which kinds this
-instance may run (`incremental`, `compaction`, `garbage_collection`, `purge`;
-incremental split/merge is on by default) and sets the `lease_ttl`;
+instance may run (`materialization`, `incremental`, `compaction`,
+`garbage_collection`, `purge`; all are on by default) and sets the `lease_ttl`.
 `MaintenanceReport` records the live instance count, this instance's rank, what
-it ran, and how many units it skipped due to contention.
+it ran, whether materialization is waiting for compaction capacity, and how many
+units it skipped due to contention.
 
 ## Distance metrics
 

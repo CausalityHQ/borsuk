@@ -38,6 +38,10 @@ pub struct MaintenanceConfig {
     /// considered dead once its heartbeat is older than this, and its lease can
     /// be reclaimed.
     pub lease_ttl: Duration,
+    /// Whether this instance may materialize the durable positioned WAL tail.
+    /// Foreground writes do not perform threshold-driven materialization; only
+    /// a completely full positioned head may force an emergency bounded drain.
+    pub materialization: bool,
     /// Whether this instance is eligible to run incremental split/merge
     /// maintenance (SPFresh/LIRE-style local rebalancing).
     pub incremental: bool,
@@ -54,6 +58,7 @@ impl Default for MaintenanceConfig {
         Self {
             instance_id: fallback_instance_id(),
             lease_ttl: DEFAULT_MAINTENANCE_LEASE_TTL,
+            materialization: true,
             incremental: true,
             compaction: true,
             garbage_collection: true,
@@ -80,6 +85,12 @@ pub struct MaintenanceReport {
     pub active_instances: usize,
     /// This instance's rank in the sorted live membership (0-based).
     pub instance_rank: usize,
+    /// Whether this pass materialized a durable WAL frontier.
+    pub materialized: bool,
+    /// Whether materialization was deferred until compaction opens global-delta
+    /// capacity. This is not an error; another leased unit or instance may own
+    /// the required compaction.
+    pub materialization_deferred: bool,
     /// Whether this instance ran an incremental split/merge pass this cycle.
     pub incremental: bool,
     /// Whether this instance ran a compaction pass this cycle.

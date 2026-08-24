@@ -6315,13 +6315,6 @@ impl BorsukIndex {
             return Ok(());
         }
         self.finish_pending_collection_claims()?;
-        // Enforce an already-reached memory-safety cap before starting the next
-        // logical mutation. Maintenance can still fail here without creating
-        // the ambiguous result of reporting failure after the new positioned
-        // transaction has durably committed.
-        let flush_span = crate::build_timing::span(crate::build_timing::Phase::AutoFlush);
-        self.maybe_flush_wal()?;
-        drop(flush_span);
         let schema_fingerprint = collection_schema_fingerprint(&self.manifest);
         if self.collection_snapshot.is_none() {
             return Err(BorsukError::InvalidStorage(
@@ -9313,9 +9306,6 @@ impl BorsukIndex {
             Some(bm25_stats_delta),
             &requests_before,
         )?;
-        if self.active_collection_transaction.is_none() {
-            self.maybe_flush_wal()?;
-        }
         Ok((
             DeleteReport {
                 ids_submitted,
@@ -9532,10 +9522,14 @@ impl BorsukIndex {
 
     /// Spawn a background thread that opens its own handle on `uri` and runs
     /// [`BorsukIndex::run_maintenance_once`] every `interval` until the returned
-    /// [`MaintenanceHandle`] is stopped or dropped. Coordination with other
-    /// instances is automatic through the S3 membership and lease objects. Errors
-    /// in a pass are swallowed and retried on the next tick so a transient storage
-    /// hiccup does not kill the loop.
+    /// [`MaintenanceHandle`] is stopped or dropped. This is the owner of WAL
+    /// materialization; foreground writes normally only append the durable,
+    /// immediately visible positioned log and therefore do not inherit
+    /// threshold-driven indexing CPU or S3 latency. A writer may still perform
+    /// an emergency bounded drain when the positioned head is completely full.
+    /// Coordination with other instances is automatic through the S3
+    /// membership and lease objects. Errors in a pass are swallowed and retried
+    /// on the next tick so a transient storage hiccup does not kill the loop.
     pub fn start_background_maintenance(
         uri: impl Into<String>,
         open_options: OpenOptions,
@@ -9564,11 +9558,12 @@ impl BorsukIndex {
         MaintenanceHandle::new(stop, join)
     }
 
-    /// Run one coordinated maintenance pass, sharing compaction, purge, and GC
-    /// with any other live instances of this index through S3 membership and lease
-    /// objects. This instance heartbeats, learns the live membership, and runs
-    /// only the maintenance units in its shard, each guarded by a lease so two
-    /// instances do not duplicate the same work. Safe to call from a scheduler.
+    /// Run one coordinated maintenance pass, sharing WAL materialization,
+    /// compaction, purge, and GC with any other live instances of this index
+    /// through S3 membership and lease objects. This instance heartbeats, learns
+    /// the live membership, and runs only the maintenance units in its shard,
+    /// each guarded by a lease so two instances do not duplicate the same work.
+    /// Safe to call from a scheduler.
     pub fn run_maintenance_once(
         &mut self,
         config: &MaintenanceConfig,
@@ -9591,6 +9586,19 @@ impl BorsukIndex {
             ..MaintenanceReport::default()
         };
 
+        self.run_maintenance_units(config, rank, count, ttl_ms, &mut report, true)?;
+        Ok(report)
+    }
+
+    fn run_maintenance_units(
+        &mut self,
+        config: &MaintenanceConfig,
+        rank: usize,
+        count: usize,
+        ttl_ms: i64,
+        report: &mut MaintenanceReport,
+        materialize_collection: bool,
+    ) -> Result<()> {
         // Each maintenance kind is one sharded, leased unit of work. With a single
         // live instance it runs all of them; with several, the S3 leases and shard
         // hashing spread the work and let a healthy instance take over a dead one's
@@ -9599,8 +9607,44 @@ impl BorsukIndex {
         // runs it in parallel on its own disjoint slice of bubbles — no single
         // "who compacts" lease. Rebase-safe publishing composes the concurrent
         // manifest updates.
+        let should_materialize = materialize_collection
+            && config.materialization
+            && maintenance::owns_shard("auto-flush", rank, count)
+            && self.collection_wal_tail_crosses_flush_threshold();
+        let mut materialization_deferred = false;
+        if should_materialize {
+            report.materialized |=
+                self.run_leased_unit(config, "auto-flush", ttl_ms, report, |index| {
+                    if !index.collection_wal_tail_crosses_flush_threshold() {
+                        return Ok(false);
+                    }
+                    let _span = crate::build_timing::span(crate::build_timing::Phase::AutoFlush);
+                    match index.flush() {
+                        Ok(()) => Ok(true),
+                        Err(BorsukError::GlobalDeltaCapacityExceeded { .. }) => {
+                            // A full immutable global-delta plane must be
+                            // consolidated before another WAL suffix can be
+                            // installed. Continue the pass so whichever instance
+                            // owns compaction can open capacity; compact_primary
+                            // owns the consolidate-then-drain recovery sequence.
+                            materialization_deferred = true;
+                            Ok(false)
+                        }
+                        Err(BorsukError::ConcurrentModification { .. }) => {
+                            // The lease excludes another auto-flush worker, not
+                            // an explicit flush/compaction or a different leased
+                            // maintenance unit. Losing that benign publication
+                            // race must not starve the rest of this pass.
+                            index.reload_mutation_snapshot_after_manifest_change()?;
+                            Ok(false)
+                        }
+                        Err(error) => Err(error),
+                    }
+                })?;
+        }
+        report.materialization_deferred |= materialization_deferred;
         if config.incremental {
-            report.incremental = self
+            report.incremental |= self
                 .run_incremental_maintenance_sharded(
                     IncrementalMaintenanceOptions::default(),
                     Some((rank, count)),
@@ -9608,25 +9652,24 @@ impl BorsukIndex {
                 .published;
         }
         if config.compaction && maintenance::owns_shard("compact", rank, count) {
-            let compacted =
-                self.run_leased_unit(config, "compact", ttl_ms, &mut report, |index| {
-                    Ok(index
-                        .compact_primary(CompactionOptions::default())?
-                        .compacted)
-                })?;
-            report.compacted = compacted;
+            let compacted = self.run_leased_unit(config, "compact", ttl_ms, report, |index| {
+                Ok(index
+                    .compact_primary(CompactionOptions::default())?
+                    .compacted)
+            })?;
+            report.compacted |= compacted;
         }
         if config.purge
             && self.manifest.tombstone_id_count > 0
             && maintenance::owns_shard("purge", rank, count)
         {
-            let purged = self.run_leased_unit(config, "purge", ttl_ms, &mut report, |index| {
+            let purged = self.run_leased_unit(config, "purge", ttl_ms, report, |index| {
                 Ok(index.purge_primary_with_report()?.published)
             })?;
-            report.purged = purged;
+            report.purged |= purged;
         }
         if config.garbage_collection && maintenance::owns_shard("gc", rank, count) {
-            let collected = self.run_leased_unit(config, "gc", ttl_ms, &mut report, |index| {
+            let collected = self.run_leased_unit(config, "gc", ttl_ms, report, |index| {
                 let gc = index.gc_obsolete_segments_primary(
                     GarbageCollectionOptions {
                         dry_run: false,
@@ -9636,12 +9679,12 @@ impl BorsukIndex {
                 )?;
                 Ok(!gc.dry_run)
             })?;
-            report.garbage_collected = collected;
+            report.garbage_collected |= collected;
         }
         for child in self.named.values_mut() {
-            child.run_maintenance_once(config)?;
+            child.run_maintenance_units(config, rank, count, ttl_ms, report, false)?;
         }
-        Ok(report)
+        Ok(())
     }
 
     /// Acquire the lease for `key`, run `work`, and release the lease. Returns the
@@ -12087,8 +12130,8 @@ impl BorsukIndex {
 
         // Mutation-log fast path: encode immutable typed payloads and stage one
         // positioned transaction without swapping the collection manifest. The
-        // tail is flushed into a real segment once it crosses the configured
-        // threshold (checked below).
+        // tail is flushed into a real segment by leased background maintenance
+        // once it crosses the configured threshold.
         //
         // The WAL codec preserves forced storage and every named payload, so all
         // normal writes share the append-only path. Sparse/text reads union the
@@ -12121,11 +12164,6 @@ impl BorsukIndex {
                     // second insert.
                     self.cell_wal_claim_checkpoint.extend(claims.finish());
                 }
-            }
-            if self.active_collection_transaction.is_none() {
-                let flush_span = crate::build_timing::span(crate::build_timing::Phase::AutoFlush);
-                self.maybe_flush_wal()?;
-                drop(flush_span);
             }
             report.requests = self.storage.request_counts().delta(&requests_before);
             observability::record_add_report(&span, &report, self.manifest.version);
@@ -13023,21 +13061,9 @@ impl BorsukIndex {
         Ok(report)
     }
 
-    /// Flush the WAL tail into real segments when it crosses either threshold.
-    fn maybe_flush_wal(&mut self) -> Result<()> {
-        self.maybe_flush_wal_with_aggregate_cap(
-            self.manifest.wal_config.collection_flush_threshold_bytes,
-        )
-        .map(|_| ())
-    }
-
-    /// Returns whether this handle successfully published maintenance. A
-    /// concurrent winner can consume the same tail while this handle refreshes;
-    /// that is a successful foreground write, but it must not make every writer
-    /// race to prune root truth or republish consumed-marker metadata.
-    fn maybe_flush_wal_with_aggregate_cap(&mut self, aggregate_byte_cap: u64) -> Result<bool> {
+    fn wal_tail_crosses_flush_threshold(&self, aggregate_byte_cap: u64) -> bool {
         if !self.manifest.wal_config.enabled {
-            return Ok(false);
+            return false;
         }
         let threshold = &self.manifest.wal_config;
         let mut cell_totals = BTreeMap::<LogicalCellId, (usize, usize, usize, u64)>::new();
@@ -13098,38 +13124,16 @@ impl BorsukIndex {
             .map(|run| run.byte_len)
             .fold(0_u64, u64::saturating_add);
         let aggregate_crossed = aggregate_byte_cap > 0 && aggregate_bytes >= aggregate_byte_cap;
-        let (flush_attempted, flush_result) =
-            if legacy_crossed || aggregate_crossed || !crossed_cells.is_empty() {
-                // Positioned source slots are reclaimed only after every modality
-                // has materialized one collection-wide prefix. Until row-level
-                // routed bundles land, a selective primary-only flush would either
-                // leak bounded head capacity or hide a named projection.
-                (true, self.flush())
-            } else {
-                (false, Ok(()))
-            };
-        match flush_result {
-            Ok(()) => return Ok(flush_attempted),
-            Err(BorsukError::ConcurrentModification { .. }) => {
-                // The public mutation committed before automatic maintenance
-                // began. A concurrent cell flush may win the separate catalog
-                // CAS; that must not turn an already-durable add/delete into a
-                // reported failure. Refresh against the winning base and leave
-                // any still-unconsumed transaction in its lane for the next
-                // threshold check. Explicit flush() continues to surface CAS
-                // conflicts to maintenance callers.
-                self.reload_mutation_snapshot_after_manifest_change()?;
-            }
-            Err(BorsukError::GlobalDeltaCapacityExceeded { .. }) => {
-                // The mutation committed before automatic maintenance began.
-                // Keep it visible in the bounded durable WAL and let explicit or
-                // background compaction publish a fresh corpus-wide base. A
-                // foreground add must not inherit a full-index rebuild cliff.
-                return Ok(false);
-            }
-            Err(error) => return Err(error),
-        }
-        Ok(false)
+        legacy_crossed || aggregate_crossed || !crossed_cells.is_empty()
+    }
+
+    fn collection_wal_tail_crosses_flush_threshold(&self) -> bool {
+        self.wal_tail_crosses_flush_threshold(
+            self.manifest.wal_config.collection_flush_threshold_bytes,
+        ) || self
+            .named
+            .values()
+            .any(Self::collection_wal_tail_crosses_flush_threshold)
     }
 
     /// Force the accumulated WAL tail into real, indexed segments and clear the
@@ -37645,6 +37649,7 @@ mod tests {
         let config = MaintenanceConfig {
             instance_id: "owner-a".to_string(),
             lease_ttl: Duration::from_millis(300),
+            materialization: false,
             incremental: false,
             compaction: false,
             garbage_collection: false,
@@ -37690,6 +37695,7 @@ mod tests {
         let config = MaintenanceConfig {
             instance_id: "panic-owner".to_string(),
             lease_ttl: Duration::from_millis(300),
+            materialization: false,
             incremental: false,
             compaction: false,
             garbage_collection: false,
@@ -37729,6 +37735,7 @@ mod tests {
         let config = MaintenanceConfig {
             instance_id: "fresh-clock-owner".to_string(),
             lease_ttl: Duration::from_millis(90),
+            materialization: false,
             incremental: false,
             compaction: false,
             garbage_collection: false,
@@ -38942,7 +38949,7 @@ mod tests {
     }
 
     #[test]
-    fn public_positioned_add_enforces_the_configured_tail_run_cap() {
+    fn public_positioned_add_defers_thresholded_tail_to_maintenance() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
         let mut index = BorsukIndex::create_with_wal(
@@ -38980,8 +38987,79 @@ mod tests {
         index
             .add(vec![VectorRecord::new("third", vec![3.0, 0.0])])
             .unwrap();
-        assert_eq!(index.cell_wal_snapshot.len(), 1);
+        assert_eq!(index.cell_wal_snapshot.len(), 3);
+        assert!(index.manifest.segments.is_empty());
+
+        let mut config = MaintenanceConfig::new("materializer");
+        config.incremental = false;
+        config.compaction = false;
+        config.garbage_collection = false;
+        config.purge = false;
+        assert!(index.run_maintenance_once(&config).unwrap().materialized);
+        assert!(index.cell_wal_snapshot.is_empty());
         assert_eq!(index.manifest.segments.len(), 1);
+    }
+
+    #[test]
+    fn collection_maintenance_materializes_a_named_only_threshold_under_the_root_lease() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 2,
+                segment_max_vectors: 8,
+                ram_budget_bytes: None,
+                text: false,
+                named_vectors: BTreeMap::from([(
+                    "image".to_string(),
+                    VectorSpec {
+                        dimensions: 3,
+                        metric: VectorMetric::Euclidean,
+                        kind: VectorKind::Dense,
+                        element_type: crate::VectorElementType::Float32,
+                    },
+                )]),
+            },
+            WalConfig {
+                flush_threshold_runs: 1,
+                flush_threshold_records: usize::MAX,
+                flush_threshold_bytes: u64::MAX,
+                collection_flush_threshold_bytes: u64::MAX,
+                enabled: true,
+            },
+        )
+        .unwrap();
+        index
+            .add(vec![
+                VectorRecord::new("named-heavy", vec![1.0, 0.0])
+                    .with_named_vector("image", vec![0.0, 1.0, 0.0]),
+            ])
+            .unwrap();
+
+        // Model recovery after the primary manifest published but before the
+        // named child materialized. Only the collection-root maintenance lease
+        // may finish this cross-modality transaction.
+        index.flush_wal().unwrap();
+        let root_collection = index.collection_snapshot.clone();
+        for child in index.named.values_mut() {
+            child.collection_snapshot.clone_from(&root_collection);
+        }
+        index.reload_positioned_snapshot().unwrap();
+        assert!(index.cell_wal_snapshot.is_empty());
+        assert_eq!(index.named["image"].cell_wal_snapshot.len(), 1);
+
+        let mut config = MaintenanceConfig::new("materializer");
+        config.incremental = false;
+        config.compaction = false;
+        config.garbage_collection = false;
+        config.purge = false;
+        let report = index.run_maintenance_once(&config).unwrap();
+
+        assert!(report.materialized, "{report:?}");
+        assert!(index.cell_wal_snapshot.is_empty());
+        assert!(index.named["image"].cell_wal_snapshot.is_empty());
     }
 
     #[test]
@@ -41971,6 +42049,68 @@ mod tests {
         );
         assert_eq!(
             index.get_vector("bounded-delta-overflow").unwrap(),
+            Some(vec![-1_000.0; 8])
+        );
+    }
+
+    #[test]
+    fn maintenance_compacts_full_global_delta_before_draining_wal_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create_with_wal(
+            IndexConfig {
+                uri,
+                metric: VectorMetric::Euclidean,
+                dimensions: 8,
+                segment_max_vectors: 32,
+                ram_budget_bytes: Some(512 * 1024 * 1024),
+                text: false,
+                named_vectors: Default::default(),
+            },
+            WalConfig {
+                flush_threshold_runs: 1,
+                ..WalConfig::default()
+            },
+        )
+        .unwrap();
+        index
+            .add(
+                (0..32)
+                    .map(|row| {
+                        VectorRecord::new(format!("maintenance-base-{row}"), vec![row as f32; 8])
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        for row in 0..MAX_GLOBAL_DELTA_SEGMENTS {
+            index
+                .add(vec![VectorRecord::new(
+                    format!("maintenance-delta-{row}"),
+                    vec![-(row as f32) - 1.0; 8],
+                )])
+                .unwrap();
+            index.flush().unwrap();
+        }
+        index
+            .add(vec![VectorRecord::new(
+                "maintenance-overflow",
+                vec![-1_000.0; 8],
+            )])
+            .unwrap();
+
+        let mut config = MaintenanceConfig::new("materializer");
+        config.incremental = false;
+        config.purge = false;
+        config.garbage_collection = false;
+        let report = index.run_maintenance_once(&config).unwrap();
+
+        assert!(report.compacted, "{report:?}");
+        assert!(report.materialization_deferred, "{report:?}");
+        assert!(index.manifest.wal_frontier_is_empty());
+        assert_eq!(
+            index.get_vector("maintenance-overflow").unwrap(),
             Some(vec![-1_000.0; 8])
         );
     }

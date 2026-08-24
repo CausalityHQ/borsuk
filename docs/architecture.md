@@ -352,9 +352,10 @@ descriptors authorized by their embedded commits. Prepared or torn
 transactions therefore remain invisible, while open/refresh coordination does
 not scale with logical cells × lanes. The standalone `CellWalStore` retains
 lane heads and inner commit markers for its lower-level protocol, but ordinary
-collection mutation does not publish that redundant frontier. Each head requests cooperative
-materialization at eight active transactions and rejects admission at 64, so
-many long-lived writers cannot make root discovery unbounded. Strict insert-only
+collection mutation does not publish that redundant frontier. Leased background
+maintenance materializes the collection when its configured WAL run, row, or
+byte threshold is crossed; each head rejects admission at 64 pending envelopes,
+so many long-lived writers cannot make root discovery unbounded. Strict insert-only
 uniqueness hashes IDs onto 4,096 fixed shards packed into 22 coordination
 pages. Explicit-ID batches acquire the deduplicated page paths in
 ascending order. Contention releases only the caller's version-fenced partial

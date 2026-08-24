@@ -16,9 +16,9 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, BorsukIndex, BuildConfig, CacheExecutionPolicy, CompactionOptions,
-    GarbageCollectionOptions, IndexConfig, LeafCapability, LeafMode, Manifest, OpenOptions,
-    PositionedLogWriter, PositionedMutationModality, PositionedMutationPayloadInput, QuantizerKind,
-    RebuildOptions, RecallGuarantee, RequestCounts, SearchMode, SearchOptions,
+    GarbageCollectionOptions, IndexConfig, LeafCapability, LeafMode, MaintenanceConfig, Manifest,
+    OpenOptions, PositionedLogWriter, PositionedMutationModality, PositionedMutationPayloadInput,
+    QuantizerKind, RebuildOptions, RecallGuarantee, RequestCounts, SearchMode, SearchOptions,
     SearchTerminationReason, SegmentSummary, VectorElementType, VectorKind, VectorMetric,
     VectorRecord, VectorSpec, WalConfig, leaf_mode_names, vector_records_to_parquet,
 };
@@ -471,7 +471,7 @@ fn concurrent_cell_wal_adds_do_not_contend_on_current() {
 }
 
 #[test]
-fn concurrent_hot_cells_compose_automatic_flushes_without_failing_add() {
+fn concurrent_threshold_crossers_remain_durable_without_foreground_materialization() {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let setup_store: Arc<dyn ObjectStore> =
         Arc::new(common::FaultInjectingObjectStore::new(Arc::clone(&inner)));
@@ -507,24 +507,15 @@ fn concurrent_hot_cells_compose_automatic_flushes_without_failing_add() {
     assert_eq!(setup.manifest().logical_cells().len(), 1);
     drop(setup);
 
-    let current_barrier = Arc::new(std::sync::Barrier::new(2));
     let writers = [
         ("left", [0.1_f32, 0.2_f32]),
         ("right", [299.8_f32, 299.9_f32]),
     ]
     .map(|(prefix, xs)| {
         let inner = Arc::clone(&inner);
-        let current_barrier = Arc::clone(&current_barrier);
         std::thread::spawn(move || {
-            let store: Arc<dyn ObjectStore> = Arc::new(
-                common::FaultInjectingObjectStore::new(inner).with_put_barrier(
-                    current_barrier,
-                    |operation, path| {
-                        operation == common::StoreOperation::Put
-                            && path.as_ref() == "collection/CURRENT"
-                    },
-                ),
-            );
+            let store: Arc<dyn ObjectStore> =
+                Arc::new(common::FaultInjectingObjectStore::new(inner));
             let mut writer =
                 BorsukIndex::open_with_object_store(store, "memory:///racing-cell-flushes")
                     .unwrap();
@@ -541,13 +532,118 @@ fn concurrent_hot_cells_compose_automatic_flushes_without_failing_add() {
     let outcomes = writers.map(|writer| writer.join().unwrap());
     assert!(
         outcomes.iter().all(Result::is_ok),
-        "independent hot-cell automatic flushes must compose: {outcomes:?}"
+        "independent foreground WAL appends must compose: {outcomes:?}"
     );
 
     let reopened =
         BorsukIndex::open_with_object_store(Arc::clone(&inner), "memory:///racing-cell-flushes")
             .unwrap();
     for id in ["left-0", "left-1", "right-0", "right-1"] {
+        assert!(reopened.get_vector(id).unwrap().is_some(), "missing {id}");
+    }
+}
+
+#[test]
+fn foreground_threshold_crossers_defer_one_leased_maintenance_flush() {
+    let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let setup_store: Arc<dyn ObjectStore> =
+        Arc::new(common::FaultInjectingObjectStore::new(Arc::clone(&inner)));
+    let mut setup = BorsukIndex::create_with_object_store_and_wal(
+        setup_store,
+        IndexConfig {
+            uri: "memory:///coalesced-auto-flush".to_string(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 8,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        },
+        WalConfig {
+            enabled: true,
+            flush_threshold_runs: 2,
+            flush_threshold_records: usize::MAX,
+            flush_threshold_bytes: u64::MAX,
+            collection_flush_threshold_bytes: u64::MAX,
+        },
+    )
+    .unwrap();
+    setup
+        .add(vec![VectorRecord::new("base-0", vec![0.0, 0.0])])
+        .unwrap();
+    setup
+        .add(vec![VectorRecord::new("base-1", vec![1.0, 0.0])])
+        .unwrap();
+    drop(setup);
+
+    let (store, operations) = common::FaultInjectingObjectStore::new(inner).with_operation_log();
+    let store: Arc<dyn ObjectStore> = Arc::new(store);
+    let writers = [
+        BorsukIndex::open_with_object_store(Arc::clone(&store), "memory:///coalesced-auto-flush")
+            .unwrap(),
+        BorsukIndex::open_with_object_store(Arc::clone(&store), "memory:///coalesced-auto-flush")
+            .unwrap(),
+    ];
+    let starts = Arc::new(std::sync::Barrier::new(2));
+    let writers = writers
+        .into_iter()
+        .zip([("left", 2.0_f32), ("right", 3.0_f32)])
+        .map(|(mut writer, (id, x))| {
+            let starts = Arc::clone(&starts);
+            std::thread::spawn(move || {
+                starts.wait();
+                writer.add(vec![VectorRecord::new(id, vec![x, 0.0])])
+            })
+        })
+        .collect::<Vec<_>>();
+    let outcomes = writers
+        .into_iter()
+        .map(|writer| writer.join().unwrap())
+        .collect::<Vec<_>>();
+    assert!(outcomes.iter().all(Result::is_ok), "{outcomes:?}");
+
+    let foreground_segment_puts = operations.count_matching(|operation, path| {
+        operation == common::StoreOperation::Put && path.starts_with("segments/L0/")
+    });
+    assert_eq!(
+        foreground_segment_puts, 0,
+        "durable foreground writes must not perform materialization"
+    );
+    let maintainers = ["materializer-left", "materializer-right"].map(|instance_id| {
+        let maintainer = BorsukIndex::open_with_object_store(
+            Arc::clone(&store),
+            "memory:///coalesced-auto-flush",
+        )
+        .unwrap();
+        (maintainer, instance_id)
+    });
+    let starts = Arc::new(std::sync::Barrier::new(2));
+    let maintainers = maintainers.map(|(mut maintainer, instance_id)| {
+        let starts = Arc::clone(&starts);
+        std::thread::spawn(move || {
+            let mut config = MaintenanceConfig::new(instance_id);
+            config.incremental = false;
+            config.compaction = false;
+            config.garbage_collection = false;
+            config.purge = false;
+            starts.wait();
+            maintainer.run_maintenance_once(&config)
+        })
+    });
+    let reports = maintainers.map(|maintainer| maintainer.join().unwrap().unwrap());
+    assert_eq!(
+        reports.iter().filter(|report| report.materialized).count(),
+        1,
+        "{reports:?}"
+    );
+    let maintenance_segment_puts = operations.count_matching(|operation, path| {
+        operation == common::StoreOperation::Put && path.starts_with("segments/L0/")
+    });
+    assert_eq!(maintenance_segment_puts, 1);
+
+    let reopened =
+        BorsukIndex::open_with_object_store(store, "memory:///coalesced-auto-flush").unwrap();
+    for id in ["base-0", "base-1", "left", "right"] {
         assert!(reopened.get_vector(id).unwrap().is_some(), "missing {id}");
     }
 }
