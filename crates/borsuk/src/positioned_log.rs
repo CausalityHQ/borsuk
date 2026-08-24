@@ -673,6 +673,9 @@ pub struct CommittedPositionedMutation {
     pub put_payload_bytes: u64,
     /// Backing object-store requests issued by this append call.
     pub requests: RequestCounts,
+    /// True when this acknowledgement resolved an already durable transaction
+    /// rather than publishing a new shard-head entry.
+    pub replayed: bool,
 }
 
 impl PartialEq for CommittedPositionedMutation {
@@ -1223,6 +1226,7 @@ impl PositionedLogWriter {
                     reference,
                     storage.request_counts(),
                     storage.put_payload_bytes(),
+                    true,
                 );
             }
             let sequence = match pinned.head.durable_sequence.checked_add(1) {
@@ -1334,6 +1338,7 @@ impl PositionedLogWriter {
                         &reference,
                         storage.request_counts(),
                         storage.put_payload_bytes(),
+                        false,
                     );
                 }
                 Err(
@@ -1368,6 +1373,7 @@ impl PositionedLogWriter {
                             &existing,
                             storage.request_counts(),
                             storage.put_payload_bytes(),
+                            true,
                         );
                     }
                     reject_digest_conflict(
@@ -2172,6 +2178,7 @@ fn committed_from_reference(
     reference: &PositionedCommitReference,
     requests: RequestCounts,
     put_payload_bytes: u64,
+    replayed: bool,
 ) -> Result<CommittedPositionedMutation> {
     Ok(CommittedPositionedMutation {
         position: CommitSourcePosition::new(source_epoch, shard, reference.sequence)?,
@@ -2182,6 +2189,7 @@ fn committed_from_reference(
         encoded_bytes: reference.encoded_bytes,
         put_payload_bytes,
         requests,
+        replayed,
     })
 }
 

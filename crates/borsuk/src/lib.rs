@@ -119,6 +119,9 @@ pub use logical_cell_catalog::train_logical_cell_centroids;
 
 /// Maximum CPU worker threads selected by the automatic small-runtime policy.
 pub const DEFAULT_BUILD_THREADS: usize = 4;
+/// Independent positioned-log shards available to one joined offline bulk-load
+/// prefix before it must be materialized.
+pub const BULK_LOAD_SOURCE_SHARDS: usize = positioned_log::SOURCE_SHARD_COUNT as usize;
 /// Process-wide build/query CPU worker override. Values must be in `1..=64`;
 /// missing or invalid values use the automatic policy: one fewer than the
 /// available CPUs, clamped to `1..=DEFAULT_BUILD_THREADS`.

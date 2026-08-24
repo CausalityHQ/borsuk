@@ -414,6 +414,58 @@ fn cell_wal_tombstone_run_count(transactions: &[CommittedCellWalTransaction]) ->
         .count()
 }
 
+fn unique_id_bulk_load_transaction_id(source_shard: u8, ids: &[String]) -> Result<String> {
+    if source_shard >= crate::positioned_log::SOURCE_SHARD_COUNT {
+        return Err(BorsukError::InvalidStorage(format!(
+            "unique-id bulk-load source shard {source_shard} is outside 0..{}",
+            crate::positioned_log::SOURCE_SHARD_COUNT
+        )));
+    }
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"borsuk-unique-id-bulk-load-v1\0");
+    for id in ids {
+        hasher.update(&(id.len() as u64).to_le_bytes());
+        hasher.update(id.as_bytes());
+    }
+    let batch_digest = hasher.finalize().to_hex();
+    for nonce in 0_u32..=u32::MAX {
+        let candidate = format!("bulk-{batch_digest}-{nonce}");
+        if blake3::hash(candidate.as_bytes()).as_bytes()[0]
+            % crate::positioned_log::SOURCE_SHARD_COUNT
+            == source_shard
+        {
+            return Ok(candidate);
+        }
+    }
+    Err(BorsukError::InvalidStorage(
+        "unique-id bulk-load transaction could not map to its requested source shard".to_string(),
+    ))
+}
+
+fn stamp_unique_id_bulk_load_records(
+    transaction_id: &str,
+    records: &mut [VectorRecord],
+) -> Result<()> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"borsuk-unique-id-bulk-load-mutation-writer-v1\0");
+    hasher.update(transaction_id.as_bytes());
+    let digest = hasher.finalize();
+    let mut writer = [0_u8; 16];
+    writer.copy_from_slice(&digest.as_bytes()[..16]);
+    for (ordinal, record) in records.iter_mut().enumerate() {
+        let hlc = u64::try_from(ordinal)
+            .ok()
+            .and_then(|ordinal| ordinal.checked_add(1))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "unique-id bulk-load mutation ordinal exceeds u64".to_string(),
+                )
+            })?;
+        CanonicalMutation::stamp_put(MutationVersion::from_parts(hlc, writer), record)?;
+    }
+    Ok(())
+}
+
 /// Below this many cells a flat centroid scan is already cheap, so the HNSW
 /// coarse quantizer stays off (building a graph would not pay for itself).
 const COARSE_QUANTIZER_MIN_CELLS: usize = 128;
@@ -6347,6 +6399,10 @@ impl BorsukIndex {
     }
 
     fn begin_collection_transaction(&mut self) -> Result<()> {
+        self.begin_collection_transaction_with_id(Uuid::new_v4().simple().to_string())
+    }
+
+    fn begin_collection_transaction_with_id(&mut self, transaction_id: String) -> Result<()> {
         if self.active_collection_transaction.is_some() {
             return Ok(());
         }
@@ -6358,7 +6414,7 @@ impl BorsukIndex {
             ));
         }
         let transaction = ActiveCollectionTransaction {
-            id: Uuid::new_v4().simple().to_string(),
+            id: transaction_id,
             schema_fingerprint,
             positioned: Arc::new(Mutex::new(Vec::new())),
             positioned_metadata: Arc::new(Mutex::new(BTreeMap::new())),
@@ -7149,6 +7205,9 @@ impl BorsukIndex {
     }
 
     fn push_positioned_overlay(target: &mut BorsukIndex, transaction: CommittedCellWalTransaction) {
+        if target.cell_wal_snapshot.contains(&transaction) {
+            return;
+        }
         target.cell_wal_snapshot.push(transaction);
         target
             .cell_wal_snapshot
@@ -8418,9 +8477,34 @@ impl BorsukIndex {
             Err(error) => return Err(error),
         };
         drop(commit_span);
-        let install_span = crate::build_timing::span(crate::build_timing::Phase::PositionedInstall);
-        self.install_committed_positioned_batch(&batch, &committed, tombstone_projections);
-        drop(install_span);
+        let replayed_materialized = if committed.replayed {
+            let collection = self.collection_storage.load_collection_snapshot()?;
+            let covered = collection.snapshot.positioned_source_epoch
+                == committed.position.source_epoch
+                && collection.snapshot.positioned_materialized_watermarks
+                    [usize::from(committed.position.shard)]
+                .sequence()
+                    >= committed.position.sequence;
+            let installed = self.collection_snapshot.as_ref().is_some_and(|installed| {
+                installed.snapshot.positioned_source_epoch == committed.position.source_epoch
+                    && installed.snapshot.positioned_materialized_watermarks
+                        [usize::from(committed.position.shard)]
+                    .sequence()
+                        >= committed.position.sequence
+            });
+            if covered && !installed {
+                self.refresh()?;
+            }
+            covered
+        } else {
+            false
+        };
+        if !replayed_materialized {
+            let install_span =
+                crate::build_timing::span(crate::build_timing::Phase::PositionedInstall);
+            self.install_committed_positioned_batch(&batch, &committed, tombstone_projections);
+            drop(install_span);
+        }
         let mut report = add_report_from_parts(
             0,
             0,
@@ -9199,14 +9283,17 @@ impl BorsukIndex {
     /// durability boundary, but deliberately skips online duplicate-claim and
     /// distributed mutation-tail coordination. The caller must exclusively own
     /// the offline build from collection creation through finalization, must
-    /// partition ids so every concurrent writer is disjoint, and must join all
-    /// writers before finalization. No online add, update, delete, or finalizer
-    /// may race that session. Use [`Self::add_vectors_with_ids`] whenever BORSUK
-    /// must enforce those conditions. This method rejects authoritative stable
-    /// finalization and mutation authority already observed by this handle; it
-    /// intentionally does not scan other writers' unmaterialized tails.
-    pub fn bulk_load_vectors_with_unique_ids(
+    /// partition ids so every concurrent writer is disjoint, assign each
+    /// pending batch a distinct `source_shard`, materialize the joined prefix
+    /// before reusing a shard, and join all writers before finalization. No
+    /// online add, update, delete, or finalizer may race that session. Use
+    /// [`Self::add_vectors_with_ids`] whenever BORSUK must enforce those
+    /// conditions. This method rejects authoritative stable finalization and
+    /// mutation authority already observed by this handle; it intentionally
+    /// does not scan other writers' unmaterialized tails.
+    pub fn bulk_load_vectors_with_unique_ids_on_source_shard(
         &mut self,
+        source_shard: u8,
         vectors: Vec<Vec<f32>>,
         ids: Vec<String>,
     ) -> Result<Vec<String>> {
@@ -9215,11 +9302,13 @@ impl BorsukIndex {
                 "unique-id bulk load cannot nest inside a collection transaction".to_string(),
             ));
         }
+        let transaction_id = unique_id_bulk_load_transaction_id(source_shard, &ids)?;
         self.with_mutation_report_scope(move |scoped| {
             let (_, _, authoritative_manifest) = scoped.load_latest_own_manifest()?;
             scoped.validate_unique_id_bulk_load_authority(&authoritative_manifest)?;
-            scoped.begin_collection_transaction()?;
-            let result = scoped.bulk_load_vectors_with_unique_ids_inner(vectors, ids);
+            scoped.begin_collection_transaction_with_id(transaction_id.clone())?;
+            let result =
+                scoped.bulk_load_vectors_with_unique_ids_inner(&transaction_id, vectors, ids);
             scoped
                 .finish_collection_transaction_value(result)
                 .map(|(ids, _)| ids)
@@ -9228,11 +9317,14 @@ impl BorsukIndex {
 
     fn bulk_load_vectors_with_unique_ids_inner(
         &mut self,
+        transaction_id: &str,
         vectors: Vec<Vec<f32>>,
         ids: Vec<String>,
     ) -> Result<Vec<String>> {
         self.validate_unique_id_bulk_load_authority(&self.manifest)?;
-        let records = records_from_ids_and_vectors(ids.clone(), vectors)?;
+        let mut records = records_from_ids_and_vectors(ids.clone(), vectors)?;
+        self.prepare_primary_records(&mut records)?;
+        stamp_unique_id_bulk_load_records(transaction_id, &mut records)?;
         let next_generated_id = next_generated_id_after_explicit_records(
             self.cell_wal_next_generated_id_floor()?,
             &records,

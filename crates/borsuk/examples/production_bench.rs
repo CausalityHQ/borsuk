@@ -18,8 +18,9 @@ use arrow_array::{
     UInt32Array, UInt64Array,
 };
 use borsuk::{
-    BACKING_GET_CONCURRENCY_ENV, BorsukIndex, BuildConfig, CPU_THREADS_ENV, CacheExecutionPolicy,
-    CompactionOptions, DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION, DEFAULT_LEAF_READ_WIDTH,
+    BACKING_GET_CONCURRENCY_ENV, BULK_LOAD_SOURCE_SHARDS, BorsukIndex, BuildConfig,
+    CPU_THREADS_ENV, CacheExecutionPolicy, CompactionOptions,
+    DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION, DEFAULT_LEAF_READ_WIDTH,
     DEFAULT_MAX_ACTIVE_SEARCHES, DEFAULT_MAX_INFLIGHT_LEAF_READS,
     DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS, DEFAULT_MAX_WAITING_SEARCHES, GarbageCollectionOptions,
     GarbageCollectionReport, GlobalPqLayout, GlobalScanCodec, IO_THREADS_ENV, IndexConfig,
@@ -631,6 +632,7 @@ struct BuildIngestReport {
     batches: usize,
     rows: usize,
     waves: usize,
+    materializations: usize,
     requests: RequestCounts,
     bytes_read: u64,
     bytes_written: u64,
@@ -638,7 +640,9 @@ struct BuildIngestReport {
 
 struct BuildIngestCoordinator {
     writers: Vec<BorsukIndex>,
-    pending: Vec<(usize, Vec<Vec<f32>>)>,
+    materializer: BorsukIndex,
+    pending: Vec<(u8, usize, Vec<Vec<f32>>)>,
+    batches_since_materialization: usize,
     next_start: usize,
     report: BuildIngestReport,
 }
@@ -652,9 +656,13 @@ impl BuildIngestCoordinator {
                     .map_err(Into::into)
             })
             .collect::<BenchResult<Vec<_>>>()?;
+        let materializer =
+            BorsukIndex::open_with_options(uri, lifecycle_writer_open_options(ram_budget_bytes))?;
         Ok(Self {
             writers,
+            materializer,
             pending: Vec::with_capacity(writer_count),
+            batches_since_materialization: 0,
             next_start: 0,
             report: BuildIngestReport::default(),
         })
@@ -667,8 +675,18 @@ impl BuildIngestCoordinator {
             );
         }
         self.next_start = self.next_start.saturating_add(vectors.len());
-        self.pending.push((start, vectors));
-        if self.pending.len() == self.writers.len() {
+        let source_shard = u8::try_from(
+            self.batches_since_materialization
+                .saturating_add(self.pending.len()),
+        )
+        .map_err(|_| invalid_input("bulk ingest source-shard window exceeds u8"))?;
+        self.pending.push((source_shard, start, vectors));
+        if self.pending.len() == self.writers.len()
+            || self
+                .batches_since_materialization
+                .saturating_add(self.pending.len())
+                == BULK_LOAD_SOURCE_SHARDS
+        {
             self.flush_pending()?;
         }
         Ok(())
@@ -692,6 +710,18 @@ impl BuildIngestCoordinator {
                 .bytes_written
                 .saturating_add(writer.put_payload_bytes());
         }
+        add_request_counts(
+            &mut self.report.requests,
+            self.materializer.request_counts(),
+        );
+        self.report.bytes_read = self
+            .report
+            .bytes_read
+            .saturating_add(self.materializer.backing_bytes_read());
+        self.report.bytes_written = self
+            .report
+            .bytes_written
+            .saturating_add(self.materializer.put_payload_bytes());
         Ok(self.report)
     }
 
@@ -705,6 +735,14 @@ impl BuildIngestCoordinator {
         for rows in completed {
             self.report.batches = self.report.batches.saturating_add(1);
             self.report.rows = self.report.rows.saturating_add(rows);
+            self.batches_since_materialization =
+                self.batches_since_materialization.saturating_add(1);
+        }
+        if self.batches_since_materialization == BULK_LOAD_SOURCE_SHARDS {
+            self.materializer.refresh()?;
+            self.materializer.flush()?;
+            self.report.materializations = self.report.materializations.saturating_add(1);
+            self.batches_since_materialization = 0;
         }
         Ok(())
     }
@@ -871,18 +909,22 @@ fn execute_put_wave(
 
 fn execute_bulk_add_wave(
     writers: &mut [BorsukIndex],
-    batches: Vec<(usize, Vec<Vec<f32>>)>,
+    batches: Vec<(u8, usize, Vec<Vec<f32>>)>,
 ) -> BenchResult<Vec<usize>> {
     if batches.len() > writers.len() {
         return Err(invalid_input("bulk ingest wave exceeds its configured writer count").into());
     }
     std::thread::scope(|scope| -> BenchResult<Vec<usize>> {
         let mut joins = Vec::with_capacity(batches.len());
-        for (writer, (start, vectors)) in writers.iter_mut().zip(batches) {
+        for (writer, (source_shard, start, vectors)) in writers.iter_mut().zip(batches) {
             joins.push(scope.spawn(move || -> borsuk::Result<usize> {
                 let rows = vectors.len();
                 let ids = benchmark_row_ids(start, rows);
-                let inserted_ids = writer.bulk_load_vectors_with_unique_ids(vectors, ids)?;
+                let inserted_ids = writer.bulk_load_vectors_with_unique_ids_on_source_shard(
+                    source_shard,
+                    vectors,
+                    ids,
+                )?;
                 validate_generated_id_range(start, start.saturating_add(rows), &inserted_ids)
                     .map_err(|error| borsuk::BorsukError::InvalidStorage(error.to_string()))?;
                 Ok(rows)
@@ -1251,12 +1293,13 @@ fn run() -> BenchResult<()> {
         // reclustering may reduce exact-rerank GETs by colocating candidates.
         let finalization = finalize_fresh_build(&mut index, config.recluster_build)?;
         eprintln!(
-            "build dataset={} records={} build_writers={} ingest_batches={} ingest_waves={} ingest_ms={ingest_ms:.3} compaction_ms={:.3} compaction_bytes_read={} compaction_bytes_written={} gc_ms={:.3} gc_objects_scanned={} gc_objects_deleted={} gc_transaction_states_remaining={} gc_bytes_read={} gc_bytes_reclaimed={}",
+            "build dataset={} records={} build_writers={} ingest_batches={} ingest_waves={} ingest_materializations={} ingest_ms={ingest_ms:.3} compaction_ms={:.3} compaction_bytes_read={} compaction_bytes_written={} gc_ms={:.3} gc_objects_scanned={} gc_objects_deleted={} gc_transaction_states_remaining={} gc_bytes_read={} gc_bytes_reclaimed={}",
             dataset.meta.name,
             dataset.train_count,
             config.build_writers,
             ingest.batches,
             ingest.waves,
+            ingest.materializations,
             finalization.compaction_ms,
             finalization.compaction_bytes_read,
             finalization.compaction_bytes_written,
@@ -7057,6 +7100,7 @@ mod tests {
             .map(|batch| {
                 let start = batch * 2;
                 (
+                    u8::try_from(batch).unwrap(),
                     start,
                     vec![vec![start as f32, 1.0], vec![start as f32 + 1.0, 1.0]],
                 )
@@ -7133,6 +7177,34 @@ mod tests {
         let mut finalizer = BorsukIndex::open(&uri).unwrap();
         finalizer.finish_bulk_load().unwrap();
         assert_eq!(finalizer.stats().records, 10);
+    }
+
+    #[test]
+    fn bulk_ingest_materializes_before_reusing_the_sixty_four_source_shards() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let mut coordinator = BuildIngestCoordinator::open(&uri, 3, None).unwrap();
+        for row in 0..70 {
+            coordinator.push(row, vec![vec![row as f32, 3.0]]).unwrap();
+        }
+        let report = coordinator.finish().unwrap();
+        assert_eq!(report.batches, 70);
+        assert_eq!(report.rows, 70);
+        assert_eq!(report.materializations, 1);
+
+        let mut finalizer = BorsukIndex::open(&uri).unwrap();
+        finalizer.finish_bulk_load().unwrap();
+        assert_eq!(finalizer.stats().records, 70);
     }
 
     #[test]

@@ -1081,7 +1081,8 @@ fn unique_id_bulk_loaders_commit_concurrently_without_claim_artifacts() {
                     let mut index = BorsukIndex::open(&uri).unwrap();
                     let start = writer * 2;
                     index
-                        .bulk_load_vectors_with_unique_ids(
+                        .bulk_load_vectors_with_unique_ids_on_source_shard(
+                            u8::try_from(writer).unwrap(),
                             vec![vec![start as f32, 1.0], vec![(start + 1) as f32, 1.0]],
                             vec![start.to_string(), (start + 1).to_string()],
                         )
@@ -1112,10 +1113,62 @@ fn unique_id_bulk_loaders_commit_concurrently_without_claim_artifacts() {
     }
     assert!(
         finalizer
-            .bulk_load_vectors_with_unique_ids(vec![vec![9.0, 1.0]], vec!["9".to_string()])
+            .bulk_load_vectors_with_unique_ids_on_source_shard(
+                0,
+                vec![vec![9.0, 1.0]],
+                vec!["9".to_string()],
+            )
             .is_err(),
         "a finalized serving index must reject the offline claim-free contract"
     );
+}
+
+#[test]
+fn unique_id_bulk_load_retry_is_idempotent_and_rejects_changed_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    let uri = dir.path().to_string_lossy().to_string();
+    let mut index =
+        BorsukIndex::create_with_wal(config(uri.clone()), WalConfig::bulk_load(2)).unwrap();
+    let ids = vec!["0".to_string(), "1".to_string()];
+    let vectors = vec![vec![0.0, 1.0], vec![1.0, 1.0]];
+    let mut retry = BorsukIndex::open(&uri).unwrap();
+
+    assert_eq!(
+        index
+            .bulk_load_vectors_with_unique_ids_on_source_shard(0, vectors.clone(), ids.clone(),)
+            .unwrap(),
+        ids
+    );
+    index.flush().unwrap();
+    drop(index);
+    assert_eq!(retry.get_vector("0").unwrap(), None);
+    assert_eq!(
+        retry
+            .bulk_load_vectors_with_unique_ids_on_source_shard(0, vectors.clone(), ids.clone(),)
+            .unwrap(),
+        ids,
+        "an ambiguous exact retry must resolve to the prior durable append"
+    );
+    assert_eq!(
+        retry.get_vector("0").unwrap(),
+        Some(vectors[0].clone()),
+        "a stale retrying handle must immediately observe the acknowledged materialized rows"
+    );
+    assert!(
+        retry
+            .bulk_load_vectors_with_unique_ids_on_source_shard(
+                0,
+                vec![vec![9.0, 9.0], vectors[1].clone()],
+                ids.clone(),
+            )
+            .is_err(),
+        "the deterministic transaction id must not accept changed vector bytes"
+    );
+
+    retry.finish_bulk_load().unwrap();
+    assert_eq!(retry.stats().records, 2);
+    assert_eq!(retry.get_vector("0").unwrap(), Some(vectors[0].clone()));
+    assert_eq!(retry.get_vector("1").unwrap(), Some(vectors[1].clone()));
 }
 
 #[test]
@@ -1125,7 +1178,11 @@ fn unique_id_bulk_load_refreshes_and_rejects_a_finalized_collection() {
     let mut finalizer =
         BorsukIndex::create_with_wal(config(uri.clone()), WalConfig::bulk_load(2)).unwrap();
     finalizer
-        .bulk_load_vectors_with_unique_ids(vec![vec![0.0, 1.0]], vec!["0".to_string()])
+        .bulk_load_vectors_with_unique_ids_on_source_shard(
+            0,
+            vec![vec![0.0, 1.0]],
+            vec!["0".to_string()],
+        )
         .unwrap();
     let mut stale_writer = BorsukIndex::open(&uri).unwrap();
 
@@ -1133,7 +1190,11 @@ fn unique_id_bulk_load_refreshes_and_rejects_a_finalized_collection() {
 
     assert!(
         stale_writer
-            .bulk_load_vectors_with_unique_ids(vec![vec![1.0, 1.0]], vec!["1".to_string()])
+            .bulk_load_vectors_with_unique_ids_on_source_shard(
+                1,
+                vec![vec![1.0, 1.0]],
+                vec!["1".to_string()],
+            )
             .is_err(),
         "a handle opened before finalization must not append through stale authority"
     );
@@ -1146,13 +1207,21 @@ fn unique_id_bulk_load_rejects_delete_authority_in_the_positioned_tail() {
     let mut index =
         BorsukIndex::create_with_wal(config(uri.clone()), WalConfig::bulk_load(2)).unwrap();
     index
-        .bulk_load_vectors_with_unique_ids(vec![vec![0.0, 1.0]], vec!["0".to_string()])
+        .bulk_load_vectors_with_unique_ids_on_source_shard(
+            0,
+            vec![vec![0.0, 1.0]],
+            vec!["0".to_string()],
+        )
         .unwrap();
     index.delete(["0"]).unwrap();
 
     assert!(
         index
-            .bulk_load_vectors_with_unique_ids(vec![vec![1.0, 1.0]], vec!["1".to_string()])
+            .bulk_load_vectors_with_unique_ids_on_source_shard(
+                1,
+                vec![vec![1.0, 1.0]],
+                vec!["1".to_string()],
+            )
             .is_err(),
         "claim-free ingestion must stop once positioned mutation authority exists"
     );
