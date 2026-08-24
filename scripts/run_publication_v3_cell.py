@@ -629,6 +629,12 @@ def build_execution_plan(
             "BORSUK_BENCH_DISK_CACHE_MAX_BYTES",
         ):
             build_env.pop(field, None)
+        # Persist the same resident-memory contract the small runtime must
+        # honor. The larger worker supplies CPU and process headroom, but must
+        # not produce an index that the scheduled runtime cannot open.
+        build_env["BORSUK_BENCH_RAM_BUDGET_BYTES"] = str(
+            resident_limit_mib * 1024 * 1024
+        )
         # Index construction does not execute recall queries, but the benchmark
         # validates all query knobs at startup. Keep this build-only phase on a
         # valid V20 leaf-page/candidate compatibility pair; runtime owns the

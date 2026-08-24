@@ -986,6 +986,12 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(publication["runtime"]["client"]["instance_type"], "c7g.xlarge")
         build_env = publication["build"]["steps"][-1]["env"]
         runtime_env = publication["runtime"]["steps"][-1]["env"]
+        runtime_ram_budget_bytes = (
+            cell["environment_contract"]["runtime_clients"]["borsuk"][
+                "resident_limit_mib"
+            ]
+            * 1024**2
+        )
         self.assertEqual(build_env["BORSUK_BENCH_BUILD_INDEX"], "1")
         self.assertEqual(build_env["BORSUK_BENCH_BUILD_ONLY"], "1")
         self.assertEqual(build_env["BORSUK_BUILD_TIMING"], "1")
@@ -994,6 +1000,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             str(Path(publication["build"]["output_dir"]) / "bench_build_phases.csv"),
         )
         self.assertEqual(build_env["BORSUK_CPU_THREADS"], "32")
+        self.assertEqual(
+            build_env["BORSUK_BENCH_RAM_BUDGET_BYTES"],
+            str(runtime_ram_budget_bytes),
+        )
         self.assertEqual(build_env["BORSUK_BENCH_NPROBES"], "4")
         self.assertEqual(build_env["BORSUK_BENCH_CANDIDATES"], "512")
         self.assertNotIn("BORSUK_BENCH_READ_ONLY", build_env)
@@ -1006,6 +1016,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(runtime_env["BORSUK_BENCH_RECALL_ONLY"], "1")
         self.assertEqual(runtime_env["BORSUK_BENCH_READ_ONLY"], "1")
         self.assertEqual(runtime_env["BORSUK_BENCH_BUILD_INDEX"], "0")
+        self.assertEqual(
+            runtime_env["BORSUK_BENCH_RAM_BUDGET_BYTES"],
+            build_env["BORSUK_BENCH_RAM_BUDGET_BYTES"],
+        )
         self.assertEqual(
             runtime_env["BORSUK_BENCH_NPROBES"],
             str(arm["leaf_page_budget"]),
