@@ -107,7 +107,7 @@ RUNTIME_FLOW_CONTROL_FIELDS = frozenset(
     }
 )
 PRODUCTION_BUILD_FIELDS = tuple(
-    "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,gc_ms,gc_objects_scanned,gc_objects_deleted,gc_transaction_states_remaining,gc_bytes_read,gc_bytes_reclaimed,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written".split(
+    "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,gc_ms,gc_objects_scanned,gc_objects_deleted,gc_transaction_states_remaining,gc_bytes_read,gc_bytes_reclaimed,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written,configured_build_writers,ingest_batches,ingest_waves,ingest_vectors_per_s".split(
         ","
     )
 )
@@ -655,6 +655,7 @@ def build_execution_plan(
                 build_output_dir / "bench_build_phases.csv"
             ),
             "BORSUK_CPU_THREADS": "32",
+            "BORSUK_BENCH_BUILD_WRITERS": "8",
         }
         for field in (
             "BORSUK_BENCH_READ_ONLY",
@@ -1766,6 +1767,9 @@ def read_build_artifact(
         "storage_lists",
         "storage_bytes_read",
         "storage_bytes_written",
+        "configured_build_writers",
+        "ingest_batches",
+        "ingest_waves",
     )
     parsed: dict[str, int] = {}
     for field in integer_fields:
@@ -1810,6 +1814,13 @@ def read_build_artifact(
         raise ValueError("publication build catalog checksum is invalid")
     if parsed["total_active_index_bytes"] <= 0:
         raise ValueError("publication build active index bytes must be positive")
+    if (
+        parsed["configured_build_writers"] != 8
+        or parsed["ingest_batches"] <= 0
+        or parsed["ingest_waves"]
+        != math.ceil(parsed["ingest_batches"] / parsed["configured_build_writers"])
+    ):
+        raise ValueError("publication build ingest schedule differs")
     if parsed["gc_transaction_states_remaining"] != 0:
         raise ValueError(
             "publication build transaction states remain after finalization"
@@ -1825,8 +1836,18 @@ def read_build_artifact(
         if nanos < 0 or nanos != nanos.to_integral_value():
             raise ValueError(f"publication build timing field {field} is invalid")
         build_timings[field.removesuffix("_ms") + "_ns"] = int(nanos)
+    try:
+        ingest_vectors_per_s = Decimal(row["ingest_vectors_per_s"])
+    except (KeyError, InvalidOperation) as error:
+        raise ValueError("publication build ingest throughput is invalid") from error
+    if not ingest_vectors_per_s.is_finite() or ingest_vectors_per_s <= 0:
+        raise ValueError("publication build ingest throughput is invalid")
     build_timings.update(
         {
+            "configured_build_writers": parsed["configured_build_writers"],
+            "ingest_batches": parsed["ingest_batches"],
+            "ingest_waves": parsed["ingest_waves"],
+            "ingest_vectors_per_s_micros": int(ingest_vectors_per_s * 1_000_000),
             "compaction_bytes_read": parsed["compaction_bytes_read"],
             "compaction_bytes_written": parsed["compaction_bytes_written"],
             "gc_objects_scanned": parsed["gc_objects_scanned"],

@@ -38,6 +38,7 @@ const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
 // count comfortably below the immutable 64 MiB / 65,536-row append bounds.
 const INGEST_DENSE_BATCH_BYTES: usize = 16 * 1024 * 1024;
 const INGEST_BATCH_MAX_VECTORS: usize = 16_384;
+const DEFAULT_BUILD_WRITERS: usize = 8;
 const DEFAULT_WRITE_BATCH_SIZE: usize = 1_024;
 // V12 persists the coarse-cell probe count in the authenticated codebook. The
 // query-time sweep controls how many ranked leaf pages may be fetched. Keep the
@@ -70,7 +71,7 @@ const CACHE_STATE_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turb
 const CONCURRENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,cache_profile,target_cache_coverage_percent,execution_engine,nprobe,max_candidates,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read";
 const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,nprobe,max_candidates,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
 const CACHE_COVERAGE_HEADER: &str = "schema_version,scan_codec,cache_execution,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,network_gets";
-const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,gc_ms,gc_objects_scanned,gc_objects_deleted,gc_transaction_states_remaining,gc_bytes_read,gc_bytes_reclaimed,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written";
+const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,gc_ms,gc_objects_scanned,gc_objects_deleted,gc_transaction_states_remaining,gc_bytes_read,gc_bytes_reclaimed,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written,configured_build_writers,ingest_batches,ingest_waves,ingest_vectors_per_s";
 const WRITE_COST_HEADER: &str = "op,configured_writers,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
 const WRITE_SAMPLE_HEADER: &str = "op,writer_index,wave_index,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists";
 const LIFECYCLE_HEADER: &str = "configured_writers,configured_batch_records,inserted_vectors,logical_vector_bytes,insert_wall_ms,insert_vectors_per_s,first_batch_publish_ms,searchability_refresh_ms,time_to_searchable_ms,searchable_samples,searchable_fraction,upsert_samples,upsert_correct_fraction,delete_samples,delete_absent_fraction,compact_delete_absent_fraction,purge_delete_absent_fraction,delta_flush_ms,time_to_fully_indexed_ms,wal_publish_bytes,indexed_delta_bytes,total_indexing_bytes,write_amplification,write_amplification_is_lower_bound,consolidation_ms,time_to_consolidated_ms,consolidated_global_bytes,consolidation_amplification";
@@ -104,6 +105,7 @@ struct ResolvedConfig {
     cache_dir: PathBuf,
     limit: usize,
     queries: usize,
+    build_writers: usize,
     lifecycle_writers: usize,
     lifecycle_insert_mode: LifecycleInsertMode,
     write_batch_size: usize,
@@ -624,6 +626,90 @@ struct PreparedRecordBatch {
     records: Vec<VectorRecord>,
 }
 
+#[derive(Default)]
+struct BuildIngestReport {
+    batches: usize,
+    rows: usize,
+    waves: usize,
+    requests: RequestCounts,
+    bytes_read: u64,
+    bytes_written: u64,
+}
+
+struct BuildIngestCoordinator {
+    writers: Vec<BorsukIndex>,
+    pending: Vec<(usize, Vec<Vec<f32>>)>,
+    next_start: usize,
+    report: BuildIngestReport,
+}
+
+impl BuildIngestCoordinator {
+    fn open(uri: &str, writer_count: usize, ram_budget_bytes: Option<u64>) -> BenchResult<Self> {
+        let writer_count = validate_build_writers(writer_count)?;
+        let writers = (0..writer_count)
+            .map(|_| {
+                BorsukIndex::open_with_options(uri, lifecycle_writer_open_options(ram_budget_bytes))
+                    .map_err(Into::into)
+            })
+            .collect::<BenchResult<Vec<_>>>()?;
+        Ok(Self {
+            writers,
+            pending: Vec::with_capacity(writer_count),
+            next_start: 0,
+            report: BuildIngestReport::default(),
+        })
+    }
+
+    fn push(&mut self, start: usize, vectors: Vec<Vec<f32>>) -> BenchResult<()> {
+        if vectors.is_empty() || start != self.next_start {
+            return Err(
+                invalid_input("bulk ingest batches must be nonempty and contiguous").into(),
+            );
+        }
+        self.next_start = self.next_start.saturating_add(vectors.len());
+        self.pending.push((start, vectors));
+        if self.pending.len() == self.writers.len() {
+            self.flush_pending()?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn pending_batches(&self) -> usize {
+        self.pending.len()
+    }
+
+    fn finish(mut self) -> BenchResult<BuildIngestReport> {
+        self.flush_pending()?;
+        for writer in &self.writers {
+            add_request_counts(&mut self.report.requests, writer.request_counts());
+            self.report.bytes_read = self
+                .report
+                .bytes_read
+                .saturating_add(writer.backing_bytes_read());
+            self.report.bytes_written = self
+                .report
+                .bytes_written
+                .saturating_add(writer.put_payload_bytes());
+        }
+        Ok(self.report)
+    }
+
+    fn flush_pending(&mut self) -> BenchResult<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let completed =
+            execute_bulk_add_wave(&mut self.writers, std::mem::take(&mut self.pending))?;
+        self.report.waves = self.report.waves.saturating_add(1);
+        for rows in completed {
+            self.report.batches = self.report.batches.saturating_add(1);
+            self.report.rows = self.report.rows.saturating_add(rows);
+        }
+        Ok(())
+    }
+}
+
 fn lifecycle_progress_line(stage: &str, status: &str, elapsed_ms: u128) -> String {
     let valid_stage = !stage.is_empty()
         && stage.len() <= 64
@@ -783,6 +869,36 @@ fn execute_put_wave(
     )
 }
 
+fn execute_bulk_add_wave(
+    writers: &mut [BorsukIndex],
+    batches: Vec<(usize, Vec<Vec<f32>>)>,
+) -> BenchResult<Vec<usize>> {
+    if batches.len() > writers.len() {
+        return Err(invalid_input("bulk ingest wave exceeds its configured writer count").into());
+    }
+    std::thread::scope(|scope| -> BenchResult<Vec<usize>> {
+        let mut joins = Vec::with_capacity(batches.len());
+        for (writer, (start, vectors)) in writers.iter_mut().zip(batches) {
+            joins.push(scope.spawn(move || -> borsuk::Result<usize> {
+                let rows = vectors.len();
+                let ids = benchmark_row_ids(start, rows);
+                let inserted_ids = writer.add_vectors_with_ids(vectors, ids)?;
+                validate_generated_id_range(start, start.saturating_add(rows), &inserted_ids)
+                    .map_err(|error| borsuk::BorsukError::InvalidStorage(error.to_string()))?;
+                Ok(rows)
+            }));
+        }
+        joins
+            .into_iter()
+            .map(|join| {
+                join.join()
+                    .map_err(|_| io::Error::other("bulk ingest writer thread panicked"))?
+                    .map_err(Into::into)
+            })
+            .collect()
+    })
+}
+
 fn execute_upsert_wave(
     op: &'static str,
     wave_index: usize,
@@ -908,6 +1024,14 @@ fn request_counts_from_samples(samples: &[WriteSample]) -> RequestCounts {
         })
 }
 
+fn add_request_counts(total: &mut RequestCounts, addition: RequestCounts) {
+    total.gets = total.gets.saturating_add(addition.gets);
+    total.puts = total.puts.saturating_add(addition.puts);
+    total.deletes = total.deletes.saturating_add(addition.deletes);
+    total.heads = total.heads.saturating_add(addition.heads);
+    total.lists = total.lists.saturating_add(addition.lists);
+}
+
 struct InsertMeasurement {
     row: WriteRow,
     first_batch_publish_ms: f64,
@@ -923,6 +1047,8 @@ struct BuildMeasurement {
     logical_cells: u32,
     logical_cell_dimensions: u32,
     logical_cell_catalog_bytes: u64,
+    ingest_batches: usize,
+    ingest_waves: usize,
     layout: &'static str,
     ingest_ms: f64,
     compaction_ms: f64,
@@ -1109,7 +1235,14 @@ fn run() -> BenchResult<()> {
         }
 
         let ingest_started = Instant::now();
-        ingest_train(&mut index, &config.dataset_dir, &dataset)?;
+        let ingest = ingest_train(
+            &mut index,
+            &config.uri,
+            config.build_writers,
+            config.ram_budget_bytes,
+            &config.dataset_dir,
+            &dataset,
+        )?;
         let ingest_ms = elapsed_ms(ingest_started);
         borsuk::report_build_timing("ingest")?;
 
@@ -1118,9 +1251,12 @@ fn run() -> BenchResult<()> {
         // reclustering may reduce exact-rerank GETs by colocating candidates.
         let finalization = finalize_fresh_build(&mut index, config.recluster_build)?;
         eprintln!(
-            "build dataset={} records={} ingest_ms={ingest_ms:.3} compaction_ms={:.3} compaction_bytes_read={} compaction_bytes_written={} gc_ms={:.3} gc_objects_scanned={} gc_objects_deleted={} gc_transaction_states_remaining={} gc_bytes_read={} gc_bytes_reclaimed={}",
+            "build dataset={} records={} build_writers={} ingest_batches={} ingest_waves={} ingest_ms={ingest_ms:.3} compaction_ms={:.3} compaction_bytes_read={} compaction_bytes_written={} gc_ms={:.3} gc_objects_scanned={} gc_objects_deleted={} gc_transaction_states_remaining={} gc_bytes_read={} gc_bytes_reclaimed={}",
             dataset.meta.name,
             dataset.train_count,
+            config.build_writers,
+            ingest.batches,
+            ingest.waves,
             finalization.compaction_ms,
             finalization.compaction_bytes_read,
             finalization.compaction_bytes_written,
@@ -1132,14 +1268,19 @@ fn run() -> BenchResult<()> {
             finalization.garbage_collection.bytes_reclaimed,
         );
         let stats = index.stats();
-        let storage_requests = index.request_counts();
-        let storage_bytes_read = index.backing_bytes_read();
-        let storage_bytes_written = index.put_payload_bytes();
+        let mut storage_requests = index.request_counts();
+        add_request_counts(&mut storage_requests, ingest.requests);
+        let storage_bytes_read = index.backing_bytes_read().saturating_add(ingest.bytes_read);
+        let storage_bytes_written = index
+            .put_payload_bytes()
+            .saturating_add(ingest.bytes_written);
         let build = BuildMeasurement {
             logical_cell_catalog_checksum: catalog_evidence.0,
             logical_cells: catalog_evidence.1,
             logical_cell_dimensions: catalog_evidence.2,
             logical_cell_catalog_bytes: catalog_evidence.3,
+            ingest_batches: ingest.batches,
+            ingest_waves: ingest.waves,
             layout: finalization.layout,
             ingest_ms,
             compaction_ms: finalization.compaction_ms,
@@ -1428,6 +1569,10 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
 
     let limit = env_usize("BORSUK_BENCH_LIMIT", 0)?;
     let queries = env_usize("BORSUK_BENCH_QUERIES", DEFAULT_QUERIES)?;
+    let build_writers = validate_build_writers(env_usize(
+        "BORSUK_BENCH_BUILD_WRITERS",
+        DEFAULT_BUILD_WRITERS,
+    )?)?;
     let lifecycle_writers =
         validate_lifecycle_writers(env_usize("BORSUK_BENCH_LIFECYCLE_WRITERS", 1)?)?;
     let lifecycle_insert_mode = parse_lifecycle_insert_mode(
@@ -1676,6 +1821,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         cache_dir,
         limit,
         queries,
+        build_writers,
         lifecycle_writers,
         lifecycle_insert_mode,
         write_batch_size,
@@ -1747,13 +1893,14 @@ fn print_config(config: &ResolvedConfig) {
     let recall_nprobes = join_usizes(&config.recall_nprobes);
     let recall_candidates = join_usizes(&config.recall_candidates);
     eprintln!(
-        "config dataset={} uri={} cache={} disk_cache_max_bytes={} limit={} queries={} lifecycle_writers={} lifecycle_insert_mode={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} max_parallel_decode_rank_tasks={} exact_read_max_physical_amplification={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} lifecycle_only={} preload_serving={}",
+        "config dataset={} uri={} cache={} disk_cache_max_bytes={} limit={} queries={} build_writers={} lifecycle_writers={} lifecycle_insert_mode={} write_batch_size={} write_ops={} uncached_queries={} output_dir={} concurrency={} segment_max={} vector_element_type={} leaf_capability={} global_scan_codec={} global_pq_layout={:?} global_pq_code_bytes={} turboquant_bits={} turboquant_qjl_bits={} turboquant_shards={} cache_execution={} force_segment_path={} ram_budget_bytes={} segment_cache_max_bytes={} recall_nprobes={} recall_candidates={} recall_leaf_mode={} serving_mode={:?} serving_leaf_mode={} serving_nprobe={} serving_candidates={} serving_prefetch_depth={} max_active_searches={} max_waiting_searches={} leaf_read_width={} max_inflight_leaf_reads={} max_parallel_decode_rank_tasks={} exact_read_max_physical_amplification={} cache_profile={:?} cache_coverage_percent={} build_index={} build_only={} recall_only={} skip_recall={} skip_exact_recall={} recluster_build={} read_only={} insert_only={} lifecycle_only={} preload_serving={}",
         config.dataset_dir.display(),
         config.uri,
         config.cache_dir.display(),
         config.disk_cache_max_bytes.unwrap_or(0),
         config.limit,
         config.queries,
+        config.build_writers,
         config.lifecycle_writers,
         config.lifecycle_insert_mode.as_str(),
         config.write_batch_size,
@@ -2357,10 +2504,18 @@ fn read_ground_truth(
     Ok(rows_out)
 }
 
-fn ingest_train(index: &mut BorsukIndex, dataset_dir: &Path, dataset: &Dataset) -> BenchResult<()> {
+fn ingest_train(
+    index: &mut BorsukIndex,
+    uri: &str,
+    build_writers: usize,
+    ram_budget_bytes: Option<u64>,
+    dataset_dir: &Path,
+    dataset: &Dataset,
+) -> BenchResult<BuildIngestReport> {
     // Both source forms stream bounded batches and use monotonic generated ids.
     // VectorDBBench acquisition must use its unshuffled train files so row ids
     // remain identical to the shipped ground-truth neighbor ids.
+    let mut coordinator = BuildIngestCoordinator::open(uri, build_writers, ram_budget_bytes)?;
     match &dataset.source {
         DatasetVectorSource::Unavailable => {
             return Err(invalid_input("index build requires local corpus vectors").into());
@@ -2375,7 +2530,7 @@ fn ingest_train(index: &mut BorsukIndex, dataset_dir: &Path, dataset: &Dataset) 
                 for _ in start..end {
                     vectors.push(read_f32_vector(&mut reader, dataset.meta.dim)?);
                 }
-                ingest_generated_batch(index, start, vectors)?;
+                coordinator.push(start, vectors)?;
                 start = end;
             }
         }
@@ -2401,7 +2556,7 @@ fn ingest_train(index: &mut BorsukIndex, dataset_dir: &Path, dataset: &Dataset) 
                     for row in 0..take {
                         decoded.push(vector_row(vectors.as_ref(), row, dataset.meta.dim, "emb")?);
                     }
-                    ingest_generated_batch(index, start, decoded)?;
+                    coordinator.push(start, decoded)?;
                     start = start.saturating_add(take);
                 }
             }
@@ -2414,7 +2569,16 @@ fn ingest_train(index: &mut BorsukIndex, dataset_dir: &Path, dataset: &Dataset) 
             }
         }
     }
-    Ok(())
+    let report = coordinator.finish()?;
+    if report.rows != dataset.train_count {
+        return Err(invalid_input(&format!(
+            "bulk ingest committed {} rows; expected {}",
+            report.rows, dataset.train_count
+        ))
+        .into());
+    }
+    index.refresh()?;
+    Ok(report)
 }
 
 fn sample_logical_cell_training_vectors(
@@ -2444,21 +2608,6 @@ fn sample_logical_cell_training_vectors(
         .into());
     }
     Ok(sample)
-}
-
-fn ingest_generated_batch(
-    index: &mut BorsukIndex,
-    start: usize,
-    vectors: Vec<Vec<f32>>,
-) -> BenchResult<()> {
-    let end = start.saturating_add(vectors.len());
-    // Ground-truth files address corpus rows by their numeric ordinal. Generated
-    // library IDs are intentionally opaque, so the benchmark supplies the exact
-    // stable row IDs instead of depending on an implementation detail.
-    let ids = benchmark_row_ids(start, vectors.len());
-    let inserted_ids = index.add_vectors_with_ids(vectors, ids)?;
-    validate_generated_id_range(start, end, &inserted_ids)?;
-    Ok(())
 }
 
 fn benchmark_row_ids(start: usize, count: usize) -> Vec<String> {
@@ -2555,9 +2704,14 @@ fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchRe
     } else {
         total_active_index_bytes as f64 / build.records as f64
     };
+    let ingest_vectors_per_s = if build.ingest_ms <= 0.0 {
+        0.0
+    } else {
+        build.records as f64 * 1_000.0 / build.ingest_ms
+    };
     writeln!(
         writer,
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{bytes_per_vector:.6},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{},{},{:.3},{},{},{},{},{},{},{},{},{},{},{},{}",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{bytes_per_vector:.6},{},{},{},{},{},{},{},{},{},{:.3},{:.3},{},{},{:.3},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{ingest_vectors_per_s:.3}",
         build.logical_cell_catalog_checksum,
         build.logical_cells,
         build.logical_cell_dimensions,
@@ -2602,6 +2756,9 @@ fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchRe
         build.storage_requests.lists,
         build.storage_bytes_read,
         build.storage_bytes_written,
+        config.build_writers,
+        build.ingest_batches,
+        build.ingest_waves,
     )?;
     writer.flush()?;
     eprintln!("wrote {} rows=1", path.display());
@@ -4579,6 +4736,15 @@ fn validate_lifecycle_writers(writers: usize) -> io::Result<usize> {
     Ok(writers)
 }
 
+fn validate_build_writers(writers: usize) -> io::Result<usize> {
+    if !(1..=32).contains(&writers) {
+        return Err(invalid_input(
+            "BORSUK_BENCH_BUILD_WRITERS must be in 1..=32",
+        ));
+    }
+    Ok(writers)
+}
+
 fn lifecycle_write_waves(
     count: usize,
     batch_size: usize,
@@ -5262,11 +5428,12 @@ fn permuted_positions(count: usize, seed: u64) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BUILD_HEADER, BenchmarkCacheProfile, BorsukIndex, CACHE_COVERAGE_HEADER,
-        CACHE_STATE_HEADER, CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER, CacheExecutionPolicy,
-        ConcurrencyMeasurement, DEFAULT_NPROBE_SWEEP, DEFAULT_PRODUCTION_RAM_BUDGET_BYTES,
-        DEFAULT_RECALL_CANDIDATES, EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig,
-        LIFECYCLE_HEADER, LeafCapability, LeafMode, LifecycleBatchAssignment, LifecycleInsertMode,
+        BUILD_HEADER, BenchmarkCacheProfile, BorsukIndex, BuildIngestCoordinator,
+        CACHE_COVERAGE_HEADER, CACHE_STATE_HEADER, CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER,
+        CacheExecutionPolicy, ConcurrencyMeasurement, DEFAULT_NPROBE_SWEEP,
+        DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES,
+        EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig, LIFECYCLE_HEADER,
+        LeafCapability, LeafMode, LifecycleBatchAssignment, LifecycleInsertMode,
         LifecycleQueryProgress, MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER,
         PreparedRecordBatch, QUERY_SAMPLE_HEADER, QuerySample, QuerySummary, RECALL_LATENCY_HEADER,
         SERVING_CANDIDATES, ServingMode, VectorMetric, VectorRecord, WRITE_COST_HEADER,
@@ -5274,26 +5441,25 @@ mod tests {
         benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
         cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
         default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
-        dollars_per_million_queries, execute_put_wave, finalize_fresh_build,
-        first_logical_batch_publish_ms, ingest_batch_size, ingest_generated_batch,
-        is_hot_workload_position, lifecycle_progress_line, lifecycle_query_progress_line,
-        lifecycle_write_operation_count, lifecycle_write_waves, lifecycle_writer_open_options,
-        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
-        parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
-        parse_leaf_capability, parse_leaf_mode, parse_lifecycle_insert_mode,
-        parse_optional_byte_cap, parse_positive_list, parse_serving_mode,
-        percentage_operation_count, permuted_positions, preload_query_count,
+        dollars_per_million_queries, execute_bulk_add_wave, execute_put_wave, finalize_fresh_build,
+        first_logical_batch_publish_ms, ingest_batch_size, is_hot_workload_position,
+        lifecycle_progress_line, lifecycle_query_progress_line, lifecycle_write_operation_count,
+        lifecycle_write_waves, lifecycle_writer_open_options, mixed_concurrency_query_indices,
+        neighbor_row, normalized_cache_access_fractions, parquet_train_files_for_phase,
+        parse_flag_value, parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
+        parse_lifecycle_insert_mode, parse_optional_byte_cap, parse_positive_list,
+        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
         read_logical_cell_catalog, rebatch_mutation_vector_chunk, recall_preloads_local_snapshot,
         recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
         serving_cache_dir, update_vector_reservoir, uses_bounded_decoded_cache_phases,
         uses_memory_preloaded_phase, validate_bounded_v20_execution, validate_build_only,
-        validate_disk_cached_network, validate_exact_read_max_physical_amplification,
-        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
-        validate_lifecycle_only, validate_lifecycle_writers,
-        validate_max_parallel_decode_rank_tasks, validate_phase_selection,
-        validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
-        vector_row, verification_offsets, write_batch_len, write_operation_count,
-        write_runtime_flow_control_receipt,
+        validate_build_writers, validate_disk_cached_network,
+        validate_exact_read_max_physical_amplification, validate_generated_id_range,
+        validate_insert_only, validate_leaf_capability_modes, validate_lifecycle_only,
+        validate_lifecycle_writers, validate_max_parallel_decode_rank_tasks,
+        validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
+        validate_v12_leaf_page_budgets, vector_row, verification_offsets, write_batch_len,
+        write_operation_count, write_runtime_flow_control_receipt,
     };
 
     #[test]
@@ -5683,8 +5849,9 @@ mod tests {
     #[test]
     fn frozen_corpus_ingest_does_not_create_mutation_tombstones() {
         let directory = tempfile::tempdir().unwrap();
-        let mut index = BorsukIndex::create(IndexConfig {
-            uri: directory.path().to_string_lossy().into_owned(),
+        let uri = directory.path().to_string_lossy().into_owned();
+        BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
             metric: VectorMetric::Euclidean,
             dimensions: 2,
             segment_max_vectors: 16,
@@ -5693,8 +5860,11 @@ mod tests {
             named_vectors: Default::default(),
         })
         .unwrap();
-
-        ingest_generated_batch(&mut index, 0, vec![vec![1.0, 0.0], vec![0.0, 1.0]]).unwrap();
+        let mut coordinator = BuildIngestCoordinator::open(&uri, 2, None).unwrap();
+        coordinator.push(0, vec![vec![1.0, 0.0]]).unwrap();
+        coordinator.push(1, vec![vec![0.0, 1.0]]).unwrap();
+        coordinator.finish().unwrap();
+        let mut index = BorsukIndex::open(&uri).unwrap();
         index.flush().unwrap();
 
         assert_eq!(index.manifest().tombstone_delta_run_count(), 0);
@@ -5706,8 +5876,9 @@ mod tests {
     #[test]
     fn fresh_build_finalization_reclaims_committed_transaction_controls() {
         let directory = tempfile::tempdir().unwrap();
-        let mut index = BorsukIndex::create(IndexConfig {
-            uri: directory.path().to_string_lossy().into_owned(),
+        let uri = directory.path().to_string_lossy().into_owned();
+        BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
             metric: VectorMetric::Euclidean,
             dimensions: 2,
             segment_max_vectors: 4,
@@ -5716,15 +5887,18 @@ mod tests {
             named_vectors: Default::default(),
         })
         .unwrap();
+        let mut coordinator = BuildIngestCoordinator::open(&uri, 4, None).unwrap();
         for batch in 0..8 {
             let start = batch * 2;
-            ingest_generated_batch(
-                &mut index,
-                start,
-                vec![vec![start as f32, 0.0], vec![(start + 1) as f32, 0.0]],
-            )
-            .unwrap();
+            coordinator
+                .push(
+                    start,
+                    vec![vec![start as f32, 0.0], vec![(start + 1) as f32, 0.0]],
+                )
+                .unwrap();
         }
+        coordinator.finish().unwrap();
+        let mut index = BorsukIndex::open(&uri).unwrap();
         let transaction_states = || {
             std::fs::read_dir(directory.path().join("transactions"))
                 .into_iter()
@@ -6484,6 +6658,10 @@ mod tests {
             "build_layout",
             "leaf_capability",
             "segment_max_vectors",
+            "configured_build_writers",
+            "ingest_batches",
+            "ingest_waves",
+            "ingest_vectors_per_s",
             "segment_bytes",
             "vector_sidecar_bytes",
             "global_scan_bytes",
@@ -6848,6 +7026,92 @@ mod tests {
         assert_eq!(ingest_batch_size(960), 4_369);
         assert_eq!(ingest_batch_size(usize::MAX), 1);
         assert!(3 * ingest_batch_size(128) + 2 <= 65_536);
+    }
+
+    #[test]
+    fn build_writer_count_is_explicitly_bounded() {
+        assert_eq!(validate_build_writers(1).unwrap(), 1);
+        assert_eq!(validate_build_writers(8).unwrap(), 8);
+        assert_eq!(validate_build_writers(32).unwrap(), 32);
+        assert!(validate_build_writers(0).is_err());
+        assert!(validate_build_writers(33).is_err());
+    }
+
+    #[test]
+    fn bounded_bulk_ingest_writers_publish_disjoint_generated_id_ranges() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let mut writers = (0..4)
+            .map(|_| BorsukIndex::open(&uri).unwrap())
+            .collect::<Vec<_>>();
+        let batches = (0..4)
+            .map(|batch| {
+                let start = batch * 2;
+                (
+                    start,
+                    vec![vec![start as f32, 1.0], vec![start as f32 + 1.0, 1.0]],
+                )
+            })
+            .collect();
+
+        let completed = execute_bulk_add_wave(&mut writers, batches).unwrap();
+        assert_eq!(completed, vec![2, 2, 2, 2]);
+
+        let mut finalizer = BorsukIndex::open(&uri).unwrap();
+        finalizer.finish_bulk_load().unwrap();
+        assert_eq!(finalizer.stats().records, 8);
+        let ids = (0..8).map(|row| row.to_string()).collect::<Vec<_>>();
+        let records = finalizer.get_records(&ids).unwrap();
+        for (row, record) in records.into_iter().enumerate() {
+            assert_eq!(record.unwrap().0, vec![row as f32, 1.0]);
+        }
+    }
+
+    #[test]
+    fn bulk_ingest_coordinator_flushes_only_bounded_complete_waves() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let mut coordinator = BuildIngestCoordinator::open(&uri, 3, None).unwrap();
+        for batch in 0..5 {
+            let start = batch * 2;
+            coordinator
+                .push(
+                    start,
+                    vec![vec![start as f32, 2.0], vec![start as f32 + 1.0, 2.0]],
+                )
+                .unwrap();
+            assert!(coordinator.pending_batches() < 3);
+        }
+        let report = coordinator.finish().unwrap();
+        assert_eq!(report.batches, 5);
+        assert_eq!(report.rows, 10);
+        assert_eq!(report.waves, 2);
+        assert!(report.requests.puts > 0);
+        assert!(report.bytes_written > 0);
+
+        let mut finalizer = BorsukIndex::open(&uri).unwrap();
+        finalizer.finish_bulk_load().unwrap();
+        assert_eq!(finalizer.stats().records, 10);
     }
 
     #[test]

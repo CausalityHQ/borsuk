@@ -482,6 +482,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     "storage_lists": "2",
                     "storage_bytes_read": "654321",
                     "storage_bytes_written": "123456",
+                    "configured_build_writers": "8",
+                    "ingest_batches": "61",
+                    "ingest_waves": "8",
+                    "ingest_vectors_per_s": "1234.500",
                 }
             )
             (output / "bench_build.csv").write_text(
@@ -535,6 +539,17 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            row["ingest_waves"] = "7"
+            (output / "bench_build.csv").write_text(
+                ",".join(PRODUCTION_BUILD_FIELDS)
+                + "\n"
+                + ",".join(row[field] for field in PRODUCTION_BUILD_FIELDS)
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "ingest schedule differs"):
+                read_build_artifact(output, cell=cell)
+            row["ingest_waves"] = "8"
             row["scan_codec"] = "pq-scan"
             (output / "bench_build.csv").write_text(
                 ",".join(PRODUCTION_BUILD_FIELDS)
@@ -611,6 +626,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             artifact["build_timings"],
             {
                 "ingest_ns": 1_234_500_000,
+                "configured_build_writers": 8,
+                "ingest_batches": 61,
+                "ingest_waves": 8,
+                "ingest_vectors_per_s_micros": 1_234_500_000,
                 "compaction_ns": 67_250_000,
                 "compaction_bytes_read": 7_654_321,
                 "compaction_bytes_written": 2_345_678,
@@ -947,6 +966,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 / "docs/research/publication-v3-manifest.json"
             ).read_text()
         )
+        for dataset in manifest["datasets"]:
+            source = dataset["source"]
+            if source["state"] == "staged-generated":
+                dataset["source"] = {
+                    "state": "generated",
+                    "generator": source["generator"],
+                    "seed": source["seed"],
+                }
         schedule = build_schedule_document(validate_manifest(manifest))
         expected = {
             "synthetic-clustered-v1",
@@ -1048,6 +1075,15 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 )
 
     def test_smoke_plan_is_scaled_and_cannot_be_published(self) -> None:
+        self.assertEqual(
+            PRODUCTION_BUILD_FIELDS[-4:],
+            (
+                "configured_build_writers",
+                "ingest_batches",
+                "ingest_waves",
+                "ingest_vectors_per_s",
+            ),
+        )
         cell = next(
             cell
             for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))[
@@ -1106,6 +1142,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             str(Path(publication["build"]["output_dir"]) / "bench_build_phases.csv"),
         )
         self.assertEqual(build_env["BORSUK_CPU_THREADS"], "32")
+        self.assertEqual(build_env["BORSUK_BENCH_BUILD_WRITERS"], "8")
         self.assertEqual(
             build_env["BORSUK_BENCH_RAM_BUDGET_BYTES"],
             str(runtime_ram_budget_bytes),
