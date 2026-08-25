@@ -867,6 +867,26 @@ fn build_materializer_open_options(ram_budget_bytes: Option<u64>) -> OpenOptions
     options
 }
 
+fn reopen_build_finalizer(
+    index: &mut BorsukIndex,
+    uri: &str,
+    ram_budget_bytes: Option<u64>,
+    report: &mut BuildIngestReport,
+) -> BenchResult<()> {
+    // The creator runtime was partitioned against the empty manifest. Preserve
+    // its construction counters, then reopen from the newly materialized
+    // authority so finalization uses the same explicit build partition as the
+    // boundary materializer.
+    add_request_counts(&mut report.requests, index.request_counts());
+    report.bytes_read = report.bytes_read.saturating_add(index.backing_bytes_read());
+    report.bytes_written = report
+        .bytes_written
+        .saturating_add(index.put_payload_bytes());
+    *index =
+        BorsukIndex::open_with_options(uri, build_materializer_open_options(ram_budget_bytes))?;
+    Ok(())
+}
+
 fn validate_claim_free_lifecycle_insert(index: &BorsukIndex) -> BenchResult<()> {
     let collection = &index.manifest().config;
     if collection.text || !collection.named_vectors.is_empty() {
@@ -2622,7 +2642,7 @@ fn ingest_train(
             }
         }
     }
-    let report = coordinator.finish()?;
+    let mut report = coordinator.finish()?;
     if report.rows != dataset.train_count {
         return Err(invalid_input(&format!(
             "bulk ingest committed {} rows; expected {}",
@@ -2630,7 +2650,7 @@ fn ingest_train(
         ))
         .into());
     }
-    index.refresh()?;
+    reopen_build_finalizer(index, uri, ram_budget_bytes, &mut report)?;
     Ok(report)
 }
 
@@ -5504,16 +5524,17 @@ mod tests {
         parse_optional_byte_cap, parse_positive_list, parse_serving_mode,
         percentage_operation_count, permuted_positions, preload_query_count,
         read_logical_cell_catalog, rebatch_mutation_vector_chunk, recall_preloads_local_snapshot,
-        recall_row_count, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
-        serving_cache_dir, update_vector_reservoir, uses_bounded_decoded_cache_phases,
-        uses_memory_preloaded_phase, validate_bounded_v20_execution, validate_build_only,
-        validate_build_writers, validate_disk_cached_network,
-        validate_exact_read_max_physical_amplification, validate_generated_id_range,
-        validate_insert_only, validate_leaf_capability_modes, validate_lifecycle_only,
-        validate_lifecycle_writers, validate_max_parallel_decode_rank_tasks,
-        validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
-        validate_v12_leaf_page_budgets, vector_row, verification_offsets, write_batch_len,
-        write_operation_count, write_runtime_flow_control_receipt,
+        recall_row_count, reopen_build_finalizer, reset_cache, rotated_workload_index, sample_mean,
+        sample_stddev, serving_cache_dir, update_vector_reservoir,
+        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        validate_bounded_v20_execution, validate_build_only, validate_build_writers,
+        validate_disk_cached_network, validate_exact_read_max_physical_amplification,
+        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
+        validate_lifecycle_only, validate_lifecycle_writers,
+        validate_max_parallel_decode_rank_tasks, validate_phase_selection,
+        validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
+        vector_row, verification_offsets, write_batch_len, write_operation_count,
+        write_runtime_flow_control_receipt,
     };
 
     #[test]
@@ -7202,7 +7223,7 @@ mod tests {
     fn bulk_ingest_materializes_before_reusing_the_sixty_four_source_shards() {
         let directory = tempfile::tempdir().unwrap();
         let uri = directory.path().to_string_lossy().into_owned();
-        BorsukIndex::create(IndexConfig {
+        let mut finalizer = BorsukIndex::create(IndexConfig {
             uri: uri.clone(),
             metric: VectorMetric::Euclidean,
             dimensions: 2,
@@ -7223,13 +7244,13 @@ mod tests {
                 assert_eq!(coordinator.report.materializer_opens, 1);
             }
         }
-        let report = coordinator.finish().unwrap();
+        let mut report = coordinator.finish().unwrap();
+        reopen_build_finalizer(&mut finalizer, &uri, None, &mut report).unwrap();
         assert_eq!(report.batches, 70);
         assert_eq!(report.rows, 70);
         assert_eq!(report.materializations, 1);
         assert_eq!(report.materializer_opens, 1);
 
-        let mut finalizer = BorsukIndex::open(&uri).unwrap();
         finalizer.finish_bulk_load().unwrap();
         assert_eq!(finalizer.stats().records, 70);
     }
