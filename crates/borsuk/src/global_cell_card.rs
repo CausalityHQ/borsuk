@@ -1262,15 +1262,15 @@ pub(crate) fn rank_cell_card_head_indexes(
 pub(crate) fn cell_card_exact_admission_bounds(
     root: &ResidentCellCardRoot,
     indexes: &[usize],
-) -> Result<(usize, u64, u64)> {
+) -> Result<(usize, u64, u64, u64)> {
     if indexes.is_empty() {
         return Err(BorsukError::InvalidStorage(
             "cell-card admission indexes are empty".to_string(),
         ));
     }
-    let (blocks, max_bytes, max_rows) = indexes.iter().try_fold(
-        (0_usize, 0_u64, 0_u64),
-        |(blocks, max_bytes, max_rows), index| {
+    let (blocks, max_bytes, max_rows, max_row_bytes) = indexes.iter().try_fold(
+        (0_usize, 0_u64, 0_u64, 0_u64),
+        |(blocks, max_bytes, max_rows, max_row_bytes), index| {
             let (_, head) = root.head_ref_for_read(*index)?;
             if head.exact_blocks.is_empty() {
                 return Err(BorsukError::InvalidStorage(
@@ -1298,15 +1298,22 @@ pub(crate) fn cell_card_exact_admission_bounds(
                         .max()
                         .unwrap_or(0),
                 ),
+                max_row_bytes.max(
+                    head.exact_blocks
+                        .iter()
+                        .map(|block| u64::from(block.bytes).div_ceil(u64::from(block.rows).max(1)))
+                        .max()
+                        .unwrap_or(0),
+                ),
             ))
         },
     )?;
-    if blocks == 0 || max_bytes == 0 || max_rows == 0 {
+    if blocks == 0 || max_bytes == 0 || max_rows == 0 || max_row_bytes == 0 {
         return Err(BorsukError::InvalidStorage(
             "cell-card admission bounds are empty".to_string(),
         ));
     }
-    Ok((blocks, max_bytes, max_rows))
+    Ok((blocks, max_bytes, max_rows, max_row_bytes))
 }
 
 pub(crate) fn plan_cell_card_head_wave(
@@ -5915,11 +5922,12 @@ mod tests {
         .unwrap();
 
         let indexes = (0..33).collect::<Vec<_>>();
-        let (blocks, max_block_bytes, max_block_rows) =
+        let (blocks, max_block_bytes, max_block_rows, max_row_bytes) =
             super::cell_card_exact_admission_bounds(&root, &indexes).unwrap();
         assert_eq!(blocks, 33);
         assert!(max_block_bytes > 0);
         assert_eq!(max_block_rows, 1);
+        assert_eq!(max_row_bytes, max_block_bytes);
     }
 
     #[test]

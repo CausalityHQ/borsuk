@@ -894,13 +894,12 @@ fn global_cell_card_query_head_admission_bytes(
 }
 
 fn global_cell_card_head_promotion_byte_ceiling(
-    head_fetch_ceiling: u64,
     head_byte_ceiling: u64,
     admitted_physical_ceiling: u64,
 ) -> u64 {
-    head_fetch_ceiling
-        .max(head_byte_ceiling)
-        .min(admitted_physical_ceiling)
+    // The candidate-scaled head ceiling is the executable policy boundary;
+    // promotion may use that whole allowance but must never cross it.
+    head_byte_ceiling.min(admitted_physical_ceiling)
 }
 
 fn cell_card_exact_io_budget(max_bytes: u64, planned_head_bytes: u64) -> Option<u64> {
@@ -946,19 +945,27 @@ fn global_leaf_code_byte_ceiling(
 
 fn global_cell_card_head_byte_ceiling(
     limit: u64,
+    exact_candidate_rows: usize,
+    exact_row_byte_ceiling: u64,
     exact_block_byte_ceiling: u64,
     exact_request_budget: usize,
     max_physical_amplification: u64,
 ) -> u64 {
-    // Reserve one maximum-sized exact block including the configured physical
-    // amplification. This guarantees that a bounded query can make progress;
-    // additional selected/coalesced blocks are admitted only when their full
-    // physical ranges fit the bytes left after the code-head plan.
-    (exact_request_budget != 0)
-        .then_some(exact_block_byte_ceiling)
-        .and_then(|selected| selected.checked_mul(max_physical_amplification))
-        .and_then(|reserve| limit.checked_sub(reserve))
-        .unwrap_or(0)
+    if exact_request_budget == 0 || exact_candidate_rows == 0 || exact_row_byte_ceiling == 0 {
+        return 0;
+    }
+    // Head reads are useful only if lossless reranking survives. Reserve a
+    // candidate-scaled exact window using authenticated block bytes/rows,
+    // while retaining the former amplified-block progress floor. Cap the
+    // scaled portion at one eighth of the caller budget so code routing still
+    // owns the dominant share and the two-wave serving shape stays bounded.
+    let progress_floor = exact_block_byte_ceiling.saturating_mul(max_physical_amplification);
+    let candidate_reserve = u64::try_from(exact_candidate_rows)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(exact_row_byte_ceiling)
+        .saturating_mul(max_physical_amplification)
+        .min(limit / 8);
+    limit.saturating_sub(progress_floor.max(candidate_reserve))
 }
 
 #[derive(Debug)]
@@ -20028,10 +20035,12 @@ impl BorsukIndex {
         // A 32-request exact wave may coalesce more than 32 authenticated
         // tiles. Charge every tile reachable from the selected heads so the
         // weighted RAM gate bounds the real executable plan, not its GET count.
-        let (_, routed_exact_block_ceiling, _) =
+        let (_, routed_exact_block_ceiling, _, routed_exact_row_byte_ceiling) =
             cell_card_exact_admission_bounds(root, &ranked_card_indexes)?;
         let head_byte_ceiling = global_cell_card_head_byte_ceiling(
             max_bytes,
+            exact_candidate_rows,
+            routed_exact_row_byte_ceiling,
             routed_exact_block_ceiling,
             global_cell_card_exact_request_budget(context.page_budget),
             self.read_runtime.exact_read_max_physical_amplification,
@@ -20076,11 +20085,8 @@ impl BorsukIndex {
         }
         let selected_card_count = selected_head_plan.cards();
         let selected_ranked_card_indexes = &ranked_card_indexes[..selected_card_count];
-        let (
-            requested_exact_block_budget,
-            selected_exact_block_ceiling,
-            selected_exact_row_ceiling,
-        ) = cell_card_exact_admission_bounds(root, selected_ranked_card_indexes)?;
+        let (requested_exact_block_budget, _, selected_exact_row_ceiling, _) =
+            cell_card_exact_admission_bounds(root, selected_ranked_card_indexes)?;
         let exact_fetch_rows = if default_mvcc_continuation {
             exact_candidate_rows.saturating_add(
                 context
@@ -20099,13 +20105,7 @@ impl BorsukIndex {
             "cards" = selected_head_plan.cards(),
             "bytes" = selected_head_plan.physical_bytes(),
         );
-        let exact_reserve = u64::try_from(requested_exact_block_budget)
-            .unwrap_or(u64::MAX)
-            .saturating_mul(selected_exact_block_ceiling)
-            .min(max_bytes);
-        let head_fetch_ceiling = max_bytes.saturating_sub(exact_reserve);
         let head_promotion_byte_ceiling = global_cell_card_head_promotion_byte_ceiling(
-            head_fetch_ceiling,
             head_byte_ceiling,
             query_head_physical_ceiling,
         );
@@ -43531,12 +43531,8 @@ mod tests {
             Some((16 * 1024 * 1024, 16 * 1024 * 1024 - 1_024 * 256))
         );
         assert_eq!(
-            global_cell_card_head_promotion_byte_ceiling(
-                30 * 1024 * 1024,
-                15 * 1024 * 1024,
-                16 * 1024 * 1024
-            ),
-            16 * 1024 * 1024
+            global_cell_card_head_promotion_byte_ceiling(15 * 1024 * 1024, 16 * 1024 * 1024),
+            15 * 1024 * 1024
         );
     }
 
@@ -43694,16 +43690,35 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v20_head_ceiling_reserves_one_amplified_exact_block_not_a_fixed_fraction() {
+    fn resident_global_v20_head_ceiling_reserves_candidate_scaled_exact_work() {
         assert_eq!(
-            global_cell_card_head_byte_ceiling(32 * 1024 * 1024, 64 * 1024, 32, 2,),
-            32 * 1024 * 1024 - 128 * 1024,
+            global_cell_card_head_byte_ceiling(32 * 1024 * 1024, 2_048, 1_024, 64 * 1024, 32, 2,),
+            32 * 1024 * 1024 - 4 * 1024 * 1024,
         );
-        assert_eq!(global_cell_card_head_byte_ceiling(1_000, 1, 0, 2), 0);
-        assert_eq!(global_cell_card_head_byte_ceiling(1_000, 600, 1, 2), 0);
         assert_eq!(
-            global_cell_card_head_byte_ceiling(u64::MAX, u64::MAX, 2, 2),
+            global_cell_card_head_byte_ceiling(32 * 1024 * 1024, 512, 1_024, 64 * 1024, 32, 2),
+            32 * 1024 * 1024 - 1024 * 1024,
+        );
+        assert_eq!(
+            global_cell_card_head_byte_ceiling(32 * 1024 * 1024, 512, 1_024, 64 * 1024, 32, 5),
+            32 * 1024 * 1024 - 2_560 * 1024,
+        );
+        assert_eq!(global_cell_card_head_byte_ceiling(1_000, 1, 1, 1, 0, 2), 0);
+        assert_eq!(
+            global_cell_card_head_byte_ceiling(1_000, 1, 1, 600, 1, 2),
+            0
+        );
+        assert_eq!(
+            global_cell_card_head_byte_ceiling(u64::MAX, usize::MAX, u64::MAX, u64::MAX, 2, 2,),
             0,
+        );
+    }
+
+    #[test]
+    fn resident_global_v20_head_promotion_cannot_consume_the_exact_reserve() {
+        assert_eq!(
+            global_cell_card_head_promotion_byte_ceiling(28 * 1024 * 1024, 32 * 1024 * 1024,),
+            28 * 1024 * 1024,
         );
     }
 
