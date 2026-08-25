@@ -42,7 +42,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v18",
+                    "borsuk-production-bench-v19",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -72,6 +72,9 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 "nprobe",
                 "max_candidates",
                 "sample_index",
+                "cache_cohort_index",
+                "cache_cohort_size",
+                "cache_cohort_count",
                 "latency_ms",
                 "recall_at_10",
                 "ram_budget_bytes",
@@ -91,6 +94,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 "global_leaf_waves",
                 "global_leaf_continuations",
                 "global_leaf_exact_scores",
+                "decoded_cache_bytes_read",
                 "backing_reads",
                 "backing_bytes_read",
                 *PHYSICAL_EXACT_LAYOUT_FIELDS,
@@ -98,13 +102,16 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v18",
+                    "borsuk-production-bench-v19",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
                     "approximate",
                     8,
                     256,
+                    0,
+                    0,
+                    0,
                     0,
                     10,
                     0.98,
@@ -123,6 +130,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     1,
                     100,
                     1,
+                    0,
                     0,
                     2,
                     1,
@@ -145,7 +153,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     12,
                 ],
                 [
-                    "borsuk-production-bench-v18",
+                    "borsuk-production-bench-v19",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -153,6 +161,9 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     8,
                     256,
                     1,
+                    0,
+                    0,
+                    0,
                     12,
                     1.0,
                     4096,
@@ -172,6 +183,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     1,
                     0,
                     2,
+                    0,
                     1,
                     100,
                     *[1, 1, 1, 1, 1, 1, 100, 0],
@@ -213,6 +225,14 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             (
                 "telemetry",
                 lambda rows: [row.pop("global_leaf_exact_scores") for row in rows],
+            ),
+            (
+                "decoded tier",
+                lambda rows: [row.pop("decoded_cache_bytes_read") for row in rows],
+            ),
+            (
+                "cache cohort",
+                lambda rows: [row.pop("cache_cohort_count") for row in rows],
             ),
             (
                 "empty timing",
@@ -352,7 +372,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 *QUERY_STAGE_TIMING_FIELDS,
             ]
             summary = [
-                "borsuk-production-bench-v18",
+                "borsuk-production-bench-v19",
                 "fast-turboquant-scan",
                 "scan",
                 "bounded-cell-card-v20",
@@ -369,7 +389,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 5,
             ]
             sample = [
-                "borsuk-production-bench-v18",
+                "borsuk-production-bench-v19",
                 "fast-turboquant-scan",
                 "scan",
                 "bounded-cell-card-v20",
@@ -437,8 +457,8 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "schema"):
                 validate_directory(root, "fast-turboquant-scan", required)
 
-            summary[0] = "borsuk-production-bench-v18"
-            sample[0] = "borsuk-production-bench-v18"
+            summary[0] = "borsuk-production-bench-v19"
+            sample[0] = "borsuk-production-bench-v19"
             sample[4] = 32
             self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
             self.write_csv(

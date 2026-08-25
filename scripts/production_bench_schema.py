@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 V10_PRODUCTION_BENCH_SCHEMA_VERSION = "borsuk-production-bench-v10"
-PRODUCTION_BENCH_SCHEMA_VERSION = "borsuk-production-bench-v18"
+PRODUCTION_BENCH_SCHEMA_VERSION = "borsuk-production-bench-v19"
 V10_QUERY_TELEMETRY_FIELDS = (
     "global_leaf_directory_reads",
     "global_leaf_directory_bytes",
@@ -45,8 +45,7 @@ QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE = {
     for field in QUERY_STAGE_TIMING_FIELDS
 }
 QUERY_STAGE_AGGREGATE_FIELDS = tuple(
-    QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE[field]
-    for field in QUERY_STAGE_TIMING_FIELDS
+    QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE[field] for field in QUERY_STAGE_TIMING_FIELDS
 )
 PHYSICAL_EXACT_LAYOUT_FIELDS = (
     "global_leaf_code_requests",
@@ -58,7 +57,13 @@ PHYSICAL_EXACT_LAYOUT_FIELDS = (
     "global_leaf_exact_selected_bytes",
     "global_leaf_exact_speculative_bytes",
 )
+CACHE_COHORT_FIELDS = (
+    "cache_cohort_index",
+    "cache_cohort_size",
+    "cache_cohort_count",
+)
 CURRENT_QUERY_TELEMETRY_FIELDS = (
+    *CACHE_COHORT_FIELDS,
     "global_leaf_directory_reads",
     "global_leaf_directory_bytes",
     "global_leaf_code_pages_read",
@@ -69,6 +74,7 @@ CURRENT_QUERY_TELEMETRY_FIELDS = (
     "global_leaf_waves",
     "global_leaf_continuations",
     "global_leaf_exact_scores",
+    "decoded_cache_bytes_read",
     "backing_reads",
     "backing_bytes_read",
     *QUERY_STAGE_TIMING_FIELDS,
@@ -151,8 +157,7 @@ def validate_query_stage_timings(
         > parsed["global_base_exact_read_us_sum"]
         or parsed["global_base_exact_read_us_max"]
         > parsed["global_base_exact_fetch_us"]
-        or parsed["global_base_exact_fetch_us"]
-        > parsed["global_base_exact_rerank_us"]
+        or parsed["global_base_exact_fetch_us"] > parsed["global_base_exact_rerank_us"]
     ):
         raise ValueError(f"{role} timing telemetry is inconsistent")
     tails = [

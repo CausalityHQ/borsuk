@@ -3,6 +3,7 @@ import hashlib
 import json
 import unittest
 
+from scripts.production_bench_schema import QUERY_STAGE_AGGREGATE_FIELDS
 from scripts.publication_v3_attestation import runtime_attestation_sha256
 from scripts.publication_v3_clones import (
     build_clone_receipt,
@@ -15,7 +16,6 @@ from scripts.publication_v3_protocol import (
 )
 from scripts.publication_v3_receipts import build_index_receipt, receipt_document_sha256
 from scripts.publication_v3_results import validate_cell_result, validate_object_roster
-from scripts.production_bench_schema import QUERY_STAGE_AGGREGATE_FIELDS
 from scripts.test_publication_v3_protocol import paid_v3_manifest
 from scripts.test_publication_v3_receipts import (
     build_artifact,
@@ -328,6 +328,47 @@ class PublicationV3ResultTests(unittest.TestCase):
             ),
             current,
         )
+        latest = copy.deepcopy(current)
+        latest["schema_version"] = 4
+        latest["metrics"].update(
+            {
+                "decoded_cache_bytes_read": 0,
+                "disk_cache_bytes_read": 0,
+                "excluded_setup_storage_gets": 2,
+                "excluded_setup_storage_bytes_read": 1_024,
+            }
+        )
+        self.assertEqual(
+            validate_cell_result(
+                latest,
+                cell=cell,
+                protocol_bytes=protocol,
+                source_archive_sha256="a" * 64,
+                dataset_materialization_sha256="d" * 64,
+                index_receipt=receipt,
+                runtime_attestation=attestation,
+            ),
+            latest,
+        )
+        for field, value in (
+            ("decoded_cache_bytes_read", -1),
+            ("disk_cache_bytes_read", True),
+            ("excluded_setup_storage_gets", -1),
+            ("excluded_setup_storage_bytes_read", 1.0),
+        ):
+            with self.subTest(field=field, value=value):
+                drift = copy.deepcopy(latest)
+                drift["metrics"][field] = value
+                with self.assertRaisesRegex(ValueError, field.replace("_", " ")):
+                    validate_cell_result(
+                        drift,
+                        cell=cell,
+                        protocol_bytes=protocol,
+                        source_archive_sha256="a" * 64,
+                        dataset_materialization_sha256="d" * 64,
+                        index_receipt=receipt,
+                        runtime_attestation=attestation,
+                    )
         inconsistent = copy.deepcopy(current)
         inconsistent["metrics"][
             "global_base_exact_read_us_max_across_queries"

@@ -65,12 +65,12 @@ const HIGH_RECALL_ROUTING_OVERFETCH: usize = 64;
 const WRITE_FRACTION_DENOMINATOR: usize = 20;
 const CACHE_COVERAGE_COHORT_QUERIES: usize = 40;
 const CACHE_COVERAGE_REPETITIONS: usize = 4;
-const PRODUCTION_BENCH_SCHEMA_VERSION: &str = "borsuk-production-bench-v18";
+const PRODUCTION_BENCH_SCHEMA_VERSION: &str = "borsuk-production-bench-v19";
 const RECALL_LATENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,execution_engine,phase,mode,nprobe,max_candidates,recall_at_10,samples,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries";
-const QUERY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
+const QUERY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,cache_cohort_index,cache_cohort_size,cache_cohort_count,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
 const CACHE_STATE_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,execution_engine,phase,queries,recall_at_10,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read,avg_object_cache_misses,avg_network_gets,dollars_per_million_queries";
 const CONCURRENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,cache_profile,target_cache_coverage_percent,execution_engine,nprobe,max_candidates,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read";
-const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,nprobe,max_candidates,workers,sample_index,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
+const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,nprobe,max_candidates,workers,sample_index,cache_cohort_index,cache_cohort_size,cache_cohort_count,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
 const CACHE_COVERAGE_HEADER: &str = "schema_version,scan_codec,cache_execution,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,network_gets";
 const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,gc_ms,gc_objects_scanned,gc_objects_deleted,gc_transaction_states_remaining,gc_bytes_read,gc_bytes_reclaimed,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written,configured_build_writers,ingest_batches,ingest_waves,ingest_vectors_per_s";
 const WRITE_COST_HEADER: &str = "op,configured_writers,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
@@ -293,6 +293,7 @@ struct QuerySample {
     decoded_cache_hits: usize,
     disk_cache_reads: u64,
     backing_reads: u64,
+    decoded_cache_bytes_read: u64,
     disk_cache_bytes_read: u64,
     backing_bytes_read: u64,
     network_gets: u64,
@@ -432,9 +433,11 @@ impl QuerySummary {
         // Query-scoped tier counters are authoritative under parallel segment
         // reads. Summing per-segment logical byte totals can count overlapping
         // work more than once.
-        let measured_bytes_read = report
-            .disk_cache_bytes_read
-            .saturating_add(report.backing_bytes_read);
+        let measured_bytes_read = query_scoped_physical_bytes_read(
+            report.decoded_cache_bytes_read,
+            report.disk_cache_bytes_read,
+            report.backing_bytes_read,
+        );
         self.latencies_ms.push(elapsed_ms);
         self.samples.push(QuerySample {
             latency_ms: elapsed_ms,
@@ -462,6 +465,7 @@ impl QuerySummary {
             decoded_cache_hits: report.decoded_cache_hits,
             disk_cache_reads: report.disk_cache_reads,
             backing_reads: report.backing_reads,
+            decoded_cache_bytes_read: report.decoded_cache_bytes_read,
             disk_cache_bytes_read: report.disk_cache_bytes_read,
             backing_bytes_read: report.backing_bytes_read,
             network_gets: report.requests.gets.saturating_add(report.requests.heads),
@@ -594,6 +598,10 @@ impl QuerySummary {
             "mixed"
         }
     }
+}
+
+fn query_scoped_physical_bytes_read(decoded: u64, disk: u64, backing: u64) -> u64 {
+    decoded.saturating_add(disk).saturating_add(backing)
 }
 
 fn execution_engine_label(report: &SearchReport) -> &str {
@@ -1424,21 +1432,9 @@ fn run() -> BenchResult<()> {
     }
 
     if !config.skip_recall && config.cache_profile != BenchmarkCacheProfile::MixedCoverage {
-        if config.recall_nprobes.len() * config.recall_candidates.len() > 1 {
-            // The matrix writer owns exactly one serving handle at a time. Do not
-            // retain an outer full-budget handle beside its isolated cell handle.
-            write_recall_latency_csv(&config, &dataset, None, false)?;
-        } else {
-            let reader = Arc::new(open_serving_index(&config)?);
-            eprintln!("index build_config={:?}", reader.build_config());
-            let preload_complete = if recall_preloads_local_snapshot(config.preload_serving) {
-                warm_all_segments(&reader)?.coverage_complete
-            } else {
-                let _ = reader.prepare_serving_metadata()?;
-                false
-            };
-            write_recall_latency_csv(&config, &dataset, Some(&reader), preload_complete)?;
-        }
+        // The recall writer owns every serving handle. A disk-cached cohort can
+        // therefore reset only after the previous measurement handle is gone.
+        write_recall_latency_csv(&config, &dataset)?;
     }
     if config.recall_only {
         return Ok(());
@@ -1460,25 +1456,21 @@ fn run() -> BenchResult<()> {
         0.0
     };
     write_startup_csv(&config, open_ms, preload_ms, warm_report.as_ref())?;
+    // Startup/preload is a separate observation. Drop its full-budget handle
+    // before cache-state or concurrency cohorts reset and reopen local cache.
+    drop(reader);
     if cache_state_summary_enabled(config.skip_recall, config.cache_profile) {
-        write_cold_warm_csv(
-            &config,
-            &dataset,
-            &reader,
-            warm_report.is_some_and(|report| report.coverage_complete),
-        )?;
+        write_cold_warm_csv(&config, &dataset)?;
     }
-    write_concurrency_csv(&config, &dataset, &reader)?;
+    write_concurrency_csv(&config, &dataset)?;
     write_cache_coverage_csv(&config, &dataset)?;
     if config.read_only {
         return Ok(());
     }
 
-    // BorsukIndex is cloneable but has no storage-level "copy index" API. All read
-    // measurements are complete, so this cloned handle is the isolated mutable
-    // benchmark copy; it shares the configured backing URI with the built index.
-    let mut write_index = reader.as_ref().clone();
-    drop(reader);
+    // Read measurements are complete. Open a new isolated mutable handle for
+    // the write phase instead of carrying read-cache authority across phases.
+    let mut write_index = open_serving_index(&config)?;
     write_write_costs_csv(&config, &dataset, &mut write_index)?;
     Ok(())
 }
@@ -1583,6 +1575,18 @@ fn uses_bounded_decoded_cache_phases(
             leaf_mode,
             LeafMode::Graph | LeafMode::VamanaPq | LeafMode::Hybrid
         )
+}
+
+fn recall_cache_profile_needs_outer_handle(
+    cache_profile: BenchmarkCacheProfile,
+    preload: bool,
+    cache_execution: CacheExecutionPolicy,
+    leaf_mode: LeafMode,
+    segment_cache_max_bytes: Option<u64>,
+) -> bool {
+    cache_profile == BenchmarkCacheProfile::All
+        && (uses_memory_preloaded_phase(preload, cache_execution, true)
+            || uses_bounded_decoded_cache_phases(false, leaf_mode, segment_cache_max_bytes))
 }
 
 fn effective_segment_cache_budget(config: &ResolvedConfig) -> Option<u64> {
@@ -2847,36 +2851,17 @@ fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchRe
     Ok(())
 }
 
-fn write_recall_latency_csv(
-    config: &ResolvedConfig,
-    dataset: &Dataset,
-    index: Option<&BorsukIndex>,
-    preload_complete: bool,
-) -> BenchResult<()> {
+fn write_recall_latency_csv(config: &ResolvedConfig, dataset: &Dataset) -> BenchResult<()> {
     let path = config.output_dir.join("bench_recall_latency.csv");
     let mut writer = csv_writer(&path)?;
     writeln!(writer, "{RECALL_LATENCY_HEADER}")?;
     let samples_path = config.output_dir.join("bench_query_samples.csv");
     let mut samples_writer = csv_writer(&samples_path)?;
     writeln!(samples_writer, "{QUERY_SAMPLE_HEADER}")?;
-    let query_source_indices = permuted_positions(dataset.queries.len(), config.query_seed);
+    let mut rows_written = 0usize;
 
     for &max_candidates in &config.recall_candidates {
         for &nprobe in &config.recall_nprobes {
-            // Multi-arm sweeps must not inherit decoded/code planes from an earlier
-            // arm. Open one serving handle per matrix cell; open time is outside the
-            // timed query samples and the handle is dropped before the next cell.
-            let matrix = config.recall_nprobes.len() * config.recall_candidates.len() > 1;
-            let isolated_index = matrix.then(|| open_serving_index(config)).transpose()?;
-            let cell_index = isolated_index.as_ref().or(index).ok_or_else(|| {
-                invalid_input("recall execution has no serving index for its matrix cell")
-            })?;
-            let cell_preload_complete =
-                if matrix && recall_preloads_local_snapshot(config.preload_serving) {
-                    warm_all_segments(cell_index)?.coverage_complete
-                } else {
-                    preload_complete
-                };
             let options = approximate_options(
                 config.recall_leaf_mode,
                 HIGH_RECALL_ROUTING_OVERFETCH,
@@ -2885,6 +2870,28 @@ fn write_recall_latency_csv(
                 config.cache_execution,
                 config.force_segment_path,
             );
+            // Each matrix cell owns its serving handle. Disk-cached execution
+            // owns still narrower handles inside each cohort, so it deliberately
+            // has no outer handle capable of retaining decoded/cache state.
+            let cell_index = recall_cache_profile_needs_outer_handle(
+                config.cache_profile,
+                config.preload_serving,
+                config.cache_execution,
+                options.mode.leaf_mode(),
+                effective_segment_cache_budget(config),
+            )
+            .then(|| open_serving_index(config))
+            .transpose()?;
+            let cell_preload_complete = if let Some(cell_index) = cell_index.as_ref() {
+                if recall_preloads_local_snapshot(config.preload_serving) {
+                    warm_all_segments(cell_index)?.coverage_complete
+                } else {
+                    let _ = cell_index.prepare_serving_metadata()?;
+                    false
+                }
+            } else {
+                false
+            };
             for (phase, summary) in run_recall_cache_phases(
                 config,
                 dataset,
@@ -2903,7 +2910,7 @@ fn write_recall_latency_csv(
                         mode: &config.recall_leaf_mode.to_string(),
                         nprobe,
                         max_candidates,
-                        query_source_indices: &query_source_indices,
+                        query_source_indices: dataset.query_source_indices.as_slice(),
                     },
                     &summary,
                 )?;
@@ -2916,31 +2923,38 @@ fn write_recall_latency_csv(
                     max_candidates,
                     &summary,
                 )?;
+                rows_written = rows_written.saturating_add(1);
             }
             writer.flush()?;
         }
     }
 
     if !config.skip_exact_recall {
-        let isolated_exact_index = index
-            .is_none()
-            .then(|| open_serving_index(config))
-            .transpose()?;
-        let exact_index = isolated_exact_index
-            .as_ref()
-            .or(index)
-            .ok_or_else(|| invalid_input("exact recall execution has no serving index"))?;
-        let exact_preload_complete =
-            if index.is_none() && recall_preloads_local_snapshot(config.preload_serving) {
+        let exact_options = SearchOptions::exact(RECALL_K);
+        let exact_index = recall_cache_profile_needs_outer_handle(
+            config.cache_profile,
+            config.preload_serving,
+            config.cache_execution,
+            exact_options.mode.leaf_mode(),
+            effective_segment_cache_budget(config),
+        )
+        .then(|| open_serving_index(config))
+        .transpose()?;
+        let exact_preload_complete = if let Some(exact_index) = exact_index.as_ref() {
+            if recall_preloads_local_snapshot(config.preload_serving) {
                 warm_all_segments(exact_index)?.coverage_complete
             } else {
-                preload_complete
-            };
+                let _ = exact_index.prepare_serving_metadata()?;
+                false
+            }
+        } else {
+            false
+        };
         for (phase, summary) in run_recall_cache_phases(
             config,
             dataset,
             exact_index,
-            SearchOptions::exact(RECALL_K),
+            exact_options,
             exact_preload_complete,
         )? {
             write_query_samples(
@@ -2951,11 +2965,12 @@ fn write_recall_latency_csv(
                     mode: "exact",
                     nprobe: 0,
                     max_candidates: 0,
-                    query_source_indices: &query_source_indices,
+                    query_source_indices: dataset.query_source_indices.as_slice(),
                 },
                 &summary,
             )?;
             write_recall_row(&mut writer, config, phase, "exact", 0, 0, &summary)?;
+            rows_written = rows_written.saturating_add(1);
         }
     }
     writer.flush()?;
@@ -2963,16 +2978,7 @@ fn write_recall_latency_csv(
     eprintln!(
         "wrote {} rows={} dataset={}",
         path.display(),
-        recall_row_count(
-            config.recall_nprobes.len(),
-            config.recall_candidates.len(),
-            config.skip_exact_recall,
-            uses_memory_preloaded_phase(
-                config.preload_serving,
-                config.cache_execution,
-                preload_complete,
-            ),
-        ),
+        rows_written,
         dataset.meta.name
     );
     Ok(())
@@ -2999,7 +3005,16 @@ fn write_query_samples(
         max_candidates,
         query_source_indices,
     } = context;
+    let cache_cohort_size =
+        query_sample_cache_cohort_size(config.cache_profile, phase, config.disk_cache_max_bytes)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+    let cache_cohort_count = if cache_cohort_size == 0 {
+        0
+    } else {
+        summary.samples.len().div_ceil(cache_cohort_size)
+    };
     for (sample_index, sample) in summary.samples.iter().enumerate() {
+        let cache_cohort_index = sample_index.checked_div(cache_cohort_size).unwrap_or(0);
         let query_source_index = query_source_indices.get(sample_index).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -3008,7 +3023,7 @@ fn write_query_samples(
         })?;
         writeln!(
             writer,
-            "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{phase},{mode},{nprobe},{max_candidates},{sample_index},{query_source_index},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{phase},{mode},{nprobe},{max_candidates},{sample_index},{cache_cohort_index},{cache_cohort_size},{cache_cohort_count},{query_source_index},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             config.global_scan_codec,
             config.cache_execution,
             sample.latency_ms,
@@ -3030,7 +3045,10 @@ fn write_query_samples(
             sample.bytes_read,
             sample.decoded_cache_hits,
             sample.disk_cache_reads,
-            sample.backing_reads,
+            format_args!(
+                "{},{}",
+                sample.backing_reads, sample.decoded_cache_bytes_read
+            ),
             sample.disk_cache_bytes_read,
             sample.backing_bytes_read,
             sample.network_gets,
@@ -3058,37 +3076,30 @@ fn write_query_samples(
     Ok(())
 }
 
-fn recall_row_count(
-    nprobes: usize,
-    candidates: usize,
-    skip_exact_recall: bool,
-    memory_preloaded: bool,
-) -> usize {
-    (if memory_preloaded { 1 } else { 2 })
-        * (nprobes * candidates + usize::from(!skip_exact_recall))
-}
-
 fn run_recall_cache_phases(
     config: &ResolvedConfig,
     dataset: &Dataset,
-    index: &BorsukIndex,
+    index: Option<BorsukIndex>,
     options: SearchOptions,
     preload_complete: bool,
 ) -> BenchResult<Vec<(&'static str, QuerySummary)>> {
     match config.cache_profile {
         BenchmarkCacheProfile::Uncached => {
+            drop(index);
             return Ok(vec![(
                 "uncached",
-                run_uncached_queries(config, dataset, index, options, dataset.queries.len())?,
+                run_uncached_queries(config, dataset, options, dataset.queries.len())?,
             )]);
         }
         BenchmarkCacheProfile::DiskCached => {
+            drop(index);
             return Ok(vec![(
                 "disk_cached",
-                run_disk_cached_queries(config, dataset, index, options)?,
+                run_disk_cached_queries(config, dataset, options)?,
             )]);
         }
         BenchmarkCacheProfile::MixedCoverage => {
+            drop(index);
             return Err(invalid_input(
                 "mixed cache coverage is measured by bench_cache_coverage.csv, not a homogeneous recall phase",
             )
@@ -3101,6 +3112,22 @@ fn run_recall_cache_phases(
         config.cache_execution,
         preload_complete,
     );
+    let bounded_decoded = uses_bounded_decoded_cache_phases(
+        memory_preloaded,
+        options.mode.leaf_mode(),
+        effective_segment_cache_budget(config),
+    );
+    if !memory_preloaded && !bounded_decoded {
+        let uncached_options = options.clone();
+        return execute_isolated_recall_cache_phases(
+            index,
+            move || run_uncached_queries(config, dataset, uncached_options, dataset.queries.len()),
+            move || run_disk_cached_queries(config, dataset, options),
+        );
+    }
+    let index = index
+        .as_ref()
+        .ok_or_else(|| invalid_input("recall execution has no serving index"))?;
     if memory_preloaded {
         let _ = run_queries(index, &dataset.queries[..1], None, options.clone())?;
         let memory_preloaded = run_queries(
@@ -3111,11 +3138,7 @@ fn run_recall_cache_phases(
         )?;
         return Ok(vec![("memory_preloaded", memory_preloaded)]);
     }
-    if uses_bounded_decoded_cache_phases(
-        memory_preloaded,
-        options.mode.leaf_mode(),
-        effective_segment_cache_budget(config),
-    ) {
+    if bounded_decoded {
         reset_cache(&config.cache_dir)?;
         let fill = run_queries(
             index,
@@ -3149,60 +3172,66 @@ fn run_recall_cache_phases(
             ),
         ]);
     }
-    let mut uncached = QuerySummary::default();
-    for query_index in 0..dataset.queries.len() {
-        reset_cache(&config.cache_dir)?;
-        uncached.absorb(run_queries(
-            index,
-            &dataset.queries[query_index..query_index + 1],
-            Some(&dataset.ground_truth[query_index..query_index + 1]),
-            options.clone(),
-        )?);
-    }
+    unreachable!("combined recall cache phase selection is exhaustive")
+}
 
-    reset_cache(&config.cache_dir)?;
-    let _ = run_queries(index, &dataset.queries, None, options.clone())?;
-    let disk_cached = run_queries(
-        index,
-        &dataset.queries,
-        Some(&dataset.ground_truth),
-        options,
-    )?;
-    validate_disk_cached_network(&disk_cached)?;
-    Ok(vec![("uncached", uncached), ("disk_cached", disk_cached)])
+fn execute_isolated_recall_cache_phases<Handle, Summary>(
+    outer: Option<Handle>,
+    uncached: impl FnOnce() -> BenchResult<Summary>,
+    disk_cached: impl FnOnce() -> BenchResult<Summary>,
+) -> BenchResult<Vec<(&'static str, Summary)>> {
+    drop(outer);
+    Ok(vec![
+        ("uncached", uncached()?),
+        ("disk_cached", disk_cached()?),
+    ])
 }
 
 fn run_uncached_queries(
     config: &ResolvedConfig,
     dataset: &Dataset,
-    index: &BorsukIndex,
     options: SearchOptions,
     query_count: usize,
 ) -> BenchResult<QuerySummary> {
+    execute_uncached_query_sequence(
+        query_count.min(dataset.queries.len()),
+        || reset_cache(&config.cache_dir).map_err(Into::into),
+        || open_serving_index(config),
+        |index, query_index| {
+            run_queries(
+                index,
+                &dataset.queries[query_index..query_index + 1],
+                Some(&dataset.ground_truth[query_index..query_index + 1]),
+                options.clone(),
+            )
+        },
+    )
+}
+
+fn execute_uncached_query_sequence<Handle>(
+    query_count: usize,
+    mut reset: impl FnMut() -> BenchResult<()>,
+    mut open: impl FnMut() -> BenchResult<Handle>,
+    mut measure: impl FnMut(&Handle, usize) -> BenchResult<QuerySummary>,
+) -> BenchResult<QuerySummary> {
     let mut summary = QuerySummary::default();
-    for query_index in 0..query_count.min(dataset.queries.len()) {
-        reset_cache(&config.cache_dir)?;
-        summary.absorb(run_queries(
-            index,
-            &dataset.queries[query_index..query_index + 1],
-            Some(&dataset.ground_truth[query_index..query_index + 1]),
-            options.clone(),
-        )?);
+    for query_index in 0..query_count {
+        reset()?;
+        {
+            let measurement = open()?;
+            summary.absorb(measure(&measurement, query_index)?);
+        }
     }
     Ok(summary)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DiskCachedQueryStep {
-    Reset,
-    Prime(usize),
-    Measure(usize),
-}
-
-fn execute_disk_cached_query_sequence(
+fn execute_disk_cached_query_cohorts<Handle>(
     query_count: usize,
     cohort_size: usize,
-    mut execute: impl FnMut(DiskCachedQueryStep) -> BenchResult<QuerySummary>,
+    mut reset: impl FnMut() -> BenchResult<()>,
+    mut open: impl FnMut() -> BenchResult<Handle>,
+    mut prime: impl FnMut(&Handle, usize) -> BenchResult<()>,
+    mut measure: impl FnMut(&Handle, usize) -> BenchResult<QuerySummary>,
 ) -> BenchResult<QuerySummary> {
     if cohort_size == 0 {
         return Err(invalid_input("disk-cached query cohort must not be empty").into());
@@ -3210,17 +3239,67 @@ fn execute_disk_cached_query_sequence(
     let mut summary = QuerySummary::default();
     for cohort_start in (0..query_count).step_by(cohort_size) {
         let cohort_end = cohort_start.saturating_add(cohort_size).min(query_count);
-        let _ = execute(DiskCachedQueryStep::Reset)?;
-        for query_index in cohort_start..cohort_end {
-            let _ = execute(DiskCachedQueryStep::Prime(query_index))?;
+        reset()?;
+        {
+            let primer = open()?;
+            for query_index in cohort_start..cohort_end {
+                prime(&primer, query_index)?;
+            }
         }
-        for query_index in cohort_start..cohort_end {
-            let measured = execute(DiskCachedQueryStep::Measure(query_index))?;
-            validate_disk_cached_query(query_index, &measured)?;
-            summary.absorb(measured);
+        {
+            let measurement = open()?;
+            for query_index in cohort_start..cohort_end {
+                let measured = measure(&measurement, query_index)?;
+                validate_disk_cached_query(query_index, &measured)?;
+                summary.absorb(measured);
+            }
         }
     }
     Ok(summary)
+}
+
+fn execute_disk_cached_concurrency_cohorts<Handle>(
+    query_count: usize,
+    cohort_size: usize,
+    mut reset: impl FnMut() -> BenchResult<()>,
+    mut open: impl FnMut() -> BenchResult<Handle>,
+    mut prime: impl FnMut(&Handle, usize) -> BenchResult<()>,
+    mut measure: impl FnMut(
+        &Handle,
+        &[usize],
+        usize,
+    ) -> BenchResult<(Vec<ConcurrencyMeasurement>, Duration)>,
+) -> BenchResult<(Vec<ConcurrencyMeasurement>, Duration)> {
+    if cohort_size == 0 {
+        return Err(invalid_input("disk-cached query cohort must not be empty").into());
+    }
+    let mut measurements = Vec::with_capacity(query_count);
+    let mut measured_wall = Duration::ZERO;
+    for cohort_start in (0..query_count).step_by(cohort_size) {
+        let cohort_end = cohort_start.saturating_add(cohort_size).min(query_count);
+        let cohort = (cohort_start..cohort_end).collect::<Vec<_>>();
+        reset()?;
+        {
+            let primer = open()?;
+            for &query_index in &cohort {
+                prime(&primer, query_index)?;
+            }
+        }
+        {
+            let measurement = open()?;
+            let (mut wave, elapsed) = measure(&measurement, &cohort, cohort_start)?;
+            for sample in &wave {
+                validate_disk_cached_observation(
+                    sample.query_source_index,
+                    sample.network_gets,
+                    sample.disk_cache_reads,
+                )?;
+            }
+            measurements.append(&mut wave);
+            measured_wall = measured_wall.saturating_add(elapsed);
+        }
+    }
+    Ok((measurements, measured_wall))
 }
 
 // V20 admits at most 32 MiB of physical head+exact data per query. Fund cohorts
@@ -3243,31 +3322,47 @@ fn disk_cached_query_cohort_size(disk_cache_max_bytes: Option<u64>) -> BenchResu
     )
 }
 
+fn query_sample_cache_cohort_size(
+    cache_profile: BenchmarkCacheProfile,
+    phase: &str,
+    disk_cache_max_bytes: Option<u64>,
+) -> BenchResult<usize> {
+    if cache_profile == BenchmarkCacheProfile::DiskCached && phase == "disk_cached" {
+        disk_cached_query_cohort_size(disk_cache_max_bytes)
+    } else {
+        Ok(0)
+    }
+}
+
 fn run_disk_cached_queries(
     config: &ResolvedConfig,
     dataset: &Dataset,
-    index: &BorsukIndex,
     options: SearchOptions,
 ) -> BenchResult<QuerySummary> {
     let cohort_size = disk_cached_query_cohort_size(config.disk_cache_max_bytes)?;
-    execute_disk_cached_query_sequence(dataset.queries.len(), cohort_size, |step| match step {
-        DiskCachedQueryStep::Reset => {
-            reset_cache(&config.cache_dir)?;
-            Ok(QuerySummary::default())
-        }
-        DiskCachedQueryStep::Prime(query_index) => run_queries(
-            index,
-            &dataset.queries[query_index..query_index + 1],
-            None,
-            options.clone(),
-        ),
-        DiskCachedQueryStep::Measure(query_index) => run_queries(
-            index,
-            &dataset.queries[query_index..query_index + 1],
-            Some(&dataset.ground_truth[query_index..query_index + 1]),
-            options.clone(),
-        ),
-    })
+    execute_disk_cached_query_cohorts(
+        dataset.queries.len(),
+        cohort_size,
+        || reset_cache(&config.cache_dir).map_err(Into::into),
+        || open_serving_index(config),
+        |index, query_index| {
+            let _ = run_queries(
+                index,
+                &dataset.queries[query_index..query_index + 1],
+                None,
+                options.clone(),
+            )?;
+            Ok(())
+        },
+        |index, query_index| {
+            run_queries(
+                index,
+                &dataset.queries[query_index..query_index + 1],
+                Some(&dataset.ground_truth[query_index..query_index + 1]),
+                options.clone(),
+            )
+        },
+    )
 }
 
 fn write_recall_row(
@@ -3313,27 +3408,42 @@ fn write_recall_row(
     )
 }
 
-fn write_cold_warm_csv(
-    config: &ResolvedConfig,
-    dataset: &Dataset,
-    index: &BorsukIndex,
-    preload_complete: bool,
-) -> BenchResult<()> {
+fn write_cold_warm_csv(config: &ResolvedConfig, dataset: &Dataset) -> BenchResult<()> {
     let path = config.output_dir.join("bench_cache_states.csv");
     let mut writer = csv_writer(&path)?;
     writeln!(writer, "{CACHE_STATE_HEADER}")?;
     let options = serving_options(config);
+    let index = recall_cache_profile_needs_outer_handle(
+        config.cache_profile,
+        config.preload_serving,
+        config.cache_execution,
+        options.mode.leaf_mode(),
+        effective_segment_cache_budget(config),
+    )
+    .then(|| open_serving_index(config))
+    .transpose()?;
+    let preload_complete = if let Some(index) = index.as_ref() {
+        if config.preload_serving {
+            warm_all_segments(index)?.coverage_complete
+        } else {
+            let _ = index.prepare_serving_metadata()?;
+            false
+        }
+    } else {
+        false
+    };
     match config.cache_profile {
         BenchmarkCacheProfile::Uncached => {
-            let summary =
-                run_uncached_queries(config, dataset, index, options, config.uncached_queries)?;
+            drop(index);
+            let summary = run_uncached_queries(config, dataset, options, config.uncached_queries)?;
             write_cache_state_row(&mut writer, config, "uncached", &summary)?;
             writer.flush()?;
             eprintln!("wrote {} rows=1", path.display());
             return Ok(());
         }
         BenchmarkCacheProfile::DiskCached => {
-            let summary = run_disk_cached_queries(config, dataset, index, options)?;
+            drop(index);
+            let summary = run_disk_cached_queries(config, dataset, options)?;
             write_cache_state_row(&mut writer, config, "disk_cached", &summary)?;
             writer.flush()?;
             eprintln!("wrote {} rows=1", path.display());
@@ -3357,6 +3467,25 @@ fn write_cold_warm_csv(
         options.mode.leaf_mode(),
         effective_segment_cache_budget(config),
     );
+    if !memory_preloaded && !bounded_decoded {
+        let uncached_options = options.clone();
+        let phases = execute_isolated_recall_cache_phases(
+            index,
+            move || {
+                run_uncached_queries(config, dataset, uncached_options, config.uncached_queries)
+            },
+            move || run_disk_cached_queries(config, dataset, options),
+        )?;
+        for (phase, summary) in phases {
+            write_cache_state_row(&mut writer, config, phase, &summary)?;
+        }
+        writer.flush()?;
+        eprintln!("wrote {} rows=2", path.display());
+        return Ok(());
+    }
+    let index = index
+        .as_ref()
+        .ok_or_else(|| invalid_input("cache-state execution has no serving index"))?;
     let (first, cached) = if memory_preloaded {
         (
             run_queries(
@@ -3389,33 +3518,7 @@ fn write_cold_warm_csv(
             )?,
         )
     } else {
-        // Every uncached trial starts with a fresh DATA cache while retaining
-        // the routing, IVF graph, and sidecar row-offset metadata prepared at
-        // open. This matches a loaded serving process whose requested cell data
-        // is absent locally, without charging initialization to the query.
-        let mut uncached = QuerySummary::default();
-        for query_index in 0..config.uncached_queries {
-            reset_cache(&config.cache_dir)?;
-            uncached.absorb(run_queries(
-                index,
-                &dataset.queries[query_index..query_index + 1],
-                Some(&dataset.ground_truth[query_index..query_index + 1]),
-                options.clone(),
-            )?);
-        }
-
-        // Prime exactly the query set that will be measured. This pass is not a
-        // result row: its only job is to populate the local disk cache. The
-        // subsequent pass must report no storage bytes or underlying GETs.
-        reset_cache(&config.cache_dir)?;
-        let _ = run_queries(index, &dataset.queries, None, options.clone())?;
-        let cached = run_queries(
-            index,
-            &dataset.queries,
-            Some(&dataset.ground_truth),
-            options.clone(),
-        )?;
-        (uncached, cached)
+        unreachable!("combined cache-state phase selection is exhaustive")
     };
     write_cache_state_row(
         &mut writer,
@@ -3629,7 +3732,11 @@ fn measure_concurrency_wave(
                         target_hot_set_member: query_index < hot_count,
                         latency_ms: elapsed_ms(query_started),
                         recall,
-                        bytes_read: report.bytes_read,
+                        bytes_read: query_scoped_physical_bytes_read(
+                            report.decoded_cache_bytes_read,
+                            report.disk_cache_bytes_read,
+                            report.backing_bytes_read,
+                        ),
                         decoded_cache_hits: report.decoded_cache_hits,
                         disk_cache_reads: report.disk_cache_reads,
                         backing_reads: report.backing_reads,
@@ -3673,16 +3780,33 @@ fn measure_concurrency_wave(
     }
     let started = Instant::now();
     ready.wait();
-    let mut measurements = Vec::with_capacity(query_indices.len());
-    for handle in handles {
-        measurements.extend(
-            handle
-                .join()
-                .map_err(|_| invalid_input("concurrency benchmark worker panicked"))?
-                .map_err(|error| invalid_input(&format!("concurrency worker failed: {error}")))?,
-        );
-    }
+    let measurements = join_concurrency_workers(handles)?;
     Ok((measurements, started.elapsed()))
+}
+
+fn join_concurrency_workers(
+    handles: Vec<thread::JoinHandle<Result<Vec<ConcurrencyMeasurement>, String>>>,
+) -> BenchResult<Vec<ConcurrencyMeasurement>> {
+    let mut measurements = Vec::new();
+    let mut first_error = None;
+    for handle in handles {
+        match handle.join() {
+            Ok(Ok(mut worker_measurements)) => measurements.append(&mut worker_measurements),
+            Ok(Err(error)) if first_error.is_none() => {
+                first_error = Some(invalid_input(&format!(
+                    "concurrency worker failed: {error}"
+                )));
+            }
+            Err(_) if first_error.is_none() => {
+                first_error = Some(invalid_input("concurrency benchmark worker panicked"));
+            }
+            Ok(Err(_)) | Err(_) => {}
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error.into());
+    }
+    Ok(measurements)
 }
 
 fn validate_lifecycle_only(
@@ -3705,11 +3829,7 @@ fn validate_lifecycle_only(
     Ok(())
 }
 
-fn write_concurrency_csv(
-    config: &ResolvedConfig,
-    dataset: &Dataset,
-    index: &Arc<BorsukIndex>,
-) -> BenchResult<()> {
+fn write_concurrency_csv(config: &ResolvedConfig, dataset: &Dataset) -> BenchResult<()> {
     let path = config.output_dir.join("bench_concurrency.csv");
     let mut writer = csv_writer(&path)?;
     writeln!(writer, "{CONCURRENCY_HEADER}")?;
@@ -3717,56 +3837,61 @@ fn write_concurrency_csv(
     let mut samples_writer = csv_writer(&samples_path)?;
     writeln!(samples_writer, "{CONCURRENCY_SAMPLE_HEADER}")?;
     let ground_truth = Arc::new(dataset.ground_truth.clone());
+    let cache_cohort_size = if config.cache_profile == BenchmarkCacheProfile::DiskCached {
+        disk_cached_query_cohort_size(config.disk_cache_max_bytes)?
+    } else {
+        0
+    };
+    let cache_cohort_count = if cache_cohort_size == 0 {
+        0
+    } else {
+        dataset.queries.len().div_ceil(cache_cohort_size)
+    };
     for &workers in &config.concurrency {
-        let mut measurements = Vec::with_capacity(dataset.queries.len());
-        let mut measured_wall = Duration::ZERO;
-        if config.cache_profile == BenchmarkCacheProfile::DiskCached {
-            let cohort_size = disk_cached_query_cohort_size(config.disk_cache_max_bytes)?;
-            for cohort_start in (0..dataset.queries.len()).step_by(cohort_size) {
-                let cohort_end = cohort_start
-                    .saturating_add(cohort_size)
-                    .min(dataset.queries.len());
-                let cohort = (cohort_start..cohort_end).collect::<Vec<_>>();
-                reset_cache(&config.cache_dir)?;
-                for &query_index in &cohort {
-                    let _ = index.search_with_report(
-                        &dataset.queries[query_index],
-                        serving_options(config),
-                    )?;
-                }
-                let (mut wave, elapsed) = measure_concurrency_wave(
+        let (mut measurements, measured_wall) =
+            if config.cache_profile == BenchmarkCacheProfile::DiskCached {
+                let cohort_size = disk_cached_query_cohort_size(config.disk_cache_max_bytes)?;
+                execute_disk_cached_concurrency_cohorts(
+                    dataset.queries.len(),
+                    cohort_size,
+                    || reset_cache(&config.cache_dir).map_err(Into::into),
+                    || Ok(Arc::new(open_serving_index(config)?)),
+                    |index, query_index| {
+                        let _ = index.search_with_report(
+                            &dataset.queries[query_index],
+                            serving_options(config),
+                        )?;
+                        Ok(())
+                    },
+                    |index, cohort, cohort_start| {
+                        measure_concurrency_wave(
+                            config,
+                            dataset,
+                            index,
+                            &ground_truth,
+                            cohort,
+                            workers,
+                            cohort_start,
+                        )
+                    },
+                )?
+            } else {
+                let (index, query_indices) = execute_concurrency_cache_setup(
+                    || reset_cache(&config.cache_dir).map_err(Into::into),
+                    || Ok(Arc::new(open_serving_index(config)?)),
+                    |index| prepare_concurrency_cache_state(config, dataset, index),
+                )?;
+                let (wave, elapsed) = measure_concurrency_wave(
                     config,
                     dataset,
-                    index,
+                    &index,
                     &ground_truth,
-                    &cohort,
+                    &query_indices,
                     workers,
-                    cohort_start,
+                    0,
                 )?;
-                for measurement in &wave {
-                    validate_disk_cached_observation(
-                        measurement.query_source_index,
-                        measurement.network_gets,
-                        measurement.disk_cache_reads,
-                    )?;
-                }
-                measurements.append(&mut wave);
-                measured_wall = measured_wall.saturating_add(elapsed);
-            }
-        } else {
-            let query_indices = prepare_concurrency_cache_state(config, dataset, index)?;
-            let (wave, elapsed) = measure_concurrency_wave(
-                config,
-                dataset,
-                index,
-                &ground_truth,
-                &query_indices,
-                workers,
-                0,
-            )?;
-            measurements = wave;
-            measured_wall = elapsed;
-        }
+                (wave, elapsed)
+            };
         measurements.sort_by_key(|measurement| measurement.position);
         let latencies_ms = measurements
             .iter()
@@ -3808,9 +3933,10 @@ fn write_concurrency_csv(
             total_queries as f64 / wall_seconds
         };
         for (sample_index, measurement) in measurements.iter().enumerate() {
+            let cache_cohort_index = sample_index.checked_div(cache_cohort_size).unwrap_or(0);
             writeln!(
                 samples_writer,
-                "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{},{},{},{},{workers},{sample_index},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{PRODUCTION_BENCH_SCHEMA_VERSION},{},{},{},{},{},{},{workers},{sample_index},{cache_cohort_index},{cache_cohort_size},{cache_cohort_count},{},{},{:.6},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 config.global_scan_codec,
                 config.cache_execution,
                 config.cache_profile.as_str(),
@@ -3896,12 +4022,22 @@ fn write_concurrency_csv(
     Ok(())
 }
 
+fn execute_concurrency_cache_setup<Handle, State>(
+    mut reset: impl FnMut() -> BenchResult<()>,
+    mut open: impl FnMut() -> BenchResult<Handle>,
+    mut prepare: impl FnMut(&Handle) -> BenchResult<State>,
+) -> BenchResult<(Handle, State)> {
+    reset()?;
+    let handle = open()?;
+    let state = prepare(&handle)?;
+    Ok((handle, state))
+}
+
 fn prepare_concurrency_cache_state(
     config: &ResolvedConfig,
     dataset: &Dataset,
     index: &BorsukIndex,
 ) -> BenchResult<Arc<Vec<usize>>> {
-    reset_cache(&config.cache_dir)?;
     let all = || (0..dataset.queries.len()).collect::<Vec<_>>();
     match config.cache_profile {
         BenchmarkCacheProfile::All | BenchmarkCacheProfile::DiskCached => {
@@ -5694,7 +5830,7 @@ mod tests {
         BUILD_HEADER, BenchmarkCacheProfile, BorsukIndex, BuildIngestCoordinator,
         CACHE_COVERAGE_HEADER, CACHE_STATE_HEADER, CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER,
         CacheExecutionPolicy, ConcurrencyMeasurement, DEFAULT_NPROBE_SWEEP,
-        DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES, DiskCachedQueryStep,
+        DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES,
         EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig, LIFECYCLE_HEADER,
         LeafCapability, LeafMode, LifecycleBatchAssignment, LifecycleInsertMode,
         LifecycleQueryProgress, MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER,
@@ -5705,27 +5841,30 @@ mod tests {
         cache_coverage_enabled, cache_state_summary_enabled, dataset_metric,
         default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
         deterministic_mutation_vector, disk_cached_query_cohort_size, dollars_per_million_queries,
-        execute_bulk_add_wave, execute_disk_cached_query_sequence, execute_put_wave,
+        execute_bulk_add_wave, execute_concurrency_cache_setup,
+        execute_disk_cached_concurrency_cohorts, execute_disk_cached_query_cohorts,
+        execute_isolated_recall_cache_phases, execute_put_wave, execute_uncached_query_sequence,
         finalize_fresh_build, first_logical_batch_publish_ms, ingest_batch_size,
-        is_hot_workload_position, lifecycle_progress_line, lifecycle_query_progress_line,
-        lifecycle_write_operation_count, lifecycle_write_waves, lifecycle_writer_open_options,
-        mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
-        parquet_train_files_for_phase, parse_flag_value, parse_global_pq_layout,
-        parse_leaf_capability, parse_leaf_mode, parse_lifecycle_insert_mode,
-        parse_optional_byte_cap, parse_positive_list, parse_serving_mode,
-        percentage_operation_count, permuted_positions, preload_query_count,
-        read_logical_cell_catalog, rebatch_mutation_vector_chunk, recall_preloads_local_snapshot,
-        recall_row_count, reopen_build_finalizer, reset_cache, rotated_workload_index, sample_mean,
-        sample_stddev, serving_cache_dir, update_vector_reservoir,
-        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
-        validate_bounded_v20_execution, validate_build_only, validate_build_writers,
-        validate_disk_cached_network, validate_exact_read_max_physical_amplification,
-        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
-        validate_lifecycle_only, validate_lifecycle_writers,
-        validate_max_parallel_decode_rank_tasks, validate_phase_selection,
-        validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
-        vector_row, verification_offsets, write_batch_len, write_operation_count,
-        write_runtime_flow_control_receipt,
+        is_hot_workload_position, join_concurrency_workers, lifecycle_progress_line,
+        lifecycle_query_progress_line, lifecycle_write_operation_count, lifecycle_write_waves,
+        lifecycle_writer_open_options, mixed_concurrency_query_indices, neighbor_row,
+        normalized_cache_access_fractions, parquet_train_files_for_phase, parse_flag_value,
+        parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
+        parse_lifecycle_insert_mode, parse_optional_byte_cap, parse_positive_list,
+        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
+        query_sample_cache_cohort_size, query_scoped_physical_bytes_read,
+        read_logical_cell_catalog, rebatch_mutation_vector_chunk,
+        recall_cache_profile_needs_outer_handle, recall_preloads_local_snapshot,
+        reopen_build_finalizer, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
+        serving_cache_dir, update_vector_reservoir, uses_bounded_decoded_cache_phases,
+        uses_memory_preloaded_phase, validate_bounded_v20_execution, validate_build_only,
+        validate_build_writers, validate_disk_cached_network,
+        validate_exact_read_max_physical_amplification, validate_generated_id_range,
+        validate_insert_only, validate_leaf_capability_modes, validate_lifecycle_only,
+        validate_lifecycle_writers, validate_max_parallel_decode_rank_tasks,
+        validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
+        validate_v12_leaf_page_budgets, vector_row, verification_offsets, write_batch_len,
+        write_operation_count, write_runtime_flow_control_receipt,
     };
 
     #[test]
@@ -6512,20 +6651,90 @@ mod tests {
     }
 
     #[test]
+    fn isolated_recall_profiles_do_not_open_or_preload_discarded_handles() {
+        assert!(!recall_cache_profile_needs_outer_handle(
+            BenchmarkCacheProfile::Uncached,
+            true,
+            CacheExecutionPolicy::Graph,
+            LeafMode::Graph,
+            Some(256 * 1024 * 1024),
+        ));
+        assert!(!recall_cache_profile_needs_outer_handle(
+            BenchmarkCacheProfile::DiskCached,
+            true,
+            CacheExecutionPolicy::Graph,
+            LeafMode::Graph,
+            Some(256 * 1024 * 1024),
+        ));
+        assert!(!recall_cache_profile_needs_outer_handle(
+            BenchmarkCacheProfile::MixedCoverage,
+            true,
+            CacheExecutionPolicy::Graph,
+            LeafMode::Graph,
+            Some(256 * 1024 * 1024),
+        ));
+        assert!(!recall_cache_profile_needs_outer_handle(
+            BenchmarkCacheProfile::All,
+            true,
+            CacheExecutionPolicy::Scan,
+            LeafMode::SrhtPqScan,
+            Some(256 * 1024 * 1024),
+        ));
+        assert!(recall_cache_profile_needs_outer_handle(
+            BenchmarkCacheProfile::All,
+            true,
+            CacheExecutionPolicy::Graph,
+            LeafMode::Graph,
+            Some(256 * 1024 * 1024),
+        ));
+        assert!(recall_cache_profile_needs_outer_handle(
+            BenchmarkCacheProfile::All,
+            true,
+            CacheExecutionPolicy::Graph,
+            LeafMode::SrhtPqScan,
+            None,
+        ));
+        assert!(recall_cache_profile_needs_outer_handle(
+            BenchmarkCacheProfile::All,
+            false,
+            CacheExecutionPolicy::Auto,
+            LeafMode::Graph,
+            Some(256 * 1024 * 1024),
+        ));
+    }
+
+    #[test]
+    fn concurrency_rows_use_query_scoped_physical_byte_tiers() {
+        assert_eq!(query_scoped_physical_bytes_read(11, 22, 33), 66);
+    }
+
+    #[test]
     fn latency_artifact_schemas_include_the_worst_query() {
         assert_eq!(
             super::PRODUCTION_BENCH_SCHEMA_VERSION,
-            "borsuk-production-bench-v18"
+            "borsuk-production-bench-v19"
         );
         assert_eq!(RECALL_LATENCY_HEADER.split(',').count(), 33);
         assert_eq!(CACHE_STATE_HEADER.split(',').count(), 31);
         assert_eq!(CONCURRENCY_HEADER.split(',').count(), 32);
         assert_eq!(CACHE_COVERAGE_HEADER.split(',').count(), 33);
-        assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 62);
+        assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 66);
         assert_eq!(
             QUERY_SAMPLE_HEADER
                 .split(',')
-                .skip(39)
+                .skip(8)
+                .take(3)
+                .collect::<Vec<_>>(),
+            vec![
+                "cache_cohort_index",
+                "cache_cohort_size",
+                "cache_cohort_count",
+            ]
+        );
+        assert_eq!(
+            QUERY_SAMPLE_HEADER
+                .split(',')
+                .skip(43)
                 .take(8)
                 .collect::<Vec<_>>(),
             vec![
@@ -6539,11 +6748,23 @@ mod tests {
                 "global_leaf_exact_speculative_bytes",
             ]
         );
-        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 62);
+        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 65);
         assert_eq!(
             CONCURRENCY_SAMPLE_HEADER
                 .split(',')
-                .skip(23)
+                .skip(9)
+                .take(3)
+                .collect::<Vec<_>>(),
+            vec![
+                "cache_cohort_index",
+                "cache_cohort_size",
+                "cache_cohort_count",
+            ]
+        );
+        assert_eq!(
+            CONCURRENCY_SAMPLE_HEADER
+                .split(',')
+                .skip(26)
                 .take(8)
                 .collect::<Vec<_>>(),
             vec![
@@ -6575,13 +6796,13 @@ mod tests {
             "global_base_exact_rerank_us",
         ];
         assert_eq!(
-            QUERY_SAMPLE_HEADER.split(',').skip(47).collect::<Vec<_>>(),
+            QUERY_SAMPLE_HEADER.split(',').skip(51).collect::<Vec<_>>(),
             timing_columns
         );
         assert_eq!(
             CONCURRENCY_SAMPLE_HEADER
                 .split(',')
-                .skip(47)
+                .skip(50)
                 .collect::<Vec<_>>(),
             timing_columns
         );
@@ -7236,7 +7457,42 @@ mod tests {
     }
 
     #[test]
-    fn disk_cached_queries_prime_and_measure_bounded_cohorts() {
+    fn query_sample_cohort_authority_is_bound_to_the_disk_cached_profile() {
+        assert_eq!(
+            query_sample_cache_cohort_size(
+                BenchmarkCacheProfile::DiskCached,
+                "disk_cached",
+                Some(1024 * 1024 * 1024),
+            )
+            .unwrap(),
+            20
+        );
+        assert_eq!(
+            query_sample_cache_cohort_size(
+                BenchmarkCacheProfile::All,
+                "disk_cached",
+                Some(1024 * 1024 * 1024),
+            )
+            .unwrap(),
+            0,
+            "legacy all-phase disk caching is not cohort-isolated"
+        );
+        assert_eq!(
+            query_sample_cache_cohort_size(
+                BenchmarkCacheProfile::Uncached,
+                "uncached",
+                Some(1024 * 1024 * 1024),
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn disk_cached_cohorts_drop_primer_before_opening_measurement_handle() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
         assert_eq!(
             disk_cached_query_cohort_size(Some(1024 * 1024 * 1024)).unwrap(),
             20
@@ -7246,69 +7502,509 @@ mod tests {
             12
         );
         assert!(disk_cached_query_cohort_size(None).is_err());
-        let mut observed = Vec::new();
-        let summary = execute_disk_cached_query_sequence(3, 2, |step| {
-            observed.push(step);
-            Ok(match step {
-                DiskCachedQueryStep::Measure(_) => QuerySummary {
-                    latencies_ms: vec![1.0],
-                    disk_cache_reads: 1,
-                    ..QuerySummary::default()
-                },
-                DiskCachedQueryStep::Reset | DiskCachedQueryStep::Prime(_) => {
-                    QuerySummary::default()
+
+        struct TrackedHandle {
+            id: usize,
+            live: Rc<Cell<usize>>,
+            events: Rc<RefCell<Vec<String>>>,
+        }
+
+        impl Drop for TrackedHandle {
+            fn drop(&mut self) {
+                assert_eq!(self.live.replace(0), 1);
+                self.events.borrow_mut().push(format!("drop-{}", self.id));
+            }
+        }
+
+        let live = Rc::new(Cell::new(0));
+        let next_id = Rc::new(Cell::new(0));
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let summary = execute_disk_cached_query_cohorts(
+            3,
+            2,
+            {
+                let live = Rc::clone(&live);
+                let events = Rc::clone(&events);
+                move || {
+                    assert_eq!(live.get(), 0);
+                    events.borrow_mut().push("reset".to_string());
+                    Ok(())
                 }
-            })
-        })
+            },
+            {
+                let live = Rc::clone(&live);
+                let next_id = Rc::clone(&next_id);
+                let events = Rc::clone(&events);
+                move || {
+                    assert_eq!(live.replace(1), 0);
+                    let id = next_id.get() + 1;
+                    next_id.set(id);
+                    events.borrow_mut().push(format!("open-{id}"));
+                    Ok(TrackedHandle {
+                        id,
+                        live: Rc::clone(&live),
+                        events: Rc::clone(&events),
+                    })
+                }
+            },
+            {
+                let events = Rc::clone(&events);
+                move |handle: &TrackedHandle, query_index| {
+                    events
+                        .borrow_mut()
+                        .push(format!("prime-{}-{query_index}", handle.id));
+                    Ok(())
+                }
+            },
+            {
+                let events = Rc::clone(&events);
+                move |handle: &TrackedHandle, query_index| {
+                    events
+                        .borrow_mut()
+                        .push(format!("measure-{}-{query_index}", handle.id));
+                    Ok(QuerySummary {
+                        latencies_ms: vec![1.0],
+                        disk_cache_reads: 1,
+                        ..QuerySummary::default()
+                    })
+                }
+            },
+        )
         .unwrap();
 
+        assert_eq!(live.get(), 0);
+        assert_eq!(summary.count(), 3);
         assert_eq!(
-            observed,
-            vec![
-                DiskCachedQueryStep::Reset,
-                DiskCachedQueryStep::Prime(0),
-                DiskCachedQueryStep::Prime(1),
-                DiskCachedQueryStep::Measure(0),
-                DiskCachedQueryStep::Measure(1),
-                DiskCachedQueryStep::Reset,
-                DiskCachedQueryStep::Prime(2),
-                DiskCachedQueryStep::Measure(2),
+            *events.borrow(),
+            [
+                "reset",
+                "open-1",
+                "prime-1-0",
+                "prime-1-1",
+                "drop-1",
+                "open-2",
+                "measure-2-0",
+                "measure-2-1",
+                "drop-2",
+                "reset",
+                "open-3",
+                "prime-3-2",
+                "drop-3",
+                "open-4",
+                "measure-4-2",
+                "drop-4",
             ]
         );
-        assert_eq!(summary.count(), 3);
+    }
+
+    #[test]
+    fn combined_recall_profile_drops_outer_handle_before_isolated_phases() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct TrackedOuter(Rc<Cell<bool>>);
+
+        impl Drop for TrackedOuter {
+            fn drop(&mut self) {
+                assert!(self.0.replace(false));
+            }
+        }
+
+        let live = Rc::new(Cell::new(true));
+        let phases = execute_isolated_recall_cache_phases(
+            Some(TrackedOuter(Rc::clone(&live))),
+            {
+                let live = Rc::clone(&live);
+                move || {
+                    assert!(!live.get(), "uncached reset ran under the outer handle");
+                    Ok(1usize)
+                }
+            },
+            {
+                let live = Rc::clone(&live);
+                move || {
+                    assert!(!live.get(), "disk-cache reset ran under the outer handle");
+                    Ok(2usize)
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(phases, vec![("uncached", 1), ("disk_cached", 2)]);
+        assert!(!live.get());
+    }
+
+    #[test]
+    fn uncached_queries_reset_before_each_fresh_handle_and_drop_after_measurement() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        struct TrackedHandle {
+            id: usize,
+            live: Rc<Cell<usize>>,
+            events: Rc<RefCell<Vec<String>>>,
+        }
+
+        impl Drop for TrackedHandle {
+            fn drop(&mut self) {
+                assert_eq!(self.live.replace(0), 1);
+                self.events.borrow_mut().push(format!("drop-{}", self.id));
+            }
+        }
+
+        let live = Rc::new(Cell::new(0));
+        let next_id = Rc::new(Cell::new(0));
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let summary = execute_uncached_query_sequence(
+            2,
+            {
+                let live = Rc::clone(&live);
+                let events = Rc::clone(&events);
+                move || {
+                    assert_eq!(live.get(), 0, "reset ran under a live serving handle");
+                    events.borrow_mut().push("reset".to_string());
+                    Ok(())
+                }
+            },
+            {
+                let live = Rc::clone(&live);
+                let next_id = Rc::clone(&next_id);
+                let events = Rc::clone(&events);
+                move || {
+                    assert_eq!(live.replace(1), 0);
+                    let id = next_id.get() + 1;
+                    next_id.set(id);
+                    events.borrow_mut().push(format!("open-{id}"));
+                    Ok(TrackedHandle {
+                        id,
+                        live: Rc::clone(&live),
+                        events: Rc::clone(&events),
+                    })
+                }
+            },
+            {
+                let events = Rc::clone(&events);
+                move |handle: &TrackedHandle, query_index| {
+                    events
+                        .borrow_mut()
+                        .push(format!("measure-{}-{query_index}", handle.id));
+                    Ok(QuerySummary {
+                        latencies_ms: vec![1.0],
+                        ..QuerySummary::default()
+                    })
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(summary.count(), 2);
+        assert_eq!(live.get(), 0);
+        assert_eq!(
+            *events.borrow(),
+            [
+                "reset",
+                "open-1",
+                "measure-1-0",
+                "drop-1",
+                "reset",
+                "open-2",
+                "measure-2-1",
+                "drop-2",
+            ]
+        );
+    }
+
+    #[test]
+    fn concurrency_cache_setup_resets_before_opening_the_serving_handle() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        struct TrackedHandle {
+            live: Rc<Cell<bool>>,
+            events: Rc<RefCell<Vec<&'static str>>>,
+        }
+
+        impl Drop for TrackedHandle {
+            fn drop(&mut self) {
+                self.live.set(false);
+                self.events.borrow_mut().push("drop");
+            }
+        }
+
+        let live = Rc::new(Cell::new(false));
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let (handle, state) = execute_concurrency_cache_setup(
+            {
+                let live = Rc::clone(&live);
+                let events = Rc::clone(&events);
+                move || {
+                    assert!(!live.get(), "cache reset ran under a live serving handle");
+                    events.borrow_mut().push("reset");
+                    Ok(())
+                }
+            },
+            {
+                let live = Rc::clone(&live);
+                let events = Rc::clone(&events);
+                move || {
+                    assert!(!live.replace(true));
+                    events.borrow_mut().push("open");
+                    Ok(TrackedHandle {
+                        live: Rc::clone(&live),
+                        events: Rc::clone(&events),
+                    })
+                }
+            },
+            {
+                let events = Rc::clone(&events);
+                move |_handle| {
+                    events.borrow_mut().push("prepare");
+                    Ok(vec![0usize, 1])
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(state, [0, 1]);
+        assert_eq!(*events.borrow(), ["reset", "open", "prepare"]);
+        drop(handle);
+        assert_eq!(*events.borrow(), ["reset", "open", "prepare", "drop"]);
+    }
+
+    #[test]
+    fn concurrency_worker_error_still_joins_every_spawned_worker() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Barrier};
+
+        let second_started = Arc::new(Barrier::new(2));
+        let release_second = Arc::new(Barrier::new(2));
+        let second_finished = Arc::new(AtomicBool::new(false));
+        let handles = vec![
+            std::thread::spawn(|| Err("first worker failed".to_string())),
+            {
+                let second_started = Arc::clone(&second_started);
+                let release_second = Arc::clone(&release_second);
+                let second_finished = Arc::clone(&second_finished);
+                std::thread::spawn(move || {
+                    second_started.wait();
+                    release_second.wait();
+                    second_finished.store(true, Ordering::SeqCst);
+                    Ok(Vec::new())
+                })
+            },
+        ];
+        second_started.wait();
+        let releaser = {
+            let release_second = Arc::clone(&release_second);
+            std::thread::spawn(move || release_second.wait())
+        };
+
+        let error = match join_concurrency_workers(handles) {
+            Ok(_) => panic!("concurrency worker failure was discarded"),
+            Err(error) => error,
+        };
+
+        releaser.join().unwrap();
+        assert!(error.to_string().contains("first worker failed"));
+        assert!(
+            second_finished.load(Ordering::SeqCst),
+            "error return detached a still-running concurrency worker"
+        );
+    }
+
+    #[test]
+    fn disk_cached_concurrency_uses_distinct_primer_and_measurement_handles() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+        use std::time::Duration;
+
+        struct TrackedHandle {
+            id: usize,
+            live: Rc<Cell<usize>>,
+            events: Rc<RefCell<Vec<String>>>,
+        }
+
+        impl Drop for TrackedHandle {
+            fn drop(&mut self) {
+                assert_eq!(self.live.replace(0), 1);
+                self.events.borrow_mut().push(format!("drop-{}", self.id));
+            }
+        }
+
+        let live = Rc::new(Cell::new(0));
+        let next_id = Rc::new(Cell::new(0));
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let (measurements, elapsed) = execute_disk_cached_concurrency_cohorts(
+            3,
+            2,
+            {
+                let live = Rc::clone(&live);
+                let events = Rc::clone(&events);
+                move || {
+                    assert_eq!(live.get(), 0);
+                    events.borrow_mut().push("reset".to_string());
+                    Ok(())
+                }
+            },
+            {
+                let live = Rc::clone(&live);
+                let next_id = Rc::clone(&next_id);
+                let events = Rc::clone(&events);
+                move || {
+                    assert_eq!(live.replace(1), 0);
+                    let id = next_id.get() + 1;
+                    next_id.set(id);
+                    events.borrow_mut().push(format!("open-{id}"));
+                    Ok(TrackedHandle {
+                        id,
+                        live: Rc::clone(&live),
+                        events: Rc::clone(&events),
+                    })
+                }
+            },
+            {
+                let events = Rc::clone(&events);
+                move |handle: &TrackedHandle, query_index| {
+                    events
+                        .borrow_mut()
+                        .push(format!("prime-{}-{query_index}", handle.id));
+                    Ok(())
+                }
+            },
+            {
+                let events = Rc::clone(&events);
+                move |handle: &TrackedHandle, cohort: &[usize], cohort_start| {
+                    events.borrow_mut().push(format!(
+                        "measure-{}-{}-{cohort_start}",
+                        handle.id,
+                        cohort.len()
+                    ));
+                    Ok((Vec::new(), Duration::from_millis(1)))
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(live.get(), 0);
+        assert!(measurements.is_empty());
+        assert_eq!(elapsed, Duration::from_millis(2));
+        assert_eq!(
+            *events.borrow(),
+            [
+                "reset",
+                "open-1",
+                "prime-1-0",
+                "prime-1-1",
+                "drop-1",
+                "open-2",
+                "measure-2-2-0",
+                "drop-2",
+                "reset",
+                "open-3",
+                "prime-3-2",
+                "drop-3",
+                "open-4",
+                "measure-4-1-2",
+                "drop-4",
+            ]
+        );
     }
 
     #[test]
     fn disk_cached_query_guard_stops_at_the_first_nonlocal_measurement() {
-        let mut observed = Vec::new();
-        let result = execute_disk_cached_query_sequence(3, 2, |step| {
-            observed.push(step);
-            Ok(match step {
-                DiskCachedQueryStep::Measure(0) => QuerySummary {
-                    latencies_ms: vec![1.0],
-                    disk_cache_reads: 1,
-                    ..QuerySummary::default()
-                },
-                DiskCachedQueryStep::Measure(1) => QuerySummary {
-                    latencies_ms: vec![1.0],
-                    billable_requests: 1,
-                    ..QuerySummary::default()
-                },
-                DiskCachedQueryStep::Measure(_)
-                | DiskCachedQueryStep::Reset
-                | DiskCachedQueryStep::Prime(_) => QuerySummary::default(),
-            })
-        });
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        struct TrackedHandle {
+            id: usize,
+            live: Rc<Cell<usize>>,
+            observed: Rc<RefCell<Vec<String>>>,
+        }
+
+        impl Drop for TrackedHandle {
+            fn drop(&mut self) {
+                assert_eq!(self.live.replace(0), 1);
+                self.observed.borrow_mut().push(format!("drop-{}", self.id));
+            }
+        }
+
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let next_handle = Rc::new(Cell::new(0usize));
+        let live = Rc::new(Cell::new(0usize));
+        let result = execute_disk_cached_query_cohorts(
+            3,
+            2,
+            {
+                let observed = Rc::clone(&observed);
+                let live = Rc::clone(&live);
+                move || {
+                    assert_eq!(live.get(), 0);
+                    observed.borrow_mut().push("reset".to_owned());
+                    Ok(())
+                }
+            },
+            {
+                let observed = Rc::clone(&observed);
+                let next_handle = Rc::clone(&next_handle);
+                let live = Rc::clone(&live);
+                move || {
+                    assert_eq!(live.replace(1), 0);
+                    let id = next_handle.get() + 1;
+                    next_handle.set(id);
+                    observed.borrow_mut().push(format!("open-{id}"));
+                    Ok(TrackedHandle {
+                        id,
+                        live: Rc::clone(&live),
+                        observed: Rc::clone(&observed),
+                    })
+                }
+            },
+            {
+                let observed = Rc::clone(&observed);
+                move |handle: &TrackedHandle, query_index| {
+                    observed
+                        .borrow_mut()
+                        .push(format!("prime-{}-{query_index}", handle.id));
+                    Ok(())
+                }
+            },
+            {
+                let observed = Rc::clone(&observed);
+                move |handle: &TrackedHandle, query_index| {
+                    observed
+                        .borrow_mut()
+                        .push(format!("measure-{}-{query_index}", handle.id));
+                    Ok(match query_index {
+                        0 => QuerySummary {
+                            latencies_ms: vec![1.0],
+                            disk_cache_reads: 1,
+                            ..QuerySummary::default()
+                        },
+                        1 => QuerySummary {
+                            latencies_ms: vec![1.0],
+                            billable_requests: 1,
+                            ..QuerySummary::default()
+                        },
+                        _ => QuerySummary::default(),
+                    })
+                }
+            },
+        );
 
         assert!(result.is_err());
+        assert_eq!(live.get(), 0);
         assert_eq!(
-            observed,
+            *observed.borrow(),
             vec![
-                DiskCachedQueryStep::Reset,
-                DiskCachedQueryStep::Prime(0),
-                DiskCachedQueryStep::Prime(1),
-                DiskCachedQueryStep::Measure(0),
-                DiskCachedQueryStep::Measure(1),
+                "reset",
+                "open-1",
+                "prime-1-0",
+                "prime-1-1",
+                "drop-1",
+                "open-2",
+                "measure-2-0",
+                "measure-2-1",
+                "drop-2",
             ]
         );
     }
@@ -7354,14 +8050,6 @@ mod tests {
         assert!(validate_lifecycle_only(true, false, false, false, false, false, false).is_err());
         assert!(validate_lifecycle_only(true, false, false, false, true, true, false).is_err());
         assert!(validate_lifecycle_only(true, false, false, false, true, false, true).is_err());
-    }
-
-    #[test]
-    fn recall_row_count_can_omit_redundant_exact_scan() {
-        assert_eq!(recall_row_count(6, 4, false, false), 50);
-        assert_eq!(recall_row_count(6, 4, true, false), 48);
-        assert_eq!(recall_row_count(6, 4, false, true), 25);
-        assert_eq!(recall_row_count(6, 4, true, true), 24);
     }
 
     #[test]

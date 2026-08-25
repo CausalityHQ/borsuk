@@ -74,8 +74,14 @@ such as `first_pass` and `repeated_pass`.
 The bounded-cohort protocol preserves the configured disk-cache limit even
 when the union of all 1,000 queries exceeds it. It pays one untimed cold prime
 per query; that setup cost is excluded from latency but remains visible in the
-attempt's storage/cost ledger. Older whole-query-set `disk_cached` artifacts
-are historical and are not latency-comparable to bounded-cohort results.
+attempt's storage/cost ledger. Current read results report timed backing I/O as
+`storage_gets` / `storage_bytes_read`, timed local-disk bytes as
+`disk_cache_bytes_read`, timed decoded-RAM bytes as
+`decoded_cache_bytes_read`, and the backing I/O excluded for open, verification,
+and priming as `excluded_setup_storage_gets` /
+`excluded_setup_storage_bytes_read`. Older whole-query-set `disk_cached`
+artifacts are historical and are not latency-comparable to bounded-cohort
+results.
 
 ## Standard datasets
 

@@ -1064,6 +1064,77 @@ def _accumulate_query_stage_timings(
             totals[aggregate_field] += value
 
 
+def disk_cached_cohort_authority(
+    disk_cache_max_bytes: int, expected_queries: int
+) -> tuple[int, int]:
+    if (
+        type(disk_cache_max_bytes) is not int
+        or type(expected_queries) is not int
+        or disk_cache_max_bytes <= 0
+        or expected_queries <= 0
+    ):
+        raise ValueError("disk cache cohort authority is invalid")
+    cohort_bytes = disk_cache_max_bytes * 3 // 4
+    cohort_size = max(1, min(20, cohort_bytes // (32 * 1024 * 1024)))
+    return cohort_size, (expected_queries + cohort_size - 1) // cohort_size
+
+
+def smoke_cache_cohort_authority(
+    plan: dict[str, object], arm: dict[str, object]
+) -> int:
+    if arm.get("cache_state") == "cold":
+        return 0
+    steps = plan.get("steps")
+    expected_queries = plan.get("effective_queries")
+    if (
+        plan.get("mode") != "smoke"
+        or arm.get("cache_state") != "warm"
+        or type(expected_queries) is not int
+        or not isinstance(steps, list)
+        or not steps
+        or not isinstance(steps[-1], dict)
+        or not isinstance(steps[-1].get("env"), dict)
+    ):
+        raise ValueError("smoke cache cohort authority is invalid")
+    try:
+        disk_cache_max_bytes = int(
+            steps[-1]["env"]["BORSUK_BENCH_DISK_CACHE_MAX_BYTES"]
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("smoke cache cohort authority is invalid") from error
+    return disk_cached_cohort_authority(
+        disk_cache_max_bytes, expected_queries
+    )[0]
+
+
+def validate_query_cache_cohort(
+    row: dict[str, str],
+    *,
+    sample_index: int,
+    expected_queries: int,
+    expected_cohort_size: int,
+) -> None:
+    try:
+        cohort_index = int(row["cache_cohort_index"])
+        cohort_size = int(row["cache_cohort_size"])
+        cohort_count = int(row["cache_cohort_count"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("cache cohort metadata is invalid") from error
+    if expected_cohort_size == 0:
+        if (cohort_index, cohort_size, cohort_count) != (0, 0, 0):
+            raise ValueError("cache cohort metadata differs from its authority")
+        return
+    if (
+        expected_queries <= 0
+        or not 0 <= sample_index < expected_queries
+        or cohort_size != expected_cohort_size
+        or cohort_count
+        != (expected_queries + expected_cohort_size - 1) // expected_cohort_size
+        or cohort_index != sample_index // expected_cohort_size
+    ):
+        raise ValueError("cache cohort metadata differs from its authority")
+
+
 def summarize_query_samples(
     rows: list[dict[str, str]],
     *,
@@ -1072,9 +1143,12 @@ def summarize_query_samples(
     expected_queries: int,
     enforce_quality: bool = True,
     expected_candidates: int = V20_COMPATIBILITY_CANDIDATES,
+    expected_cache_cohort_size: int | None = None,
 ) -> dict[str, int]:
     if len(rows) != expected_queries:
         raise ValueError("query sample artifact is incomplete for its arm")
+    if arm.get("cache_state") == "warm" and expected_cache_cohort_size is None:
+        raise ValueError("disk-cached query cache cohort authority is missing")
     index_profile = cell.get("index_profile")
     expected_mode = (
         index_profile.get("global_scan_codec")
@@ -1086,8 +1160,11 @@ def summarize_query_samples(
     latencies_us: list[int] = []
     recalls_ppm: list[int] = []
     sample_indices: set[int] = set()
+    query_source_indices: set[int] = set()
     storage_gets = 0
     storage_bytes_read = 0
+    decoded_cache_bytes_read = 0
+    disk_cache_bytes_read = 0
     timing_totals = {field: 0 for field in QUERY_STAGE_AGGREGATE_FIELDS}
     diagnostic_values: dict[str, list[int]] = {
         "global_leaf_exact_scores": [],
@@ -1113,6 +1190,17 @@ def summarize_query_samples(
         if sample_index < 0 or sample_index in sample_indices:
             raise ValueError("query sample indices must be unique and nonnegative")
         sample_indices.add(sample_index)
+        query_source_index = int(row.get("query_source_index", "-1"))
+        if query_source_index < 0 or query_source_index in query_source_indices:
+            raise ValueError("query source indices must be unique and nonnegative")
+        query_source_indices.add(query_source_index)
+        if expected_cache_cohort_size is not None:
+            validate_query_cache_cohort(
+                row,
+                sample_index=sample_index,
+                expected_queries=expected_queries,
+                expected_cohort_size=expected_cache_cohort_size,
+            )
         latency = float(row["latency_ms"])
         recall = float(row["recall_at_10"])
         if (
@@ -1126,16 +1214,39 @@ def summarize_query_samples(
         recalls_ppm.append(round(recall * 1_000_000))
         network_gets = int(row["network_gets"])
         bytes_read = int(row["bytes_read"])
-        if network_gets < 0 or bytes_read < 0:
+        decoded_bytes = int(row.get("decoded_cache_bytes_read", "-1"))
+        disk_cache_reads = int(row["disk_cache_reads"])
+        disk_bytes = int(row["disk_cache_bytes_read"])
+        backing_bytes = int(row["backing_bytes_read"])
+        if (
+            network_gets < 0
+            or bytes_read < 0
+            or decoded_bytes < 0
+            or disk_cache_reads < 0
+            or disk_bytes < 0
+            or backing_bytes < 0
+            or bytes_read != decoded_bytes + disk_bytes + backing_bytes
+        ):
             raise ValueError("query sample storage telemetry is invalid")
         if arm["cache_state"] == "warm":
-            disk_cache_reads = int(row.get("disk_cache_reads", "-1"))
-            if network_gets != 0 or disk_cache_reads <= 0:
+            if (
+                network_gets != 0
+                or backing_bytes != 0
+                or disk_cache_reads <= 0
+                or disk_bytes <= 0
+            ):
                 raise ValueError(
                     "disk-cached query sample was not served from local disk"
                 )
+        else:
+            if network_gets <= 0 or backing_bytes <= 0:
+                raise ValueError("uncached query sample performed no backing reads")
+            if disk_cache_reads != 0 or disk_bytes != 0:
+                raise ValueError("uncached query sample was served from local disk")
         storage_gets += network_gets
-        storage_bytes_read += bytes_read
+        storage_bytes_read += backing_bytes
+        decoded_cache_bytes_read += decoded_bytes
+        disk_cache_bytes_read += disk_bytes
         _accumulate_query_stage_timings(
             timing_totals,
             _validated_query_stage_timings(row, role="query sample"),
@@ -1148,6 +1259,8 @@ def summarize_query_samples(
             if parsed < 0:
                 raise ValueError("query sample planner telemetry is invalid")
             values.append(parsed)
+    if sample_indices != set(range(expected_queries)):
+        raise ValueError("query sample indices are not canonical")
     correctness_ppm = round(sum(recalls_ppm) / len(recalls_ppm))
     factors = cell.get("workload", {}).get("factors", {})
     floor = factors.get("minimum_recall_ppm")
@@ -1177,6 +1290,8 @@ def summarize_query_samples(
         "latency_p99_us": _nearest_rank(latencies_us, 0.99),
         "storage_gets": storage_gets,
         "storage_bytes_read": storage_bytes_read,
+        "decoded_cache_bytes_read": decoded_cache_bytes_read,
+        "disk_cache_bytes_read": disk_cache_bytes_read,
         "global_leaf_code_requests": sum(
             diagnostic_values["global_leaf_code_requests"]
         ),
@@ -1197,6 +1312,7 @@ def summarize_read_diagnostic_samples(
     expected_queries: int,
     nprobes: tuple[int, ...],
     candidates: tuple[int, ...],
+    expected_cache_cohort_size: int | None = None,
 ) -> dict[str, object]:
     """Fold one bounded read-width matrix without creating release evidence."""
 
@@ -1240,7 +1356,9 @@ def summarize_read_diagnostic_samples(
                 raise ValueError("read diagnostic source index is invalid")
             prior = source_indices.setdefault(sample_index, source_index)
             if prior != source_index:
-                raise ValueError("read diagnostic source indices differ across matrix cells")
+                raise ValueError(
+                    "read diagnostic source indices differ across matrix cells"
+                )
     metrics = []
     for probe, width in expected:
         diagnostic_arm = {**arm, "leaf_page_budget": probe}
@@ -1255,6 +1373,7 @@ def summarize_read_diagnostic_samples(
                     expected_queries=expected_queries,
                     enforce_quality=False,
                     expected_candidates=width,
+                    expected_cache_cohort_size=expected_cache_cohort_size,
                 ),
             }
         )
@@ -1292,8 +1411,7 @@ def summarize_read_diagnostic_samples(
             or not math.isfinite(recall)
             or not 0 <= recall <= 1
             or abs(
-                round(recall * 1_000_000)
-                - int(metrics_by_key[key]["correctness_ppm"])
+                round(recall * 1_000_000) - int(metrics_by_key[key]["correctness_ppm"])
             )
             > 501
         ):
@@ -1321,9 +1439,12 @@ def summarize_concurrency_artifacts(
     expected_max_candidates: int,
     expected_cache_profile: str,
     expected_cache_coverage_percent: int,
+    expected_cache_cohort_size: int | None = None,
 ) -> list[dict[str, int]]:
     if expected_queries <= 0 or not expected_workers:
         raise ValueError("concurrency authority is empty")
+    if expected_cache_profile == "disk_cached" and expected_cache_cohort_size is None:
+        raise ValueError("disk-cached concurrency cache cohort authority is missing")
     if (
         expected_scan_codec not in BORSUK_GLOBAL_SCAN_CODECS
         or expected_nprobe <= 0
@@ -1361,7 +1482,17 @@ def summarize_concurrency_artifacts(
         raise ValueError("concurrency summary is incomplete")
 
     sample_indices = {worker: set() for worker in expected_workers}
+    query_source_by_sample: dict[int, int] = {}
     recalls = {worker: [] for worker in expected_workers}
+    storage_totals = {
+        worker: {
+            "storage_gets": 0,
+            "storage_bytes_read": 0,
+            "decoded_cache_bytes_read": 0,
+            "disk_cache_bytes_read": 0,
+        }
+        for worker in expected_workers
+    }
     timing_totals = {
         worker: {field: 0 for field in QUERY_STAGE_AGGREGATE_FIELDS}
         for worker in expected_workers
@@ -1381,8 +1512,25 @@ def summarize_concurrency_artifacts(
         ):
             raise ValueError("concurrency sample differs from its authority")
         sample_index = int(row.get("sample_index", "-1"))
-        if sample_index < 0 or sample_index in sample_indices[worker]:
-            raise ValueError("concurrency sample index is invalid")
+        if not 0 <= sample_index < expected_queries:
+            raise ValueError("concurrency sample indices are not canonical")
+        if sample_index in sample_indices[worker]:
+            raise ValueError("concurrency sample index is duplicated")
+        query_source_index = int(row.get("query_source_index", "-1"))
+        if query_source_index < 0:
+            raise ValueError("concurrency query source mapping is invalid")
+        prior_source = query_source_by_sample.setdefault(
+            sample_index, query_source_index
+        )
+        if prior_source != query_source_index:
+            raise ValueError("concurrency query source mapping differs across workers")
+        if expected_cache_cohort_size is not None:
+            validate_query_cache_cohort(
+                row,
+                sample_index=sample_index,
+                expected_queries=expected_queries,
+                expected_cohort_size=expected_cache_cohort_size,
+            )
         latency_ms = float(row.get("latency_ms", "nan"))
         recall = float(row.get("recall_at_10", "nan"))
         if (
@@ -1394,22 +1542,48 @@ def summarize_concurrency_artifacts(
             raise ValueError("concurrency sample latency or recall is invalid")
         network_gets = int(row.get("network_gets", "-1"))
         disk_cache_reads = int(row.get("disk_cache_reads", "-1"))
-        if network_gets < 0 or disk_cache_reads < 0:
+        bytes_read = int(row.get("bytes_read", "-1"))
+        decoded_bytes = int(row.get("decoded_cache_bytes_read", "-1"))
+        disk_bytes = int(row.get("disk_cache_bytes_read", "-1"))
+        backing_bytes = int(row.get("backing_bytes_read", "-1"))
+        if (
+            network_gets < 0
+            or disk_cache_reads < 0
+            or bytes_read < 0
+            or decoded_bytes < 0
+            or disk_bytes < 0
+            or backing_bytes < 0
+            or bytes_read != decoded_bytes + disk_bytes + backing_bytes
+        ):
             raise ValueError("concurrency sample cache counters are invalid")
         if expected_cache_profile == "disk_cached" and (
-            network_gets != 0 or disk_cache_reads == 0
+            network_gets != 0
+            or backing_bytes != 0
+            or disk_cache_reads == 0
+            or disk_bytes == 0
         ):
             raise ValueError(
                 "disk-cached concurrency sample was not served from local disk"
             )
         sample_indices[worker].add(sample_index)
         recalls[worker].append(round(recall * 1_000_000))
+        storage_totals[worker]["storage_gets"] += network_gets
+        storage_totals[worker]["storage_bytes_read"] += backing_bytes
+        storage_totals[worker]["decoded_cache_bytes_read"] += decoded_bytes
+        storage_totals[worker]["disk_cache_bytes_read"] += disk_bytes
         _accumulate_query_stage_timings(
             timing_totals[worker],
             _validated_query_stage_timings(row, role="concurrency sample"),
         )
 
     result = []
+    if len(set(query_source_by_sample.values())) != expected_queries:
+        raise ValueError("concurrency query source mapping is not one-to-one")
+    if expected_cache_profile == "uncached" and any(
+        row["storage_gets"] == 0 or row["storage_bytes_read"] == 0
+        for row in storage_totals.values()
+    ):
+        raise ValueError("uncached concurrency wave performed no backing reads")
     for worker in expected_workers:
         if len(sample_indices[worker]) != expected_queries:
             raise ValueError("concurrency samples are incomplete")
@@ -1426,6 +1600,7 @@ def summarize_concurrency_artifacts(
                 "p95_us": round(float(row["p95_ms"]) * 1_000),
                 "p99_us": round(float(row["p99_ms"]) * 1_000),
                 "recall_ppm": recall_ppm,
+                **storage_totals[worker],
                 **timing_totals[worker],
             }
         )
@@ -1517,6 +1692,65 @@ def reconcile_lifecycle_storage_trace(
         "storage_bytes_read": trace["storage_bytes_read"],
         "storage_distinct_data_objects": trace["storage_distinct_data_objects"],
         "storage_max_data_object_bytes": trace["storage_max_data_object_bytes"],
+    }
+
+
+def reconcile_read_storage_trace(
+    measured: dict[str, int], trace: dict[str, int]
+) -> dict[str, int]:
+    def counter(values: dict[str, int], field: str) -> int:
+        value = values.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("read storage accounting is invalid")
+        return value
+
+    measured_gets = counter(measured, "storage_gets")
+    measured_bytes = counter(measured, "storage_bytes_read")
+    counter(measured, "disk_cache_bytes_read")
+    counter(measured, "decoded_cache_bytes_read")
+    trace_gets = counter(trace, "storage_gets")
+    trace_bytes = counter(trace, "storage_bytes_read")
+    for field in (
+        "storage_puts",
+        "storage_bytes_written",
+        "storage_distinct_data_objects",
+        "storage_max_data_object_bytes",
+    ):
+        counter(trace, field)
+    if trace_gets < measured_gets or trace_bytes < measured_bytes:
+        raise ValueError("complete read storage trace is smaller than measured query I/O")
+    return {
+        "excluded_setup_storage_gets": trace_gets - measured_gets,
+        "excluded_setup_storage_bytes_read": trace_bytes - measured_bytes,
+    }
+
+
+def reconcile_concurrency_storage(
+    metrics: list[dict[str, int]], trace: dict[str, int]
+) -> dict[str, int]:
+    if not metrics:
+        raise ValueError("concurrency storage accounting is empty")
+    measured = {
+        "storage_gets": 0,
+        "storage_bytes_read": 0,
+        "decoded_cache_bytes_read": 0,
+        "disk_cache_bytes_read": 0,
+    }
+    for row in metrics:
+        for field in measured:
+            value = row.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("concurrency storage accounting is invalid")
+            measured[field] += value
+    setup = reconcile_read_storage_trace(measured, trace)
+    return {
+        "storage_gets": measured["storage_gets"],
+        "storage_puts": trace["storage_puts"],
+        "storage_bytes_read": measured["storage_bytes_read"],
+        "storage_bytes_written": trace["storage_bytes_written"],
+        "decoded_cache_bytes_read": measured["decoded_cache_bytes_read"],
+        "disk_cache_bytes_read": measured["disk_cache_bytes_read"],
+        **setup,
     }
 
 
@@ -2145,7 +2379,7 @@ def build_publication_report(
     elapsed_ns: int,
     query_metrics: dict[str, int],
     resource_metrics: dict[str, int],
-    runtime_write_metrics: dict[str, int],
+    runtime_storage_trace: dict[str, int],
     index_receipt: dict[str, object],
     runtime_attestation: dict[str, object],
     runtime_profile: str = "recall",
@@ -2170,6 +2404,8 @@ def build_publication_report(
             "latency_p99_us",
             "storage_gets",
             "storage_bytes_read",
+            "decoded_cache_bytes_read",
+            "disk_cache_bytes_read",
             "global_leaf_code_requests",
             "global_leaf_exact_requests",
             "query_elapsed_ns",
@@ -2187,12 +2423,23 @@ def build_publication_report(
         raise ValueError("publication query metric fields differ")
     if frozenset(resource_metrics) != expected_resource_fields:
         raise ValueError("publication resource metric fields differ")
-    if frozenset(runtime_write_metrics) != frozenset(
-        {"storage_puts", "storage_bytes_written"}
-    ):
-        raise ValueError("publication runtime write metric fields differ")
+    expected_storage_trace_fields = frozenset(
+        {
+            "storage_gets",
+            "storage_puts",
+            "storage_bytes_read",
+            "storage_bytes_written",
+            "storage_distinct_data_objects",
+            "storage_max_data_object_bytes",
+        }
+    )
+    if frozenset(runtime_storage_trace) != expected_storage_trace_fields:
+        raise ValueError("publication runtime storage trace fields differ")
+    setup_storage = reconcile_read_storage_trace(
+        query_metrics, runtime_storage_trace
+    )
     result = {
-        "schema_version": 3,
+        "schema_version": 4,
         "status": "complete",
         "cell_id": cell.get("cell_id"),
         "manifest_sha256": cell.get("manifest_sha256"),
@@ -2209,9 +2456,12 @@ def build_publication_report(
             },
             **resource_metrics,
             "storage_gets": query_metrics["storage_gets"],
-            "storage_puts": runtime_write_metrics["storage_puts"],
+            "storage_puts": runtime_storage_trace["storage_puts"],
             "storage_bytes_read": query_metrics["storage_bytes_read"],
-            "storage_bytes_written": runtime_write_metrics["storage_bytes_written"],
+            "storage_bytes_written": runtime_storage_trace[
+                "storage_bytes_written"
+            ],
+            **setup_storage,
             "throughput_milli_per_second": max(
                 1,
                 round(queries * 1_000_000_000_000 / query_metrics["query_elapsed_ns"]),
@@ -2722,6 +2972,13 @@ def main() -> int:
         (args.workspace / "RUNTIME_ATTESTATION.json").write_bytes(
             canonical_json_bytes(runtime_attestation) + b"\n"
         )
+        effective_queries = int(plan["effective_queries"])
+        expected_cache_cohort_size = 0
+        if arm["cache_state"] == "warm":
+            expected_cache_cohort_size, _ = disk_cached_cohort_authority(
+                int(effective_flow_control["disk_cache_max_bytes"]),
+                effective_queries,
+            )
         if workload_kind == "read-recall" and args.runtime_profile == "concurrency":
             summary_path = output / "bench_concurrency.csv"
             samples_path = output / "bench_concurrency_samples.csv"
@@ -2742,7 +2999,7 @@ def main() -> int:
                 summary_rows,
                 sample_rows,
                 expected_workers=workers,
-                expected_queries=int(plan["effective_queries"]),
+                expected_queries=effective_queries,
                 minimum_recall_ppm=int(factors["minimum_recall_ppm"]),
                 expected_scan_codec=str(cell["index_profile"]["global_scan_codec"]),
                 expected_nprobe=int(arm["leaf_page_budget"]),
@@ -2753,12 +3010,12 @@ def main() -> int:
                 expected_cache_coverage_percent=(
                     0 if arm["cache_state"] == "cold" else 100
                 ),
+                expected_cache_cohort_size=expected_cache_cohort_size,
             )
             trace_writes = summarize_runtime_write_trace(output / "storage-access.csv")
-            runtime_writes = {
-                field: trace_writes[field]
-                for field in ("storage_puts", "storage_bytes_written")
-            }
+            runtime_storage = reconcile_concurrency_storage(
+                concurrency_metrics, trace_writes
+            )
             report = {
                 "publishable": True,
                 "runtime_profile": "concurrency",
@@ -2773,7 +3030,7 @@ def main() -> int:
                     "elapsed_ns": elapsed_ns,
                     "metrics": concurrency_metrics,
                     "resources": resources,
-                    "runtime_writes": runtime_writes,
+                    "runtime_storage": runtime_storage,
                     "runtime_attestation": runtime_attestation,
                 },
             }
@@ -2795,9 +3052,10 @@ def main() -> int:
                     summary_rows=summary_rows,
                     cell=cell,
                     arm=arm,
-                    expected_queries=int(plan["effective_queries"]),
+                    expected_queries=effective_queries,
                     nprobes=args.diagnostic_read_nprobes,
                     candidates=args.diagnostic_read_candidates,
+                    expected_cache_cohort_size=expected_cache_cohort_size,
                 )
                 report.update(
                     {
@@ -2821,13 +3079,10 @@ def main() -> int:
                 rows,
                 cell=cell,
                 arm=arm,
-                expected_queries=int(plan["effective_queries"]),
+                expected_queries=effective_queries,
+                expected_cache_cohort_size=expected_cache_cohort_size,
             )
             trace_writes = summarize_runtime_write_trace(output / "storage-access.csv")
-            runtime_writes = {
-                field: trace_writes[field]
-                for field in ("storage_puts", "storage_bytes_written")
-            }
             report = build_publication_report(
                 cell=cell,
                 arm=arm,
@@ -2839,7 +3094,7 @@ def main() -> int:
                 elapsed_ns=elapsed_ns,
                 query_metrics=metrics,
                 resource_metrics=resources,
-                runtime_write_metrics=runtime_writes,
+                runtime_storage_trace=trace_writes,
                 index_receipt=receipt,
                 runtime_attestation=runtime_attestation,
                 runtime_profile=args.runtime_profile,
@@ -2901,6 +3156,7 @@ def main() -> int:
         arm=arm,
         expected_queries=int(plan["effective_queries"]),
         enforce_quality=False,
+        expected_cache_cohort_size=smoke_cache_cohort_authority(plan, arm),
     )
     report = build_smoke_report(
         cell=cell,

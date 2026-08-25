@@ -27,20 +27,25 @@ from scripts.run_publication_v3_cell import (
     build_smoke_report,
     claim_ineligible_lifecycle_diagnostic,
     concurrency_result_arm,
+    disk_cached_cohort_authority,
     execute_plan,
     execute_plan_with_resources,
     execute_publication_phase,
     plan_arms,
     read_build_artifact,
+    reconcile_concurrency_storage,
     reconcile_lifecycle_storage_trace,
+    reconcile_read_storage_trace,
     runtime_execution_contract,
     runtime_flow_control_authority,
+    smoke_cache_cohort_authority,
     summarize_concurrency_artifacts,
     summarize_lifecycle_artifacts,
     summarize_query_samples,
     summarize_read_diagnostic_samples,
     summarize_runtime_write_trace,
     validate_publication_cell_authority,
+    validate_query_cache_cohort,
 )
 from scripts.test_publication_v3_protocol import paid_v3_manifest
 from scripts.test_publication_v3_receipts import (
@@ -89,7 +94,212 @@ def runtime_flow_control(profile: str = "recall") -> dict[str, int]:
     return values
 
 
+def concurrency_artifact_fixture(
+    *, cache_profile: str, disk_bytes: int, backing_bytes: int, decoded_bytes: int
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    summary = {
+        "schema_version": "borsuk-production-bench-v19",
+        "scan_codec": "fast-turboquant-scan",
+        "execution_engine": "bounded-cell-card-v20",
+        "nprobe": "32",
+        "max_candidates": "512",
+        "cache_profile": cache_profile,
+        "target_cache_coverage_percent": "0",
+        "workers": "1",
+        "total_queries": "1",
+        "qps": "10",
+        "mean_ms": "5",
+        "p50_ms": "5",
+        "p95_ms": "5",
+        "p99_ms": "5",
+        "max_ms": "5",
+    }
+    sample = {
+        "schema_version": "borsuk-production-bench-v19",
+        "scan_codec": "fast-turboquant-scan",
+        "execution_engine": "bounded-cell-card-v20",
+        "nprobe": "32",
+        "max_candidates": "512",
+        "cache_profile": cache_profile,
+        "target_cache_coverage_percent": "0",
+        "workers": "1",
+        "sample_index": "0",
+        "query_source_index": "100",
+        "cache_cohort_index": "0",
+        "cache_cohort_size": "0",
+        "cache_cohort_count": "0",
+        "latency_ms": "5",
+        "recall_at_10": "0.99",
+        "network_gets": "1",
+        "disk_cache_reads": "1" if disk_bytes else "0",
+        "bytes_read": str(disk_bytes + backing_bytes + decoded_bytes),
+        "decoded_cache_bytes_read": str(decoded_bytes),
+        "disk_cache_bytes_read": str(disk_bytes),
+        "backing_bytes_read": str(backing_bytes),
+        "global_base_approximate_us": "1",
+        "global_base_head_admission_us": "2",
+        "global_base_head_fetch_us": "3",
+        "global_base_head_decode_admission_us": "4",
+        "global_base_head_decode_us": "5",
+        "global_base_exact_admission_us": "6",
+        "global_base_exact_fetch_us": "10",
+        "global_base_exact_read_us_max": "8",
+        "global_base_exact_read_us_sum": "20",
+        "global_base_exact_reads_over_20ms": "2",
+        "global_base_exact_reads_over_30ms": "1",
+        "global_base_exact_reads_over_50ms": "0",
+        "global_base_exact_reads_over_100ms": "0",
+        "global_base_exact_cpu_us": "7",
+        "global_base_exact_rerank_us": "23",
+    }
+    return [summary], [sample]
+
+
+def query_artifact_fixture(*, decoded_bytes: int) -> dict[str, str]:
+    _, samples = concurrency_artifact_fixture(
+        cache_profile="uncached",
+        disk_bytes=0,
+        backing_bytes=75,
+        decoded_bytes=decoded_bytes,
+    )
+    return {
+        **samples[0],
+        "phase": "uncached",
+        "mode": "srht-pq-scan",
+        "scan_codec": "srht-pq-scan",
+        "cache_cohort_index": "0",
+        "cache_cohort_size": "0",
+        "cache_cohort_count": "0",
+        "global_leaf_code_pages_read": "7",
+        "global_leaf_code_requests": "2",
+        "global_leaf_pages_read": "4",
+        "global_leaf_exact_requests": "1",
+        "global_leaf_exact_scores": "512",
+    }
+
+
 class PublicationV3CellRunnerTests(unittest.TestCase):
+    def test_query_samples_account_decoded_ram_cache_bytes(self) -> None:
+        cell = scheduled_cell()
+        cell["queries_per_repetition"] = 1
+        metrics = summarize_query_samples(
+            [query_artifact_fixture(decoded_bytes=25)],
+            cell=cell,
+            arm={"k": 10, "leaf_page_budget": 32, "cache_state": "cold"},
+            expected_queries=1,
+            expected_cache_cohort_size=0,
+        )
+
+        self.assertEqual(metrics["storage_bytes_read"], 75)
+        self.assertEqual(metrics["decoded_cache_bytes_read"], 25)
+
+    def test_each_cold_query_sample_proves_backing_reads(self) -> None:
+        cell = scheduled_cell()
+        cell["queries_per_repetition"] = 1
+        row = query_artifact_fixture(decoded_bytes=25)
+        row.update(
+            {
+                "network_gets": "0",
+                "bytes_read": "25",
+                "backing_bytes_read": "0",
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "performed no backing reads"):
+            summarize_query_samples(
+                [row],
+                cell=cell,
+                arm={"k": 10, "leaf_page_budget": 32, "cache_state": "cold"},
+                expected_queries=1,
+                expected_cache_cohort_size=0,
+            )
+
+    def test_uncached_concurrency_allows_in_wave_local_disk_hits(self) -> None:
+        summaries, samples = concurrency_artifact_fixture(
+            cache_profile="uncached",
+            disk_bytes=40,
+            backing_bytes=60,
+            decoded_bytes=0,
+        )
+
+        metrics = summarize_concurrency_artifacts(
+            summaries,
+            samples,
+            expected_workers=(1,),
+            expected_queries=1,
+            minimum_recall_ppm=980_000,
+            expected_scan_codec="fast-turboquant-scan",
+            expected_nprobe=32,
+            expected_max_candidates=512,
+            expected_cache_profile="uncached",
+            expected_cache_coverage_percent=0,
+            expected_cache_cohort_size=0,
+        )
+
+        self.assertEqual(metrics[0]["storage_bytes_read"], 60)
+        self.assertEqual(metrics[0]["disk_cache_bytes_read"], 40)
+
+    def test_each_uncached_concurrency_profile_proves_backing_reads(self) -> None:
+        summaries, samples = concurrency_artifact_fixture(
+            cache_profile="uncached",
+            disk_bytes=40,
+            backing_bytes=60,
+            decoded_bytes=0,
+        )
+        second_summary = copy.deepcopy(summaries[0])
+        second_summary["workers"] = "2"
+        second_sample = copy.deepcopy(samples[0])
+        second_sample.update(
+            {
+                "workers": "2",
+                "network_gets": "0",
+                "bytes_read": "100",
+                "disk_cache_bytes_read": "100",
+                "backing_bytes_read": "0",
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "performed no backing reads"):
+            summarize_concurrency_artifacts(
+                [*summaries, second_summary],
+                [*samples, second_sample],
+                expected_workers=(1, 2),
+                expected_queries=1,
+                minimum_recall_ppm=980_000,
+                expected_scan_codec="fast-turboquant-scan",
+                expected_nprobe=32,
+                expected_max_candidates=512,
+                expected_cache_profile="uncached",
+                expected_cache_coverage_percent=0,
+                expected_cache_cohort_size=0,
+            )
+
+    def test_concurrency_accounts_decoded_ram_cache_bytes(self) -> None:
+        summaries, samples = concurrency_artifact_fixture(
+            cache_profile="uncached",
+            disk_bytes=25,
+            backing_bytes=50,
+            decoded_bytes=25,
+        )
+
+        metrics = summarize_concurrency_artifacts(
+            summaries,
+            samples,
+            expected_workers=(1,),
+            expected_queries=1,
+            minimum_recall_ppm=980_000,
+            expected_scan_codec="fast-turboquant-scan",
+            expected_nprobe=32,
+            expected_max_candidates=512,
+            expected_cache_profile="uncached",
+            expected_cache_coverage_percent=0,
+            expected_cache_cohort_size=0,
+        )
+
+        self.assertEqual(metrics[0]["storage_bytes_read"], 50)
+        self.assertEqual(metrics[0]["disk_cache_bytes_read"], 25)
+        self.assertEqual(metrics[0]["decoded_cache_bytes_read"], 25)
+
     def test_lifecycle_artifacts_require_exact_operations_and_visibility_evidence(
         self,
     ) -> None:
@@ -722,6 +932,46 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertGreater(build_resources["cpu_ns"], 0)
         self.assertGreater(runtime_resources["cpu_ns"], 0)
 
+    def test_read_storage_trace_separates_timed_and_setup_backing_io(self) -> None:
+        measured = {
+            "storage_gets": 2,
+            "storage_bytes_read": 600,
+            "decoded_cache_bytes_read": 100,
+            "disk_cache_bytes_read": 300,
+        }
+        trace = {
+            "storage_gets": 5,
+            "storage_puts": 0,
+            "storage_bytes_read": 1_600,
+            "storage_bytes_written": 0,
+            "storage_distinct_data_objects": 0,
+            "storage_max_data_object_bytes": 0,
+        }
+        self.assertEqual(
+            reconcile_read_storage_trace(measured, trace),
+            {
+                "excluded_setup_storage_gets": 3,
+                "excluded_setup_storage_bytes_read": 1_000,
+            },
+        )
+        for drift in (
+            {**trace, "storage_gets": 1},
+            {**trace, "storage_bytes_read": 599},
+        ):
+            with self.subTest(drift=drift):
+                with self.assertRaisesRegex(ValueError, "smaller than measured"):
+                    reconcile_read_storage_trace(measured, drift)
+        for invalid in (
+            {**measured, "storage_gets": True},
+            {**trace, "storage_bytes_read": -1},
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "storage accounting is invalid"):
+                    if "disk_cache_bytes_read" in invalid:
+                        reconcile_read_storage_trace(invalid, trace)
+                    else:
+                        reconcile_read_storage_trace(measured, invalid)
+
     def test_publication_report_is_a_complete_admissible_result(self) -> None:
         cell = scheduled_cell()
         protocol = canonical_json_bytes(cell) + b"\n"
@@ -760,6 +1010,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "latency_p99_us": 3_000,
                 "storage_gets": 10,
                 "storage_bytes_read": 4096,
+                "decoded_cache_bytes_read": 0,
+                "disk_cache_bytes_read": 0,
                 "global_leaf_code_requests": 4,
                 "global_leaf_exact_requests": 6,
                 "query_elapsed_ns": 1_000_000_000,
@@ -771,15 +1023,33 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "disk_read_bytes": 8192,
                 "disk_write_bytes": 16384,
             },
-            runtime_write_metrics={"storage_puts": 0, "storage_bytes_written": 0},
+            runtime_storage_trace={
+                "storage_gets": 12,
+                "storage_puts": 0,
+                "storage_bytes_read": 5_096,
+                "storage_bytes_written": 0,
+                "storage_distinct_data_objects": 0,
+                "storage_max_data_object_bytes": 0,
+            },
             index_receipt=receipt,
             runtime_attestation=attestation,
             runtime_profile="concurrency",
         )
         self.assertTrue(report["publishable"])
         self.assertEqual(report["runtime_profile"], "concurrency")
+        self.assertEqual(report["result"]["schema_version"], 4)
         self.assertEqual(report["result"]["metrics"]["storage_gets"], 10)
         self.assertEqual(report["result"]["metrics"]["storage_bytes_read"], 4096)
+        self.assertEqual(
+            report["result"]["metrics"]["decoded_cache_bytes_read"], 0
+        )
+        self.assertEqual(report["result"]["metrics"]["disk_cache_bytes_read"], 0)
+        self.assertEqual(
+            report["result"]["metrics"]["excluded_setup_storage_gets"], 2
+        )
+        self.assertEqual(
+            report["result"]["metrics"]["excluded_setup_storage_bytes_read"], 1_000
+        )
         self.assertEqual(report["result"]["metrics"]["global_leaf_code_requests"], 4)
         self.assertEqual(report["result"]["metrics"]["global_leaf_exact_requests"], 6)
         admitted = validate_cell_result(
@@ -962,6 +1232,12 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             warm_plan["steps"][1]["env"]["BORSUK_BENCH_CACHE_COVERAGE_PERCENT"],
             "100",
         )
+        self.assertEqual(
+            smoke_cache_cohort_authority(warm_plan, warm_arm),
+            20,
+            "smoke must authenticate every warm sample against its actual cohort",
+        )
+        self.assertEqual(smoke_cache_cohort_authority(plan, arm), 0)
         self.assertEqual(plan["runtime_client"]["instance_type"], "c7g.xlarge")
         self.assertEqual(plan["runtime_storage"]["volume_size_gib"], 32)
 
@@ -1434,7 +1710,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
     ) -> None:
         summaries = [
             {
-                "schema_version": "borsuk-production-bench-v18",
+                "schema_version": "borsuk-production-bench-v19",
                 "scan_codec": "fast-turboquant-scan",
                 "execution_engine": "bounded-cell-card-v20",
                 "nprobe": "32",
@@ -1454,7 +1730,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         ]
         samples = [
             {
-                "schema_version": "borsuk-production-bench-v18",
+                "schema_version": "borsuk-production-bench-v19",
                 "scan_codec": "fast-turboquant-scan",
                 "execution_engine": "bounded-cell-card-v20",
                 "nprobe": "32",
@@ -1463,10 +1739,18 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "target_cache_coverage_percent": "100",
                 "workers": str(workers),
                 "sample_index": str(sample),
+                "query_source_index": str(100 + sample),
+                "cache_cohort_index": "0",
+                "cache_cohort_size": "2",
+                "cache_cohort_count": "1",
                 "latency_ms": "5",
                 "recall_at_10": "0.99",
                 "network_gets": "0",
                 "disk_cache_reads": "1",
+                "bytes_read": "100",
+                "decoded_cache_bytes_read": "0",
+                "disk_cache_bytes_read": "100",
+                "backing_bytes_read": "0",
                 "global_base_approximate_us": "1",
                 "global_base_head_admission_us": "2",
                 "global_base_head_fetch_us": "3",
@@ -1497,9 +1781,74 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             expected_max_candidates=512,
             expected_cache_profile="disk_cached",
             expected_cache_coverage_percent=100,
+            expected_cache_cohort_size=2,
         )
         self.assertEqual([row["workers"] for row in metrics], [1, 2, 4])
         self.assertEqual(metrics[-1]["qps_milli"], 40_000)
+        self.assertEqual(metrics[-1]["storage_gets"], 0)
+        self.assertEqual(metrics[-1]["storage_bytes_read"], 0)
+        self.assertEqual(metrics[-1]["disk_cache_bytes_read"], 200)
+        self.assertEqual(
+            reconcile_concurrency_storage(
+                metrics,
+                {
+                    "storage_gets": 3,
+                    "storage_puts": 0,
+                    "storage_bytes_read": 1_200,
+                    "storage_bytes_written": 0,
+                    "storage_distinct_data_objects": 0,
+                    "storage_max_data_object_bytes": 0,
+                },
+            ),
+            {
+                "storage_gets": 0,
+                "storage_puts": 0,
+                "storage_bytes_read": 0,
+                "storage_bytes_written": 0,
+                "decoded_cache_bytes_read": 0,
+                "disk_cache_bytes_read": 600,
+                "excluded_setup_storage_gets": 3,
+                "excluded_setup_storage_bytes_read": 1_200,
+            },
+        )
+        shifted_samples = json.loads(json.dumps(samples))
+        for row in shifted_samples:
+            if row["workers"] == "4":
+                row["sample_index"] = str(int(row["sample_index"]) + 2)
+        with self.assertRaisesRegex(ValueError, "canonical"):
+            summarize_concurrency_artifacts(
+                summaries,
+                shifted_samples,
+                expected_workers=(1, 2, 4),
+                expected_queries=2,
+                minimum_recall_ppm=980_000,
+                expected_scan_codec="fast-turboquant-scan",
+                expected_nprobe=32,
+                expected_max_candidates=512,
+                expected_cache_profile="disk_cached",
+                expected_cache_coverage_percent=100,
+                expected_cache_cohort_size=2,
+            )
+        mismatched_source = json.loads(json.dumps(samples))
+        next(
+            row
+            for row in mismatched_source
+            if row["workers"] == "4" and row["sample_index"] == "1"
+        )["query_source_index"] = "999"
+        with self.assertRaisesRegex(ValueError, "query source mapping"):
+            summarize_concurrency_artifacts(
+                summaries,
+                mismatched_source,
+                expected_workers=(1, 2, 4),
+                expected_queries=2,
+                minimum_recall_ppm=980_000,
+                expected_scan_codec="fast-turboquant-scan",
+                expected_nprobe=32,
+                expected_max_candidates=512,
+                expected_cache_profile="disk_cached",
+                expected_cache_coverage_percent=100,
+                expected_cache_cohort_size=2,
+            )
         self.assertEqual(metrics[-1]["global_base_exact_fetch_us_total"], 20)
         self.assertEqual(metrics[-1]["global_base_exact_read_us_sum_total"], 40)
         with self.assertRaisesRegex(ValueError, "incomplete"):
@@ -1514,6 +1863,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_max_candidates=512,
                 expected_cache_profile="disk_cached",
                 expected_cache_coverage_percent=100,
+                expected_cache_cohort_size=2,
             )
         wrong_codec = json.loads(json.dumps(samples))
         wrong_codec[0]["scan_codec"] = "srht-pq-scan"
@@ -1529,6 +1879,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_max_candidates=512,
                 expected_cache_profile="disk_cached",
                 expected_cache_coverage_percent=100,
+                expected_cache_cohort_size=2,
             )
         missing_timing = json.loads(json.dumps(samples))
         del missing_timing[0]["global_base_exact_fetch_us"]
@@ -1544,6 +1895,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_max_candidates=512,
                 expected_cache_profile="disk_cached",
                 expected_cache_coverage_percent=100,
+                expected_cache_cohort_size=2,
             )
         fallback = json.loads(json.dumps(samples))
         fallback[0]["execution_engine"] = "fast-turboquant-scan"
@@ -1559,6 +1911,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_max_candidates=512,
                 expected_cache_profile="disk_cached",
                 expected_cache_coverage_percent=100,
+                expected_cache_cohort_size=2,
             )
         wrong_budget = json.loads(json.dumps(summaries))
         wrong_budget[0]["nprobe"] = "64"
@@ -1574,6 +1927,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_max_candidates=512,
                 expected_cache_profile="disk_cached",
                 expected_cache_coverage_percent=100,
+                expected_cache_cohort_size=2,
             )
 
         network = json.loads(json.dumps(samples))
@@ -1590,6 +1944,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_max_candidates=512,
                 expected_cache_profile="disk_cached",
                 expected_cache_coverage_percent=100,
+                expected_cache_cohort_size=2,
             )
 
         memory_only = json.loads(json.dumps(samples))
@@ -1606,7 +1961,60 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_max_candidates=512,
                 expected_cache_profile="disk_cached",
                 expected_cache_coverage_percent=100,
+                expected_cache_cohort_size=2,
             )
+
+    def test_disk_cached_cohort_authority_is_budgeted_and_row_bound(self) -> None:
+        self.assertEqual(
+            disk_cached_cohort_authority(1024 * 1024 * 1024, 1_000),
+            (20, 50),
+        )
+        self.assertEqual(
+            disk_cached_cohort_authority(512 * 1024 * 1024, 1_000),
+            (12, 84),
+        )
+        for disk_bytes, queries in ((True, 1_000), (1024**3, True), (0, 1_000)):
+            with (
+                self.subTest(disk_bytes=disk_bytes, queries=queries),
+                self.assertRaisesRegex(ValueError, "cohort authority"),
+            ):
+                disk_cached_cohort_authority(disk_bytes, queries)
+        row = {
+            "cache_cohort_index": "1",
+            "cache_cohort_size": "20",
+            "cache_cohort_count": "50",
+        }
+        validate_query_cache_cohort(
+            row,
+            sample_index=20,
+            expected_queries=1_000,
+            expected_cohort_size=20,
+        )
+        for field, value in (
+            ("cache_cohort_index", "0"),
+            ("cache_cohort_size", "19"),
+            ("cache_cohort_count", "49"),
+        ):
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(ValueError, "cache cohort"),
+            ):
+                validate_query_cache_cohort(
+                    {**row, field: value},
+                    sample_index=20,
+                    expected_queries=1_000,
+                    expected_cohort_size=20,
+                )
+        validate_query_cache_cohort(
+            {
+                "cache_cohort_index": "0",
+                "cache_cohort_size": "0",
+                "cache_cohort_count": "0",
+            },
+            sample_index=20,
+            expected_queries=1_000,
+            expected_cohort_size=0,
+        )
 
     def test_unavailable_local_system_is_rejected_not_simulated(self) -> None:
         cell = scheduled_cell(system="amazon-s3-vectors")
@@ -1657,12 +2065,17 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         ):
             rows.append(
                 {
-                    "schema_version": "borsuk-production-bench-v18",
+                    "schema_version": "borsuk-production-bench-v19",
                     "sample_index": str(index),
+                    "query_source_index": str(100 + index),
                     "latency_ms": str(latency),
                     "recall_at_10": str(recall),
                     "network_gets": str(index + 1),
                     "bytes_read": str((index + 1) * 100),
+                    "disk_cache_reads": "0",
+                    "decoded_cache_bytes_read": "0",
+                    "disk_cache_bytes_read": "0",
+                    "backing_bytes_read": str((index + 1) * 100),
                     "global_leaf_code_pages_read": str(100 + index),
                     "global_leaf_code_requests": str(index + 2),
                     "global_leaf_pages_read": str(30 + index),
@@ -1699,9 +2112,18 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     "execution_engine": "bounded-cell-card-v20",
                     "nprobe": "32",
                     "max_candidates": "512",
+                    "cache_cohort_index": "0",
+                    "cache_cohort_size": "0",
+                    "cache_cohort_count": "0",
                 }
             )
-        summary = summarize_query_samples(rows, cell=cell, arm=arm, expected_queries=3)
+        summary = summarize_query_samples(
+            rows,
+            cell=cell,
+            arm=arm,
+            expected_queries=3,
+            expected_cache_cohort_size=0,
+        )
         self.assertEqual(summary["queries"], 3)
         self.assertEqual(summary["correctness_ppm"], 966667)
         self.assertEqual(summary["latency_p50_us"], 2000)
@@ -1709,12 +2131,35 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(summary["latency_p99_us"], 4000)
         self.assertEqual(summary["storage_gets"], 6)
         self.assertEqual(summary["storage_bytes_read"], 600)
+        self.assertEqual(summary["decoded_cache_bytes_read"], 0)
+        self.assertEqual(summary["disk_cache_bytes_read"], 0)
         self.assertEqual(summary["global_leaf_code_requests"], 9)
         self.assertEqual(summary["global_leaf_exact_requests"], 12)
         self.assertEqual(summary["global_base_exact_fetch_us_total"], 63)
         self.assertEqual(summary["global_base_exact_read_us_sum_total"], 90)
         self.assertEqual(summary["global_base_exact_reads_over_20ms_total"], 6)
         self.assertEqual(summary["query_elapsed_ns"], 7_000_000)
+        shifted_rows = json.loads(json.dumps(rows))
+        for row in shifted_rows:
+            row["sample_index"] = str(int(row["sample_index"]) + 3)
+        with self.assertRaisesRegex(ValueError, "canonical"):
+            summarize_query_samples(
+                shifted_rows,
+                cell=cell,
+                arm=arm,
+                expected_queries=3,
+            )
+        duplicate_source = json.loads(json.dumps(rows))
+        duplicate_source[1]["query_source_index"] = duplicate_source[0][
+            "query_source_index"
+        ]
+        with self.assertRaisesRegex(ValueError, "query source"):
+            summarize_query_samples(
+                duplicate_source,
+                cell=cell,
+                arm=arm,
+                expected_queries=3,
+            )
 
         warm_arm = {**arm, "cache_state": "warm"}
         warm_rows = json.loads(json.dumps(rows))
@@ -1722,20 +2167,56 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             row["phase"] = "disk_cached"
             row["network_gets"] = "0"
             row["disk_cache_reads"] = "1"
-        summarize_query_samples(
-            warm_rows, cell=cell, arm=warm_arm, expected_queries=3
+            row["disk_cache_bytes_read"] = row["bytes_read"]
+            row["backing_bytes_read"] = "0"
+            row["cache_cohort_size"] = "3"
+            row["cache_cohort_count"] = "1"
+        with self.assertRaisesRegex(ValueError, "cache cohort authority"):
+            summarize_query_samples(
+                warm_rows,
+                cell=cell,
+                arm=warm_arm,
+                expected_queries=3,
+            )
+        warm_summary = summarize_query_samples(
+            warm_rows,
+            cell=cell,
+            arm=warm_arm,
+            expected_queries=3,
+            expected_cache_cohort_size=3,
         )
+        self.assertEqual(warm_summary["storage_gets"], 0)
+        self.assertEqual(warm_summary["storage_bytes_read"], 0)
+        self.assertEqual(warm_summary["disk_cache_bytes_read"], 600)
+        wrong_cohort = json.loads(json.dumps(warm_rows))
+        wrong_cohort[2]["cache_cohort_index"] = "1"
+        with self.assertRaisesRegex(ValueError, "cache cohort"):
+            summarize_query_samples(
+                wrong_cohort,
+                cell=cell,
+                arm=warm_arm,
+                expected_queries=3,
+                expected_cache_cohort_size=3,
+            )
         warm_network = json.loads(json.dumps(warm_rows))
         warm_network[0]["network_gets"] = "1"
         with self.assertRaisesRegex(ValueError, "disk-cached query sample"):
             summarize_query_samples(
-                warm_network, cell=cell, arm=warm_arm, expected_queries=3
+                warm_network,
+                cell=cell,
+                arm=warm_arm,
+                expected_queries=3,
+                expected_cache_cohort_size=3,
             )
         warm_memory_only = json.loads(json.dumps(warm_rows))
         warm_memory_only[0]["disk_cache_reads"] = "0"
         with self.assertRaisesRegex(ValueError, "disk-cached query sample"):
             summarize_query_samples(
-                warm_memory_only, cell=cell, arm=warm_arm, expected_queries=3
+                warm_memory_only,
+                cell=cell,
+                arm=warm_arm,
+                expected_queries=3,
+                expected_cache_cohort_size=3,
             )
 
         protocol = canonical_json_bytes(cell) + b"\n"
@@ -1769,12 +2250,19 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "disk_read_bytes": 0,
                 "disk_write_bytes": 0,
             },
-            runtime_write_metrics={"storage_puts": 0, "storage_bytes_written": 0},
+            runtime_storage_trace={
+                "storage_gets": 6,
+                "storage_puts": 0,
+                "storage_bytes_read": 600,
+                "storage_bytes_written": 0,
+                "storage_distinct_data_objects": 0,
+                "storage_max_data_object_bytes": 0,
+            },
             index_receipt=receipt,
             runtime_attestation=attestation,
         )
         self.assertTrue(report["publishable"])
-        self.assertEqual(report["result"]["schema_version"], 3)
+        self.assertEqual(report["result"]["schema_version"], 4)
 
         missing_timing = json.loads(json.dumps(rows))
         del missing_timing[0]["global_base_exact_fetch_us"]
@@ -1962,7 +2450,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 for sample_index in range(2):
                     rows.append(
                         {
-                            "schema_version": "borsuk-production-bench-v18",
+                            "schema_version": "borsuk-production-bench-v19",
                             "phase": "uncached",
                             "mode": "srht-pq-scan",
                             "scan_codec": "srht-pq-scan",
@@ -1975,6 +2463,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                             "recall_at_10": "0.80",
                             "network_gets": "3",
                             "bytes_read": "100",
+                            "disk_cache_reads": "0",
+                            "decoded_cache_bytes_read": "0",
+                            "disk_cache_bytes_read": "0",
+                            "backing_bytes_read": "100",
                             "global_leaf_code_pages_read": "7",
                             "global_leaf_code_requests": "2",
                             "global_leaf_pages_read": "4",
@@ -2000,7 +2492,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
 
         summaries = [
             {
-                "schema_version": "borsuk-production-bench-v18",
+                "schema_version": "borsuk-production-bench-v19",
                 "scan_codec": "srht-pq-scan",
                 "execution_engine": "bounded-cell-card-v20",
                 "phase": "uncached",

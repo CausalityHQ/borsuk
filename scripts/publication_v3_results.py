@@ -66,7 +66,17 @@ READ_METRIC_FIELDS_V1 = frozenset(
 READ_METRIC_FIELDS_V2 = READ_METRIC_FIELDS_V1 | frozenset(
     {"global_leaf_code_requests", "global_leaf_exact_requests"}
 )
-READ_METRIC_FIELDS = READ_METRIC_FIELDS_V2 | frozenset(QUERY_STAGE_AGGREGATE_FIELDS)
+READ_METRIC_FIELDS_V3 = READ_METRIC_FIELDS_V2 | frozenset(
+    QUERY_STAGE_AGGREGATE_FIELDS
+)
+READ_METRIC_FIELDS = READ_METRIC_FIELDS_V3 | frozenset(
+    {
+        "decoded_cache_bytes_read",
+        "disk_cache_bytes_read",
+        "excluded_setup_storage_gets",
+        "excluded_setup_storage_bytes_read",
+    }
+)
 LIFECYCLE_METRIC_FIELDS = frozenset(
     {
         "insert_ops",
@@ -295,7 +305,7 @@ def validate_cell_result(
 ) -> dict[str, object]:
     if not isinstance(value, dict) or frozenset(value) != RESULT_FIELDS:
         raise ValueError("cell result fields differ")
-    if value["schema_version"] not in (1, 2, 3) or value["status"] != "complete":
+    if value["schema_version"] not in (1, 2, 3, 4) or value["status"] != "complete":
         raise ValueError("cell result schema or status is invalid")
     if value["cell_id"] != cell.get("cell_id"):
         raise ValueError("cell result identity differs from its protocol")
@@ -389,6 +399,8 @@ def validate_cell_result(
         elif result_schema_version == 2:
             expected_metric_fields = READ_METRIC_FIELDS_V2
         elif result_schema_version == 3:
+            expected_metric_fields = READ_METRIC_FIELDS_V3
+        elif result_schema_version == 4:
             expected_metric_fields = READ_METRIC_FIELDS
         else:
             raise ValueError("cell result schema version is unsupported")
@@ -498,7 +510,7 @@ def validate_cell_result(
     if workload_kind == "read-recall" and result_schema_version >= 2:
         for field in ("global_leaf_code_requests", "global_leaf_exact_requests"):
             _nonnegative_integer(metrics[field], field.replace("_", " "))
-    if workload_kind == "read-recall" and result_schema_version == 3:
+    if workload_kind == "read-recall" and result_schema_version >= 3:
         for field in QUERY_STAGE_AGGREGATE_FIELDS:
             _nonnegative_integer(metrics[field], field.replace("_", " "))
         if (
@@ -518,6 +530,14 @@ def validate_cell_result(
         ]
         if timing_tails != sorted(timing_tails, reverse=True):
             raise ValueError("cell result timing aggregates are inconsistent")
+    if workload_kind == "read-recall" and result_schema_version >= 4:
+        for field in (
+            "decoded_cache_bytes_read",
+            "disk_cache_bytes_read",
+            "excluded_setup_storage_gets",
+            "excluded_setup_storage_bytes_read",
+        ):
+            _nonnegative_integer(metrics[field], field.replace("_", " "))
     if workload_kind == "read-recall" and (
         metrics["storage_puts"] != 0 or metrics["storage_bytes_written"] != 0
     ):
