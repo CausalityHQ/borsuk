@@ -944,6 +944,23 @@ fn global_leaf_code_byte_ceiling(
     (remaining / 4).min(remaining.saturating_sub(first_exact_page_bytes))
 }
 
+fn global_cell_card_head_byte_ceiling(
+    limit: u64,
+    exact_block_byte_ceiling: u64,
+    exact_request_budget: usize,
+    max_physical_amplification: u64,
+) -> u64 {
+    // Reserve one maximum-sized exact block including the configured physical
+    // amplification. This guarantees that a bounded query can make progress;
+    // additional selected/coalesced blocks are admitted only when their full
+    // physical ranges fit the bytes left after the code-head plan.
+    (exact_request_budget != 0)
+        .then_some(exact_block_byte_ceiling)
+        .and_then(|selected| selected.checked_mul(max_physical_amplification))
+        .and_then(|reserve| limit.checked_sub(reserve))
+        .unwrap_or(0)
+}
+
 #[derive(Debug)]
 struct RoutedDecodedGlobalLeafRow {
     row: crate::global_leaf::DecodedGlobalLeafRow,
@@ -20013,9 +20030,13 @@ impl BorsukIndex {
         // weighted RAM gate bounds the real executable plan, not its GET count.
         let (_, routed_exact_block_ceiling, _) =
             cell_card_exact_admission_bounds(root, &ranked_card_indexes)?;
-        let head_byte_ceiling =
-            global_leaf_code_byte_ceiling(max_bytes, 0, routed_exact_block_ceiling)
-                .min(query_head_physical_ceiling);
+        let head_byte_ceiling = global_cell_card_head_byte_ceiling(
+            max_bytes,
+            routed_exact_block_ceiling,
+            global_cell_card_exact_request_budget(context.page_budget),
+            self.read_runtime.exact_read_max_physical_amplification,
+        )
+        .min(query_head_physical_ceiling);
         if head_byte_ceiling == 0 {
             v20_progress!(
                 "head-declined",
@@ -20290,7 +20311,7 @@ impl BorsukIndex {
         let (exact_plan, exact_limited) = match plan_ranked_cell_card_exact_wave_with_amplification(
             &ranked,
             exact_budget,
-            global_cell_card_exact_request_budget(context.page_budget),
+            requested_exact_block_budget,
             global_cell_card_exact_request_budget(context.page_budget),
             self.read_runtime.exact_read_max_physical_amplification,
         ) {
@@ -43561,8 +43582,12 @@ mod tests {
         assert_eq!(report.hits.len(), 10, "{report:?}");
         assert_eq!(report.hits[0].id.as_bytes(), b"row-0", "{report:?}");
         assert!(
-            report.records_scored > 512,
-            "an explicit exact-candidate request was silently capped: {report:?}"
+            report.records_scored > 1_024,
+            "the exact request width silently capped coalesced candidate blocks: {report:?}"
+        );
+        assert!(
+            report.global_leaf_exact_requests <= GLOBAL_LEAF_QUERY_WAVE_PAGES,
+            "wider coalesced candidates exceeded the exact GET cap: {report:?}"
         );
 
         let wide = reader
@@ -43636,8 +43661,8 @@ mod tests {
             .unwrap();
         assert!(bounded.records_scored <= rows);
         assert!(
-            bounded.global_leaf_pages_read <= GLOBAL_LEAF_QUERY_WAVE_PAGES,
-            "coalescing must not bypass the admitted exact-tile bound: {bounded:?}"
+            bounded.global_leaf_exact_requests <= GLOBAL_LEAF_QUERY_WAVE_PAGES,
+            "coalescing must not bypass the admitted exact GET bound: {bounded:?}"
         );
 
         let wide_unbounded = reader
@@ -43649,8 +43674,8 @@ mod tests {
             )
             .unwrap();
         assert!(
-            wide_unbounded.global_leaf_pages_read <= 64,
-            "coalesced exact reads bypassed the admitted page-budget wave: {wide_unbounded:?}"
+            wide_unbounded.global_leaf_exact_requests <= 64,
+            "coalesced exact reads bypassed the admitted GET-budget wave: {wide_unbounded:?}"
         );
     }
 
@@ -43666,6 +43691,20 @@ mod tests {
         assert_eq!(global_leaf_code_byte_ceiling(1_000, 200, 700), 100);
         assert_eq!(global_leaf_code_byte_ceiling(1_000, 200, 900), 0);
         assert_eq!(global_leaf_code_byte_ceiling(100, 200, 1), 0);
+    }
+
+    #[test]
+    fn resident_global_v20_head_ceiling_reserves_one_amplified_exact_block_not_a_fixed_fraction() {
+        assert_eq!(
+            global_cell_card_head_byte_ceiling(32 * 1024 * 1024, 64 * 1024, 32, 2,),
+            32 * 1024 * 1024 - 128 * 1024,
+        );
+        assert_eq!(global_cell_card_head_byte_ceiling(1_000, 1, 0, 2), 0);
+        assert_eq!(global_cell_card_head_byte_ceiling(1_000, 600, 1, 2), 0);
+        assert_eq!(
+            global_cell_card_head_byte_ceiling(u64::MAX, u64::MAX, 2, 2),
+            0,
+        );
     }
 
     #[test]
@@ -43878,7 +43917,11 @@ mod tests {
         // affordable prefix on the V17 path instead of starting a second
         // storage path that can spend the caller's cap again.
         assert_eq!(fallback_complete.leaf_mode, "bounded-cell-card-v20");
-        assert!((1..=4).contains(&fallback_complete.global_leaf_pages_read));
+        assert!(fallback_complete.global_leaf_pages_read > 0);
+        assert!(
+            fallback_complete.global_leaf_exact_requests <= GLOBAL_LEAF_QUERY_WAVE_PAGES,
+            "the bounded continuation exceeded its exact GET cap: {fallback_complete:?}"
+        );
         assert_eq!(fallback_complete.global_leaf_waves, 2);
         assert!(fallback_complete.global_leaf_code_pages_read > 0);
         assert!(fallback_complete.global_leaf_code_bytes > 0);

@@ -1,5 +1,6 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    cmp::Reverse,
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, VecDeque},
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
 };
@@ -2740,27 +2741,349 @@ pub(crate) fn plan_ranked_cell_card_exact_wave_with_amplification(
     max_requests: usize,
     max_physical_amplification: u64,
 ) -> Result<(CellCardExactWavePlan, bool)> {
+    let (plan, limited, _) = plan_ranked_cell_card_exact_wave_incremental(
+        ranked,
+        max_physical_bytes,
+        max_blocks,
+        max_requests,
+        max_physical_amplification,
+    )?;
+    Ok((plan, limited))
+}
+
+#[derive(Debug)]
+struct RankedExactGroupRuns {
+    group: Arc<CellCardGroupRef>,
+    runs: BTreeMap<u64, u64>,
+}
+
+#[derive(Debug, Default)]
+struct RankedExactPrefixState {
+    groups: BTreeMap<String, RankedExactGroupRuns>,
+    merge_candidates: BinaryHeap<Reverse<(u64, String, u64, u64)>>,
+    physical_bytes: u64,
+    selected_bytes: u64,
+    requests: usize,
+}
+
+impl RankedExactPrefixState {
+    fn enqueue_adjacent_gap(&mut self, path: &str, left_start: u64, right_start: u64) {
+        let Some(group) = self.groups.get(path) else {
+            return;
+        };
+        let Some(left_end) = group.runs.get(&left_start).copied() else {
+            return;
+        };
+        if left_end > right_start || !group.runs.contains_key(&right_start) {
+            return;
+        }
+        self.merge_candidates.push(Reverse((
+            right_start - left_end,
+            path.to_string(),
+            left_start,
+            right_start,
+        )));
+    }
+
+    fn enqueue_neighbors(&mut self, path: &str, start: u64) {
+        let neighbors = self.groups.get(path).and_then(|group| {
+            group.runs.get(&start)?;
+            let predecessor = group.runs.range(..start).next_back().map(|(key, _)| *key);
+            let successor = group
+                .runs
+                .range((std::ops::Bound::Excluded(start), std::ops::Bound::Unbounded))
+                .next()
+                .map(|(key, _)| *key);
+            Some((predecessor, successor))
+        });
+        let Some((predecessor, successor)) = neighbors else {
+            return;
+        };
+        if let Some(predecessor) = predecessor {
+            self.enqueue_adjacent_gap(path, predecessor, start);
+        }
+        if let Some(successor) = successor {
+            self.enqueue_adjacent_gap(path, start, successor);
+        }
+    }
+
+    fn insert(
+        &mut self,
+        block: &RankedCellCardExactBlock,
+        max_physical_bytes: u64,
+        max_physical_amplification: u64,
+    ) -> Result<()> {
+        let start = block.reference.offset;
+        let end = start
+            .checked_add(u64::from(block.reference.bytes))
+            .ok_or_else(|| BorsukError::InvalidStorage("cell-card exact range overflows".into()))?;
+        self.selected_bytes = self
+            .selected_bytes
+            .checked_add(u64::from(block.reference.bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card selected exact bytes overflow".to_string())
+            })?;
+        let path = block.group.path.clone();
+        let group = self
+            .groups
+            .entry(path.clone())
+            .or_insert_with(|| RankedExactGroupRuns {
+                group: Arc::clone(&block.group),
+                runs: BTreeMap::new(),
+            });
+        let contained = group
+            .runs
+            .range(..=start)
+            .next_back()
+            .is_some_and(|(_, run_end)| end <= *run_end);
+        if !contained {
+            group.runs.insert(start, end);
+            self.physical_bytes =
+                self.physical_bytes
+                    .checked_add(end - start)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "cell-card exact wave byte count overflows".to_string(),
+                        )
+                    })?;
+            self.requests = self.requests.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card exact request count overflows".to_string())
+            })?;
+            self.enqueue_neighbors(&path, start);
+        }
+
+        while let Some(Reverse((gap, candidate_path, left_start, right_start))) =
+            self.merge_candidates.peek().cloned()
+        {
+            let valid = self
+                .groups
+                .get(&candidate_path)
+                .and_then(|candidate_group| {
+                    let left_end = candidate_group.runs.get(&left_start).copied()?;
+                    let right_end = candidate_group.runs.get(&right_start).copied()?;
+                    let adjacent = candidate_group
+                        .runs
+                        .range((
+                            std::ops::Bound::Excluded(left_start),
+                            std::ops::Bound::Unbounded,
+                        ))
+                        .next()
+                        .is_some_and(|(start, _)| *start == right_start);
+                    (adjacent && right_start >= left_end).then_some((left_end, right_end))
+                });
+            let Some((left_end, right_end)) = valid else {
+                self.merge_candidates.pop();
+                continue;
+            };
+            if right_start - left_end != gap
+                || right_end - left_start > CELL_CARD_RANGE_READ_MAX_BYTES
+            {
+                self.merge_candidates.pop();
+                continue;
+            }
+            let maximum_gap_bytes = max_physical_bytes.saturating_sub(self.selected_bytes).min(
+                self.selected_bytes
+                    .saturating_mul(max_physical_amplification - 1),
+            );
+            let used_gap_bytes = self.physical_bytes.saturating_sub(self.selected_bytes);
+            if gap > maximum_gap_bytes.saturating_sub(used_gap_bytes) {
+                break;
+            }
+            self.merge_candidates.pop();
+            let candidate_group = self
+                .groups
+                .get_mut(&candidate_path)
+                .expect("validated exact group remains present");
+            candidate_group.runs.remove(&right_start);
+            candidate_group.runs.insert(left_start, right_end);
+            self.physical_bytes = self.physical_bytes.checked_add(gap).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card exact wave byte count overflows".to_string())
+            })?;
+            self.requests = self.requests.checked_sub(1).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card exact request count underflows".to_string())
+            })?;
+            self.enqueue_neighbors(&candidate_path, left_start);
+        }
+        Ok(())
+    }
+}
+
+fn plan_ranked_cell_card_exact_wave_incremental(
+    ranked: &[RankedCellCardExactBlock],
+    max_physical_bytes: u64,
+    max_blocks: usize,
+    max_requests: usize,
+    max_physical_amplification: u64,
+) -> Result<(CellCardExactWavePlan, bool, usize)> {
     if max_blocks == 0 {
         return Err(BorsukError::InvalidStorage(
             "cell-card exact wave block cap must be nonzero".to_string(),
         ));
     }
-    let mut last_limit = None;
-    for prefix in (1..=ranked.len().min(max_blocks)).rev() {
-        match plan_cell_card_exact_wave_with_amplification(
-            &ranked[..prefix],
-            max_physical_bytes,
-            max_requests,
-            max_physical_amplification,
-        ) {
-            Ok(plan) => return Ok((plan, prefix < ranked.len())),
-            Err(error @ BorsukError::RecallGuaranteeViolated { .. }) => last_limit = Some(error),
-            Err(error) => return Err(error),
+    if ranked.is_empty() || max_physical_bytes == 0 || max_requests == 0 {
+        return Err(BorsukError::InvalidStorage(
+            "ranked cell-card exact wave bounds and blocks must be non-empty".to_string(),
+        ));
+    }
+    if !(1..=CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION).contains(&max_physical_amplification) {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card exact physical amplification is outside 1..=5".to_string(),
+        ));
+    }
+
+    let block_limit = ranked.len().min(max_blocks);
+    let mut physical_order = Vec::with_capacity(block_limit);
+    for block in &ranked[..block_limit] {
+        let end = block
+            .reference
+            .offset
+            .checked_add(u64::from(block.reference.bytes))
+            .ok_or_else(|| BorsukError::InvalidStorage("cell-card exact range overflows".into()))?;
+        physical_order.push((block.group.path.as_str(), block.reference.offset, end));
+    }
+    physical_order
+        .sort_unstable_by(|left, right| left.0.cmp(right.0).then_with(|| left.1.cmp(&right.1)));
+    if physical_order
+        .windows(2)
+        .any(|pair| pair[0].0 == pair[1].0 && pair[1].1 < pair[0].2)
+    {
+        return Err(BorsukError::InvalidStorage(
+            "cell-card exact ranges overlap".to_string(),
+        ));
+    }
+
+    // Add blocks in quality order and maintain only ranges formed by the
+    // selected prefix. A min-heap merges the cheapest currently adjacent gap,
+    // so each block/range is inserted and merged a bounded number of times;
+    // lower-ranked blocks can never poison an earlier prefix's read boundary.
+    let mut state = RankedExactPrefixState::default();
+    let mut selected_prefix = 0_usize;
+    let mut planning_steps = 0_usize;
+    let mut limit_reason = crate::record::SearchTerminationReason::MaxSegments;
+    for (rank, block) in ranked[..block_limit].iter().enumerate() {
+        planning_steps += 1;
+        let candidate_selected_bytes = state
+            .selected_bytes
+            .checked_add(u64::from(block.reference.bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card selected exact bytes overflow".to_string())
+            })?;
+        if candidate_selected_bytes > max_physical_bytes {
+            limit_reason = crate::record::SearchTerminationReason::MaxBytes;
+            break;
+        }
+        state.insert(block, max_physical_bytes, max_physical_amplification)?;
+        if state.physical_bytes > max_physical_bytes {
+            limit_reason = crate::record::SearchTerminationReason::MaxBytes;
+            break;
+        }
+        if state.requests <= max_requests {
+            selected_prefix = rank + 1;
         }
     }
-    Err(last_limit.unwrap_or_else(|| {
-        BorsukError::InvalidStorage("cell-card exact wave selected no blocks".to_string())
-    }))
+    if selected_prefix == 0 {
+        return Err(BorsukError::RecallGuaranteeViolated {
+            reason: limit_reason,
+        });
+    }
+
+    let mut final_state = RankedExactPrefixState::default();
+    for block in &ranked[..selected_prefix] {
+        planning_steps += 1;
+        final_state.insert(block, max_physical_bytes, max_physical_amplification)?;
+    }
+    if final_state.requests > max_requests
+        || final_state.physical_bytes > max_physical_bytes
+        || final_state.physical_bytes
+            > final_state
+                .selected_bytes
+                .saturating_mul(max_physical_amplification)
+    {
+        return Err(BorsukError::InvalidStorage(
+            "ranked cell-card exact prefix reconstruction exceeded its bounds".to_string(),
+        ));
+    }
+    let mut blocks_by_run = BTreeMap::<(String, u64), Vec<RankedCellCardExactBlock>>::new();
+    for block in ranked[..selected_prefix].iter().cloned() {
+        let end = block
+            .reference
+            .offset
+            .checked_add(u64::from(block.reference.bytes))
+            .ok_or_else(|| BorsukError::InvalidStorage("cell-card exact range overflows".into()))?;
+        let run_start = final_state
+            .groups
+            .get(block.group.path.as_str())
+            .and_then(|group| group.runs.range(..=block.reference.offset).next_back())
+            .and_then(|(start, run_end)| (end <= *run_end).then_some(*start))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "ranked cell-card exact block escaped its selected run".to_string(),
+                )
+            })?;
+        blocks_by_run
+            .entry((block.group.path.clone(), run_start))
+            .or_default()
+            .push(block);
+    }
+    let mut reads = Vec::with_capacity(final_state.requests);
+    for (path, group) in &final_state.groups {
+        for (start, end) in &group.runs {
+            let mut blocks = blocks_by_run
+                .remove(&(path.clone(), *start))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "ranked cell-card exact run has no selected blocks".to_string(),
+                    )
+                })?;
+            blocks.sort_unstable_by_key(|block| block.reference.offset);
+            let selected_bytes = blocks.iter().try_fold(0_u64, |total, block| {
+                total
+                    .checked_add(u64::from(block.reference.bytes))
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "cell-card selected exact bytes overflow".to_string(),
+                        )
+                    })
+            })?;
+            reads.push(CellCardExactRead {
+                group: Arc::clone(&group.group),
+                start: *start,
+                end: *end,
+                selected_bytes,
+                blocks,
+            });
+        }
+    }
+    if !blocks_by_run.is_empty() || reads.len() != final_state.requests {
+        return Err(BorsukError::InvalidStorage(
+            "ranked cell-card exact run reconstruction is incomplete".to_string(),
+        ));
+    }
+    Ok((
+        CellCardExactWavePlan {
+            reads,
+            physical_bytes: final_state.physical_bytes,
+            selected_bytes: final_state.selected_bytes,
+        },
+        selected_prefix < ranked.len(),
+        planning_steps,
+    ))
+}
+
+#[cfg(test)]
+pub(crate) fn plan_ranked_cell_card_exact_wave_with_work_for_test(
+    ranked: &[RankedCellCardExactBlock],
+    max_physical_bytes: u64,
+    max_blocks: usize,
+    max_requests: usize,
+) -> Result<(CellCardExactWavePlan, bool, usize)> {
+    plan_ranked_cell_card_exact_wave_incremental(
+        ranked,
+        max_physical_bytes,
+        max_blocks,
+        max_requests,
+        CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION,
+    )
 }
 
 #[derive(Debug)]
@@ -5705,6 +6028,156 @@ mod tests {
         );
         assert_eq!(plan.selected_bytes(), selected_bytes);
         assert_eq!(plan.speculative_bytes(), 0);
+    }
+
+    #[test]
+    fn ranked_exact_wave_plans_a_request_limited_tiny_block_prefix_once() {
+        let ranked = (0_u32..700)
+            .map(|ordinal| {
+                let group = Arc::new(super::CellCardGroupRef {
+                    path: format!("group-{ordinal:04}.arrow"),
+                    checksum: [ordinal as u8; 32],
+                    encoded_bytes: 1,
+                    code_plane_offset: 0,
+                    code_plane_bytes: 1,
+                    code_plane_checksum: [ordinal as u8; 32],
+                });
+                super::RankedCellCardExactBlock {
+                    head_index: ordinal as usize,
+                    group,
+                    cell_index: ordinal,
+                    card_ordinal: 0,
+                    reference: super::CellCardExactBlockRef {
+                        block_ordinal: 0,
+                        offset: 0,
+                        metadata_bytes: 0,
+                        body_bytes: 1,
+                        bytes: 1,
+                        rows: 1,
+                        checksum: [ordinal as u8; 32],
+                    },
+                    distance: ordinal as f32,
+                    row_distances: Box::new([]),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let (plan, limited, planning_steps) =
+            super::plan_ranked_cell_card_exact_wave_with_work_for_test(
+                &ranked,
+                700,
+                ranked.len(),
+                32,
+            )
+            .unwrap();
+
+        assert!(limited);
+        assert_eq!(plan.blocks(), 32);
+        assert_eq!(plan.requests(), 32);
+        assert!(
+            planning_steps <= ranked.len() * 2,
+            "request-limited planning repeated ranked prefixes: {planning_steps}"
+        );
+    }
+
+    #[test]
+    fn ranked_exact_wave_ignores_lower_ranked_blocks_when_forming_read_boundaries() {
+        let group = Arc::new(super::CellCardGroupRef {
+            path: "group.arrow".to_string(),
+            checksum: [1; 32],
+            encoded_bytes: super::CELL_CARD_GROUP_MAX_BYTES,
+            code_plane_offset: 0,
+            code_plane_bytes: 1,
+            code_plane_checksum: [2; 32],
+        });
+        let maximum_range = super::CELL_CARD_RANGE_READ_MAX_BYTES;
+        let ranked = [maximum_range - 2, maximum_range, 0]
+            .into_iter()
+            .enumerate()
+            .map(|(rank, offset)| super::RankedCellCardExactBlock {
+                head_index: rank,
+                group: Arc::clone(&group),
+                cell_index: rank as u32,
+                card_ordinal: 0,
+                reference: super::CellCardExactBlockRef {
+                    block_ordinal: rank as u32,
+                    offset,
+                    metadata_bytes: 0,
+                    body_bytes: 1,
+                    bytes: 1,
+                    rows: 1,
+                    checksum: [rank as u8; 32],
+                },
+                distance: rank as f32,
+                row_distances: Box::new([]),
+            })
+            .collect::<Vec<_>>();
+
+        let (plan, limited) = super::plan_ranked_cell_card_exact_wave_with_amplification(
+            &ranked,
+            4,
+            ranked.len(),
+            1,
+            2,
+        )
+        .unwrap();
+
+        assert!(limited);
+        assert_eq!(plan.blocks(), 2);
+        assert_eq!(plan.requests(), 1);
+        assert_eq!(plan.physical_bytes(), 3);
+    }
+
+    #[test]
+    fn ranked_exact_wave_does_not_keep_a_prefix_after_prior_gaps_exhaust_bytes() {
+        let groups = ["a.arrow", "b.arrow"].map(|path| {
+            Arc::new(super::CellCardGroupRef {
+                path: path.to_string(),
+                checksum: [1; 32],
+                encoded_bytes: 100,
+                code_plane_offset: 0,
+                code_plane_bytes: 1,
+                code_plane_checksum: [2; 32],
+            })
+        });
+        let ranked = [(0_usize, 0_u64, 40_u32), (0, 60, 40), (1, 0, 1)]
+            .into_iter()
+            .enumerate()
+            .map(
+                |(rank, (group, offset, bytes))| super::RankedCellCardExactBlock {
+                    head_index: rank,
+                    group: Arc::clone(&groups[group]),
+                    cell_index: rank as u32,
+                    card_ordinal: 0,
+                    reference: super::CellCardExactBlockRef {
+                        block_ordinal: rank as u32,
+                        offset,
+                        metadata_bytes: 0,
+                        body_bytes: bytes,
+                        bytes,
+                        rows: 1,
+                        checksum: [rank as u8; 32],
+                    },
+                    distance: rank as f32,
+                    row_distances: Box::new([]),
+                },
+            )
+            .collect::<Vec<_>>();
+
+        let (plan, limited) = super::plan_ranked_cell_card_exact_wave_with_amplification(
+            &ranked,
+            100,
+            ranked.len(),
+            2,
+            2,
+        )
+        .unwrap();
+
+        assert!(limited);
+        assert_eq!(plan.blocks(), 2);
+        assert_eq!(plan.requests(), 1);
+        assert_eq!(plan.selected_bytes(), 80);
+        assert_eq!(plan.physical_bytes(), 100);
     }
 
     #[test]
