@@ -926,7 +926,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(
             benchmark_env["BORSUK_BENCH_NPROBES"], str(arm["leaf_page_budget"])
         )
-        self.assertEqual(benchmark_env["BORSUK_BENCH_CANDIDATES"], "2048")
+        self.assertEqual(benchmark_env["BORSUK_BENCH_CANDIDATES"], "512")
         self.assertEqual(benchmark_env["BORSUK_BENCH_SKIP_EXACT_RECALL"], "1")
         self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELLS"], "128")
         self.assertEqual(
@@ -1148,7 +1148,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             str(runtime_ram_budget_bytes),
         )
         self.assertEqual(build_env["BORSUK_BENCH_NPROBES"], "4")
-        self.assertEqual(build_env["BORSUK_BENCH_CANDIDATES"], "2048")
+        self.assertEqual(build_env["BORSUK_BENCH_CANDIDATES"], "512")
         self.assertNotIn("BORSUK_BENCH_READ_ONLY", build_env)
         self.assertEqual(runtime_env["BORSUK_CPU_THREADS"], "3")
         self.assertEqual(runtime_env["BORSUK_IO_THREADS"], "88")
@@ -1169,7 +1169,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         )
         self.assertEqual(
             runtime_env["BORSUK_BENCH_CANDIDATES"],
-            "2048",
+            "512",
         )
         self.assertEqual(runtime_env["BORSUK_BENCH_URI"], cell["index_prefix"])
         self.assertNotEqual(
@@ -1212,7 +1212,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             runtime_env["BORSUK_BENCH_SERVING_NPROBE"],
             str(plan_arms(cell)[0]["leaf_page_budget"]),
         )
-        self.assertEqual(runtime_env["BORSUK_BENCH_SERVING_CANDIDATES"], "2048")
+        self.assertEqual(runtime_env["BORSUK_BENCH_SERVING_CANDIDATES"], "512")
         self.assertEqual(runtime_env["BORSUK_BENCH_MAX_ACTIVE_SEARCHES"], "16")
         self.assertEqual(runtime_env["BORSUK_BENCH_MAX_WAITING_SEARCHES"], "64")
         self.assertEqual(runtime_env["BORSUK_BENCH_LEAF_READ_WIDTH"], "32")
@@ -1642,7 +1642,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     "scan_codec": "srht-pq-scan",
                     "execution_engine": "bounded-cell-card-v20",
                     "nprobe": "32",
-                    "max_candidates": "2048",
+                    "max_candidates": "512",
                 }
             )
         summary = summarize_query_samples(rows, cell=cell, arm=arm, expected_queries=3)

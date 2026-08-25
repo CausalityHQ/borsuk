@@ -88,7 +88,7 @@ except ModuleNotFoundError:
 
 
 SUPPORTED_LOCAL_KINDS = frozenset({"read-recall", "write-update-delete-compact"})
-V20_COMPATIBILITY_CANDIDATES = 2048
+V20_COMPATIBILITY_CANDIDATES = 512
 V20_EXECUTION_ENGINE = "bounded-cell-card-v20"
 CONCURRENCY_SWEEP = (1, 2, 4, 8, 16)
 RUNTIME_FLOW_CONTROL_FIELDS = frozenset(
