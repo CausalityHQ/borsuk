@@ -81,11 +81,13 @@ class ExecutionJob:
     ) -> "ExecutionJob":
         if profile not in {"recall", "concurrency", "lifecycle"}:
             raise ValueError("runtime execution profile is invalid")
-        if arm_index < 0 or (diagnostic and profile != "lifecycle"):
+        if arm_index < 0 or (diagnostic and profile not in {"recall", "lifecycle"}):
             raise ValueError("runtime execution arm identity is invalid")
         job = cls._new(cell, role="runtime", attempt=attempt)
         if profile == "lifecycle" and diagnostic:
             namespace = "runtime-lifecycle-diagnostic"
+        elif profile == "recall" and diagnostic:
+            namespace = "runtime-read-diagnostic"
         else:
             namespace = f"runtime-{profile}"
         terminal_prefix = (
@@ -365,6 +367,8 @@ def runtime_worker_script(
     ram_budget_bytes: int,
     diagnostic_write_ops: int | None = None,
     diagnostic_timeout_seconds: int | None = None,
+    diagnostic_read_nprobes: tuple[int, ...] | None = None,
+    diagnostic_read_candidates: tuple[int, ...] | None = None,
 ) -> str:
     if job.role != "runtime":
         raise ValueError("runtime worker requires a runtime job")
@@ -406,6 +410,13 @@ def runtime_worker_script(
         raise ValueError("runtime resource authority violates safety bounds")
     workload = job.cell.get("workload")
     workload_kind = workload.get("kind") if isinstance(workload, dict) else None
+    read_diagnostic = any(
+        value is not None
+        for value in (
+            diagnostic_read_nprobes,
+            diagnostic_read_candidates,
+        )
+    )
     profile_mismatch = (
         (
             runtime_profile == "concurrency"
@@ -417,6 +428,10 @@ def runtime_worker_script(
                 not job.cell_tag.startswith("runtime-")
                 or job.cell_tag.startswith("runtime-concurrency-")
                 or job.cell_tag.startswith("runtime-lifecycle-")
+                or (
+                    read_diagnostic
+                    != job.cell_tag.startswith("runtime-read-diagnostic-")
+                )
             )
         )
         or (
@@ -487,6 +502,7 @@ def runtime_worker_script(
     diagnostic_arguments = ""
     diagnostic_validation = ""
     diagnostic_receipt_fields = ""
+    read_diagnostic_uploads = ""
     if (diagnostic_write_ops is None) != (diagnostic_timeout_seconds is None):
         raise ValueError("lifecycle diagnostic authority must be supplied atomically")
     if diagnostic_write_ops is not None:
@@ -508,6 +524,60 @@ diagnostic_result_sha=$(sha256sum \"$work/cell/RESULT_COMPLETE.json\" | awk '{{p
             f'"claim_eligible":false,"diagnostic_write_ops":{diagnostic_write_ops},'
             f'"diagnostic_timeout_seconds":{diagnostic_timeout_seconds},'
             '"diagnostic_result_sha256":"%s"\' "$diagnostic_result_sha")'
+        )
+    if read_diagnostic:
+        if (
+            diagnostic_write_ops is not None
+            or runtime_profile != "recall"
+            or diagnostic_read_nprobes is None
+            or diagnostic_read_candidates is None
+            or not diagnostic_read_nprobes
+            or not diagnostic_read_candidates
+            or tuple(sorted(set(diagnostic_read_nprobes))) != diagnostic_read_nprobes
+            or tuple(sorted(set(diagnostic_read_candidates)))
+            != diagnostic_read_candidates
+            or len(diagnostic_read_nprobes) * len(diagnostic_read_candidates) > 32
+            or any(
+                isinstance(value, bool) or not 1 <= value <= 256
+                for value in diagnostic_read_nprobes
+            )
+            or any(
+                isinstance(value, bool) or not 1 <= value <= 16_384
+                for value in diagnostic_read_candidates
+            )
+        ):
+            raise ValueError("read diagnostic authority is invalid")
+        nprobes = ",".join(str(value) for value in diagnostic_read_nprobes)
+        candidates = ",".join(str(value) for value in diagnostic_read_candidates)
+        diagnostic_arguments = (
+            f" --diagnostic-read-nprobes {_q(nprobes)}"
+            f" --diagnostic-read-candidates {_q(candidates)}"
+        )
+        diagnostic_validation = """actual_claim_eligible=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))[\"claim_eligible\"]))' \"$work/cell/RESULT_COMPLETE.json\")
+test \"$actual_claim_eligible\" = false
+for name in bench_query_samples.csv bench_recall_latency.csv; do
+  test -s \"$work/cell/runtime-output/$name\"
+done
+diagnostic_result_sha=$(sha256sum \"$work/cell/RESULT_COMPLETE.json\" | awk '{print $1}')
+diagnostic_samples_sha=$(sha256sum \"$work/cell/runtime-output/bench_query_samples.csv\" | awk '{print $1}')
+diagnostic_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_recall_latency.csv\" | awk '{print $1}')"""
+        diagnostic_receipt_fields = (
+            "diagnostic_fields=$(printf ',"
+            '"claim_eligible":false,'
+            f'"diagnostic_read_nprobes":{json.dumps(list(diagnostic_read_nprobes))},'
+            f'"diagnostic_read_candidates":{json.dumps(list(diagnostic_read_candidates))},'
+            '"diagnostic_result_sha256":"%s",'
+            '"diagnostic_samples_sha256":"%s",'
+            '"diagnostic_summary_sha256":"%s"\' '
+            '"$diagnostic_result_sha" "$diagnostic_samples_sha" '
+            '"$diagnostic_summary_sha")'
+        )
+        read_diagnostic_uploads = textwrap.dedent(
+            f"""\
+            for name in bench_query_samples.csv bench_recall_latency.csv; do
+              put_immutable "$work/cell/runtime-output/$name" {_q(terminal_prefix)}/$name
+            done
+            """
         )
     return prelude + textwrap.dedent(
         f"""\
@@ -575,6 +645,7 @@ diagnostic_result_sha=$(sha256sum \"$work/cell/RESULT_COMPLETE.json\" | awk '{{p
         {diagnostic_validation}
         stage=publish-receipts
         put_immutable "$work/cell/RESULT_COMPLETE.json" {_q(terminal_prefix + "/RESULT_COMPLETE.json")}
+        {read_diagnostic_uploads}
         put_immutable "$work/cell/RUNTIME_ATTESTATION.json" {_q(terminal_prefix + "/RUNTIME_ATTESTATION.json")}
         execution_contract="$work/cell/RUNTIME_EXECUTION_CONTRACT.json"
         put_immutable "$execution_contract" {_q(terminal_prefix + "/RUNTIME_EXECUTION_CONTRACT.json")}

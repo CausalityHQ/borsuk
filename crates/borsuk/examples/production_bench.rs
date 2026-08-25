@@ -1421,15 +1421,21 @@ fn run() -> BenchResult<()> {
     }
 
     if !config.skip_recall && config.cache_profile != BenchmarkCacheProfile::MixedCoverage {
-        let reader = Arc::new(open_serving_index(&config)?);
-        eprintln!("index build_config={:?}", reader.build_config());
-        let preload_complete = if recall_preloads_local_snapshot(config.preload_serving) {
-            warm_all_segments(&reader)?.coverage_complete
+        if config.recall_nprobes.len() * config.recall_candidates.len() > 1 {
+            // The matrix writer owns exactly one serving handle at a time. Do not
+            // retain an outer full-budget handle beside its isolated cell handle.
+            write_recall_latency_csv(&config, &dataset, None, false)?;
         } else {
-            let _ = reader.prepare_serving_metadata()?;
-            false
-        };
-        write_recall_latency_csv(&config, &dataset, &reader, preload_complete)?;
+            let reader = Arc::new(open_serving_index(&config)?);
+            eprintln!("index build_config={:?}", reader.build_config());
+            let preload_complete = if recall_preloads_local_snapshot(config.preload_serving) {
+                warm_all_segments(&reader)?.coverage_complete
+            } else {
+                let _ = reader.prepare_serving_metadata()?;
+                false
+            };
+            write_recall_latency_csv(&config, &dataset, Some(&reader), preload_complete)?;
+        }
     }
     if config.recall_only {
         return Ok(());
@@ -2841,7 +2847,7 @@ fn write_build_csv(config: &ResolvedConfig, build: &BuildMeasurement) -> BenchRe
 fn write_recall_latency_csv(
     config: &ResolvedConfig,
     dataset: &Dataset,
-    index: &BorsukIndex,
+    index: Option<&BorsukIndex>,
     preload_complete: bool,
 ) -> BenchResult<()> {
     let path = config.output_dir.join("bench_recall_latency.csv");
@@ -2854,6 +2860,20 @@ fn write_recall_latency_csv(
 
     for &max_candidates in &config.recall_candidates {
         for &nprobe in &config.recall_nprobes {
+            // Multi-arm sweeps must not inherit decoded/code planes from an earlier
+            // arm. Open one serving handle per matrix cell; open time is outside the
+            // timed query samples and the handle is dropped before the next cell.
+            let matrix = config.recall_nprobes.len() * config.recall_candidates.len() > 1;
+            let isolated_index = matrix.then(|| open_serving_index(config)).transpose()?;
+            let cell_index = isolated_index.as_ref().or(index).ok_or_else(|| {
+                invalid_input("recall execution has no serving index for its matrix cell")
+            })?;
+            let cell_preload_complete =
+                if matrix && recall_preloads_local_snapshot(config.preload_serving) {
+                    warm_all_segments(cell_index)?.coverage_complete
+                } else {
+                    preload_complete
+                };
             let options = approximate_options(
                 config.recall_leaf_mode,
                 HIGH_RECALL_ROUTING_OVERFETCH,
@@ -2862,9 +2882,13 @@ fn write_recall_latency_csv(
                 config.cache_execution,
                 config.force_segment_path,
             );
-            for (phase, summary) in
-                run_recall_cache_phases(config, dataset, index, options, preload_complete)?
-            {
+            for (phase, summary) in run_recall_cache_phases(
+                config,
+                dataset,
+                cell_index,
+                options,
+                cell_preload_complete,
+            )? {
                 if !config.force_segment_path {
                     validate_bounded_v20_execution(&summary)?;
                 }
@@ -2895,12 +2919,26 @@ fn write_recall_latency_csv(
     }
 
     if !config.skip_exact_recall {
+        let isolated_exact_index = index
+            .is_none()
+            .then(|| open_serving_index(config))
+            .transpose()?;
+        let exact_index = isolated_exact_index
+            .as_ref()
+            .or(index)
+            .ok_or_else(|| invalid_input("exact recall execution has no serving index"))?;
+        let exact_preload_complete =
+            if index.is_none() && recall_preloads_local_snapshot(config.preload_serving) {
+                warm_all_segments(exact_index)?.coverage_complete
+            } else {
+                preload_complete
+            };
         for (phase, summary) in run_recall_cache_phases(
             config,
             dataset,
-            index,
+            exact_index,
             SearchOptions::exact(RECALL_K),
-            preload_complete,
+            exact_preload_complete,
         )? {
             write_query_samples(
                 &mut samples_writer,

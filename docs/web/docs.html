@@ -525,7 +525,7 @@ console.log(
                   </div>
                   <pre data-code-panel="rust"><code data-ladder="production:rust">// Open for serving. Paged routing avoids retaining every leaf summary. A
 // shared decoded-segment cache trades a fixed RAM budget for fewer reads of
-// an explicitly hot set; query and leaf-read caps bound working memory.
+// an explicitly hot set; handle-wide query/decode caps bound working memory.
 let index = BorsukIndex::open_with_options(
     &amp;uri,
     OpenOptions {

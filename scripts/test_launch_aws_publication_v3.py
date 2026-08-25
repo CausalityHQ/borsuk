@@ -81,6 +81,12 @@ if operation == 'run-read':
     assert sys.argv[sys.argv.index('--arm-index') + 1] == '2'
     assert sys.argv[sys.argv.index('--attempt') + 1] == '7'
     assert sys.argv[sys.argv.index('--build-attempt') + 1] == '3'
+if operation == 'diagnose-read':
+    assert sys.argv[sys.argv.index('--repetition') + 1] == 'r01'
+    assert sys.argv[sys.argv.index('--nprobes') + 1] == '32,64'
+    assert sys.argv[sys.argv.index('--candidates') + 1] == '512,1024,2048,4096'
+    assert sys.argv[sys.argv.index('--attempt') + 1] == '7'
+    assert sys.argv[sys.argv.index('--build-attempt') + 1] == '3'
 print(json.dumps({'operation': operation}, sort_keys=True))
 """,
                 encoding="utf-8",
@@ -124,6 +130,23 @@ print(json.dumps({'operation': operation}, sort_keys=True))
             )
             self.assertEqual(runtime.returncode, 0, runtime.stderr)
             self.assertEqual(json.loads(runtime.stdout)["operation"], "run-read")
+            diagnostic = subprocess.run(
+                [
+                    "bash",
+                    "scripts/launch_aws_publication_v3.sh",
+                    "--diagnose-read",
+                    "realistic-dense-read",
+                    "laion-100m-768",
+                ],
+                cwd=repository,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(diagnostic.returncode, 0, diagnostic.stderr)
+            self.assertEqual(
+                json.loads(diagnostic.stdout)["operation"], "diagnose-read"
+            )
 
     def test_dry_run_is_deterministic_and_never_calls_aws(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

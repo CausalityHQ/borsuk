@@ -33270,12 +33270,12 @@ mod tests {
         let resident_bytes = index.collection_resident_bytes_estimate();
         index.read_runtime = CollectionReadRuntime::new(
             &OpenOptions::default(),
-            Some(resident_bytes.saturating_add(8 * 1024)),
+            Some(resident_bytes.saturating_add(256 * 1024)),
             resident_bytes,
         );
         let index = Arc::new(index);
         let transient_capacity = index.flow_control_stats().transient.capacity_bytes;
-        assert!((1..=8192).contains(&transient_capacity));
+        assert!((1..=256 * 1024).contains(&transient_capacity));
 
         let searches = 4_usize;
         let start = Arc::new(Barrier::new(searches + 1));
@@ -43765,9 +43765,16 @@ mod tests {
             report.transient_capacity_bytes > 0,
             "the admission regression needs a bounded transient pool: {report:?}"
         );
+        let selected_wave_admission = global_cell_card_query_head_admission_bytes(
+            report.global_leaf_pages_read,
+            GLOBAL_CELL_CARD_DEFAULT_MAX_BYTES,
+            None,
+        )
+        .unwrap()
+        .0;
         assert!(
-            report.transient_peak_bytes <= GLOBAL_CELL_CARD_DEFAULT_MAX_BYTES,
-            "V17 admitted the caller byte cap instead of the selected wave: {report:?}"
+            report.transient_peak_bytes <= selected_wave_admission,
+            "V20 exceeded the selected wave plus its owned plan memory: {report:?}"
         );
     }
 

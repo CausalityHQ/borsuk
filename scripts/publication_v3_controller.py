@@ -66,6 +66,16 @@ class PreparedExecution:
     timeout_seconds: int
 
 
+def _positive_integer_tuple(value: str) -> tuple[int, ...]:
+    try:
+        parsed = tuple(int(item) for item in value.split(","))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("expected comma-separated integers") from error
+    if not parsed or any(item <= 0 for item in parsed):
+        raise argparse.ArgumentTypeError("expected positive comma-separated integers")
+    return parsed
+
+
 def _minimum_lifecycle_write_ops(
     *, writers: int, batch_size: int, update_percent: int, delete_percent: int
 ) -> int:
@@ -597,6 +607,17 @@ def run_execution_job(
                         )
                         if expected.get("claim_eligible") is False:
                             digest_fields.append("diagnostic_result_sha256")
+                    elif (
+                        expected["runtime_profile"] == "recall"
+                        and expected.get("claim_eligible") is False
+                    ):
+                        digest_fields.extend(
+                            (
+                                "diagnostic_result_sha256",
+                                "diagnostic_samples_sha256",
+                                "diagnostic_summary_sha256",
+                            )
+                        )
                     if any(
                         not isinstance(value.get(field), str)
                         or re.fullmatch(r"[0-9a-f]{64}", value[field]) is None
@@ -759,6 +780,8 @@ def prepare_qualification_execution(
     arm_index: int | None = None,
     diagnostic_write_ops: int = 2_560,
     diagnostic_timeout_seconds: int = 1_200,
+    diagnostic_read_nprobes: tuple[int, ...] | None = None,
+    diagnostic_read_candidates: tuple[int, ...] | None = None,
 ) -> PreparedExecution:
     """Prepare one immutable build or small-runtime qualification execution."""
 
@@ -772,6 +795,7 @@ def prepare_qualification_execution(
         "diagnose-lifecycle",
         "build-read",
         "run-read",
+        "diagnose-read",
     }
     if operation not in supported:
         raise ValueError("unsupported qualification execution")
@@ -780,16 +804,18 @@ def prepare_qualification_execution(
         "run-lifecycle",
         "diagnose-lifecycle",
     }
-    generic_read = operation in {"build-read", "run-read"}
-    diagnostic = operation == "diagnose-lifecycle"
+    generic_read = operation in {"build-read", "run-read", "diagnose-read"}
+    lifecycle_diagnostic = operation == "diagnose-lifecycle"
+    read_diagnostic = operation == "diagnose-read"
+    diagnostic = lifecycle_diagnostic or read_diagnostic
     effective_arm_index = (
         13
-        if diagnostic and arm_index is None
+        if lifecycle_diagnostic and arm_index is None
         else 0
         if arm_index is None
         else arm_index
     )
-    if diagnostic and (
+    if lifecycle_diagnostic and (
         isinstance(diagnostic_write_ops, bool)
         or not 1 <= diagnostic_write_ops <= 50_000
         or isinstance(diagnostic_timeout_seconds, bool)
@@ -798,6 +824,34 @@ def prepare_qualification_execution(
         > int(normalized["budget_contract"]["max_cell_seconds"])
     ):
         raise ValueError("lifecycle diagnostic bounds are invalid")
+    if read_diagnostic and (
+        diagnostic_read_nprobes is None
+        or diagnostic_read_candidates is None
+        or not diagnostic_read_nprobes
+        or not diagnostic_read_candidates
+        or tuple(sorted(set(diagnostic_read_nprobes)))
+        != diagnostic_read_nprobes
+        or tuple(sorted(set(diagnostic_read_candidates)))
+        != diagnostic_read_candidates
+        or any(
+            isinstance(value, bool) or not 1 <= value <= 256
+            for value in diagnostic_read_nprobes
+        )
+        or any(
+            isinstance(value, bool) or not 1 <= value <= 16_384
+            for value in diagnostic_read_candidates
+        )
+        or len(diagnostic_read_nprobes) * len(diagnostic_read_candidates) > 32
+    ):
+        raise ValueError("read diagnostic bounds are invalid")
+    if not read_diagnostic and any(
+        value is not None
+        for value in (
+            diagnostic_read_nprobes,
+            diagnostic_read_candidates,
+        )
+    ):
+        raise ValueError("read diagnostic authority requires diagnose-read")
     if generic_read:
         if not workload_id or not dataset_id:
             raise ValueError("generic read execution requires workload and dataset")
@@ -890,7 +944,7 @@ def prepare_qualification_execution(
     if effective_arm_index >= len(arms):
         raise ValueError("qualification arm index is outside the factor matrix")
     arm = arms[effective_arm_index]
-    if diagnostic:
+    if lifecycle_diagnostic:
         minimum_diagnostic_write_ops = _minimum_lifecycle_write_ops(
             writers=int(arm["writers"]),
             batch_size=int(arm["batch_size"]),
@@ -997,14 +1051,22 @@ def prepare_qualification_execution(
             io_threads=io_threads,
             s3_get_concurrency=s3_get_concurrency,
             ram_budget_bytes=ram_budget_bytes,
-            diagnostic_write_ops=diagnostic_write_ops if diagnostic else None,
+            diagnostic_write_ops=(
+                diagnostic_write_ops if lifecycle_diagnostic else None
+            ),
             diagnostic_timeout_seconds=(
-                diagnostic_timeout_seconds if diagnostic else None
+                diagnostic_timeout_seconds if lifecycle_diagnostic else None
+            ),
+            diagnostic_read_nprobes=(
+                diagnostic_read_nprobes if read_diagnostic else None
+            ),
+            diagnostic_read_candidates=(
+                diagnostic_read_candidates if read_diagnostic else None
             ),
         )
         maximum = (
             diagnostic_timeout_seconds
-            if diagnostic
+            if lifecycle_diagnostic
             else int(normalized["budget_contract"]["max_cell_seconds"])
         )
         role = "runtime"
@@ -1024,10 +1086,16 @@ def prepare_qualification_execution(
         expected["exact_read_max_physical_amplification"] = (
             exact_read_max_physical_amplification
         )
-        if diagnostic:
+        if lifecycle_diagnostic:
             expected["claim_eligible"] = False
             expected["diagnostic_write_ops"] = diagnostic_write_ops
             expected["diagnostic_timeout_seconds"] = maximum
+        elif read_diagnostic:
+            expected["claim_eligible"] = False
+            expected["diagnostic_read_nprobes"] = list(diagnostic_read_nprobes or ())
+            expected["diagnostic_read_candidates"] = list(
+                diagnostic_read_candidates or ()
+            )
     request = build_launch_request(
         normalized,
         role=role,
@@ -1101,6 +1169,32 @@ def main() -> int:
     generic_runtime.add_argument("--max-attempts", type=int, default=6)
     generic_runtime.add_argument("--arm-index", type=int, required=True)
     generic_runtime.add_argument(
+        "--purchase-option", choices=("spot", "on-demand"), default="spot"
+    )
+    read_diagnostic = subparsers.add_parser("diagnose-read")
+    read_diagnostic.add_argument("--manifest", type=Path, required=True)
+    read_diagnostic.add_argument("--source-archive", type=Path, required=True)
+    read_diagnostic.add_argument("--workload", required=True)
+    read_diagnostic.add_argument("--dataset", required=True)
+    read_diagnostic.add_argument("--repetition", default="r01")
+    read_diagnostic.add_argument("--profile", default="causality")
+    read_diagnostic.add_argument("--image-id", required=True)
+    read_diagnostic.add_argument("--subnet-id", required=True)
+    read_diagnostic.add_argument("--security-group-id", required=True)
+    read_diagnostic.add_argument("--instance-profile-arn", required=True)
+    read_diagnostic.add_argument("--attempt", type=int, default=0)
+    read_diagnostic.add_argument("--build-attempt", type=int, default=0)
+    read_diagnostic.add_argument("--max-attempts", type=int, default=6)
+    read_diagnostic.add_argument("--arm-index", type=int, default=0)
+    read_diagnostic.add_argument(
+        "--nprobes", type=_positive_integer_tuple, default=(32, 64)
+    )
+    read_diagnostic.add_argument(
+        "--candidates",
+        type=_positive_integer_tuple,
+        default=(512, 1_024, 2_048, 4_096),
+    )
+    read_diagnostic.add_argument(
         "--purchase-option", choices=("spot", "on-demand"), default="spot"
     )
     runtime = subparsers.add_parser("read-recall-sift")
@@ -1223,7 +1317,8 @@ def main() -> int:
             "run-lifecycle",
             "diagnose-lifecycle",
         }
-        generic_read = args.operation in {"build-read", "run-read"}
+        generic_read = args.operation in {"build-read", "run-read", "diagnose-read"}
+        read_diagnostic = args.operation == "diagnose-read"
         build_operation = args.operation in {
             "build-sift",
             "build-lifecycle",
@@ -1276,6 +1371,7 @@ def main() -> int:
                     attempt=attempt,
                     profile="recall",
                     arm_index=args.arm_index,
+                    diagnostic=read_diagnostic,
                 ),
                 aws=aws,
                 max_attempts=args.max_attempts,
@@ -1346,6 +1442,8 @@ def main() -> int:
             arm_index=getattr(args, "arm_index", 0),
             diagnostic_write_ops=getattr(args, "write_ops", 2_560),
             diagnostic_timeout_seconds=getattr(args, "timeout_seconds", 1_200),
+            diagnostic_read_nprobes=getattr(args, "nprobes", None),
+            diagnostic_read_candidates=getattr(args, "candidates", None),
         )
         receipt = run_execution_job(
             prepared.job,

@@ -38,6 +38,7 @@ from scripts.run_publication_v3_cell import (
     summarize_concurrency_artifacts,
     summarize_lifecycle_artifacts,
     summarize_query_samples,
+    summarize_read_diagnostic_samples,
     summarize_runtime_write_trace,
     validate_publication_cell_authority,
 )
@@ -1871,6 +1872,186 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             claim_ineligible_lifecycle_diagnostic(
                 {"publishable": True, "result": {}}, write_ops=0
             )
+
+    def test_read_diagnostic_matrix_is_complete_below_floor_and_claim_ineligible(
+        self,
+    ) -> None:
+        cell = scheduled_cell()
+        cell["queries_per_repetition"] = 2
+        arm = {"k": 10, "leaf_page_budget": 32, "cache_state": "cold"}
+        rows = []
+        for nprobe in (32, 64):
+            for candidates in (512, 1024, 2048, 4096):
+                for sample_index in range(2):
+                    rows.append(
+                        {
+                            "schema_version": "borsuk-production-bench-v18",
+                            "phase": "uncached",
+                            "mode": "srht-pq-scan",
+                            "scan_codec": "srht-pq-scan",
+                            "execution_engine": "bounded-cell-card-v20",
+                            "nprobe": str(nprobe),
+                            "max_candidates": str(candidates),
+                            "sample_index": str(sample_index),
+                            "query_source_index": str(100 + sample_index),
+                            "latency_ms": str(10 + sample_index),
+                            "recall_at_10": "0.80",
+                            "network_gets": "3",
+                            "bytes_read": "100",
+                            "global_leaf_code_pages_read": "7",
+                            "global_leaf_code_requests": "2",
+                            "global_leaf_pages_read": "4",
+                            "global_leaf_exact_requests": "1",
+                            "global_leaf_exact_scores": str(candidates),
+                            "global_base_approximate_us": "10",
+                            "global_base_head_admission_us": "1",
+                            "global_base_head_fetch_us": "2",
+                            "global_base_head_decode_admission_us": "3",
+                            "global_base_head_decode_us": "4",
+                            "global_base_exact_admission_us": "5",
+                            "global_base_exact_fetch_us": "20",
+                            "global_base_exact_read_us_max": "10",
+                            "global_base_exact_read_us_sum": "30",
+                            "global_base_exact_reads_over_20ms": "2",
+                            "global_base_exact_reads_over_30ms": "1",
+                            "global_base_exact_reads_over_50ms": "0",
+                            "global_base_exact_reads_over_100ms": "0",
+                            "global_base_exact_cpu_us": "6",
+                            "global_base_exact_rerank_us": "31",
+                        }
+                    )
+
+        summaries = [
+            {
+                "schema_version": "borsuk-production-bench-v18",
+                "scan_codec": "srht-pq-scan",
+                "execution_engine": "bounded-cell-card-v20",
+                "phase": "uncached",
+                "mode": "srht-pq-scan",
+                "nprobe": str(nprobe),
+                "max_candidates": str(candidates),
+                "recall_at_10": "0.800",
+                "samples": "2",
+            }
+            for nprobe in (32, 64)
+            for candidates in (512, 1024, 2048, 4096)
+        ]
+
+        report = summarize_read_diagnostic_samples(
+            rows,
+            summary_rows=summaries,
+            cell=cell,
+            arm=arm,
+            expected_queries=2,
+            nprobes=(32, 64),
+            candidates=(512, 1024, 2048, 4096),
+        )
+
+        self.assertEqual(report["document_kind"], "publication-v3-read-diagnostic")
+        self.assertFalse(report["publishable"])
+        self.assertFalse(report["claim_eligible"])
+        self.assertEqual(report["nprobes"], [32, 64])
+        self.assertEqual(report["candidates"], [512, 1024, 2048, 4096])
+        self.assertEqual(len(report["metrics"]), 8)
+        self.assertEqual(
+            [(item["nprobe"], item["max_candidates"]) for item in report["metrics"]],
+            [
+                (32, 512),
+                (32, 1024),
+                (32, 2048),
+                (32, 4096),
+                (64, 512),
+                (64, 1024),
+                (64, 2048),
+                (64, 4096),
+            ],
+        )
+        self.assertTrue(
+            all(item["correctness_ppm"] == 800000 for item in report["metrics"])
+        )
+
+        with self.assertRaisesRegex(ValueError, "diagnostic matrix is incomplete"):
+            summarize_read_diagnostic_samples(
+                rows[:-2],
+                summary_rows=summaries,
+                cell=cell,
+                arm=arm,
+                expected_queries=2,
+                nprobes=(32, 64),
+                candidates=(512, 1024, 2048, 4096),
+            )
+        with self.assertRaisesRegex(ValueError, "summary matrix is incomplete"):
+            summarize_read_diagnostic_samples(
+                rows,
+                summary_rows=summaries[:-1],
+                cell=cell,
+                arm=arm,
+                expected_queries=2,
+                nprobes=(32, 64),
+                candidates=(512, 1024, 2048, 4096),
+            )
+        mismatched_source = [dict(row) for row in rows]
+        mismatched_source[-1]["query_source_index"] = "999"
+        with self.assertRaisesRegex(ValueError, "source indices differ"):
+            summarize_read_diagnostic_samples(
+                mismatched_source,
+                summary_rows=summaries,
+                cell=cell,
+                arm=arm,
+                expected_queries=2,
+                nprobes=(32, 64),
+                candidates=(512, 1024, 2048, 4096),
+            )
+        disjoint_samples = [dict(row) for row in rows]
+        disjoint_samples[-2]["sample_index"] = "2"
+        disjoint_samples[-1]["sample_index"] = "3"
+        with self.assertRaisesRegex(ValueError, "sample indices are not canonical"):
+            summarize_read_diagnostic_samples(
+                disjoint_samples,
+                summary_rows=summaries,
+                cell=cell,
+                arm=arm,
+                expected_queries=2,
+                nprobes=(32, 64),
+                candidates=(512, 1024, 2048, 4096),
+            )
+        with self.assertRaisesRegex(ValueError, "below required 950000 ppm"):
+            summarize_query_samples(rows[:2], cell=cell, arm=arm, expected_queries=2)
+
+    def test_read_diagnostic_plan_sets_only_the_bounded_cross_product(self) -> None:
+        cell = scheduled_cell()
+        arm = plan_arms(cell)[0]
+        with tempfile.TemporaryDirectory() as root:
+            plan = build_execution_plan(
+                cell,
+                arm=arm,
+                workspace=Path(root),
+                generator=Path("/bin/false"),
+                borsuk_bench=Path("/bin/true"),
+                mode="runtime",
+                runtime_profile="recall",
+                runtime_flow_control=runtime_flow_control(),
+                diagnostic_read_nprobes=(32, 64),
+                diagnostic_read_candidates=(512, 1024, 2048, 4096),
+            )
+            environment = plan["runtime"]["steps"][0]["env"]
+            self.assertEqual(environment["BORSUK_BENCH_NPROBES"], "32,64")
+            self.assertEqual(
+                environment["BORSUK_BENCH_CANDIDATES"], "512,1024,2048,4096"
+            )
+
+            with self.assertRaisesRegex(ValueError, "read diagnostic authority"):
+                build_execution_plan(
+                    cell,
+                    arm=arm,
+                    workspace=Path(root),
+                    generator=Path("/bin/false"),
+                    borsuk_bench=Path("/bin/true"),
+                    mode="runtime",
+                    runtime_profile="recall",
+                    runtime_flow_control=runtime_flow_control(),
+                    diagnostic_read_nprobes=(32, 64),
+                )
 
     def test_smoke_report_is_distinct_from_a_publishable_cell_result(self) -> None:
         cell = scheduled_cell()

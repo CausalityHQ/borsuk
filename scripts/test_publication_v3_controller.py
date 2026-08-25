@@ -310,6 +310,154 @@ class PublicationV3ControllerTests(unittest.TestCase):
             640,
         )
 
+    def test_read_diagnostic_reuses_one_build_and_binds_the_complete_matrix(
+        self,
+    ) -> None:
+        manifest = json.loads(MANIFEST.read_text())
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        build_cell = borsuk_cell(
+            manifest,
+            workload_id="standard-ann-read",
+            dataset_id="deep-image-96",
+            repetition_id="r01",
+            build_attempt=1,
+        )
+        build_job = ExecutionJob.build(build_cell, attempt=1)
+
+        class ReadDiagnosticAws:
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                return {
+                    "schema_version": 1,
+                    "status": "complete",
+                    "role": "build",
+                    "attempt": 1,
+                    "attempt_id": f"{build_job.cell_tag}-a0001",
+                    "source_archive_sha256": "2" * 64,
+                    "manifest_sha256": "6" * 64,
+                    "protocol_sha256": "9" * 64,
+                    "index_uri": build_job.index_uri,
+                    "binary_sha256": "8" * 64,
+                    "purchase_option": "spot",
+                }
+
+        prepared = prepare_qualification_execution(
+            manifest,
+            operation="diagnose-read",
+            workload_id="standard-ann-read",
+            dataset_id="deep-image-96",
+            repetition_id="r01",
+            source_uri="s3://bucket/source.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocol.json",
+            protocol_sha256="7" * 64,
+            build_protocol_sha256="9" * 64,
+            launch=LaunchEnvironment(
+                "ami-x",
+                "subnet-x",
+                "sg-x",
+                "arn:aws:iam::453182569524:instance-profile/x",
+                "aarch64",
+                "eu-central-1",
+            ),
+            aws=ReadDiagnosticAws(),
+            attempt=2,
+            build_attempt=1,
+            diagnostic_read_nprobes=(32, 64),
+            diagnostic_read_candidates=(512, 1_024, 2_048, 4_096),
+        )
+
+        self.assertTrue(
+            prepared.job.terminal_prefix.endswith(
+                "/runtime-read-diagnostic/arms/0000/attempts/0002"
+            )
+        )
+        self.assertEqual(prepared.expected["claim_eligible"], False)
+        self.assertEqual(prepared.expected["diagnostic_read_nprobes"], [32, 64])
+        self.assertEqual(
+            prepared.expected["diagnostic_read_candidates"],
+            [512, 1_024, 2_048, 4_096],
+        )
+        user_data = base64.b64decode(prepared.request["UserData"]).decode()
+        worker_payload = user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
+        worker = gzip.decompress(base64.b64decode(worker_payload)).decode()
+        self.assertIn("--diagnostic-read-nprobes 32,64", worker)
+        self.assertIn(
+            "--diagnostic-read-candidates 512,1024,2048,4096", worker
+        )
+        for artifact in (
+            "diagnostic_result_sha256",
+            "diagnostic_samples_sha256",
+            "diagnostic_summary_sha256",
+        ):
+            self.assertIn(f'"{artifact}":"%s"', worker)
+        self.assertEqual(
+            subprocess.run(["bash", "-n"], input=worker, text=True).returncode,
+            0,
+        )
+
+        class ReadDiagnosticReceiptAws:
+            def __init__(self, *, include_summary_digest: bool) -> None:
+                self.include_summary_digest = include_summary_digest
+
+            def find_execution_instance(
+                self, _job: object, *, purchase_option: str
+            ) -> None:
+                return None
+
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                receipt = {
+                    "schema_version": 4,
+                    "status": "complete",
+                    "role": "runtime",
+                    "attempt": 2,
+                    **prepared.expected,
+                    "execution_contract_sha256": "9" * 64,
+                    "diagnostic_result_sha256": "1" * 64,
+                    "diagnostic_samples_sha256": "2" * 64,
+                }
+                if self.include_summary_digest:
+                    receipt["diagnostic_summary_sha256"] = "3" * 64
+                return receipt
+
+            def terminate(self, _instance: str) -> None:
+                raise AssertionError("completed observation has no active instance")
+
+        with self.assertRaisesRegex(ValueError, "artifact digest"):
+            run_execution_job(
+                prepared.job,
+                request=prepared.request,
+                expected=prepared.expected,
+                aws=ReadDiagnosticReceiptAws(include_summary_digest=False),
+                timeout_seconds=60,
+                poll_seconds=0.01,
+                purchase_option="spot",
+            )
+        completed = run_execution_job(
+            prepared.job,
+            request=prepared.request,
+            expected=prepared.expected,
+            aws=ReadDiagnosticReceiptAws(include_summary_digest=True),
+            timeout_seconds=60,
+            poll_seconds=0.01,
+            purchase_option="spot",
+        )
+        self.assertEqual(completed["diagnostic_summary_sha256"], "3" * 64)
+
     def test_lifecycle_diagnostic_is_bounded_claim_ineligible_and_namespaced(
         self,
     ) -> None:
@@ -1323,7 +1471,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn(
-            "{stage,build-sift,build-read,run-read,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle,diagnose-lifecycle}",
+            "{stage,build-sift,build-read,run-read,diagnose-read,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle,diagnose-lifecycle}",
             completed.stdout,
         )
 

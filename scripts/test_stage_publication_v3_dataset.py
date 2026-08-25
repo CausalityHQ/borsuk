@@ -44,13 +44,21 @@ def frozen_manifest() -> dict[str, object]:
         "scifact": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip",
     }
     for dataset in value["datasets"]:
+        source = dataset["source"]
+        if source["state"] == "staged-generated":
+            dataset["source"] = {
+                "state": "generated",
+                "generator": source["generator"],
+                "seed": source["seed"],
+            }
+            continue
         expected_source = expected_sources.get(dataset["id"])
         if expected_source is None:
             continue
         dataset["source"] = {
             "state": "unstaged",
             "expected_source": expected_source,
-            "license": dataset["source"]["license"],
+            "license": source["license"],
         }
     return value
 

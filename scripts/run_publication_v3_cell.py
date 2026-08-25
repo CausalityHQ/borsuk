@@ -323,6 +323,8 @@ def build_execution_plan(
     runtime_profile: str = "recall",
     runtime_flow_control: dict[str, int] | None = None,
     diagnostic_write_ops: int | None = None,
+    diagnostic_read_nprobes: tuple[int, ...] | None = None,
+    diagnostic_read_candidates: tuple[int, ...] | None = None,
 ) -> dict[str, object]:
     if mode not in {"build", "runtime", "smoke"}:
         raise ValueError("execution mode must be build, runtime, or smoke")
@@ -341,6 +343,37 @@ def build_execution_plan(
         or not 1 <= diagnostic_write_ops <= 50_000
     ):
         raise ValueError("lifecycle diagnostic write count is invalid")
+    read_diagnostic_values = (
+        diagnostic_read_nprobes,
+        diagnostic_read_candidates,
+    )
+    if any(value is not None for value in read_diagnostic_values):
+        if (
+            any(value is None for value in read_diagnostic_values)
+            or mode != "runtime"
+            or runtime_profile != "recall"
+            or diagnostic_write_ops is not None
+        ):
+            raise ValueError("read diagnostic authority must be supplied atomically")
+        assert diagnostic_read_nprobes is not None
+        assert diagnostic_read_candidates is not None
+        if (
+            not diagnostic_read_nprobes
+            or not diagnostic_read_candidates
+            or tuple(sorted(set(diagnostic_read_nprobes))) != diagnostic_read_nprobes
+            or tuple(sorted(set(diagnostic_read_candidates)))
+            != diagnostic_read_candidates
+            or any(
+                isinstance(value, bool) or not 1 <= value <= 256
+                for value in diagnostic_read_nprobes
+            )
+            or any(
+                isinstance(value, bool) or not 1 <= value <= 16_384
+                for value in diagnostic_read_candidates
+            )
+            or len(diagnostic_read_nprobes) * len(diagnostic_read_candidates) > 32
+        ):
+            raise ValueError("read diagnostic authority is invalid")
     if runtime_flow_control is not None and (
         frozenset(runtime_flow_control) != RUNTIME_FLOW_CONTROL_FIELDS
         or any(
@@ -687,6 +720,18 @@ def build_execution_plan(
             "BORSUK_BENCH_BUILD_INDEX": "0",
             "BORSUK_STORAGE_TRACE": str(runtime_output_dir / "storage-access.csv"),
         }
+        if diagnostic_read_nprobes is not None:
+            assert diagnostic_read_candidates is not None
+            runtime_env.update(
+                {
+                    "BORSUK_BENCH_NPROBES": ",".join(
+                        str(value) for value in diagnostic_read_nprobes
+                    ),
+                    "BORSUK_BENCH_CANDIDATES": ",".join(
+                        str(value) for value in diagnostic_read_candidates
+                    ),
+                }
+            )
         if runtime_profile == "concurrency":
             runtime_env.update(
                 {
@@ -1023,6 +1068,7 @@ def summarize_query_samples(
     arm: dict[str, object],
     expected_queries: int,
     enforce_quality: bool = True,
+    expected_candidates: int = V20_COMPATIBILITY_CANDIDATES,
 ) -> dict[str, int]:
     if len(rows) != expected_queries:
         raise ValueError("query sample artifact is incomplete for its arm")
@@ -1057,7 +1103,7 @@ def summarize_query_samples(
             or row.get("scan_codec") != expected_mode
             or row.get("execution_engine") != V20_EXECUTION_ENGINE
             or int(row.get("nprobe", "-1")) != arm["leaf_page_budget"]
-            or int(row.get("max_candidates", "-1")) != V20_COMPATIBILITY_CANDIDATES
+            or int(row.get("max_candidates", "-1")) != expected_candidates
         ):
             raise ValueError("query sample belongs to a different factor arm")
         sample_index = int(row["sample_index"])
@@ -1130,6 +1176,127 @@ def summarize_query_samples(
         ),
         **timing_totals,
         "query_elapsed_ns": sum(latencies_us) * 1_000,
+    }
+
+
+def summarize_read_diagnostic_samples(
+    rows: list[dict[str, str]],
+    *,
+    summary_rows: list[dict[str, str]],
+    cell: dict[str, object],
+    arm: dict[str, object],
+    expected_queries: int,
+    nprobes: tuple[int, ...],
+    candidates: tuple[int, ...],
+) -> dict[str, object]:
+    """Fold one bounded read-width matrix without creating release evidence."""
+
+    if (
+        not nprobes
+        or not candidates
+        or tuple(sorted(set(nprobes))) != nprobes
+        or tuple(sorted(set(candidates))) != candidates
+        or expected_queries <= 0
+    ):
+        raise ValueError("read diagnostic matrix authority is invalid")
+    grouped: dict[tuple[int, int], list[dict[str, str]]] = {}
+    for row in rows:
+        try:
+            key = (int(row["nprobe"]), int(row["max_candidates"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("read diagnostic row identity is invalid") from error
+        grouped.setdefault(key, []).append(row)
+    expected = [(probe, width) for probe in nprobes for width in candidates]
+    if set(grouped) != set(expected) or any(
+        len(grouped[key]) != expected_queries for key in expected
+    ):
+        raise ValueError("read diagnostic matrix is incomplete")
+    canonical_sample_indices = set(range(expected_queries))
+    for key in expected:
+        try:
+            sample_indices = {int(row["sample_index"]) for row in grouped[key]}
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("read diagnostic sample index is invalid") from error
+        if sample_indices != canonical_sample_indices:
+            raise ValueError("read diagnostic sample indices are not canonical")
+    source_indices: dict[int, int] = {}
+    for key in expected:
+        for row in grouped[key]:
+            try:
+                sample_index = int(row["sample_index"])
+                source_index = int(row["query_source_index"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError("read diagnostic source index is invalid") from error
+            if sample_index < 0 or source_index < 0:
+                raise ValueError("read diagnostic source index is invalid")
+            prior = source_indices.setdefault(sample_index, source_index)
+            if prior != source_index:
+                raise ValueError("read diagnostic source indices differ across matrix cells")
+    metrics = []
+    for probe, width in expected:
+        diagnostic_arm = {**arm, "leaf_page_budget": probe}
+        metrics.append(
+            {
+                "nprobe": probe,
+                "max_candidates": width,
+                **summarize_query_samples(
+                    grouped[(probe, width)],
+                    cell=cell,
+                    arm=diagnostic_arm,
+                    expected_queries=expected_queries,
+                    enforce_quality=False,
+                    expected_candidates=width,
+                ),
+            }
+        )
+    expected_mode = cell.get("index_profile", {}).get("global_scan_codec")
+    expected_phase = "uncached" if arm["cache_state"] == "cold" else "disk_cached"
+    summaries: dict[tuple[int, int], dict[str, str]] = {}
+    for row in summary_rows:
+        try:
+            key = (int(row["nprobe"]), int(row["max_candidates"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("read diagnostic summary identity is invalid") from error
+        if key in summaries:
+            raise ValueError("read diagnostic summary matrix contains duplicates")
+        summaries[key] = row
+    if set(summaries) != set(expected):
+        raise ValueError("read diagnostic summary matrix is incomplete")
+    metrics_by_key = {
+        (int(metric["nprobe"]), int(metric["max_candidates"])): metric
+        for metric in metrics
+    }
+    for key in expected:
+        row = summaries[key]
+        try:
+            samples = int(row["samples"])
+            recall = float(row["recall_at_10"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("read diagnostic summary values are invalid") from error
+        if (
+            row.get("schema_version") != PRODUCTION_BENCH_SCHEMA_VERSION
+            or row.get("phase") != expected_phase
+            or row.get("mode") != expected_mode
+            or row.get("scan_codec") != expected_mode
+            or row.get("execution_engine") != V20_EXECUTION_ENGINE
+            or samples != expected_queries
+            or not math.isfinite(recall)
+            or not 0 <= recall <= 1
+            or abs(
+                round(recall * 1_000_000)
+                - int(metrics_by_key[key]["correctness_ppm"])
+            )
+            > 501
+        ):
+            raise ValueError("read diagnostic summary differs from query samples")
+    return {
+        "schema_version": 1,
+        "document_kind": "publication-v3-read-diagnostic",
+        "publishable": False,
+        "claim_eligible": False,
+        "nprobes": list(nprobes),
+        "candidates": list(candidates),
+        "metrics": metrics,
     }
 
 
@@ -2240,6 +2407,16 @@ def runtime_execution_contract(
     }
 
 
+def _positive_integer_tuple(value: str) -> tuple[int, ...]:
+    try:
+        parsed = tuple(int(item) for item in value.split(","))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("expected comma-separated integers") from error
+    if not parsed or any(item <= 0 for item in parsed):
+        raise argparse.ArgumentTypeError("expected positive comma-separated integers")
+    return parsed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("protocol", type=Path)
@@ -2279,6 +2456,8 @@ def main() -> int:
     parser.add_argument("--disk-cache-max-bytes", type=int)
     parser.add_argument("--exact-read-max-physical-amplification", type=int)
     parser.add_argument("--diagnostic-write-ops", type=int)
+    parser.add_argument("--diagnostic-read-nprobes", type=_positive_integer_tuple)
+    parser.add_argument("--diagnostic-read-candidates", type=_positive_integer_tuple)
     args = parser.parse_args()
 
     runtime_flow_control = runtime_flow_control_authority(
@@ -2387,6 +2566,8 @@ def main() -> int:
         runtime_profile=args.runtime_profile,
         runtime_flow_control=runtime_flow_control,
         diagnostic_write_ops=args.diagnostic_write_ops,
+        diagnostic_read_nprobes=args.diagnostic_read_nprobes,
+        diagnostic_read_candidates=args.diagnostic_read_candidates,
     )
     if args.mode == "build":
         output, resources, elapsed_ns = execute_publication_phase(plan, "build")
@@ -2569,6 +2750,40 @@ def main() -> int:
                 raise ValueError("publication runtime emitted no query samples")
             with samples.open(newline="") as source:
                 rows = list(csv.DictReader(source))
+            if args.diagnostic_read_nprobes is not None:
+                assert args.diagnostic_read_candidates is not None
+                summary_path = output / "bench_recall_latency.csv"
+                if not summary_path.is_file() or summary_path.stat().st_size == 0:
+                    raise ValueError("read diagnostic emitted no summary artifact")
+                with summary_path.open(newline="") as source:
+                    summary_rows = list(csv.DictReader(source))
+                report = summarize_read_diagnostic_samples(
+                    rows,
+                    summary_rows=summary_rows,
+                    cell=cell,
+                    arm=arm,
+                    expected_queries=int(plan["effective_queries"]),
+                    nprobes=args.diagnostic_read_nprobes,
+                    candidates=args.diagnostic_read_candidates,
+                )
+                report.update(
+                    {
+                        "cell_id": cell["cell_id"],
+                        "attempt_id": args.attempt_id,
+                        "instance_identity": args.instance_identity,
+                        "source_archive_sha256": args.source_archive_sha256,
+                        "dataset_materialization_sha256": (
+                            args.dataset_materialization_sha256
+                        ),
+                        "elapsed_ns": elapsed_ns,
+                        "resources": resources,
+                        "runtime_attestation": runtime_attestation,
+                    }
+                )
+                destination = args.workspace / "RESULT_COMPLETE.json"
+                destination.write_bytes(canonical_json_bytes(report) + b"\n")
+                print(json.dumps(report, sort_keys=True))
+                return 0
             metrics = summarize_query_samples(
                 rows,
                 cell=cell,

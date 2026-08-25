@@ -68,11 +68,22 @@ class PublicationV3DatasetTests(unittest.TestCase):
         )
 
     def test_generated_descriptor_requires_real_materialized_bytes(self) -> None:
-        dataset = next(
-            item
-            for item in self.manifest["datasets"]
-            if item["source"]["state"] == "generated"
+        dataset = json.loads(
+            json.dumps(
+                next(
+                    item
+                    for item in self.manifest["datasets"]
+                    if item["id"] == "synthetic-clustered-1m-768"
+                )
+            )
         )
+        source = dataset["source"]
+        self.assertEqual(source["state"], "staged-generated")
+        dataset["source"] = {
+            "state": "generated",
+            "generator": source["generator"],
+            "seed": source["seed"],
+        }
         with self.assertRaisesRegex(ValueError, "materialized bytes"):
             build_dataset_descriptor(dataset)
 

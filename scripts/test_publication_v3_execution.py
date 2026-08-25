@@ -373,6 +373,75 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )
 
+    def test_read_diagnostic_is_claim_ineligible_namespaced_and_binds_raw_artifacts(
+        self,
+    ) -> None:
+        cell = qualification_cell(
+            frozen_manifest(), dataset_id="sift-128", workload_kind="read-recall"
+        )
+        job = ExecutionJob.runtime(
+            cell,
+            attempt=2,
+            profile="recall",
+            arm_index=0,
+            diagnostic=True,
+        )
+        self.assertIn(
+            "/runtime-read-diagnostic/arms/0000/attempts/0002",
+            job.terminal_prefix,
+        )
+
+        script = runtime_worker_script(
+            job=job,
+            source_uri="s3://bucket/source/source.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifests/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocols/cell.json",
+            protocol_sha256="7" * 64,
+            build_prefix="s3://bucket/results/cell/build/attempts/0001",
+            binary_sha256="8" * 64,
+            attempt_id="read-diagnostic-0002",
+            terminal_prefix=job.terminal_prefix,
+            disk_cache_max_bytes=0,
+            exact_read_max_physical_amplification=2,
+            max_active_searches=4,
+            max_waiting_searches=16,
+            leaf_read_width=32,
+            max_inflight_leaf_reads=48,
+            max_parallel_decode_rank_tasks=1,
+            cpu_threads=3,
+            io_threads=88,
+            s3_get_concurrency=64,
+            ram_budget_bytes=2 * 1024 * 1024 * 1024,
+            diagnostic_read_nprobes=(32, 64),
+            diagnostic_read_candidates=(512, 1024, 2048, 4096),
+        )
+
+        self.assertIn("--diagnostic-read-nprobes 32,64", script)
+        self.assertIn("--diagnostic-read-candidates 512,1024,2048,4096", script)
+        self.assertIn('"claim_eligible":false', script)
+        for name in (
+            "RESULT_COMPLETE.json",
+            "bench_query_samples.csv",
+            "bench_recall_latency.csv",
+        ):
+            self.assertIn(name, script)
+        for field in (
+            "diagnostic_result_sha256",
+            "diagnostic_samples_sha256",
+            "diagnostic_summary_sha256",
+        ):
+            self.assertIn(field, script)
+        self.assertEqual(
+            script.count('put_immutable "$work/cell/RUNTIME_ATTESTATION.json"'),
+            1,
+        )
+        self.assertLess(len(script.encode("utf-8")), 16 * 1024)
+        self.assertEqual(
+            subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
+        )
+
     def test_generated_runtime_fetches_only_authenticated_query_roles(self) -> None:
         manifest = frozen_manifest()
         dataset = next(
