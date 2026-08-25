@@ -838,7 +838,13 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         self.assertTrue(read_workloads)
         self.assertTrue(
             all(
-                workload["factors"]["leaf_page_budgets"] == [32, 64]
+                workload["factors"]["leaf_page_budgets"] == [64]
+                for workload in read_workloads
+            )
+        )
+        self.assertTrue(
+            all(
+                workload["factors"]["minimum_recall_ppm"] == 950_000
                 for workload in read_workloads
             )
         )

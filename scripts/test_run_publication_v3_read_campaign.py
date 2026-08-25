@@ -35,7 +35,7 @@ class RunPublicationV3ReadCampaignTests(unittest.TestCase):
         ):
             self.assertEqual(main(), 0)
 
-        self.assertEqual(run.call_count, 63)
+        self.assertEqual(run.call_count, 33)
         for call in run.call_args_list:
             self.assertEqual(call.kwargs["env"]["AWS_PROFILE"], "causality")
             self.assertEqual(
@@ -57,9 +57,9 @@ class RunPublicationV3ReadCampaignTests(unittest.TestCase):
             "cohere-large-10m-768",
             "laion-100m-768",
         ]
-        self.assertEqual(len(commands), len(datasets) * (1 + 5 * 4))
+        self.assertEqual(len(commands), len(datasets) * (1 + 5 * 2))
         for dataset_index, dataset_id in enumerate(datasets):
-            offset = dataset_index * 21
+            offset = dataset_index * 11
             self.assertEqual(
                 commands[offset],
                 ("--build-read", "realistic-dense-read", dataset_id),
@@ -69,8 +69,8 @@ class RunPublicationV3ReadCampaignTests(unittest.TestCase):
                 ("--run-read", "realistic-dense-read", dataset_id, "r01", "0"),
             )
             self.assertEqual(
-                commands[offset + 20],
-                ("--run-read", "realistic-dense-read", dataset_id, "r05", "3"),
+                commands[offset + 10],
+                ("--run-read", "realistic-dense-read", dataset_id, "r05", "1"),
             )
 
     def test_campaign_rejects_non_read_unknown_or_generated_workloads(self) -> None:
@@ -123,7 +123,7 @@ class RunPublicationV3ReadCampaignTests(unittest.TestCase):
                 "receipt_sha256": "c" * 64,
             }
         commands = campaign_commands(manifest, "synthetic-dense-read")
-        self.assertEqual(len(commands), 10 * 21)
+        self.assertEqual(len(commands), 10 * 11)
         builds = [command for command in commands if command[0] == "--build-read"]
         self.assertIn(
             ("--build-read", "synthetic-dense-read", "synthetic-clustered-100m-768"),

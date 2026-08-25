@@ -287,17 +287,17 @@ class PublicationV3ControllerTests(unittest.TestCase):
             aws=aws,
             attempt=3,
             build_attempt=1,
-            arm_index=2,
+            arm_index=0,
         )
 
         self.assertEqual(aws.observed_build.cell["repetition_id"], "r01")
         self.assertEqual(prepared.job.cell["repetition_id"], "r05")
         self.assertEqual(prepared.job.index_uri, build_job.index_uri)
         self.assertIn(
-            "/runtime-recall/arms/0002/attempts/0003",
+            "/runtime-recall/arms/0000/attempts/0003",
             prepared.job.terminal_prefix,
         )
-        self.assertEqual(prepared.expected["arm_index"], 2)
+        self.assertEqual(prepared.expected["arm_index"], 0)
 
     def test_lifecycle_diagnostic_minimum_matches_runtime_integer_ceiling(self) -> None:
         self.assertEqual(
