@@ -663,20 +663,29 @@ struct BuildIngestCoordinator {
 impl BuildIngestCoordinator {
     fn open(uri: &str, writer_count: usize, ram_budget_bytes: Option<u64>) -> BenchResult<Self> {
         let writer_count = validate_build_writers(writer_count)?;
+        let anchor =
+            BorsukIndex::open_with_options(uri, lifecycle_writer_open_options(ram_budget_bytes))?;
+        let open_requests = anchor.request_counts();
+        let open_bytes_read = anchor.backing_bytes_read();
+        let open_bytes_written = anchor.put_payload_bytes();
+        // Build lanes have statically disjoint source shards, so sharing one
+        // pinned appender is contention-neutral and avoids W resident copies.
         let writers = (0..writer_count)
-            .map(|_| {
-                BorsukIndex::open_with_options(uri, lifecycle_writer_open_options(ram_budget_bytes))
-                    .map_err(Into::into)
-            })
-            .collect::<BenchResult<Vec<_>>>()?;
+            .map(|_| anchor.clone_for_coordinated_bulk_writer())
+            .collect();
         Ok(Self {
             writers,
             uri: uri.to_owned(),
-            materializer_options: build_materializer_open_options(ram_budget_bytes),
+            materializer_options: lifecycle_writer_open_options(ram_budget_bytes),
             pending: Vec::with_capacity(writer_count),
             batches_since_materialization: 0,
             next_start: 0,
-            report: BuildIngestReport::default(),
+            report: BuildIngestReport {
+                requests: open_requests,
+                bytes_read: open_bytes_read,
+                bytes_written: open_bytes_written,
+                ..BuildIngestReport::default()
+            },
         })
     }
 
@@ -843,21 +852,33 @@ fn lifecycle_phase<T>(
     Ok(result)
 }
 
-fn open_lifecycle_writer_handles(config: &ResolvedConfig) -> BenchResult<Vec<BorsukIndex>> {
-    (0..config.lifecycle_writers)
+fn open_lifecycle_writer_handles(
+    uri: &str,
+    writer_count: usize,
+    ram_budget_bytes: Option<u64>,
+) -> BenchResult<Vec<BorsukIndex>> {
+    if writer_count == 0 {
+        return Err(invalid_input("lifecycle writer count must be positive").into());
+    }
+    // The library RAM budget is per handle. Lifecycle scaling deliberately
+    // opens W independent appenders so remote head contention remains part of
+    // the measurement; the campaign cgroup separately attests process peak.
+    (0..writer_count)
         .map(|_| {
-            BorsukIndex::open_with_options(
-                &config.uri,
-                lifecycle_writer_open_options(config.ram_budget_bytes),
-            )
-            .map_err(Into::into)
+            BorsukIndex::open_with_options(uri, lifecycle_writer_open_options(ram_budget_bytes))
+                .map_err(Into::into)
         })
         .collect()
+}
+
+fn mutable_resident_metadata_budget(ram_budget_bytes: Option<u64>) -> Option<u64> {
+    ram_budget_bytes.map(|bytes| bytes / 2)
 }
 
 fn lifecycle_writer_open_options(ram_budget_bytes: Option<u64>) -> OpenOptions {
     OpenOptions {
         ram_budget_bytes,
+        resident_metadata_max_bytes: mutable_resident_metadata_budget(ram_budget_bytes),
         // Writer handles are long-lived metadata/WAL clients, not serving
         // caches. Retaining an independent copy of every read cache per
         // concurrent writer would make process memory scale with W.
@@ -870,12 +891,6 @@ fn lifecycle_writer_open_options(ram_budget_bytes: Option<u64>) -> OpenOptions {
         wal_tail_cache_max_bytes: 0,
         ..OpenOptions::default()
     }
-}
-
-fn build_materializer_open_options(ram_budget_bytes: Option<u64>) -> OpenOptions {
-    let mut options = lifecycle_writer_open_options(ram_budget_bytes);
-    options.resident_metadata_max_bytes = ram_budget_bytes.map(|bytes| bytes / 2);
-    options
 }
 
 fn reopen_build_finalizer(
@@ -893,8 +908,7 @@ fn reopen_build_finalizer(
     report.bytes_written = report
         .bytes_written
         .saturating_add(index.put_payload_bytes());
-    *index =
-        BorsukIndex::open_with_options(uri, build_materializer_open_options(ram_budget_bytes))?;
+    *index = BorsukIndex::open_with_options(uri, lifecycle_writer_open_options(ram_budget_bytes))?;
     Ok(())
 }
 
@@ -1405,9 +1419,16 @@ fn run() -> BenchResult<()> {
 
     if config.insert_only {
         let write_ops = write_operation_count(dataset.train_count, config.write_ops)?;
-        let mut writers = open_lifecycle_writer_handles(&config)?;
+        let mut writers = open_lifecycle_writer_handles(
+            &config.uri,
+            config.lifecycle_writers,
+            config.ram_budget_bytes,
+        )?;
         let insert = measure_inserts(&config, &dataset, &mut writers, write_ops)?;
-        let observer = BorsukIndex::open(&config.uri)?;
+        let observer = BorsukIndex::open_with_options(
+            &config.uri,
+            lifecycle_writer_open_options(config.ram_budget_bytes),
+        )?;
         let (samples, visible) = verify_insert_visibility(&config, &dataset, &observer, write_ops)?;
         drop(observer);
         if visible != samples {
@@ -1426,7 +1447,7 @@ fn run() -> BenchResult<()> {
 
     if config.lifecycle_only {
         reset_cache(&config.cache_dir)?;
-        let mut write_index = open_serving_index(&config)?;
+        let mut write_index = open_mutable_index(&config)?;
         write_write_costs_csv(&config, &dataset, &mut write_index)?;
         return Ok(());
     }
@@ -1470,7 +1491,7 @@ fn run() -> BenchResult<()> {
 
     // Read measurements are complete. Open a new isolated mutable handle for
     // the write phase instead of carrying read-cache authority across phases.
-    let mut write_index = open_serving_index(&config)?;
+    let mut write_index = open_mutable_index(&config)?;
     write_write_costs_csv(&config, &dataset, &mut write_index)?;
     Ok(())
 }
@@ -1602,12 +1623,27 @@ fn serving_cache_dir(cache_dir: &Path, disk_cache_max_bytes: Option<u64>) -> Opt
 }
 
 fn open_serving_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
+    open_benchmark_index(config, None)
+}
+
+fn open_mutable_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
+    open_benchmark_index(
+        config,
+        mutable_resident_metadata_budget(config.ram_budget_bytes),
+    )
+}
+
+fn open_benchmark_index(
+    config: &ResolvedConfig,
+    resident_metadata_max_bytes: Option<u64>,
+) -> BenchResult<BorsukIndex> {
     let index = BorsukIndex::open_with_options(
         &config.uri,
         OpenOptions {
             cache_dir: serving_cache_dir(&config.cache_dir, config.disk_cache_max_bytes),
             cache_max_bytes: config.disk_cache_max_bytes,
             ram_budget_bytes: config.ram_budget_bytes,
+            resident_metadata_max_bytes,
             segment_cache_max_bytes: effective_segment_cache_budget(config),
             // Routing summaries and the centroid graph are serving metadata.
             // Load/build them during open so neither cache-state measurement
@@ -4320,7 +4356,13 @@ fn write_write_costs_csv(
             run_queries(index, mutation_queries, None, serving_options(config))
         })?,
     )];
-    let mut writers = lifecycle_phase("open-writers", || open_lifecycle_writer_handles(config))?;
+    let mut writers = lifecycle_phase("open-writers", || {
+        open_lifecycle_writer_handles(
+            &config.uri,
+            config.lifecycle_writers,
+            config.ram_budget_bytes,
+        )
+    })?;
     let stats_before_insert = index.stats();
     let mut rows = Vec::with_capacity(7);
     let insert = lifecycle_phase("insert", || {
@@ -4334,7 +4376,10 @@ fn write_write_costs_csv(
     let time_to_searchable_ms = insert.row.wall_ms + searchability_refresh_ms;
     let (searchable_samples, searchable_hits) =
         lifecycle_phase("insert-verify", || -> BenchResult<(usize, usize)> {
-            let observer = BorsukIndex::open(&config.uri)?;
+            let observer = BorsukIndex::open_with_options(
+                &config.uri,
+                lifecycle_writer_open_options(config.ram_budget_bytes),
+            )?;
             let result = verify_insert_visibility(config, dataset, &observer, write_ops)?;
             drop(observer);
             Ok(result)
@@ -4451,7 +4496,10 @@ fn write_write_costs_csv(
     })?;
     let (upsert_samples, upsert_correct) =
         lifecycle_phase("upsert-verify", || -> BenchResult<(usize, usize)> {
-            let observer = BorsukIndex::open(&config.uri)?;
+            let observer = BorsukIndex::open_with_options(
+                &config.uri,
+                lifecycle_writer_open_options(config.ram_budget_bytes),
+            )?;
             let result = verify_upsert_values(&observer, &upsert.expected_records)?;
             drop(observer);
             Ok(result)
@@ -4472,7 +4520,10 @@ fn write_write_costs_csv(
     })?;
     let (delete_samples, delete_absent) =
         lifecycle_phase("delete-verify", || -> BenchResult<(usize, usize)> {
-            let observer = BorsukIndex::open(&config.uri)?;
+            let observer = BorsukIndex::open_with_options(
+                &config.uri,
+                lifecycle_writer_open_options(config.ram_budget_bytes),
+            )?;
             let result = verify_delete_absence(config, &observer, update_ops, delete_ops)?;
             drop(observer);
             Ok(result)
@@ -4511,7 +4562,10 @@ fn write_write_costs_csv(
         bytes_written: index.put_payload_bytes().saturating_sub(bytes_before),
     });
     let compact_delete_absent = lifecycle_phase("compact-verify", || -> BenchResult<usize> {
-        let observer = BorsukIndex::open(&config.uri)?;
+        let observer = BorsukIndex::open_with_options(
+            &config.uri,
+            lifecycle_writer_open_options(config.ram_budget_bytes),
+        )?;
         let (_, absent) = verify_delete_absence(config, &observer, update_ops, delete_ops)?;
         require_surviving_mutations(
             "compaction",
@@ -4556,7 +4610,10 @@ fn write_write_costs_csv(
         bytes_written: index.put_payload_bytes().saturating_sub(bytes_before),
     });
     let purge_delete_absent = lifecycle_phase("purge-verify", || -> BenchResult<usize> {
-        let observer = BorsukIndex::open(&config.uri)?;
+        let observer = BorsukIndex::open_with_options(
+            &config.uri,
+            lifecycle_writer_open_options(config.ram_budget_bytes),
+        )?;
         let (_, absent) = verify_delete_absence(config, &observer, update_ops, delete_ops)?;
         require_surviving_mutations(
             "purge",
@@ -5833,22 +5890,22 @@ mod tests {
         DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES,
         EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig, LIFECYCLE_HEADER,
         LeafCapability, LeafMode, LifecycleBatchAssignment, LifecycleInsertMode,
-        LifecycleQueryProgress, MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER,
+        LifecycleQueryProgress, MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, OpenOptions,
         PreparedRecordBatch, QUERY_SAMPLE_HEADER, QuerySample, QuerySummary, RECALL_LATENCY_HEADER,
         SERVING_CANDIDATES, ServingMode, VectorMetric, VectorRecord, WRITE_COST_HEADER,
         WRITE_SAMPLE_HEADER, allow_missing_corpus_for_phase, approximate_options,
-        benchmark_row_ids, build_materializer_open_options, cache_coverage_cohort_size,
-        cache_coverage_enabled, cache_state_summary_enabled, dataset_metric,
-        default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
-        deterministic_mutation_vector, disk_cached_query_cohort_size, dollars_per_million_queries,
-        execute_bulk_add_wave, execute_concurrency_cache_setup,
-        execute_disk_cached_concurrency_cohorts, execute_disk_cached_query_cohorts,
-        execute_isolated_recall_cache_phases, execute_put_wave, execute_uncached_query_sequence,
-        finalize_fresh_build, first_logical_batch_publish_ms, ingest_batch_size,
-        is_hot_workload_position, join_concurrency_workers, lifecycle_progress_line,
-        lifecycle_query_progress_line, lifecycle_write_operation_count, lifecycle_write_waves,
-        lifecycle_writer_open_options, mixed_concurrency_query_indices, neighbor_row,
-        normalized_cache_access_fractions, parquet_train_files_for_phase, parse_flag_value,
+        benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
+        cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
+        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
+        disk_cached_query_cohort_size, dollars_per_million_queries, execute_bulk_add_wave,
+        execute_concurrency_cache_setup, execute_disk_cached_concurrency_cohorts,
+        execute_disk_cached_query_cohorts, execute_isolated_recall_cache_phases, execute_put_wave,
+        execute_uncached_query_sequence, finalize_fresh_build, first_logical_batch_publish_ms,
+        ingest_batch_size, is_hot_workload_position, join_concurrency_workers,
+        lifecycle_progress_line, lifecycle_query_progress_line, lifecycle_write_operation_count,
+        lifecycle_write_waves, lifecycle_writer_open_options, mixed_concurrency_query_indices,
+        mutable_resident_metadata_budget, neighbor_row, normalized_cache_access_fractions,
+        open_lifecycle_writer_handles, parquet_train_files_for_phase, parse_flag_value,
         parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
         parse_lifecycle_insert_mode, parse_optional_byte_cap, parse_positive_list,
         parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
@@ -6004,7 +6061,7 @@ mod tests {
     fn lifecycle_writer_options_inherit_the_runtime_budget_without_retained_caches() {
         let options = lifecycle_writer_open_options(Some(96 * 1024 * 1024));
         assert_eq!(options.ram_budget_bytes, Some(96 * 1024 * 1024));
-        assert_eq!(options.resident_metadata_max_bytes, None);
+        assert_eq!(options.resident_metadata_max_bytes, Some(48 * 1024 * 1024));
         assert_eq!(options.cache_dir, None);
         assert_eq!(options.cache_max_bytes, None);
         assert!(!options.resident_routing);
@@ -6016,13 +6073,98 @@ mod tests {
         assert_eq!(options.lexical_term_page_cache_max_bytes, 0);
         assert_eq!(options.late_interaction_batch_cache_max_bytes, 0);
         assert_eq!(options.wal_tail_cache_max_bytes, 0);
+    }
 
-        let materializer = build_materializer_open_options(Some(96 * 1024 * 1024));
-        assert_eq!(materializer.ram_budget_bytes, Some(96 * 1024 * 1024));
+    #[test]
+    fn lifecycle_runtime_reserves_half_of_one_total_budget_for_positioned_authority() {
         assert_eq!(
-            materializer.resident_metadata_max_bytes,
-            Some(48 * 1024 * 1024)
+            mutable_resident_metadata_budget(Some(2 * 1024 * 1024 * 1024)),
+            Some(1024 * 1024 * 1024)
         );
+        assert_eq!(mutable_resident_metadata_budget(None), None);
+    }
+
+    #[test]
+    fn lifecycle_runtime_opens_a_positioned_tail_larger_than_the_default_resident_slice() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().to_string();
+        let persisted_ram_budget_bytes = 8 * 1024 * 1024;
+        let requested_ram_budget_bytes = 32 * 1024 * 1024;
+        let dimensions = 128;
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Cosine,
+            dimensions,
+            segment_max_vectors: 8_192,
+            ram_budget_bytes: Some(persisted_ram_budget_bytes),
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let rows = 4_096;
+        index
+            .add_vectors_with_ids(
+                vec![vec![1.0; dimensions]; rows],
+                (0..rows).map(|row| format!("row-{row}")).collect(),
+            )
+            .unwrap();
+        drop(index);
+
+        let default_error = BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                ram_budget_bytes: Some(requested_ram_budget_bytes),
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(default_error.code(), "ram_budget_exceeded");
+
+        let opened = BorsukIndex::open_with_options(
+            &uri,
+            lifecycle_writer_open_options(Some(requested_ram_budget_bytes)),
+        )
+        .unwrap();
+        let stats = opened.stats();
+        assert!(stats.collection_resident_bytes > persisted_ram_budget_bytes / 4);
+        assert!(stats.retained_capacity_bytes > 0);
+        assert!(stats.transient_capacity_bytes > 0);
+    }
+
+    #[test]
+    fn lifecycle_writers_use_independent_cache_free_accounting_scopes() {
+        let dir = tempfile::tempdir().unwrap();
+        let uri = dir.path().to_string_lossy().to_string();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri: uri.clone(),
+            metric: VectorMetric::Cosine,
+            dimensions: 2,
+            segment_max_vectors: 8,
+            ram_budget_bytes: Some(96 * 1024 * 1024),
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add_vectors_with_ids(vec![vec![1.0, 0.0]], vec!["base".to_owned()])
+            .unwrap();
+
+        let mut writers = open_lifecycle_writer_handles(&uri, 2, Some(96 * 1024 * 1024)).unwrap();
+        writers[0]
+            .add_vectors_with_ids(vec![vec![0.0, 1.0]], vec!["writer-0".to_owned()])
+            .unwrap();
+        let writer_0_bytes = writers[0].put_payload_bytes();
+        writers[1]
+            .add_vectors_with_ids(vec![vec![-1.0, 0.0]], vec!["writer-1".to_owned()])
+            .unwrap();
+
+        assert!(writer_0_bytes > 0);
+        assert_eq!(writers[0].put_payload_bytes(), writer_0_bytes);
+        assert!(writers[1].put_payload_bytes() > 0);
+
+        index.refresh().unwrap();
+        assert!(index.get_vector("writer-0").unwrap().is_some());
+        assert!(index.get_vector("writer-1").unwrap().is_some());
     }
 
     #[test]

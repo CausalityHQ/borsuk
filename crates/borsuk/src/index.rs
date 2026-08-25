@@ -1197,12 +1197,13 @@ pub struct OpenOptions {
     pub cache_max_bytes: Option<u64>,
     /// Optional runtime resident manifest/routing memory budget in bytes.
     pub ram_budget_bytes: Option<u64>,
-    /// Optional share of the total RAM budget reserved for immutable resident
-    /// manifest and collection authority. `None` reserves the larger of the
-    /// authority present at open and one quarter of the total budget. Build
-    /// materializers may raise this cap when a large newly staged manifest is
-    /// expected, while leaving the remainder for bounded retained and
-    /// transient work.
+    /// Optional cap for the share of the total RAM budget reserved for
+    /// immutable resident manifest and collection authority. With a total RAM
+    /// budget this is capped at one half of the effective persisted/runtime
+    /// budget, preserving the other half for bounded retained and transient
+    /// work. Authority already loaded at open remains a floor, up to the total
+    /// effective budget. `None` reserves the larger of that authority and one
+    /// quarter of the total budget.
     pub resident_metadata_max_bytes: Option<u64>,
     /// Keep full segment routing summaries resident after open.
     ///
@@ -3624,7 +3625,11 @@ impl CollectionReadRuntime {
     ) -> Arc<Self> {
         let resident_capacity_bytes =
             match (effective_ram_budget, options.resident_metadata_max_bytes) {
-                (Some(budget), Some(configured)) => Some(configured.min(budget)),
+                (Some(budget), Some(configured)) => Some(
+                    configured
+                        .min((budget / 2).max(1).min(budget))
+                        .max(collection_resident_bytes.min(budget)),
+                ),
                 (Some(budget), None) => Some(
                     collection_resident_bytes.max(budget / COLLECTION_RESIDENT_RAM_BUDGET_DIVISOR),
                 ),
@@ -3899,6 +3904,28 @@ impl BorsukIndex {
         cloned.collection_storage = self
             .collection_storage
             .clone_with_independent_request_counters();
+        cloned.storage = self
+            .storage
+            .clone_with_request_counters_from(&cloned.collection_storage);
+        cloned.positioned_log = self
+            .positioned_log
+            .as_ref()
+            .map(|writer| writer.with_storage_scope(cloned.collection_storage.clone()));
+        cloned.reset_independent_writer_state(&cloned.collection_storage.clone());
+        cloned
+    }
+
+    /// Clone one pinned offline-build authority into a coordinated writer
+    /// lane with private mutation identity and payload/request counters.
+    ///
+    /// The positioned-head locks remain shared. Callers must therefore assign
+    /// lanes to disjoint source shards and join them before materialization.
+    #[doc(hidden)]
+    pub fn clone_for_coordinated_bulk_writer(&self) -> Self {
+        let mut cloned = self.clone();
+        cloned.collection_storage = self
+            .collection_storage
+            .clone_with_independent_mutation_counters();
         cloned.storage = self
             .storage
             .clone_with_request_counters_from(&cloned.collection_storage);
@@ -35213,6 +35240,62 @@ mod tests {
                 .unwrap_err()
                 .code(),
             "ram_budget_exceeded"
+        );
+    }
+
+    #[test]
+    fn explicit_resident_metadata_budget_preserves_half_for_bounded_work() {
+        let options = OpenOptions {
+            resident_metadata_max_bytes: Some(500),
+            ..OpenOptions::default()
+        };
+        let runtime = CollectionReadRuntime::new(&options, Some(600), 0);
+
+        runtime.enforce_resident_capacity(300).unwrap();
+        assert_eq!(
+            runtime.enforce_resident_capacity(301).unwrap_err().code(),
+            "ram_budget_exceeded"
+        );
+        assert_eq!(
+            runtime.retained_pool.as_ref().unwrap().capacity_bytes(),
+            150
+        );
+        assert_eq!(
+            runtime
+                .transient_admission
+                .as_ref()
+                .unwrap()
+                .capacity_bytes()
+                + runtime.wal_tail_runtime.fetch_admission.capacity_bytes(),
+            150
+        );
+    }
+
+    #[test]
+    fn explicit_resident_metadata_budget_never_excludes_loaded_authority() {
+        let options = OpenOptions {
+            resident_metadata_max_bytes: Some(500),
+            ..OpenOptions::default()
+        };
+        let runtime = CollectionReadRuntime::new(&options, Some(600), 350);
+
+        runtime.enforce_resident_capacity(350).unwrap();
+        assert_eq!(
+            runtime.enforce_resident_capacity(351).unwrap_err().code(),
+            "ram_budget_exceeded"
+        );
+        assert_eq!(
+            runtime.retained_pool.as_ref().unwrap().capacity_bytes(),
+            125
+        );
+        assert_eq!(
+            runtime
+                .transient_admission
+                .as_ref()
+                .unwrap()
+                .capacity_bytes()
+                + runtime.wal_tail_runtime.fetch_admission.capacity_bytes(),
+            125
         );
     }
 
