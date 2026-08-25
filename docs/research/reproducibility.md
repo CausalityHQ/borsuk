@@ -142,6 +142,11 @@ Every paid-prefix attempt, including failures before a usable comparison, is
 recorded in the
 [publication v2 attempt ledger](publication-v2-attempt-ledger.md).
 
+Publication V3 likewise preserves completed and failed build/runtime attempts
+in the [Publication V3 attempt ledger](publication-v3-attempt-ledger.md). A
+completed individual cell remains ineligible for an aggregate or comparative
+claim until the frozen campaign and its independent validation are complete.
+
 ```bash
 python3 scripts/publication_protocol.py validate \
   docs/research/publication-v2-manifest.json
