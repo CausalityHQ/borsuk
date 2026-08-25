@@ -83,3 +83,67 @@ The failed attempt authorizes no latency, throughput, cost, or comparison
 claim. A replacement attempt must use a frozen repair that makes the disk cache
 the only state shared between priming and measurement, preserves the immutable
 attempt numbering, and rebuilds under the repaired source authority.
+
+## Repaired cache-isolation rerun
+
+The replacement cell used source commit
+`23aa21506dd81c8ca0fddaeaf439ed2342741db9` and cell identity
+`r01-ab690b34e46e4c84ad4d130e`. Its immutable authority is:
+
+- source archive SHA-256:
+  `c290aec5c4a0fa85dc7e4ec46dad5f29f927970652e7b4fe2b29ec052677d509`;
+- manifest SHA-256:
+  `bc61b3512ce9f35e57763fa787745956743bb6129a9796a9069ccff6b9608978`;
+- build/runtime protocol SHA-256:
+  `a8331947b6eebe89f0655e45cac55bc669af8d8b43b573d233268077a1844dbb`;
+- binary SHA-256:
+  `9f799dd127e970563ffc75639d5a719ae36813103ff4dde72492002bda8769b0`;
+- index URI:
+  `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/indexes/build-attempts/0001/index-19cb5ca5b93d5b21193ceb96`.
+
+Every completed job used EC2 Spot. The first warm-concurrency controller launch
+exhausted its three SDK `RunInstances` retries with
+`InsufficientInstanceCapacity`, all under one client token and before instance
+creation. A second controller launch reused the same immutable attempt and
+idempotent client token, then acquired Spot capacity. No On-Demand exception,
+replacement attempt, or partial artifact was used.
+
+| Role / arm | Attempt | Instance | Terminal state | Terminal-marker SHA-256 |
+|---|---:|---|---|---|
+| build | 1 | `i-07bd9f94687a34281` | complete | `cda89a6ca8eb3a34b4bc26e8d1f972cc171deda68071e678a3a408de17cacbb1` |
+| recall arm 0 (`cold`) | 1 | `i-068df0b467258ef26` | complete | `b4a0937710b2b32118d151fa6d3fe406624f09d3840d20694a1e9a75f169709f` |
+| recall arm 1 (`warm`) | 1 | `i-0f8abb768c2778fe3` | complete | `2ebb41488c0270d38c5ba256a67b60e03b1bdf6565e5c9ba8a6175ccf65c081b` |
+| concurrency arm 0 (`cold`) | 1 | `i-021fc150346bbc82f` | complete | `64f286f8e2ffa4c51948a5b94bc65e9107f9ba531dacd0908195bf88ec06af8b` |
+| concurrency arm 1 (`warm`) | 1 | `i-047917fe606d34827` | complete | `f91f34c0db951f7fc79d7ab71d96e86b4432506a1949322b059a1c3760bb11f6` |
+
+The controller terminated every instance after its terminal marker. The
+replacement read artifacts are `publishable:true`, share the exact build
+receipt SHA-256
+`2667d679bf8d31d205b587659475238a17d17692348ec7b5d5f4df45394d5e63`,
+and report the following result boundary:
+
+| Cache state | Recall@10 | p50 | p95 | p99 | Single-query throughput | Peak RSS | Measured backing I/O |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| cold | 99.04% | 54.316 ms | 99.679 ms | 118.535 ms | 17.002 qps | 208,474,112 bytes | 9,345 GETs / 612,487,936 bytes |
+| warm | 99.04% | 8.060 ms | 10.349 ms | 11.381 ms | 121.830 qps | 219,058,176 bytes | zero GETs / zero bytes |
+
+The concurrency sweep preserved 99.04% recall for every row:
+
+| Cache state | Workers | Throughput | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| cold | 1 | 25.599 qps | 37.556 ms | 54.982 ms | 68.582 ms |
+| cold | 2 | 49.283 qps | 38.218 ms | 56.226 ms | 70.575 ms |
+| cold | 4 | 94.675 qps | 39.752 ms | 59.110 ms | 71.949 ms |
+| cold | 8 | 154.049 qps | 49.000 ms | 69.141 ms | 90.751 ms |
+| cold | 16 | 161.415 qps | 96.190 ms | 117.074 ms | 130.448 ms |
+| warm | 1 | 119.494 qps | 8.224 ms | 10.484 ms | 11.522 ms |
+| warm | 2 | 153.394 qps | 12.822 ms | 16.180 ms | 18.468 ms |
+| warm | 4 | 170.896 qps | 21.593 ms | 34.431 ms | 40.284 ms |
+| warm | 8 | 174.750 qps | 40.765 ms | 58.539 ms | 66.668 ms |
+| warm | 16 | 174.243 qps | 62.977 ms | 91.303 ms | 101.462 ms |
+
+Cold concurrency peaked at 262,488,064 bytes RSS; warm concurrency peaked at
+252,170,240 bytes RSS. Both runtime attestations report zero swap, zero OOM
+events, and zero OOM-kill events. Every warm measurement row reports zero
+backing GETs and bytes; its measured bytes are explicitly separated into
+decoded-RAM and local-disk tiers.
