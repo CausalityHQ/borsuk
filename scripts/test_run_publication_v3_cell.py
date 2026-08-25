@@ -939,6 +939,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             benchmark_env["BORSUK_BENCH_RAM_BUDGET_BYTES"], str(2 * 1024**3)
         )
         self.assertEqual(benchmark_env["BORSUK_BENCH_DISK_CACHE_MAX_BYTES"], "0")
+        self.assertEqual(benchmark_env["BORSUK_BENCH_CACHE_COVERAGE_PERCENT"], "0")
         warm_arm = next(
             candidate
             for candidate in plan_arms(cell)
@@ -956,6 +957,10 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(
             warm_plan["steps"][1]["env"]["BORSUK_BENCH_DISK_CACHE_MAX_BYTES"],
             str(1024**3),
+        )
+        self.assertEqual(
+            warm_plan["steps"][1]["env"]["BORSUK_BENCH_CACHE_COVERAGE_PERCENT"],
+            "100",
         )
         self.assertEqual(plan["runtime_client"]["instance_type"], "c7g.xlarge")
         self.assertEqual(plan["runtime_storage"]["volume_size_gib"], 32)
@@ -1434,6 +1439,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "execution_engine": "bounded-cell-card-v20",
                 "nprobe": "32",
                 "max_candidates": "512",
+                "cache_profile": "disk_cached",
+                "target_cache_coverage_percent": "100",
                 "workers": str(workers),
                 "total_queries": "2",
                 "qps": str(10 * workers),
@@ -1452,10 +1459,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "execution_engine": "bounded-cell-card-v20",
                 "nprobe": "32",
                 "max_candidates": "512",
+                "cache_profile": "disk_cached",
+                "target_cache_coverage_percent": "100",
                 "workers": str(workers),
                 "sample_index": str(sample),
                 "latency_ms": "5",
                 "recall_at_10": "0.99",
+                "network_gets": "0",
+                "disk_cache_reads": "1",
                 "global_base_approximate_us": "1",
                 "global_base_head_admission_us": "2",
                 "global_base_head_fetch_us": "3",
@@ -1484,6 +1495,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             expected_scan_codec="fast-turboquant-scan",
             expected_nprobe=32,
             expected_max_candidates=512,
+            expected_cache_profile="disk_cached",
+            expected_cache_coverage_percent=100,
         )
         self.assertEqual([row["workers"] for row in metrics], [1, 2, 4])
         self.assertEqual(metrics[-1]["qps_milli"], 40_000)
@@ -1499,6 +1512,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_scan_codec="fast-turboquant-scan",
                 expected_nprobe=32,
                 expected_max_candidates=512,
+                expected_cache_profile="disk_cached",
+                expected_cache_coverage_percent=100,
             )
         wrong_codec = json.loads(json.dumps(samples))
         wrong_codec[0]["scan_codec"] = "srht-pq-scan"
@@ -1512,6 +1527,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_scan_codec="fast-turboquant-scan",
                 expected_nprobe=32,
                 expected_max_candidates=512,
+                expected_cache_profile="disk_cached",
+                expected_cache_coverage_percent=100,
             )
         missing_timing = json.loads(json.dumps(samples))
         del missing_timing[0]["global_base_exact_fetch_us"]
@@ -1525,6 +1542,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_scan_codec="fast-turboquant-scan",
                 expected_nprobe=32,
                 expected_max_candidates=512,
+                expected_cache_profile="disk_cached",
+                expected_cache_coverage_percent=100,
             )
         fallback = json.loads(json.dumps(samples))
         fallback[0]["execution_engine"] = "fast-turboquant-scan"
@@ -1538,6 +1557,8 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_scan_codec="fast-turboquant-scan",
                 expected_nprobe=32,
                 expected_max_candidates=512,
+                expected_cache_profile="disk_cached",
+                expected_cache_coverage_percent=100,
             )
         wrong_budget = json.loads(json.dumps(summaries))
         wrong_budget[0]["nprobe"] = "64"
@@ -1551,6 +1572,40 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_scan_codec="fast-turboquant-scan",
                 expected_nprobe=32,
                 expected_max_candidates=512,
+                expected_cache_profile="disk_cached",
+                expected_cache_coverage_percent=100,
+            )
+
+        network = json.loads(json.dumps(samples))
+        network[0]["network_gets"] = "1"
+        with self.assertRaisesRegex(ValueError, "disk-cached concurrency"):
+            summarize_concurrency_artifacts(
+                summaries,
+                network,
+                expected_workers=(1, 2, 4),
+                expected_queries=2,
+                minimum_recall_ppm=980_000,
+                expected_scan_codec="fast-turboquant-scan",
+                expected_nprobe=32,
+                expected_max_candidates=512,
+                expected_cache_profile="disk_cached",
+                expected_cache_coverage_percent=100,
+            )
+
+        memory_only = json.loads(json.dumps(samples))
+        memory_only[0]["disk_cache_reads"] = "0"
+        with self.assertRaisesRegex(ValueError, "disk-cached concurrency"):
+            summarize_concurrency_artifacts(
+                summaries,
+                memory_only,
+                expected_workers=(1, 2, 4),
+                expected_queries=2,
+                minimum_recall_ppm=980_000,
+                expected_scan_codec="fast-turboquant-scan",
+                expected_nprobe=32,
+                expected_max_candidates=512,
+                expected_cache_profile="disk_cached",
+                expected_cache_coverage_percent=100,
             )
 
     def test_unavailable_local_system_is_rejected_not_simulated(self) -> None:
@@ -1660,6 +1715,28 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(summary["global_base_exact_read_us_sum_total"], 90)
         self.assertEqual(summary["global_base_exact_reads_over_20ms_total"], 6)
         self.assertEqual(summary["query_elapsed_ns"], 7_000_000)
+
+        warm_arm = {**arm, "cache_state": "warm"}
+        warm_rows = json.loads(json.dumps(rows))
+        for row in warm_rows:
+            row["phase"] = "disk_cached"
+            row["network_gets"] = "0"
+            row["disk_cache_reads"] = "1"
+        summarize_query_samples(
+            warm_rows, cell=cell, arm=warm_arm, expected_queries=3
+        )
+        warm_network = json.loads(json.dumps(warm_rows))
+        warm_network[0]["network_gets"] = "1"
+        with self.assertRaisesRegex(ValueError, "disk-cached query sample"):
+            summarize_query_samples(
+                warm_network, cell=cell, arm=warm_arm, expected_queries=3
+            )
+        warm_memory_only = json.loads(json.dumps(warm_rows))
+        warm_memory_only[0]["disk_cache_reads"] = "0"
+        with self.assertRaisesRegex(ValueError, "disk-cached query sample"):
+            summarize_query_samples(
+                warm_memory_only, cell=cell, arm=warm_arm, expected_queries=3
+            )
 
         protocol = canonical_json_bytes(cell) + b"\n"
         receipt = build_index_receipt(

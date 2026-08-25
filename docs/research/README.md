@@ -60,8 +60,9 @@ Numbers from different classes are not merged into one ranking.
   latency.
 - `uncached`: serving metadata is resident, but query cell data is absent from
   local disk and must be fetched from object storage.
-- `disk_cached`: the identical query working set is served through the local
-  disk cache and must report zero backing GETs and zero backing bytes.
+- `disk_cached`: bounded cohorts of at most 20 unique queries are primed outside
+  timing and then measured before the next cohort. Every measured query must
+  report a local-disk read and zero backing GETs and backing bytes.
 - `memory_preloaded`: the warm report proves complete decoded segment/vector
   coverage in the bounded RAM cache; graph-enabled indexes also require every
   immutable graph resident. Partial coverage is labeled as a mixed-cache state,
@@ -69,6 +70,12 @@ Numbers from different classes are not merged into one ranking.
 
 Managed services whose internal state is opaque retain vendor-neutral labels
 such as `first_pass` and `repeated_pass`.
+
+The bounded-cohort protocol preserves the configured disk-cache limit even
+when the union of all 1,000 queries exceeds it. It pays one untimed cold prime
+per query; that setup cost is excluded from latency but remains visible in the
+attempt's storage/cost ledger. Older whole-query-set `disk_cached` artifacts
+are historical and are not latency-comparable to bounded-cohort results.
 
 ## Standard datasets
 

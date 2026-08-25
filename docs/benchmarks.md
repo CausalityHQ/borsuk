@@ -35,15 +35,20 @@ Uncapped query or decode concurrency is research-only.
   backing-store I/O. Global exact pages are fixed-width and need no index;
   physical record-sidecar indexes used for late top-k IDs share the hard
   128 MiB cache.
-- `disk_cached`: identical query data is served through local disk and reports
-  zero backing-store GETs. Logical bytes served by the disk layer remain
-  reported; they must not be mistaken for network transfer.
+- `disk_cached`: bounded cohorts of at most 20 unique queries are primed outside
+  timing and then measured before the next cohort. Every measured query must
+  report at least one local-disk read and zero backing-store GETs. Logical bytes
+  served by the disk layer remain reported; they must not be mistaken for
+  network transfer. Byte-bounded resident serving state is unchanged across
+  cache states and is not the complete-corpus `memory_preloaded` state.
 - `memory_preloaded`: `WarmReport.coverage_complete=true` proves every active
   decoded segment, and every required graph, remains in the byte-bounded RAM
   cache. It is reported separately; a partial warm is instead a mixed-cache
   profile. The graph-free production default has no graph allocation.
 
 Do not use “cold” or “warm” without one of these precise definitions.
+Disk-cached artifacts produced by the older whole-query-set priming protocol
+are historical evidence and are not latency-comparable to bounded-cohort rows.
 
 ## Qualification gate
 

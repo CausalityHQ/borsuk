@@ -8,7 +8,7 @@ use std::{
     io::{self, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Barrier, OnceLock},
     thread,
     time::{Duration, Instant},
 };
@@ -251,6 +251,7 @@ struct QuerySummary {
     recall_count: usize,
     bytes_read: u128,
     billable_requests: u128,
+    disk_cache_reads: u128,
     object_cache_misses: u128,
     global_leaf_directory_reads: u128,
     global_leaf_directory_bytes: u128,
@@ -480,6 +481,7 @@ impl QuerySummary {
         self.bytes_read += u128::from(measured_bytes_read);
         self.billable_requests +=
             u128::from(report.requests.gets.saturating_add(report.requests.heads));
+        self.disk_cache_reads += u128::from(report.disk_cache_reads);
         self.object_cache_misses += report.object_cache_misses as u128;
         self.global_leaf_directory_reads += report.global_leaf_directory_reads as u128;
         self.global_leaf_directory_bytes += u128::from(report.global_leaf_directory_bytes);
@@ -507,6 +509,7 @@ impl QuerySummary {
         self.recall_count += other.recall_count;
         self.bytes_read += other.bytes_read;
         self.billable_requests += other.billable_requests;
+        self.disk_cache_reads += other.disk_cache_reads;
         self.object_cache_misses += other.object_cache_misses;
         self.global_leaf_directory_reads += other.global_leaf_directory_reads;
         self.global_leaf_directory_bytes += other.global_leaf_directory_bytes;
@@ -3189,22 +3192,82 @@ fn run_uncached_queries(
     Ok(summary)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiskCachedQueryStep {
+    Reset,
+    Prime(usize),
+    Measure(usize),
+}
+
+fn execute_disk_cached_query_sequence(
+    query_count: usize,
+    cohort_size: usize,
+    mut execute: impl FnMut(DiskCachedQueryStep) -> BenchResult<QuerySummary>,
+) -> BenchResult<QuerySummary> {
+    if cohort_size == 0 {
+        return Err(invalid_input("disk-cached query cohort must not be empty").into());
+    }
+    let mut summary = QuerySummary::default();
+    for cohort_start in (0..query_count).step_by(cohort_size) {
+        let cohort_end = cohort_start.saturating_add(cohort_size).min(query_count);
+        let _ = execute(DiskCachedQueryStep::Reset)?;
+        for query_index in cohort_start..cohort_end {
+            let _ = execute(DiskCachedQueryStep::Prime(query_index))?;
+        }
+        for query_index in cohort_start..cohort_end {
+            let measured = execute(DiskCachedQueryStep::Measure(query_index))?;
+            validate_disk_cached_query(query_index, &measured)?;
+            summary.absorb(measured);
+        }
+    }
+    Ok(summary)
+}
+
+// V20 admits at most 32 MiB of physical head+exact data per query. Fund cohorts
+// from only three quarters of the disk budget, leaving the remainder for
+// authenticated directory/control objects and disk-cache entry accounting.
+const DISK_CACHED_QUERY_PHYSICAL_MAX_BYTES: u64 = 32 * 1024 * 1024;
+const DISK_CACHED_QUERY_MAX_COHORT: usize = 20;
+
+fn disk_cached_query_cohort_size(disk_cache_max_bytes: Option<u64>) -> BenchResult<usize> {
+    let max_bytes = disk_cache_max_bytes
+        .filter(|bytes| *bytes > 0)
+        .ok_or_else(|| {
+            invalid_input("disk-cached measurement requires a positive local disk-cache budget")
+        })?;
+    let cohort_bytes = max_bytes.saturating_mul(3) / 4;
+    Ok(
+        usize::try_from(cohort_bytes / DISK_CACHED_QUERY_PHYSICAL_MAX_BYTES)
+            .unwrap_or(usize::MAX)
+            .clamp(1, DISK_CACHED_QUERY_MAX_COHORT),
+    )
+}
+
 fn run_disk_cached_queries(
     config: &ResolvedConfig,
     dataset: &Dataset,
     index: &BorsukIndex,
     options: SearchOptions,
 ) -> BenchResult<QuerySummary> {
-    reset_cache(&config.cache_dir)?;
-    let _ = run_queries(index, &dataset.queries, None, options.clone())?;
-    let summary = run_queries(
-        index,
-        &dataset.queries,
-        Some(&dataset.ground_truth),
-        options,
-    )?;
-    validate_disk_cached_network(&summary)?;
-    Ok(summary)
+    let cohort_size = disk_cached_query_cohort_size(config.disk_cache_max_bytes)?;
+    execute_disk_cached_query_sequence(dataset.queries.len(), cohort_size, |step| match step {
+        DiskCachedQueryStep::Reset => {
+            reset_cache(&config.cache_dir)?;
+            Ok(QuerySummary::default())
+        }
+        DiskCachedQueryStep::Prime(query_index) => run_queries(
+            index,
+            &dataset.queries[query_index..query_index + 1],
+            None,
+            options.clone(),
+        ),
+        DiskCachedQueryStep::Measure(query_index) => run_queries(
+            index,
+            &dataset.queries[query_index..query_index + 1],
+            Some(&dataset.ground_truth[query_index..query_index + 1]),
+            options.clone(),
+        ),
+    })
 }
 
 fn write_recall_row(
@@ -3405,6 +3468,36 @@ fn validate_disk_cached_network(summary: &QuerySummary) -> BenchResult<()> {
     Ok(())
 }
 
+fn validate_disk_cached_query(query_index: usize, summary: &QuerySummary) -> BenchResult<()> {
+    validate_disk_cached_observation(
+        query_index,
+        summary.billable_requests,
+        summary.disk_cache_reads,
+    )
+}
+
+fn validate_disk_cached_observation(
+    query_identity: usize,
+    network_gets: impl Into<u128>,
+    disk_cache_reads: impl Into<u128>,
+) -> BenchResult<()> {
+    let network_gets = network_gets.into();
+    let disk_cache_reads = disk_cache_reads.into();
+    if network_gets != 0 {
+        return Err(invalid_input(&format!(
+            "disk-cached query {query_identity} performed network I/O: network_gets={network_gets}"
+        ))
+        .into());
+    }
+    if disk_cache_reads == 0 {
+        return Err(invalid_input(&format!(
+            "disk-cached query {query_identity} performed no local disk-cache reads"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 fn cache_state_summary_enabled(skip_recall: bool, cache_profile: BenchmarkCacheProfile) -> bool {
     !skip_recall && cache_profile != BenchmarkCacheProfile::MixedCoverage
 }
@@ -3479,6 +3572,119 @@ fn validate_insert_only(insert_only: bool, build_only: bool, read_only: bool) ->
     Ok(())
 }
 
+fn measure_concurrency_wave(
+    config: &ResolvedConfig,
+    dataset: &Dataset,
+    index: &Arc<BorsukIndex>,
+    ground_truth: &Arc<Vec<Vec<String>>>,
+    query_indices: &[usize],
+    workers: usize,
+    position_offset: usize,
+) -> BenchResult<(Vec<ConcurrencyMeasurement>, Duration)> {
+    let hot_count = match config.cache_profile {
+        BenchmarkCacheProfile::All | BenchmarkCacheProfile::DiskCached => dataset.queries.len(),
+        BenchmarkCacheProfile::Uncached => 0,
+        BenchmarkCacheProfile::MixedCoverage => {
+            dataset.queries.len() * config.cache_coverage_percent / 100
+        }
+    };
+    let active_workers = workers.min(query_indices.len()).max(1);
+    let query_indices = Arc::new(query_indices.to_vec());
+    let query_source_indices = Arc::clone(&dataset.query_source_indices);
+    let ready = Arc::new(Barrier::new(active_workers + 1));
+    let mut handles = Vec::with_capacity(active_workers);
+    for worker in 0..active_workers {
+        let worker_index = Arc::clone(index);
+        let queries = Arc::clone(&dataset.queries);
+        let query_indices = Arc::clone(&query_indices);
+        let ground_truth = Arc::clone(ground_truth);
+        let query_source_indices = Arc::clone(&query_source_indices);
+        let ready = Arc::clone(&ready);
+        let options = serving_options(config);
+        handles.push(thread::spawn(
+            move || -> Result<Vec<ConcurrencyMeasurement>, String> {
+                ready.wait();
+                let mut measurements = Vec::new();
+                for position in (worker..query_indices.len()).step_by(active_workers) {
+                    let query_index = query_indices[position];
+                    let query_started = Instant::now();
+                    let report = worker_index
+                        .search_with_report(&queries[query_index], options.clone())
+                        .map_err(|error| error.to_string())?;
+                    let recall = if is_zero_norm(&queries[query_index]) {
+                        f32::NAN
+                    } else {
+                        let ids = report
+                            .hits
+                            .iter()
+                            .map(|hit| hit.id.to_utf8_string())
+                            .collect::<borsuk::Result<Vec<_>>>()
+                            .map_err(|error| error.to_string())?;
+                        recall_at_k(&ground_truth[query_index], &ids, RECALL_K)
+                            .map_err(|error| error.to_string())?
+                    };
+                    measurements.push(ConcurrencyMeasurement {
+                        position: position_offset + position,
+                        query_source_index: query_source_indices[query_index],
+                        target_hot_set_member: query_index < hot_count,
+                        latency_ms: elapsed_ms(query_started),
+                        recall,
+                        bytes_read: report.bytes_read,
+                        decoded_cache_hits: report.decoded_cache_hits,
+                        disk_cache_reads: report.disk_cache_reads,
+                        backing_reads: report.backing_reads,
+                        decoded_cache_bytes_read: report.decoded_cache_bytes_read,
+                        disk_cache_bytes_read: report.disk_cache_bytes_read,
+                        backing_bytes_read: report.backing_bytes_read,
+                        network_gets: report.requests.gets.saturating_add(report.requests.heads),
+                        global_leaf_directory_reads: report.global_leaf_directory_reads,
+                        global_leaf_directory_bytes: report.global_leaf_directory_bytes,
+                        global_leaf_code_pages_read: report.global_leaf_code_pages_read,
+                        global_leaf_code_bytes: report.global_leaf_code_bytes,
+                        global_leaf_pages_read: report.global_leaf_pages_read,
+                        global_leaf_page_bytes: report.global_leaf_page_bytes,
+                        global_leaf_waves: report.global_leaf_waves,
+                        global_leaf_continuations: report.global_leaf_continuations,
+                        global_leaf_exact_scores: report.global_leaf_exact_scores,
+                        global_leaf_code_requests: report.global_leaf_code_requests,
+                        global_leaf_exact_requests: report.global_leaf_exact_requests,
+                        global_leaf_exact_cells: report.global_leaf_exact_cells,
+                        global_leaf_exact_cards: report.global_leaf_exact_cards,
+                        global_leaf_deepest_winning_card_rank: report
+                            .global_leaf_deepest_winning_card_rank,
+                        global_leaf_exact_groups: report.global_leaf_exact_groups,
+                        global_leaf_exact_selected_bytes: report.global_leaf_exact_selected_bytes,
+                        global_leaf_exact_speculative_bytes: report
+                            .global_leaf_exact_speculative_bytes,
+                        execution_engine: execution_engine_label(&report).to_string(),
+                        collection_resident_bytes: report.collection_resident_bytes,
+                        retained_bytes: report.retained_bytes,
+                        retained_capacity_bytes: report.retained_capacity_bytes,
+                        retained_peak_bytes: report.retained_peak_bytes,
+                        transient_bytes: report.transient_bytes,
+                        transient_capacity_bytes: report.transient_capacity_bytes,
+                        transient_peak_bytes: report.transient_peak_bytes,
+                        timings: QueryStageTimings::from_report(&report),
+                    });
+                }
+                Ok(measurements)
+            },
+        ));
+    }
+    let started = Instant::now();
+    ready.wait();
+    let mut measurements = Vec::with_capacity(query_indices.len());
+    for handle in handles {
+        measurements.extend(
+            handle
+                .join()
+                .map_err(|_| invalid_input("concurrency benchmark worker panicked"))?
+                .map_err(|error| invalid_input(&format!("concurrency worker failed: {error}")))?,
+        );
+    }
+    Ok((measurements, started.elapsed()))
+}
+
 fn validate_lifecycle_only(
     lifecycle_only: bool,
     build_index: bool,
@@ -3510,110 +3716,56 @@ fn write_concurrency_csv(
     let samples_path = config.output_dir.join("bench_concurrency_samples.csv");
     let mut samples_writer = csv_writer(&samples_path)?;
     writeln!(samples_writer, "{CONCURRENCY_SAMPLE_HEADER}")?;
+    let ground_truth = Arc::new(dataset.ground_truth.clone());
     for &workers in &config.concurrency {
-        let query_indices = prepare_concurrency_cache_state(config, dataset, index)?;
-        let ground_truth = Arc::new(dataset.ground_truth.clone());
-        let query_source_indices = Arc::clone(&dataset.query_source_indices);
-        let hot_count = match config.cache_profile {
-            BenchmarkCacheProfile::All | BenchmarkCacheProfile::DiskCached => dataset.queries.len(),
-            BenchmarkCacheProfile::Uncached => 0,
-            BenchmarkCacheProfile::MixedCoverage => {
-                dataset.queries.len() * config.cache_coverage_percent / 100
+        let mut measurements = Vec::with_capacity(dataset.queries.len());
+        let mut measured_wall = Duration::ZERO;
+        if config.cache_profile == BenchmarkCacheProfile::DiskCached {
+            let cohort_size = disk_cached_query_cohort_size(config.disk_cache_max_bytes)?;
+            for cohort_start in (0..dataset.queries.len()).step_by(cohort_size) {
+                let cohort_end = cohort_start
+                    .saturating_add(cohort_size)
+                    .min(dataset.queries.len());
+                let cohort = (cohort_start..cohort_end).collect::<Vec<_>>();
+                reset_cache(&config.cache_dir)?;
+                for &query_index in &cohort {
+                    let _ = index.search_with_report(
+                        &dataset.queries[query_index],
+                        serving_options(config),
+                    )?;
+                }
+                let (mut wave, elapsed) = measure_concurrency_wave(
+                    config,
+                    dataset,
+                    index,
+                    &ground_truth,
+                    &cohort,
+                    workers,
+                    cohort_start,
+                )?;
+                for measurement in &wave {
+                    validate_disk_cached_observation(
+                        measurement.query_source_index,
+                        measurement.network_gets,
+                        measurement.disk_cache_reads,
+                    )?;
+                }
+                measurements.append(&mut wave);
+                measured_wall = measured_wall.saturating_add(elapsed);
             }
-        };
-        let started = Instant::now();
-        let mut handles = Vec::with_capacity(workers);
-        for worker in 0..workers {
-            let worker_index = Arc::clone(index);
-            let queries = Arc::clone(&dataset.queries);
-            let query_indices = Arc::clone(&query_indices);
-            let ground_truth = Arc::clone(&ground_truth);
-            let query_source_indices = Arc::clone(&query_source_indices);
-            let options = serving_options(config);
-            handles.push(thread::spawn(
-                move || -> Result<Vec<ConcurrencyMeasurement>, String> {
-                    let mut measurements = Vec::new();
-                    for position in (worker..query_indices.len()).step_by(workers) {
-                        let query_index = query_indices[position];
-                        let query_started = Instant::now();
-                        let report = worker_index
-                            .search_with_report(&queries[query_index], options.clone())
-                            .map_err(|error| error.to_string())?;
-                        let recall = if is_zero_norm(&queries[query_index]) {
-                            f32::NAN
-                        } else {
-                            let ids = report
-                                .hits
-                                .iter()
-                                .map(|hit| hit.id.to_utf8_string())
-                                .collect::<borsuk::Result<Vec<_>>>()
-                                .map_err(|error| error.to_string())?;
-                            recall_at_k(&ground_truth[query_index], &ids, RECALL_K)
-                                .map_err(|error| error.to_string())?
-                        };
-                        measurements.push(ConcurrencyMeasurement {
-                            position,
-                            query_source_index: query_source_indices[query_index],
-                            target_hot_set_member: query_index < hot_count,
-                            latency_ms: elapsed_ms(query_started),
-                            recall,
-                            bytes_read: report.bytes_read,
-                            decoded_cache_hits: report.decoded_cache_hits,
-                            disk_cache_reads: report.disk_cache_reads,
-                            backing_reads: report.backing_reads,
-                            decoded_cache_bytes_read: report.decoded_cache_bytes_read,
-                            disk_cache_bytes_read: report.disk_cache_bytes_read,
-                            backing_bytes_read: report.backing_bytes_read,
-                            network_gets: report
-                                .requests
-                                .gets
-                                .saturating_add(report.requests.heads),
-                            global_leaf_directory_reads: report.global_leaf_directory_reads,
-                            global_leaf_directory_bytes: report.global_leaf_directory_bytes,
-                            global_leaf_code_pages_read: report.global_leaf_code_pages_read,
-                            global_leaf_code_bytes: report.global_leaf_code_bytes,
-                            global_leaf_pages_read: report.global_leaf_pages_read,
-                            global_leaf_page_bytes: report.global_leaf_page_bytes,
-                            global_leaf_waves: report.global_leaf_waves,
-                            global_leaf_continuations: report.global_leaf_continuations,
-                            global_leaf_exact_scores: report.global_leaf_exact_scores,
-                            global_leaf_code_requests: report.global_leaf_code_requests,
-                            global_leaf_exact_requests: report.global_leaf_exact_requests,
-                            global_leaf_exact_cells: report.global_leaf_exact_cells,
-                            global_leaf_exact_cards: report.global_leaf_exact_cards,
-                            global_leaf_deepest_winning_card_rank: report
-                                .global_leaf_deepest_winning_card_rank,
-                            global_leaf_exact_groups: report.global_leaf_exact_groups,
-                            global_leaf_exact_selected_bytes: report
-                                .global_leaf_exact_selected_bytes,
-                            global_leaf_exact_speculative_bytes: report
-                                .global_leaf_exact_speculative_bytes,
-                            execution_engine: execution_engine_label(&report).to_string(),
-                            collection_resident_bytes: report.collection_resident_bytes,
-                            retained_bytes: report.retained_bytes,
-                            retained_capacity_bytes: report.retained_capacity_bytes,
-                            retained_peak_bytes: report.retained_peak_bytes,
-                            transient_bytes: report.transient_bytes,
-                            transient_capacity_bytes: report.transient_capacity_bytes,
-                            transient_peak_bytes: report.transient_peak_bytes,
-                            timings: QueryStageTimings::from_report(&report),
-                        });
-                    }
-                    Ok(measurements)
-                },
-            ));
-        }
-
-        let mut measurements = Vec::with_capacity(query_indices.len());
-        for handle in handles {
-            measurements.extend(
-                handle
-                    .join()
-                    .map_err(|_| invalid_input("concurrency benchmark worker panicked"))?
-                    .map_err(|error| {
-                        invalid_input(&format!("concurrency worker failed: {error}"))
-                    })?,
-            );
+        } else {
+            let query_indices = prepare_concurrency_cache_state(config, dataset, index)?;
+            let (wave, elapsed) = measure_concurrency_wave(
+                config,
+                dataset,
+                index,
+                &ground_truth,
+                &query_indices,
+                workers,
+                0,
+            )?;
+            measurements = wave;
+            measured_wall = elapsed;
         }
         measurements.sort_by_key(|measurement| measurement.position);
         let latencies_ms = measurements
@@ -3648,7 +3800,7 @@ fn write_concurrency_csv(
             backing_bytes_read += u128::from(measurement.backing_bytes_read);
             execution_engines.insert(measurement.execution_engine.clone());
         }
-        let wall_seconds = started.elapsed().as_secs_f64();
+        let wall_seconds = measured_wall.as_secs_f64();
         let total_queries = latencies_ms.len();
         let qps = if wall_seconds == 0.0 {
             total_queries as f64
@@ -5542,7 +5694,7 @@ mod tests {
         BUILD_HEADER, BenchmarkCacheProfile, BorsukIndex, BuildIngestCoordinator,
         CACHE_COVERAGE_HEADER, CACHE_STATE_HEADER, CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER,
         CacheExecutionPolicy, ConcurrencyMeasurement, DEFAULT_NPROBE_SWEEP,
-        DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES,
+        DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES, DiskCachedQueryStep,
         EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig, LIFECYCLE_HEADER,
         LeafCapability, LeafMode, LifecycleBatchAssignment, LifecycleInsertMode,
         LifecycleQueryProgress, MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER,
@@ -5552,8 +5704,9 @@ mod tests {
         benchmark_row_ids, build_materializer_open_options, cache_coverage_cohort_size,
         cache_coverage_enabled, cache_state_summary_enabled, dataset_metric,
         default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
-        deterministic_mutation_vector, dollars_per_million_queries, execute_bulk_add_wave,
-        execute_put_wave, finalize_fresh_build, first_logical_batch_publish_ms, ingest_batch_size,
+        deterministic_mutation_vector, disk_cached_query_cohort_size, dollars_per_million_queries,
+        execute_bulk_add_wave, execute_disk_cached_query_sequence, execute_put_wave,
+        finalize_fresh_build, first_logical_batch_publish_ms, ingest_batch_size,
         is_hot_workload_position, lifecycle_progress_line, lifecycle_query_progress_line,
         lifecycle_write_operation_count, lifecycle_write_waves, lifecycle_writer_open_options,
         mixed_concurrency_query_indices, neighbor_row, normalized_cache_access_fractions,
@@ -7068,6 +7221,7 @@ mod tests {
     fn disk_cached_validation_allows_local_bytes_but_rejects_network_gets() {
         let local_disk = QuerySummary {
             bytes_read: 4_953_727,
+            disk_cache_reads: 1,
             billable_requests: 0,
             ..QuerySummary::default()
         };
@@ -7079,6 +7233,84 @@ mod tests {
             ..QuerySummary::default()
         };
         assert!(validate_disk_cached_network(&network).is_err());
+    }
+
+    #[test]
+    fn disk_cached_queries_prime_and_measure_bounded_cohorts() {
+        assert_eq!(
+            disk_cached_query_cohort_size(Some(1024 * 1024 * 1024)).unwrap(),
+            20
+        );
+        assert_eq!(
+            disk_cached_query_cohort_size(Some(512 * 1024 * 1024)).unwrap(),
+            12
+        );
+        assert!(disk_cached_query_cohort_size(None).is_err());
+        let mut observed = Vec::new();
+        let summary = execute_disk_cached_query_sequence(3, 2, |step| {
+            observed.push(step);
+            Ok(match step {
+                DiskCachedQueryStep::Measure(_) => QuerySummary {
+                    latencies_ms: vec![1.0],
+                    disk_cache_reads: 1,
+                    ..QuerySummary::default()
+                },
+                DiskCachedQueryStep::Reset | DiskCachedQueryStep::Prime(_) => {
+                    QuerySummary::default()
+                }
+            })
+        })
+        .unwrap();
+
+        assert_eq!(
+            observed,
+            vec![
+                DiskCachedQueryStep::Reset,
+                DiskCachedQueryStep::Prime(0),
+                DiskCachedQueryStep::Prime(1),
+                DiskCachedQueryStep::Measure(0),
+                DiskCachedQueryStep::Measure(1),
+                DiskCachedQueryStep::Reset,
+                DiskCachedQueryStep::Prime(2),
+                DiskCachedQueryStep::Measure(2),
+            ]
+        );
+        assert_eq!(summary.count(), 3);
+    }
+
+    #[test]
+    fn disk_cached_query_guard_stops_at_the_first_nonlocal_measurement() {
+        let mut observed = Vec::new();
+        let result = execute_disk_cached_query_sequence(3, 2, |step| {
+            observed.push(step);
+            Ok(match step {
+                DiskCachedQueryStep::Measure(0) => QuerySummary {
+                    latencies_ms: vec![1.0],
+                    disk_cache_reads: 1,
+                    ..QuerySummary::default()
+                },
+                DiskCachedQueryStep::Measure(1) => QuerySummary {
+                    latencies_ms: vec![1.0],
+                    billable_requests: 1,
+                    ..QuerySummary::default()
+                },
+                DiskCachedQueryStep::Measure(_)
+                | DiskCachedQueryStep::Reset
+                | DiskCachedQueryStep::Prime(_) => QuerySummary::default(),
+            })
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            observed,
+            vec![
+                DiskCachedQueryStep::Reset,
+                DiskCachedQueryStep::Prime(0),
+                DiskCachedQueryStep::Prime(1),
+                DiskCachedQueryStep::Measure(0),
+                DiskCachedQueryStep::Measure(1),
+            ]
+        );
     }
 
     #[test]

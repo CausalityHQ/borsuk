@@ -583,6 +583,9 @@ def build_execution_plan(
         "BORSUK_BENCH_CACHE_PROFILE": (
             "uncached" if arm.get("cache_state", "cold") == "cold" else "disk_cached"
         ),
+        "BORSUK_BENCH_CACHE_COVERAGE_PERCENT": (
+            "0" if arm.get("cache_state", "cold") == "cold" else "100"
+        ),
         "BORSUK_BENCH_RAM_BUDGET_BYTES": str(resident_limit_mib * 1024 * 1024),
         "BORSUK_BENCH_MAX_ACTIVE_SEARCHES": str(runtime_vcpus),
         "BORSUK_BENCH_MAX_WAITING_SEARCHES": "16",
@@ -1125,6 +1128,12 @@ def summarize_query_samples(
         bytes_read = int(row["bytes_read"])
         if network_gets < 0 or bytes_read < 0:
             raise ValueError("query sample storage telemetry is invalid")
+        if arm["cache_state"] == "warm":
+            disk_cache_reads = int(row.get("disk_cache_reads", "-1"))
+            if network_gets != 0 or disk_cache_reads <= 0:
+                raise ValueError(
+                    "disk-cached query sample was not served from local disk"
+                )
         storage_gets += network_gets
         storage_bytes_read += bytes_read
         _accumulate_query_stage_timings(
@@ -1310,6 +1319,8 @@ def summarize_concurrency_artifacts(
     expected_scan_codec: str,
     expected_nprobe: int,
     expected_max_candidates: int,
+    expected_cache_profile: str,
+    expected_cache_coverage_percent: int,
 ) -> list[dict[str, int]]:
     if expected_queries <= 0 or not expected_workers:
         raise ValueError("concurrency authority is empty")
@@ -1333,6 +1344,9 @@ def summarize_concurrency_artifacts(
             or row.get("execution_engine") != V20_EXECUTION_ENGINE
             or int(row.get("nprobe", "-1")) != expected_nprobe
             or int(row.get("max_candidates", "-1")) != expected_max_candidates
+            or row.get("cache_profile") != expected_cache_profile
+            or int(row.get("target_cache_coverage_percent", "-1"))
+            != expected_cache_coverage_percent
             or worker not in expected
             or worker in by_worker
             or int(row.get("total_queries", "-1")) != expected_queries
@@ -1360,6 +1374,9 @@ def summarize_concurrency_artifacts(
             or row.get("execution_engine") != V20_EXECUTION_ENGINE
             or int(row.get("nprobe", "-1")) != expected_nprobe
             or int(row.get("max_candidates", "-1")) != expected_max_candidates
+            or row.get("cache_profile") != expected_cache_profile
+            or int(row.get("target_cache_coverage_percent", "-1"))
+            != expected_cache_coverage_percent
             or worker not in expected
         ):
             raise ValueError("concurrency sample differs from its authority")
@@ -1375,6 +1392,16 @@ def summarize_concurrency_artifacts(
             or not 0 <= recall <= 1
         ):
             raise ValueError("concurrency sample latency or recall is invalid")
+        network_gets = int(row.get("network_gets", "-1"))
+        disk_cache_reads = int(row.get("disk_cache_reads", "-1"))
+        if network_gets < 0 or disk_cache_reads < 0:
+            raise ValueError("concurrency sample cache counters are invalid")
+        if expected_cache_profile == "disk_cached" and (
+            network_gets != 0 or disk_cache_reads == 0
+        ):
+            raise ValueError(
+                "disk-cached concurrency sample was not served from local disk"
+            )
         sample_indices[worker].add(sample_index)
         recalls[worker].append(round(recall * 1_000_000))
         _accumulate_query_stage_timings(
@@ -2720,6 +2747,12 @@ def main() -> int:
                 expected_scan_codec=str(cell["index_profile"]["global_scan_codec"]),
                 expected_nprobe=int(arm["leaf_page_budget"]),
                 expected_max_candidates=V20_COMPATIBILITY_CANDIDATES,
+                expected_cache_profile=(
+                    "uncached" if arm["cache_state"] == "cold" else "disk_cached"
+                ),
+                expected_cache_coverage_percent=(
+                    0 if arm["cache_state"] == "cold" else 100
+                ),
             )
             trace_writes = summarize_runtime_write_trace(output / "storage-access.csv")
             runtime_writes = {

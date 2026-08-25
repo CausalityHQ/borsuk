@@ -247,12 +247,15 @@ results were 0.970/0.973 and are the only publication-safe values.
 - `uncached` means serving metadata is already resident, while the query data
   pages are absent from the local disk cache and therefore require object-store
   I/O.
-- `disk_cached` repeats the identical query working set from local disk and must
-  report zero backing-store GETs and zero backing-store bytes.
+- `disk_cached` primes bounded cohorts of at most 20 unique queries outside
+  timing, measures that same cohort, and requires every measured query to
+  report local-disk reads with zero backing-store GETs and bytes.
 - Full decoded-vector preload is a separate `memory_preloaded` research state,
   not “cold” or “warm”.
 - Startup/open plus serving-metadata preparation is measured separately and is
   excluded from query latency.
+- Results from the superseded whole-query-set disk-cache priming protocol are
+  historical only and are not joined with bounded-cohort publication rows.
 - Current production uses separate bounded active/waiting search admission,
   per-query leaf width, handle-wide physical reads, and process-wide backing
   GETs. Uncapped fan-out and multi-user runs are labelled “research ceiling”.
