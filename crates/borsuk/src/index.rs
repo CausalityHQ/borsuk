@@ -855,25 +855,52 @@ fn global_cell_card_exact_request_budget(page_budget: usize) -> usize {
     )
 }
 
-fn global_cell_card_head_card_budget(page_budget: usize, available_cards: usize) -> usize {
-    page_budget
-        .saturating_mul(GLOBAL_CELL_CARD_HEAD_CARD_MULTIPLIER)
-        .min(available_cards)
+fn global_cell_card_head_card_budget(available_cards: usize) -> usize {
+    available_cards
 }
 
-fn one_based_cell_card_ranks(ranked_root_indexes: &[usize]) -> Result<HashMap<usize, usize>> {
-    let ranks = ranked_root_indexes
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(rank, root_index)| (root_index, rank + 1))
-        .collect::<HashMap<_, _>>();
-    if ranks.len() != ranked_root_indexes.len() {
-        return Err(BorsukError::InvalidStorage(
-            "V20 centroid ranking repeats a cell-card root index".to_string(),
-        ));
+fn global_cell_card_query_scratch_bytes(card_count: usize) -> Option<u64> {
+    // Root-index vectors, centroid scores, authenticated planned heads, static
+    // tile membership, and allocator overhead coexist at the planner peak.
+    const BYTES_PER_CARD: usize = 512;
+    (card_count > 0)
+        .then(|| card_count.checked_mul(BYTES_PER_CARD))
+        .flatten()
+        .and_then(|bytes| u64::try_from(bytes).ok())
+}
+
+fn global_cell_card_query_head_admission_bytes(
+    routed_card_count: usize,
+    max_physical_bytes: u64,
+    transient_capacity_bytes: Option<u64>,
+) -> Option<(u64, u64)> {
+    const SELECTED_PLAN_BYTES_PER_CARD: u64 = 256;
+    let scratch = global_cell_card_query_scratch_bytes(routed_card_count)?;
+    let selected_plan = u64::try_from(routed_card_count)
+        .ok()?
+        .checked_mul(SELECTED_PLAN_BYTES_PER_CARD)?;
+    let physical_ceiling = transient_capacity_bytes.map_or(max_physical_bytes, |capacity| {
+        capacity
+            .saturating_sub(selected_plan)
+            .min(max_physical_bytes)
+    });
+    let admission = selected_plan.checked_add(physical_ceiling)?.max(scratch);
+    if physical_ceiling == 0
+        || transient_capacity_bytes.is_some_and(|capacity| admission > capacity)
+    {
+        return None;
     }
-    Ok(ranks)
+    Some((admission, physical_ceiling))
+}
+
+fn global_cell_card_head_promotion_byte_ceiling(
+    head_fetch_ceiling: u64,
+    head_byte_ceiling: u64,
+    admitted_physical_ceiling: u64,
+) -> u64 {
+    head_fetch_ceiling
+        .max(head_byte_ceiling)
+        .min(admitted_physical_ceiling)
 }
 
 fn cell_card_exact_io_budget(max_bytes: u64, planned_head_bytes: u64) -> Option<u64> {
@@ -907,7 +934,6 @@ fn global_cell_card_exact_wave_admission_bytes(
 }
 const _: () = assert!(GLOBAL_LEAF_QUERY_WAVE_PAGES <= DEFAULT_MAX_INFLIGHT_LEAF_READS);
 const GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER: usize = 4;
-const GLOBAL_CELL_CARD_HEAD_CARD_MULTIPLIER: usize = 8;
 
 fn global_leaf_code_byte_ceiling(
     limit: u64,
@@ -19916,7 +19942,45 @@ impl BorsukIndex {
             SearchMode::Exact => unreachable!("V17 eligibility requires approximate search"),
         };
         let max_bytes = caller_max_bytes.unwrap_or(GLOBAL_CELL_CARD_DEFAULT_MAX_BYTES);
+        let routed_card_count = root.card_count_for_cells(&selected_cells)?;
+        let transient_capacity_bytes = self
+            .read_runtime
+            .transient_admission
+            .as_ref()
+            .map(|gate| gate.capacity_bytes());
+        let Some((query_head_admission_bytes, query_head_physical_ceiling)) =
+            global_cell_card_query_head_admission_bytes(
+                routed_card_count,
+                max_bytes,
+                transient_capacity_bytes,
+            )
+        else {
+            v20_progress!(
+                "ranking-declined",
+                "reason" = SearchTerminationReason::MaxBytes
+            );
+            return Ok(Some(self.bounded_cell_card_declined_execution(
+                global_ref,
+                started,
+                requests_before,
+                SearchTerminationReason::MaxBytes,
+                CellCardDeclineTelemetry::default(),
+            )));
+        };
+        let head_admission_started = Instant::now();
+        let ranking_memory_permit = self
+            .read_runtime
+            .transient_admission
+            .as_ref()
+            .map(|gate| gate.acquire_owned(query_head_admission_bytes));
+        let global_base_head_admission_us =
+            u64::try_from(head_admission_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let card_indexes = root.card_indexes_for_cells(&selected_cells)?;
+        if card_indexes.len() != routed_card_count {
+            return Err(BorsukError::InvalidStorage(
+                "V20 routed-card count changed during ranking".to_string(),
+            ));
+        }
         let centroid_distances = codebook.score_cell_card_codes(
             &pq_query,
             card_indexes
@@ -19924,8 +19988,11 @@ impl BorsukIndex {
                 .map(|index| root.centroid_code(*index))
                 .collect::<Result<Vec<_>>>()?,
         )?;
-        let head_card_budget =
-            global_cell_card_head_card_budget(context.page_budget, card_indexes.len());
+        // Rank every card authorized by the persisted routing decision. The
+        // physical head planner below owns the caller's request and byte
+        // budgets; truncating this logical set first can discard the winning
+        // cells while those physical budgets remain under-spent.
+        let head_card_budget = global_cell_card_head_card_budget(card_indexes.len());
         let ranked_card_indexes = rank_cell_card_head_indexes(
             root,
             &card_indexes,
@@ -19937,7 +20004,6 @@ impl BorsukIndex {
             "cells" = selected_cells.len(),
             "cards" = ranked_card_indexes.len(),
         );
-        let card_rank_by_root_index = one_based_cell_card_ranks(&ranked_card_indexes)?;
         // Code ranges only choose the lossless blocks. Reserve the largest
         // authenticated block among the selected cards rather than the global
         // format maximum; otherwise compact V17 code ranges can make an honest
@@ -19945,22 +20011,11 @@ impl BorsukIndex {
         // A 32-request exact wave may coalesce more than 32 authenticated
         // tiles. Charge every tile reachable from the selected heads so the
         // weighted RAM gate bounds the real executable plan, not its GET count.
-        let (
-            requested_exact_block_budget,
-            selected_exact_block_ceiling,
-            selected_exact_row_ceiling,
-        ) = cell_card_exact_admission_bounds(root, &ranked_card_indexes)?;
-        let exact_fetch_rows = if default_mvcc_continuation {
-            exact_candidate_rows.saturating_add(
-                context
-                    .page_budget
-                    .saturating_mul(selected_exact_row_ceiling as usize),
-            )
-        } else {
-            exact_candidate_rows
-        };
+        let (_, routed_exact_block_ceiling, _) =
+            cell_card_exact_admission_bounds(root, &ranked_card_indexes)?;
         let head_byte_ceiling =
-            global_leaf_code_byte_ceiling(max_bytes, 0, selected_exact_block_ceiling);
+            global_leaf_code_byte_ceiling(max_bytes, 0, routed_exact_block_ceiling)
+                .min(query_head_physical_ceiling);
         if head_byte_ceiling == 0 {
             v20_progress!(
                 "head-declined",
@@ -19993,6 +20048,30 @@ impl BorsukIndex {
             }
             Err(error) => return Err(error),
         };
+        if selected_head_plan.transient_admission_bytes() > query_head_admission_bytes {
+            return Err(BorsukError::InvalidStorage(
+                "V20 selected head plan exceeds its admitted memory".to_string(),
+            ));
+        }
+        let selected_card_count = selected_head_plan.cards();
+        let selected_ranked_card_indexes = &ranked_card_indexes[..selected_card_count];
+        let (
+            requested_exact_block_budget,
+            selected_exact_block_ceiling,
+            selected_exact_row_ceiling,
+        ) = cell_card_exact_admission_bounds(root, selected_ranked_card_indexes)?;
+        let exact_fetch_rows = if default_mvcc_continuation {
+            exact_candidate_rows.saturating_add(
+                context
+                    .page_budget
+                    .saturating_mul(selected_exact_row_ceiling as usize),
+            )
+        } else {
+            exact_candidate_rows
+        };
+        drop(centroid_distances);
+        drop(card_indexes);
+        drop(ranked_card_indexes);
         v20_progress!(
             "head-plan",
             "reads" = selected_head_plan.reads().len(),
@@ -20004,22 +20083,32 @@ impl BorsukIndex {
             .saturating_mul(selected_exact_block_ceiling)
             .min(max_bytes);
         let head_fetch_ceiling = max_bytes.saturating_sub(exact_reserve);
+        let head_promotion_byte_ceiling = global_cell_card_head_promotion_byte_ceiling(
+            head_fetch_ceiling,
+            head_byte_ceiling,
+            query_head_physical_ceiling,
+        );
         // Compute the cold promoted plan independently from cache state. It is
         // the strict I/O charge for both warm and cold queries: stable-plane
         // reuse may reduce actual backing I/O, but must never increase rerank
         // breadth or let an uncached promotion exceed the caller byte cap.
         let planned_head_bytes = promote_cell_card_head_wave_to_stable_planes_with_pinned_cache(
             selected_head_plan.clone(),
-            head_fetch_ceiling.max(head_byte_ceiling),
+            head_promotion_byte_ceiling,
             cell_card_plane_promotion_ceiling(self.read_runtime.retained_pool.is_some()),
             global_cell_card_head_request_budget(context.page_budget),
             |_| false,
         )?
         .physical_bytes();
+        if planned_head_bytes > query_head_physical_ceiling {
+            return Err(BorsukError::InvalidStorage(
+                "V20 cold promoted head plan exceeds its admitted memory".to_string(),
+            ));
+        }
         let mut pinned_code_planes = HashMap::<String, Arc<Vec<u8>>>::new();
         let head_plan = promote_cell_card_head_wave_to_stable_planes_with_pinned_cache(
             selected_head_plan,
-            head_fetch_ceiling.max(head_byte_ceiling),
+            head_promotion_byte_ceiling,
             cell_card_plane_promotion_ceiling(self.read_runtime.retained_pool.is_some()),
             global_cell_card_head_request_budget(context.page_budget),
             |group| {
@@ -20041,16 +20130,13 @@ impl BorsukIndex {
                 }
             },
         )?;
-        let head_admission_bytes = head_plan.transient_admission_bytes();
-        let head_admission_started = Instant::now();
-        let head_memory_permit = self
-            .read_runtime
-            .transient_admission
-            .as_ref()
-            .map(|gate| gate.acquire_owned(head_admission_bytes));
-        v20_progress!("head-admitted", "bytes" = head_admission_bytes);
-        let global_base_head_admission_us =
-            u64::try_from(head_admission_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        if head_plan.physical_bytes() > query_head_physical_ceiling {
+            return Err(BorsukError::InvalidStorage(
+                "V20 promoted head plan exceeds its admitted memory".to_string(),
+            ));
+        }
+        let head_memory_permit = ranking_memory_permit;
+        v20_progress!("head-admitted", "bytes" = query_head_admission_bytes);
         // Cached slices are assembled into one physical-range buffer per read.
         // Acquire the transient permit before allocating those buffers so warm
         // concurrent queries obey the same peak-memory bound as cold reads.
@@ -20381,15 +20467,12 @@ impl BorsukIndex {
                 })?;
             let mut rows = Vec::new();
             for block in streamed_exact_blocks {
-                let root_index = heads
-                    .get(block.block.head_index)
-                    .ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "V20 exact block references an absent decoded head".to_string(),
-                        )
-                    })?
-                    .root_index;
-                let card_rank = *card_rank_by_root_index.get(&root_index).ok_or_else(|| {
+                let head = heads.get(block.block.head_index).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V20 exact block references an absent decoded head".to_string(),
+                    )
+                })?;
+                let card_rank = head.one_based_rank.ok_or_else(|| {
                     BorsukError::InvalidStorage(
                         "V20 exact block has no centroid-ranked card authority".to_string(),
                     )
@@ -33838,6 +33921,7 @@ mod tests {
             selected_bytes: bytes.len() as u64,
             cards: vec![crate::global_cell_card::PlannedCellCardHead {
                 root_index: 0,
+                one_based_rank: None,
                 reference: crate::global_cell_card::CellCardHeadRef {
                     cell_index: 0,
                     card_ordinal: 0,
@@ -33893,6 +33977,7 @@ mod tests {
             selected_bytes: bytes.len() as u64,
             cards: vec![crate::global_cell_card::PlannedCellCardHead {
                 root_index: 0,
+                one_based_rank: None,
                 reference: crate::global_cell_card::CellCardHeadRef {
                     cell_index: 0,
                     card_ordinal: 0,
@@ -40043,17 +40128,16 @@ mod tests {
         // parents with 256 children each. Physical segments remain bounded
         // ingest and object-store units; they are not the query-routing fan-out.
         let deep_100m_coarse_cells = 16_384;
+        let deep_10m_coarse_cells = 4_096;
+        let deep_10m_probes =
+            resident_global_pq_probes(&VectorMetric::Cosine, 96, deep_10m_coarse_cells);
         let deep_100m_probes =
             resident_global_pq_probes(&VectorMetric::Cosine, 96, deep_100m_coarse_cells);
         assert_eq!(recommended_segment_max_vectors(96), 43_690);
         assert_eq!(deep_100m_segments, 2_289);
+        assert_eq!(deep_10m_probes, 128);
         assert_eq!(deep_100m_probes, 256);
         assert_eq!(GLOBAL_CELL_CARD_HEAD_MIN_REQUESTS, 16);
-        assert_eq!(
-            64 * GLOBAL_LEAF_CODE_PREFILTER_MULTIPLIER,
-            256,
-            "the widest qualified arm ranks 256 card heads before bounded physical planning"
-        );
         assert_eq!(global_cell_card_head_request_budget(64), 64);
         assert!(
             deep_100m_probes * 64 <= deep_100m_coarse_cells,
@@ -41114,16 +41198,6 @@ mod tests {
             report.global_leaf_deepest_winning_card_rank <= report.global_leaf_code_pages_read,
             "{report:?}"
         );
-    }
-
-    #[test]
-    fn one_based_cell_card_rank_map_preserves_centroid_order_not_root_order() {
-        let ranks = one_based_cell_card_ranks(&[9, 4, 7]).unwrap();
-
-        assert_eq!(ranks.get(&9), Some(&1));
-        assert_eq!(ranks.get(&4), Some(&2));
-        assert_eq!(ranks.get(&7), Some(&3));
-        assert!(one_based_cell_card_ranks(&[4, 4]).is_err());
     }
 
     #[test]
@@ -43410,8 +43484,39 @@ mod tests {
     }
 
     #[test]
-    fn resident_global_v20_scores_all_300_resident_cards_at_page_budget_64() {
-        assert_eq!(global_cell_card_head_card_budget(64, 300), 300);
+    fn resident_global_v20_scores_every_routed_card_before_physical_planning() {
+        assert_eq!(global_cell_card_head_card_budget(500), 500);
+        assert_eq!(global_cell_card_head_card_budget(700), 700);
+    }
+
+    #[test]
+    fn resident_global_v20_accounts_ranking_scratch_before_allocation() {
+        assert_eq!(global_cell_card_query_scratch_bytes(0), None);
+        assert_eq!(
+            global_cell_card_query_scratch_bytes(1_024),
+            Some(1_024 * 512)
+        );
+        assert_eq!(global_cell_card_query_scratch_bytes(usize::MAX), None);
+        assert_eq!(
+            global_cell_card_query_head_admission_bytes(1_024, 32 * 1024 * 1024, None),
+            Some((32 * 1024 * 1024 + 1_024 * 256, 32 * 1024 * 1024))
+        );
+        assert_eq!(
+            global_cell_card_query_head_admission_bytes(
+                1_024,
+                32 * 1024 * 1024,
+                Some(16 * 1024 * 1024)
+            ),
+            Some((16 * 1024 * 1024, 16 * 1024 * 1024 - 1_024 * 256))
+        );
+        assert_eq!(
+            global_cell_card_head_promotion_byte_ceiling(
+                30 * 1024 * 1024,
+                15 * 1024 * 1024,
+                16 * 1024 * 1024
+            ),
+            16 * 1024 * 1024
+        );
     }
 
     #[test]

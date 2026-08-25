@@ -1105,6 +1105,7 @@ fn cell_card_ranges_should_coalesce(
 #[derive(Debug, Clone)]
 pub(crate) struct PlannedCellCardHead {
     pub(crate) root_index: usize,
+    pub(crate) one_based_rank: Option<usize>,
     pub(crate) reference: CellCardHeadRef,
 }
 
@@ -1269,7 +1270,7 @@ pub(crate) fn cell_card_exact_admission_bounds(
     let (blocks, max_bytes, max_rows) = indexes.iter().try_fold(
         (0_usize, 0_u64, 0_u64),
         |(blocks, max_bytes, max_rows), index| {
-            let (_, head) = root.head_ref(*index)?;
+            let (_, head) = root.head_ref_for_read(*index)?;
             if head.exact_blocks.is_empty() {
                 return Err(BorsukError::InvalidStorage(
                     "cell-card admission head has no exact blocks".to_string(),
@@ -1323,25 +1324,216 @@ pub(crate) fn plan_ranked_cell_card_head_wave(
     max_physical_bytes: u64,
     max_requests: usize,
 ) -> Result<(CellCardHeadWavePlan, bool)> {
-    if ranked_indexes.is_empty() {
+    if ranked_indexes.is_empty() || max_physical_bytes == 0 || max_requests == 0 {
         return Err(BorsukError::InvalidStorage(
-            "ranked cell-card head selection is empty".to_string(),
+            "ranked cell-card head wave bounds and indexes must be non-empty".to_string(),
         ));
     }
-    let mut last_limit = None;
-    for prefix in (1..=ranked_indexes.len()).rev() {
-        match plan_cell_card_head_indexes(
-            root,
-            &ranked_indexes[..prefix],
-            max_physical_bytes,
-            max_requests,
-        ) {
-            Ok(plan) => return Ok((plan, prefix < ranked_indexes.len())),
-            Err(error @ BorsukError::RecallGuaranteeViolated { .. }) => last_limit = Some(error),
-            Err(error) => return Err(error),
+
+    struct RankedCard {
+        rank: usize,
+        group: Arc<CellCardGroupRef>,
+        card: PlannedCellCardHead,
+    }
+    struct StaticReadTile {
+        group: Arc<CellCardGroupRef>,
+        start: u64,
+        end: u64,
+        cards: Vec<(usize, PlannedCellCardHead)>,
+    }
+
+    // Resolve and authenticate the complete routed ranking once. Physical
+    // tiles are then immutable for this query, so adding another ranked card
+    // can only add bytes/requests. That makes the largest fitting prefix a
+    // single pass instead of rebuilding and sorting every shorter prefix.
+    let mut seen = std::collections::BTreeSet::new();
+    let mut ranked_cards = Vec::with_capacity(ranked_indexes.len());
+    for (rank, root_index) in ranked_indexes.iter().copied().enumerate() {
+        if !seen.insert(root_index) {
+            return Err(BorsukError::InvalidStorage(
+                "ranked cell-card head wave repeats a resident index".to_string(),
+            ));
+        }
+        let (group, reference) = root.head_ref_for_read(root_index)?;
+        ranked_cards.push(RankedCard {
+            rank,
+            group,
+            card: PlannedCellCardHead {
+                root_index,
+                one_based_rank: Some(rank + 1),
+                reference,
+            },
+        });
+    }
+    ranked_cards.sort_by(|left, right| {
+        left.group.path.cmp(&right.group.path).then_with(|| {
+            left.card
+                .reference
+                .code_offset
+                .cmp(&right.card.reference.code_offset)
+        })
+    });
+
+    let mut tiles = Vec::<StaticReadTile>::new();
+    for ranked in ranked_cards {
+        let card_end = ranked
+            .card
+            .reference
+            .code_offset
+            .checked_add(u64::from(ranked.card.reference.code_bytes))
+            .ok_or_else(|| BorsukError::InvalidStorage("cell-card code range overflows".into()))?;
+        if let Some(prior) = tiles.last_mut()
+            && prior.group.path == ranked.group.path
+        {
+            if ranked.card.reference.code_offset == prior.start && card_end == prior.end {
+                prior.cards.push((ranked.rank, ranked.card));
+                continue;
+            }
+            if ranked.card.reference.code_offset < prior.end {
+                return Err(BorsukError::InvalidStorage(
+                    "cell-card head ranges overlap".to_string(),
+                ));
+            }
+            if cell_card_ranges_should_coalesce(
+                prior.start,
+                prior.end,
+                ranked.card.reference.code_offset,
+                card_end,
+                CELL_CARD_HEAD_RANGE_READ_MAX_GAP_BYTES,
+            ) {
+                prior.end = card_end;
+                prior.cards.push((ranked.rank, ranked.card));
+                continue;
+            }
+        }
+        tiles.push(StaticReadTile {
+            group: ranked.group,
+            start: ranked.card.reference.code_offset,
+            end: card_end,
+            cards: vec![(ranked.rank, ranked.card)],
+        });
+    }
+
+    let mut tile_by_rank = vec![usize::MAX; ranked_indexes.len()];
+    let mut range_by_rank = vec![(0_u64, 0_u64); ranked_indexes.len()];
+    for (tile_index, tile) in tiles.iter().enumerate() {
+        for (rank, card) in &tile.cards {
+            tile_by_rank[*rank] = tile_index;
+            range_by_rank[*rank] = (
+                card.reference.code_offset,
+                card.reference
+                    .code_offset
+                    .checked_add(u64::from(card.reference.code_bytes))
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage("cell-card code range overflows".into())
+                    })?,
+            );
         }
     }
-    Err(last_limit.expect("one non-empty ranked prefix was attempted"))
+    if tile_by_rank.contains(&usize::MAX) {
+        return Err(BorsukError::InvalidStorage(
+            "ranked cell-card tile authority is incomplete".to_string(),
+        ));
+    }
+
+    let mut selected_ranges = vec![None::<(u64, u64)>; tiles.len()];
+    let mut physical_bytes = 0_u64;
+    let mut requests = 0_usize;
+    let mut selected_prefix = 0_usize;
+    let mut limit_reason = crate::record::SearchTerminationReason::MaxSegments;
+    for (rank, tile_index) in tile_by_rank.iter().copied().enumerate() {
+        let prior_range = selected_ranges[tile_index];
+        let (card_start, card_end) = range_by_rank[rank];
+        let candidate_range = prior_range.map_or((card_start, card_end), |(start, end)| {
+            (start.min(card_start), end.max(card_end))
+        });
+        let prior_bytes = prior_range.map_or(0, |(start, end)| end - start);
+        let candidate_physical_bytes = physical_bytes
+            .checked_sub(prior_bytes)
+            .and_then(|bytes| bytes.checked_add(candidate_range.1 - candidate_range.0))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card head wave byte count overflows".to_string())
+            })?;
+        let candidate_requests = if prior_range.is_none() {
+            requests.checked_add(1).ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card head request count overflows".to_string())
+            })?
+        } else {
+            requests
+        };
+        if candidate_physical_bytes > max_physical_bytes || candidate_requests > max_requests {
+            limit_reason = if candidate_physical_bytes > max_physical_bytes {
+                crate::record::SearchTerminationReason::MaxBytes
+            } else {
+                crate::record::SearchTerminationReason::MaxSegments
+            };
+            break;
+        }
+        selected_ranges[tile_index] = Some(candidate_range);
+        physical_bytes = candidate_physical_bytes;
+        requests = candidate_requests;
+        selected_prefix = rank + 1;
+    }
+    if selected_prefix == 0 {
+        return Err(BorsukError::RecallGuaranteeViolated {
+            reason: limit_reason,
+        });
+    }
+
+    let mut reads = Vec::with_capacity(requests.min(max_requests));
+    let mut selected_bytes = 0_u64;
+    for (tile_index, tile) in tiles.into_iter().enumerate() {
+        let Some((start, end)) = selected_ranges[tile_index] else {
+            continue;
+        };
+        let cards = tile
+            .cards
+            .into_iter()
+            .filter_map(|(rank, card)| (rank < selected_prefix).then_some(card))
+            .collect::<Vec<_>>();
+        if cards.is_empty() {
+            continue;
+        }
+        let tile_selected_bytes = cards.iter().try_fold(0_u64, |total, card| {
+            total
+                .checked_add(u64::from(card.reference.code_bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "cell-card selected head bytes overflow".to_string(),
+                    )
+                })
+        })?;
+        selected_bytes = selected_bytes
+            .checked_add(tile_selected_bytes)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("cell-card selected head bytes overflow".to_string())
+            })?;
+        reads.push(CellCardHeadRead {
+            group: tile.group,
+            start,
+            end,
+            selected_bytes: tile_selected_bytes,
+            cards,
+        });
+    }
+    let physical_bytes = reads.iter().try_fold(0_u64, |total, read| {
+        total.checked_add(read.end - read.start).ok_or_else(|| {
+            BorsukError::InvalidStorage("cell-card head wave byte count overflows".to_string())
+        })
+    })?;
+    let backing_requests = reads.len();
+    Ok((
+        CellCardHeadWavePlan {
+            reads,
+            physical_bytes,
+            selected_bytes,
+            cached_selected_bytes: 0,
+            backing_requests,
+            cards: selected_prefix,
+            serving_shape: root.serving_shape,
+        },
+        selected_prefix < ranked_indexes.len(),
+    ))
 }
 
 fn plan_cell_card_head_indexes(
@@ -1350,6 +1542,8 @@ fn plan_cell_card_head_indexes(
     max_physical_bytes: u64,
     max_requests: usize,
 ) -> Result<CellCardHeadWavePlan> {
+    #[cfg(test)]
+    RANKED_HEAD_FULL_PLAN_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     if root_indexes.is_empty() || max_physical_bytes == 0 || max_requests == 0 {
         return Err(BorsukError::InvalidStorage(
             "cell-card head wave bounds and indexes must be non-empty".to_string(),
@@ -1363,11 +1557,12 @@ fn plan_cell_card_head_indexes(
                 "cell-card head wave repeats a resident index".to_string(),
             ));
         }
-        let (group, reference) = root.head_ref(root_index)?;
+        let (group, reference) = root.head_ref_for_read(root_index)?;
         cards.push((
             group,
             PlannedCellCardHead {
                 root_index,
+                one_based_rank: None,
                 reference,
             },
         ));
@@ -1462,6 +1657,21 @@ fn plan_cell_card_head_indexes(
         cards: card_count,
         serving_shape: root.serving_shape,
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    static RANKED_HEAD_FULL_PLAN_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_ranked_head_full_plan_calls() {
+    RANKED_HEAD_FULL_PLAN_CALLS.with(|calls| calls.set(0));
+}
+
+#[cfg(test)]
+fn ranked_head_full_plan_calls() -> usize {
+    RANKED_HEAD_FULL_PLAN_CALLS.with(std::cell::Cell::get)
 }
 
 /// Promote selected code ranges to stable, immutable complete code planes when
@@ -1612,6 +1822,7 @@ where
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedCellCardHead {
     pub(crate) root_index: usize,
+    pub(crate) one_based_rank: Option<usize>,
     pub(crate) group: Arc<CellCardGroupRef>,
     pub(crate) head: VerifiedCellCardHead,
 }
@@ -1808,6 +2019,7 @@ where
             };
             loaded.push(LoadedCellCardHead {
                 root_index: card.root_index,
+                one_based_rank: card.one_based_rank,
                 group: Arc::clone(&read.group),
                 head,
             });
@@ -3017,6 +3229,30 @@ impl ResidentCellCardRoot {
         Ok(indexes)
     }
 
+    pub(crate) fn card_count_for_cells(&self, selected_cells: &[u32]) -> Result<usize> {
+        let selected = selected_cells
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let count = selected
+            .into_iter()
+            .try_fold(0_usize, |count, cell_index| {
+                count
+                    .checked_add(self.card_range_for_cell(cell_index).len())
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "cell-card routed card count overflows".to_string(),
+                        )
+                    })
+            })?;
+        if count == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "cell-card selection contains no resident cards".to_string(),
+            ));
+        }
+        Ok(count)
+    }
+
     pub(crate) fn centroid_code(&self, index: usize) -> Result<&[u8]> {
         let start = *self.centroid_offsets.get(index).ok_or_else(|| {
             BorsukError::InvalidStorage("cell-card centroid index is out of range".to_string())
@@ -3033,11 +3269,15 @@ impl ResidentCellCardRoot {
         &self,
         index: usize,
     ) -> Result<(Arc<CellCardGroupRef>, CellCardHeadRef)> {
+        let (group, mut reference) = self.head_ref_for_read(index)?;
+        reference.centroid_code = self.centroid_code(index)?.into();
+        Ok((group, reference))
+    }
+
+    fn head_ref_for_read(&self, index: usize) -> Result<(Arc<CellCardGroupRef>, CellCardHeadRef)> {
         let group_index = *self.group_indexes.get(index).ok_or_else(|| {
             BorsukError::InvalidStorage("cell-card root index is out of range".to_string())
         })? as usize;
-        let centroid_start = self.centroid_offsets[index] as usize;
-        let centroid_end = self.centroid_offsets[index + 1] as usize;
         Ok((
             Arc::clone(self.groups.get(group_index).ok_or_else(|| {
                 BorsukError::InvalidStorage("cell-card root group index is invalid".to_string())
@@ -3051,9 +3291,9 @@ impl ResidentCellCardRoot {
                 rows: self.rows[index],
                 code_width: self.code_widths[index],
                 code_checksum: self.code_checksums[index],
-                centroid_code: self.centroid_codes[centroid_start..centroid_end]
-                    .to_vec()
-                    .into_boxed_slice(),
+                // Centroids are consumed during ranking directly from the
+                // resident root. Head fetch/decode needs no per-card copy.
+                centroid_code: Box::default(),
                 exact_blocks: Arc::clone(&self.exact_blocks[index]),
             },
         ))
@@ -4867,6 +5107,7 @@ mod tests {
         });
         let loaded = vec![super::LoadedCellCardHead {
             root_index: 0,
+            one_based_rank: None,
             group,
             head: super::VerifiedCellCardHead {
                 cell_index: 0,
@@ -5603,6 +5844,47 @@ mod tests {
     }
 
     #[test]
+    fn ranked_head_planner_constructs_the_physical_plan_once() {
+        let mut groups = Vec::new();
+        let mut cards = Vec::new();
+        for cell_index in 0..1_024_u32 {
+            let encoded = encode_cell_card_group(
+                &[GlobalLeafPageInput {
+                    cell_index,
+                    leaf_ordinal: 0,
+                    centroid_code: vec![cell_index as u8, 0],
+                    rows: rows(3, 4),
+                }],
+                4,
+                VectorElementType::Int8,
+            )
+            .unwrap();
+            let path = encoded
+                .content_addressed_path(&format!("global-cell-cards/linear-{cell_index}"))
+                .unwrap();
+            let (group, mut group_cards) = encoded.references(&path).unwrap();
+            groups.push(group);
+            cards.append(&mut group_cards);
+        }
+        let root_bytes = encode_cell_card_run_root("codebook-checksum", &groups, &cards).unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+        let ranked = (0..1_024).collect::<Vec<_>>();
+
+        super::reset_ranked_head_full_plan_calls();
+        let (plan, limited) =
+            super::plan_ranked_cell_card_head_wave(&root, &ranked, u64::MAX, 32).unwrap();
+
+        assert!(limited);
+        assert_eq!(plan.cards(), 32);
+        assert!(super::ranked_head_full_plan_calls() <= 1);
+    }
+
+    #[test]
     fn head_request_cap_does_not_cap_coalesced_logical_cards() {
         let inputs = (0..32_u32)
             .map(|cell_index| GlobalLeafPageInput {
@@ -5637,6 +5919,76 @@ mod tests {
         assert!(!limited);
         assert_eq!(plan.cards(), 32);
         assert_eq!(plan.requests(), 1);
+    }
+
+    #[test]
+    fn ranked_static_tile_charges_only_the_selected_prefix_span() {
+        let inputs = (0..32_u32)
+            .map(|cell_index| GlobalLeafPageInput {
+                cell_index,
+                leaf_ordinal: 0,
+                centroid_code: vec![cell_index as u8, 0],
+                rows: rows(3, 4),
+            })
+            .collect::<Vec<_>>();
+        let encoded = encode_cell_card_group(&inputs, 4, VectorElementType::Int8).unwrap();
+        let path = encoded
+            .content_addressed_path("global-cell-cards/selected-prefix-span")
+            .unwrap();
+        let (group, cards) = encoded.references(&path).unwrap();
+        let root_bytes = encode_cell_card_run_root("codebook-checksum", &[group], &cards).unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+        let ranked = (0..root.card_count()).collect::<Vec<_>>();
+        let first_bytes = u64::from(root.head_ref(ranked[0]).unwrap().1.code_bytes);
+
+        let (plan, limited) =
+            super::plan_ranked_cell_card_head_wave(&root, &ranked, first_bytes, 1).unwrap();
+
+        assert!(limited);
+        assert_eq!(plan.cards(), 1);
+        assert_eq!(plan.physical_bytes(), first_bytes);
+        assert_eq!(plan.requests(), 1);
+    }
+
+    #[test]
+    fn ranked_head_plan_does_not_clone_wide_centroid_codes() {
+        let mut wide_rows = rows(3, 4);
+        for (ordinal, row) in wide_rows.iter_mut().enumerate() {
+            row.code = GlobalLeafCodeInput::from(vec![ordinal as u8; 256]);
+        }
+        let encoded = encode_cell_card_group(
+            &[GlobalLeafPageInput {
+                cell_index: 0,
+                leaf_ordinal: 0,
+                centroid_code: vec![7; 256],
+                rows: wide_rows,
+            }],
+            4,
+            VectorElementType::Int8,
+        )
+        .unwrap();
+        let path = encoded
+            .content_addressed_path("global-cell-cards/wide-centroid")
+            .unwrap();
+        let (group, cards) = encoded.references(&path).unwrap();
+        let root_bytes = encode_cell_card_run_root("codebook-checksum", &[group], &cards).unwrap();
+        let root = decode_cell_card_run_root(
+            &root_bytes.reference,
+            &root_bytes.bytes,
+            "codebook-checksum",
+        )
+        .unwrap();
+
+        let (plan, limited) =
+            super::plan_ranked_cell_card_head_wave(&root, &[0], u64::MAX, 1).unwrap();
+
+        assert!(!limited);
+        assert!(plan.reads()[0].cards[0].reference.centroid_code.is_empty());
     }
 
     #[test]
