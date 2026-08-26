@@ -267,3 +267,92 @@ not whole-process RSS or clone/setup activity. These are publishable results
 for the exact three-arm BORSUK lifecycle slice only. They do not complete the
 manifest's other lifecycle factors or authorize a cross-system product
 comparison.
+
+## Repaired-source paired lifecycle insert-mode slice
+
+After the receipt-publication repair, one preregistered four-writer,
+1,024-record-batch cell was run for each lifecycle insert mode on the same
+immutable `cohere-medium-1m-768` build. The source revision was
+`ba4d55b9037a6f04e24be56b272143d68e29e69f` and the cell identity was
+`r01-feaba6b65dfaab744e5c8b6a`. Its authority was:
+
+- source archive SHA-256:
+  `ff730871cebe7b482b9efcca3d0bac95be86b13cb6603bdc459847251f7a624a`;
+- manifest SHA-256:
+  `c2e8a6b7b31f31bcafcf4f7159260323dba36a37428eb7627c7aebe85226905f`;
+- build/runtime protocol SHA-256:
+  `2e23f164080b9775698a3968afe72ed6c6e68e5ada0e2346d5677469fe748809`;
+- benchmark binary SHA-256:
+  `1f33973c5e21fea274a9e92b2b764feffc5a8a970489d7e94ddba578c0c76f43`;
+- REST benchmark binary SHA-256:
+  `67960ff6f29b95316468bf9b2c0b39c228a99fc71e4f1a7800a0da63ec8026fe`;
+- index receipt SHA-256:
+  `4c6a1b679bdb203c6999770dd9e1285c986cd98b2ec9b9a9d1abbeaf95afe0bd`;
+- index URI:
+  `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/indexes/build-attempts/0001/index-48db0648b72ffef43ca13ee9`.
+
+All three jobs used EC2 Spot and completed under the repaired persistent
+terminal schemas: build schema 2 and runtime schema 5. Every terminal receipt
+reported `artifact_upload_reconciliations:0`. The controller confirmed that
+each instance terminated after its terminal marker, and no campaign instance
+remained pending, running, stopping, or shutting down.
+
+Both runtime cells used a `c7g.xlarge` with four vCPUs and 8 GiB of memory,
+three benchmark CPU threads, a 2 GiB BORSUK RAM budget, no disk cache, S3 GET
+concurrency 64, leaf-read width 32, at most 48 in-flight leaf reads, and
+exact-read physical amplification 2. The shared build in this section is not
+the different immutable build used by the preceding scaling slice.
+
+| Role / arm | Attempt | Instance | Terminal-marker SHA-256 | Result/receipt SHA-256 |
+|---|---:|---|---|---|
+| build | 1 | `i-0aba82ea16cdc125f` | `d8d1be85bf72ae694e44cc5c7bfc55d197294113771f52a7f6a58e80a7dcdd27` | `4c6a1b679bdb203c6999770dd9e1285c986cd98b2ec9b9a9d1abbeaf95afe0bd` |
+| arm 5 (`general-upsert`, 4 writers) | 1 | `i-005de724a39565e87` | `19a79679c543dd6c1acf564dd066f471a048a55cb5202bfec24852e83cec2971` | `ebcfb82f0134e718a814248c05eff4c5e47b681060228a77461d77bd6962b5e5` |
+| arm 14 (`claim-free-put`, 4 writers) | 1 | `i-09d3c24e19308b44e` | `2266d95fe6a93cdd18f2e0da65bc1a103a905aa84b52ccf9b2f9e68852b705eb` | `76f2f12bd14e6b7f0e6aa3fce4ec52c4f98862ea2e581420ac6888ff4c9ae6e2` |
+
+The terminal objects are below
+`s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-feaba6b65dfaab744e5c8b6a/` at
+`build/attempts/0001/` and
+`runtime-lifecycle/arms/{0005,0014}/attempts/0001/`. The mutable clone receipt
+SHA-256 values were
+`e32baa50c9dd70c51ab1681e049f70990a975a0eb6c157d99ca52d350fa3a57a`
+and
+`f75043388979e91518291cddf934216b57bf2ca3b9f9e84e48f9c468b8a5023a`
+respectively.
+
+Both cells inserted 19,859 rows, then performed 1,986 upserts and 1,986
+deletes, and passed the exact 100% sampled lifecycle correctness gate. The
+throughput definition is the same 23,831 insert + upsert + delete operations
+divided by the three mutation-phase wall times; it excludes maintenance,
+verification, and query time.
+
+| Insert mode | Mutation throughput | Batch p50 | Batch p95 | Batch p99 | Insert searchable | Insert fully indexed | Insert consolidated | Correctness | Peak process RSS |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `general-upsert` | 8,080.313 ops/s | 403.211 ms | 455.257 ms | 459.668 ms | 6.988 s | 19.964 s | 296.998 s | pass (100%) | 2,470,227,968 bytes |
+| `claim-free-put` | 7,826.255 ops/s | 386.281 ms | 455.491 ms | 477.178 ms | 6.923 s | 19.886 s | 299.891 s | pass (100%) | 2,415,534,080 bytes |
+
+Relative to `general-upsert`, the claim-free cell was 3.144% slower in
+mutation throughput. It improved batch p50 by 4.199%, was effectively tied at
+p95 (+0.051%), worsened p99 by 3.809%, reduced peak process RSS by 2.214%, and
+took 0.974% longer to reach the reported consolidated milestone. Storage
+traffic was effectively identical: claim-free issued 13 fewer GETs and three
+more PUTs, and wrote only 0.000219% more total traced storage bytes. That total
+campaign-storage scope is broader than the published write-amplification
+numerator, which includes WAL plus indexed-delta bytes but excludes later
+consolidation bytes. The write-amplification lower bounds were 2.425604x and
+2.426313x.
+
+The runtime cgroup memory peaks were 7,514,591,232 and 7,495,815,168 bytes.
+Both attestations report zero swap bytes, zero OOM events, and zero OOM-kill
+events. This section has one observation per insert mode under its exact
+authority, with no dispersion estimate. The earlier claim-free scaling slice
+reported 7,373.362 ops/s at four writers, 6.142% below this section's
+7,826.255 ops/s, but it used another source archive, protocol, index build, and
+receipt schema. Pooling those points would be invalid; their spread also shows
+why the 3.144% paired gap cannot yet be treated as a stable effect size.
+
+The result does not establish a universal ordering or justify a product-level
+performance claim. In this exact paired cell, however, claim-free coordination
+did not deliver a mutation-throughput advantage. The evidence therefore does
+not justify freezing `claim-free-put` as the production default; the existing
+`general-upsert` path remains the conservative default until repeated and
+broader lifecycle evidence says otherwise.
