@@ -11,9 +11,12 @@ Publication V3 is the only active release campaign. Its checked
 [manifest](publication-v3-manifest.json) covers standard ANN datasets,
 realistic 1M/10M/100M dense datasets, synthetic stress families, hybrid and
 late-interaction retrieval, datatype kernels, and write/update/delete/compact
-lifecycle behavior. The campaign has not launched: its source is not frozen
-and 12 external datasets are not yet staged, so the protocol rejects paid
-execution.
+lifecycle behavior. All manifest datasets have durable staged authority.
+Lifecycle qualification has completed, while the standard read campaign's
+first source-bound cold cell completed and its warm cell failed closed. That
+read campaign is paused until the replacement warm-cache source is frozen;
+results from the superseded source remain historical and are never pooled with
+the replacement campaign.
 
 Publication V2 and all earlier campaign artifacts are immutable historical
 evidence for their recorded source revisions. They are not current-release
