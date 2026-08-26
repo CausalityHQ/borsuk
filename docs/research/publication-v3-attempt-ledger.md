@@ -147,3 +147,120 @@ Cold concurrency peaked at 262,488,064 bytes RSS; warm concurrency peaked at
 events, and zero OOM-kill events. Every warm measurement row reports zero
 backing GETs and bytes; its measured bytes are explicitly separated into
 decoded-RAM and local-disk tiers.
+
+## Final-source claim-free lifecycle scaling slice
+
+The preregistered `cohere-medium-1m-768` claim-free, 1,024-record-batch
+scaling slice used source commit
+`c59eee820dc7eb9a84b638a8fbbc7483947c3c62` and cell identity
+`r01-0a2d474957bd3e8c3c8cbdf1`. The exact immutable authority was:
+
+- source archive SHA-256:
+  `15569c307c12758cd3532a0ede3a3389d61dfb3267e9092c587a3e7cd020ab8e`;
+- manifest SHA-256:
+  `40efedb07d423d75574817c9f12d14f161ab0f3eda7da9a6921d1fd295d3ec89`;
+- build/runtime protocol SHA-256:
+  `5b170defb3b3df03345ce9006ed741028ee6a4720ecacd7d98ef06c60710437f`;
+- benchmark binary SHA-256:
+  `1f33973c5e21fea274a9e92b2b764feffc5a8a970489d7e94ddba578c0c76f43`;
+- REST benchmark binary SHA-256:
+  `67960ff6f29b95316468bf9b2c0b39c228a99fc71e4f1a7800a0da63ec8026fe`;
+- index receipt SHA-256:
+  `dcd29eb344f4e89f7407b8b9c4a217e35f16364312837d60b9d408c6809d18e1`;
+- index URI:
+  `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/indexes/build-attempts/0001/index-debd4f8777d4a6fb2219200e`.
+
+Every job used EC2 Spot. The controller confirmed termination of every
+instance after its terminal marker. At the end of the slice, no BORSUK
+benchmark instance remained pending, running, stopping, or shutting down.
+The runtime was a `c7g.xlarge` with four vCPUs and 8 GiB of memory. It used
+three benchmark CPU threads, a 2 GiB BORSUK RAM budget, no disk cache, S3 GET
+concurrency 64, leaf-read width 32, and at most 48 in-flight leaf reads.
+
+| Role / arm | Attempt | Instance | Terminal state | Terminal-marker SHA-256 | Result/receipt SHA-256 |
+|---|---:|---|---|---|---|
+| build | 1 | `i-0fe025a3c8800440c` | complete | `e553e0427e6678efcbf10e37c2d0e031dfbdbc849dc831ee83f6357f3be88ec5` | `58e89279e7918efaea0a3975b26a34931dda2c5ba85d52f7ace3679cf9595e7f` |
+| lifecycle arm 11 (1 writer) | 1 | `i-05070f8c6a3fc01e5` | complete | `2eeed1bbd70f25f4379bfcebf263dc1d198cf31cb423df8c1626a2281103bba1` | `e901e67075ec0db24da3377a486fcd3deb1b2bf484cf8aa13f266816c7fd93fd` |
+| lifecycle arm 14 (4 writers) | 1 | `i-055ca9644d9733dc9` | failed | `a6e185a588c3efecfab9edc9cad4e2231c531360d91b4e9dea30a225f55ecacf` | not published |
+| lifecycle arm 14 (4 writers) | 2 | `i-041c5204609953251` | complete | `77ecb5d0cb652beb3c0a57c505106580cb5eb5790eb7b45eb0d7a8a60a736dbe` | `872cdad02f2d18e94269f50df8466fb14114005ed84f4eac87029508cf8024f1` |
+| lifecycle arm 17 (16 writers) | 1 | `i-01cc1b49a65c3b12a` | complete | `7eb00256621400474182dd304015235a5a6a32539cf3b190cf1d6398dd5de69f` | `07e5a0059d3235a53b2b6d714190ad40d207940d79dc4d9a295cf634dce6f538` |
+
+The mutable clone receipt SHA-256 values were
+`ad89981b4be8cc2e490498d3487e6d1cc3314dbe1168fac9e570f26d53c8cab9`
+(arm 11 attempt 1),
+`24d282c799a4203e7866bc5dc0350b3c6cb7f3a59fc3192896e8c52d8f4f263f`
+(arm 14 attempt 1),
+`766c2db3ef99063357bb8e4058a38a4f63cbbb4653739249c6c98cf457839c89`
+(arm 14 attempt 2), and
+`9f1316125503da8ea3148e201627fda3c00025d90e0ca42730472e3cc88084eb`
+(arm 17 attempt 1). Terminal objects are below the common prefix
+`s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-0a2d474957bd3e8c3c8cbdf1/` at
+`build/attempts/0001/` and
+`runtime-lifecycle/arms/{0011,0014,0017}/attempts/NNNN/`.
+
+Arm 14 attempt 1 reached `publish-receipts` and then published only an
+80-byte terminal failure document plus its bounded failure log. It published
+no `RESULT_COMPLETE.json`; the log contained no BORSUK product traceback and
+EC2 reported neither an interruption nor an impairment. The attempt therefore
+contributes no performance observation. The controller advanced explicitly to
+attempt 2 under the same immutable build and source authority, which completed.
+The exact cause remains unknown. Before the remaining lifecycle campaign, the
+receipt publisher and failure reporter need a focused robustness repair so a
+future publication-stage failure preserves its underlying error rather than
+only the stage name.
+
+Each completed arm inserted 19,859 new rows, flushed and consolidated that
+inserted delta, then performed 1,986 upserts and 1,986 deletes before compaction
+and purge. The insert count is the exact dimension-dependent maintenance-free
+envelope after reserving the subsequent upserts. `Mutation throughput` below is
+the published 23,831 insert + upsert + delete operations divided by the sum of
+those three mutation-phase wall times. It excludes flush, consolidation,
+compaction, purge, refresh, and verification time.
+
+| Writers | Mutation throughput | Speedup vs 1 writer | Batch p50 | Batch p95 | Batch p99 | Insert searchable | Insert fully indexed | Insert consolidated | Correctness gate | Peak process RSS |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 3,127.093 ops/s | 1.000x | 221.862 ms | 855.643 ms | 938.739 ms | 9.348 s | 22.597 s | 301.624 s | pass (100%) | 2,153,451,520 bytes |
+| 4 | 7,373.362 ops/s | 2.358x | 378.668 ms | 465.864 ms | 704.620 ms | 7.003 s | 20.188 s | 298.395 s | pass (100%) | 2,449,399,808 bytes |
+| 16 | 8,800.992 ops/s | 2.814x | 308.603 ms | 1,350.634 ms | 1,377.983 ms | 6.904 s | 20.071 s | 306.986 s | pass (100%) | 3,028,852,736 bytes |
+
+The three insert milestone columns are reported phase-duration sums rather
+than end-to-end wall-clock measurements: searchable is insert publication plus
+refresh, fully indexed adds delta flush, and consolidated adds consolidation.
+They exclude the interleaved verification and query stages and occur before
+the later upsert/delete/compact/purge phases.
+
+The correctness value is a publication gate, not a statistically graded
+accuracy estimate: any value below 100% would fail the arm. The benchmark
+sampled 16 inserted, updated, and deleted IDs at one and four writers, and 32
+at sixteen writers, then repeated the survival/deletion checks after compaction
+and purge. All sampled identities passed. The query stages additionally
+completed and were bound into the terminal receipt as separate artifacts.
+
+The configured 1,024 records is a maximum batch size. Insert used 20 batches;
+at 16 writers its final wave contained only four participating writers.
+Upserts and deletes used two batches at one writer, four balanced batches at
+four writers, and sixteen balanced 124--125-record batches at sixteen writers.
+The pooled batch percentiles therefore are useful within an arm but are not a
+like-for-like cross-arm latency comparison.
+
+The four-writer point delivered 2.358x the one-writer mutation-phase throughput
+at 58.9% parallel efficiency. Sixteen writers delivered the highest measured
+mutation-phase throughput, but only 1.194x the four-writer result and 17.6%
+parallel efficiency. The reported insert-consolidation milestones were
+301.624, 298.395, and 306.986 seconds: consolidation dominated the observed
+slice, four writers improved that milestone by only 1.1% over one writer, and
+sixteen writers was slowest. Each arm is a single measurement without a
+dispersion estimate. These data establish diminishing mutation-phase scaling
+on this four-vCPU host, but do not yet justify freezing an operating writer
+count.
+
+Published write-amplification lower bounds remained stable at 2.425--2.427x.
+They include WAL publication plus indexed-delta bytes but exclude the later
+consolidation bytes. The completed arms reported zero swap bytes, zero OOM
+events, and zero OOM-kill events. Their runtime cgroup memory peaks were
+7,508,709,376, 7,506,055,168, and 7,695,392,768 bytes respectively under the
+8 GiB instance limit. The separate 2 GiB BORSUK RAM budget bounds index state,
+not whole-process RSS or clone/setup activity. These are publishable results
+for the exact three-arm BORSUK lifecycle slice only. They do not complete the
+manifest's other lifecycle factors or authorize a cross-system product
+comparison.
