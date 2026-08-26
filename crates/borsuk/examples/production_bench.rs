@@ -3317,6 +3317,10 @@ fn execute_disk_cached_query_cohorts<Handle>(
         // deliberately retaining RAM-resident metadata on this handle.
         clear_disk_cache_after_open(&handle)?;
         for query_index in 0..query_count {
+            // Every primer must exercise the same cold query-retained state as
+            // its measured query. Otherwise an earlier primer's decoded plane
+            // can hide disk keys that the later measurement will require.
+            clear_query_retained_state(&handle)?;
             prime(&handle, query_index)?;
         }
         for query_index in 0..query_count {
@@ -3359,6 +3363,10 @@ fn execute_disk_cached_concurrency_profiles<Handle>(
         // objects so they cannot evict any query in the complete primed cohort.
         clear_disk_cache_after_open(&handle)?;
         for &query_index in &cohort {
+            // Populate disk authority from a cleared retained state for every
+            // serial primer. The concurrent wave begins only after the final
+            // clear below, while each public search owns isolated I/O counters.
+            clear_query_retained_state(&handle)?;
             prime(&handle, query_index)?;
         }
         for &workers in worker_profiles {
@@ -3377,8 +3385,9 @@ fn execute_disk_cached_concurrency_profiles<Handle>(
     Ok(profiles)
 }
 
-// Warm recall primes the complete registered query set once. Each measured
-// query then starts with decoded state cleared and must be served from the
+// Warm recall primes the complete registered query set once, clearing decoded
+// query state before every primer so that no primer inherits a RAM-only path.
+// Each measured query repeats that cleared state and must be served from the
 // already-populated local disk tier without any backing-store read.
 fn disk_cached_query_cohort_size(
     disk_cache_max_bytes: Option<u64>,
@@ -7951,8 +7960,11 @@ mod tests {
                 "reset",
                 "open-1",
                 "clear-disk-1",
+                "clear-1",
                 "prime-1-0",
+                "clear-1",
                 "prime-1-1",
+                "clear-1",
                 "prime-1-2",
                 "clear-1",
                 "measure-1-0",
@@ -7987,6 +7999,52 @@ mod tests {
             |_| Ok(()),
             |_, query_index| {
                 let cache_hit = cached_queries.borrow().contains(&query_index);
+                Ok(QuerySummary {
+                    latencies_ms: vec![1.0],
+                    billable_requests: usize::from(!cache_hit) as u128,
+                    disk_cache_reads: usize::from(cache_hit) as u128,
+                    ..QuerySummary::default()
+                })
+            },
+        )
+        .unwrap();
+
+        assert_eq!(summary.count(), 3);
+        assert_eq!(summary.billable_requests, 0);
+        assert_eq!(summary.disk_cache_reads, 3);
+    }
+
+    #[test]
+    fn disk_cached_recall_primes_every_query_from_cleared_retained_state() {
+        use std::cell::{Cell, RefCell};
+        use std::collections::BTreeSet;
+
+        let retained_query = Cell::new(None);
+        let disk_cached_queries = RefCell::new(BTreeSet::new());
+        let summary = execute_disk_cached_query_cohorts(
+            3,
+            3,
+            || {
+                retained_query.set(None);
+                disk_cached_queries.borrow_mut().clear();
+                Ok(())
+            },
+            || Ok(()),
+            |_| Ok(()),
+            |_, query_index| {
+                if retained_query.get().is_none() {
+                    disk_cached_queries.borrow_mut().insert(query_index);
+                }
+                retained_query.set(Some(query_index));
+                Ok(())
+            },
+            |_| {
+                retained_query.set(None);
+                Ok(())
+            },
+            |_, query_index| {
+                let cache_hit = disk_cached_queries.borrow().contains(&query_index);
+                retained_query.set(Some(query_index));
                 Ok(QuerySummary {
                     latencies_ms: vec![1.0],
                     billable_requests: usize::from(!cache_hit) as u128,
@@ -8218,7 +8276,7 @@ mod tests {
     }
 
     #[test]
-    fn disk_cached_concurrency_discards_open_io_then_primes_once() {
+    fn disk_cached_concurrency_clears_retained_state_before_every_prime() {
         use std::cell::{Cell, RefCell};
         use std::rc::Rc;
         use std::time::Duration;
@@ -8326,8 +8384,11 @@ mod tests {
                 "reset",
                 "open-1",
                 "clear-disk-1",
+                "clear-1",
                 "prime-1-0",
+                "clear-1",
                 "prime-1-1",
+                "clear-1",
                 "prime-1-2",
                 "clear-1",
                 "measure-1-3-1",
@@ -8445,7 +8506,9 @@ mod tests {
                 "reset",
                 "open-1",
                 "clear-disk-1",
+                "clear-1",
                 "prime-1-0",
+                "clear-1",
                 "prime-1-1",
                 "clear-1",
                 "measure-1-0",

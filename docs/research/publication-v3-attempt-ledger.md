@@ -450,3 +450,72 @@ complete primed query set, rather than excluded setup objects, the sole
 disk-resident measurement cohort. Because the repair changes source authority,
 the completed cold cell above remains immutable historical evidence; both arms
 must rebuild and rerun under the repaired source.
+
+## Per-query primer-state restart on 2026-08-26
+
+The next standard-read restart used source commit
+`483a9aba7428206ca941f266ac87b3a5b6d39100`, cell
+`r01-1d33e3e3d8cf2b48184f8f90`, and the following immutable authority:
+
+- source archive SHA-256:
+  `ac6ba200169225ed63748a49a9caf220918d9ed1ce6c02486b549abeef7f1379`;
+- manifest SHA-256:
+  `bb3bce356acff9617c9738982e2468883ae155d3cad78f4dd33d9ff700b818db`;
+- build/runtime protocol SHA-256:
+  `76fa6bcfb0cbb0ca628cc08906a12fa7d68d6305ecda2c4244ac06bfbb86ffbb`;
+- benchmark binary SHA-256:
+  `118a6c890d9ae52dba944d96029358a6e09cf1f1a8c78224468a2390d885ef26`;
+- REST benchmark binary SHA-256:
+  `286bae811ff008ca5157db985fb7147984ce78b916160f4ea4a6633f7853860d`;
+- index URI:
+  `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/indexes/build-attempts/0001/index-2091599d38cd90eff99eeb8a`.
+
+The build completed on Spot instance `i-0f99cb9114a95bc81`. Its terminal-marker
+SHA-256 was
+`9c6476b6a226eb38b15d1d2830bf8409e11a173ff04189813412890d6fee398c`.
+The first two runtime launch calls in `eu-central-1a` failed before an instance
+existed with EC2 `InsufficientInstanceCapacity`. Retrying the same immutable
+cell in the campaign VPC's `eu-central-1b` subnet acquired Spot capacity; no
+On-Demand exception was used.
+
+Cold arm 0 completed on `i-03cc0519b0df2dccc`. Its terminal-marker SHA-256
+was `61458a0d4f3067fc9158a8f37755a0303ec4b21be67dadbe50985ed32c51a8c5`
+and its result SHA-256 was
+`609d340fa71a1fa96bc90f7cac5f1229a6ad3814f0cd29949afc4c6c88799182`.
+It measured 1,000 queries at 97.41% recall@10, p50/p95/p99 latency
+236.047/316.108/361.812 ms, 4.172 queries/s, peak RSS 781,037,568 bytes,
+58,642 backing GETs, and 28,481,498,592 backing bytes. This remains valid
+evidence only for that exact cold cell.
+
+Warm arm 1 failed closed on `i-01a37c21cde1f0753`; no result was published.
+Its terminal-marker SHA-256 was
+`0bee75e35f70ff35cb207f78f1d7eebf2d270a18f8f63ccad10f2b59de4d351b`
+and the failure-log SHA-256 was
+`dd9f5384af18ac28a653e0f0846dc9830fa8642fafa44ddc179f7c24dbee0d75`.
+Measured query 3 issued three backing GETs even though the read-through cache
+had been cleared immediately after open and the complete query set had been
+primed.
+
+The second failure isolated a different state boundary. Primers ran in one
+sequence while decoded query state accumulated in RAM. A later query could
+therefore be satisfied by a prior primer's retained code plane without writing
+every disk key that the later measured query needed after its mandatory RAM
+clear. The replacement lifecycle clears query-retained RAM before every
+primer, while preserving the disk tier across the complete cohort, and clears
+it again before every measurement. A regression reproduces the former failure:
+without the pre-primer clear, query 1 inherits retained RAM, omits its disk
+authority, and then performs a backing GET after RAM is cleared. The replacement
+source must rebuild and rerun both arms; the cold result above is not pooled
+with it.
+
+Before another paid launch, the repaired lifecycle was exercised through the
+real `production_bench` binary against a deterministic local
+`synthetic-clustered-v1` index (20,000 rows, 96 dimensions, 100 queries, 64
+logical cells, nprobe 32, candidate budget 512, 128 MiB RAM authority, and an
+8 GiB disk-cache authority). The disk-cached recall run emitted 100 measured
+samples with zero backing GETs/bytes and at least four disk-cache reads per
+sample. A separate disk-cached concurrency run emitted 300 samples across the
+registered 1/2/4-worker profiles with the same zero-backing and positive-disk
+invariants. This is non-publication diagnostic evidence: it proves the repaired
+primer/measurement state transition on the production path, but it is not a
+performance result and does not replace the required paid immutable rerun.
