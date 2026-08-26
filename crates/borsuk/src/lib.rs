@@ -116,6 +116,10 @@ pub use index::{
 pub use lane_log::GROUP_COMMIT_STRIPE_COUNT;
 #[doc(hidden)]
 pub use logical_cell_catalog::train_logical_cell_centroids;
+#[doc(hidden)]
+pub use manifest::{
+    MAX_GLOBAL_DELTA_ROWS, MAX_GLOBAL_DELTA_SEGMENTS, MAX_GLOBAL_DELTA_VECTOR_BYTES,
+};
 
 /// Maximum CPU worker threads selected by the automatic small-runtime policy.
 pub const DEFAULT_BUILD_THREADS: usize = 4;

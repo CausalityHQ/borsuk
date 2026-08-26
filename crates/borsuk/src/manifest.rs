@@ -29,17 +29,17 @@ pub const DEFAULT_ROUTING_PAGE_FANOUT: usize = 128;
 /// Default maximum segment-local graph neighbors per source record.
 pub const DEFAULT_GRAPH_NEIGHBORS: usize = 8;
 /// Maximum ANN segment wave retained beside an immutable global ANN base.
-pub(crate) const MAX_GLOBAL_DELTA_SEGMENTS: usize = 16;
+pub const MAX_GLOBAL_DELTA_SEGMENTS: usize = 16;
 /// Maximum logical rows retained in the online ANN delta.
 ///
 /// The segment count alone is not a work bound because callers may choose very
 /// large physical segments. Foreground flush stops before this limit and leaves
 /// the still-durable suffix in the WAL for off-request-path maintenance.
-pub(crate) const MAX_GLOBAL_DELTA_ROWS: usize = 65_536;
+pub const MAX_GLOBAL_DELTA_ROWS: usize = 65_536;
 /// Maximum uncompressed float32 vector bytes represented by the online delta.
 /// This keeps query work bounded across realistic dimensionalities even when
 /// the row limit would otherwise admit a very wide vector set.
-pub(crate) const MAX_GLOBAL_DELTA_VECTOR_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_GLOBAL_DELTA_VECTOR_BYTES: usize = 64 * 1024 * 1024;
 const SEGMENT_ID_BLOOM_HASHES: usize = 4;
 const SEGMENT_VECTOR_SIGNATURE_BLOOM_HASHES: usize = 4;
 

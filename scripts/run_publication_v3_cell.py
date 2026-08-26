@@ -1777,6 +1777,31 @@ def _finite_nonnegative_float(value: object, role: str) -> float:
     return result
 
 
+def lifecycle_batch_records(
+    operations: int, configured_batch_size: int, writers: int
+) -> list[int]:
+    if (
+        isinstance(operations, bool)
+        or operations <= 0
+        or isinstance(configured_batch_size, bool)
+        or configured_batch_size <= 0
+        or isinstance(writers, bool)
+        or not 1 <= writers <= 64
+    ):
+        raise ValueError("publication lifecycle batch schedule is invalid")
+    natural_batches = (operations + configured_batch_size - 1) // configured_batch_size
+    participating_writers = min(writers, operations)
+    if natural_batches >= participating_writers:
+        return [
+            min(configured_batch_size, operations - index * configured_batch_size)
+            for index in range(natural_batches)
+        ]
+    base, larger_batches = divmod(operations, participating_writers)
+    return [
+        base + int(index < larger_batches) for index in range(participating_writers)
+    ]
+
+
 def summarize_lifecycle_artifacts(
     output_dir: Path, *, expected_batch_size: int, expected_writers: int
 ) -> dict[str, int]:
@@ -1934,23 +1959,18 @@ def summarize_lifecycle_artifacts(
             raise ValueError("publication lifecycle operation count is invalid")
         operation_counts[operation] = operations
         if operation in {"insert", "upsert", "delete"}:
-            expected_batches = (
-                operations + expected_batch_size - 1
-            ) // expected_batch_size
+            expected_schedule = lifecycle_batch_records(
+                operations, expected_batch_size, expected_writers
+            )
             try:
                 declared_batches = int(row["batches"])
             except (KeyError, TypeError, ValueError) as error:
                 raise ValueError(
                     "publication lifecycle batch schedule is invalid"
                 ) from error
-            expected_records = {
-                index: min(
-                    expected_batch_size, operations - index * expected_batch_size
-                )
-                for index in range(expected_batches)
-            }
+            expected_records = dict(enumerate(expected_schedule))
             if (
-                declared_batches != expected_batches
+                declared_batches != len(expected_schedule)
                 or sample_batch_records[operation] != expected_records
             ):
                 raise ValueError("publication lifecycle batch schedule differs")

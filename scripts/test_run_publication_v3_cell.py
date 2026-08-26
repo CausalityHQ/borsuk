@@ -31,6 +31,7 @@ from scripts.run_publication_v3_cell import (
     execute_plan,
     execute_plan_with_resources,
     execute_publication_phase,
+    lifecycle_batch_records,
     plan_arms,
     read_build_artifact,
     reconcile_concurrency_storage,
@@ -179,6 +180,11 @@ def query_artifact_fixture(*, decoded_bytes: int) -> dict[str, str]:
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
+    def test_lifecycle_batch_schedule_balances_only_to_exercise_writers(self) -> None:
+        self.assertEqual(lifecycle_batch_records(19_859, 1_024, 16), [1_024] * 19 + [403])
+        self.assertEqual(lifecycle_batch_records(1_986, 1_024, 16), [125, 125, *([124] * 14)])
+        self.assertEqual(lifecycle_batch_records(17, 1_024, 16), [2, *([1] * 15)])
+
     def test_query_samples_account_decoded_ram_cache_bytes(self) -> None:
         cell = scheduled_cell()
         cell["queries_per_repetition"] = 1

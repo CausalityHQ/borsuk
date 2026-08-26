@@ -24,7 +24,8 @@ use borsuk::{
     DEFAULT_MAX_ACTIVE_SEARCHES, DEFAULT_MAX_INFLIGHT_LEAF_READS,
     DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS, DEFAULT_MAX_WAITING_SEARCHES, GarbageCollectionOptions,
     GarbageCollectionReport, GlobalPqLayout, GlobalScanCodec, IO_THREADS_ENV, IndexConfig,
-    LeafCapability, LeafMode, OpenOptions, ProcessLimits, RequestCounts, SearchOptions,
+    LeafCapability, LeafMode, MAX_GLOBAL_DELTA_ROWS, MAX_GLOBAL_DELTA_SEGMENTS,
+    MAX_GLOBAL_DELTA_VECTOR_BYTES, OpenOptions, ProcessLimits, RequestCounts, SearchOptions,
     SearchReport, VectorElementType, VectorMetric, VectorRecord, WalConfig, WarmReport,
     configure_process, configured_backing_get_concurrency, configured_cpu_threads,
     configured_io_threads, recall_at_k, recommended_segment_max_vectors,
@@ -1936,6 +1937,25 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     )?;
     let preload_serving = env_flag("BORSUK_BENCH_PRELOAD_SERVING")?;
     let recluster_build = env_flag("BORSUK_BENCH_RECLUSTER_BUILD")?;
+    if lifecycle_only {
+        let train_count = if limit == 0 {
+            layout_meta.n_train
+        } else {
+            limit.min(layout_meta.n_train)
+        };
+        lifecycle_write_operation_count(
+            train_count,
+            LifecycleDeltaLayout {
+                dimensions: layout_meta.dim,
+                segment_max_vectors: segment_max,
+            },
+            write_ops,
+            lifecycle_writers,
+            write_batch_size,
+            update_percent,
+            delete_percent,
+        )?;
+    }
 
     Ok(ResolvedConfig {
         dataset_dir,
@@ -2710,18 +2730,24 @@ fn sample_logical_cell_training_vectors(
     seed: u64,
 ) -> BenchResult<Vec<Vec<f32>>> {
     let mut sample = Vec::with_capacity(sample_rows);
-    stream_dataset_batches(config, dataset, dataset.train_count, |offset, vectors| {
-        for (within_batch, vector) in vectors.into_iter().enumerate() {
-            update_vector_reservoir(
-                &mut sample,
-                vector,
-                offset.saturating_add(within_batch),
-                sample_rows,
-                seed,
-            );
-        }
-        Ok(())
-    })?;
+    stream_dataset_batches(
+        config,
+        dataset,
+        dataset.train_count,
+        None,
+        |offset, vectors| {
+            for (within_batch, vector) in vectors.into_iter().enumerate() {
+                update_vector_reservoir(
+                    &mut sample,
+                    vector,
+                    offset.saturating_add(within_batch),
+                    sample_rows,
+                    seed,
+                );
+            }
+            Ok(())
+        },
+    )?;
     if sample.len() != sample_rows {
         return Err(invalid_input(&format!(
             "logical-cell sampling retained {} rows; expected {sample_rows}",
@@ -4336,6 +4362,10 @@ fn write_write_costs_csv(
 ) -> BenchResult<()> {
     let write_ops = lifecycle_write_operation_count(
         dataset.train_count,
+        LifecycleDeltaLayout {
+            dimensions: dataset.meta.dim,
+            segment_max_vectors: config.segment_max,
+        },
         config.write_ops,
         config.lifecycle_writers,
         config.write_batch_size,
@@ -4852,50 +4882,65 @@ fn measure_inserts(
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
+    let assignment_batch_sizes = assignments
+        .iter()
+        .map(|assignment| assignment.len)
+        .collect::<Vec<_>>();
     let mut assignment_cursor = 0_usize;
     let mut pending = Vec::with_capacity(writers.len());
-    stream_dataset_batches(config, dataset, count, |offset, vectors| {
-        let assignment = assignments
-            .get(assignment_cursor)
-            .copied()
-            .ok_or_else(|| invalid_input("lifecycle insert source exceeded its schedule"))?;
-        if assignment.offset != offset || assignment.len != vectors.len() {
-            return Err(invalid_input("lifecycle insert source differs from its schedule").into());
-        }
-        let ids = (offset..offset.saturating_add(vectors.len()))
-            .map(|id| format!("bench-insert-{}", dataset.train_count.saturating_add(id)))
-            .collect::<Vec<_>>();
-        pending.push(PreparedRecordBatch {
-            assignment,
-            records: ids
-                .into_iter()
-                .zip(vectors)
-                .map(|(id, vector)| VectorRecord::new(id, vector))
-                .collect(),
-        });
-        assignment_cursor = assignment_cursor.saturating_add(1);
-        let wave_complete = assignment_cursor == assignments.len()
-            || assignments[assignment_cursor].writer_index == 0;
-        if wave_complete {
-            let wave_index = assignment.batch_index / writers.len();
-            let completed = match config.lifecycle_insert_mode {
-                LifecycleInsertMode::GeneralUpsert => execute_upsert_wave(
-                    "insert",
-                    wave_index,
-                    writers,
-                    std::mem::take(&mut pending),
-                )?,
-                LifecycleInsertMode::ClaimFreePut => {
-                    execute_put_wave("insert", wave_index, writers, std::mem::take(&mut pending))?
-                }
-            };
-            for (sample, written) in completed {
-                bytes_written = bytes_written.saturating_add(written);
-                samples.push(sample);
+    stream_dataset_batches(
+        config,
+        dataset,
+        count,
+        Some(&assignment_batch_sizes),
+        |offset, vectors| {
+            let assignment = assignments
+                .get(assignment_cursor)
+                .copied()
+                .ok_or_else(|| invalid_input("lifecycle insert source exceeded its schedule"))?;
+            if assignment.offset != offset || assignment.len != vectors.len() {
+                return Err(
+                    invalid_input("lifecycle insert source differs from its schedule").into(),
+                );
             }
-        }
-        Ok(())
-    })?;
+            let ids = (offset..offset.saturating_add(vectors.len()))
+                .map(|id| format!("bench-insert-{}", dataset.train_count.saturating_add(id)))
+                .collect::<Vec<_>>();
+            pending.push(PreparedRecordBatch {
+                assignment,
+                records: ids
+                    .into_iter()
+                    .zip(vectors)
+                    .map(|(id, vector)| VectorRecord::new(id, vector))
+                    .collect(),
+            });
+            assignment_cursor = assignment_cursor.saturating_add(1);
+            let wave_complete = assignment_cursor == assignments.len()
+                || assignments[assignment_cursor].writer_index == 0;
+            if wave_complete {
+                let wave_index = assignment.batch_index / writers.len();
+                let completed = match config.lifecycle_insert_mode {
+                    LifecycleInsertMode::GeneralUpsert => execute_upsert_wave(
+                        "insert",
+                        wave_index,
+                        writers,
+                        std::mem::take(&mut pending),
+                    )?,
+                    LifecycleInsertMode::ClaimFreePut => execute_put_wave(
+                        "insert",
+                        wave_index,
+                        writers,
+                        std::mem::take(&mut pending),
+                    )?,
+                };
+                for (sample, written) in completed {
+                    bytes_written = bytes_written.saturating_add(written);
+                    samples.push(sample);
+                }
+            }
+            Ok(())
+        },
+    )?;
     if assignment_cursor != assignments.len() || !pending.is_empty() {
         return Err(invalid_input("lifecycle insert schedule is incomplete").into());
     }
@@ -4977,43 +5022,58 @@ fn measure_upserts(
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
+    let assignment_batch_sizes = assignments
+        .iter()
+        .map(|assignment| assignment.len)
+        .collect::<Vec<_>>();
     let mut assignment_cursor = 0_usize;
     let mut pending = Vec::with_capacity(writers.len());
-    stream_dataset_batches(config, dataset, count, |offset, vectors| {
-        let assignment = assignments
-            .get(assignment_cursor)
-            .copied()
-            .ok_or_else(|| invalid_input("lifecycle upsert source exceeded its schedule"))?;
-        if assignment.offset != offset || assignment.len != vectors.len() {
-            return Err(invalid_input("lifecycle upsert source differs from its schedule").into());
-        }
-        let mut records = Vec::with_capacity(vectors.len());
-        for (position, mut vector) in vectors.into_iter().enumerate() {
-            vector[0] += 1.0e-4;
-            let id = offset.saturating_add(position).to_string();
-            if verification_offsets.contains(&offset.saturating_add(position)) {
-                expected_records.push((id.clone(), vector.clone()));
+    stream_dataset_batches(
+        config,
+        dataset,
+        count,
+        Some(&assignment_batch_sizes),
+        |offset, vectors| {
+            let assignment = assignments
+                .get(assignment_cursor)
+                .copied()
+                .ok_or_else(|| invalid_input("lifecycle upsert source exceeded its schedule"))?;
+            if assignment.offset != offset || assignment.len != vectors.len() {
+                return Err(
+                    invalid_input("lifecycle upsert source differs from its schedule").into(),
+                );
             }
-            records.push(VectorRecord::new(id, vector));
-        }
-        pending.push(PreparedRecordBatch {
-            assignment,
-            records,
-        });
-        assignment_cursor = assignment_cursor.saturating_add(1);
-        let wave_complete = assignment_cursor == assignments.len()
-            || assignments[assignment_cursor].writer_index == 0;
-        if wave_complete {
-            let wave_index = assignment.batch_index / writers.len();
-            for (sample, written) in
-                execute_upsert_wave("upsert", wave_index, writers, std::mem::take(&mut pending))?
-            {
-                bytes_written = bytes_written.saturating_add(written);
-                samples.push(sample);
+            let mut records = Vec::with_capacity(vectors.len());
+            for (position, mut vector) in vectors.into_iter().enumerate() {
+                vector[0] += 1.0e-4;
+                let id = offset.saturating_add(position).to_string();
+                if verification_offsets.contains(&offset.saturating_add(position)) {
+                    expected_records.push((id.clone(), vector.clone()));
+                }
+                records.push(VectorRecord::new(id, vector));
             }
-        }
-        Ok(())
-    })?;
+            pending.push(PreparedRecordBatch {
+                assignment,
+                records,
+            });
+            assignment_cursor = assignment_cursor.saturating_add(1);
+            let wave_complete = assignment_cursor == assignments.len()
+                || assignments[assignment_cursor].writer_index == 0;
+            if wave_complete {
+                let wave_index = assignment.batch_index / writers.len();
+                for (sample, written) in execute_upsert_wave(
+                    "upsert",
+                    wave_index,
+                    writers,
+                    std::mem::take(&mut pending),
+                )? {
+                    bytes_written = bytes_written.saturating_add(written);
+                    samples.push(sample);
+                }
+            }
+            Ok(())
+        },
+    )?;
     if assignment_cursor != assignments.len() || !pending.is_empty() {
         return Err(invalid_input("lifecycle upsert schedule is incomplete").into());
     }
@@ -5132,34 +5192,86 @@ fn write_operation_count(train_count: usize, configured: Option<usize>) -> Bench
     Ok(count)
 }
 
+#[derive(Clone, Copy)]
+struct LifecycleDeltaLayout {
+    dimensions: usize,
+    segment_max_vectors: usize,
+}
+
 fn lifecycle_write_operation_count(
     train_count: usize,
+    layout: LifecycleDeltaLayout,
     configured: Option<usize>,
     writers: usize,
     batch_size: usize,
     update_percent: usize,
     delete_percent: usize,
 ) -> BenchResult<usize> {
+    let LifecycleDeltaLayout {
+        dimensions,
+        segment_max_vectors,
+    } = layout;
     let writers = validate_lifecycle_writers(writers)?;
     if batch_size == 0
+        || segment_max_vectors == 0
         || !(1..=100).contains(&update_percent)
         || !(1..=100).contains(&delete_percent)
     {
         return Err(invalid_input("lifecycle concurrency inputs are invalid").into());
     }
-    let minimum_mutation_ops = writers.saturating_mul(batch_size);
     let minimum_percent = update_percent.min(delete_percent);
-    let minimum_write_ops = minimum_mutation_ops
+    let minimum_write_ops = writers.saturating_mul(100).div_ceil(minimum_percent);
+    let vector_bytes_per_row = dimensions
+        .checked_mul(std::mem::size_of::<f32>())
+        .ok_or_else(|| invalid_input("lifecycle vector row size overflows"))?;
+    if vector_bytes_per_row == 0 {
+        return Err(invalid_input("lifecycle vector dimensions must be positive").into());
+    }
+    let max_delta_rows = MAX_GLOBAL_DELTA_ROWS.min(
+        MAX_GLOBAL_DELTA_VECTOR_BYTES
+            .checked_div(vector_bytes_per_row)
+            .unwrap_or(0),
+    );
+    let segment_row_ceiling = segment_max_vectors.saturating_mul(MAX_GLOBAL_DELTA_SEGMENTS);
+    let mut max_write_ops = max_delta_rows
+        .min(segment_row_ceiling)
         .saturating_mul(100)
-        .div_ceil(minimum_percent);
+        .checked_div(100_usize.saturating_add(update_percent))
+        .unwrap_or(0);
+    while {
+        let update_ops = max_write_ops
+            .saturating_mul(update_percent)
+            .saturating_add(99)
+            / 100;
+        max_write_ops.saturating_add(update_ops) > max_delta_rows
+            || max_write_ops
+                .div_ceil(segment_max_vectors)
+                .saturating_add(update_ops.div_ceil(segment_max_vectors))
+                > MAX_GLOBAL_DELTA_SEGMENTS
+    } {
+        max_write_ops = max_write_ops.saturating_sub(1);
+    }
+    if max_write_ops < minimum_write_ops {
+        return Err(invalid_input(
+            "bounded global ANN delta cannot exercise every lifecycle writer",
+        )
+        .into());
+    }
     let count = configured.unwrap_or_else(|| {
         (train_count / WRITE_FRACTION_DENOMINATOR)
             .max(1)
             .max(minimum_write_ops)
+            .min(max_write_ops)
     });
     if count < minimum_write_ops {
         return Err(invalid_input(&format!(
-            "BORSUK_BENCH_WRITE_OPS={count} cannot exercise all {writers} lifecycle writers with batch size {batch_size} and {minimum_percent}% mutations; require at least {minimum_write_ops}"
+            "BORSUK_BENCH_WRITE_OPS={count} cannot exercise all {writers} lifecycle writers at {minimum_percent}% mutations; require at least {minimum_write_ops}"
+        ))
+        .into());
+    }
+    if count > max_write_ops {
+        return Err(invalid_input(&format!(
+            "BORSUK_BENCH_WRITE_OPS={count} plus {update_percent}% upserts exceeds the bounded global ANN delta capacity for {dimensions} dimensions and segment_max_vectors={segment_max_vectors}; maximum is {max_write_ops}"
         ))
         .into());
     }
@@ -5212,57 +5324,69 @@ fn lifecycle_write_waves(
             "lifecycle batch size must be greater than zero",
         ));
     }
-    let batch_count = count.div_ceil(batch_size);
+    let natural_batch_count = count.div_ceil(batch_size);
+    let participating_writers = writers.min(count);
+    let batch_count = natural_batch_count.max(participating_writers);
+    let balance_for_writers = natural_batch_count < participating_writers;
+    let balanced_batch_size = count.checked_div(batch_count).unwrap_or(0);
+    let larger_balanced_batches = count.checked_rem(batch_count).unwrap_or(0);
     let mut waves = Vec::with_capacity(batch_count.div_ceil(writers));
     for batch_index in 0..batch_count {
         let wave_index = batch_index / writers;
         if wave_index == waves.len() {
             waves.push(Vec::with_capacity(writers));
         }
-        let offset = batch_index.saturating_mul(batch_size);
+        let (offset, len) = if balance_for_writers {
+            let offset = batch_index
+                .saturating_mul(balanced_batch_size)
+                .saturating_add(batch_index.min(larger_balanced_batches));
+            (
+                offset,
+                balanced_batch_size + usize::from(batch_index < larger_balanced_batches),
+            )
+        } else {
+            let offset = batch_index.saturating_mul(batch_size);
+            (offset, write_batch_len(count, offset, batch_size))
+        };
         waves[wave_index].push(LifecycleBatchAssignment {
             writer_index: batch_index % writers,
             batch_index,
             offset,
-            len: write_batch_len(count, offset, batch_size),
+            len,
         });
     }
     Ok(waves)
-}
-
-fn rebatch_mutation_vector_chunk(
-    pending: &mut VecDeque<Vec<f32>>,
-    chunk: Vec<Vec<f32>>,
-    batch_size: usize,
-    finished: bool,
-) -> io::Result<Vec<Vec<Vec<f32>>>> {
-    if batch_size == 0 {
-        return Err(invalid_input(
-            "lifecycle mutation batch size must be greater than zero",
-        ));
-    }
-    pending.extend(chunk);
-    let mut batches = Vec::new();
-    while pending.len() >= batch_size {
-        batches.push(pending.drain(..batch_size).collect());
-    }
-    if finished && !pending.is_empty() {
-        batches.push(pending.drain(..).collect());
-    }
-    Ok(batches)
 }
 
 fn stream_dataset_batches(
     config: &ResolvedConfig,
     dataset: &Dataset,
     count: usize,
+    scheduled_batch_sizes: Option<&[usize]>,
     mut consume: impl FnMut(usize, Vec<Vec<f32>>) -> BenchResult<()>,
 ) -> BenchResult<()> {
+    let default_batch_sizes;
+    let batch_sizes = if let Some(batch_sizes) = scheduled_batch_sizes {
+        let scheduled_rows = batch_sizes
+            .iter()
+            .try_fold(0_usize, |total, &batch_size| total.checked_add(batch_size));
+        if batch_sizes.contains(&0) || scheduled_rows != Some(count) {
+            return Err(invalid_input("mutation source batch schedule is invalid").into());
+        }
+        batch_sizes
+    } else {
+        default_batch_sizes = (0..count.div_ceil(config.write_batch_size))
+            .map(|batch_index| {
+                let offset = batch_index.saturating_mul(config.write_batch_size);
+                write_batch_len(count, offset, config.write_batch_size)
+            })
+            .collect::<Vec<_>>();
+        &default_batch_sizes
+    };
     let mut offset = 0_usize;
     match &dataset.source {
         DatasetVectorSource::Unavailable => {
-            while offset < count {
-                let batch_rows = write_batch_len(count, offset, config.write_batch_size);
+            for &batch_rows in batch_sizes {
                 let vectors = (offset..offset.saturating_add(batch_rows))
                     .map(|row| deterministic_mutation_vector(row, dataset.meta.dim))
                     .collect();
@@ -5272,8 +5396,7 @@ fn stream_dataset_batches(
         }
         DatasetVectorSource::RawF32 => {
             let mut reader = BufReader::new(File::open(config.dataset_dir.join("train.f32"))?);
-            while offset < count {
-                let batch_rows = write_batch_len(count, offset, config.write_batch_size);
+            for &batch_rows in batch_sizes {
                 let mut vectors = Vec::with_capacity(batch_rows);
                 for _ in 0..batch_rows {
                     vectors.push(read_f32_vector(&mut reader, dataset.meta.dim)?);
@@ -5285,6 +5408,7 @@ fn stream_dataset_batches(
         DatasetVectorSource::Parquet { train_files } => {
             let mut decoded = 0_usize;
             let mut pending = VecDeque::with_capacity(config.write_batch_size);
+            let mut batch_index = 0_usize;
             'files: for path in train_files {
                 let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?
                     .with_batch_size(config.write_batch_size)
@@ -5303,31 +5427,22 @@ fn stream_dataset_batches(
                         vectors.push(vector_row(column.as_ref(), row, dataset.meta.dim, "emb")?);
                     }
                     decoded = decoded.saturating_add(batch_rows);
-                    for vectors in rebatch_mutation_vector_chunk(
-                        &mut pending,
-                        vectors,
-                        config.write_batch_size,
-                        false,
-                    )? {
-                        let batch_rows = vectors.len();
+                    pending.extend(vectors);
+                    while batch_index < batch_sizes.len()
+                        && pending.len() >= batch_sizes[batch_index]
+                    {
+                        let batch_rows = batch_sizes[batch_index];
+                        let vectors = pending.drain(..batch_rows).collect();
                         consume(offset, vectors)?;
                         offset = offset.saturating_add(batch_rows);
+                        batch_index = batch_index.saturating_add(1);
                     }
                 }
             }
-            for vectors in rebatch_mutation_vector_chunk(
-                &mut pending,
-                Vec::new(),
-                config.write_batch_size,
-                true,
-            )? {
-                let batch_rows = vectors.len();
-                consume(offset, vectors)?;
-                offset = offset.saturating_add(batch_rows);
-            }
-            if decoded != count {
+            if decoded != count || batch_index != batch_sizes.len() || !pending.is_empty() {
                 return Err(invalid_input(&format!(
-                    "mutation source decoded {decoded} vectors; expected {count}"
+                    "mutation source decoded {decoded} vectors into {batch_index} batches; expected {count} vectors in {} batches",
+                    batch_sizes.len()
                 ))
                 .into());
             }
@@ -5889,39 +6004,40 @@ mod tests {
         CacheExecutionPolicy, ConcurrencyMeasurement, DEFAULT_NPROBE_SWEEP,
         DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES,
         EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig, LIFECYCLE_HEADER,
-        LeafCapability, LeafMode, LifecycleBatchAssignment, LifecycleInsertMode,
-        LifecycleQueryProgress, MUTATION_QUERY_HEADER, MUTATION_QUERY_SAMPLE_HEADER, OpenOptions,
-        PreparedRecordBatch, QUERY_SAMPLE_HEADER, QuerySample, QuerySummary, RECALL_LATENCY_HEADER,
-        SERVING_CANDIDATES, ServingMode, VectorMetric, VectorRecord, WRITE_COST_HEADER,
-        WRITE_SAMPLE_HEADER, allow_missing_corpus_for_phase, approximate_options,
-        benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
-        cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
-        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
-        disk_cached_query_cohort_size, dollars_per_million_queries, execute_bulk_add_wave,
-        execute_concurrency_cache_setup, execute_disk_cached_concurrency_cohorts,
-        execute_disk_cached_query_cohorts, execute_isolated_recall_cache_phases, execute_put_wave,
-        execute_uncached_query_sequence, finalize_fresh_build, first_logical_batch_publish_ms,
-        ingest_batch_size, is_hot_workload_position, join_concurrency_workers,
-        lifecycle_progress_line, lifecycle_query_progress_line, lifecycle_write_operation_count,
-        lifecycle_write_waves, lifecycle_writer_open_options, mixed_concurrency_query_indices,
+        LeafCapability, LeafMode, LifecycleBatchAssignment, LifecycleDeltaLayout,
+        LifecycleInsertMode, LifecycleQueryProgress, MUTATION_QUERY_HEADER,
+        MUTATION_QUERY_SAMPLE_HEADER, OpenOptions, PreparedRecordBatch, QUERY_SAMPLE_HEADER,
+        QuerySample, QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES, ServingMode,
+        VectorMetric, VectorRecord, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
+        allow_missing_corpus_for_phase, approximate_options, benchmark_row_ids,
+        cache_coverage_cohort_size, cache_coverage_enabled, cache_state_summary_enabled,
+        dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
+        default_serving_leaf_mode, deterministic_mutation_vector, disk_cached_query_cohort_size,
+        dollars_per_million_queries, execute_bulk_add_wave, execute_concurrency_cache_setup,
+        execute_disk_cached_concurrency_cohorts, execute_disk_cached_query_cohorts,
+        execute_isolated_recall_cache_phases, execute_put_wave, execute_uncached_query_sequence,
+        finalize_fresh_build, first_logical_batch_publish_ms, ingest_batch_size,
+        is_hot_workload_position, join_concurrency_workers, lifecycle_progress_line,
+        lifecycle_query_progress_line, lifecycle_write_operation_count, lifecycle_write_waves,
+        lifecycle_writer_open_options, mixed_concurrency_query_indices,
         mutable_resident_metadata_budget, neighbor_row, normalized_cache_access_fractions,
         open_lifecycle_writer_handles, parquet_train_files_for_phase, parse_flag_value,
         parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
         parse_lifecycle_insert_mode, parse_optional_byte_cap, parse_positive_list,
         parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
         query_sample_cache_cohort_size, query_scoped_physical_bytes_read,
-        read_logical_cell_catalog, rebatch_mutation_vector_chunk,
-        recall_cache_profile_needs_outer_handle, recall_preloads_local_snapshot,
-        reopen_build_finalizer, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
-        serving_cache_dir, update_vector_reservoir, uses_bounded_decoded_cache_phases,
-        uses_memory_preloaded_phase, validate_bounded_v20_execution, validate_build_only,
-        validate_build_writers, validate_disk_cached_network,
-        validate_exact_read_max_physical_amplification, validate_generated_id_range,
-        validate_insert_only, validate_leaf_capability_modes, validate_lifecycle_only,
-        validate_lifecycle_writers, validate_max_parallel_decode_rank_tasks,
-        validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
-        validate_v12_leaf_page_budgets, vector_row, verification_offsets, write_batch_len,
-        write_operation_count, write_runtime_flow_control_receipt,
+        read_logical_cell_catalog, recall_cache_profile_needs_outer_handle,
+        recall_preloads_local_snapshot, reopen_build_finalizer, reset_cache,
+        rotated_workload_index, sample_mean, sample_stddev, serving_cache_dir,
+        update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        validate_bounded_v20_execution, validate_build_only, validate_build_writers,
+        validate_disk_cached_network, validate_exact_read_max_physical_amplification,
+        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
+        validate_lifecycle_only, validate_lifecycle_writers,
+        validate_max_parallel_decode_rank_tasks, validate_phase_selection,
+        validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
+        vector_row, verification_offsets, write_batch_len, write_operation_count,
+        write_runtime_flow_control_receipt,
     };
 
     #[test]
@@ -6006,11 +6122,80 @@ mod tests {
     #[test]
     fn lifecycle_default_write_count_exercises_every_writer_in_mutation_phases() {
         assert_eq!(
-            lifecycle_write_operation_count(1_000_000, None, 16, 1024, 10, 10).unwrap(),
-            163_840
+            lifecycle_write_operation_count(
+                1_000_000,
+                LifecycleDeltaLayout {
+                    dimensions: 768,
+                    segment_max_vectors: 8_192,
+                },
+                None,
+                16,
+                1024,
+                10,
+                10,
+            )
+            .unwrap(),
+            19_859
         );
         assert!(
-            lifecycle_write_operation_count(1_000_000, Some(50_000), 16, 1024, 10, 10).is_err()
+            lifecycle_write_operation_count(
+                1_000_000,
+                LifecycleDeltaLayout {
+                    dimensions: 768,
+                    segment_max_vectors: 8_192,
+                },
+                Some(50_000),
+                16,
+                1024,
+                10,
+                10,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            lifecycle_write_operation_count(
+                1_000_000,
+                LifecycleDeltaLayout {
+                    dimensions: 768,
+                    segment_max_vectors: 512,
+                },
+                None,
+                16,
+                1024,
+                10,
+                10,
+            )
+            .unwrap(),
+            7_168
+        );
+    }
+
+    #[test]
+    fn partial_lifecycle_batches_exercise_every_configured_writer() {
+        let waves = lifecycle_write_waves(1_800, 1_024, 16).unwrap();
+        assert_eq!(waves.len(), 1);
+        assert_eq!(waves[0].len(), 16);
+        assert_eq!(
+            waves[0]
+                .iter()
+                .map(|batch| batch.writer_index)
+                .collect::<Vec<_>>(),
+            (0..16).collect::<Vec<_>>()
+        );
+        assert_eq!(waves[0].iter().map(|batch| batch.len).sum::<usize>(), 1_800);
+        assert!(waves[0].iter().all(|batch| batch.len <= 1_024));
+
+        let uneven = lifecycle_write_waves(17, 1_024, 16).unwrap();
+        assert_eq!(uneven.len(), 1);
+        assert_eq!(uneven[0].len(), 16);
+        assert_eq!(uneven[0][0].len, 2);
+        assert!(uneven[0][1..].iter().all(|batch| batch.len == 1));
+        assert_eq!(
+            uneven[0]
+                .iter()
+                .map(|batch| batch.writer_index)
+                .collect::<Vec<_>>(),
+            (0..16).collect::<Vec<_>>()
         );
     }
 
@@ -6036,25 +6221,6 @@ mod tests {
             "op,writer_index,wave_index,batch_index,batch_records,batch_latency_ms,amortized_ms,gets,puts,deletes,heads,lists"
         );
         assert!(LIFECYCLE_HEADER.starts_with("configured_writers,configured_batch_records"));
-    }
-
-    #[test]
-    fn parquet_row_group_chunks_are_rebatched_to_the_configured_write_size() {
-        let mut pending = std::collections::VecDeque::new();
-        let mut batches = Vec::new();
-        for (chunk, finished) in [
-            (vec![vec![0.0]; 3], false),
-            (vec![vec![1.0]; 3], false),
-            (vec![vec![2.0]; 3], true),
-        ] {
-            batches
-                .extend(rebatch_mutation_vector_chunk(&mut pending, chunk, 4, finished).unwrap());
-        }
-        assert_eq!(
-            batches.iter().map(Vec::len).collect::<Vec<_>>(),
-            vec![4, 4, 1]
-        );
-        assert!(pending.is_empty());
     }
 
     #[test]

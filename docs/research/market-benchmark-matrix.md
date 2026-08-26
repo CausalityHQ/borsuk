@@ -128,14 +128,20 @@ compaction, open/prepare, and each query phase. Required measurements are:
   deviation shown on charts.
 
 Lifecycle write measurements must record the configured durable batch size.
-`production_bench` accepts `BORSUK_BENCH_WRITE_BATCH_SIZE` (default `1024`) and
-emits it in both aggregate write-cost and lifecycle artifacts. Single-record
-latency and batched throughput are separate workload points: neither may be
-extrapolated from the other. Production qualification sweeps `1`, `32`, `128`,
-and `1024` records per durable publish, preserving raw per-batch latency and
-object-store request samples for each point. `BORSUK_BENCH_WRITE_OPS` fixes the
-mutation count when set and fails closed if it exceeds the pinned dataset;
-otherwise the historical five-percent lifecycle sample remains the default.
+`production_bench` accepts `BORSUK_BENCH_WRITE_BATCH_SIZE` (default `1024`) as
+the maximum durable batch size and emits it in both aggregate write-cost and
+lifecycle artifacts; raw samples bind each actual batch size. When a mutation
+cohort would otherwise create fewer batches than configured writers, the
+cohort is split into balanced partial batches so every writer participates.
+Single-record latency and batched throughput are separate workload points:
+neither may be extrapolated from the other. Production qualification sweeps
+`1`, `32`, `128`, and `1024` records per durable publish, preserving raw
+per-batch latency and object-store request samples for each point.
+`BORSUK_BENCH_WRITE_OPS` fixes the mutation count when set and fails closed if
+it exceeds either the pinned dataset or the product's maintenance-free online
+delta envelope. Otherwise the sample is the smaller of the historical five
+percent corpus cohort and that envelope. Consequently the measured row count
+may differ across vector dimensions; every receipt reports the exact count.
 
 Client compute is an explicit, equal line for every system. BORSUK's library
 executes inside that client; S3 Vectors, TurboPuffer, and other services also
