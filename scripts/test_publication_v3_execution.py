@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import base64
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.publication_v3_aws import build_launch_request
 from scripts.publication_v3_execution import (
     ExecutionJob,
     borsuk_cell,
@@ -13,6 +16,7 @@ from scripts.publication_v3_execution import (
     qualification_cell,
     runtime_worker_script,
     worker_failure_trap_script,
+    worker_immutable_upload_function,
 )
 from scripts.publication_v3_protocol import validate_schedule_cell
 
@@ -35,6 +39,210 @@ def frozen_manifest() -> dict[str, object]:
 
 
 class PublicationV3ExecutionTests(unittest.TestCase):
+    def test_worker_immutable_upload_retries_reconciles_and_preserves_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="borsuk-v3-upload-") as directory:
+            root = Path(directory)
+            binaries = root / "bin"
+            captured = root / "captured"
+            work = root / "work"
+            binaries.mkdir()
+            captured.mkdir()
+            work.mkdir()
+            fake_aws = binaries / "aws"
+            fake_aws.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "operation=${2:-}\n"
+                "body= key= query= declared_checksum= checksum_mode=\n"
+                'original_args="$*"\n'
+                "while [[ $# -gt 0 ]]; do\n"
+                "  case $1 in\n"
+                "    --body) body=$2; shift 2;;\n"
+                "    --key) key=$2; shift 2;;\n"
+                "    --query) query=$2; shift 2;;\n"
+                "    --checksum-sha256) declared_checksum=$2; shift 2;;\n"
+                "    --checksum-mode) checksum_mode=$2; shift 2;;\n"
+                "    *) shift;;\n"
+                "  esac\n"
+                "done\n"
+                'count_file="$CAPTURE_DIR/$operation-count"\n'
+                'count=0; [[ ! -f "$count_file" ]] || count=$(cat "$count_file")\n'
+                'count=$((count + 1)); printf "%s" "$count" >"$count_file"\n'
+                'printf "%s" "$original_args" >"$CAPTURE_DIR/$operation-args-$count"\n'
+                'target="$CAPTURE_DIR/${key##*/}"\n'
+                "if [[ $operation = head-object ]]; then\n"
+                "  [[ $query = ChecksumSHA256 && $checksum_mode = ENABLED ]]\n"
+                '  openssl dgst -sha256 -binary "$target" | base64 -w0\n'
+                "  exit 0\n"
+                "fi\n"
+                "case $AWS_FAKE_MODE in\n"
+                "  transient)\n"
+                "    if (( count < 3 )); then echo RequestTimeout >&2; exit 255; fi\n"
+                '    cp "$body" "$target";;\n'
+                "  ambiguous)\n"
+                '    cp "$body" "$target"\n'
+                "    echo 'PreconditionFailed (412)' >&2\n"
+                "    exit 255;;\n"
+                "  ambiguous-mismatch)\n"
+                '    printf foreign >"$target"\n'
+                "    echo 'PreconditionFailed (412)' >&2\n"
+                "    exit 255;;\n"
+                "  permanent) echo 'network down: exact upload detail' >&2; exit 255;;\n"
+                "  mixed)\n"
+                "    if (( count == 1 )); then echo 'AccessDenied first attempt' >&2; exit 255; fi\n"
+                "    exit 42;;\n"
+                "  silent) exit 42;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_aws.chmod(0o700)
+            payload = root / "payload.json"
+            payload.write_text('{"complete":true}\n', encoding="utf-8")
+            runner = root / "run.sh"
+            runner.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                f"work={work!s}\n"
+                'detail_log="$work/prior.log"\n'
+                "immutable_upload_deadline=0\n"
+                "immutable_upload_reconciliations=0\n"
+                "if [[ ${EXPIRE_UPLOAD_DEADLINE:-0} = 1 ]]; then\n"
+                "  immutable_upload_deadline=1\n"
+                "  SECONDS=2\n"
+                "fi\n"
+                + worker_immutable_upload_function()
+                + "\n"
+                "finish() {\n"
+                "  status=$1\n"
+                "  trap - EXIT\n"
+                '  printf "%s" "$detail_log" >"$work/observed-detail-path"\n'
+                '  printf "%s" "$immutable_upload_reconciliations" >"$work/observed-reconciliations"\n'
+                "  exit $status\n"
+                "}\n"
+                "trap 'finish $?' EXIT\n"
+                f"put_immutable {payload!s} s3://bucket/result.json\n"
+                "finish 0\n",
+                encoding="utf-8",
+            )
+            runner.chmod(0o700)
+            environment = {
+                **dict(os.environ),
+                "PATH": f"{binaries}:{os.environ['PATH']}",
+                "CAPTURE_DIR": str(captured),
+            }
+
+            transient = subprocess.run(
+                [str(runner)],
+                text=True,
+                capture_output=True,
+                env={**environment, "AWS_FAKE_MODE": "transient"},
+                check=False,
+            )
+            self.assertEqual(transient.returncode, 0, transient.stderr)
+            self.assertEqual((captured / "put-object-count").read_text(), "3")
+            self.assertEqual((captured / "result.json").read_bytes(), payload.read_bytes())
+            put_args = (captured / "put-object-args-3").read_text()
+            for required in (
+                "--expected-bucket-owner 453182569524",
+                "--if-none-match *",
+                "--checksum-sha256",
+                "--metadata borsuk-sha256=",
+            ):
+                self.assertIn(required, put_args)
+
+            for path in captured.iterdir():
+                path.unlink()
+            ambiguous = subprocess.run(
+                [str(runner)],
+                text=True,
+                capture_output=True,
+                env={**environment, "AWS_FAKE_MODE": "ambiguous"},
+                check=False,
+            )
+            self.assertEqual(ambiguous.returncode, 0, ambiguous.stderr)
+            self.assertEqual((captured / "put-object-count").read_text(), "1")
+            self.assertEqual((captured / "head-object-count").read_text(), "1")
+            self.assertEqual((work / "observed-reconciliations").read_text(), "1")
+            self.assertIn("reconciled-412", ambiguous.stderr)
+
+            for path in captured.iterdir():
+                path.unlink()
+            mismatch = subprocess.run(
+                [str(runner)],
+                text=True,
+                capture_output=True,
+                env={**environment, "AWS_FAKE_MODE": "ambiguous-mismatch"},
+                check=False,
+            )
+            self.assertNotEqual(mismatch.returncode, 0)
+            self.assertEqual((captured / "put-object-count").read_text(), "3")
+            self.assertEqual((captured / "head-object-count").read_text(), "3")
+            self.assertEqual((work / "observed-reconciliations").read_text(), "0")
+
+            for path in captured.iterdir():
+                path.unlink()
+            permanent = subprocess.run(
+                [str(runner)],
+                text=True,
+                capture_output=True,
+                env={**environment, "AWS_FAKE_MODE": "permanent"},
+                check=False,
+            )
+            self.assertNotEqual(permanent.returncode, 0)
+            self.assertEqual((captured / "put-object-count").read_text(), "3")
+            detail_path = Path((work / "observed-detail-path").read_text())
+            self.assertEqual(detail_path, work / "failure-detail.log")
+            self.assertIn("network down: exact upload detail", detail_path.read_text())
+
+            for path in captured.iterdir():
+                path.unlink()
+            mixed = subprocess.run(
+                [str(runner)],
+                text=True,
+                capture_output=True,
+                env={**environment, "AWS_FAKE_MODE": "mixed"},
+                check=False,
+            )
+            self.assertNotEqual(mixed.returncode, 0)
+            mixed_detail = Path((work / "observed-detail-path").read_text()).read_text()
+            self.assertIn("AccessDenied first attempt", mixed_detail)
+            self.assertIn("attempt=3 status=42", mixed_detail)
+
+            for path in captured.iterdir():
+                path.unlink()
+            silent = subprocess.run(
+                [str(runner)],
+                text=True,
+                capture_output=True,
+                env={**environment, "AWS_FAKE_MODE": "silent"},
+                check=False,
+            )
+            self.assertNotEqual(silent.returncode, 0)
+            detail_path = Path((work / "observed-detail-path").read_text())
+            self.assertIn("status=42", detail_path.read_text())
+
+            for path in captured.iterdir():
+                path.unlink()
+            expired = subprocess.run(
+                [str(runner)],
+                text=True,
+                capture_output=True,
+                env={
+                    **environment,
+                    "AWS_FAKE_MODE": "transient",
+                    "EXPIRE_UPLOAD_DEADLINE": "1",
+                },
+                check=False,
+            )
+            self.assertNotEqual(expired.returncode, 0)
+            self.assertFalse((captured / "put-object-count").exists())
+            expired_detail = Path(
+                (work / "observed-detail-path").read_text()
+            ).read_text()
+            self.assertIn("publish-budget-exhausted", expired_detail)
+
     def test_generated_build_consumes_staged_roster_without_regeneration(self) -> None:
         manifest = frozen_manifest()
         dataset = next(
@@ -284,6 +492,9 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn('detail_log="$work/cell/build/step-00.log"', script)
         self.assertNotIn('find "$work"', script)
         self.assertIn("stage=build-index", script)
+        self.assertIn('"schema_version":2', script)
+        self.assertIn('"artifact_upload_reconciliations":%s', script)
+        self.assertIn("immutable_upload_deadline=$((SECONDS + 600))", script)
         self.assertLess(len(script.encode("utf-8")), 16 * 1024)
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
@@ -368,6 +579,9 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             script.index("systemd-run --quiet"),
         )
         self.assertIn("stage=publish-receipts", script)
+        self.assertIn('"schema_version":5', script)
+        self.assertIn('"artifact_upload_reconciliations":%s', script)
+        self.assertIn("immutable_upload_deadline=$((SECONDS + 600))", script)
         self.assertLess(len(script.encode("utf-8")), 16 * 1024)
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
@@ -437,7 +651,27 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             script.count('put_immutable "$work/cell/RUNTIME_ATTESTATION.json"'),
             1,
         )
-        self.assertLess(len(script.encode("utf-8")), 16 * 1024)
+        request = build_launch_request(
+            frozen_manifest(),
+            role="runtime",
+            system="borsuk",
+            image_id="ami-0123456789abcdef0",
+            subnet_id="subnet-0123456789abcdef0",
+            security_group_id="sg-0123456789abcdef0",
+            instance_profile_arn=(
+                "arn:aws:iam::453182569524:instance-profile/borsuk-test"
+            ),
+            image_architecture="aarch64",
+            subnet_region="eu-central-1",
+            campaign_id="publication-v3-20260812",
+            cell_id=job.cell_tag,
+            attempt=2,
+            worker_script=script,
+            terminal_failure_uri=job.failed_uri,
+            terminal_detail_log_path="/var/lib/borsuk-publication/worker.log",
+            max_seconds=7_200,
+        )
+        self.assertLess(len(base64.b64decode(request["UserData"])), 16 * 1024)
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )

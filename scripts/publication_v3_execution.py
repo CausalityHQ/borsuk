@@ -174,6 +174,83 @@ def _j(value: object) -> str:
     return json.dumps(str(value))
 
 
+def worker_immutable_upload_function() -> str:
+    """Return the retry-safe immutable S3 publisher used by paid workers."""
+
+    return textwrap.dedent(
+        """\
+        put_immutable() {
+          local path=$1 uri=$2 digest checksum bucket key attempt error_log attempt_log
+          local remote_checksum put_status command_timeout remaining head_timeout
+          digest=$(sha256sum "$path" | awk '{print $1}')
+          checksum=$(openssl dgst -sha256 -binary "$path" | base64 -w0)
+          bucket=${uri#s3://}; bucket=${bucket%%/*}; key=${uri#s3://$bucket/}
+          error_log="$work/put-immutable-error.log"
+          attempt_log="$work/put-immutable-attempt.log"
+          : >"$error_log"
+          for attempt in 1 2 3; do
+            command_timeout=60
+            if [[ "$immutable_upload_deadline" -gt 0 ]]; then
+              remaining=$((immutable_upload_deadline - SECONDS))
+              if [[ "$remaining" -le 0 ]]; then
+                printf 'immutable-upload key=%s attempt=%s publish-budget-exhausted\n' \
+                  "$key" "$attempt" >>"$error_log"
+                break
+              fi
+              if [[ "$remaining" -lt "$command_timeout" ]]; then
+                command_timeout=$remaining
+              fi
+            fi
+            if timeout "$command_timeout" aws s3api put-object --bucket "$bucket" --key "$key" --body "$path" \
+              --expected-bucket-owner 453182569524 --server-side-encryption AES256 \
+              --checksum-algorithm SHA256 --checksum-sha256 "$checksum" \
+              --metadata "borsuk-sha256=$digest" --if-none-match '*' \
+              >/dev/null 2>"$attempt_log"; then
+              rm -f "$error_log" "$attempt_log"
+              return 0
+            else
+              put_status=$?
+            fi
+            {
+              printf 'immutable-upload key=%s attempt=%s status=%s\n' \
+                "$key" "$attempt" "$put_status"
+              tail -c 16384 "$attempt_log" || true
+            } >>"$error_log"
+            if grep -Eq 'PreconditionFailed|(^|[^0-9])412([^0-9]|$)' "$attempt_log"; then
+              head_timeout=15
+              if [[ "$immutable_upload_deadline" -gt 0 ]]; then
+                remaining=$((immutable_upload_deadline - SECONDS))
+                if [[ "$remaining" -le 0 ]]; then break; fi
+                if [[ "$remaining" -lt "$head_timeout" ]]; then
+                  head_timeout=$remaining
+                fi
+              fi
+              remote_checksum=$(timeout "$head_timeout" aws s3api head-object --bucket "$bucket" \
+                --key "$key" --expected-bucket-owner 453182569524 \
+                --checksum-mode ENABLED --query ChecksumSHA256 --output text \
+                2>>"$error_log" || true)
+              if [[ "$remote_checksum" = "$checksum" ]]; then
+                immutable_upload_reconciliations=$((immutable_upload_reconciliations + 1))
+                printf 'immutable-upload key=%s attempt=%s reconciled-412\n' \
+                  "$key" "$attempt" >&2
+                rm -f "$error_log" "$attempt_log"
+                return 0
+              fi
+            fi
+            tail -c 16384 "$attempt_log" >&2 || true
+            printf 'immutable-upload key=%s attempt=%s status=%s\n' \
+              "$key" "$attempt" "$put_status" >&2
+            if [[ "$attempt" -lt 3 ]]; then sleep 1; fi
+          done
+          tail -c 65536 "$error_log" >"$work/failure-detail.log" || true
+          detail_log="$work/failure-detail.log"
+          rm -f "$attempt_log"
+          return 1
+        }
+        """
+    )
+
+
 def _common_prelude(
     *,
     source_revision: str,
@@ -194,16 +271,9 @@ def _common_prelude(
         complete=0
         stage=preflight
         detail_log="$work/worker.log"
-        put_immutable() {{
-          local path=$1 uri=$2 digest checksum bucket key
-          digest=$(sha256sum "$path" | awk '{{print $1}}')
-          checksum=$(openssl dgst -sha256 -binary "$path" | base64 -w0)
-          bucket=${{uri#s3://}}; bucket=${{bucket%%/*}}; key=${{uri#s3://$bucket/}}
-          aws s3api put-object --bucket "$bucket" --key "$key" --body "$path" \
-            --expected-bucket-owner 453182569524 --server-side-encryption AES256 \
-            --checksum-algorithm SHA256 --checksum-sha256 "$checksum" \
-            --metadata "borsuk-sha256=$digest" --if-none-match '*' >/dev/null
-        }}
+        immutable_upload_deadline=0
+        immutable_upload_reconciliations=0
+        {worker_immutable_upload_function()}
         {failure_trap}
         exec > >(tee -a "$work/worker.log") 2>&1
         source_uri={_q(source_uri)}
@@ -326,11 +396,12 @@ def build_worker_script(
           --attempt-id {_q(attempt_id)} --instance-identity "$instance_id" \
           --build-complete "$work/cell/BUILD_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json"
         stage=publish-receipts
+        immutable_upload_deadline=$((SECONDS + 600))
         for name in BUILD_COMPLETE.json INDEX_COMPLETE.json INDEX_OBJECTS.json INDEX_INVENTORY.json; do
           path="$work/$name"; [[ -f "$path" ]] || path="$work/cell/$name"
           put_immutable "$path" {_q(terminal_prefix)}/$name
         done
-        printf '{{"schema_version":1,"status":"complete","role":"build","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"index_uri":{_j(job.index_uri)},"binary_sha256":"%s","rest_binary_sha256":"%s","purchase_option":"%s"}}\n' "$instance_id" "$binary_sha" "$rest_binary_sha" "$instance_purchase_option" >"$work/complete.json"
+        printf '{{"schema_version":2,"status":"complete","role":"build","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"index_uri":{_j(job.index_uri)},"binary_sha256":"%s","rest_binary_sha256":"%s","purchase_option":"%s","artifact_upload_reconciliations":%s}}\n' "$instance_id" "$binary_sha" "$rest_binary_sha" "$instance_purchase_option" "$immutable_upload_reconciliations" >"$work/complete.json"
         put_immutable "$work/complete.json" {_q(terminal_prefix + "/BUILD_TERMINAL_COMPLETE.json")}
         complete=1
         """
@@ -644,6 +715,7 @@ diagnostic_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_recall_late
           --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}{diagnostic_arguments}
         {diagnostic_validation}
         stage=publish-receipts
+        immutable_upload_deadline=$((SECONDS + 600))
         put_immutable "$work/cell/RESULT_COMPLETE.json" {_q(terminal_prefix + "/RESULT_COMPLETE.json")}
         {read_diagnostic_uploads}
         put_immutable "$work/cell/RUNTIME_ATTESTATION.json" {_q(terminal_prefix + "/RUNTIME_ATTESTATION.json")}
@@ -697,7 +769,7 @@ diagnostic_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_recall_late
           lifecycle_storage_trace_sha=$(sha256sum "$work/cell/runtime-output/storage-access.csv" | awk '{{print $1}}')
           lifecycle_fields=$(printf ',"lifecycle_summary_sha256":"%s","lifecycle_costs_sha256":"%s","lifecycle_samples_sha256":"%s","lifecycle_query_summary_sha256":"%s","lifecycle_query_samples_sha256":"%s","lifecycle_storage_trace_sha256":"%s"' "$lifecycle_summary_sha" "$lifecycle_costs_sha" "$lifecycle_samples_sha" "$lifecycle_query_summary_sha" "$lifecycle_query_samples_sha" "$lifecycle_storage_trace_sha")
         fi
-        printf '{{"schema_version":4,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)},"purchase_option":"%s","runtime_profile":"%s","arm_index":{arm_index},"max_active_searches":%s,"max_waiting_searches":%s,"leaf_read_width":%s,"max_inflight_leaf_reads":%s,"max_parallel_decode_rank_tasks":%s,"cpu_threads":%s,"io_threads":%s,"s3_get_concurrency":%s,"ram_budget_bytes":%s,"disk_cache_max_bytes":%s,"exact_read_max_physical_amplification":%s,"execution_contract_sha256":"%s"%s%s%s}}\n' "$instance_id" "$instance_purchase_option" "$actual_runtime_profile" "$actual_max_active" "$actual_max_waiting" "$actual_leaf_width" "$actual_max_leaf_reads" "$actual_max_parallel_decode_rank_tasks" "$actual_cpu_threads" "$actual_io_threads" "$actual_s3_gets" "$actual_ram_budget" "$actual_disk_cache" "$actual_exact_amplification" "$execution_contract_sha" "$diagnostic_fields" "$concurrency_fields" "$lifecycle_fields" >"$work/complete.json"
+        printf '{{"schema_version":5,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)},"purchase_option":"%s","runtime_profile":"%s","arm_index":{arm_index},"max_active_searches":%s,"max_waiting_searches":%s,"leaf_read_width":%s,"max_inflight_leaf_reads":%s,"max_parallel_decode_rank_tasks":%s,"cpu_threads":%s,"io_threads":%s,"s3_get_concurrency":%s,"ram_budget_bytes":%s,"disk_cache_max_bytes":%s,"exact_read_max_physical_amplification":%s,"execution_contract_sha256":"%s","artifact_upload_reconciliations":%s%s%s%s}}\n' "$instance_id" "$instance_purchase_option" "$actual_runtime_profile" "$actual_max_active" "$actual_max_waiting" "$actual_leaf_width" "$actual_max_leaf_reads" "$actual_max_parallel_decode_rank_tasks" "$actual_cpu_threads" "$actual_io_threads" "$actual_s3_gets" "$actual_ram_budget" "$actual_disk_cache" "$actual_exact_amplification" "$execution_contract_sha" "$immutable_upload_reconciliations" "$diagnostic_fields" "$concurrency_fields" "$lifecycle_fields" >"$work/complete.json"
         put_immutable "$work/complete.json" {_q(terminal_prefix + "/RUNTIME_TERMINAL_COMPLETE.json")}
         complete=1
         """

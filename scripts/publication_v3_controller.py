@@ -551,6 +551,13 @@ def stage_dataset(
     raise ValueError(f"staging dataset {dataset_id} exhausted {max_attempts} attempts")
 
 
+def _require_upload_reconciliation_count(value: dict[str, object]) -> int:
+    count = value.get("artifact_upload_reconciliations")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise ValueError("execution receipt upload reconciliation count is invalid")
+    return count
+
+
 def run_execution_job(
     job: Any,
     *,
@@ -574,7 +581,7 @@ def run_execution_job(
             if outcome == "complete":
                 value = aws.read_receipt(job)
                 required = {
-                    "schema_version": 4 if job.role == "runtime" else 1,
+                    "schema_version": 5 if job.role == "runtime" else 2,
                     "status": "complete",
                     "role": job.role,
                     "attempt": job.attempt,
@@ -585,6 +592,7 @@ def run_execution_job(
                     for key, expected_value in required.items()
                 ):
                     raise ValueError("execution receipt differs from frozen authority")
+                _require_upload_reconciliation_count(value)
                 if expected.get("runtime_profile") is not None:
                     digest_fields = ["execution_contract_sha256"]
                     if expected["runtime_profile"] == "concurrency":
@@ -735,7 +743,7 @@ def completed_build_authority(
     value = aws.read_receipt(job)
     required: dict[str, object] = {
         **expected,
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "complete",
         "role": "build",
         "attempt": job.attempt,
@@ -747,6 +755,7 @@ def completed_build_authority(
         value.get(key) != expected_value for key, expected_value in required.items()
     ):
         raise ValueError("completed build differs from frozen runtime authority")
+    _require_upload_reconciliation_count(value)
     binary_sha256 = value.get("binary_sha256")
     if not isinstance(binary_sha256, str) or not re.fullmatch(
         r"[0-9a-f]{64}", binary_sha256

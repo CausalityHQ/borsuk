@@ -249,7 +249,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 return {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "status": "complete",
                     "role": "build",
                     "attempt": 1,
@@ -260,6 +260,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "index_uri": build_job.index_uri,
                     "binary_sha256": "8" * 64,
                     "purchase_option": "spot",
+                    "artifact_upload_reconciliations": 0,
                 }
 
         aws = GenericReadAws()
@@ -337,7 +338,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 return {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "status": "complete",
                     "role": "build",
                     "attempt": 1,
@@ -348,6 +349,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "index_uri": build_job.index_uri,
                     "binary_sha256": "8" * 64,
                     "purchase_option": "spot",
+                    "artifact_upload_reconciliations": 0,
                 }
 
         prepared = prepare_qualification_execution(
@@ -421,7 +423,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 receipt = {
-                    "schema_version": 4,
+                    "schema_version": 5,
                     "status": "complete",
                     "role": "runtime",
                     "attempt": 2,
@@ -429,6 +431,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "execution_contract_sha256": "9" * 64,
                     "diagnostic_result_sha256": "1" * 64,
                     "diagnostic_samples_sha256": "2" * 64,
+                    "artifact_upload_reconciliations": 0,
                 }
                 if self.include_summary_digest:
                     receipt["diagnostic_summary_sha256"] = "3" * 64
@@ -484,7 +487,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 return {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "status": "complete",
                     "role": "build",
                     "attempt": 1,
@@ -495,6 +498,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "index_uri": build_job.index_uri,
                     "binary_sha256": "8" * 64,
                     "purchase_option": "spot",
+                    "artifact_upload_reconciliations": 0,
                 }
 
         diagnostic = prepare_qualification_execution(
@@ -586,7 +590,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 receipt = {
-                    "schema_version": 4,
+                    "schema_version": 5,
                     "status": "complete",
                     "role": "runtime",
                     "attempt": 2,
@@ -598,6 +602,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "lifecycle_query_summary_sha256": "5" * 64,
                     "lifecycle_query_samples_sha256": "4" * 64,
                     "lifecycle_storage_trace_sha256": "3" * 64,
+                    "artifact_upload_reconciliations": 0,
                 }
                 if self.include_result_digest:
                     receipt["diagnostic_result_sha256"] = "1" * 64
@@ -653,7 +658,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 return {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "status": "complete",
                     "role": "build",
                     "attempt": 1,
@@ -664,6 +669,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "index_uri": build_job.index_uri,
                     "binary_sha256": "8" * 64,
                     "purchase_option": "spot",
+                    "artifact_upload_reconciliations": 0,
                 }
 
         common = {
@@ -769,7 +775,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 return {
-                    "schema_version": 4,
+                    "schema_version": 5,
                     "status": "complete",
                     "role": "runtime",
                     "attempt": 1,
@@ -778,6 +784,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "lifecycle_summary_sha256": "8" * 64,
                     "lifecycle_costs_sha256": "7" * 64,
                     "lifecycle_samples_sha256": "6" * 64,
+                    "artifact_upload_reconciliations": 0,
                 }
 
             def terminate(self, _instance: str) -> None:
@@ -820,7 +827,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 return {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "status": "complete",
                     "role": "build",
                     "attempt": 1,
@@ -831,6 +838,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "index_uri": build_job.index_uri,
                     "binary_sha256": "8" * 64,
                     "purchase_option": "spot",
+                    "artifact_upload_reconciliations": 0,
                 }
 
         prepared = prepare_qualification_execution(
@@ -976,7 +984,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 return {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "status": "complete",
                     "role": "build",
                     "attempt": 1,
@@ -987,6 +995,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "index_uri": job.index_uri,
                     "binary_sha256": "8" * 64,
                     "purchase_option": "spot",
+                    "artifact_upload_reconciliations": 0,
                 }
 
         authority = completed_build_authority(
@@ -1087,7 +1096,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 return {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "status": "complete",
                     "role": "build",
                     "attempt": 1,
@@ -1099,6 +1108,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "index_uri": job.index_uri,
                     "binary_sha256": "8" * 64,
                     "purchase_option": "spot",
+                    "artifact_upload_reconciliations": 0,
                 }
 
             def launch(self, _job: object, _request: object):
@@ -1207,7 +1217,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             )
         self.assertEqual(aws.purchase_option, "on-demand")
 
-    def test_runtime_schema_three_receipt_matches_flow_control_authority(self) -> None:
+    def test_runtime_schema_five_receipt_matches_flow_control_authority(self) -> None:
         manifest = unstaged_sift_manifest()
         manifest["source"] = {
             "state": "frozen",
@@ -1246,6 +1256,8 @@ class PublicationV3ControllerTests(unittest.TestCase):
         }
 
         class RuntimeReceiptAws:
+            reconciliation_count: object = 0
+
             def find_execution_instance(self, _job: object, *, purchase_option: str):
                 return None
 
@@ -1254,12 +1266,13 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
             def read_receipt(self, _job: object):
                 return {
-                    "schema_version": 4,
+                    "schema_version": 5,
                     "status": "complete",
                     "role": "runtime",
                     "attempt": 1,
                     **expected,
                     "execution_contract_sha256": "9" * 64,
+                    "artifact_upload_reconciliations": self.reconciliation_count,
                 }
 
             def terminate(self, _instance: str):
@@ -1274,7 +1287,23 @@ class PublicationV3ControllerTests(unittest.TestCase):
             poll_seconds=0.01,
             purchase_option="spot",
         )
-        self.assertEqual(receipt["schema_version"], 4)
+        self.assertEqual(receipt["schema_version"], 5)
+        for invalid_count in (True, -1, 0.0, None):
+            with (
+                self.subTest(invalid_count=invalid_count),
+                self.assertRaisesRegex(ValueError, "reconciliation count"),
+            ):
+                invalid = RuntimeReceiptAws()
+                invalid.reconciliation_count = invalid_count
+                run_execution_job(
+                    job,
+                    request={},
+                    expected=expected,
+                    aws=invalid,
+                    timeout_seconds=60,
+                    poll_seconds=0.01,
+                    purchase_option="spot",
+                )
 
     def test_execution_instance_identity_is_role_cell_and_attempt_bound(self) -> None:
         manifest = unstaged_sift_manifest()
