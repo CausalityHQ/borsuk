@@ -247,8 +247,10 @@ results were 0.970/0.973 and are the only publication-safe values.
 - `uncached` means serving metadata is already resident, while the query data
   pages are absent from the local disk cache and therefore require object-store
   I/O.
-- `disk_cached` resets the disk cache, opens one prepared serving handle, and
-  primes the complete 1,000-query set once outside timing. Recall clears
+- `disk_cached` resets the disk cache, opens one prepared serving handle, then
+  clears the disk-resident product of excluded startup while deliberately
+  retaining RAM-resident serving metadata. It primes the complete 1,000-query
+  set once outside timing. Recall clears
   query-populated decoded RAM state before each measured query; concurrency
   clears it before each steady worker profile. Every measurement requires
   local-disk reads with zero backing-store GETs and bytes. Its 64 GiB cache

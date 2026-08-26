@@ -388,11 +388,13 @@ that all 20 data-dependent working sets would remain in the 1 GiB disk cache.
 The runtime therefore correctly rejected the arm rather than mislabeling it
 warm.
 
-The replacement methodology resets the disk cache, prepares one handle, and
-primes all 1,000 registered queries once. Recall clears query-populated decoded
-state before each measured query; concurrency clears it before each steady
-worker profile. This avoids both cross-query eviction and repeated expensive
-index opens. The BORSUK runtime now
+The replacement methodology resets the disk cache, prepares one handle, clears
+the disk-resident product of excluded startup while deliberately retaining
+RAM-resident serving metadata, and primes all 1,000 registered queries once.
+Recall clears query-populated decoded state before each measured query;
+concurrency clears it before each steady worker profile. This avoids setup
+pollution, cross-query eviction, and repeated expensive index opens. The BORSUK
+runtime now
 uses a dedicated 96 GiB volume and a 64 GiB cache; only 75% is admissible at a
 conservative 48 MiB per query, giving authority for 1,024 queries and leaving
 16 GiB explicit headroom. Because this changes the frozen source, storage, and
@@ -404,3 +406,47 @@ The replacement concurrency run primes once and measures one 1,000-query wave
 per worker profile. Its QPS is not comparable to any earlier worker-sized,
 multi-wave diagnostic, whose repeated spawn/barrier overhead dominated the
 measurement; only the replacement campaign is publication-eligible.
+
+## Full-query-set cache restart on 2026-08-26
+
+The next standard-read restart used source commit
+`7334c5299f0649c6a74262b0e7f92fc645f29505`, cell
+`r01-1a02288fe99c832240fe6037`, and the following immutable authority:
+
+- source archive SHA-256:
+  `9c9b11832c7525dcaf0c2f3dc5d014afa65bee6968e458b7ec90f558194804ad`;
+- manifest SHA-256:
+  `c74df8d4d392164e02680b9142cc57123c66cf07c511e53d6082e34c70f8fd9e`;
+- build/runtime protocol SHA-256:
+  `9cfe4716f828f7aa18c6eed0df765b2716614a58664c214956b8b396257fb8bc`;
+- binary SHA-256:
+  `c56a29b6aed7e7a9ef40426ef210da8dd0c35af57e86ad25f590db6701a679bb`;
+- index URI:
+  `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/indexes/build-attempts/0001/index-6e3e9756f5c66f82a2fb1c24`.
+
+Every attempt used Spot and the controller terminated every instance. The build
+completed on `i-028912a14239bc11f`; its terminal-marker SHA-256 was
+`e4cc7665faeef269e954255812da80786b958751f4837885ccd012f7a5154f47`.
+Cold arm 0 completed on `i-0f30af4df4b15f8f5`; its terminal-marker SHA-256
+was `9fd63199c6a3c5efaa72f0e4f02198ff42ea02e33008bfc0c9215bf7ca2ddbdc`
+and its result SHA-256 was
+`23a187ad75225b98dd0639b5a5e77683052efc5a137b6e3ffe9913f15164d414`.
+It measured 1,000 queries at 97.41% recall@10, p50/p95/p99 latency
+227.895/292.266/331.762 ms, 4.322 queries/s, peak RSS 793,972,736 bytes,
+58,642 backing GETs, and 28,481,498,592 backing bytes. This is valid evidence
+only for that exact cold cell.
+
+Warm arm 1 failed closed on `i-0fb7e55eaeee6301c`; its terminal-marker
+SHA-256 was
+`0bee75e35f70ff35cb207f78f1d7eebf2d270a18f8f63ccad10f2b59de4d351b`.
+No result was published. Opening and preparing the handle first admitted
+65,146,500,000 bytes of excluded setup traffic into the 64 GiB read-through
+cache. Priming the complete query set then evicted early query objects, and
+measured query 3 correctly failed the zero-backing-I/O guard after three GETs.
+
+The repaired methodology keeps RAM-resident prepared metadata but clears the
+disk-resident product of open immediately before query priming. This makes the
+complete primed query set, rather than excluded setup objects, the sole
+disk-resident measurement cohort. Because the repair changes source authority,
+the completed cold cell above remains immutable historical evidence; both arms
+must rebuild and rerun under the repaired source.

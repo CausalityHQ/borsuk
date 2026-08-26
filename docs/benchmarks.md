@@ -36,9 +36,11 @@ Uncapped query or decode concurrency is research-only.
   physical record-sidecar indexes used for late top-k IDs share the hard
   128 MiB cache.
 - `disk_cached`: the disk cache is reset, one serving handle is prepared, and
-  all 1,000 queries are primed once outside timing. Recall clears decoded query
-  state before every measured query; concurrency clears it before each worker
-  profile and measures each as one steady pipeline. The 64 GiB cache has a
+  the disk-resident product of excluded startup is cleared while RAM-resident
+  serving metadata is deliberately retained. All 1,000 queries are then primed
+  once outside timing. Recall clears decoded query state before every measured
+  query; concurrency clears it before each worker profile and measures each as
+  one steady pipeline. The 64 GiB cache has a
   conservative 1,024-query authority with 16 GiB reserved inside the cache
   budget; the 96 GiB volume provides another 32 GiB outside it. Every measured
   query must report at least one local-disk read and zero backing-store GETs. Logical bytes

@@ -3291,11 +3291,13 @@ fn execute_uncached_query_sequence<Handle>(
     Ok(summary)
 }
 
+#[allow(clippy::too_many_arguments)] // Keep every ordered cache-lifecycle boundary testable.
 fn execute_disk_cached_query_cohorts<Handle>(
     query_count: usize,
     cohort_size: usize,
     mut reset: impl FnMut() -> BenchResult<()>,
     mut open: impl FnMut() -> BenchResult<Handle>,
+    mut clear_disk_cache_after_open: impl FnMut(&Handle) -> BenchResult<()>,
     mut prime: impl FnMut(&Handle, usize) -> BenchResult<()>,
     mut clear_query_retained_state: impl FnMut(&Handle) -> BenchResult<()>,
     mut measure: impl FnMut(&Handle, usize) -> BenchResult<QuerySummary>,
@@ -3310,6 +3312,10 @@ fn execute_disk_cached_query_cohorts<Handle>(
     reset()?;
     {
         let handle = open()?;
+        // Opening prepares serving authority through the read-through cache.
+        // Discard the disk-resident product of that excluded setup while
+        // deliberately retaining RAM-resident metadata on this handle.
+        clear_disk_cache_after_open(&handle)?;
         for query_index in 0..query_count {
             prime(&handle, query_index)?;
         }
@@ -3323,11 +3329,13 @@ fn execute_disk_cached_query_cohorts<Handle>(
     Ok(summary)
 }
 
+#[allow(clippy::too_many_arguments)] // Keep every ordered cache-lifecycle boundary testable.
 fn execute_disk_cached_concurrency_profiles<Handle>(
     query_count: usize,
     worker_profiles: &[usize],
     mut reset: impl FnMut() -> BenchResult<()>,
     mut open: impl FnMut() -> BenchResult<Handle>,
+    mut clear_disk_cache_after_open: impl FnMut(&Handle) -> BenchResult<()>,
     mut prime: impl FnMut(&Handle, usize) -> BenchResult<()>,
     mut clear_query_retained_state: impl FnMut(&Handle) -> BenchResult<()>,
     mut measure: impl FnMut(
@@ -3347,6 +3355,9 @@ fn execute_disk_cached_concurrency_profiles<Handle>(
     reset()?;
     {
         let handle = open()?;
+        // Keep RAM-resident prepared metadata, but remove disk-resident setup
+        // objects so they cannot evict any query in the complete primed cohort.
+        clear_disk_cache_after_open(&handle)?;
         for &query_index in &cohort {
             prime(&handle, query_index)?;
         }
@@ -3432,6 +3443,7 @@ fn run_disk_cached_queries(
         cohort_size,
         || reset_cache(&config.cache_dir).map_err(Into::into),
         || open_serving_index(config),
+        |index| index.clear_local_read_through_cache().map_err(Into::into),
         |index, query_index| {
             let _ = run_queries(
                 index,
@@ -3937,6 +3949,7 @@ fn write_concurrency_csv(config: &ResolvedConfig, dataset: &Dataset) -> BenchRes
             &config.concurrency,
             || reset_cache(&config.cache_dir).map_err(Into::into),
             || Ok(Arc::new(open_serving_index(config)?)),
+            |index| index.clear_local_read_through_cache().map_err(Into::into),
             |index, query_index| {
                 let _ = index
                     .search_with_report(&dataset.queries[query_index], serving_options(config))?;
@@ -7827,7 +7840,7 @@ mod tests {
     }
 
     #[test]
-    fn disk_cached_cohorts_clear_decoded_state_before_measuring_on_one_handle() {
+    fn disk_cached_cohorts_discard_open_io_before_priming_one_handle() {
         use std::cell::{Cell, RefCell};
         use std::rc::Rc;
 
@@ -7888,6 +7901,17 @@ mod tests {
                 }
             },
             {
+                let live = Rc::clone(&live);
+                let events = Rc::clone(&events);
+                move |handle: &TrackedHandle| {
+                    assert_eq!(live.get(), 1);
+                    events
+                        .borrow_mut()
+                        .push(format!("clear-disk-{}", handle.id));
+                    Ok(())
+                }
+            },
+            {
                 let events = Rc::clone(&events);
                 move |handle: &TrackedHandle, query_index| {
                     events
@@ -7926,6 +7950,7 @@ mod tests {
             [
                 "reset",
                 "open-1",
+                "clear-disk-1",
                 "prime-1-0",
                 "prime-1-1",
                 "prime-1-2",
@@ -7954,6 +7979,7 @@ mod tests {
                 Ok(())
             },
             || Ok(()),
+            |_| Ok(()),
             |_, query_index| {
                 cached_queries.borrow_mut().insert(query_index);
                 Ok(())
@@ -8192,7 +8218,7 @@ mod tests {
     }
 
     #[test]
-    fn disk_cached_concurrency_primes_once_then_clears_before_each_worker_profile() {
+    fn disk_cached_concurrency_discards_open_io_then_primes_once() {
         use std::cell::{Cell, RefCell};
         use std::rc::Rc;
         use std::time::Duration;
@@ -8242,6 +8268,17 @@ mod tests {
                 }
             },
             {
+                let live = Rc::clone(&live);
+                let events = Rc::clone(&events);
+                move |handle: &TrackedHandle| {
+                    assert_eq!(live.get(), 1);
+                    events
+                        .borrow_mut()
+                        .push(format!("clear-disk-{}", handle.id));
+                    Ok(())
+                }
+            },
+            {
                 let events = Rc::clone(&events);
                 move |handle: &TrackedHandle, query_index| {
                     events
@@ -8288,6 +8325,7 @@ mod tests {
             [
                 "reset",
                 "open-1",
+                "clear-disk-1",
                 "prime-1-0",
                 "prime-1-1",
                 "prime-1-2",
@@ -8351,6 +8389,17 @@ mod tests {
             },
             {
                 let observed = Rc::clone(&observed);
+                let live = Rc::clone(&live);
+                move |handle: &TrackedHandle| {
+                    assert_eq!(live.get(), 1);
+                    observed
+                        .borrow_mut()
+                        .push(format!("clear-disk-{}", handle.id));
+                    Ok(())
+                }
+            },
+            {
+                let observed = Rc::clone(&observed);
                 move |handle: &TrackedHandle, query_index| {
                     observed
                         .borrow_mut()
@@ -8395,6 +8444,7 @@ mod tests {
             vec![
                 "reset",
                 "open-1",
+                "clear-disk-1",
                 "prime-1-0",
                 "prime-1-1",
                 "clear-1",

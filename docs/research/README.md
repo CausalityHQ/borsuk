@@ -64,7 +64,9 @@ Numbers from different classes are not merged into one ranking.
 - `uncached`: serving metadata is resident, but query cell data is absent from
   local disk and must be fetched from object storage.
 - `disk_cached`: the disk cache is reset, one handle is prepared, and the
-  complete 1,000-query set is primed once. Recall clears decoded query state
+  disk-resident product of excluded startup is cleared while RAM-resident
+  serving metadata is deliberately retained. The complete 1,000-query set is
+  then primed once. Recall clears decoded query state
   before each measured query; concurrency clears it before measuring each
   steady worker profile. Its 64 GiB cache authority reserves 16 GiB inside the
   cache budget and funds 1,024 queries at 48 MiB each; the 96 GiB volume leaves

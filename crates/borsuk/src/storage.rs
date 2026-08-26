@@ -1803,6 +1803,13 @@ impl Storage {
         self.request_counters.snapshot()
     }
 
+    pub(crate) fn clear_read_through_cache(&self) -> Result<()> {
+        if let Some(budget) = &self.cache_budget {
+            budget.clear()?;
+        }
+        Ok(())
+    }
+
     /// Payload bytes submitted to direct backing-store PUT attempts in this
     /// counter scope. Positioned mutations use direct bounded PUTs for typed
     /// payloads, envelopes, and shard-head CAS writes, so their operation-local
@@ -4712,6 +4719,55 @@ impl DiskCacheBudget {
         Ok(())
     }
 
+    fn clear(&self) -> Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        fs::create_dir_all(&self.root).map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "failed to create cache root `{}` before reset: {error}",
+                self.root.display()
+            ))
+        })?;
+        let clear_result = (|| -> io::Result<()> {
+            for entry in fs::read_dir(&self.root)? {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error),
+                };
+                let path = entry.path();
+                let file_type = match entry.file_type() {
+                    Ok(file_type) => file_type,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error),
+                };
+                let result = if file_type.is_dir() {
+                    fs::remove_dir_all(&path)
+                } else {
+                    fs::remove_file(&path)
+                };
+                if let Err(error) = result
+                    && error.kind() != io::ErrorKind::NotFound
+                {
+                    return Err(error);
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = clear_result {
+            *state = DiskCacheBudgetState::default();
+            self.initialize(&mut state)?;
+            return Err(BorsukError::InvalidStorage(format!(
+                "failed to reset cache root `{}`: {error}",
+                self.root.display()
+            )));
+        }
+        *state = DiskCacheBudgetState {
+            initialized: true,
+            ..DiskCacheBudgetState::default()
+        };
+        Ok(())
+    }
+
     #[cfg(test)]
     fn inventory_scans(&self) -> u64 {
         self.inventory_scans.load(Ordering::Relaxed)
@@ -7318,6 +7374,45 @@ mod tests {
         let state = budget.state.lock().unwrap();
         assert_eq!(state.entries.get(&path).map(|entry| entry.0), Some(3));
         assert_eq!(state.total_bytes, 3);
+    }
+
+    #[test]
+    fn live_cache_reset_clears_files_and_budget_accounting_before_repopulation() {
+        let objects = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let storage = Storage::from_uri_with_cache_and_max(
+            &file_uri(objects.path()),
+            Some(cache.path().to_path_buf()),
+            Some(128 * 1024),
+        )
+        .unwrap();
+        let setup = vec![1_u8; 16 * 1024];
+        storage.write_cache_file("setup/a", &setup).unwrap();
+        storage.write_cache_file("setup/b", &setup).unwrap();
+
+        storage.clear_read_through_cache().unwrap();
+
+        let budget = storage.cache_budget.as_ref().unwrap();
+        {
+            let state = budget.state.lock().unwrap();
+            assert!(state.initialized);
+            assert_eq!(state.total_bytes, 0);
+            assert!(state.entries.is_empty());
+            assert!(state.lru.is_empty());
+        }
+        assert_eq!(fs::read_dir(cache.path()).unwrap().count(), 0);
+
+        let cohort_a = vec![2_u8; 24 * 1024];
+        let cohort_b = vec![3_u8; 24 * 1024];
+        storage.write_cache_file("cohort/a", &cohort_a).unwrap();
+        storage.write_cache_file("cohort/b", &cohort_b).unwrap();
+        assert_eq!(storage.read_cache_file("cohort/a").unwrap(), Some(cohort_a));
+        assert_eq!(storage.read_cache_file("cohort/b").unwrap(), Some(cohort_b));
+        assert_eq!(
+            budget.state.lock().unwrap().total_bytes,
+            48 * 1024,
+            "reset setup entries must not remain as phantom capacity"
+        );
     }
 
     #[test]

@@ -5605,6 +5605,18 @@ impl BorsukIndex {
         Ok(())
     }
 
+    /// Clear configured local read-through cache files and their byte accounting.
+    ///
+    /// The caller must ensure that no index handle sharing this configured cache root
+    /// has an active search. The reset covers that entire shared root, including named
+    /// vector subtrees. RAM-resident serving metadata on this handle is deliberately
+    /// retained. This is intended for controlled cache-tier measurements after
+    /// synchronous open-time preparation.
+    #[doc(hidden)]
+    pub fn clear_local_read_through_cache(&self) -> Result<()> {
+        self.storage.clear_read_through_cache()
+    }
+
     fn clear_handle_query_retained_state(&self) {
         *self
             .live_wal_snapshot_cache
@@ -41446,8 +41458,7 @@ mod tests {
                 .is_some(),
             "query-cache clearing must retain explicitly prepared serving metadata"
         );
-        std::fs::remove_dir_all(cache.path()).unwrap();
-        std::fs::create_dir_all(cache.path()).unwrap();
+        index.clear_local_read_through_cache().unwrap();
 
         let report = index
             .search_with_report(
@@ -41463,6 +41474,20 @@ mod tests {
         assert_eq!(report.global_leaf_code_requests, 0, "{report:?}");
         assert!(report.decoded_cache_hits > 0, "{report:?}");
         assert!(report.global_leaf_page_bytes > 0, "{report:?}");
+        assert!(report.requests.gets > 0, "{report:?}");
+
+        index.clear_query_retained_state().unwrap();
+        let measured = index
+            .search_with_report(
+                &vectors[37],
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(64)
+                    .with_max_candidates_per_segment(128),
+            )
+            .unwrap();
+        assert_eq!(measured.requests.gets, 0, "{measured:?}");
+        assert!(measured.disk_cache_reads > 0, "{measured:?}");
+        assert_eq!(measured.hits, report.hits);
     }
 
     #[test]
