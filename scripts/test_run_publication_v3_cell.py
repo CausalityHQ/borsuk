@@ -38,6 +38,7 @@ from scripts.run_publication_v3_cell import (
     reconcile_lifecycle_storage_trace,
     reconcile_read_storage_trace,
     runtime_execution_contract,
+    runtime_expected_cache_cohort_size,
     runtime_flow_control_authority,
     smoke_cache_cohort_authority,
     summarize_concurrency_artifacts,
@@ -180,6 +181,18 @@ def query_artifact_fixture(*, decoded_bytes: int) -> dict[str, str]:
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
+    def test_lifecycle_runtime_has_no_read_cache_cohort(self) -> None:
+        arm = plan_arms(scheduled_cell(kind="write-update-delete-compact"))[11]
+        self.assertNotIn("cache_state", arm)
+        self.assertEqual(
+            runtime_expected_cache_cohort_size(
+                arm,
+                effective_flow_control={"disk_cache_max_bytes": 0},
+                effective_queries=1_000,
+            ),
+            0,
+        )
+
     def test_lifecycle_batch_schedule_balances_only_to_exercise_writers(self) -> None:
         self.assertEqual(lifecycle_batch_records(19_859, 1_024, 16), [1_024] * 19 + [403])
         self.assertEqual(lifecycle_batch_records(1_986, 1_024, 16), [125, 125, *([124] * 14)])

@@ -1079,6 +1079,21 @@ def disk_cached_cohort_authority(
     return cohort_size, (expected_queries + cohort_size - 1) // cohort_size
 
 
+def runtime_expected_cache_cohort_size(
+    arm: dict[str, object],
+    *,
+    effective_flow_control: dict[str, object],
+    effective_queries: int,
+) -> int:
+    if arm.get("cache_state") != "warm":
+        return 0
+    try:
+        disk_cache_max_bytes = int(effective_flow_control["disk_cache_max_bytes"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("runtime cache cohort authority is invalid") from error
+    return disk_cached_cohort_authority(disk_cache_max_bytes, effective_queries)[0]
+
+
 def smoke_cache_cohort_authority(
     plan: dict[str, object], arm: dict[str, object]
 ) -> int:
@@ -2993,12 +3008,11 @@ def main() -> int:
             canonical_json_bytes(runtime_attestation) + b"\n"
         )
         effective_queries = int(plan["effective_queries"])
-        expected_cache_cohort_size = 0
-        if arm["cache_state"] == "warm":
-            expected_cache_cohort_size, _ = disk_cached_cohort_authority(
-                int(effective_flow_control["disk_cache_max_bytes"]),
-                effective_queries,
-            )
+        expected_cache_cohort_size = runtime_expected_cache_cohort_size(
+            arm,
+            effective_flow_control=effective_flow_control,
+            effective_queries=effective_queries,
+        )
         if workload_kind == "read-recall" and args.runtime_profile == "concurrency":
             summary_path = output / "bench_concurrency.csv"
             samples_path = output / "bench_concurrency_samples.csv"
