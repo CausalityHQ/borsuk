@@ -205,9 +205,12 @@ EC2 reported neither an interruption nor an impairment. The attempt therefore
 contributes no performance observation. The controller advanced explicitly to
 attempt 2 under the same immutable build and source authority, which completed.
 The exact cause remains unknown. Before the remaining lifecycle campaign, the
-receipt publisher and failure reporter need a focused robustness repair so a
-future publication-stage failure preserves its underlying error rather than
-only the stage name.
+receipt publisher and failure reporter therefore required a focused robustness
+repair. Source commit `5fcec05dc59cc952d23e4077a9874dfd9b7ebe7f` adds
+three bounded upload attempts, S3-computed-checksum reconciliation for an
+ambiguous conditional PUT, a shared ten-minute publication-stage deadline,
+bounded aggregate error preservation, and a durable reconciliation count in
+versioned terminal receipts. Foreign-checksum conflicts still fail closed.
 
 Each completed arm inserted 19,859 new rows, flushed and consolidated that
 inserted delta, then performed 1,986 upserts and 1,986 deletes before compaction
