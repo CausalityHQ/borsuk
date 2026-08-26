@@ -191,7 +191,7 @@ class PublicationV3AwsTests(unittest.TestCase):
         self.assertEqual(root["Ebs"]["VolumeSize"], 16)
         self.assertEqual(cache["DeviceName"], "/dev/sdf")
         volume = cache["Ebs"]
-        self.assertEqual(volume["VolumeSize"], 32)
+        self.assertEqual(volume["VolumeSize"], 96)
         self.assertEqual(volume["VolumeType"], "gp3")
         self.assertEqual(volume["Iops"], 3000)
         self.assertEqual(volume["Throughput"], 125)

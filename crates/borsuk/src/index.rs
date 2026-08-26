@@ -3526,6 +3526,12 @@ impl SidecarIndexCache {
         }
         true
     }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+        self.bytes = 0;
+    }
 }
 
 struct LateInteractionSidecarIndexCache {
@@ -3615,9 +3621,52 @@ impl LateInteractionSidecarIndexCache {
         }
         true
     }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+        self.bytes = 0;
+    }
 }
 
 impl CollectionReadRuntime {
+    fn clear_query_retained_state(&self) {
+        if let Some(cache) = self.segment_cache.get() {
+            cache.clear();
+        }
+        self.cell_card_code_planes.clear();
+        self.projected_segment_cache.clear();
+        self.decoded_lexical_reads.clear();
+        self.decoded_lexical_pages.clear();
+        self.tombstone_cache.clear();
+        self.mutation_directory_batch_cache.clear();
+        self.mutation_directory_root_cache.clear();
+        self.decoded_bm25_stats_pages.clear();
+        self.vector_sidecar_indexes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        self.decoded_vector_sidecars.clear();
+        self.routing_page_cache.clear();
+        self.decoded_routing_page_children.clear();
+        self.decoded_routing_page_summaries.clear();
+        self.late_interaction_sidecar_indexes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        self.decoded_late_interaction_batches.clear();
+        self.wal_tail_runtime.decoded_runs.clear();
+        if let Some(pool) = self.retained_pool.as_ref() {
+            pool.reset_peak_to_used();
+        }
+        if let Some(gate) = self.transient_admission.as_ref() {
+            gate.reset_peak_to_used();
+        }
+        if let Some(gate) = self.lexical_admission.as_ref() {
+            gate.reset_peak_to_used();
+        }
+    }
+
     fn new(
         options: &OpenOptions,
         effective_ram_budget: Option<u64>,
@@ -5540,6 +5589,30 @@ impl BorsukIndex {
         let _ = self.load_resident_lexical_roots()?;
         self.prepare_mutation_frontier(&self.manifest)?;
         Ok(summaries.len())
+    }
+
+    /// Release query-populated decoded state while retaining prepared serving metadata.
+    ///
+    /// The caller must ensure that this collection has no active searches. This is
+    /// intended for controlled cache-tier measurements: a primer may populate the
+    /// local read-through cache, then this method removes the decoded-RAM reuse path
+    /// before the measured query without rebuilding routing summaries, quantizers,
+    /// codebooks, or complete code planes admitted by [`Self::prepare_serving_metadata`].
+    #[doc(hidden)]
+    pub fn clear_query_retained_state(&self) -> Result<()> {
+        self.read_runtime.clear_query_retained_state();
+        self.clear_handle_query_retained_state();
+        Ok(())
+    }
+
+    fn clear_handle_query_retained_state(&self) {
+        *self
+            .live_wal_snapshot_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+        for child in self.named.values() {
+            child.clear_handle_query_retained_state();
+        }
     }
 
     fn prepare_fitting_cell_card_code_planes(&self, pins: &ResidentGlobalAnnPins) -> Result<()> {
@@ -41363,6 +41436,16 @@ mod tests {
         )
         .unwrap();
         index.prepare_serving_metadata().unwrap();
+        index.clear_query_retained_state().unwrap();
+        assert!(
+            index
+                .read_runtime
+                .prepared_cell_card_code_planes
+                .lock()
+                .unwrap()
+                .is_some(),
+            "query-cache clearing must retain explicitly prepared serving metadata"
+        );
         std::fs::remove_dir_all(cache.path()).unwrap();
         std::fs::create_dir_all(cache.path()).unwrap();
 
@@ -41699,8 +41782,6 @@ mod tests {
             "the first query must exercise card-slice caching, not full-plane promotion"
         );
 
-        std::fs::remove_dir_all(cache.path()).unwrap();
-        std::fs::create_dir_all(cache.path()).unwrap();
         let second = index.search_with_report(&query, options).unwrap();
 
         assert_eq!(second.hits, first.hits);
@@ -41715,6 +41796,20 @@ mod tests {
         assert_eq!(second.global_leaf_code_bytes, 0, "{second:?}");
         assert_eq!(second.global_leaf_code_requests, 0, "{second:?}");
         assert!(second.decoded_cache_hits > 0, "{second:?}");
+
+        index.clear_query_retained_state().unwrap();
+        let third = index
+            .search_with_report(
+                &query,
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(4)
+                    .with_max_candidates_per_segment(128),
+            )
+            .unwrap();
+        assert_eq!(third.hits, first.hits);
+        assert!(third.global_leaf_code_bytes > 0, "{third:?}");
+        assert!(third.disk_cache_reads > 0, "{third:?}");
+        assert_eq!(third.backing_reads, 0, "{third:?}");
     }
 
     #[test]

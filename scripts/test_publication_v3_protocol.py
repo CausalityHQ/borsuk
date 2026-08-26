@@ -65,7 +65,7 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
                     "vcpus": 4,
                     "memory_mib": 8192,
                     "resident_limit_mib": 2048,
-                    "disk_cache_limit_mib": 1024,
+                    "disk_cache_limit_mib": 65536,
                 },
                 "amazon-s3-vectors": {
                     "instance_type": "c7g.xlarge",
@@ -90,7 +90,7 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
             },
             "runtime_storage": {
                 "volume_type": "gp3",
-                "volume_size_gib": 32,
+                "volume_size_gib": 96,
                 "iops": 3000,
                 "throughput_mib_s": 125,
             },
@@ -503,14 +503,23 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         self.assertLessEqual(
             environment["runtime_clients"]["borsuk"]["resident_limit_mib"], 2048
         )
-        self.assertEqual(environment["runtime_storage"]["volume_size_gib"], 32)
+        self.assertEqual(environment["runtime_storage"]["volume_size_gib"], 96)
         self.assertFalse(environment["runtime_data_contract"]["allow_local_corpus"])
         self.assertFalse(environment["runtime_data_contract"]["allow_local_index"])
 
         for mutation, error in (
             (("runtime_clients", "borsuk", "resident_limit_mib", 8192), "resident"),
-            (("runtime_clients", "borsuk", "disk_cache_limit_mib", 4096), "cache"),
+            (("runtime_clients", "borsuk", "disk_cache_limit_mib", 65537), "cache"),
+            (
+                ("runtime_clients", "amazon-s3-vectors", "disk_cache_limit_mib", 4096),
+                "cache",
+            ),
+            (
+                ("runtime_clients", "borsuk", "disk_cache_limit_mib", 1024),
+                "complete query set",
+            ),
             (("runtime_storage", "volume_size_gib", None, 256), "runtime storage"),
+            (("runtime_storage", "volume_size_gib", None, 64), "cache headroom"),
             (("runtime_data_contract", "allow_local_index", None, True), "S3-only"),
         ):
             manifest = valid_v3_manifest()

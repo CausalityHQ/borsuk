@@ -181,12 +181,44 @@ def query_artifact_fixture(*, decoded_bytes: int) -> dict[str, str]:
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
+    def test_runtime_cache_cohort_authority_binds_read_profiles_to_complete_query_set(
+        self,
+    ) -> None:
+        arm = {"cache_state": "warm"}
+        flow = {"disk_cache_max_bytes": 64 * 1024 * 1024 * 1024}
+        self.assertEqual(
+            runtime_expected_cache_cohort_size(
+                arm,
+                runtime_profile="recall",
+                effective_flow_control=flow,
+                effective_queries=1_000,
+            ),
+            1_000,
+        )
+        self.assertEqual(
+            runtime_expected_cache_cohort_size(
+                arm,
+                runtime_profile="concurrency",
+                effective_flow_control=flow,
+                effective_queries=1_000,
+            ),
+            1_000,
+        )
+        with self.assertRaisesRegex(ValueError, "complete query set"):
+            runtime_expected_cache_cohort_size(
+                arm,
+                runtime_profile="concurrency",
+                effective_flow_control={"disk_cache_max_bytes": 1024**3},
+                effective_queries=1_000,
+            )
+
     def test_lifecycle_runtime_has_no_read_cache_cohort(self) -> None:
         arm = plan_arms(scheduled_cell(kind="write-update-delete-compact"))[11]
         self.assertNotIn("cache_state", arm)
         self.assertEqual(
             runtime_expected_cache_cohort_size(
                 arm,
+                runtime_profile="recall",
                 effective_flow_control={"disk_cache_max_bytes": 0},
                 effective_queries=1_000,
             ),
@@ -1245,7 +1277,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             )
         self.assertEqual(
             warm_plan["steps"][1]["env"]["BORSUK_BENCH_DISK_CACHE_MAX_BYTES"],
-            str(1024**3),
+            str(64 * 1024**3),
         )
         self.assertEqual(
             warm_plan["steps"][1]["env"]["BORSUK_BENCH_CACHE_COVERAGE_PERCENT"],
@@ -1253,12 +1285,12 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         )
         self.assertEqual(
             smoke_cache_cohort_authority(warm_plan, warm_arm),
-            20,
-            "smoke must authenticate every warm sample against its actual cohort",
+            10,
+            "smoke must authenticate the complete warm query cohort",
         )
         self.assertEqual(smoke_cache_cohort_authority(plan, arm), 0)
         self.assertEqual(plan["runtime_client"]["instance_type"], "c7g.xlarge")
-        self.assertEqual(plan["runtime_storage"]["volume_size_gib"], 32)
+        self.assertEqual(plan["runtime_storage"]["volume_size_gib"], 96)
 
     def test_every_frozen_dense_generator_has_an_exact_executable_plan(self) -> None:
         manifest = json.loads(
@@ -1286,7 +1318,11 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         for cell in schedule["cells"]:
             source = cell["dataset"]["source"]
             generator_id = source.get("generator")
-            if cell["system"] != "borsuk" or generator_id not in expected:
+            if (
+                cell["system"] != "borsuk"
+                or cell["workload"]["kind"] != "read-recall"
+                or generator_id not in expected
+            ):
                 continue
             if generator_id in observed:
                 continue
@@ -1807,6 +1843,24 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(metrics[-1]["storage_gets"], 0)
         self.assertEqual(metrics[-1]["storage_bytes_read"], 0)
         self.assertEqual(metrics[-1]["disk_cache_bytes_read"], 200)
+        wrong_wave = json.loads(json.dumps(samples))
+        next(row for row in wrong_wave if row["workers"] == "2")[
+            "cache_cohort_size"
+        ] = "1"
+        with self.assertRaisesRegex(ValueError, "cache cohort"):
+            summarize_concurrency_artifacts(
+                summaries,
+                wrong_wave,
+                expected_workers=(1, 2, 4),
+                expected_queries=2,
+                minimum_recall_ppm=980_000,
+                expected_scan_codec="fast-turboquant-scan",
+                expected_nprobe=32,
+                expected_max_candidates=512,
+                expected_cache_profile="disk_cached",
+                expected_cache_coverage_percent=100,
+                expected_cache_cohort_size=2,
+            )
         self.assertEqual(
             reconcile_concurrency_storage(
                 metrics,
@@ -1985,13 +2039,11 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
 
     def test_disk_cached_cohort_authority_is_budgeted_and_row_bound(self) -> None:
         self.assertEqual(
-            disk_cached_cohort_authority(1024 * 1024 * 1024, 1_000),
-            (20, 50),
+            disk_cached_cohort_authority(64 * 1024 * 1024 * 1024, 1_000),
+            (1_000, 1),
         )
-        self.assertEqual(
-            disk_cached_cohort_authority(512 * 1024 * 1024, 1_000),
-            (12, 84),
-        )
+        with self.assertRaisesRegex(ValueError, "complete query set"):
+            disk_cached_cohort_authority(1024 * 1024 * 1024, 1_000)
         for disk_bytes, queries in ((True, 1_000), (1024**3, True), (0, 1_000)):
             with (
                 self.subTest(disk_bytes=disk_bytes, queries=queries),
@@ -1999,20 +2051,20 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             ):
                 disk_cached_cohort_authority(disk_bytes, queries)
         row = {
-            "cache_cohort_index": "1",
-            "cache_cohort_size": "20",
-            "cache_cohort_count": "50",
+            "cache_cohort_index": "0",
+            "cache_cohort_size": "1000",
+            "cache_cohort_count": "1",
         }
         validate_query_cache_cohort(
             row,
             sample_index=20,
             expected_queries=1_000,
-            expected_cohort_size=20,
+            expected_cohort_size=1_000,
         )
         for field, value in (
-            ("cache_cohort_index", "0"),
-            ("cache_cohort_size", "19"),
-            ("cache_cohort_count", "49"),
+            ("cache_cohort_index", "1"),
+            ("cache_cohort_size", "999"),
+            ("cache_cohort_count", "2"),
         ):
             with (
                 self.subTest(field=field),
@@ -2022,7 +2074,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     {**row, field: value},
                     sample_index=20,
                     expected_queries=1_000,
-                    expected_cohort_size=20,
+                    expected_cohort_size=1_000,
                 )
         validate_query_cache_cohort(
             {
@@ -2188,6 +2240,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             row["disk_cache_reads"] = "1"
             row["disk_cache_bytes_read"] = row["bytes_read"]
             row["backing_bytes_read"] = "0"
+            row["cache_cohort_index"] = "0"
             row["cache_cohort_size"] = "3"
             row["cache_cohort_count"] = "1"
         with self.assertRaisesRegex(ValueError, "cache cohort authority"):

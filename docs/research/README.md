@@ -60,9 +60,17 @@ Numbers from different classes are not merged into one ranking.
   latency.
 - `uncached`: serving metadata is resident, but query cell data is absent from
   local disk and must be fetched from object storage.
-- `disk_cached`: bounded cohorts of at most 20 unique queries are primed outside
-  timing and then measured before the next cohort. Every measured query must
-  report a local-disk read and zero backing GETs and backing bytes.
+- `disk_cached`: the disk cache is reset, one handle is prepared, and the
+  complete 1,000-query set is primed once. Recall clears decoded query state
+  before each measured query; concurrency clears it before measuring each
+  steady worker profile. Its 64 GiB cache authority reserves 16 GiB inside the
+  cache budget and funds 1,024 queries at 48 MiB each; the 96 GiB volume leaves
+  another 32 GiB outside the cache. Every measured query must report a
+  local-disk read and zero backing GETs and backing bytes.
+  The 64 GiB read-through cache applies only to BORSUK's remote object index;
+  Amazon S3 Vectors has opaque managed caching and FAISS serves an admitted
+  resident index, so their disclosed 1 GiB client cache is staging/control
+  capacity rather than an equivalent index-data cache.
 - `memory_preloaded`: the warm report proves complete decoded segment/vector
   coverage in the bounded RAM cache; graph-enabled indexes also require every
   immutable graph resident. Partial coverage is labeled as a mixed-cache state,

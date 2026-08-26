@@ -36,6 +36,7 @@ try:
     from scripts.publication_v3_protocol import (
         BORSUK_GLOBAL_SCAN_CODECS,
         BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS,
+        DISK_CACHED_QUERY_CACHE_AUTHORITY_MIB,
         build_schedule_document,
         canonical_json_bytes,
         read_protocol,
@@ -71,6 +72,7 @@ except ModuleNotFoundError:
     from publication_v3_protocol import (
         BORSUK_GLOBAL_SCAN_CODECS,
         BORSUK_TURBOQUANT_GLOBAL_SCAN_CODECS,
+        DISK_CACHED_QUERY_CACHE_AUTHORITY_MIB,
         build_schedule_document,
         canonical_json_bytes,
         read_protocol,
@@ -1075,23 +1077,34 @@ def disk_cached_cohort_authority(
     ):
         raise ValueError("disk cache cohort authority is invalid")
     cohort_bytes = disk_cache_max_bytes * 3 // 4
-    cohort_size = max(1, min(20, cohort_bytes // (32 * 1024 * 1024)))
-    return cohort_size, (expected_queries + cohort_size - 1) // cohort_size
+    cache_safe_queries = cohort_bytes // (
+        DISK_CACHED_QUERY_CACHE_AUTHORITY_MIB * 1024 * 1024
+    )
+    if cache_safe_queries < expected_queries:
+        raise ValueError("disk cache cannot fund the complete query set")
+    return expected_queries, 1
 
 
 def runtime_expected_cache_cohort_size(
     arm: dict[str, object],
     *,
+    runtime_profile: str,
     effective_flow_control: dict[str, object],
     effective_queries: int,
 ) -> int:
     if arm.get("cache_state") != "warm":
         return 0
     try:
-        disk_cache_max_bytes = int(effective_flow_control["disk_cache_max_bytes"])
-    except (KeyError, TypeError, ValueError) as error:
+        disk_cache_max_bytes = effective_flow_control["disk_cache_max_bytes"]
+    except KeyError as error:
         raise ValueError("runtime cache cohort authority is invalid") from error
-    return disk_cached_cohort_authority(disk_cache_max_bytes, effective_queries)[0]
+    if type(disk_cache_max_bytes) is not int or disk_cache_max_bytes <= 0:
+        raise ValueError("runtime cache cohort authority is invalid")
+    if runtime_profile in {"recall", "concurrency"}:
+        return disk_cached_cohort_authority(
+            disk_cache_max_bytes, effective_queries
+        )[0]
+    raise ValueError("runtime cache cohort authority is invalid")
 
 
 def smoke_cache_cohort_authority(
@@ -1105,6 +1118,7 @@ def smoke_cache_cohort_authority(
         plan.get("mode") != "smoke"
         or arm.get("cache_state") != "warm"
         or type(expected_queries) is not int
+        or expected_queries <= 0
         or not isinstance(steps, list)
         or not steps
         or not isinstance(steps[-1], dict)
@@ -1471,6 +1485,14 @@ def summarize_concurrency_artifacts(
         worker <= 0 for worker in expected
     ):
         raise ValueError("concurrency worker authority is invalid")
+    if expected_cache_profile == "disk_cached" and (
+        type(expected_cache_cohort_size) is not int
+        or expected_cache_cohort_size <= 0
+        or expected_cache_cohort_size != expected_queries
+    ):
+        raise ValueError("disk-cached concurrency cache cohort authority is invalid")
+    # Every worker profile measures the same fully primed query set as one
+    # steady pipeline; worker count must not redefine cache residency.
     by_worker: dict[int, dict[str, str]] = {}
     for row in summaries:
         worker = int(row.get("workers", "-1"))
@@ -3010,6 +3032,7 @@ def main() -> int:
         effective_queries = int(plan["effective_queries"])
         expected_cache_cohort_size = runtime_expected_cache_cohort_size(
             arm,
+            runtime_profile=args.runtime_profile,
             effective_flow_control=effective_flow_control,
             effective_queries=effective_queries,
         )

@@ -204,6 +204,14 @@ impl<T> DecodedObjectCache<T> {
         Self::remove_entry(&mut shard, checksum);
     }
 
+    pub(crate) fn clear(&self) {
+        for shard in &self.shards {
+            let mut shard = shard.lock().unwrap_or_else(|error| error.into_inner());
+            shard.entries.clear();
+            shard.resident_bytes = 0;
+        }
+    }
+
     fn oldest_key(shard: &ObjectCacheShard<T>) -> Option<String> {
         shard
             .entries
@@ -447,6 +455,14 @@ impl DecodedSegmentCache {
             .is_some_and(|entry| {
                 entry.graph.is_some() && entry.graph_checksum.as_deref() == Some(graph_checksum)
             })
+    }
+
+    pub(crate) fn clear(&self) {
+        for shard in &self.shards {
+            let mut shard = shard.lock().unwrap_or_else(|error| error.into_inner());
+            shard.entries.clear();
+            shard.resident_bytes = 0;
+        }
     }
 
     /// Return the shared decoded segment for `checksum` if it is cached.
@@ -958,6 +974,11 @@ impl RetainedBytePool {
     pub(crate) fn peak_bytes(&self) -> u64 {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).peak
     }
+
+    pub(crate) fn reset_peak_to_used(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.peak = state.used;
+    }
 }
 
 #[derive(Debug)]
@@ -1121,6 +1142,11 @@ impl ByteAdmissionGate {
 
     pub(crate) fn peak_bytes(&self) -> u64 {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).peak
+    }
+
+    pub(crate) fn reset_peak_to_used(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.peak = state.used;
     }
 
     pub(crate) fn snapshot(&self) -> ByteAdmissionSnapshot {
@@ -1644,6 +1670,8 @@ mod tests {
         drop(second);
         assert_eq!(pool.used_bytes(), 0);
         assert_eq!(pool.peak_bytes(), 100);
+        pool.reset_peak_to_used();
+        assert_eq!(pool.peak_bytes(), 0);
     }
 
     #[test]
@@ -1668,6 +1696,8 @@ mod tests {
         assert_eq!(gate.capacity_bytes(), 64);
         drop(permit);
         assert_eq!(gate.used_bytes(), 0);
+        gate.reset_peak_to_used();
+        assert_eq!(gate.peak_bytes(), 0);
     }
 
     #[test]

@@ -356,3 +356,51 @@ did not deliver a mutation-throughput advantage. The evidence therefore does
 not justify freezing `claim-free-put` as the production default; the existing
 `general-upsert` path remains the conservative default until repeated and
 broader lifecycle evidence says otherwise.
+
+## Standard read campaign restart on 2026-08-26
+
+The first `deep-image-96` cell of the restarted standard read campaign used
+cell `r01-ff1ce5a82f2e8965c5251cf1`, source archive SHA-256
+`7949727eaac8229b2cdcc9210432953e9b8adaa43fe050db136fb3fd38d79e75`,
+manifest SHA-256
+`1566f0a23fe3d2497be44ee6d845b92d10741128f7e1dff9d89adca6a0676117`,
+and protocol SHA-256
+`a92273cccf108d6b52c009f86be876c31ffc4d34041fa33988d47e707e42ca4b`.
+The immutable build completed on Spot instance `i-029bff19e92295841` at
+`index-79e971700cc1deab01e500df`; its terminal-marker SHA-256 was
+`8fe3c818955c452750a5fb787bc39c0541d7cc55fefa69e0c49ed502724f5c87`.
+
+Cold arm 0 completed on Spot instance `i-0987913bfa9bc9e5f`; terminal-marker
+SHA-256 was
+`e7b8ad02777cfdda3f785de0123e222829b431376037c741d1ab9c5594a92503`.
+It measured 1,000 queries at 97.41% recall@10, with p50/p95/p99 latency
+238.845/309.538/345.944 ms, 4.155 queries/s, peak RSS 793,575,424 bytes,
+58,642 backing GETs, and 28,481,498,592 backing bytes. This is valid evidence
+for that exact source-bound cold cell only; it is not pooled with a replacement
+source or presented as a completed campaign.
+
+Warm arm 1 failed closed on Spot instance `i-0b8ce6ea81d59d9cb`. Its terminal
+marker SHA-256 was
+`0bee75e35f70ff35cb207f78f1d7eebf2d270a18f8f63ccad10f2b59de4d351b`;
+no result was published. After priming a 20-query cohort, measured query 88
+issued one backing GET. The fixed 32 MiB-per-query estimate had not proved
+that all 20 data-dependent working sets would remain in the 1 GiB disk cache.
+The runtime therefore correctly rejected the arm rather than mislabeling it
+warm.
+
+The replacement methodology resets the disk cache, prepares one handle, and
+primes all 1,000 registered queries once. Recall clears query-populated decoded
+state before each measured query; concurrency clears it before each steady
+worker profile. This avoids both cross-query eviction and repeated expensive
+index opens. The BORSUK runtime now
+uses a dedicated 96 GiB volume and a 64 GiB cache; only 75% is admissible at a
+conservative 48 MiB per query, giving authority for 1,024 queries and leaving
+16 GiB explicit headroom. Because this changes the frozen source, storage, and
+cache-cohort protocol, the completed cold cell above is historical evidence and
+the replacement campaign must rebuild and rerun both arms under the new
+authority.
+
+The replacement concurrency run primes once and measures one 1,000-query wave
+per worker profile. Its QPS is not comparable to any earlier worker-sized,
+multi-wave diagnostic, whose repeated spawn/barrier overhead dominated the
+measurement; only the replacement campaign is publication-eligible.

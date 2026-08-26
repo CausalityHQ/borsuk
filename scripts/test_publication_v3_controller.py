@@ -932,12 +932,12 @@ class PublicationV3ControllerTests(unittest.TestCase):
         self.assertEqual(concurrency.expected["leaf_read_width"], 32)
         self.assertEqual(concurrency.expected["max_inflight_leaf_reads"], 96)
         self.assertEqual(concurrency.expected["max_parallel_decode_rank_tasks"], 2)
-        self.assertEqual(concurrency.expected["disk_cache_max_bytes"], 1073741824)
+        self.assertEqual(concurrency.expected["disk_cache_max_bytes"], 68719476736)
         self.assertEqual(
             concurrency.expected["exact_read_max_physical_amplification"], 2
         )
         for argument in (
-            "--disk-cache-max-bytes 1073741824",
+            "--disk-cache-max-bytes 68719476736",
             "--exact-read-max-physical-amplification 2",
             "--max-active-searches 16",
             "--max-waiting-searches 64",

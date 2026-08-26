@@ -93,7 +93,12 @@ def runtime_attestation_for(
         "oom_kill_events": 0,
         "cache_capacity_bytes": client["disk_cache_limit_mib"] * 1024 * 1024,
         "effective_disk_cache_max_bytes": 0,
-        "cache_filesystem_bytes": 32 * 1024 * 1024 * 1024,
+        "cache_filesystem_bytes": cell["environment_contract"]["runtime_storage"][
+            "volume_size_gib"
+        ]
+        * 1024
+        * 1024
+        * 1024,
         "cache_device": "259:1",
         "root_device": "259:0",
         "cache_is_mount": True,

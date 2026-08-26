@@ -95,6 +95,7 @@ SYNTHETIC_BINARY_GENERATORS = frozenset({"synthetic-binary-v1"})
 SYNTHETIC_GROUP_SIZE = 100
 SYNTHETIC_TRAIN_SHARD_TARGET_BYTES = 64 * 1024 * 1024
 MAX_STAGED_DATASET_OBJECTS = 8_192
+DISK_CACHED_QUERY_CACHE_AUTHORITY_MIB = 48
 IDENTIFIER = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?")
 HEX_40 = re.compile(r"[0-9a-f]{40}")
 HEX_64 = re.compile(r"[0-9a-f]{64}")
@@ -859,8 +860,11 @@ def _validate_environment(value: object) -> dict[str, object]:
             or client["resident_limit_mib"] >= client["memory_mib"]
         ):
             raise ValueError(f"{system} runtime resident limit exceeds its cap")
-        if client["disk_cache_limit_mib"] > 1_024:
-            raise ValueError(f"{system} runtime cache exceeds its 1 GiB cap")
+        disk_cache_cap_mib = 65_536 if system == "borsuk" else 1_024
+        if client["disk_cache_limit_mib"] > disk_cache_cap_mib:
+            raise ValueError(
+                f"{system} runtime cache exceeds its {disk_cache_cap_mib} MiB cap"
+            )
 
     def normalize_storage(raw: object, role: str) -> dict[str, object]:
         storage = _dict(raw, role)
@@ -887,11 +891,19 @@ def _validate_environment(value: object) -> dict[str, object]:
         environment["runtime_storage"], "runtime storage"
     )
     if (
-        normalized_runtime_storage["volume_size_gib"] > 32
+        normalized_runtime_storage["volume_size_gib"] > 96
         or normalized_runtime_storage["iops"] > 3_000
         or normalized_runtime_storage["throughput_mib_s"] > 125
     ):
         raise ValueError("runtime storage exceeds the small-client cap")
+    runtime_cache_headroom_mib = (
+        normalized_runtime_storage["volume_size_gib"] * 1_024 * 3 // 4
+    )
+    if any(
+        client["disk_cache_limit_mib"] > runtime_cache_headroom_mib
+        for client in normalized_clients.values()
+    ):
+        raise ValueError("runtime storage does not provide cache headroom")
     runtime_data_contract = _dict(
         environment["runtime_data_contract"], "runtime_data_contract"
     )
@@ -975,6 +987,17 @@ def validate_manifest(value: dict[str, object]) -> dict[str, object]:
     systems = _unique_strings(manifest["systems"], "systems")
     if systems != list(SYSTEMS):
         raise ValueError("systems must be borsuk, amazon-s3-vectors, and faiss")
+    environment = _validate_environment(manifest["environment_contract"])
+    borsuk_cache_mib = environment["runtime_clients"]["borsuk"][
+        "disk_cache_limit_mib"
+    ]
+    safe_disk_cached_queries = (
+        borsuk_cache_mib * 3 // 4 // DISK_CACHED_QUERY_CACHE_AUTHORITY_MIB
+    )
+    if safe_disk_cached_queries < queries:
+        raise ValueError(
+            "borsuk runtime cache cannot fund the complete query set before paid launch"
+        )
     datasets_value = manifest["datasets"]
     workloads_value = manifest["workloads"]
     if not isinstance(datasets_value, list) or not datasets_value:
@@ -1043,7 +1066,7 @@ def validate_manifest(value: dict[str, object]) -> dict[str, object]:
         "queries_per_repetition": queries,
         "publish_p99": True,
         "source": _validate_campaign_source(manifest["source"]),
-        "environment_contract": _validate_environment(manifest["environment_contract"]),
+        "environment_contract": environment,
         "prefixes": prefixes,
         "index_profiles": _validate_index_profiles(manifest["index_profiles"]),
         "budget_contract": _validate_budget(manifest["budget_contract"]),

@@ -247,15 +247,24 @@ results were 0.970/0.973 and are the only publication-safe values.
 - `uncached` means serving metadata is already resident, while the query data
   pages are absent from the local disk cache and therefore require object-store
   I/O.
-- `disk_cached` primes bounded cohorts of at most 20 unique queries outside
-  timing, measures that same cohort, and requires every measured query to
-  report local-disk reads with zero backing-store GETs and bytes.
+- `disk_cached` resets the disk cache, opens one prepared serving handle, and
+  primes the complete 1,000-query set once outside timing. Recall clears
+  query-populated decoded RAM state before each measured query; concurrency
+  clears it before each steady worker profile. Every measurement requires
+  local-disk reads with zero backing-store GETs and bytes. Its 64 GiB cache
+  funds only 75% of capacity at a conservative 48 MiB per query (1,024-query
+  authority), leaving 16 GiB inside the cache budget; the dedicated 96 GiB
+  runtime volume leaves another 32 GiB outside the cache.
+- This 64 GiB read-through cache applies only to BORSUK's remote object index.
+  Amazon S3 Vectors owns an opaque managed-service cache and FAISS uses its
+  admitted resident index; their manifest-declared 1 GiB client cache is only
+  staging/control capacity, and the paper discloses that asymmetry.
 - Full decoded-vector preload is a separate `memory_preloaded` research state,
   not “cold” or “warm”.
 - Startup/open plus serving-metadata preparation is measured separately and is
   excluded from query latency.
-- Results from the superseded whole-query-set disk-cache priming protocol are
-  historical only and are not joined with bounded-cohort publication rows.
+- Results from the superseded 1 GiB/20-query disk-cache priming protocol are
+  historical only and are not joined with full-cohort publication rows.
 - Current production uses separate bounded active/waiting search admission,
   per-query leaf width, handle-wide physical reads, and process-wide backing
   GETs. Uncapped fan-out and multi-user runs are labelled “research ceiling”.

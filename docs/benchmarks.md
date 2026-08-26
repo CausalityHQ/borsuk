@@ -35,12 +35,20 @@ Uncapped query or decode concurrency is research-only.
   backing-store I/O. Global exact pages are fixed-width and need no index;
   physical record-sidecar indexes used for late top-k IDs share the hard
   128 MiB cache.
-- `disk_cached`: bounded cohorts of at most 20 unique queries are primed outside
-  timing and then measured before the next cohort. Every measured query must
-  report at least one local-disk read and zero backing-store GETs. Logical bytes
+- `disk_cached`: the disk cache is reset, one serving handle is prepared, and
+  all 1,000 queries are primed once outside timing. Recall clears decoded query
+  state before every measured query; concurrency clears it before each worker
+  profile and measures each as one steady pipeline. The 64 GiB cache has a
+  conservative 1,024-query authority with 16 GiB reserved inside the cache
+  budget; the 96 GiB volume provides another 32 GiB outside it. Every measured
+  query must report at least one local-disk read and zero backing-store GETs. Logical bytes
   served by the disk layer remain reported; they must not be mistaken for
   network transfer. Byte-bounded resident serving state is unchanged across
   cache states and is not the complete-corpus `memory_preloaded` state.
+  The 64 GiB read-through cache is BORSUK-specific. Amazon S3 Vectors owns an
+  opaque managed service cache and FAISS serves its admitted resident index;
+  their disclosed client-side staging/control cache remains 1 GiB and is not
+  presented as an equivalent index-data cache.
 - `memory_preloaded`: `WarmReport.coverage_complete=true` proves every active
   decoded segment, and every required graph, remains in the byte-bounded RAM
   cache. It is reported separately; a partial warm is instead a mixed-cache

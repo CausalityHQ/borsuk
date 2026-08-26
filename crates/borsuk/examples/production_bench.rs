@@ -3067,9 +3067,13 @@ fn write_query_samples(
         max_candidates,
         query_source_indices,
     } = context;
-    let cache_cohort_size =
-        query_sample_cache_cohort_size(config.cache_profile, phase, config.disk_cache_max_bytes)
-            .map_err(|error| io::Error::other(error.to_string()))?;
+    let cache_cohort_size = query_sample_cache_cohort_size(
+        config.cache_profile,
+        phase,
+        config.disk_cache_max_bytes,
+        summary.samples.len(),
+    )
+    .map_err(|error| io::Error::other(error.to_string()))?;
     let cache_cohort_count = if cache_cohort_size == 0 {
         0
     } else {
@@ -3293,63 +3297,62 @@ fn execute_disk_cached_query_cohorts<Handle>(
     mut reset: impl FnMut() -> BenchResult<()>,
     mut open: impl FnMut() -> BenchResult<Handle>,
     mut prime: impl FnMut(&Handle, usize) -> BenchResult<()>,
+    mut clear_query_retained_state: impl FnMut(&Handle) -> BenchResult<()>,
     mut measure: impl FnMut(&Handle, usize) -> BenchResult<QuerySummary>,
 ) -> BenchResult<QuerySummary> {
-    if cohort_size == 0 {
-        return Err(invalid_input("disk-cached query cohort must not be empty").into());
+    if query_count == 0 || cohort_size != query_count {
+        return Err(invalid_input(
+            "disk-cached recall requires one complete nonempty query cohort",
+        )
+        .into());
     }
     let mut summary = QuerySummary::default();
-    for cohort_start in (0..query_count).step_by(cohort_size) {
-        let cohort_end = cohort_start.saturating_add(cohort_size).min(query_count);
-        reset()?;
-        {
-            let primer = open()?;
-            for query_index in cohort_start..cohort_end {
-                prime(&primer, query_index)?;
-            }
+    reset()?;
+    {
+        let handle = open()?;
+        for query_index in 0..query_count {
+            prime(&handle, query_index)?;
         }
-        {
-            let measurement = open()?;
-            for query_index in cohort_start..cohort_end {
-                let measured = measure(&measurement, query_index)?;
-                validate_disk_cached_query(query_index, &measured)?;
-                summary.absorb(measured);
-            }
+        for query_index in 0..query_count {
+            clear_query_retained_state(&handle)?;
+            let measured = measure(&handle, query_index)?;
+            validate_disk_cached_query(query_index, &measured)?;
+            summary.absorb(measured);
         }
     }
     Ok(summary)
 }
 
-fn execute_disk_cached_concurrency_cohorts<Handle>(
+fn execute_disk_cached_concurrency_profiles<Handle>(
     query_count: usize,
-    cohort_size: usize,
+    worker_profiles: &[usize],
     mut reset: impl FnMut() -> BenchResult<()>,
     mut open: impl FnMut() -> BenchResult<Handle>,
     mut prime: impl FnMut(&Handle, usize) -> BenchResult<()>,
+    mut clear_query_retained_state: impl FnMut(&Handle) -> BenchResult<()>,
     mut measure: impl FnMut(
         &Handle,
         &[usize],
         usize,
     ) -> BenchResult<(Vec<ConcurrencyMeasurement>, Duration)>,
-) -> BenchResult<(Vec<ConcurrencyMeasurement>, Duration)> {
-    if cohort_size == 0 {
-        return Err(invalid_input("disk-cached query cohort must not be empty").into());
+) -> BenchResult<Vec<(usize, Vec<ConcurrencyMeasurement>, Duration)>> {
+    if query_count == 0 || worker_profiles.is_empty() {
+        return Err(invalid_input(
+            "disk-cached concurrency requires one complete nonempty query cohort and worker schedule",
+        )
+        .into());
     }
-    let mut measurements = Vec::with_capacity(query_count);
-    let mut measured_wall = Duration::ZERO;
-    for cohort_start in (0..query_count).step_by(cohort_size) {
-        let cohort_end = cohort_start.saturating_add(cohort_size).min(query_count);
-        let cohort = (cohort_start..cohort_end).collect::<Vec<_>>();
-        reset()?;
-        {
-            let primer = open()?;
-            for &query_index in &cohort {
-                prime(&primer, query_index)?;
-            }
+    let cohort = (0..query_count).collect::<Vec<_>>();
+    let mut profiles = Vec::with_capacity(worker_profiles.len());
+    reset()?;
+    {
+        let handle = open()?;
+        for &query_index in &cohort {
+            prime(&handle, query_index)?;
         }
-        {
-            let measurement = open()?;
-            let (mut wave, elapsed) = measure(&measurement, &cohort, cohort_start)?;
+        for &workers in worker_profiles {
+            clear_query_retained_state(&handle)?;
+            let (wave, elapsed) = measure(&handle, &cohort, workers)?;
             for sample in &wave {
                 validate_disk_cached_observation(
                     sample.query_source_index,
@@ -3357,40 +3360,61 @@ fn execute_disk_cached_concurrency_cohorts<Handle>(
                     sample.disk_cache_reads,
                 )?;
             }
-            measurements.append(&mut wave);
-            measured_wall = measured_wall.saturating_add(elapsed);
+            profiles.push((workers, wave, elapsed));
         }
     }
-    Ok((measurements, measured_wall))
+    Ok(profiles)
 }
 
-// V20 admits at most 32 MiB of physical head+exact data per query. Fund cohorts
-// from only three quarters of the disk budget, leaving the remainder for
-// authenticated directory/control objects and disk-cache entry accounting.
-const DISK_CACHED_QUERY_PHYSICAL_MAX_BYTES: u64 = 32 * 1024 * 1024;
-const DISK_CACHED_QUERY_MAX_COHORT: usize = 20;
+// Warm recall primes the complete registered query set once. Each measured
+// query then starts with decoded state cleared and must be served from the
+// already-populated local disk tier without any backing-store read.
+fn disk_cached_query_cohort_size(
+    disk_cache_max_bytes: Option<u64>,
+    expected_queries: usize,
+) -> BenchResult<usize> {
+    disk_cached_concurrency_cohort_size(disk_cache_max_bytes, expected_queries)
+}
 
-fn disk_cached_query_cohort_size(disk_cache_max_bytes: Option<u64>) -> BenchResult<usize> {
+// Concurrent measurements prime the complete query set once, then measure one
+// steady worker pipeline. Reserve a conservative 48 MiB per query: the 32 MiB
+// physical read ceiling plus 50% for authenticated cache framing, index/control
+// objects, and entry accounting. Only three quarters of the configured disk
+// budget funds query entries; the remaining quarter is explicit headroom.
+const DISK_CACHED_QUERY_CACHE_AUTHORITY_BYTES: u64 = 48 * 1024 * 1024;
+
+fn disk_cached_concurrency_cohort_size(
+    disk_cache_max_bytes: Option<u64>,
+    expected_queries: usize,
+) -> BenchResult<usize> {
+    if expected_queries == 0 {
+        return Err(invalid_input("disk-cached concurrency query set must not be empty").into());
+    }
     let max_bytes = disk_cache_max_bytes
         .filter(|bytes| *bytes > 0)
         .ok_or_else(|| {
             invalid_input("disk-cached measurement requires a positive local disk-cache budget")
         })?;
     let cohort_bytes = max_bytes.saturating_mul(3) / 4;
-    Ok(
-        usize::try_from(cohort_bytes / DISK_CACHED_QUERY_PHYSICAL_MAX_BYTES)
-            .unwrap_or(usize::MAX)
-            .clamp(1, DISK_CACHED_QUERY_MAX_COHORT),
-    )
+    let safe_queries = usize::try_from(cohort_bytes / DISK_CACHED_QUERY_CACHE_AUTHORITY_BYTES)
+        .unwrap_or(usize::MAX);
+    if expected_queries > safe_queries {
+        return Err(invalid_input(&format!(
+            "disk-cached query count {expected_queries} exceeds the cache-safe complete-query size {safe_queries}"
+        ))
+        .into());
+    }
+    Ok(expected_queries)
 }
 
 fn query_sample_cache_cohort_size(
     cache_profile: BenchmarkCacheProfile,
     phase: &str,
     disk_cache_max_bytes: Option<u64>,
+    expected_queries: usize,
 ) -> BenchResult<usize> {
     if cache_profile == BenchmarkCacheProfile::DiskCached && phase == "disk_cached" {
-        disk_cached_query_cohort_size(disk_cache_max_bytes)
+        disk_cached_query_cohort_size(disk_cache_max_bytes, expected_queries)
     } else {
         Ok(0)
     }
@@ -3401,7 +3425,8 @@ fn run_disk_cached_queries(
     dataset: &Dataset,
     options: SearchOptions,
 ) -> BenchResult<QuerySummary> {
-    let cohort_size = disk_cached_query_cohort_size(config.disk_cache_max_bytes)?;
+    let cohort_size =
+        disk_cached_query_cohort_size(config.disk_cache_max_bytes, dataset.queries.len())?;
     execute_disk_cached_query_cohorts(
         dataset.queries.len(),
         cohort_size,
@@ -3416,6 +3441,7 @@ fn run_disk_cached_queries(
             )?;
             Ok(())
         },
+        |index| index.clear_query_retained_state().map_err(Into::into),
         |index, query_index| {
             run_queries(
                 index,
@@ -3900,43 +3926,43 @@ fn write_concurrency_csv(config: &ResolvedConfig, dataset: &Dataset) -> BenchRes
     writeln!(samples_writer, "{CONCURRENCY_SAMPLE_HEADER}")?;
     let ground_truth = Arc::new(dataset.ground_truth.clone());
     let cache_cohort_size = if config.cache_profile == BenchmarkCacheProfile::DiskCached {
-        disk_cached_query_cohort_size(config.disk_cache_max_bytes)?
+        disk_cached_concurrency_cohort_size(config.disk_cache_max_bytes, dataset.queries.len())?
     } else {
         0
     };
-    let cache_cohort_count = if cache_cohort_size == 0 {
-        0
+    let cache_cohort_count = usize::from(cache_cohort_size > 0);
+    let mut disk_cached_profiles = if config.cache_profile == BenchmarkCacheProfile::DiskCached {
+        VecDeque::from(execute_disk_cached_concurrency_profiles(
+            dataset.queries.len(),
+            &config.concurrency,
+            || reset_cache(&config.cache_dir).map_err(Into::into),
+            || Ok(Arc::new(open_serving_index(config)?)),
+            |index, query_index| {
+                let _ = index
+                    .search_with_report(&dataset.queries[query_index], serving_options(config))?;
+                Ok(())
+            },
+            |index| index.clear_query_retained_state().map_err(Into::into),
+            |index, cohort, workers| {
+                measure_concurrency_wave(config, dataset, index, &ground_truth, cohort, workers, 0)
+            },
+        )?)
     } else {
-        dataset.queries.len().div_ceil(cache_cohort_size)
+        VecDeque::new()
     };
     for &workers in &config.concurrency {
         let (mut measurements, measured_wall) =
             if config.cache_profile == BenchmarkCacheProfile::DiskCached {
-                let cohort_size = disk_cached_query_cohort_size(config.disk_cache_max_bytes)?;
-                execute_disk_cached_concurrency_cohorts(
-                    dataset.queries.len(),
-                    cohort_size,
-                    || reset_cache(&config.cache_dir).map_err(Into::into),
-                    || Ok(Arc::new(open_serving_index(config)?)),
-                    |index, query_index| {
-                        let _ = index.search_with_report(
-                            &dataset.queries[query_index],
-                            serving_options(config),
-                        )?;
-                        Ok(())
-                    },
-                    |index, cohort, cohort_start| {
-                        measure_concurrency_wave(
-                            config,
-                            dataset,
-                            index,
-                            &ground_truth,
-                            cohort,
-                            workers,
-                            cohort_start,
-                        )
-                    },
-                )?
+                let (profile_workers, measurements, elapsed) = disk_cached_profiles
+                    .pop_front()
+                    .ok_or_else(|| invalid_input("disk-cached concurrency profile is missing"))?;
+                if profile_workers != workers {
+                    return Err(invalid_input(
+                        "disk-cached concurrency profile order differs from its authority",
+                    )
+                    .into());
+                }
+                (measurements, elapsed)
             } else {
                 let (index, query_indices) = execute_concurrency_cache_setup(
                     || reset_cache(&config.cache_dir).map_err(Into::into),
@@ -6012,9 +6038,10 @@ mod tests {
         allow_missing_corpus_for_phase, approximate_options, benchmark_row_ids,
         cache_coverage_cohort_size, cache_coverage_enabled, cache_state_summary_enabled,
         dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
-        default_serving_leaf_mode, deterministic_mutation_vector, disk_cached_query_cohort_size,
+        default_serving_leaf_mode, deterministic_mutation_vector,
+        disk_cached_concurrency_cohort_size, disk_cached_query_cohort_size,
         dollars_per_million_queries, execute_bulk_add_wave, execute_concurrency_cache_setup,
-        execute_disk_cached_concurrency_cohorts, execute_disk_cached_query_cohorts,
+        execute_disk_cached_concurrency_profiles, execute_disk_cached_query_cohorts,
         execute_isolated_recall_cache_phases, execute_put_wave, execute_uncached_query_sequence,
         finalize_fresh_build, first_logical_batch_publish_ms, ingest_batch_size,
         is_hot_workload_position, join_concurrency_workers, lifecycle_progress_line,
@@ -7770,16 +7797,18 @@ mod tests {
             query_sample_cache_cohort_size(
                 BenchmarkCacheProfile::DiskCached,
                 "disk_cached",
-                Some(1024 * 1024 * 1024),
+                Some(64 * 1024 * 1024 * 1024),
+                1_000,
             )
             .unwrap(),
-            20
+            1_000
         );
         assert_eq!(
             query_sample_cache_cohort_size(
                 BenchmarkCacheProfile::All,
                 "disk_cached",
                 Some(1024 * 1024 * 1024),
+                1_000,
             )
             .unwrap(),
             0,
@@ -7790,6 +7819,7 @@ mod tests {
                 BenchmarkCacheProfile::Uncached,
                 "uncached",
                 Some(1024 * 1024 * 1024),
+                1_000,
             )
             .unwrap(),
             0
@@ -7797,19 +7827,21 @@ mod tests {
     }
 
     #[test]
-    fn disk_cached_cohorts_drop_primer_before_opening_measurement_handle() {
+    fn disk_cached_cohorts_clear_decoded_state_before_measuring_on_one_handle() {
         use std::cell::{Cell, RefCell};
         use std::rc::Rc;
 
         assert_eq!(
-            disk_cached_query_cohort_size(Some(1024 * 1024 * 1024)).unwrap(),
-            20
+            disk_cached_query_cohort_size(Some(64 * 1024 * 1024 * 1024), 1_000).unwrap(),
+            1_000
         );
         assert_eq!(
-            disk_cached_query_cohort_size(Some(512 * 1024 * 1024)).unwrap(),
-            12
+            disk_cached_concurrency_cohort_size(Some(64 * 1024 * 1024 * 1024), 1_000).unwrap(),
+            1_000
         );
-        assert!(disk_cached_query_cohort_size(None).is_err());
+        assert!(disk_cached_concurrency_cohort_size(Some(1024 * 1024 * 1024), 1_000).is_err());
+        assert!(disk_cached_query_cohort_size(None, 1).is_err());
+        assert!(disk_cached_concurrency_cohort_size(None, 1).is_err());
 
         struct TrackedHandle {
             id: usize,
@@ -7829,7 +7861,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let summary = execute_disk_cached_query_cohorts(
             3,
-            2,
+            3,
             {
                 let live = Rc::clone(&live);
                 let events = Rc::clone(&events);
@@ -7866,6 +7898,13 @@ mod tests {
             },
             {
                 let events = Rc::clone(&events);
+                move |handle: &TrackedHandle| {
+                    events.borrow_mut().push(format!("clear-{}", handle.id));
+                    Ok(())
+                }
+            },
+            {
+                let events = Rc::clone(&events);
                 move |handle: &TrackedHandle, query_index| {
                     events
                         .borrow_mut()
@@ -7889,20 +7928,52 @@ mod tests {
                 "open-1",
                 "prime-1-0",
                 "prime-1-1",
+                "prime-1-2",
+                "clear-1",
+                "measure-1-0",
+                "clear-1",
+                "measure-1-1",
+                "clear-1",
+                "measure-1-2",
                 "drop-1",
-                "open-2",
-                "measure-2-0",
-                "measure-2-1",
-                "drop-2",
-                "reset",
-                "open-3",
-                "prime-3-2",
-                "drop-3",
-                "open-4",
-                "measure-4-2",
-                "drop-4",
             ]
         );
+    }
+
+    #[test]
+    fn disk_cached_recall_cohorts_cannot_evict_an_earlier_primed_query() {
+        use std::cell::RefCell;
+        use std::collections::BTreeSet;
+
+        let cached_queries = RefCell::new(BTreeSet::new());
+        let summary = execute_disk_cached_query_cohorts(
+            3,
+            disk_cached_query_cohort_size(Some(64 * 1024 * 1024 * 1024), 3).unwrap(),
+            || {
+                cached_queries.borrow_mut().clear();
+                Ok(())
+            },
+            || Ok(()),
+            |_, query_index| {
+                cached_queries.borrow_mut().insert(query_index);
+                Ok(())
+            },
+            |_| Ok(()),
+            |_, query_index| {
+                let cache_hit = cached_queries.borrow().contains(&query_index);
+                Ok(QuerySummary {
+                    latencies_ms: vec![1.0],
+                    billable_requests: usize::from(!cache_hit) as u128,
+                    disk_cache_reads: usize::from(cache_hit) as u128,
+                    ..QuerySummary::default()
+                })
+            },
+        )
+        .unwrap();
+
+        assert_eq!(summary.count(), 3);
+        assert_eq!(summary.billable_requests, 0);
+        assert_eq!(summary.disk_cache_reads, 3);
     }
 
     #[test]
@@ -8121,7 +8192,7 @@ mod tests {
     }
 
     #[test]
-    fn disk_cached_concurrency_uses_distinct_primer_and_measurement_handles() {
+    fn disk_cached_concurrency_primes_once_then_clears_before_each_worker_profile() {
         use std::cell::{Cell, RefCell};
         use std::rc::Rc;
         use std::time::Duration;
@@ -8142,9 +8213,9 @@ mod tests {
         let live = Rc::new(Cell::new(0));
         let next_id = Rc::new(Cell::new(0));
         let events = Rc::new(RefCell::new(Vec::new()));
-        let (measurements, elapsed) = execute_disk_cached_concurrency_cohorts(
+        let profiles = execute_disk_cached_concurrency_profiles(
             3,
-            2,
+            &[1, 2],
             {
                 let live = Rc::clone(&live);
                 let events = Rc::clone(&events);
@@ -8181,9 +8252,16 @@ mod tests {
             },
             {
                 let events = Rc::clone(&events);
-                move |handle: &TrackedHandle, cohort: &[usize], cohort_start| {
+                move |handle: &TrackedHandle| {
+                    events.borrow_mut().push(format!("clear-{}", handle.id));
+                    Ok(())
+                }
+            },
+            {
+                let events = Rc::clone(&events);
+                move |handle: &TrackedHandle, cohort: &[usize], workers| {
                     events.borrow_mut().push(format!(
-                        "measure-{}-{}-{cohort_start}",
+                        "measure-{}-{}-{workers}",
                         handle.id,
                         cohort.len()
                     ));
@@ -8194,8 +8272,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(live.get(), 0);
-        assert!(measurements.is_empty());
-        assert_eq!(elapsed, Duration::from_millis(2));
+        assert_eq!(profiles.len(), 2);
+        assert!(
+            profiles
+                .iter()
+                .all(|(_, measurements, _)| measurements.is_empty())
+        );
+        assert!(
+            profiles
+                .iter()
+                .all(|(_, _, elapsed)| *elapsed == Duration::from_millis(1))
+        );
         assert_eq!(
             *events.borrow(),
             [
@@ -8203,17 +8290,12 @@ mod tests {
                 "open-1",
                 "prime-1-0",
                 "prime-1-1",
+                "prime-1-2",
+                "clear-1",
+                "measure-1-3-1",
+                "clear-1",
+                "measure-1-3-2",
                 "drop-1",
-                "open-2",
-                "measure-2-2-0",
-                "drop-2",
-                "reset",
-                "open-3",
-                "prime-3-2",
-                "drop-3",
-                "open-4",
-                "measure-4-1-2",
-                "drop-4",
             ]
         );
     }
@@ -8240,7 +8322,7 @@ mod tests {
         let next_handle = Rc::new(Cell::new(0usize));
         let live = Rc::new(Cell::new(0usize));
         let result = execute_disk_cached_query_cohorts(
-            3,
+            2,
             2,
             {
                 let observed = Rc::clone(&observed);
@@ -8278,6 +8360,13 @@ mod tests {
             },
             {
                 let observed = Rc::clone(&observed);
+                move |handle: &TrackedHandle| {
+                    observed.borrow_mut().push(format!("clear-{}", handle.id));
+                    Ok(())
+                }
+            },
+            {
+                let observed = Rc::clone(&observed);
                 move |handle: &TrackedHandle, query_index| {
                     observed
                         .borrow_mut()
@@ -8308,11 +8397,11 @@ mod tests {
                 "open-1",
                 "prime-1-0",
                 "prime-1-1",
+                "clear-1",
+                "measure-1-0",
+                "clear-1",
+                "measure-1-1",
                 "drop-1",
-                "open-2",
-                "measure-2-0",
-                "measure-2-1",
-                "drop-2",
             ]
         );
     }
