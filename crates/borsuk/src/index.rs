@@ -151,7 +151,7 @@ use crate::{
     },
     sparse::{SparseVector, sparse_dot},
     storage::{
-        LoadedCollectionSnapshot, PrefetchedRead, RangedColumns, ReadBytes,
+        LoadedCollectionSnapshot, PhysicalReadStats, PrefetchedRead, RangedColumns, ReadBytes,
         RoutingLayerPageIndexRead, StagedManifest, Storage, StorageWriteReport, StoredObject,
     },
     storage_trace::{StorageAccessEvent, physical_format_for_path},
@@ -491,7 +491,7 @@ const DEFAULT_BM25_STATS_PAGE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
 /// Stable PQ-code planes are routing data, not exact-vector payloads. Retain a
 /// corpus-independent window so loaded application processes reuse immutable
 /// planes while 100M-scale indexes remain bounded.
-const DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES: u64 = 256 * 1024 * 1024;
+pub const DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 /// Bound concurrent immutable-segment publication by both object count and
 /// records retained by the write wave. Tiny logical cells need enough parallel
 /// PUTs to hide object-store latency, while production-sized segments must not
@@ -681,6 +681,7 @@ struct CellCardDeclineTelemetry {
     global_base_approximate_us: u64,
     global_base_head_admission_us: u64,
     global_base_head_fetch_us: u64,
+    head_read_stats: PhysicalReadStats,
     global_base_head_decode_admission_us: u64,
     global_base_head_decode_us: u64,
     global_leaf_waves: usize,
@@ -1227,6 +1228,13 @@ pub struct OpenOptions {
     /// which is useful for honest cold-path qualification; request-local
     /// coalescing still avoids duplicate reads inside one batch.
     pub routing_page_cache_max_bytes: u64,
+    /// Byte cap for query-populated immutable cell-card code-plane and slice
+    /// cache entries. Zero disables retention and cache-motivated complete-plane
+    /// promotion while preserving request-local single-flight. Explicit warm
+    /// preparation is also disabled at zero. Handles without a configured RAM
+    /// budget have no retained pool, so their effective capacity is zero even
+    /// when this option retains its default value.
+    pub cell_card_code_plane_cache_max_bytes: u64,
     /// Byte cap for decoded immutable tombstone pages shared by all callers.
     /// The persisted overlay may grow with the corpus, while process memory
     /// remains independent of its total size. Zero disables retention.
@@ -1309,6 +1317,7 @@ impl Default for OpenOptions {
             resident_routing: false,
             segment_cache_max_bytes: None,
             routing_page_cache_max_bytes: DEFAULT_ROUTING_PAGE_CACHE_BYTES,
+            cell_card_code_plane_cache_max_bytes: DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES,
             tombstone_page_cache_max_bytes: DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES,
             bm25_stats_page_cache_max_bytes: DEFAULT_BM25_STATS_PAGE_CACHE_BYTES,
             lexical_run_cache_max_bytes: DEFAULT_LEXICAL_RUN_CACHE_BYTES,
@@ -1793,11 +1802,12 @@ struct CollectionReadRuntime {
     admission: Arc<AdmissionGate>,
     leaf_read_width: usize,
     exact_read_max_physical_amplification: u64,
+    cell_card_code_plane_cache_max_bytes: u64,
     global_pq_rerank_admission: Arc<AdmissionGate>,
     decode_rank_admission: Arc<AdmissionGate>,
     cell_card_code_planes: Arc<DecodedObjectCache<Vec<u8>>>,
     prepared_cell_card_code_planes: Mutex<Option<PreparedCellCardCodePlanes>>,
-    inflight_cell_card_code_planes: Arc<InFlightReads<Vec<u8>>>,
+    inflight_cell_card_code_planes: Arc<InFlightReads<InFlightCellCardCodePlane>>,
     inflight_verified_cell_card_code_planes: Arc<InFlightReads<Arc<Vec<u8>>>>,
     inflight_segment_reads: Arc<InFlightSegmentReads>,
     projected_segment_cache: Arc<DecodedObjectCache<Segment>>,
@@ -1836,6 +1846,13 @@ struct FetchedCellCardHeadRead {
     bytes: FetchedCellCardHeadBytes,
     physical_bytes: u64,
     cache_hit: bool,
+    read_stats: PhysicalReadStats,
+}
+
+#[derive(Debug)]
+struct InFlightCellCardCodePlane {
+    bytes: Arc<Vec<u8>>,
+    read_stats: PhysicalReadStats,
 }
 
 enum FetchedCellCardHeadBytes {
@@ -3771,6 +3788,9 @@ impl CollectionReadRuntime {
         // keeps unbounded-RAM/test handles from silently tripling the option.
         let mutation_root_cache_bytes = options.tombstone_page_cache_max_bytes / 2;
         let mutation_data_cache_bytes = options.tombstone_page_cache_max_bytes / 4;
+        let cell_card_code_plane_cache_max_bytes = retained_pool
+            .as_ref()
+            .map_or(0, |_| options.cell_card_code_plane_cache_max_bytes);
         Arc::new(Self {
             resident_capacity_bytes,
             retained_pool: retained_pool.clone(),
@@ -3783,6 +3803,7 @@ impl CollectionReadRuntime {
             )),
             leaf_read_width: options.leaf_read_width,
             exact_read_max_physical_amplification: options.exact_read_max_physical_amplification,
+            cell_card_code_plane_cache_max_bytes,
             global_pq_rerank_admission: Arc::new(AdmissionGate::new(
                 options.max_inflight_leaf_reads,
             )),
@@ -3790,9 +3811,7 @@ impl CollectionReadRuntime {
                 options.max_parallel_decode_rank_tasks,
             )),
             cell_card_code_planes: decoded_cache_with_pool(
-                retained_pool
-                    .as_ref()
-                    .map_or(0, |_| DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES),
+                cell_card_code_plane_cache_max_bytes,
                 &retained_pool,
             ),
             prepared_cell_card_code_planes: Mutex::new(None),
@@ -5031,6 +5050,7 @@ impl BorsukIndex {
                 resident_routing: false,
                 segment_cache_max_bytes: None,
                 routing_page_cache_max_bytes: DEFAULT_ROUTING_PAGE_CACHE_BYTES,
+                cell_card_code_plane_cache_max_bytes: DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES,
                 tombstone_page_cache_max_bytes: DEFAULT_TOMBSTONE_PAGE_CACHE_BYTES,
                 bm25_stats_page_cache_max_bytes: DEFAULT_BM25_STATS_PAGE_CACHE_BYTES,
                 lexical_run_cache_max_bytes: DEFAULT_LEXICAL_RUN_CACHE_BYTES,
@@ -5687,6 +5707,9 @@ impl BorsukIndex {
     }
 
     fn prepare_fitting_cell_card_code_planes(&self, pins: &ResidentGlobalAnnPins) -> Result<()> {
+        if self.read_runtime.cell_card_code_plane_cache_max_bytes == 0 {
+            return Ok(());
+        }
         if let Some(prepared) = self.stage_fitting_cell_card_code_planes(pins, false)? {
             *self
                 .read_runtime
@@ -5706,6 +5729,9 @@ impl BorsukIndex {
         pins: &ResidentGlobalAnnPins,
         replacement_only: bool,
     ) -> Result<Option<PreparedCellCardCodePlanes>> {
+        if self.read_runtime.cell_card_code_plane_cache_max_bytes == 0 {
+            return Ok(None);
+        }
         let Some(root) = pins.cell_card_root.as_ref() else {
             return Ok(None);
         };
@@ -12597,10 +12623,26 @@ impl BorsukIndex {
             global_base_approximate_us: 0,
             global_base_head_admission_us: 0,
             global_base_head_fetch_us: 0,
+            global_base_head_read_attempts: 0,
+            global_base_head_read_successes: 0,
+            global_base_head_read_response_bytes: 0,
+            global_base_head_read_us_sum: 0,
+            global_base_head_read_us_max: 0,
+            global_base_head_read_queue_us_sum: 0,
+            global_base_head_read_queue_us_max: 0,
+            global_base_head_reads_over_20ms: 0,
+            global_base_head_reads_over_30ms: 0,
+            global_base_head_reads_over_50ms: 0,
+            global_base_head_reads_over_100ms: 0,
             global_base_head_decode_admission_us: 0,
             global_base_head_decode_us: 0,
             global_base_exact_admission_us: 0,
             global_base_exact_fetch_us: 0,
+            global_base_exact_read_attempts: 0,
+            global_base_exact_read_successes: 0,
+            global_base_exact_read_response_bytes: 0,
+            global_base_exact_read_queue_us_sum: 0,
+            global_base_exact_read_queue_us_max: 0,
             global_base_exact_read_us_max: 0,
             global_base_exact_read_us_sum: 0,
             global_base_exact_reads_over_20ms: 0,
@@ -19733,6 +19775,7 @@ impl BorsukIndex {
         &self,
         read: &CellCardHeadRead,
         pinned_read: Option<&Arc<Vec<u8>>>,
+        queued_at: Instant,
     ) -> Result<FetchedCellCardHeadRead> {
         let plane_end = read
             .group
@@ -19746,17 +19789,21 @@ impl BorsukIndex {
                 bytes: FetchedCellCardHeadBytes::Authenticated(Arc::clone(bytes)),
                 physical_bytes: 0,
                 cache_hit: true,
+                read_stats: PhysicalReadStats::default(),
             });
         }
         if read.start != read.group.code_plane_offset || read.end != plane_end {
-            let bytes = self
-                .storage
-                .read_range(&read.group.path, read.start..read.end)?;
-            let physical_bytes = bytes.len() as u64;
+            let reported = self.storage.read_range_reported(
+                &read.group.path,
+                read.start..read.end,
+                queued_at,
+            )?;
+            let physical_bytes = reported.bytes.len() as u64;
             return Ok(FetchedCellCardHeadRead {
-                bytes: FetchedCellCardHeadBytes::Unverified(Arc::new(bytes)),
+                bytes: FetchedCellCardHeadBytes::Unverified(Arc::new(reported.bytes)),
                 physical_bytes,
                 cache_hit: false,
+                read_stats: reported.stats,
             });
         }
         let key = cell_card_code_plane_cache_key(&read.group.path, read.group.code_plane_checksum);
@@ -19765,9 +19812,10 @@ impl BorsukIndex {
                 bytes: FetchedCellCardHeadBytes::Authenticated(bytes),
                 physical_bytes: 0,
                 cache_hit: true,
+                read_stats: PhysicalReadStats::default(),
             });
         }
-        let (bytes, physical_bytes, _shared) = self
+        let (plane, physical_bytes, shared) = self
             .read_runtime
             .inflight_cell_card_code_planes
             .load(&key, || {
@@ -19778,16 +19826,37 @@ impl BorsukIndex {
                         )
                     })?;
                 let mut bytes = Vec::with_capacity(capacity);
+                let mut read_stats = PhysicalReadStats::default();
+                let mut range_queued_at = queued_at;
                 for range in bounded_cell_card_plane_ranges(read.start, read.end)? {
-                    bytes.extend_from_slice(&self.storage.read_range(&read.group.path, range)?);
+                    let reported = self.storage.read_range_reported(
+                        &read.group.path,
+                        range,
+                        range_queued_at,
+                    )?;
+                    read_stats.merge(reported.stats);
+                    bytes.extend_from_slice(&reported.bytes);
+                    range_queued_at = Instant::now();
                 }
                 let physical_bytes = bytes.len() as u64;
-                Ok((bytes, physical_bytes))
+                Ok((
+                    InFlightCellCardCodePlane {
+                        bytes: Arc::new(bytes),
+                        read_stats,
+                    },
+                    physical_bytes,
+                ))
             })?;
+        let read_stats = if shared {
+            PhysicalReadStats::default()
+        } else {
+            plane.read_stats
+        };
         Ok(FetchedCellCardHeadRead {
-            bytes: FetchedCellCardHeadBytes::Unverified(bytes),
+            bytes: FetchedCellCardHeadBytes::Unverified(Arc::clone(&plane.bytes)),
             physical_bytes,
             cache_hit: false,
+            read_stats,
         })
     }
 
@@ -19795,11 +19864,12 @@ impl BorsukIndex {
         &self,
         read: &CellCardHeadRead,
         fetched: FetchedCellCardHeadRead,
-    ) -> Result<(Arc<Vec<u8>>, u64, bool)> {
+    ) -> Result<(Arc<Vec<u8>>, u64, bool, PhysicalReadStats)> {
         let FetchedCellCardHeadRead {
             bytes,
             physical_bytes,
             cache_hit,
+            read_stats,
         } = fetched;
         let bytes = match bytes {
             FetchedCellCardHeadBytes::Authenticated(bytes) => {
@@ -19808,7 +19878,7 @@ impl BorsukIndex {
                         "cell-card authenticated read length mismatch".to_string(),
                     ));
                 }
-                return Ok((bytes, physical_bytes, cache_hit));
+                return Ok((bytes, physical_bytes, cache_hit, read_stats));
             }
             FetchedCellCardHeadBytes::Unverified(bytes) => bytes,
         };
@@ -19826,22 +19896,13 @@ impl BorsukIndex {
             // retained for cards outside this query. Cache-disabled serving
             // authenticates the selected card ranges below instead of hashing
             // and discarding speculative plane bytes.
-            if self.read_runtime.retained_pool.is_none() {
+            if self.read_runtime.cell_card_code_plane_cache_max_bytes == 0 {
                 self.cache_cell_card_head_read_slices(read, bytes.as_slice())?;
-                return Ok((bytes, physical_bytes, cache_hit));
+                return Ok((bytes, physical_bytes, cache_hit, read_stats));
             }
             let raw = Arc::clone(&bytes);
             let expected_bytes = read.group.code_plane_bytes;
             let expected_checksum = read.group.code_plane_checksum;
-            let root = self
-                .resident_global_ann_pins
-                .as_ref()
-                .and_then(|pins| pins.cell_card_root.as_ref())
-                .ok_or_else(|| {
-                    BorsukError::InvalidStorage(
-                        "cell-card code plane is visible without its resident root".to_string(),
-                    )
-                })?;
             let cache = Arc::clone(&self.read_runtime.cell_card_code_planes);
             let cache_key = key.clone();
             let (verified, _, _) = self
@@ -19855,19 +19916,34 @@ impl BorsukIndex {
                             "cell-card code-plane checksum or bounds mismatch".to_string(),
                         ));
                     }
+                    let root = self
+                        .resident_global_ann_pins
+                        .as_ref()
+                        .and_then(|pins| pins.cell_card_root.as_ref())
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "cell-card code plane is visible without its resident root"
+                                    .to_string(),
+                            )
+                        })?;
                     root.validate_complete_code_planes(&[(&read.group, raw.as_slice())])?;
                     cache.insert(cache_key, Arc::clone(&raw), raw.len() as u64);
                     Ok((raw, 0))
                 })?;
-            return Ok((Arc::clone(verified.as_ref()), physical_bytes, cache_hit));
+            return Ok((
+                Arc::clone(verified.as_ref()),
+                physical_bytes,
+                cache_hit,
+                read_stats,
+            ));
         } else {
             self.cache_cell_card_head_read_slices(read, bytes.as_slice())?;
         }
-        Ok((bytes, physical_bytes, cache_hit))
+        Ok((bytes, physical_bytes, cache_hit, read_stats))
     }
 
     fn cached_cell_card_head_read(&self, read: &CellCardHeadRead) -> Result<Option<Arc<Vec<u8>>>> {
-        if self.read_runtime.retained_pool.is_none() {
+        if self.read_runtime.cell_card_code_plane_cache_max_bytes == 0 {
             return Ok(None);
         }
         let plane_end = read
@@ -19974,7 +20050,7 @@ impl BorsukIndex {
                 )
             })?;
             validate_cell_card_code_range(&card.reference, stored)?;
-            if self.read_runtime.retained_pool.is_some() {
+            if self.read_runtime.cell_card_code_plane_cache_max_bytes > 0 {
                 let key = cell_card_code_slice_cache_key(
                     &read.group,
                     card.reference.code_offset,
@@ -20076,11 +20152,27 @@ impl BorsukIndex {
                 global_base_approximate_us: telemetry.global_base_approximate_us,
                 global_base_head_admission_us: telemetry.global_base_head_admission_us,
                 global_base_head_fetch_us: telemetry.global_base_head_fetch_us,
+                global_base_head_read_attempts: telemetry.head_read_stats.attempts,
+                global_base_head_read_successes: telemetry.head_read_stats.successes,
+                global_base_head_read_response_bytes: telemetry.head_read_stats.response_bytes,
+                global_base_head_read_us_sum: telemetry.head_read_stats.service_us_sum,
+                global_base_head_read_us_max: telemetry.head_read_stats.service_us_max,
+                global_base_head_read_queue_us_sum: telemetry.head_read_stats.queue_us_sum,
+                global_base_head_read_queue_us_max: telemetry.head_read_stats.queue_us_max,
+                global_base_head_reads_over_20ms: telemetry.head_read_stats.reads_over_20ms,
+                global_base_head_reads_over_30ms: telemetry.head_read_stats.reads_over_30ms,
+                global_base_head_reads_over_50ms: telemetry.head_read_stats.reads_over_50ms,
+                global_base_head_reads_over_100ms: telemetry.head_read_stats.reads_over_100ms,
                 global_base_head_decode_admission_us: telemetry
                     .global_base_head_decode_admission_us,
                 global_base_head_decode_us: telemetry.global_base_head_decode_us,
                 global_base_exact_admission_us: 0,
                 global_base_exact_fetch_us: 0,
+                global_base_exact_read_attempts: 0,
+                global_base_exact_read_successes: 0,
+                global_base_exact_read_response_bytes: 0,
+                global_base_exact_read_queue_us_sum: 0,
+                global_base_exact_read_queue_us_max: 0,
                 global_base_exact_read_us_max: 0,
                 global_base_exact_read_us_sum: 0,
                 global_base_exact_reads_over_20ms: 0,
@@ -20327,7 +20419,7 @@ impl BorsukIndex {
         let planned_head_bytes = promote_cell_card_head_wave_to_stable_planes_with_pinned_cache(
             selected_head_plan.clone(),
             head_promotion_byte_ceiling,
-            cell_card_plane_promotion_ceiling(self.read_runtime.retained_pool.is_some()),
+            cell_card_plane_promotion_ceiling(true),
             global_cell_card_head_request_budget(context.page_budget),
             |_| false,
         )?
@@ -20341,7 +20433,9 @@ impl BorsukIndex {
         let head_plan = promote_cell_card_head_wave_to_stable_planes_with_pinned_cache(
             selected_head_plan,
             head_promotion_byte_ceiling,
-            cell_card_plane_promotion_ceiling(self.read_runtime.retained_pool.is_some()),
+            cell_card_plane_promotion_ceiling(
+                self.read_runtime.cell_card_code_plane_cache_max_bytes > 0,
+            ),
             global_cell_card_head_request_budget(context.page_budget),
             |group| {
                 let key = cell_card_code_plane_cache_key(&group.path, group.code_plane_checksum);
@@ -20387,14 +20481,15 @@ impl BorsukIndex {
         }
         let code_requests_before = self.storage.request_counts();
         let head_io_started = Instant::now();
-        let head_reads = bounded_io_map_with_gate(
+        let head_reads = bounded_io_map_with_gate_and_queue_time(
             head_plan.reads(),
             self.leaf_read_width,
             Some(&self.global_pq_rerank_admission),
-            |read| {
+            |read, queued_at| {
                 self.fetch_cell_card_head_read(
                     read,
                     pinned_head_reads.get(&cell_card_head_read_identity(read)),
+                    queued_at,
                 )
             },
         );
@@ -20421,8 +20516,10 @@ impl BorsukIndex {
                 let mut code_plane_cache_hits = 0_usize;
                 let mut code_plane_cache_bytes = 0_u64;
                 let mut code_plane_storage_bytes = 0_u64;
+                let mut head_read_stats = PhysicalReadStats::default();
                 for finished in finished_heads {
-                    let (bytes, storage_bytes, cache_hit) = finished?;
+                    let (bytes, storage_bytes, cache_hit, read_stats) = finished?;
+                    head_read_stats.merge(read_stats);
                     code_plane_storage_bytes =
                         code_plane_storage_bytes.saturating_add(storage_bytes);
                     if cache_hit {
@@ -20468,6 +20565,7 @@ impl BorsukIndex {
                     code_plane_cache_hits,
                     code_plane_cache_bytes,
                     code_plane_storage_bytes,
+                    head_read_stats,
                     global_base_head_decode_us,
                     global_approximate_us,
                 ))
@@ -20478,6 +20576,7 @@ impl BorsukIndex {
             code_plane_cache_hits,
             code_plane_cache_bytes,
             code_plane_storage_bytes,
+            head_read_stats,
             global_base_head_decode_us,
             global_approximate_us,
         ) = head_result?;
@@ -20502,6 +20601,7 @@ impl BorsukIndex {
                     global_base_approximate_us: global_approximate_us,
                     global_base_head_admission_us,
                     global_base_head_fetch_us,
+                    head_read_stats,
                     global_base_head_decode_admission_us,
                     global_base_head_decode_us,
                     global_leaf_waves: 1,
@@ -20863,22 +20963,32 @@ impl BorsukIndex {
                 global_base_approximate_us: global_approximate_us,
                 global_base_head_admission_us,
                 global_base_head_fetch_us,
+                global_base_head_read_attempts: head_read_stats.attempts,
+                global_base_head_read_successes: head_read_stats.successes,
+                global_base_head_read_response_bytes: head_read_stats.response_bytes,
+                global_base_head_read_us_sum: head_read_stats.service_us_sum,
+                global_base_head_read_us_max: head_read_stats.service_us_max,
+                global_base_head_read_queue_us_sum: head_read_stats.queue_us_sum,
+                global_base_head_read_queue_us_max: head_read_stats.queue_us_max,
+                global_base_head_reads_over_20ms: head_read_stats.reads_over_20ms,
+                global_base_head_reads_over_30ms: head_read_stats.reads_over_30ms,
+                global_base_head_reads_over_50ms: head_read_stats.reads_over_50ms,
+                global_base_head_reads_over_100ms: head_read_stats.reads_over_100ms,
                 global_base_head_decode_admission_us,
                 global_base_head_decode_us,
                 global_base_exact_admission_us,
                 global_base_exact_fetch_us,
-                global_base_exact_read_us_max: exact_wave_stats.read_us_max,
-                global_base_exact_read_us_sum: exact_wave_stats.read_us_sum,
-                global_base_exact_reads_over_20ms: u64::try_from(exact_wave_stats.reads_over_20ms)
-                    .unwrap_or(u64::MAX),
-                global_base_exact_reads_over_30ms: u64::try_from(exact_wave_stats.reads_over_30ms)
-                    .unwrap_or(u64::MAX),
-                global_base_exact_reads_over_50ms: u64::try_from(exact_wave_stats.reads_over_50ms)
-                    .unwrap_or(u64::MAX),
-                global_base_exact_reads_over_100ms: u64::try_from(
-                    exact_wave_stats.reads_over_100ms,
-                )
-                .unwrap_or(u64::MAX),
+                global_base_exact_read_attempts: exact_wave_stats.attempts,
+                global_base_exact_read_successes: exact_wave_stats.successes,
+                global_base_exact_read_response_bytes: exact_wave_stats.response_bytes,
+                global_base_exact_read_queue_us_sum: exact_wave_stats.queue_us_sum,
+                global_base_exact_read_queue_us_max: exact_wave_stats.queue_us_max,
+                global_base_exact_read_us_max: exact_wave_stats.service_us_max,
+                global_base_exact_read_us_sum: exact_wave_stats.service_us_sum,
+                global_base_exact_reads_over_20ms: exact_wave_stats.reads_over_20ms,
+                global_base_exact_reads_over_30ms: exact_wave_stats.reads_over_30ms,
+                global_base_exact_reads_over_50ms: exact_wave_stats.reads_over_50ms,
+                global_base_exact_reads_over_100ms: exact_wave_stats.reads_over_100ms,
                 global_base_exact_cpu_us,
                 global_base_exact_rerank_us: u64::try_from(exact_started.elapsed().as_micros())
                     .unwrap_or(u64::MAX),
@@ -20989,10 +21099,26 @@ impl BorsukIndex {
                     global_base_approximate_us: 0,
                     global_base_head_admission_us: 0,
                     global_base_head_fetch_us: 0,
+                    global_base_head_read_attempts: 0,
+                    global_base_head_read_successes: 0,
+                    global_base_head_read_response_bytes: 0,
+                    global_base_head_read_us_sum: 0,
+                    global_base_head_read_us_max: 0,
+                    global_base_head_read_queue_us_sum: 0,
+                    global_base_head_read_queue_us_max: 0,
+                    global_base_head_reads_over_20ms: 0,
+                    global_base_head_reads_over_30ms: 0,
+                    global_base_head_reads_over_50ms: 0,
+                    global_base_head_reads_over_100ms: 0,
                     global_base_head_decode_admission_us: 0,
                     global_base_head_decode_us: 0,
                     global_base_exact_admission_us: 0,
                     global_base_exact_fetch_us: 0,
+                    global_base_exact_read_attempts: 0,
+                    global_base_exact_read_successes: 0,
+                    global_base_exact_read_response_bytes: 0,
+                    global_base_exact_read_queue_us_sum: 0,
+                    global_base_exact_read_queue_us_max: 0,
                     global_base_exact_read_us_max: 0,
                     global_base_exact_read_us_sum: 0,
                     global_base_exact_reads_over_20ms: 0,
@@ -21461,10 +21587,26 @@ impl BorsukIndex {
                 global_base_approximate_us: global_approximate_us,
                 global_base_head_admission_us: 0,
                 global_base_head_fetch_us: 0,
+                global_base_head_read_attempts: 0,
+                global_base_head_read_successes: 0,
+                global_base_head_read_response_bytes: 0,
+                global_base_head_read_us_sum: 0,
+                global_base_head_read_us_max: 0,
+                global_base_head_read_queue_us_sum: 0,
+                global_base_head_read_queue_us_max: 0,
+                global_base_head_reads_over_20ms: 0,
+                global_base_head_reads_over_30ms: 0,
+                global_base_head_reads_over_50ms: 0,
+                global_base_head_reads_over_100ms: 0,
                 global_base_head_decode_admission_us: 0,
                 global_base_head_decode_us: 0,
                 global_base_exact_admission_us: 0,
                 global_base_exact_fetch_us: 0,
+                global_base_exact_read_attempts: 0,
+                global_base_exact_read_successes: 0,
+                global_base_exact_read_response_bytes: 0,
+                global_base_exact_read_queue_us_sum: 0,
+                global_base_exact_read_queue_us_max: 0,
                 global_base_exact_read_us_max: 0,
                 global_base_exact_read_us_sum: 0,
                 global_base_exact_reads_over_20ms: 0,
@@ -24003,6 +24145,52 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_base_head_fetch_us)
                 .sum(),
+            global_base_head_read_attempts: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_read_attempts)
+                .sum(),
+            global_base_head_read_successes: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_read_successes)
+                .sum(),
+            global_base_head_read_response_bytes: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_read_response_bytes)
+                .sum(),
+            global_base_head_read_us_sum: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_read_us_sum)
+                .sum(),
+            global_base_head_read_us_max: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_read_us_max)
+                .max()
+                .unwrap_or(0),
+            global_base_head_read_queue_us_sum: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_read_queue_us_sum)
+                .sum(),
+            global_base_head_read_queue_us_max: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_read_queue_us_max)
+                .max()
+                .unwrap_or(0),
+            global_base_head_reads_over_20ms: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_reads_over_20ms)
+                .sum(),
+            global_base_head_reads_over_30ms: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_reads_over_30ms)
+                .sum(),
+            global_base_head_reads_over_50ms: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_reads_over_50ms)
+                .sum(),
+            global_base_head_reads_over_100ms: reports
+                .iter()
+                .map(|(_, report)| report.global_base_head_reads_over_100ms)
+                .sum(),
             global_base_head_decode_admission_us: reports
                 .iter()
                 .map(|(_, report)| report.global_base_head_decode_admission_us)
@@ -24019,6 +24207,27 @@ impl BorsukIndex {
                 .iter()
                 .map(|(_, report)| report.global_base_exact_fetch_us)
                 .sum(),
+            global_base_exact_read_attempts: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_read_attempts)
+                .sum(),
+            global_base_exact_read_successes: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_read_successes)
+                .sum(),
+            global_base_exact_read_response_bytes: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_read_response_bytes)
+                .sum(),
+            global_base_exact_read_queue_us_sum: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_read_queue_us_sum)
+                .sum(),
+            global_base_exact_read_queue_us_max: reports
+                .iter()
+                .map(|(_, report)| report.global_base_exact_read_queue_us_max)
+                .max()
+                .unwrap_or(0),
             global_base_exact_read_us_max: reports
                 .iter()
                 .map(|(_, report)| report.global_base_exact_read_us_max)
@@ -24222,10 +24431,26 @@ impl BorsukIndex {
                 global_base_approximate_us: 0,
                 global_base_head_admission_us: 0,
                 global_base_head_fetch_us: 0,
+                global_base_head_read_attempts: 0,
+                global_base_head_read_successes: 0,
+                global_base_head_read_response_bytes: 0,
+                global_base_head_read_us_sum: 0,
+                global_base_head_read_us_max: 0,
+                global_base_head_read_queue_us_sum: 0,
+                global_base_head_read_queue_us_max: 0,
+                global_base_head_reads_over_20ms: 0,
+                global_base_head_reads_over_30ms: 0,
+                global_base_head_reads_over_50ms: 0,
+                global_base_head_reads_over_100ms: 0,
                 global_base_head_decode_admission_us: 0,
                 global_base_head_decode_us: 0,
                 global_base_exact_admission_us: 0,
                 global_base_exact_fetch_us: 0,
+                global_base_exact_read_attempts: 0,
+                global_base_exact_read_successes: 0,
+                global_base_exact_read_response_bytes: 0,
+                global_base_exact_read_queue_us_sum: 0,
+                global_base_exact_read_queue_us_max: 0,
                 global_base_exact_read_us_max: 0,
                 global_base_exact_read_us_sum: 0,
                 global_base_exact_reads_over_20ms: 0,
@@ -24461,10 +24686,26 @@ impl BorsukIndex {
             global_base_approximate_us: 0,
             global_base_head_admission_us: 0,
             global_base_head_fetch_us: 0,
+            global_base_head_read_attempts: 0,
+            global_base_head_read_successes: 0,
+            global_base_head_read_response_bytes: 0,
+            global_base_head_read_us_sum: 0,
+            global_base_head_read_us_max: 0,
+            global_base_head_read_queue_us_sum: 0,
+            global_base_head_read_queue_us_max: 0,
+            global_base_head_reads_over_20ms: 0,
+            global_base_head_reads_over_30ms: 0,
+            global_base_head_reads_over_50ms: 0,
+            global_base_head_reads_over_100ms: 0,
             global_base_head_decode_admission_us: 0,
             global_base_head_decode_us: 0,
             global_base_exact_admission_us: 0,
             global_base_exact_fetch_us: 0,
+            global_base_exact_read_attempts: 0,
+            global_base_exact_read_successes: 0,
+            global_base_exact_read_response_bytes: 0,
+            global_base_exact_read_queue_us_sum: 0,
+            global_base_exact_read_queue_us_max: 0,
             global_base_exact_read_us_max: 0,
             global_base_exact_read_us_sum: 0,
             global_base_exact_reads_over_20ms: 0,
@@ -24923,10 +25164,26 @@ impl BorsukIndex {
                     global_base_approximate_us: 0,
                     global_base_head_admission_us: 0,
                     global_base_head_fetch_us: 0,
+                    global_base_head_read_attempts: 0,
+                    global_base_head_read_successes: 0,
+                    global_base_head_read_response_bytes: 0,
+                    global_base_head_read_us_sum: 0,
+                    global_base_head_read_us_max: 0,
+                    global_base_head_read_queue_us_sum: 0,
+                    global_base_head_read_queue_us_max: 0,
+                    global_base_head_reads_over_20ms: 0,
+                    global_base_head_reads_over_30ms: 0,
+                    global_base_head_reads_over_50ms: 0,
+                    global_base_head_reads_over_100ms: 0,
                     global_base_head_decode_admission_us: 0,
                     global_base_head_decode_us: 0,
                     global_base_exact_admission_us: 0,
                     global_base_exact_fetch_us: 0,
+                    global_base_exact_read_attempts: 0,
+                    global_base_exact_read_successes: 0,
+                    global_base_exact_read_response_bytes: 0,
+                    global_base_exact_read_queue_us_sum: 0,
+                    global_base_exact_read_queue_us_max: 0,
                     global_base_exact_read_us_max: 0,
                     global_base_exact_read_us_sum: 0,
                     global_base_exact_reads_over_20ms: 0,
@@ -25707,10 +25964,26 @@ impl BorsukIndex {
                 global_base_approximate_us: 0,
                 global_base_head_admission_us: 0,
                 global_base_head_fetch_us: 0,
+                global_base_head_read_attempts: 0,
+                global_base_head_read_successes: 0,
+                global_base_head_read_response_bytes: 0,
+                global_base_head_read_us_sum: 0,
+                global_base_head_read_us_max: 0,
+                global_base_head_read_queue_us_sum: 0,
+                global_base_head_read_queue_us_max: 0,
+                global_base_head_reads_over_20ms: 0,
+                global_base_head_reads_over_30ms: 0,
+                global_base_head_reads_over_50ms: 0,
+                global_base_head_reads_over_100ms: 0,
                 global_base_head_decode_admission_us: 0,
                 global_base_head_decode_us: 0,
                 global_base_exact_admission_us: 0,
                 global_base_exact_fetch_us: 0,
+                global_base_exact_read_attempts: 0,
+                global_base_exact_read_successes: 0,
+                global_base_exact_read_response_bytes: 0,
+                global_base_exact_read_queue_us_sum: 0,
+                global_base_exact_read_queue_us_max: 0,
                 global_base_exact_read_us_max: 0,
                 global_base_exact_read_us_sum: 0,
                 global_base_exact_reads_over_20ms: 0,
@@ -25840,10 +26113,26 @@ impl BorsukIndex {
                 global_base_approximate_us: 0,
                 global_base_head_admission_us: 0,
                 global_base_head_fetch_us: 0,
+                global_base_head_read_attempts: 0,
+                global_base_head_read_successes: 0,
+                global_base_head_read_response_bytes: 0,
+                global_base_head_read_us_sum: 0,
+                global_base_head_read_us_max: 0,
+                global_base_head_read_queue_us_sum: 0,
+                global_base_head_read_queue_us_max: 0,
+                global_base_head_reads_over_20ms: 0,
+                global_base_head_reads_over_30ms: 0,
+                global_base_head_reads_over_50ms: 0,
+                global_base_head_reads_over_100ms: 0,
                 global_base_head_decode_admission_us: 0,
                 global_base_head_decode_us: 0,
                 global_base_exact_admission_us: 0,
                 global_base_exact_fetch_us: 0,
+                global_base_exact_read_attempts: 0,
+                global_base_exact_read_successes: 0,
+                global_base_exact_read_response_bytes: 0,
+                global_base_exact_read_queue_us_sum: 0,
+                global_base_exact_read_queue_us_max: 0,
                 global_base_exact_read_us_max: 0,
                 global_base_exact_read_us_sum: 0,
                 global_base_exact_reads_over_20ms: 0,
@@ -31690,6 +31979,51 @@ where
         .collect()
 }
 
+fn bounded_io_map_with_gate_and_queue_time<T, U, F>(
+    values: &[T],
+    width: usize,
+    gate: Option<&AdmissionGate>,
+    work: F,
+) -> Vec<U>
+where
+    T: Sync,
+    U: Send,
+    F: Fn(&T, Instant) -> U + Sync,
+{
+    let width = width.max(1);
+    if values.is_empty() {
+        return Vec::new();
+    }
+    let next = AtomicUsize::new(0);
+    let output = (0..values.len())
+        .map(|_| std::sync::Mutex::new(None))
+        .collect::<Vec<_>>();
+    crate::parallel::install_io(|| {
+        (0..width.min(values.len())).into_par_iter().for_each(|_| {
+            loop {
+                let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(value) = values.get(index) else {
+                    break;
+                };
+                let queued_at = Instant::now();
+                let _permit = gate.map(AdmissionGate::acquire);
+                let result = work(value, queued_at);
+                *output[index]
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(result);
+            }
+        });
+    });
+    output
+        .into_iter()
+        .map(|slot| {
+            slot.into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .expect("every bounded I/O input is mapped once")
+        })
+        .collect()
+}
+
 /// Run checksum, decode, and ranking work on the bounded process-wide CPU pool.
 ///
 /// Object-store workers must remain blocking-I/O waiters: executing V17 CPU
@@ -32867,6 +33201,50 @@ fn merge_search_execution_hits(
         .report
         .global_base_head_fetch_us
         .saturating_add(delta_report.global_base_head_fetch_us);
+    base.report.global_base_head_read_attempts = base
+        .report
+        .global_base_head_read_attempts
+        .saturating_add(delta_report.global_base_head_read_attempts);
+    base.report.global_base_head_read_successes = base
+        .report
+        .global_base_head_read_successes
+        .saturating_add(delta_report.global_base_head_read_successes);
+    base.report.global_base_head_read_response_bytes = base
+        .report
+        .global_base_head_read_response_bytes
+        .saturating_add(delta_report.global_base_head_read_response_bytes);
+    base.report.global_base_head_read_us_sum = base
+        .report
+        .global_base_head_read_us_sum
+        .saturating_add(delta_report.global_base_head_read_us_sum);
+    base.report.global_base_head_read_us_max = base
+        .report
+        .global_base_head_read_us_max
+        .max(delta_report.global_base_head_read_us_max);
+    base.report.global_base_head_read_queue_us_sum = base
+        .report
+        .global_base_head_read_queue_us_sum
+        .saturating_add(delta_report.global_base_head_read_queue_us_sum);
+    base.report.global_base_head_read_queue_us_max = base
+        .report
+        .global_base_head_read_queue_us_max
+        .max(delta_report.global_base_head_read_queue_us_max);
+    base.report.global_base_head_reads_over_20ms = base
+        .report
+        .global_base_head_reads_over_20ms
+        .saturating_add(delta_report.global_base_head_reads_over_20ms);
+    base.report.global_base_head_reads_over_30ms = base
+        .report
+        .global_base_head_reads_over_30ms
+        .saturating_add(delta_report.global_base_head_reads_over_30ms);
+    base.report.global_base_head_reads_over_50ms = base
+        .report
+        .global_base_head_reads_over_50ms
+        .saturating_add(delta_report.global_base_head_reads_over_50ms);
+    base.report.global_base_head_reads_over_100ms = base
+        .report
+        .global_base_head_reads_over_100ms
+        .saturating_add(delta_report.global_base_head_reads_over_100ms);
     base.report.global_base_head_decode_admission_us = base
         .report
         .global_base_head_decode_admission_us
@@ -32883,6 +33261,26 @@ fn merge_search_execution_hits(
         .report
         .global_base_exact_fetch_us
         .saturating_add(delta_report.global_base_exact_fetch_us);
+    base.report.global_base_exact_read_attempts = base
+        .report
+        .global_base_exact_read_attempts
+        .saturating_add(delta_report.global_base_exact_read_attempts);
+    base.report.global_base_exact_read_successes = base
+        .report
+        .global_base_exact_read_successes
+        .saturating_add(delta_report.global_base_exact_read_successes);
+    base.report.global_base_exact_read_response_bytes = base
+        .report
+        .global_base_exact_read_response_bytes
+        .saturating_add(delta_report.global_base_exact_read_response_bytes);
+    base.report.global_base_exact_read_queue_us_sum = base
+        .report
+        .global_base_exact_read_queue_us_sum
+        .saturating_add(delta_report.global_base_exact_read_queue_us_sum);
+    base.report.global_base_exact_read_queue_us_max = base
+        .report
+        .global_base_exact_read_queue_us_max
+        .max(delta_report.global_base_exact_read_queue_us_max);
     base.report.global_base_exact_read_us_max = base
         .report
         .global_base_exact_read_us_max
@@ -34129,13 +34527,14 @@ mod tests {
         };
 
         let fetched = index
-            .fetch_cell_card_head_read(&read, Some(&bytes))
+            .fetch_cell_card_head_read(&read, Some(&bytes), Instant::now())
             .unwrap();
-        let (loaded, physical_bytes, cache_hit) =
+        let (loaded, physical_bytes, cache_hit, read_stats) =
             index.finish_cell_card_head_read(&read, fetched).unwrap();
         assert!(Arc::ptr_eq(&loaded, &bytes));
         assert_eq!(physical_bytes, 0);
         assert!(cache_hit);
+        assert_eq!(read_stats, PhysicalReadStats::default());
     }
 
     #[test]
@@ -34187,14 +34586,61 @@ mod tests {
         };
 
         let fetched = index
-            .fetch_cell_card_head_read(&read, None)
+            .fetch_cell_card_head_read(&read, None, Instant::now())
             .expect("the I/O stage must only fetch bytes");
         let error = run_cell_card_post_io(&index.decode_rank_admission, || {
             index.finish_cell_card_head_read(&read, fetched)
         })
         .unwrap_err();
 
-        assert!(error.to_string().contains("checksum or bounds mismatch"));
+        assert!(
+            error.to_string().contains("checksum or bounds mismatch"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn complete_cell_card_plane_reports_each_bounded_backing_range() {
+        let directory = tempfile::tempdir().unwrap();
+        let index = BorsukIndex::create(IndexConfig {
+            uri: directory.path().to_string_lossy().into_owned(),
+            metric: VectorMetric::Euclidean,
+            dimensions: 2,
+            segment_max_vectors: 16,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: BTreeMap::new(),
+        })
+        .unwrap();
+        let bytes = vec![7_u8; CELL_CARD_RANGE_READ_MAX_BYTES as usize + 1];
+        index
+            .storage
+            .write_bytes("cell-card/large-code-plane.arrow", &bytes)
+            .unwrap();
+        let checksum = *blake3::hash(&bytes).as_bytes();
+        let read = CellCardHeadRead {
+            group: Arc::new(crate::global_cell_card::CellCardGroupRef {
+                path: "cell-card/large-code-plane.arrow".to_string(),
+                checksum,
+                encoded_bytes: bytes.len() as u64,
+                code_plane_offset: 0,
+                code_plane_bytes: bytes.len() as u64,
+                code_plane_checksum: checksum,
+            }),
+            start: 0,
+            end: bytes.len() as u64,
+            selected_bytes: bytes.len() as u64,
+            cards: Vec::new(),
+        };
+
+        let fetched = index
+            .fetch_cell_card_head_read(&read, None, Instant::now())
+            .unwrap();
+
+        assert_eq!(fetched.physical_bytes, bytes.len() as u64);
+        assert_eq!(fetched.read_stats.attempts, 2);
+        assert_eq!(fetched.read_stats.successes, 2);
+        assert_eq!(fetched.read_stats.response_bytes, bytes.len() as u64);
     }
 
     #[test]
@@ -34211,6 +34657,10 @@ mod tests {
         })
         .unwrap();
         assert!(index.read_runtime.retained_pool.is_none());
+        assert_eq!(
+            index.read_runtime.cell_card_code_plane_cache_max_bytes, 0,
+            "cell-card promotion policy must use the effective retained capacity"
+        );
         let bytes = [1_u8, 2, 3, 4];
         let read = CellCardHeadRead {
             group: Arc::new(crate::global_cell_card::CellCardGroupRef {
@@ -40005,6 +40455,11 @@ mod tests {
             Some(512 * 1024 * 1024)
         );
         assert_eq!(
+            OpenOptions::default().cell_card_code_plane_cache_max_bytes,
+            DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES,
+            "production handles retain a bounded complete-plane working set by default"
+        );
+        assert_eq!(
             OpenOptions::default().max_active_searches,
             DEFAULT_MAX_ACTIVE_SEARCHES
         );
@@ -41611,6 +42066,7 @@ mod tests {
                 cache_dir: Some(deferred_cache.path().to_path_buf()),
                 cache_max_bytes: Some(64 * 1024 * 1024),
                 ram_budget_bytes: Some(64 * 1024 * 1024),
+                cell_card_code_plane_cache_max_bytes: 0,
                 ..OpenOptions::default()
             },
         )
@@ -41638,7 +42094,28 @@ mod tests {
             .unwrap();
         assert!(deferred.global_leaf_code_bytes > 0, "{deferred:?}");
         assert!(deferred.global_leaf_code_requests > 0, "{deferred:?}");
+        assert_eq!(
+            deferred.global_base_head_read_attempts, deferred.global_leaf_code_requests as u64,
+            "cold head telemetry must own every physical range request"
+        );
+        assert_eq!(
+            deferred.global_base_head_read_response_bytes, deferred.global_leaf_code_bytes,
+            "cold head telemetry must own every physical response byte"
+        );
+        assert_eq!(
+            deferred.global_base_exact_read_attempts, deferred.global_leaf_exact_requests as u64,
+            "cold exact telemetry must own every physical range request"
+        );
+        assert_eq!(
+            deferred.global_base_exact_read_response_bytes, deferred.global_leaf_page_bytes,
+            "cold exact telemetry must own every physical response byte"
+        );
         assert!(deferred.requests.gets > 0, "{deferred:?}");
+        assert_eq!(
+            index.read_runtime.cell_card_code_planes.resident_bytes(),
+            0,
+            "a one-query cold handle must not retain selected slices or complete planes"
+        );
         drop(index);
 
         let index = BorsukIndex::open_with_options(
@@ -41676,9 +42153,20 @@ mod tests {
         assert_eq!(report.leaf_mode, "bounded-cell-card-v20", "{report:?}");
         assert_eq!(report.global_leaf_code_bytes, 0, "{report:?}");
         assert_eq!(report.global_leaf_code_requests, 0, "{report:?}");
+        assert_eq!(report.global_base_head_read_attempts, 0, "{report:?}");
+        assert_eq!(report.global_base_head_read_response_bytes, 0, "{report:?}");
         assert!(report.decoded_cache_hits > 0, "{report:?}");
         assert!(report.global_leaf_page_bytes > 0, "{report:?}");
         assert!(report.requests.gets > 0, "{report:?}");
+        assert_eq!(deferred.hits, report.hits);
+        assert_eq!(
+            deferred.global_leaf_code_pages_read, report.global_leaf_code_pages_read,
+            "cache policy must not change the ranked head breadth"
+        );
+        assert_eq!(
+            deferred.global_leaf_exact_scores, report.global_leaf_exact_scores,
+            "cache policy must not change exact rerank breadth"
+        );
 
         index.clear_query_retained_state().unwrap();
         let measured = index
@@ -45023,6 +45511,20 @@ mod tests {
             }
         });
         assert_eq!(mapped, vec![true, true, true]);
+    }
+
+    #[test]
+    fn bounded_io_queue_time_starts_when_each_item_is_admitted() {
+        let values = [0_u8, 1];
+        let queue_ages =
+            bounded_io_map_with_gate_and_queue_time(&values, 1, None, |value, queued_at| {
+                if *value == 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                queued_at.elapsed()
+            });
+
+        assert!(queue_ages[1] < std::time::Duration::from_millis(30));
     }
 
     #[test]

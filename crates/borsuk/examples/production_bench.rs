@@ -20,8 +20,8 @@ use arrow_array::{
 use borsuk::{
     BACKING_GET_CONCURRENCY_ENV, BULK_LOAD_SOURCE_SHARDS, BorsukIndex, BuildConfig,
     CPU_THREADS_ENV, CacheExecutionPolicy, CompactionOptions,
-    DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION, DEFAULT_LEAF_READ_WIDTH,
-    DEFAULT_MAX_ACTIVE_SEARCHES, DEFAULT_MAX_INFLIGHT_LEAF_READS,
+    DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES, DEFAULT_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION,
+    DEFAULT_LEAF_READ_WIDTH, DEFAULT_MAX_ACTIVE_SEARCHES, DEFAULT_MAX_INFLIGHT_LEAF_READS,
     DEFAULT_MAX_PARALLEL_DECODE_RANK_TASKS, DEFAULT_MAX_WAITING_SEARCHES, GarbageCollectionOptions,
     GarbageCollectionReport, GlobalPqLayout, GlobalScanCodec, IO_THREADS_ENV, IndexConfig,
     LeafCapability, LeafMode, MAX_GLOBAL_DELTA_ROWS, MAX_GLOBAL_DELTA_SEGMENTS,
@@ -66,12 +66,12 @@ const HIGH_RECALL_ROUTING_OVERFETCH: usize = 64;
 const WRITE_FRACTION_DENOMINATOR: usize = 20;
 const CACHE_COVERAGE_COHORT_QUERIES: usize = 40;
 const CACHE_COVERAGE_REPETITIONS: usize = 4;
-const PRODUCTION_BENCH_SCHEMA_VERSION: &str = "borsuk-production-bench-v19";
+const PRODUCTION_BENCH_SCHEMA_VERSION: &str = "borsuk-production-bench-v20";
 const RECALL_LATENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,execution_engine,phase,mode,nprobe,max_candidates,recall_at_10,samples,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read,avg_gets_per_query,dollars_per_million_queries";
-const QUERY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,cache_cohort_index,cache_cohort_size,cache_cohort_count,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
+const QUERY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,phase,mode,nprobe,max_candidates,sample_index,cache_cohort_index,cache_cohort_size,cache_cohort_count,query_source_index,latency_ms,recall_at_10,execution_engine,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,query_seed,repetition_id,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_read_attempts,global_base_head_read_successes,global_base_head_read_response_bytes,global_base_head_read_us_max,global_base_head_read_us_sum,global_base_head_read_queue_us_max,global_base_head_read_queue_us_sum,global_base_head_reads_over_20ms,global_base_head_reads_over_30ms,global_base_head_reads_over_50ms,global_base_head_reads_over_100ms,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_attempts,global_base_exact_read_successes,global_base_exact_read_response_bytes,global_base_exact_read_queue_us_max,global_base_exact_read_queue_us_sum,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
 const CACHE_STATE_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,execution_engine,phase,queries,recall_at_10,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read,avg_object_cache_misses,avg_network_gets,dollars_per_million_queries";
 const CONCURRENCY_HEADER: &str = "schema_version,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,cache_execution,cache_profile,target_cache_coverage_percent,execution_engine,nprobe,max_candidates,workers,total_queries,qps,mean_ms,stddev_ms,p50_ms,p95_ms,p99_ms,max_ms,avg_global_leaf_directory_reads,avg_global_leaf_directory_bytes,avg_global_leaf_code_pages_read,avg_global_leaf_code_bytes,avg_global_leaf_pages_read,avg_global_leaf_page_bytes,avg_global_leaf_waves,avg_global_leaf_continuations,avg_global_leaf_exact_scores,avg_backing_reads,avg_backing_bytes_read,avg_bytes_read";
-const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,nprobe,max_candidates,workers,sample_index,cache_cohort_index,cache_cohort_size,cache_cohort_count,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
+const CONCURRENCY_SAMPLE_HEADER: &str = "schema_version,scan_codec,cache_execution,cache_profile,target_cache_coverage_percent,nprobe,max_candidates,workers,sample_index,cache_cohort_index,cache_cohort_size,cache_cohort_count,query_source_index,target_hot_set_member,latency_ms,recall_at_10,execution_engine,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,bytes_read,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_cache_bytes_read,disk_cache_bytes_read,backing_bytes_read,network_gets,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,global_base_approximate_us,global_base_head_admission_us,global_base_head_fetch_us,global_base_head_read_attempts,global_base_head_read_successes,global_base_head_read_response_bytes,global_base_head_read_us_max,global_base_head_read_us_sum,global_base_head_read_queue_us_max,global_base_head_read_queue_us_sum,global_base_head_reads_over_20ms,global_base_head_reads_over_30ms,global_base_head_reads_over_50ms,global_base_head_reads_over_100ms,global_base_head_decode_admission_us,global_base_head_decode_us,global_base_exact_admission_us,global_base_exact_fetch_us,global_base_exact_read_attempts,global_base_exact_read_successes,global_base_exact_read_response_bytes,global_base_exact_read_queue_us_max,global_base_exact_read_queue_us_sum,global_base_exact_read_us_max,global_base_exact_read_us_sum,global_base_exact_reads_over_20ms,global_base_exact_reads_over_30ms,global_base_exact_reads_over_50ms,global_base_exact_reads_over_100ms,global_base_exact_cpu_us,global_base_exact_rerank_us";
 const CACHE_COVERAGE_HEADER: &str = "schema_version,scan_codec,cache_execution,target_hot_query_fraction,repetition,cohort_position,query_class,query_index,execution_engine,observed_cache_tier,recall_at_10,latency_ms,segments_searched,global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,decoded_cache_hits,disk_cache_reads,backing_reads,decoded_bytes_read,disk_bytes_read,backing_bytes_read,decoded_access_fraction,disk_access_fraction,backing_access_fraction,bytes_read,network_gets";
 const BUILD_HEADER: &str = "logical_cell_catalog_checksum,logical_cells,logical_cell_dimensions,logical_cell_catalog_bytes,vector_element_type,scan_codec,turboquant_bits,turboquant_qjl_bits,turboquant_shards,build_layout,leaf_capability,segment_max_vectors,records,segment_bytes,vector_sidecar_bytes,graph_bytes,global_scan_bytes,total_active_index_bytes,bytes_per_vector,resident_bytes_estimate,ram_budget_bytes,collection_resident_bytes,retained_bytes,retained_capacity_bytes,retained_peak_bytes,transient_bytes,transient_capacity_bytes,transient_peak_bytes,ingest_ms,compaction_ms,compaction_bytes_read,compaction_bytes_written,gc_ms,gc_objects_scanned,gc_objects_deleted,gc_transaction_states_remaining,gc_bytes_read,gc_bytes_reclaimed,storage_gets,storage_puts,storage_deletes,storage_heads,storage_lists,storage_bytes_read,storage_bytes_written,configured_build_writers,ingest_batches,ingest_waves,ingest_vectors_per_s";
 const WRITE_COST_HEADER: &str = "op,configured_writers,configured_batch_records,ops,batches,wall_ms,ops_per_s,mean_batch_ms,stddev_batch_ms,p50_batch_ms,p95_batch_ms,p99_batch_ms,max_batch_ms,mean_amortized_ms,gets,puts,deletes,heads,lists,bytes_read,bytes_written";
@@ -329,10 +329,26 @@ struct QueryStageTimings {
     approximate_us: u64,
     head_admission_us: u64,
     head_fetch_us: u64,
+    head_read_attempts: u64,
+    head_read_successes: u64,
+    head_read_response_bytes: u64,
+    head_read_us_max: u64,
+    head_read_us_sum: u64,
+    head_read_queue_us_max: u64,
+    head_read_queue_us_sum: u64,
+    head_reads_over_20ms: u64,
+    head_reads_over_30ms: u64,
+    head_reads_over_50ms: u64,
+    head_reads_over_100ms: u64,
     head_decode_admission_us: u64,
     head_decode_us: u64,
     exact_admission_us: u64,
     exact_fetch_us: u64,
+    exact_read_attempts: u64,
+    exact_read_successes: u64,
+    exact_read_response_bytes: u64,
+    exact_read_queue_us_max: u64,
+    exact_read_queue_us_sum: u64,
     exact_read_us_max: u64,
     exact_read_us_sum: u64,
     exact_reads_over_20ms: u64,
@@ -349,10 +365,26 @@ impl QueryStageTimings {
             approximate_us: report.global_base_approximate_us,
             head_admission_us: report.global_base_head_admission_us,
             head_fetch_us: report.global_base_head_fetch_us,
+            head_read_attempts: report.global_base_head_read_attempts,
+            head_read_successes: report.global_base_head_read_successes,
+            head_read_response_bytes: report.global_base_head_read_response_bytes,
+            head_read_us_max: report.global_base_head_read_us_max,
+            head_read_us_sum: report.global_base_head_read_us_sum,
+            head_read_queue_us_max: report.global_base_head_read_queue_us_max,
+            head_read_queue_us_sum: report.global_base_head_read_queue_us_sum,
+            head_reads_over_20ms: report.global_base_head_reads_over_20ms,
+            head_reads_over_30ms: report.global_base_head_reads_over_30ms,
+            head_reads_over_50ms: report.global_base_head_reads_over_50ms,
+            head_reads_over_100ms: report.global_base_head_reads_over_100ms,
             head_decode_admission_us: report.global_base_head_decode_admission_us,
             head_decode_us: report.global_base_head_decode_us,
             exact_admission_us: report.global_base_exact_admission_us,
             exact_fetch_us: report.global_base_exact_fetch_us,
+            exact_read_attempts: report.global_base_exact_read_attempts,
+            exact_read_successes: report.global_base_exact_read_successes,
+            exact_read_response_bytes: report.global_base_exact_read_response_bytes,
+            exact_read_queue_us_max: report.global_base_exact_read_queue_us_max,
+            exact_read_queue_us_sum: report.global_base_exact_read_queue_us_sum,
             exact_read_us_max: report.global_base_exact_read_us_max,
             exact_read_us_sum: report.global_base_exact_read_us_sum,
             exact_reads_over_20ms: report.global_base_exact_reads_over_20ms,
@@ -365,15 +397,30 @@ impl QueryStageTimings {
     }
 
     fn csv_fields(self) -> String {
-        format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+        [
             self.approximate_us,
             self.head_admission_us,
             self.head_fetch_us,
+            self.head_read_attempts,
+            self.head_read_successes,
+            self.head_read_response_bytes,
+            self.head_read_us_max,
+            self.head_read_us_sum,
+            self.head_read_queue_us_max,
+            self.head_read_queue_us_sum,
+            self.head_reads_over_20ms,
+            self.head_reads_over_30ms,
+            self.head_reads_over_50ms,
+            self.head_reads_over_100ms,
             self.head_decode_admission_us,
             self.head_decode_us,
             self.exact_admission_us,
             self.exact_fetch_us,
+            self.exact_read_attempts,
+            self.exact_read_successes,
+            self.exact_read_response_bytes,
+            self.exact_read_queue_us_max,
+            self.exact_read_queue_us_sum,
             self.exact_read_us_max,
             self.exact_read_us_sum,
             self.exact_reads_over_20ms,
@@ -382,7 +429,9 @@ impl QueryStageTimings {
             self.exact_reads_over_100ms,
             self.exact_cpu_us,
             self.exact_rerank_us,
-        )
+        ]
+        .map(|value| value.to_string())
+        .join(",")
     }
 }
 
@@ -1648,6 +1697,13 @@ impl ServingMetadataPreparation {
     fn complete_code_planes(self) -> bool {
         self == Self::Complete
     }
+
+    fn code_plane_cache_max_bytes(self) -> u64 {
+        match self {
+            Self::DeferredCodePlanes => 0,
+            Self::Complete => DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES,
+        }
+    }
 }
 
 fn shared_serving_metadata_preparation(
@@ -1701,6 +1757,7 @@ fn open_benchmark_index(
             resident_metadata_max_bytes,
             transient_ram_min_bytes,
             segment_cache_max_bytes: effective_segment_cache_budget(config),
+            cell_card_code_plane_cache_max_bytes: preparation.code_plane_cache_max_bytes(),
             // Routing summaries and the centroid graph are serving metadata.
             // Load/build them during open so neither cache-state measurement
             // charges one-time library initialization to the first query.
@@ -7151,6 +7208,15 @@ mod tests {
     fn serving_metadata_preparation_is_bound_to_each_handle_role() {
         assert!(!ServingMetadataPreparation::DeferredCodePlanes.complete_code_planes());
         assert!(ServingMetadataPreparation::Complete.complete_code_planes());
+        assert_eq!(
+            ServingMetadataPreparation::DeferredCodePlanes.code_plane_cache_max_bytes(),
+            0,
+            "a fresh cold handle must not retain or promote complete code planes"
+        );
+        assert!(
+            ServingMetadataPreparation::Complete.code_plane_cache_max_bytes() > 0,
+            "warm serving needs an explicitly bounded complete-plane cache"
+        );
     }
 
     #[test]
@@ -7182,13 +7248,13 @@ mod tests {
     fn latency_artifact_schemas_include_the_worst_query() {
         assert_eq!(
             super::PRODUCTION_BENCH_SCHEMA_VERSION,
-            "borsuk-production-bench-v19"
+            "borsuk-production-bench-v20"
         );
         assert_eq!(RECALL_LATENCY_HEADER.split(',').count(), 33);
         assert_eq!(CACHE_STATE_HEADER.split(',').count(), 31);
         assert_eq!(CONCURRENCY_HEADER.split(',').count(), 32);
         assert_eq!(CACHE_COVERAGE_HEADER.split(',').count(), 33);
-        assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 66);
+        assert_eq!(QUERY_SAMPLE_HEADER.split(',').count(), 82);
         assert_eq!(
             QUERY_SAMPLE_HEADER
                 .split(',')
@@ -7218,7 +7284,7 @@ mod tests {
                 "global_leaf_exact_speculative_bytes",
             ]
         );
-        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 65);
+        assert_eq!(CONCURRENCY_SAMPLE_HEADER.split(',').count(), 81);
         assert_eq!(
             CONCURRENCY_SAMPLE_HEADER
                 .split(',')
@@ -7252,10 +7318,26 @@ mod tests {
             "global_base_approximate_us",
             "global_base_head_admission_us",
             "global_base_head_fetch_us",
+            "global_base_head_read_attempts",
+            "global_base_head_read_successes",
+            "global_base_head_read_response_bytes",
+            "global_base_head_read_us_max",
+            "global_base_head_read_us_sum",
+            "global_base_head_read_queue_us_max",
+            "global_base_head_read_queue_us_sum",
+            "global_base_head_reads_over_20ms",
+            "global_base_head_reads_over_30ms",
+            "global_base_head_reads_over_50ms",
+            "global_base_head_reads_over_100ms",
             "global_base_head_decode_admission_us",
             "global_base_head_decode_us",
             "global_base_exact_admission_us",
             "global_base_exact_fetch_us",
+            "global_base_exact_read_attempts",
+            "global_base_exact_read_successes",
+            "global_base_exact_read_response_bytes",
+            "global_base_exact_read_queue_us_max",
+            "global_base_exact_read_queue_us_sum",
             "global_base_exact_read_us_max",
             "global_base_exact_read_us_sum",
             "global_base_exact_reads_over_20ms",

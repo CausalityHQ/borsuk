@@ -6325,6 +6325,82 @@ mod tests {
     }
 
     #[test]
+    fn locality_renumbering_reduces_head_requests_without_changing_selected_cells() {
+        let build = |physical_order: &[u32], namespace: &str| {
+            let mut groups = Vec::new();
+            let mut cards = Vec::new();
+            for (group_ordinal, cells) in physical_order.chunks(2).enumerate() {
+                let inputs = cells
+                    .iter()
+                    .copied()
+                    .map(|cell_index| GlobalLeafPageInput {
+                        cell_index,
+                        leaf_ordinal: 0,
+                        centroid_code: vec![cell_index as u8, 0],
+                        rows: rows(3, 4),
+                    })
+                    .collect::<Vec<_>>();
+                let encoded = encode_cell_card_group(&inputs, 4, VectorElementType::Int8).unwrap();
+                let path = encoded
+                    .content_addressed_path(&format!("{namespace}/group-{group_ordinal}"))
+                    .unwrap();
+                let (group, mut group_cards) = encoded.references(&path).unwrap();
+                groups.push(group);
+                cards.append(&mut group_cards);
+            }
+            groups.sort_by(|left, right| left.path.cmp(&right.path));
+            cards.sort_by(|left, right| {
+                left.head
+                    .cell_index
+                    .cmp(&right.head.cell_index)
+                    .then_with(|| left.head.card_ordinal.cmp(&right.head.card_ordinal))
+            });
+            let root_bytes =
+                encode_cell_card_run_root("codebook-checksum", &groups, &cards).unwrap();
+            decode_cell_card_run_root(
+                &root_bytes.reference,
+                &root_bytes.bytes,
+                "codebook-checksum",
+            )
+            .unwrap()
+        };
+        let shuffled = [0_u32, 4, 1, 5, 2, 6, 3, 7];
+        let codebook = shuffled
+            .iter()
+            .flat_map(|cell| [*cell as f32, 0.0])
+            .collect::<Vec<_>>();
+        let reordered =
+            crate::rotated_product_quantizer::reorder_flat_centroids_by_locality(codebook, 2)
+                .chunks_exact(2)
+                .map(|centroid| centroid[0] as u32)
+                .collect::<Vec<_>>();
+        let selected_cells = [0_u32, 1, 2, 3];
+        let old_root = build(&shuffled, "global-cell-cards/shuffled");
+        let new_root = build(&reordered, "global-cell-cards/locality");
+        let old_ranked = old_root.card_indexes_for_cells(&selected_cells).unwrap();
+        let new_ranked = new_root.card_indexes_for_cells(&selected_cells).unwrap();
+
+        let (old_plan, old_limited) =
+            super::plan_ranked_cell_card_head_wave(&old_root, &old_ranked, 4 * 1024 * 1024, 64)
+                .unwrap();
+        let (new_plan, new_limited) =
+            super::plan_ranked_cell_card_head_wave(&new_root, &new_ranked, 4 * 1024 * 1024, 64)
+                .unwrap();
+        let selected = |plan: &super::CellCardHeadWavePlan| {
+            plan.reads()
+                .iter()
+                .flat_map(|read| read.cards.iter().map(|card| card.reference.cell_index))
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+
+        assert!(!old_limited && !new_limited);
+        assert_eq!(selected(&old_plan), selected_cells.into_iter().collect());
+        assert_eq!(selected(&new_plan), selected_cells.into_iter().collect());
+        assert_eq!(old_plan.requests(), 4);
+        assert_eq!(new_plan.requests(), 2);
+    }
+
+    #[test]
     fn ranked_head_planner_constructs_the_physical_plan_once() {
         let mut groups = Vec::new();
         let mut cards = Vec::new();

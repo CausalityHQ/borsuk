@@ -503,6 +503,7 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
                 "BORSUK_HYBRID_ROUTING_PAGE_CACHE_MAX_BYTES",
                 borsuk::DEFAULT_ROUTING_PAGE_CACHE_BYTES,
             )?,
+            cell_card_code_plane_cache_max_bytes: borsuk::DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES,
             tombstone_page_cache_max_bytes: env_u64(
                 "BORSUK_HYBRID_TOMBSTONE_CACHE_MAX_BYTES",
                 32 * 1024 * 1024,

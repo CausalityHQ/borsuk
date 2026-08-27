@@ -10,6 +10,49 @@ from scripts.production_bench_schema import (
 from scripts.validate_benchmark_artifacts import validate_directory
 
 
+def query_stage_values(
+    *,
+    head_attempts: int = 1,
+    head_bytes: int = 40,
+    exact_attempts: int = 1,
+    exact_bytes: int = 60,
+) -> list[int]:
+    values = {
+        "global_base_approximate_us": 1,
+        "global_base_head_admission_us": 0,
+        "global_base_head_fetch_us": 2,
+        "global_base_head_read_attempts": head_attempts,
+        "global_base_head_read_successes": head_attempts,
+        "global_base_head_read_response_bytes": head_bytes,
+        "global_base_head_read_us_max": 1 if head_attempts else 0,
+        "global_base_head_read_us_sum": head_attempts,
+        "global_base_head_read_queue_us_max": 1 if head_attempts else 0,
+        "global_base_head_read_queue_us_sum": head_attempts,
+        "global_base_head_reads_over_20ms": 0,
+        "global_base_head_reads_over_30ms": 0,
+        "global_base_head_reads_over_50ms": 0,
+        "global_base_head_reads_over_100ms": 0,
+        "global_base_head_decode_admission_us": 1,
+        "global_base_head_decode_us": 0,
+        "global_base_exact_admission_us": 10,
+        "global_base_exact_fetch_us": 8,
+        "global_base_exact_read_attempts": exact_attempts,
+        "global_base_exact_read_successes": exact_attempts,
+        "global_base_exact_read_response_bytes": exact_bytes,
+        "global_base_exact_read_queue_us_max": 1 if exact_attempts else 0,
+        "global_base_exact_read_queue_us_sum": exact_attempts,
+        "global_base_exact_read_us_max": 1 if exact_attempts else 0,
+        "global_base_exact_read_us_sum": exact_attempts,
+        "global_base_exact_reads_over_20ms": 0,
+        "global_base_exact_reads_over_30ms": 0,
+        "global_base_exact_reads_over_50ms": 0,
+        "global_base_exact_reads_over_100ms": 0,
+        "global_base_exact_cpu_us": 2,
+        "global_base_exact_rerank_us": 12,
+    }
+    return [values[field] for field in QUERY_STAGE_TIMING_FIELDS]
+
+
 class ValidateBenchmarkArtifactsTests(unittest.TestCase):
     def write_csv(
         self, root: Path, name: str, header: list[str], rows: list[list[object]]
@@ -42,7 +85,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v19",
+                    "borsuk-production-bench-v20",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -102,7 +145,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             ],
             [
                 [
-                    "borsuk-production-bench-v19",
+                    "borsuk-production-bench-v20",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -134,26 +177,12 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     0,
                     2,
                     1,
-                    100,
+                    200,
                     *[1, 1, 1, 1, 1, 1, 100, 0],
-                    1,
-                    0,
-                    2,
-                    0,
-                    1,
-                    0,
-                    10,
-                    8,
-                    20,
-                    0,
-                    0,
-                    0,
-                    0,
-                    2,
-                    12,
+                    *query_stage_values(head_bytes=100, exact_bytes=100),
                 ],
                 [
-                    "borsuk-production-bench-v19",
+                    "borsuk-production-bench-v20",
                     "srht-pq-scan",
                     "auto",
                     "uncached",
@@ -185,23 +214,9 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                     2,
                     0,
                     1,
-                    100,
+                    200,
                     *[1, 1, 1, 1, 1, 1, 100, 0],
-                    1,
-                    0,
-                    2,
-                    0,
-                    1,
-                    0,
-                    10,
-                    8,
-                    20,
-                    0,
-                    0,
-                    0,
-                    0,
-                    2,
-                    12,
+                    *query_stage_values(head_bytes=16, exact_bytes=100),
                 ],
             ],
         )
@@ -372,7 +387,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 *QUERY_STAGE_TIMING_FIELDS,
             ]
             summary = [
-                "borsuk-production-bench-v19",
+                "borsuk-production-bench-v20",
                 "fast-turboquant-scan",
                 "scan",
                 "bounded-cell-card-v20",
@@ -389,7 +404,7 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 5,
             ]
             sample = [
-                "borsuk-production-bench-v19",
+                "borsuk-production-bench-v20",
                 "fast-turboquant-scan",
                 "scan",
                 "bounded-cell-card-v20",
@@ -408,21 +423,12 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
                 1024,
                 100,
                 *([0] * len(PHYSICAL_EXACT_LAYOUT_FIELDS)),
-                1,
-                0,
-                2,
-                0,
-                1,
-                0,
-                10,
-                8,
-                20,
-                0,
-                0,
-                0,
-                0,
-                2,
-                12,
+                *query_stage_values(
+                    head_attempts=0,
+                    head_bytes=0,
+                    exact_attempts=0,
+                    exact_bytes=0,
+                ),
             ]
             self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
             self.write_csv(
@@ -457,8 +463,8 @@ class ValidateBenchmarkArtifactsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "schema"):
                 validate_directory(root, "fast-turboquant-scan", required)
 
-            summary[0] = "borsuk-production-bench-v19"
-            sample[0] = "borsuk-production-bench-v19"
+            summary[0] = "borsuk-production-bench-v20"
+            sample[0] = "borsuk-production-bench-v20"
             sample[4] = 32
             self.write_csv(root, "bench_concurrency.csv", summary_header, [summary])
             self.write_csv(

@@ -1453,7 +1453,7 @@ fn emit_spool_chunk(
     })
 }
 
-const V12_CODEBOOK_LAYOUT: &str = "bounded-arrow-leaf-v13";
+const V12_CODEBOOK_LAYOUT: &str = "bounded-arrow-leaf-v14";
 const V12_CODEBOOK_QUANTIZER_COLUMN: &str = "quantizer_json";
 const V12_CODEBOOK_COARSE_QUANTIZER_COLUMN: &str = "coarse_quantizer_json";
 
@@ -2839,14 +2839,14 @@ mod tests {
     }
 
     #[test]
-    fn v13_codebook_rejects_old_v12_layout_metadata() {
+    fn v14_codebook_rejects_old_v13_layout_metadata() {
         let mut encoded = test_v12_codebook_descriptor().encode().unwrap();
-        let marker = b"bounded-arrow-leaf-v13";
+        let marker = b"bounded-arrow-leaf-v14";
         let offset = encoded
             .windows(marker.len())
             .position(|window| window == marker)
-            .expect("new codebooks must persist the V12 marker");
-        encoded[offset + marker.len() - 1] = b'2';
+            .expect("new codebooks must persist the V14 marker");
+        encoded[offset + marker.len() - 1] = b'3';
 
         let error = GlobalCodebookDescriptor::decode(&encoded).unwrap_err();
         assert!(error.to_string().contains("incompatible"), "{error}");

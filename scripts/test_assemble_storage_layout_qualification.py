@@ -68,9 +68,9 @@ class AssembleStorageLayoutQualificationTest(unittest.TestCase):
                 "query_source_index,recall_at_10,network_gets,backing_reads,bytes_read,decoded_cache_bytes_read,backing_bytes_read,segments_searched,"
                 "global_leaf_directory_reads,global_leaf_directory_bytes,global_leaf_code_pages_read,global_leaf_code_bytes,global_leaf_pages_read,global_leaf_page_bytes,global_leaf_waves,global_leaf_continuations,global_leaf_exact_scores,execution_engine,query_seed,repetition_id,global_leaf_code_requests,global_leaf_exact_requests,global_leaf_exact_cells,global_leaf_exact_cards,global_leaf_deepest_winning_card_rank,global_leaf_exact_groups,global_leaf_exact_selected_bytes,global_leaf_exact_speculative_bytes,"
                 f"{timing_header}\n"
-                "borsuk-production-bench-v19,srht-pq-scan,scan,uncached,srht-pq-scan,8,320,0,0,0,0,1.5,17,0.99,3,7,2048,0,1024,8,0,0,0,0,0,0,0,0,0,srht-pq-scan,17,r01,0,0,0,0,0,0,0,0,"
+                "borsuk-production-bench-v20,srht-pq-scan,scan,uncached,srht-pq-scan,8,320,0,0,0,0,1.5,17,0.99,3,7,2048,0,1024,8,0,0,0,0,0,0,0,0,0,srht-pq-scan,17,r01,0,0,0,0,0,0,0,0,"
                 f"{timing_values}\n"
-                "borsuk-production-bench-v19,srht-pq-scan,scan,disk_cached,srht-pq-scan,8,320,0,0,1,1,0.5,17,0.99,0,0,128,0,0,8,0,0,0,0,0,0,0,0,0,srht-pq-scan,17,r01,0,0,0,0,0,0,0,0,"
+                "borsuk-production-bench-v20,srht-pq-scan,scan,disk_cached,srht-pq-scan,8,320,0,0,1,1,0.5,17,0.99,0,0,128,0,0,8,0,0,0,0,0,0,0,0,0,srht-pq-scan,17,r01,0,0,0,0,0,0,0,0,"
                 f"{timing_values}\n"
             )
 
@@ -98,7 +98,7 @@ class AssembleStorageLayoutQualificationTest(unittest.TestCase):
             "mode": "srht-pq-scan",
             "nprobe": "8",
             "max_candidates": "320",
-            "schema_version": "borsuk-production-bench-v19",
+            "schema_version": "borsuk-production-bench-v20",
             "segments_searched": "8",
             "global_leaf_directory_reads": "1",
             "global_leaf_directory_bytes": "1",
@@ -133,7 +133,7 @@ class AssembleStorageLayoutQualificationTest(unittest.TestCase):
 
     def test_rejects_off_cohort_or_mixed_schema_rows_before_selection(self) -> None:
         valid = {
-            "schema_version": "borsuk-production-bench-v19",
+            "schema_version": "borsuk-production-bench-v20",
             "global_leaf_directory_reads": "0",
             "global_leaf_directory_bytes": "0",
             "global_leaf_code_pages_read": "0",

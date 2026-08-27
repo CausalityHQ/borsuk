@@ -1176,6 +1176,39 @@ pub struct SearchReport {
     /// including collection-wide leaf-read admission.
     #[serde(default)]
     pub global_base_head_fetch_us: u64,
+    /// Query-owned physical backing-range attempts issued by the head wave.
+    #[serde(default)]
+    pub global_base_head_read_attempts: u64,
+    /// Successful physical head-range responses.
+    #[serde(default)]
+    pub global_base_head_read_successes: u64,
+    /// Response bytes returned by physical head-range attempts.
+    #[serde(default)]
+    pub global_base_head_read_response_bytes: u64,
+    /// Sum of physical head-range backing service times.
+    #[serde(default)]
+    pub global_base_head_read_us_sum: u64,
+    /// Slowest physical head-range backing service time.
+    #[serde(default)]
+    pub global_base_head_read_us_max: u64,
+    /// Sum of scheduler and backing-admission delay before head service.
+    #[serde(default)]
+    pub global_base_head_read_queue_us_sum: u64,
+    /// Longest scheduler and backing-admission delay before head service.
+    #[serde(default)]
+    pub global_base_head_read_queue_us_max: u64,
+    /// Physical head attempts whose service exceeded 20 milliseconds.
+    #[serde(default)]
+    pub global_base_head_reads_over_20ms: u64,
+    /// Physical head attempts whose service exceeded 30 milliseconds.
+    #[serde(default)]
+    pub global_base_head_reads_over_30ms: u64,
+    /// Physical head attempts whose service exceeded 50 milliseconds.
+    #[serde(default)]
+    pub global_base_head_reads_over_50ms: u64,
+    /// Physical head attempts whose service exceeded 100 milliseconds.
+    #[serde(default)]
+    pub global_base_head_reads_over_100ms: u64,
     /// Aggregate microseconds spent waiting for head decode/rank admission.
     #[serde(default)]
     pub global_base_head_decode_admission_us: u64,
@@ -1189,6 +1222,21 @@ pub struct SearchReport {
     /// including collection-wide leaf-read admission.
     #[serde(default)]
     pub global_base_exact_fetch_us: u64,
+    /// Query-owned physical backing-range attempts issued by the exact wave.
+    #[serde(default)]
+    pub global_base_exact_read_attempts: u64,
+    /// Successful physical exact-range responses.
+    #[serde(default)]
+    pub global_base_exact_read_successes: u64,
+    /// Response bytes returned by physical exact-range attempts.
+    #[serde(default)]
+    pub global_base_exact_read_response_bytes: u64,
+    /// Sum of scheduler and backing-admission delay before exact service.
+    #[serde(default)]
+    pub global_base_exact_read_queue_us_sum: u64,
+    /// Longest scheduler and backing-admission delay before exact service.
+    #[serde(default)]
+    pub global_base_exact_read_queue_us_max: u64,
     /// Slowest successful end-to-end backing range read in the global exact wave.
     #[serde(default)]
     pub global_base_exact_read_us_max: u64,

@@ -21,6 +21,7 @@ try:
         QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE,
         QUERY_STAGE_AGGREGATE_FIELDS,
         QUERY_STAGE_MAX_FIELDS,
+        validate_query_planner_read_telemetry,
         validate_query_stage_timings,
     )
     from scripts.publication_v3_attestation import (
@@ -57,6 +58,7 @@ except ModuleNotFoundError:
         QUERY_STAGE_AGGREGATE_FIELD_BY_SAMPLE,
         QUERY_STAGE_AGGREGATE_FIELDS,
         QUERY_STAGE_MAX_FIELDS,
+        validate_query_planner_read_telemetry,
         validate_query_stage_timings,
     )
     from publication_v3_attestation import (
@@ -1291,6 +1293,7 @@ def summarize_query_samples(
             timing_totals,
             _validated_query_stage_timings(row, role="query sample"),
         )
+        validate_query_planner_read_telemetry(row, role="query sample")
         for field, values in diagnostic_values.items():
             value = row.get(field)
             if value is None:

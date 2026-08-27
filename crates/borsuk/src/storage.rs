@@ -787,14 +787,74 @@ struct RangeWaveRead {
 
 type RangeWaveOutcome = std::thread::Result<Result<RangeWaveRead>>;
 
+/// Fixed-size query-owned evidence for physical backing-range attempts.
+///
+/// The aggregate deliberately retains no per-request vector: a query can fold
+/// every completion while its I/O window is running without making telemetry
+/// memory scale with fan-out. Queue time is measured before backing service,
+/// and failed attempts remain visible even though they contribute no response
+/// bytes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct RangeWaveStats {
-    pub(crate) read_us_sum: u64,
-    pub(crate) read_us_max: u64,
-    pub(crate) reads_over_20ms: usize,
-    pub(crate) reads_over_30ms: usize,
-    pub(crate) reads_over_50ms: usize,
-    pub(crate) reads_over_100ms: usize,
+pub(crate) struct PhysicalReadStats {
+    pub(crate) attempts: u64,
+    pub(crate) successes: u64,
+    pub(crate) response_bytes: u64,
+    pub(crate) service_us_sum: u64,
+    pub(crate) service_us_max: u64,
+    pub(crate) queue_us_sum: u64,
+    pub(crate) queue_us_max: u64,
+    pub(crate) reads_over_20ms: u64,
+    pub(crate) reads_over_30ms: u64,
+    pub(crate) reads_over_50ms: u64,
+    pub(crate) reads_over_100ms: u64,
+}
+
+pub(crate) type RangeWaveStats = PhysicalReadStats;
+
+impl PhysicalReadStats {
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.attempts = self.attempts.saturating_add(other.attempts);
+        self.successes = self.successes.saturating_add(other.successes);
+        self.response_bytes = self.response_bytes.saturating_add(other.response_bytes);
+        self.service_us_sum = self.service_us_sum.saturating_add(other.service_us_sum);
+        self.service_us_max = self.service_us_max.max(other.service_us_max);
+        self.queue_us_sum = self.queue_us_sum.saturating_add(other.queue_us_sum);
+        self.queue_us_max = self.queue_us_max.max(other.queue_us_max);
+        self.reads_over_20ms = self.reads_over_20ms.saturating_add(other.reads_over_20ms);
+        self.reads_over_30ms = self.reads_over_30ms.saturating_add(other.reads_over_30ms);
+        self.reads_over_50ms = self.reads_over_50ms.saturating_add(other.reads_over_50ms);
+        self.reads_over_100ms = self.reads_over_100ms.saturating_add(other.reads_over_100ms);
+    }
+
+    pub(crate) fn record_success(&mut self, queue_us: u64, service_us: u64, response_bytes: u64) {
+        self.successes = self.successes.saturating_add(1);
+        self.response_bytes = self.response_bytes.saturating_add(response_bytes);
+        self.record_attempt(queue_us, service_us);
+    }
+
+    pub(crate) fn record_failure(&mut self, queue_us: u64, service_us: u64) {
+        self.record_attempt(queue_us, service_us);
+    }
+
+    fn record_attempt(&mut self, queue_us: u64, service_us: u64) {
+        self.attempts = self.attempts.saturating_add(1);
+        self.service_us_sum = self.service_us_sum.saturating_add(service_us);
+        self.service_us_max = self.service_us_max.max(service_us);
+        self.queue_us_sum = self.queue_us_sum.saturating_add(queue_us);
+        self.queue_us_max = self.queue_us_max.max(queue_us);
+        self.reads_over_20ms = self
+            .reads_over_20ms
+            .saturating_add(u64::from(service_us > 20_000));
+        self.reads_over_30ms = self
+            .reads_over_30ms
+            .saturating_add(u64::from(service_us > 30_000));
+        self.reads_over_50ms = self
+            .reads_over_50ms
+            .saturating_add(u64::from(service_us > 50_000));
+        self.reads_over_100ms = self
+            .reads_over_100ms
+            .saturating_add(u64::from(service_us > 100_000));
+    }
 }
 
 #[cfg(test)]
@@ -806,7 +866,18 @@ pub(crate) struct RangeWaveReport {
 struct RangeWaveCompletion {
     index: usize,
     outcome: RangeWaveOutcome,
+    queue_us: u64,
     elapsed_us: u64,
+}
+
+struct RangeWaveTask {
+    index: usize,
+    queued_at: Instant,
+    context: PrefetchReadContext,
+    relative: String,
+    range: Range<u64>,
+    permit: Option<OwnedAdmissionPermit>,
+    completed: std::sync::mpsc::Sender<RangeWaveCompletion>,
 }
 
 impl BlockingRuntime {
@@ -832,16 +903,18 @@ impl BlockingRuntime {
         self.runtime().spawn(future)
     }
 
-    fn spawn_range_wave_read(
-        &self,
-        index: usize,
-        context: PrefetchReadContext,
-        relative: String,
-        range: Range<u64>,
-        permit: Option<OwnedAdmissionPermit>,
-        completed: std::sync::mpsc::Sender<RangeWaveCompletion>,
-    ) {
+    fn spawn_range_wave_read(&self, task: RangeWaveTask) {
+        let RangeWaveTask {
+            index,
+            queued_at,
+            context,
+            relative,
+            range,
+            permit,
+            completed,
+        } = task;
         std::mem::drop(self.runtime().spawn(async move {
+            let queue_us = u64::try_from(queued_at.elapsed().as_micros()).unwrap_or(u64::MAX);
             let started = Instant::now();
             let outcome = AssertUnwindSafe(async move {
                 let _permit = permit;
@@ -859,6 +932,7 @@ impl BlockingRuntime {
             let _ = completed.send(RangeWaveCompletion {
                 index,
                 outcome,
+                queue_us,
                 elapsed_us,
             });
         }));
@@ -1036,6 +1110,12 @@ pub(crate) struct ReadBytes {
     pub bytes: Vec<u8>,
     pub cache_hit: bool,
     pub cache_repaired: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReportedRangeRead {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) stats: PhysicalReadStats,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3575,6 +3655,16 @@ impl Storage {
     }
 
     pub(crate) fn read_range(&self, relative: &str, range: Range<u64>) -> Result<Vec<u8>> {
+        self.read_range_reported(relative, range, Instant::now())
+            .map(|read| read.bytes)
+    }
+
+    pub(crate) fn read_range_reported(
+        &self,
+        relative: &str,
+        range: Range<u64>,
+        queued_at: Instant,
+    ) -> Result<ReportedRangeRead> {
         let cacheable = !is_mutable_lane_head(relative);
         if cacheable && let Some(bytes) = self.read_cache_file(relative)? {
             let start = usize::try_from(range.start).map_err(|_| {
@@ -3600,7 +3690,10 @@ impl Storage {
                 physical_format_for_path(relative),
                 bytes.len() as u64,
             ))?;
-            return Ok(selected);
+            return Ok(ReportedRangeRead {
+                bytes: selected,
+                stats: PhysicalReadStats::default(),
+            });
         }
 
         let range_cache_key = range_cache_key(relative, range.start, range.end);
@@ -3613,7 +3706,10 @@ impl Storage {
                     physical_format_for_path(relative),
                     0,
                 ))?;
-                return Ok(bytes);
+                return Ok(ReportedRangeRead {
+                    bytes,
+                    stats: PhysicalReadStats::default(),
+                });
             }
             // Cache repair is best effort; backing storage remains the source
             // of truth even when the local cache cannot be mutated.
@@ -3621,6 +3717,8 @@ impl Storage {
         }
 
         let requested_bytes = range.end.saturating_sub(range.start);
+        let queue_us = u64::try_from(queued_at.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let service_started = Instant::now();
         let location = self.resolve(relative)?;
         let result = self
             .runtime
@@ -3639,6 +3737,7 @@ impl Storage {
             .block_on(result.bytes())
             .map(|bytes| bytes.to_vec())
             .map_err(|err| map_object_store_error(relative, err))?;
+        let service_us = u64::try_from(service_started.elapsed().as_micros()).unwrap_or(u64::MAX);
         if cacheable {
             self.write_cache_file(&range_cache_key, &bytes)?;
         }
@@ -3650,7 +3749,9 @@ impl Storage {
                 1,
                 requested_bytes,
             ))?;
-        Ok(bytes)
+        let mut stats = PhysicalReadStats::default();
+        stats.record_success(queue_us, service_us, bytes.len() as u64);
+        Ok(ReportedRangeRead { bytes, stats })
     }
 
     /// Fetch one already-bounded cross-object range wave without re-entering
@@ -3710,18 +3811,20 @@ impl Storage {
         let mut coordinator = Some(completed_tx);
         while next < width {
             let (relative, range) = &requests[next];
+            let queued_at = Instant::now();
             let permit = gate.map(AdmissionGate::acquire_owned);
-            self.runtime.spawn_range_wave_read(
-                next,
-                context.clone(),
-                relative.clone(),
-                range.clone(),
+            self.runtime.spawn_range_wave_read(RangeWaveTask {
+                index: next,
+                queued_at,
+                context: context.clone(),
+                relative: relative.clone(),
+                range: range.clone(),
                 permit,
-                coordinator
+                completed: coordinator
                     .as_ref()
                     .expect("range-wave sender exists")
                     .clone(),
-            );
+            });
             next += 1;
         }
         if next == requests.len() {
@@ -3750,18 +3853,20 @@ impl Storage {
             completed += 1;
             if next < requests.len() {
                 let (relative, range) = &requests[next];
+                let queued_at = Instant::now();
                 let permit = gate.map(AdmissionGate::acquire_owned);
-                self.runtime.spawn_range_wave_read(
-                    next,
-                    context.clone(),
-                    relative.clone(),
-                    range.clone(),
+                self.runtime.spawn_range_wave_read(RangeWaveTask {
+                    index: next,
+                    queued_at,
+                    context: context.clone(),
+                    relative: relative.clone(),
+                    range: range.clone(),
                     permit,
-                    coordinator
+                    completed: coordinator
                         .as_ref()
                         .expect("range-wave sender exists")
                         .clone(),
-                );
+                });
                 next += 1;
                 if next == requests.len() {
                     coordinator.take();
@@ -3772,17 +3877,18 @@ impl Storage {
                 match outcome {
                     Ok(read) => {
                         if read.backing_get {
-                            stats.read_us_sum =
-                                stats.read_us_sum.saturating_add(completion.elapsed_us);
-                            stats.read_us_max = stats.read_us_max.max(completion.elapsed_us);
-                            stats.reads_over_20ms += usize::from(completion.elapsed_us > 20_000);
-                            stats.reads_over_30ms += usize::from(completion.elapsed_us > 30_000);
-                            stats.reads_over_50ms += usize::from(completion.elapsed_us > 50_000);
-                            stats.reads_over_100ms += usize::from(completion.elapsed_us > 100_000);
+                            stats.record_success(
+                                completion.queue_us,
+                                completion.elapsed_us,
+                                read.bytes.len() as u64,
+                            );
                         }
                         Ok(read.bytes)
                     }
-                    Err(error) => Err(error),
+                    Err(error) => {
+                        stats.record_failure(completion.queue_us, completion.elapsed_us);
+                        Err(error)
+                    }
                 },
             );
         }
@@ -5263,8 +5369,8 @@ mod tests {
 
     use super::{
         CacheReadCounters, CacheReadCounts, ContentAddressedWriteOutcome, CreateOutcome,
-        MULTIPART_PART_BYTES, PrefetchedRead, RangedColumns, ReadBytes, RequestCounters,
-        SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES, Storage,
+        MULTIPART_PART_BYTES, PhysicalReadStats, PrefetchedRead, RangedColumns, ReadBytes,
+        RequestCounters, SIDECAR_MAX_PHYSICAL_RANGE_BYTES, SIDECAR_RANGE_COALESCE_BYTES, Storage,
         plan_bounded_ranges,
     };
     use crate::{
@@ -6462,12 +6568,75 @@ mod tests {
         let wave = storage.read_range_wave_report(&requests, 2, None);
 
         assert_eq!(wave.reads.len(), 4);
-        assert!(wave.stats.read_us_max >= 40_000);
-        assert!(wave.stats.read_us_sum >= 160_000);
+        assert_eq!(wave.stats.attempts, 4);
+        assert_eq!(wave.stats.successes, 4);
+        assert_eq!(wave.stats.response_bytes, 8);
+        assert!(
+            wave.stats.queue_us_max < 30_000,
+            "prior service time must not be reported as scheduler queue time: {:?}",
+            wave.stats
+        );
+        assert!(wave.stats.service_us_max >= 40_000);
+        assert!(wave.stats.service_us_sum >= 160_000);
         assert_eq!(wave.stats.reads_over_20ms, 4);
         assert_eq!(wave.stats.reads_over_30ms, 4);
         assert!(wave.stats.reads_over_50ms <= wave.stats.reads_over_30ms);
         assert!(wave.stats.reads_over_100ms <= wave.stats.reads_over_50ms);
+    }
+
+    #[test]
+    fn physical_read_stats_fold_fixed_size_attempt_byte_service_and_queue_evidence() {
+        let mut stats = PhysicalReadStats::default();
+
+        stats.record_success(7, 11_000, 128);
+        stats.record_success(13, 55_000, 256);
+        stats.record_failure(17, 120_000);
+
+        assert_eq!(stats.attempts, 3);
+        assert_eq!(stats.successes, 2);
+        assert_eq!(stats.response_bytes, 384);
+        assert_eq!(stats.service_us_sum, 186_000);
+        assert_eq!(stats.service_us_max, 120_000);
+        assert_eq!(stats.queue_us_sum, 37);
+        assert_eq!(stats.queue_us_max, 17);
+        assert_eq!(stats.reads_over_20ms, 2);
+        assert_eq!(stats.reads_over_30ms, 2);
+        assert_eq!(stats.reads_over_50ms, 2);
+        assert_eq!(stats.reads_over_100ms, 1);
+
+        let mut merged = PhysicalReadStats::default();
+        merged.record_success(3, 5_000, 64);
+        merged.merge(stats);
+        assert_eq!(merged.attempts, 4);
+        assert_eq!(merged.successes, 3);
+        assert_eq!(merged.response_bytes, 448);
+        assert_eq!(merged.service_us_sum, 191_000);
+        assert_eq!(merged.service_us_max, 120_000);
+        assert_eq!(merged.queue_us_sum, 40);
+        assert_eq!(merged.queue_us_max, 17);
+    }
+
+    #[test]
+    fn reported_range_read_owns_backing_bytes_service_and_scheduler_queue_evidence() {
+        let storage = Storage::from_object_store(
+            "memory:///reported-range".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        storage
+            .write_bytes("reported/object.bin", b"abcdefgh")
+            .unwrap();
+        let queued_at = Instant::now() - Duration::from_millis(2);
+
+        let read = storage
+            .read_range_reported("reported/object.bin", 2..6, queued_at)
+            .unwrap();
+
+        assert_eq!(read.bytes, b"cdef");
+        assert_eq!(read.stats.attempts, 1);
+        assert_eq!(read.stats.successes, 1);
+        assert_eq!(read.stats.response_bytes, 4);
+        assert!(read.stats.queue_us_max >= 1_000, "{:?}", read.stats);
     }
 
     #[test]
@@ -6513,6 +6682,64 @@ mod tests {
     }
 
     #[test]
+    fn range_wave_queue_time_starts_when_each_read_is_spawned() {
+        let inner = Arc::new(ThrottledStore::new(
+            InMemory::new(),
+            ThrottleConfig {
+                wait_get_per_call: Duration::from_millis(50),
+                ..ThrottleConfig::default()
+            },
+        ));
+        let storage = Storage::from_object_store(
+            "memory:///range-wave-queue-origin".to_string(),
+            Arc::clone(&inner) as Arc<dyn ObjectStore>,
+        )
+        .unwrap();
+        storage.write_bytes("wave/a.bin", b"abcdefgh").unwrap();
+        storage.write_bytes("wave/b.bin", b"ABCDEFGH").unwrap();
+        let requests = vec![
+            ("wave/a.bin".to_string(), 0..2),
+            ("wave/b.bin".to_string(), 0..2),
+        ];
+
+        let report = storage.read_range_wave_report(&requests, 1, None);
+
+        assert!(report.reads.iter().all(Result::is_ok));
+        assert!(
+            report.stats.queue_us_max < 30_000,
+            "rolling-window service time leaked into scheduler queue time: {:?}",
+            report.stats
+        );
+    }
+
+    #[test]
+    fn range_wave_queue_time_includes_admission_wait() {
+        let storage = Storage::from_object_store(
+            "memory:///range-wave-admission-queue".to_string(),
+            Arc::new(InMemory::new()),
+        )
+        .unwrap();
+        storage.write_bytes("wave/a.bin", b"abcdefgh").unwrap();
+        let requests = vec![("wave/a.bin".to_string(), 0..2)];
+        let gate = Arc::new(crate::segment_cache::AdmissionGate::new(1));
+        let held = gate.acquire_owned();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(held);
+        });
+
+        let report = storage.read_range_wave_report(&requests, 1, Some(&gate));
+        releaser.join().unwrap();
+
+        assert!(report.reads[0].is_ok());
+        assert!(
+            report.stats.queue_us_max >= 40_000,
+            "admission wait was omitted from queue time: {:?}",
+            report.stats
+        );
+    }
+
+    #[test]
     fn cross_object_range_wave_preserves_cached_read_trace_without_backing_gets() {
         let objects = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
@@ -6537,8 +6764,8 @@ mod tests {
         let before = storage.request_counts();
         let cached_wave = storage.read_range_wave_report(&request, 1, None);
         assert_eq!(cached_wave.reads[0].as_deref().unwrap(), b"2345");
-        assert_eq!(cached_wave.stats.read_us_sum, 0);
-        assert_eq!(cached_wave.stats.read_us_max, 0);
+        assert_eq!(cached_wave.stats.service_us_sum, 0);
+        assert_eq!(cached_wave.stats.service_us_max, 0);
         assert_eq!(cached_wave.stats.reads_over_20ms, 0);
 
         let cached_requests = storage.request_counts().delta(&before);

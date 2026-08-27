@@ -100,7 +100,7 @@ def concurrency_artifact_fixture(
     *, cache_profile: str, disk_bytes: int, backing_bytes: int, decoded_bytes: int
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     summary = {
-        "schema_version": "borsuk-production-bench-v19",
+        "schema_version": "borsuk-production-bench-v20",
         "scan_codec": "fast-turboquant-scan",
         "execution_engine": "bounded-cell-card-v20",
         "nprobe": "32",
@@ -117,7 +117,7 @@ def concurrency_artifact_fixture(
         "max_ms": "5",
     }
     sample = {
-        "schema_version": "borsuk-production-bench-v19",
+        "schema_version": "borsuk-production-bench-v20",
         "scan_codec": "fast-turboquant-scan",
         "execution_engine": "bounded-cell-card-v20",
         "nprobe": "32",
@@ -141,14 +141,30 @@ def concurrency_artifact_fixture(
         "global_base_approximate_us": "1",
         "global_base_head_admission_us": "2",
         "global_base_head_fetch_us": "3",
+        "global_base_head_read_attempts": "1" if backing_bytes else "0",
+        "global_base_head_read_successes": "1" if backing_bytes else "0",
+        "global_base_head_read_response_bytes": str(backing_bytes // 2),
+        "global_base_head_read_us_max": "2" if backing_bytes else "0",
+        "global_base_head_read_us_sum": "2" if backing_bytes else "0",
+        "global_base_head_read_queue_us_max": "1" if backing_bytes else "0",
+        "global_base_head_read_queue_us_sum": "1" if backing_bytes else "0",
+        "global_base_head_reads_over_20ms": "0",
+        "global_base_head_reads_over_30ms": "0",
+        "global_base_head_reads_over_50ms": "0",
+        "global_base_head_reads_over_100ms": "0",
         "global_base_head_decode_admission_us": "4",
         "global_base_head_decode_us": "5",
         "global_base_exact_admission_us": "6",
         "global_base_exact_fetch_us": "10",
-        "global_base_exact_read_us_max": "8",
-        "global_base_exact_read_us_sum": "20",
-        "global_base_exact_reads_over_20ms": "2",
-        "global_base_exact_reads_over_30ms": "1",
+        "global_base_exact_read_attempts": "1" if backing_bytes else "0",
+        "global_base_exact_read_successes": "1" if backing_bytes else "0",
+        "global_base_exact_read_response_bytes": str(backing_bytes - backing_bytes // 2),
+        "global_base_exact_read_queue_us_max": "1" if backing_bytes else "0",
+        "global_base_exact_read_queue_us_sum": "1" if backing_bytes else "0",
+        "global_base_exact_read_us_max": "8" if backing_bytes else "0",
+        "global_base_exact_read_us_sum": "8" if backing_bytes else "0",
+        "global_base_exact_reads_over_20ms": "0",
+        "global_base_exact_reads_over_30ms": "0",
         "global_base_exact_reads_over_50ms": "0",
         "global_base_exact_reads_over_100ms": "0",
         "global_base_exact_cpu_us": "7",
@@ -174,9 +190,15 @@ def query_artifact_fixture(*, decoded_bytes: int) -> dict[str, str]:
         "cache_cohort_count": "0",
         "global_leaf_code_pages_read": "7",
         "global_leaf_code_requests": "2",
+        "global_leaf_code_bytes": "30",
         "global_leaf_pages_read": "4",
         "global_leaf_exact_requests": "1",
+        "global_leaf_page_bytes": "45",
         "global_leaf_exact_scores": "512",
+        "global_base_head_read_attempts": "2",
+        "global_base_head_read_successes": "2",
+        "global_base_head_read_response_bytes": "30",
+        "global_base_exact_read_response_bytes": "45",
     }
 
 
@@ -257,6 +279,22 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "performed no backing reads"):
+            summarize_query_samples(
+                [row],
+                cell=cell,
+                arm={"k": 10, "leaf_page_budget": 32, "cache_state": "cold"},
+                expected_queries=1,
+                expected_cache_cohort_size=0,
+            )
+
+    def test_query_sample_reconciles_planned_ranges_with_physical_reads(self) -> None:
+        cell = scheduled_cell()
+        cell["queries_per_repetition"] = 1
+        row = query_artifact_fixture(decoded_bytes=25)
+        row["global_base_head_read_attempts"] = "1"
+        row["global_base_head_read_successes"] = "1"
+
+        with self.assertRaisesRegex(ValueError, "planner/read telemetry"):
             summarize_query_samples(
                 [row],
                 cell=cell,
@@ -1765,7 +1803,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
     ) -> None:
         summaries = [
             {
-                "schema_version": "borsuk-production-bench-v19",
+                "schema_version": "borsuk-production-bench-v20",
                 "scan_codec": "fast-turboquant-scan",
                 "execution_engine": "bounded-cell-card-v20",
                 "nprobe": "32",
@@ -1785,7 +1823,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         ]
         samples = [
             {
-                "schema_version": "borsuk-production-bench-v19",
+                "schema_version": "borsuk-production-bench-v20",
                 "scan_codec": "fast-turboquant-scan",
                 "execution_engine": "bounded-cell-card-v20",
                 "nprobe": "32",
@@ -1809,14 +1847,30 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "global_base_approximate_us": "1",
                 "global_base_head_admission_us": "2",
                 "global_base_head_fetch_us": "3",
+                "global_base_head_read_attempts": "0",
+                "global_base_head_read_successes": "0",
+                "global_base_head_read_response_bytes": "0",
+                "global_base_head_read_us_max": "0",
+                "global_base_head_read_us_sum": "0",
+                "global_base_head_read_queue_us_max": "0",
+                "global_base_head_read_queue_us_sum": "0",
+                "global_base_head_reads_over_20ms": "0",
+                "global_base_head_reads_over_30ms": "0",
+                "global_base_head_reads_over_50ms": "0",
+                "global_base_head_reads_over_100ms": "0",
                 "global_base_head_decode_admission_us": "4",
                 "global_base_head_decode_us": "5",
                 "global_base_exact_admission_us": "6",
                 "global_base_exact_fetch_us": "10",
-                "global_base_exact_read_us_max": "8",
-                "global_base_exact_read_us_sum": "20",
-                "global_base_exact_reads_over_20ms": "2",
-                "global_base_exact_reads_over_30ms": "1",
+                "global_base_exact_read_attempts": "0",
+                "global_base_exact_read_successes": "0",
+                "global_base_exact_read_response_bytes": "0",
+                "global_base_exact_read_queue_us_max": "0",
+                "global_base_exact_read_queue_us_sum": "0",
+                "global_base_exact_read_us_max": "0",
+                "global_base_exact_read_us_sum": "0",
+                "global_base_exact_reads_over_20ms": "0",
+                "global_base_exact_reads_over_30ms": "0",
                 "global_base_exact_reads_over_50ms": "0",
                 "global_base_exact_reads_over_100ms": "0",
                 "global_base_exact_cpu_us": "7",
@@ -1923,7 +1977,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_cache_cohort_size=2,
             )
         self.assertEqual(metrics[-1]["global_base_exact_fetch_us_total"], 20)
-        self.assertEqual(metrics[-1]["global_base_exact_read_us_sum_total"], 40)
+        self.assertEqual(metrics[-1]["global_base_exact_read_us_sum_total"], 0)
         with self.assertRaisesRegex(ValueError, "incomplete"):
             summarize_concurrency_artifacts(
                 summaries,
@@ -1960,6 +2014,22 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             summarize_concurrency_artifacts(
                 summaries,
                 missing_timing,
+                expected_workers=(1, 2, 4),
+                expected_queries=2,
+                minimum_recall_ppm=980_000,
+                expected_scan_codec="fast-turboquant-scan",
+                expected_nprobe=32,
+                expected_max_candidates=512,
+                expected_cache_profile="disk_cached",
+                expected_cache_coverage_percent=100,
+                expected_cache_cohort_size=2,
+            )
+        inconsistent_physical_read = json.loads(json.dumps(samples))
+        inconsistent_physical_read[0]["global_base_head_read_attempts"] = "1"
+        with self.assertRaisesRegex(ValueError, "timing telemetry is inconsistent"):
+            summarize_concurrency_artifacts(
+                summaries,
+                inconsistent_physical_read,
                 expected_workers=(1, 2, 4),
                 expected_queries=2,
                 minimum_recall_ppm=980_000,
@@ -2136,7 +2206,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         ):
             rows.append(
                 {
-                    "schema_version": "borsuk-production-bench-v19",
+                    "schema_version": "borsuk-production-bench-v20",
                     "sample_index": str(index),
                     "query_source_index": str(100 + index),
                     "latency_ms": str(latency),
@@ -2148,18 +2218,35 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     "disk_cache_bytes_read": "0",
                     "backing_bytes_read": str((index + 1) * 100),
                     "global_leaf_code_pages_read": str(100 + index),
-                    "global_leaf_code_bytes": str((index + 1) * 100),
+                    "global_leaf_code_bytes": str((index + 1) * 40),
                     "global_leaf_code_requests": str(index + 2),
                     "global_leaf_pages_read": str(30 + index),
                     "global_leaf_exact_requests": str(index + 3),
+                    "global_leaf_page_bytes": str((index + 1) * 60),
                     "global_leaf_exact_scores": str(960 + index * 32),
                     "global_base_approximate_us": str(10 + index),
                     "global_base_head_admission_us": "1",
                     "global_base_head_fetch_us": "2",
+                    "global_base_head_read_attempts": str(index + 2),
+                    "global_base_head_read_successes": str(index + 2),
+                    "global_base_head_read_response_bytes": str((index + 1) * 40),
+                    "global_base_head_read_us_max": "1",
+                    "global_base_head_read_us_sum": str(index + 2),
+                    "global_base_head_read_queue_us_max": "1",
+                    "global_base_head_read_queue_us_sum": str(index + 2),
+                    "global_base_head_reads_over_20ms": "0",
+                    "global_base_head_reads_over_30ms": "0",
+                    "global_base_head_reads_over_50ms": "0",
+                    "global_base_head_reads_over_100ms": "0",
                     "global_base_head_decode_admission_us": "3",
                     "global_base_head_decode_us": "4",
                     "global_base_exact_admission_us": "5",
                     "global_base_exact_fetch_us": str(20 + index),
+                    "global_base_exact_read_attempts": str(index + 3),
+                    "global_base_exact_read_successes": str(index + 3),
+                    "global_base_exact_read_response_bytes": str((index + 1) * 60),
+                    "global_base_exact_read_queue_us_max": "1",
+                    "global_base_exact_read_queue_us_sum": str(index + 3),
                     "global_base_exact_read_us_max": "10",
                     "global_base_exact_read_us_sum": "30",
                     "global_base_exact_reads_over_20ms": "2",
@@ -2534,7 +2621,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 for sample_index in range(2):
                     rows.append(
                         {
-                            "schema_version": "borsuk-production-bench-v19",
+                            "schema_version": "borsuk-production-bench-v20",
                             "phase": "uncached",
                             "mode": "srht-pq-scan",
                             "scan_codec": "srht-pq-scan",
@@ -2553,19 +2640,37 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                             "backing_bytes_read": "100",
                             "global_leaf_code_pages_read": "7",
                             "global_leaf_code_requests": "2",
+                            "global_leaf_code_bytes": "40",
                             "global_leaf_pages_read": "4",
                             "global_leaf_exact_requests": "1",
+                            "global_leaf_page_bytes": "60",
                             "global_leaf_exact_scores": str(candidates),
                             "global_base_approximate_us": "10",
                             "global_base_head_admission_us": "1",
                             "global_base_head_fetch_us": "2",
+                            "global_base_head_read_attempts": "2",
+                            "global_base_head_read_successes": "2",
+                            "global_base_head_read_response_bytes": "40",
+                            "global_base_head_read_us_max": "1",
+                            "global_base_head_read_us_sum": "2",
+                            "global_base_head_read_queue_us_max": "1",
+                            "global_base_head_read_queue_us_sum": "2",
+                            "global_base_head_reads_over_20ms": "0",
+                            "global_base_head_reads_over_30ms": "0",
+                            "global_base_head_reads_over_50ms": "0",
+                            "global_base_head_reads_over_100ms": "0",
                             "global_base_head_decode_admission_us": "3",
                             "global_base_head_decode_us": "4",
                             "global_base_exact_admission_us": "5",
                             "global_base_exact_fetch_us": "20",
+                            "global_base_exact_read_attempts": "1",
+                            "global_base_exact_read_successes": "1",
+                            "global_base_exact_read_response_bytes": "60",
+                            "global_base_exact_read_queue_us_max": "1",
+                            "global_base_exact_read_queue_us_sum": "1",
                             "global_base_exact_read_us_max": "10",
                             "global_base_exact_read_us_sum": "30",
-                            "global_base_exact_reads_over_20ms": "2",
+                            "global_base_exact_reads_over_20ms": "1",
                             "global_base_exact_reads_over_30ms": "1",
                             "global_base_exact_reads_over_50ms": "0",
                             "global_base_exact_reads_over_100ms": "0",
@@ -2576,7 +2681,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
 
         summaries = [
             {
-                "schema_version": "borsuk-production-bench-v19",
+                "schema_version": "borsuk-production-bench-v20",
                 "scan_codec": "srht-pq-scan",
                 "execution_engine": "bounded-cell-card-v20",
                 "phase": "uncached",

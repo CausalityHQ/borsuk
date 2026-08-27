@@ -308,49 +308,49 @@ pub(crate) fn product_code_locality_key(code: &[u8]) -> Vec<u8> {
 }
 
 pub(crate) fn reorder_flat_centroids_by_locality(codebook: Vec<f32>, width: usize) -> Vec<f32> {
-    if width == 0 || codebook.len() <= width {
+    if width == 0 || codebook.len() <= width || !codebook.len().is_multiple_of(width) {
         return codebook;
     }
     let centroids = codebook.len() / width;
-    let mut mins = vec![f32::INFINITY; width];
-    let mut maxes = vec![f32::NEG_INFINITY; width];
-    for centroid in codebook.chunks_exact(width) {
-        crate::metric::min_max_assign_simd(&mut mins, &mut maxes, centroid);
+    let centroid = |index: usize| &codebook[index * width..(index + 1) * width];
+    let compare_centroids = |left: usize, right: usize| {
+        centroid(left)
+            .iter()
+            .zip(centroid(right))
+            .map(|(left, right)| left.total_cmp(right))
+            .find(|ordering| !ordering.is_eq())
+            .unwrap_or_else(|| left.cmp(&right))
+    };
+    // Product-code ordinals are one byte, and hierarchical coarse levels have
+    // the same 256-centroid cap. Direct O(n^2) chain construction is therefore
+    // bounded independently of corpus rows and avoids high-dimensional Morton
+    // keys degenerating into coarse sign/octant buckets after rotation.
+    let start = (0..centroids)
+        .min_by(|left, right| compare_centroids(*left, *right))
+        .expect("a multi-centroid codebook has a first centroid");
+    let mut order = Vec::with_capacity(centroids);
+    let mut seen = vec![false; centroids];
+    let mut current = start;
+    seen[current] = true;
+    order.push(current);
+    while order.len() < centroids {
+        let next = (0..centroids)
+            .filter(|candidate| !seen[*candidate])
+            .min_by(|left, right| {
+                crate::metric::squared_euclidean_simd(centroid(current), centroid(*left))
+                    .total_cmp(&crate::metric::squared_euclidean_simd(
+                        centroid(current),
+                        centroid(*right),
+                    ))
+                    .then_with(|| compare_centroids(*left, *right))
+            })
+            .expect("an incomplete centroid chain has an unseen centroid");
+        seen[next] = true;
+        order.push(next);
+        current = next;
     }
-    let mut order = (0..centroids)
-        .map(|index| {
-            let centroid = &codebook[index * width..(index + 1) * width];
-            let quantized = centroid
-                .iter()
-                .enumerate()
-                .map(|(dimension, value)| {
-                    let span = maxes[dimension] - mins[dimension];
-                    if span <= f32::EPSILON {
-                        0
-                    } else {
-                        (((value - mins[dimension]) / span) * 255.0)
-                            .round()
-                            .clamp(0.0, 255.0) as u8
-                    }
-                })
-                .collect::<Vec<_>>();
-            (product_code_locality_key(&quantized), index)
-        })
-        .collect::<Vec<_>>();
-    order.sort_unstable_by(|left, right| {
-        let left_centroid = &codebook[left.1 * width..(left.1 + 1) * width];
-        let right_centroid = &codebook[right.1 * width..(right.1 + 1) * width];
-        left.0.cmp(&right.0).then_with(|| {
-            left_centroid
-                .iter()
-                .zip(right_centroid)
-                .map(|(left, right)| left.total_cmp(right))
-                .find(|ordering| !ordering.is_eq())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-    });
     let mut reordered = Vec::with_capacity(codebook.len());
-    for (_, index) in order {
+    for index in order {
         reordered.extend_from_slice(&codebook[index * width..(index + 1) * width]);
     }
     reordered
@@ -819,6 +819,64 @@ mod tests {
             first.encode(&fit[17]).unwrap(),
             second.encode(&fit[17]).unwrap()
         );
+    }
+
+    #[test]
+    fn centroid_locality_order_follows_a_deterministic_nearest_neighbor_chain() {
+        let codebook = vec![
+            0.0, 0.0, // stable lexicographic start
+            0.0, 10.0, 1.0, 10.0, 1.0, 0.0,
+        ];
+
+        assert_eq!(
+            reorder_flat_centroids_by_locality(codebook, 2),
+            vec![0.0, 0.0, 1.0, 0.0, 1.0, 10.0, 0.0, 10.0],
+            "high-dimensional Morton bucketing must not replace direct geometric locality"
+        );
+    }
+
+    #[test]
+    fn centroid_locality_order_is_a_repeatable_bijection_with_stable_ties() {
+        let shuffled = vec![
+            2.0, 0.0, // source ordinal 0
+            0.0, 0.0, // deterministic lexicographic start
+            1.0, 1.0, // equal distance from the start
+            1.0, -1.0, // lexicographically precedes the prior centroid
+            3.0, 0.0,
+        ];
+
+        let first = reorder_flat_centroids_by_locality(shuffled.clone(), 2);
+        let second = reorder_flat_centroids_by_locality(shuffled.clone(), 2);
+        let mut input_rows = shuffled
+            .chunks_exact(2)
+            .map(<[f32]>::to_vec)
+            .collect::<Vec<_>>();
+        let mut output_rows = first
+            .chunks_exact(2)
+            .map(<[f32]>::to_vec)
+            .collect::<Vec<_>>();
+        input_rows.sort_by(|left, right| {
+            left.iter()
+                .zip(right)
+                .find_map(|(left, right)| {
+                    let ordering = left.total_cmp(right);
+                    (!ordering.is_eq()).then_some(ordering)
+                })
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        output_rows.sort_by(|left, right| {
+            left.iter()
+                .zip(right)
+                .find_map(|(left, right)| {
+                    let ordering = left.total_cmp(right);
+                    (!ordering.is_eq()).then_some(ordering)
+                })
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        assert_eq!(first, second);
+        assert_eq!(input_rows, output_rows);
+        assert_eq!(&first[..4], &[0.0, 0.0, 1.0, -1.0]);
     }
 
     #[test]
