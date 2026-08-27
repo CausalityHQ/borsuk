@@ -85,8 +85,10 @@ class ExecutionJob:
         if (
             type(v21_feasibility) is not bool
             or arm_index < 0
-            or diagnostic and profile not in {"recall", "lifecycle"}
-            or v21_feasibility and (diagnostic or profile != "recall" or arm_index != 0)
+            or diagnostic
+            and profile not in {"recall", "lifecycle"}
+            or v21_feasibility
+            and (diagnostic or profile != "recall" or arm_index != 0)
         ):
             raise ValueError("runtime execution arm identity is invalid")
         job = cls._new(cell, role="runtime", attempt=attempt)
@@ -426,7 +428,7 @@ def runtime_worker_script(
     protocol_uri: str,
     protocol_sha256: str,
     build_prefix: str,
-    binary_sha256: str,
+    binary_sha256: str | None,
     attempt_id: str,
     terminal_prefix: str,
     purchase_option: str = "spot",
@@ -449,6 +451,7 @@ def runtime_worker_script(
     diagnostic_read_nprobes: tuple[int, ...] | None = None,
     diagnostic_read_candidates: tuple[int, ...] | None = None,
     v21_feasibility: bool = False,
+    v21_base_authority: dict[str, object] | None = None,
 ) -> str:
     if job.role != "runtime":
         raise ValueError("runtime worker requires a runtime job")
@@ -497,12 +500,19 @@ def runtime_worker_script(
             diagnostic_read_candidates,
         )
     )
-    if type(v21_feasibility) is not bool or v21_feasibility and (
-        read_diagnostic
-        or diagnostic_write_ops is not None
-        or diagnostic_timeout_seconds is not None
-        or runtime_profile != "recall"
-        or arm_index != 0
+    if (
+        type(v21_feasibility) is not bool
+        or v21_feasibility
+        and (
+            read_diagnostic
+            or diagnostic_write_ops is not None
+            or diagnostic_timeout_seconds is not None
+            or runtime_profile != "recall"
+            or arm_index != 0
+            or not isinstance(v21_base_authority, dict)
+        )
+        or not v21_feasibility
+        and v21_base_authority is not None
     ):
         raise ValueError("V21 feasibility authority is invalid")
     profile_mismatch = (
@@ -539,6 +549,119 @@ def runtime_worker_script(
     elif workload_kind != "read-recall" or arm is not None:
         raise ValueError("read runtime cannot carry lifecycle authority")
     cell = job.cell
+    base_setup = ""
+    index_uri = job.index_uri
+    runtime_manifest = '"$work/manifest.json"'
+    runtime_protocol = '"$work/protocol.json"'
+    runtime_source_sha256 = source_sha256
+    index_digest_checks = ""
+    if not v21_feasibility and (
+        not isinstance(binary_sha256, str)
+        or len(binary_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in binary_sha256)
+    ):
+        raise ValueError("runtime binary checksum authority differs")
+    binary_setup = textwrap.dedent(
+        f"""\
+        aws s3 cp {_q(build_prefix + "/production_bench")} "$work/production_bench" --only-show-errors
+        test "$(sha256sum "$work/production_bench" | awk '{{print $1}}')" = {_q(binary_sha256)}
+        binary_sha={_q(binary_sha256)}
+        """
+    )
+    provision_packages = "git python3.12 python3.12-pip util-linux xfsprogs"
+    provision_python = '"$work/venv/bin/pip" install boto3==1.34.46'
+    if v21_feasibility:
+        assert v21_base_authority is not None
+        fields = {
+            "manifest_uri",
+            "manifest_sha256",
+            "protocol_uri",
+            "protocol_sha256",
+            "build_terminal_uri",
+            "build_terminal_sha256",
+            "build_prefix",
+            "source_archive_sha256",
+            "cell",
+            "index_id",
+            "index_uri",
+            "index_receipt_sha256",
+            "object_roster_sha256",
+            "inventory_sha256",
+        }
+        if set(v21_base_authority) != fields:
+            raise ValueError("V21 base-index authority fields differ")
+        for field in (
+            "manifest_sha256",
+            "protocol_sha256",
+            "build_terminal_sha256",
+            "source_archive_sha256",
+            "index_receipt_sha256",
+            "object_roster_sha256",
+            "inventory_sha256",
+        ):
+            value = v21_base_authority[field]
+            if (
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(character not in "0123456789abcdef" for character in value)
+            ):
+                raise ValueError(f"V21 base-index {field} differs")
+        base_cell = v21_base_authority["cell"]
+        base_source = base_cell.get("source") if isinstance(base_cell, dict) else None
+        if (
+            not isinstance(base_cell, dict)
+            or base_cell.get("cell_id") is None
+            or not isinstance(base_source, dict)
+            or base_source.get("archive_sha256")
+            != v21_base_authority["source_archive_sha256"]
+            or base_cell.get("index_prefix") != v21_base_authority["index_uri"]
+            or str(base_cell["index_prefix"]).rstrip("/").rsplit("/", 1)[-1]
+            != v21_base_authority["index_id"]
+            or v21_base_authority["build_prefix"] != build_prefix
+            or binary_sha256 is not None
+        ):
+            raise ValueError("V21 base-index cell authority differs")
+        cell = base_cell
+        index_uri = str(v21_base_authority["index_uri"])
+        runtime_manifest = '"$work/base-manifest.json"'
+        runtime_protocol = '"$work/base-protocol.json"'
+        runtime_source_sha256 = str(v21_base_authority["source_archive_sha256"])
+        base_setup = textwrap.dedent(
+            f"""\
+            stage=verify-base-authority
+            aws s3 cp {_q(v21_base_authority["manifest_uri"])} "$work/base-manifest.json" --only-show-errors
+            test "$(sha256sum "$work/base-manifest.json" | awk '{{print $1}}')" = {_q(v21_base_authority["manifest_sha256"])}
+            aws s3 cp {_q(v21_base_authority["protocol_uri"])} "$work/base-protocol.json" --only-show-errors
+            test "$(sha256sum "$work/base-protocol.json" | awk '{{print $1}}')" = {_q(v21_base_authority["protocol_sha256"])}
+            aws s3 cp {_q(v21_base_authority["build_terminal_uri"])} "$work/BASE_BUILD_TERMINAL_COMPLETE.json" --only-show-errors
+            test "$(sha256sum "$work/BASE_BUILD_TERMINAL_COMPLETE.json" | awk '{{print $1}}')" = {_q(v21_base_authority["build_terminal_sha256"])}
+            """
+        )
+        index_digest_checks = textwrap.dedent(
+            f"""\
+            test "$(sha256sum "$work/INDEX_COMPLETE.json" | awk '{{print $1}}')" = {_q(v21_base_authority["index_receipt_sha256"])}
+            test "$(sha256sum "$work/INDEX_OBJECTS.json" | awk '{{print $1}}')" = {_q(v21_base_authority["object_roster_sha256"])}
+            test "$(sha256sum "$work/INDEX_INVENTORY.json" | awk '{{print $1}}')" = {_q(v21_base_authority["inventory_sha256"])}
+            """
+        )
+        provision_packages = (
+            "gcc gcc-c++ git make cmake openssl-devel python3.12 "
+            "python3.12-pip util-linux xfsprogs xz"
+        )
+        provision_python = (
+            '"$work/venv/bin/pip" install -r '
+            '"$work/source/scripts/requirements-format-bench.txt"'
+        )
+        binary_setup = textwrap.dedent(
+            """\
+            stage=compile-diagnostic
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            source /root/.cargo/env
+            (cd "$work/source" && cargo build --locked --release --example production_bench)
+            cp "$work/source/target/release/examples/production_bench" "$work/production_bench"
+            binary_sha=$(sha256sum "$work/production_bench" | awk '{print $1}')
+            """
+        )
     source = cell["dataset"]["source"]
     if source.get("state") not in {"staged", "staged-generated"}:
         raise ValueError("publication runtime requires a staged dataset")
@@ -712,9 +835,9 @@ test \"$actual_flow_control_authority\" = requested-systemd-enforced"""
         instance_purchase_option=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-life-cycle)
         test "$instance_purchase_option" = {_q(purchase_option)}
         stage=provision
-        dnf install -y git python3.12 python3.12-pip util-linux xfsprogs
+        dnf install -y {provision_packages}
         python3.12 -m venv "$work/venv"
-        "$work/venv/bin/pip" install boto3==1.34.46
+        {provision_python}
         stage=mount-cache
         root_source=$(findmnt -n -o SOURCE /)
         root_parent=$(lsblk -no PKNAME "$root_source")
@@ -729,15 +852,16 @@ test \"$actual_flow_control_authority\" = requested-systemd-enforced"""
         mkdir -p "$cache_mount"
         mount -o noatime "$cache_device" "$cache_mount"
         swapoff -a
+        {base_setup}
         stage=verify-index
-        aws s3 cp {_q(build_prefix + "/production_bench")} "$work/production_bench" --only-show-errors
-        test "$(sha256sum "$work/production_bench" | awk '{{print $1}}')" = {_q(binary_sha256)}
+        {binary_setup}
         chmod 700 "$work/production_bench"
         for name in INDEX_COMPLETE.json INDEX_OBJECTS.json INDEX_INVENTORY.json; do
           aws s3 cp {_q(build_prefix)}/$name "$work/$name" --only-show-errors
         done
+        {index_digest_checks}
         "$work/venv/bin/python" "$work/source/scripts/observe_publication_v3_index.py" \
-          --index-uri {_q(job.index_uri)} --roster "$work/INDEX_OBJECTS.json" \
+          --index-uri {_q(index_uri)} --roster "$work/INDEX_OBJECTS.json" \
           --output "$work/INDEX_INVENTORY.json" --region eu-central-1
         {clone_step}
         mkdir -p "$work/cell/runtime-dataset"
@@ -747,8 +871,8 @@ test \"$actual_flow_control_authority\" = requested-systemd-enforced"""
         systemd-run --quiet --wait --collect --service-type=exec \
           -p MemoryMax=8589934592 -p MemorySwapMax=0 \
           -p StandardOutput=append:$detail_log -p StandardError=append:$detail_log \
-          /usr/bin/python3.12 "$work/source/scripts/run_publication_v3_cell.py" "$work/protocol.json" "$work/cell" \
-          --mode runtime --manifest "$work/manifest.json" --source-archive-sha256 {_q(source_sha256)} \
+          /usr/bin/python3.12 "$work/source/scripts/run_publication_v3_cell.py" {runtime_protocol} "$work/cell" \
+          --mode runtime --manifest {runtime_manifest} --source-archive-sha256 {_q(runtime_source_sha256)} \
           --runtime-profile {_q(runtime_profile)} \
           --arm-index {_q(arm_index)} \
           --disk-cache-max-bytes {_q(disk_cache_max_bytes)} \
@@ -824,7 +948,7 @@ test \"$actual_flow_control_authority\" = requested-systemd-enforced"""
           lifecycle_storage_trace_sha=$(sha256sum "$work/cell/runtime-output/storage-access.csv" | awk '{{print $1}}')
           lifecycle_fields=$(printf ',"lifecycle_summary_sha256":"%s","lifecycle_costs_sha256":"%s","lifecycle_samples_sha256":"%s","lifecycle_query_summary_sha256":"%s","lifecycle_query_samples_sha256":"%s","lifecycle_storage_trace_sha256":"%s"' "$lifecycle_summary_sha" "$lifecycle_costs_sha" "$lifecycle_samples_sha" "$lifecycle_query_summary_sha" "$lifecycle_query_samples_sha" "$lifecycle_storage_trace_sha")
         fi
-        printf '{{"schema_version":5,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":{_j(binary_sha256)},"purchase_option":"%s","runtime_profile":"%s","arm_index":{arm_index},"max_active_searches":%s,"max_waiting_searches":%s,"leaf_read_width":%s,"max_inflight_leaf_reads":%s,"max_parallel_decode_rank_tasks":%s,"cpu_threads":%s,"io_threads":%s,"s3_get_concurrency":%s,"ram_budget_bytes":%s,"disk_cache_max_bytes":%s,"exact_read_max_physical_amplification":%s,"execution_contract_sha256":"%s","artifact_upload_reconciliations":%s%s%s%s}}\n' "$instance_id" "$instance_purchase_option" "$actual_runtime_profile" "$actual_max_active" "$actual_max_waiting" "$actual_leaf_width" "$actual_max_leaf_reads" "$actual_max_parallel_decode_rank_tasks" "$actual_cpu_threads" "$actual_io_threads" "$actual_s3_gets" "$actual_ram_budget" "$actual_disk_cache" "$actual_exact_amplification" "$execution_contract_sha" "$immutable_upload_reconciliations" "$diagnostic_fields" "$concurrency_fields" "$lifecycle_fields" >"$work/complete.json"
+        printf '{{"schema_version":5,"status":"complete","role":"runtime","attempt":{job.attempt},"attempt_id":{_j(attempt_id)},"instance_id":"%s","source_archive_sha256":{_j(source_sha256)},"manifest_sha256":{_j(manifest_sha256)},"protocol_sha256":{_j(protocol_sha256)},"binary_sha256":"%s","purchase_option":"%s","runtime_profile":"%s","arm_index":{arm_index},"max_active_searches":%s,"max_waiting_searches":%s,"leaf_read_width":%s,"max_inflight_leaf_reads":%s,"max_parallel_decode_rank_tasks":%s,"cpu_threads":%s,"io_threads":%s,"s3_get_concurrency":%s,"ram_budget_bytes":%s,"disk_cache_max_bytes":%s,"exact_read_max_physical_amplification":%s,"execution_contract_sha256":"%s","artifact_upload_reconciliations":%s%s%s%s}}\n' "$instance_id" "$binary_sha" "$instance_purchase_option" "$actual_runtime_profile" "$actual_max_active" "$actual_max_waiting" "$actual_leaf_width" "$actual_max_leaf_reads" "$actual_max_parallel_decode_rank_tasks" "$actual_cpu_threads" "$actual_io_threads" "$actual_s3_gets" "$actual_ram_budget" "$actual_disk_cache" "$actual_exact_amplification" "$execution_contract_sha" "$immutable_upload_reconciliations" "$diagnostic_fields" "$concurrency_fields" "$lifecycle_fields" >"$work/complete.json"
         put_immutable "$work/complete.json" {_q(terminal_prefix + "/RUNTIME_TERMINAL_COMPLETE.json")}
         complete=1
         """

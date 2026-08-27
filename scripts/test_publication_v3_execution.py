@@ -6,6 +6,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 from scripts.publication_v3_aws import build_launch_request
@@ -36,6 +37,28 @@ def frozen_manifest() -> dict[str, object]:
         "node_lock_sha256": "5" * 64,
     }
     return value
+
+
+def v21_base_authority(
+    cell: dict[str, object], *, build_prefix: str
+) -> dict[str, object]:
+    index_uri = str(cell["index_prefix"])
+    return {
+        "manifest_uri": "s3://bucket/manifests/base.json",
+        "manifest_sha256": "b" * 64,
+        "protocol_uri": "s3://bucket/protocols/base.json",
+        "protocol_sha256": "c" * 64,
+        "build_terminal_uri": f"{build_prefix}/BUILD_TERMINAL_COMPLETE.json",
+        "build_terminal_sha256": "d" * 64,
+        "build_prefix": build_prefix,
+        "source_archive_sha256": str(cell["source"]["archive_sha256"]),
+        "cell": cell,
+        "index_id": index_uri.rstrip("/").rsplit("/", 1)[-1],
+        "index_uri": index_uri,
+        "index_receipt_sha256": "e" * 64,
+        "object_roster_sha256": "f" * 64,
+        "inventory_sha256": "0" * 64,
+    }
 
 
 class PublicationV3ExecutionTests(unittest.TestCase):
@@ -111,9 +134,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
                 "if [[ ${EXPIRE_UPLOAD_DEADLINE:-0} = 1 ]]; then\n"
                 "  immutable_upload_deadline=1\n"
                 "  SECONDS=2\n"
-                "fi\n"
-                + worker_immutable_upload_function()
-                + "\n"
+                "fi\n" + worker_immutable_upload_function() + "\n"
                 "finish() {\n"
                 "  status=$1\n"
                 "  trap - EXIT\n"
@@ -142,7 +163,9 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             )
             self.assertEqual(transient.returncode, 0, transient.stderr)
             self.assertEqual((captured / "put-object-count").read_text(), "3")
-            self.assertEqual((captured / "result.json").read_bytes(), payload.read_bytes())
+            self.assertEqual(
+                (captured / "result.json").read_bytes(), payload.read_bytes()
+            )
             put_args = (captured / "put-object-args-3").read_text()
             for required in (
                 "--expected-bucket-owner 453182569524",
@@ -702,7 +725,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             protocol_uri="s3://bucket/protocols/cell.json",
             protocol_sha256="7" * 64,
             build_prefix="s3://bucket/results/cell/build/attempts/0001",
-            binary_sha256="8" * 64,
+            binary_sha256=None,
             attempt_id="v21-feasibility-0003",
             terminal_prefix=job.terminal_prefix,
             disk_cache_max_bytes=0,
@@ -717,6 +740,10 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             s3_get_concurrency=64,
             ram_budget_bytes=3 * 1024 * 1024 * 1024,
             v21_feasibility=True,
+            v21_base_authority=v21_base_authority(
+                cell,
+                build_prefix="s3://bucket/results/cell/build/attempts/0001",
+            ),
         )
         self.assertIn("--v21-feasibility", script)
         self.assertIn('"claim_eligible":false', script)
@@ -738,6 +765,83 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             "v21_summary_sha256",
         ):
             self.assertIn(field, script)
+        self.assertEqual(
+            subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
+        )
+
+    def test_v21_worker_compiles_current_source_but_reads_historical_index_authority(
+        self,
+    ) -> None:
+        current_cell = qualification_cell(
+            frozen_manifest(),
+            dataset_id="deep-image-96",
+            workload_kind="read-recall",
+        )
+        job = ExecutionJob.runtime(
+            current_cell,
+            attempt=3,
+            profile="recall",
+            arm_index=0,
+            v21_feasibility=True,
+        )
+        base_cell = deepcopy(current_cell)
+        base_cell["source"]["git_commit"] = "1" * 40
+        base_cell["source"]["archive_sha256"] = "a" * 64
+        base_cell["cell_id"] = "r01-historical"
+        base_cell["index_prefix"] = (
+            "s3://bucket/indexes/build-attempts/0001/index-historical"
+        )
+        base_authority = {
+            "manifest_uri": "s3://bucket/manifests/base.json",
+            "manifest_sha256": "b" * 64,
+            "protocol_uri": "s3://bucket/protocols/base.json",
+            "protocol_sha256": "c" * 64,
+            "build_terminal_uri": "s3://bucket/results/base/BUILD_TERMINAL_COMPLETE.json",
+            "build_terminal_sha256": "d" * 64,
+            "build_prefix": "s3://bucket/results/base",
+            "source_archive_sha256": "a" * 64,
+            "cell": base_cell,
+            "index_id": "index-historical",
+            "index_uri": base_cell["index_prefix"],
+            "index_receipt_sha256": "e" * 64,
+            "object_roster_sha256": "f" * 64,
+            "inventory_sha256": "0" * 64,
+        }
+        script = runtime_worker_script(
+            job=job,
+            source_uri="s3://bucket/source/current.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifests/current.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocols/current.json",
+            protocol_sha256="7" * 64,
+            build_prefix=base_authority["build_prefix"],
+            binary_sha256=None,
+            attempt_id="v21-feasibility-0003",
+            terminal_prefix=job.terminal_prefix,
+            disk_cache_max_bytes=0,
+            exact_read_max_physical_amplification=2,
+            max_active_searches=4,
+            max_waiting_searches=16,
+            leaf_read_width=32,
+            max_inflight_leaf_reads=48,
+            max_parallel_decode_rank_tasks=1,
+            cpu_threads=3,
+            io_threads=88,
+            s3_get_concurrency=64,
+            ram_budget_bytes=3 * 1024 * 1024 * 1024,
+            v21_feasibility=True,
+            v21_base_authority=base_authority,
+        )
+        self.assertIn(
+            "cargo build --locked --release --example production_bench", script
+        )
+        self.assertNotIn(
+            f"aws s3 cp {base_authority['build_prefix']}/production_bench", script
+        )
+        self.assertIn(str(base_authority["index_uri"]), script)
+        self.assertIn(str(base_authority["source_archive_sha256"]), script)
+        self.assertIn("s3://bucket/source/current.tar.gz", script)
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )
