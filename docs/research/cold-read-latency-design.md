@@ -1,7 +1,10 @@
 # Cold object-store read latency design
 
-**Status:** Accepted cold-first direction on 2026-08-27; implementation and
-qualification pending.
+**Status:** Superseded on 2026-08-27 by the approved Standard-S3-only V21
+direction in
+`docs/superpowers/specs/2026-08-27-standard-s3-v21-cold-read-design.md`.
+This document remains historical V20 methodology and evidence; its former
+200-ms p99 target is not a release gate.
 
 ## Objective
 
