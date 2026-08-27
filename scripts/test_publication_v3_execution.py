@@ -804,6 +804,10 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             script.index('put_immutable "$work/cell/RESULT_COMPLETE.json"'),
             script.index("actual_memory_max="),
         )
+        self.assertLess(
+            script.index("unit_active_state=$(systemctl show"),
+            script.index("actual_claim_eligible="),
+        )
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )

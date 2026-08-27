@@ -575,6 +575,7 @@ def runtime_worker_script(
     memory_max_bytes = 8_589_934_592
     systemd_wait_option = "--wait"
     systemd_run_options = "--collect"
+    cgroup_wait = ""
     cgroup_observation = ""
     if v21_feasibility:
         assert v21_base_authority is not None
@@ -672,7 +673,7 @@ def runtime_worker_script(
         unit_name = f"borsuk-v21-{job.attempt:04d}.service"
         systemd_wait_option = ""
         systemd_run_options = f"--unit={unit_name} --remain-after-exit"
-        cgroup_observation = textwrap.dedent(
+        cgroup_wait = textwrap.dedent(
             f"""\
             while true; do
               unit_active_state=$(systemctl show {_q(unit_name)} --property=ActiveState --value)
@@ -694,6 +695,10 @@ def runtime_worker_script(
               fi
               sleep 1
             done
+            """
+        )
+        cgroup_observation = textwrap.dedent(
+            f"""\
             actual_exec_code=$(systemctl show {_q(unit_name)} --property=ExecMainCode --value)
             actual_exec_status=$(systemctl show {_q(unit_name)} --property=ExecMainStatus --value)
             actual_memory_max=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["memory_max_bytes"])' "$work/cell/RUNTIME_ATTESTATION.json")
@@ -792,7 +797,6 @@ def runtime_worker_script(
     diagnostic_validation = ""
     diagnostic_receipt_fields = ""
     read_diagnostic_uploads = ""
-    diagnostic_uploads_before_result = ""
     diagnostic_preservation_before_observation = ""
     result_upload = (
         f'put_immutable "$work/cell/RESULT_COMPLETE.json" '
@@ -924,6 +928,7 @@ v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_su
         )
         diagnostic_preservation_before_observation = textwrap.dedent(
             f"""\
+            stage=preserve-evidence
             immutable_upload_deadline=$((SECONDS + 600))
             put_immutable "$work/cell/runtime-output/bench_v21_feasibility_arms.csv" {_q(terminal_prefix + "/bench_v21_feasibility_arms.csv")}
             put_immutable "$work/cell/runtime-output/bench_v21_feasibility_samples.csv" {_q(terminal_prefix + "/bench_v21_feasibility_samples.csv")}
@@ -983,12 +988,12 @@ v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_su
           --borsuk-bench "$work/production_bench" \
           --index-receipt "$work/INDEX_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json" \
           --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}{diagnostic_arguments}{' --v21-diagnostic-protocol "$work/protocol.json" --v21-diagnostic-manifest "$work/manifest.json"' if v21_feasibility else ''}
+        {cgroup_wait}
         {diagnostic_validation}
         {diagnostic_preservation_before_observation}
         {cgroup_observation}
         stage=publish-receipts
         immutable_upload_deadline=$((SECONDS + 600))
-        {diagnostic_uploads_before_result}
         {result_upload}
         {read_diagnostic_uploads}
         put_immutable "$work/cell/RUNTIME_ATTESTATION.json" {_q(terminal_prefix + "/RUNTIME_ATTESTATION.json")}
