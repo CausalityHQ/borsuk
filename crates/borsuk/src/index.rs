@@ -74,7 +74,7 @@ use crate::{
         CELL_CARD_RANGE_READ_MAX_BYTES, CellCardGroupRef, CellCardGroupWriter, CellCardHeadRead,
         CellCardPush, GlobalCellCardAnnRef, cell_card_exact_admission_bounds,
         decode_authenticated_cell_card_head_wave, decode_cell_card_exact_read,
-        decode_cell_card_run_root, encode_cell_card_run_root,
+        decode_cell_card_head, decode_cell_card_run_root, encode_cell_card_run_root,
         plan_ranked_cell_card_exact_wave_with_amplification, plan_ranked_cell_card_head_wave,
         project_authenticated_cell_card_head_read,
         promote_cell_card_head_wave_to_stable_planes_with_pinned_cache,
@@ -13011,6 +13011,373 @@ impl BorsukIndex {
             ));
         }
         codebook.nearest_cells(query, probes)
+    }
+
+    /// Project and evaluate the preregistered V21 Standard-S3 selector arms
+    /// from the pinned, authenticated V20 generation without publishing state.
+    #[doc(hidden)]
+    pub fn diagnose_v21_selector_feasibility(
+        &self,
+        queries: &[Vec<f32>],
+        ground_truth: &[Vec<String>],
+        options: &SearchOptions,
+        arms: &[crate::v21_feasibility::V21FeasibilityArm],
+    ) -> Result<Vec<crate::v21_feasibility::V21FeasibilityReport>> {
+        use crate::v21_feasibility::{
+            V21_SELECTOR_MAX_CAPACITY_BYTES, V21FeasibilityQuerySample, V21FeasibilityReport,
+            build_v21_projected_directory_with_cell_ids, plan_v21_feasibility_query,
+        };
+
+        if queries.is_empty()
+            || queries.len() != ground_truth.len()
+            || arms.is_empty()
+            || options.k != 10
+            || !matches!(options.mode, SearchMode::Approx { .. })
+            || options.filter.is_some()
+            || !options.vector_name.is_empty()
+        {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V21 feasibility diagnostic request is outside its read-only authority".to_string(),
+            ));
+        }
+        for arm in arms {
+            arm.validate()?;
+        }
+        if !self.cell_wal_snapshot.is_empty()
+            || !self.manifest.wal_frontier_is_empty()
+            || self.global_leaf_mutation_state_required()
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V21 feasibility requires mutation-free generation authority".to_string(),
+            ));
+        }
+        let global_ref = self
+            .manifest
+            .global_cell_card_ann_ref
+            .as_ref()
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V21 feasibility requires a pinned V20 cell-card generation".to_string(),
+                )
+            })?;
+        global_ref.validate()?;
+        let pins = self.resident_global_ann_pins.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V21 feasibility requires authenticated resident pins".to_string(),
+            )
+        })?;
+        let root = pins.cell_card_root.as_ref().ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V21 feasibility requires the authenticated V20 root".to_string(),
+            )
+        })?;
+        let codebook = self.load_resident_global_codebook(global_ref.codebook())?;
+        let dimensions = self.manifest.config.dimensions;
+        let element_type = self.manifest.build_config.vector_element_type;
+        let normalize = self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry();
+        let authenticated_cell_ids = codebook.all_cell_ids();
+
+        let mut truth_ids = Vec::with_capacity(ground_truth.len());
+        for truth in ground_truth {
+            if truth.len() != options.k || truth.iter().any(String::is_empty) {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "V21 feasibility ground truth must supply exactly k non-empty IDs".to_string(),
+                ));
+            }
+            let ids = truth
+                .iter()
+                .map(|id| RecordId::from(id.as_str()))
+                .collect::<BTreeSet<_>>();
+            if ids.len() != truth.len() {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "V21 feasibility ground truth contains duplicate IDs".to_string(),
+                ));
+            }
+            truth_ids.push(ids);
+        }
+        for query in queries {
+            self.validate_vector(query)?;
+        }
+
+        let mut projected_pages = Vec::with_capacity(root.card_count());
+        let mut source_ordinal = 0_u64;
+        let card_indexes_by_group = root.card_indexes_by_group()?;
+        for (group_ordinal, group) in root.groups().iter().enumerate() {
+            let checksum = blake3::Hash::from_bytes(group.checksum)
+                .to_hex()
+                .to_string();
+            let group_read = self
+                .storage
+                .read_known_size_from_backing_without_cache_with_checksum(
+                    &group.path,
+                    group.encoded_bytes,
+                    &checksum,
+                )?;
+            let group_bytes = &group_read.bytes;
+            let plane_start = usize::try_from(group.code_plane_offset).map_err(|_| {
+                BorsukError::InvalidStorage("V21 group code-plane offset exceeds usize".to_string())
+            })?;
+            let plane_end = plane_start
+                .checked_add(usize::try_from(group.code_plane_bytes).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "V21 group code-plane bytes exceed usize".to_string(),
+                    )
+                })?)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("V21 group code-plane range overflows".to_string())
+                })?;
+            let code_plane = group_bytes.get(plane_start..plane_end).ok_or_else(|| {
+                BorsukError::InvalidStorage("V21 group object omits its code plane".to_string())
+            })?;
+            root.validate_complete_code_planes(&[(group.as_ref(), code_plane)])?;
+            let card_indexes = card_indexes_by_group.get(group_ordinal).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V21 projected group card directory is absent".to_string(),
+                )
+            })?;
+            for &card_index in card_indexes {
+                let (_, head) = root.head_ref(card_index)?;
+                let code_start = usize::try_from(head.code_offset).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "V21 projected code offset exceeds usize".to_string(),
+                    )
+                })?;
+                let code_end = code_start
+                    .checked_add(head.code_bytes as usize)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V21 projected code range overflows".to_string(),
+                        )
+                    })?;
+                let card_codes = group_bytes.get(code_start..code_end).ok_or_else(|| {
+                    BorsukError::InvalidStorage("V21 projected code plane omits a card".to_string())
+                })?;
+                let code_width = usize::try_from(head.code_width).map_err(|_| {
+                    BorsukError::InvalidStorage("V21 projected code width overflows".to_string())
+                })?;
+                if code_width == 0 || card_codes.len() % code_width != 0 {
+                    return Err(BorsukError::InvalidStorage(
+                        "V21 projected card code plane is not row aligned".to_string(),
+                    ));
+                }
+                let verified_head = decode_cell_card_head(
+                    &head,
+                    card_codes,
+                    group.encoded_bytes,
+                    dimensions,
+                    element_type,
+                )?;
+
+                let mut decoded_rows = Vec::with_capacity(head.rows as usize);
+                let mut physical_bytes = 0_u64;
+                let mut first_offset = None;
+                let mut expected_offset = None;
+                for block in head.exact_blocks.iter() {
+                    if expected_offset.is_some_and(|offset| offset != block.offset) {
+                        return Err(BorsukError::InvalidStorage(
+                            "V21 projected exact blocks are not physically contiguous".to_string(),
+                        ));
+                    }
+                    first_offset.get_or_insert(block.offset);
+                    let end = block
+                        .offset
+                        .checked_add(u64::from(block.bytes))
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V21 projected exact block range overflows".to_string(),
+                            )
+                        })?;
+                    let stored = group_bytes
+                        .get(
+                            usize::try_from(block.offset).map_err(|_| {
+                                BorsukError::InvalidStorage(
+                                    "V21 exact block offset exceeds usize".to_string(),
+                                )
+                            })?
+                                ..usize::try_from(end).map_err(|_| {
+                                    BorsukError::InvalidStorage(
+                                        "V21 exact block end exceeds usize".to_string(),
+                                    )
+                                })?,
+                        )
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V21 group object omits an exact block".to_string(),
+                            )
+                        })?;
+                    decoded_rows.extend(verified_head.verify_block(
+                        block.block_ordinal,
+                        stored,
+                        dimensions,
+                        element_type,
+                    )?);
+                    physical_bytes = physical_bytes
+                        .checked_add(u64::from(block.bytes))
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V21 projected exact bytes overflow".to_string(),
+                            )
+                        })?;
+                    expected_offset = Some(end);
+                }
+                if decoded_rows.len() != head.rows as usize
+                    || card_codes.len() != decoded_rows.len().saturating_mul(code_width)
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "V21 projected card row/code authority disagrees".to_string(),
+                    ));
+                }
+                let mut rows = Vec::with_capacity(decoded_rows.len());
+                for (row_index, row) in decoded_rows.into_iter().enumerate() {
+                    let mut exact = Vec::new();
+                    element_type.encode_canonical_fixed_width_into(&row.vector, &mut exact)?;
+                    rows.push(Arc::new(crate::v21_feasibility::V21ProjectedRow {
+                        id: row.id,
+                        source_ordinal,
+                        code: card_codes[row_index * code_width..(row_index + 1) * code_width]
+                            .to_vec(),
+                        exact,
+                    }));
+                    source_ordinal = source_ordinal.checked_add(1).ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V21 projected source ordinal overflows".to_string(),
+                        )
+                    })?;
+                }
+                projected_pages.push(crate::v21_feasibility::V21ProjectedPage {
+                    cell_index: head.cell_index,
+                    leaf_ordinal: head.leaf_ordinal,
+                    group_ordinal: u32::try_from(group_ordinal).map_err(|_| {
+                        BorsukError::InvalidStorage(
+                            "V21 projected group ordinal exceeds u32".to_string(),
+                        )
+                    })?,
+                    group_path: group.path.clone(),
+                    group_checksum: group.checksum,
+                    offset: first_offset.ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V21 projected card contains no exact blocks".to_string(),
+                        )
+                    })?,
+                    physical_bytes,
+                    rows,
+                });
+            }
+        }
+        if source_ordinal != root.rows() {
+            return Err(BorsukError::InvalidStorage(
+                "V21 projected rows disagree with the authenticated root".to_string(),
+            ));
+        }
+
+        let mut reports = Vec::with_capacity(arms.len());
+        for (arm_index, arm) in arms.iter().copied().enumerate() {
+            let directory = build_v21_projected_directory_with_cell_ids(
+                projected_pages.clone(),
+                dimensions,
+                element_type,
+                normalize,
+                codebook.scan_quantizer(),
+                &authenticated_cell_ids,
+                arm,
+            )?;
+            let mut samples = Vec::with_capacity(queries.len());
+            for (query_index, query) in queries.iter().enumerate() {
+                let routed_query = if normalize {
+                    crate::metric::unit_l2_normalized(query)
+                } else {
+                    query.clone()
+                };
+                let routed_cells = self.resident_global_selected_cells(
+                    &codebook,
+                    &routed_query,
+                    usize::try_from(global_ref.codebook().probes())
+                        .unwrap_or(usize::MAX)
+                        .max(1)
+                        .min(codebook.cell_count()),
+                )?;
+                let plan = plan_v21_feasibility_query(
+                    &directory,
+                    &routed_cells,
+                    &routed_query,
+                    codebook.scan_quantizer(),
+                    arm,
+                )?;
+                let selected = plan
+                    .selected_bundle_indexes
+                    .iter()
+                    .map(|index| {
+                        directory.bundles.get(*index as usize).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V21 plan selected an absent bundle".to_string(),
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let selected_ids = selected
+                    .iter()
+                    .flat_map(|bundle| bundle.rows.iter().map(|row| row.id.clone()))
+                    .collect::<BTreeSet<_>>();
+                let gt_hits = truth_ids[query_index].intersection(&selected_ids).count();
+                let mut scored = selected
+                    .iter()
+                    .flat_map(|bundle| bundle.rows.iter())
+                    .map(|row| {
+                        let vector = element_type.decode_fixed_width(&row.exact, dimensions)?;
+                        Ok((
+                            self.manifest
+                                .config
+                                .metric
+                                .distance_unchecked(query, &vector)?,
+                            row.id.clone(),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                scored.sort_by(|left, right| {
+                    left.0
+                        .total_cmp(&right.0)
+                        .then_with(|| left.1.cmp(&right.1))
+                });
+                scored.truncate(options.k);
+                let recall_hits = scored
+                    .iter()
+                    .filter(|(_, id)| truth_ids[query_index].contains(id))
+                    .count();
+                samples.push(V21FeasibilityQuerySample {
+                    arm_index,
+                    query_index,
+                    routed_cells: routed_cells.len(),
+                    selected_rows: plan.selected_rows,
+                    selected_bundles: plan.selected_bundle_indexes.len(),
+                    primary_requests: plan.reads.len(),
+                    maximum_actual_requests: plan.maximum_actual_requests,
+                    selected_bytes: plan.selected_bytes,
+                    physical_bytes: plan.physical_bytes,
+                    gt_hits,
+                    recall_hits,
+                    limiting_bound: plan.limiting_bound,
+                });
+            }
+            reports.push(V21FeasibilityReport {
+                arm,
+                bundle_count: directory.bundles.len(),
+                region_count: usize::try_from(directory.regions).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "V21 projected region count exceeds usize".to_string(),
+                    )
+                })?,
+                projected_directory_bytes: directory.selector_capacity_bytes,
+                selector_within_frozen_cap: directory.selector_capacity_bytes
+                    <= V21_SELECTOR_MAX_CAPACITY_BYTES,
+                rows: directory.rows,
+                samples,
+            });
+        }
+        Ok(reports)
     }
 
     /// Resolve the logical write cell using this handle's configured routing
@@ -43611,6 +43978,249 @@ mod tests {
                     + report.global_leaf_code_pages_read
                     + report.global_leaf_pages_read) as u64,
             "V12 issued a dependent identity/exact GET wave: {report:?}"
+        );
+    }
+
+    #[test]
+    fn v21_feasibility_diagnostic_is_authenticated_ordered_and_read_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let vectors = (0..256)
+            .map(|row| {
+                let cluster = (row % 4) as f32 * 100.0;
+                (0..8)
+                    .map(|dimension| cluster + row as f32 * 0.01 + dimension as f32 * 0.001)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        index
+            .add(
+                vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(row, vector)| {
+                        VectorRecord::new(format!("v21-diagnostic-{row}"), vector.clone())
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let manifest_before = serde_json::to_vec(&index.manifest).unwrap();
+        let objects_before = index
+            .storage
+            .list_objects("")
+            .unwrap()
+            .into_iter()
+            .map(|object| (object.path, object.size))
+            .collect::<Vec<_>>();
+        let queries = vec![vectors[37].clone(), vectors[173].clone()];
+        let truth = vec![
+            (0..10)
+                .map(|offset| format!("v21-diagnostic-{}", 37 + offset * 4))
+                .collect::<Vec<_>>(),
+            (0..10)
+                .map(|offset| format!("v21-diagnostic-{}", 173 + offset * 4))
+                .collect::<Vec<_>>(),
+        ];
+        let options = SearchOptions::approx(10, LeafMode::SrhtPqScan)
+            .with_max_segments(4)
+            .with_max_candidates_per_segment(256);
+        let arms = [
+            crate::v21_feasibility::V21FeasibilityArm {
+                bundle_row_limit: 128,
+                selector_span: 32,
+                hedge_delay_ms: None,
+            },
+            crate::v21_feasibility::V21FeasibilityArm {
+                bundle_row_limit: 256,
+                selector_span: 64,
+                hedge_delay_ms: Some(20),
+            },
+        ];
+        let visible_before = index
+            .search_with_report(&queries[0], options.clone())
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|hit| hit.id)
+            .collect::<Vec<_>>();
+        let diagnostic_requests_before = index.storage.request_counts();
+        let diagnostic_group_count = index
+            .resident_global_ann_pins
+            .as_ref()
+            .and_then(|pins| pins.cell_card_root.as_ref())
+            .unwrap()
+            .groups()
+            .len();
+
+        let reports = index
+            .diagnose_v21_selector_feasibility(&queries, &truth, &options, &arms)
+            .unwrap();
+        let diagnostic_requests = index
+            .storage
+            .request_counts()
+            .delta(&diagnostic_requests_before);
+        assert!(
+            diagnostic_requests.gets <= diagnostic_group_count as u64,
+            "diagnostic issued per-block reads instead of one authenticated group read: {diagnostic_requests:?}"
+        );
+
+        assert_eq!(reports.len(), 2);
+        for (arm_index, report) in reports.iter().enumerate() {
+            assert_eq!(report.arm, arms[arm_index]);
+            assert!(report.bundle_count > 0);
+            assert!(report.region_count > 0);
+            assert!(report.selector_within_frozen_cap);
+            assert_eq!(report.rows, 256);
+            assert_eq!(report.samples.len(), 2);
+            for (query_index, sample) in report.samples.iter().enumerate() {
+                assert_eq!(sample.arm_index, arm_index);
+                assert_eq!(sample.query_index, query_index);
+                assert!(sample.routed_cells > 0);
+                assert!(sample.primary_requests <= arms[arm_index].primary_request_limit());
+                assert!(sample.maximum_actual_requests <= 4);
+                assert!(sample.physical_bytes <= 1_048_576);
+                assert_eq!(sample.gt_hits, 10);
+                assert!(sample.recall_hits >= 1);
+            }
+        }
+        let invalid_k = index
+            .diagnose_v21_selector_feasibility(
+                &queries,
+                &truth,
+                &SearchOptions::approx(9, LeafMode::SrhtPqScan),
+                &arms,
+            )
+            .unwrap_err();
+        assert!(invalid_k.to_string().contains("read-only authority"));
+        assert_eq!(
+            serde_json::to_vec(&index.manifest).unwrap(),
+            manifest_before
+        );
+        assert_eq!(
+            index
+                .storage
+                .list_objects("")
+                .unwrap()
+                .into_iter()
+                .map(|object| (object.path, object.size))
+                .collect::<Vec<_>>(),
+            objects_before
+        );
+        assert_eq!(
+            index
+                .search_with_report(&queries[0], options.clone())
+                .unwrap()
+                .hits
+                .into_iter()
+                .map(|hit| hit.id)
+                .collect::<Vec<_>>(),
+            visible_before
+        );
+
+        index
+            .add(vec![VectorRecord::new(
+                "v21-diagnostic-live-mutation",
+                vec![0.0; 8],
+            )])
+            .unwrap();
+        let mutation_error = index
+            .diagnose_v21_selector_feasibility(&queries, &truth, &options, &arms)
+            .unwrap_err();
+        assert!(
+            mutation_error.to_string().contains("mutation-free"),
+            "{mutation_error}"
+        );
+    }
+
+    #[test]
+    fn v21_feasibility_diagnostic_rejects_corrupt_exact_authority_without_writing() {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        index
+            .add(
+                (0..128)
+                    .map(|row| VectorRecord::new(format!("v21-corrupt-{row}"), vec![row as f32; 8]))
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+        let root = index
+            .resident_global_ann_pins
+            .as_ref()
+            .and_then(|pins| pins.cell_card_root.as_ref())
+            .unwrap();
+        let (group, head) = root.head_ref(0).unwrap();
+        let block = &head.exact_blocks[0];
+        let path = directory.path().join(&group.path);
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        file.seek(SeekFrom::Start(block.offset)).unwrap();
+        let mut byte = [0_u8; 1];
+        file.read_exact(&mut byte).unwrap();
+        byte[0] ^= 0x80;
+        file.seek(SeekFrom::Start(block.offset)).unwrap();
+        file.write_all(&byte).unwrap();
+        file.sync_all().unwrap();
+
+        let objects_before = index
+            .storage
+            .list_objects("")
+            .unwrap()
+            .into_iter()
+            .map(|object| (object.path, object.size))
+            .collect::<Vec<_>>();
+        let error = index
+            .diagnose_v21_selector_feasibility(
+                &[vec![7.0; 8]],
+                &[(7..17)
+                    .map(|row| format!("v21-corrupt-{row}"))
+                    .collect::<Vec<_>>()],
+                &SearchOptions::approx(10, LeafMode::SrhtPqScan),
+                &[crate::v21_feasibility::V21FeasibilityArm {
+                    bundle_row_limit: 128,
+                    selector_span: 32,
+                    hedge_delay_ms: None,
+                }],
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains("checksum"), "{error}");
+        assert_eq!(
+            index
+                .storage
+                .list_objects("")
+                .unwrap()
+                .into_iter()
+                .map(|object| (object.path, object.size))
+                .collect::<Vec<_>>(),
+            objects_before
         );
     }
 

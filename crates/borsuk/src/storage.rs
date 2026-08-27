@@ -3620,6 +3620,49 @@ impl Storage {
         })
     }
 
+    /// Authenticate a diagnostic-only backing object without consulting or
+    /// populating the local object cache.
+    pub(crate) fn read_known_size_from_backing_without_cache_with_checksum(
+        &self,
+        relative: &str,
+        known_size: u64,
+        expected_checksum: &str,
+    ) -> Result<ReadBytes> {
+        let location = self.resolve(relative)?;
+        let bytes = self
+            .runtime
+            .block_on(async { self.store.get_range(&location, 0..known_size).await })
+            .map_err(|err| map_object_store_error(relative, err))?
+            .to_vec();
+        if bytes.len() as u64 != known_size {
+            return Err(BorsukError::InvalidStorage(format!(
+                "object `{relative}` returned {} bytes, expected {known_size}",
+                bytes.len()
+            )));
+        }
+        let actual_checksum = blake3::hash(&bytes).to_hex().to_string();
+        if actual_checksum != expected_checksum {
+            return Err(BorsukError::ChecksumMismatch {
+                path: relative.to_string(),
+                expected: expected_checksum.to_string(),
+                actual: actual_checksum,
+            });
+        }
+        self.storage_trace
+            .record(StorageAccessEvent::observed_read(
+                relative,
+                physical_format_for_path(relative),
+                known_size,
+                1,
+                bytes.len() as u64,
+            ))?;
+        Ok(ReadBytes {
+            bytes,
+            cache_hit: false,
+            cache_repaired: false,
+        })
+    }
+
     pub(crate) fn prefetch_read_bytes_with_cache_status_and_checksum(
         &self,
         relative: String,
@@ -7100,6 +7143,42 @@ mod tests {
         assert_eq!(
             storage.request_counts().delta(&requests_after_suffix).gets,
             0
+        );
+    }
+
+    #[test]
+    fn authenticated_diagnostic_backing_read_neither_consults_nor_populates_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let writer = Storage::from_uri(&file_uri(directory.path())).unwrap();
+        let payload = b"authenticated-diagnostic-payload";
+        writer.write_bytes("vectors/group.arrow", payload).unwrap();
+        fs::create_dir_all(cache.path().join("vectors")).unwrap();
+        fs::write(
+            cache.path().join("vectors/group.arrow"),
+            b"stale-cache-payload",
+        )
+        .unwrap();
+        let storage = Storage::from_uri_with_cache(
+            &file_uri(directory.path()),
+            Some(cache.path().to_path_buf()),
+        )
+        .unwrap();
+        let checksum = blake3::hash(payload).to_hex().to_string();
+
+        let read = storage
+            .read_known_size_from_backing_without_cache_with_checksum(
+                "vectors/group.arrow",
+                payload.len() as u64,
+                &checksum,
+            )
+            .unwrap();
+
+        assert_eq!(read.bytes, payload);
+        assert!(!read.cache_hit);
+        assert_eq!(
+            fs::read(cache.path().join("vectors/group.arrow")).unwrap(),
+            b"stale-cache-payload"
         );
     }
 

@@ -3471,6 +3471,20 @@ impl ResidentCellCardRoot {
     pub(crate) fn groups(&self) -> &[Arc<CellCardGroupRef>] {
         &self.groups
     }
+
+    pub(crate) fn card_indexes_by_group(&self) -> Result<Vec<Vec<usize>>> {
+        let mut indexes = vec![Vec::new(); self.groups.len()];
+        for (card_index, &group_index) in self.group_indexes.iter().enumerate() {
+            indexes
+                .get_mut(group_index as usize)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("cell-card root group index is invalid".to_string())
+                })?
+                .push(card_index);
+        }
+        Ok(indexes)
+    }
+
     pub(crate) fn card_count(&self) -> usize {
         self.cell_indexes.len()
     }

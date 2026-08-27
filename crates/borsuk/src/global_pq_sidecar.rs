@@ -2135,6 +2135,20 @@ impl ResidentGlobalCodebook {
         }
     }
 
+    pub(crate) fn all_cell_ids(&self) -> Vec<u32> {
+        match &self.routing {
+            ResidentGlobalRouting::SegmentDerived { cells, .. } => {
+                cells.iter().map(|cell| u32::from(*cell)).collect()
+            }
+            ResidentGlobalRouting::Catalog(router) => router
+                .catalog()
+                .cells
+                .iter()
+                .map(|cell| cell.cell_ordinal)
+                .collect(),
+        }
+    }
+
     pub(crate) fn catalog_router(&self) -> Option<&Arc<CatalogRouter>> {
         match &self.routing {
             ResidentGlobalRouting::Catalog(router) => Some(router),

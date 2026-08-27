@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     mem::size_of,
     ops::Range,
+    sync::Arc,
 };
 
 use crate::{
@@ -9,14 +10,21 @@ use crate::{
     global_pq_sidecar::GlobalScanQuantizer, record::RecordId,
 };
 
+pub(crate) const V21_SELECTOR_MAX_CAPACITY_BYTES: u64 = 40_000_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One preregistered V21 selector feasibility arm.
 pub struct V21FeasibilityArm {
+    /// Maximum logical rows in one projected exact bundle.
     pub bundle_row_limit: u16,
+    /// Maximum logical rows represented by one selector region.
     pub selector_span: u16,
+    /// Optional one-shot duplicate-read hedge delay.
     pub hedge_delay_ms: Option<u16>,
 }
 
 impl V21FeasibilityArm {
+    /// Validate that this arm belongs to the frozen feasibility matrix.
     pub fn validate(&self) -> Result<()> {
         if !matches!(self.bundle_row_limit, 128 | 256)
             || !matches!(self.selector_span, 32 | 64)
@@ -51,7 +59,7 @@ pub(crate) struct V21ProjectedPage {
     pub(crate) group_checksum: [u8; 32],
     pub(crate) offset: u64,
     pub(crate) physical_bytes: u64,
-    pub(crate) rows: Vec<V21ProjectedRow>,
+    pub(crate) rows: Vec<Arc<V21ProjectedRow>>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +79,7 @@ pub(crate) struct V21ProjectedBundle {
     pub(crate) group_checksum: [u8; 32],
     pub(crate) offset: u64,
     pub(crate) physical_bytes: u64,
-    pub(crate) rows: Vec<V21ProjectedRow>,
+    pub(crate) rows: Vec<Arc<V21ProjectedRow>>,
     pub(crate) regions: Vec<V21ProjectedRegion>,
 }
 
@@ -86,12 +94,66 @@ pub(crate) struct V21ProjectedDirectory {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Resource bound that stopped extension of a projected ranked prefix.
 pub enum V21LimitingBound {
+    /// Every routed bundle fit.
     Exhausted,
+    /// Adding the next bundle would exceed the primary request limit.
     Requests,
+    /// Adding the next bundle would exceed the physical-byte limit.
     Bytes,
+    /// Adding the next bundle would exceed physical amplification.
     Amplification,
+    /// The highest-ranked bundle could not fit any permitted plan.
     FirstBundle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// One query's claim-ineligible V21 feasibility evidence.
+pub struct V21FeasibilityQuerySample {
+    /// Zero-based arm position in the caller's frozen arm list.
+    pub arm_index: usize,
+    /// Zero-based query position in the caller's frozen query list.
+    pub query_index: usize,
+    /// Number of cells selected by the authenticated V20 router.
+    pub routed_cells: usize,
+    /// Logical exact rows admitted by the projected plan.
+    pub selected_rows: u32,
+    /// Projected bundles admitted by the ranked prefix.
+    pub selected_bundles: usize,
+    /// Primary S3 range requests in the projected plan.
+    pub primary_requests: usize,
+    /// Maximum actual requests including the optional single hedge.
+    pub maximum_actual_requests: usize,
+    /// Selected bundle bytes excluding coalesced gaps.
+    pub selected_bytes: u64,
+    /// Physical bytes including coalesced gaps.
+    pub physical_bytes: u64,
+    /// Ground-truth IDs covered by the selected bundles.
+    pub gt_hits: usize,
+    /// Ground-truth IDs present in the stable exact top-k result.
+    pub recall_hits: usize,
+    /// Bound that stopped further prefix extension.
+    pub limiting_bound: V21LimitingBound,
+}
+
+#[derive(Debug, Clone)]
+/// Claim-ineligible V21 feasibility evidence for one arm.
+pub struct V21FeasibilityReport {
+    /// Frozen arm authority.
+    pub arm: V21FeasibilityArm,
+    /// Number of projected exact bundles.
+    pub bundle_count: usize,
+    /// Number of compact selector regions.
+    pub region_count: usize,
+    /// Allocated capacity of every production selector slab.
+    pub projected_directory_bytes: u64,
+    /// Whether the projected selector fits the frozen 40,000,000-byte gate.
+    pub selector_within_frozen_cap: bool,
+    /// Authenticated rows represented by the directory.
+    pub rows: u64,
+    /// Arm-major, query-major samples.
+    pub samples: Vec<V21FeasibilityQuerySample>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +189,7 @@ struct V21SelectorSlabs {
     region_spreads: Vec<u16>,
     region_row_starts: Vec<u16>,
     region_row_counts: Vec<u16>,
+    cell_ids: Vec<u32>,
     cell_offsets: Vec<u32>,
 }
 
@@ -138,7 +201,10 @@ struct V21SelectorGroup {
 }
 
 impl V21SelectorSlabs {
-    fn from_bundles(bundles: &[V21ProjectedBundle]) -> Result<Self> {
+    fn from_bundles(
+        bundles: &[V21ProjectedBundle],
+        authenticated_cell_ids: &[u32],
+    ) -> Result<Self> {
         let region_count = bundles.iter().try_fold(0_usize, |total, bundle| {
             total.checked_add(bundle.regions.len()).ok_or_else(|| {
                 BorsukError::InvalidStorage("V21 selector region count overflows".to_string())
@@ -176,19 +242,22 @@ impl V21SelectorSlabs {
                 checksum,
             })
             .collect::<Vec<_>>();
-        let maximum_cell = bundles
+        let mut cell_ids = authenticated_cell_ids.to_vec();
+        cell_ids.sort_unstable();
+        cell_ids.dedup();
+        if cell_ids.is_empty() || cell_ids.len() != authenticated_cell_ids.len() {
+            return Err(BorsukError::InvalidStorage(
+                "V21 selector cell dictionary is empty or duplicated".to_string(),
+            ));
+        }
+        if bundles
             .iter()
-            .map(|bundle| bundle.cell_index)
-            .max()
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("V21 selector has no bundles".to_string())
-            })?;
-        let cell_count = usize::try_from(maximum_cell)
-            .ok()
-            .and_then(|cell| cell.checked_add(1))
-            .ok_or_else(|| {
-                BorsukError::InvalidStorage("V21 selector cell count overflows".to_string())
-            })?;
+            .any(|bundle| cell_ids.binary_search(&bundle.cell_index).is_err())
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V21 selector bundle references an unauthenticated router cell".to_string(),
+            ));
+        }
         let mut slabs = Self {
             group_dictionary,
             bundle_group_ordinals: Vec::with_capacity(bundles.len()),
@@ -202,7 +271,8 @@ impl V21SelectorSlabs {
             region_spreads: Vec::with_capacity(region_count),
             region_row_starts: Vec::with_capacity(region_count),
             region_row_counts: Vec::with_capacity(region_count),
-            cell_offsets: vec![0; cell_count + 1],
+            cell_offsets: vec![0; cell_ids.len() + 1],
+            cell_ids,
         };
         slabs.bundle_region_offsets.push(0);
         for bundle in bundles {
@@ -229,9 +299,14 @@ impl V21SelectorSlabs {
                         "V21 selector region offset exceeds u32".to_string(),
                     )
                 })?);
-            let cell = usize::try_from(bundle.cell_index).map_err(|_| {
-                BorsukError::InvalidStorage("V21 selector cell exceeds usize".to_string())
-            })?;
+            let cell = slabs
+                .cell_ids
+                .binary_search(&bundle.cell_index)
+                .map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "V21 selector bundle cell is absent from its dictionary".to_string(),
+                    )
+                })?;
             slabs.cell_offsets[cell + 1] =
                 slabs.cell_offsets[cell + 1].checked_add(1).ok_or_else(|| {
                     BorsukError::InvalidStorage("V21 selector cell rows overflow".to_string())
@@ -273,6 +348,7 @@ impl V21SelectorSlabs {
             .saturating_add(bytes(&self.region_spreads))
             .saturating_add(bytes(&self.region_row_starts))
             .saturating_add(bytes(&self.region_row_counts))
+            .saturating_add(bytes(&self.cell_ids))
             .saturating_add(bytes(&self.cell_offsets))
     }
 }
@@ -305,7 +381,7 @@ impl V21ProjectedDirectory {
     }
 
     #[cfg(test)]
-    fn selector_identity(&self) -> Vec<(u32, u32, u32, u64, u64, Vec<(Vec<u8>, u16, u16, u16)>)> {
+    fn selector_identity(&self) -> Vec<V21SelectorIdentity> {
         self.bundles
             .iter()
             .map(|bundle| {
@@ -341,6 +417,12 @@ impl V21ProjectedDirectory {
             .collect()
     }
 }
+
+#[cfg(test)]
+type V21RegionIdentity = (Vec<u8>, u16, u16, u16);
+
+#[cfg(test)]
+type V21SelectorIdentity = (u32, u32, u32, u64, u64, Vec<V21RegionIdentity>);
 
 fn f16_rounded_up(value: f32) -> Result<u16> {
     if !value.is_finite() {
@@ -601,7 +683,7 @@ pub(crate) fn plan_v21_feasibility_query(
 }
 
 fn build_projected_regions(
-    rows: &[V21ProjectedRow],
+    rows: &[Arc<V21ProjectedRow>],
     dimensions: usize,
     element_type: VectorElementType,
     normalize: bool,
@@ -712,11 +794,64 @@ fn finish_projected_bundle(
 }
 
 pub(crate) fn build_v21_projected_directory(
+    pages: Vec<V21ProjectedPage>,
+    dimensions: usize,
+    element_type: VectorElementType,
+    normalize: bool,
+    quantizer: &GlobalScanQuantizer,
+    arm: V21FeasibilityArm,
+) -> Result<V21ProjectedDirectory> {
+    let cell_ids = pages
+        .iter()
+        .map(|page| page.cell_index)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    build_v21_projected_directory_with_cell_ids(
+        pages,
+        dimensions,
+        element_type,
+        normalize,
+        quantizer,
+        &cell_ids,
+        arm,
+    )
+}
+
+pub(crate) fn build_v21_projected_directory_with_cell_count(
+    pages: Vec<V21ProjectedPage>,
+    dimensions: usize,
+    element_type: VectorElementType,
+    normalize: bool,
+    quantizer: &GlobalScanQuantizer,
+    cell_count: usize,
+    arm: V21FeasibilityArm,
+) -> Result<V21ProjectedDirectory> {
+    let cell_ids = (0..cell_count)
+        .map(|cell| {
+            u32::try_from(cell).map_err(|_| {
+                BorsukError::InvalidStorage("V21 selector cell count exceeds u32".to_string())
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    build_v21_projected_directory_with_cell_ids(
+        pages,
+        dimensions,
+        element_type,
+        normalize,
+        quantizer,
+        &cell_ids,
+        arm,
+    )
+}
+
+pub(crate) fn build_v21_projected_directory_with_cell_ids(
     mut pages: Vec<V21ProjectedPage>,
     dimensions: usize,
     element_type: VectorElementType,
     normalize: bool,
     quantizer: &GlobalScanQuantizer,
+    authenticated_cell_ids: &[u32],
     arm: V21FeasibilityArm,
 ) -> Result<V21ProjectedDirectory> {
     arm.validate()?;
@@ -818,7 +953,7 @@ pub(crate) fn build_v21_projected_directory(
                 .saturating_add(row.exact.capacity() as u64)
         })
     });
-    let selector_slabs = V21SelectorSlabs::from_bundles(&bundles)?;
+    let selector_slabs = V21SelectorSlabs::from_bundles(&bundles, authenticated_cell_ids)?;
     let selector_capacity_bytes = selector_slabs.capacity_bytes();
     Ok(V21ProjectedDirectory {
         selector_capacity_bytes,
@@ -832,10 +967,13 @@ pub(crate) fn build_v21_projected_directory(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{
-        V21FeasibilityArm, V21LimitingBound, V21ProjectedBundle, V21ProjectedDirectory,
-        V21ProjectedPage, V21ProjectedRegion, V21ProjectedRow, V21SelectorSlabs,
-        build_v21_projected_directory, plan_v21_feasibility_query,
+        V21_SELECTOR_MAX_CAPACITY_BYTES, V21FeasibilityArm, V21LimitingBound, V21ProjectedBundle,
+        V21ProjectedDirectory, V21ProjectedPage, V21ProjectedRegion, V21ProjectedRow,
+        V21SelectorSlabs, build_v21_projected_directory,
+        build_v21_projected_directory_with_cell_count, plan_v21_feasibility_query,
     };
     use crate::{
         VectorElementType,
@@ -887,8 +1025,7 @@ mod tests {
         }
     }
 
-    fn projected_page(
-        quantizer: &GlobalScanQuantizer,
+    struct ProjectedPageSpec {
         cell_index: u32,
         leaf_ordinal: u32,
         group_ordinal: u32,
@@ -896,7 +1033,38 @@ mod tests {
         first_source_ordinal: u64,
         rows: usize,
         dimensions: usize,
+    }
+
+    macro_rules! projected_page {
+        ($quantizer:expr, $cell:expr, $leaf:expr, $group:expr, $offset:expr, $source:expr, $rows:expr, $dimensions:expr $(,)?) => {
+            projected_page_from_spec(
+                $quantizer,
+                ProjectedPageSpec {
+                    cell_index: $cell,
+                    leaf_ordinal: $leaf,
+                    group_ordinal: $group,
+                    offset: $offset,
+                    first_source_ordinal: $source,
+                    rows: $rows,
+                    dimensions: $dimensions,
+                },
+            )
+        };
+    }
+
+    fn projected_page_from_spec(
+        quantizer: &GlobalScanQuantizer,
+        spec: ProjectedPageSpec,
     ) -> V21ProjectedPage {
+        let ProjectedPageSpec {
+            cell_index,
+            leaf_ordinal,
+            group_ordinal,
+            offset,
+            first_source_ordinal,
+            rows,
+            dimensions,
+        } = spec;
         V21ProjectedPage {
             cell_index,
             leaf_ordinal,
@@ -907,11 +1075,11 @@ mod tests {
             physical_bytes: u64::try_from(rows).unwrap() * 100,
             rows: (0..rows)
                 .map(|row| {
-                    projected_row(
+                    Arc::new(projected_row(
                         quantizer,
                         first_source_ordinal + u64::try_from(row).unwrap(),
                         dimensions,
-                    )
+                    ))
                 })
                 .collect(),
         }
@@ -959,7 +1127,7 @@ mod tests {
                     group_checksum: [u8::try_from(group_ordinal).unwrap(); 32],
                     offset,
                     physical_bytes,
-                    rows: vec![row],
+                    rows: vec![Arc::new(row)],
                     regions: vec![V21ProjectedRegion {
                         centroid_code: quantizer.encode(&vector).unwrap(),
                         spread_bits: half::f16::from_f32(0.0).to_bits(),
@@ -969,7 +1137,7 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        let selector_slabs = V21SelectorSlabs::from_bundles(&bundles).unwrap();
+        let selector_slabs = V21SelectorSlabs::from_bundles(&bundles, &[0]).unwrap();
         V21ProjectedDirectory {
             selector_capacity_bytes: selector_slabs.capacity_bytes(),
             diagnostic_working_set_bytes: 0,
@@ -1048,7 +1216,7 @@ mod tests {
         let quantizer = test_quantizer(2);
         let mut pages = (0..8)
             .map(|block| {
-                projected_page(
+                projected_page!(
                     &quantizer,
                     7,
                     block,
@@ -1060,7 +1228,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        pages.push(projected_page(&quantizer, 7, 8, 4, 0, 256, 1, 2));
+        pages.push(projected_page!(&quantizer, 7, 8, 4, 0, 256, 1, 2));
         let canonical_pages = pages.clone();
         pages.reverse();
 
@@ -1112,8 +1280,8 @@ mod tests {
     fn v21_projected_directory_derives_high_dimension_bundle_rows_from_payload() {
         let quantizer = test_quantizer(768);
         let pages = vec![
-            projected_page(&quantizer, 4, 0, 2, 0, 0, 32, 768),
-            projected_page(&quantizer, 4, 1, 2, 3_200, 32, 32, 768),
+            projected_page!(&quantizer, 4, 0, 2, 0, 0, 32, 768),
+            projected_page!(&quantizer, 4, 1, 2, 3_200, 32, 32, 768),
         ];
 
         let directory = build_v21_projected_directory(
@@ -1138,9 +1306,9 @@ mod tests {
     fn v21_projected_directory_does_not_merge_physical_or_ordinal_gaps() {
         let quantizer = test_quantizer(2);
         let pages = vec![
-            projected_page(&quantizer, 1, 0, 9, 0, 0, 1, 2),
-            projected_page(&quantizer, 1, 1, 9, 200, 1, 1, 2),
-            projected_page(&quantizer, 1, 3, 9, 300, 2, 1, 2),
+            projected_page!(&quantizer, 1, 0, 9, 0, 0, 1, 2),
+            projected_page!(&quantizer, 1, 1, 9, 200, 1, 1, 2),
+            projected_page!(&quantizer, 1, 3, 9, 300, 2, 1, 2),
         ];
 
         let directory = build_v21_projected_directory(
@@ -1163,7 +1331,7 @@ mod tests {
     #[test]
     fn v21_projected_directory_charges_group_dictionary_payload() {
         let quantizer = test_quantizer(2);
-        let short = vec![projected_page(&quantizer, 1, 0, 9, 0, 0, 1, 2)];
+        let short = vec![projected_page!(&quantizer, 1, 0, 9, 0, 0, 1, 2)];
         let mut long = short.clone();
         long[0].group_path = format!("groups/9/{}/bundle.arrow", "nested".repeat(40));
         let arm = V21FeasibilityArm {
@@ -1197,6 +1365,73 @@ mod tests {
             vec![(9, "groups/9/bundle.arrow".to_string(), [9; 32])]
         );
         assert!(long.selector_capacity_bytes > short.selector_capacity_bytes);
+    }
+
+    #[test]
+    fn v21_projected_page_clones_share_authenticated_row_storage() {
+        let quantizer = test_quantizer(2);
+        let page = projected_page!(&quantizer, 1, 0, 9, 0, 0, 1, 2);
+        let cloned = page.clone();
+
+        assert!(std::sync::Arc::ptr_eq(&page.rows[0], &cloned.rows[0]));
+    }
+
+    #[test]
+    fn v21_projected_directory_charges_every_authenticated_router_cell_offset() {
+        let quantizer = test_quantizer(2);
+        let arm = V21FeasibilityArm {
+            bundle_row_limit: 256,
+            selector_span: 64,
+            hedge_delay_ms: None,
+        };
+        let page = projected_page!(&quantizer, 1, 0, 9, 0, 0, 1, 2);
+
+        let compact = build_v21_projected_directory_with_cell_count(
+            vec![page.clone()],
+            2,
+            VectorElementType::Float32,
+            false,
+            &quantizer,
+            2,
+            arm,
+        )
+        .unwrap();
+        let publication_shape = build_v21_projected_directory_with_cell_count(
+            vec![page],
+            2,
+            VectorElementType::Float32,
+            false,
+            &quantizer,
+            16_384,
+            arm,
+        )
+        .unwrap();
+
+        assert_eq!(
+            publication_shape.selector_capacity_bytes - compact.selector_capacity_bytes,
+            (16_384_u64 - 2) * 2 * size_of::<u32>() as u64
+        );
+    }
+
+    #[test]
+    fn v21_projected_directory_records_selector_capacity_above_frozen_ram_gate() {
+        let quantizer = test_quantizer(2);
+        let directory = build_v21_projected_directory_with_cell_count(
+            vec![projected_page!(&quantizer, 0, 0, 9, 0, 0, 1, 2)],
+            2,
+            VectorElementType::Float32,
+            false,
+            &quantizer,
+            5_000_000,
+            V21FeasibilityArm {
+                bundle_row_limit: 256,
+                selector_span: 64,
+                hedge_delay_ms: None,
+            },
+        )
+        .unwrap();
+
+        assert!(directory.selector_capacity_bytes > V21_SELECTOR_MAX_CAPACITY_BYTES);
     }
 
     #[test]
