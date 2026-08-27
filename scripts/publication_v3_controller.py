@@ -672,7 +672,7 @@ def run_execution_job(
                     raise ValueError("execution receipt differs from frozen authority")
                 _require_upload_reconciliation_count(value)
                 if expected.get("runtime_profile") is not None:
-                    digest_fields = ["execution_contract_sha256"]
+                    digest_fields = ["binary_sha256", "execution_contract_sha256"]
                     if expected["runtime_profile"] == "concurrency":
                         digest_fields.extend(
                             (
@@ -720,6 +720,17 @@ def run_execution_job(
                         for field in digest_fields
                     ):
                         raise ValueError("execution receipt artifact digest is invalid")
+                    if expected.get("v21_feasibility") is True:
+                        memory_peak = value.get("memory_peak_bytes")
+                        if (
+                            isinstance(memory_peak, bool)
+                            or not isinstance(memory_peak, int)
+                            or memory_peak <= 0
+                            or memory_peak > expected.get("memory_max_bytes", 0)
+                        ):
+                            raise ValueError(
+                                "V21 execution receipt memory peak is invalid"
+                            )
                 if job.role == "build" and value.get("index_uri") != job.index_uri:
                     raise ValueError("build receipt differs from scheduled index")
                 return value
@@ -1112,6 +1123,7 @@ def prepare_qualification_execution(
     diagnostic_timeout_seconds: int = 1_200,
     diagnostic_read_nprobes: tuple[int, ...] | None = None,
     diagnostic_read_candidates: tuple[int, ...] | None = None,
+    v21_base_authority: BaseIndexAuthority | None = None,
 ) -> PreparedExecution:
     """Prepare one immutable build or small-runtime qualification execution."""
 
@@ -1144,6 +1156,10 @@ def prepare_qualification_execution(
     lifecycle_diagnostic = operation == "diagnose-lifecycle"
     read_diagnostic = operation == "diagnose-read"
     v21_feasibility = operation == "diagnose-v21-selector"
+    if v21_feasibility != isinstance(v21_base_authority, BaseIndexAuthority):
+        raise ValueError(
+            "V21 selector diagnostic requires its exact base-index authority"
+        )
     diagnostic = lifecycle_diagnostic or read_diagnostic
     effective_arm_index = (
         13
@@ -1369,27 +1385,60 @@ def prepare_qualification_execution(
         maximum = int(normalized["budget_contract"]["max_index_build_seconds"])
         role = "build"
     else:
-        build_cell = (
-            borsuk_cell(
-                normalized,
-                workload_id=str(workload_id),
-                dataset_id=selected_dataset,
+        worker_base_authority = None
+        if v21_feasibility:
+            assert v21_base_authority is not None
+            if build_attempt != v21_base_authority.build_attempt:
+                raise ValueError("V21 build attempt differs from base-index authority")
+            base_cell = borsuk_cell(
+                v21_base_authority.manifest,
+                workload_id="standard-ann-read",
+                dataset_id="deep-image-96",
                 repetition_id="r01",
-                build_attempt=build_attempt,
+                build_attempt=v21_base_authority.build_attempt,
             )
-            if generic_read
-            else cell
-        )
-        build_job = ExecutionJob.build(build_cell, attempt=build_attempt)
-        authority = completed_build_authority(
-            build_job,
-            aws=aws,
-            expected={
-                "source_archive_sha256": source_sha256,
-                "manifest_sha256": manifest_sha256,
-                "protocol_sha256": build_protocol_sha256 or protocol_sha256,
-            },
-        )
+            authority = {
+                "build_prefix": v21_base_authority.build_prefix,
+                "binary_sha256": None,
+            }
+            worker_base_authority = {
+                "manifest_uri": v21_base_authority.manifest_uri,
+                "manifest_sha256": v21_base_authority.manifest_sha256,
+                "protocol_uri": v21_base_authority.protocol_uri,
+                "protocol_sha256": v21_base_authority.protocol_sha256,
+                "build_terminal_uri": v21_base_authority.build_terminal_uri,
+                "build_terminal_sha256": (v21_base_authority.build_terminal_sha256),
+                "build_prefix": v21_base_authority.build_prefix,
+                "source_archive_sha256": (v21_base_authority.source_archive_sha256),
+                "cell": base_cell,
+                "index_id": v21_base_authority.index_id,
+                "index_uri": v21_base_authority.index_uri,
+                "index_receipt_sha256": (v21_base_authority.index_receipt_sha256),
+                "object_roster_sha256": (v21_base_authority.object_roster_sha256),
+                "inventory_sha256": v21_base_authority.inventory_sha256,
+            }
+        else:
+            build_cell = (
+                borsuk_cell(
+                    normalized,
+                    workload_id=str(workload_id),
+                    dataset_id=selected_dataset,
+                    repetition_id="r01",
+                    build_attempt=build_attempt,
+                )
+                if generic_read
+                else cell
+            )
+            build_job = ExecutionJob.build(build_cell, attempt=build_attempt)
+            authority = completed_build_authority(
+                build_job,
+                aws=aws,
+                expected={
+                    "source_archive_sha256": source_sha256,
+                    "manifest_sha256": manifest_sha256,
+                    "protocol_sha256": build_protocol_sha256 or protocol_sha256,
+                },
+            )
         worker = runtime_worker_script(
             job=job,
             source_uri=source_uri,
@@ -1432,14 +1481,16 @@ def prepare_qualification_execution(
                 diagnostic_read_candidates if read_diagnostic else None
             ),
             v21_feasibility=v21_feasibility,
+            v21_base_authority=worker_base_authority,
         )
         maximum = (
             diagnostic_timeout_seconds
             if lifecycle_diagnostic
             else int(normalized["budget_contract"]["max_cell_seconds"])
         )
-        role = "runtime"
-        expected["binary_sha256"] = authority["binary_sha256"]
+        role = "diagnostic" if v21_feasibility else "runtime"
+        if not v21_feasibility:
+            expected["binary_sha256"] = authority["binary_sha256"]
         expected["runtime_profile"] = runtime_profile
         expected["arm_index"] = effective_arm_index
         expected["max_active_searches"] = max_active_searches
@@ -1466,9 +1517,33 @@ def prepare_qualification_execution(
                 diagnostic_read_candidates or ()
             )
         elif v21_feasibility:
+            assert v21_base_authority is not None
             expected["claim_eligible"] = False
             expected["v21_feasibility"] = True
-            expected["flow_control_authority"] = "requested-systemd-enforced"
+            expected.update(
+                {
+                    "base_build_terminal_sha256": (
+                        v21_base_authority.build_terminal_sha256
+                    ),
+                    "base_manifest_sha256": v21_base_authority.manifest_sha256,
+                    "base_protocol_sha256": v21_base_authority.protocol_sha256,
+                    "base_source_archive_sha256": (
+                        v21_base_authority.source_archive_sha256
+                    ),
+                    "base_index_receipt_sha256": (
+                        v21_base_authority.index_receipt_sha256
+                    ),
+                    "base_object_roster_sha256": (
+                        v21_base_authority.object_roster_sha256
+                    ),
+                    "base_inventory_sha256": v21_base_authority.inventory_sha256,
+                    "base_index_id": v21_base_authority.index_id,
+                    "base_index_uri": v21_base_authority.index_uri,
+                    "diagnostic_source_archive_sha256": source_sha256,
+                    "memory_max_bytes": 34_359_738_368,
+                    "memory_swap_max_bytes": 0,
+                }
+            )
     request = build_launch_request(
         normalized,
         role=role,

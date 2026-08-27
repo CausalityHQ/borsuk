@@ -276,9 +276,7 @@ def collect_runtime_attestation(
     cgroup_root = _current_cgroup_root(
         proc_self_cgroup=proc_self_cgroup, cgroup_mount=cgroup_mount
     )
-    vcpus = _effective_cpu_count(
-        cgroup_root=cgroup_root, cgroup_mount=cgroup_mount
-    )
+    vcpus = _effective_cpu_count(cgroup_root=cgroup_root, cgroup_mount=cgroup_mount)
     memory_max_bytes = _read_cgroup_integer(cgroup_root, "memory.max")
     memory_peak_bytes = _read_cgroup_integer(cgroup_root, "memory.peak")
     oom_events, oom_kill_events = _read_memory_events(cgroup_root)
@@ -325,8 +323,15 @@ def _positive(value: object, role: str) -> int:
 
 
 def validate_runtime_attestation(
-    value: object, *, cell: dict[str, object], attempt_id: str
+    value: object,
+    *,
+    cell: dict[str, object],
+    attempt_id: str,
+    resource_role: str = "runtime",
+    expected_memory_max_bytes: int | None = None,
 ) -> dict[str, object]:
+    if resource_role not in {"runtime", "diagnostic"}:
+        raise ValueError("runtime attestation resource role is invalid")
     if not isinstance(value, dict) or frozenset(value) != FIELDS:
         raise ValueError("runtime attestation fields differ")
     if value["schema_version"] != 2:
@@ -339,21 +344,49 @@ def validate_runtime_attestation(
         environment.get("runtime_clients") if isinstance(environment, dict) else None
     )
     client = clients.get(system) if isinstance(clients, dict) else None
-    storage = (
-        environment.get("runtime_storage") if isinstance(environment, dict) else None
+    build_workers = (
+        environment.get("build_workers") if isinstance(environment, dict) else None
     )
-    if not isinstance(client, dict) or not isinstance(storage, dict):
+    resource = (
+        client
+        if resource_role == "runtime"
+        else build_workers.get(system)
+        if isinstance(build_workers, dict)
+        else None
+    )
+    storage = (
+        environment.get(
+            "runtime_storage" if resource_role == "runtime" else "build_storage"
+        )
+        if isinstance(environment, dict)
+        else None
+    )
+    if (
+        not isinstance(client, dict)
+        or not isinstance(resource, dict)
+        or not isinstance(storage, dict)
+    ):
         raise ValueError("runtime attestation has no scheduled host contract")
-    if value["instance_type"] != client.get("instance_type"):
+    if value["instance_type"] != resource.get("instance_type"):
         raise ValueError("runtime instance type differs from its contract")
     if value["purchase_option"] not in {"spot", "on-demand"}:
         raise ValueError("runtime purchase option is invalid")
     if value["architecture"] != environment.get("architecture"):
         raise ValueError("runtime architecture differs from its contract")
-    if _positive(value["vcpus"], "runtime vCPUs") != client.get("vcpus"):
+    if _positive(value["vcpus"], "runtime vCPUs") != resource.get("vcpus"):
         raise ValueError("runtime vCPUs differ from their contract")
     memory_max = _positive(value["memory_max_bytes"], "runtime memory maximum")
-    if memory_max != client.get("memory_mib") * 1024 * 1024:
+    required_memory_max = (
+        client.get("memory_mib") * 1024 * 1024
+        if resource_role == "runtime"
+        else expected_memory_max_bytes
+    )
+    if (
+        isinstance(required_memory_max, bool)
+        or not isinstance(required_memory_max, int)
+        or required_memory_max <= 0
+        or memory_max != required_memory_max
+    ):
         raise ValueError("runtime cgroup memory differs from its contract")
     if _positive(value["memory_peak_bytes"], "runtime memory peak") > memory_max:
         raise ValueError("runtime memory peak exceeds its cgroup")

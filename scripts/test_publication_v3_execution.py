@@ -765,6 +765,27 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             "v21_summary_sha256",
         ):
             self.assertIn(field, script)
+        self.assertIn("-p MemoryMax=34359738368 -p MemorySwapMax=0", script)
+        self.assertIn("--property=MemoryMax --value", script)
+        self.assertIn("--property=MemorySwapMax --value", script)
+        self.assertIn("--property=MemoryPeak --value", script)
+        self.assertNotIn("requested-systemd-enforced", script)
+        for field in (
+            "base_build_terminal_sha256",
+            "base_manifest_sha256",
+            "base_protocol_sha256",
+            "base_source_archive_sha256",
+            "base_index_receipt_sha256",
+            "base_object_roster_sha256",
+            "base_inventory_sha256",
+            "base_index_id",
+            "base_index_uri",
+            "diagnostic_source_archive_sha256",
+            "memory_max_bytes",
+            "memory_swap_max_bytes",
+            "memory_peak_bytes",
+        ):
+            self.assertIn(field, script)
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )

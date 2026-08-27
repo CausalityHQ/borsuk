@@ -16,7 +16,9 @@ from scripts.test_publication_v3_protocol import paid_v3_manifest
 
 
 class PublicationV3AttestationTests(unittest.TestCase):
-    def test_effective_cpu_count_rejects_affinity_outside_inherited_cpuset(self) -> None:
+    def test_effective_cpu_count_rejects_affinity_outside_inherited_cpuset(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as root:
             mount = Path(root) / "cgroup"
             leaf = mount / "system.slice" / "run-u12.service"
@@ -83,11 +85,14 @@ class PublicationV3AttestationTests(unittest.TestCase):
                 "0::/runtime.slice/run-u12.service\n", encoding="utf-8"
             )
             runtime = {
-                "steps":
-                [{"env": {
-                    "BORSUK_BENCH_CACHE": str(cache),
-                    "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": "0",
-                }}]
+                "steps": [
+                    {
+                        "env": {
+                            "BORSUK_BENCH_CACHE": str(cache),
+                            "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": "0",
+                        }
+                    }
+                ]
             }
 
             def identity_after_transient_unit_cleanup() -> dict[str, object]:
@@ -165,9 +170,9 @@ class PublicationV3AttestationTests(unittest.TestCase):
             "oom_kill_events": 0,
             "cache_capacity_bytes": client["disk_cache_limit_mib"] * 1024 * 1024,
             "effective_disk_cache_max_bytes": 0,
-            "cache_filesystem_bytes": cell["environment_contract"][
-                "runtime_storage"
-            ]["volume_size_gib"]
+            "cache_filesystem_bytes": cell["environment_contract"]["runtime_storage"][
+                "volume_size_gib"
+            ]
             * 1024
             * 1024
             * 1024,
@@ -207,6 +212,69 @@ class PublicationV3AttestationTests(unittest.TestCase):
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 validate_runtime_attestation(
                     mutation, cell=cell, attempt_id="attempt-01"
+                )
+
+    def test_v21_diagnostic_attestation_uses_build_host_and_bounded_cgroup(
+        self,
+    ) -> None:
+        cell = next(
+            cell
+            for cell in build_schedule_document(validate_manifest(paid_v3_manifest()))[
+                "cells"
+            ]
+            if cell["system"] == "borsuk" and cell["workload"]["kind"] == "read-recall"
+        )
+        runtime_client = cell["environment_contract"]["runtime_clients"]["borsuk"]
+        build_worker = cell["environment_contract"]["build_workers"]["borsuk"]
+        value = {
+            "schema_version": 2,
+            "cell_id": cell["cell_id"],
+            "attempt_id": "v21-attempt-01",
+            "instance_id": "i-diagnostic-01",
+            "instance_type": build_worker["instance_type"],
+            "purchase_option": "spot",
+            "architecture": "aarch64",
+            "vcpus": build_worker["vcpus"],
+            "memory_max_bytes": 32 * 1024**3,
+            "memory_peak_bytes": 12 * 1024**3,
+            "swap_max_bytes": 0,
+            "swap_current_bytes": 0,
+            "swap_peak_bytes": 0,
+            "oom_events": 0,
+            "oom_kill_events": 0,
+            "cache_capacity_bytes": runtime_client["disk_cache_limit_mib"] * 1024**2,
+            "effective_disk_cache_max_bytes": 0,
+            "cache_filesystem_bytes": cell["environment_contract"]["build_storage"][
+                "volume_size_gib"
+            ]
+            * 1024**3,
+            "cache_device": "259:1",
+            "root_device": "259:0",
+            "cache_is_mount": True,
+            "source_revision": str(cell["source"]["git_commit"]),
+        }
+        self.assertEqual(
+            validate_runtime_attestation(
+                value,
+                cell=cell,
+                attempt_id="v21-attempt-01",
+                resource_role="diagnostic",
+                expected_memory_max_bytes=32 * 1024**3,
+            ),
+            value,
+        )
+        for mutation in (
+            {**value, "instance_type": "c7g.xlarge"},
+            {**value, "vcpus": 4},
+            {**value, "memory_max_bytes": 8 * 1024**3},
+        ):
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                validate_runtime_attestation(
+                    mutation,
+                    cell=cell,
+                    attempt_id="v21-attempt-01",
+                    resource_role="diagnostic",
+                    expected_memory_max_bytes=32 * 1024**3,
                 )
 
 

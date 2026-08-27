@@ -352,11 +352,15 @@ def build_execution_plan(
         diagnostic_read_nprobes,
         diagnostic_read_candidates,
     )
-    if type(v21_feasibility) is not bool or v21_feasibility and (
-        mode != "runtime"
-        or runtime_profile != "recall"
-        or diagnostic_write_ops is not None
-        or any(value is not None for value in read_diagnostic_values)
+    if (
+        type(v21_feasibility) is not bool
+        or v21_feasibility
+        and (
+            mode != "runtime"
+            or runtime_profile != "recall"
+            or diagnostic_write_ops is not None
+            or any(value is not None for value in read_diagnostic_values)
+        )
     ):
         raise ValueError("V21 feasibility mode must be an exclusive recall runtime")
     if any(value is not None for value in read_diagnostic_values):
@@ -930,13 +934,10 @@ def authorize_publication_runtime(
             raise ValueError(
                 "runtime index URI differs from the immutable build receipt"
             )
-        if (
-            environment.get("BORSUK_BENCH_BUILD_INDEX") != "0"
-            and not (
-                v21_feasibility
-                and "BORSUK_BENCH_BUILD_INDEX" not in environment
-                and environment.get("BORSUK_BENCH_V21_FEASIBILITY") == "1"
-            )
+        if environment.get("BORSUK_BENCH_BUILD_INDEX") != "0" and not (
+            v21_feasibility
+            and "BORSUK_BENCH_BUILD_INDEX" not in environment
+            and environment.get("BORSUK_BENCH_V21_FEASIBILITY") == "1"
         ):
             raise ValueError("publication runtime must disable index construction")
         for forbidden in (
@@ -1162,9 +1163,7 @@ def runtime_expected_cache_cohort_size(
     if type(disk_cache_max_bytes) is not int or disk_cache_max_bytes <= 0:
         raise ValueError("runtime cache cohort authority is invalid")
     if runtime_profile in {"recall", "concurrency"}:
-        return disk_cached_cohort_authority(
-            disk_cache_max_bytes, effective_queries
-        )[0]
+        return disk_cached_cohort_authority(disk_cache_max_bytes, effective_queries)[0]
     raise ValueError("runtime cache cohort authority is invalid")
 
 
@@ -1192,9 +1191,7 @@ def smoke_cache_cohort_authority(
         )
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("smoke cache cohort authority is invalid") from error
-    return disk_cached_cohort_authority(
-        disk_cache_max_bytes, expected_queries
-    )[0]
+    return disk_cached_cohort_authority(disk_cache_max_bytes, expected_queries)[0]
 
 
 def summarize_v21_feasibility_artifacts(
@@ -1368,8 +1365,7 @@ def summarize_v21_feasibility_artifacts(
         or summary.get("index_id") != expected_index_id
         or summary.get("dataset_id") != expected_dataset_id
         or parse_int(summary.get("arm_count"), "arm count") != 12
-        or parse_int(summary.get("sample_count"), "sample count")
-        != len(sample_rows)
+        or parse_int(summary.get("sample_count"), "sample count") != len(sample_rows)
     ):
         raise ValueError("V21 feasibility authority differs")
     require_digest(expected_source_archive_sha256, "source digest")
@@ -1470,15 +1466,9 @@ def summarize_v21_feasibility_artifacts(
                 raise ValueError("V21 sample identity or order differs")
             rows = parse_int(sample["selected_rows"], "selected rows")
             requests = parse_int(sample["maximum_actual_requests"], "requests")
-            primary_requests = parse_int(
-                sample["primary_requests"], "primary requests"
-            )
-            routed_cells = parse_int(
-                sample["routed_cells"], "routed cells", minimum=1
-            )
-            selected_bundles = parse_int(
-                sample["selected_bundles"], "selected bundles"
-            )
+            primary_requests = parse_int(sample["primary_requests"], "primary requests")
+            routed_cells = parse_int(sample["routed_cells"], "routed cells", minimum=1)
+            selected_bundles = parse_int(sample["selected_bundles"], "selected bundles")
             physical = parse_int(sample["physical_bytes"], "physical bytes")
             selected = parse_int(sample["selected_bytes"], "selected bytes")
             sample_gt_hits = parse_int(sample["gt_hits"], "GT hits")
@@ -1545,8 +1535,7 @@ def summarize_v21_feasibility_artifacts(
             parse_int(arm["baseline_rss_bytes"], "baseline RSS") != baseline_rss
             or parse_int(arm["projected_query_transient_bytes"], "transient bytes")
             != maximum_transient
-            or parse_int(arm["projected_peak_rss_bytes"], "peak RSS")
-            != projected_peak
+            or parse_int(arm["projected_peak_rss_bytes"], "peak RSS") != projected_peak
             or parse_float(arm["gt_coverage"], "GT coverage") != gt_coverage
             or parse_float(arm["recall_at_10"], "recall") != recall
             or parse_int(arm["maximum_actual_requests"], "maximum requests")
@@ -2227,7 +2216,9 @@ def reconcile_read_storage_trace(
     ):
         counter(trace, field)
     if trace_gets < measured_gets or trace_bytes < measured_bytes:
-        raise ValueError("complete read storage trace is smaller than measured query I/O")
+        raise ValueError(
+            "complete read storage trace is smaller than measured query I/O"
+        )
     return {
         "excluded_setup_storage_gets": trace_gets - measured_gets,
         "excluded_setup_storage_bytes_read": trace_bytes - measured_bytes,
@@ -2964,9 +2955,7 @@ def build_publication_report(
     )
     if frozenset(runtime_storage_trace) != expected_storage_trace_fields:
         raise ValueError("publication runtime storage trace fields differ")
-    setup_storage = reconcile_read_storage_trace(
-        query_metrics, runtime_storage_trace
-    )
+    setup_storage = reconcile_read_storage_trace(query_metrics, runtime_storage_trace)
     result = {
         "schema_version": 4,
         "status": "complete",
@@ -2987,9 +2976,7 @@ def build_publication_report(
             "storage_gets": query_metrics["storage_gets"],
             "storage_puts": runtime_storage_trace["storage_puts"],
             "storage_bytes_read": query_metrics["storage_bytes_read"],
-            "storage_bytes_written": runtime_storage_trace[
-                "storage_bytes_written"
-            ],
+            "storage_bytes_written": runtime_storage_trace["storage_bytes_written"],
             **setup_storage,
             "throughput_milli_per_second": max(
                 1,
@@ -3265,6 +3252,8 @@ def main() -> int:
     parser.add_argument("--diagnostic-read-nprobes", type=_positive_integer_tuple)
     parser.add_argument("--diagnostic-read-candidates", type=_positive_integer_tuple)
     parser.add_argument("--v21-feasibility", action="store_true")
+    parser.add_argument("--v21-diagnostic-protocol", type=Path)
+    parser.add_argument("--v21-diagnostic-manifest", type=Path)
     args = parser.parse_args()
 
     runtime_flow_control = runtime_flow_control_authority(
@@ -3287,6 +3276,22 @@ def main() -> int:
     )
 
     cell = read_protocol(args.protocol)
+    diagnostic_cell = None
+    if args.v21_feasibility:
+        if (
+            args.v21_diagnostic_protocol is None
+            or args.v21_diagnostic_manifest is None
+        ):
+            raise ValueError("V21 feasibility requires diagnostic source authority")
+        diagnostic_cell = read_protocol(args.v21_diagnostic_protocol)
+        validate_publication_cell_authority(
+            diagnostic_cell, args.v21_diagnostic_manifest
+        )
+    elif (
+        args.v21_diagnostic_protocol is not None
+        or args.v21_diagnostic_manifest is not None
+    ):
+        raise ValueError("diagnostic source authority is V21-only")
     protocol_bytes = args.protocol.read_bytes()
     arms = plan_arms(cell)
     if args.arm_index < 0 or args.arm_index >= len(arms):
@@ -3462,16 +3467,23 @@ def main() -> int:
             raise ValueError("publication runtime workload is not implemented")
         authorized_plan = {**plan, "runtime": authorized_runtime}
         source_root = Path(__file__).resolve().parent.parent
+        attestation_cell = diagnostic_cell or cell
+        attestation_resource_role = (
+            "diagnostic" if args.v21_feasibility else "runtime"
+        )
+        attestation_memory_max = 32 * 1024**3 if args.v21_feasibility else None
         preflight = validate_runtime_attestation(
             collect_runtime_attestation(
-                cell=cell,
+                cell=attestation_cell,
                 attempt_id=str(args.attempt_id),
                 runtime=authorized_runtime,
                 source_root=source_root,
                 purchase_option=args.purchase_option,
             ),
-            cell=cell,
+            cell=attestation_cell,
             attempt_id=str(args.attempt_id),
+            resource_role=attestation_resource_role,
+            expected_memory_max_bytes=attestation_memory_max,
         )
         if preflight["instance_id"] != args.instance_identity:
             raise ValueError("runtime EC2 identity differs from its scheduled instance")
@@ -3486,20 +3498,21 @@ def main() -> int:
                 args.runtime_profile,
                 {"schema_version": 4, **runtime_flow_control},
             )
-            execution_contract["flow_control_authority"] = "requested-systemd-enforced"
             (args.workspace / "RUNTIME_EXECUTION_CONTRACT.json").write_bytes(
                 canonical_json_bytes(execution_contract) + b"\n"
             )
             runtime_attestation = validate_runtime_attestation(
                 collect_runtime_attestation(
-                    cell=cell,
+                    cell=attestation_cell,
                     attempt_id=str(args.attempt_id),
                     runtime=authorized_runtime,
                     source_root=source_root,
                     purchase_option=args.purchase_option,
                 ),
-                cell=cell,
+                cell=attestation_cell,
                 attempt_id=str(args.attempt_id),
+                resource_role=attestation_resource_role,
+                expected_memory_max_bytes=attestation_memory_max,
             )
             (args.workspace / "RUNTIME_ATTESTATION.json").write_bytes(
                 canonical_json_bytes(runtime_attestation) + b"\n"
@@ -3536,6 +3549,7 @@ def main() -> int:
             report.update(
                 {
                     "cell_id": cell["cell_id"],
+                    "diagnostic_cell_id": attestation_cell["cell_id"],
                     "attempt_id": args.attempt_id,
                     "instance_identity": args.instance_identity,
                     "dataset_materialization_sha256": (
@@ -3544,7 +3558,6 @@ def main() -> int:
                     "elapsed_ns": elapsed_ns,
                     "resources": resources,
                     "runtime_attestation": runtime_attestation,
-                    "flow_control_authority": "requested-systemd-enforced",
                 }
             )
             destination = args.workspace / "RESULT_COMPLETE.json"

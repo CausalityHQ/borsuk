@@ -228,7 +228,7 @@ def _resource_contract(
     if role == "runtime":
         resources = systems[system]
         storage = environment["runtime_storage"]
-    elif role == "build":
+    elif role in {"build", "diagnostic"}:
         resources = environment["build_workers"][system]
         storage = environment["build_storage"]
     elif role == "staging":
@@ -239,7 +239,7 @@ def _resource_contract(
         resources = environment["build_workers"]["borsuk"]
         storage = environment["build_storage"]
     else:
-        raise ValueError("instance role must be runtime, build, or staging")
+        raise ValueError("instance role must be runtime, build, diagnostic, or staging")
     return resources, storage
 
 
@@ -427,7 +427,9 @@ def build_launch_request(
     if not instance_profile_arn.startswith(expected_profile_prefix):
         raise ValueError("instance profile ARN differs from the manifest AWS account")
     budget_field = (
-        "max_cell_seconds" if role == "runtime" else "max_index_build_seconds"
+        "max_cell_seconds"
+        if role in {"runtime", "diagnostic"}
+        else "max_index_build_seconds"
     )
     maximum_seconds = int(normalized["budget_contract"][budget_field])
     if max_seconds <= 0 or max_seconds > maximum_seconds:

@@ -548,7 +548,8 @@ def runtime_worker_script(
             raise ValueError("lifecycle runtime requires an exact mutation arm")
     elif workload_kind != "read-recall" or arm is not None:
         raise ValueError("read runtime cannot carry lifecycle authority")
-    cell = job.cell
+    diagnostic_cell = job.cell
+    cell = diagnostic_cell
     base_setup = ""
     index_uri = job.index_uri
     runtime_manifest = '"$work/manifest.json"'
@@ -570,6 +571,9 @@ def runtime_worker_script(
     )
     provision_packages = "git python3.12 python3.12-pip util-linux xfsprogs"
     provision_python = '"$work/venv/bin/pip" install boto3==1.34.46'
+    memory_max_bytes = 8_589_934_592
+    systemd_run_options = "--collect"
+    cgroup_observation = ""
     if v21_feasibility:
         assert v21_base_authority is not None
         fields = {
@@ -662,11 +666,27 @@ def runtime_worker_script(
             binary_sha=$(sha256sum "$work/production_bench" | awk '{print $1}')
             """
         )
+        memory_max_bytes = 34_359_738_368
+        unit_name = f"borsuk-v21-{job.attempt:04d}.service"
+        systemd_run_options = f"--unit={unit_name}"
+        cgroup_observation = textwrap.dedent(
+            f"""\
+            actual_memory_max=$(systemctl show {_q(unit_name)} --property=MemoryMax --value)
+            actual_memory_swap_max=$(systemctl show {_q(unit_name)} --property=MemorySwapMax --value)
+            actual_memory_peak=$(systemctl show {_q(unit_name)} --property=MemoryPeak --value)
+            [[ "$actual_memory_max" =~ ^[0-9]+$ ]]
+            [[ "$actual_memory_swap_max" =~ ^[0-9]+$ ]]
+            [[ "$actual_memory_peak" =~ ^[0-9]+$ ]]
+            test "$actual_memory_max" = {memory_max_bytes}
+            test "$actual_memory_swap_max" = 0
+            test "$actual_memory_peak" -le "$actual_memory_max"
+            """
+        )
     source = cell["dataset"]["source"]
     if source.get("state") not in {"staged", "staged-generated"}:
         raise ValueError("publication runtime requires a staged dataset")
     prelude = _common_prelude(
-        source_revision=str(cell["source"]["git_commit"]),
+        source_revision=str(diagnostic_cell["source"]["git_commit"]),
         source_uri=source_uri,
         source_sha256=source_sha256,
         manifest_uri=manifest_uri,
@@ -796,6 +816,7 @@ diagnostic_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_recall_late
             """
         )
     if v21_feasibility:
+        assert v21_base_authority is not None
         diagnostic_arguments = " --v21-feasibility"
         diagnostic_validation = """actual_claim_eligible=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))[\"claim_eligible\"]))' \"$work/cell/RESULT_COMPLETE.json\")
 test \"$actual_claim_eligible\" = false
@@ -806,19 +827,40 @@ v21_result_sha=$(sha256sum \"$work/cell/RESULT_COMPLETE.json\" | awk '{print $1}
 v21_arms_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_arms.csv\" | awk '{print $1}')
 v21_samples_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_samples.csv\" | awk '{print $1}')
 v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_summary.json\" | awk '{print $1}')"""
-        diagnostic_validation += """
-actual_flow_control_authority=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.load(open(sys.argv[1]))[\"flow_control_authority\"])' \"$work/cell/RUNTIME_EXECUTION_CONTRACT.json\")
-test \"$actual_flow_control_authority\" = requested-systemd-enforced"""
         diagnostic_receipt_fields = (
             "diagnostic_fields=$(printf ',"
             '"claim_eligible":false,"v21_feasibility":true,'
-            '"flow_control_authority":"requested-systemd-enforced",'
             '"v21_result_sha256":"%s",'
             '"v21_arms_sha256":"%s",'
             '"v21_samples_sha256":"%s",'
             '"v21_summary_sha256":"%s"\' '
             '"$v21_result_sha" "$v21_arms_sha" "$v21_samples_sha" '
             '"$v21_summary_sha")'
+        )
+        v21_receipt_authority = {
+            "base_build_terminal_sha256": v21_base_authority["build_terminal_sha256"],
+            "base_manifest_sha256": v21_base_authority["manifest_sha256"],
+            "base_protocol_sha256": v21_base_authority["protocol_sha256"],
+            "base_source_archive_sha256": v21_base_authority["source_archive_sha256"],
+            "base_index_receipt_sha256": v21_base_authority["index_receipt_sha256"],
+            "base_object_roster_sha256": v21_base_authority["object_roster_sha256"],
+            "base_inventory_sha256": v21_base_authority["inventory_sha256"],
+            "base_index_id": v21_base_authority["index_id"],
+            "base_index_uri": v21_base_authority["index_uri"],
+            "diagnostic_source_archive_sha256": source_sha256,
+        }
+        v21_authority_fragment = "," + ",".join(
+            f"{json.dumps(key)}:{json.dumps(value)}"
+            for key, value in v21_receipt_authority.items()
+        )
+        diagnostic_receipt_fields += (
+            f'\ndiagnostic_fields="$diagnostic_fields{v21_authority_fragment}"'
+        )
+        diagnostic_receipt_fields += (
+            "\ndiagnostic_fields=$(printf "
+            '\'%s,"memory_max_bytes":%s,"memory_swap_max_bytes":%s,\''
+            '\'"memory_peak_bytes":%s\' "$diagnostic_fields" '
+            '"$actual_memory_max" "$actual_memory_swap_max" "$actual_memory_peak")'
         )
         diagnostic_uploads_before_result = textwrap.dedent(
             f"""\
@@ -868,8 +910,8 @@ test \"$actual_flow_control_authority\" = requested-systemd-enforced"""
         {runtime_dataset_step}stage=execute-runtime
         detail_log="$work/cell/runtime/step-00.log"
         mkdir -p "$(dirname "$detail_log")"
-        systemd-run --quiet --wait --collect --service-type=exec \
-          -p MemoryMax=8589934592 -p MemorySwapMax=0 \
+        systemd-run --quiet --wait {systemd_run_options} --service-type=exec \
+          -p MemoryMax={memory_max_bytes} -p MemorySwapMax=0 \
           -p StandardOutput=append:$detail_log -p StandardError=append:$detail_log \
           /usr/bin/python3.12 "$work/source/scripts/run_publication_v3_cell.py" {runtime_protocol} "$work/cell" \
           --mode runtime --manifest {runtime_manifest} --source-archive-sha256 {_q(runtime_source_sha256)} \
@@ -890,7 +932,8 @@ test \"$actual_flow_control_authority\" = requested-systemd-enforced"""
           --instance-identity "$instance_id" --purchase-option "$instance_purchase_option" \
           --borsuk-bench "$work/production_bench" \
           --index-receipt "$work/INDEX_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json" \
-          --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}{diagnostic_arguments}
+          --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}{diagnostic_arguments}{' --v21-diagnostic-protocol "$work/protocol.json" --v21-diagnostic-manifest "$work/manifest.json"' if v21_feasibility else ''}
+        {cgroup_observation}
         {diagnostic_validation}
         stage=publish-receipts
         immutable_upload_deadline=$((SECONDS + 600))

@@ -15,6 +15,7 @@ from pathlib import Path
 from scripts.publication_v3_aws import build_staging_receipt, staging_jobs
 from scripts.publication_v3_controller import (
     AwsCli,
+    BaseIndexAuthority,
     LaunchEnvironment,
     _minimum_lifecycle_write_ops,
     authenticate_v21_base_index_authority,
@@ -339,6 +340,88 @@ class PublicationV3ControllerTests(unittest.TestCase):
                 ),
             )
         self.assertEqual(aws.mutating_calls, [])
+
+    def test_v21_execution_uses_build_class_spot_and_binds_dual_authority(
+        self,
+    ) -> None:
+        current, historical, _base_cell, base_job, objects = (
+            self._v21_base_authority_fixture()
+        )
+
+        class AuthorityAws:
+            def read_immutable_bytes(self, uri: str, sha256: str | None) -> bytes:
+                payload = objects[uri]
+                if sha256 is not None and hashlib.sha256(payload).hexdigest() != sha256:
+                    raise ValueError("test authority digest differs")
+                return payload
+
+        base_authority = authenticate_v21_base_index_authority(
+            current_manifest=current,
+            terminal_uri=base_job.complete_uri,
+            terminal_sha256=hashlib.sha256(objects[base_job.complete_uri]).hexdigest(),
+            aws=AuthorityAws(),
+            git_is_ancestor=lambda old, new: (
+                old == historical["source"]["git_commit"]
+                and new == current["source"]["git_commit"]
+            ),
+        )
+        current_sha256 = hashlib.sha256(canonical_json_bytes(current)).hexdigest()
+        current_cell = borsuk_cell(
+            current,
+            workload_id="standard-ann-read",
+            dataset_id="deep-image-96",
+            repetition_id="r01",
+            build_attempt=1,
+        )
+        current_protocol_sha256 = hashlib.sha256(
+            canonical_json_bytes(current_cell) + b"\n"
+        ).hexdigest()
+
+        class NoAws:
+            def __getattr__(self, name: str):
+                raise AssertionError(
+                    f"prepared V21 execution reached AWS through {name}"
+                )
+
+        prepared = prepare_qualification_execution(
+            current,
+            operation="diagnose-v21-selector",
+            workload_id="standard-ann-read",
+            dataset_id="deep-image-96",
+            repetition_id="r01",
+            source_uri="s3://bucket/source/current.tar.gz",
+            source_sha256=str(current["source"]["archive_sha256"]),
+            manifest_uri="s3://bucket/manifests/current.json",
+            manifest_sha256=current_sha256,
+            protocol_uri="s3://bucket/protocols/current.json",
+            protocol_sha256=current_protocol_sha256,
+            launch=LaunchEnvironment(
+                "ami-x",
+                "subnet-x",
+                "sg-x",
+                "arn:aws:iam::453182569524:instance-profile/x",
+                "aarch64",
+                "eu-central-1",
+            ),
+            aws=NoAws(),
+            attempt=2,
+            build_attempt=1,
+            purchase_option="spot",
+            arm_index=0,
+            v21_base_authority=base_authority,
+        )
+        self.assertEqual(prepared.request["InstanceType"], "r7g.8xlarge")
+        self.assertEqual(prepared.expected["memory_max_bytes"], 34_359_738_368)
+        self.assertEqual(prepared.expected["memory_swap_max_bytes"], 0)
+        self.assertEqual(prepared.expected["base_index_id"], base_authority.index_id)
+        self.assertEqual(
+            prepared.expected["base_source_archive_sha256"],
+            base_authority.source_archive_sha256,
+        )
+        self.assertEqual(
+            prepared.expected["diagnostic_source_archive_sha256"],
+            current["source"]["archive_sha256"],
+        )
 
     def test_attempt_reconciliation_uses_exact_frozen_job_markers(self) -> None:
         class MarkerAws:
@@ -727,6 +810,26 @@ class PublicationV3ControllerTests(unittest.TestCase):
             "attempt": 2,
             "build_attempt": 1,
             "arm_index": 0,
+            "v21_base_authority": BaseIndexAuthority(
+                manifest=manifest,
+                manifest_uri="s3://bucket/manifests/base.json",
+                manifest_sha256=manifest_sha256,
+                protocol_uri="s3://bucket/protocols/base.json",
+                protocol_sha256="9" * 64,
+                source_uri="s3://bucket/source/base.tar.gz",
+                source_archive_sha256="2" * 64,
+                source_git_commit="1" * 40,
+                build_terminal_uri=build_job.complete_uri,
+                build_terminal_sha256="a" * 64,
+                build_prefix=build_job.terminal_prefix,
+                build_cell_id=str(build_cell["cell_id"]),
+                build_attempt=1,
+                index_id=index_id(build_cell),
+                index_uri=build_job.index_uri,
+                index_receipt_sha256="b" * 64,
+                object_roster_sha256="c" * 64,
+                inventory_sha256="d" * 64,
+            ),
         }
         prepared = prepare_qualification_execution(
             manifest, purchase_option="spot", **arguments
@@ -779,6 +882,8 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     "v21_arms_sha256": "2" * 64,
                     "v21_samples_sha256": "3" * 64,
                     "artifact_upload_reconciliations": 0,
+                    "binary_sha256": "8" * 64,
+                    "memory_peak_bytes": 1_024,
                 }
                 if self.complete:
                     receipt["v21_summary_sha256"] = "4" * 64

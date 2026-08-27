@@ -238,6 +238,42 @@ class PublicationV3AwsTests(unittest.TestCase):
                 max_seconds=7200,
             )
 
+    def test_v21_diagnostic_launch_uses_build_resources_with_runtime_timeout(
+        self,
+    ) -> None:
+        request = build_launch_request(
+            self.manifest,
+            role="diagnostic",
+            system="borsuk",
+            image_id="ami-0123456789abcdef0",
+            subnet_id="subnet-0123456789abcdef0",
+            security_group_id="sg-0123456789abcdef0",
+            instance_profile_arn="arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile",
+            image_architecture="aarch64",
+            subnet_region="eu-central-1",
+            campaign_id="publication-v3-20260812",
+            cell_id="runtime-v21-r01",
+            attempt=1,
+            worker_script="echo v21",
+            terminal_failure_uri=(
+                "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/"
+                "results/runtime-v21-r01/runtime-v21-feasibility/attempts/0001/"
+                "RUNTIME_TERMINAL_FAILED.json"
+            ),
+            terminal_detail_log_path="/var/lib/borsuk-publication/worker.log",
+            max_seconds=7_200,
+            purchase_option="spot",
+        )
+        self.assertEqual(request["InstanceType"], "r7g.8xlarge")
+        self.assertEqual(len(request["BlockDeviceMappings"]), 1)
+        self.assertEqual(request["BlockDeviceMappings"][0]["Ebs"]["VolumeSize"], 4096)
+        tags = {
+            item["Key"]: item["Value"]
+            for item in request["TagSpecifications"][0]["Tags"]
+        }
+        self.assertEqual(tags["Role"], "diagnostic")
+        self.assertEqual(tags["PurchaseOption"], "spot")
+
     def test_worker_supervisor_reports_failure_after_timeout_kills_worker(
         self,
     ) -> None:
