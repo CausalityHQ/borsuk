@@ -143,7 +143,7 @@ impl V22ExactPrefixAccumulator {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 /// One exact-ranked corpus row and its primary-cell routing authority.
 pub struct V22StageLExactRow {
     /// Exact metric distance to the frozen query.
@@ -158,7 +158,7 @@ pub struct V22StageLExactRow {
     pub primary_cell_routing_rank: usize,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 /// Bounded exact corpus prefix for one frozen query.
 pub struct V22StageLQueryPrefix {
     /// Zero-based query position in caller authority.
@@ -167,7 +167,7 @@ pub struct V22StageLQueryPrefix {
     pub rows: Vec<V22StageLExactRow>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 /// Claim-ineligible V22 Stage-L generation and exact-prefix evidence.
 pub struct V22StageLReport {
     /// Authenticated V20 cell-card root checksum.
@@ -205,7 +205,7 @@ pub(crate) struct V22LayoutCensusArm {
     pub(crate) exact_prefix_rows: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 /// One physical range selected by the production exact-wave planner.
 pub struct V22StageLRange {
     /// Content-addressed object path.
@@ -222,7 +222,7 @@ pub struct V22StageLRange {
     pub blocks: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 /// Exact Stage-L result for one query in one layout/prefix arm.
 pub struct V22StageLLayoutQuerySample {
     /// Zero-based query index.
@@ -265,7 +265,7 @@ pub struct V22StageLLayoutQuerySample {
     pub ranges: Vec<V22StageLRange>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 /// Canonical Stage-L arm and all query-major samples.
 pub struct V22StageLLayoutArmReport {
     /// Frozen layout family.
@@ -282,7 +282,7 @@ pub struct V22StageLLayoutArmReport {
     pub eligible: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 /// One content-addressed object emitted or referenced by a Stage-L layout.
 pub struct V22StageLProjectedObject {
     /// Object path.
@@ -3036,7 +3036,7 @@ mod tests {
             .flat_map(|card| card.iter().map(|record| record.record_id))
             .collect::<Vec<_>>();
         let census = v22_census_layout_prefix(
-            &projected,
+            projected,
             &ranked,
             EXACT_ROW_BYTES as u64,
             encoded.bytes.len() as u64,
@@ -3350,12 +3350,29 @@ mod tests {
             decoded_bytes: 384,
             record_ids: vec![10].into(),
         };
-        assert!(v22_census_layout_prefix(&[valid.clone()], &[10], 384, 1_048_576, 4, 2).is_ok());
-        assert!(v22_census_layout_prefix(&[], &[10], 384, 1_048_576, 4, 2).is_err());
-        assert!(v22_census_layout_prefix(&[valid.clone()], &[], 384, 1_048_576, 4, 2).is_err());
-        assert!(v22_census_layout_prefix(&[valid.clone()], &[11], 384, 1_048_576, 4, 2).is_err());
         assert!(
-            v22_census_layout_prefix(&[valid.clone()], &[10, 10], 384, 1_048_576, 4, 2).is_err()
+            v22_census_layout_prefix(std::slice::from_ref(&valid), &[10], 384, 1_048_576, 4, 2)
+                .is_ok()
+        );
+        assert!(v22_census_layout_prefix(&[], &[10], 384, 1_048_576, 4, 2).is_err());
+        assert!(
+            v22_census_layout_prefix(std::slice::from_ref(&valid), &[], 384, 1_048_576, 4, 2)
+                .is_err()
+        );
+        assert!(
+            v22_census_layout_prefix(std::slice::from_ref(&valid), &[11], 384, 1_048_576, 4, 2)
+                .is_err()
+        );
+        assert!(
+            v22_census_layout_prefix(
+                std::slice::from_ref(&valid),
+                &[10, 10],
+                384,
+                1_048_576,
+                4,
+                2,
+            )
+            .is_err()
         );
         let short_object = V22ProjectedUnit {
             object_encoded_bytes: 511,

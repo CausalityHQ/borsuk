@@ -48,6 +48,7 @@ from scripts.run_publication_v3_cell import (
     summarize_runtime_write_trace,
     summarize_v21_feasibility_artifacts,
     validate_and_canonicalize_v21_summary,
+    validate_and_canonicalize_v22_stage_l,
     validate_publication_cell_authority,
     validate_query_cache_cohort,
 )
@@ -96,6 +97,117 @@ def runtime_flow_control(profile: str = "recall") -> dict[str, int]:
             }
         )
     return values
+
+
+def v22_stage_l_fixture() -> tuple[dict[str, object], dict[str, object]]:
+    rows = [
+        {
+            "distance": float(record_id),
+            "record_id": record_id,
+            "canonical_record_id": list(f"row-{record_id}".encode()),
+            "primary_cell": record_id % 4,
+            "primary_cell_routing_rank": record_id % 4 + 1,
+        }
+        for record_id in range(2048)
+    ]
+    arms: list[dict[str, object]] = []
+    layouts = (
+        ("v20-physical", None),
+        ("v20-two-pivot-repacked", 32),
+        ("v20-two-pivot-repacked", 64),
+        ("semantic-within-cell", 32),
+        ("semantic-within-cell", 64),
+        ("semantic-cross-cell", 32),
+        ("semantic-cross-cell", 64),
+    )
+    for layout, microcluster_rows in layouts:
+        path = f"{layout}-{microcluster_rows}.arrow"
+        for exact_prefix_rows in (10, 256, 512, 1024, 1536, 2048):
+            useful_bytes = exact_prefix_rows * 32
+            arms.append(
+                {
+                    "layout": layout,
+                    "microcluster_rows": microcluster_rows,
+                    "exact_prefix_rows": exact_prefix_rows,
+                    "projected_objects": [
+                        {
+                            "path": path,
+                            "checksum": "1" * 64,
+                            "encoded_bytes": 65_536,
+                        }
+                    ],
+                    "query_samples": [
+                        {
+                            "query_index": 0,
+                            "exact_prefix_rows": exact_prefix_rows,
+                            "required_routing_cells": 4,
+                            "gt_cell_hits": 10,
+                            "gt_cell_coverage_ppm": 1_000_000,
+                            "routed_rows": 2048,
+                            "useful_bytes": useful_bytes,
+                            "selected_bytes": 65_536,
+                            "physical_bytes": 65_536,
+                            "speculative_bytes": 0,
+                            "requests": 1,
+                            "selected_rows": exact_prefix_rows,
+                            "packing_purity_ppm": useful_bytes * 1_000_000 // 65_536,
+                            "physical_amplification_ppm": 1_000_000,
+                            "physical_limiting_bound": "eligible",
+                            "routing_eligible": True,
+                            "limiting_bound": "eligible",
+                            "eligible": True,
+                            "ranges": [
+                                {
+                                    "path": path,
+                                    "start": 0,
+                                    "end": 65_536,
+                                    "selected_bytes": 65_536,
+                                    "rows": exact_prefix_rows,
+                                    "blocks": 1,
+                                }
+                            ],
+                        }
+                    ],
+                    "eligible": True,
+                }
+            )
+    evidence = {
+        "schema": "borsuk-v22-stage-l-layout-v1",
+        "document_kind": "publication-v3-v22-stage-l-report",
+        "claim_eligible": False,
+        "identity": {
+            "dataset_name": "deep-image-96",
+            "dataset_id": "deep-image-96",
+            "index_id": "index-authority",
+            "source_archive_sha256": "2" * 64,
+            "dimensions": 96,
+            "dataset_rows": 10_000_000,
+            "query_seed": 23_006,
+            "query_source_indices": [11],
+        },
+        "report": {
+            "v20_root_checksum": "3" * 64,
+            "v20_codebook_checksum": "4" * 64,
+            "rows": 10_000_000,
+            "routing_cell_count": 4096,
+            "query_prefixes": [{"query_index": 0, "rows": rows}],
+            "layout_censuses": arms,
+        },
+    }
+    summary = {
+        "schema": "borsuk-v22-stage-l-layout-v1",
+        "document_kind": "publication-v3-v22-stage-l-summary",
+        "claim_eligible": False,
+        "rows": 10_000_000,
+        "routing_cell_count": 4096,
+        "queries": 1,
+        "arms": 42,
+        "eligible_arms": list(range(42)),
+        "maximum_routed_rows": 2048,
+        "maximum_primary_requests": 1,
+        "maximum_primary_physical_bytes": 65_536,
+    }
+    return evidence, summary
 
 
 def v21_feasibility_fixture() -> tuple[
@@ -313,6 +425,108 @@ def query_artifact_fixture(*, decoded_bytes: int) -> dict[str, str]:
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
+    def test_v22_stage_l_accepts_struct_order_rust_json_and_float_spelling(
+        self,
+    ) -> None:
+        evidence, summary = v22_stage_l_fixture()
+        evidence["report"]["query_prefixes"][0]["rows"][0]["distance"] = 1.1920929e-7
+        rust_report = json.dumps(evidence, separators=(",", ":")).replace(
+            "1.1920929e-07", "1.1920929e-7"
+        )
+        rust_summary = json.dumps(summary, separators=(",", ":"))
+        with tempfile.TemporaryDirectory() as root:
+            report_path = Path(root) / "bench_v22_stage_l_report.json"
+            summary_path = Path(root) / "bench_v22_stage_l_summary.json"
+            report_path.write_text(rust_report + "\n")
+            summary_path.write_text(rust_summary + "\n")
+            validated = validate_and_canonicalize_v22_stage_l(
+                report_path,
+                summary_path,
+                expected_source_archive_sha256="2" * 64,
+                expected_index_id="index-authority",
+                expected_dataset_id="deep-image-96",
+                expected_queries=1,
+                expected_dataset_rows=10_000_000,
+                expected_query_seed=23_006,
+                expected_dimensions=96,
+            )
+            self.assertEqual(validated["document_kind"], "publication-v3-v22-stage-l")
+
+    def test_v22_stage_l_evidence_is_exact_claim_ineligible_and_mutation_safe(
+        self,
+    ) -> None:
+        evidence, summary = v22_stage_l_fixture()
+        with tempfile.TemporaryDirectory() as root:
+            report_path = Path(root) / "bench_v22_stage_l_report.json"
+            summary_path = Path(root) / "bench_v22_stage_l_summary.json"
+            report_path.write_bytes(canonical_json_bytes(evidence) + b"\n")
+            summary_path.write_bytes(canonical_json_bytes(summary) + b"\n")
+            report = validate_and_canonicalize_v22_stage_l(
+                report_path,
+                summary_path,
+                expected_source_archive_sha256="2" * 64,
+                expected_index_id="index-authority",
+                expected_dataset_id="deep-image-96",
+                expected_queries=1,
+                expected_dataset_rows=10_000_000,
+                expected_query_seed=23_006,
+                expected_dimensions=96,
+            )
+            self.assertEqual(report["document_kind"], "publication-v3-v22-stage-l")
+            self.assertIs(report["claim_eligible"], False)
+            self.assertEqual(report["eligible_arms"], list(range(42)))
+
+            mutated = copy.deepcopy(evidence)
+            mutated["report"]["layout_censuses"][0]["query_samples"][0][
+                "packing_purity_ppm"
+            ] += 1
+            report_path.write_bytes(canonical_json_bytes(mutated) + b"\n")
+            with self.assertRaisesRegex(ValueError, "V22"):
+                validate_and_canonicalize_v22_stage_l(
+                    report_path,
+                    summary_path,
+                    expected_source_archive_sha256="2" * 64,
+                    expected_index_id="index-authority",
+                    expected_dataset_id="deep-image-96",
+                    expected_queries=1,
+                    expected_dataset_rows=10_000_000,
+                    expected_query_seed=23_006,
+                    expected_dimensions=96,
+                )
+
+            mutated = copy.deepcopy(evidence)
+            sample = mutated["report"]["layout_censuses"][0]["query_samples"][0]
+            segment_ends = (13_107, 26_214, 39_321, 52_428, 65_536)
+            segment_starts = (0, *segment_ends[:-1])
+            sample["ranges"] = [
+                {
+                    "path": "v20-physical-None.arrow",
+                    "start": start,
+                    "end": end,
+                    "selected_bytes": end - start,
+                    "rows": 2,
+                    "blocks": 1,
+                }
+                for start, end in zip(segment_starts, segment_ends, strict=True)
+            ]
+            sample["requests"] = 5
+            report_path.write_bytes(canonical_json_bytes(mutated) + b"\n")
+            mutated_summary = copy.deepcopy(summary)
+            mutated_summary["maximum_primary_requests"] = 5
+            summary_path.write_bytes(canonical_json_bytes(mutated_summary) + b"\n")
+            with self.assertRaisesRegex(ValueError, "V22"):
+                validate_and_canonicalize_v22_stage_l(
+                    report_path,
+                    summary_path,
+                    expected_source_archive_sha256="2" * 64,
+                    expected_index_id="index-authority",
+                    expected_dataset_id="deep-image-96",
+                    expected_queries=1,
+                    expected_dataset_rows=10_000_000,
+                    expected_query_seed=23_006,
+                    expected_dimensions=96,
+                )
+
     def test_v21_summary_is_validated_before_cross_language_canonicalization(
         self,
     ) -> None:
@@ -3081,6 +3295,55 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             environment["BORSUK_BENCH_V21_DATASET_ID"], "deep-image-96"
         )
         for forbidden in (
+            "BORSUK_BENCH_BUILD_INDEX",
+            "BORSUK_BENCH_READ_ONLY",
+            "BORSUK_BENCH_RECALL_ONLY",
+            "BORSUK_BENCH_SKIP_RECALL",
+            "BORSUK_BENCH_NPROBES",
+            "BORSUK_BENCH_CANDIDATES",
+            "BORSUK_BENCH_CONCURRENCY",
+            "BORSUK_BENCH_LIMIT",
+            "BORSUK_STORAGE_TRACE",
+        ):
+            self.assertNotIn(forbidden, environment)
+
+    def test_v22_stage_l_plan_is_an_exclusive_claim_ineligible_runtime(self) -> None:
+        cell = scheduled_cell()
+        cell["workload"]["id"] = "standard-ann-read"
+        cell["dataset"]["id"] = "deep-image-96"
+        cell["dataset"]["dimensions"] = 96
+        cell["source"]["archive_sha256"] = "b" * 64
+        arm = plan_arms(cell)[0]
+        with tempfile.TemporaryDirectory() as root:
+            plan = build_execution_plan(
+                cell,
+                arm=arm,
+                workspace=Path(root),
+                generator=Path("/bin/false"),
+                borsuk_bench=Path("/bin/true"),
+                mode="runtime",
+                runtime_profile="recall",
+                runtime_flow_control=runtime_flow_control(),
+                v22_stage_l=True,
+            )
+        self.assertIs(plan["publishable"], False)
+        self.assertIs(plan["v22_stage_l"], True)
+        self.assertEqual(plan["effective_queries"], 32)
+        environment = plan["runtime"]["steps"][0]["env"]
+        self.assertEqual(environment["BORSUK_BENCH_V22_STAGE_L"], "1")
+        self.assertEqual(environment["BORSUK_BENCH_QUERIES"], "32")
+        self.assertEqual(
+            environment["BORSUK_BENCH_V22_SOURCE_ARCHIVE_SHA256"], "b" * 64
+        )
+        self.assertEqual(
+            environment["BORSUK_BENCH_V22_INDEX_ID"],
+            str(cell["index_prefix"]).rstrip("/").rsplit("/", 1)[-1],
+        )
+        self.assertEqual(
+            environment["BORSUK_BENCH_V22_DATASET_ID"], "deep-image-96"
+        )
+        for forbidden in (
+            "BORSUK_BENCH_V21_FEASIBILITY",
             "BORSUK_BENCH_BUILD_INDEX",
             "BORSUK_BENCH_READ_ONLY",
             "BORSUK_BENCH_RECALL_ONLY",

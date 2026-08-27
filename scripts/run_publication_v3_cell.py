@@ -94,6 +94,7 @@ except ModuleNotFoundError:
 SUPPORTED_LOCAL_KINDS = frozenset({"read-recall", "write-update-delete-compact"})
 V20_COMPATIBILITY_CANDIDATES = 512
 V20_EXECUTION_ENGINE = "bounded-cell-card-v20"
+V22_STAGE_L_QUERY_COUNT = 32
 CONCURRENCY_SWEEP = (1, 2, 4, 8, 16)
 RUNTIME_FLOW_CONTROL_FIELDS = frozenset(
     {
@@ -330,6 +331,7 @@ def build_execution_plan(
     diagnostic_read_nprobes: tuple[int, ...] | None = None,
     diagnostic_read_candidates: tuple[int, ...] | None = None,
     v21_feasibility: bool = False,
+    v22_stage_l: bool = False,
 ) -> dict[str, object]:
     if mode not in {"build", "runtime", "smoke"}:
         raise ValueError("execution mode must be build, runtime, or smoke")
@@ -352,9 +354,13 @@ def build_execution_plan(
         diagnostic_read_nprobes,
         diagnostic_read_candidates,
     )
+    if type(v21_feasibility) is not bool or type(v22_stage_l) is not bool:
+        raise ValueError("V21/V22 diagnostic flags must be concrete booleans")
+    if v21_feasibility and v22_stage_l:
+        raise ValueError("V21 and V22 diagnostic modes are mutually exclusive")
+    v2x_diagnostic = v21_feasibility or v22_stage_l
     if (
-        type(v21_feasibility) is not bool
-        or v21_feasibility
+        v2x_diagnostic
         and (
             mode != "runtime"
             or runtime_profile != "recall"
@@ -362,7 +368,7 @@ def build_execution_plan(
             or any(value is not None for value in read_diagnostic_values)
         )
     ):
-        raise ValueError("V21 feasibility mode must be an exclusive recall runtime")
+        raise ValueError("V21/V22 diagnostic mode must be an exclusive recall runtime")
     if any(value is not None for value in read_diagnostic_values):
         if (
             any(value is None for value in read_diagnostic_values)
@@ -506,9 +512,14 @@ def build_execution_plan(
     if mode == "smoke" and dataset["source"].get("generator") in dense_generators:
         smoke_rows = ((smoke_rows + 99) // 100) * 100
     effective_rows = scheduled_rows if publication else min(scheduled_rows, smoke_rows)
-    effective_queries = (
-        queries_per_repetition if publication else min(queries_per_repetition, 10)
-    )
+    if v22_stage_l:
+        if queries_per_repetition < V22_STAGE_L_QUERY_COUNT:
+            raise ValueError("V22 Stage L query authority is too small")
+        effective_queries = V22_STAGE_L_QUERY_COUNT
+    else:
+        effective_queries = (
+            queries_per_repetition if publication else min(queries_per_repetition, 10)
+        )
     dataset_dir = workspace / "dataset"
     output_dir = workspace / "output"
     index_dir = workspace / "index"
@@ -818,7 +829,7 @@ def build_execution_plan(
                 runtime_env["BORSUK_OPEN_PROGRESS"] = "1"
                 runtime_env["BORSUK_LIFECYCLE_PROGRESS"] = "1"
                 runtime_env["BORSUK_V20_PROGRESS"] = "1"
-        if v21_feasibility:
+        if v2x_diagnostic:
             if (
                 workload.get("id") != "standard-ann-read"
                 or dataset.get("id") != "deep-image-96"
@@ -829,7 +840,7 @@ def build_execution_plan(
                 or not isinstance(cell.get("index_prefix"), str)
             ):
                 raise ValueError(
-                    "V21 feasibility requires the canonical Deep Image build authority"
+                    "V21/V22 diagnostic requires the canonical Deep Image build authority"
                 )
             for field in (
                 "BORSUK_BENCH_BUILD_INDEX",
@@ -845,24 +856,27 @@ def build_execution_plan(
                 "BORSUK_STORAGE_TRACE",
             ):
                 runtime_env.pop(field, None)
+            diagnostic_version = "V21" if v21_feasibility else "V22"
+            diagnostic_mode = "FEASIBILITY" if v21_feasibility else "STAGE_L"
             runtime_env.update(
                 {
-                    "BORSUK_BENCH_V21_FEASIBILITY": "1",
-                    "BORSUK_BENCH_V21_SOURCE_ARCHIVE_SHA256": str(
+                    f"BORSUK_BENCH_{diagnostic_version}_{diagnostic_mode}": "1",
+                    f"BORSUK_BENCH_{diagnostic_version}_SOURCE_ARCHIVE_SHA256": str(
                         source["archive_sha256"]
                     ),
-                    "BORSUK_BENCH_V21_INDEX_ID": str(cell["index_prefix"])
+                    f"BORSUK_BENCH_{diagnostic_version}_INDEX_ID": str(cell["index_prefix"])
                     .rstrip("/")
                     .rsplit("/", 1)[-1],
-                    "BORSUK_BENCH_V21_DATASET_ID": str(dataset["id"]),
+                    f"BORSUK_BENCH_{diagnostic_version}_DATASET_ID": str(dataset["id"]),
                 }
             )
         return {
             "schema_version": 1,
             "cell_id": cell.get("cell_id"),
             "mode": "publication",
-            "publishable": not v21_feasibility,
+            "publishable": not v2x_diagnostic,
             "v21_feasibility": v21_feasibility,
+            "v22_stage_l": v22_stage_l,
             "effective_rows": effective_rows,
             "effective_queries": effective_queries,
             "workspace": str(workspace),
@@ -909,9 +923,13 @@ def authorize_publication_runtime(
     if not isinstance(workload, dict) or workload.get("kind") != "read-recall":
         raise ValueError("immutable index runtime authorization is read-only")
     v21_feasibility = plan.get("v21_feasibility") is True
+    v22_stage_l = plan.get("v22_stage_l") is True
+    if v21_feasibility and v22_stage_l:
+        raise ValueError("runtime diagnostic authority is ambiguous")
+    v2x_diagnostic = v21_feasibility or v22_stage_l
     if plan.get("mode") != "publication" or (
         plan.get("publishable") is not True
-        and not (v21_feasibility and plan.get("publishable") is False)
+        and not (v2x_diagnostic and plan.get("publishable") is False)
     ):
         raise ValueError("only a publication plan has an authorized runtime phase")
     if plan.get("cell_id") != cell.get("cell_id"):
@@ -935,9 +953,14 @@ def authorize_publication_runtime(
                 "runtime index URI differs from the immutable build receipt"
             )
         if environment.get("BORSUK_BENCH_BUILD_INDEX") != "0" and not (
-            v21_feasibility
+            v2x_diagnostic
             and "BORSUK_BENCH_BUILD_INDEX" not in environment
-            and environment.get("BORSUK_BENCH_V21_FEASIBILITY") == "1"
+            and environment.get(
+                "BORSUK_BENCH_V21_FEASIBILITY"
+                if v21_feasibility
+                else "BORSUK_BENCH_V22_STAGE_L"
+            )
+            == "1"
         ):
             raise ValueError("publication runtime must disable index construction")
         for forbidden in (
@@ -1617,6 +1640,374 @@ def validate_and_canonicalize_v21_summary(
     )
     path.write_bytes(canonical_json_bytes(summary) + b"\n")
     return report
+
+
+def validate_and_canonicalize_v22_stage_l(
+    report_path: Path,
+    summary_path: Path,
+    *,
+    expected_source_archive_sha256: str,
+    expected_index_id: str,
+    expected_dataset_id: str,
+    expected_queries: int,
+    expected_dataset_rows: int,
+    expected_query_seed: int,
+    expected_dimensions: int,
+) -> dict[str, object]:
+    """Authenticate complete Rust V22 Stage-L evidence and derived summary."""
+
+    _, evidence = _read_bounded_json_payload(report_path, 512 * 1024 * 1024)
+    _, summary = _read_bounded_json_payload(summary_path, 2 * 1024 * 1024)
+    schema = "borsuk-v22-stage-l-layout-v1"
+    if (
+        not isinstance(evidence, dict)
+        or frozenset(evidence)
+        != {"schema", "document_kind", "claim_eligible", "identity", "report"}
+        or evidence.get("schema") != schema
+        or evidence.get("document_kind") != "publication-v3-v22-stage-l-report"
+        or evidence.get("claim_eligible") is not False
+    ):
+        raise ValueError("V22 Stage L report authority differs")
+    identity = evidence["identity"]
+    identity_fields = {
+        "dataset_name",
+        "dataset_id",
+        "index_id",
+        "source_archive_sha256",
+        "dimensions",
+        "dataset_rows",
+        "query_seed",
+        "query_source_indices",
+    }
+    if not isinstance(identity, dict) or frozenset(identity) != identity_fields:
+        raise ValueError("V22 Stage L identity schema differs")
+    source_indices = identity.get("query_source_indices")
+    if (
+        type(identity.get("dataset_name")) is not str
+        or not identity["dataset_name"]
+        or identity.get("dataset_id") != expected_dataset_id
+        or identity.get("index_id") != expected_index_id
+        or identity.get("source_archive_sha256")
+        != expected_source_archive_sha256
+        or type(identity.get("dimensions")) is not int
+        or identity["dimensions"] != expected_dimensions
+        or type(identity.get("dataset_rows")) is not int
+        or identity["dataset_rows"] != expected_dataset_rows
+        or type(identity.get("query_seed")) is not int
+        or identity["query_seed"] != expected_query_seed
+        or not isinstance(source_indices, list)
+        or len(source_indices) != expected_queries
+        or any(type(value) is not int or value < 0 for value in source_indices)
+        or len(set(source_indices)) != len(source_indices)
+    ):
+        raise ValueError("V22 Stage L identity authority differs")
+    value = evidence["report"]
+    report_fields = {
+        "v20_root_checksum",
+        "v20_codebook_checksum",
+        "rows",
+        "routing_cell_count",
+        "query_prefixes",
+        "layout_censuses",
+    }
+    def is_sha256(item: object) -> bool:
+        return type(item) is str and len(item) == 64 and all(
+            byte in "0123456789abcdef" for byte in item
+        )
+    if (
+        not isinstance(value, dict)
+        or frozenset(value) != report_fields
+        or not is_sha256(value.get("v20_root_checksum"))
+        or not is_sha256(value.get("v20_codebook_checksum"))
+        or type(value.get("rows")) is not int
+        or value["rows"] != expected_dataset_rows
+        or type(value.get("routing_cell_count")) is not int
+        or value["routing_cell_count"] <= 0
+        or not isinstance(value.get("query_prefixes"), list)
+        or len(value["query_prefixes"]) != expected_queries
+        or not isinstance(value.get("layout_censuses"), list)
+        or len(value["layout_censuses"]) != 42
+    ):
+        raise ValueError("V22 Stage L generation authority differs")
+    exact_row_fields = {
+        "distance",
+        "record_id",
+        "canonical_record_id",
+        "primary_cell",
+        "primary_cell_routing_rank",
+    }
+    for query_index, prefix in enumerate(value["query_prefixes"]):
+        if (
+            not isinstance(prefix, dict)
+            or frozenset(prefix) != {"query_index", "rows"}
+            or type(prefix.get("query_index")) is not int
+            or prefix["query_index"] != query_index
+            or not isinstance(prefix.get("rows"), list)
+            or len(prefix["rows"]) != 2048
+        ):
+            raise ValueError("V22 Stage L exact-prefix schema differs")
+        identities: set[tuple[int, bytes]] = set()
+        prior: tuple[float, bytes, int] | None = None
+        for row in prefix["rows"]:
+            if not isinstance(row, dict) or frozenset(row) != exact_row_fields:
+                raise ValueError("V22 Stage L exact row schema differs")
+            canonical = row.get("canonical_record_id")
+            if (
+                type(row.get("distance")) is not float
+                or not math.isfinite(row["distance"])
+                or type(row.get("record_id")) is not int
+                or not 0 <= row["record_id"] < expected_dataset_rows
+                or not isinstance(canonical, list)
+                or not canonical
+                or any(type(byte) is not int or not 0 <= byte <= 255 for byte in canonical)
+                or type(row.get("primary_cell")) is not int
+                or not 0 <= row["primary_cell"] < value["routing_cell_count"]
+                or type(row.get("primary_cell_routing_rank")) is not int
+                or not 1
+                <= row["primary_cell_routing_rank"]
+                <= value["routing_cell_count"]
+            ):
+                raise ValueError("V22 Stage L exact row authority differs")
+            canonical_bytes = bytes(canonical)
+            identity_key = (row["record_id"], canonical_bytes)
+            order_key = (row["distance"], canonical_bytes, row["record_id"])
+            if identity_key in identities or (prior is not None and order_key < prior):
+                raise ValueError("V22 Stage L exact-prefix order differs")
+            identities.add(identity_key)
+            prior = order_key
+    expected_arms = [
+        (layout, rows, prefix)
+        for layout, rows in (
+            ("v20-physical", None),
+            ("v20-two-pivot-repacked", 32),
+            ("v20-two-pivot-repacked", 64),
+            ("semantic-within-cell", 32),
+            ("semantic-within-cell", 64),
+            ("semantic-cross-cell", 32),
+            ("semantic-cross-cell", 64),
+        )
+        for prefix in (10, 256, 512, 1024, 1536, 2048)
+    ]
+    arm_fields = {
+        "layout",
+        "microcluster_rows",
+        "exact_prefix_rows",
+        "projected_objects",
+        "query_samples",
+        "eligible",
+    }
+    object_fields = {"path", "checksum", "encoded_bytes"}
+    sample_fields = {
+        "query_index",
+        "exact_prefix_rows",
+        "required_routing_cells",
+        "gt_cell_hits",
+        "gt_cell_coverage_ppm",
+        "routed_rows",
+        "useful_bytes",
+        "selected_bytes",
+        "physical_bytes",
+        "speculative_bytes",
+        "requests",
+        "selected_rows",
+        "packing_purity_ppm",
+        "physical_amplification_ppm",
+        "physical_limiting_bound",
+        "routing_eligible",
+        "limiting_bound",
+        "eligible",
+        "ranges",
+    }
+    range_fields = {"path", "start", "end", "selected_bytes", "rows", "blocks"}
+    layout_objects: dict[tuple[str, int | None], object] = {}
+    exact_row_bytes: int | None = None
+    eligible_arms: list[int] = []
+    maximum_routed_rows = 0
+    maximum_requests = 0
+    maximum_physical = 0
+    for arm_index, (arm, expected_arm) in enumerate(
+        zip(value["layout_censuses"], expected_arms, strict=True)
+    ):
+        if (
+            not isinstance(arm, dict)
+            or frozenset(arm) != arm_fields
+            or (
+                arm.get("layout"),
+                arm.get("microcluster_rows"),
+                arm.get("exact_prefix_rows"),
+            )
+            != expected_arm
+            or not isinstance(arm.get("projected_objects"), list)
+            or not arm["projected_objects"]
+            or not isinstance(arm.get("query_samples"), list)
+            or len(arm["query_samples"]) != expected_queries
+            or type(arm.get("eligible")) is not bool
+        ):
+            raise ValueError("V22 Stage L arm authority differs")
+        objects: dict[str, int] = {}
+        for item in arm["projected_objects"]:
+            if (
+                not isinstance(item, dict)
+                or frozenset(item) != object_fields
+                or type(item.get("path")) is not str
+                or not item["path"]
+                or item["path"] in objects
+                or not is_sha256(item.get("checksum"))
+                or type(item.get("encoded_bytes")) is not int
+                or item["encoded_bytes"] <= 0
+            ):
+                raise ValueError("V22 Stage L projected object differs")
+            objects[item["path"]] = item["encoded_bytes"]
+        layout_key = (arm["layout"], arm["microcluster_rows"])
+        canonical_objects = canonical_json_bytes(arm["projected_objects"])
+        if layout_key in layout_objects and layout_objects[layout_key] != canonical_objects:
+            raise ValueError("V22 Stage L layout object authority differs")
+        layout_objects[layout_key] = canonical_objects
+        for query_index, sample in enumerate(arm["query_samples"]):
+            if not isinstance(sample, dict) or frozenset(sample) != sample_fields:
+                raise ValueError("V22 Stage L query sample schema differs")
+            integer_fields = sample_fields - {
+                "physical_limiting_bound",
+                "routing_eligible",
+                "limiting_bound",
+                "eligible",
+                "ranges",
+            }
+            if any(type(sample.get(field)) is not int for field in integer_fields):
+                raise ValueError("V22 Stage L query sample integer differs")
+            if (
+                type(sample.get("routing_eligible")) is not bool
+                or type(sample.get("eligible")) is not bool
+                or sample.get("physical_limiting_bound")
+                not in {"eligible", "bytes", "requests", "amplification"}
+                or sample.get("limiting_bound")
+                not in {
+                    "eligible",
+                    "routing-rows",
+                    "bytes",
+                    "requests",
+                    "amplification",
+                }
+                or sample["useful_bytes"] <= 0
+                or sample["selected_bytes"] <= 0
+                or sample["physical_bytes"] <= 0
+                or sample["speculative_bytes"] < 0
+                or sample["selected_rows"] <= 0
+            ):
+                raise ValueError("V22 Stage L query sample authority differs")
+            ranges = sample["ranges"]
+            if not isinstance(ranges, list) or not ranges:
+                raise ValueError("V22 Stage L query ranges are empty")
+            physical_bytes = selected_bytes = selected_rows = 0
+            for physical_range in ranges:
+                if (
+                    not isinstance(physical_range, dict)
+                    or frozenset(physical_range) != range_fields
+                    or type(physical_range.get("path")) is not str
+                    or physical_range["path"] not in objects
+                    or any(
+                        type(physical_range.get(field)) is not int
+                        for field in range_fields - {"path"}
+                    )
+                    or not 0 <= physical_range["start"] < physical_range["end"]
+                    or physical_range["end"] > objects[physical_range["path"]]
+                    or not 0
+                    < physical_range["selected_bytes"]
+                    <= physical_range["end"] - physical_range["start"]
+                    or physical_range["rows"] <= 0
+                    or physical_range["blocks"] <= 0
+                ):
+                    raise ValueError("V22 Stage L range authority differs")
+                physical_bytes += physical_range["end"] - physical_range["start"]
+                selected_bytes += physical_range["selected_bytes"]
+                selected_rows += physical_range["rows"]
+            prefix_rows = arm["exact_prefix_rows"]
+            row_bytes, remainder = divmod(sample["useful_bytes"], prefix_rows)
+            packing = sample["useful_bytes"] * 1_000_000 // sample["physical_bytes"]
+            amplification = sample["physical_bytes"] * 1_000_000 // sample["selected_bytes"]
+            routing_eligible = sample["routed_rows"] <= 512_000
+            expected_physical_bound = (
+                "bytes"
+                if sample["physical_bytes"] > 1_048_576
+                else "requests"
+                if sample["requests"] > 4
+                else "eligible"
+            )
+            expected_limiting = (
+                sample["physical_limiting_bound"]
+                if routing_eligible
+                else "routing-rows"
+            )
+            expected_eligible = routing_eligible and expected_physical_bound == "eligible"
+            if (
+                sample["query_index"] != query_index
+                or sample["exact_prefix_rows"] != prefix_rows
+                or sample["required_routing_cells"] <= 0
+                or sample["required_routing_cells"] > value["routing_cell_count"]
+                or sample["gt_cell_hits"] != 10
+                or sample["gt_cell_coverage_ppm"] != 1_000_000
+                or not 0 < sample["routed_rows"] <= expected_dataset_rows
+                or sample["requests"] != len(ranges)
+                or sample["requests"] > prefix_rows
+                or sample["physical_bytes"] != physical_bytes
+                or sample["selected_bytes"] != selected_bytes
+                or sample["selected_rows"] != selected_rows
+                or selected_rows < prefix_rows
+                or sample["selected_bytes"] + sample["speculative_bytes"]
+                != sample["physical_bytes"]
+                or remainder != 0
+                or row_bytes <= 0
+                or (exact_row_bytes is not None and row_bytes != exact_row_bytes)
+                or sample["packing_purity_ppm"] != packing
+                or sample["physical_amplification_ppm"] != amplification
+                or sample["physical_limiting_bound"] != expected_physical_bound
+                or sample["routing_eligible"] is not routing_eligible
+                or sample["limiting_bound"] != expected_limiting
+                or sample["eligible"] is not expected_eligible
+            ):
+                raise ValueError("V22 Stage L sample evidence differs")
+            exact_row_bytes = row_bytes
+            maximum_routed_rows = max(maximum_routed_rows, sample["routed_rows"])
+            maximum_requests = max(maximum_requests, sample["requests"])
+            maximum_physical = max(maximum_physical, sample["physical_bytes"])
+        expected_arm_eligible = all(sample["eligible"] for sample in arm["query_samples"])
+        if arm["eligible"] is not expected_arm_eligible:
+            raise ValueError("V22 Stage L arm eligibility differs")
+        if expected_arm_eligible:
+            eligible_arms.append(arm_index)
+    expected_summary = {
+        "schema": schema,
+        "document_kind": "publication-v3-v22-stage-l-summary",
+        "claim_eligible": False,
+        "rows": expected_dataset_rows,
+        "routing_cell_count": value["routing_cell_count"],
+        "queries": expected_queries,
+        "arms": 42,
+        "eligible_arms": eligible_arms,
+        "maximum_routed_rows": maximum_routed_rows,
+        "maximum_primary_requests": maximum_requests,
+        "maximum_primary_physical_bytes": maximum_physical,
+    }
+    if summary != expected_summary:
+        raise ValueError("V22 Stage L aggregate summary differs")
+    return {
+        "schema_version": 1,
+        "document_kind": "publication-v3-v22-stage-l",
+        "status": "complete",
+        "publishable": False,
+        "claim_eligible": False,
+        "dataset_id": expected_dataset_id,
+        "index_id": expected_index_id,
+        "source_archive_sha256": expected_source_archive_sha256,
+        "v20_root_checksum": value["v20_root_checksum"],
+        "v20_codebook_checksum": value["v20_codebook_checksum"],
+        "dataset_rows": expected_dataset_rows,
+        "dimensions": expected_dimensions,
+        "query_seed": expected_query_seed,
+        "query_source_indices": source_indices,
+        "eligible_arms": eligible_arms,
+        "summary": expected_summary,
+    }
 
 
 def validate_query_cache_cohort(
@@ -3295,6 +3686,9 @@ def main() -> int:
     parser.add_argument("--v21-feasibility", action="store_true")
     parser.add_argument("--v21-diagnostic-protocol", type=Path)
     parser.add_argument("--v21-diagnostic-manifest", type=Path)
+    parser.add_argument("--v22-stage-l", action="store_true")
+    parser.add_argument("--v22-diagnostic-protocol", type=Path)
+    parser.add_argument("--v22-diagnostic-manifest", type=Path)
     args = parser.parse_args()
 
     runtime_flow_control = runtime_flow_control_authority(
@@ -3318,6 +3712,8 @@ def main() -> int:
 
     cell = read_protocol(args.protocol)
     diagnostic_cell = None
+    if args.v21_feasibility and args.v22_stage_l:
+        raise ValueError("V21 and V22 diagnostic modes are mutually exclusive")
     if args.v21_feasibility:
         if (
             args.v21_diagnostic_protocol is None
@@ -3328,11 +3724,26 @@ def main() -> int:
         validate_publication_cell_authority(
             diagnostic_cell, args.v21_diagnostic_manifest
         )
-    elif (
+    elif args.v22_stage_l:
+        if (
+            args.v22_diagnostic_protocol is None
+            or args.v22_diagnostic_manifest is None
+        ):
+            raise ValueError("V22 Stage L requires diagnostic source authority")
+        diagnostic_cell = read_protocol(args.v22_diagnostic_protocol)
+        validate_publication_cell_authority(
+            diagnostic_cell, args.v22_diagnostic_manifest
+        )
+    if not args.v21_feasibility and (
         args.v21_diagnostic_protocol is not None
         or args.v21_diagnostic_manifest is not None
     ):
-        raise ValueError("diagnostic source authority is V21-only")
+        raise ValueError("V21 diagnostic authority requires V21 mode")
+    if not args.v22_stage_l and (
+        args.v22_diagnostic_protocol is not None
+        or args.v22_diagnostic_manifest is not None
+    ):
+        raise ValueError("V22 diagnostic authority requires V22 mode")
     protocol_bytes = args.protocol.read_bytes()
     arms = plan_arms(cell)
     if args.arm_index < 0 or args.arm_index >= len(arms):
@@ -3422,6 +3833,7 @@ def main() -> int:
         diagnostic_read_nprobes=args.diagnostic_read_nprobes,
         diagnostic_read_candidates=args.diagnostic_read_candidates,
         v21_feasibility=args.v21_feasibility,
+        v22_stage_l=args.v22_stage_l,
     )
     if args.mode == "build":
         output, resources, elapsed_ns = execute_publication_phase(plan, "build")
@@ -3509,10 +3921,9 @@ def main() -> int:
         authorized_plan = {**plan, "runtime": authorized_runtime}
         source_root = Path(__file__).resolve().parent.parent
         attestation_cell = diagnostic_cell or cell
-        attestation_resource_role = (
-            "diagnostic" if args.v21_feasibility else "runtime"
-        )
-        attestation_memory_max = 32 * 1024**3 if args.v21_feasibility else None
+        v2x_diagnostic = args.v21_feasibility or args.v22_stage_l
+        attestation_resource_role = "diagnostic" if v2x_diagnostic else "runtime"
+        attestation_memory_max = 32 * 1024**3 if v2x_diagnostic else None
         preflight = validate_runtime_attestation(
             collect_runtime_attestation(
                 cell=attestation_cell,
@@ -3531,6 +3942,71 @@ def main() -> int:
         output, resources, elapsed_ns = execute_publication_phase(
             authorized_plan, "runtime"
         )
+        if args.v22_stage_l:
+            if runtime_flow_control is None:
+                raise ValueError("V22 Stage L requires runtime flow authority")
+            execution_contract = runtime_execution_contract(
+                authorized_plan,
+                args.runtime_profile,
+                {"schema_version": 4, **runtime_flow_control},
+            )
+            (args.workspace / "RUNTIME_EXECUTION_CONTRACT.json").write_bytes(
+                canonical_json_bytes(execution_contract) + b"\n"
+            )
+            runtime_attestation = validate_runtime_attestation(
+                collect_runtime_attestation(
+                    cell=attestation_cell,
+                    attempt_id=str(args.attempt_id),
+                    runtime=authorized_runtime,
+                    source_root=source_root,
+                    purchase_option=args.purchase_option,
+                ),
+                cell=attestation_cell,
+                attempt_id=str(args.attempt_id),
+                resource_role=attestation_resource_role,
+                expected_memory_max_bytes=attestation_memory_max,
+            )
+            (args.workspace / "RUNTIME_ATTESTATION.json").write_bytes(
+                canonical_json_bytes(runtime_attestation) + b"\n"
+            )
+            report_path = output / "bench_v22_stage_l_report.json"
+            summary_path = output / "bench_v22_stage_l_summary.json"
+            if any(
+                not path.is_file() or path.stat().st_size == 0
+                for path in (report_path, summary_path)
+            ):
+                raise ValueError("V22 Stage L runtime emitted incomplete artifacts")
+            report = validate_and_canonicalize_v22_stage_l(
+                report_path,
+                summary_path,
+                expected_source_archive_sha256=str(args.source_archive_sha256),
+                expected_index_id=str(cell["index_prefix"])
+                .rstrip("/")
+                .rsplit("/", 1)[-1],
+                expected_dataset_id=str(cell["dataset"]["id"]),
+                expected_queries=int(plan["effective_queries"]),
+                expected_dataset_rows=int(plan["effective_rows"]),
+                expected_query_seed=int(cell["query_seed"]),
+                expected_dimensions=int(cell["dataset"]["dimensions"]),
+            )
+            report.update(
+                {
+                    "cell_id": cell["cell_id"],
+                    "diagnostic_cell_id": attestation_cell["cell_id"],
+                    "attempt_id": args.attempt_id,
+                    "instance_identity": args.instance_identity,
+                    "dataset_materialization_sha256": (
+                        args.dataset_materialization_sha256
+                    ),
+                    "elapsed_ns": elapsed_ns,
+                    "resources": resources,
+                    "runtime_attestation": runtime_attestation,
+                }
+            )
+            destination = args.workspace / "RESULT_COMPLETE.json"
+            destination.write_bytes(canonical_json_bytes(report) + b"\n")
+            print(json.dumps(report, sort_keys=True))
+            return 0
         if args.v21_feasibility:
             if runtime_flow_control is None:
                 raise ValueError("V21 feasibility requires runtime flow authority")

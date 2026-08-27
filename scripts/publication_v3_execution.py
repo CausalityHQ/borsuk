@@ -79,21 +79,29 @@ class ExecutionJob:
         arm_index: int = 0,
         diagnostic: bool = False,
         v21_feasibility: bool = False,
+        v22_stage_l: bool = False,
     ) -> "ExecutionJob":
         if profile not in {"recall", "concurrency", "lifecycle"}:
             raise ValueError("runtime execution profile is invalid")
         if (
             type(v21_feasibility) is not bool
+            or type(v22_stage_l) is not bool
+            or v21_feasibility
+            and v22_stage_l
             or arm_index < 0
             or diagnostic
             and profile not in {"recall", "lifecycle"}
             or v21_feasibility
+            and (diagnostic or profile != "recall" or arm_index != 0)
+            or v22_stage_l
             and (diagnostic or profile != "recall" or arm_index != 0)
         ):
             raise ValueError("runtime execution arm identity is invalid")
         job = cls._new(cell, role="runtime", attempt=attempt)
         if v21_feasibility:
             namespace = "runtime-v21-feasibility"
+        elif v22_stage_l:
+            namespace = "runtime-v22-stage-l"
         elif profile == "lifecycle" and diagnostic:
             namespace = "runtime-lifecycle-diagnostic"
         elif profile == "recall" and diagnostic:
@@ -452,6 +460,8 @@ def runtime_worker_script(
     diagnostic_read_candidates: tuple[int, ...] | None = None,
     v21_feasibility: bool = False,
     v21_base_authority: dict[str, object] | None = None,
+    v22_stage_l: bool = False,
+    v22_base_authority: dict[str, object] | None = None,
 ) -> str:
     if job.role != "runtime":
         raise ValueError("runtime worker requires a runtime job")
@@ -502,19 +512,31 @@ def runtime_worker_script(
     )
     if (
         type(v21_feasibility) is not bool
+        or type(v22_stage_l) is not bool
         or v21_feasibility
+        and v22_stage_l
+    ):
+        raise ValueError("V21/V22 diagnostic flags are invalid")
+    v2x_diagnostic = v21_feasibility or v22_stage_l
+    base_authority = v21_base_authority if v21_feasibility else v22_base_authority
+    if (
+        v2x_diagnostic
         and (
             read_diagnostic
             or diagnostic_write_ops is not None
             or diagnostic_timeout_seconds is not None
             or runtime_profile != "recall"
             or arm_index != 0
-            or not isinstance(v21_base_authority, dict)
+            or not isinstance(base_authority, dict)
         )
-        or not v21_feasibility
+        or not v2x_diagnostic
+        and (v21_base_authority is not None or v22_base_authority is not None)
+        or v21_feasibility
+        and v22_base_authority is not None
+        or v22_stage_l
         and v21_base_authority is not None
     ):
-        raise ValueError("V21 feasibility authority is invalid")
+        raise ValueError("V21/V22 diagnostic authority is invalid")
     profile_mismatch = (
         (
             runtime_profile == "concurrency"
@@ -533,6 +555,10 @@ def runtime_worker_script(
                 or (
                     v21_feasibility
                     != job.cell_tag.startswith("runtime-v21-feasibility-")
+                )
+                or (
+                    v22_stage_l
+                    != job.cell_tag.startswith("runtime-v22-stage-l-")
                 )
             )
         )
@@ -556,7 +582,7 @@ def runtime_worker_script(
     runtime_protocol = '"$work/protocol.json"'
     runtime_source_sha256 = source_sha256
     index_digest_checks = ""
-    if not v21_feasibility and (
+    if not v2x_diagnostic and (
         not isinstance(binary_sha256, str)
         or len(binary_sha256) != 64
         or any(character not in "0123456789abcdef" for character in binary_sha256)
@@ -577,8 +603,8 @@ def runtime_worker_script(
     systemd_run_options = "--collect"
     cgroup_wait = ""
     cgroup_observation = ""
-    if v21_feasibility:
-        assert v21_base_authority is not None
+    if v2x_diagnostic:
+        assert base_authority is not None
         fields = {
             "manifest_uri",
             "manifest_sha256",
@@ -595,8 +621,8 @@ def runtime_worker_script(
             "object_roster_sha256",
             "inventory_sha256",
         }
-        if set(v21_base_authority) != fields:
-            raise ValueError("V21 base-index authority fields differ")
+        if set(base_authority) != fields:
+            raise ValueError("V21/V22 base-index authority fields differ")
         for field in (
             "manifest_sha256",
             "protocol_sha256",
@@ -606,49 +632,49 @@ def runtime_worker_script(
             "object_roster_sha256",
             "inventory_sha256",
         ):
-            value = v21_base_authority[field]
+            value = base_authority[field]
             if (
                 not isinstance(value, str)
                 or len(value) != 64
                 or any(character not in "0123456789abcdef" for character in value)
             ):
-                raise ValueError(f"V21 base-index {field} differs")
-        base_cell = v21_base_authority["cell"]
+                raise ValueError(f"V21/V22 base-index {field} differs")
+        base_cell = base_authority["cell"]
         base_source = base_cell.get("source") if isinstance(base_cell, dict) else None
         if (
             not isinstance(base_cell, dict)
             or base_cell.get("cell_id") is None
             or not isinstance(base_source, dict)
             or base_source.get("archive_sha256")
-            != v21_base_authority["source_archive_sha256"]
-            or base_cell.get("index_prefix") != v21_base_authority["index_uri"]
+            != base_authority["source_archive_sha256"]
+            or base_cell.get("index_prefix") != base_authority["index_uri"]
             or str(base_cell["index_prefix"]).rstrip("/").rsplit("/", 1)[-1]
-            != v21_base_authority["index_id"]
-            or v21_base_authority["build_prefix"] != build_prefix
+            != base_authority["index_id"]
+            or base_authority["build_prefix"] != build_prefix
             or binary_sha256 is not None
         ):
-            raise ValueError("V21 base-index cell authority differs")
+            raise ValueError("V21/V22 base-index cell authority differs")
         cell = base_cell
-        index_uri = str(v21_base_authority["index_uri"])
+        index_uri = str(base_authority["index_uri"])
         runtime_manifest = '"$work/base-manifest.json"'
         runtime_protocol = '"$work/base-protocol.json"'
-        runtime_source_sha256 = str(v21_base_authority["source_archive_sha256"])
+        runtime_source_sha256 = str(base_authority["source_archive_sha256"])
         base_setup = textwrap.dedent(
             f"""\
             stage=verify-base-authority
-            aws s3 cp {_q(v21_base_authority["manifest_uri"])} "$work/base-manifest.json" --only-show-errors
-            test "$(sha256sum "$work/base-manifest.json" | awk '{{print $1}}')" = {_q(v21_base_authority["manifest_sha256"])}
-            aws s3 cp {_q(v21_base_authority["protocol_uri"])} "$work/base-protocol.json" --only-show-errors
-            test "$(sha256sum "$work/base-protocol.json" | awk '{{print $1}}')" = {_q(v21_base_authority["protocol_sha256"])}
-            aws s3 cp {_q(v21_base_authority["build_terminal_uri"])} "$work/BASE_BUILD_TERMINAL_COMPLETE.json" --only-show-errors
-            test "$(sha256sum "$work/BASE_BUILD_TERMINAL_COMPLETE.json" | awk '{{print $1}}')" = {_q(v21_base_authority["build_terminal_sha256"])}
+            aws s3 cp {_q(base_authority["manifest_uri"])} "$work/base-manifest.json" --only-show-errors
+            test "$(sha256sum "$work/base-manifest.json" | awk '{{print $1}}')" = {_q(base_authority["manifest_sha256"])}
+            aws s3 cp {_q(base_authority["protocol_uri"])} "$work/base-protocol.json" --only-show-errors
+            test "$(sha256sum "$work/base-protocol.json" | awk '{{print $1}}')" = {_q(base_authority["protocol_sha256"])}
+            aws s3 cp {_q(base_authority["build_terminal_uri"])} "$work/BASE_BUILD_TERMINAL_COMPLETE.json" --only-show-errors
+            test "$(sha256sum "$work/BASE_BUILD_TERMINAL_COMPLETE.json" | awk '{{print $1}}')" = {_q(base_authority["build_terminal_sha256"])}
             """
         )
         index_digest_checks = textwrap.dedent(
             f"""\
-            test "$(sha256sum "$work/INDEX_COMPLETE.json" | awk '{{print $1}}')" = {_q(v21_base_authority["index_receipt_sha256"])}
-            test "$(sha256sum "$work/INDEX_OBJECTS.json" | awk '{{print $1}}')" = {_q(v21_base_authority["object_roster_sha256"])}
-            test "$(sha256sum "$work/INDEX_INVENTORY.json" | awk '{{print $1}}')" = {_q(v21_base_authority["inventory_sha256"])}
+            test "$(sha256sum "$work/INDEX_COMPLETE.json" | awk '{{print $1}}')" = {_q(base_authority["index_receipt_sha256"])}
+            test "$(sha256sum "$work/INDEX_OBJECTS.json" | awk '{{print $1}}')" = {_q(base_authority["object_roster_sha256"])}
+            test "$(sha256sum "$work/INDEX_INVENTORY.json" | awk '{{print $1}}')" = {_q(base_authority["inventory_sha256"])}
             """
         )
         provision_packages = (
@@ -670,7 +696,7 @@ def runtime_worker_script(
             """
         )
         memory_max_bytes = 34_359_738_368
-        unit_name = f"borsuk-v21-{job.attempt:04d}.service"
+        unit_name = f"borsuk-{'v21' if v21_feasibility else 'v22'}-{job.attempt:04d}.service"
         systemd_wait_option = ""
         systemd_run_options = f"--unit={unit_name} --remain-after-exit"
         cgroup_wait = textwrap.dedent(
@@ -878,10 +904,16 @@ diagnostic_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_recall_late
             done
             """
         )
-    if v21_feasibility:
-        assert v21_base_authority is not None
-        diagnostic_arguments = " --v21-feasibility"
-        diagnostic_validation = """actual_claim_eligible=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))[\"claim_eligible\"]))' \"$work/cell/RESULT_COMPLETE.json\")
+    if v2x_diagnostic:
+        assert base_authority is not None
+        if v21_feasibility:
+            diagnostic_arguments = " --v21-feasibility"
+            artifact_names = (
+                "bench_v21_feasibility_arms.csv",
+                "bench_v21_feasibility_samples.csv",
+                "bench_v21_feasibility_summary.json",
+            )
+            diagnostic_validation = """actual_claim_eligible=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))[\"claim_eligible\"]))' \"$work/cell/RESULT_COMPLETE.json\")
 test \"$actual_claim_eligible\" = false
 for name in bench_v21_feasibility_arms.csv bench_v21_feasibility_samples.csv bench_v21_feasibility_summary.json; do
   test -s \"$work/cell/runtime-output/$name\"
@@ -890,35 +922,57 @@ v21_result_sha=$(sha256sum \"$work/cell/RESULT_COMPLETE.json\" | awk '{print $1}
 v21_arms_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_arms.csv\" | awk '{print $1}')
 v21_samples_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_samples.csv\" | awk '{print $1}')
 v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_summary.json\" | awk '{print $1}')"""
-        diagnostic_receipt_fields = (
-            "diagnostic_fields=$(printf ',"
-            '"claim_eligible":false,"v21_feasibility":true,'
-            '"v21_result_sha256":"%s",'
-            '"v21_arms_sha256":"%s",'
-            '"v21_samples_sha256":"%s",'
-            '"v21_summary_sha256":"%s"\' '
-            '"$v21_result_sha" "$v21_arms_sha" "$v21_samples_sha" '
-            '"$v21_summary_sha")'
-        )
-        v21_receipt_authority = {
-            "base_build_terminal_sha256": v21_base_authority["build_terminal_sha256"],
-            "base_manifest_sha256": v21_base_authority["manifest_sha256"],
-            "base_protocol_sha256": v21_base_authority["protocol_sha256"],
-            "base_source_archive_sha256": v21_base_authority["source_archive_sha256"],
-            "base_index_receipt_sha256": v21_base_authority["index_receipt_sha256"],
-            "base_object_roster_sha256": v21_base_authority["object_roster_sha256"],
-            "base_inventory_sha256": v21_base_authority["inventory_sha256"],
-            "base_index_id": v21_base_authority["index_id"],
-            "base_index_uri": v21_base_authority["index_uri"],
+            diagnostic_receipt_fields = (
+                "diagnostic_fields=$(printf ',"
+                '"claim_eligible":false,"v21_feasibility":true,'
+                '"v21_result_sha256":"%s",'
+                '"v21_arms_sha256":"%s",'
+                '"v21_samples_sha256":"%s",'
+                '"v21_summary_sha256":"%s"\' '
+                '"$v21_result_sha" "$v21_arms_sha" "$v21_samples_sha" '
+                '"$v21_summary_sha")'
+            )
+        else:
+            diagnostic_arguments = " --v22-stage-l"
+            artifact_names = (
+                "bench_v22_stage_l_report.json",
+                "bench_v22_stage_l_summary.json",
+            )
+            diagnostic_validation = """actual_claim_eligible=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))[\"claim_eligible\"]))' \"$work/cell/RESULT_COMPLETE.json\")
+test \"$actual_claim_eligible\" = false
+for name in bench_v22_stage_l_report.json bench_v22_stage_l_summary.json; do
+  test -s \"$work/cell/runtime-output/$name\"
+done
+v22_result_sha=$(sha256sum \"$work/cell/RESULT_COMPLETE.json\" | awk '{print $1}')
+v22_report_sha=$(sha256sum \"$work/cell/runtime-output/bench_v22_stage_l_report.json\" | awk '{print $1}')
+v22_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v22_stage_l_summary.json\" | awk '{print $1}')"""
+            diagnostic_receipt_fields = (
+                "diagnostic_fields=$(printf ',"
+                '"claim_eligible":false,"v22_stage_l":true,'
+                '"v22_result_sha256":"%s",'
+                '"v22_report_sha256":"%s",'
+                '"v22_summary_sha256":"%s"\' '
+                '"$v22_result_sha" "$v22_report_sha" "$v22_summary_sha")'
+            )
+        receipt_authority = {
+            "base_build_terminal_sha256": base_authority["build_terminal_sha256"],
+            "base_manifest_sha256": base_authority["manifest_sha256"],
+            "base_protocol_sha256": base_authority["protocol_sha256"],
+            "base_source_archive_sha256": base_authority["source_archive_sha256"],
+            "base_index_receipt_sha256": base_authority["index_receipt_sha256"],
+            "base_object_roster_sha256": base_authority["object_roster_sha256"],
+            "base_inventory_sha256": base_authority["inventory_sha256"],
+            "base_index_id": base_authority["index_id"],
+            "base_index_uri": base_authority["index_uri"],
             "diagnostic_source_archive_sha256": source_sha256,
         }
-        v21_authority_fragment = "," + ",".join(
+        authority_fragment = "," + ",".join(
             f"{json.dumps(key)}:{json.dumps(value)}"
-            for key, value in v21_receipt_authority.items()
+            for key, value in receipt_authority.items()
         )
         diagnostic_receipt_fields += (
             "\ndiagnostic_fields=$(printf '%s%s' \"$diagnostic_fields\" "
-            f"{_q(v21_authority_fragment)})"
+            f"{_q(authority_fragment)})"
         )
         diagnostic_receipt_fields += (
             "\ndiagnostic_fields=$(printf "
@@ -926,13 +980,16 @@ v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_su
             '\'"memory_peak_bytes":%s\' "$diagnostic_fields" '
             '"$actual_memory_max" "$actual_memory_swap_max" "$actual_memory_peak")'
         )
+        evidence_uploads = "\n".join(
+            f'put_immutable "$work/cell/runtime-output/{name}" '
+            f"{_q(terminal_prefix + '/' + name)}"
+            for name in artifact_names
+        )
         diagnostic_preservation_before_observation = textwrap.dedent(
             f"""\
             stage=preserve-evidence
             immutable_upload_deadline=$((SECONDS + 600))
-            put_immutable "$work/cell/runtime-output/bench_v21_feasibility_arms.csv" {_q(terminal_prefix + "/bench_v21_feasibility_arms.csv")}
-            put_immutable "$work/cell/runtime-output/bench_v21_feasibility_samples.csv" {_q(terminal_prefix + "/bench_v21_feasibility_samples.csv")}
-            put_immutable "$work/cell/runtime-output/bench_v21_feasibility_summary.json" {_q(terminal_prefix + "/bench_v21_feasibility_summary.json")}
+            {evidence_uploads}
             put_immutable "$work/cell/RESULT_COMPLETE.json" {_q(terminal_prefix + "/RESULT_COMPLETE.json")}
             """
         )
@@ -987,7 +1044,7 @@ v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_su
           --instance-identity "$instance_id" --purchase-option "$instance_purchase_option" \
           --borsuk-bench "$work/production_bench" \
           --index-receipt "$work/INDEX_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json" \
-          --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}{diagnostic_arguments}{' --v21-diagnostic-protocol "$work/protocol.json" --v21-diagnostic-manifest "$work/manifest.json"' if v21_feasibility else ''}
+          --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}{diagnostic_arguments}{' --v21-diagnostic-protocol "$work/protocol.json" --v21-diagnostic-manifest "$work/manifest.json"' if v21_feasibility else ' --v22-diagnostic-protocol "$work/protocol.json" --v22-diagnostic-manifest "$work/manifest.json"' if v22_stage_l else ''}
         {cgroup_wait}
         {diagnostic_validation}
         {diagnostic_preservation_before_observation}

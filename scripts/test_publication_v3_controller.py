@@ -481,6 +481,87 @@ class PublicationV3ControllerTests(unittest.TestCase):
             current["source"]["archive_sha256"],
         )
 
+    def test_v22_stage_l_execution_reuses_exact_base_in_distinct_namespace(
+        self,
+    ) -> None:
+        current, historical, _base_cell, base_job, objects = (
+            self._v21_base_authority_fixture()
+        )
+
+        class AuthorityAws:
+            def read_immutable_bytes(self, uri: str, sha256: str | None) -> bytes:
+                payload = objects[uri]
+                if sha256 is not None and hashlib.sha256(payload).hexdigest() != sha256:
+                    raise ValueError("test authority digest differs")
+                return payload
+
+        base_authority = authenticate_v21_base_index_authority(
+            current_manifest=current,
+            terminal_uri=base_job.complete_uri,
+            terminal_sha256=hashlib.sha256(objects[base_job.complete_uri]).hexdigest(),
+            aws=AuthorityAws(),
+            git_is_ancestor=lambda old, new: (
+                old == historical["source"]["git_commit"]
+                and new == current["source"]["git_commit"]
+            ),
+        )
+        current_sha256 = hashlib.sha256(canonical_json_bytes(current)).hexdigest()
+        current_cell = borsuk_cell(
+            current,
+            workload_id="standard-ann-read",
+            dataset_id="deep-image-96",
+            repetition_id="r01",
+            build_attempt=1,
+        )
+        protocol_sha256 = hashlib.sha256(
+            canonical_json_bytes(current_cell) + b"\n"
+        ).hexdigest()
+
+        class NoAws:
+            def __getattr__(self, name: str):
+                raise AssertionError(f"prepared V22 execution reached AWS through {name}")
+
+        prepared = prepare_qualification_execution(
+            current,
+            operation="diagnose-v22-stage-l",
+            workload_id="standard-ann-read",
+            dataset_id="deep-image-96",
+            repetition_id="r01",
+            source_uri="s3://bucket/source/current.tar.gz",
+            source_sha256=str(current["source"]["archive_sha256"]),
+            manifest_uri="s3://bucket/manifests/current.json",
+            manifest_sha256=current_sha256,
+            protocol_uri="s3://bucket/protocols/current.json",
+            protocol_sha256=protocol_sha256,
+            launch=LaunchEnvironment(
+                "ami-x",
+                "subnet-x",
+                "sg-x",
+                "arn:aws:iam::453182569524:instance-profile/x",
+                "aarch64",
+                "eu-central-1",
+            ),
+            aws=NoAws(),
+            attempt=1,
+            build_attempt=1,
+            purchase_option="spot",
+            arm_index=0,
+            v22_base_authority=base_authority,
+        )
+        self.assertTrue(
+            prepared.job.terminal_prefix.endswith(
+                "/runtime-v22-stage-l/arms/0000/attempts/0001"
+            )
+        )
+        self.assertEqual(prepared.request["InstanceType"], "r7g.8xlarge")
+        self.assertIs(prepared.expected["claim_eligible"], False)
+        self.assertIs(prepared.expected["v22_stage_l"], True)
+        user_data = base64.b64decode(prepared.request["UserData"]).decode()
+        worker_payload = user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
+        worker = gzip.decompress(base64.b64decode(worker_payload)).decode()
+        self.assertIn("--v22-stage-l", worker)
+        self.assertIn("v22_report_sha256", worker)
+
     def test_attempt_reconciliation_uses_exact_frozen_job_markers(self) -> None:
         class MarkerAws:
             def __init__(self) -> None:
@@ -985,6 +1066,12 @@ class PublicationV3ControllerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "V21 selector diagnostic"):
             prepare_qualification_execution(
                 manifest, purchase_option="on-demand", **arguments
+            )
+        with self.assertRaisesRegex(ValueError, "base-index authority"):
+            prepare_qualification_execution(
+                manifest,
+                purchase_option="spot",
+                **{**arguments, "operation": "build-read"},
             )
 
     def test_lifecycle_diagnostic_is_bounded_claim_ineligible_and_namespaced(
@@ -2026,7 +2113,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn(
-            "{stage,build-sift,build-read,run-read,diagnose-read,diagnose-v21-selector,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle,diagnose-lifecycle}",
+            "{stage,build-sift,build-read,run-read,diagnose-read,diagnose-v21-selector,diagnose-v22-stage-l,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle,diagnose-lifecycle}",
             completed.stdout,
         )
 

@@ -44933,7 +44933,7 @@ mod tests {
         let stale_root_error = index
             .diagnose_v22_stage_l(
                 &[vectors[1024].clone()],
-                &[truth.clone()],
+                std::slice::from_ref(&truth),
                 &options,
                 scratch_parent.path(),
             )
@@ -44961,7 +44961,7 @@ mod tests {
         let mutation_error = index
             .diagnose_v22_stage_l(
                 &[vectors[1024].clone()],
-                &[truth.clone()],
+                std::slice::from_ref(&truth),
                 &options,
                 scratch_parent.path(),
             )
@@ -44979,7 +44979,7 @@ mod tests {
         let delta_error = index
             .diagnose_v22_stage_l(
                 &[vectors[1024].clone()],
-                &[truth.clone()],
+                std::slice::from_ref(&truth),
                 &options,
                 scratch_parent.path(),
             )

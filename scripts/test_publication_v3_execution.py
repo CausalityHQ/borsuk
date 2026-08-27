@@ -835,6 +835,63 @@ printf '{{\"schema_version\":5%s}}\n' "$diagnostic_fields"
         self.assertEqual(receipt["base_index_id"], base_authority["index_id"])
         self.assertEqual(receipt["memory_peak_bytes"], 123456789)
 
+    def test_v22_stage_l_worker_uses_distinct_namespace_and_uploads_raw_evidence(
+        self,
+    ) -> None:
+        cell = qualification_cell(
+            frozen_manifest(), dataset_id="deep-image-96", workload_kind="read-recall"
+        )
+        job = ExecutionJob.runtime(
+            cell,
+            attempt=1,
+            profile="recall",
+            arm_index=0,
+            v22_stage_l=True,
+        )
+        self.assertIn(
+            "/runtime-v22-stage-l/arms/0000/attempts/0001", job.terminal_prefix
+        )
+        base_authority = v21_base_authority(
+            cell,
+            build_prefix="s3://bucket/results/cell/build/attempts/0001",
+        )
+        script = runtime_worker_script(
+            job=job,
+            source_uri="s3://bucket/source/source.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifests/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocols/cell.json",
+            protocol_sha256="7" * 64,
+            build_prefix="s3://bucket/results/cell/build/attempts/0001",
+            binary_sha256=None,
+            attempt_id="v22-stage-l-0001",
+            terminal_prefix=job.terminal_prefix,
+            disk_cache_max_bytes=0,
+            exact_read_max_physical_amplification=2,
+            max_active_searches=4,
+            max_waiting_searches=16,
+            leaf_read_width=32,
+            max_inflight_leaf_reads=48,
+            max_parallel_decode_rank_tasks=1,
+            cpu_threads=3,
+            io_threads=88,
+            s3_get_concurrency=64,
+            ram_budget_bytes=3 * 1024 * 1024 * 1024,
+            v22_stage_l=True,
+            v22_base_authority=base_authority,
+        )
+        self.assertIn("--v22-stage-l", script)
+        self.assertIn("bench_v22_stage_l_report.json", script)
+        self.assertIn("bench_v22_stage_l_summary.json", script)
+        self.assertIn("v22_result_sha256", script)
+        self.assertIn("v22_report_sha256", script)
+        self.assertIn("v22_summary_sha256", script)
+        self.assertIn('"claim_eligible":false', script)
+        self.assertEqual(
+            subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
+        )
+
     def test_v21_worker_compiles_current_source_but_reads_historical_index_authority(
         self,
     ) -> None:

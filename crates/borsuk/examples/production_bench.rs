@@ -26,7 +26,8 @@ use borsuk::{
     GarbageCollectionReport, GlobalPqLayout, GlobalScanCodec, IO_THREADS_ENV, IndexConfig,
     LeafCapability, LeafMode, MAX_GLOBAL_DELTA_ROWS, MAX_GLOBAL_DELTA_SEGMENTS,
     MAX_GLOBAL_DELTA_VECTOR_BYTES, OpenOptions, ProcessLimits, RequestCounts, SearchOptions,
-    SearchReport, V21FeasibilityArm, V21FeasibilityReport, V21LimitingBound, VectorElementType,
+    SearchReport, V21FeasibilityArm, V21FeasibilityReport, V21LimitingBound, V22LayoutKind,
+    V22LayoutLimitingBound, V22StageLProjectedObject, V22StageLReport, VectorElementType,
     VectorMetric, VectorRecord, WalConfig, WarmReport, configure_process,
     configured_backing_get_concurrency, configured_cpu_threads, configured_io_threads, recall_at_k,
     recommended_segment_max_vectors,
@@ -89,6 +90,7 @@ const MUTATION_QUERY_SAMPLES: usize = 100;
 const V21_FEASIBILITY_SCHEMA: &str = "borsuk-v21-selector-feasibility-v1";
 const V21_FEASIBILITY_ARMS_HEADER: &str = "schema,arm_index,bundle_row_limit,selector_span,hedge_delay_ms,bundle_count,region_count,projected_directory_bytes,replaced_v20_root_bytes,v20_root_checksum,baseline_rss_bytes,projected_query_transient_bytes,projected_peak_rss_bytes,gt_coverage,recall_at_10,maximum_actual_requests,maximum_physical_bytes,selector_within_frozen_cap,eligible,rows";
 const V21_FEASIBILITY_SAMPLES_HEADER: &str = "schema,arm_index,query_index,query_source_index,routed_cells,selected_rows,selected_bundles,primary_requests,maximum_actual_requests,selected_bytes,physical_bytes,gt_hits,recall_hits,limiting_bound";
+const V22_STAGE_L_SCHEMA: &str = "borsuk-v22-stage-l-layout-v1";
 const DEFAULT_PRODUCTION_RAM_BUDGET_BYTES: u64 = borsuk::DEFAULT_RAM_BUDGET_BYTES;
 // AWS S3 Standard GET pricing in eu-central-1 at the 2026-07-20 snapshot:
 // $0.43 per one million requests. The checked-in dated cost model records the
@@ -174,6 +176,10 @@ struct ResolvedConfig {
     v21_source_archive_sha256: Option<String>,
     v21_index_id: Option<String>,
     v21_dataset_id: Option<String>,
+    v22_stage_l: bool,
+    v22_source_archive_sha256: Option<String>,
+    v22_index_id: Option<String>,
+    v22_dataset_id: Option<String>,
     preload_serving: bool,
     _uri_temp: Option<tempfile::TempDir>,
     _cache_temp: Option<tempfile::TempDir>,
@@ -336,6 +342,42 @@ struct V21EvidenceIdentity<'a> {
     query_seed: u64,
     query_source_indices: &'a [usize],
     baseline_rss_bytes: u64,
+}
+
+#[derive(Clone, Copy, Serialize)]
+struct V22EvidenceIdentity<'a> {
+    dataset_name: &'a str,
+    dataset_id: &'a str,
+    index_id: &'a str,
+    source_archive_sha256: &'a str,
+    dimensions: usize,
+    dataset_rows: u64,
+    query_seed: u64,
+    query_source_indices: &'a [usize],
+}
+
+#[derive(Serialize)]
+struct V22StageLEvidence<'a> {
+    schema: &'static str,
+    document_kind: &'static str,
+    claim_eligible: bool,
+    identity: V22EvidenceIdentity<'a>,
+    report: &'a V22StageLReport,
+}
+
+#[derive(Debug, PartialEq, Serialize)]
+struct V22StageLSummary {
+    schema: &'static str,
+    document_kind: &'static str,
+    claim_eligible: bool,
+    rows: u64,
+    routing_cell_count: usize,
+    queries: usize,
+    arms: usize,
+    eligible_arms: Vec<usize>,
+    maximum_routed_rows: u64,
+    maximum_primary_requests: usize,
+    maximum_primary_physical_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1452,10 +1494,17 @@ fn run() -> BenchResult<()> {
     if config.v21_feasibility {
         reject_existing_destinations(&v21_feasibility_destinations(&config.output_dir))?;
     }
+    if config.v22_stage_l {
+        reject_existing_destinations(&v22_stage_l_destinations(&config.output_dir))?;
+    }
     print_config(&config);
     let dataset = load_dataset(&config)?;
     if config.v21_feasibility {
         write_v21_feasibility_artifacts(&config, &dataset)?;
+        return Ok(());
+    }
+    if config.v22_stage_l {
+        write_v22_stage_l_artifacts(&config, &dataset)?;
         return Ok(());
     }
     fs::create_dir_all(&config.output_dir)?;
@@ -2218,6 +2267,19 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     let v21_dataset_id = v21_feasibility
         .then(|| non_empty_env("BORSUK_BENCH_V21_DATASET_ID"))
         .flatten();
+    let v22_stage_l = env_flag("BORSUK_BENCH_V22_STAGE_L")?;
+    if v21_feasibility && v22_stage_l {
+        return Err(invalid_input("V21 and V22 diagnostic modes are mutually exclusive").into());
+    }
+    let v22_source_archive_sha256 = v22_stage_l
+        .then(|| non_empty_env("BORSUK_BENCH_V22_SOURCE_ARCHIVE_SHA256"))
+        .flatten();
+    let v22_index_id = v22_stage_l
+        .then(|| non_empty_env("BORSUK_BENCH_V22_INDEX_ID"))
+        .flatten();
+    let v22_dataset_id = v22_stage_l
+        .then(|| non_empty_env("BORSUK_BENCH_V22_DATASET_ID"))
+        .flatten();
     if v21_feasibility
         && (v21_source_archive_sha256.is_none()
             || v21_index_id.is_none()
@@ -2235,6 +2297,24 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     ) {
         validate_v21_evidence_identity_fields(source, index, dataset)?;
     }
+    if v22_stage_l
+        && (v22_source_archive_sha256.is_none()
+            || v22_index_id.is_none()
+            || v22_dataset_id.is_none())
+    {
+        return Err(invalid_input(
+            "BORSUK_BENCH_V22_STAGE_L requires exact source archive, index, and dataset identities",
+        )
+        .into());
+    }
+    if let (Some(source), Some(index), Some(dataset)) = (
+        v22_source_archive_sha256.as_deref(),
+        v22_index_id.as_deref(),
+        v22_dataset_id.as_deref(),
+    ) {
+        validate_v21_evidence_identity_fields(source, index, dataset)?;
+    }
+    let diagnostic_mode = v21_feasibility || v22_stage_l;
     let v21_forbidden_phase_env = [
         "BORSUK_BENCH_BUILD_INDEX",
         "BORSUK_BENCH_BUILD_ONLY",
@@ -2252,7 +2332,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         "BORSUK_BENCH_LIFECYCLE_WRITERS",
         "BORSUK_BENCH_LIMIT",
     ];
-    if v21_feasibility
+    if diagnostic_mode
         && let Some(name) = v21_forbidden_phase_env
             .iter()
             .find(|name| env::var_os(name).is_some())
@@ -2262,21 +2342,21 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         ))
         .into());
     }
-    let build_index = if v21_feasibility {
+    let build_index = if diagnostic_mode {
         false
     } else {
         env_flag_with_default("BORSUK_BENCH_BUILD_INDEX", true)?
     };
-    let build_only = !v21_feasibility && env_flag("BORSUK_BENCH_BUILD_ONLY")?;
+    let build_only = !diagnostic_mode && env_flag("BORSUK_BENCH_BUILD_ONLY")?;
     validate_build_only(build_only, build_index)?;
-    let recall_only = !v21_feasibility && env_flag("BORSUK_BENCH_RECALL_ONLY")?;
-    let skip_recall = v21_feasibility || env_flag("BORSUK_BENCH_SKIP_RECALL")?;
+    let recall_only = !diagnostic_mode && env_flag("BORSUK_BENCH_RECALL_ONLY")?;
+    let skip_recall = diagnostic_mode || env_flag("BORSUK_BENCH_SKIP_RECALL")?;
     let skip_exact_recall = env_flag("BORSUK_BENCH_SKIP_EXACT_RECALL")?;
     validate_phase_selection(recall_only, skip_recall)?;
-    let read_only = v21_feasibility || env_flag("BORSUK_BENCH_READ_ONLY")?;
-    let insert_only = !v21_feasibility && env_flag("BORSUK_BENCH_INSERT_ONLY")?;
+    let read_only = diagnostic_mode || env_flag("BORSUK_BENCH_READ_ONLY")?;
+    let insert_only = !diagnostic_mode && env_flag("BORSUK_BENCH_INSERT_ONLY")?;
     validate_insert_only(insert_only, build_only, read_only)?;
-    let lifecycle_only = !v21_feasibility && env_flag("BORSUK_BENCH_LIFECYCLE_ONLY")?;
+    let lifecycle_only = !diagnostic_mode && env_flag("BORSUK_BENCH_LIFECYCLE_ONLY")?;
     validate_lifecycle_only(
         lifecycle_only,
         build_index,
@@ -2287,7 +2367,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         insert_only,
     )?;
     validate_v21_feasibility_phase(
-        v21_feasibility,
+        diagnostic_mode,
         V21FeasibilityPhaseSelection {
             build_index,
             build_only,
@@ -2398,6 +2478,10 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         v21_source_archive_sha256,
         v21_index_id,
         v21_dataset_id,
+        v22_stage_l,
+        v22_source_archive_sha256,
+        v22_index_id,
+        v22_dataset_id,
         preload_serving,
         _uri_temp: uri_temp,
         _cache_temp: cache_temp,
@@ -3499,6 +3583,359 @@ fn v21_feasibility_destinations(output_dir: &Path) -> [PathBuf; 3] {
     ]
 }
 
+fn v22_stage_l_scratch_parent(output_dir: &Path) -> &Path {
+    output_dir
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn write_v22_stage_l_artifacts(config: &ResolvedConfig, dataset: &Dataset) -> BenchResult<()> {
+    let destinations = v22_stage_l_destinations(&config.output_dir);
+    reject_existing_destinations(&destinations)?;
+    if config.queries == 0
+        || config.queries > dataset.queries.len()
+        || config.queries > dataset.ground_truth.len()
+        || config.queries > dataset.query_source_indices.len()
+        || dataset.meta.name.is_empty()
+        || dataset.meta.dim == 0
+        || dataset.train_count != dataset.meta.n_train
+    {
+        return Err(invalid_input(
+            "V22 Stage L requires the exact full dataset and configured query authority",
+        )
+        .into());
+    }
+    let query_count = config.queries;
+    let index = BorsukIndex::open_with_options(
+        &config.uri,
+        OpenOptions {
+            cache_dir: None,
+            cache_max_bytes: Some(0),
+            ram_budget_bytes: config.ram_budget_bytes,
+            resident_routing: true,
+            cell_card_code_plane_cache_max_bytes: 0,
+            ..OpenOptions::default()
+        },
+    )?;
+    let _ = index.prepare_serving_metadata_without_complete_code_planes()?;
+    let scratch_parent = v22_stage_l_scratch_parent(&config.output_dir);
+    fs::create_dir_all(scratch_parent)?;
+    let scratch = tempfile::Builder::new()
+        .prefix(".borsuk-v22-stage-l-")
+        .tempdir_in(scratch_parent)?;
+    let report = index.diagnose_v22_stage_l(
+        &dataset.queries[..query_count],
+        &dataset.ground_truth[..query_count],
+        &SearchOptions::approx(RECALL_K, config.recall_leaf_mode),
+        scratch.path(),
+    )?;
+    let source_archive_sha256 = config
+        .v22_source_archive_sha256
+        .as_deref()
+        .ok_or_else(|| invalid_input("V22 Stage L source identity is absent"))?;
+    let index_id = config
+        .v22_index_id
+        .as_deref()
+        .ok_or_else(|| invalid_input("V22 Stage L index identity is absent"))?;
+    let dataset_id = config
+        .v22_dataset_id
+        .as_deref()
+        .ok_or_else(|| invalid_input("V22 Stage L dataset identity is absent"))?;
+    let identity = V22EvidenceIdentity {
+        dataset_name: &dataset.meta.name,
+        dataset_id,
+        index_id,
+        source_archive_sha256,
+        dimensions: dataset.meta.dim,
+        dataset_rows: u64::try_from(dataset.train_count)
+            .map_err(|_| invalid_input("V22 Stage L dataset rows exceed u64"))?,
+        query_seed: config.query_seed,
+        query_source_indices: &dataset.query_source_indices[..query_count],
+    };
+    write_v22_stage_l_evidence(&config.output_dir, &identity, &report)?;
+    Ok(())
+}
+
+fn v22_stage_l_destinations(output_dir: &Path) -> [PathBuf; 2] {
+    [
+        output_dir.join("bench_v22_stage_l_report.json"),
+        output_dir.join("bench_v22_stage_l_summary.json"),
+    ]
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn build_v22_stage_l_summary(
+    identity: &V22EvidenceIdentity<'_>,
+    report: &V22StageLReport,
+) -> io::Result<V22StageLSummary> {
+    if identity.dataset_name.is_empty()
+        || identity.dataset_id.is_empty()
+        || identity.index_id.is_empty()
+        || !valid_sha256(identity.source_archive_sha256)
+        || identity.dimensions == 0
+        || identity.dataset_rows == 0
+        || identity.dataset_rows != report.rows
+        || identity.query_source_indices.is_empty()
+        || identity
+            .query_source_indices
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != identity.query_source_indices.len()
+        || !valid_sha256(&report.v20_root_checksum)
+        || !valid_sha256(&report.v20_codebook_checksum)
+        || report.routing_cell_count == 0
+        || report.query_prefixes.len() != identity.query_source_indices.len()
+        || report.layout_censuses.len() != 42
+    {
+        return Err(invalid_input("V22 Stage L identity authority differs"));
+    }
+    for (query_index, prefix) in report.query_prefixes.iter().enumerate() {
+        if prefix.query_index != query_index
+            || prefix.rows.len() != 2048
+            || prefix.rows.iter().any(|row| {
+                !row.distance.is_finite()
+                    || row.canonical_record_id.is_empty()
+                    || row.primary_cell_routing_rank == 0
+                    || row.primary_cell_routing_rank > report.routing_cell_count
+            })
+            || prefix.rows.windows(2).any(|pair| {
+                pair[0]
+                    .distance
+                    .total_cmp(&pair[1].distance)
+                    .then_with(|| {
+                        pair[0]
+                            .canonical_record_id
+                            .cmp(&pair[1].canonical_record_id)
+                    })
+                    .then_with(|| pair[0].record_id.cmp(&pair[1].record_id))
+                    .is_gt()
+            })
+            || prefix
+                .rows
+                .iter()
+                .map(|row| row.record_id)
+                .collect::<BTreeSet<_>>()
+                .len()
+                != prefix.rows.len()
+        {
+            return Err(invalid_input("V22 Stage L exact-prefix authority differs"));
+        }
+    }
+    let expected_arms = [
+        (V22LayoutKind::V20Physical, None),
+        (V22LayoutKind::V20TwoPivotRepacked, Some(32)),
+        (V22LayoutKind::V20TwoPivotRepacked, Some(64)),
+        (V22LayoutKind::SemanticWithinCell, Some(32)),
+        (V22LayoutKind::SemanticWithinCell, Some(64)),
+        (V22LayoutKind::SemanticCrossCell, Some(32)),
+        (V22LayoutKind::SemanticCrossCell, Some(64)),
+    ]
+    .into_iter()
+    .flat_map(|(layout, rows)| {
+        [10_u16, 256, 512, 1024, 1536, 2048]
+            .into_iter()
+            .map(move |prefix| (layout, rows, prefix))
+    });
+    let mut maximum_routed_rows = 0_u64;
+    let mut maximum_primary_requests = 0_usize;
+    let mut maximum_primary_physical_bytes = 0_u64;
+    let mut eligible_arms = Vec::new();
+    let mut exact_row_bytes = None;
+    let mut layout_object_authorities: [Option<&[V22StageLProjectedObject]>; 7] = [None; 7];
+    for (arm_index, (arm, expected)) in report.layout_censuses.iter().zip(expected_arms).enumerate()
+    {
+        let projected_object_bytes = arm
+            .projected_objects
+            .iter()
+            .map(|object| (object.path.as_str(), object.encoded_bytes))
+            .collect::<BTreeMap<_, _>>();
+        if (arm.layout, arm.microcluster_rows, arm.exact_prefix_rows) != expected
+            || arm.query_samples.len() != report.query_prefixes.len()
+            || arm.projected_objects.is_empty()
+            || projected_object_bytes.len() != arm.projected_objects.len()
+            || arm.projected_objects.iter().any(|object| {
+                object.path.is_empty()
+                    || !valid_sha256(&object.checksum)
+                    || object.encoded_bytes == 0
+            })
+        {
+            return Err(invalid_input("V22 Stage L arm authority differs"));
+        }
+        let layout_index = arm_index / 6;
+        if layout_object_authorities[layout_index]
+            .is_some_and(|objects| objects != arm.projected_objects.as_slice())
+        {
+            return Err(invalid_input("V22 Stage L layout object authority differs"));
+        }
+        layout_object_authorities[layout_index] = Some(&arm.projected_objects);
+        for (query_index, sample) in arm.query_samples.iter().enumerate() {
+            let physical_bytes = sample.ranges.iter().try_fold(0_u64, |total, range| {
+                range
+                    .end
+                    .checked_sub(range.start)
+                    .and_then(|bytes| total.checked_add(bytes))
+            });
+            let selected_bytes = sample.ranges.iter().try_fold(0_u64, |total, range| {
+                total.checked_add(range.selected_bytes)
+            });
+            let selected_rows = sample
+                .ranges
+                .iter()
+                .try_fold(0_u64, |total, range| total.checked_add(range.rows));
+            let range_authority_differs = sample.ranges.iter().any(|range| {
+                range.start >= range.end
+                    || range.selected_bytes == 0
+                    || range.selected_bytes > range.end.saturating_sub(range.start)
+                    || range.rows == 0
+                    || range.blocks == 0
+                    || projected_object_bytes
+                        .get(range.path.as_str())
+                        .is_none_or(|encoded_bytes| range.end > *encoded_bytes)
+            });
+            let sample_exact_row_bytes = sample
+                .useful_bytes
+                .checked_div(u64::from(sample.exact_prefix_rows))
+                .filter(|bytes| {
+                    *bytes > 0
+                        && bytes.checked_mul(u64::from(sample.exact_prefix_rows))
+                            == Some(sample.useful_bytes)
+                });
+            let expected_packing_purity = sample
+                .useful_bytes
+                .checked_mul(1_000_000)
+                .and_then(|value| value.checked_div(sample.physical_bytes));
+            let expected_physical_amplification = sample
+                .physical_bytes
+                .checked_mul(1_000_000)
+                .and_then(|value| value.checked_div(sample.selected_bytes));
+            let expected_physical_bound = if sample.physical_bytes > 1_048_576 {
+                V22LayoutLimitingBound::Bytes
+            } else if sample.requests > 4 {
+                V22LayoutLimitingBound::Requests
+            } else {
+                V22LayoutLimitingBound::Eligible
+            };
+            if sample.query_index != query_index
+                || sample.exact_prefix_rows != arm.exact_prefix_rows
+                || sample.gt_cell_hits != 10
+                || sample.gt_cell_coverage_ppm != 1_000_000
+                || sample.required_routing_cells == 0
+                || sample.required_routing_cells > report.routing_cell_count
+                || sample.routing_eligible != (sample.routed_rows <= 512_000)
+                || sample.routed_rows > report.rows
+                || sample.requests != sample.ranges.len()
+                || sample.requests == 0
+                || sample.requests > usize::from(sample.exact_prefix_rows)
+                || range_authority_differs
+                || physical_bytes != Some(sample.physical_bytes)
+                || selected_bytes != Some(sample.selected_bytes)
+                || selected_rows != Some(sample.selected_rows)
+                || sample.selected_rows < u64::from(sample.exact_prefix_rows)
+                || sample_exact_row_bytes.is_none()
+                || sample.selected_bytes.checked_add(sample.speculative_bytes)
+                    != Some(sample.physical_bytes)
+                || expected_packing_purity != Some(sample.packing_purity_ppm)
+                || expected_physical_amplification != Some(sample.physical_amplification_ppm)
+                || sample.physical_limiting_bound != expected_physical_bound
+                || sample.limiting_bound
+                    != if sample.routing_eligible {
+                        sample.physical_limiting_bound
+                    } else {
+                        V22LayoutLimitingBound::RoutingRows
+                    }
+                || sample.eligible
+                    != (sample.routing_eligible
+                        && sample.physical_limiting_bound == V22LayoutLimitingBound::Eligible)
+            {
+                return Err(invalid_input("V22 Stage L sample evidence differs"));
+            }
+            if exact_row_bytes.is_some_and(|bytes| Some(bytes) != sample_exact_row_bytes) {
+                return Err(invalid_input("V22 Stage L exact-row width differs"));
+            }
+            exact_row_bytes = sample_exact_row_bytes;
+            maximum_routed_rows = maximum_routed_rows.max(sample.routed_rows);
+            maximum_primary_requests = maximum_primary_requests.max(sample.requests);
+            maximum_primary_physical_bytes =
+                maximum_primary_physical_bytes.max(sample.physical_bytes);
+        }
+        if arm.eligible != arm.query_samples.iter().all(|sample| sample.eligible) {
+            return Err(invalid_input("V22 Stage L arm eligibility differs"));
+        }
+        if arm.eligible {
+            eligible_arms.push(arm_index);
+        }
+    }
+    Ok(V22StageLSummary {
+        schema: V22_STAGE_L_SCHEMA,
+        document_kind: "publication-v3-v22-stage-l-summary",
+        claim_eligible: false,
+        rows: report.rows,
+        routing_cell_count: report.routing_cell_count,
+        queries: report.query_prefixes.len(),
+        arms: report.layout_censuses.len(),
+        eligible_arms,
+        maximum_routed_rows,
+        maximum_primary_requests,
+        maximum_primary_physical_bytes,
+    })
+}
+
+fn serialize_v22_stage_l_evidence(
+    identity: &V22EvidenceIdentity<'_>,
+    report: &V22StageLReport,
+) -> io::Result<[Vec<u8>; 2]> {
+    let summary = build_v22_stage_l_summary(identity, report)?;
+    let evidence = V22StageLEvidence {
+        schema: V22_STAGE_L_SCHEMA,
+        document_kind: "publication-v3-v22-stage-l-report",
+        claim_eligible: false,
+        identity: *identity,
+        report,
+    };
+    let mut raw = serde_json::to_vec(&evidence)
+        .map_err(|_| invalid_input("V22 Stage L report serialization failed"))?;
+    raw.push(b'\n');
+    let mut summary = serde_json::to_vec(&summary)
+        .map_err(|_| invalid_input("V22 Stage L summary serialization failed"))?;
+    summary.push(b'\n');
+    Ok([raw, summary])
+}
+
+fn validate_v22_stage_l_evidence(
+    output_dir: &Path,
+    identity: &V22EvidenceIdentity<'_>,
+    report: &V22StageLReport,
+) -> io::Result<()> {
+    let expected = serialize_v22_stage_l_evidence(identity, report)?;
+    let observed = v22_stage_l_destinations(output_dir).map(fs::read);
+    for (observed, expected) in observed.into_iter().zip(expected) {
+        if observed? != expected {
+            return Err(invalid_input("V22 Stage L persisted evidence differs"));
+        }
+    }
+    Ok(())
+}
+
+fn write_v22_stage_l_evidence(
+    output_dir: &Path,
+    identity: &V22EvidenceIdentity<'_>,
+    report: &V22StageLReport,
+) -> io::Result<()> {
+    let destinations = v22_stage_l_destinations(output_dir);
+    let payloads = serialize_v22_stage_l_evidence(identity, report)?;
+    publish_exclusive_file_set(output_dir, &destinations, &payloads)?;
+    validate_v22_stage_l_evidence(output_dir, identity, report)
+}
+
 fn projected_v21_serving_rss(
     baseline_rss_bytes: u64,
     replaced_v20_root_bytes: u64,
@@ -4022,10 +4459,10 @@ fn validate_v21_samples_csv(
     Ok(())
 }
 
-fn publish_exclusive_file_set(
+fn publish_exclusive_file_set<const N: usize>(
     output_dir: &Path,
-    destinations: &[PathBuf; 3],
-    payloads: &[Vec<u8>; 3],
+    destinations: &[PathBuf; N],
+    payloads: &[Vec<u8>; N],
 ) -> io::Result<()> {
     fs::create_dir_all(output_dir)?;
     reject_existing_destinations(destinations)?;
@@ -4035,9 +4472,7 @@ fn publish_exclusive_file_set(
             let file_name = path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .ok_or_else(|| {
-                    invalid_input("V21 feasibility destination has no UTF-8 filename")
-                })?;
+                .ok_or_else(|| invalid_input("evidence destination has no UTF-8 filename"))?;
             Ok(path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id())))
         })
         .collect::<io::Result<Vec<_>>>()?;
@@ -4071,7 +4506,7 @@ fn publish_exclusive_file_set(
     if reloaded.as_slice() != payloads {
         cleanup_temporary();
         return Err(invalid_input(
-            "V21 feasibility temporary evidence changed before publication",
+            "temporary evidence changed before publication",
         ));
     }
     let mut linked = Vec::new();
@@ -7115,19 +7550,19 @@ mod tests {
         QuerySample, QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES,
         ServingMetadataPreparation, ServingMode, V21EvidenceIdentity, V21FeasibilityPhaseSelection,
         V21FeasibilityQuerySample, V21FeasibilityReport, V21FeasibilitySummary, V21LimitingBound,
-        VectorMetric, VectorRecord, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
+        V22EvidenceIdentity, VectorMetric, VectorRecord, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
         allow_missing_corpus_for_phase, approximate_options, benchmark_row_ids,
-        build_v21_feasibility_summary, cache_coverage_cohort_size, cache_coverage_enabled,
-        cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
-        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
-        disk_cached_concurrency_cohort_size, disk_cached_query_cohort_size,
-        dollars_per_million_queries, execute_bulk_add_wave, execute_concurrency_cache_setup,
-        execute_disk_cached_concurrency_profiles, execute_disk_cached_query_cohorts,
-        execute_isolated_recall_cache_phases, execute_put_wave, execute_uncached_query_sequence,
-        finalize_fresh_build, first_logical_batch_publish_ms, ingest_batch_size,
-        is_hot_workload_position, join_concurrency_workers, lifecycle_progress_line,
-        lifecycle_query_progress_line, lifecycle_write_operation_count, lifecycle_write_waves,
-        lifecycle_writer_open_options, mixed_concurrency_query_indices,
+        build_v21_feasibility_summary, build_v22_stage_l_summary, cache_coverage_cohort_size,
+        cache_coverage_enabled, cache_state_summary_enabled, dataset_metric,
+        default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
+        deterministic_mutation_vector, disk_cached_concurrency_cohort_size,
+        disk_cached_query_cohort_size, dollars_per_million_queries, execute_bulk_add_wave,
+        execute_concurrency_cache_setup, execute_disk_cached_concurrency_profiles,
+        execute_disk_cached_query_cohorts, execute_isolated_recall_cache_phases, execute_put_wave,
+        execute_uncached_query_sequence, finalize_fresh_build, first_logical_batch_publish_ms,
+        ingest_batch_size, is_hot_workload_position, join_concurrency_workers,
+        lifecycle_progress_line, lifecycle_query_progress_line, lifecycle_write_operation_count,
+        lifecycle_write_waves, lifecycle_writer_open_options, mixed_concurrency_query_indices,
         mutable_resident_metadata_budget, neighbor_row, normalized_cache_access_fractions,
         open_lifecycle_writer_handles, parquet_train_files_for_phase, parse_flag_value,
         parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
@@ -7140,17 +7575,24 @@ mod tests {
         serialize_v21_feasibility_evidence, serving_cache_dir, serving_memory_partition,
         shared_serving_metadata_preparation, update_vector_reservoir,
         uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase, v21_feasibility_arms,
-        validate_bounded_v20_execution, validate_build_only, validate_build_writers,
-        validate_disk_cached_network, validate_exact_read_max_physical_amplification,
-        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
-        validate_lifecycle_only, validate_lifecycle_writers,
-        validate_max_parallel_decode_rank_tasks, validate_phase_selection,
-        validate_serialized_v21_feasibility_evidence, validate_v12_candidate_budgets,
-        validate_v12_leaf_mode, validate_v12_leaf_page_budgets, validate_v21_feasibility_phase,
-        validate_v21_feasibility_reports, vector_row, verification_offsets, write_batch_len,
+        v22_stage_l_scratch_parent, validate_bounded_v20_execution, validate_build_only,
+        validate_build_writers, validate_disk_cached_network,
+        validate_exact_read_max_physical_amplification, validate_generated_id_range,
+        validate_insert_only, validate_leaf_capability_modes, validate_lifecycle_only,
+        validate_lifecycle_writers, validate_max_parallel_decode_rank_tasks,
+        validate_phase_selection, validate_serialized_v21_feasibility_evidence,
+        validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
+        validate_v21_feasibility_phase, validate_v21_feasibility_reports,
+        validate_v22_stage_l_evidence, vector_row, verification_offsets, write_batch_len,
         write_operation_count, write_runtime_flow_control_receipt, write_v21_feasibility_evidence,
+        write_v22_stage_l_evidence,
     };
-    use std::fs;
+    use borsuk::{
+        V22LayoutKind, V22LayoutLimitingBound, V22StageLExactRow, V22StageLLayoutArmReport,
+        V22StageLLayoutQuerySample, V22StageLProjectedObject, V22StageLQueryPrefix, V22StageLRange,
+        V22StageLReport,
+    };
+    use std::{fs, path::Path};
 
     #[test]
     fn v21_feasibility_matrix_is_exact_and_canonical() {
@@ -10176,5 +10618,150 @@ mod tests {
     #[test]
     fn benchmark_request_cost_uses_dated_frankfurt_get_price() {
         assert!((dollars_per_million_queries(200.0) - 86.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn v22_stage_l_evidence_is_canonical_validated_and_no_clobber() {
+        let exact_rows = (0_u64..2048)
+            .map(|record_id| V22StageLExactRow {
+                distance: record_id as f32,
+                record_id,
+                canonical_record_id: format!("row-{record_id}").into_bytes().into(),
+                primary_cell: (record_id % 4) as u32,
+                primary_cell_routing_rank: (record_id % 4 + 1) as usize,
+            })
+            .collect::<Vec<_>>();
+        let query_prefixes = (0..2)
+            .map(|query_index| V22StageLQueryPrefix {
+                query_index,
+                rows: exact_rows.clone(),
+            })
+            .collect::<Vec<_>>();
+        let mut layout_censuses = Vec::new();
+        for (layout, microcluster_rows) in [
+            (V22LayoutKind::V20Physical, None),
+            (V22LayoutKind::V20TwoPivotRepacked, Some(32)),
+            (V22LayoutKind::V20TwoPivotRepacked, Some(64)),
+            (V22LayoutKind::SemanticWithinCell, Some(32)),
+            (V22LayoutKind::SemanticWithinCell, Some(64)),
+            (V22LayoutKind::SemanticCrossCell, Some(32)),
+            (V22LayoutKind::SemanticCrossCell, Some(64)),
+        ] {
+            for exact_prefix_rows in [10_u16, 256, 512, 1024, 1536, 2048] {
+                layout_censuses.push(V22StageLLayoutArmReport {
+                    layout,
+                    microcluster_rows,
+                    exact_prefix_rows,
+                    projected_objects: vec![V22StageLProjectedObject {
+                        path: format!("{layout:?}-{microcluster_rows:?}.arrow"),
+                        checksum: "11".repeat(32),
+                        encoded_bytes: 65_536,
+                    }],
+                    query_samples: (0..2)
+                        .map(|query_index| V22StageLLayoutQuerySample {
+                            query_index,
+                            exact_prefix_rows,
+                            required_routing_cells: 4,
+                            gt_cell_hits: 10,
+                            gt_cell_coverage_ppm: 1_000_000,
+                            routed_rows: 2048,
+                            useful_bytes: u64::from(exact_prefix_rows) * 32,
+                            selected_bytes: 65_536,
+                            physical_bytes: 65_536,
+                            speculative_bytes: 0,
+                            requests: 1,
+                            selected_rows: u64::from(exact_prefix_rows),
+                            packing_purity_ppm: u64::from(exact_prefix_rows) * 32 * 1_000_000
+                                / 65_536,
+                            physical_amplification_ppm: 1_000_000,
+                            physical_limiting_bound: V22LayoutLimitingBound::Eligible,
+                            routing_eligible: true,
+                            limiting_bound: V22LayoutLimitingBound::Eligible,
+                            eligible: true,
+                            ranges: vec![V22StageLRange {
+                                path: format!("{layout:?}-{microcluster_rows:?}.arrow"),
+                                start: 0,
+                                end: 65_536,
+                                selected_bytes: 65_536,
+                                rows: u64::from(exact_prefix_rows),
+                                blocks: 1,
+                            }],
+                        })
+                        .collect(),
+                    eligible: true,
+                });
+            }
+        }
+        let report = V22StageLReport {
+            v20_root_checksum: "22".repeat(32),
+            v20_codebook_checksum: "33".repeat(32),
+            rows: 10_000_000,
+            routing_cell_count: 4096,
+            query_prefixes,
+            layout_censuses,
+        };
+        let identity = V22EvidenceIdentity {
+            dataset_name: "deep-image-96",
+            dataset_id: "deep-image-96",
+            index_id: "index-authority",
+            source_archive_sha256: &"44".repeat(32),
+            dimensions: 96,
+            dataset_rows: 10_000_000,
+            query_seed: 23_006,
+            query_source_indices: &[11, 29],
+        };
+        let output = tempfile::tempdir().unwrap();
+        write_v22_stage_l_evidence(output.path(), &identity, &report).unwrap();
+        validate_v22_stage_l_evidence(output.path(), &identity, &report).unwrap();
+        assert!(write_v22_stage_l_evidence(output.path(), &identity, &report).is_err());
+        assert_eq!(output.path().read_dir().unwrap().count(), 2);
+
+        let mut drifted = report.clone();
+        drifted.layout_censuses[0].query_samples[0].packing_purity_ppm += 1;
+        assert!(build_v22_stage_l_summary(&identity, &drifted).is_err());
+        let mut drifted = report.clone();
+        drifted.layout_censuses[0].query_samples[0].physical_amplification_ppm += 1;
+        assert!(build_v22_stage_l_summary(&identity, &drifted).is_err());
+        let mut drifted = report.clone();
+        drifted.layout_censuses[0].query_samples[0].ranges[0].path =
+            "unbound-object.arrow".to_string();
+        assert!(build_v22_stage_l_summary(&identity, &drifted).is_err());
+        let mut drifted = report.clone();
+        drifted.layout_censuses[1].projected_objects[0].encoded_bytes += 1;
+        assert!(build_v22_stage_l_summary(&identity, &drifted).is_err());
+        let mut drifted = report.clone();
+        let sample = &mut drifted.layout_censuses[0].query_samples[0];
+        let range = sample.ranges[0].clone();
+        let segment_ends = [13_107_u64, 26_214, 39_321, 52_428, 65_536];
+        sample.ranges = segment_ends
+            .into_iter()
+            .scan(0_u64, |start, end| {
+                let selected_bytes = end - *start;
+                let result = V22StageLRange {
+                    path: range.path.clone(),
+                    start: *start,
+                    end,
+                    selected_bytes,
+                    rows: 2,
+                    blocks: 1,
+                };
+                *start = end;
+                Some(result)
+            })
+            .collect();
+        sample.requests = 5;
+        assert!(build_v22_stage_l_summary(&identity, &drifted).is_err());
+    }
+
+    #[test]
+    fn v22_stage_l_relative_output_uses_the_current_directory_for_scratch() {
+        assert_eq!(
+            v22_stage_l_scratch_parent(Path::new("runtime-output")),
+            Path::new(".")
+        );
+        assert_eq!(
+            v22_stage_l_scratch_parent(Path::new("/tmp/runtime-output")),
+            Path::new("/tmp")
+        );
     }
 }
