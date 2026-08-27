@@ -423,7 +423,15 @@ def validate_runtime_attestation(
             or len(value[field]) > 256
         ):
             raise ValueError(f"runtime {field} is invalid")
-    if (
+    if resource_role == "diagnostic":
+        if effective_disk_cache_max != 0:
+            raise ValueError("diagnostic runtime disk cache must be disabled")
+        if (
+            value["cache_is_mount"] is not False
+            or value["cache_device"] != value["root_device"]
+        ):
+            raise ValueError("diagnostic runtime cache path must use root storage")
+    elif (
         value["cache_is_mount"] is not True
         or value["cache_device"] == value["root_device"]
     ):

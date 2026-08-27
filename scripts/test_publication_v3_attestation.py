@@ -248,9 +248,9 @@ class PublicationV3AttestationTests(unittest.TestCase):
                 "volume_size_gib"
             ]
             * 1024**3,
-            "cache_device": "259:1",
+            "cache_device": "259:0",
             "root_device": "259:0",
-            "cache_is_mount": True,
+            "cache_is_mount": False,
             "source_revision": str(cell["source"]["git_commit"]),
         }
         self.assertEqual(
@@ -267,6 +267,9 @@ class PublicationV3AttestationTests(unittest.TestCase):
             {**value, "instance_type": "c7g.xlarge"},
             {**value, "vcpus": 4},
             {**value, "memory_max_bytes": 8 * 1024**3},
+            {**value, "effective_disk_cache_max_bytes": 1},
+            {**value, "cache_is_mount": True},
+            {**value, "cache_device": "259:1"},
         ):
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 validate_runtime_attestation(
