@@ -81,7 +81,7 @@ def runtime_flow_control(profile: str = "recall") -> dict[str, int]:
         "cpu_threads": 3,
         "io_threads": 88,
         "s3_get_concurrency": 64,
-        "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
+        "ram_budget_bytes": 3 * 1024 * 1024 * 1024,
     }
     if profile == "concurrency":
         values.update(
@@ -1257,7 +1257,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(benchmark_env["BORSUK_BENCH_LOGICAL_CELL_ITERATIONS"], "8")
         self.assertEqual(benchmark_env["BORSUK_BENCH_GLOBAL_PQ_CODE_BYTES"], "128")
         self.assertEqual(
-            benchmark_env["BORSUK_BENCH_RAM_BUDGET_BYTES"], str(2 * 1024**3)
+            benchmark_env["BORSUK_BENCH_RAM_BUDGET_BYTES"], str(3 * 1024**3)
         )
         self.assertEqual(benchmark_env["BORSUK_BENCH_DISK_CACHE_MAX_BYTES"], "0")
         self.assertEqual(benchmark_env["BORSUK_BENCH_CACHE_COVERAGE_PERCENT"], "0")
@@ -1573,7 +1573,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         effective = {
             "schema_version": 4,
             "disk_cache_max_bytes": 0,
-            "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
+            "ram_budget_bytes": 3 * 1024 * 1024 * 1024,
             "max_active_searches": 16,
             "max_waiting_searches": 64,
             "leaf_read_width": 32,
@@ -1591,7 +1591,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "schema_version": 5,
                 "runtime_profile": "concurrency",
                 "disk_cache_max_bytes": 0,
-                "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
+                "ram_budget_bytes": 3 * 1024 * 1024 * 1024,
                 "max_active_searches": 16,
                 "max_waiting_searches": 64,
                 "leaf_read_width": 32,
@@ -1618,7 +1618,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 "concurrency",
                 {**effective, "max_active_searches": 3},
             )
-        runtime_env["BORSUK_BENCH_RAM_BUDGET_BYTES"] = str(2 * 1024 * 1024 * 1024)
+        runtime_env["BORSUK_BENCH_RAM_BUDGET_BYTES"] = str(3 * 1024 * 1024 * 1024)
         runtime_env["BORSUK_BENCH_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION"] = "6"
         with self.assertRaisesRegex(ValueError, "physical amplification"):
             runtime_execution_contract(
@@ -1639,7 +1639,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             "cpu_threads": 3,
             "io_threads": 160,
             "s3_get_concurrency": 128,
-            "ram_budget_bytes": 2 * 1024 * 1024 * 1024,
+            "ram_budget_bytes": 3 * 1024 * 1024 * 1024,
         }
         with self.assertRaisesRegex(ValueError, "required"):
             runtime_flow_control_authority("runtime", {key: None for key in fields})
@@ -1674,7 +1674,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             ("leaf_read_width", 1025),
             ("max_inflight_leaf_reads", 1025),
             ("cpu_threads", 5),
-            ("ram_budget_bytes", 2 * 1024 * 1024 * 1024 + 1),
+            ("ram_budget_bytes", 3 * 1024 * 1024 * 1024 + 1),
             ("exact_read_max_physical_amplification", 6),
             ("disk_cache_max_bytes", 1),
             ("cpu_threads", True),
@@ -2148,6 +2148,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     "disk_cache_bytes_read": "0",
                     "backing_bytes_read": str((index + 1) * 100),
                     "global_leaf_code_pages_read": str(100 + index),
+                    "global_leaf_code_bytes": str((index + 1) * 100),
                     "global_leaf_code_requests": str(index + 2),
                     "global_leaf_pages_read": str(30 + index),
                     "global_leaf_exact_requests": str(index + 3),
@@ -2240,6 +2241,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             row["disk_cache_reads"] = "1"
             row["disk_cache_bytes_read"] = row["bytes_read"]
             row["backing_bytes_read"] = "0"
+            row["global_leaf_code_bytes"] = "0"
             row["cache_cohort_index"] = "0"
             row["cache_cohort_size"] = "3"
             row["cache_cohort_count"] = "1"
@@ -2285,6 +2287,16 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "disk-cached query sample"):
             summarize_query_samples(
                 warm_memory_only,
+                cell=cell,
+                arm=warm_arm,
+                expected_queries=3,
+                expected_cache_cohort_size=3,
+            )
+        warm_head_reads = json.loads(json.dumps(warm_rows))
+        warm_head_reads[0]["global_leaf_code_bytes"] = "1"
+        with self.assertRaisesRegex(ValueError, "prepared code planes"):
+            summarize_query_samples(
+                warm_head_reads,
                 cell=cell,
                 arm=warm_arm,
                 expected_queries=3,

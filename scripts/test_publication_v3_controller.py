@@ -947,7 +947,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             "--cpu-threads 3",
             "--io-threads 160",
             "--s3-get-concurrency 128",
-            "--ram-budget-bytes 2147483648",
+            "--ram-budget-bytes 3221225472",
         ):
             self.assertIn(argument, concurrency_worker)
         self.assertIn(

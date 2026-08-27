@@ -845,7 +845,7 @@ def _validate_environment(value: object) -> dict[str, object]:
         for system in SYSTEMS
     }
     query_caps = {
-        "borsuk": (8_192, 2_048),
+        "borsuk": (8_192, 3_072),
         "amazon-s3-vectors": (8_192, 2_048),
         "faiss": (16_384, 12_288),
     }

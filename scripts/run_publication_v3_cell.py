@@ -1247,6 +1247,12 @@ def summarize_query_samples(
         disk_cache_reads = int(row["disk_cache_reads"])
         disk_bytes = int(row["disk_cache_bytes_read"])
         backing_bytes = int(row["backing_bytes_read"])
+        code_bytes = int(
+            row.get(
+                "global_leaf_code_bytes",
+                "-1" if arm["cache_state"] == "warm" else "0",
+            )
+        )
         if (
             network_gets < 0
             or bytes_read < 0
@@ -1254,10 +1260,15 @@ def summarize_query_samples(
             or disk_cache_reads < 0
             or disk_bytes < 0
             or backing_bytes < 0
+            or code_bytes < 0
             or bytes_read != decoded_bytes + disk_bytes + backing_bytes
         ):
             raise ValueError("query sample storage telemetry is invalid")
         if arm["cache_state"] == "warm":
+            if code_bytes != 0:
+                raise ValueError(
+                    "disk-cached query sample did not use prepared code planes"
+                )
             if (
                 network_gets != 0
                 or backing_bytes != 0

@@ -70,9 +70,9 @@ use crate::{
         tombstone_ids_to_parquet, wal_records_from_table,
     },
     global_cell_card::{
-        CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION, CELL_CARD_RANGE_READ_MAX_BYTES,
-        CellCardGroupRef, CellCardGroupWriter, CellCardHeadRead, CellCardPush,
-        GlobalCellCardAnnRef, cell_card_exact_admission_bounds,
+        CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION, CELL_CARD_GROUP_MAX_BYTES,
+        CELL_CARD_RANGE_READ_MAX_BYTES, CellCardGroupRef, CellCardGroupWriter, CellCardHeadRead,
+        CellCardPush, GlobalCellCardAnnRef, cell_card_exact_admission_bounds,
         decode_authenticated_cell_card_head_wave, decode_cell_card_exact_read,
         decode_cell_card_run_root, encode_cell_card_run_root,
         plan_ranked_cell_card_exact_wave_with_amplification, plan_ranked_cell_card_head_wave,
@@ -821,16 +821,13 @@ fn admitted_cell_card_code_plane_bytes(
 ) -> Option<u64> {
     let mut planes = 0_usize;
     let total = plane_bytes.into_iter().try_fold(0_u64, |total, bytes| {
-        if bytes == 0 || bytes > CELL_CARD_CACHEABLE_PLANE_MAX_BYTES {
+        if bytes == 0 || bytes > CELL_CARD_GROUP_MAX_BYTES {
             return None;
         }
         planes = planes.checked_add(1)?;
         total.checked_add(bytes)
     })?;
-    (planes > 0
-        && total <= DEFAULT_CELL_CARD_CODE_PLANE_CACHE_BYTES
-        && total <= available_retained_bytes)
-        .then_some(total)
+    (planes > 0 && total <= available_retained_bytes).then_some(total)
 }
 
 fn cell_card_plane_promotion_ceiling(cache_enabled: bool) -> u64 {
@@ -1205,6 +1202,13 @@ pub struct OpenOptions {
     /// effective budget. `None` reserves the larger of that authority and one
     /// quarter of the total budget.
     pub resident_metadata_max_bytes: Option<u64>,
+    /// Optional minimum share of the effective RAM budget reserved for
+    /// transient query and WAL work after immutable collection authority.
+    /// When the remaining budget can honor this floor, all additional bytes
+    /// belong to the retained pool instead of being split evenly. Open fails
+    /// if immutable collection authority leaves no retained byte after this
+    /// floor is reserved.
+    pub transient_ram_min_bytes: Option<u64>,
     /// Keep full segment routing summaries resident after open.
     ///
     /// Defaults to `false`: search resolves segments from persisted routing
@@ -1301,6 +1305,7 @@ impl Default for OpenOptions {
             cache_max_bytes: None,
             ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
             resident_metadata_max_bytes: None,
+            transient_ram_min_bytes: None,
             resident_routing: false,
             segment_cache_max_bytes: None,
             routing_page_cache_max_bytes: DEFAULT_ROUTING_PAGE_CACHE_BYTES,
@@ -3672,23 +3677,22 @@ impl CollectionReadRuntime {
         effective_ram_budget: Option<u64>,
         collection_resident_bytes: u64,
     ) -> Arc<Self> {
-        let resident_capacity_bytes =
-            match (effective_ram_budget, options.resident_metadata_max_bytes) {
-                (Some(budget), Some(configured)) => Some(
-                    configured
-                        .min((budget / 2).max(1).min(budget))
-                        .max(collection_resident_bytes.min(budget)),
-                ),
-                (Some(budget), None) => Some(
-                    collection_resident_bytes.max(budget / COLLECTION_RESIDENT_RAM_BUDGET_DIVISOR),
-                ),
-                (None, configured) => configured,
-            };
+        let resident_capacity_bytes = read_runtime_resident_capacity(
+            options,
+            effective_ram_budget,
+            collection_resident_bytes,
+        );
         let remaining = effective_ram_budget
             .zip(resident_capacity_bytes)
             .map(|(budget, resident_capacity)| budget.saturating_sub(resident_capacity));
-        let retained_capacity = remaining.map(|bytes| bytes / 2);
-        let transient_capacity = remaining.map(|bytes| bytes.saturating_sub(bytes / 2));
+        let retained_capacity = remaining.map(|bytes| {
+            options
+                .transient_ram_min_bytes
+                .map_or(bytes / 2, |minimum| bytes.saturating_sub(minimum))
+        });
+        let transient_capacity = remaining
+            .zip(retained_capacity)
+            .map(|(bytes, retained)| bytes.saturating_sub(retained));
         let wal_fetch_capacity = transient_capacity.map(|capacity| {
             (capacity / WAL_TAIL_FETCH_TRANSIENT_BUDGET_DIVISOR)
                 .max(1)
@@ -3870,6 +3874,46 @@ impl CollectionReadRuntime {
         }
         Ok(())
     }
+}
+
+fn read_runtime_resident_capacity(
+    options: &OpenOptions,
+    effective_ram_budget: Option<u64>,
+    collection_resident_bytes: u64,
+) -> Option<u64> {
+    match (effective_ram_budget, options.resident_metadata_max_bytes) {
+        (Some(budget), Some(configured)) => Some(
+            configured
+                .min((budget / 2).max(1).min(budget))
+                .max(collection_resident_bytes.min(budget)),
+        ),
+        (Some(budget), None) => {
+            Some(collection_resident_bytes.max(budget / COLLECTION_RESIDENT_RAM_BUDGET_DIVISOR))
+        }
+        (None, configured) => configured,
+    }
+}
+
+fn validate_read_runtime_partition(
+    options: &OpenOptions,
+    effective_ram_budget: Option<u64>,
+    collection_resident_bytes: u64,
+) -> Result<()> {
+    let (Some(budget), Some(minimum), Some(resident_capacity)) = (
+        effective_ram_budget,
+        options.transient_ram_min_bytes,
+        read_runtime_resident_capacity(options, effective_ram_budget, collection_resident_bytes),
+    ) else {
+        return Ok(());
+    };
+    let required = resident_capacity.saturating_add(minimum);
+    if required >= budget {
+        return Err(BorsukError::RamBudgetExceeded {
+            resident_bytes: required,
+            budget_bytes: budget,
+        });
+    }
+    Ok(())
 }
 
 fn first_duplicate_record_id<'a>(
@@ -4983,6 +5027,7 @@ impl BorsukIndex {
                 cache_max_bytes: Some(crate::storage::DEFAULT_DISK_CACHE_BYTES),
                 ram_budget_bytes: Some(DEFAULT_RAM_BUDGET_BYTES),
                 resident_metadata_max_bytes: None,
+                transient_ram_min_bytes: None,
                 resident_routing: false,
                 segment_cache_max_bytes: None,
                 routing_page_cache_max_bytes: DEFAULT_ROUTING_PAGE_CACHE_BYTES,
@@ -5131,6 +5176,7 @@ impl BorsukIndex {
         }
         let effective_ram_budget =
             effective_ram_budget_bytes(manifest.config.ram_budget_bytes, options.ram_budget_bytes);
+        validate_read_runtime_partition(&options, effective_ram_budget, collection_resident_bytes)?;
         let read_runtime =
             CollectionReadRuntime::new(&options, effective_ram_budget, collection_resident_bytes);
         read_runtime.enforce_resident_capacity(collection_resident_bytes)?;
@@ -5729,20 +5775,48 @@ impl BorsukIndex {
     fn stage_replacement_cell_card_code_planes(
         &self,
         pins: Option<&ResidentGlobalAnnPins>,
-    ) -> Result<Option<PreparedCellCardCodePlanes>> {
-        pins.map(|pins| self.stage_fitting_cell_card_code_planes(pins, true))
+    ) -> Result<(Option<PreparedCellCardCodePlanes>, bool)> {
+        let reprepare_after_publish = self
+            .read_runtime
+            .prepared_cell_card_code_planes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .is_some_and(|prepared| prepared.owner_modality == self.manifest_reference.modality);
+        let prepared = pins
+            .map(|pins| self.stage_fitting_cell_card_code_planes(pins, true))
             .transpose()
-            .map(Option::flatten)
+            .map(Option::flatten)?;
+        Ok((prepared, reprepare_after_publish))
     }
 
-    fn install_staged_cell_card_code_planes(&self, prepared: Option<PreparedCellCardCodePlanes>) {
+    fn install_staged_cell_card_code_planes(
+        &self,
+        prepared: Option<PreparedCellCardCodePlanes>,
+        reprepare_after_publish: bool,
+    ) -> bool {
         if let Some(prepared) = prepared {
             *self
                 .read_runtime
                 .prepared_cell_card_code_planes
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()) = Some(prepared);
+            return false;
         }
+        let already_prepared = self
+            .read_runtime
+            .prepared_cell_card_code_planes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_some();
+        reprepare_after_publish && !already_prepared && self.resident_global_ann_pins.is_some()
+    }
+
+    fn reprepare_published_cell_card_code_planes(&self, required: bool) -> Result<()> {
+        if required && let Some(pins) = self.resident_global_ann_pins.as_ref() {
+            self.prepare_fitting_cell_card_code_planes(pins)?;
+        }
+        Ok(())
     }
 
     fn install_resident_global_ann_pins(&mut self, next: Option<ResidentGlobalAnnPins>) {
@@ -9871,7 +9945,7 @@ impl BorsukIndex {
         manifest.global_ann_ref = None;
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
-        let prepared_cell_card_code_planes =
+        let (prepared_cell_card_code_planes, reprepare_cell_card_code_planes) =
             self.stage_replacement_cell_card_code_planes(prepared_global_ann_pins.as_ref())?;
         // Generation shard counters are shared monotonic allocators and must
         // survive purge. They contain no record ownership or visibility state;
@@ -9880,12 +9954,16 @@ impl BorsukIndex {
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         self.install_resident_global_ann_pins(prepared_global_ann_pins);
-        self.install_staged_cell_card_code_planes(prepared_cell_card_code_planes);
+        let reprepare_cell_card_code_planes = self.install_staged_cell_card_code_planes(
+            prepared_cell_card_code_planes,
+            reprepare_cell_card_code_planes,
+        );
         // Purge rebuilt the cell layout; refresh the persisted cold quantizer.
         self.refresh_persisted_quantizer()?;
         self.rekey_resident_global_mutations_after_manifest_publish(
             Self::mutation_snapshot_key_for(previous.version, &self.cell_wal_snapshot),
         );
+        self.reprepare_published_cell_card_code_planes(reprepare_cell_card_code_planes)?;
 
         Ok(PurgeReport {
             segments_rewritten,
@@ -16105,13 +16183,16 @@ impl BorsukIndex {
         );
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
-        let prepared_cell_card_code_planes =
+        let (prepared_cell_card_code_planes, reprepare_cell_card_code_planes) =
             self.stage_replacement_cell_card_code_planes(prepared_global_ann_pins.as_ref())?;
         let previous = self.manifest.clone();
         self.manifest =
             self.publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         self.install_resident_global_ann_pins(prepared_global_ann_pins);
-        self.install_staged_cell_card_code_planes(prepared_cell_card_code_planes);
+        let reprepare_cell_card_code_planes = self.install_staged_cell_card_code_planes(
+            prepared_cell_card_code_planes,
+            reprepare_cell_card_code_planes,
+        );
         // Publication is durable now. Rebind immediately while the local WAL
         // snapshot still names the pre-clear frontier, so a best-effort pruning
         // failure cannot leave this serving handle on the old manifest key.
@@ -16146,6 +16227,7 @@ impl BorsukIndex {
         self.rekey_resident_global_mutations_after_manifest_publish(
             mutation_snapshot_key_before_compaction,
         );
+        self.reprepare_published_cell_card_code_planes(reprepare_cell_card_code_planes)?;
 
         Ok(CompactionReport {
             compacted: true,
@@ -16480,7 +16562,7 @@ impl BorsukIndex {
         // resident state that the budget is meant to prevent.
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
-        let prepared_cell_card_code_planes =
+        let (prepared_cell_card_code_planes, reprepare_cell_card_code_planes) =
             self.stage_replacement_cell_card_code_planes(prepared_global_ann_pins.as_ref())?;
         let needs_leaf_page_append = replacement_pages.len() > dirty_page_count;
         if let Some(mut page_refs) = full_leaf_page_refs {
@@ -16625,10 +16707,14 @@ impl BorsukIndex {
         // through the IVF probe list instead of the degraded routing tree.
         self.refresh_persisted_quantizer()?;
         self.install_resident_global_ann_pins(prepared_global_ann_pins);
-        self.install_staged_cell_card_code_planes(prepared_cell_card_code_planes);
+        let reprepare_cell_card_code_planes = self.install_staged_cell_card_code_planes(
+            prepared_cell_card_code_planes,
+            reprepare_cell_card_code_planes,
+        );
         self.rekey_resident_global_mutations_after_manifest_publish(
             mutation_snapshot_key_before_compaction,
         );
+        self.reprepare_published_cell_card_code_planes(reprepare_cell_card_code_planes)?;
 
         Ok(CompactionReport {
             compacted: true,
@@ -23360,7 +23446,7 @@ impl BorsukIndex {
         }
         enforce_ram_budget(&manifest, self.runtime_ram_budget_bytes)?;
         let prepared_global_ann_pins = self.preload_resident_global_ann_for_manifest(&manifest)?;
-        let prepared_cell_card_code_planes =
+        let (prepared_cell_card_code_planes, reprepare_cell_card_code_planes) =
             self.stage_replacement_cell_card_code_planes(prepared_global_ann_pins.as_ref())?;
         if !manifest.has_complete_inline_segments() {
             let top_read = self.storage.read_routing_layer_page_index_with_status(
@@ -23384,10 +23470,14 @@ impl BorsukIndex {
                 .publish_manifest_reusing_routing_pages_with_recovery(manifest, Some(&previous))?;
         }
         self.install_resident_global_ann_pins(prepared_global_ann_pins);
-        self.install_staged_cell_card_code_planes(prepared_cell_card_code_planes);
+        let reprepare_cell_card_code_planes = self.install_staged_cell_card_code_planes(
+            prepared_cell_card_code_planes,
+            reprepare_cell_card_code_planes,
+        );
         self.rekey_resident_global_mutations_after_manifest_publish(
             Self::mutation_snapshot_key_for(previous.version, &self.cell_wal_snapshot),
         );
+        self.reprepare_published_cell_card_code_planes(reprepare_cell_card_code_planes)?;
         Ok(())
     }
 
@@ -30996,6 +31086,19 @@ fn validate_open_options(options: &OpenOptions) -> Result<()> {
             "resident_metadata_max_bytes must be greater than zero when configured".to_string(),
         ));
     }
+    if options.transient_ram_min_bytes == Some(0) {
+        return Err(BorsukError::InvalidOpenOptions(
+            "transient_ram_min_bytes must be greater than zero when configured".to_string(),
+        ));
+    }
+    if let (Some(total), Some(minimum)) =
+        (options.ram_budget_bytes, options.transient_ram_min_bytes)
+        && minimum >= total
+    {
+        return Err(BorsukError::InvalidOpenOptions(
+            "transient_ram_min_bytes must be smaller than ram_budget_bytes".to_string(),
+        ));
+    }
     for (field, value) in [
         ("max_active_searches", options.max_active_searches),
         ("leaf_read_width", options.leaf_read_width),
@@ -35326,6 +35429,48 @@ mod tests {
                 .code(),
             "ram_budget_exceeded"
         );
+    }
+
+    #[test]
+    fn three_gib_serving_budget_admits_full_planes_and_protects_transient_work() {
+        const MIB: u64 = 1024 * 1024;
+        let options = OpenOptions {
+            resident_metadata_max_bytes: Some(768 * MIB),
+            transient_ram_min_bytes: Some(768 * MIB),
+            ..OpenOptions::default()
+        };
+        let runtime = CollectionReadRuntime::new(&options, Some(3 * 1024 * MIB), 644 * MIB);
+
+        runtime.enforce_resident_capacity(644 * MIB).unwrap();
+        assert_eq!(
+            runtime.retained_pool.as_ref().unwrap().capacity_bytes(),
+            1536 * MIB
+        );
+        assert_eq!(
+            runtime
+                .transient_admission
+                .as_ref()
+                .unwrap()
+                .capacity_bytes()
+                + runtime.wal_tail_runtime.fetch_admission.capacity_bytes(),
+            768 * MIB
+        );
+    }
+
+    #[test]
+    fn transient_floor_rejects_collection_authority_that_cannot_fund_it() {
+        const MIB: u64 = 1024 * 1024;
+        let error = validate_read_runtime_partition(
+            &OpenOptions {
+                resident_metadata_max_bytes: Some(768 * MIB),
+                transient_ram_min_bytes: Some(768 * MIB),
+                ..OpenOptions::default()
+            },
+            Some(3 * 1024 * MIB),
+            2_400 * MIB,
+        )
+        .unwrap_err();
+        assert!(matches!(error, BorsukError::RamBudgetExceeded { .. }));
     }
 
     #[test]
@@ -39941,6 +40086,15 @@ mod tests {
         .unwrap_err();
         assert!(matches!(error, BorsukError::InvalidOpenOptions(_)));
         assert!(error.to_string().contains("resident_metadata_max_bytes"));
+        for minimum in [0, DEFAULT_RAM_BUDGET_BYTES] {
+            let error = validate_open_options(&OpenOptions {
+                transient_ram_min_bytes: Some(minimum),
+                ..OpenOptions::default()
+            })
+            .unwrap_err();
+            assert!(matches!(error, BorsukError::InvalidOpenOptions(_)));
+            assert!(error.to_string().contains("transient_ram_min_bytes"));
+        }
         for amplification in [0, CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION + 1] {
             let error = validate_open_options(&OpenOptions {
                 exact_read_max_physical_amplification: amplification,
@@ -41488,6 +41642,25 @@ mod tests {
         assert_eq!(measured.requests.gets, 0, "{measured:?}");
         assert!(measured.disk_cache_reads > 0, "{measured:?}");
         assert_eq!(measured.hits, report.hits);
+
+        *index
+            .read_runtime
+            .prepared_cell_card_code_planes
+            .lock()
+            .unwrap() = None;
+        let required = index.install_staged_cell_card_code_planes(None, true);
+        index
+            .reprepare_published_cell_card_code_planes(required)
+            .unwrap();
+        assert!(
+            index
+                .read_runtime
+                .prepared_cell_card_code_planes
+                .lock()
+                .unwrap()
+                .is_some(),
+            "a published generation must be prepared after an overlap-bounded staging miss"
+        );
     }
 
     #[test]
@@ -41717,16 +41890,17 @@ mod tests {
         assert_eq!(
             admitted_cell_card_code_plane_bytes(
                 [CELL_CARD_CACHEABLE_PLANE_MAX_BYTES + 1],
-                u64::MAX,
+                16 * 1024 * 1024,
             ),
+            Some(CELL_CARD_CACHEABLE_PLANE_MAX_BYTES + 1)
+        );
+        assert_eq!(
+            admitted_cell_card_code_plane_bytes([CELL_CARD_GROUP_MAX_BYTES + 1], u64::MAX),
             None
         );
         assert_eq!(
-            admitted_cell_card_code_plane_bytes(
-                [CELL_CARD_CACHEABLE_PLANE_MAX_BYTES; 33],
-                u64::MAX,
-            ),
-            None
+            admitted_cell_card_code_plane_bytes([6_319_258_u64; 215], 1536 * 1024 * 1024,),
+            Some(1_358_640_470)
         );
     }
 

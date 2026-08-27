@@ -876,6 +876,18 @@ fn mutable_resident_metadata_budget(ram_budget_bytes: Option<u64>) -> Option<u64
     ram_budget_bytes.map(|bytes| bytes / 2)
 }
 
+fn serving_memory_partition(ram_budget_bytes: Option<u64>) -> (Option<u64>, Option<u64>) {
+    const MIB: u64 = 1024 * 1024;
+    const PREPARED_PLANE_BUDGET_THRESHOLD: u64 = 3 * 1024 * MIB;
+    const PREPARED_PLANE_TRANSIENT_FLOOR: u64 = 768 * MIB;
+    ram_budget_bytes.map_or((None, None), |bytes| {
+        (
+            Some(bytes / 4),
+            (bytes >= PREPARED_PLANE_BUDGET_THRESHOLD).then_some(PREPARED_PLANE_TRANSIENT_FLOOR),
+        )
+    })
+}
+
 fn lifecycle_writer_open_options(ram_budget_bytes: Option<u64>) -> OpenOptions {
     OpenOptions {
         ram_budget_bytes,
@@ -1624,19 +1636,23 @@ fn serving_cache_dir(cache_dir: &Path, disk_cache_max_bytes: Option<u64>) -> Opt
 }
 
 fn open_serving_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
-    open_benchmark_index(config, None)
+    let (resident_metadata_max_bytes, transient_ram_min_bytes) =
+        serving_memory_partition(config.ram_budget_bytes);
+    open_benchmark_index(config, resident_metadata_max_bytes, transient_ram_min_bytes)
 }
 
 fn open_mutable_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
     open_benchmark_index(
         config,
         mutable_resident_metadata_budget(config.ram_budget_bytes),
+        None,
     )
 }
 
 fn open_benchmark_index(
     config: &ResolvedConfig,
     resident_metadata_max_bytes: Option<u64>,
+    transient_ram_min_bytes: Option<u64>,
 ) -> BenchResult<BorsukIndex> {
     let index = BorsukIndex::open_with_options(
         &config.uri,
@@ -1645,6 +1661,7 @@ fn open_benchmark_index(
             cache_max_bytes: config.disk_cache_max_bytes,
             ram_budget_bytes: config.ram_budget_bytes,
             resident_metadata_max_bytes,
+            transient_ram_min_bytes,
             segment_cache_max_bytes: effective_segment_cache_budget(config),
             // Routing summaries and the centroid graph are serving metadata.
             // Load/build them during open so neither cache-state measurement
@@ -6078,15 +6095,15 @@ mod tests {
         read_logical_cell_catalog, recall_cache_profile_needs_outer_handle,
         recall_preloads_local_snapshot, reopen_build_finalizer, reset_cache,
         rotated_workload_index, sample_mean, sample_stddev, serving_cache_dir,
-        update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
-        validate_bounded_v20_execution, validate_build_only, validate_build_writers,
-        validate_disk_cached_network, validate_exact_read_max_physical_amplification,
-        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
-        validate_lifecycle_only, validate_lifecycle_writers,
-        validate_max_parallel_decode_rank_tasks, validate_phase_selection,
-        validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
-        vector_row, verification_offsets, write_batch_len, write_operation_count,
-        write_runtime_flow_control_receipt,
+        serving_memory_partition, update_vector_reservoir, uses_bounded_decoded_cache_phases,
+        uses_memory_preloaded_phase, validate_bounded_v20_execution, validate_build_only,
+        validate_build_writers, validate_disk_cached_network,
+        validate_exact_read_max_physical_amplification, validate_generated_id_range,
+        validate_insert_only, validate_leaf_capability_modes, validate_lifecycle_only,
+        validate_lifecycle_writers, validate_max_parallel_decode_rank_tasks,
+        validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
+        validate_v12_leaf_page_budgets, vector_row, verification_offsets, write_batch_len,
+        write_operation_count, write_runtime_flow_control_receipt,
     };
 
     #[test]
@@ -6297,6 +6314,20 @@ mod tests {
             Some(1024 * 1024 * 1024)
         );
         assert_eq!(mutable_resident_metadata_budget(None), None);
+    }
+
+    #[test]
+    fn serving_memory_partition_reserves_fixed_and_transient_shares() {
+        const MIB: u64 = 1024 * 1024;
+        assert_eq!(
+            serving_memory_partition(Some(3 * 1024 * MIB)),
+            (Some(768 * MIB), Some(768 * MIB))
+        );
+        assert_eq!(
+            serving_memory_partition(Some(512 * MIB)),
+            (Some(128 * MIB), None)
+        );
+        assert_eq!(serving_memory_partition(None), (None, None));
     }
 
     #[test]

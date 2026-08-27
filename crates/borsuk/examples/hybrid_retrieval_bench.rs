@@ -496,6 +496,7 @@ fn query(dataset: &Path, index_uri: &str, output: &Path, manifest: &Manifest) ->
             cache_max_bytes: env_optional_u64("BORSUK_HYBRID_CACHE_MAX_BYTES")?,
             ram_budget_bytes: Some(ram_budget_bytes),
             resident_metadata_max_bytes: None,
+            transient_ram_min_bytes: None,
             resident_routing: env_bool("BORSUK_HYBRID_RESIDENT_ROUTING", false)?,
             segment_cache_max_bytes: env_optional_u64("BORSUK_HYBRID_SEGMENT_CACHE_MAX_BYTES")?,
             routing_page_cache_max_bytes: env_u64(

@@ -64,7 +64,7 @@ def valid_v3_manifest(**overrides: object) -> dict[str, object]:
                     "instance_type": "c7g.xlarge",
                     "vcpus": 4,
                     "memory_mib": 8192,
-                    "resident_limit_mib": 2048,
+                    "resident_limit_mib": 3072,
                     "disk_cache_limit_mib": 65536,
                 },
                 "amazon-s3-vectors": {
@@ -500,8 +500,8 @@ class PublicationV3ProtocolTests(unittest.TestCase):
         environment = validate_manifest(valid_v3_manifest())["environment_contract"]
         self.assertEqual(environment["build_workers"]["borsuk"]["memory_mib"], 262144)
         self.assertEqual(environment["runtime_clients"]["borsuk"]["memory_mib"], 8192)
-        self.assertLessEqual(
-            environment["runtime_clients"]["borsuk"]["resident_limit_mib"], 2048
+        self.assertEqual(
+            environment["runtime_clients"]["borsuk"]["resident_limit_mib"], 3072
         )
         self.assertEqual(environment["runtime_storage"]["volume_size_gib"], 96)
         self.assertFalse(environment["runtime_data_contract"]["allow_local_corpus"])
