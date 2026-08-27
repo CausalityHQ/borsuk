@@ -76,6 +76,10 @@ mod storage_trace;
 /// Text tokenization helpers for per-record term-frequency storage.
 pub mod text;
 mod turboquant;
+#[allow(
+    dead_code,
+    reason = "V21 feasibility components are wired incrementally by the committed plan"
+)]
 mod v21_feasibility;
 
 /// Print and reset the env-gated (`BORSUK_BUILD_TIMING=1`) per-phase build timing

@@ -131,7 +131,7 @@ git commit -m "Add V21 feasibility arm authority"
 **Interfaces:**
 - Consumes: `V21FeasibilityArm`, `GlobalScanQuantizer`, `VectorElementType`, canonical decoded V20 pages.
 - Produces:
-  - `pub(crate) struct V21ProjectedPage { cell_index: u32, leaf_ordinal: u32, group_ordinal: u32, offset: u64, physical_bytes: u64, rows: Vec<V21ProjectedRow> }`
+  - `pub(crate) struct V21ProjectedPage { cell_index: u32, leaf_ordinal: u32, group_ordinal: u32, group_path: String, group_checksum: [u8; 32], offset: u64, physical_bytes: u64, rows: Vec<V21ProjectedRow> }`
   - `pub(crate) struct V21ProjectedRow { id: RecordId, source_ordinal: u64, code: Vec<u8>, exact: Vec<u8> }`
   - `pub(crate) struct V21ProjectedDirectory { bundles: Vec<V21ProjectedBundle>, selector_capacity_bytes: u64, diagnostic_working_set_bytes: u64, rows: u64, regions: u64 }`
   - `build_v21_projected_directory(pages, dimensions, element_type, normalize, quantizer, arm) -> Result<V21ProjectedDirectory>`
@@ -162,7 +162,7 @@ For each region, decode exact geometry in canonical row order, accumulate each c
 
 - [ ] **Step 4: Write and satisfy deterministic/capacity tests**
 
-Add a permutation test that reverses pages and rows before canonical sorting and asserts byte-identical representative codes, f16 bits, spans, and bundle ordering. Add `selector_capacity_bytes` tests that calculate the capacities of exactly the production SoA group dictionary, fixed bundle columns, code, spread, span, and cell-offset slabs. Exact vectors and IDs retained only to score the diagnostic are reported separately as `diagnostic_working_set_bytes` and may never be counted as selector authority.
+Add a permutation test that reverses authenticated page input order while preserving each page's authenticated internal row order, then asserts byte-identical representative codes, f16 bits, spans, and bundle ordering. Add `selector_capacity_bytes` tests that calculate the capacities of exactly the production SoA group dictionary, fixed bundle columns, code, spread, span, and cell-offset slabs. Exact vectors and IDs retained only to score the diagnostic are reported separately as `diagnostic_working_set_bytes` and may never be counted as selector authority.
 
 Run: `rtk proxy cargo test -p borsuk v21_projected --lib -- --nocapture`
 
@@ -185,7 +185,8 @@ git commit -m "Build deterministic V21 projected directories"
 - Consumes: projected directory, routed cell indexes, query, arm.
 - Produces:
   - `pub(crate) enum V21LimitingBound { Exhausted, Requests, Bytes, Amplification, FirstBundle }`
-  - `pub(crate) struct V21FeasibilityPlan { selected_bundle_indexes: Vec<u32>, reads: Vec<Range<u64>>, selected_rows: u32, selected_bytes: u64, physical_bytes: u64, limiting_bound: V21LimitingBound }`
+  - `pub(crate) struct V21FeasibilityRead { group_ordinal: u32, range: Range<u64>, selected_bytes: u64, bundle_indexes: Vec<u32> }`
+  - `pub(crate) struct V21FeasibilityPlan { selected_bundle_indexes: Vec<u32>, reads: Vec<V21FeasibilityRead>, selected_rows: u32, maximum_actual_requests: usize, selected_bytes: u64, physical_bytes: u64, limiting_bound: V21LimitingBound }`
   - `plan_v21_feasibility_query(directory, routed_cells, query, quantizer, arm) -> Result<V21FeasibilityPlan>`
 
 - [ ] **Step 1: Write failing hand-derived ranking and planning tests**
