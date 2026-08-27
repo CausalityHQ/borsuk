@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import gzip
 import hashlib
 import json
@@ -460,6 +461,170 @@ class PublicationV3ControllerTests(unittest.TestCase):
             purchase_option="spot",
         )
         self.assertEqual(completed["diagnostic_summary_sha256"], "3" * 64)
+
+    def test_v21_selector_diagnostic_is_spot_only_and_reuses_exact_deep_image_build(
+        self,
+    ) -> None:
+        manifest = json.loads(MANIFEST.read_text())
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+        manifest_sha256 = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+        build_cell = borsuk_cell(
+            manifest,
+            workload_id="standard-ann-read",
+            dataset_id="deep-image-96",
+            repetition_id="r01",
+            build_attempt=1,
+        )
+        build_job = ExecutionJob.build(build_cell, attempt=1)
+
+        class V21Aws:
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                return {
+                    "schema_version": 2,
+                    "status": "complete",
+                    "role": "build",
+                    "attempt": 1,
+                    "attempt_id": f"{build_job.cell_tag}-a0001",
+                    "source_archive_sha256": "2" * 64,
+                    "manifest_sha256": manifest_sha256,
+                    "protocol_sha256": "9" * 64,
+                    "index_uri": build_job.index_uri,
+                    "binary_sha256": "8" * 64,
+                    "purchase_option": "spot",
+                    "artifact_upload_reconciliations": 0,
+                }
+
+        launch = LaunchEnvironment(
+            "ami-x",
+            "subnet-x",
+            "sg-x",
+            "arn:aws:iam::453182569524:instance-profile/x",
+            "aarch64",
+            "eu-central-1",
+        )
+        arguments = {
+            "operation": "diagnose-v21-selector",
+            "workload_id": "standard-ann-read",
+            "dataset_id": "deep-image-96",
+            "repetition_id": "r01",
+            "source_uri": "s3://bucket/source.tar.gz",
+            "source_sha256": "2" * 64,
+            "manifest_uri": "s3://bucket/manifest.json",
+            "manifest_sha256": manifest_sha256,
+            "protocol_uri": "s3://bucket/protocol.json",
+            "protocol_sha256": "7" * 64,
+            "build_protocol_sha256": "9" * 64,
+            "launch": launch,
+            "aws": V21Aws(),
+            "attempt": 2,
+            "build_attempt": 1,
+            "arm_index": 0,
+        }
+        prepared = prepare_qualification_execution(
+            manifest, purchase_option="spot", **arguments
+        )
+        self.assertTrue(
+            prepared.job.terminal_prefix.endswith(
+                "/runtime-v21-feasibility/arms/0000/attempts/0002"
+            )
+        )
+        self.assertEqual(prepared.expected["claim_eligible"], False)
+        self.assertEqual(prepared.expected["v21_feasibility"], True)
+        self.assertEqual(prepared.expected["ram_budget_bytes"], 3 * 1024**3)
+        self.assertEqual(
+            prepared.timeout_seconds,
+            manifest["budget_contract"]["max_cell_seconds"],
+        )
+        user_data = base64.b64decode(prepared.request["UserData"]).decode()
+        worker_payload = user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
+        worker = gzip.decompress(base64.b64decode(worker_payload)).decode()
+        self.assertIn("--v21-feasibility", worker)
+        for artifact in (
+            "v21_result_sha256",
+            "v21_arms_sha256",
+            "v21_samples_sha256",
+            "v21_summary_sha256",
+        ):
+            self.assertIn(f'"{artifact}":"%s"', worker)
+
+        class V21ReceiptAws:
+            def __init__(self, *, complete: bool) -> None:
+                self.complete = complete
+
+            def find_execution_instance(
+                self, _job: object, *, purchase_option: str
+            ) -> None:
+                return None
+
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                receipt = {
+                    "schema_version": 5,
+                    "status": "complete",
+                    "role": "runtime",
+                    "attempt": 2,
+                    **prepared.expected,
+                    "execution_contract_sha256": "9" * 64,
+                    "v21_result_sha256": "1" * 64,
+                    "v21_arms_sha256": "2" * 64,
+                    "v21_samples_sha256": "3" * 64,
+                    "artifact_upload_reconciliations": 0,
+                }
+                if self.complete:
+                    receipt["v21_summary_sha256"] = "4" * 64
+                return receipt
+
+            def terminate(self, _instance: str) -> None:
+                raise AssertionError("completed observation has no active instance")
+
+        with self.assertRaisesRegex(ValueError, "artifact digest"):
+            run_execution_job(
+                prepared.job,
+                request=prepared.request,
+                expected=prepared.expected,
+                aws=V21ReceiptAws(complete=False),
+                timeout_seconds=60,
+                poll_seconds=0.01,
+                purchase_option="spot",
+            )
+        completed = run_execution_job(
+            prepared.job,
+            request=prepared.request,
+            expected=prepared.expected,
+            aws=V21ReceiptAws(complete=True),
+            timeout_seconds=60,
+            poll_seconds=0.01,
+            purchase_option="spot",
+        )
+        self.assertEqual(completed["v21_summary_sha256"], "4" * 64)
+
+        class NoAws:
+            def __getattr__(self, name: str):
+                raise AssertionError(f"unfrozen authority reached AWS through {name}")
+
+        unfrozen = copy.deepcopy(manifest)
+        unfrozen["source"] = {"state": "unfrozen"}
+        unfrozen_arguments = {**arguments, "aws": NoAws()}
+        with self.assertRaisesRegex(ValueError, "V21 selector diagnostic"):
+            prepare_qualification_execution(
+                unfrozen, purchase_option="spot", **unfrozen_arguments
+            )
+        with self.assertRaisesRegex(ValueError, "V21 selector diagnostic"):
+            prepare_qualification_execution(
+                manifest, purchase_option="on-demand", **arguments
+            )
 
     def test_lifecycle_diagnostic_is_bounded_claim_ineligible_and_namespaced(
         self,
@@ -1500,7 +1665,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn(
-            "{stage,build-sift,build-read,run-read,diagnose-read,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle,diagnose-lifecycle}",
+            "{stage,build-sift,build-read,run-read,diagnose-read,diagnose-v21-selector,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle,diagnose-lifecycle}",
             completed.stdout,
         )
 

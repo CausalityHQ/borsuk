@@ -46,6 +46,7 @@ from scripts.run_publication_v3_cell import (
     summarize_query_samples,
     summarize_read_diagnostic_samples,
     summarize_runtime_write_trace,
+    summarize_v21_feasibility_artifacts,
     validate_publication_cell_authority,
     validate_query_cache_cohort,
 )
@@ -94,6 +95,114 @@ def runtime_flow_control(profile: str = "recall") -> dict[str, int]:
             }
         )
     return values
+
+
+def v21_feasibility_fixture() -> tuple[
+    list[dict[str, str]], list[dict[str, str]], dict[str, object]
+]:
+    arms: list[dict[str, str]] = []
+    samples: list[dict[str, str]] = []
+    summaries: list[dict[str, object]] = []
+    arm_index = 0
+    for bundle_row_limit in (128, 256):
+        for selector_span in (32, 64):
+            for hedge_delay_ms in (None, 20, 35):
+                directory_bytes = 1_000 + arm_index
+                transient_bytes = 59_392
+                peak_bytes = 700_000_000 - 100_000_000 + directory_bytes + transient_bytes
+                maximum_requests = 2 + int(hedge_delay_ms is not None)
+                arm = {
+                    "schema": "borsuk-v21-selector-feasibility-v1",
+                    "arm_index": str(arm_index),
+                    "bundle_row_limit": str(bundle_row_limit),
+                    "selector_span": str(selector_span),
+                    "hedge_delay_ms": "off" if hedge_delay_ms is None else str(hedge_delay_ms),
+                    "bundle_count": "3",
+                    "region_count": "5",
+                    "projected_directory_bytes": str(directory_bytes),
+                    "replaced_v20_root_bytes": "100000000",
+                    "v20_root_checksum": "b" * 64,
+                    "baseline_rss_bytes": "700000000",
+                    "projected_query_transient_bytes": str(transient_bytes),
+                    "projected_peak_rss_bytes": str(peak_bytes),
+                    "gt_coverage": "0.50000000000000000",
+                    "recall_at_10": "0.50000000000000000",
+                    "maximum_actual_requests": str(maximum_requests),
+                    "maximum_physical_bytes": "8192",
+                    "selector_within_frozen_cap": "true",
+                    "eligible": "false",
+                    "rows": "100",
+                }
+                arms.append(arm)
+                summaries.append(
+                    {
+                        "arm_index": arm_index,
+                        "bundle_row_limit": bundle_row_limit,
+                        "selector_span": selector_span,
+                        "hedge_delay_ms": hedge_delay_ms,
+                        "bundle_count": 3,
+                        "region_count": 5,
+                        "projected_directory_bytes": directory_bytes,
+                        "replaced_v20_root_bytes": 100_000_000,
+                        "selector_within_frozen_cap": True,
+                        "rows": 100,
+                        "gt_coverage": 0.5,
+                        "recall_at_10": 0.5,
+                        "maximum_actual_requests": maximum_requests,
+                        "maximum_physical_bytes": 8_192,
+                        "projected_query_transient_bytes": transient_bytes,
+                        "projected_peak_rss_bytes": peak_bytes,
+                        "eligible": False,
+                    }
+                )
+                for query_index, hits in enumerate((10, 0)):
+                    first_bundle_rejected = query_index == 1
+                    samples.append(
+                        {
+                            "schema": "borsuk-v21-selector-feasibility-v1",
+                            "arm_index": str(arm_index),
+                            "query_index": str(query_index),
+                            "query_source_index": str((7, 11)[query_index]),
+                            "routed_cells": "4",
+                            "selected_rows": "0" if first_bundle_rejected else "100",
+                            "selected_bundles": "0" if first_bundle_rejected else "3",
+                            "primary_requests": "0" if first_bundle_rejected else "2",
+                            "maximum_actual_requests": (
+                                "0" if first_bundle_rejected else str(maximum_requests)
+                            ),
+                            "selected_bytes": "0" if first_bundle_rejected else "4096",
+                            "physical_bytes": "0" if first_bundle_rejected else "8192",
+                            "gt_hits": str(hits),
+                            "recall_hits": str(hits),
+                            "limiting_bound": (
+                                "first_bundle" if first_bundle_rejected else "exhausted"
+                            ),
+                        }
+                    )
+                arm_index += 1
+    summary: dict[str, object] = {
+        "schema": "borsuk-v21-selector-feasibility-v1",
+        "claim_eligible": False,
+        "dataset_name": "deep-image-10m",
+        "dataset_id": "deep-image-96",
+        "index_id": "index-abc",
+        "source_archive_sha256": "a" * 64,
+        "v20_root_checksum": "b" * 64,
+        "dataset_rows": 100,
+        "dimensions": 96,
+        "query_seed": 23001,
+        "query_source_indices": [7, 11],
+        "arm_count": 12,
+        "sample_count": 24,
+        "baseline_rss_bytes": 700_000_000,
+        "minimum_arm_gt_coverage": 0.5,
+        "minimum_arm_recall_at_10": 0.5,
+        "maximum_actual_requests": 3,
+        "maximum_physical_bytes": 8_192,
+        "eligible_arm_indexes": [],
+        "arms": summaries,
+    }
+    return arms, samples, summary
 
 
 def concurrency_artifact_fixture(
@@ -203,6 +312,90 @@ def query_artifact_fixture(*, decoded_bytes: int) -> dict[str, str]:
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
+    def test_v21_feasibility_parser_is_exact_claim_ineligible_and_mutation_safe(
+        self,
+    ) -> None:
+        arms, samples, summary = v21_feasibility_fixture()
+        report = summarize_v21_feasibility_artifacts(
+            arms,
+            samples,
+            summary,
+            expected_source_archive_sha256="a" * 64,
+            expected_index_id="index-abc",
+            expected_dataset_id="deep-image-96",
+            expected_queries=2,
+            expected_dataset_rows=100,
+            expected_query_seed=23001,
+            expected_dimensions=96,
+        )
+        self.assertEqual(report["document_kind"], "publication-v3-v21-feasibility")
+        self.assertEqual(report["claim_eligible"], False)
+        self.assertEqual(report["publishable"], False)
+        self.assertEqual(len(report["arms"]), 12)
+
+        mutations: list[tuple[list[dict[str, str]], list[dict[str, str]], dict[str, object]]] = []
+        missing_arm = copy.deepcopy(arms)
+        missing_arm.pop()
+        mutations.append((missing_arm, copy.deepcopy(samples), copy.deepcopy(summary)))
+        duplicate_arm = copy.deepcopy(arms)
+        duplicate_arm[-1] = copy.deepcopy(duplicate_arm[-2])
+        mutations.append((duplicate_arm, copy.deepcopy(samples), copy.deepcopy(summary)))
+        reordered_arms = copy.deepcopy(arms)
+        reordered_arms[0], reordered_arms[1] = reordered_arms[1], reordered_arms[0]
+        mutations.append((reordered_arms, copy.deepcopy(samples), copy.deepcopy(summary)))
+        missing_sample = copy.deepcopy(samples)
+        missing_sample.pop()
+        mutations.append((copy.deepcopy(arms), missing_sample, copy.deepcopy(summary)))
+        duplicate_sample = copy.deepcopy(samples)
+        duplicate_sample[-1] = copy.deepcopy(duplicate_sample[-2])
+        mutations.append((copy.deepcopy(arms), duplicate_sample, copy.deepcopy(summary)))
+        reordered_samples = copy.deepcopy(samples)
+        reordered_samples[0], reordered_samples[1] = reordered_samples[1], reordered_samples[0]
+        mutations.append((copy.deepcopy(arms), reordered_samples, copy.deepcopy(summary)))
+        drifted_hit = copy.deepcopy(samples)
+        drifted_hit[0]["gt_hits"] = "9"
+        mutations.append((copy.deepcopy(arms), drifted_hit, copy.deepcopy(summary)))
+        drifted_recall = copy.deepcopy(samples)
+        drifted_recall[0]["recall_hits"] = "9"
+        mutations.append((copy.deepcopy(arms), drifted_recall, copy.deepcopy(summary)))
+        drifted_request = copy.deepcopy(samples)
+        drifted_request[0]["maximum_actual_requests"] = "4"
+        mutations.append((copy.deepcopy(arms), drifted_request, copy.deepcopy(summary)))
+        drifted_bytes = copy.deepcopy(samples)
+        drifted_bytes[0]["physical_bytes"] = "8193"
+        mutations.append((copy.deepcopy(arms), drifted_bytes, copy.deepcopy(summary)))
+        drifted_capacity = copy.deepcopy(arms)
+        drifted_capacity[0]["projected_directory_bytes"] = "40000001"
+        mutations.append((drifted_capacity, copy.deepcopy(samples), copy.deepcopy(summary)))
+        drifted_eligibility = copy.deepcopy(summary)
+        drifted_eligibility["arms"][0]["eligible"] = True
+        mutations.append((copy.deepcopy(arms), copy.deepcopy(samples), drifted_eligibility))
+        drifted_rows = copy.deepcopy(summary)
+        drifted_rows["dataset_rows"] = 101
+        mutations.append((copy.deepcopy(arms), copy.deepcopy(samples), drifted_rows))
+        drifted_seed = copy.deepcopy(summary)
+        drifted_seed["query_seed"] = 23002
+        mutations.append((copy.deepcopy(arms), copy.deepcopy(samples), drifted_seed))
+        drifted_dimensions = copy.deepcopy(summary)
+        drifted_dimensions["dimensions"] = 95
+        mutations.append(
+            (copy.deepcopy(arms), copy.deepcopy(samples), drifted_dimensions)
+        )
+        for mutated_arms, mutated_samples, mutated_summary in mutations:
+            with self.assertRaises(ValueError):
+                summarize_v21_feasibility_artifacts(
+                    mutated_arms,
+                    mutated_samples,
+                    mutated_summary,
+                    expected_source_archive_sha256="a" * 64,
+                    expected_index_id="index-abc",
+                    expected_dataset_id="deep-image-96",
+                    expected_queries=2,
+                    expected_dataset_rows=100,
+                    expected_query_seed=23001,
+                    expected_dimensions=96,
+                )
+
     def test_runtime_cache_cohort_authority_binds_read_profiles_to_complete_query_set(
         self,
     ) -> None:
@@ -2810,6 +3003,51 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     runtime_flow_control=runtime_flow_control(),
                     diagnostic_read_nprobes=(32, 64),
                 )
+
+    def test_v21_feasibility_plan_is_an_exclusive_claim_ineligible_runtime(self) -> None:
+        cell = scheduled_cell()
+        cell["workload"]["id"] = "standard-ann-read"
+        cell["dataset"]["id"] = "deep-image-96"
+        cell["dataset"]["dimensions"] = 96
+        cell["source"]["archive_sha256"] = "a" * 64
+        arm = plan_arms(cell)[0]
+        with tempfile.TemporaryDirectory() as root:
+            plan = build_execution_plan(
+                cell,
+                arm=arm,
+                workspace=Path(root),
+                generator=Path("/bin/false"),
+                borsuk_bench=Path("/bin/true"),
+                mode="runtime",
+                runtime_profile="recall",
+                runtime_flow_control=runtime_flow_control(),
+                v21_feasibility=True,
+            )
+        self.assertIs(plan["publishable"], False)
+        environment = plan["runtime"]["steps"][0]["env"]
+        self.assertEqual(environment["BORSUK_BENCH_V21_FEASIBILITY"], "1")
+        self.assertEqual(
+            environment["BORSUK_BENCH_V21_SOURCE_ARCHIVE_SHA256"], "a" * 64
+        )
+        self.assertEqual(
+            environment["BORSUK_BENCH_V21_INDEX_ID"],
+            str(cell["index_prefix"]).rstrip("/").rsplit("/", 1)[-1],
+        )
+        self.assertEqual(
+            environment["BORSUK_BENCH_V21_DATASET_ID"], "deep-image-96"
+        )
+        for forbidden in (
+            "BORSUK_BENCH_BUILD_INDEX",
+            "BORSUK_BENCH_READ_ONLY",
+            "BORSUK_BENCH_RECALL_ONLY",
+            "BORSUK_BENCH_SKIP_RECALL",
+            "BORSUK_BENCH_NPROBES",
+            "BORSUK_BENCH_CANDIDATES",
+            "BORSUK_BENCH_CONCURRENCY",
+            "BORSUK_BENCH_LIMIT",
+            "BORSUK_STORAGE_TRACE",
+        ):
+            self.assertNotIn(forbidden, environment)
 
     def test_smoke_report_is_distinct_from_a_publishable_cell_result(self) -> None:
         cell = scheduled_cell()

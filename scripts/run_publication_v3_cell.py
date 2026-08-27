@@ -329,6 +329,7 @@ def build_execution_plan(
     diagnostic_write_ops: int | None = None,
     diagnostic_read_nprobes: tuple[int, ...] | None = None,
     diagnostic_read_candidates: tuple[int, ...] | None = None,
+    v21_feasibility: bool = False,
 ) -> dict[str, object]:
     if mode not in {"build", "runtime", "smoke"}:
         raise ValueError("execution mode must be build, runtime, or smoke")
@@ -351,6 +352,13 @@ def build_execution_plan(
         diagnostic_read_nprobes,
         diagnostic_read_candidates,
     )
+    if type(v21_feasibility) is not bool or v21_feasibility and (
+        mode != "runtime"
+        or runtime_profile != "recall"
+        or diagnostic_write_ops is not None
+        or any(value is not None for value in read_diagnostic_values)
+    ):
+        raise ValueError("V21 feasibility mode must be an exclusive recall runtime")
     if any(value is not None for value in read_diagnostic_values):
         if (
             any(value is None for value in read_diagnostic_values)
@@ -806,11 +814,51 @@ def build_execution_plan(
                 runtime_env["BORSUK_OPEN_PROGRESS"] = "1"
                 runtime_env["BORSUK_LIFECYCLE_PROGRESS"] = "1"
                 runtime_env["BORSUK_V20_PROGRESS"] = "1"
+        if v21_feasibility:
+            if (
+                workload.get("id") != "standard-ann-read"
+                or dataset.get("id") != "deep-image-96"
+                or cell.get("repetition_id") != "r01"
+                or arm != plan_arms(cell)[0]
+                or not isinstance(source, dict)
+                or not isinstance(source.get("archive_sha256"), str)
+                or not isinstance(cell.get("index_prefix"), str)
+            ):
+                raise ValueError(
+                    "V21 feasibility requires the canonical Deep Image build authority"
+                )
+            for field in (
+                "BORSUK_BENCH_BUILD_INDEX",
+                "BORSUK_BENCH_READ_ONLY",
+                "BORSUK_BENCH_RECALL_ONLY",
+                "BORSUK_BENCH_SKIP_RECALL",
+                "BORSUK_BENCH_SKIP_EXACT_RECALL",
+                "BORSUK_BENCH_NPROBES",
+                "BORSUK_BENCH_CANDIDATES",
+                "BORSUK_BENCH_CONCURRENCY",
+                "BORSUK_BENCH_SERVING_NPROBE",
+                "BORSUK_BENCH_SERVING_CANDIDATES",
+                "BORSUK_STORAGE_TRACE",
+            ):
+                runtime_env.pop(field, None)
+            runtime_env.update(
+                {
+                    "BORSUK_BENCH_V21_FEASIBILITY": "1",
+                    "BORSUK_BENCH_V21_SOURCE_ARCHIVE_SHA256": str(
+                        source["archive_sha256"]
+                    ),
+                    "BORSUK_BENCH_V21_INDEX_ID": str(cell["index_prefix"])
+                    .rstrip("/")
+                    .rsplit("/", 1)[-1],
+                    "BORSUK_BENCH_V21_DATASET_ID": str(dataset["id"]),
+                }
+            )
         return {
             "schema_version": 1,
             "cell_id": cell.get("cell_id"),
             "mode": "publication",
-            "publishable": True,
+            "publishable": not v21_feasibility,
+            "v21_feasibility": v21_feasibility,
             "effective_rows": effective_rows,
             "effective_queries": effective_queries,
             "workspace": str(workspace),
@@ -856,7 +904,11 @@ def authorize_publication_runtime(
     workload = cell.get("workload")
     if not isinstance(workload, dict) or workload.get("kind") != "read-recall":
         raise ValueError("immutable index runtime authorization is read-only")
-    if plan.get("mode") != "publication" or plan.get("publishable") is not True:
+    v21_feasibility = plan.get("v21_feasibility") is True
+    if plan.get("mode") != "publication" or (
+        plan.get("publishable") is not True
+        and not (v21_feasibility and plan.get("publishable") is False)
+    ):
         raise ValueError("only a publication plan has an authorized runtime phase")
     if plan.get("cell_id") != cell.get("cell_id"):
         raise ValueError("runtime plan cell differs from its protocol")
@@ -878,7 +930,14 @@ def authorize_publication_runtime(
             raise ValueError(
                 "runtime index URI differs from the immutable build receipt"
             )
-        if environment.get("BORSUK_BENCH_BUILD_INDEX") != "0":
+        if (
+            environment.get("BORSUK_BENCH_BUILD_INDEX") != "0"
+            and not (
+                v21_feasibility
+                and "BORSUK_BENCH_BUILD_INDEX" not in environment
+                and environment.get("BORSUK_BENCH_V21_FEASIBILITY") == "1"
+            )
+        ):
             raise ValueError("publication runtime must disable index construction")
         for forbidden in (
             "BORSUK_BENCH_BUILD_ONLY",
@@ -1136,6 +1195,405 @@ def smoke_cache_cohort_authority(
     return disk_cached_cohort_authority(
         disk_cache_max_bytes, expected_queries
     )[0]
+
+
+def summarize_v21_feasibility_artifacts(
+    arm_rows: list[dict[str, str]],
+    sample_rows: list[dict[str, str]],
+    summary: dict[str, object],
+    *,
+    expected_source_archive_sha256: str,
+    expected_index_id: str,
+    expected_dataset_id: str,
+    expected_queries: int,
+    expected_dataset_rows: int,
+    expected_query_seed: int,
+    expected_dimensions: int,
+) -> dict[str, object]:
+    schema = "borsuk-v21-selector-feasibility-v1"
+    arm_fields = {
+        "schema",
+        "arm_index",
+        "bundle_row_limit",
+        "selector_span",
+        "hedge_delay_ms",
+        "bundle_count",
+        "region_count",
+        "projected_directory_bytes",
+        "replaced_v20_root_bytes",
+        "v20_root_checksum",
+        "baseline_rss_bytes",
+        "projected_query_transient_bytes",
+        "projected_peak_rss_bytes",
+        "gt_coverage",
+        "recall_at_10",
+        "maximum_actual_requests",
+        "maximum_physical_bytes",
+        "selector_within_frozen_cap",
+        "eligible",
+        "rows",
+    }
+    sample_fields = {
+        "schema",
+        "arm_index",
+        "query_index",
+        "query_source_index",
+        "routed_cells",
+        "selected_rows",
+        "selected_bundles",
+        "primary_requests",
+        "maximum_actual_requests",
+        "selected_bytes",
+        "physical_bytes",
+        "gt_hits",
+        "recall_hits",
+        "limiting_bound",
+    }
+    summary_fields = {
+        "schema",
+        "claim_eligible",
+        "dataset_name",
+        "dataset_id",
+        "index_id",
+        "source_archive_sha256",
+        "v20_root_checksum",
+        "dataset_rows",
+        "dimensions",
+        "query_seed",
+        "query_source_indices",
+        "arm_count",
+        "sample_count",
+        "baseline_rss_bytes",
+        "minimum_arm_gt_coverage",
+        "minimum_arm_recall_at_10",
+        "maximum_actual_requests",
+        "maximum_physical_bytes",
+        "eligible_arm_indexes",
+        "arms",
+    }
+    summary_arm_fields = {
+        "arm_index",
+        "bundle_row_limit",
+        "selector_span",
+        "hedge_delay_ms",
+        "bundle_count",
+        "region_count",
+        "projected_directory_bytes",
+        "replaced_v20_root_bytes",
+        "selector_within_frozen_cap",
+        "rows",
+        "gt_coverage",
+        "recall_at_10",
+        "maximum_actual_requests",
+        "maximum_physical_bytes",
+        "projected_query_transient_bytes",
+        "projected_peak_rss_bytes",
+        "eligible",
+    }
+
+    def parse_int(value: object, role: str, *, minimum: int = 0) -> int:
+        if type(value) is int:
+            parsed = value
+        elif isinstance(value, str) and value and value.isascii():
+            try:
+                parsed = int(value)
+            except ValueError as error:
+                raise ValueError(f"V21 {role} is invalid") from error
+            if str(parsed) != value:
+                raise ValueError(f"V21 {role} is not canonical")
+        else:
+            raise ValueError(f"V21 {role} is invalid")
+        if parsed < minimum:
+            raise ValueError(f"V21 {role} is out of range")
+        return parsed
+
+    def parse_float(value: object, role: str) -> float:
+        if type(value) not in {str, float}:
+            raise ValueError(f"V21 {role} is invalid")
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"V21 {role} is invalid") from error
+        if not math.isfinite(parsed):
+            raise ValueError(f"V21 {role} is invalid")
+        return parsed
+
+    def parse_bool(value: object, role: str) -> bool:
+        if type(value) is bool:
+            return value
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        raise ValueError(f"V21 {role} is invalid")
+
+    def require_digest(value: object, role: str) -> str:
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError(f"V21 {role} is invalid")
+        return value
+
+    def require_identifier(value: object, role: str) -> str:
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) > 128
+            or any(
+                not (character.isascii() and character.isalnum())
+                and character not in "._-"
+                for character in value
+            )
+        ):
+            raise ValueError(f"V21 {role} is invalid")
+        return value
+
+    if (
+        type(expected_queries) is not int
+        or expected_queries <= 0
+        or type(expected_dataset_rows) is not int
+        or expected_dataset_rows <= 0
+        or type(expected_query_seed) is not int
+        or expected_query_seed < 0
+        or type(expected_dimensions) is not int
+        or expected_dimensions <= 0
+        or len(arm_rows) != 12
+        or len(sample_rows) != 12 * expected_queries
+        or set(summary) != summary_fields
+        or summary.get("schema") != schema
+        or summary.get("claim_eligible") is not False
+        or summary.get("source_archive_sha256") != expected_source_archive_sha256
+        or summary.get("index_id") != expected_index_id
+        or summary.get("dataset_id") != expected_dataset_id
+        or parse_int(summary.get("arm_count"), "arm count") != 12
+        or parse_int(summary.get("sample_count"), "sample count")
+        != len(sample_rows)
+    ):
+        raise ValueError("V21 feasibility authority differs")
+    require_digest(expected_source_archive_sha256, "source digest")
+    require_identifier(expected_index_id, "index identity")
+    require_identifier(expected_dataset_id, "dataset identity")
+    if not isinstance(summary.get("dataset_name"), str) or not summary["dataset_name"]:
+        raise ValueError("V21 dataset name is invalid")
+    root_checksum = require_digest(summary.get("v20_root_checksum"), "root digest")
+    dataset_rows = parse_int(summary.get("dataset_rows"), "dataset rows", minimum=1)
+    dimensions = parse_int(summary.get("dimensions"), "dimensions", minimum=1)
+    query_seed = parse_int(summary.get("query_seed"), "query seed")
+    if (
+        dataset_rows != expected_dataset_rows
+        or query_seed != expected_query_seed
+        or dimensions != expected_dimensions
+    ):
+        raise ValueError("V21 dataset or query authority differs")
+    baseline_rss = parse_int(
+        summary.get("baseline_rss_bytes"), "baseline RSS", minimum=1
+    )
+    source_indices = summary.get("query_source_indices")
+    if (
+        not isinstance(source_indices, list)
+        or len(source_indices) != expected_queries
+        or any(type(value) is not int or value < 0 for value in source_indices)
+        or len(set(source_indices)) != expected_queries
+    ):
+        raise ValueError("V21 query source authority is invalid")
+    expected_arms = [
+        (bundle, span, hedge)
+        for bundle in (128, 256)
+        for span in (32, 64)
+        for hedge in (None, 20, 35)
+    ]
+    summary_arms = summary.get("arms")
+    if not isinstance(summary_arms, list) or len(summary_arms) != 12:
+        raise ValueError("V21 summary arm matrix is invalid")
+    parsed_arms: list[dict[str, object]] = []
+    all_gt: list[float] = []
+    all_recall: list[float] = []
+    all_requests: list[int] = []
+    all_physical: list[int] = []
+    eligible_indexes: list[int] = []
+    row_bytes = dimensions * 4 + 128
+    for arm_index, (arm, summary_arm, factors) in enumerate(
+        zip(arm_rows, summary_arms, expected_arms, strict=True)
+    ):
+        if (
+            set(arm) != arm_fields
+            or arm.get("schema") != schema
+            or not isinstance(summary_arm, dict)
+            or set(summary_arm) != summary_arm_fields
+        ):
+            raise ValueError("V21 arm schema differs")
+        bundle, span, hedge = factors
+        hedge_text = "off" if hedge is None else str(hedge)
+        if (
+            parse_int(arm["arm_index"], "arm index") != arm_index
+            or parse_int(arm["bundle_row_limit"], "bundle row limit") != bundle
+            or parse_int(arm["selector_span"], "selector span") != span
+            or arm["hedge_delay_ms"] != hedge_text
+            or summary_arm.get("arm_index") != arm_index
+            or summary_arm.get("bundle_row_limit") != bundle
+            or summary_arm.get("selector_span") != span
+            or summary_arm.get("hedge_delay_ms") != hedge
+        ):
+            raise ValueError("V21 arm order or factors differ")
+        if require_digest(arm["v20_root_checksum"], "root digest") != root_checksum:
+            raise ValueError("V21 root digest differs")
+        bundle_count = parse_int(arm["bundle_count"], "bundle count", minimum=1)
+        region_count = parse_int(arm["region_count"], "region count", minimum=1)
+        report_rows = parse_int(arm["rows"], "rows", minimum=1)
+        directory = parse_int(
+            arm["projected_directory_bytes"], "directory bytes", minimum=1
+        )
+        replaced = parse_int(
+            arm["replaced_v20_root_bytes"], "replaced root bytes", minimum=1
+        )
+        if report_rows != dataset_rows:
+            raise ValueError("V21 arm rows differ from dataset authority")
+        samples = sample_rows[
+            arm_index * expected_queries : (arm_index + 1) * expected_queries
+        ]
+        gt_hits = 0
+        recall_hits = 0
+        maximum_requests = 0
+        maximum_physical = 0
+        maximum_transient = 0
+        for query_index, sample in enumerate(samples):
+            if set(sample) != sample_fields or sample.get("schema") != schema:
+                raise ValueError("V21 sample schema differs")
+            if (
+                parse_int(sample["arm_index"], "sample arm") != arm_index
+                or parse_int(sample["query_index"], "query index") != query_index
+                or parse_int(sample["query_source_index"], "query source")
+                != source_indices[query_index]
+            ):
+                raise ValueError("V21 sample identity or order differs")
+            rows = parse_int(sample["selected_rows"], "selected rows")
+            requests = parse_int(sample["maximum_actual_requests"], "requests")
+            primary_requests = parse_int(
+                sample["primary_requests"], "primary requests"
+            )
+            routed_cells = parse_int(
+                sample["routed_cells"], "routed cells", minimum=1
+            )
+            selected_bundles = parse_int(
+                sample["selected_bundles"], "selected bundles"
+            )
+            physical = parse_int(sample["physical_bytes"], "physical bytes")
+            selected = parse_int(sample["selected_bytes"], "selected bytes")
+            sample_gt_hits = parse_int(sample["gt_hits"], "GT hits")
+            sample_recall_hits = parse_int(sample["recall_hits"], "recall hits")
+            if (
+                routed_cells <= 0
+                or rows > report_rows
+                or selected_bundles > bundle_count
+                or primary_requests > requests
+                or sample_gt_hits > 10
+                or sample_recall_hits > 10
+                or selected > physical
+                or sample["limiting_bound"]
+                not in {
+                    "exhausted",
+                    "requests",
+                    "bytes",
+                    "amplification",
+                    "first_bundle",
+                }
+            ):
+                raise ValueError("V21 sample evidence is invalid")
+            gt_hits += sample_gt_hits
+            recall_hits += sample_recall_hits
+            maximum_requests = max(maximum_requests, requests)
+            maximum_physical = max(maximum_physical, physical)
+            maximum_transient = max(maximum_transient, rows * row_bytes + physical)
+        gt_coverage = gt_hits / (expected_queries * 10)
+        recall = recall_hits / (expected_queries * 10)
+        projected_peak = baseline_rss - replaced + directory + maximum_transient
+        selector_within_cap = directory <= 40_000_000
+        eligible = (
+            selector_within_cap
+            and projected_peak <= 768 * 1024 * 1024
+            and gt_coverage >= 0.990
+            and recall >= 0.975
+            and maximum_requests <= 4
+            and maximum_physical <= 1024 * 1024
+        )
+        expected_values: dict[str, object] = {
+            "arm_index": arm_index,
+            "bundle_row_limit": bundle,
+            "selector_span": span,
+            "hedge_delay_ms": hedge,
+            "bundle_count": bundle_count,
+            "region_count": region_count,
+            "projected_directory_bytes": directory,
+            "replaced_v20_root_bytes": replaced,
+            "selector_within_frozen_cap": selector_within_cap,
+            "rows": report_rows,
+            "gt_coverage": gt_coverage,
+            "recall_at_10": recall,
+            "maximum_actual_requests": maximum_requests,
+            "maximum_physical_bytes": maximum_physical,
+            "projected_query_transient_bytes": maximum_transient,
+            "projected_peak_rss_bytes": projected_peak,
+            "eligible": eligible,
+        }
+        for field, value in expected_values.items():
+            observed = summary_arm.get(field)
+            if type(observed) is not type(value) or observed != value:
+                raise ValueError(f"V21 summary arm {field} differs")
+        if (
+            parse_int(arm["baseline_rss_bytes"], "baseline RSS") != baseline_rss
+            or parse_int(arm["projected_query_transient_bytes"], "transient bytes")
+            != maximum_transient
+            or parse_int(arm["projected_peak_rss_bytes"], "peak RSS")
+            != projected_peak
+            or parse_float(arm["gt_coverage"], "GT coverage") != gt_coverage
+            or parse_float(arm["recall_at_10"], "recall") != recall
+            or parse_int(arm["maximum_actual_requests"], "maximum requests")
+            != maximum_requests
+            or parse_int(arm["maximum_physical_bytes"], "maximum physical")
+            != maximum_physical
+            or parse_bool(arm["selector_within_frozen_cap"], "selector cap")
+            != selector_within_cap
+            or parse_bool(arm["eligible"], "eligibility") != eligible
+        ):
+            raise ValueError("V21 arm evidence differs from samples")
+        parsed_arms.append(expected_values)
+        all_gt.append(gt_coverage)
+        all_recall.append(recall)
+        all_requests.append(maximum_requests)
+        all_physical.append(maximum_physical)
+        if eligible:
+            eligible_indexes.append(arm_index)
+    if (
+        summary.get("eligible_arm_indexes") != eligible_indexes
+        or parse_float(summary.get("minimum_arm_gt_coverage"), "minimum GT")
+        != min(all_gt)
+        or parse_float(summary.get("minimum_arm_recall_at_10"), "minimum recall")
+        != min(all_recall)
+        or parse_int(summary.get("maximum_actual_requests"), "maximum requests")
+        != max(all_requests)
+        or parse_int(summary.get("maximum_physical_bytes"), "maximum physical")
+        != max(all_physical)
+    ):
+        raise ValueError("V21 aggregate summary differs")
+    return {
+        "schema_version": 1,
+        "document_kind": "publication-v3-v21-feasibility",
+        "status": "complete",
+        "publishable": False,
+        "claim_eligible": False,
+        "dataset_id": expected_dataset_id,
+        "index_id": expected_index_id,
+        "source_archive_sha256": expected_source_archive_sha256,
+        "v20_root_checksum": root_checksum,
+        "dataset_rows": dataset_rows,
+        "dimensions": dimensions,
+        "query_seed": query_seed,
+        "query_source_indices": source_indices,
+        "eligible_arm_indexes": eligible_indexes,
+        "arms": parsed_arms,
+    }
 
 
 def validate_query_cache_cohort(
@@ -2806,6 +3264,7 @@ def main() -> int:
     parser.add_argument("--diagnostic-write-ops", type=int)
     parser.add_argument("--diagnostic-read-nprobes", type=_positive_integer_tuple)
     parser.add_argument("--diagnostic-read-candidates", type=_positive_integer_tuple)
+    parser.add_argument("--v21-feasibility", action="store_true")
     args = parser.parse_args()
 
     runtime_flow_control = runtime_flow_control_authority(
@@ -2916,6 +3375,7 @@ def main() -> int:
         diagnostic_write_ops=args.diagnostic_write_ops,
         diagnostic_read_nprobes=args.diagnostic_read_nprobes,
         diagnostic_read_candidates=args.diagnostic_read_candidates,
+        v21_feasibility=args.v21_feasibility,
     )
     if args.mode == "build":
         output, resources, elapsed_ns = execute_publication_phase(plan, "build")
@@ -3018,6 +3478,79 @@ def main() -> int:
         output, resources, elapsed_ns = execute_publication_phase(
             authorized_plan, "runtime"
         )
+        if args.v21_feasibility:
+            if runtime_flow_control is None:
+                raise ValueError("V21 feasibility requires runtime flow authority")
+            execution_contract = runtime_execution_contract(
+                authorized_plan,
+                args.runtime_profile,
+                {"schema_version": 4, **runtime_flow_control},
+            )
+            execution_contract["flow_control_authority"] = "requested-systemd-enforced"
+            (args.workspace / "RUNTIME_EXECUTION_CONTRACT.json").write_bytes(
+                canonical_json_bytes(execution_contract) + b"\n"
+            )
+            runtime_attestation = validate_runtime_attestation(
+                collect_runtime_attestation(
+                    cell=cell,
+                    attempt_id=str(args.attempt_id),
+                    runtime=authorized_runtime,
+                    source_root=source_root,
+                    purchase_option=args.purchase_option,
+                ),
+                cell=cell,
+                attempt_id=str(args.attempt_id),
+            )
+            (args.workspace / "RUNTIME_ATTESTATION.json").write_bytes(
+                canonical_json_bytes(runtime_attestation) + b"\n"
+            )
+            arms_path = output / "bench_v21_feasibility_arms.csv"
+            samples_path = output / "bench_v21_feasibility_samples.csv"
+            summary_path = output / "bench_v21_feasibility_summary.json"
+            if any(
+                not path.is_file() or path.stat().st_size == 0
+                for path in (arms_path, samples_path, summary_path)
+            ):
+                raise ValueError("V21 feasibility runtime emitted incomplete artifacts")
+            with arms_path.open(newline="") as source_file:
+                arm_rows = list(csv.DictReader(source_file))
+            with samples_path.open(newline="") as source_file:
+                sample_rows = list(csv.DictReader(source_file))
+            summary_value = _read_canonical_value(summary_path, 2 * 1024 * 1024)
+            if not isinstance(summary_value, dict):
+                raise ValueError("V21 feasibility summary must be a JSON object")
+            report = summarize_v21_feasibility_artifacts(
+                arm_rows,
+                sample_rows,
+                summary_value,
+                expected_source_archive_sha256=str(args.source_archive_sha256),
+                expected_index_id=str(cell["index_prefix"])
+                .rstrip("/")
+                .rsplit("/", 1)[-1],
+                expected_dataset_id=str(cell["dataset"]["id"]),
+                expected_queries=int(plan["effective_queries"]),
+                expected_dataset_rows=int(plan["effective_rows"]),
+                expected_query_seed=int(cell["query_seed"]),
+                expected_dimensions=int(cell["dataset"]["dimensions"]),
+            )
+            report.update(
+                {
+                    "cell_id": cell["cell_id"],
+                    "attempt_id": args.attempt_id,
+                    "instance_identity": args.instance_identity,
+                    "dataset_materialization_sha256": (
+                        args.dataset_materialization_sha256
+                    ),
+                    "elapsed_ns": elapsed_ns,
+                    "resources": resources,
+                    "runtime_attestation": runtime_attestation,
+                    "flow_control_authority": "requested-systemd-enforced",
+                }
+            )
+            destination = args.workspace / "RESULT_COMPLETE.json"
+            destination.write_bytes(canonical_json_bytes(report) + b"\n")
+            print(json.dumps(report, sort_keys=True))
+            return 0
         effective_flow_control = _read_canonical_value(
             output / "bench_runtime_flow_control.json", 64 * 1024
         )

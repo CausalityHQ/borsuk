@@ -78,13 +78,21 @@ class ExecutionJob:
         profile: str = "recall",
         arm_index: int = 0,
         diagnostic: bool = False,
+        v21_feasibility: bool = False,
     ) -> "ExecutionJob":
         if profile not in {"recall", "concurrency", "lifecycle"}:
             raise ValueError("runtime execution profile is invalid")
-        if arm_index < 0 or (diagnostic and profile not in {"recall", "lifecycle"}):
+        if (
+            type(v21_feasibility) is not bool
+            or arm_index < 0
+            or diagnostic and profile not in {"recall", "lifecycle"}
+            or v21_feasibility and (diagnostic or profile != "recall" or arm_index != 0)
+        ):
             raise ValueError("runtime execution arm identity is invalid")
         job = cls._new(cell, role="runtime", attempt=attempt)
-        if profile == "lifecycle" and diagnostic:
+        if v21_feasibility:
+            namespace = "runtime-v21-feasibility"
+        elif profile == "lifecycle" and diagnostic:
             namespace = "runtime-lifecycle-diagnostic"
         elif profile == "recall" and diagnostic:
             namespace = "runtime-read-diagnostic"
@@ -440,6 +448,7 @@ def runtime_worker_script(
     diagnostic_timeout_seconds: int | None = None,
     diagnostic_read_nprobes: tuple[int, ...] | None = None,
     diagnostic_read_candidates: tuple[int, ...] | None = None,
+    v21_feasibility: bool = False,
 ) -> str:
     if job.role != "runtime":
         raise ValueError("runtime worker requires a runtime job")
@@ -488,6 +497,14 @@ def runtime_worker_script(
             diagnostic_read_candidates,
         )
     )
+    if type(v21_feasibility) is not bool or v21_feasibility and (
+        read_diagnostic
+        or diagnostic_write_ops is not None
+        or diagnostic_timeout_seconds is not None
+        or runtime_profile != "recall"
+        or arm_index != 0
+    ):
+        raise ValueError("V21 feasibility authority is invalid")
     profile_mismatch = (
         (
             runtime_profile == "concurrency"
@@ -502,6 +519,10 @@ def runtime_worker_script(
                 or (
                     read_diagnostic
                     != job.cell_tag.startswith("runtime-read-diagnostic-")
+                )
+                or (
+                    v21_feasibility
+                    != job.cell_tag.startswith("runtime-v21-feasibility-")
                 )
             )
         )
@@ -574,6 +595,7 @@ def runtime_worker_script(
     diagnostic_validation = ""
     diagnostic_receipt_fields = ""
     read_diagnostic_uploads = ""
+    diagnostic_uploads_before_result = ""
     if (diagnostic_write_ops is None) != (diagnostic_timeout_seconds is None):
         raise ValueError("lifecycle diagnostic authority must be supplied atomically")
     if diagnostic_write_ops is not None:
@@ -650,6 +672,38 @@ diagnostic_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_recall_late
             done
             """
         )
+    if v21_feasibility:
+        diagnostic_arguments = " --v21-feasibility"
+        diagnostic_validation = """actual_claim_eligible=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))[\"claim_eligible\"]))' \"$work/cell/RESULT_COMPLETE.json\")
+test \"$actual_claim_eligible\" = false
+for name in bench_v21_feasibility_arms.csv bench_v21_feasibility_samples.csv bench_v21_feasibility_summary.json; do
+  test -s \"$work/cell/runtime-output/$name\"
+done
+v21_result_sha=$(sha256sum \"$work/cell/RESULT_COMPLETE.json\" | awk '{print $1}')
+v21_arms_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_arms.csv\" | awk '{print $1}')
+v21_samples_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_samples.csv\" | awk '{print $1}')
+v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_summary.json\" | awk '{print $1}')"""
+        diagnostic_validation += """
+actual_flow_control_authority=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.load(open(sys.argv[1]))[\"flow_control_authority\"])' \"$work/cell/RUNTIME_EXECUTION_CONTRACT.json\")
+test \"$actual_flow_control_authority\" = requested-systemd-enforced"""
+        diagnostic_receipt_fields = (
+            "diagnostic_fields=$(printf ',"
+            '"claim_eligible":false,"v21_feasibility":true,'
+            '"flow_control_authority":"requested-systemd-enforced",'
+            '"v21_result_sha256":"%s",'
+            '"v21_arms_sha256":"%s",'
+            '"v21_samples_sha256":"%s",'
+            '"v21_summary_sha256":"%s"\' '
+            '"$v21_result_sha" "$v21_arms_sha" "$v21_samples_sha" '
+            '"$v21_summary_sha")'
+        )
+        diagnostic_uploads_before_result = textwrap.dedent(
+            f"""\
+            put_immutable "$work/cell/runtime-output/bench_v21_feasibility_arms.csv" {_q(terminal_prefix + "/bench_v21_feasibility_arms.csv")}
+            put_immutable "$work/cell/runtime-output/bench_v21_feasibility_samples.csv" {_q(terminal_prefix + "/bench_v21_feasibility_samples.csv")}
+            put_immutable "$work/cell/runtime-output/bench_v21_feasibility_summary.json" {_q(terminal_prefix + "/bench_v21_feasibility_summary.json")}
+            """
+        )
     return prelude + textwrap.dedent(
         f"""\
         stage=attest-purchase
@@ -716,6 +770,7 @@ diagnostic_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_recall_late
         {diagnostic_validation}
         stage=publish-receipts
         immutable_upload_deadline=$((SECONDS + 600))
+        {diagnostic_uploads_before_result}
         put_immutable "$work/cell/RESULT_COMPLETE.json" {_q(terminal_prefix + "/RESULT_COMPLETE.json")}
         {read_diagnostic_uploads}
         put_immutable "$work/cell/RUNTIME_ATTESTATION.json" {_q(terminal_prefix + "/RUNTIME_ATTESTATION.json")}

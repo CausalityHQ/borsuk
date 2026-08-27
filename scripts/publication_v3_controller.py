@@ -619,13 +619,23 @@ def run_execution_job(
                         expected["runtime_profile"] == "recall"
                         and expected.get("claim_eligible") is False
                     ):
-                        digest_fields.extend(
-                            (
-                                "diagnostic_result_sha256",
-                                "diagnostic_samples_sha256",
-                                "diagnostic_summary_sha256",
+                        if expected.get("v21_feasibility") is True:
+                            digest_fields.extend(
+                                (
+                                    "v21_result_sha256",
+                                    "v21_arms_sha256",
+                                    "v21_samples_sha256",
+                                    "v21_summary_sha256",
+                                )
                             )
-                        )
+                        else:
+                            digest_fields.extend(
+                                (
+                                    "diagnostic_result_sha256",
+                                    "diagnostic_samples_sha256",
+                                    "diagnostic_summary_sha256",
+                                )
+                            )
                     if any(
                         not isinstance(value.get(field), str)
                         or re.fullmatch(r"[0-9a-f]{64}", value[field]) is None
@@ -805,6 +815,7 @@ def prepare_qualification_execution(
         "build-read",
         "run-read",
         "diagnose-read",
+        "diagnose-v21-selector",
     }
     if operation not in supported:
         raise ValueError("unsupported qualification execution")
@@ -813,9 +824,15 @@ def prepare_qualification_execution(
         "run-lifecycle",
         "diagnose-lifecycle",
     }
-    generic_read = operation in {"build-read", "run-read", "diagnose-read"}
+    generic_read = operation in {
+        "build-read",
+        "run-read",
+        "diagnose-read",
+        "diagnose-v21-selector",
+    }
     lifecycle_diagnostic = operation == "diagnose-lifecycle"
     read_diagnostic = operation == "diagnose-read"
+    v21_feasibility = operation == "diagnose-v21-selector"
     diagnostic = lifecycle_diagnostic or read_diagnostic
     effective_arm_index = (
         13
@@ -861,6 +878,40 @@ def prepare_qualification_execution(
         )
     ):
         raise ValueError("read diagnostic authority requires diagnose-read")
+    if v21_feasibility and (
+        workload_id != "standard-ann-read"
+        or dataset_id != "deep-image-96"
+        or repetition_id != "r01"
+        or effective_arm_index != 0
+        or purchase_option != "spot"
+    ):
+        raise ValueError(
+            "V21 selector diagnostic requires canonical Deep Image arm 0 on Spot"
+        )
+    if v21_feasibility:
+        frozen_source = normalized.get("source")
+        matching_datasets = [
+            dataset
+            for dataset in normalized["datasets"]
+            if dataset.get("id") == "deep-image-96"
+        ]
+        dataset_source = (
+            matching_datasets[0].get("source")
+            if len(matching_datasets) == 1
+            else None
+        )
+        if (
+            not isinstance(frozen_source, dict)
+            or frozen_source.get("state") != "frozen"
+            or frozen_source.get("archive_sha256") != source_sha256
+            or hashlib.sha256(canonical_json_bytes(normalized)).hexdigest()
+            != manifest_sha256
+            or not isinstance(dataset_source, dict)
+            or dataset_source.get("state") != "staged"
+        ):
+            raise ValueError(
+                "V21 selector diagnostic requires frozen source and staged Deep Image authority"
+            )
     if generic_read:
         if not workload_id or not dataset_id:
             raise ValueError("generic read execution requires workload and dataset")
@@ -985,6 +1036,7 @@ def prepare_qualification_execution(
             profile=runtime_profile,
             arm_index=effective_arm_index,
             diagnostic=diagnostic,
+            v21_feasibility=v21_feasibility,
         )
     )
     attempt_id = f"{job.cell_tag}-a{job.attempt:04d}"
@@ -1072,6 +1124,7 @@ def prepare_qualification_execution(
             diagnostic_read_candidates=(
                 diagnostic_read_candidates if read_diagnostic else None
             ),
+            v21_feasibility=v21_feasibility,
         )
         maximum = (
             diagnostic_timeout_seconds
@@ -1105,6 +1158,10 @@ def prepare_qualification_execution(
             expected["diagnostic_read_candidates"] = list(
                 diagnostic_read_candidates or ()
             )
+        elif v21_feasibility:
+            expected["claim_eligible"] = False
+            expected["v21_feasibility"] = True
+            expected["flow_control_authority"] = "requested-systemd-enforced"
     request = build_launch_request(
         normalized,
         role=role,
@@ -1205,6 +1262,24 @@ def main() -> int:
     )
     read_diagnostic.add_argument(
         "--purchase-option", choices=("spot", "on-demand"), default="spot"
+    )
+    v21_diagnostic = subparsers.add_parser("diagnose-v21-selector")
+    v21_diagnostic.add_argument("--manifest", type=Path, required=True)
+    v21_diagnostic.add_argument("--source-archive", type=Path, required=True)
+    v21_diagnostic.add_argument("--workload", default="standard-ann-read")
+    v21_diagnostic.add_argument("--dataset", default="deep-image-96")
+    v21_diagnostic.add_argument("--repetition", default="r01")
+    v21_diagnostic.add_argument("--profile", default="causality")
+    v21_diagnostic.add_argument("--image-id", required=True)
+    v21_diagnostic.add_argument("--subnet-id", required=True)
+    v21_diagnostic.add_argument("--security-group-id", required=True)
+    v21_diagnostic.add_argument("--instance-profile-arn", required=True)
+    v21_diagnostic.add_argument("--attempt", type=int, default=0)
+    v21_diagnostic.add_argument("--build-attempt", type=int, default=0)
+    v21_diagnostic.add_argument("--max-attempts", type=int, default=6)
+    v21_diagnostic.add_argument("--arm-index", type=int, default=0)
+    v21_diagnostic.add_argument(
+        "--purchase-option", choices=("spot",), default="spot"
     )
     runtime = subparsers.add_parser("read-recall-sift")
     runtime.add_argument("--manifest", type=Path, required=True)
@@ -1326,8 +1401,14 @@ def main() -> int:
             "run-lifecycle",
             "diagnose-lifecycle",
         }
-        generic_read = args.operation in {"build-read", "run-read", "diagnose-read"}
+        generic_read = args.operation in {
+            "build-read",
+            "run-read",
+            "diagnose-read",
+            "diagnose-v21-selector",
+        }
         read_diagnostic = args.operation == "diagnose-read"
+        v21_feasibility = args.operation == "diagnose-v21-selector"
         build_operation = args.operation in {
             "build-sift",
             "build-lifecycle",
@@ -1381,6 +1462,7 @@ def main() -> int:
                     profile="recall",
                     arm_index=args.arm_index,
                     diagnostic=read_diagnostic,
+                    v21_feasibility=v21_feasibility,
                 ),
                 aws=aws,
                 max_attempts=args.max_attempts,
