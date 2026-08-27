@@ -46,20 +46,23 @@ is immutable, independently recomputed, and `claim_eligible:false`.
 
 **Files:** `crates/borsuk/src/v22_feasibility.rs`, existing exact encoder/planner
 
-- [ ] RED hand fixture that separates the existing 1-D two-pivot order,
+- [x] RED hand fixture that separates the existing 1-D two-pivot order,
   metric microclustering within cells, and neighboring-cell placement.
-- [ ] Implement a precisely registered bounded microcluster algorithm: canonical
-  ID order, deterministic metric seeds/ties, fixed iteration cap, and linear or
-  bounded per-cell work; reject corpus-wide quadratic behavior.
-- [ ] Reuse/generalize the production exact-range planner rather than fork its
+- [x] Implement a precisely registered bounded microcluster algorithm: canonical
+  ID order, deterministic metric pivots/ties, balanced recursion, and bounded
+  per-cell work; cross-cell nearest-neighbor ordering is bounded by the
+  authenticated cell count and corpus-wide quadratic clustering is rejected.
+- [x] Reuse/generalize the production exact-range planner rather than fork its
   byte/request logic. Cover both `truncate` and `skip` only in G2; Stage L uses
   the complete exact prefix.
-- [ ] Emit exact primary useful/selected/physical bytes, minimum packing purity,
-  ranges, rows-per-range and contiguous-run histograms. Duplicate fetches are
-  physical bytes.
+- [x] Emit exact primary useful/selected/physical/speculative bytes, amplification,
+  eligibility, limiting bound, ranges, rows-per-range and contiguous-run
+  histograms, plus projected-object path/length/checksum authority. Duplicate
+  fetches are physical bytes. Budget-negative arms still emit their complete
+  measured census and exact limiting bound.
 - [ ] Prove sizing equals the proposed encoder for singleton, skewed,
   maximum-width, and compressed fixtures.
-- [ ] Run `rtk proxy cargo test -p borsuk v22_layout_oracle --lib -- --nocapture`.
+- [x] Run `rtk proxy cargo test -p borsuk v22_layout_oracle --lib -- --nocapture`.
 
 ### Task 3: Add the authenticated read-only Stage-L index census
 

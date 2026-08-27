@@ -66,19 +66,26 @@ This section is a hypothesis until the diagnostic ladder passes.
 2. Encode every row's residual from its primary routing centroid into a compact
    resident code plane. Codes are ordered by authenticated row ordinal and
    indexed by resident cell spans.
-3. Partition rows within a cell into deterministic semantic microclusters of
-   32 or 64 rows using recursive balanced bi-pivot splits. Start from canonical
-   record-ID order. At each node choose the row farthest from the minimum-ID
-   row, then the row farthest from that pivot, with record ID as the distance
-   tie-break. Stable-sort by the difference between distances to those pivots
-   and split at the balanced median. Recurse until the leaf fits. Order leaf
-   centroids by a deterministic nearest-neighbor chain with minimum record ID
-   tie-break. This is bounded by `O(n log(n/M) * dimensions)` split scoring plus
-   `O((n/M)^2 * dimensions)` leaf ordering per cell, never corpus-wide
-   quadratic clustering.
-4. Order neighboring cells and microclusters into content-addressed group
-   objects so a ranked row prefix expands to a small number of contiguous
-   exact-row ranges.
+3. Partition rows within a cell into exactly `ceil(cell_rows/M)` deterministic
+   semantic microclusters of at most `M in {32,64}` rows using recursive
+   balanced bi-pivot splits. Start from lexicographic authenticated raw
+   record-ID byte order. At each node choose the row farthest from the
+   minimum-ID row, then the row farthest from that pivot, with raw record-ID
+   bytes as the distance tie-break. Compute each row's distance-difference
+   score once per level, stable-sort by `(score, raw record-ID bytes)`, and
+   split at the balanced median.
+   Recurse until the leaf fits. Start with the leaf containing the minimum
+   record ID, then order leaf centroids by a deterministic nearest-neighbor
+   chain with minimum leaf record ID as the distance tie-break. Split work is
+   bounded by `O(n log(n/M) * dimensions + n log^2(n/M))`; leaf ordering is
+   `O((n/M)^2 * dimensions)` per cell, never corpus-wide quadratic clustering.
+4. For the cross-cell authority, start with the smallest cell index and order
+   remaining cell centroids by the same nearest-neighbor rule, using cell index
+   as the distance tie-break. This adds bounded `O(C^2 * dimensions)` diagnostic
+   work for `C` authenticated cells. Order those cells and microclusters into
+   content-addressed group objects so a ranked row prefix expands to a small
+   number of contiguous exact-row ranges. The within-cell authority instead
+   retains the authenticated V20 cell order.
 5. At query time, route in resident memory, scan only the routed resident code
    spans, rank rows, expand admitted rows to microcluster ranges, coalesce under
    the exact request/byte/amplification limits, issue one concurrent Standard-S3
@@ -126,19 +133,32 @@ without writing a format:
 The authorities are V20 physical; V20 two-pivot repacked at 32 and 64 rows;
 semantic-within-cell at 32 and 64 rows; and semantic-cross-cell at 32 and 64
 rows. With six exact prefixes this is exactly 42 `(layout, prefix)` pairs.
+The two-pivot control uses the current V20 per-cell one-dimensional projection
+and cuts that total order into full `M`-row units plus one final partial unit;
+it does not use the recursive semantic partitioner. Its anchor and tie order use
+the authenticated raw record-ID bytes, and its distance/projection reductions
+use the same `f32` kernels as the V20 builder.
 
 For every `(layout, prefix)` pair, expand exact rows to complete physical units
 and run the exact coalescer. Emit per-query ranges, primary useful/selected/
 physical bytes, amplification, primary-cell routing ranks, cell boundaries,
-rows-per-range histogram, contiguous-run-length histogram, and limiting bound.
-Report within-cell and cross-cell deltas separately.
+selected rows-per-range histogram, contiguous-run-length histogram, explicit
+speculative bytes, authenticated projected-object path/length/checksum authority,
+and limiting bound.
+Report within-cell and cross-cell deltas separately. Census planning first
+measures the complete prefix under the registered amplification allowance and
+then classifies it as `eligible`, `bytes`, `requests`, or `amplification`;
+budget-negative arms therefore emit complete evidence instead of failing the
+42-arm run. Each projected unit binds its exact decoded row bytes independently
+of its authenticated encoded length. Compression may make packing purity exceed
+one, but cannot hide decoded-row under-sizing.
 
 A layout/prefix pair advances only if routing reaches at least `0.995` GT cell
 coverage with at most 512,000 routed rows for every query and every query's
 exact prefix fits four primary ranges, 1 MiB primary physical bytes, and 2x
 primary amplification. The 2,048-row arm has only about 1.33x physical headroom
 after 384-byte vectors, before ID/format overhead; evidence reports the exact
-minimum packing purity for every prefix instead of treating all arms as having
+prefix packing purity for every prefix instead of treating all arms as having
 the same 2x allowance. If no pair advances, stop V22 before code training.
 
 ### G2: resident residual-code sweep
