@@ -2,6 +2,9 @@ use std::{
     cmp::Ordering,
     collections::BinaryHeap,
     collections::{BTreeMap, BTreeSet},
+    fs::{File, OpenOptions},
+    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -12,11 +15,14 @@ use crate::{
         CellCardGroupWriter, CellCardPush, EncodedCellCardGroup, RankedCellCardExactBlock,
         encode_cell_card_group, plan_cell_card_exact_wave_with_amplification,
     },
-    global_leaf::GlobalLeafPageInput,
+    global_leaf::{GlobalLeafCodeInput, GlobalLeafPageInput, GlobalLeafRowInput},
+    mutation::{MutationStamp, MutationVersion},
+    record::RecordId,
 };
 
 const V22_EXACT_PREFIX_ROWS: [u16; 6] = [10, 256, 512, 1024, 1536, 2048];
 pub(crate) const V22_MAX_EXACT_PREFIX_ROWS: usize = 2048;
+pub(crate) const V22_STAGE_L_MAX_CELL_ROWS: u64 = 512_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct V22ExactPrefixRow {
@@ -174,13 +180,21 @@ pub struct V22StageLReport {
     pub routing_cell_count: usize,
     /// Query-major bounded exact-prefix evidence.
     pub query_prefixes: Vec<V22StageLQueryPrefix>,
+    /// Canonical seven-layout by six-prefix census evidence.
+    pub layout_censuses: Vec<V22StageLLayoutArmReport>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum V22LayoutKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+/// Frozen Stage-L physical-layout authority.
+pub enum V22LayoutKind {
+    /// Existing V20 immutable cell-card physical order.
     V20Physical,
+    /// V20 rows repacked within each cell by a deterministic two-pivot projection.
     V20TwoPivotRepacked,
+    /// Semantic microclusters ordered independently inside each authenticated cell.
     SemanticWithinCell,
+    /// Semantic microclusters with both within-cell and cross-cell ordering.
     SemanticCrossCell,
 }
 
@@ -189,6 +203,94 @@ pub(crate) struct V22LayoutCensusArm {
     pub(crate) layout: V22LayoutKind,
     pub(crate) microcluster_rows: Option<u8>,
     pub(crate) exact_prefix_rows: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// One physical range selected by the production exact-wave planner.
+pub struct V22StageLRange {
+    /// Content-addressed object path.
+    pub path: String,
+    /// Inclusive byte offset.
+    pub start: u64,
+    /// Exclusive byte offset.
+    pub end: u64,
+    /// Encoded bytes belonging to selected blocks inside this range.
+    pub selected_bytes: u64,
+    /// Complete decoded rows carried by the selected blocks.
+    pub rows: u64,
+    /// Selected exact blocks coalesced into this range.
+    pub blocks: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Exact Stage-L result for one query in one layout/prefix arm.
+pub struct V22StageLLayoutQuerySample {
+    /// Zero-based query index.
+    pub query_index: usize,
+    /// Frozen exact prefix size.
+    pub exact_prefix_rows: u16,
+    /// Smallest complete routing prefix covering all ten GT cells.
+    pub required_routing_cells: usize,
+    /// Ground-truth rows covered by the required routing prefix.
+    pub gt_cell_hits: usize,
+    /// Ground-truth cell coverage in parts per million.
+    pub gt_cell_coverage_ppm: u64,
+    /// Corpus rows in that complete routing prefix.
+    pub routed_rows: u64,
+    /// Useful exact-vector bytes in the requested prefix.
+    pub useful_bytes: u64,
+    /// Encoded bytes in selected exact blocks.
+    pub selected_bytes: u64,
+    /// Actual bytes in coalesced physical reads.
+    pub physical_bytes: u64,
+    /// Physical bytes not belonging to selected blocks.
+    pub speculative_bytes: u64,
+    /// Number of physical object-store requests.
+    pub requests: usize,
+    /// Complete rows carried by selected blocks.
+    pub selected_rows: u64,
+    /// Useful-to-physical packing purity in parts per million.
+    pub packing_purity_ppm: u64,
+    /// Physical-to-selected amplification in parts per million.
+    pub physical_amplification_ppm: u64,
+    /// Exact physical planner classification independent of routing eligibility.
+    pub physical_limiting_bound: V22LayoutLimitingBound,
+    /// Whether the routing prefix satisfies coverage and row-count authority.
+    pub routing_eligible: bool,
+    /// First bound preventing eligibility, or eligible.
+    pub limiting_bound: V22LayoutLimitingBound,
+    /// True only when routing and physical gates both pass.
+    pub eligible: bool,
+    /// Exact production-planner physical ranges.
+    pub ranges: Vec<V22StageLRange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Canonical Stage-L arm and all query-major samples.
+pub struct V22StageLLayoutArmReport {
+    /// Frozen layout family.
+    pub layout: V22LayoutKind,
+    /// Unit-row authority for repacked layouts.
+    pub microcluster_rows: Option<u8>,
+    /// Exact ranked prefix size.
+    pub exact_prefix_rows: u16,
+    /// Content-addressed object authority reachable by candidate units.
+    pub projected_objects: Vec<V22StageLProjectedObject>,
+    /// Query-major samples.
+    pub query_samples: Vec<V22StageLLayoutQuerySample>,
+    /// True only when every query passes every Stage-L gate.
+    pub eligible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// One content-addressed object emitted or referenced by a Stage-L layout.
+pub struct V22StageLProjectedObject {
+    /// Object path.
+    pub path: String,
+    /// BLAKE3 checksum encoded as lowercase hexadecimal.
+    pub checksum: String,
+    /// Complete encoded object length.
+    pub encoded_bytes: u64,
 }
 
 impl V22LayoutCensusArm {
@@ -279,6 +381,438 @@ pub(crate) fn routing_coverage_at_probe(
     Ok(ranks.iter().filter(|rank| **rank <= probes).count())
 }
 
+fn stage_l_io(path: &Path, source: std::io::Error) -> BorsukError {
+    BorsukError::Io {
+        path: path.to_path_buf(),
+        source,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct V22StageLSpillRow {
+    pub(crate) source_ordinal: u64,
+    pub(crate) canonical_record_id: Box<[u8]>,
+    pub(crate) stamp: MutationStamp,
+    pub(crate) code: Box<[u8]>,
+    pub(crate) exact: Box<[u8]>,
+}
+
+impl V22StageLSpillRow {
+    pub(crate) fn geometry(
+        &self,
+        dimensions: usize,
+        element_type: VectorElementType,
+        normalize: bool,
+    ) -> Result<Box<[f32]>> {
+        let decoded = element_type.decode_fixed_width(&self.exact, dimensions)?;
+        Ok(if normalize {
+            crate::metric::unit_l2_normalized(&decoded).into()
+        } else {
+            decoded.into()
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct V22StageLSpillExtent {
+    primary_cell: u32,
+    start_ordinal: u64,
+    rows: u64,
+    offset: u64,
+    bytes: u64,
+    checksum: [u8; 32],
+}
+
+struct V22OpenSpillExtent {
+    primary_cell: u32,
+    start_ordinal: u64,
+    rows: u64,
+    offset: u64,
+    bytes: u64,
+    hasher: blake3::Hasher,
+}
+
+pub(crate) struct V22StageLSpillWriter {
+    directory: tempfile::TempDir,
+    path: PathBuf,
+    writer: BufWriter<File>,
+    dimensions: usize,
+    element_type: VectorElementType,
+    exact_width: usize,
+    code_width: usize,
+    header_bytes: u64,
+    header_checksum: [u8; 32],
+    authenticated_cells: BTreeSet<u32>,
+    completed_cells: BTreeSet<u32>,
+    extents: Vec<V22StageLSpillExtent>,
+    open_extent: Option<V22OpenSpillExtent>,
+    total_rows: u64,
+    max_cell_rows: u64,
+}
+
+impl V22StageLSpillWriter {
+    pub(crate) fn create(
+        parent: &Path,
+        root_checksum: &str,
+        dimensions: usize,
+        element_type: VectorElementType,
+        code_width: usize,
+        authenticated_cells: &BTreeSet<u32>,
+        max_cell_rows: u64,
+    ) -> Result<Self> {
+        if root_checksum.is_empty()
+            || dimensions == 0
+            || code_width == 0
+            || authenticated_cells.is_empty()
+            || max_cell_rows == 0
+        {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V22 Stage L scratch authority is empty".to_string(),
+            ));
+        }
+        let directory = tempfile::Builder::new()
+            .prefix("borsuk-v22-stage-l-")
+            .tempdir_in(parent)
+            .map_err(|source| stage_l_io(parent, source))?;
+        let path = directory.path().join("rows.bin");
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .map_err(|source| stage_l_io(&path, source))?;
+        let mut header = b"BORSUK-V22-STAGE-L-SCRATCH\0".to_vec();
+        header.extend_from_slice(&(root_checksum.len() as u64).to_le_bytes());
+        header.extend_from_slice(root_checksum.as_bytes());
+        let header_bytes = header.len() as u64;
+        let header_checksum = *blake3::hash(&header).as_bytes();
+        let mut writer = BufWriter::new(file);
+        writer
+            .write_all(&header)
+            .map_err(|source| stage_l_io(&path, source))?;
+        Ok(Self {
+            directory,
+            path,
+            writer,
+            dimensions,
+            element_type,
+            exact_width: element_type.fixed_width_bytes(dimensions)?,
+            code_width,
+            header_bytes,
+            header_checksum,
+            authenticated_cells: authenticated_cells.clone(),
+            completed_cells: BTreeSet::new(),
+            extents: Vec::with_capacity(authenticated_cells.len()),
+            open_extent: None,
+            total_rows: 0,
+            max_cell_rows,
+        })
+    }
+
+    fn finish_open_extent(&mut self) -> Result<()> {
+        let Some(open) = self.open_extent.take() else {
+            return Ok(());
+        };
+        if open.rows == 0 || open.rows > self.max_cell_rows {
+            return Err(BorsukError::InvalidStorage(
+                "V22 Stage L scratch cell is empty or exceeds its row bound".to_string(),
+            ));
+        }
+        self.completed_cells.insert(open.primary_cell);
+        self.extents.push(V22StageLSpillExtent {
+            primary_cell: open.primary_cell,
+            start_ordinal: open.start_ordinal,
+            rows: open.rows,
+            offset: open.offset,
+            bytes: open.bytes,
+            checksum: *open.hasher.finalize().as_bytes(),
+        });
+        Ok(())
+    }
+
+    pub(crate) fn append_batch(
+        &mut self,
+        primary_cell: u32,
+        rows: &[V22StageLSpillRow],
+    ) -> Result<()> {
+        if rows.is_empty() || !self.authenticated_cells.contains(&primary_cell) {
+            return Err(BorsukError::InvalidStorage(
+                "V22 Stage L scratch batch is empty or references an unauthenticated cell"
+                    .to_string(),
+            ));
+        }
+        if self
+            .open_extent
+            .as_ref()
+            .is_some_and(|open| open.primary_cell != primary_cell)
+        {
+            self.finish_open_extent()?;
+        }
+        if self.open_extent.is_none() {
+            if self.completed_cells.contains(&primary_cell) {
+                return Err(BorsukError::InvalidStorage(
+                    "V22 Stage L scratch cells are not contiguous".to_string(),
+                ));
+            }
+            let offset = self
+                .writer
+                .stream_position()
+                .map_err(|source| stage_l_io(&self.path, source))?;
+            self.open_extent = Some(V22OpenSpillExtent {
+                primary_cell,
+                start_ordinal: self.total_rows,
+                rows: 0,
+                offset,
+                bytes: 0,
+                hasher: blake3::Hasher::new(),
+            });
+        }
+        let open = self.open_extent.as_ref().expect("scratch extent is open");
+        let prospective_rows = open.rows.checked_add(rows.len() as u64).ok_or_else(|| {
+            BorsukError::InvalidStorage("V22 Stage L scratch row count overflows".to_string())
+        })?;
+        if prospective_rows > self.max_cell_rows
+            || rows.iter().enumerate().any(|(offset, row)| {
+                row.source_ordinal != self.total_rows + offset as u64
+                    || row.canonical_record_id.is_empty()
+                    || row.canonical_record_id.len() > u16::MAX as usize
+                    || row.code.len() != self.code_width
+                    || row.exact.len() != self.exact_width
+            })
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V22 Stage L scratch row authority is invalid or exceeds its bound".to_string(),
+            ));
+        }
+        let mut encoded = Vec::new();
+        for row in rows {
+            encoded.extend_from_slice(&(row.canonical_record_id.len() as u16).to_le_bytes());
+            encoded.extend_from_slice(&row.canonical_record_id);
+            encoded.extend_from_slice(&row.stamp.version().to_bytes());
+            encoded.extend_from_slice(&row.stamp.digest());
+            encoded.extend_from_slice(&row.code);
+            encoded.extend_from_slice(&row.exact);
+        }
+        self.writer
+            .write_all(&encoded)
+            .map_err(|source| stage_l_io(&self.path, source))?;
+        let open = self.open_extent.as_mut().expect("scratch extent is open");
+        open.hasher.update(&encoded);
+        open.rows = prospective_rows;
+        open.bytes = open
+            .bytes
+            .checked_add(encoded.len() as u64)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V22 Stage L scratch bytes overflow".to_string())
+            })?;
+        self.total_rows = self
+            .total_rows
+            .checked_add(rows.len() as u64)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V22 Stage L total row count overflows".to_string())
+            })?;
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> Result<V22StageLSpill> {
+        self.finish_open_extent()?;
+        if self.completed_cells != self.authenticated_cells {
+            return Err(BorsukError::InvalidStorage(
+                "V22 Stage L scratch does not cover every authenticated cell".to_string(),
+            ));
+        }
+        self.writer
+            .flush()
+            .map_err(|source| stage_l_io(&self.path, source))?;
+        self.writer
+            .get_ref()
+            .sync_all()
+            .map_err(|source| stage_l_io(&self.path, source))?;
+        Ok(V22StageLSpill {
+            _directory: self.directory,
+            path: self.path,
+            dimensions: self.dimensions,
+            element_type: self.element_type,
+            exact_width: self.exact_width,
+            code_width: self.code_width,
+            header_bytes: self.header_bytes,
+            header_checksum: self.header_checksum,
+            extents: self.extents,
+            total_rows: self.total_rows,
+        })
+    }
+}
+
+pub(crate) struct V22StageLSpill {
+    _directory: tempfile::TempDir,
+    path: PathBuf,
+    dimensions: usize,
+    element_type: VectorElementType,
+    exact_width: usize,
+    code_width: usize,
+    header_bytes: u64,
+    header_checksum: [u8; 32],
+    extents: Vec<V22StageLSpillExtent>,
+    total_rows: u64,
+}
+
+impl V22StageLSpill {
+    pub(crate) fn total_rows(&self) -> u64 {
+        self.total_rows
+    }
+
+    pub(crate) fn cell_rows(&self) -> Vec<(u32, u64)> {
+        self.extents
+            .iter()
+            .map(|extent| (extent.primary_cell, extent.rows))
+            .collect()
+    }
+
+    pub(crate) fn read_cell(&self, primary_cell: u32) -> Result<Vec<V22StageLSpillRow>> {
+        let extent = self
+            .extents
+            .iter()
+            .find(|extent| extent.primary_cell == primary_cell)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V22 Stage L scratch omits an authenticated cell".to_string(),
+                )
+            })?;
+        let mut reader = BufReader::new(
+            File::open(&self.path).map_err(|source| stage_l_io(&self.path, source))?,
+        );
+        let header_bytes = usize::try_from(self.header_bytes).map_err(|_| {
+            BorsukError::InvalidStorage("V22 Stage L scratch header is oversized".to_string())
+        })?;
+        let mut header = vec![0_u8; header_bytes];
+        reader
+            .read_exact(&mut header)
+            .map_err(|source| stage_l_io(&self.path, source))?;
+        if *blake3::hash(&header).as_bytes() != self.header_checksum {
+            return Err(BorsukError::InvalidStorage(
+                "V22 Stage L scratch header checksum differs".to_string(),
+            ));
+        }
+        reader
+            .seek(SeekFrom::Start(extent.offset))
+            .map_err(|source| stage_l_io(&self.path, source))?;
+        let mut encoded = vec![0_u8; extent.bytes as usize];
+        reader
+            .read_exact(&mut encoded)
+            .map_err(|source| stage_l_io(&self.path, source))?;
+        if *blake3::hash(&encoded).as_bytes() != extent.checksum {
+            return Err(BorsukError::InvalidStorage(
+                "V22 Stage L scratch cell checksum differs".to_string(),
+            ));
+        }
+        let mut cursor = 0_usize;
+        let mut rows = Vec::with_capacity(extent.rows as usize);
+        for row_index in 0..extent.rows {
+            let id_len_end = cursor.checked_add(2).ok_or_else(|| {
+                BorsukError::InvalidStorage("V22 Stage L scratch ID range overflows".to_string())
+            })?;
+            let id_len = u16::from_le_bytes(
+                encoded
+                    .get(cursor..id_len_end)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V22 Stage L scratch ID length is truncated".to_string(),
+                        )
+                    })?
+                    .try_into()
+                    .expect("two-byte ID length"),
+            ) as usize;
+            cursor = id_len_end;
+            let id_end = cursor.checked_add(id_len).ok_or_else(|| {
+                BorsukError::InvalidStorage("V22 Stage L scratch ID overflows".to_string())
+            })?;
+            let canonical_record_id = encoded
+                .get(cursor..id_end)
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("V22 Stage L scratch ID is truncated".to_string())
+                })?
+                .to_vec()
+                .into_boxed_slice();
+            cursor = id_end;
+            let version_end = cursor.checked_add(24).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V22 Stage L scratch mutation version range overflows".to_string(),
+                )
+            })?;
+            let version = MutationVersion::from_bytes(
+                encoded.get(cursor..version_end).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V22 Stage L scratch mutation version is truncated".to_string(),
+                    )
+                })?,
+            )?;
+            cursor = version_end;
+            let digest_end = cursor.checked_add(32).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V22 Stage L scratch mutation digest range overflows".to_string(),
+                )
+            })?;
+            let digest: [u8; 32] = encoded
+                .get(cursor..digest_end)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V22 Stage L scratch mutation digest is truncated".to_string(),
+                    )
+                })?
+                .try_into()
+                .expect("fixed mutation digest");
+            cursor = digest_end;
+            let code_end = cursor.checked_add(self.code_width).ok_or_else(|| {
+                BorsukError::InvalidStorage("V22 Stage L scratch code range overflows".to_string())
+            })?;
+            let code = encoded
+                .get(cursor..code_end)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("V22 Stage L scratch code is truncated".to_string())
+                })?
+                .to_vec()
+                .into_boxed_slice();
+            cursor = code_end;
+            let exact_end = cursor.checked_add(self.exact_width).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V22 Stage L scratch exact row range overflows".to_string(),
+                )
+            })?;
+            let exact = encoded
+                .get(cursor..exact_end)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V22 Stage L scratch exact row is truncated".to_string(),
+                    )
+                })?
+                .to_vec()
+                .into_boxed_slice();
+            cursor = exact_end;
+            rows.push(V22StageLSpillRow {
+                source_ordinal: extent.start_ordinal + row_index,
+                canonical_record_id,
+                stamp: MutationStamp::new(version, digest),
+                code,
+                exact,
+            });
+        }
+        if cursor != encoded.len() || rows.len() != extent.rows as usize {
+            return Err(BorsukError::InvalidStorage(
+                "V22 Stage L scratch cell has trailing or missing rows".to_string(),
+            ));
+        }
+        Ok(rows)
+    }
+
+    pub(crate) fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
+    pub(crate) fn element_type(&self) -> VectorElementType {
+        self.element_type
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct V22SemanticRow {
     pub(crate) record_id: u64,
@@ -296,10 +830,10 @@ pub(crate) struct V22SemanticUnit {
 }
 
 #[derive(Debug)]
-struct V22SemanticCell {
-    primary_cell: u32,
-    centroid: Box<[f64]>,
-    units: Vec<V22SemanticUnit>,
+pub(crate) struct V22SemanticCell {
+    pub(crate) primary_cell: u32,
+    pub(crate) centroid: Box<[f64]>,
+    pub(crate) units: Vec<V22SemanticUnit>,
 }
 
 fn semantic_squared_distance(left: &[f32], right: &[f32]) -> f64 {
@@ -459,6 +993,80 @@ fn nearest_neighbor_order<K: Ord>(centroids: &[Box<[f64]>], keys: &[K]) -> Vec<u
     order
 }
 
+pub(crate) fn project_v22_semantic_cell(
+    rows: &[V22SemanticRow],
+    primary_cell: u32,
+    microcluster_rows: u8,
+) -> Result<V22SemanticCell> {
+    if rows.is_empty()
+        || !matches!(microcluster_rows, 32 | 64)
+        || rows.iter().any(|row| row.primary_cell != primary_cell)
+    {
+        return Err(BorsukError::InvalidSearchOptions(
+            "V22 semantic cell authority is empty or mismatched".to_string(),
+        ));
+    }
+    let mut indexes = (0..rows.len()).collect::<Vec<_>>();
+    indexes.sort_unstable_by(|left, right| {
+        rows[*left]
+            .canonical_record_id
+            .cmp(&rows[*right].canonical_record_id)
+            .then_with(|| rows[*left].record_id.cmp(&rows[*right].record_id))
+    });
+    let cell_centroid = semantic_centroid(rows, &indexes);
+    let mut leaves = Vec::new();
+    let leaf_count = indexes.len().div_ceil(usize::from(microcluster_rows));
+    split_semantic_rows(rows, &mut indexes, leaf_count, &mut leaves);
+    let leaf_centroids = leaves
+        .iter()
+        .map(|leaf| semantic_centroid(rows, leaf))
+        .collect::<Vec<_>>();
+    let leaf_keys = leaves
+        .iter()
+        .map(|leaf| {
+            leaf.iter()
+                .map(|index| rows[*index].canonical_record_id.as_ref())
+                .min()
+                .expect("semantic leaf is nonempty")
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    let units = nearest_neighbor_order(&leaf_centroids, &leaf_keys)
+        .into_iter()
+        .map(|leaf_index| V22SemanticUnit {
+            primary_cell,
+            record_ids: leaves[leaf_index]
+                .iter()
+                .map(|index| rows[*index].record_id)
+                .collect(),
+        })
+        .collect();
+    Ok(V22SemanticCell {
+        primary_cell,
+        centroid: cell_centroid,
+        units,
+    })
+}
+
+pub(crate) fn v22_semantic_cell_centroid(
+    rows: &[V22SemanticRow],
+    primary_cell: u32,
+) -> Result<Box<[f64]>> {
+    if rows.is_empty() || rows.iter().any(|row| row.primary_cell != primary_cell) {
+        return Err(BorsukError::InvalidStorage(
+            "V22 semantic centroid cell authority is empty or mismatched".to_string(),
+        ));
+    }
+    let mut indexes = (0..rows.len()).collect::<Vec<_>>();
+    indexes.sort_unstable_by(|left, right| {
+        rows[*left]
+            .canonical_record_id
+            .cmp(&rows[*right].canonical_record_id)
+            .then_with(|| rows[*left].record_id.cmp(&rows[*right].record_id))
+    });
+    Ok(semantic_centroid(rows, &indexes))
+}
+
 pub(crate) fn project_v22_semantic_layout(
     rows: &[V22SemanticRow],
     authenticated_cell_order: &[u32],
@@ -515,47 +1123,14 @@ pub(crate) fn project_v22_semantic_layout(
     }
 
     let mut cells = BTreeMap::<u32, V22SemanticCell>::new();
-    for (&primary_cell, cell_indexes) in &mut rows_by_cell {
-        cell_indexes.sort_unstable_by(|left, right| {
-            rows[*left]
-                .canonical_record_id
-                .cmp(&rows[*right].canonical_record_id)
-        });
-        let cell_centroid = semantic_centroid(rows, cell_indexes);
-        let mut leaves = Vec::new();
-        let leaf_count = cell_indexes.len().div_ceil(usize::from(microcluster_rows));
-        split_semantic_rows(rows, cell_indexes, leaf_count, &mut leaves);
-        let leaf_centroids = leaves
+    for (&primary_cell, row_indexes) in &rows_by_cell {
+        let cell_rows = row_indexes
             .iter()
-            .map(|leaf| semantic_centroid(rows, leaf))
+            .map(|index| rows[*index].clone())
             .collect::<Vec<_>>();
-        let leaf_keys = leaves
-            .iter()
-            .map(|leaf| {
-                leaf.iter()
-                    .map(|index| rows[*index].canonical_record_id.as_ref())
-                    .min()
-                    .expect("semantic leaf is nonempty")
-                    .to_vec()
-            })
-            .collect::<Vec<_>>();
-        let units = nearest_neighbor_order(&leaf_centroids, &leaf_keys)
-            .into_iter()
-            .map(|leaf_index| V22SemanticUnit {
-                primary_cell,
-                record_ids: leaves[leaf_index]
-                    .iter()
-                    .map(|index| rows[*index].record_id)
-                    .collect(),
-            })
-            .collect();
         cells.insert(
             primary_cell,
-            V22SemanticCell {
-                primary_cell,
-                centroid: cell_centroid,
-                units,
-            },
+            project_v22_semantic_cell(&cell_rows, primary_cell, microcluster_rows)?,
         );
     }
 
@@ -641,50 +1216,288 @@ pub(crate) fn project_v22_two_pivot_layout(
 
     let mut projected = Vec::new();
     for primary_cell in authenticated_cell_order {
-        let mut indexes = rows_by_cell
+        let cell_rows = rows_by_cell
             .remove(primary_cell)
-            .expect("validated two-pivot cell remains present");
-        indexes.sort_unstable_by(|left, right| {
+            .expect("validated two-pivot cell remains present")
+            .into_iter()
+            .map(|index| rows[index].clone())
+            .collect::<Vec<_>>();
+        projected.extend(project_v22_two_pivot_cell(
+            &cell_rows,
+            *primary_cell,
+            unit_rows,
+        )?);
+    }
+    Ok(projected)
+}
+
+pub(crate) fn project_v22_two_pivot_cell(
+    rows: &[V22SemanticRow],
+    primary_cell: u32,
+    unit_rows: u8,
+) -> Result<Vec<V22SemanticUnit>> {
+    if rows.is_empty()
+        || !matches!(unit_rows, 32 | 64)
+        || rows.iter().any(|row| row.primary_cell != primary_cell)
+    {
+        return Err(BorsukError::InvalidSearchOptions(
+            "V22 two-pivot cell authority is empty or mismatched".to_string(),
+        ));
+    }
+    let mut indexes = (0..rows.len()).collect::<Vec<_>>();
+    indexes.sort_unstable_by(|left, right| {
+        rows[*left]
+            .canonical_record_id
+            .cmp(&rows[*right].canonical_record_id)
+            .then_with(|| rows[*left].record_id.cmp(&rows[*right].record_id))
+    });
+    let first = indexes[0];
+    let second = two_pivot_farthest(rows, &indexes, first);
+    let first_geometry = &rows[first].geometry;
+    let projection_axis = rows[second]
+        .geometry
+        .iter()
+        .zip(first_geometry)
+        .map(|(second, first)| second - first)
+        .collect::<Vec<_>>();
+    let mut offset_geometry = vec![0.0_f32; first_geometry.len()];
+    let mut scored = indexes
+        .into_iter()
+        .map(|index| {
+            for ((offset, value), first) in offset_geometry
+                .iter_mut()
+                .zip(rows[index].geometry.iter())
+                .zip(first_geometry)
+            {
+                *offset = value - first;
+            }
+            let score = crate::metric::dot_product(&offset_geometry, &projection_axis);
+            (index, score)
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|(left, left_score), (right, right_score)| {
+        left_score.total_cmp(right_score).then_with(|| {
             rows[*left]
                 .canonical_record_id
                 .cmp(&rows[*right].canonical_record_id)
-        });
-        let first = indexes[0];
-        let second = two_pivot_farthest(rows, &indexes, first);
-        let first_geometry = &rows[first].geometry;
-        let projection_axis = rows[second]
-            .geometry
+                .then_with(|| rows[*left].record_id.cmp(&rows[*right].record_id))
+        })
+    });
+    Ok(scored
+        .chunks(usize::from(unit_rows))
+        .map(|chunk| V22SemanticUnit {
+            primary_cell,
+            record_ids: chunk
+                .iter()
+                .map(|(index, _)| rows[*index].record_id)
+                .collect(),
+        })
+        .collect())
+}
+
+pub(crate) fn v22_cross_cell_order(cells: &[(u32, Box<[f64]>)]) -> Result<Vec<u32>> {
+    if cells.is_empty()
+        || cells.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+        || cells[0].1.is_empty()
+        || cells.iter().any(|(_, centroid)| {
+            centroid.len() != cells[0].1.len() || centroid.iter().any(|value| !value.is_finite())
+        })
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V22 cross-cell centroid authority is empty or invalid".to_string(),
+        ));
+    }
+    let centroids = cells
+        .iter()
+        .map(|(_, centroid)| centroid.clone())
+        .collect::<Vec<_>>();
+    let keys = cells.iter().map(|(cell, _)| *cell).collect::<Vec<_>>();
+    Ok(nearest_neighbor_order(&centroids, &keys)
+        .into_iter()
+        .map(|index| cells[index].0)
+        .collect())
+}
+
+pub(crate) fn v22_stage_l_cell_rows(
+    spill: &V22StageLSpill,
+    primary_cell: u32,
+    normalize: bool,
+) -> Result<(Vec<V22StageLSpillRow>, Vec<V22SemanticRow>)> {
+    let rows = spill.read_cell(primary_cell)?;
+    let semantic = rows
+        .iter()
+        .map(|row| {
+            Ok(V22SemanticRow {
+                record_id: row.source_ordinal,
+                canonical_record_id: row.canonical_record_id.clone(),
+                primary_cell,
+                geometry: row.geometry(spill.dimensions(), spill.element_type(), normalize)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((rows, semantic))
+}
+
+pub(crate) fn v22_stage_l_pages_for_units(
+    rows: Vec<V22StageLSpillRow>,
+    semantic_rows: &[V22SemanticRow],
+    units: &[V22SemanticUnit],
+    projected_cell_index: u32,
+    mut encode_centroid: impl FnMut(&[f32]) -> Result<Vec<u8>>,
+) -> Result<Vec<(GlobalLeafPageInput, Box<[V22EncodedRecordAuthority]>)>> {
+    if rows.is_empty()
+        || semantic_rows.len() != rows.len()
+        || units.is_empty()
+        || rows
             .iter()
-            .zip(first_geometry)
-            .map(|(second, first)| second - first)
-            .collect::<Vec<_>>();
-        let mut scored = indexes
-            .into_iter()
-            .map(|index| {
-                let mut offset_geometry = rows[index].geometry.to_vec();
-                for (value, first) in offset_geometry.iter_mut().zip(first_geometry) {
-                    *value -= first;
-                }
-                let score = crate::metric::dot_product(&offset_geometry, &projection_axis);
-                (index, score)
-            })
-            .collect::<Vec<_>>();
-        scored.sort_by(|(left, left_score), (right, right_score)| {
-            left_score.total_cmp(right_score).then_with(|| {
-                rows[*left]
-                    .canonical_record_id
-                    .cmp(&rows[*right].canonical_record_id)
-            })
-        });
-        projected.extend(scored.chunks(usize::from(unit_rows)).map(|chunk| {
-            V22SemanticUnit {
-                primary_cell: *primary_cell,
-                record_ids: chunk
-                    .iter()
-                    .map(|(index, _)| rows[*index].record_id)
-                    .collect(),
+            .zip(semantic_rows)
+            .any(|(row, semantic)| row.source_ordinal != semantic.record_id)
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V22 Stage L cell page authority is empty or mismatched".to_string(),
+        ));
+    }
+    let first_ordinal = rows[0].source_ordinal;
+    if rows
+        .iter()
+        .enumerate()
+        .any(|(index, row)| row.source_ordinal != first_ordinal + index as u64)
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V22 Stage L cell scratch ordinals are not contiguous".to_string(),
+        ));
+    }
+    let dimensions = semantic_rows[0].geometry.len();
+    let primary_cell = semantic_rows[0].primary_cell;
+    let mut owned = rows.into_iter().map(Some).collect::<Vec<_>>();
+    let mut pages = Vec::with_capacity(units.len());
+    for (leaf_ordinal, unit) in units.iter().enumerate() {
+        if unit.primary_cell != primary_cell || unit.record_ids.is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "V22 Stage L semantic unit conflicts with its cell".to_string(),
+            ));
+        }
+        let mut centroid = vec![0.0_f64; dimensions];
+        let mut page_rows = Vec::with_capacity(unit.record_ids.len());
+        let mut authority = Vec::with_capacity(unit.record_ids.len());
+        for ordinal in &unit.record_ids {
+            let index = ordinal
+                .checked_sub(first_ordinal)
+                .and_then(|index| usize::try_from(index).ok())
+                .filter(|index| *index < owned.len())
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V22 Stage L semantic unit ordinal is outside its cell".to_string(),
+                    )
+                })?;
+            let semantic = &semantic_rows[index];
+            for (sum, value) in centroid.iter_mut().zip(semantic.geometry.iter()) {
+                *sum += f64::from(*value);
             }
-        }));
+            let row = owned[index].take().ok_or_else(|| {
+                BorsukError::InvalidStorage("V22 Stage L semantic units repeat a row".to_string())
+            })?;
+            authority.push(V22EncodedRecordAuthority {
+                canonical_record_id: row.canonical_record_id.clone(),
+                record_id: row.source_ordinal,
+            });
+            page_rows.push(GlobalLeafRowInput {
+                id: RecordId::from_bytes(row.canonical_record_id.to_vec()),
+                stamp: row.stamp,
+                code: GlobalLeafCodeInput::from(row.code.into_vec()),
+                exact: row.exact.into_vec(),
+            });
+        }
+        let denominator = unit.record_ids.len() as f64;
+        let centroid = centroid
+            .into_iter()
+            .map(|value| (value / denominator) as f32)
+            .collect::<Vec<_>>();
+        pages.push((
+            GlobalLeafPageInput {
+                cell_index: projected_cell_index,
+                leaf_ordinal: u32::try_from(leaf_ordinal).map_err(|_| {
+                    BorsukError::InvalidStorage("V22 Stage L leaf ordinal exceeds u32".to_string())
+                })?,
+                centroid_code: encode_centroid(&centroid)?,
+                rows: page_rows,
+            },
+            authority.into_boxed_slice(),
+        ));
+    }
+    if owned.iter().any(Option::is_some) {
+        return Err(BorsukError::InvalidStorage(
+            "V22 Stage L semantic units omit rows".to_string(),
+        ));
+    }
+    Ok(pages)
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct V22StageLPhysicalBlock {
+    pub(crate) path: String,
+    pub(crate) object_checksum: [u8; 32],
+    pub(crate) object_encoded_bytes: u64,
+    pub(crate) offset: u64,
+    pub(crate) encoded_bytes: u32,
+    pub(crate) decoded_bytes: u64,
+    pub(crate) first_ordinal: u64,
+    pub(crate) rows: u32,
+}
+
+pub(crate) fn v22_physical_candidate_units(
+    blocks: &[V22StageLPhysicalBlock],
+    total_rows: u64,
+    candidate_ordinals: &[u64],
+) -> Result<Vec<V22ProjectedUnit>> {
+    if blocks.is_empty()
+        || total_rows == 0
+        || candidate_ordinals.is_empty()
+        || candidate_ordinals.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V22 physical layout authority is empty or invalid".to_string(),
+        ));
+    }
+    let mut expected_ordinal = 0_u64;
+    let mut projected = Vec::new();
+    for block in blocks {
+        let end_ordinal = block
+            .first_ordinal
+            .checked_add(u64::from(block.rows))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V22 physical ordinal range overflows".to_string())
+            })?;
+        if block.first_ordinal != expected_ordinal
+            || block.path.is_empty()
+            || block.rows == 0
+            || block.encoded_bytes == 0
+            || block.offset + u64::from(block.encoded_bytes) > block.object_encoded_bytes
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V22 physical block authority is noncanonical".to_string(),
+            ));
+        }
+        let intersects = candidate_ordinals
+            .partition_point(|ordinal| *ordinal < block.first_ordinal)
+            < candidate_ordinals.partition_point(|ordinal| *ordinal < end_ordinal);
+        if intersects {
+            projected.push(V22ProjectedUnit {
+                path: block.path.clone(),
+                object_checksum: block.object_checksum,
+                object_encoded_bytes: block.object_encoded_bytes,
+                offset: block.offset,
+                encoded_bytes: block.encoded_bytes,
+                decoded_bytes: block.decoded_bytes,
+                record_ids: (block.first_ordinal..end_ordinal).collect(),
+            });
+        }
+        expected_ordinal = end_ordinal;
+    }
+    if expected_ordinal != total_rows {
+        return Err(BorsukError::InvalidStorage(
+            "V22 physical blocks do not cover the corpus".to_string(),
+        ));
     }
     Ok(projected)
 }
@@ -915,12 +1728,287 @@ pub(crate) fn project_v22_encoded_layout(
     Ok(projected)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum V22LayoutLimitingBound {
+pub(crate) struct V22CandidateLayoutEncoder {
+    dimensions: usize,
+    element_type: VectorElementType,
+    exact_row_bytes: usize,
+    code_width: usize,
+    content_prefix: String,
+    total_rows: u64,
+    candidate_ordinals: Box<[u64]>,
+    writer: Option<CellCardGroupWriter>,
+    pending_authority: Vec<Box<[V22EncodedRecordAuthority]>>,
+    seen: Vec<u64>,
+    seen_rows: u64,
+    retained: Vec<V22ProjectedUnit>,
+    saw_page: bool,
+}
+
+impl V22CandidateLayoutEncoder {
+    pub(crate) fn new(
+        dimensions: usize,
+        element_type: VectorElementType,
+        code_width: usize,
+        content_prefix: &str,
+        total_rows: u64,
+        candidate_ordinals: &[u64],
+    ) -> Result<Self> {
+        if dimensions == 0
+            || code_width == 0
+            || content_prefix.is_empty()
+            || total_rows == 0
+            || candidate_ordinals.is_empty()
+            || candidate_ordinals.windows(2).any(|pair| pair[0] >= pair[1])
+            || candidate_ordinals
+                .iter()
+                .any(|ordinal| *ordinal >= total_rows)
+        {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V22 candidate encoder authority is empty or invalid".to_string(),
+            ));
+        }
+        let rows = usize::try_from(total_rows).map_err(|_| {
+            BorsukError::InvalidSearchOptions(
+                "V22 candidate encoder row count exceeds usize".to_string(),
+            )
+        })?;
+        Ok(Self {
+            dimensions,
+            element_type,
+            exact_row_bytes: element_type.fixed_width_bytes(dimensions)?,
+            code_width,
+            content_prefix: content_prefix.to_string(),
+            total_rows,
+            candidate_ordinals: candidate_ordinals.into(),
+            writer: Some(CellCardGroupWriter::new(
+                dimensions,
+                element_type,
+                code_width,
+            )?),
+            pending_authority: Vec::new(),
+            seen: vec![0; rows.div_ceil(64)],
+            seen_rows: 0,
+            retained: Vec::new(),
+            saw_page: false,
+        })
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        let writer = self.writer.take().ok_or_else(|| {
+            BorsukError::InvalidStorage("V22 candidate encoder writer is absent".to_string())
+        })?;
+        let (encoded, encoded_pages) = writer.finish_with_pages()?;
+        let mut canonical = BTreeSet::new();
+        let mut numeric = BTreeSet::new();
+        for unit in project_v22_encoded_group(
+            &encoded,
+            &encoded_pages,
+            &self.pending_authority,
+            self.exact_row_bytes,
+            &self.content_prefix,
+            &mut canonical,
+            &mut numeric,
+        )? {
+            let mut intersects = false;
+            for ordinal in &unit.record_ids {
+                if *ordinal >= self.total_rows {
+                    return Err(BorsukError::InvalidStorage(
+                        "V22 candidate encoder ordinal exceeds scratch authority".to_string(),
+                    ));
+                }
+                let ordinal = *ordinal as usize;
+                let mask = 1_u64 << (ordinal % 64);
+                let word = &mut self.seen[ordinal / 64];
+                if *word & mask != 0 {
+                    return Err(BorsukError::InvalidStorage(
+                        "V22 candidate encoder repeats a scratch ordinal".to_string(),
+                    ));
+                }
+                *word |= mask;
+                self.seen_rows += 1;
+                intersects |= self
+                    .candidate_ordinals
+                    .binary_search(&(ordinal as u64))
+                    .is_ok();
+            }
+            if intersects {
+                self.retained.push(unit);
+            }
+        }
+        self.pending_authority.clear();
+        Ok(())
+    }
+
+    pub(crate) fn push(
+        &mut self,
+        page: GlobalLeafPageInput,
+        authority: Box<[V22EncodedRecordAuthority]>,
+    ) -> Result<()> {
+        self.saw_page = true;
+        let writer = self.writer.as_mut().ok_or_else(|| {
+            BorsukError::InvalidStorage("V22 candidate encoder is already finished".to_string())
+        })?;
+        match writer.try_push(page)? {
+            CellCardPush::Accepted => self.pending_authority.push(authority),
+            CellCardPush::Full(page) => {
+                self.flush()?;
+                let mut writer =
+                    CellCardGroupWriter::new(self.dimensions, self.element_type, self.code_width)?;
+                match writer.try_push(page)? {
+                    CellCardPush::Accepted => {
+                        self.pending_authority.push(authority);
+                        self.writer = Some(writer);
+                    }
+                    CellCardPush::Full(_) => {
+                        return Err(BorsukError::InvalidStorage(
+                            "V22 candidate encoder page exceeds an empty group".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> Result<Vec<V22ProjectedUnit>> {
+        if !self.saw_page {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V22 candidate encoder layout is empty".to_string(),
+            ));
+        }
+        self.flush()?;
+        let total_rows = self.total_rows as usize;
+        let complete = self.seen_rows == self.total_rows
+            && self.seen.iter().enumerate().all(|(word_index, word)| {
+                let remaining = total_rows.saturating_sub(word_index * 64);
+                let expected = if remaining >= 64 {
+                    u64::MAX
+                } else if remaining == 0 {
+                    0
+                } else {
+                    (1_u64 << remaining) - 1
+                };
+                *word == expected
+            });
+        if !complete {
+            return Err(BorsukError::InvalidStorage(
+                "V22 candidate encoder does not cover scratch authority exactly".to_string(),
+            ));
+        }
+        Ok(self.retained)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+/// First frozen Stage-L physical gate preventing an arm from advancing.
+pub enum V22LayoutLimitingBound {
+    /// The arm satisfies every frozen Stage-L eligibility bound.
     Eligible,
+    /// The routed row set exceeds the frozen Stage-L row bound.
+    RoutingRows,
+    /// The exact prefix requires too many Standard S3 requests.
     Requests,
+    /// The exact prefix exceeds the frozen physical-byte allowance.
     Bytes,
+    /// Coalescing would exceed the frozen physical-amplification bound.
     Amplification,
+}
+
+pub(crate) fn v22_stage_l_layout_reports(
+    layout: V22LayoutKind,
+    microcluster_rows: Option<u8>,
+    units: &[V22ProjectedUnit],
+    query_prefixes: &[V22StageLQueryPrefix],
+    routing_gates: &[(usize, u64)],
+    exact_row_bytes: u64,
+) -> Result<Vec<V22StageLLayoutArmReport>> {
+    if units.is_empty()
+        || query_prefixes.is_empty()
+        || query_prefixes.len() != routing_gates.len()
+        || exact_row_bytes == 0
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V22 Stage L layout report authority is empty or mismatched".to_string(),
+        ));
+    }
+    let prepared = V22PreparedLayout::new(units, exact_row_bytes)?;
+    let projected_objects = units
+        .iter()
+        .map(|unit| {
+            (
+                unit.path.clone(),
+                (unit.object_checksum, unit.object_encoded_bytes),
+            )
+        })
+        .collect::<BTreeMap<_, _>>()
+        .into_iter()
+        .map(
+            |(path, (checksum, encoded_bytes))| V22StageLProjectedObject {
+                path,
+                checksum: blake3::Hash::from_bytes(checksum).to_hex().to_string(),
+                encoded_bytes,
+            },
+        )
+        .collect::<Vec<_>>();
+    let mut reports = Vec::with_capacity(V22_EXACT_PREFIX_ROWS.len());
+    for exact_prefix_rows in V22_EXACT_PREFIX_ROWS {
+        let arm = V22LayoutCensusArm {
+            layout,
+            microcluster_rows,
+            exact_prefix_rows,
+        };
+        arm.validate()?;
+        let mut query_samples = Vec::with_capacity(query_prefixes.len());
+        for (query, &(required_routing_cells, routed_rows)) in
+            query_prefixes.iter().zip(routing_gates)
+        {
+            let prefix_rows = usize::from(exact_prefix_rows);
+            let ranked = query.rows.get(..prefix_rows).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V22 Stage L exact corpus is smaller than a frozen prefix".to_string(),
+                )
+            })?;
+            let ranked = ranked.iter().map(|row| row.record_id).collect::<Vec<_>>();
+            let census = prepared.census_prefix(&ranked, exact_row_bytes, 1_048_576, 4, 2)?;
+            let routing_eligible = required_routing_cells > 0 && routed_rows <= 512_000;
+            query_samples.push(V22StageLLayoutQuerySample {
+                query_index: query.query_index,
+                exact_prefix_rows,
+                required_routing_cells,
+                gt_cell_hits: 10,
+                gt_cell_coverage_ppm: 1_000_000,
+                routed_rows,
+                useful_bytes: census.useful_bytes,
+                selected_bytes: census.selected_bytes,
+                physical_bytes: census.physical_bytes,
+                speculative_bytes: census.speculative_bytes,
+                requests: census.requests,
+                selected_rows: census.selected_rows,
+                packing_purity_ppm: census.packing_purity_ppm,
+                physical_amplification_ppm: census.physical_amplification_ppm,
+                physical_limiting_bound: census.limiting_bound,
+                routing_eligible,
+                limiting_bound: if routing_eligible {
+                    census.limiting_bound
+                } else {
+                    V22LayoutLimitingBound::RoutingRows
+                },
+                eligible: routing_eligible && census.eligible,
+                ranges: census.ranges.into_vec(),
+            });
+        }
+        let eligible = query_samples.iter().all(|sample| sample.eligible);
+        reports.push(V22StageLLayoutArmReport {
+            layout,
+            microcluster_rows,
+            exact_prefix_rows,
+            projected_objects: projected_objects.clone(),
+            query_samples,
+            eligible,
+        });
+    }
+    Ok(reports)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -934,10 +2022,306 @@ pub(crate) struct V22LayoutCensus {
     pub(crate) selected_rows: u64,
     pub(crate) rows_per_range: Box<[u64]>,
     pub(crate) blocks_per_range: Box<[usize]>,
+    pub(crate) ranges: Box<[V22StageLRange]>,
     pub(crate) packing_purity_ppm: u64,
     pub(crate) physical_amplification_ppm: u64,
     pub(crate) limiting_bound: V22LayoutLimitingBound,
     pub(crate) eligible: bool,
+}
+
+struct V22PreparedLayout<'a> {
+    units: &'a [V22ProjectedUnit],
+    record_to_unit: BTreeMap<u64, usize>,
+    groups: BTreeMap<&'a str, Arc<CellCardGroupRef>>,
+    projected_objects: Box<[V22ProjectedObjectAuthority]>,
+}
+
+impl<'a> V22PreparedLayout<'a> {
+    fn new(units: &'a [V22ProjectedUnit], exact_row_bytes: u64) -> Result<Self> {
+        if units.is_empty() || exact_row_bytes == 0 {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V22 projected layout authority is empty".to_string(),
+            ));
+        }
+        let mut record_to_unit = BTreeMap::<u64, usize>::new();
+        let mut ranges_by_path = BTreeMap::<&str, Vec<(u64, u64)>>::new();
+        let mut path_authority = BTreeMap::<&str, (u64, [u8; 32])>::new();
+        for (unit_index, unit) in units.iter().enumerate() {
+            let expected_decoded_bytes = u64::try_from(unit.record_ids.len())
+                .ok()
+                .and_then(|rows| rows.checked_mul(exact_row_bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidSearchOptions(
+                        "V22 projected unit decoded byte count overflows".to_string(),
+                    )
+                })?;
+            let end = unit
+                .offset
+                .checked_add(u64::from(unit.encoded_bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidSearchOptions(
+                        "V22 projected unit range overflows".to_string(),
+                    )
+                })?;
+            if unit.path.is_empty()
+                || unit.encoded_bytes == 0
+                || unit.record_ids.is_empty()
+                || u32::try_from(unit.record_ids.len()).is_err()
+                || unit.decoded_bytes != expected_decoded_bytes
+                || end > unit.object_encoded_bytes
+            {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "V22 projected unit is empty or oversized".to_string(),
+                ));
+            }
+            for record_id in &unit.record_ids {
+                if record_to_unit.insert(*record_id, unit_index).is_some() {
+                    return Err(BorsukError::InvalidSearchOptions(
+                        "V22 projected units contain a duplicate record".to_string(),
+                    ));
+                }
+            }
+            ranges_by_path
+                .entry(unit.path.as_str())
+                .or_default()
+                .push((unit.offset, end));
+            match path_authority.entry(unit.path.as_str()) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert((unit.object_encoded_bytes, unit.object_checksum));
+                }
+                std::collections::btree_map::Entry::Occupied(entry) => {
+                    if *entry.get() != (unit.object_encoded_bytes, unit.object_checksum) {
+                        return Err(BorsukError::InvalidSearchOptions(
+                            "V22 projected object checksum authority conflicts".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        for ranges in ranges_by_path.values_mut() {
+            ranges.sort_unstable();
+            if ranges.windows(2).any(|pair| pair[1].0 < pair[0].1) {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "V22 projected unit ranges overlap".to_string(),
+                ));
+            }
+        }
+        let groups = path_authority
+            .into_iter()
+            .map(|(path, (encoded_bytes, checksum))| {
+                (
+                    path,
+                    Arc::new(CellCardGroupRef {
+                        path: path.to_string(),
+                        checksum,
+                        encoded_bytes,
+                        code_plane_offset: 0,
+                        code_plane_bytes: 0,
+                        code_plane_checksum: [0; 32],
+                    }),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let projected_objects = groups
+            .values()
+            .map(|group| V22ProjectedObjectAuthority {
+                path: group.path.clone(),
+                checksum: group.checksum,
+                encoded_bytes: group.encoded_bytes,
+            })
+            .collect();
+        Ok(Self {
+            units,
+            record_to_unit,
+            groups,
+            projected_objects,
+        })
+    }
+
+    fn census_prefix(
+        &self,
+        ranked_record_ids: &[u64],
+        exact_row_bytes: u64,
+        max_physical_bytes: u64,
+        max_requests: usize,
+        max_physical_amplification: u64,
+    ) -> Result<V22LayoutCensus> {
+        if ranked_record_ids.is_empty()
+            || exact_row_bytes == 0
+            || max_physical_bytes == 0
+            || max_requests == 0
+            || !(1..=CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION)
+                .contains(&max_physical_amplification)
+        {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V22 projected layout census authority is empty".to_string(),
+            ));
+        }
+        let ranked_unique = ranked_record_ids.iter().copied().collect::<BTreeSet<_>>();
+        if ranked_unique.len() != ranked_record_ids.len()
+            || ranked_record_ids
+                .iter()
+                .any(|record_id| !self.record_to_unit.contains_key(record_id))
+        {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V22 ranked prefix is duplicate or absent from the projected layout".to_string(),
+            ));
+        }
+        let mut selected_units = BTreeSet::<usize>::new();
+        let mut ranked = Vec::new();
+        for (rank, record_id) in ranked_record_ids.iter().enumerate() {
+            let unit_index = self.record_to_unit[record_id];
+            if !selected_units.insert(unit_index) {
+                continue;
+            }
+            let unit = &self.units[unit_index];
+            ranked.push(RankedCellCardExactBlock {
+                head_index: unit_index,
+                group: Arc::clone(&self.groups[unit.path.as_str()]),
+                cell_index: 0,
+                card_ordinal: u32::try_from(unit_index).map_err(|_| {
+                    BorsukError::InvalidSearchOptions(
+                        "V22 projected unit ordinal overflows".to_string(),
+                    )
+                })?,
+                reference: CellCardExactBlockRef {
+                    block_ordinal: 0,
+                    offset: unit.offset,
+                    metadata_bytes: 0,
+                    body_bytes: unit.encoded_bytes,
+                    bytes: unit.encoded_bytes,
+                    rows: unit.record_ids.len() as u32,
+                    checksum: [0; 32],
+                },
+                distance: rank as f32,
+                row_distances: Box::default(),
+            });
+        }
+        self.finish_census(
+            ranked_record_ids,
+            ranked,
+            exact_row_bytes,
+            max_physical_bytes,
+            max_requests,
+            max_physical_amplification,
+        )
+    }
+
+    fn finish_census(
+        &self,
+        ranked_record_ids: &[u64],
+        ranked: Vec<RankedCellCardExactBlock>,
+        exact_row_bytes: u64,
+        max_physical_bytes: u64,
+        max_requests: usize,
+        max_physical_amplification: u64,
+    ) -> Result<V22LayoutCensus> {
+        let selected_bytes = ranked.iter().try_fold(0_u64, |total, block| {
+            total
+                .checked_add(u64::from(block.reference.bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidSearchOptions(
+                        "V22 selected encoded byte count overflows".to_string(),
+                    )
+                })
+        })?;
+        let measurement_ceiling = if selected_bytes <= max_physical_bytes {
+            max_physical_bytes
+        } else {
+            selected_bytes
+                .checked_mul(max_physical_amplification)
+                .ok_or_else(|| {
+                    BorsukError::InvalidSearchOptions(
+                        "V22 physical measurement ceiling overflows".to_string(),
+                    )
+                })?
+        };
+        let plan = plan_cell_card_exact_wave_with_amplification(
+            &ranked,
+            measurement_ceiling,
+            ranked.len(),
+            max_physical_amplification,
+        )?;
+        let useful_bytes = u64::try_from(ranked_record_ids.len())
+            .ok()
+            .and_then(|rows| rows.checked_mul(exact_row_bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidSearchOptions("V22 useful byte count overflows".to_string())
+            })?;
+        let purity_numerator = useful_bytes.checked_mul(1_000_000).ok_or_else(|| {
+            BorsukError::InvalidSearchOptions("V22 packing purity overflows".to_string())
+        })?;
+        let amplification_numerator =
+            plan.physical_bytes()
+                .checked_mul(1_000_000)
+                .ok_or_else(|| {
+                    BorsukError::InvalidSearchOptions(
+                        "V22 physical amplification overflows".to_string(),
+                    )
+                })?;
+        let limiting_bound = if plan.physical_bytes() > max_physical_bytes {
+            V22LayoutLimitingBound::Bytes
+        } else if plan.requests() > max_requests {
+            let maximum_amplification_plan = plan_cell_card_exact_wave_with_amplification(
+                &ranked,
+                max_physical_bytes,
+                ranked.len(),
+                CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION,
+            )?;
+            if max_physical_amplification < CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION
+                && maximum_amplification_plan.requests() <= max_requests
+                && maximum_amplification_plan.physical_bytes() <= max_physical_bytes
+            {
+                V22LayoutLimitingBound::Amplification
+            } else {
+                V22LayoutLimitingBound::Requests
+            }
+        } else {
+            V22LayoutLimitingBound::Eligible
+        };
+        let projected_objects = self.projected_objects.clone();
+        let ranges = plan
+            .reads()
+            .iter()
+            .map(|read| V22StageLRange {
+                path: read.group.path.clone(),
+                start: read.start,
+                end: read.end,
+                selected_bytes: read.selected_bytes,
+                rows: read
+                    .blocks
+                    .iter()
+                    .map(|block| u64::from(block.reference.rows))
+                    .sum(),
+                blocks: read.blocks.len(),
+            })
+            .collect();
+        Ok(V22LayoutCensus {
+            projected_objects,
+            useful_bytes,
+            selected_bytes: plan.selected_bytes(),
+            physical_bytes: plan.physical_bytes(),
+            speculative_bytes: plan.speculative_bytes(),
+            requests: plan.requests(),
+            selected_rows: plan.rows(),
+            rows_per_range: plan
+                .reads()
+                .iter()
+                .map(|read| {
+                    read.blocks
+                        .iter()
+                        .map(|block| u64::from(block.reference.rows))
+                        .sum()
+                })
+                .collect(),
+            blocks_per_range: plan.reads().iter().map(|read| read.blocks.len()).collect(),
+            ranges,
+            packing_purity_ppm: purity_numerator / plan.physical_bytes(),
+            physical_amplification_ppm: amplification_numerator / plan.selected_bytes(),
+            limiting_bound,
+            eligible: limiting_bound == V22LayoutLimitingBound::Eligible,
+        })
+    }
 }
 
 pub(crate) fn v22_census_layout_prefix(
@@ -948,240 +2332,25 @@ pub(crate) fn v22_census_layout_prefix(
     max_requests: usize,
     max_physical_amplification: u64,
 ) -> Result<V22LayoutCensus> {
-    if units.is_empty()
-        || ranked_record_ids.is_empty()
-        || exact_row_bytes == 0
-        || max_physical_bytes == 0
-        || max_requests == 0
-        || !(1..=CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION).contains(&max_physical_amplification)
-    {
-        return Err(BorsukError::InvalidSearchOptions(
-            "V22 projected layout census authority is empty".to_string(),
-        ));
-    }
-    let mut record_to_unit = BTreeMap::<u64, usize>::new();
-    let mut ranges_by_path = BTreeMap::<&str, Vec<(u64, u64)>>::new();
-    let mut path_authority = BTreeMap::<&str, (u64, [u8; 32])>::new();
-    for (unit_index, unit) in units.iter().enumerate() {
-        let expected_decoded_bytes = u64::try_from(unit.record_ids.len())
-            .ok()
-            .and_then(|rows| rows.checked_mul(exact_row_bytes))
-            .ok_or_else(|| {
-                BorsukError::InvalidSearchOptions(
-                    "V22 projected unit decoded byte count overflows".to_string(),
-                )
-            })?;
-        let end = unit
-            .offset
-            .checked_add(u64::from(unit.encoded_bytes))
-            .ok_or_else(|| {
-                BorsukError::InvalidSearchOptions("V22 projected unit range overflows".to_string())
-            })?;
-        if unit.path.is_empty()
-            || unit.encoded_bytes == 0
-            || unit.record_ids.is_empty()
-            || u32::try_from(unit.record_ids.len()).is_err()
-            || unit.decoded_bytes != expected_decoded_bytes
-            || end > unit.object_encoded_bytes
-        {
-            return Err(BorsukError::InvalidSearchOptions(
-                "V22 projected unit is empty or oversized".to_string(),
-            ));
-        }
-        for record_id in &unit.record_ids {
-            if record_to_unit.insert(*record_id, unit_index).is_some() {
-                return Err(BorsukError::InvalidSearchOptions(
-                    "V22 projected units contain a duplicate record".to_string(),
-                ));
-            }
-        }
-        ranges_by_path
-            .entry(unit.path.as_str())
-            .or_default()
-            .push((unit.offset, end));
-        match path_authority.entry(unit.path.as_str()) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert((unit.object_encoded_bytes, unit.object_checksum));
-            }
-            std::collections::btree_map::Entry::Occupied(entry) => {
-                if *entry.get() != (unit.object_encoded_bytes, unit.object_checksum) {
-                    return Err(BorsukError::InvalidSearchOptions(
-                        "V22 projected object checksum authority conflicts".to_string(),
-                    ));
-                }
-            }
-        }
-    }
-    for ranges in ranges_by_path.values_mut() {
-        ranges.sort_unstable();
-        if ranges.windows(2).any(|pair| pair[1].0 < pair[0].1) {
-            return Err(BorsukError::InvalidSearchOptions(
-                "V22 projected unit ranges overlap".to_string(),
-            ));
-        }
-    }
-    let ranked_unique = ranked_record_ids.iter().copied().collect::<BTreeSet<_>>();
-    if ranked_unique.len() != ranked_record_ids.len()
-        || ranked_record_ids
-            .iter()
-            .any(|record_id| !record_to_unit.contains_key(record_id))
-    {
-        return Err(BorsukError::InvalidSearchOptions(
-            "V22 ranked prefix is duplicate or absent from the projected layout".to_string(),
-        ));
-    }
-
-    let groups = path_authority
-        .into_iter()
-        .map(|(path, (encoded_bytes, checksum))| {
-            (
-                path,
-                Arc::new(CellCardGroupRef {
-                    path: path.to_string(),
-                    checksum,
-                    encoded_bytes,
-                    code_plane_offset: 0,
-                    code_plane_bytes: 0,
-                    code_plane_checksum: [0; 32],
-                }),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let mut selected_units = BTreeSet::<usize>::new();
-    let mut ranked = Vec::new();
-    for (rank, record_id) in ranked_record_ids.iter().enumerate() {
-        let unit_index = record_to_unit[record_id];
-        if !selected_units.insert(unit_index) {
-            continue;
-        }
-        let unit = &units[unit_index];
-        ranked.push(RankedCellCardExactBlock {
-            head_index: unit_index,
-            group: Arc::clone(&groups[unit.path.as_str()]),
-            cell_index: 0,
-            card_ordinal: u32::try_from(unit_index).map_err(|_| {
-                BorsukError::InvalidSearchOptions(
-                    "V22 projected unit ordinal overflows".to_string(),
-                )
-            })?,
-            reference: CellCardExactBlockRef {
-                block_ordinal: 0,
-                offset: unit.offset,
-                metadata_bytes: 0,
-                body_bytes: unit.encoded_bytes,
-                bytes: unit.encoded_bytes,
-                rows: unit.record_ids.len() as u32,
-                checksum: [0; 32],
-            },
-            distance: rank as f32,
-            row_distances: Box::default(),
-        });
-    }
-    let selected_bytes = ranked.iter().try_fold(0_u64, |total, block| {
-        total
-            .checked_add(u64::from(block.reference.bytes))
-            .ok_or_else(|| {
-                BorsukError::InvalidSearchOptions(
-                    "V22 selected encoded byte count overflows".to_string(),
-                )
-            })
-    })?;
-    let measurement_ceiling = if selected_bytes <= max_physical_bytes {
-        max_physical_bytes
-    } else {
-        selected_bytes
-            .checked_mul(max_physical_amplification)
-            .ok_or_else(|| {
-                BorsukError::InvalidSearchOptions(
-                    "V22 physical measurement ceiling overflows".to_string(),
-                )
-            })?
-    };
-    let plan = plan_cell_card_exact_wave_with_amplification(
-        &ranked,
-        measurement_ceiling,
-        ranked.len(),
+    V22PreparedLayout::new(units, exact_row_bytes)?.census_prefix(
+        ranked_record_ids,
+        exact_row_bytes,
+        max_physical_bytes,
+        max_requests,
         max_physical_amplification,
-    )?;
-    let useful_bytes = u64::try_from(ranked_record_ids.len())
-        .ok()
-        .and_then(|rows| rows.checked_mul(exact_row_bytes))
-        .ok_or_else(|| {
-            BorsukError::InvalidSearchOptions("V22 useful byte count overflows".to_string())
-        })?;
-    let purity_numerator = useful_bytes.checked_mul(1_000_000).ok_or_else(|| {
-        BorsukError::InvalidSearchOptions("V22 packing purity overflows".to_string())
-    })?;
-    let amplification_numerator =
-        plan.physical_bytes()
-            .checked_mul(1_000_000)
-            .ok_or_else(|| {
-                BorsukError::InvalidSearchOptions(
-                    "V22 physical amplification overflows".to_string(),
-                )
-            })?;
-    let limiting_bound = if plan.physical_bytes() > max_physical_bytes {
-        V22LayoutLimitingBound::Bytes
-    } else if plan.requests() > max_requests {
-        let maximum_amplification_plan = plan_cell_card_exact_wave_with_amplification(
-            &ranked,
-            max_physical_bytes,
-            ranked.len(),
-            CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION,
-        )?;
-        if max_physical_amplification < CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION
-            && maximum_amplification_plan.requests() <= max_requests
-            && maximum_amplification_plan.physical_bytes() <= max_physical_bytes
-        {
-            V22LayoutLimitingBound::Amplification
-        } else {
-            V22LayoutLimitingBound::Requests
-        }
-    } else {
-        V22LayoutLimitingBound::Eligible
-    };
-    let projected_objects = groups
-        .values()
-        .map(|group| V22ProjectedObjectAuthority {
-            path: group.path.clone(),
-            checksum: group.checksum,
-            encoded_bytes: group.encoded_bytes,
-        })
-        .collect();
-    Ok(V22LayoutCensus {
-        projected_objects,
-        useful_bytes,
-        selected_bytes: plan.selected_bytes(),
-        physical_bytes: plan.physical_bytes(),
-        speculative_bytes: plan.speculative_bytes(),
-        requests: plan.requests(),
-        selected_rows: plan.rows(),
-        rows_per_range: plan
-            .reads()
-            .iter()
-            .map(|read| {
-                read.blocks
-                    .iter()
-                    .map(|block| u64::from(block.reference.rows))
-                    .sum()
-            })
-            .collect(),
-        blocks_per_range: plan.reads().iter().map(|read| read.blocks.len()).collect(),
-        packing_purity_ppm: purity_numerator / plan.physical_bytes(),
-        physical_amplification_ppm: amplification_numerator / plan.selected_bytes(),
-        limiting_bound,
-        eligible: limiting_bound == V22LayoutLimitingBound::Eligible,
-    })
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        V22EncodedRecordAuthority, V22ExactPrefixAccumulator, V22LayoutCensusArm, V22LayoutKind,
-        V22LayoutLimitingBound, V22ProjectedUnit, V22SemanticRow, nearest_neighbor_order,
-        project_v22_encoded_cell_card_group, project_v22_encoded_layout,
+        V22CandidateLayoutEncoder, V22EncodedRecordAuthority, V22ExactPrefixAccumulator,
+        V22LayoutCensusArm, V22LayoutKind, V22LayoutLimitingBound, V22ProjectedUnit,
+        V22SemanticRow, V22SemanticUnit, V22StageLSpillRow, V22StageLSpillWriter,
+        nearest_neighbor_order, project_v22_encoded_cell_card_group, project_v22_encoded_layout,
         project_v22_semantic_layout, project_v22_two_pivot_layout, routing_coverage_at_probe,
         routing_rank, v22_census_layout_prefix, v22_layout_census_arms,
+        v22_stage_l_pages_for_units,
     };
     use crate::{
         VectorElementType,
@@ -1189,6 +2358,251 @@ mod tests {
         mutation::{MutationStamp, MutationVersion},
         record::RecordId,
     };
+    use std::{
+        collections::BTreeSet,
+        fs::OpenOptions,
+        io::{Seek, SeekFrom, Write},
+    };
+
+    fn stage_l_spill_row(source_ordinal: u64) -> V22StageLSpillRow {
+        V22StageLSpillRow {
+            source_ordinal,
+            canonical_record_id: format!("row-{source_ordinal}").into_bytes().into(),
+            stamp: MutationStamp::new(
+                MutationVersion::from_parts(source_ordinal + 1, [7; 16]),
+                [source_ordinal as u8; 32],
+            ),
+            code: vec![source_ordinal as u8; 2].into(),
+            exact: vec![source_ordinal as u8; 2].into(),
+        }
+    }
+
+    #[test]
+    fn v22_stage_l_scratch_is_exact_bounded_authenticated_and_ephemeral() {
+        let parent = tempfile::tempdir().unwrap();
+        let cells = BTreeSet::from([3, 4]);
+        let mut writer = V22StageLSpillWriter::create(
+            parent.path(),
+            "root-checksum",
+            2,
+            VectorElementType::Int8,
+            2,
+            &cells,
+            2,
+        )
+        .unwrap();
+        writer.append_batch(3, &[stage_l_spill_row(0)]).unwrap();
+        writer.append_batch(3, &[stage_l_spill_row(1)]).unwrap();
+        writer.append_batch(4, &[stage_l_spill_row(2)]).unwrap();
+        let spill = writer.finish().unwrap();
+        assert_eq!(spill.total_rows(), 3);
+        assert_eq!(spill.cell_rows(), vec![(3, 2), (4, 1)]);
+        assert_eq!(spill.read_cell(3).unwrap()[1].source_ordinal, 1);
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
+        drop(spill);
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+
+        let one_cell = BTreeSet::from([3]);
+        let mut bounded = V22StageLSpillWriter::create(
+            parent.path(),
+            "root-checksum",
+            2,
+            VectorElementType::Int8,
+            2,
+            &one_cell,
+            1,
+        )
+        .unwrap();
+        assert!(
+            bounded
+                .append_batch(3, &[stage_l_spill_row(0), stage_l_spill_row(1)])
+                .is_err()
+        );
+
+        let mut noncontiguous = V22StageLSpillWriter::create(
+            parent.path(),
+            "root-checksum",
+            2,
+            VectorElementType::Int8,
+            2,
+            &cells,
+            2,
+        )
+        .unwrap();
+        noncontiguous
+            .append_batch(3, &[stage_l_spill_row(0)])
+            .unwrap();
+        noncontiguous
+            .append_batch(4, &[stage_l_spill_row(1)])
+            .unwrap();
+        assert!(
+            noncontiguous
+                .append_batch(3, &[stage_l_spill_row(2)])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn v22_stage_l_scratch_rejects_header_and_cell_corruption() {
+        let parent = tempfile::tempdir().unwrap();
+        let cells = BTreeSet::from([3]);
+        let make_spill = || {
+            let mut writer = V22StageLSpillWriter::create(
+                parent.path(),
+                "root-checksum",
+                2,
+                VectorElementType::Int8,
+                2,
+                &cells,
+                2,
+            )
+            .unwrap();
+            writer.append_batch(3, &[stage_l_spill_row(0)]).unwrap();
+            writer.finish().unwrap()
+        };
+
+        let spill = make_spill();
+        let mut file = OpenOptions::new().write(true).open(&spill.path).unwrap();
+        file.write_all(b"X").unwrap();
+        file.sync_all().unwrap();
+        assert!(spill.read_cell(3).is_err());
+        drop(spill);
+
+        let spill = make_spill();
+        let mut file = OpenOptions::new().write(true).open(&spill.path).unwrap();
+        file.seek(SeekFrom::Start(spill.extents[0].offset)).unwrap();
+        file.write_all(b"X").unwrap();
+        file.sync_all().unwrap();
+        assert!(spill.read_cell(3).is_err());
+    }
+
+    #[test]
+    fn v22_candidate_encoder_retains_reachable_units_and_requires_exact_coverage() {
+        let page = GlobalLeafPageInput {
+            cell_index: 3,
+            leaf_ordinal: 0,
+            centroid_code: vec![1, 2],
+            rows: (0_u64..3)
+                .map(|record_id| GlobalLeafRowInput {
+                    id: RecordId::from_bytes(format!("row-{record_id}").into_bytes()),
+                    stamp: MutationStamp::new(
+                        MutationVersion::from_parts(record_id + 1, [3; 16]),
+                        [record_id as u8; 32],
+                    ),
+                    code: GlobalLeafCodeInput::from(vec![record_id as u8; 2]),
+                    exact: vec![record_id as u8; 2],
+                })
+                .collect(),
+        };
+        let authority = (0_u64..3)
+            .map(|record_id| V22EncodedRecordAuthority {
+                canonical_record_id: format!("row-{record_id}").into_bytes().into(),
+                record_id,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        let mut encoder = V22CandidateLayoutEncoder::new(
+            2,
+            VectorElementType::Int8,
+            2,
+            "v22-stage-l/candidates",
+            3,
+            &[1],
+        )
+        .unwrap();
+        encoder.push(page.clone(), authority.clone()).unwrap();
+        let retained = encoder.finish().unwrap();
+        assert!(!retained.is_empty());
+        assert!(
+            retained
+                .iter()
+                .any(|unit| unit.record_ids.binary_search(&1).is_ok())
+        );
+
+        let mut incomplete = V22CandidateLayoutEncoder::new(
+            2,
+            VectorElementType::Int8,
+            2,
+            "v22-stage-l/incomplete",
+            4,
+            &[1],
+        )
+        .unwrap();
+        incomplete.push(page.clone(), authority).unwrap();
+        assert!(incomplete.finish().is_err());
+
+        let duplicate_authority = [0_u64, 0, 2]
+            .into_iter()
+            .map(|record_id| V22EncodedRecordAuthority {
+                canonical_record_id: format!("duplicate-{record_id}").into_bytes().into(),
+                record_id,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let mut duplicate = V22CandidateLayoutEncoder::new(
+            2,
+            VectorElementType::Int8,
+            2,
+            "v22-stage-l/duplicate",
+            3,
+            &[1],
+        )
+        .unwrap();
+        duplicate.push(page, duplicate_authority).unwrap();
+        assert!(duplicate.finish().is_err());
+    }
+
+    #[test]
+    fn v22_candidate_encoder_uses_layout_order_not_source_cell_order() {
+        let mut first = stage_l_spill_row(0);
+        first.canonical_record_id = b"first".to_vec().into();
+        let mut second = stage_l_spill_row(1);
+        second.canonical_record_id = b"second".to_vec().into();
+        let first_semantic = [V22SemanticRow {
+            record_id: 0,
+            canonical_record_id: first.canonical_record_id.clone(),
+            primary_cell: 9,
+            geometry: vec![0.0, 1.0].into(),
+        }];
+        let second_semantic = [V22SemanticRow {
+            record_id: 1,
+            canonical_record_id: second.canonical_record_id.clone(),
+            primary_cell: 2,
+            geometry: vec![1.0, 0.0].into(),
+        }];
+        let first_units = [V22SemanticUnit {
+            primary_cell: 9,
+            record_ids: vec![0].into(),
+        }];
+        let second_units = [V22SemanticUnit {
+            primary_cell: 2,
+            record_ids: vec![1].into(),
+        }];
+        let first_pages =
+            v22_stage_l_pages_for_units(vec![first], &first_semantic, &first_units, 0, |_| {
+                Ok(vec![0, 0])
+            })
+            .unwrap();
+        let second_pages =
+            v22_stage_l_pages_for_units(vec![second], &second_semantic, &second_units, 1, |_| {
+                Ok(vec![1, 1])
+            })
+            .unwrap();
+        let mut encoder = V22CandidateLayoutEncoder::new(
+            2,
+            VectorElementType::Int8,
+            2,
+            "v22-stage-l/nonmonotonic-source-cells",
+            2,
+            &[0],
+        )
+        .unwrap();
+        for (page, authority) in first_pages.into_iter().chain(second_pages) {
+            encoder.push(page, authority).unwrap();
+        }
+        assert!(!encoder.finish().unwrap().is_empty());
+    }
 
     #[test]
     fn v22_layout_census_authority_is_exact_and_canonical() {

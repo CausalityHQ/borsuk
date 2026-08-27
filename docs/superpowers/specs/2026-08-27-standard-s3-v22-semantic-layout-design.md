@@ -120,6 +120,28 @@ one-based routing rank of its primary cell over that complete cell order. This
 single rank subsumes a probe sweep and yields coverage and routed-row curves
 for any prefix.
 
+The single backing-store pass writes an ephemeral, checksum-authenticated local
+scratch stream on the build-class diagnostic host. The stream preserves exact
+row bytes, authenticated raw IDs and mutation stamps, existing V20 row codes,
+source ordinals, primary cells, and the original V20 exact-block authority. It
+is not a serving tier, persistent index object, or publication artifact and is
+deleted on every ordinary success and failure path. Scratch is replayed one cell at a
+time under the registered 512,000-row routed-cell ceiling. A cell exceeding
+that ceiling is rejected by a root-directory preflight before the backing pass,
+rather than allocating an unbounded working set. Normal exits delete scratch;
+the attempt-specific scratch parent is on the ephemeral Spot host, so host
+termination discards it after SIGKILL or reclaim. The seven layouts
+are encoded and censused strictly one at a time;
+only the current cell, one bounded encoder group, the sorted unique top-prefix
+source ordinals, and projected units intersecting those ordinals may be live.
+The intersecting-unit set is explicitly corpus-bounded, not candidate-count-
+bounded: a broad union of query prefixes may retain most units, so Stage L runs
+only on the build-class diagnostic host and drops that set before the next
+layout.
+The current layout is dropped before the next begins. Cross-cell ordering
+replays the same authenticated scratch cells after their bounded centroids are
+known; it never rereads S3 or retains corpus vectors in memory.
+
 Project four layout families, producing seven concrete layout authorities,
 without writing a format:
 
@@ -144,7 +166,9 @@ and run the exact coalescer. Emit per-query ranges, primary useful/selected/
 physical bytes, amplification, primary-cell routing ranks, cell boundaries,
 selected rows-per-range histogram, contiguous-run-length histogram, explicit
 speculative bytes, authenticated projected-object path/length/checksum authority,
-and limiting bound.
+and both the routing and physical limiting bounds. Emit GT-cell hits and
+coverage explicitly; because `k=10`, the per-query `>=0.995` gate requires all
+ten GT rows' primary cells and is exactly 1.0 rather than an aggregate average.
 Report within-cell and cross-cell deltas separately. Census planning first
 measures the complete prefix under the registered amplification allowance and
 then classifies it as `eligible`, `bytes`, `requests`, or `amplification`;

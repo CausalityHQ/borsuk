@@ -73,20 +73,25 @@ is immutable, independently recomputed, and `claim_eligible:false`.
   bytes before encoding the next group; never retain multiple layout/corpus
   payloads in memory.
 
-- [ ] RED tiny instrumented-index test around a wished-for hidden Stage-L API;
+- [x] Write one checksum-authenticated ephemeral local scratch stream during
+  the sole V20 backing pass. Replay one cell and one layout at a time, retain
+  only projected units intersecting the sorted exact-prefix ordinal set, fail
+  closed above 512,000 rows in any cell, and delete scratch on every exit.
+
+- [x] RED tiny instrumented-index test around a wished-for hidden Stage-L API;
   snapshot manifest bytes and object roster.
-- [ ] Stream/decode each authenticated V20 row once. Compute exact top-2048 for
+- [x] Stream/decode each authenticated V20 row once. Compute exact top-2048 for
   all frozen queries with bounded per-query heaps; verify exact top-10 equals
   frozen GT.
-- [ ] Record each prefix row's primary cell, complete query routing rank, and
+- [x] Record each prefix row's primary cell, complete query routing rank, and
   routed-row curve; bind the decoded generation cell count and fail on
   missing/duplicate GT or mismatched authority.
-- [ ] Project all seven layout authorities (four families) and run the exact
+- [x] Project all seven layout authorities (four families) and run the exact
   42-arm range census over six prefixes.
-- [ ] Enforce Stage-L eligibility: `>=0.995` GT cell coverage, every query
+- [x] Enforce Stage-L eligibility: `>=0.995` GT cell coverage, every query
   `<=512,000` routed rows, `<=4` primary ranges, `<=1 MiB`, `<=2x` primary
   amplification. Report negative completion if none passes.
-- [ ] Prove the call is mutation-free and report order is exact.
+- [x] Prove the call is mutation-free and report order is exact.
 
 ### Task 4: Publish and independently validate Stage-L evidence
 
