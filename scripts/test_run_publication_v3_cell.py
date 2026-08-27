@@ -3313,6 +3313,11 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         cell["dataset"]["id"] = "deep-image-96"
         cell["dataset"]["dimensions"] = 96
         cell["source"]["archive_sha256"] = "b" * 64
+        diagnostic_cell = copy.deepcopy(cell)
+        diagnostic_cell["source"]["archive_sha256"] = "c" * 64
+        cell["environment_contract"]["runtime_clients"]["borsuk"][
+            "resident_limit_mib"
+        ] = 2_048
         arm = plan_arms(cell)[0]
         with tempfile.TemporaryDirectory() as root:
             plan = build_execution_plan(
@@ -3324,6 +3329,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 mode="runtime",
                 runtime_profile="recall",
                 runtime_flow_control=runtime_flow_control(),
+                diagnostic_cell=diagnostic_cell,
                 v22_stage_l=True,
             )
         self.assertIs(plan["publishable"], False)

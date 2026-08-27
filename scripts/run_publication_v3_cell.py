@@ -330,6 +330,7 @@ def build_execution_plan(
     diagnostic_write_ops: int | None = None,
     diagnostic_read_nprobes: tuple[int, ...] | None = None,
     diagnostic_read_candidates: tuple[int, ...] | None = None,
+    diagnostic_cell: dict[str, object] | None = None,
     v21_feasibility: bool = False,
     v22_stage_l: bool = False,
 ) -> dict[str, object]:
@@ -359,6 +360,19 @@ def build_execution_plan(
     if v21_feasibility and v22_stage_l:
         raise ValueError("V21 and V22 diagnostic modes are mutually exclusive")
     v2x_diagnostic = v21_feasibility or v22_stage_l
+    if diagnostic_cell is not None and (
+        not v2x_diagnostic
+        or diagnostic_cell.get("system") != cell.get("system")
+        or not isinstance(diagnostic_cell.get("source"), dict)
+        or diagnostic_cell["source"].get("state") != "frozen"
+        or not isinstance(diagnostic_cell.get("dataset"), dict)
+        or not isinstance(cell.get("dataset"), dict)
+        or diagnostic_cell["dataset"].get("id") != cell["dataset"].get("id")
+        or not isinstance(diagnostic_cell.get("workload"), dict)
+        or not isinstance(cell.get("workload"), dict)
+        or diagnostic_cell["workload"].get("id") != cell["workload"].get("id")
+    ):
+        raise ValueError("V21/V22 diagnostic cell authority differs")
     if (
         v2x_diagnostic
         and (
@@ -434,7 +448,16 @@ def build_execution_plan(
     region = environment.get("region")
     if not isinstance(region, str) or not region:
         raise ValueError("cell environment region is invalid")
-    runtime_clients = environment.get("runtime_clients")
+    flow_environment = (
+        diagnostic_cell.get("environment_contract")
+        if diagnostic_cell is not None
+        else environment
+    )
+    runtime_clients = (
+        flow_environment.get("runtime_clients")
+        if isinstance(flow_environment, dict)
+        else None
+    )
     runtime_storage = environment.get("runtime_storage")
     if not isinstance(runtime_clients, dict) or not isinstance(runtime_storage, dict):
         raise ValueError("cell has no bounded runtime-client contract")
@@ -3832,6 +3855,7 @@ def main() -> int:
         diagnostic_write_ops=args.diagnostic_write_ops,
         diagnostic_read_nprobes=args.diagnostic_read_nprobes,
         diagnostic_read_candidates=args.diagnostic_read_candidates,
+        diagnostic_cell=diagnostic_cell,
         v21_feasibility=args.v21_feasibility,
         v22_stage_l=args.v22_stage_l,
     )
