@@ -137,6 +137,45 @@ impl V22ExactPrefixAccumulator {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+/// One exact-ranked corpus row and its primary-cell routing authority.
+pub struct V22StageLExactRow {
+    /// Exact metric distance to the frozen query.
+    pub distance: f32,
+    /// Deterministic diagnostic row ordinal.
+    pub record_id: u64,
+    /// Authenticated raw record-ID bytes.
+    pub canonical_record_id: Box<[u8]>,
+    /// Primary V20 routing cell containing the row.
+    pub primary_cell: u32,
+    /// One-based rank of the primary cell in the complete routing order.
+    pub primary_cell_routing_rank: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Bounded exact corpus prefix for one frozen query.
+pub struct V22StageLQueryPrefix {
+    /// Zero-based query position in caller authority.
+    pub query_index: usize,
+    /// Exact rows ordered by metric distance and authenticated ID.
+    pub rows: Vec<V22StageLExactRow>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Claim-ineligible V22 Stage-L generation and exact-prefix evidence.
+pub struct V22StageLReport {
+    /// Authenticated V20 cell-card root checksum.
+    pub v20_root_checksum: String,
+    /// Authenticated V20 codebook descriptor checksum.
+    pub v20_codebook_checksum: String,
+    /// Rows represented by the exact pinned V20 generation.
+    pub rows: u64,
+    /// Complete authenticated routing-cell count.
+    pub routing_cell_count: usize,
+    /// Query-major bounded exact-prefix evidence.
+    pub query_prefixes: Vec<V22StageLQueryPrefix>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum V22LayoutKind {
     V20Physical,

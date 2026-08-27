@@ -3446,6 +3446,7 @@ struct ResidentGlobalAnnPins {
     codebook_key: String,
     codebook: Arc<ResidentGlobalCodebook>,
     leaf_runs: Vec<(String, Arc<ResidentGlobalLeafRun>)>,
+    cell_card_root_key: Option<String>,
     cell_card_root: Option<Arc<crate::global_cell_card::ResidentCellCardRoot>>,
 }
 
@@ -3458,6 +3459,15 @@ impl ResidentGlobalAnnPins {
         self.leaf_runs
             .iter()
             .find_map(|(run_key, run)| (run_key == key).then(|| Arc::clone(run)))
+    }
+
+    fn cell_card_root(
+        &self,
+        key: &str,
+    ) -> Option<Arc<crate::global_cell_card::ResidentCellCardRoot>> {
+        (self.cell_card_root_key.as_deref() == Some(key))
+            .then(|| self.cell_card_root.as_ref().map(Arc::clone))
+            .flatten()
     }
 }
 
@@ -13013,6 +13023,326 @@ impl BorsukIndex {
         codebook.nearest_cells(query, probes)
     }
 
+    /// Compute authenticated exact-prefix and complete routing-rank authority
+    /// from one mutation-free V20 generation without publishing state.
+    #[doc(hidden)]
+    pub fn diagnose_v22_stage_l(
+        &self,
+        queries: &[Vec<f32>],
+        ground_truth: &[Vec<String>],
+        options: &SearchOptions,
+    ) -> Result<crate::v22_feasibility::V22StageLReport> {
+        use crate::v22_feasibility::{
+            V22ExactPrefixAccumulator, V22StageLExactRow, V22StageLQueryPrefix, V22StageLReport,
+        };
+
+        if queries.is_empty()
+            || queries.len() != ground_truth.len()
+            || options.k != 10
+            || !matches!(options.mode, SearchMode::Approx { .. })
+            || options.filter.is_some()
+            || !options.vector_name.is_empty()
+        {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V22 Stage L diagnostic request is outside its read-only authority".to_string(),
+            ));
+        }
+        if !self.cell_wal_snapshot.is_empty()
+            || !self.manifest.wal_frontier_is_empty()
+            || (self.manifest.segments_are_global_delta && !self.manifest.segments.is_empty())
+            || self.global_leaf_mutation_state_required()
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V22 Stage L requires mutation-free generation authority".to_string(),
+            ));
+        }
+        let global_ref = self
+            .manifest
+            .global_cell_card_ann_ref
+            .as_ref()
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V22 Stage L requires a pinned V20 cell-card generation".to_string(),
+                )
+            })?;
+        global_ref.validate()?;
+        let root_checksum = global_ref.root_checksum();
+        let root = self
+            .resident_global_ann_pins
+            .as_ref()
+            .and_then(|pins| pins.cell_card_root(&root_checksum))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V22 Stage L requires the authenticated V20 root".to_string(),
+                )
+            })?;
+        let codebook = self.load_resident_global_codebook(global_ref.codebook())?;
+        let routing_cell_count = codebook.cell_count();
+        if routing_cell_count == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "V22 Stage L routing authority is empty".to_string(),
+            ));
+        }
+        let authenticated_cells = codebook.all_cell_ids().into_iter().collect::<BTreeSet<_>>();
+        if authenticated_cells.len() != routing_cell_count {
+            return Err(BorsukError::InvalidStorage(
+                "V22 Stage L routing authority contains duplicate cells".to_string(),
+            ));
+        }
+
+        let mut truth_ids = Vec::with_capacity(ground_truth.len());
+        for truth in ground_truth {
+            if truth.len() != options.k || truth.iter().any(String::is_empty) {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "V22 Stage L ground truth must supply exactly k non-empty IDs".to_string(),
+                ));
+            }
+            let ordered = truth
+                .iter()
+                .map(|id| RecordId::from(id.as_str()))
+                .collect::<Vec<_>>();
+            if ordered.iter().cloned().collect::<BTreeSet<_>>().len() != ordered.len() {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "V22 Stage L ground truth contains duplicate IDs".to_string(),
+                ));
+            }
+            truth_ids.push(ordered);
+        }
+        for query in queries {
+            self.validate_vector(query)?;
+        }
+
+        let normalize = self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry();
+        let routing_ranks = queries
+            .iter()
+            .map(|query| {
+                let routed_query = if normalize {
+                    crate::metric::unit_l2_normalized(query)
+                } else {
+                    query.clone()
+                };
+                let ordered = self.resident_global_selected_cells(
+                    &codebook,
+                    &routed_query,
+                    routing_cell_count,
+                )?;
+                if ordered.len() != routing_cell_count
+                    || ordered.iter().copied().collect::<BTreeSet<_>>() != authenticated_cells
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "V22 Stage L complete routing order conflicts with authority".to_string(),
+                    ));
+                }
+                let mut ranks = ordered
+                    .into_iter()
+                    .enumerate()
+                    .map(|(rank, cell)| {
+                        u32::try_from(rank + 1)
+                            .map(|rank| (cell, rank))
+                            .map_err(|_| {
+                                BorsukError::InvalidStorage(
+                                    "V22 Stage L routing rank exceeds u32".to_string(),
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                ranks.sort_unstable_by_key(|(cell, _)| *cell);
+                Ok(ranks)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let dimensions = self.manifest.config.dimensions;
+        let element_type = self.manifest.build_config.vector_element_type;
+        let mut accumulator = V22ExactPrefixAccumulator::new(queries.len())?;
+        let mut source_ordinal = 0_u64;
+        let card_indexes_by_group = root.card_indexes_by_group()?;
+        for (group_ordinal, group) in root.groups().iter().enumerate() {
+            let checksum = blake3::Hash::from_bytes(group.checksum)
+                .to_hex()
+                .to_string();
+            let group_read = self
+                .storage
+                .read_known_size_from_backing_without_cache_with_checksum(
+                    &group.path,
+                    group.encoded_bytes,
+                    &checksum,
+                )?;
+            let group_bytes = &group_read.bytes;
+            let plane_start = usize::try_from(group.code_plane_offset).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "V22 Stage L group code-plane offset exceeds usize".to_string(),
+                )
+            })?;
+            let plane_end = plane_start
+                .checked_add(usize::try_from(group.code_plane_bytes).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "V22 Stage L group code-plane bytes exceed usize".to_string(),
+                    )
+                })?)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V22 Stage L group code-plane range overflows".to_string(),
+                    )
+                })?;
+            let code_plane = group_bytes.get(plane_start..plane_end).ok_or_else(|| {
+                BorsukError::InvalidStorage("V22 Stage L group omits its code plane".to_string())
+            })?;
+            root.validate_complete_code_planes(&[(group.as_ref(), code_plane)])?;
+            let card_indexes = card_indexes_by_group.get(group_ordinal).ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V22 Stage L group card directory is absent".to_string(),
+                )
+            })?;
+            for &card_index in card_indexes {
+                let (_, head) = root.head_ref(card_index)?;
+                let code_start = usize::try_from(head.code_offset).map_err(|_| {
+                    BorsukError::InvalidStorage("V22 Stage L code offset exceeds usize".to_string())
+                })?;
+                let code_end = code_start
+                    .checked_add(head.code_bytes as usize)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage("V22 Stage L code range overflows".to_string())
+                    })?;
+                let card_codes = group_bytes.get(code_start..code_end).ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V22 Stage L group omits a card code plane".to_string(),
+                    )
+                })?;
+                let verified_head = decode_cell_card_head(
+                    &head,
+                    card_codes,
+                    group.encoded_bytes,
+                    dimensions,
+                    element_type,
+                )?;
+                let mut decoded_card_rows = 0_usize;
+                for block in head.exact_blocks.iter() {
+                    let end = block
+                        .offset
+                        .checked_add(u64::from(block.bytes))
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V22 Stage L exact block range overflows".to_string(),
+                            )
+                        })?;
+                    let stored = group_bytes
+                        .get(
+                            usize::try_from(block.offset).map_err(|_| {
+                                BorsukError::InvalidStorage(
+                                    "V22 Stage L exact offset exceeds usize".to_string(),
+                                )
+                            })?
+                                ..usize::try_from(end).map_err(|_| {
+                                    BorsukError::InvalidStorage(
+                                        "V22 Stage L exact end exceeds usize".to_string(),
+                                    )
+                                })?,
+                        )
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V22 Stage L group omits an exact block".to_string(),
+                            )
+                        })?;
+                    let decoded = verified_head.verify_block(
+                        block.block_ordinal,
+                        stored,
+                        dimensions,
+                        element_type,
+                    )?;
+                    decoded_card_rows =
+                        decoded_card_rows
+                            .checked_add(decoded.len())
+                            .ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "V22 Stage L decoded row count overflows".to_string(),
+                                )
+                            })?;
+                    for row in decoded {
+                        let distances = queries
+                            .iter()
+                            .map(|query| {
+                                self.manifest
+                                    .config
+                                    .metric
+                                    .distance_unchecked(query, &row.vector)
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        accumulator.observe(
+                            source_ordinal,
+                            row.id.as_bytes(),
+                            head.cell_index,
+                            &distances,
+                        )?;
+                        source_ordinal = source_ordinal.checked_add(1).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V22 Stage L source ordinal overflows".to_string(),
+                            )
+                        })?;
+                    }
+                }
+                if decoded_card_rows != head.rows as usize {
+                    return Err(BorsukError::InvalidStorage(
+                        "V22 Stage L decoded rows disagree with card authority".to_string(),
+                    ));
+                }
+            }
+        }
+        if source_ordinal != root.rows() {
+            return Err(BorsukError::InvalidStorage(
+                "V22 Stage L decoded rows disagree with root authority".to_string(),
+            ));
+        }
+
+        let exact_prefixes = accumulator.finish()?;
+        let mut query_prefixes = Vec::with_capacity(queries.len());
+        for (query_index, rows) in exact_prefixes.into_iter().enumerate() {
+            if rows.len() < options.k
+                || rows[..options.k]
+                    .iter()
+                    .zip(&truth_ids[query_index])
+                    .any(|(row, truth)| row.canonical_record_id.as_ref() != truth.as_bytes())
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "V22 Stage L exact top ten conflicts with frozen ground truth".to_string(),
+                ));
+            }
+            let rows = rows
+                .into_iter()
+                .map(|row| {
+                    let primary_cell_routing_rank = routing_ranks[query_index]
+                        .binary_search_by_key(&row.primary_cell, |(cell, _)| *cell)
+                        .ok()
+                        .map(|index| routing_ranks[query_index][index].1 as usize)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V22 Stage L prefix row references an unauthenticated cell"
+                                    .to_string(),
+                            )
+                        })?;
+                    Ok(V22StageLExactRow {
+                        distance: row.distance,
+                        record_id: row.record_id,
+                        canonical_record_id: row.canonical_record_id,
+                        primary_cell: row.primary_cell,
+                        primary_cell_routing_rank,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            query_prefixes.push(V22StageLQueryPrefix { query_index, rows });
+        }
+        Ok(V22StageLReport {
+            v20_root_checksum: root_checksum,
+            v20_codebook_checksum: global_ref.codebook().descriptor_checksum().to_string(),
+            rows: source_ordinal,
+            routing_cell_count,
+            query_prefixes,
+        })
+    }
+
     /// Project and evaluate the preregistered V21 Standard-S3 selector arms
     /// from the pinned, authenticated V20 generation without publishing state.
     #[doc(hidden)]
@@ -19442,6 +19772,7 @@ impl BorsukIndex {
                 codebook_key,
                 codebook,
                 leaf_runs: Vec::new(),
+                cell_card_root_key: Some(reference.root_checksum()),
                 cell_card_root: Some(Arc::new(root)),
             }));
         }
@@ -19559,6 +19890,7 @@ impl BorsukIndex {
             codebook_key,
             codebook,
             leaf_runs,
+            cell_card_root_key: None,
             cell_card_root: None,
         }))
     }
@@ -44143,6 +44475,172 @@ mod tests {
         assert!(
             mutation_error.to_string().contains("mutation-free"),
             "{mutation_error}"
+        );
+    }
+
+    #[test]
+    fn v22_stage_l_diagnostic_authenticates_exact_prefixes_and_is_read_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let vectors = (0..64).map(|row| vec![row as f32; 8]).collect::<Vec<_>>();
+        index
+            .add(
+                vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(row, vector)| {
+                        VectorRecord::new(format!("v22-stage-l-{row:03}"), vector.clone())
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let manifest_before = serde_json::to_vec(&index.manifest).unwrap();
+        let objects_before = index
+            .storage
+            .list_objects("")
+            .unwrap()
+            .into_iter()
+            .map(|object| (object.path, object.size))
+            .collect::<Vec<_>>();
+        let truth = vec![
+            "v22-stage-l-020",
+            "v22-stage-l-019",
+            "v22-stage-l-021",
+            "v22-stage-l-018",
+            "v22-stage-l-022",
+            "v22-stage-l-017",
+            "v22-stage-l-023",
+            "v22-stage-l-016",
+            "v22-stage-l-024",
+            "v22-stage-l-015",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let options = SearchOptions::approx(10, LeafMode::SrhtPqScan)
+            .with_max_segments(4)
+            .with_max_candidates_per_segment(64);
+        let v20_root_checksum = index
+            .manifest
+            .global_cell_card_ann_ref
+            .as_ref()
+            .unwrap()
+            .root_checksum();
+        let v20_codebook_checksum = index
+            .manifest
+            .global_cell_card_ann_ref
+            .as_ref()
+            .unwrap()
+            .codebook()
+            .descriptor_checksum()
+            .to_string();
+
+        let report = index
+            .diagnose_v22_stage_l(&[vectors[20].clone()], &[truth.clone()], &options)
+            .unwrap();
+
+        assert_eq!(report.v20_root_checksum, v20_root_checksum);
+        assert_eq!(report.v20_codebook_checksum, v20_codebook_checksum);
+        assert_eq!(report.rows, 64);
+        assert!(report.routing_cell_count > 0);
+        assert_eq!(report.query_prefixes.len(), 1);
+        let prefix = &report.query_prefixes[0];
+        assert_eq!(prefix.query_index, 0);
+        assert_eq!(prefix.rows.len(), 64);
+        assert_eq!(
+            prefix.rows[..10]
+                .iter()
+                .map(|row| String::from_utf8(row.canonical_record_id.to_vec()).unwrap())
+                .collect::<Vec<_>>(),
+            truth
+        );
+        assert!(prefix.rows.iter().all(|row| {
+            (1..=report.routing_cell_count).contains(&row.primary_cell_routing_rank)
+        }));
+        let mut observed_ranks = prefix
+            .rows
+            .iter()
+            .map(|row| row.primary_cell_routing_rank)
+            .collect::<Vec<_>>();
+        observed_ranks.sort_unstable();
+        assert_eq!(
+            observed_ranks,
+            (1..=report.routing_cell_count).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            serde_json::to_vec(&index.manifest).unwrap(),
+            manifest_before
+        );
+        assert_eq!(
+            index
+                .storage
+                .list_objects("")
+                .unwrap()
+                .into_iter()
+                .map(|object| (object.path, object.size))
+                .collect::<Vec<_>>(),
+            objects_before
+        );
+
+        index
+            .resident_global_ann_pins
+            .as_mut()
+            .unwrap()
+            .cell_card_root_key = Some("stale-v22-root".to_string());
+        let stale_root_error = index
+            .diagnose_v22_stage_l(&[vectors[20].clone()], &[truth.clone()], &options)
+            .unwrap_err();
+        assert!(
+            stale_root_error
+                .to_string()
+                .contains("authenticated V20 root"),
+            "{stale_root_error}"
+        );
+        index
+            .resident_global_ann_pins
+            .as_mut()
+            .unwrap()
+            .cell_card_root_key = Some(v20_root_checksum);
+
+        index
+            .add(vec![VectorRecord::new(
+                "v22-stage-l-drained-delta",
+                vec![100.0; 8],
+            )])
+            .unwrap();
+        assert!(!index.cell_wal_snapshot.is_empty());
+        assert!(!index.manifest.segments_are_global_delta);
+        let mutation_error = index
+            .diagnose_v22_stage_l(&[vectors[20].clone()], &[truth.clone()], &options)
+            .unwrap_err();
+        assert!(
+            mutation_error.to_string().contains("mutation-free"),
+            "{mutation_error}"
+        );
+        index.flush().unwrap();
+        assert!(index.cell_wal_snapshot.is_empty());
+        assert!(index.manifest.wal_frontier_is_empty());
+        assert!(index.manifest.segments_are_global_delta);
+        assert_eq!(index.manifest.segments.len(), 1);
+        assert!(!index.global_leaf_mutation_state_required());
+        let delta_error = index
+            .diagnose_v22_stage_l(&[vectors[20].clone()], &[truth.clone()], &options)
+            .unwrap_err();
+        assert!(
+            delta_error.to_string().contains("mutation-free"),
+            "{delta_error}"
         );
     }
 

@@ -135,6 +135,8 @@ pub use manifest::{
 pub use v21_feasibility::{
     V21FeasibilityArm, V21FeasibilityQuerySample, V21FeasibilityReport, V21LimitingBound,
 };
+#[doc(hidden)]
+pub use v22_feasibility::{V22StageLExactRow, V22StageLQueryPrefix, V22StageLReport};
 
 /// Maximum CPU worker threads selected by the automatic small-runtime policy.
 pub const DEFAULT_BUILD_THREADS: usize = 4;
