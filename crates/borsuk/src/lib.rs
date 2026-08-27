@@ -81,6 +81,11 @@ mod turboquant;
     reason = "V21 feasibility components are wired incrementally by the committed plan"
 )]
 mod v21_feasibility;
+#[allow(
+    dead_code,
+    reason = "V22 feasibility components are wired incrementally by the committed plan"
+)]
+mod v22_feasibility;
 
 /// Print and reset the env-gated (`BORSUK_BUILD_TIMING=1`) per-phase build timing
 /// breakdown accumulated since the last call. When
