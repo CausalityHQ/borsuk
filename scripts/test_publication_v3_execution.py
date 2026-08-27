@@ -716,6 +716,10 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             "/runtime-v21-feasibility/arms/0000/attempts/0003",
             job.terminal_prefix,
         )
+        base_authority = v21_base_authority(
+            cell,
+            build_prefix="s3://bucket/results/cell/build/attempts/0001",
+        )
         script = runtime_worker_script(
             job=job,
             source_uri="s3://bucket/source/source.tar.gz",
@@ -740,10 +744,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             s3_get_concurrency=64,
             ram_budget_bytes=3 * 1024 * 1024 * 1024,
             v21_feasibility=True,
-            v21_base_authority=v21_base_authority(
-                cell,
-                build_prefix="s3://bucket/results/cell/build/attempts/0001",
-            ),
+            v21_base_authority=base_authority,
         )
         self.assertIn("--v21-feasibility", script)
         self.assertIn('"claim_eligible":false', script)
@@ -766,10 +767,21 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         ):
             self.assertIn(field, script)
         self.assertIn("-p MemoryMax=34359738368 -p MemorySwapMax=0", script)
+        self.assertIn("--remain-after-exit", script)
+        self.assertNotIn("systemd-run --quiet --wait --unit=", script)
+        self.assertIn("unit_sub_state", script)
+        self.assertIn("--property=ExecMainStatus --value", script)
+        self.assertIn("systemctl stop borsuk-v21-0003.service", script)
         self.assertIn("--property=MemoryMax --value", script)
         self.assertIn("--property=MemorySwapMax --value", script)
         self.assertIn("--property=MemoryPeak --value", script)
         self.assertNotIn("requested-systemd-enforced", script)
+        self.assertIn("stage=disable-cache", script)
+        self.assertNotIn('cache_device=$(lsblk', script)
+        self.assertLess(
+            script.index("stage=compile-diagnostic"),
+            script.index("stage=verify-index"),
+        )
         for field in (
             "base_build_terminal_sha256",
             "base_manifest_sha256",
@@ -789,6 +801,29 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )
+
+        receipt_fragment = script.split("        diagnostic_fields=''", 1)[1].split(
+            "        concurrency_fields=''", 1
+        )[0]
+        receipt_probe = f"""set -euo pipefail
+v21_result_sha={'1' * 64}
+v21_arms_sha={'2' * 64}
+v21_samples_sha={'3' * 64}
+v21_summary_sha={'4' * 64}
+actual_memory_max=34359738368
+actual_memory_swap_max=0
+actual_memory_peak=123456789
+diagnostic_fields=''
+{receipt_fragment}
+printf '{{\"schema_version\":5%s}}\n' "$diagnostic_fields"
+"""
+        completed = subprocess.run(
+            ["bash"], input=receipt_probe, text=True, capture_output=True
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        receipt = json.loads(completed.stdout)
+        self.assertEqual(receipt["base_index_id"], base_authority["index_id"])
+        self.assertEqual(receipt["memory_peak_bytes"], 123456789)
 
     def test_v21_worker_compiles_current_source_but_reads_historical_index_authority(
         self,

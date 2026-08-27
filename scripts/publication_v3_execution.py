@@ -572,6 +572,7 @@ def runtime_worker_script(
     provision_packages = "git python3.12 python3.12-pip util-linux xfsprogs"
     provision_python = '"$work/venv/bin/pip" install boto3==1.34.46'
     memory_max_bytes = 8_589_934_592
+    systemd_wait_option = "--wait"
     systemd_run_options = "--collect"
     cgroup_observation = ""
     if v21_feasibility:
@@ -668,18 +669,64 @@ def runtime_worker_script(
         )
         memory_max_bytes = 34_359_738_368
         unit_name = f"borsuk-v21-{job.attempt:04d}.service"
-        systemd_run_options = f"--unit={unit_name}"
+        systemd_wait_option = ""
+        systemd_run_options = f"--unit={unit_name} --remain-after-exit"
         cgroup_observation = textwrap.dedent(
             f"""\
+            while true; do
+              unit_active_state=$(systemctl show {_q(unit_name)} --property=ActiveState --value)
+              unit_sub_state=$(systemctl show {_q(unit_name)} --property=SubState --value)
+              if [[ "$unit_active_state" == active && "$unit_sub_state" == exited ]]; then
+                break
+              fi
+              if [[ "$unit_active_state" == failed ]]; then
+                runtime_status=$(systemctl show {_q(unit_name)} --property=ExecMainStatus --value)
+                [[ "$runtime_status" =~ ^[0-9]+$ ]] || runtime_status=1
+                (( runtime_status != 0 )) || runtime_status=1
+                exit "$runtime_status"
+              fi
+              sleep 1
+            done
+            actual_exec_code=$(systemctl show {_q(unit_name)} --property=ExecMainCode --value)
+            actual_exec_status=$(systemctl show {_q(unit_name)} --property=ExecMainStatus --value)
             actual_memory_max=$(systemctl show {_q(unit_name)} --property=MemoryMax --value)
             actual_memory_swap_max=$(systemctl show {_q(unit_name)} --property=MemorySwapMax --value)
             actual_memory_peak=$(systemctl show {_q(unit_name)} --property=MemoryPeak --value)
             [[ "$actual_memory_max" =~ ^[0-9]+$ ]]
             [[ "$actual_memory_swap_max" =~ ^[0-9]+$ ]]
             [[ "$actual_memory_peak" =~ ^[0-9]+$ ]]
+            test "$actual_exec_code" = 1
+            test "$actual_exec_status" = 0
             test "$actual_memory_max" = {memory_max_bytes}
             test "$actual_memory_swap_max" = 0
             test "$actual_memory_peak" -le "$actual_memory_max"
+            systemctl stop {_q(unit_name)}
+            """
+        )
+        cache_setup = textwrap.dedent(
+            """\
+            stage=disable-cache
+            mkdir -p "$work/cell/cache"
+            swapoff -a
+            """
+        )
+    else:
+        cache_setup = textwrap.dedent(
+            """\
+            stage=mount-cache
+            root_source=$(findmnt -n -o SOURCE /)
+            root_parent=$(lsblk -no PKNAME "$root_source")
+            root_device=${root_parent:+/dev/$root_parent}
+            [[ -n "$root_device" ]] || root_device=$root_source
+            cache_device=$(lsblk -dpno NAME,TYPE | awk '$2=="disk" {print $1}' | while read -r candidate; do
+              if [[ "$candidate" != "$root_device" ]]; then printf '%s\n' "$candidate"; break; fi
+            done)
+            test -b "$cache_device"
+            mkfs.xfs -f "$cache_device" >/dev/null
+            cache_mount="$work/cell/cache"
+            mkdir -p "$cache_mount"
+            mount -o noatime "$cache_device" "$cache_mount"
+            swapoff -a
             """
         )
     source = cell["dataset"]["source"]
@@ -854,7 +901,8 @@ v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_su
             for key, value in v21_receipt_authority.items()
         )
         diagnostic_receipt_fields += (
-            f'\ndiagnostic_fields="$diagnostic_fields{v21_authority_fragment}"'
+            "\ndiagnostic_fields=$(printf '%s%s' \"$diagnostic_fields\" "
+            f"{_q(v21_authority_fragment)})"
         )
         diagnostic_receipt_fields += (
             "\ndiagnostic_fields=$(printf "
@@ -880,24 +928,11 @@ v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_su
         dnf install -y {provision_packages}
         python3.12 -m venv "$work/venv"
         {provision_python}
-        stage=mount-cache
-        root_source=$(findmnt -n -o SOURCE /)
-        root_parent=$(lsblk -no PKNAME "$root_source")
-        root_device=${{root_parent:+/dev/$root_parent}}
-        [[ -n "$root_device" ]] || root_device=$root_source
-        cache_device=$(lsblk -dpno NAME,TYPE | awk '$2=="disk" {{print $1}}' | while read -r candidate; do
-          if [[ "$candidate" != "$root_device" ]]; then printf '%s\n' "$candidate"; break; fi
-        done)
-        test -b "$cache_device"
-        mkfs.xfs -f "$cache_device" >/dev/null
-        cache_mount="$work/cell/cache"
-        mkdir -p "$cache_mount"
-        mount -o noatime "$cache_device" "$cache_mount"
-        swapoff -a
+        {cache_setup}
         {base_setup}
-        stage=verify-index
         {binary_setup}
         chmod 700 "$work/production_bench"
+        stage=verify-index
         for name in INDEX_COMPLETE.json INDEX_OBJECTS.json INDEX_INVENTORY.json; do
           aws s3 cp {_q(build_prefix)}/$name "$work/$name" --only-show-errors
         done
@@ -910,7 +945,7 @@ v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_su
         {runtime_dataset_step}stage=execute-runtime
         detail_log="$work/cell/runtime/step-00.log"
         mkdir -p "$(dirname "$detail_log")"
-        systemd-run --quiet --wait {systemd_run_options} --service-type=exec \
+        systemd-run --quiet {systemd_wait_option} {systemd_run_options} --service-type=exec \
           -p MemoryMax={memory_max_bytes} -p MemorySwapMax=0 \
           -p StandardOutput=append:$detail_log -p StandardError=append:$detail_log \
           /usr/bin/python3.12 "$work/source/scripts/run_publication_v3_cell.py" {runtime_protocol} "$work/cell" \

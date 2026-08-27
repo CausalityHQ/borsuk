@@ -3549,7 +3549,6 @@ def main() -> int:
             report.update(
                 {
                     "cell_id": cell["cell_id"],
-                    "diagnostic_cell_id": attestation_cell["cell_id"],
                     "attempt_id": args.attempt_id,
                     "instance_identity": args.instance_identity,
                     "dataset_materialization_sha256": (
@@ -3560,6 +3559,8 @@ def main() -> int:
                     "runtime_attestation": runtime_attestation,
                 }
             )
+            if args.v21_feasibility:
+                report["diagnostic_cell_id"] = attestation_cell["cell_id"]
             destination = args.workspace / "RESULT_COMPLETE.json"
             destination.write_bytes(canonical_json_bytes(report) + b"\n")
             print(json.dumps(report, sort_keys=True))

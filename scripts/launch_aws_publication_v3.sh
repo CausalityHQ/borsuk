@@ -22,7 +22,7 @@ elif [[ "$#" -eq 3 && "$1" == "--diagnose-read" && -n "$2" && -n "$3" ]]; then
   mode="$1"
   read_workload="$2"
   read_dataset="$3"
-elif [[ "$#" -eq 3 && "$1" == "--diagnose-v21-selector" && -n "$2" && "$3" =~ ^[0-9a-f]{64}$ ]]; then
+elif [[ "$#" -eq 3 && "$1" == "--diagnose-v21-selector" && "$2" == s3://*/results/*/BUILD_TERMINAL_COMPLETE.json && "$3" =~ ^[0-9a-f]{64}$ ]]; then
   mode="$1"
   base_build_terminal_uri="$2"
   base_build_terminal_sha256="$3"
@@ -218,9 +218,9 @@ if [[ "$mode" == "--diagnose-v21-selector" ]]; then
     --subnet-id "${BORSUK_PUBLICATION_V3_SUBNET_ID:-subnet-034528fbd6977848f}" \
     --security-group-id "${BORSUK_PUBLICATION_V3_SECURITY_GROUP_ID:-sg-0b1fd3e4fbde4af0d}" \
     --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
-    --attempt "${BORSUK_PUBLICATION_V3_RUNTIME_ATTEMPT:-0}" \
-    --max-attempts "${BORSUK_PUBLICATION_V3_MAX_ATTEMPTS:-6}" \
-    --arm-index "${BORSUK_PUBLICATION_V3_ARM_INDEX:-0}" \
+    --attempt 0 \
+    --max-attempts 1 \
+    --arm-index 0 \
     --base-build-terminal-uri "$base_build_terminal_uri" \
     --base-build-terminal-sha256 "$base_build_terminal_sha256"
   exit 0
