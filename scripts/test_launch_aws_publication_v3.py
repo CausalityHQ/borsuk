@@ -77,7 +77,7 @@ assert sys.argv[1] == 'diagnose-v21-selector'
 assert sys.argv[sys.argv.index('--base-build-terminal-uri') + 1] == 's3://bucket/results/base/build/attempts/0001/BUILD_TERMINAL_COMPLETE.json'
 assert sys.argv[sys.argv.index('--base-build-terminal-sha256') + 1] == 'a' * 64
 assert sys.argv[sys.argv.index('--attempt') + 1] == '0'
-assert sys.argv[sys.argv.index('--max-attempts') + 1] == '1'
+assert sys.argv[sys.argv.index('--max-attempts') + 1] == '6'
 assert sys.argv[sys.argv.index('--arm-index') + 1] == '0'
 assert '--build-attempt' not in sys.argv
 print(json.dumps({'operation': sys.argv[1]}, sort_keys=True))

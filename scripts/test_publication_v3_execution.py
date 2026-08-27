@@ -772,9 +772,11 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn("unit_sub_state", script)
         self.assertIn("--property=ExecMainStatus --value", script)
         self.assertIn("systemctl stop borsuk-v21-0003.service", script)
-        self.assertIn("--property=MemoryMax --value", script)
-        self.assertIn("--property=MemorySwapMax --value", script)
-        self.assertIn("--property=MemoryPeak --value", script)
+        self.assertIn('["memory_max_bytes"]', script)
+        self.assertIn('["swap_max_bytes"]', script)
+        self.assertNotIn("--property=MemoryPeak --value", script)
+        self.assertIn('["memory_peak_bytes"]', script)
+        self.assertIn('unit_active_state" == inactive', script)
         self.assertNotIn("requested-systemd-enforced", script)
         self.assertIn("stage=disable-cache", script)
         self.assertNotIn('cache_device=$(lsblk', script)
@@ -798,6 +800,10 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             "memory_peak_bytes",
         ):
             self.assertIn(field, script)
+        self.assertLess(
+            script.index('put_immutable "$work/cell/RESULT_COMPLETE.json"'),
+            script.index("actual_memory_max="),
+        )
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )

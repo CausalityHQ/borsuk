@@ -564,6 +564,7 @@ def runtime_worker_script(
         raise ValueError("runtime binary checksum authority differs")
     binary_setup = textwrap.dedent(
         f"""\
+        stage=verify-binary
         aws s3 cp {_q(build_prefix + "/production_bench")} "$work/production_bench" --only-show-errors
         test "$(sha256sum "$work/production_bench" | awk '{{print $1}}')" = {_q(binary_sha256)}
         binary_sha={_q(binary_sha256)}
@@ -685,13 +686,19 @@ def runtime_worker_script(
                 (( runtime_status != 0 )) || runtime_status=1
                 exit "$runtime_status"
               fi
+              if [[ "$unit_active_state" == inactive || "$unit_sub_state" == dead ]]; then
+                runtime_status=$(systemctl show {_q(unit_name)} --property=ExecMainStatus --value)
+                [[ "$runtime_status" =~ ^[0-9]+$ ]] || runtime_status=1
+                (( runtime_status != 0 )) || runtime_status=1
+                exit "$runtime_status"
+              fi
               sleep 1
             done
             actual_exec_code=$(systemctl show {_q(unit_name)} --property=ExecMainCode --value)
             actual_exec_status=$(systemctl show {_q(unit_name)} --property=ExecMainStatus --value)
-            actual_memory_max=$(systemctl show {_q(unit_name)} --property=MemoryMax --value)
-            actual_memory_swap_max=$(systemctl show {_q(unit_name)} --property=MemorySwapMax --value)
-            actual_memory_peak=$(systemctl show {_q(unit_name)} --property=MemoryPeak --value)
+            actual_memory_max=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["memory_max_bytes"])' "$work/cell/RUNTIME_ATTESTATION.json")
+            actual_memory_swap_max=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["swap_max_bytes"])' "$work/cell/RUNTIME_ATTESTATION.json")
+            actual_memory_peak=$("$work/venv/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["memory_peak_bytes"])' "$work/cell/RUNTIME_ATTESTATION.json")
             [[ "$actual_memory_max" =~ ^[0-9]+$ ]]
             [[ "$actual_memory_swap_max" =~ ^[0-9]+$ ]]
             [[ "$actual_memory_peak" =~ ^[0-9]+$ ]]
@@ -786,6 +793,11 @@ def runtime_worker_script(
     diagnostic_receipt_fields = ""
     read_diagnostic_uploads = ""
     diagnostic_uploads_before_result = ""
+    diagnostic_preservation_before_observation = ""
+    result_upload = (
+        f'put_immutable "$work/cell/RESULT_COMPLETE.json" '
+        f'{_q(terminal_prefix + "/RESULT_COMPLETE.json")}'
+    )
     if (diagnostic_write_ops is None) != (diagnostic_timeout_seconds is None):
         raise ValueError("lifecycle diagnostic authority must be supplied atomically")
     if diagnostic_write_ops is not None:
@@ -910,13 +922,16 @@ v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_su
             '\'"memory_peak_bytes":%s\' "$diagnostic_fields" '
             '"$actual_memory_max" "$actual_memory_swap_max" "$actual_memory_peak")'
         )
-        diagnostic_uploads_before_result = textwrap.dedent(
+        diagnostic_preservation_before_observation = textwrap.dedent(
             f"""\
+            immutable_upload_deadline=$((SECONDS + 600))
             put_immutable "$work/cell/runtime-output/bench_v21_feasibility_arms.csv" {_q(terminal_prefix + "/bench_v21_feasibility_arms.csv")}
             put_immutable "$work/cell/runtime-output/bench_v21_feasibility_samples.csv" {_q(terminal_prefix + "/bench_v21_feasibility_samples.csv")}
             put_immutable "$work/cell/runtime-output/bench_v21_feasibility_summary.json" {_q(terminal_prefix + "/bench_v21_feasibility_summary.json")}
+            put_immutable "$work/cell/RESULT_COMPLETE.json" {_q(terminal_prefix + "/RESULT_COMPLETE.json")}
             """
         )
+        result_upload = ""
     return prelude + textwrap.dedent(
         f"""\
         stage=attest-purchase
@@ -968,12 +983,13 @@ v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_su
           --borsuk-bench "$work/production_bench" \
           --index-receipt "$work/INDEX_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json" \
           --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}{diagnostic_arguments}{' --v21-diagnostic-protocol "$work/protocol.json" --v21-diagnostic-manifest "$work/manifest.json"' if v21_feasibility else ''}
-        {cgroup_observation}
         {diagnostic_validation}
+        {diagnostic_preservation_before_observation}
+        {cgroup_observation}
         stage=publish-receipts
         immutable_upload_deadline=$((SECONDS + 600))
         {diagnostic_uploads_before_result}
-        put_immutable "$work/cell/RESULT_COMPLETE.json" {_q(terminal_prefix + "/RESULT_COMPLETE.json")}
+        {result_upload}
         {read_diagnostic_uploads}
         put_immutable "$work/cell/RUNTIME_ATTESTATION.json" {_q(terminal_prefix + "/RUNTIME_ATTESTATION.json")}
         execution_contract="$work/cell/RUNTIME_EXECUTION_CONTRACT.json"

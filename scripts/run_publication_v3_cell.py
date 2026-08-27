@@ -3559,8 +3559,7 @@ def main() -> int:
                     "runtime_attestation": runtime_attestation,
                 }
             )
-            if args.v21_feasibility:
-                report["diagnostic_cell_id"] = attestation_cell["cell_id"]
+            report["diagnostic_cell_id"] = attestation_cell["cell_id"]
             destination = args.workspace / "RESULT_COMPLETE.json"
             destination.write_bytes(canonical_json_bytes(report) + b"\n")
             print(json.dumps(report, sort_keys=True))
