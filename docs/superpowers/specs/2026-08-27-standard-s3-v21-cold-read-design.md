@@ -172,7 +172,7 @@ prefix satisfying:
 - at most four physical S3 GETs, counting speculative hedges;
 - at most `1 MiB` physical bytes;
 - at most 2x physical amplification over selected bundle bytes;
-- every physical range at most the 128-KiB encoded-bundle cap.
+- every physical range at most the same `1 MiB` total-wave cap.
 
 Adjacent selected bundle ranges may coalesce, but an unselected lower-ranked
 bundle cannot change the range or cost of an earlier prefix. The planner
