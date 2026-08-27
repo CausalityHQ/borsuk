@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import dataclasses
 import hashlib
 import json
@@ -30,7 +31,16 @@ if __package__:
         qualification_cell,
         runtime_worker_script,
     )
-    from scripts.publication_v3_protocol import canonical_json_bytes, validate_manifest
+    from scripts.publication_v3_protocol import (
+        canonical_json_bytes,
+        index_id,
+        validate_manifest,
+    )
+    from scripts.publication_v3_receipts import (
+        reconcile_index_inventory,
+        require_verified_index,
+        require_verified_object_roster,
+    )
 else:
     from publication_v3_aws import (
         build_launch_request,
@@ -45,7 +55,16 @@ else:
         qualification_cell,
         runtime_worker_script,
     )
-    from publication_v3_protocol import canonical_json_bytes, validate_manifest
+    from publication_v3_protocol import (
+        canonical_json_bytes,
+        index_id,
+        validate_manifest,
+    )
+    from publication_v3_receipts import (
+        reconcile_index_inventory,
+        require_verified_index,
+        require_verified_object_roster,
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -64,6 +83,28 @@ class PreparedExecution:
     request: dict[str, object]
     expected: dict[str, object]
     timeout_seconds: int
+
+
+@dataclasses.dataclass(frozen=True)
+class BaseIndexAuthority:
+    manifest: dict[str, object]
+    manifest_uri: str
+    manifest_sha256: str
+    protocol_uri: str
+    protocol_sha256: str
+    source_uri: str
+    source_archive_sha256: str
+    source_git_commit: str
+    build_terminal_uri: str
+    build_terminal_sha256: str
+    build_prefix: str
+    build_cell_id: str
+    build_attempt: int
+    index_id: str
+    index_uri: str
+    index_receipt_sha256: str
+    object_roster_sha256: str
+    inventory_sha256: str
 
 
 def _positive_integer_tuple(value: str) -> tuple[int, ...]:
@@ -161,6 +202,43 @@ class AwsCli:
         ):
             return None
         raise ValueError(completed.stderr.strip() or "S3 HEAD failed")
+
+    def read_immutable_bytes(self, uri: str, sha256: str | None = None) -> bytes:
+        head = self._head(uri)
+        if head is None:
+            raise ValueError("publication authority object is missing")
+        bucket, key = _s3_location(uri)
+        with tempfile.TemporaryDirectory(
+            prefix="borsuk-publication-authority-"
+        ) as directory:
+            target = Path(directory) / "object"
+            self._run(
+                [
+                    "s3api",
+                    "get-object",
+                    "--bucket",
+                    bucket,
+                    "--key",
+                    key,
+                    "--expected-bucket-owner",
+                    self.owner,
+                    "--checksum-mode",
+                    "ENABLED",
+                    str(target),
+                ]
+            )
+            body = target.read_bytes()
+        digest = hashlib.sha256(body).digest()
+        digest_hex = digest.hex()
+        if (
+            head.get("ContentLength") != len(body)
+            or head.get("Metadata", {}).get("borsuk-sha256") != digest_hex
+            or head.get("ChecksumSHA256") != base64.b64encode(digest).decode("ascii")
+            or sha256 is not None
+            and digest_hex != sha256
+        ):
+            raise ValueError("publication authority object checksum differs")
+        return body
 
     def terminal_markers(self, job: Any) -> tuple[str, ...]:
         markers = []
@@ -777,6 +855,239 @@ def completed_build_authority(
     }
 
 
+def _git_is_ancestor(ancestor: str, descendant: str) -> bool:
+    if (
+        re.fullmatch(r"[0-9a-f]{40}", ancestor) is None
+        or re.fullmatch(r"[0-9a-f]{40}", descendant) is None
+    ):
+        raise ValueError("V21 source commit identity is not canonical")
+    completed = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode not in {0, 1}:
+        raise ValueError(completed.stderr.strip() or "V21 source ancestry check failed")
+    return completed.returncode == 0
+
+
+def _json_object(
+    payload: bytes, *, newline: bool, canonical_keys: bool
+) -> dict[str, object]:
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("publication authority object is not JSON") from error
+    expected = (
+        canonical_json_bytes(value)
+        if canonical_keys
+        else json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ) + (b"\n" if newline else b"")
+    if not isinstance(value, dict) or payload != expected:
+        raise ValueError("publication authority object is not canonical")
+    return value
+
+
+def _manifest_entry(
+    manifest: dict[str, object], collection: str, identity: str
+) -> dict[str, object]:
+    values = manifest.get(collection)
+    matches = (
+        [
+            value
+            for value in values
+            if isinstance(value, dict) and value.get("id") == identity
+        ]
+        if isinstance(values, list)
+        else []
+    )
+    if len(matches) != 1:
+        raise ValueError(f"V21 manifest {collection} authority differs")
+    return matches[0]
+
+
+def authenticate_v21_base_index_authority(
+    *,
+    current_manifest: dict[str, object],
+    terminal_uri: str,
+    terminal_sha256: str,
+    aws: Any,
+    git_is_ancestor: Any = _git_is_ancestor,
+) -> BaseIndexAuthority:
+    """Authenticate the exact historical Deep Image build before paid work."""
+
+    try:
+        current = validate_manifest(current_manifest)
+        if re.fullmatch(r"[0-9a-f]{64}", terminal_sha256) is None:
+            raise ValueError("base build terminal checksum is not canonical")
+        if "/results/" not in terminal_uri or not terminal_uri.endswith(
+            "/BUILD_TERMINAL_COMPLETE.json"
+        ):
+            raise ValueError("base build terminal URI is not canonical")
+        _s3_location(terminal_uri)
+        campaign_root = terminal_uri.split("/results/", 1)[0]
+        terminal_payload = aws.read_immutable_bytes(terminal_uri, terminal_sha256)
+        terminal = _json_object(terminal_payload, newline=True, canonical_keys=False)
+        terminal_fields = {
+            "schema_version",
+            "status",
+            "role",
+            "attempt",
+            "attempt_id",
+            "instance_id",
+            "source_archive_sha256",
+            "manifest_sha256",
+            "protocol_sha256",
+            "index_uri",
+            "binary_sha256",
+            "rest_binary_sha256",
+            "purchase_option",
+            "artifact_upload_reconciliations",
+        }
+        if frozenset(terminal) != terminal_fields:
+            raise ValueError("base build terminal fields differ")
+        for field in (
+            "source_archive_sha256",
+            "manifest_sha256",
+            "protocol_sha256",
+            "binary_sha256",
+            "rest_binary_sha256",
+        ):
+            if re.fullmatch(r"[0-9a-f]{64}", str(terminal[field])) is None:
+                raise ValueError(f"base build terminal {field} differs")
+        if (
+            terminal["schema_version"] != 2
+            or terminal["status"] != "complete"
+            or terminal["role"] != "build"
+            or terminal["purchase_option"] != "spot"
+            or isinstance(terminal["attempt"], bool)
+            or not isinstance(terminal["attempt"], int)
+            or not 1 <= terminal["attempt"] <= 9_999
+        ):
+            raise ValueError("base build terminal authority differs")
+
+        manifest_sha256 = str(terminal["manifest_sha256"])
+        manifest_uri = f"{campaign_root}/manifests/{manifest_sha256}.json"
+        manifest_payload = aws.read_immutable_bytes(manifest_uri, manifest_sha256)
+        historical = validate_manifest(
+            _json_object(manifest_payload, newline=False, canonical_keys=True)
+        )
+        source = historical.get("source")
+        current_source = current.get("source")
+        if (
+            not isinstance(source, dict)
+            or source.get("state") != "frozen"
+            or source.get("archive_sha256") != terminal["source_archive_sha256"]
+            or not isinstance(current_source, dict)
+            or current_source.get("state") != "frozen"
+            or not git_is_ancestor(
+                str(source.get("git_commit")), str(current_source.get("git_commit"))
+            )
+        ):
+            raise ValueError("base source authority differs")
+
+        historical_dataset = _manifest_entry(historical, "datasets", "deep-image-96")
+        current_dataset = _manifest_entry(current, "datasets", "deep-image-96")
+        historical_workload = _manifest_entry(
+            historical, "workloads", "standard-ann-read"
+        )
+        current_workload = _manifest_entry(current, "workloads", "standard-ann-read")
+        historical_profiles = historical.get("index_profiles")
+        current_profiles = current.get("index_profiles")
+        historical_environment = historical.get("environment_contract")
+        current_environment = current.get("environment_contract")
+        if (
+            historical.get("campaign_id") != current.get("campaign_id")
+            or historical_dataset != current_dataset
+            or historical_workload != current_workload
+            or not isinstance(historical_profiles, dict)
+            or not isinstance(current_profiles, dict)
+            or historical_profiles.get("borsuk") != current_profiles.get("borsuk")
+            or not isinstance(historical_environment, dict)
+            or not isinstance(current_environment, dict)
+            or historical_environment.get("architecture")
+            != current_environment.get("architecture")
+        ):
+            raise ValueError("base manifest is incompatible with diagnostic authority")
+
+        attempt = int(terminal["attempt"])
+        cell = borsuk_cell(
+            historical,
+            workload_id="standard-ann-read",
+            dataset_id="deep-image-96",
+            repetition_id="r01",
+            build_attempt=attempt,
+        )
+        job = ExecutionJob.build(cell, attempt=attempt)
+        if (
+            terminal_uri != job.complete_uri
+            or terminal["attempt_id"] != f"{job.cell_tag}-a{attempt:04d}"
+            or terminal["index_uri"] != job.index_uri
+        ):
+            raise ValueError("base build cell or index URI differs")
+
+        protocol_sha256 = str(terminal["protocol_sha256"])
+        protocol_uri = f"{campaign_root}/protocols/{protocol_sha256}.json"
+        protocol_payload = aws.read_immutable_bytes(protocol_uri, protocol_sha256)
+        if protocol_payload != canonical_json_bytes(cell) + b"\n":
+            raise ValueError("base build protocol differs from its manifest")
+
+        build_prefix = job.terminal_prefix
+        receipt_payload = aws.read_immutable_bytes(
+            f"{build_prefix}/INDEX_COMPLETE.json", None
+        )
+        receipt, receipt_sha256 = require_verified_index(
+            receipt_payload,
+            cell=cell,
+            source_archive_sha256=str(terminal["source_archive_sha256"]),
+            dataset_materialization_sha256=str(historical_dataset["source"]["sha256"]),
+        )
+        roster_payload = aws.read_immutable_bytes(
+            f"{build_prefix}/INDEX_OBJECTS.json",
+            str(receipt["object_roster_ref"]["checksum"]),
+        )
+        roster = require_verified_object_roster(receipt, roster_payload, cell=cell)
+        inventory_payload = aws.read_immutable_bytes(
+            f"{build_prefix}/INDEX_INVENTORY.json", None
+        )
+        inventory = json.loads(inventory_payload)
+        if (
+            not isinstance(inventory, list)
+            or inventory_payload != canonical_json_bytes(inventory) + b"\n"
+        ):
+            raise ValueError("base index inventory is not canonical")
+        reconcile_index_inventory(roster, inventory)
+
+        expected_index_id = index_id(cell)
+        return BaseIndexAuthority(
+            manifest=copy.deepcopy(historical),
+            manifest_uri=manifest_uri,
+            manifest_sha256=manifest_sha256,
+            protocol_uri=protocol_uri,
+            protocol_sha256=protocol_sha256,
+            source_uri=(
+                f"{campaign_root}/source/{terminal['source_archive_sha256']}.tar.gz"
+            ),
+            source_archive_sha256=str(terminal["source_archive_sha256"]),
+            source_git_commit=str(source["git_commit"]),
+            build_terminal_uri=terminal_uri,
+            build_terminal_sha256=terminal_sha256,
+            build_prefix=build_prefix,
+            build_cell_id=str(cell["cell_id"]),
+            build_attempt=attempt,
+            index_id=expected_index_id,
+            index_uri=str(cell["index_prefix"]),
+            index_receipt_sha256=receipt_sha256,
+            object_roster_sha256=hashlib.sha256(roster_payload).hexdigest(),
+            inventory_sha256=hashlib.sha256(inventory_payload).hexdigest(),
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("V21 base-index authority differs") from error
+
+
 def prepare_qualification_execution(
     manifest: dict[str, object],
     *,
@@ -855,10 +1166,8 @@ def prepare_qualification_execution(
         or diagnostic_read_candidates is None
         or not diagnostic_read_nprobes
         or not diagnostic_read_candidates
-        or tuple(sorted(set(diagnostic_read_nprobes)))
-        != diagnostic_read_nprobes
-        or tuple(sorted(set(diagnostic_read_candidates)))
-        != diagnostic_read_candidates
+        or tuple(sorted(set(diagnostic_read_nprobes))) != diagnostic_read_nprobes
+        or tuple(sorted(set(diagnostic_read_candidates))) != diagnostic_read_candidates
         or any(
             isinstance(value, bool) or not 1 <= value <= 256
             for value in diagnostic_read_nprobes
@@ -896,9 +1205,7 @@ def prepare_qualification_execution(
             if dataset.get("id") == "deep-image-96"
         ]
         dataset_source = (
-            matching_datasets[0].get("source")
-            if len(matching_datasets) == 1
-            else None
+            matching_datasets[0].get("source") if len(matching_datasets) == 1 else None
         )
         if (
             not isinstance(frozen_source, dict)
@@ -1278,9 +1585,7 @@ def main() -> int:
     v21_diagnostic.add_argument("--build-attempt", type=int, default=0)
     v21_diagnostic.add_argument("--max-attempts", type=int, default=6)
     v21_diagnostic.add_argument("--arm-index", type=int, default=0)
-    v21_diagnostic.add_argument(
-        "--purchase-option", choices=("spot",), default="spot"
-    )
+    v21_diagnostic.add_argument("--purchase-option", choices=("spot",), default="spot")
     runtime = subparsers.add_parser("read-recall-sift")
     runtime.add_argument("--manifest", type=Path, required=True)
     runtime.add_argument("--source-archive", type=Path, required=True)

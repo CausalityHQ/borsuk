@@ -17,6 +17,7 @@ from scripts.publication_v3_controller import (
     AwsCli,
     LaunchEnvironment,
     _minimum_lifecycle_write_ops,
+    authenticate_v21_base_index_authority,
     completed_build_authority,
     prepare_qualification_execution,
     run_execution_job,
@@ -28,7 +29,8 @@ from scripts.publication_v3_execution import (
     borsuk_cell,
     qualification_cell,
 )
-from scripts.publication_v3_protocol import canonical_json_bytes
+from scripts.publication_v3_protocol import canonical_json_bytes, index_id
+from scripts.publication_v3_receipts import build_index_receipt
 
 MANIFEST = (
     Path(__file__).resolve().parents[1] / "docs/research/publication-v3-manifest.json"
@@ -140,6 +142,204 @@ class FakeAws:
 
 
 class PublicationV3ControllerTests(unittest.TestCase):
+    def _v21_base_authority_fixture(self):
+        current = json.loads(MANIFEST.read_text())
+        historical = copy.deepcopy(current)
+        historical["source"] = {
+            **historical["source"],
+            "git_commit": "1" * 40,
+            "archive_sha256": "2" * 64,
+        }
+        historical_sha256 = hashlib.sha256(canonical_json_bytes(historical)).hexdigest()
+        cell = borsuk_cell(
+            historical,
+            workload_id="standard-ann-read",
+            dataset_id="deep-image-96",
+            repetition_id="r01",
+            build_attempt=1,
+        )
+        protocol = canonical_json_bytes(cell) + b"\n"
+        protocol_sha256 = hashlib.sha256(protocol).hexdigest()
+        job = ExecutionJob.build(cell, attempt=1)
+        rows = cell["dataset"]["scale"]["rows"]
+        roster = [
+            {
+                "role": "data-bundle",
+                "path": "segments/00000000.parquet",
+                "format": "parquet",
+                "bytes": 64 * 1024 * 1024,
+                "rows": rows,
+                "checksum": "3" * 64,
+                "etag": '"33333333333333333333333333333333"',
+            },
+            {
+                "role": "directory",
+                "path": "directory/00000000.arrow",
+                "format": "arrow-ipc",
+                "bytes": 4096,
+                "rows": 0,
+                "checksum": "4" * 64,
+                "etag": '"44444444444444444444444444444444"',
+            },
+        ]
+        metrics = {
+            "cpu_ns": 10,
+            "peak_rss_bytes": 20,
+            "disk_read_bytes": 30,
+            "disk_write_bytes": 40,
+            "storage_gets": 50,
+            "storage_puts": 60,
+            "storage_deletes": 0,
+            "storage_heads": 2,
+            "storage_lists": 1,
+            "storage_bytes_read": 70,
+            "storage_bytes_written": 80,
+            "build_elapsed_ns": 90,
+        }
+        receipt = build_index_receipt(
+            cell=cell,
+            source_archive_sha256="2" * 64,
+            dataset_materialization_sha256=cell["dataset"]["source"]["sha256"],
+            build_attempt_id=f"{job.cell_tag}-a0001",
+            builder_instance_identity="i-0123456789abcdef0",
+            builder_instance_type="r7g.8xlarge",
+            build_artifact={
+                "index_stats": {
+                    "logical_cells": cell["index_profile"]["logical_cells"],
+                    "records": rows,
+                    "total_active_index_bytes": 64 * 1024 * 1024,
+                    "logical_cell_catalog_checksum": "5" * 64,
+                },
+                "storage_metrics": {
+                    key: metrics[key]
+                    for key in (
+                        "storage_gets",
+                        "storage_puts",
+                        "storage_deletes",
+                        "storage_heads",
+                        "storage_lists",
+                        "storage_bytes_read",
+                        "storage_bytes_written",
+                    )
+                },
+            },
+            object_roster=roster,
+            build_metrics=metrics,
+        )
+        inventory = [
+            {key: item[key] for key in ("path", "bytes", "checksum", "etag")}
+            for item in roster
+        ]
+        terminal = {
+            "schema_version": 2,
+            "status": "complete",
+            "role": "build",
+            "attempt": 1,
+            "attempt_id": f"{job.cell_tag}-a0001",
+            "instance_id": "i-0123456789abcdef0",
+            "source_archive_sha256": "2" * 64,
+            "manifest_sha256": historical_sha256,
+            "protocol_sha256": protocol_sha256,
+            "index_uri": job.index_uri,
+            "binary_sha256": "6" * 64,
+            "rest_binary_sha256": "7" * 64,
+            "purchase_option": "spot",
+            "artifact_upload_reconciliations": 0,
+        }
+        root = str(historical["prefixes"]["dataset"]).removesuffix("/datasets")
+        objects = {
+            job.complete_uri: canonical_json_bytes(terminal) + b"\n",
+            f"{root}/manifests/{historical_sha256}.json": canonical_json_bytes(
+                historical
+            ),
+            f"{root}/protocols/{protocol_sha256}.json": protocol,
+            f"{job.terminal_prefix}/INDEX_COMPLETE.json": canonical_json_bytes(receipt)
+            + b"\n",
+            f"{job.terminal_prefix}/INDEX_OBJECTS.json": canonical_json_bytes(roster)
+            + b"\n",
+            f"{job.terminal_prefix}/INDEX_INVENTORY.json": canonical_json_bytes(
+                inventory
+            )
+            + b"\n",
+        }
+        return current, historical, cell, job, objects
+
+    def test_v21_base_authority_authenticates_distinct_historical_generation_before_writes(
+        self,
+    ) -> None:
+        current, historical, cell, job, objects = self._v21_base_authority_fixture()
+
+        class AuthorityAws:
+            mutating_calls: list[str] = []
+
+            def read_immutable_bytes(self, uri: str, sha256: str | None) -> bytes:
+                payload = objects[uri]
+                if sha256 is not None and hashlib.sha256(payload).hexdigest() != sha256:
+                    raise ValueError("test authority digest differs")
+                return payload
+
+        terminal_sha256 = hashlib.sha256(objects[job.complete_uri]).hexdigest()
+        authority = authenticate_v21_base_index_authority(
+            current_manifest=current,
+            terminal_uri=job.complete_uri,
+            terminal_sha256=terminal_sha256,
+            aws=AuthorityAws(),
+            git_is_ancestor=lambda old, new: (
+                old == historical["source"]["git_commit"]
+                and new == current["source"]["git_commit"]
+            ),
+        )
+        self.assertEqual(authority.build_cell_id, cell["cell_id"])
+        self.assertEqual(authority.index_id, index_id(cell))
+        self.assertEqual(authority.index_uri, cell["index_prefix"])
+        self.assertEqual(authority.source_archive_sha256, "2" * 64)
+        self.assertNotEqual(
+            authority.source_archive_sha256,
+            current["source"]["archive_sha256"],
+        )
+        self.assertEqual(AuthorityAws.mutating_calls, [])
+
+    def test_v21_base_authority_mismatch_fails_before_any_write_or_ec2(
+        self,
+    ) -> None:
+        current, historical, _cell, job, objects = self._v21_base_authority_fixture()
+        receipt_uri = f"{job.terminal_prefix}/INDEX_COMPLETE.json"
+        receipt = json.loads(objects[receipt_uri])
+        receipt["index_uri"] = str(receipt["index_uri"]) + "-mutated"
+        objects[receipt_uri] = canonical_json_bytes(receipt) + b"\n"
+
+        class ReadOnlyAuthorityAws:
+            mutating_calls: list[str] = []
+
+            def read_immutable_bytes(self, uri: str, sha256: str | None) -> bytes:
+                payload = objects[uri]
+                if uri == receipt_uri:
+                    return payload
+                if sha256 is not None and hashlib.sha256(payload).hexdigest() != sha256:
+                    raise ValueError("test authority digest differs")
+                return payload
+
+            def __getattr__(self, name: str):
+                self.mutating_calls.append(name)
+                raise AssertionError(
+                    f"base preflight reached mutating AWS method {name}"
+                )
+
+        terminal_sha256 = hashlib.sha256(objects[job.complete_uri]).hexdigest()
+        aws = ReadOnlyAuthorityAws()
+        with self.assertRaisesRegex(ValueError, "base-index authority"):
+            authenticate_v21_base_index_authority(
+                current_manifest=current,
+                terminal_uri=job.complete_uri,
+                terminal_sha256=terminal_sha256,
+                aws=aws,
+                git_is_ancestor=lambda old, new: (
+                    old == historical["source"]["git_commit"]
+                    and new == current["source"]["git_commit"]
+                ),
+            )
+        self.assertEqual(aws.mutating_calls, [])
+
     def test_attempt_reconciliation_uses_exact_frozen_job_markers(self) -> None:
         class MarkerAws:
             def __init__(self) -> None:
@@ -396,9 +596,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         worker_payload = user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
         worker = gzip.decompress(base64.b64decode(worker_payload)).decode()
         self.assertIn("--diagnostic-read-nprobes 32,64", worker)
-        self.assertIn(
-            "--diagnostic-read-candidates 512,1024,2048,4096", worker
-        )
+        self.assertIn("--diagnostic-read-candidates 512,1024,2048,4096", worker)
         for artifact in (
             "diagnostic_result_sha256",
             "diagnostic_samples_sha256",
