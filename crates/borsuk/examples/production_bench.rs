@@ -26,12 +26,16 @@ use borsuk::{
     GarbageCollectionReport, GlobalPqLayout, GlobalScanCodec, IO_THREADS_ENV, IndexConfig,
     LeafCapability, LeafMode, MAX_GLOBAL_DELTA_ROWS, MAX_GLOBAL_DELTA_SEGMENTS,
     MAX_GLOBAL_DELTA_VECTOR_BYTES, OpenOptions, ProcessLimits, RequestCounts, SearchOptions,
-    SearchReport, VectorElementType, VectorMetric, VectorRecord, WalConfig, WarmReport,
-    configure_process, configured_backing_get_concurrency, configured_cpu_threads,
-    configured_io_threads, recall_at_k, recommended_segment_max_vectors,
+    SearchReport, V21FeasibilityArm, V21FeasibilityReport, V21LimitingBound, VectorElementType,
+    VectorMetric, VectorRecord, WalConfig, WarmReport, configure_process,
+    configured_backing_get_concurrency, configured_cpu_threads, configured_io_threads, recall_at_k,
+    recommended_segment_max_vectors,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
+
+#[cfg(test)]
+use borsuk::V21FeasibilityQuerySample;
 
 const DEFAULT_QUERIES: usize = 1_000;
 const DEFAULT_CONCURRENCY: &str = "1,2,4,8,16";
@@ -82,6 +86,9 @@ const MUTATION_QUERY_HEADER: &str =
 const MUTATION_QUERY_SAMPLE_HEADER: &str =
     "stage,sample_index,latency_ms,execution_engine,bytes_read,network_gets";
 const MUTATION_QUERY_SAMPLES: usize = 100;
+const V21_FEASIBILITY_SCHEMA: &str = "borsuk-v21-selector-feasibility-v1";
+const V21_FEASIBILITY_ARMS_HEADER: &str = "schema,arm_index,bundle_row_limit,selector_span,hedge_delay_ms,bundle_count,region_count,projected_directory_bytes,replaced_v20_root_bytes,v20_root_checksum,baseline_rss_bytes,projected_query_transient_bytes,projected_peak_rss_bytes,gt_coverage,recall_at_10,maximum_actual_requests,maximum_physical_bytes,selector_within_frozen_cap,eligible,rows";
+const V21_FEASIBILITY_SAMPLES_HEADER: &str = "schema,arm_index,query_index,query_source_index,routed_cells,selected_rows,selected_bundles,primary_requests,maximum_actual_requests,selected_bytes,physical_bytes,gt_hits,recall_hits,limiting_bound";
 const DEFAULT_PRODUCTION_RAM_BUDGET_BYTES: u64 = borsuk::DEFAULT_RAM_BUDGET_BYTES;
 // AWS S3 Standard GET pricing in eu-central-1 at the 2026-07-20 snapshot:
 // $0.43 per one million requests. The checked-in dated cost model records the
@@ -163,9 +170,99 @@ struct ResolvedConfig {
     read_only: bool,
     insert_only: bool,
     lifecycle_only: bool,
+    v21_feasibility: bool,
+    v21_source_archive_sha256: Option<String>,
+    v21_index_id: Option<String>,
+    v21_dataset_id: Option<String>,
     preload_serving: bool,
     _uri_temp: Option<tempfile::TempDir>,
     _cache_temp: Option<tempfile::TempDir>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct V21FeasibilityPhaseSelection {
+    build_index: bool,
+    build_only: bool,
+    recall_only: bool,
+    skip_recall: bool,
+    read_only: bool,
+    insert_only: bool,
+    lifecycle_only: bool,
+    ambient_nprobes: bool,
+    ambient_candidates: bool,
+    ambient_concurrency: bool,
+    ambient_writes: bool,
+    ambient_limit: bool,
+}
+
+fn v21_feasibility_arms() -> Vec<V21FeasibilityArm> {
+    [128_u16, 256]
+        .into_iter()
+        .flat_map(|bundle_row_limit| {
+            [32_u16, 64].into_iter().flat_map(move |selector_span| {
+                [None, Some(20_u16), Some(35_u16)]
+                    .into_iter()
+                    .map(move |hedge_delay_ms| V21FeasibilityArm {
+                        bundle_row_limit,
+                        selector_span,
+                        hedge_delay_ms,
+                    })
+            })
+        })
+        .collect()
+}
+
+fn validate_v21_feasibility_phase(
+    enabled: bool,
+    selection: V21FeasibilityPhaseSelection,
+) -> io::Result<()> {
+    if !enabled {
+        return Ok(());
+    }
+    if selection.build_index
+        || selection.build_only
+        || selection.recall_only
+        || !selection.skip_recall
+        || !selection.read_only
+        || selection.insert_only
+        || selection.lifecycle_only
+        || selection.ambient_nprobes
+        || selection.ambient_candidates
+        || selection.ambient_concurrency
+        || selection.ambient_writes
+        || selection.ambient_limit
+    {
+        return Err(invalid_input(
+            "BORSUK_BENCH_V21_FEASIBILITY must be the sole phase selector for an existing immutable index",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_v21_evidence_identity_fields(
+    source_archive_sha256: &str,
+    index_id: &str,
+    dataset_id: &str,
+) -> io::Result<()> {
+    let canonical_identifier = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+    };
+    if source_archive_sha256.len() != 64
+        || !source_archive_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || !canonical_identifier(index_id)
+        || !canonical_identifier(dataset_id)
+    {
+        return Err(invalid_input(
+            "V21 feasibility evidence identity is invalid",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -182,6 +279,63 @@ struct EffectiveRuntimeFlowControl {
     cpu_threads: usize,
     io_threads: usize,
     s3_get_concurrency: usize,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+struct V21FeasibilitySummary {
+    schema: String,
+    claim_eligible: bool,
+    dataset_name: String,
+    dataset_id: String,
+    index_id: String,
+    source_archive_sha256: String,
+    v20_root_checksum: String,
+    dataset_rows: u64,
+    dimensions: usize,
+    query_seed: u64,
+    query_source_indices: Vec<usize>,
+    arm_count: usize,
+    sample_count: usize,
+    baseline_rss_bytes: u64,
+    minimum_arm_gt_coverage: f64,
+    minimum_arm_recall_at_10: f64,
+    maximum_actual_requests: usize,
+    maximum_physical_bytes: u64,
+    eligible_arm_indexes: Vec<usize>,
+    arms: Vec<V21FeasibilityArmSummary>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+struct V21FeasibilityArmSummary {
+    arm_index: usize,
+    bundle_row_limit: u16,
+    selector_span: u16,
+    hedge_delay_ms: Option<u16>,
+    bundle_count: usize,
+    region_count: usize,
+    projected_directory_bytes: u64,
+    replaced_v20_root_bytes: u64,
+    selector_within_frozen_cap: bool,
+    rows: u64,
+    gt_coverage: f64,
+    recall_at_10: f64,
+    maximum_actual_requests: usize,
+    maximum_physical_bytes: u64,
+    projected_query_transient_bytes: u64,
+    projected_peak_rss_bytes: u64,
+    eligible: bool,
+}
+
+struct V21EvidenceIdentity<'a> {
+    dataset_name: &'a str,
+    dataset_id: &'a str,
+    index_id: &'a str,
+    source_archive_sha256: &'a str,
+    dimensions: usize,
+    dataset_rows: u64,
+    query_seed: u64,
+    query_source_indices: &'a [usize],
+    baseline_rss_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1295,8 +1449,15 @@ fn main() {
 fn run() -> BenchResult<()> {
     configure_benchmark_process()?;
     let config = resolve_config()?;
+    if config.v21_feasibility {
+        reject_existing_destinations(&v21_feasibility_destinations(&config.output_dir))?;
+    }
     print_config(&config);
     let dataset = load_dataset(&config)?;
+    if config.v21_feasibility {
+        write_v21_feasibility_artifacts(&config, &dataset)?;
+        return Ok(());
+    }
     fs::create_dir_all(&config.output_dir)?;
     write_effective_runtime_flow_control(&config)?;
 
@@ -2031,17 +2192,75 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
             invalid_input("BORSUK_BENCH_CACHE_COVERAGE_PERCENT must be between 0 and 100").into(),
         );
     }
-    let build_index = env_flag_with_default("BORSUK_BENCH_BUILD_INDEX", true)?;
-    let build_only = env_flag("BORSUK_BENCH_BUILD_ONLY")?;
+    let v21_feasibility = env_flag("BORSUK_BENCH_V21_FEASIBILITY")?;
+    let v21_source_archive_sha256 = v21_feasibility
+        .then(|| non_empty_env("BORSUK_BENCH_V21_SOURCE_ARCHIVE_SHA256"))
+        .flatten();
+    let v21_index_id = v21_feasibility
+        .then(|| non_empty_env("BORSUK_BENCH_V21_INDEX_ID"))
+        .flatten();
+    let v21_dataset_id = v21_feasibility
+        .then(|| non_empty_env("BORSUK_BENCH_V21_DATASET_ID"))
+        .flatten();
+    if v21_feasibility
+        && (v21_source_archive_sha256.is_none()
+            || v21_index_id.is_none()
+            || v21_dataset_id.is_none())
+    {
+        return Err(invalid_input(
+            "BORSUK_BENCH_V21_FEASIBILITY requires exact source archive, index, and dataset identities",
+        )
+        .into());
+    }
+    if let (Some(source), Some(index), Some(dataset)) = (
+        v21_source_archive_sha256.as_deref(),
+        v21_index_id.as_deref(),
+        v21_dataset_id.as_deref(),
+    ) {
+        validate_v21_evidence_identity_fields(source, index, dataset)?;
+    }
+    let v21_forbidden_phase_env = [
+        "BORSUK_BENCH_BUILD_INDEX",
+        "BORSUK_BENCH_BUILD_ONLY",
+        "BORSUK_BENCH_RECALL_ONLY",
+        "BORSUK_BENCH_SKIP_RECALL",
+        "BORSUK_BENCH_READ_ONLY",
+        "BORSUK_BENCH_INSERT_ONLY",
+        "BORSUK_BENCH_LIFECYCLE_ONLY",
+        "BORSUK_BENCH_NPROBES",
+        "BORSUK_BENCH_CANDIDATES",
+        "BORSUK_BENCH_CONCURRENCY",
+        "BORSUK_BENCH_WRITE_OPS",
+        "BORSUK_BENCH_UPDATE_PERCENT",
+        "BORSUK_BENCH_DELETE_PERCENT",
+        "BORSUK_BENCH_LIFECYCLE_WRITERS",
+        "BORSUK_BENCH_LIMIT",
+    ];
+    if v21_feasibility
+        && let Some(name) = v21_forbidden_phase_env
+            .iter()
+            .find(|name| env::var_os(name).is_some())
+    {
+        return Err(invalid_input(&format!(
+            "BORSUK_BENCH_V21_FEASIBILITY is the only permitted phase selector; remove {name}"
+        ))
+        .into());
+    }
+    let build_index = if v21_feasibility {
+        false
+    } else {
+        env_flag_with_default("BORSUK_BENCH_BUILD_INDEX", true)?
+    };
+    let build_only = !v21_feasibility && env_flag("BORSUK_BENCH_BUILD_ONLY")?;
     validate_build_only(build_only, build_index)?;
-    let recall_only = env_flag("BORSUK_BENCH_RECALL_ONLY")?;
-    let skip_recall = env_flag("BORSUK_BENCH_SKIP_RECALL")?;
+    let recall_only = !v21_feasibility && env_flag("BORSUK_BENCH_RECALL_ONLY")?;
+    let skip_recall = v21_feasibility || env_flag("BORSUK_BENCH_SKIP_RECALL")?;
     let skip_exact_recall = env_flag("BORSUK_BENCH_SKIP_EXACT_RECALL")?;
     validate_phase_selection(recall_only, skip_recall)?;
-    let read_only = env_flag("BORSUK_BENCH_READ_ONLY")?;
-    let insert_only = env_flag("BORSUK_BENCH_INSERT_ONLY")?;
+    let read_only = v21_feasibility || env_flag("BORSUK_BENCH_READ_ONLY")?;
+    let insert_only = !v21_feasibility && env_flag("BORSUK_BENCH_INSERT_ONLY")?;
     validate_insert_only(insert_only, build_only, read_only)?;
-    let lifecycle_only = env_flag("BORSUK_BENCH_LIFECYCLE_ONLY")?;
+    let lifecycle_only = !v21_feasibility && env_flag("BORSUK_BENCH_LIFECYCLE_ONLY")?;
     validate_lifecycle_only(
         lifecycle_only,
         build_index,
@@ -2050,6 +2269,30 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         skip_recall,
         read_only,
         insert_only,
+    )?;
+    validate_v21_feasibility_phase(
+        v21_feasibility,
+        V21FeasibilityPhaseSelection {
+            build_index,
+            build_only,
+            recall_only,
+            skip_recall,
+            read_only,
+            insert_only,
+            lifecycle_only,
+            ambient_nprobes: env::var_os("BORSUK_BENCH_NPROBES").is_some(),
+            ambient_candidates: env::var_os("BORSUK_BENCH_CANDIDATES").is_some(),
+            ambient_concurrency: env::var_os("BORSUK_BENCH_CONCURRENCY").is_some(),
+            ambient_writes: [
+                "BORSUK_BENCH_WRITE_OPS",
+                "BORSUK_BENCH_UPDATE_PERCENT",
+                "BORSUK_BENCH_DELETE_PERCENT",
+                "BORSUK_BENCH_LIFECYCLE_WRITERS",
+            ]
+            .iter()
+            .any(|name| env::var_os(name).is_some()),
+            ambient_limit: env::var_os("BORSUK_BENCH_LIMIT").is_some(),
+        },
     )?;
     let preload_serving = env_flag("BORSUK_BENCH_PRELOAD_SERVING")?;
     let recluster_build = env_flag("BORSUK_BENCH_RECLUSTER_BUILD")?;
@@ -2135,6 +2378,10 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         read_only,
         insert_only,
         lifecycle_only,
+        v21_feasibility,
+        v21_source_archive_sha256,
+        v21_index_id,
+        v21_dataset_id,
         preload_serving,
         _uri_temp: uri_temp,
         _cache_temp: cache_temp,
@@ -3159,6 +3406,672 @@ fn write_recall_latency_csv(config: &ResolvedConfig, dataset: &Dataset) -> Bench
         rows_written,
         dataset.meta.name
     );
+    Ok(())
+}
+
+fn write_v21_feasibility_artifacts(config: &ResolvedConfig, dataset: &Dataset) -> BenchResult<()> {
+    let destinations = v21_feasibility_destinations(&config.output_dir);
+    reject_existing_destinations(&destinations)?;
+    if config.queries == 0
+        || config.queries > dataset.queries.len()
+        || config.queries > dataset.ground_truth.len()
+        || config.queries > dataset.query_source_indices.len()
+        || dataset.meta.name.is_empty()
+        || dataset.meta.dim == 0
+    {
+        return Err(invalid_input(
+            "V21 feasibility requires the exact configured dataset and query authority",
+        )
+        .into());
+    }
+    let query_count = config.queries;
+    let index = BorsukIndex::open_with_options(
+        &config.uri,
+        OpenOptions {
+            cache_dir: None,
+            cache_max_bytes: Some(0),
+            ram_budget_bytes: config.ram_budget_bytes,
+            resident_routing: true,
+            cell_card_code_plane_cache_max_bytes: 0,
+            ..OpenOptions::default()
+        },
+    )?;
+    let _ = index.prepare_serving_metadata_without_complete_code_planes()?;
+    let baseline_rss_bytes = memory_stats::memory_stats()
+        .ok_or_else(|| invalid_input("V21 feasibility could not observe process RSS"))?
+        .physical_mem as u64;
+    let queries = &dataset.queries[..query_count];
+    let truth = &dataset.ground_truth[..query_count];
+    let reports = index.diagnose_v21_selector_feasibility(
+        queries,
+        truth,
+        &SearchOptions::approx(RECALL_K, config.recall_leaf_mode),
+        &v21_feasibility_arms(),
+    )?;
+    let source_archive_sha256 = config
+        .v21_source_archive_sha256
+        .as_deref()
+        .ok_or_else(|| invalid_input("V21 feasibility source identity is absent"))?;
+    let index_id = config
+        .v21_index_id
+        .as_deref()
+        .ok_or_else(|| invalid_input("V21 feasibility index identity is absent"))?;
+    let dataset_id = config
+        .v21_dataset_id
+        .as_deref()
+        .ok_or_else(|| invalid_input("V21 feasibility dataset identity is absent"))?;
+    let identity = V21EvidenceIdentity {
+        dataset_name: &dataset.meta.name,
+        dataset_id,
+        index_id,
+        source_archive_sha256,
+        dimensions: dataset.meta.dim,
+        dataset_rows: u64::try_from(dataset.train_count)
+            .map_err(|_| invalid_input("V21 dataset rows exceed u64"))?,
+        query_seed: config.query_seed,
+        query_source_indices: &dataset.query_source_indices[..query_count],
+        baseline_rss_bytes,
+    };
+    write_v21_feasibility_evidence(&config.output_dir, &identity, &reports)
+}
+
+fn v21_feasibility_destinations(output_dir: &Path) -> [PathBuf; 3] {
+    [
+        output_dir.join("bench_v21_feasibility_arms.csv"),
+        output_dir.join("bench_v21_feasibility_samples.csv"),
+        output_dir.join("bench_v21_feasibility_summary.json"),
+    ]
+}
+
+fn projected_v21_serving_rss(
+    baseline_rss_bytes: u64,
+    replaced_v20_root_bytes: u64,
+    selector_bytes: u64,
+    query_transient_bytes: u64,
+) -> Option<u64> {
+    baseline_rss_bytes
+        .checked_sub(replaced_v20_root_bytes)?
+        .checked_add(selector_bytes)?
+        .checked_add(query_transient_bytes)
+}
+
+fn reject_existing_destinations(destinations: &[PathBuf]) -> io::Result<()> {
+    if let Some(path) = destinations.iter().find(|path| path.exists()) {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("refusing to overwrite `{}`", path.display()),
+        ));
+    }
+    Ok(())
+}
+
+fn v21_limiting_bound(bound: V21LimitingBound) -> &'static str {
+    match bound {
+        V21LimitingBound::Exhausted => "exhausted",
+        V21LimitingBound::Requests => "requests",
+        V21LimitingBound::Bytes => "bytes",
+        V21LimitingBound::Amplification => "amplification",
+        V21LimitingBound::FirstBundle => "first_bundle",
+    }
+}
+
+fn validate_v21_feasibility_reports(
+    query_source_indices: &[usize],
+    reports: &[V21FeasibilityReport],
+) -> io::Result<()> {
+    let expected_arms = v21_feasibility_arms();
+    if reports.len() != expected_arms.len() || query_source_indices.is_empty() {
+        return Err(invalid_input(
+            "V21 feasibility evidence has incomplete arm or query authority",
+        ));
+    }
+    let expected_root_bytes = reports[0].replaced_v20_root_bytes;
+    let expected_root_checksum = &reports[0].v20_root_checksum;
+    for (arm_index, (report, expected_arm)) in reports.iter().zip(expected_arms).enumerate() {
+        if report.arm != expected_arm
+            || report.samples.len() != query_source_indices.len()
+            || report.bundle_count == 0
+            || report.region_count == 0
+            || report.rows == 0
+            || report.projected_directory_bytes == 0
+            || report.replaced_v20_root_bytes != expected_root_bytes
+            || report.replaced_v20_root_bytes == 0
+            || report.v20_root_checksum != *expected_root_checksum
+            || report.v20_root_checksum.len() != 64
+            || !report
+                .v20_root_checksum
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || report.selector_within_frozen_cap != (report.projected_directory_bytes <= 40_000_000)
+        {
+            return Err(invalid_input("V21 feasibility arm authority drifted"));
+        }
+        for (query_index, sample) in report.samples.iter().enumerate() {
+            if sample.arm_index != arm_index
+                || sample.query_index != query_index
+                || sample.routed_cells == 0
+                || u64::from(sample.selected_rows) > report.rows
+                || sample.selected_bundles > report.bundle_count
+                || sample.primary_requests > sample.maximum_actual_requests
+                || sample.selected_bytes > sample.physical_bytes
+                || sample.gt_hits > RECALL_K
+                || sample.recall_hits > RECALL_K
+            {
+                return Err(invalid_input("V21 feasibility sample authority drifted"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn build_v21_feasibility_summary(
+    identity: &V21EvidenceIdentity<'_>,
+    reports: &[V21FeasibilityReport],
+) -> io::Result<V21FeasibilitySummary> {
+    validate_v21_feasibility_reports(identity.query_source_indices, reports)?;
+    validate_v21_evidence_identity_fields(
+        identity.source_archive_sha256,
+        identity.index_id,
+        identity.dataset_id,
+    )?;
+    if identity.dataset_name.is_empty()
+        || identity.dimensions == 0
+        || identity.dataset_rows == 0
+        || identity.baseline_rss_bytes == 0
+        || identity
+            .query_source_indices
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != identity.query_source_indices.len()
+        || reports
+            .iter()
+            .any(|report| report.rows != identity.dataset_rows)
+    {
+        return Err(invalid_input(
+            "V21 feasibility evidence identity is invalid",
+        ));
+    }
+    let row_bytes = u64::try_from(identity.dimensions)
+        .ok()
+        .and_then(|dimensions| dimensions.checked_mul(4))
+        .and_then(|bytes| bytes.checked_add(128))
+        .ok_or_else(|| invalid_input("V21 feasibility decoded-row bytes overflow"))?;
+    let mut arms = Vec::with_capacity(reports.len());
+    for (arm_index, report) in reports.iter().enumerate() {
+        let denominator = (report.samples.len() * RECALL_K) as f64;
+        let gt_coverage = report
+            .samples
+            .iter()
+            .map(|sample| sample.gt_hits)
+            .sum::<usize>() as f64
+            / denominator;
+        let recall_at_10 = report
+            .samples
+            .iter()
+            .map(|sample| sample.recall_hits)
+            .sum::<usize>() as f64
+            / denominator;
+        let maximum_actual_requests = report
+            .samples
+            .iter()
+            .map(|sample| sample.maximum_actual_requests)
+            .max()
+            .unwrap_or(0);
+        let maximum_physical_bytes = report
+            .samples
+            .iter()
+            .map(|sample| sample.physical_bytes)
+            .max()
+            .unwrap_or(0);
+        let projected_query_transient_bytes = report
+            .samples
+            .iter()
+            .map(|sample| {
+                u64::from(sample.selected_rows)
+                    .checked_mul(row_bytes)
+                    .and_then(|decoded| decoded.checked_add(sample.physical_bytes))
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| invalid_input("V21 feasibility query-transient bytes overflow"))?
+            .into_iter()
+            .max()
+            .unwrap_or(0);
+        let projected_peak_rss_bytes = projected_v21_serving_rss(
+            identity.baseline_rss_bytes,
+            report.replaced_v20_root_bytes,
+            report.projected_directory_bytes,
+            projected_query_transient_bytes,
+        )
+        .ok_or_else(|| invalid_input("V21 feasibility projected RSS overflows or underflows"))?;
+        let eligible = report.selector_within_frozen_cap
+            && projected_peak_rss_bytes <= 768 * 1024 * 1024
+            && gt_coverage >= 0.990
+            && recall_at_10 >= 0.975
+            && maximum_actual_requests <= 4
+            && maximum_physical_bytes <= 1_048_576;
+        arms.push(V21FeasibilityArmSummary {
+            arm_index,
+            bundle_row_limit: report.arm.bundle_row_limit,
+            selector_span: report.arm.selector_span,
+            hedge_delay_ms: report.arm.hedge_delay_ms,
+            bundle_count: report.bundle_count,
+            region_count: report.region_count,
+            projected_directory_bytes: report.projected_directory_bytes,
+            replaced_v20_root_bytes: report.replaced_v20_root_bytes,
+            selector_within_frozen_cap: report.selector_within_frozen_cap,
+            rows: report.rows,
+            gt_coverage,
+            recall_at_10,
+            maximum_actual_requests,
+            maximum_physical_bytes,
+            projected_query_transient_bytes,
+            projected_peak_rss_bytes,
+            eligible,
+        });
+    }
+    let minimum_arm_gt_coverage = arms
+        .iter()
+        .map(|arm| arm.gt_coverage)
+        .min_by(f64::total_cmp)
+        .ok_or_else(|| invalid_input("V21 feasibility evidence contains no arms"))?;
+    let minimum_arm_recall_at_10 = arms
+        .iter()
+        .map(|arm| arm.recall_at_10)
+        .min_by(f64::total_cmp)
+        .ok_or_else(|| invalid_input("V21 feasibility evidence contains no arms"))?;
+    let maximum_actual_requests = arms
+        .iter()
+        .map(|arm| arm.maximum_actual_requests)
+        .max()
+        .unwrap_or(0);
+    let maximum_physical_bytes = arms
+        .iter()
+        .map(|arm| arm.maximum_physical_bytes)
+        .max()
+        .unwrap_or(0);
+    let eligible_arm_indexes = arms
+        .iter()
+        .filter_map(|arm| arm.eligible.then_some(arm.arm_index))
+        .collect();
+    Ok(V21FeasibilitySummary {
+        schema: V21_FEASIBILITY_SCHEMA.to_string(),
+        claim_eligible: false,
+        dataset_name: identity.dataset_name.to_string(),
+        dataset_id: identity.dataset_id.to_string(),
+        index_id: identity.index_id.to_string(),
+        source_archive_sha256: identity.source_archive_sha256.to_string(),
+        v20_root_checksum: reports[0].v20_root_checksum.clone(),
+        dataset_rows: identity.dataset_rows,
+        dimensions: identity.dimensions,
+        query_seed: identity.query_seed,
+        query_source_indices: identity.query_source_indices.to_vec(),
+        arm_count: reports.len(),
+        sample_count: reports.iter().map(|report| report.samples.len()).sum(),
+        baseline_rss_bytes: identity.baseline_rss_bytes,
+        minimum_arm_gt_coverage,
+        minimum_arm_recall_at_10,
+        maximum_actual_requests,
+        maximum_physical_bytes,
+        eligible_arm_indexes,
+        arms,
+    })
+}
+
+fn write_v21_feasibility_evidence(
+    output_dir: &Path,
+    identity: &V21EvidenceIdentity<'_>,
+    reports: &[V21FeasibilityReport],
+) -> BenchResult<()> {
+    let destinations = v21_feasibility_destinations(output_dir);
+    reject_existing_destinations(&destinations)?;
+    let summary = build_v21_feasibility_summary(identity, reports)?;
+    let payloads = serialize_v21_feasibility_evidence(identity, reports, &summary)?;
+    validate_serialized_v21_feasibility_evidence(identity, reports, &payloads)?;
+    publish_exclusive_file_set(output_dir, &destinations, &payloads)?;
+    Ok(())
+}
+
+fn serialize_v21_feasibility_evidence(
+    identity: &V21EvidenceIdentity<'_>,
+    reports: &[V21FeasibilityReport],
+    summary: &V21FeasibilitySummary,
+) -> io::Result<[Vec<u8>; 3]> {
+    use std::fmt::Write as _;
+
+    let mut arms = format!("{V21_FEASIBILITY_ARMS_HEADER}\n");
+    let mut samples = format!("{V21_FEASIBILITY_SAMPLES_HEADER}\n");
+    for (arm_index, report) in reports.iter().enumerate() {
+        let arm_summary = summary
+            .arms
+            .get(arm_index)
+            .ok_or_else(|| invalid_input("V21 feasibility summary arm is absent"))?;
+        writeln!(
+            arms,
+            "{V21_FEASIBILITY_SCHEMA},{arm_index},{},{},{},{},{},{},{},{},{},{},{},{:.17},{:.17},{},{},{},{},{}",
+            report.arm.bundle_row_limit,
+            report.arm.selector_span,
+            report
+                .arm
+                .hedge_delay_ms
+                .map_or_else(|| "off".to_string(), |delay| delay.to_string()),
+            report.bundle_count,
+            report.region_count,
+            report.projected_directory_bytes,
+            report.replaced_v20_root_bytes,
+            report.v20_root_checksum,
+            identity.baseline_rss_bytes,
+            arm_summary.projected_query_transient_bytes,
+            arm_summary.projected_peak_rss_bytes,
+            arm_summary.gt_coverage,
+            arm_summary.recall_at_10,
+            arm_summary.maximum_actual_requests,
+            arm_summary.maximum_physical_bytes,
+            report.selector_within_frozen_cap,
+            arm_summary.eligible,
+            report.rows,
+        )
+        .map_err(|_| invalid_input("V21 feasibility arm serialization failed"))?;
+        for sample in &report.samples {
+            writeln!(
+                samples,
+                "{V21_FEASIBILITY_SCHEMA},{arm_index},{},{},{},{},{},{},{},{},{},{},{},{}",
+                sample.query_index,
+                identity.query_source_indices[sample.query_index],
+                sample.routed_cells,
+                sample.selected_rows,
+                sample.selected_bundles,
+                sample.primary_requests,
+                sample.maximum_actual_requests,
+                sample.selected_bytes,
+                sample.physical_bytes,
+                sample.gt_hits,
+                sample.recall_hits,
+                v21_limiting_bound(sample.limiting_bound),
+            )
+            .map_err(|_| invalid_input("V21 feasibility sample serialization failed"))?;
+        }
+    }
+    let mut summary_bytes = serde_json::to_vec(&summary)?;
+    summary_bytes.push(b'\n');
+    Ok([arms.into_bytes(), samples.into_bytes(), summary_bytes])
+}
+
+fn validate_serialized_v21_feasibility_evidence(
+    identity: &V21EvidenceIdentity<'_>,
+    reports: &[V21FeasibilityReport],
+    payloads: &[Vec<u8>; 3],
+) -> io::Result<()> {
+    let reparsed: V21FeasibilitySummary = serde_json::from_slice(&payloads[2])?;
+    let recomputed = build_v21_feasibility_summary(identity, reports)?;
+    if reparsed != recomputed {
+        return Err(invalid_input(
+            "V21 feasibility summary failed recomputation",
+        ));
+    }
+    let expected = serialize_v21_feasibility_evidence(identity, reports, &recomputed)?;
+    if payloads != &expected {
+        return Err(invalid_input(
+            "V21 feasibility CSV evidence failed canonical recomputation",
+        ));
+    }
+    validate_v21_samples_csv(identity, reports, &reparsed, &payloads[1])?;
+    validate_v21_arms_csv(identity, reports, &reparsed, &payloads[0])?;
+    let arm_rows = payloads[0].split(|byte| *byte == b'\n').count() - 1;
+    let sample_rows = payloads[1].split(|byte| *byte == b'\n').count() - 1;
+    if arm_rows != reports.len() + 1 || sample_rows != recomputed.sample_count + 1 {
+        return Err(invalid_input("V21 feasibility artifact row count drifted"));
+    }
+    Ok(())
+}
+
+fn validate_v21_arms_csv(
+    identity: &V21EvidenceIdentity<'_>,
+    reports: &[V21FeasibilityReport],
+    summary: &V21FeasibilitySummary,
+    bytes: &[u8],
+) -> io::Result<()> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| invalid_input("V21 feasibility arms are not UTF-8"))?;
+    let mut lines = text.lines();
+    if lines.next() != Some(V21_FEASIBILITY_ARMS_HEADER) {
+        return Err(invalid_input("V21 feasibility arm header drifted"));
+    }
+    let parse_bool = |field: &str| match field {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(invalid_input("V21 feasibility boolean is invalid")),
+    };
+    let parse_usize = |field: &str| {
+        field
+            .parse::<usize>()
+            .map_err(|_| invalid_input("V21 feasibility arm integer is invalid"))
+    };
+    let parse_u64 = |field: &str| {
+        field
+            .parse::<u64>()
+            .map_err(|_| invalid_input("V21 feasibility arm integer is invalid"))
+    };
+    let parse_f64 = |field: &str| {
+        field
+            .parse::<f64>()
+            .map_err(|_| invalid_input("V21 feasibility arm float is invalid"))
+    };
+    let mut rows = 0_usize;
+    for (ordinal, line) in lines.enumerate() {
+        let fields = line.split(',').collect::<Vec<_>>();
+        if fields.len() != 20 || fields[0] != V21_FEASIBILITY_SCHEMA || ordinal >= reports.len() {
+            return Err(invalid_input("V21 feasibility arm row shape drifted"));
+        }
+        let report = &reports[ordinal];
+        let arm = &summary.arms[ordinal];
+        let hedge_delay_ms = match fields[4] {
+            "off" => None,
+            value => Some(
+                value
+                    .parse::<u16>()
+                    .map_err(|_| invalid_input("V21 feasibility hedge delay is invalid"))?,
+            ),
+        };
+        if parse_usize(fields[1])? != ordinal
+            || fields[2].parse::<u16>().ok() != Some(arm.bundle_row_limit)
+            || fields[3].parse::<u16>().ok() != Some(arm.selector_span)
+            || hedge_delay_ms != arm.hedge_delay_ms
+            || parse_usize(fields[5])? != arm.bundle_count
+            || parse_usize(fields[6])? != arm.region_count
+            || parse_u64(fields[7])? != arm.projected_directory_bytes
+            || parse_u64(fields[8])? != arm.replaced_v20_root_bytes
+            || fields[9] != summary.v20_root_checksum
+            || parse_u64(fields[10])? != identity.baseline_rss_bytes
+            || parse_u64(fields[11])? != arm.projected_query_transient_bytes
+            || parse_u64(fields[12])? != arm.projected_peak_rss_bytes
+            || parse_f64(fields[13])? != arm.gt_coverage
+            || parse_f64(fields[14])? != arm.recall_at_10
+            || parse_usize(fields[15])? != arm.maximum_actual_requests
+            || parse_u64(fields[16])? != arm.maximum_physical_bytes
+            || parse_bool(fields[17])? != arm.selector_within_frozen_cap
+            || parse_bool(fields[18])? != arm.eligible
+            || parse_u64(fields[19])? != arm.rows
+            || report.arm.bundle_row_limit != arm.bundle_row_limit
+            || report.arm.selector_span != arm.selector_span
+            || report.arm.hedge_delay_ms != arm.hedge_delay_ms
+        {
+            return Err(invalid_input(
+                "V21 feasibility arm fields failed recomputation",
+            ));
+        }
+        rows += 1;
+    }
+    if rows != reports.len() {
+        return Err(invalid_input("V21 feasibility arm rows are incomplete"));
+    }
+    Ok(())
+}
+
+fn validate_v21_samples_csv(
+    identity: &V21EvidenceIdentity<'_>,
+    reports: &[V21FeasibilityReport],
+    summary: &V21FeasibilitySummary,
+    bytes: &[u8],
+) -> io::Result<()> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| invalid_input("V21 feasibility samples are not UTF-8"))?;
+    let mut lines = text.lines();
+    if lines.next() != Some(V21_FEASIBILITY_SAMPLES_HEADER) {
+        return Err(invalid_input("V21 feasibility sample header drifted"));
+    }
+    let query_count = identity.query_source_indices.len();
+    let row_bytes = u64::try_from(identity.dimensions)
+        .ok()
+        .and_then(|dimensions| dimensions.checked_mul(4))
+        .and_then(|bytes| bytes.checked_add(128))
+        .ok_or_else(|| invalid_input("V21 feasibility decoded-row bytes overflow"))?;
+    let mut counts = vec![0_usize; reports.len()];
+    let mut gt_hits = vec![0_usize; reports.len()];
+    let mut recall_hits = vec![0_usize; reports.len()];
+    let mut maximum_requests = vec![0_usize; reports.len()];
+    let mut maximum_physical = vec![0_u64; reports.len()];
+    let mut maximum_transient = vec![0_u64; reports.len()];
+    for (ordinal, line) in lines.enumerate() {
+        let fields = line.split(',').collect::<Vec<_>>();
+        if fields.len() != 14 || fields[0] != V21_FEASIBILITY_SCHEMA {
+            return Err(invalid_input("V21 feasibility sample row shape drifted"));
+        }
+        let parse_usize = |field: &str| {
+            field
+                .parse::<usize>()
+                .map_err(|_| invalid_input("V21 feasibility sample integer is invalid"))
+        };
+        let parse_u64 = |field: &str| {
+            field
+                .parse::<u64>()
+                .map_err(|_| invalid_input("V21 feasibility sample integer is invalid"))
+        };
+        let arm_index = parse_usize(fields[1])?;
+        let query_index = parse_usize(fields[2])?;
+        if arm_index != ordinal / query_count
+            || query_index != ordinal % query_count
+            || arm_index >= reports.len()
+            || parse_usize(fields[3])? != identity.query_source_indices[query_index]
+        {
+            return Err(invalid_input("V21 feasibility sample ordering drifted"));
+        }
+        let selected_rows = parse_u64(fields[5])?;
+        let physical_bytes = parse_u64(fields[10])?;
+        let expected_sample = &reports[arm_index].samples[query_index];
+        if parse_usize(fields[4])? != expected_sample.routed_cells
+            || selected_rows != u64::from(expected_sample.selected_rows)
+            || parse_usize(fields[6])? != expected_sample.selected_bundles
+            || parse_usize(fields[7])? != expected_sample.primary_requests
+            || parse_usize(fields[8])? != expected_sample.maximum_actual_requests
+            || parse_u64(fields[9])? != expected_sample.selected_bytes
+            || physical_bytes != expected_sample.physical_bytes
+            || parse_usize(fields[11])? != expected_sample.gt_hits
+            || parse_usize(fields[12])? != expected_sample.recall_hits
+            || fields[13] != v21_limiting_bound(expected_sample.limiting_bound)
+        {
+            return Err(invalid_input(
+                "V21 feasibility sample fields failed recomputation",
+            ));
+        }
+        let transient = selected_rows
+            .checked_mul(row_bytes)
+            .and_then(|decoded| decoded.checked_add(physical_bytes))
+            .ok_or_else(|| invalid_input("V21 feasibility sample memory overflows"))?;
+        counts[arm_index] += 1;
+        gt_hits[arm_index] = gt_hits[arm_index]
+            .checked_add(parse_usize(fields[11])?)
+            .ok_or_else(|| invalid_input("V21 feasibility GT hits overflow"))?;
+        recall_hits[arm_index] = recall_hits[arm_index]
+            .checked_add(parse_usize(fields[12])?)
+            .ok_or_else(|| invalid_input("V21 feasibility recall hits overflow"))?;
+        maximum_requests[arm_index] = maximum_requests[arm_index].max(parse_usize(fields[8])?);
+        maximum_physical[arm_index] = maximum_physical[arm_index].max(physical_bytes);
+        maximum_transient[arm_index] = maximum_transient[arm_index].max(transient);
+    }
+    for (arm_index, arm_summary) in summary.arms.iter().enumerate() {
+        let denominator = (query_count * RECALL_K) as f64;
+        if counts[arm_index] != query_count
+            || arm_summary.gt_coverage != gt_hits[arm_index] as f64 / denominator
+            || arm_summary.recall_at_10 != recall_hits[arm_index] as f64 / denominator
+            || arm_summary.maximum_actual_requests != maximum_requests[arm_index]
+            || arm_summary.maximum_physical_bytes != maximum_physical[arm_index]
+            || arm_summary.projected_query_transient_bytes != maximum_transient[arm_index]
+        {
+            return Err(invalid_input(
+                "V21 feasibility sample aggregates failed recomputation",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn publish_exclusive_file_set(
+    output_dir: &Path,
+    destinations: &[PathBuf; 3],
+    payloads: &[Vec<u8>; 3],
+) -> io::Result<()> {
+    fs::create_dir_all(output_dir)?;
+    reject_existing_destinations(destinations)?;
+    let temporary = destinations
+        .iter()
+        .map(|path| {
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    invalid_input("V21 feasibility destination has no UTF-8 filename")
+                })?;
+            Ok(path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id())))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    let cleanup_temporary = || {
+        for path in &temporary {
+            let _ = fs::remove_file(path);
+        }
+    };
+    for (path, bytes) in temporary.iter().zip(payloads) {
+        let result = (|| {
+            let mut file = File::options().create_new(true).write(true).open(path)?;
+            file.write_all(bytes)?;
+            file.sync_all()
+        })();
+        if let Err(error) = result {
+            cleanup_temporary();
+            return Err(error);
+        }
+    }
+    let reloaded = match temporary
+        .iter()
+        .map(fs::read)
+        .collect::<io::Result<Vec<_>>>()
+    {
+        Ok(reloaded) => reloaded,
+        Err(error) => {
+            cleanup_temporary();
+            return Err(error);
+        }
+    };
+    if reloaded.as_slice() != payloads {
+        cleanup_temporary();
+        return Err(invalid_input(
+            "V21 feasibility temporary evidence changed before publication",
+        ));
+    }
+    let mut linked = Vec::new();
+    for (temporary, destination) in temporary.iter().zip(destinations) {
+        if let Err(error) = fs::hard_link(temporary, destination) {
+            for path in linked {
+                let _ = fs::remove_file(path);
+            }
+            cleanup_temporary();
+            return Err(error);
+        }
+        linked.push(destination);
+    }
+    cleanup_temporary();
+    File::open(output_dir)?.sync_all()?;
     Ok(())
 }
 
@@ -6185,9 +7098,11 @@ mod tests {
         LifecycleInsertMode, LifecycleQueryProgress, MUTATION_QUERY_HEADER,
         MUTATION_QUERY_SAMPLE_HEADER, OpenOptions, PreparedRecordBatch, QUERY_SAMPLE_HEADER,
         QuerySample, QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES,
-        ServingMetadataPreparation, ServingMode, VectorMetric, VectorRecord, WRITE_COST_HEADER,
-        WRITE_SAMPLE_HEADER, allow_missing_corpus_for_phase, approximate_options,
-        benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
+        ServingMetadataPreparation, ServingMode, V21EvidenceIdentity, V21FeasibilityPhaseSelection,
+        V21FeasibilityQuerySample, V21FeasibilityReport, V21FeasibilitySummary, V21LimitingBound,
+        VectorMetric, VectorRecord, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
+        allow_missing_corpus_for_phase, approximate_options, benchmark_row_ids,
+        build_v21_feasibility_summary, cache_coverage_cohort_size, cache_coverage_enabled,
         cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
         default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
         disk_cached_concurrency_cohort_size, disk_cached_query_cohort_size,
@@ -6203,21 +7118,295 @@ mod tests {
         parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
         parse_lifecycle_insert_mode, parse_optional_byte_cap, parse_positive_list,
         parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
-        query_sample_cache_cohort_size, query_scoped_physical_bytes_read,
-        read_logical_cell_catalog, recall_cache_profile_needs_outer_handle,
-        recall_preloads_local_snapshot, reopen_build_finalizer, reset_cache,
-        rotated_workload_index, sample_mean, sample_stddev, serving_cache_dir,
-        serving_memory_partition, shared_serving_metadata_preparation, update_vector_reservoir,
-        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        projected_v21_serving_rss, query_sample_cache_cohort_size,
+        query_scoped_physical_bytes_read, read_logical_cell_catalog,
+        recall_cache_profile_needs_outer_handle, recall_preloads_local_snapshot,
+        reopen_build_finalizer, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
+        serialize_v21_feasibility_evidence, serving_cache_dir, serving_memory_partition,
+        shared_serving_metadata_preparation, update_vector_reservoir,
+        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase, v21_feasibility_arms,
         validate_bounded_v20_execution, validate_build_only, validate_build_writers,
         validate_disk_cached_network, validate_exact_read_max_physical_amplification,
         validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
         validate_lifecycle_only, validate_lifecycle_writers,
         validate_max_parallel_decode_rank_tasks, validate_phase_selection,
-        validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
-        vector_row, verification_offsets, write_batch_len, write_operation_count,
-        write_runtime_flow_control_receipt,
+        validate_serialized_v21_feasibility_evidence, validate_v12_candidate_budgets,
+        validate_v12_leaf_mode, validate_v12_leaf_page_budgets, validate_v21_feasibility_phase,
+        validate_v21_feasibility_reports, vector_row, verification_offsets, write_batch_len,
+        write_operation_count, write_runtime_flow_control_receipt, write_v21_feasibility_evidence,
     };
+    use std::fs;
+
+    #[test]
+    fn v21_feasibility_matrix_is_exact_and_canonical() {
+        let observed = v21_feasibility_arms()
+            .into_iter()
+            .map(|arm| (arm.bundle_row_limit, arm.selector_span, arm.hedge_delay_ms))
+            .collect::<Vec<_>>();
+        let expected = [128_u16, 256]
+            .into_iter()
+            .flat_map(|bundle| {
+                [32_u16, 64].into_iter().flat_map(move |span| {
+                    [None, Some(20_u16), Some(35_u16)]
+                        .into_iter()
+                        .map(move |hedge| (bundle, span, hedge))
+                })
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(observed, expected);
+        assert_eq!(observed.len(), 12);
+    }
+
+    #[test]
+    fn v21_feasibility_phase_rejects_every_ordinary_or_ambient_mode() {
+        let valid = V21FeasibilityPhaseSelection {
+            build_index: false,
+            skip_recall: true,
+            read_only: true,
+            ..V21FeasibilityPhaseSelection::default()
+        };
+        validate_v21_feasibility_phase(true, valid).unwrap();
+
+        for invalid in [
+            V21FeasibilityPhaseSelection {
+                build_index: true,
+                ..valid
+            },
+            V21FeasibilityPhaseSelection {
+                build_only: true,
+                ..valid
+            },
+            V21FeasibilityPhaseSelection {
+                recall_only: true,
+                ..valid
+            },
+            V21FeasibilityPhaseSelection {
+                skip_recall: false,
+                ..valid
+            },
+            V21FeasibilityPhaseSelection {
+                read_only: false,
+                ..valid
+            },
+            V21FeasibilityPhaseSelection {
+                insert_only: true,
+                ..valid
+            },
+            V21FeasibilityPhaseSelection {
+                lifecycle_only: true,
+                ..valid
+            },
+            V21FeasibilityPhaseSelection {
+                ambient_nprobes: true,
+                ..valid
+            },
+            V21FeasibilityPhaseSelection {
+                ambient_candidates: true,
+                ..valid
+            },
+            V21FeasibilityPhaseSelection {
+                ambient_concurrency: true,
+                ..valid
+            },
+            V21FeasibilityPhaseSelection {
+                ambient_writes: true,
+                ..valid
+            },
+            V21FeasibilityPhaseSelection {
+                ambient_limit: true,
+                ..valid
+            },
+        ] {
+            assert!(validate_v21_feasibility_phase(true, invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn v21_feasibility_evidence_is_canonical_self_validating_and_no_clobber() {
+        let output = tempfile::tempdir().unwrap();
+        let query_source_indices = (0..40).collect::<Vec<_>>();
+        let source_archive_sha256 = "a".repeat(64);
+        let mut identity = V21EvidenceIdentity {
+            dataset_name: "deep-image-10m",
+            dataset_id: "deep-image-10m",
+            index_id: "index-abc",
+            source_archive_sha256: &source_archive_sha256,
+            dimensions: 96,
+            dataset_rows: 100,
+            query_seed: 23_001,
+            query_source_indices: &query_source_indices,
+            baseline_rss_bytes: 700_000_000,
+        };
+        let reports = v21_feasibility_arms()
+            .into_iter()
+            .enumerate()
+            .map(|(arm_index, arm)| V21FeasibilityReport {
+                arm,
+                bundle_count: 3,
+                region_count: 5,
+                projected_directory_bytes: 1_000 + arm_index as u64,
+                replaced_v20_root_bytes: 100_000_000,
+                v20_root_checksum: "b".repeat(64),
+                selector_within_frozen_cap: true,
+                rows: 100,
+                samples: (0..40)
+                    .map(|query_index| V21FeasibilityQuerySample {
+                        arm_index,
+                        query_index,
+                        routed_cells: 4,
+                        selected_rows: 100,
+                        selected_bundles: 3,
+                        primary_requests: 2,
+                        maximum_actual_requests: 3,
+                        selected_bytes: 4_096,
+                        physical_bytes: 8_192,
+                        gt_hits: if query_index == 0 { 9 } else { 10 },
+                        recall_hits: if query_index == 0 { 9 } else { 10 },
+                        limiting_bound: V21LimitingBound::Exhausted,
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+
+        write_v21_feasibility_evidence(output.path(), &identity, &reports).unwrap();
+
+        for name in [
+            "bench_v21_feasibility_arms.csv",
+            "bench_v21_feasibility_samples.csv",
+            "bench_v21_feasibility_summary.json",
+        ] {
+            assert!(output.path().join(name).is_file(), "missing {name}");
+        }
+        assert!(
+            write_v21_feasibility_evidence(output.path(), &identity, &reports).is_err(),
+            "evidence writer overwrote an immutable destination"
+        );
+
+        let mut reordered = reports.clone();
+        reordered.swap(0, 1);
+        assert!(validate_v21_feasibility_reports(&query_source_indices, &reordered).is_err());
+        let mut reordered_samples = reports.clone();
+        reordered_samples[0].samples.swap(0, 1);
+        assert!(
+            validate_v21_feasibility_reports(&query_source_indices, &reordered_samples).is_err()
+        );
+        let mut drifted_cap = reports.clone();
+        drifted_cap[0].selector_within_frozen_cap = false;
+        assert!(validate_v21_feasibility_reports(&query_source_indices, &drifted_cap).is_err());
+        let mut invalid_requests = reports.clone();
+        invalid_requests[0].samples[0].primary_requests = 4;
+        invalid_requests[0].samples[0].maximum_actual_requests = 3;
+        assert!(
+            validate_v21_feasibility_reports(&query_source_indices, &invalid_requests).is_err()
+        );
+        let mut invalid_hits = reports.clone();
+        invalid_hits[0].samples[0].gt_hits = 11;
+        assert!(validate_v21_feasibility_reports(&query_source_indices, &invalid_hits).is_err());
+
+        identity.dataset_rows = 99;
+        assert!(build_v21_feasibility_summary(&identity, &reports).is_err());
+        identity.dataset_rows = 100;
+
+        let summary: V21FeasibilitySummary = serde_json::from_slice(
+            &fs::read(output.path().join("bench_v21_feasibility_summary.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(summary.eligible_arm_indexes, (0..12).collect::<Vec<_>>());
+        assert_eq!(summary.arms[0].recall_at_10, 399.0 / 400.0);
+        assert_eq!(summary.dataset_rows, 100);
+        assert_eq!(summary.arms[0].bundle_row_limit, 128);
+        assert_eq!(summary.arms[0].selector_span, 32);
+        assert_eq!(summary.arms[0].hedge_delay_ms, None);
+        assert_eq!(summary.arms[0].projected_directory_bytes, 1_000);
+
+        let mut one_slow_arm = reports.clone();
+        one_slow_arm[0].samples[0].maximum_actual_requests = 5;
+        let one_slow_summary = build_v21_feasibility_summary(&identity, &one_slow_arm).unwrap();
+        assert!(!one_slow_summary.arms[0].eligible);
+        assert!(one_slow_summary.arms[1..].iter().all(|arm| arm.eligible));
+
+        let canonical_summary = build_v21_feasibility_summary(&identity, &reports).unwrap();
+        let payloads =
+            serialize_v21_feasibility_evidence(&identity, &reports, &canonical_summary).unwrap();
+        for payload_index in 0..3 {
+            let mut mutated = payloads.clone();
+            let byte_index = mutated[payload_index]
+                .iter()
+                .position(|byte| byte.is_ascii_digit())
+                .unwrap();
+            mutated[payload_index][byte_index] = b'9';
+            assert!(
+                validate_serialized_v21_feasibility_evidence(&identity, &reports, &mutated)
+                    .is_err(),
+                "artifact {payload_index} accepted mutated evidence"
+            );
+        }
+        let mut swapped_arm_columns = payloads.clone();
+        let arms_text = String::from_utf8(swapped_arm_columns[0].clone()).unwrap();
+        let mut arm_lines = arms_text.lines().map(str::to_string).collect::<Vec<_>>();
+        let mut fields = arm_lines[1]
+            .split(',')
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        fields.swap(11, 12);
+        arm_lines[1] = fields.join(",");
+        swapped_arm_columns[0] = format!("{}\n", arm_lines.join("\n")).into_bytes();
+        assert!(
+            validate_serialized_v21_feasibility_evidence(
+                &identity,
+                &reports,
+                &swapped_arm_columns,
+            )
+            .is_err()
+        );
+        let mut mutated_sample_field = payloads.clone();
+        let samples_text = String::from_utf8(mutated_sample_field[1].clone()).unwrap();
+        let mut sample_lines = samples_text.lines().map(str::to_string).collect::<Vec<_>>();
+        let mut fields = sample_lines[1]
+            .split(',')
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        fields[4] = "999".to_string();
+        sample_lines[1] = fields.join(",");
+        mutated_sample_field[1] = format!("{}\n", sample_lines.join("\n")).into_bytes();
+        assert!(
+            validate_serialized_v21_feasibility_evidence(
+                &identity,
+                &reports,
+                &mutated_sample_field,
+            )
+            .is_err()
+        );
+
+        let partial = tempfile::tempdir().unwrap();
+        fs::write(
+            partial.path().join("bench_v21_feasibility_samples.csv"),
+            b"occupied\n",
+        )
+        .unwrap();
+        assert!(write_v21_feasibility_evidence(partial.path(), &identity, &reports).is_err());
+        assert!(
+            !partial
+                .path()
+                .join("bench_v21_feasibility_arms.csv")
+                .exists()
+        );
+        assert!(
+            !partial
+                .path()
+                .join("bench_v21_feasibility_summary.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn v21_projected_rss_replaces_v20_root_instead_of_double_counting_it() {
+        assert_eq!(
+            projected_v21_serving_rss(700_000_000, 120_000_000, 35_000_000, 5_000_000),
+            Some(620_000_000)
+        );
+    }
 
     #[test]
     fn lifecycle_progress_line_is_bounded_and_machine_readable() {

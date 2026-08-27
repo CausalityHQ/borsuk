@@ -148,6 +148,10 @@ pub struct V21FeasibilityReport {
     pub region_count: usize,
     /// Allocated capacity of every production selector slab.
     pub projected_directory_bytes: u64,
+    /// Resident V20 root bytes replaced by the projected V21 selector.
+    pub replaced_v20_root_bytes: u64,
+    /// Authenticated V20 root generation projected by this arm.
+    pub v20_root_checksum: String,
     /// Whether the projected selector fits the frozen 40,000,000-byte gate.
     pub selector_within_frozen_cap: bool,
     /// Authenticated rows represented by the directory.
@@ -542,6 +546,29 @@ fn v21_read_totals(reads: &[V21FeasibilityRead]) -> Result<(u64, u64)> {
         })
 }
 
+fn v21_maximum_actual_physical_bytes(
+    reads: &[V21FeasibilityRead],
+    primary_physical_bytes: u64,
+    hedge_enabled: bool,
+) -> Result<u64> {
+    let hedge_bytes = if hedge_enabled {
+        reads
+            .iter()
+            .map(|read| read.range.end.saturating_sub(read.range.start))
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    primary_physical_bytes
+        .checked_add(hedge_bytes)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V21 feasibility hedged physical bytes overflow".to_string(),
+            )
+        })
+}
+
 pub(crate) fn plan_v21_feasibility_query(
     directory: &V21ProjectedDirectory,
     routed_cells: &[u32],
@@ -637,7 +664,12 @@ pub(crate) fn plan_v21_feasibility_query(
             };
             break;
         };
-        let (physical_bytes, selected_bytes) = v21_read_totals(&proposed)?;
+        let (primary_physical_bytes, selected_bytes) = v21_read_totals(&proposed)?;
+        let physical_bytes = v21_maximum_actual_physical_bytes(
+            &proposed,
+            primary_physical_bytes,
+            arm.hedge_delay_ms.is_some(),
+        )?;
         let rejected = if physical_bytes > 1_048_576
             || proposed
                 .iter()
@@ -667,7 +699,12 @@ pub(crate) fn plan_v21_feasibility_query(
             })?)
             .ok_or_else(|| BorsukError::InvalidStorage("V21 selected rows overflow".to_string()))?;
     }
-    let (physical_bytes, selected_bytes) = v21_read_totals(&accepted_reads)?;
+    let (primary_physical_bytes, selected_bytes) = v21_read_totals(&accepted_reads)?;
+    let physical_bytes = v21_maximum_actual_physical_bytes(
+        &accepted_reads,
+        primary_physical_bytes,
+        arm.hedge_delay_ms.is_some(),
+    )?;
     let maximum_actual_requests = accepted_reads.len().saturating_add(usize::from(
         arm.hedge_delay_ms.is_some() && !accepted_reads.is_empty(),
     ));
@@ -1494,7 +1531,7 @@ mod tests {
         assert_eq!(plan.selected_bundle_indexes, [0, 1, 2]);
         assert_eq!(plan.reads.len(), 3);
         assert_eq!(plan.selected_bytes, 30);
-        assert_eq!(plan.physical_bytes, 30);
+        assert_eq!(plan.physical_bytes, 40);
         assert_eq!(plan.limiting_bound, V21LimitingBound::Amplification);
     }
 
@@ -1523,6 +1560,34 @@ mod tests {
         assert_eq!(plan.reads.len(), 3);
         assert_eq!(plan.maximum_actual_requests, 4);
         assert_eq!(plan.limiting_bound, V21LimitingBound::Requests);
+    }
+
+    #[test]
+    fn v21_feasibility_hedge_reserves_duplicate_backing_bytes() {
+        let quantizer = planner_quantizer();
+        let directory = planner_directory(
+            &quantizer,
+            &[(1, 0, 300_000), (2, 0, 300_000), (3, 0, 300_000)],
+        );
+
+        let plan = plan_v21_feasibility_query(
+            &directory,
+            &[0],
+            &[0.0],
+            &quantizer,
+            V21FeasibilityArm {
+                bundle_row_limit: 256,
+                selector_span: 64,
+                hedge_delay_ms: Some(20),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(plan.selected_bundle_indexes, [0, 1]);
+        assert_eq!(plan.reads.len(), 2);
+        assert_eq!(plan.maximum_actual_requests, 3);
+        assert_eq!(plan.physical_bytes, 900_000);
+        assert_eq!(plan.limiting_bound, V21LimitingBound::Bytes);
     }
 
     #[test]

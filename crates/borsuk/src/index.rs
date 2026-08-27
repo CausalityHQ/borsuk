@@ -13371,6 +13371,8 @@ impl BorsukIndex {
                     )
                 })?,
                 projected_directory_bytes: directory.selector_capacity_bytes,
+                replaced_v20_root_bytes: root.resident_bytes() as u64,
+                v20_root_checksum: global_ref.root_checksum(),
                 selector_within_frozen_cap: directory.selector_capacity_bytes
                     <= V21_SELECTOR_MAX_CAPACITY_BYTES,
                 rows: directory.rows,
