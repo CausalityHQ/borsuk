@@ -60,13 +60,18 @@ is immutable, independently recomputed, and `claim_eligible:false`.
   histograms, plus projected-object path/length/checksum authority. Duplicate
   fetches are physical bytes. Budget-negative arms still emit their complete
   measured census and exact limiting bound.
-- [ ] Prove sizing equals the proposed encoder for singleton, skewed,
-  maximum-width, and compressed fixtures.
+- [x] Prove empty groups fail closed and sizing equals the production encoder
+  for singleton, skewed, 32-row-clamped, payload-cap-limited wide, and
+  zero-filled uncompressed fixtures.
 - [x] Run `rtk proxy cargo test -p borsuk v22_layout_oracle --lib -- --nocapture`.
 
 ### Task 3: Add the authenticated read-only Stage-L index census
 
 **Files:** `crates/borsuk/src/index.rs`, `crates/borsuk/src/v22_feasibility.rs`
+
+- [ ] Stream one bounded encoded group through census/publication and drop its
+  bytes before encoding the next group; never retain multiple layout/corpus
+  payloads in memory.
 
 - [ ] RED tiny instrumented-index test around a wished-for hidden Stage-L API;
   snapshot manifest bytes and object roster.

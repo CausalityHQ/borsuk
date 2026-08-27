@@ -150,8 +150,15 @@ measures the complete prefix under the registered amplification allowance and
 then classifies it as `eligible`, `bytes`, `requests`, or `amplification`;
 budget-negative arms therefore emit complete evidence instead of failing the
 42-arm run. Each projected unit binds its exact decoded row bytes independently
-of its authenticated encoded length. Compression may make packing purity exceed
-one, but cannot hide decoded-row under-sizing.
+of its authenticated encoded length. The current cell-card Arrow encoder is
+uncompressed, so Stage L must not claim savings from input compressibility;
+future compression would require a new authenticated encoder authority and may
+make packing purity exceed one, but still cannot hide decoded-row under-sizing.
+Projected ranges come only from the production Arrow encoder's authenticated
+exact-block references. A 64-row logical microcluster spans at least two 32-row
+physical blocks and may span more when the 96-KiB decoded-payload cap lowers the
+physical row count; Stage L measures those real offsets, lengths, object
+checksums, and object lengths rather than estimating a range from logical rows.
 
 A layout/prefix pair advances only if routing reaches at least `0.995` GT cell
 coverage with at most 512,000 routed rows for every query and every query's
@@ -274,8 +281,9 @@ Only after Stage L, G2, and D2 pass:
 4. Perfect-selector oracle ranges and bytes are independently hand-derived.
 5. Ranked-prefix planning never exceeds four GETs, 1 MiB, or 2x amplification
    and never lets unselected rows poison physical ranges.
-6. Exact serialized/sized payload bytes agree for empty, singleton, skewed,
-   maximum-width, and compressed data.
+6. Empty groups fail closed. Exact serialized/sized payload bytes agree for
+   singleton, skewed, 32-row-clamped, and payload-cap-limited wide data; a
+   zero-filled fixture proves the current encoder remains uncompressed.
 7. Malformed codes, rows, offsets, lengths, hashes, order, duplicates, and
    aggregate counts fail before unsafe allocation or scoring.
 8. One query owns one bounded wave; success, error, cancellation, and hedge

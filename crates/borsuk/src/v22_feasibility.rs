@@ -4,11 +4,13 @@ use std::{
 };
 
 use crate::{
-    BorsukError, Result,
+    BorsukError, Result, VectorElementType,
     global_cell_card::{
         CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION, CellCardExactBlockRef, CellCardGroupRef,
-        RankedCellCardExactBlock, plan_cell_card_exact_wave_with_amplification,
+        EncodedCellCardGroup, RankedCellCardExactBlock, encode_cell_card_group,
+        plan_cell_card_exact_wave_with_amplification,
     },
+    global_leaf::GlobalLeafPageInput,
 };
 
 const V22_EXACT_PREFIX_ROWS: [u16; 6] = [10, 256, 512, 1024, 1536, 2048];
@@ -544,6 +546,110 @@ pub(crate) struct V22ProjectedObjectAuthority {
     pub(crate) encoded_bytes: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V22EncodedRecordAuthority {
+    pub(crate) canonical_record_id: Box<[u8]>,
+    pub(crate) record_id: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct V22EncodedProjection {
+    pub(crate) encoded: EncodedCellCardGroup,
+    pub(crate) units: Vec<V22ProjectedUnit>,
+}
+
+pub(crate) fn project_v22_encoded_cell_card_group(
+    pages: &[GlobalLeafPageInput],
+    records_by_card: &[Box<[V22EncodedRecordAuthority]>],
+    dimensions: usize,
+    element_type: VectorElementType,
+    content_prefix: &str,
+) -> Result<V22EncodedProjection> {
+    let exact_row_bytes_usize = element_type.fixed_width_bytes(dimensions)?;
+    let exact_row_bytes = exact_row_bytes_usize as u64;
+    if exact_row_bytes == 0 || pages.len() != records_by_card.len() {
+        return Err(BorsukError::InvalidSearchOptions(
+            "V22 encoded group projection authority is empty or mismatched".to_string(),
+        ));
+    }
+    let encoded = encode_cell_card_group(pages, dimensions, element_type)?;
+    let path = encoded.content_addressed_path(content_prefix)?;
+    let (group, cards) = encoded.references(&path)?;
+    let mut canonical_record_ids = BTreeSet::new();
+    let mut numeric_record_ids = BTreeSet::new();
+    let mut projected = Vec::new();
+    for ((card, page), records) in cards.iter().zip(pages).zip(records_by_card) {
+        if records.is_empty()
+            || records.len() != card.head.rows as usize
+            || records.len() != page.rows.len()
+            || card.head.cell_index != page.cell_index
+            || card.head.card_ordinal != page.leaf_ordinal
+            || card.head.leaf_ordinal != page.leaf_ordinal
+            || page.rows.iter().zip(records).any(|(row, record)| {
+                row.id.as_bytes() != record.canonical_record_id.as_ref()
+                    || row.exact.len() != exact_row_bytes_usize
+                    || !canonical_record_ids.insert(record.canonical_record_id.as_ref())
+                    || !numeric_record_ids.insert(record.record_id)
+            })
+        {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V22 encoded card record authority is empty or mismatched".to_string(),
+            ));
+        }
+        let mut row_offset = 0_usize;
+        let mut previous_block_end = 0_u64;
+        for (block_index, block) in card.head.exact_blocks.iter().enumerate() {
+            if block.block_ordinal != block_index as u32 || block.offset < previous_block_end {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "V22 encoded blocks are not in canonical row order".to_string(),
+                ));
+            }
+            let block_rows = block.rows as usize;
+            let row_end = row_offset.checked_add(block_rows).ok_or_else(|| {
+                BorsukError::InvalidSearchOptions(
+                    "V22 encoded block row range overflows".to_string(),
+                )
+            })?;
+            let block_record_ids = records.get(row_offset..row_end).ok_or_else(|| {
+                BorsukError::InvalidSearchOptions(
+                    "V22 encoded blocks exceed record authority".to_string(),
+                )
+            })?;
+            let decoded_bytes = u64::try_from(block_rows)
+                .ok()
+                .and_then(|rows| rows.checked_mul(exact_row_bytes))
+                .ok_or_else(|| {
+                    BorsukError::InvalidSearchOptions(
+                        "V22 encoded block decoded bytes overflow".to_string(),
+                    )
+                })?;
+            projected.push(V22ProjectedUnit {
+                path: group.path.clone(),
+                object_checksum: group.checksum,
+                object_encoded_bytes: group.encoded_bytes,
+                offset: block.offset,
+                encoded_bytes: block.bytes,
+                decoded_bytes,
+                record_ids: block_record_ids
+                    .iter()
+                    .map(|record| record.record_id)
+                    .collect(),
+            });
+            previous_block_end = block.offset + u64::from(block.bytes);
+            row_offset = row_end;
+        }
+        if row_offset != records.len() {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V22 encoded blocks do not cover record authority".to_string(),
+            ));
+        }
+    }
+    Ok(V22EncodedProjection {
+        encoded,
+        units: projected,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum V22LayoutLimitingBound {
     Eligible,
@@ -806,10 +912,17 @@ pub(crate) fn v22_census_layout_prefix(
 #[cfg(test)]
 mod tests {
     use super::{
-        V22LayoutCensusArm, V22LayoutKind, V22LayoutLimitingBound, V22ProjectedUnit,
-        V22SemanticRow, nearest_neighbor_order, project_v22_semantic_layout,
+        V22EncodedRecordAuthority, V22LayoutCensusArm, V22LayoutKind, V22LayoutLimitingBound,
+        V22ProjectedUnit, V22SemanticRow, nearest_neighbor_order,
+        project_v22_encoded_cell_card_group, project_v22_semantic_layout,
         project_v22_two_pivot_layout, routing_coverage_at_probe, routing_rank,
         v22_census_layout_prefix, v22_layout_census_arms,
+    };
+    use crate::{
+        VectorElementType,
+        global_leaf::{GlobalLeafCodeInput, GlobalLeafPageInput, GlobalLeafRowInput},
+        mutation::{MutationStamp, MutationVersion},
+        record::RecordId,
     };
 
     #[test]
@@ -1075,6 +1188,229 @@ mod tests {
             geometry: vec![f32::NAN, 2.0].into(),
         }];
         assert!(project_v22_semantic_layout(&nonfinite, &[3], 32, false).is_err());
+    }
+
+    #[test]
+    fn v22_layout_oracle_derives_ranges_from_the_real_encoder() {
+        const DIMENSIONS: usize = 96;
+        const EXACT_ROW_BYTES: usize = DIMENSIONS * std::mem::size_of::<f32>();
+
+        assert!(
+            project_v22_encoded_cell_card_group(
+                &[],
+                &[],
+                DIMENSIONS,
+                VectorElementType::Float32,
+                "v22-stage-l/empty",
+            )
+            .is_err()
+        );
+
+        let mut next_record_id = 0_u64;
+        let mut make_page = |cell_index: u32, rows: usize, compressible: bool| {
+            let mut authority = Vec::with_capacity(rows);
+            let rows = (0..rows)
+                .map(|ordinal| {
+                    let record_id = next_record_id;
+                    next_record_id += 1;
+                    let canonical = format!("v22-{cell_index:02}-{ordinal:04}").into_bytes();
+                    authority.push(V22EncodedRecordAuthority {
+                        canonical_record_id: canonical.clone().into(),
+                        record_id,
+                    });
+                    let exact = if compressible {
+                        vec![0; EXACT_ROW_BYTES]
+                    } else {
+                        (0..EXACT_ROW_BYTES)
+                            .map(|byte| {
+                                let mixed = record_id
+                                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                                    .rotate_left((byte % 63) as u32)
+                                    ^ byte as u64;
+                                mixed as u8
+                            })
+                            .collect()
+                    };
+                    GlobalLeafRowInput {
+                        id: RecordId::from_bytes(canonical),
+                        stamp: MutationStamp::new(
+                            MutationVersion::from_parts(record_id + 1, [cell_index as u8; 16]),
+                            [record_id as u8; 32],
+                        ),
+                        code: GlobalLeafCodeInput::from(vec![cell_index as u8, ordinal as u8]),
+                        exact,
+                    }
+                })
+                .collect();
+            (
+                GlobalLeafPageInput {
+                    cell_index,
+                    leaf_ordinal: cell_index,
+                    centroid_code: vec![cell_index as u8, 0],
+                    rows,
+                },
+                authority.into_boxed_slice(),
+            )
+        };
+        let fixtures = [
+            make_page(0, 1, false),
+            make_page(1, 32, true),
+            make_page(2, 65, false),
+        ];
+        let pages = fixtures
+            .iter()
+            .map(|(page, _)| page.clone())
+            .collect::<Vec<_>>();
+        let authority = fixtures
+            .into_iter()
+            .map(|(_, authority)| authority)
+            .collect::<Vec<_>>();
+        let projection = project_v22_encoded_cell_card_group(
+            &pages,
+            &authority,
+            DIMENSIONS,
+            VectorElementType::Float32,
+            "v22-stage-l/layout",
+        )
+        .unwrap();
+        let encoded = &projection.encoded;
+        let expected_path = encoded
+            .content_addressed_path("v22-stage-l/layout")
+            .unwrap();
+        let (group, _) = encoded.references(&expected_path).unwrap();
+        let projected = &projection.units;
+
+        assert_eq!(projected.len(), 5);
+        assert_eq!(
+            projected
+                .iter()
+                .map(|unit| unit.record_ids.len())
+                .collect::<Vec<_>>(),
+            [1, 32, 32, 32, 1]
+        );
+        let expected_blocks = encoded
+            .cards
+            .iter()
+            .flat_map(|card| card.head.exact_blocks.iter())
+            .collect::<Vec<_>>();
+        for (unit, block) in projected.iter().zip(expected_blocks) {
+            assert_eq!(unit.object_checksum, group.checksum);
+            assert_eq!(unit.object_encoded_bytes, encoded.bytes.len() as u64);
+            assert_eq!(unit.offset, block.offset);
+            assert_eq!(unit.encoded_bytes, block.bytes);
+            assert_eq!(
+                unit.decoded_bytes,
+                u64::from(block.rows) * EXACT_ROW_BYTES as u64
+            );
+            assert!(unit.offset + u64::from(unit.encoded_bytes) <= unit.object_encoded_bytes);
+        }
+        assert_eq!(projected[0].path, expected_path);
+        assert_eq!(
+            projected[1].encoded_bytes, projected[2].encoded_bytes,
+            "the current uncompressed encoder must not claim a compressibility-dependent size"
+        );
+        let ranked = authority
+            .iter()
+            .flat_map(|card| card.iter().map(|record| record.record_id))
+            .collect::<Vec<_>>();
+        let census = v22_census_layout_prefix(
+            &projected,
+            &ranked,
+            EXACT_ROW_BYTES as u64,
+            encoded.bytes.len() as u64,
+            projected.len(),
+            5,
+        )
+        .unwrap();
+        assert!(census.eligible);
+        assert_eq!(census.selected_rows, 98);
+        assert_eq!(census.projected_objects.len(), 1);
+        assert_eq!(census.projected_objects[0].checksum, group.checksum);
+        assert_eq!(
+            census.projected_objects[0].encoded_bytes,
+            encoded.bytes.len() as u64
+        );
+
+        let mut mismatched_authority = authority.clone();
+        mismatched_authority[0][0].canonical_record_id = b"wrong-record".to_vec().into();
+        assert!(
+            project_v22_encoded_cell_card_group(
+                &pages,
+                &mismatched_authority,
+                DIMENSIONS,
+                VectorElementType::Float32,
+                "v22-stage-l/layout",
+            )
+            .is_err()
+        );
+        let mut duplicate_numeric_authority = authority.clone();
+        duplicate_numeric_authority[1][0].record_id = duplicate_numeric_authority[0][0].record_id;
+        assert!(
+            project_v22_encoded_cell_card_group(
+                &pages,
+                &duplicate_numeric_authority,
+                DIMENSIONS,
+                VectorElementType::Float32,
+                "v22-stage-l/layout",
+            )
+            .is_err()
+        );
+        let mut wrong_width_pages = pages.clone();
+        wrong_width_pages[0].rows[0].exact.pop();
+        assert!(
+            project_v22_encoded_cell_card_group(
+                &wrong_width_pages,
+                &authority,
+                DIMENSIONS,
+                VectorElementType::Float32,
+                "v22-stage-l/layout",
+            )
+            .is_err()
+        );
+
+        const WIDE_DIMENSIONS: usize = 1536;
+        const WIDE_ROW_BYTES: usize = WIDE_DIMENSIONS * std::mem::size_of::<f32>();
+        let wide_records = (0_u64..17)
+            .map(|record_id| V22EncodedRecordAuthority {
+                canonical_record_id: format!("wide-{record_id:04}").into_bytes().into(),
+                record_id,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let wide_page = GlobalLeafPageInput {
+            cell_index: 9,
+            leaf_ordinal: 4,
+            centroid_code: vec![9, 4],
+            rows: wide_records
+                .iter()
+                .map(|record| GlobalLeafRowInput {
+                    id: RecordId::from_bytes(record.canonical_record_id.to_vec()),
+                    stamp: MutationStamp::new(
+                        MutationVersion::from_parts(record.record_id + 1, [9; 16]),
+                        [record.record_id as u8; 32],
+                    ),
+                    code: GlobalLeafCodeInput::from(vec![9, record.record_id as u8]),
+                    exact: vec![record.record_id as u8; WIDE_ROW_BYTES],
+                })
+                .collect(),
+        };
+        let wide_projection = project_v22_encoded_cell_card_group(
+            &[wide_page],
+            &[wide_records],
+            WIDE_DIMENSIONS,
+            VectorElementType::Float32,
+            "v22-stage-l/wide",
+        )
+        .unwrap();
+        assert_eq!(
+            wide_projection
+                .units
+                .iter()
+                .map(|unit| unit.record_ids.len())
+                .collect::<Vec<_>>(),
+            [16, 1],
+            "the real encoder must apply its 96-KiB decoded payload cap below the 32-row clamp"
+        );
     }
 
     #[test]
