@@ -2,214 +2,168 @@ use std::collections::BTreeSet;
 
 use crate::{BorsukError, Result};
 
-const V22_ROUTING_PROBES: [u16; 6] = [32, 64, 128, 256, 512, 1024];
-const V22_MULTI_ASSIGNMENTS: [u8; 5] = [1, 2, 4, 8, 16];
-const V22_MICROCLUSTER_ROWS: [u8; 2] = [32, 64];
-const V22_CODE_BYTES: [u8; 4] = [4, 8, 12, 16];
-const V22_CANDIDATE_ROWS: [u16; 5] = [256, 512, 1024, 1536, 2048];
+const V22_EXACT_PREFIX_ROWS: [u16; 6] = [10, 256, 512, 1024, 1536, 2048];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct V22RoutingArm {
-    pub(crate) probes: u16,
-    pub(crate) multi_assignment: u8,
-}
-
-impl V22RoutingArm {
-    pub(crate) fn validate(self) -> Result<()> {
-        if !V22_ROUTING_PROBES.contains(&self.probes)
-            || !V22_MULTI_ASSIGNMENTS.contains(&self.multi_assignment)
-        {
-            return Err(BorsukError::InvalidSearchOptions(
-                "V22 routing arm is outside the frozen matrix".to_string(),
-            ));
-        }
-        Ok(())
-    }
+pub(crate) enum V22LayoutKind {
+    V20Physical,
+    V20TwoPivotRepacked,
+    SemanticWithinCell,
+    SemanticCrossCell,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct V22LayoutArm {
-    pub(crate) microcluster_rows: u8,
+pub(crate) struct V22LayoutCensusArm {
+    pub(crate) layout: V22LayoutKind,
+    pub(crate) microcluster_rows: Option<u8>,
+    pub(crate) exact_prefix_rows: u16,
 }
 
-impl V22LayoutArm {
+impl V22LayoutCensusArm {
     pub(crate) fn validate(self) -> Result<()> {
-        if !V22_MICROCLUSTER_ROWS.contains(&self.microcluster_rows) {
-            return Err(BorsukError::InvalidSearchOptions(
-                "V22 layout arm is outside the frozen matrix".to_string(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct V22RankerArm {
-    pub(crate) code_bytes: u8,
-    pub(crate) candidate_rows: u16,
-}
-
-impl V22RankerArm {
-    pub(crate) fn validate(self) -> Result<()> {
-        if !V22_CODE_BYTES.contains(&self.code_bytes)
-            || !V22_CANDIDATE_ROWS.contains(&self.candidate_rows)
-        {
-            return Err(BorsukError::InvalidSearchOptions(
-                "V22 ranker arm is outside the frozen matrix".to_string(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct V22FeasibilityArm {
-    pub(crate) routing: V22RoutingArm,
-    pub(crate) layout: V22LayoutArm,
-    pub(crate) ranker: V22RankerArm,
-}
-
-impl V22FeasibilityArm {
-    pub(crate) fn validate(self) -> Result<()> {
-        self.routing.validate()?;
-        self.layout.validate()?;
-        self.ranker.validate()
-    }
-
-    pub(crate) fn resident_code_bytes(self, rows: u64) -> Result<u64> {
-        self.validate()?;
-        rows.checked_mul(u64::from(self.ranker.code_bytes))
-            .ok_or_else(|| {
-                BorsukError::InvalidSearchOptions(
-                    "V22 resident code capacity overflows".to_string(),
+        let layout_is_valid = matches!(
+            (self.layout, self.microcluster_rows),
+            (V22LayoutKind::V20Physical, None)
+                | (
+                    V22LayoutKind::V20TwoPivotRepacked
+                        | V22LayoutKind::SemanticWithinCell
+                        | V22LayoutKind::SemanticCrossCell,
+                    Some(32 | 64)
                 )
-            })
+        );
+        if !layout_is_valid || !V22_EXACT_PREFIX_ROWS.contains(&self.exact_prefix_rows) {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V22 layout census arm is outside the frozen matrix".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
-pub(crate) fn v22_feasibility_arms() -> Result<Vec<V22FeasibilityArm>> {
-    let mut arms = Vec::with_capacity(
-        V22_ROUTING_PROBES.len()
-            * V22_MICROCLUSTER_ROWS.len()
-            * V22_CODE_BYTES.len()
-            * V22_CANDIDATE_ROWS.len(),
-    );
-    for probes in V22_ROUTING_PROBES {
-        for microcluster_rows in V22_MICROCLUSTER_ROWS {
-            for code_bytes in V22_CODE_BYTES {
-                for candidate_rows in V22_CANDIDATE_ROWS {
-                    let arm = V22FeasibilityArm {
-                        routing: V22RoutingArm {
-                            probes,
-                            multi_assignment: 1,
-                        },
-                        layout: V22LayoutArm { microcluster_rows },
-                        ranker: V22RankerArm {
-                            code_bytes,
-                            candidate_rows,
-                        },
-                    };
-                    arm.validate()?;
-                    arms.push(arm);
-                }
-            }
+pub(crate) fn v22_layout_census_arms() -> Result<Vec<V22LayoutCensusArm>> {
+    let mut arms = Vec::with_capacity(V22_EXACT_PREFIX_ROWS.len() * 7);
+    for (layout, microcluster_rows) in [
+        (V22LayoutKind::V20Physical, None),
+        (V22LayoutKind::V20TwoPivotRepacked, Some(32)),
+        (V22LayoutKind::V20TwoPivotRepacked, Some(64)),
+        (V22LayoutKind::SemanticWithinCell, Some(32)),
+        (V22LayoutKind::SemanticWithinCell, Some(64)),
+        (V22LayoutKind::SemanticCrossCell, Some(32)),
+        (V22LayoutKind::SemanticCrossCell, Some(64)),
+    ] {
+        for exact_prefix_rows in V22_EXACT_PREFIX_ROWS {
+            let arm = V22LayoutCensusArm {
+                layout,
+                microcluster_rows,
+                exact_prefix_rows,
+            };
+            arm.validate()?;
+            arms.push(arm);
         }
     }
     Ok(arms)
 }
 
-pub(crate) fn routing_gt_hits(selected_cells: &[u32], gt_primary_cells: &[u32]) -> Result<usize> {
-    if selected_cells.is_empty() || gt_primary_cells.is_empty() {
+pub(crate) fn routing_rank(ordered_cells: &[u32], primary_cell: u32) -> Result<usize> {
+    if ordered_cells.is_empty() {
         return Err(BorsukError::InvalidSearchOptions(
-            "V22 routing authority is empty".to_string(),
+            "V22 ordered routing authority is empty".to_string(),
         ));
     }
-    let selected = selected_cells.iter().copied().collect::<BTreeSet<_>>();
-    if selected.len() != selected_cells.len() {
+    let unique = ordered_cells.iter().copied().collect::<BTreeSet<_>>();
+    if unique.len() != ordered_cells.len() {
         return Err(BorsukError::InvalidSearchOptions(
-            "V22 selected routing authority contains duplicate cells".to_string(),
+            "V22 ordered routing authority contains duplicate cells".to_string(),
         ));
     }
-    Ok(gt_primary_cells
+    ordered_cells
         .iter()
-        .filter(|cell| selected.contains(cell))
-        .count())
+        .position(|cell| *cell == primary_cell)
+        .map(|rank| rank + 1)
+        .ok_or_else(|| {
+            BorsukError::InvalidSearchOptions(
+                "V22 primary cell is absent from ordered routing authority".to_string(),
+            )
+        })
+}
+
+pub(crate) fn routing_coverage_at_probe(
+    ranks: &[usize],
+    probes: usize,
+    routing_cell_count: usize,
+) -> Result<usize> {
+    if ranks.is_empty()
+        || routing_cell_count == 0
+        || probes == 0
+        || probes > routing_cell_count
+        || ranks
+            .iter()
+            .any(|rank| *rank == 0 || *rank > routing_cell_count)
+    {
+        return Err(BorsukError::InvalidSearchOptions(
+            "V22 routing-rank evidence is empty or invalid".to_string(),
+        ));
+    }
+    Ok(ranks.iter().filter(|rank| **rank <= probes).count())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{V22LayoutArm, V22RankerArm, V22RoutingArm, routing_gt_hits, v22_feasibility_arms};
+    use super::{
+        V22LayoutCensusArm, V22LayoutKind, routing_coverage_at_probe, routing_rank,
+        v22_layout_census_arms,
+    };
 
     #[test]
-    fn v22_authority_accepts_only_the_registered_factors() {
-        for probes in [32, 64, 128, 256, 512, 1024] {
-            V22RoutingArm {
-                probes,
-                multi_assignment: 1,
+    fn v22_layout_census_authority_is_exact_and_canonical() {
+        let arms = v22_layout_census_arms().unwrap();
+        assert_eq!(arms.len(), 42);
+        assert_eq!(
+            arms[0],
+            V22LayoutCensusArm {
+                layout: V22LayoutKind::V20Physical,
+                microcluster_rows: None,
+                exact_prefix_rows: 10,
             }
-            .validate()
-            .unwrap();
-        }
-        for multi_assignment in [1, 2, 4, 8, 16] {
-            V22RoutingArm {
-                probes: 128,
-                multi_assignment,
-            }
-            .validate()
-            .unwrap();
-        }
-        for microcluster_rows in [32, 64] {
-            V22LayoutArm { microcluster_rows }.validate().unwrap();
-        }
-        for code_bytes in [4, 8, 12, 16] {
-            for candidate_rows in [256, 512, 1024, 1536, 2048] {
-                V22RankerArm {
-                    code_bytes,
-                    candidate_rows,
-                }
-                .validate()
-                .unwrap();
-            }
+        );
+        assert_eq!(arms[5].exact_prefix_rows, 2048);
+        assert_eq!(arms[6].layout, V22LayoutKind::V20TwoPivotRepacked);
+        assert_eq!(arms[6].microcluster_rows, Some(32));
+        assert_eq!(arms[12].microcluster_rows, Some(64));
+        assert_eq!(arms[18].layout, V22LayoutKind::SemanticWithinCell);
+        assert_eq!(arms[18].microcluster_rows, Some(32));
+        assert_eq!(arms[24].microcluster_rows, Some(64));
+        assert_eq!(arms[30].layout, V22LayoutKind::SemanticCrossCell);
+        assert_eq!(arms[30].microcluster_rows, Some(32));
+        assert_eq!(arms[36].microcluster_rows, Some(64));
+        assert_eq!(arms[41].exact_prefix_rows, 2048);
+        for arm in arms {
+            arm.validate().unwrap();
         }
     }
 
     #[test]
-    fn v22_authority_rejects_unregistered_factors() {
+    fn v22_layout_census_authority_rejects_factor_drift() {
         for arm in [
-            V22RoutingArm {
-                probes: 0,
-                multi_assignment: 1,
+            V22LayoutCensusArm {
+                layout: V22LayoutKind::V20Physical,
+                microcluster_rows: Some(32),
+                exact_prefix_rows: 256,
             },
-            V22RoutingArm {
-                probes: 96,
-                multi_assignment: 1,
+            V22LayoutCensusArm {
+                layout: V22LayoutKind::V20TwoPivotRepacked,
+                microcluster_rows: None,
+                exact_prefix_rows: 256,
             },
-            V22RoutingArm {
-                probes: 128,
-                multi_assignment: 3,
+            V22LayoutCensusArm {
+                layout: V22LayoutKind::SemanticWithinCell,
+                microcluster_rows: Some(48),
+                exact_prefix_rows: 256,
             },
-        ] {
-            assert!(arm.validate().is_err());
-        }
-        for microcluster_rows in [0, 16, 48, 128] {
-            assert!(V22LayoutArm { microcluster_rows }.validate().is_err());
-        }
-        for arm in [
-            V22RankerArm {
-                code_bytes: 0,
-                candidate_rows: 256,
-            },
-            V22RankerArm {
-                code_bytes: 6,
-                candidate_rows: 256,
-            },
-            V22RankerArm {
-                code_bytes: 12,
-                candidate_rows: 768,
-            },
-            V22RankerArm {
-                code_bytes: 12,
-                candidate_rows: 4096,
+            V22LayoutCensusArm {
+                layout: V22LayoutKind::SemanticWithinCell,
+                microcluster_rows: Some(32),
+                exact_prefix_rows: 768,
             },
         ] {
             assert!(arm.validate().is_err());
@@ -217,25 +171,31 @@ mod tests {
     }
 
     #[test]
-    fn v22_authority_matrix_is_canonical_and_capacity_checked() {
-        let arms = v22_feasibility_arms().unwrap();
-        assert_eq!(arms.len(), 240);
-        assert_eq!(arms[0].routing.probes, 32);
-        assert_eq!(arms[0].layout.microcluster_rows, 32);
-        assert_eq!(arms[0].ranker.code_bytes, 4);
-        assert_eq!(arms[0].ranker.candidate_rows, 256);
-        assert_eq!(arms[1].ranker.candidate_rows, 512);
-        assert_eq!(arms[5].ranker.code_bytes, 8);
-        assert_eq!(arms[20].layout.microcluster_rows, 64);
-        assert_eq!(arms[40].routing.probes, 64);
-        assert_eq!(arms[0].resident_code_bytes(9_990_000).unwrap(), 39_960_000);
-        assert!(arms[0].resident_code_bytes(u64::MAX).is_err());
-    }
-
-    #[test]
-    fn v22_routing_gt_hits_counts_rows_and_rejects_invalid_authority() {
-        assert_eq!(routing_gt_hits(&[9, 3, 7], &[3, 7, 7, 8, 9]).unwrap(), 4);
-        assert!(routing_gt_hits(&[], &[3]).is_err());
-        assert!(routing_gt_hits(&[3, 3], &[3]).is_err());
+    fn v22_layout_census_routing_rank_subsumes_the_probe_sweep() {
+        let ordered_cells = [9, 3, 7, 2, 5];
+        assert_eq!(routing_rank(&ordered_cells, 9).unwrap(), 1);
+        assert_eq!(routing_rank(&ordered_cells, 2).unwrap(), 4);
+        assert_eq!(
+            routing_coverage_at_probe(&[1, 4, 4, 5], 3, ordered_cells.len()).unwrap(),
+            1
+        );
+        assert_eq!(
+            routing_coverage_at_probe(&[1, 4, 4, 5], 4, ordered_cells.len()).unwrap(),
+            3
+        );
+        assert!(routing_rank(&[], 3).is_err());
+        assert!(routing_rank(&[3, 3], 3).is_err());
+        assert!(routing_rank(&[3], 7).is_err());
+        assert!(routing_coverage_at_probe(&[], 4, 5).is_err());
+        assert!(routing_coverage_at_probe(&[1, 0], 4, 5).is_err());
+        assert!(routing_coverage_at_probe(&[1], 0, 5).is_err());
+        assert!(routing_coverage_at_probe(&[6], 5, 5).is_err());
+        assert!(routing_coverage_at_probe(&[1], 6, 5).is_err());
+        assert!(routing_coverage_at_probe(&[1], 1, 0).is_err());
+        assert_eq!(routing_coverage_at_probe(&[4096], 4096, 4096).unwrap(), 1);
+        assert_eq!(
+            routing_coverage_at_probe(&[16384], 16384, 16384).unwrap(),
+            1
+        );
     }
 }

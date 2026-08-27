@@ -1,10 +1,45 @@
 # Standard-S3 V21 Cold-Read Design
 
-**Status:** Approved direction; corrected written design pending operator review.
+**Status:** Rejected by completed claim-ineligible feasibility evidence on
+2026-08-27. No V21 production format or publication build is authorized.
 
-**Supersedes:** `docs/research/cold-read-latency-design.md` for the next
-pre-release dense-ANN format. V20 results remain immutable evidence tied to
-their exact source and format.
+## Terminal feasibility outcome
+
+The immutable completed diagnostic is rooted at:
+
+```text
+s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/
+r01-77f321472e3f25c63957de46/runtime-v21-feasibility/arms/0000/attempts/0001/
+```
+
+It reused authenticated V20 index `index-41967870b0bff1a67f5e82af`, ran on
+S3 Standard with disk cache disabled, remained claim-ineligible, and terminated
+its Spot host after writing `RUNTIME_TERMINAL_COMPLETE.json`. The terminal
+receipt binds the source, binary, base build, execution contract, result, and
+all three raw artifacts.
+
+No arm passed. The best arm (`bundle_row_limit=256`, `selector_span=64`, hedge
+off) measured GT coverage and exact recall of only `0.1119`. Its per-query
+maxima stayed within four actual requests and `1,042,944` physical bytes. Its
+selector occupied `25,147,939` bytes and its projected serving footprint was
+`208,209,490` bytes, so memory and request accounting were not the cause.
+Across its 1,000 queries it selected about 945 rows and 7.2
+bundles on average, while 535 queries covered none of the ten ground-truth IDs.
+Most prefixes stopped on the byte or amplification bound.
+
+The experiment rejects V21 as registered. Its `0.1119` end-to-end coverage
+still combines routing, representation, physical layout, and the registered
+truncate-on-first-rejection admission policy; it does not attribute the loss to
+one of them. Hedging reduced coverage under V21's registered accounting because
+the duplicate reserves a request and network bytes and was also included in
+the legacy amplification numerator. V22 separates primary amplification from
+hedge bytes. The quality, request, byte, and RAM gates remain
+unchanged. The next diagnostic must separate routing, representation, layout,
+and admission before any new production-format build.
+
+This rejected design once proposed to supersede
+`docs/research/cold-read-latency-design.md`; V22 supersedes it in turn. V20 and
+V21 results remain immutable evidence tied to their exact source and format.
 
 ## Objective
 
