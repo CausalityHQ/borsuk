@@ -63,6 +63,48 @@ def make_clean_repository(
 
 
 class LaunchAwsPublicationV3Tests(unittest.TestCase):
+    def test_v21_launcher_forwards_explicit_historical_terminal_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            repository = temp / "repository"
+            repository.mkdir()
+            make_clean_repository(repository)
+            fake = temp / "controller.py"
+            fake.write_text(
+                """#!/usr/bin/env python3
+import json, sys
+assert sys.argv[1] == 'diagnose-v21-selector'
+assert sys.argv[sys.argv.index('--base-build-terminal-uri') + 1] == 's3://bucket/results/base/build/attempts/0001/BUILD_TERMINAL_COMPLETE.json'
+assert sys.argv[sys.argv.index('--base-build-terminal-sha256') + 1] == 'a' * 64
+assert sys.argv[sys.argv.index('--attempt') + 1] == '0'
+assert '--build-attempt' not in sys.argv
+print(json.dumps({'operation': sys.argv[1]}, sort_keys=True))
+""",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "scripts/launch_aws_publication_v3.sh",
+                    "--diagnose-v21-selector",
+                    "s3://bucket/results/base/build/attempts/0001/BUILD_TERMINAL_COMPLETE.json",
+                    "a" * 64,
+                ],
+                cwd=repository,
+                env={
+                    **os.environ,
+                    "BORSUK_PUBLICATION_V3_CONTROLLER": str(fake),
+                },
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(
+                json.loads(completed.stdout)["operation"],
+                "diagnose-v21-selector",
+            )
+
     def test_generic_read_commands_forward_exact_frozen_cell_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)

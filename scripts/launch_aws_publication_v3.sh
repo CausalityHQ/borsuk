@@ -22,6 +22,10 @@ elif [[ "$#" -eq 3 && "$1" == "--diagnose-read" && -n "$2" && -n "$3" ]]; then
   mode="$1"
   read_workload="$2"
   read_dataset="$3"
+elif [[ "$#" -eq 3 && "$1" == "--diagnose-v21-selector" && -n "$2" && "$3" =~ ^[0-9a-f]{64}$ ]]; then
+  mode="$1"
+  base_build_terminal_uri="$2"
+  base_build_terminal_sha256="$3"
 elif [[ "$#" -eq 2 && "$1" == "--diagnose-lifecycle" && -n "$2" ]]; then
   mode="$1"
   lifecycle_dataset="$2"
@@ -33,7 +37,7 @@ elif [[ "$#" -eq 1 && ( "$1" == "--dry-run" || "$1" == "--build-sift" || "$1" ==
   mode="$1"
 else
   printf 'Publication V3 paid launch is unavailable until the AWS execution plan is implemented and reviewed\n' >&2
-  printf 'usage: %s --dry-run|--build-sift|--read-recall-sift|--read-concurrency-sift|--build-read <workload-id> <dataset-id>|--run-read <workload-id> <dataset-id> <repetition-id> <arm-index>|--diagnose-read <workload-id> <dataset-id>|--stage-dataset <manifest-dataset-id>|--build-lifecycle <manifest-dataset-id>|--run-lifecycle <manifest-dataset-id> <arm-index>|--diagnose-lifecycle <manifest-dataset-id>\n' "$0" >&2
+  printf 'usage: %s --dry-run|--build-sift|--read-recall-sift|--read-concurrency-sift|--build-read <workload-id> <dataset-id>|--run-read <workload-id> <dataset-id> <repetition-id> <arm-index>|--diagnose-read <workload-id> <dataset-id>|--diagnose-v21-selector <base-build-terminal-uri> <base-build-terminal-sha256>|--stage-dataset <manifest-dataset-id>|--build-lifecycle <manifest-dataset-id>|--run-lifecycle <manifest-dataset-id> <arm-index>|--diagnose-lifecycle <manifest-dataset-id>\n' "$0" >&2
   exit 2
 fi
 
@@ -45,7 +49,7 @@ if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --
 fi
 
 git fetch --quiet origin main
-if [[ "$mode" == "--build-sift" || "$mode" == "--build-read" || "$mode" == "--run-read" || "$mode" == "--diagnose-read" || "$mode" == "--build-lifecycle" || "$mode" == "--run-lifecycle" || "$mode" == "--diagnose-lifecycle" || "$mode" == "--read-recall-sift" || "$mode" == "--read-concurrency-sift" ]]; then
+if [[ "$mode" == "--build-sift" || "$mode" == "--build-read" || "$mode" == "--run-read" || "$mode" == "--diagnose-read" || "$mode" == "--diagnose-v21-selector" || "$mode" == "--build-lifecycle" || "$mode" == "--run-lifecycle" || "$mode" == "--diagnose-lifecycle" || "$mode" == "--read-recall-sift" || "$mode" == "--read-concurrency-sift" ]]; then
   if ! git merge-base --is-ancestor HEAD origin/main; then
     printf 'Publication V3 frozen source commit must be contained in origin/main\n' >&2
     exit 2
@@ -201,6 +205,24 @@ if [[ "$mode" == "--diagnose-read" ]]; then
     --nprobes "${BORSUK_PUBLICATION_V3_DIAGNOSTIC_NPROBES:-32,64}" \
     --candidates "${BORSUK_PUBLICATION_V3_DIAGNOSTIC_CANDIDATES:-512,1024,2048,4096}" \
     --purchase-option "${BORSUK_PUBLICATION_V3_PURCHASE_OPTION:-spot}"
+  exit 0
+fi
+
+if [[ "$mode" == "--diagnose-v21-selector" ]]; then
+  controller="${BORSUK_PUBLICATION_V3_CONTROLLER:-scripts/publication_v3_controller.py}"
+  python3 "$controller" diagnose-v21-selector \
+    --manifest "$manifest" \
+    --source-archive "$archive" \
+    --profile "${AWS_PROFILE:-causality}" \
+    --image-id "${BORSUK_PUBLICATION_V3_AMI_ID:-ami-07bcecd13a160173f}" \
+    --subnet-id "${BORSUK_PUBLICATION_V3_SUBNET_ID:-subnet-034528fbd6977848f}" \
+    --security-group-id "${BORSUK_PUBLICATION_V3_SECURITY_GROUP_ID:-sg-0b1fd3e4fbde4af0d}" \
+    --instance-profile-arn "${BORSUK_PUBLICATION_V3_INSTANCE_PROFILE_ARN:-arn:aws:iam::453182569524:instance-profile/borsuk-bench-profile}" \
+    --attempt "${BORSUK_PUBLICATION_V3_RUNTIME_ATTEMPT:-0}" \
+    --max-attempts "${BORSUK_PUBLICATION_V3_MAX_ATTEMPTS:-6}" \
+    --arm-index "${BORSUK_PUBLICATION_V3_ARM_INDEX:-0}" \
+    --base-build-terminal-uri "$base_build_terminal_uri" \
+    --base-build-terminal-sha256 "$base_build_terminal_sha256"
   exit 0
 fi
 

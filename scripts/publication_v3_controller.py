@@ -1657,10 +1657,11 @@ def main() -> int:
     v21_diagnostic.add_argument("--security-group-id", required=True)
     v21_diagnostic.add_argument("--instance-profile-arn", required=True)
     v21_diagnostic.add_argument("--attempt", type=int, default=0)
-    v21_diagnostic.add_argument("--build-attempt", type=int, default=0)
     v21_diagnostic.add_argument("--max-attempts", type=int, default=6)
     v21_diagnostic.add_argument("--arm-index", type=int, default=0)
     v21_diagnostic.add_argument("--purchase-option", choices=("spot",), default="spot")
+    v21_diagnostic.add_argument("--base-build-terminal-uri", required=True)
+    v21_diagnostic.add_argument("--base-build-terminal-sha256", required=True)
     runtime = subparsers.add_parser("read-recall-sift")
     runtime.add_argument("--manifest", type=Path, required=True)
     runtime.add_argument("--source-archive", type=Path, required=True)
@@ -1750,6 +1751,16 @@ def main() -> int:
     source_uri = f"{campaign_root}/source/{source_sha}.tar.gz"
     manifest_uri = f"{campaign_root}/manifests/{manifest_sha}.json"
     aws = AwsCli(normalized, profile=args.profile)
+    v21_base_authority = (
+        authenticate_v21_base_index_authority(
+            current_manifest=normalized,
+            terminal_uri=args.base_build_terminal_uri,
+            terminal_sha256=args.base_build_terminal_sha256,
+            aws=aws,
+        )
+        if args.operation == "diagnose-v21-selector"
+        else None
+    )
     aws.upload_immutable(args.source_archive, source_uri, source_sha)
     aws.upload_immutable(
         args.manifest, manifest_uri, hashlib.sha256(manifest_bytes).hexdigest()
@@ -1795,7 +1806,13 @@ def main() -> int:
             "build-read",
         }
         execution_attempt = getattr(args, "attempt", 1)
-        build_attempt = execution_attempt if build_operation else args.build_attempt
+        build_attempt = (
+            v21_base_authority.build_attempt
+            if v21_feasibility and v21_base_authority is not None
+            else execution_attempt
+            if build_operation
+            else args.build_attempt
+        )
         if generic_read and build_operation and execution_attempt == 0:
             execution_attempt = select_execution_attempt(
                 lambda attempt: ExecutionJob.build(
@@ -1812,7 +1829,12 @@ def main() -> int:
                 max_attempts=args.max_attempts,
             )
             build_attempt = execution_attempt
-        elif generic_read and not build_operation and build_attempt == 0:
+        elif (
+            generic_read
+            and not build_operation
+            and not v21_feasibility
+            and build_attempt == 0
+        ):
             build_attempt = select_execution_attempt(
                 lambda attempt: ExecutionJob.build(
                     borsuk_cell(
@@ -1877,19 +1899,28 @@ def main() -> int:
         protocol_sha = hashlib.sha256(protocol_bytes).hexdigest()
         protocol_uri = f"{campaign_root}/protocols/{protocol_sha}.json"
         build_protocol_bytes = canonical_json_bytes(build_cell) + b"\n"
-        build_protocol_sha = hashlib.sha256(build_protocol_bytes).hexdigest()
-        build_protocol_uri = f"{campaign_root}/protocols/{build_protocol_sha}.json"
+        build_protocol_sha = (
+            v21_base_authority.protocol_sha256
+            if v21_feasibility and v21_base_authority is not None
+            else hashlib.sha256(build_protocol_bytes).hexdigest()
+        )
+        build_protocol_uri = (
+            v21_base_authority.protocol_uri
+            if v21_feasibility and v21_base_authority is not None
+            else f"{campaign_root}/protocols/{build_protocol_sha}.json"
+        )
         with tempfile.TemporaryDirectory(
             prefix="borsuk-publication-protocol-"
         ) as directory:
             protocol_path = Path(directory) / "protocol.json"
             protocol_path.write_bytes(protocol_bytes)
             aws.upload_immutable(protocol_path, protocol_uri, protocol_sha)
-            build_protocol_path = Path(directory) / "build-protocol.json"
-            build_protocol_path.write_bytes(build_protocol_bytes)
-            aws.upload_immutable(
-                build_protocol_path, build_protocol_uri, build_protocol_sha
-            )
+            if not v21_feasibility:
+                build_protocol_path = Path(directory) / "build-protocol.json"
+                build_protocol_path.write_bytes(build_protocol_bytes)
+                aws.upload_immutable(
+                    build_protocol_path, build_protocol_uri, build_protocol_sha
+                )
         prepared = prepare_qualification_execution(
             normalized,
             operation=args.operation,
@@ -1915,6 +1946,7 @@ def main() -> int:
             diagnostic_timeout_seconds=getattr(args, "timeout_seconds", 1_200),
             diagnostic_read_nprobes=getattr(args, "nprobes", None),
             diagnostic_read_candidates=getattr(args, "candidates", None),
+            v21_base_authority=v21_base_authority,
         )
         receipt = run_execution_job(
             prepared.job,

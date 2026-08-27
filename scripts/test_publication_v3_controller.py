@@ -11,7 +11,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import scripts.publication_v3_controller as controller
 from scripts.publication_v3_aws import build_staging_receipt, staging_jobs
 from scripts.publication_v3_controller import (
     AwsCli,
@@ -143,6 +145,62 @@ class FakeAws:
 
 
 class PublicationV3ControllerTests(unittest.TestCase):
+    def test_v21_main_authenticates_base_before_any_publication(self) -> None:
+        manifest = json.loads(MANIFEST.read_text())
+        archive = b"current diagnostic source"
+        source_sha256 = hashlib.sha256(archive).hexdigest()
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "2" * 40,
+            "archive_sha256": source_sha256,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+
+        class NoPublicationAws:
+            def upload_immutable(self, *_args: object) -> None:
+                raise AssertionError("base authority must precede every S3 write")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "manifest.json"
+            archive_path = root / "source.tar.gz"
+            manifest_path.write_bytes(canonical_json_bytes(manifest))
+            archive_path.write_bytes(archive)
+            arguments = [
+                "publication_v3_controller.py",
+                "diagnose-v21-selector",
+                "--manifest",
+                str(manifest_path),
+                "--source-archive",
+                str(archive_path),
+                "--image-id",
+                "ami-x",
+                "--subnet-id",
+                "subnet-x",
+                "--security-group-id",
+                "sg-x",
+                "--instance-profile-arn",
+                "arn:aws:iam::453182569524:instance-profile/x",
+                "--base-build-terminal-uri",
+                "s3://bucket/results/base/build/attempts/0001/BUILD_TERMINAL_COMPLETE.json",
+                "--base-build-terminal-sha256",
+                "a" * 64,
+            ]
+            with (
+                mock.patch.object(sys, "argv", arguments),
+                mock.patch.object(controller, "AwsCli", return_value=NoPublicationAws()),
+                mock.patch.object(
+                    controller,
+                    "authenticate_v21_base_index_authority",
+                    side_effect=ValueError("base authority rejected"),
+                ) as authenticate,
+                self.assertRaisesRegex(ValueError, "base authority rejected"),
+            ):
+                controller.main()
+        authenticate.assert_called_once()
+
     def _v21_base_authority_fixture(self):
         current = json.loads(MANIFEST.read_text())
         historical = copy.deepcopy(current)
