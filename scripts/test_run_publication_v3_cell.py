@@ -47,6 +47,7 @@ from scripts.run_publication_v3_cell import (
     summarize_read_diagnostic_samples,
     summarize_runtime_write_trace,
     summarize_v21_feasibility_artifacts,
+    validate_and_canonicalize_v21_summary,
     validate_publication_cell_authority,
     validate_query_cache_cohort,
 )
@@ -312,6 +313,49 @@ def query_artifact_fixture(*, decoded_bytes: int) -> dict[str, str]:
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
+    def test_v21_summary_is_validated_before_cross_language_canonicalization(
+        self,
+    ) -> None:
+        arms, samples, summary = v21_feasibility_fixture()
+        noncanonical = json.dumps(summary).encode("utf-8") + b"\n"
+        self.assertNotEqual(noncanonical, canonical_json_bytes(summary) + b"\n")
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "bench_v21_feasibility_summary.json"
+            path.write_bytes(noncanonical)
+            report = validate_and_canonicalize_v21_summary(
+                path,
+                arms,
+                samples,
+                expected_source_archive_sha256="a" * 64,
+                expected_index_id="index-abc",
+                expected_dataset_id="deep-image-96",
+                expected_queries=2,
+                expected_dataset_rows=100,
+                expected_query_seed=23001,
+                expected_dimensions=96,
+            )
+            self.assertEqual(report["status"], "complete")
+            self.assertEqual(path.read_bytes(), canonical_json_bytes(summary) + b"\n")
+
+            drifted = copy.deepcopy(summary)
+            drifted["query_seed"] = 23002
+            drifted_bytes = json.dumps(drifted).encode("utf-8") + b"\n"
+            path.write_bytes(drifted_bytes)
+            with self.assertRaises(ValueError):
+                validate_and_canonicalize_v21_summary(
+                    path,
+                    arms,
+                    samples,
+                    expected_source_archive_sha256="a" * 64,
+                    expected_index_id="index-abc",
+                    expected_dataset_id="deep-image-96",
+                    expected_queries=2,
+                    expected_dataset_rows=100,
+                    expected_query_seed=23001,
+                    expected_dimensions=96,
+                )
+            self.assertEqual(path.read_bytes(), drifted_bytes)
+
     def test_v21_feasibility_parser_is_exact_claim_ineligible_and_mutation_safe(
         self,
     ) -> None:

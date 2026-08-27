@@ -1769,12 +1769,28 @@ fn effective_runtime_flow_control_json_line(
     // Publication V3 deliberately limits this persisted receipt to integer and
     // null values, whose serde_json spelling is identical to Python's strict
     // canonical_json_bytes contract after lexicographic key ordering.
-    let value = serde_json::to_value(value)?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| invalid_input("runtime flow control must be a JSON object"))?;
-    let ordered = object.iter().collect::<BTreeMap<_, _>>();
-    let mut bytes = serde_json::to_vec(&ordered)?;
+    Ok(canonical_json_line(value)?)
+}
+
+fn canonical_json_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(canonical_json_value).collect())
+        }
+        serde_json::Value::Object(values) => {
+            let ordered = values
+                .into_iter()
+                .map(|(key, value)| (key, canonical_json_value(value)))
+                .collect::<BTreeMap<_, _>>();
+            serde_json::Value::Object(ordered.into_iter().collect())
+        }
+        scalar => scalar,
+    }
+}
+
+fn canonical_json_line(value: &impl Serialize) -> io::Result<Vec<u8>> {
+    let value = canonical_json_value(serde_json::to_value(value)?);
+    let mut bytes = serde_json::to_vec(&value)?;
     bytes.push(b'\n');
     Ok(bytes)
 }
@@ -3793,8 +3809,7 @@ fn serialize_v21_feasibility_evidence(
             .map_err(|_| invalid_input("V21 feasibility sample serialization failed"))?;
         }
     }
-    let mut summary_bytes = serde_json::to_vec(&summary)?;
-    summary_bytes.push(b'\n');
+    let summary_bytes = canonical_json_line(summary)?;
     Ok([arms.into_bytes(), samples.into_bytes(), summary_bytes])
 }
 
@@ -7329,6 +7344,13 @@ mod tests {
         let canonical_summary = build_v21_feasibility_summary(&identity, &reports).unwrap();
         let payloads =
             serialize_v21_feasibility_evidence(&identity, &reports, &canonical_summary).unwrap();
+        assert!(
+            payloads[2].starts_with(
+                br#"{"arm_count":12,"arms":[{"arm_index":0,"bundle_count":3,"bundle_row_limit":128,"eligible":true,"gt_coverage":"#
+            ),
+            "V21 summary must use recursively lexicographic publication JSON: {}",
+            String::from_utf8_lossy(&payloads[2][..payloads[2].len().min(256)])
+        );
         for payload_index in 0..3 {
             let mut mutated = payloads.clone();
             let byte_index = mutated[payload_index]

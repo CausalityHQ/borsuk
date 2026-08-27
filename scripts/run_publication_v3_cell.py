@@ -1585,6 +1585,40 @@ def summarize_v21_feasibility_artifacts(
     }
 
 
+def validate_and_canonicalize_v21_summary(
+    path: Path,
+    arm_rows: list[dict[str, str]],
+    sample_rows: list[dict[str, str]],
+    *,
+    expected_source_archive_sha256: str,
+    expected_index_id: str,
+    expected_dataset_id: str,
+    expected_queries: int,
+    expected_dataset_rows: int,
+    expected_query_seed: int,
+    expected_dimensions: int,
+) -> dict[str, object]:
+    """Validate Rust evidence before normalizing its cross-language JSON bytes."""
+
+    _, summary = _read_bounded_json_payload(path, 2 * 1024 * 1024)
+    if not isinstance(summary, dict):
+        raise ValueError("V21 feasibility summary must be a JSON object")
+    report = summarize_v21_feasibility_artifacts(
+        arm_rows,
+        sample_rows,
+        summary,
+        expected_source_archive_sha256=expected_source_archive_sha256,
+        expected_index_id=expected_index_id,
+        expected_dataset_id=expected_dataset_id,
+        expected_queries=expected_queries,
+        expected_dataset_rows=expected_dataset_rows,
+        expected_query_seed=expected_query_seed,
+        expected_dimensions=expected_dimensions,
+    )
+    path.write_bytes(canonical_json_bytes(summary) + b"\n")
+    return report
+
+
 def validate_query_cache_cohort(
     row: dict[str, str],
     *,
@@ -3107,7 +3141,9 @@ def claim_ineligible_lifecycle_diagnostic(
     }
 
 
-def _read_canonical_value(path: Path, maximum_bytes: int) -> object:
+def _read_bounded_json_payload(
+    path: Path, maximum_bytes: int
+) -> tuple[bytes, object]:
     payload = path.read_bytes()
     if not payload or len(payload) > maximum_bytes or not payload.endswith(b"\n"):
         raise ValueError(f"{path} is missing or exceeds its canonical bound")
@@ -3115,6 +3151,11 @@ def _read_canonical_value(path: Path, maximum_bytes: int) -> object:
         value = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"{path} is not valid UTF-8 JSON") from error
+    return payload, value
+
+
+def _read_canonical_value(path: Path, maximum_bytes: int) -> object:
+    payload, value = _read_bounded_json_payload(path, maximum_bytes)
     if canonical_json_bytes(value) + b"\n" != payload:
         raise ValueError(f"{path} is not canonical JSON")
     return value
@@ -3529,13 +3570,10 @@ def main() -> int:
                 arm_rows = list(csv.DictReader(source_file))
             with samples_path.open(newline="") as source_file:
                 sample_rows = list(csv.DictReader(source_file))
-            summary_value = _read_canonical_value(summary_path, 2 * 1024 * 1024)
-            if not isinstance(summary_value, dict):
-                raise ValueError("V21 feasibility summary must be a JSON object")
-            report = summarize_v21_feasibility_artifacts(
+            report = validate_and_canonicalize_v21_summary(
+                summary_path,
                 arm_rows,
                 sample_rows,
-                summary_value,
                 expected_source_archive_sha256=str(args.source_archive_sha256),
                 expected_index_id=str(cell["index_prefix"])
                 .rstrip("/")
