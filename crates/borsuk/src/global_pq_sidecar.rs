@@ -201,6 +201,18 @@ impl GlobalScanQuantizer {
         }
     }
 
+    pub(crate) fn score_codes<'a>(
+        &self,
+        query: &[f32],
+        codes: impl IntoIterator<Item = &'a [u8]>,
+    ) -> Result<Vec<f32>> {
+        let prepared = self.prepare_query(query)?;
+        codes
+            .into_iter()
+            .map(|code| self.distance(&prepared, code))
+            .collect()
+    }
+
     pub(crate) fn uses_product_code_locality(&self) -> bool {
         matches!(self, Self::Pq(_))
     }
@@ -3005,6 +3017,34 @@ mod tests {
                 .score_cell_card_codes(&query, [near_code[..near_code.len() - 1].as_ref()])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn v21_quantizer_score_codes_matches_resident_scoring() {
+        let descriptor = test_v12_codebook_descriptor();
+        let quantizer = GlobalScanQuantizer::from_state(descriptor.quantizer.clone()).unwrap();
+        let resident = ResidentGlobalCodebook::load(descriptor).unwrap();
+        let query = vectors(1, 64).pop().unwrap();
+        let mut middle = query.clone();
+        middle.iter_mut().for_each(|value| *value += 3.0);
+        let mut far = query.clone();
+        far.iter_mut().for_each(|value| *value += 20.0);
+        let codes = [
+            quantizer.encode(&query).unwrap(),
+            quantizer.encode(&middle).unwrap(),
+            quantizer.encode(&far).unwrap(),
+        ];
+
+        let expected = resident
+            .score_cell_card_codes(&query, codes.iter().map(Vec::as_slice))
+            .unwrap();
+        let actual = quantizer
+            .score_codes(&query, codes.iter().map(Vec::as_slice))
+            .unwrap();
+
+        assert_eq!(actual, expected);
+        assert!(actual[0] <= actual[1]);
+        assert!(actual[1] < actual[2]);
     }
 
     #[test]

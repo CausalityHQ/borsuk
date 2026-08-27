@@ -76,6 +76,7 @@ mod storage_trace;
 /// Text tokenization helpers for per-record term-frequency storage.
 pub mod text;
 mod turboquant;
+mod v21_feasibility;
 
 /// Print and reset the env-gated (`BORSUK_BUILD_TIMING=1`) per-phase build timing
 /// breakdown accumulated since the last call. When
