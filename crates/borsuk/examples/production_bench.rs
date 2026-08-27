@@ -1476,7 +1476,10 @@ fn run() -> BenchResult<()> {
 
     reset_cache(&config.cache_dir)?;
     let open_started = Instant::now();
-    let reader = Arc::new(open_serving_index(&config)?);
+    let reader = Arc::new(open_serving_index(
+        &config,
+        shared_serving_metadata_preparation(config.cache_profile),
+    )?);
     eprintln!("index build_config={:?}", reader.build_config());
     let open_ms = elapsed_ms(open_started);
     let preload_started = Instant::now();
@@ -1635,10 +1638,43 @@ fn serving_cache_dir(cache_dir: &Path, disk_cache_max_bytes: Option<u64>) -> Opt
     disk_cache_max_bytes.map(|_| cache_dir.to_path_buf())
 }
 
-fn open_serving_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServingMetadataPreparation {
+    DeferredCodePlanes,
+    Complete,
+}
+
+impl ServingMetadataPreparation {
+    fn complete_code_planes(self) -> bool {
+        self == Self::Complete
+    }
+}
+
+fn shared_serving_metadata_preparation(
+    cache_profile: BenchmarkCacheProfile,
+) -> ServingMetadataPreparation {
+    match cache_profile {
+        BenchmarkCacheProfile::All | BenchmarkCacheProfile::DiskCached => {
+            ServingMetadataPreparation::Complete
+        }
+        BenchmarkCacheProfile::Uncached | BenchmarkCacheProfile::MixedCoverage => {
+            ServingMetadataPreparation::DeferredCodePlanes
+        }
+    }
+}
+
+fn open_serving_index(
+    config: &ResolvedConfig,
+    preparation: ServingMetadataPreparation,
+) -> BenchResult<BorsukIndex> {
     let (resident_metadata_max_bytes, transient_ram_min_bytes) =
         serving_memory_partition(config.ram_budget_bytes);
-    open_benchmark_index(config, resident_metadata_max_bytes, transient_ram_min_bytes)
+    open_benchmark_index(
+        config,
+        resident_metadata_max_bytes,
+        transient_ram_min_bytes,
+        preparation,
+    )
 }
 
 fn open_mutable_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
@@ -1646,6 +1682,7 @@ fn open_mutable_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
         config,
         mutable_resident_metadata_budget(config.ram_budget_bytes),
         None,
+        ServingMetadataPreparation::Complete,
     )
 }
 
@@ -1653,6 +1690,7 @@ fn open_benchmark_index(
     config: &ResolvedConfig,
     resident_metadata_max_bytes: Option<u64>,
     transient_ram_min_bytes: Option<u64>,
+    preparation: ServingMetadataPreparation,
 ) -> BenchResult<BorsukIndex> {
     let index = BorsukIndex::open_with_options(
         &config.uri,
@@ -1679,7 +1717,11 @@ fn open_benchmark_index(
     if config.serving_mode == ServingMode::Hybrid
         && config.serving_leaf_mode == config.global_scan_codec.leaf_mode()
     {
-        let _ = index.prepare_serving_metadata()?;
+        if preparation.complete_code_planes() {
+            let _ = index.prepare_serving_metadata()?;
+        } else {
+            let _ = index.prepare_serving_metadata_without_complete_code_planes()?;
+        }
     }
     Ok(index)
 }
@@ -2959,7 +3001,7 @@ fn write_recall_latency_csv(config: &ResolvedConfig, dataset: &Dataset) -> Bench
                 options.mode.leaf_mode(),
                 effective_segment_cache_budget(config),
             )
-            .then(|| open_serving_index(config))
+            .then(|| open_serving_index(config, ServingMetadataPreparation::Complete))
             .transpose()?;
             let cell_preload_complete = if let Some(cell_index) = cell_index.as_ref() {
                 if recall_preloads_local_snapshot(config.preload_serving) {
@@ -3017,7 +3059,7 @@ fn write_recall_latency_csv(config: &ResolvedConfig, dataset: &Dataset) -> Bench
             exact_options.mode.leaf_mode(),
             effective_segment_cache_budget(config),
         )
-        .then(|| open_serving_index(config))
+        .then(|| open_serving_index(config, ServingMetadataPreparation::Complete))
         .transpose()?;
         let exact_preload_complete = if let Some(exact_index) = exact_index.as_ref() {
             if recall_preloads_local_snapshot(config.preload_serving) {
@@ -3279,7 +3321,7 @@ fn run_uncached_queries(
     execute_uncached_query_sequence(
         query_count.min(dataset.queries.len()),
         || reset_cache(&config.cache_dir).map_err(Into::into),
-        || open_serving_index(config),
+        || open_serving_index(config, ServingMetadataPreparation::DeferredCodePlanes),
         |index, query_index| {
             run_queries(
                 index,
@@ -3468,7 +3510,7 @@ fn run_disk_cached_queries(
         dataset.queries.len(),
         cohort_size,
         || reset_cache(&config.cache_dir).map_err(Into::into),
-        || open_serving_index(config),
+        || open_serving_index(config, ServingMetadataPreparation::Complete),
         |index| index.clear_local_read_through_cache().map_err(Into::into),
         |index, query_index| {
             let _ = run_queries(
@@ -3546,7 +3588,7 @@ fn write_cold_warm_csv(config: &ResolvedConfig, dataset: &Dataset) -> BenchResul
         options.mode.leaf_mode(),
         effective_segment_cache_budget(config),
     )
-    .then(|| open_serving_index(config))
+    .then(|| open_serving_index(config, ServingMetadataPreparation::Complete))
     .transpose()?;
     let preload_complete = if let Some(index) = index.as_ref() {
         if config.preload_serving {
@@ -3969,12 +4011,18 @@ fn write_concurrency_csv(config: &ResolvedConfig, dataset: &Dataset) -> BenchRes
         0
     };
     let cache_cohort_count = usize::from(cache_cohort_size > 0);
+    let serving_metadata_preparation = shared_serving_metadata_preparation(config.cache_profile);
     let mut disk_cached_profiles = if config.cache_profile == BenchmarkCacheProfile::DiskCached {
         VecDeque::from(execute_disk_cached_concurrency_profiles(
             dataset.queries.len(),
             &config.concurrency,
             || reset_cache(&config.cache_dir).map_err(Into::into),
-            || Ok(Arc::new(open_serving_index(config)?)),
+            || {
+                Ok(Arc::new(open_serving_index(
+                    config,
+                    serving_metadata_preparation,
+                )?))
+            },
             |index| index.clear_local_read_through_cache().map_err(Into::into),
             |index, query_index| {
                 let _ = index
@@ -4005,7 +4053,12 @@ fn write_concurrency_csv(config: &ResolvedConfig, dataset: &Dataset) -> BenchRes
             } else {
                 let (index, query_indices) = execute_concurrency_cache_setup(
                     || reset_cache(&config.cache_dir).map_err(Into::into),
-                    || Ok(Arc::new(open_serving_index(config)?)),
+                    || {
+                        Ok(Arc::new(open_serving_index(
+                            config,
+                            serving_metadata_preparation,
+                        )?))
+                    },
                     |index| prepare_concurrency_cache_state(config, dataset, index),
                 )?;
                 let (wave, elapsed) = measure_concurrency_wave(
@@ -4252,7 +4305,9 @@ fn write_cache_coverage_csv(config: &ResolvedConfig, dataset: &Dataset) -> Bench
             // cohort is primed. Cold queries are unique inside a repetition,
             // so a preceding cold request cannot silently turn a later one hot.
             reset_cache(&config.cache_dir)?;
-            let index = open_serving_index(config)?;
+            // Coverage is a per-handle hot/cold experiment even under the aggregate
+            // `All` profile. Completing every plane here would erase its cold cohort.
+            let index = open_serving_index(config, ServingMetadataPreparation::DeferredCodePlanes)?;
             for &query_index in &hot_indices {
                 let _ = index.search_with_report(&dataset.queries[query_index], options.clone())?;
             }
@@ -6072,12 +6127,12 @@ mod tests {
         LeafCapability, LeafMode, LifecycleBatchAssignment, LifecycleDeltaLayout,
         LifecycleInsertMode, LifecycleQueryProgress, MUTATION_QUERY_HEADER,
         MUTATION_QUERY_SAMPLE_HEADER, OpenOptions, PreparedRecordBatch, QUERY_SAMPLE_HEADER,
-        QuerySample, QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES, ServingMode,
-        VectorMetric, VectorRecord, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
-        allow_missing_corpus_for_phase, approximate_options, benchmark_row_ids,
-        cache_coverage_cohort_size, cache_coverage_enabled, cache_state_summary_enabled,
-        dataset_metric, default_build_leaf_capability, default_recall_leaf_mode,
-        default_serving_leaf_mode, deterministic_mutation_vector,
+        QuerySample, QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES,
+        ServingMetadataPreparation, ServingMode, VectorMetric, VectorRecord, WRITE_COST_HEADER,
+        WRITE_SAMPLE_HEADER, allow_missing_corpus_for_phase, approximate_options,
+        benchmark_row_ids, cache_coverage_cohort_size, cache_coverage_enabled,
+        cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
+        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
         disk_cached_concurrency_cohort_size, disk_cached_query_cohort_size,
         dollars_per_million_queries, execute_bulk_add_wave, execute_concurrency_cache_setup,
         execute_disk_cached_concurrency_profiles, execute_disk_cached_query_cohorts,
@@ -6095,15 +6150,16 @@ mod tests {
         read_logical_cell_catalog, recall_cache_profile_needs_outer_handle,
         recall_preloads_local_snapshot, reopen_build_finalizer, reset_cache,
         rotated_workload_index, sample_mean, sample_stddev, serving_cache_dir,
-        serving_memory_partition, update_vector_reservoir, uses_bounded_decoded_cache_phases,
-        uses_memory_preloaded_phase, validate_bounded_v20_execution, validate_build_only,
-        validate_build_writers, validate_disk_cached_network,
-        validate_exact_read_max_physical_amplification, validate_generated_id_range,
-        validate_insert_only, validate_leaf_capability_modes, validate_lifecycle_only,
-        validate_lifecycle_writers, validate_max_parallel_decode_rank_tasks,
-        validate_phase_selection, validate_v12_candidate_budgets, validate_v12_leaf_mode,
-        validate_v12_leaf_page_budgets, vector_row, verification_offsets, write_batch_len,
-        write_operation_count, write_runtime_flow_control_receipt,
+        serving_memory_partition, shared_serving_metadata_preparation, update_vector_reservoir,
+        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        validate_bounded_v20_execution, validate_build_only, validate_build_writers,
+        validate_disk_cached_network, validate_exact_read_max_physical_amplification,
+        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
+        validate_lifecycle_only, validate_lifecycle_writers,
+        validate_max_parallel_decode_rank_tasks, validate_phase_selection,
+        validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
+        vector_row, verification_offsets, write_batch_len, write_operation_count,
+        write_runtime_flow_control_receipt,
     };
 
     #[test]
@@ -7089,6 +7145,32 @@ mod tests {
             LeafMode::Graph,
             Some(256 * 1024 * 1024),
         ));
+    }
+
+    #[test]
+    fn serving_metadata_preparation_is_bound_to_each_handle_role() {
+        assert!(!ServingMetadataPreparation::DeferredCodePlanes.complete_code_planes());
+        assert!(ServingMetadataPreparation::Complete.complete_code_planes());
+    }
+
+    #[test]
+    fn shared_serving_metadata_preparation_is_exhaustive_by_cache_profile() {
+        assert_eq!(
+            shared_serving_metadata_preparation(BenchmarkCacheProfile::All),
+            ServingMetadataPreparation::Complete
+        );
+        assert_eq!(
+            shared_serving_metadata_preparation(BenchmarkCacheProfile::DiskCached),
+            ServingMetadataPreparation::Complete
+        );
+        assert_eq!(
+            shared_serving_metadata_preparation(BenchmarkCacheProfile::Uncached),
+            ServingMetadataPreparation::DeferredCodePlanes
+        );
+        assert_eq!(
+            shared_serving_metadata_preparation(BenchmarkCacheProfile::MixedCoverage),
+            ServingMetadataPreparation::DeferredCodePlanes
+        );
     }
 
     #[test]

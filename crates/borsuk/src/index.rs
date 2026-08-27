@@ -5616,6 +5616,19 @@ impl BorsukIndex {
     ///
     /// Returns the number of active routing cells prepared.
     pub fn prepare_serving_metadata(&self) -> Result<usize> {
+        self.prepare_serving_metadata_inner(true)
+    }
+
+    /// Prepare serving metadata while leaving complete code planes paged.
+    ///
+    /// Cold-cache benchmark handles use this boundary so opening a fresh handle
+    /// does not fetch the entire immutable code plane before the measured query.
+    #[doc(hidden)]
+    pub fn prepare_serving_metadata_without_complete_code_planes(&self) -> Result<usize> {
+        self.prepare_serving_metadata_inner(false)
+    }
+
+    fn prepare_serving_metadata_inner(&self, complete_code_planes: bool) -> Result<usize> {
         let summaries = if let Some(summaries) = self.resident_routing_summaries() {
             summaries
         } else {
@@ -5629,7 +5642,7 @@ impl BorsukIndex {
         };
         let _ = self.coarse_quantizer()?;
         let global_ann = self.preload_resident_global_ann_for_manifest(&self.manifest)?;
-        if let Some(pins) = global_ann.as_ref() {
+        if complete_code_planes && let Some(pins) = global_ann.as_ref() {
             self.prepare_fitting_cell_card_code_planes(pins)?;
         }
         let _ = self.load_resident_lexical_roots()?;
@@ -41546,7 +41559,8 @@ mod tests {
     #[test]
     fn prepare_serving_metadata_preloads_fitting_cell_card_code_planes() {
         let dir = tempfile::tempdir().unwrap();
-        let cache = tempfile::tempdir().unwrap();
+        let deferred_cache = tempfile::tempdir().unwrap();
+        let prepared_cache = tempfile::tempdir().unwrap();
         let uri = dir.path().to_string_lossy().into_owned();
         let mut builder = BorsukIndex::create(IndexConfig {
             uri: uri.clone(),
@@ -41594,7 +41608,43 @@ mod tests {
         let index = BorsukIndex::open_with_options(
             &uri,
             OpenOptions {
-                cache_dir: Some(cache.path().to_path_buf()),
+                cache_dir: Some(deferred_cache.path().to_path_buf()),
+                cache_max_bytes: Some(64 * 1024 * 1024),
+                ram_budget_bytes: Some(64 * 1024 * 1024),
+                ..OpenOptions::default()
+            },
+        )
+        .unwrap();
+        index
+            .prepare_serving_metadata_without_complete_code_planes()
+            .unwrap();
+        assert!(
+            index
+                .read_runtime
+                .prepared_cell_card_code_planes
+                .lock()
+                .unwrap()
+                .is_none(),
+            "deferred preparation must not preload complete code planes"
+        );
+
+        let deferred = index
+            .search_with_report(
+                &vectors[37],
+                SearchOptions::approx(10, LeafMode::SrhtPqScan)
+                    .with_max_segments(64)
+                    .with_max_candidates_per_segment(128),
+            )
+            .unwrap();
+        assert!(deferred.global_leaf_code_bytes > 0, "{deferred:?}");
+        assert!(deferred.global_leaf_code_requests > 0, "{deferred:?}");
+        assert!(deferred.requests.gets > 0, "{deferred:?}");
+        drop(index);
+
+        let index = BorsukIndex::open_with_options(
+            &uri,
+            OpenOptions {
+                cache_dir: Some(prepared_cache.path().to_path_buf()),
                 cache_max_bytes: Some(64 * 1024 * 1024),
                 ram_budget_bytes: Some(64 * 1024 * 1024),
                 ..OpenOptions::default()
