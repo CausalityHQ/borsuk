@@ -1,4 +1,6 @@
 use std::{
+    cmp::Ordering,
+    collections::BinaryHeap,
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
@@ -7,13 +9,133 @@ use crate::{
     BorsukError, Result, VectorElementType,
     global_cell_card::{
         CELL_CARD_EXACT_MAX_PHYSICAL_AMPLIFICATION, CellCardExactBlockRef, CellCardGroupRef,
-        EncodedCellCardGroup, RankedCellCardExactBlock, encode_cell_card_group,
-        plan_cell_card_exact_wave_with_amplification,
+        CellCardGroupWriter, CellCardPush, EncodedCellCardGroup, RankedCellCardExactBlock,
+        encode_cell_card_group, plan_cell_card_exact_wave_with_amplification,
     },
     global_leaf::GlobalLeafPageInput,
 };
 
 const V22_EXACT_PREFIX_ROWS: [u16; 6] = [10, 256, 512, 1024, 1536, 2048];
+pub(crate) const V22_MAX_EXACT_PREFIX_ROWS: usize = 2048;
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V22ExactPrefixRow {
+    pub(crate) distance: f32,
+    pub(crate) record_id: u64,
+    pub(crate) canonical_record_id: Box<[u8]>,
+    pub(crate) primary_cell: u32,
+}
+
+#[derive(Debug, Clone)]
+struct V22ExactCandidate(V22ExactPrefixRow);
+
+impl PartialEq for V22ExactCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for V22ExactCandidate {}
+
+impl PartialOrd for V22ExactCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for V22ExactCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0
+            .distance
+            .total_cmp(&other.0.distance)
+            .then_with(|| self.0.canonical_record_id.cmp(&other.0.canonical_record_id))
+            .then_with(|| self.0.record_id.cmp(&other.0.record_id))
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct V22ExactPrefixAccumulator {
+    heaps: Vec<BinaryHeap<V22ExactCandidate>>,
+}
+
+impl V22ExactPrefixAccumulator {
+    pub(crate) fn new(query_count: usize) -> Result<Self> {
+        if query_count == 0 {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V22 exact-prefix query authority is empty".to_string(),
+            ));
+        }
+        Ok(Self {
+            heaps: (0..query_count)
+                .map(|_| BinaryHeap::with_capacity(V22_MAX_EXACT_PREFIX_ROWS))
+                .collect(),
+        })
+    }
+
+    pub(crate) fn observe(
+        &mut self,
+        record_id: u64,
+        canonical_record_id: &[u8],
+        primary_cell: u32,
+        distances: &[f32],
+    ) -> Result<()> {
+        if canonical_record_id.is_empty()
+            || distances.len() != self.heaps.len()
+            || distances.iter().any(|distance| !distance.is_finite())
+        {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V22 exact-prefix row authority is empty or invalid".to_string(),
+            ));
+        }
+        for (heap, distance) in self.heaps.iter_mut().zip(distances) {
+            let retain = heap.len() < V22_MAX_EXACT_PREFIX_ROWS
+                || heap.peek().is_some_and(|worst| {
+                    distance
+                        .total_cmp(&worst.0.distance)
+                        .then_with(|| canonical_record_id.cmp(worst.0.canonical_record_id.as_ref()))
+                        .then_with(|| record_id.cmp(&worst.0.record_id))
+                        .is_lt()
+                });
+            if retain {
+                if heap.len() == V22_MAX_EXACT_PREFIX_ROWS {
+                    heap.pop();
+                }
+                heap.push(V22ExactCandidate(V22ExactPrefixRow {
+                    distance: *distance,
+                    record_id,
+                    canonical_record_id: canonical_record_id.into(),
+                    primary_cell,
+                }));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(self) -> Result<Vec<Vec<V22ExactPrefixRow>>> {
+        self.heaps
+            .into_iter()
+            .map(|heap| {
+                let mut rows = heap
+                    .into_vec()
+                    .into_iter()
+                    .map(|candidate| candidate.0)
+                    .collect::<Vec<_>>();
+                rows.sort_by(|left, right| {
+                    left.distance
+                        .total_cmp(&right.distance)
+                        .then_with(|| left.canonical_record_id.cmp(&right.canonical_record_id))
+                        .then_with(|| left.record_id.cmp(&right.record_id))
+                });
+                if rows.is_empty() {
+                    return Err(BorsukError::InvalidStorage(
+                        "V22 exact-prefix corpus authority is empty".to_string(),
+                    ));
+                }
+                Ok(rows)
+            })
+            .collect()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum V22LayoutKind {
@@ -566,17 +688,46 @@ pub(crate) fn project_v22_encoded_cell_card_group(
     content_prefix: &str,
 ) -> Result<V22EncodedProjection> {
     let exact_row_bytes_usize = element_type.fixed_width_bytes(dimensions)?;
-    let exact_row_bytes = exact_row_bytes_usize as u64;
-    if exact_row_bytes == 0 || pages.len() != records_by_card.len() {
+    if exact_row_bytes_usize == 0 || pages.len() != records_by_card.len() {
         return Err(BorsukError::InvalidSearchOptions(
             "V22 encoded group projection authority is empty or mismatched".to_string(),
         ));
     }
     let encoded = encode_cell_card_group(pages, dimensions, element_type)?;
-    let path = encoded.content_addressed_path(content_prefix)?;
-    let (group, cards) = encoded.references(&path)?;
     let mut canonical_record_ids = BTreeSet::new();
     let mut numeric_record_ids = BTreeSet::new();
+    let units = project_v22_encoded_group(
+        &encoded,
+        pages,
+        records_by_card,
+        exact_row_bytes_usize,
+        content_prefix,
+        &mut canonical_record_ids,
+        &mut numeric_record_ids,
+    )?;
+    Ok(V22EncodedProjection { encoded, units })
+}
+
+fn project_v22_encoded_group(
+    encoded: &EncodedCellCardGroup,
+    pages: &[GlobalLeafPageInput],
+    records_by_card: &[Box<[V22EncodedRecordAuthority]>],
+    exact_row_bytes_usize: usize,
+    content_prefix: &str,
+    canonical_record_ids: &mut BTreeSet<Box<[u8]>>,
+    numeric_record_ids: &mut BTreeSet<u64>,
+) -> Result<Vec<V22ProjectedUnit>> {
+    let exact_row_bytes = exact_row_bytes_usize as u64;
+    if exact_row_bytes == 0
+        || encoded.cards.len() != pages.len()
+        || pages.len() != records_by_card.len()
+    {
+        return Err(BorsukError::InvalidSearchOptions(
+            "V22 encoded group projection authority is empty or mismatched".to_string(),
+        ));
+    }
+    let path = encoded.content_addressed_path(content_prefix)?;
+    let (group, cards) = encoded.references(&path)?;
     let mut projected = Vec::new();
     for ((card, page), records) in cards.iter().zip(pages).zip(records_by_card) {
         if records.is_empty()
@@ -588,7 +739,7 @@ pub(crate) fn project_v22_encoded_cell_card_group(
             || page.rows.iter().zip(records).any(|(row, record)| {
                 row.id.as_bytes() != record.canonical_record_id.as_ref()
                     || row.exact.len() != exact_row_bytes_usize
-                    || !canonical_record_ids.insert(record.canonical_record_id.as_ref())
+                    || !canonical_record_ids.insert(record.canonical_record_id.clone())
                     || !numeric_record_ids.insert(record.record_id)
             })
         {
@@ -644,10 +795,85 @@ pub(crate) fn project_v22_encoded_cell_card_group(
             ));
         }
     }
-    Ok(V22EncodedProjection {
-        encoded,
-        units: projected,
-    })
+    Ok(projected)
+}
+
+pub(crate) fn project_v22_encoded_layout(
+    pages: impl IntoIterator<Item = (GlobalLeafPageInput, Box<[V22EncodedRecordAuthority]>)>,
+    dimensions: usize,
+    element_type: VectorElementType,
+    code_width: usize,
+    content_prefix: &str,
+) -> Result<Vec<V22ProjectedUnit>> {
+    if code_width == 0 {
+        return Err(BorsukError::InvalidSearchOptions(
+            "V22 encoded layout authority is empty".to_string(),
+        ));
+    }
+    let exact_row_bytes = element_type.fixed_width_bytes(dimensions)?;
+    let mut writer = CellCardGroupWriter::new(dimensions, element_type, code_width)?;
+    let mut pending_authority = Vec::new();
+    let mut projected = Vec::new();
+    let mut canonical_record_ids = BTreeSet::new();
+    let mut numeric_record_ids = BTreeSet::new();
+    let mut saw_page = false;
+
+    let flush = |writer: CellCardGroupWriter,
+                 authority: &[Box<[V22EncodedRecordAuthority]>],
+                 projected: &mut Vec<V22ProjectedUnit>,
+                 canonical_record_ids: &mut BTreeSet<Box<[u8]>>,
+                 numeric_record_ids: &mut BTreeSet<u64>|
+     -> Result<()> {
+        let (encoded, encoded_pages) = writer.finish_with_pages()?;
+        projected.extend(project_v22_encoded_group(
+            &encoded,
+            &encoded_pages,
+            authority,
+            exact_row_bytes,
+            content_prefix,
+            canonical_record_ids,
+            numeric_record_ids,
+        )?);
+        Ok(())
+    };
+
+    for (page, authority) in pages {
+        saw_page = true;
+        match writer.try_push(page)? {
+            CellCardPush::Accepted => pending_authority.push(authority),
+            CellCardPush::Full(page) => {
+                flush(
+                    writer,
+                    &pending_authority,
+                    &mut projected,
+                    &mut canonical_record_ids,
+                    &mut numeric_record_ids,
+                )?;
+                writer = CellCardGroupWriter::new(dimensions, element_type, code_width)?;
+                match writer.try_push(page)? {
+                    CellCardPush::Accepted => pending_authority = vec![authority],
+                    CellCardPush::Full(_) => {
+                        return Err(BorsukError::InvalidStorage(
+                            "V22 encoded layout page exceeds an empty group".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if !saw_page {
+        return Err(BorsukError::InvalidSearchOptions(
+            "V22 encoded layout authority is empty".to_string(),
+        ));
+    }
+    flush(
+        writer,
+        &pending_authority,
+        &mut projected,
+        &mut canonical_record_ids,
+        &mut numeric_record_ids,
+    )?;
+    Ok(projected)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -912,11 +1138,11 @@ pub(crate) fn v22_census_layout_prefix(
 #[cfg(test)]
 mod tests {
     use super::{
-        V22EncodedRecordAuthority, V22LayoutCensusArm, V22LayoutKind, V22LayoutLimitingBound,
-        V22ProjectedUnit, V22SemanticRow, nearest_neighbor_order,
-        project_v22_encoded_cell_card_group, project_v22_semantic_layout,
-        project_v22_two_pivot_layout, routing_coverage_at_probe, routing_rank,
-        v22_census_layout_prefix, v22_layout_census_arms,
+        V22EncodedRecordAuthority, V22ExactPrefixAccumulator, V22LayoutCensusArm, V22LayoutKind,
+        V22LayoutLimitingBound, V22ProjectedUnit, V22SemanticRow, nearest_neighbor_order,
+        project_v22_encoded_cell_card_group, project_v22_encoded_layout,
+        project_v22_semantic_layout, project_v22_two_pivot_layout, routing_coverage_at_probe,
+        routing_rank, v22_census_layout_prefix, v22_layout_census_arms,
     };
     use crate::{
         VectorElementType,
@@ -951,6 +1177,40 @@ mod tests {
         for arm in arms {
             arm.validate().unwrap();
         }
+    }
+
+    #[test]
+    fn v22_stage_l_exact_prefix_is_bounded_and_deterministic() {
+        let mut accumulator = V22ExactPrefixAccumulator::new(2).unwrap();
+        for record_id in (0_u64..2055).rev() {
+            accumulator
+                .observe(
+                    record_id,
+                    &record_id.to_be_bytes(),
+                    (record_id % 7) as u32,
+                    &[record_id as f32, (2054 - record_id) as f32],
+                )
+                .unwrap();
+        }
+        let prefixes = accumulator.finish().unwrap();
+        assert_eq!(prefixes.len(), 2);
+        assert_eq!(prefixes[0].len(), 2048);
+        assert_eq!(prefixes[1].len(), 2048);
+        assert_eq!(prefixes[0][0].record_id, 0);
+        assert_eq!(prefixes[0][2047].record_id, 2047);
+        assert_eq!(prefixes[1][0].record_id, 2054);
+        assert_eq!(prefixes[1][2047].record_id, 7);
+
+        let mut ties = V22ExactPrefixAccumulator::new(1).unwrap();
+        ties.observe(1, b"z", 0, &[1.0]).unwrap();
+        ties.observe(2, b"a", 0, &[1.0]).unwrap();
+        let tied = ties.finish().unwrap();
+        assert_eq!(tied[0][0].canonical_record_id.as_ref(), b"a");
+        assert!(V22ExactPrefixAccumulator::new(0).is_err());
+        let mut invalid = V22ExactPrefixAccumulator::new(1).unwrap();
+        assert!(invalid.observe(0, b"", 0, &[0.0]).is_err());
+        assert!(invalid.observe(0, b"x", 0, &[f32::NAN]).is_err());
+        assert!(invalid.observe(0, b"x", 0, &[0.0, 1.0]).is_err());
     }
 
     #[test]
@@ -1279,6 +1539,15 @@ mod tests {
             .unwrap();
         let (group, _) = encoded.references(&expected_path).unwrap();
         let projected = &projection.units;
+        let packed = project_v22_encoded_layout(
+            pages.iter().cloned().zip(authority.iter().cloned()),
+            DIMENSIONS,
+            VectorElementType::Float32,
+            2,
+            "v22-stage-l/layout",
+        )
+        .unwrap();
+        assert_eq!(packed, *projected);
 
         assert_eq!(projected.len(), 5);
         assert_eq!(
@@ -1355,6 +1624,22 @@ mod tests {
             )
             .is_err()
         );
+        let mut duplicate_canonical_pages = pages.clone();
+        let mut duplicate_canonical_authority = authority.clone();
+        let duplicate_canonical = authority[0][0].canonical_record_id.clone();
+        duplicate_canonical_pages[1].rows[0].id =
+            RecordId::from_bytes(duplicate_canonical.to_vec());
+        duplicate_canonical_authority[1][0].canonical_record_id = duplicate_canonical;
+        assert!(
+            project_v22_encoded_cell_card_group(
+                &duplicate_canonical_pages,
+                &duplicate_canonical_authority,
+                DIMENSIONS,
+                VectorElementType::Float32,
+                "v22-stage-l/layout",
+            )
+            .is_err()
+        );
         let mut wrong_width_pages = pages.clone();
         wrong_width_pages[0].rows[0].exact.pop();
         assert!(
@@ -1411,6 +1696,57 @@ mod tests {
             [16, 1],
             "the real encoder must apply its 96-KiB decoded payload cap below the 32-row clamp"
         );
+    }
+
+    #[test]
+    fn v22_streaming_layout_rejects_duplicate_ids_across_group_boundaries() {
+        for duplicate_canonical_id in [false, true] {
+            let pages = (0_u32..=3012).map(|cell_index| {
+                let source_record_id = u64::from(cell_index);
+                let canonical_record_id = if duplicate_canonical_id && cell_index == 3012 {
+                    0_u64.to_be_bytes()
+                } else {
+                    source_record_id.to_be_bytes()
+                };
+                (
+                    GlobalLeafPageInput {
+                        cell_index,
+                        leaf_ordinal: 0,
+                        centroid_code: vec![0, 0],
+                        rows: vec![GlobalLeafRowInput {
+                            id: RecordId::from_bytes(canonical_record_id.to_vec()),
+                            stamp: MutationStamp::new(
+                                MutationVersion::from_parts(source_record_id + 1, [0; 16]),
+                                [cell_index as u8; 32],
+                            ),
+                            code: GlobalLeafCodeInput::from(vec![0, 0]),
+                            exact: vec![cell_index as u8; 4],
+                        }],
+                    },
+                    vec![V22EncodedRecordAuthority {
+                        canonical_record_id: canonical_record_id.to_vec().into_boxed_slice(),
+                        record_id: if !duplicate_canonical_id && cell_index == 3012 {
+                            0
+                        } else {
+                            source_record_id
+                        },
+                    }]
+                    .into_boxed_slice(),
+                )
+            });
+
+            assert!(
+                project_v22_encoded_layout(
+                    pages,
+                    4,
+                    VectorElementType::Int8,
+                    2,
+                    "v22-stage-l/cross-group-duplicate",
+                )
+                .is_err(),
+                "duplicate_canonical_id={duplicate_canonical_id}"
+            );
+        }
     }
 
     #[test]

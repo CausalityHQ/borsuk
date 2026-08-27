@@ -227,13 +227,19 @@ impl CellCardGroupWriter {
     }
 
     pub(crate) fn finish(self) -> Result<EncodedCellCardGroup> {
+        self.finish_with_pages().map(|(encoded, _)| encoded)
+    }
+
+    pub(crate) fn finish_with_pages(
+        self,
+    ) -> Result<(EncodedCellCardGroup, Vec<GlobalLeafPageInput>)> {
         let encoded = encode_cell_card_group(&self.pages, self.dimensions, self.element_type)?;
         if encoded.bytes.len() as u64 > self.max_bytes {
             return Err(BorsukError::InvalidStorage(
                 "cell-card writer estimate admitted an oversized group".to_string(),
             ));
         }
-        Ok(encoded)
+        Ok((encoded, self.pages))
     }
 }
 
