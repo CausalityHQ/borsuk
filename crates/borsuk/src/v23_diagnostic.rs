@@ -271,6 +271,13 @@ fn validate_ranked_result(result: &V23RankedResult) -> Result<()> {
     Ok(())
 }
 
+fn valid_diagnostic_code_width(key: V23D1ArmKey) -> bool {
+    key.code_width_bytes > 0
+        && key.code_width_bytes <= 64
+        && (!matches!(key.family, V23QuantizerFamily::SrhtPq)
+            || [8, 16, 32, 64].contains(&key.code_width_bytes))
+}
+
 pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
     if report.schema != "borsuk-v23-d1-v1"
         || !valid_checksum(&report.v20_root_checksum)
@@ -289,7 +296,7 @@ pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
         ));
     }
     for arm in &report.arms {
-        if ![8, 16, 32, 64].contains(&arm.key.code_width_bytes)
+        if !valid_diagnostic_code_width(arm.key)
             || !valid_checksum(&arm.quantizer_checksum)
             || arm.query_samples.len() != V23_DIAGNOSTIC_QUERIES
             || arm.four_page_projected_bytes == 0
@@ -380,7 +387,7 @@ pub(crate) fn validate_d2_report(report: &V23D2Report) -> Result<()> {
         ));
     }
     for arm in &report.arms {
-        if ![8, 16, 32, 64].contains(&arm.d1_key.code_width_bytes)
+        if !valid_diagnostic_code_width(arm.d1_key)
             || ![512, 1_024, 2_048].contains(&arm.primary_target_rows)
             || !(1..=3).contains(&arm.maximum_assignments_per_row)
             || arm.pages.is_empty()
@@ -695,6 +702,16 @@ mod tests {
         let mut noncanonical_queries = canonical;
         noncanonical_queries.arms[0].query_samples[31].query_index = 30;
         assert!(validate_d1_report(&noncanonical_queries).is_err());
+    }
+
+    #[test]
+    fn v23_d1_contract_accepts_native_fast_turboquant_width() {
+        let mut report = canonical_d1_report();
+        report.arms[0].key = V23D1ArmKey {
+            family: V23QuantizerFamily::FastTurboQuantMse,
+            code_width_bytes: 52,
+        };
+        validate_d1_report(&report).unwrap();
     }
 
     #[test]
