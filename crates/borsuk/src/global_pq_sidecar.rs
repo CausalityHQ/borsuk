@@ -160,7 +160,7 @@ impl From<FastTurboQuantProdScanQuantizer> for GlobalScanQuantizer {
     }
 }
 
-enum PreparedGlobalScan {
+pub(crate) enum PreparedGlobalScan {
     Pq(crate::rotated_product_quantizer::PreparedAdc),
     FastTurboQuantMse(PreparedFastTurboQuantMseScan),
     FastTurboQuantProd(PreparedFastTurboQuantProdScan),
@@ -213,9 +213,16 @@ impl GlobalScanQuantizer {
             .collect()
     }
 
-    pub(crate) fn score_contiguous_codes(&self, query: &[f32], codes: &[u8]) -> Result<Vec<f32>> {
-        let prepared = self.prepare_query(query)?;
-        self.distances_contiguous(&prepared, codes)
+    pub(crate) fn prepare_contiguous_query(&self, query: &[f32]) -> Result<PreparedGlobalScan> {
+        self.prepare_query(query)
+    }
+
+    pub(crate) fn score_prepared_contiguous_codes(
+        &self,
+        prepared: &PreparedGlobalScan,
+        codes: &[u8],
+    ) -> Result<Vec<f32>> {
+        self.distances_contiguous(prepared, codes)
     }
 
     pub(crate) fn uses_product_code_locality(&self) -> bool {

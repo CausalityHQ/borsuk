@@ -1,4 +1,7 @@
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Instant,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -7,13 +10,20 @@ use crate::{
     global_pq_sidecar::GlobalScanQuantizer,
     rotated_product_quantizer::{ProductQuantizerConfig, ProductRotation, RotatedProductQuantizer},
     turboquant::{FastTurboQuantMseScanQuantizer, FastTurboQuantProdScanQuantizer},
+    v22_feasibility::{V22StageLQueryPrefix, V22StageLSpill},
 };
 
+#[allow(dead_code, reason = "consumed by the planned D2 page-codec slice")]
 pub(crate) const V23_PAGE_MAX_ENCODED_BYTES: u64 = 245_760;
+#[allow(dead_code, reason = "consumed by the planned D2 and D3 slices")]
 pub(crate) const V23_WAVE_MAX_PAGES: usize = 4;
 pub(crate) const V23_WAVE_MAX_BYTES: u64 = 983_040;
+#[allow(dead_code, reason = "consumed by the planned D2 RAM projection")]
 pub(crate) const V23_PROCESS_MAX_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 pub(crate) const V23_DIAGNOSTIC_QUERIES: usize = 32;
+const V23_PAGE_HEADER_BYTES: u64 = 96;
+const V23_D1_PROJECTED_PAGE_ROWS: u64 = 2_048;
+const V23_SCALAR_SIMD_MAX_DISTANCE_DELTA_PPM: u64 = 10;
 #[allow(dead_code, reason = "consumed by the planned D3 benchmark slice")]
 pub(crate) const V23_D3_WAVES: usize = 1_000;
 const V23_D1_CPU_MAX_NS: u64 = 15_000_000;
@@ -57,6 +67,8 @@ pub struct V23D1QuerySample {
     pub ground_truth_ids: Vec<Vec<u8>>,
     /// Code-ranked result over the exact top-2,048 oracle pool.
     pub oracle: V23RankedResult,
+    /// Scalar-kernel result over the same exact top-2,048 oracle pool.
+    pub scalar_oracle: V23RankedResult,
     /// Code-ranked result over the complete registered routed pool.
     pub routed: V23RankedResult,
     /// Exact oracle-pool row count.
@@ -76,7 +88,7 @@ pub struct V23D1QuerySample {
 pub struct V23D1Arm {
     /// Canonical arm identity.
     pub key: V23D1ArmKey,
-    /// SHA-256 of the complete serialized quantizer state.
+    /// BLAKE3 of the complete serialized quantizer state.
     pub quantizer_checksum: String,
     /// Query-major scientific evidence.
     pub query_samples: Vec<V23D1QuerySample>,
@@ -84,6 +96,10 @@ pub struct V23D1Arm {
     pub oracle_recall_ppm: u64,
     /// Routed-pool recall in parts per million.
     pub routed_recall_ppm: u64,
+    /// Whether real-corpus scalar and SIMD oracle rankings have identical IDs.
+    pub scalar_simd_ids_equal: bool,
+    /// Maximum normalized scalar/SIMD distance delta in parts per million.
+    pub scalar_simd_max_distance_delta_ppm: u64,
     /// Nearest-rank p99 CPU time across frozen queries.
     pub cpu_p99_ns: u64,
     /// Conservative encoded-byte projection for four maximum pages.
@@ -101,12 +117,16 @@ pub struct V23D1Report {
     pub v20_root_checksum: String,
     /// Authenticated source V20 codebook checksum.
     pub v20_codebook_checksum: String,
-    /// SHA-256 of the ordered quantizer-training sample ordinals.
+    /// BLAKE3 of the ordered quantizer-training sample ordinals.
     pub sample_ordinals_checksum: String,
+    /// Strictly increasing frozen source-query ordinals.
+    pub query_ordinals: Vec<u64>,
     /// Live rows covered by the immutable source generation.
     pub rows: u64,
     /// Complete source routing-cell count.
     pub routing_cell_count: usize,
+    /// Maximum authenticated raw record-ID width in the corpus.
+    pub maximum_record_id_bytes: u16,
     /// Canonically ordered quantizer arms.
     pub arms: Vec<V23D1Arm>,
 }
@@ -224,6 +244,7 @@ pub struct V23WaveSample {
     pub elapsed_ns: u64,
 }
 
+#[allow(dead_code, reason = "consumed by the planned D3 benchmark slice")]
 pub(crate) fn validate_wave_sample(sample: &V23WaveSample) -> Result<()> {
     if sample.page_ordinals.is_empty()
         || sample.page_ordinals.len() > V23_WAVE_MAX_PAGES
@@ -283,7 +304,7 @@ fn valid_diagnostic_code_width(key: V23D1ArmKey) -> bool {
             || [8, 16, 32, 64].contains(&key.code_width_bytes))
 }
 
-fn fit_v23_diagnostic_quantizer(
+pub(crate) fn fit_v23_diagnostic_quantizer(
     family: V23QuantizerFamily,
     code_width_bytes: u8,
     dimensions: usize,
@@ -342,13 +363,424 @@ fn fit_v23_diagnostic_quantizer(
     }
 }
 
+pub(crate) struct V23D1CorpusAuthority<'a> {
+    pub(crate) root_checksum: &'a str,
+    pub(crate) codebook_checksum: &'a str,
+    pub(crate) rows: u64,
+    pub(crate) routing_cell_count: usize,
+    pub(crate) scratch: &'a V22StageLSpill,
+    pub(crate) query_ordinals: &'a [u64],
+    pub(crate) queries: &'a [Vec<f32>],
+    pub(crate) query_prefixes: &'a [V22StageLQueryPrefix],
+    pub(crate) routing_ranks: &'a [Vec<(u32, u32)>],
+    pub(crate) routing_gates: &'a [(usize, u64)],
+    pub(crate) normalize: bool,
+}
+
+fn v23_d1_arm_keys(dimensions: usize) -> Vec<V23D1ArmKey> {
+    let mut keys = BTreeSet::new();
+    for code_width_bytes in [8_u8, 16, 32, 64] {
+        if usize::from(code_width_bytes) <= dimensions {
+            keys.insert(V23D1ArmKey {
+                family: V23QuantizerFamily::SrhtPq,
+                code_width_bytes,
+            });
+        }
+    }
+    for bits in 1_u8..=8 {
+        if let Ok(quantizer) = FastTurboQuantMseScanQuantizer::new(23, dimensions, bits, 1)
+            && let Ok(code_width_bytes) = u8::try_from(quantizer.packed_code_len())
+            && code_width_bytes <= 64
+        {
+            keys.insert(V23D1ArmKey {
+                family: V23QuantizerFamily::FastTurboQuantMse,
+                code_width_bytes,
+            });
+        }
+    }
+    for bits in 2_u8..=8 {
+        if let Ok(quantizer) = FastTurboQuantProdScanQuantizer::new(23, dimensions, bits)
+            && let Ok(code_width_bytes) = u8::try_from(quantizer.packed_code_len())
+            && code_width_bytes <= 64
+        {
+            keys.insert(V23D1ArmKey {
+                family: V23QuantizerFamily::FastTurboQuantProd,
+                code_width_bytes,
+            });
+        }
+    }
+    keys.into_iter().collect()
+}
+
+fn observe_ranked(
+    ranked: &mut Vec<(f32, Box<[u8]>)>,
+    distance: f32,
+    canonical_record_id: &[u8],
+) -> Result<()> {
+    if !distance.is_finite() || canonical_record_id.is_empty() {
+        return Err(BorsukError::InvalidStorage(
+            "V23 D1 code ranking produced invalid evidence".to_string(),
+        ));
+    }
+    let insertion = ranked.partition_point(|(current_distance, current_id)| {
+        current_distance
+            .total_cmp(&distance)
+            .then_with(|| current_id.as_ref().cmp(canonical_record_id))
+            .is_le()
+    });
+    if insertion < 10 {
+        ranked.insert(insertion, (distance, canonical_record_id.into()));
+        ranked.truncate(10);
+    }
+    Ok(())
+}
+
+fn finish_ranked(ranked: Vec<(f32, Box<[u8]>)>) -> Result<V23RankedResult> {
+    if ranked.len() != 10 {
+        return Err(BorsukError::InvalidStorage(
+            "V23 D1 code-ranked top ten is incomplete".to_string(),
+        ));
+    }
+    Ok(V23RankedResult {
+        ids: ranked.iter().map(|(_, id)| id.to_vec()).collect::<Vec<_>>(),
+        distances: ranked.into_iter().map(|(distance, _)| distance).collect(),
+    })
+}
+
+pub(crate) fn build_v23_d1_report(authority: V23D1CorpusAuthority<'_>) -> Result<V23D1Report> {
+    if authority.query_ordinals.len() != V23_DIAGNOSTIC_QUERIES
+        || authority
+            .query_ordinals
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || authority.queries.len() != V23_DIAGNOSTIC_QUERIES
+        || authority.query_prefixes.len() != authority.queries.len()
+        || authority.routing_ranks.len() != authority.queries.len()
+        || authority.routing_gates.len() != authority.queries.len()
+        || authority.scratch.total_rows() != authority.rows
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 D1 corpus authority differs".to_string(),
+        ));
+    }
+    let dimensions = authority.scratch.dimensions();
+    let element_type = authority.scratch.element_type();
+    let sample_rows = usize::try_from(authority.rows.min(65_536)).map_err(|_| {
+        BorsukError::InvalidStorage("V23 D1 sample cardinality exceeds usize".to_string())
+    })?;
+    let sample_ordinals = (0..sample_rows)
+        .map(|index| (index as u64).saturating_mul(authority.rows) / sample_rows as u64)
+        .collect::<Vec<_>>();
+    let sample_set = sample_ordinals.iter().copied().collect::<BTreeSet<_>>();
+    if sample_set.len() != sample_rows {
+        return Err(BorsukError::InvalidStorage(
+            "V23 D1 ordinal reservoir is not unique".to_string(),
+        ));
+    }
+    let mut sample = Vec::with_capacity(sample_rows);
+    let mut maximum_record_id_bytes = 0_usize;
+    for (cell, _) in authority.scratch.cell_rows() {
+        for row in authority.scratch.read_cell(cell)? {
+            maximum_record_id_bytes = maximum_record_id_bytes.max(row.canonical_record_id.len());
+            if sample_set.contains(&row.source_ordinal) {
+                sample.push((
+                    row.source_ordinal,
+                    row.geometry(dimensions, element_type, authority.normalize)?
+                        .into_vec(),
+                ));
+            }
+        }
+    }
+    sample.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+    if sample
+        .iter()
+        .map(|(ordinal, _)| *ordinal)
+        .collect::<Vec<_>>()
+        != sample_ordinals
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 D1 scratch omits its registered ordinal reservoir".to_string(),
+        ));
+    }
+    let maximum_record_id_bytes = u16::try_from(maximum_record_id_bytes).map_err(|_| {
+        BorsukError::InvalidStorage("V23 D1 record ID width exceeds u16".to_string())
+    })?;
+    let mut ordinal_hasher = blake3::Hasher::new();
+    for (ordinal, _) in &sample {
+        ordinal_hasher.update(&ordinal.to_le_bytes());
+    }
+    let sample_vectors = sample
+        .into_iter()
+        .map(|(_, vector)| vector)
+        .collect::<Vec<_>>();
+    let prepared_queries = authority
+        .queries
+        .iter()
+        .map(|query| {
+            if authority.normalize {
+                crate::metric::unit_l2_normalized(query)
+            } else {
+                query.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    let oracle_ordinals = authority
+        .query_prefixes
+        .iter()
+        .map(|prefix| {
+            prefix
+                .rows
+                .iter()
+                .map(|row| row.record_id)
+                .collect::<BTreeSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    if oracle_ordinals
+        .iter()
+        .any(|ordinals| ordinals.len() != 2_048)
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 D1 exact oracle pool is incomplete".to_string(),
+        ));
+    }
+    let mut oracle_membership = BTreeMap::<u64, Vec<usize>>::new();
+    for (query_index, ordinals) in oracle_ordinals.iter().enumerate() {
+        for ordinal in ordinals {
+            oracle_membership
+                .entry(*ordinal)
+                .or_default()
+                .push(query_index);
+        }
+    }
+
+    let mut arms = Vec::new();
+    for key in v23_d1_arm_keys(dimensions) {
+        let quantizer = fit_v23_diagnostic_quantizer(
+            key.family,
+            key.code_width_bytes,
+            dimensions,
+            &sample_vectors,
+        )?;
+        let quantizer_state = serde_json::to_vec(&quantizer.state()).map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "V23 D1 quantizer state cannot be canonicalized: {error}"
+            ))
+        })?;
+        let mut routed_ranked = (0..authority.queries.len())
+            .map(|_| Vec::<(f32, Box<[u8]>)>::new())
+            .collect::<Vec<_>>();
+        let mut oracle_codes = (0..authority.queries.len())
+            .map(|_| Vec::<u8>::new())
+            .collect::<Vec<_>>();
+        let mut oracle_ids = (0..authority.queries.len())
+            .map(|_| Vec::<Box<[u8]>>::new())
+            .collect::<Vec<_>>();
+        let mut routed_rows = vec![0_u64; authority.queries.len()];
+        let mut cpu_ns = Vec::with_capacity(authority.queries.len());
+        let mut prepared = Vec::with_capacity(authority.queries.len());
+        for query in &prepared_queries {
+            let started = Instant::now();
+            prepared.push(quantizer.prepare_contiguous_query(query)?);
+            cpu_ns.push(started.elapsed().as_nanos().max(1) as u64);
+        }
+        for (cell, _) in authority.scratch.cell_rows() {
+            let rows = authority.scratch.read_cell(cell)?;
+            let mut codes = Vec::with_capacity(
+                rows.len()
+                    .checked_mul(usize::from(key.code_width_bytes))
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V23 D1 contiguous code bytes overflow".to_string(),
+                        )
+                    })?,
+            );
+            for row in &rows {
+                let geometry = row.geometry(dimensions, element_type, authority.normalize)?;
+                codes.extend_from_slice(&quantizer.encode(&geometry)?);
+            }
+            for (row_index, row) in rows.iter().enumerate() {
+                if let Some(query_indexes) = oracle_membership.get(&row.source_ordinal) {
+                    for query_index in query_indexes {
+                        let start = row_index * usize::from(key.code_width_bytes);
+                        oracle_codes[*query_index].extend_from_slice(
+                            &codes[start..start + usize::from(key.code_width_bytes)],
+                        );
+                        oracle_ids[*query_index].push(row.canonical_record_id.clone());
+                    }
+                }
+            }
+            for query_index in 0..authority.queries.len() {
+                let rank = authority.routing_ranks[query_index]
+                    .binary_search_by_key(&cell, |(candidate, _)| *candidate)
+                    .ok()
+                    .map(|index| authority.routing_ranks[query_index][index].1 as usize)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage(
+                            "V23 D1 scratch cell is absent from routing authority".to_string(),
+                        )
+                    })?;
+                if rank <= authority.routing_gates[query_index].0 {
+                    let started = Instant::now();
+                    let distances = quantizer
+                        .score_prepared_contiguous_codes(&prepared[query_index], &codes)?;
+                    cpu_ns[query_index] = cpu_ns[query_index]
+                        .saturating_add(started.elapsed().as_nanos().max(1) as u64);
+                    for (row, distance) in rows.iter().zip(distances) {
+                        observe_ranked(
+                            &mut routed_ranked[query_index],
+                            distance,
+                            &row.canonical_record_id,
+                        )?;
+                    }
+                    routed_rows[query_index] = routed_rows[query_index]
+                        .checked_add(rows.len() as u64)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V23 D1 routed candidate rows overflow".to_string(),
+                            )
+                        })?;
+                }
+            }
+        }
+        let mut query_samples = Vec::with_capacity(authority.queries.len());
+        let mut scalar_simd_ids_equal = true;
+        let mut scalar_simd_max_distance_delta_ppm = 0_u64;
+        for query_index in 0..authority.queries.len() {
+            if oracle_ids[query_index].len() != 2_048
+                || routed_rows[query_index] != authority.routing_gates[query_index].1
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 D1 candidate pools conflict with authority".to_string(),
+                ));
+            }
+            let oracle_distances = quantizer.score_prepared_contiguous_codes(
+                &prepared[query_index],
+                &oracle_codes[query_index],
+            )?;
+            let scalar_distances = quantizer.score_codes(
+                &prepared_queries[query_index],
+                oracle_codes[query_index].chunks_exact(usize::from(key.code_width_bytes)),
+            )?;
+            let mut oracle_ranked = Vec::new();
+            let mut scalar_ranked = Vec::new();
+            for ((id, simd_distance), scalar_distance) in oracle_ids[query_index]
+                .iter()
+                .zip(oracle_distances)
+                .zip(scalar_distances)
+            {
+                observe_ranked(&mut oracle_ranked, simd_distance, id)?;
+                observe_ranked(&mut scalar_ranked, scalar_distance, id)?;
+            }
+            let oracle = finish_ranked(oracle_ranked)?;
+            let scalar_oracle = finish_ranked(scalar_ranked)?;
+            scalar_simd_ids_equal &= oracle.ids == scalar_oracle.ids;
+            for (simd, scalar) in oracle.distances.iter().zip(&scalar_oracle.distances) {
+                let normalized =
+                    f64::from((simd - scalar).abs()) / f64::from(scalar.abs().max(1.0));
+                scalar_simd_max_distance_delta_ppm = scalar_simd_max_distance_delta_ppm
+                    .max((normalized * 1_000_000.0).ceil().min(u64::MAX as f64) as u64);
+            }
+            let routed = finish_ranked(std::mem::take(&mut routed_ranked[query_index]))?;
+            let ground_truth_ids = authority.query_prefixes[query_index].rows[..10]
+                .iter()
+                .map(|row| row.canonical_record_id.to_vec())
+                .collect::<Vec<_>>();
+            let truth = ground_truth_ids.iter().collect::<BTreeSet<_>>();
+            let oracle_hits = oracle.ids.iter().filter(|id| truth.contains(id)).count() as u8;
+            let routed_hits = routed.ids.iter().filter(|id| truth.contains(id)).count() as u8;
+            query_samples.push(V23D1QuerySample {
+                query_index: query_index as u32,
+                ground_truth_ids,
+                oracle,
+                scalar_oracle,
+                routed,
+                oracle_candidate_rows: 2_048,
+                routed_candidate_rows: routed_rows[query_index],
+                oracle_hits,
+                routed_hits,
+                cpu_ns: cpu_ns[query_index].max(1),
+            });
+        }
+        let denominator = (query_samples.len() as u64).saturating_mul(10);
+        let oracle_recall_ppm = query_samples
+            .iter()
+            .map(|sample| u64::from(sample.oracle_hits))
+            .sum::<u64>()
+            .saturating_mul(1_000_000)
+            / denominator;
+        let routed_recall_ppm = query_samples
+            .iter()
+            .map(|sample| u64::from(sample.routed_hits))
+            .sum::<u64>()
+            .saturating_mul(1_000_000)
+            / denominator;
+        let mut cpu = query_samples
+            .iter()
+            .map(|sample| sample.cpu_ns)
+            .collect::<Vec<_>>();
+        cpu.sort_unstable();
+        let cpu_p99_ns = cpu[cpu.len() - 1];
+        let projected_page_bytes = V23_PAGE_HEADER_BYTES
+            .checked_add(4 * (V23_D1_PROJECTED_PAGE_ROWS + 1))
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    V23_D1_PROJECTED_PAGE_ROWS
+                        * (u64::from(key.code_width_bytes) + u64::from(maximum_record_id_bytes)),
+                )
+            })
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 D1 page projection overflows".to_string())
+            })?;
+        let four_page_projected_bytes = projected_page_bytes.checked_mul(4).ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 D1 wave projection overflows".to_string())
+        })?;
+        arms.push(V23D1Arm {
+            key,
+            quantizer_checksum: blake3::hash(&quantizer_state).to_hex().to_string(),
+            query_samples,
+            oracle_recall_ppm,
+            routed_recall_ppm,
+            scalar_simd_ids_equal,
+            scalar_simd_max_distance_delta_ppm,
+            cpu_p99_ns,
+            four_page_projected_bytes,
+            passed: oracle_recall_ppm >= 990_000
+                && routed_recall_ppm >= 975_000
+                && scalar_simd_ids_equal
+                && scalar_simd_max_distance_delta_ppm <= V23_SCALAR_SIMD_MAX_DISTANCE_DELTA_PPM
+                && cpu_p99_ns <= V23_D1_CPU_MAX_NS
+                && projected_page_bytes <= V23_PAGE_MAX_ENCODED_BYTES
+                && four_page_projected_bytes <= V23_WAVE_MAX_BYTES,
+        });
+    }
+    let report = V23D1Report {
+        schema: "borsuk-v23-d1-v1".to_string(),
+        v20_root_checksum: authority.root_checksum.to_string(),
+        v20_codebook_checksum: authority.codebook_checksum.to_string(),
+        sample_ordinals_checksum: ordinal_hasher.finalize().to_hex().to_string(),
+        query_ordinals: authority.query_ordinals.to_vec(),
+        rows: authority.rows,
+        routing_cell_count: authority.routing_cell_count,
+        maximum_record_id_bytes,
+        arms,
+    };
+    validate_d1_report(&report)?;
+    Ok(report)
+}
+
 pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
     if report.schema != "borsuk-v23-d1-v1"
         || !valid_checksum(&report.v20_root_checksum)
         || !valid_checksum(&report.v20_codebook_checksum)
         || !valid_checksum(&report.sample_ordinals_checksum)
+        || report.query_ordinals.len() != V23_DIAGNOSTIC_QUERIES
+        || report
+            .query_ordinals
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
         || report.rows == 0
         || report.routing_cell_count == 0
+        || report.maximum_record_id_bytes == 0
         || report.arms.is_empty()
         || report
             .arms
@@ -360,10 +792,15 @@ pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
         ));
     }
     for arm in &report.arms {
+        let expected_page_projection = V23_PAGE_HEADER_BYTES
+            + 4 * (V23_D1_PROJECTED_PAGE_ROWS + 1)
+            + V23_D1_PROJECTED_PAGE_ROWS
+                * (u64::from(arm.key.code_width_bytes) + u64::from(report.maximum_record_id_bytes));
+        let expected_wave_projection = expected_page_projection.saturating_mul(4);
         if !valid_diagnostic_code_width(arm.key)
             || !valid_checksum(&arm.quantizer_checksum)
             || arm.query_samples.len() != V23_DIAGNOSTIC_QUERIES
-            || arm.four_page_projected_bytes == 0
+            || arm.four_page_projected_bytes != expected_wave_projection
         {
             return Err(BorsukError::InvalidStorage(
                 "V23 D1 arm authority differs".to_string(),
@@ -372,10 +809,25 @@ pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
         let mut oracle_hits = 0_u64;
         let mut routed_hits = 0_u64;
         let mut cpu = Vec::with_capacity(V23_DIAGNOSTIC_QUERIES);
+        let mut scalar_simd_ids_equal = true;
+        let mut scalar_simd_max_distance_delta_ppm = 0_u64;
         for (expected_index, sample) in arm.query_samples.iter().enumerate() {
             let truth = sample.ground_truth_ids.iter().collect::<BTreeSet<_>>();
             validate_ranked_result(&sample.oracle)?;
+            validate_ranked_result(&sample.scalar_oracle)?;
             validate_ranked_result(&sample.routed)?;
+            scalar_simd_ids_equal &= sample.oracle.ids == sample.scalar_oracle.ids;
+            for (simd, scalar) in sample
+                .oracle
+                .distances
+                .iter()
+                .zip(&sample.scalar_oracle.distances)
+            {
+                let normalized =
+                    f64::from((simd - scalar).abs()) / f64::from(scalar.abs().max(1.0));
+                scalar_simd_max_distance_delta_ppm = scalar_simd_max_distance_delta_ppm
+                    .max((normalized * 1_000_000.0).ceil().min(u64::MAX as f64) as u64);
+            }
             let expected_oracle_hits = sample
                 .oracle
                 .ids
@@ -413,10 +865,15 @@ pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
         let expected_cpu_p99 = cpu[V23_DIAGNOSTIC_QUERIES - 1];
         let expected_passed = expected_oracle_recall >= 990_000
             && expected_routed_recall >= 975_000
+            && scalar_simd_ids_equal
+            && scalar_simd_max_distance_delta_ppm <= V23_SCALAR_SIMD_MAX_DISTANCE_DELTA_PPM
             && expected_cpu_p99 <= V23_D1_CPU_MAX_NS
+            && expected_page_projection <= V23_PAGE_MAX_ENCODED_BYTES
             && arm.four_page_projected_bytes <= V23_WAVE_MAX_BYTES;
         if arm.oracle_recall_ppm != expected_oracle_recall
             || arm.routed_recall_ppm != expected_routed_recall
+            || arm.scalar_simd_ids_equal != scalar_simd_ids_equal
+            || arm.scalar_simd_max_distance_delta_ppm != scalar_simd_max_distance_delta_ppm
             || arm.cpu_p99_ns != expected_cpu_p99
             || arm.passed != expected_passed
         {
@@ -428,6 +885,7 @@ pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code, reason = "consumed by the planned D2 simulator slice")]
 fn d2_arm_key(arm: &V23D2Arm) -> (V23D1ArmKey, u16, u8) {
     (
         arm.d1_key,
@@ -436,6 +894,7 @@ fn d2_arm_key(arm: &V23D2Arm) -> (V23D1ArmKey, u16, u8) {
     )
 }
 
+#[allow(dead_code, reason = "consumed by the planned D2 simulator slice")]
 pub(crate) fn validate_d2_report(report: &V23D2Report) -> Result<()> {
     if report.schema != "borsuk-v23-d2-v1"
         || !valid_checksum(&report.d1_report_checksum)
@@ -612,6 +1071,7 @@ mod tests {
                 query_index,
                 ground_truth_ids: ranked_top_ten().ids,
                 oracle: ranked_top_ten(),
+                scalar_oracle: ranked_top_ten(),
                 routed: ranked_top_ten(),
                 oracle_candidate_rows: 2_048,
                 routed_candidate_rows: 8_192,
@@ -625,8 +1085,10 @@ mod tests {
             v20_root_checksum: "a".repeat(64),
             v20_codebook_checksum: "b".repeat(64),
             sample_ordinals_checksum: "c".repeat(64),
+            query_ordinals: (0_u64..32).collect(),
             rows: 9_990_000,
             routing_cell_count: 4_096,
+            maximum_record_id_bytes: 32,
             arms: vec![V23D1Arm {
                 key: V23D1ArmKey {
                     family: V23QuantizerFamily::SrhtPq,
@@ -636,8 +1098,10 @@ mod tests {
                 query_samples,
                 oracle_recall_ppm: 1_000_000,
                 routed_recall_ppm: 1_000_000,
+                scalar_simd_ids_equal: true,
+                scalar_simd_max_distance_delta_ppm: 0,
                 cpu_p99_ns: 1_000_000,
-                four_page_projected_bytes: 900_000,
+                four_page_projected_bytes: 4 * (96 + 4 * 2_049 + 2_048 * (64 + 32)),
                 passed: true,
             }],
         }
@@ -764,6 +1228,29 @@ mod tests {
         non_finite.arms[0].query_samples[0].routed.distances[0] = f32::NAN;
         assert!(validate_d1_report(&non_finite).is_err());
 
+        let mut projection_drift = canonical.clone();
+        projection_drift.arms[0].four_page_projected_bytes += 1;
+        assert!(validate_d1_report(&projection_drift).is_err());
+
+        let mut oversized_projection = canonical.clone();
+        oversized_projection.maximum_record_id_bytes = 64;
+        oversized_projection.arms[0].four_page_projected_bytes =
+            4 * (96 + 4 * 2_049 + 2_048 * (64 + 64));
+        oversized_projection.arms[0].passed = false;
+        validate_d1_report(&oversized_projection).unwrap();
+        oversized_projection.arms[0].passed = true;
+        assert!(validate_d1_report(&oversized_projection).is_err());
+
+        let mut duplicate_source_query = canonical.clone();
+        duplicate_source_query.query_ordinals[31] = 30;
+        assert!(validate_d1_report(&duplicate_source_query).is_err());
+
+        let mut scalar_identity_drift = canonical.clone();
+        scalar_identity_drift.arms[0].query_samples[0]
+            .scalar_oracle
+            .ids[0] = vec![b'z'];
+        assert!(validate_d1_report(&scalar_identity_drift).is_err());
+
         let mut noncanonical_queries = canonical;
         noncanonical_queries.arms[0].query_samples[31].query_index = 30;
         assert!(validate_d1_report(&noncanonical_queries).is_err());
@@ -776,6 +1263,7 @@ mod tests {
             family: V23QuantizerFamily::FastTurboQuantMse,
             code_width_bytes: 52,
         };
+        report.arms[0].four_page_projected_bytes = 4 * (96 + 4 * 2_049 + 2_048 * (52 + 32));
         validate_d1_report(&report).unwrap();
     }
 
@@ -840,8 +1328,9 @@ mod tests {
             let scalar = quantizer
                 .score_codes(&query, encoded.iter().map(Vec::as_slice))
                 .unwrap();
+            let prepared = quantizer.prepare_contiguous_query(&query).unwrap();
             let simd = quantizer
-                .score_contiguous_codes(&query, &contiguous)
+                .score_prepared_contiguous_codes(&prepared, &contiguous)
                 .unwrap();
             assert_eq!(simd.len(), scalar.len());
             for (observed, expected) in simd.iter().zip(scalar) {

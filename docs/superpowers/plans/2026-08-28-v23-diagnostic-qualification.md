@@ -6,7 +6,7 @@
 
 **Architecture:** Extend the existing read-only V22 corpus scan with a private V23 diagnostic module that evaluates the production SIMD quantizers, deterministically constructs capped replicated posting pages, and emits immutable page bytes. Route the diagnostic through the existing Publication V3 worker/controller authority, but give it its own claim-ineligible namespace and strict canonical validators. Each paid stage is conditional on the preceding stage's terminal receipt and does not change the authoritative index.
 
-**Tech Stack:** Rust 2024, serde, bytes, crc32fast/SHA-256 utilities already in BORSUK, production SIMD quantizers, BORSUK Storage/S3 Standard, Python 3.12 Publication V3 controller and validators, unittest/pytest, AWS EC2 Spot with profile `causality`.
+**Tech Stack:** Rust 2024, serde, bytes, BORSUK's existing BLAKE3 content checksums, production SIMD quantizers, BORSUK Storage/S3 Standard, Python 3.12 Publication V3 controller and validators, unittest/pytest, AWS EC2 Spot with profile `causality`.
 
 **Spec:** `docs/superpowers/specs/2026-08-28-standard-s3-v23-code-posting-pages-design.md`
 
@@ -130,7 +130,7 @@ git commit -m "Define V23 diagnostic authority"
 
 **Interfaces:**
 - Consumes: `V22StageLSpillRow`, authenticated V20 codebook/root, `RotatedProductQuantizer`, `FastTurboQuantMseScanQuantizer`, and `FastTurboQuantProdScanQuantizer`.
-- Produces: `BorsukIndex::diagnose_v23_d1(&[Vec<f32>], &[Vec<String>], &SearchOptions, &Path) -> Result<V23D1Report>`.
+- Produces: `BorsukIndex::diagnose_v23_d1(&[u64], &[Vec<f32>], &[Vec<String>], &SearchOptions, &Path) -> Result<V23D1Report>`; the first argument is the strictly increasing frozen source-query ordinal authority.
 
 - [ ] **Step 1: Write scalar/SIMD identity and recall RED tests**
 
@@ -157,23 +157,21 @@ Expected: compilation fails on the absent D1 API.
 Add a crate-private diagnostic wrapper to `GlobalScanQuantizer`:
 
 ```rust
-pub(crate) fn score_contiguous_codes(
+pub(crate) fn prepare_contiguous_query(&self, query: &[f32]) -> Result<PreparedGlobalScan>;
+pub(crate) fn score_prepared_contiguous_codes(
     &self,
-    query: &[f32],
+    prepared: &PreparedGlobalScan,
     codes: &[u8],
-) -> Result<Vec<f32>> {
-    let prepared = self.prepare_query(query)?;
-    self.distances_contiguous(&prepared, codes)
-}
+) -> Result<Vec<f32>>;
 ```
 
-Add `fit_v23_diagnostic_quantizer(family, width, dimensions, sample)` in `v23_diagnostic.rs`. Build `sample` as a deterministic source-ordinal reservoir capped at 65,536 complete vectors during the single corpus pass; bind its ordered ordinal SHA-256 into the report. SRHT-PQ uses `ProductQuantizerConfig { rotation: ProductRotation::Srht, subspaces: width, centroids: 256, sample_limit: sample.len(), iterations: 8, seed: 23, dimensions }`. Fast-TurboQuant arms are included only when `packed_code_len()` is one of 8, 16, 32, or 64.
+Add `fit_v23_diagnostic_quantizer(family, width, dimensions, sample)` in `v23_diagnostic.rs`. Build `sample` as a deterministic source-ordinal reservoir capped at 65,536 complete vectors during the single corpus pass; bind its ordered ordinal BLAKE3 into the report. SRHT-PQ uses `ProductQuantizerConfig { rotation: ProductRotation::Srht, subspaces: width, centroids: 256, sample_limit: sample.len(), iterations: 8, seed: 23, dimensions }`. Fast-TurboQuant arms include every distinct native packed width no greater than 64 bytes; production widths depend on dimensions and bit packing and are not restricted to powers of two.
 
 - [ ] **Step 4: Implement one authenticated corpus pass**
 
 Factor the V22 cell-card scan so D1 writes `(source_ordinal, canonical_record_id, primary_cell, exact_vector)` to the existing bounded scratch extent and encodes every passing quantizer in batches. For each query, score both its authenticated exact top-2,048 prefix and its complete registered routed pool. Sort by `(distance.total_cmp, raw_id)` and compute integer hit counts before ppm conversion.
 
-The report must bind root checksum, codebook checksum, dataset rows, query ordinals, quantizer state SHA-256, code width, candidate counts, SIMD CPU nanoseconds, scalar/SIMD agreement, per-query IDs, and aggregate recall.
+The report must bind root checksum, codebook checksum, dataset rows, query ordinals, quantizer-state BLAKE3, code width, candidate counts, SIMD CPU nanoseconds, scalar/SIMD agreement, per-query IDs, and aggregate recall.
 
 - [ ] **Step 5: Run D1 tests and unchanged V22 coverage**
 
@@ -295,7 +293,7 @@ pub(crate) struct V23DecodedPage {
 }
 ```
 
-Use a fixed 96-byte little-endian header with magic `BRSKV23P`, version `23`, and checked `u32/u64` lengths. Append `(n + 1)` `u32` ID offsets, raw ID bytes, and exactly `n * code_width` code bytes. Hash the body using the repository's existing SHA-256 helper and reject any complete encoded length above 245,760 bytes. Decoder arithmetic uses `checked_add`/`checked_mul`; it authenticates the reference before returning ranges into the owned `Bytes`.
+Use a fixed 96-byte little-endian header with magic `BRSKV23P`, version `23`, and checked `u32/u64` lengths. Append `(n + 1)` `u32` ID offsets, raw ID bytes, and exactly `n * code_width` code bytes. Hash the body using the repository's existing BLAKE3 checksum and reject any complete encoded length above 245,760 bytes. Decoder arithmetic uses `checked_add`/`checked_mul`; it authenticates the reference before returning ranges into the owned `Bytes`.
 
 - [ ] **Step 4: Run codec tests under Miri-compatible safe Rust constraints**
 

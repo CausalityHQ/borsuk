@@ -13023,6 +13023,492 @@ impl BorsukIndex {
         codebook.nearest_cells(query, probes)
     }
 
+    /// Replay production V23 quantizers over one authenticated immutable corpus
+    /// generation without publishing index state.
+    #[doc(hidden)]
+    pub fn diagnose_v23_d1(
+        &self,
+        query_ordinals: &[u64],
+        queries: &[Vec<f32>],
+        ground_truth: &[Vec<String>],
+        options: &SearchOptions,
+        scratch_parent: &Path,
+    ) -> Result<crate::v23_diagnostic::V23D1Report> {
+        use crate::{
+            v22_feasibility::{
+                V22_STAGE_L_MAX_CELL_ROWS, V22ExactPrefixAccumulator, V22StageLExactRow,
+                V22StageLQueryPrefix, V22StageLSpillRow, V22StageLSpillWriter,
+            },
+            v23_diagnostic::{V23_DIAGNOSTIC_QUERIES, V23D1CorpusAuthority, build_v23_d1_report},
+        };
+
+        if query_ordinals.len() != V23_DIAGNOSTIC_QUERIES
+            || query_ordinals.windows(2).any(|pair| pair[0] >= pair[1])
+            || queries.len() != V23_DIAGNOSTIC_QUERIES
+            || queries.len() != ground_truth.len()
+            || options.k != 10
+            || !matches!(options.mode, SearchMode::Approx { .. })
+            || options.filter.is_some()
+            || !options.vector_name.is_empty()
+            || !scratch_parent.is_dir()
+        {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V23 D1 diagnostic request is outside its read-only authority".to_string(),
+            ));
+        }
+        if !self.cell_wal_snapshot.is_empty()
+            || !self.manifest.wal_frontier_is_empty()
+            || (self.manifest.segments_are_global_delta && !self.manifest.segments.is_empty())
+            || self.global_leaf_mutation_state_required()
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V23 D1 requires mutation-free generation authority".to_string(),
+            ));
+        }
+        let global_ref = self
+            .manifest
+            .global_cell_card_ann_ref
+            .as_ref()
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V23 D1 requires a pinned V20 cell-card generation".to_string(),
+                )
+            })?;
+        global_ref.validate()?;
+        let root_checksum = global_ref.root_checksum();
+        let root = self
+            .resident_global_ann_pins
+            .as_ref()
+            .and_then(|pins| pins.cell_card_root(&root_checksum))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V23 D1 requires the authenticated V20 root".to_string(),
+                )
+            })?;
+        let codebook = self.load_resident_global_codebook(global_ref.codebook())?;
+        let routing_cell_count = codebook.cell_count();
+        if routing_cell_count == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "V23 D1 routing authority is empty".to_string(),
+            ));
+        }
+        let authenticated_cells = codebook.all_cell_ids().into_iter().collect::<BTreeSet<_>>();
+        if authenticated_cells.len() != routing_cell_count {
+            return Err(BorsukError::InvalidStorage(
+                "V23 D1 routing authority contains duplicate cells".to_string(),
+            ));
+        }
+
+        let mut truth_ids = Vec::with_capacity(ground_truth.len());
+        for truth in ground_truth {
+            if truth.len() != options.k || truth.iter().any(String::is_empty) {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "V23 D1 ground truth must supply exactly k non-empty IDs".to_string(),
+                ));
+            }
+            let ordered = truth
+                .iter()
+                .map(|id| RecordId::from(id.as_str()))
+                .collect::<Vec<_>>();
+            if ordered.iter().cloned().collect::<BTreeSet<_>>().len() != ordered.len() {
+                return Err(BorsukError::InvalidSearchOptions(
+                    "V23 D1 ground truth contains duplicate IDs".to_string(),
+                ));
+            }
+            truth_ids.push(ordered);
+        }
+        for query in queries {
+            self.validate_vector(query)?;
+        }
+
+        let normalize = self
+            .manifest
+            .config
+            .metric
+            .uses_normalized_euclidean_geometry();
+        let routing_ranks = queries
+            .iter()
+            .map(|query| {
+                let routed_query = if normalize {
+                    crate::metric::unit_l2_normalized(query)
+                } else {
+                    query.clone()
+                };
+                let ordered = self.resident_global_selected_cells(
+                    &codebook,
+                    &routed_query,
+                    routing_cell_count,
+                )?;
+                if ordered.len() != routing_cell_count
+                    || ordered.iter().copied().collect::<BTreeSet<_>>() != authenticated_cells
+                {
+                    return Err(BorsukError::InvalidStorage(
+                        "V23 D1 complete routing order conflicts with authority".to_string(),
+                    ));
+                }
+                let mut ranks = ordered
+                    .into_iter()
+                    .enumerate()
+                    .map(|(rank, cell)| {
+                        u32::try_from(rank + 1)
+                            .map(|rank| (cell, rank))
+                            .map_err(|_| {
+                                BorsukError::InvalidStorage(
+                                    "V23 D1 routing rank exceeds u32".to_string(),
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                ranks.sort_unstable_by_key(|(cell, _)| *cell);
+                Ok(ranks)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let dimensions = self.manifest.config.dimensions;
+        let element_type = self.manifest.build_config.vector_element_type;
+        let code_width = codebook.code_bytes_per_vector();
+        let mut populated_cells = BTreeSet::new();
+        let mut populated_cell_rows = BTreeMap::<u32, u64>::new();
+        for card_index in 0..root.card_count() {
+            let (_, head) = root.head_ref(card_index)?;
+            if !authenticated_cells.contains(&head.cell_index) {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 D1 card references an unauthenticated routing cell".to_string(),
+                ));
+            }
+            populated_cells.insert(head.cell_index);
+            let rows = populated_cell_rows.entry(head.cell_index).or_default();
+            *rows = rows.checked_add(u64::from(head.rows)).ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 D1 cell row count overflows".to_string())
+            })?;
+            if *rows > V22_STAGE_L_MAX_CELL_ROWS {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 D1 cell exceeds the registered routed-row ceiling".to_string(),
+                ));
+            }
+        }
+        if populated_cells.is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "V23 D1 generation has no populated routing cells".to_string(),
+            ));
+        }
+        let mut scratch = V22StageLSpillWriter::create(
+            scratch_parent,
+            &root_checksum,
+            dimensions,
+            element_type,
+            code_width,
+            &populated_cells,
+            V22_STAGE_L_MAX_CELL_ROWS,
+        )?;
+        let mut accumulators = (0..queries.len())
+            .map(|_| V22ExactPrefixAccumulator::new(1))
+            .collect::<Result<Vec<_>>>()?;
+        let mut canonical_id_hashes =
+            Vec::<[u8; 32]>::with_capacity(usize::try_from(root.rows()).map_err(|_| {
+                BorsukError::InvalidStorage("V23 D1 root row count exceeds usize".to_string())
+            })?);
+        let exact_row_bytes = element_type.fixed_width_bytes(dimensions)?;
+        let mut source_ordinal = 0_u64;
+        let card_indexes_by_group = root.card_indexes_by_group()?;
+        for (group_ordinal, group) in root.groups().iter().enumerate() {
+            let mut group_rows = Vec::<(u64, Box<[u8]>, u32, Vec<f32>)>::new();
+            let checksum = blake3::Hash::from_bytes(group.checksum)
+                .to_hex()
+                .to_string();
+            let group_read = self
+                .storage
+                .read_known_size_from_backing_without_cache_with_checksum(
+                    &group.path,
+                    group.encoded_bytes,
+                    &checksum,
+                )?;
+            let group_bytes = &group_read.bytes;
+            let plane_start = usize::try_from(group.code_plane_offset).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "V23 D1 group code-plane offset exceeds usize".to_string(),
+                )
+            })?;
+            let plane_end = plane_start
+                .checked_add(usize::try_from(group.code_plane_bytes).map_err(|_| {
+                    BorsukError::InvalidStorage(
+                        "V23 D1 group code-plane bytes exceed usize".to_string(),
+                    )
+                })?)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V23 D1 group code-plane range overflows".to_string(),
+                    )
+                })?;
+            let code_plane = group_bytes.get(plane_start..plane_end).ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 D1 group omits its code plane".to_string())
+            })?;
+            root.validate_complete_code_planes(&[(group.as_ref(), code_plane)])?;
+            let card_indexes = card_indexes_by_group.get(group_ordinal).ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 D1 group card directory is absent".to_string())
+            })?;
+            for &card_index in card_indexes {
+                let (_, head) = root.head_ref(card_index)?;
+                let code_start = usize::try_from(head.code_offset).map_err(|_| {
+                    BorsukError::InvalidStorage("V23 D1 code offset exceeds usize".to_string())
+                })?;
+                let code_end = code_start
+                    .checked_add(head.code_bytes as usize)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage("V23 D1 code range overflows".to_string())
+                    })?;
+                let card_codes = group_bytes.get(code_start..code_end).ok_or_else(|| {
+                    BorsukError::InvalidStorage("V23 D1 group omits a card code plane".to_string())
+                })?;
+                let verified_head = decode_cell_card_head(
+                    &head,
+                    card_codes,
+                    group.encoded_bytes,
+                    dimensions,
+                    element_type,
+                )?;
+                let mut decoded_card_rows = 0_usize;
+                for block in head.exact_blocks.iter() {
+                    let end = block
+                        .offset
+                        .checked_add(u64::from(block.bytes))
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V23 D1 exact block range overflows".to_string(),
+                            )
+                        })?;
+                    let stored = group_bytes
+                        .get(
+                            usize::try_from(block.offset).map_err(|_| {
+                                BorsukError::InvalidStorage(
+                                    "V23 D1 exact offset exceeds usize".to_string(),
+                                )
+                            })?
+                                ..usize::try_from(end).map_err(|_| {
+                                    BorsukError::InvalidStorage(
+                                        "V23 D1 exact end exceeds usize".to_string(),
+                                    )
+                                })?,
+                        )
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V23 D1 group omits an exact block".to_string(),
+                            )
+                        })?;
+                    let decoded = verified_head.verify_block(
+                        block.block_ordinal,
+                        stored,
+                        dimensions,
+                        element_type,
+                    )?;
+                    if decoded.len() != block.rows as usize {
+                        return Err(BorsukError::InvalidStorage(
+                            "V23 D1 decoded block rows disagree with authority".to_string(),
+                        ));
+                    }
+                    let mut spilled = Vec::with_capacity(decoded.len());
+                    for (local_row, row) in decoded.iter().enumerate() {
+                        let ordinal =
+                            source_ordinal
+                                .checked_add(local_row as u64)
+                                .ok_or_else(|| {
+                                    BorsukError::InvalidStorage(
+                                        "V23 D1 source ordinal overflows".to_string(),
+                                    )
+                                })?;
+                        let card_row =
+                            decoded_card_rows.checked_add(local_row).ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "V23 D1 card row ordinal overflows".to_string(),
+                                )
+                            })?;
+                        let code_start = card_row.checked_mul(code_width).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V23 D1 row-code offset overflows".to_string(),
+                            )
+                        })?;
+                        let code_end = code_start.checked_add(code_width).ok_or_else(|| {
+                            BorsukError::InvalidStorage("V23 D1 row-code end overflows".to_string())
+                        })?;
+                        let code = card_codes.get(code_start..code_end).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V23 D1 card code plane omits a decoded row".to_string(),
+                            )
+                        })?;
+                        let mut exact = Vec::with_capacity(exact_row_bytes);
+                        element_type.encode_canonical_fixed_width_into(&row.vector, &mut exact)?;
+                        let canonical_record_id: Box<[u8]> = row.id.as_bytes().into();
+                        canonical_id_hashes.push(*blake3::hash(&canonical_record_id).as_bytes());
+                        spilled.push(V22StageLSpillRow {
+                            source_ordinal: ordinal,
+                            canonical_record_id: canonical_record_id.clone(),
+                            stamp: row.stamp,
+                            code: code.into(),
+                            exact: exact.into(),
+                        });
+                        group_rows.push((
+                            ordinal,
+                            canonical_record_id,
+                            head.cell_index,
+                            row.vector.clone(),
+                        ));
+                    }
+                    scratch.append_batch(head.cell_index, &spilled)?;
+                    decoded_card_rows =
+                        decoded_card_rows
+                            .checked_add(decoded.len())
+                            .ok_or_else(|| {
+                                BorsukError::InvalidStorage(
+                                    "V23 D1 decoded row count overflows".to_string(),
+                                )
+                            })?;
+                    source_ordinal = source_ordinal
+                        .checked_add(decoded.len() as u64)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V23 D1 source ordinal overflows".to_string(),
+                            )
+                        })?;
+                }
+                if decoded_card_rows != head.rows as usize {
+                    return Err(BorsukError::InvalidStorage(
+                        "V23 D1 decoded rows disagree with card authority".to_string(),
+                    ));
+                }
+            }
+            crate::parallel::install(|| {
+                accumulators
+                    .par_iter_mut()
+                    .zip(queries.par_iter())
+                    .try_for_each(|(accumulator, query)| -> Result<()> {
+                        for (ordinal, canonical_record_id, primary_cell, vector) in &group_rows {
+                            let distance = self
+                                .manifest
+                                .config
+                                .metric
+                                .distance_unchecked(query, vector)?;
+                            accumulator.observe(
+                                *ordinal,
+                                canonical_record_id,
+                                *primary_cell,
+                                &[distance],
+                            )?;
+                        }
+                        Ok(())
+                    })
+            })?;
+        }
+        if source_ordinal != root.rows() {
+            return Err(BorsukError::InvalidStorage(
+                "V23 D1 decoded rows disagree with root authority".to_string(),
+            ));
+        }
+        canonical_id_hashes.sort_unstable();
+        if canonical_id_hashes
+            .windows(2)
+            .any(|pair| pair[0] == pair[1])
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V23 D1 corpus contains duplicate authenticated record IDs".to_string(),
+            ));
+        }
+        let scratch = scratch.finish()?;
+        if scratch.total_rows() != source_ordinal {
+            return Err(BorsukError::InvalidStorage(
+                "V23 D1 scratch row count conflicts with root authority".to_string(),
+            ));
+        }
+        let exact_prefixes = accumulators
+            .into_iter()
+            .map(|accumulator| {
+                let mut query = accumulator.finish()?;
+                query.pop().ok_or_else(|| {
+                    BorsukError::InvalidStorage("V23 D1 query accumulator is empty".to_string())
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut query_prefixes = Vec::with_capacity(queries.len());
+        for (query_index, rows) in exact_prefixes.into_iter().enumerate() {
+            if rows.len() != 2_048
+                || rows[..options.k]
+                    .iter()
+                    .zip(&truth_ids[query_index])
+                    .any(|(row, truth)| row.canonical_record_id.as_ref() != truth.as_bytes())
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 D1 exact top ten conflicts with frozen ground truth".to_string(),
+                ));
+            }
+            let rows = rows
+                .into_iter()
+                .map(|row| {
+                    let primary_cell_routing_rank = routing_ranks[query_index]
+                        .binary_search_by_key(&row.primary_cell, |(cell, _)| *cell)
+                        .ok()
+                        .map(|index| routing_ranks[query_index][index].1 as usize)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V23 D1 prefix row references an unauthenticated cell".to_string(),
+                            )
+                        })?;
+                    Ok(V22StageLExactRow {
+                        distance: row.distance,
+                        record_id: row.record_id,
+                        canonical_record_id: row.canonical_record_id,
+                        primary_cell: row.primary_cell,
+                        primary_cell_routing_rank,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            query_prefixes.push(V22StageLQueryPrefix { query_index, rows });
+        }
+        let cell_rows = scratch.cell_rows();
+        let registered_probes = usize::try_from(global_ref.codebook().probes())
+            .unwrap_or(usize::MAX)
+            .max(1)
+            .min(routing_cell_count);
+        let routing_gates = query_prefixes
+            .iter()
+            .enumerate()
+            .map(|(query_index, _)| {
+                let routed_rows = cell_rows.iter().try_fold(0_u64, |total, (cell, rows)| {
+                    let rank = routing_ranks[query_index]
+                        .binary_search_by_key(cell, |(candidate, _)| *candidate)
+                        .ok()
+                        .map(|index| routing_ranks[query_index][index].1 as usize)
+                        .ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V23 D1 scratch cell is absent from routing authority".to_string(),
+                            )
+                        })?;
+                    if rank <= registered_probes {
+                        total.checked_add(*rows).ok_or_else(|| {
+                            BorsukError::InvalidStorage(
+                                "V23 D1 routed row count overflows".to_string(),
+                            )
+                        })
+                    } else {
+                        Ok(total)
+                    }
+                })?;
+                Ok((registered_probes, routed_rows))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        build_v23_d1_report(V23D1CorpusAuthority {
+            root_checksum: &root_checksum,
+            codebook_checksum: global_ref.codebook().descriptor_checksum(),
+            rows: source_ordinal,
+            routing_cell_count,
+            scratch: &scratch,
+            query_ordinals,
+            queries,
+            query_prefixes: &query_prefixes,
+            routing_ranks: &routing_ranks,
+            routing_gates: &routing_gates,
+            normalize,
+        })
+    }
+
     /// Compute authenticated exact-prefix and complete routing-rank authority
     /// from one mutation-free V20 generation without publishing state.
     #[doc(hidden)]
@@ -44988,6 +45474,159 @@ mod tests {
             delta_error.to_string().contains("mutation-free"),
             "{delta_error}"
         );
+    }
+
+    #[test]
+    fn v23_d1_diagnostic_replays_one_immutable_generation() {
+        let directory = tempfile::tempdir().unwrap();
+        let scratch_parent = tempfile::tempdir().unwrap();
+        let uri = directory.path().to_string_lossy().into_owned();
+        let mut index = BorsukIndex::create(IndexConfig {
+            uri,
+            metric: VectorMetric::Euclidean,
+            dimensions: 8,
+            segment_max_vectors: 256,
+            ram_budget_bytes: None,
+            text: false,
+            named_vectors: Default::default(),
+        })
+        .unwrap();
+        let vectors = (0..2055).map(|row| vec![row as f32; 8]).collect::<Vec<_>>();
+        index
+            .add(
+                vectors
+                    .iter()
+                    .enumerate()
+                    .map(|(row, vector)| {
+                        VectorRecord::new(format!("v23-d1-{row:04}"), vector.clone())
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        index.finish_bulk_load().unwrap();
+
+        let manifest_before = serde_json::to_vec(&index.manifest).unwrap();
+        let objects_before = index
+            .storage
+            .list_objects("")
+            .unwrap()
+            .into_iter()
+            .map(|object| (object.path, object.size))
+            .collect::<Vec<_>>();
+        let query_ordinals = (0..crate::v23_diagnostic::V23_DIAGNOSTIC_QUERIES)
+            .map(|offset| 1_000_u64 + offset as u64)
+            .collect::<Vec<_>>();
+        let queries = query_ordinals
+            .iter()
+            .map(|ordinal| vectors[*ordinal as usize].clone())
+            .collect::<Vec<_>>();
+        let truth = query_ordinals
+            .iter()
+            .map(|ordinal| {
+                let center = *ordinal as usize;
+                [
+                    center,
+                    center - 1,
+                    center + 1,
+                    center - 2,
+                    center + 2,
+                    center - 3,
+                    center + 3,
+                    center - 4,
+                    center + 4,
+                    center - 5,
+                ]
+                .into_iter()
+                .map(|row| format!("v23-d1-{row:04}"))
+                .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let options = SearchOptions::approx(10, LeafMode::SrhtPqScan)
+            .with_max_segments(4)
+            .with_max_candidates_per_segment(64);
+
+        let report = index
+            .diagnose_v23_d1(
+                &query_ordinals,
+                &queries,
+                &truth,
+                &options,
+                scratch_parent.path(),
+            )
+            .unwrap();
+        crate::v23_diagnostic::validate_d1_report(&report).unwrap();
+        assert_eq!(report.rows, 2055);
+        let global_ref = index.manifest.global_cell_card_ann_ref.as_ref().unwrap();
+        let codebook = index
+            .load_resident_global_codebook(global_ref.codebook())
+            .unwrap();
+        let root = index
+            .resident_global_ann_pins
+            .as_ref()
+            .unwrap()
+            .cell_card_root(global_ref.root_checksum().as_str())
+            .unwrap();
+        let expected_routed_rows = queries
+            .iter()
+            .map(|query| {
+                let registered_cells = index
+                    .resident_global_selected_cells(
+                        &codebook,
+                        query,
+                        usize::try_from(global_ref.codebook().probes())
+                            .unwrap()
+                            .min(codebook.cell_count()),
+                    )
+                    .unwrap()
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+                (0..root.card_count())
+                    .map(|card_index| root.head_ref(card_index).unwrap().1)
+                    .filter(|head| registered_cells.contains(&head.cell_index))
+                    .map(|head| u64::from(head.rows))
+                    .sum::<u64>()
+            })
+            .collect::<Vec<_>>();
+        assert!(!report.arms.is_empty());
+        assert!(report.arms.windows(2).all(|pair| pair[0].key < pair[1].key));
+        assert!(report.arms.iter().all(|arm| {
+            arm.query_samples
+                .iter()
+                .enumerate()
+                .all(|(query_index, sample)| {
+                    sample.query_index as usize == query_index
+                        && sample.routed_candidate_rows == expected_routed_rows[query_index]
+                })
+        }));
+        assert_eq!(scratch_parent.path().read_dir().unwrap().count(), 0);
+        assert_eq!(
+            serde_json::to_vec(&index.manifest).unwrap(),
+            manifest_before
+        );
+        assert_eq!(
+            index
+                .storage
+                .list_objects("")
+                .unwrap()
+                .into_iter()
+                .map(|object| (object.path, object.size))
+                .collect::<Vec<_>>(),
+            objects_before
+        );
+
+        index
+            .add(vec![VectorRecord::new("v23-d1-mutation", vec![0.0; 8])])
+            .unwrap();
+        let error = index
+            .diagnose_v23_d1(
+                &query_ordinals,
+                &queries,
+                &truth,
+                &options,
+                scratch_parent.path(),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("mutation-free"), "{error}");
     }
 
     #[test]
