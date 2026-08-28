@@ -793,6 +793,7 @@ fn centroid_residual_simd(values: &[f32], codes: &[u8], centroids: &[f32]) -> Ve
 /// fitted to the indexed corpus: coordinates of a uniformly rotated unit vector
 /// follow the symmetric Beta law used by TurboQuant's MSE quantizer.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TurboQuantCodebookState {
     pub(crate) boundaries: Vec<f32>,
     pub(crate) centroids: Vec<f32>,
@@ -800,6 +801,7 @@ pub(crate) struct TurboQuantCodebookState {
 
 /// Complete, data-oblivious state for the global MSE-only TurboQuant codec.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FastTurboQuantMseScanState {
     pub(crate) seed: u64,
     pub(crate) dimensions: usize,
@@ -1067,6 +1069,7 @@ impl FastTurboQuantMseScanQuantizer {
 /// rotated coordinate and the residual stage uses one sign bit per padded
 /// coordinate, as in TurboQuant's two-stage construction.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FastTurboQuantProdScanState {
     pub(crate) seed: u64,
     pub(crate) dimensions: usize,

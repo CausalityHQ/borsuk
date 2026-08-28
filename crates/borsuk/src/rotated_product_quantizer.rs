@@ -49,6 +49,7 @@ pub(crate) struct PreparedAdc {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ProductQuantizerState {
     pub(crate) rotation: ProductRotation,
     pub(crate) seed: u64,

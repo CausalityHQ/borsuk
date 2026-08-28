@@ -89,7 +89,12 @@ fn compose_spool_cell(primary: usize, secondary: usize, parent_high_byte: bool) 
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "codec", content = "state", rename_all = "kebab-case")]
+#[serde(
+    deny_unknown_fields,
+    tag = "codec",
+    content = "state",
+    rename_all = "kebab-case"
+)]
 pub(crate) enum GlobalScanQuantizerState {
     Pq(ProductQuantizerState),
     FastTurboQuantMse(FastTurboQuantMseScanState),
@@ -98,6 +103,7 @@ pub(crate) enum GlobalScanQuantizerState {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct F16FlatScanState {
     dimensions: usize,
 }

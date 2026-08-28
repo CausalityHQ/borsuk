@@ -1270,20 +1270,64 @@ pub(crate) fn fit_v23_diagnostic_quantizer(
     }
 }
 
-pub(crate) fn restore_v23_diagnostic_quantizer(arm: &V23D1Arm) -> Result<GlobalScanQuantizer> {
-    if !valid_diagnostic_code_width(arm.key) || !valid_checksum(&arm.quantizer_checksum) {
-        return Err(BorsukError::InvalidStorage(
-            "V23 D1 quantizer authority differs".to_string(),
-        ));
+fn v23_canonical_json_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(v23_canonical_json_value).collect())
+        }
+        serde_json::Value::Object(values) => {
+            let ordered = values
+                .into_iter()
+                .map(|(key, value)| (key, v23_canonical_json_value(value)))
+                .collect::<BTreeMap<_, _>>();
+            serde_json::Value::Object(ordered.into_iter().collect())
+        }
+        scalar => scalar,
     }
-    let state_bytes = serde_json::to_vec(&arm.quantizer_state).map_err(|error| {
+}
+
+fn v23_quantizer_state_checksum(state: &GlobalScanQuantizerState) -> Result<String> {
+    let value = serde_json::to_value(state).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 D1 quantizer state cannot be canonicalized: {error}"
+        ))
+    })?;
+    let bytes = serde_json::to_vec(&v23_canonical_json_value(value)).map_err(|error| {
         BorsukError::InvalidStorage(format!(
             "V23 D1 quantizer state cannot be serialized: {error}"
         ))
     })?;
-    if blake3::hash(&state_bytes).to_hex().as_str() != arm.quantizer_checksum {
+    Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
+fn v23_d1_report_checksum(report: &V23D1Report) -> Result<String> {
+    let mut normalized = report.clone();
+    for arm in &mut normalized.arms {
+        let state: GlobalScanQuantizerState = serde_json::from_value(arm.quantizer_state.clone())
+            .map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "V23 D1 quantizer state cannot be decoded: {error}"
+            ))
+        })?;
+        arm.quantizer_state = serde_json::to_value(state).map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "V23 D1 quantizer state cannot be canonicalized: {error}"
+            ))
+        })?;
+    }
+    let value = serde_json::to_value(normalized).map_err(|error| {
+        BorsukError::InvalidStorage(format!("V23 D1 report cannot be canonicalized: {error}"))
+    })?;
+    let bytes = serde_json::to_vec(&v23_canonical_json_value(value)).map_err(|error| {
+        BorsukError::InvalidStorage(format!("V23 D1 report cannot be serialized: {error}"))
+    })?;
+    Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
+pub(crate) fn restore_v23_diagnostic_quantizer(arm: &V23D1Arm) -> Result<GlobalScanQuantizer> {
+    if !valid_diagnostic_code_width(arm.key) || !valid_checksum(&arm.quantizer_checksum) {
         return Err(BorsukError::InvalidStorage(
-            "V23 D1 quantizer state checksum differs".to_string(),
+            "V23 D1 quantizer authority differs".to_string(),
         ));
     }
     let state: GlobalScanQuantizerState = serde_json::from_value(arm.quantizer_state.clone())
@@ -1292,6 +1336,11 @@ pub(crate) fn restore_v23_diagnostic_quantizer(arm: &V23D1Arm) -> Result<GlobalS
                 "V23 D1 quantizer state cannot be decoded: {error}"
             ))
         })?;
+    if v23_quantizer_state_checksum(&state)? != arm.quantizer_checksum {
+        return Err(BorsukError::InvalidStorage(
+            "V23 D1 quantizer state checksum differs".to_string(),
+        ));
+    }
     let family_matches = matches!(
         (&state, arm.key.family),
         (GlobalScanQuantizerState::Pq(_), V23QuantizerFamily::SrhtPq)
@@ -1637,16 +1686,13 @@ pub(crate) fn build_v23_d1_report(authority: V23D1CorpusAuthority<'_>) -> Result
             dimensions,
             &sample_vectors,
         )?;
-        let quantizer_state = serde_json::to_value(quantizer.state()).map_err(|error| {
+        let typed_quantizer_state = quantizer.state();
+        let quantizer_state = serde_json::to_value(&typed_quantizer_state).map_err(|error| {
             BorsukError::InvalidStorage(format!(
                 "V23 D1 quantizer state cannot be canonicalized: {error}"
             ))
         })?;
-        let quantizer_state_bytes = serde_json::to_vec(&quantizer_state).map_err(|error| {
-            BorsukError::InvalidStorage(format!(
-                "V23 D1 quantizer state cannot be serialized: {error}"
-            ))
-        })?;
+        let quantizer_checksum = v23_quantizer_state_checksum(&typed_quantizer_state)?;
         let mut routed_ranked = (0..authority.queries.len())
             .map(|_| Vec::<(f32, Box<[u8]>)>::new())
             .collect::<Vec<_>>();
@@ -1823,7 +1869,7 @@ pub(crate) fn build_v23_d1_report(authority: V23D1CorpusAuthority<'_>) -> Result
         })?;
         arms.push(V23D1Arm {
             key,
-            quantizer_checksum: blake3::hash(&quantizer_state_bytes).to_hex().to_string(),
+            quantizer_checksum,
             quantizer_state,
             query_samples,
             oracle_recall_ppm,
@@ -3068,12 +3114,9 @@ fn build_v23_d2_report_inner(
     for arm in &mut nondominated {
         arm.projected_build_bytes = projected_build_peak_bytes;
     }
-    let d1_report_bytes = serde_json::to_vec(authority.d1_report).map_err(|error| {
-        BorsukError::InvalidStorage(format!("V23 D1 report cannot be canonicalized: {error}"))
-    })?;
     let report = V23D2Report {
         schema: "borsuk-v23-d2-v4".to_string(),
-        d1_report_checksum: blake3::hash(&d1_report_bytes).to_hex().to_string(),
+        d1_report_checksum: v23_d1_report_checksum(authority.d1_report)?,
         query_ordinals: authority.query_ordinals.to_vec(),
         rows: authority.scratch.total_rows(),
         arms: nondominated,
@@ -3420,9 +3463,9 @@ mod tests {
         encode_v23_page, fit_v23_diagnostic_quantizer, plan_v23_pages, plan_v23_pages_for_metric,
         read_v23_u16, restore_v23_diagnostic_quantizer, select_v23_d2_frontier,
         stream_v23_materialized_pages, v23_d1_arm_keys, v23_d1_bounded_wave_codes,
-        v23_d1_projected_page_bytes, v23_d1_projected_page_rows, v23_d2_projected_build_memory,
-        v23_d2_projected_memory, validate_d1_report, validate_d2_report,
-        validate_v23_d2_query_binding, validate_v23_d2_query_prefixes,
+        v23_d1_projected_page_bytes, v23_d1_projected_page_rows, v23_d1_report_checksum,
+        v23_d2_projected_build_memory, v23_d2_projected_memory, validate_d1_report,
+        validate_d2_report, validate_v23_d2_query_binding, validate_v23_d2_query_prefixes,
         validate_v23_d3_request_capacity, validate_wave_sample,
     };
     use crate::metric::VectorMetric;
@@ -3848,6 +3891,46 @@ mod tests {
             .unwrap()
             .insert("mutated".to_string(), serde_json::Value::Bool(true));
         assert!(validate_d1_report(&report).is_err());
+    }
+
+    #[test]
+    fn v23_d1_quantizer_checksum_normalizes_equivalent_f32_json_numbers() {
+        let mut report = canonical_d1_report();
+        let value = &mut report.arms[0].quantizer_state["state"]["codebooks"][0][0];
+        let original = value.as_f64().unwrap();
+        let adjacent = f64::from_bits(original.to_bits() + 1);
+        assert_ne!(original, adjacent);
+        assert_eq!(original as f32, adjacent as f32);
+        *value = serde_json::Value::Number(serde_json::Number::from_f64(adjacent).unwrap());
+
+        restore_v23_diagnostic_quantizer(&report.arms[0]).unwrap();
+        validate_d1_report(&report).unwrap();
+    }
+
+    #[test]
+    fn v23_d2_lineage_checksum_normalizes_equivalent_d1_f32_json_numbers() {
+        let report = canonical_d1_report();
+        let mut equivalent = report.clone();
+        let value = &mut equivalent.arms[0].quantizer_state["state"]["codebooks"][0][0];
+        let original = value.as_f64().unwrap();
+        let adjacent = f64::from_bits(original.to_bits() + 1);
+        assert_ne!(original, adjacent);
+        assert_eq!(original as f32, adjacent as f32);
+        *value = serde_json::Value::Number(serde_json::Number::from_f64(adjacent).unwrap());
+
+        assert_eq!(
+            v23_d1_report_checksum(&report).unwrap(),
+            v23_d1_report_checksum(&equivalent).unwrap()
+        );
+    }
+
+    #[test]
+    fn v23_quantizer_state_rejects_nested_unknown_fields_before_checksum() {
+        let mut report = canonical_d1_report();
+        report.arms[0].quantizer_state["state"]["unexpected"] = serde_json::json!(true);
+
+        assert!(restore_v23_diagnostic_quantizer(&report.arms[0]).is_err());
+        assert!(v23_d1_report_checksum(&report).is_err());
     }
 
     #[test]
