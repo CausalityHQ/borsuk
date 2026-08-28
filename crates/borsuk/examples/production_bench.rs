@@ -718,7 +718,7 @@ fn validate_v23_phase(
         return Ok(());
     }
     if queries != V23_D3_QUERY_COUNT as usize
-        || disk_cache_max_bytes != Some(0)
+        || disk_cache_max_bytes.is_some()
         || ram_budget_bytes != Some(V23_D3_MAX_TRANSIENT_BYTES)
         || limit != 0
         || ambient_phase.is_some()
@@ -12687,25 +12687,11 @@ mod tests {
             page_uri: None,
         };
         assert!(
-            validate_v23_phase(
-                Some(&mode),
-                32,
-                Some(0),
-                Some(3 * 1024 * 1024 * 1024),
-                0,
-                None
-            )
-            .is_ok()
+            validate_v23_phase(Some(&mode), 32, None, Some(3 * 1024 * 1024 * 1024), 0, None)
+                .is_ok()
         );
         for invalid in [
-            validate_v23_phase(
-                Some(&mode),
-                31,
-                Some(0),
-                Some(3 * 1024 * 1024 * 1024),
-                0,
-                None,
-            ),
+            validate_v23_phase(Some(&mode), 31, None, Some(3 * 1024 * 1024 * 1024), 0, None),
             validate_v23_phase(
                 Some(&mode),
                 32,
@@ -12714,27 +12700,20 @@ mod tests {
                 0,
                 None,
             ),
-            validate_v23_phase(Some(&mode), 32, Some(0), None, 0, None),
+            validate_v23_phase(Some(&mode), 32, None, None, 0, None),
             validate_v23_phase(
                 Some(&mode),
                 32,
-                Some(0),
+                None,
                 Some(3 * 1024 * 1024 * 1024 + 1),
                 0,
                 None,
             ),
+            validate_v23_phase(Some(&mode), 32, None, Some(3 * 1024 * 1024 * 1024), 1, None),
             validate_v23_phase(
                 Some(&mode),
                 32,
-                Some(0),
-                Some(3 * 1024 * 1024 * 1024),
-                1,
                 None,
-            ),
-            validate_v23_phase(
-                Some(&mode),
-                32,
-                Some(0),
                 Some(3 * 1024 * 1024 * 1024),
                 0,
                 Some("BORSUK_BENCH_RECALL_ONLY"),
