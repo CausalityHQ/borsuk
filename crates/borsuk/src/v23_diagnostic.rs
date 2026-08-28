@@ -2,6 +2,7 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, BinaryHeap},
     path::Path,
+    sync::Arc,
     time::Instant,
 };
 
@@ -15,6 +16,8 @@ use crate::{
     logical_cell_catalog::LogicalCellCatalog,
     metric::VectorMetric,
     rotated_product_quantizer::{ProductQuantizerConfig, ProductRotation, RotatedProductQuantizer},
+    segment_cache::ByteAdmissionGate,
+    storage::Storage,
     turboquant::{FastTurboQuantMseScanQuantizer, FastTurboQuantProdScanQuantizer},
     v22_feasibility::{V22_MAX_EXACT_PREFIX_ROWS, V22StageLQueryPrefix, V22StageLSpill},
 };
@@ -382,8 +385,20 @@ pub(crate) fn decode_v23_page(bytes: Bytes, page_ref: &V23PageRef) -> Result<V23
         })
         || !valid_checksum(&page_ref.checksum)
         || page_ref.path != expected_path
-        || blake3::hash(&bytes).to_hex().as_str() != page_ref.checksum
-        || bytes.get(0..4) != Some(V23_PAGE_MAGIC.as_slice())
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 page envelope authority differs".to_string(),
+        ));
+    }
+    let actual_checksum = blake3::hash(&bytes).to_hex().to_string();
+    if actual_checksum != page_ref.checksum {
+        return Err(BorsukError::ChecksumMismatch {
+            path: page_ref.path.clone(),
+            expected: page_ref.checksum.clone(),
+            actual: actual_checksum,
+        });
+    }
+    if bytes.get(0..4) != Some(V23_PAGE_MAGIC.as_slice())
         || bytes[4] != V23_PAGE_VERSION
         || v23_metric_tag(&page_ref.metric) != Some(bytes[5])
         || v23_family_tag(page_ref.family) != bytes[6]
@@ -625,12 +640,368 @@ pub struct V23WaveSample {
     pub candidate_rows: u64,
     /// Query-scoped S3 Standard GET count.
     pub backing_gets: u32,
+    /// Aggregate physical GET concurrency admitted for this executor.
+    pub backing_get_concurrency: u32,
     /// Query-scoped S3 Standard response bytes.
     pub backing_bytes: u64,
+    /// Sum of physical-request queue time within the backing wave.
+    pub backing_queue_us_sum: u64,
+    /// Longest physical-request queue time within the backing wave.
+    pub backing_queue_us_max: u64,
+    /// Sum of physical-request service time within the backing wave.
+    pub backing_service_us_sum: u64,
+    /// Longest physical-request service time within the backing wave.
+    pub backing_service_us_max: u64,
     /// Query preparation, decode, and SIMD ranking time.
     pub cpu_ns: u64,
+    /// Time waiting for the shared transient-byte permit.
+    pub transient_admission_wait_ns: u64,
+    /// Time waiting for aggregate physical-request admission.
+    pub request_admission_wait_ns: u64,
+    /// End-to-end query service time excluding both admission waits.
+    pub service_ns: u64,
     /// Complete measured cold-query wall time.
     pub elapsed_ns: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// One authenticated cold-page wave result.
+pub struct V23D3WaveResult {
+    /// Physical backing-I/O and bounded-work evidence.
+    pub sample: V23WaveSample,
+    /// Code-ranked, replica-deduplicated result from fetched page bytes.
+    pub ranked: V23RankedResult,
+    /// Maximum aggregate transient bytes observed by the shared executor gate.
+    pub transient_peak_bytes: u64,
+    /// Maximum aggregate backing GETs admitted by the shared executor so far.
+    pub request_peak_gets: u32,
+}
+
+fn validate_v23_d3_request_capacity(
+    maximum_query_pages: usize,
+    backing_get_concurrency: usize,
+) -> Result<()> {
+    if maximum_query_pages == 0
+        || backing_get_concurrency == 0
+        || maximum_query_pages > backing_get_concurrency
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 D3 page fanout exceeds backing GET capacity".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Cache-disabled executor for real V23 D3 backing-page waves.
+///
+/// The storage client and HTTP pool are reused across queries, but no page
+/// bytes are cached. Every successful query therefore performs one backing
+/// GET per selected page while concurrent callers share one byte gate.
+pub struct V23D3Executor {
+    storage: Storage,
+    gate: Arc<ByteAdmissionGate>,
+    request_gate: Arc<ByteAdmissionGate>,
+    quantizer: GlobalScanQuantizer,
+    router: CatalogRouter,
+    pages: Vec<V23PageRef>,
+    metric: VectorMetric,
+    dimensions: usize,
+    maximum_query_pages: usize,
+    maximum_record_id_bytes: u64,
+    code_width: u64,
+}
+
+impl V23D3Executor {
+    /// Open one cache-disabled backing client and authenticate immutable
+    /// quantizer and page-directory authority before a measured query.
+    pub fn new(
+        storage_uri: &str,
+        d1_arm: &V23D1Arm,
+        d2_arm: &V23D2Arm,
+        transient_capacity_bytes: u64,
+    ) -> Result<Self> {
+        if storage_uri.is_empty()
+            || transient_capacity_bytes == 0
+            || !d1_arm.passed
+            || !d2_arm.passed
+            || d2_arm.d1_key != d1_arm.key
+            || d2_arm.pages.is_empty()
+            || d2_arm.maximum_query_pages == 0
+            || usize::from(d2_arm.maximum_query_pages) > V23_WAVE_MAX_PAGES
+            || d2_arm.maximum_record_id_bytes == 0
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V23 D3 executor authority differs".to_string(),
+            ));
+        }
+        let first = &d2_arm.pages[0];
+        let dimensions = usize::try_from(first.dimensions).map_err(|_| {
+            BorsukError::InvalidStorage("V23 D3 dimensions exceed usize".to_string())
+        })?;
+        if dimensions == 0
+            || d2_arm.pages.iter().enumerate().any(|(index, page)| {
+                page.page_ordinal as usize != index
+                    || page.generation_checksum != first.generation_checksum
+                    || page.metric != first.metric
+                    || page.dimensions != first.dimensions
+                    || page.family != d1_arm.key.family
+                    || page.code_width != d1_arm.key.code_width_bytes
+                    || page.centroid.len() != dimensions
+                    || page.centroid.iter().any(|value| !value.is_finite())
+                    || page.encoded_bytes == 0
+                    || page.encoded_bytes > V23_PAGE_MAX_ENCODED_BYTES
+                    || !valid_checksum(&page.checksum)
+                    || page.path != format!("pages/{}", page.checksum)
+                    || page.primary_rows == 0
+            })
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V23 D3 page directory differs".to_string(),
+            ));
+        }
+        let quantizer = restore_v23_diagnostic_quantizer(d1_arm)?;
+        quantizer.prepare_contiguous_query(&vec![0.0; dimensions])?;
+        let backing_get_concurrency = crate::configured_backing_get_concurrency();
+        validate_v23_d3_request_capacity(
+            usize::from(d2_arm.maximum_query_pages),
+            backing_get_concurrency,
+        )?;
+        let catalog = LogicalCellCatalog::from_stored_centroids(
+            23,
+            dimensions,
+            first.metric.clone(),
+            d2_arm
+                .pages
+                .iter()
+                .map(|page| page.centroid.clone())
+                .collect(),
+        )?;
+        let router = CatalogRouter::build(
+            Arc::new(catalog),
+            first.metric.clone(),
+            CatalogRoutingStrategy::production(&first.metric, d2_arm.pages.len()),
+        )?;
+        Ok(Self {
+            storage: Storage::from_uri(storage_uri)?,
+            gate: Arc::new(ByteAdmissionGate::new(transient_capacity_bytes)),
+            request_gate: Arc::new(ByteAdmissionGate::new(backing_get_concurrency as u64)),
+            quantizer,
+            router,
+            pages: d2_arm.pages.clone(),
+            metric: first.metric.clone(),
+            dimensions,
+            maximum_query_pages: usize::from(d2_arm.maximum_query_pages),
+            maximum_record_id_bytes: u64::from(d2_arm.maximum_record_id_bytes),
+            code_width: u64::from(d1_arm.key.code_width_bytes),
+        })
+    }
+
+    /// Execute one complete cold wave. Routing, admission, backing I/O,
+    /// authenticated decode, deduplication, and scoring are measured.
+    pub fn execute(&self, query_index: u32, query: &[f32]) -> Result<V23D3WaveResult> {
+        if query.len() != self.dimensions || query.iter().any(|value| !value.is_finite()) {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V23 D3 query authority differs".to_string(),
+            ));
+        }
+        let elapsed_started = Instant::now();
+        let routing_started = Instant::now();
+        let prepared_query = if self.metric == VectorMetric::Cosine {
+            crate::metric::unit_l2_normalized(query)
+        } else {
+            query.to_vec()
+        };
+        let mut page_ordinals = self
+            .router
+            .nearest(&prepared_query, self.maximum_query_pages)?;
+        page_ordinals.sort_unstable();
+        let mut encoded_bytes = 0_u64;
+        let mut candidate_rows = 0_u64;
+        let mut requests = Vec::with_capacity(page_ordinals.len());
+        let mut selected_pages = Vec::with_capacity(page_ordinals.len());
+        for page_ordinal in &page_ordinals {
+            let page = usize::try_from(*page_ordinal)
+                .ok()
+                .and_then(|index| self.pages.get(index))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("V23 D3 selected page is absent".to_string())
+                })?;
+            encoded_bytes = encoded_bytes
+                .checked_add(page.encoded_bytes)
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("V23 D3 selected bytes overflow".to_string())
+                })?;
+            candidate_rows = candidate_rows
+                .checked_add(u64::from(page.primary_rows) + u64::from(page.replicated_rows))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("V23 D3 candidate rows overflow".to_string())
+                })?;
+            requests.push((page.path.clone(), 0..page.encoded_bytes));
+            selected_pages.push(page);
+        }
+        if encoded_bytes == 0 || encoded_bytes > V23_WAVE_MAX_BYTES || candidate_rows == 0 {
+            return Err(BorsukError::InvalidStorage(
+                "V23 D3 selected wave exceeds its physical bound".to_string(),
+            ));
+        }
+        let per_candidate_bytes = self
+            .maximum_record_id_bytes
+            .saturating_mul(2)
+            .saturating_add(self.code_width.saturating_mul(2))
+            .saturating_add(128);
+        let adc_table_bytes = self
+            .code_width
+            .checked_mul(256)
+            .and_then(|entries| entries.checked_mul(std::mem::size_of::<f32>() as u64))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 D3 ADC table memory overflows".to_string())
+            })?;
+        let transient_bytes = encoded_bytes
+            .checked_add(
+                candidate_rows
+                    .checked_mul(per_candidate_bytes)
+                    .ok_or_else(|| {
+                        BorsukError::InvalidStorage("V23 D3 candidate memory overflows".to_string())
+                    })?,
+            )
+            .and_then(|bytes| bytes.checked_add((self.dimensions as u64).saturating_mul(8)))
+            .and_then(|bytes| bytes.checked_add(adc_table_bytes))
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 D3 transient memory overflows".to_string())
+            })?;
+        if transient_bytes > self.gate.capacity_bytes() {
+            return Err(BorsukError::InvalidSearchOptions(format!(
+                "V23 D3 wave requires {transient_bytes} transient bytes, capacity is {}",
+                self.gate.capacity_bytes()
+            )));
+        }
+        let mut cpu_ns = u64::try_from(routing_started.elapsed().as_nanos())
+            .unwrap_or(u64::MAX)
+            .max(1);
+        let transient_admission_started = Instant::now();
+        let _permit = self.gate.acquire_owned(transient_bytes);
+        let transient_admission_wait_ns =
+            u64::try_from(transient_admission_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let request_admission_started = Instant::now();
+        let _request_permit = self.request_gate.acquire_owned(requests.len() as u64);
+        let request_admission_wait_ns =
+            u64::try_from(request_admission_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        let mut reads = (0..requests.len()).map(|_| None).collect::<Vec<_>>();
+        let stats = self.storage.for_each_range_wave_completion(
+            &requests,
+            requests.len(),
+            None,
+            |index, result| reads[index] = Some(result),
+        );
+        let bodies = reads
+            .into_iter()
+            .enumerate()
+            .map(|(index, result)| {
+                result.ok_or_else(|| {
+                    BorsukError::InvalidStorage(format!("V23 D3 backing wave omitted page {index}"))
+                })?
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if stats.attempts != requests.len() as u64
+            || stats.successes != requests.len() as u64
+            || stats.response_bytes != encoded_bytes
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V23 D3 backing telemetry differs".to_string(),
+            ));
+        }
+
+        let ranking_started = Instant::now();
+        let mut candidate_by_id = BTreeMap::<Box<[u8]>, Box<[u8]>>::new();
+        for (body, expected_page) in bodies.into_iter().zip(selected_pages) {
+            let decoded = decode_v23_page(Bytes::from(body), expected_page)?;
+            for row_index in 0..decoded.primary_rows() + decoded.replicated_rows() {
+                let id = decoded.record_id(row_index).ok_or_else(|| {
+                    BorsukError::InvalidStorage("V23 D3 record ID is absent".to_string())
+                })?;
+                if id.len() as u64 > self.maximum_record_id_bytes {
+                    return Err(BorsukError::InvalidStorage(
+                        "V23 D3 record ID exceeds authenticated width".to_string(),
+                    ));
+                }
+                let code = decoded.code(row_index).ok_or_else(|| {
+                    BorsukError::InvalidStorage("V23 D3 code is absent".to_string())
+                })?;
+                candidate_by_id
+                    .entry(id.to_vec().into_boxed_slice())
+                    .or_insert_with(|| code.to_vec().into_boxed_slice());
+            }
+        }
+        let mut codes = Vec::with_capacity(
+            candidate_by_id
+                .len()
+                .saturating_mul(self.code_width as usize),
+        );
+        let mut ids = Vec::with_capacity(candidate_by_id.len());
+        for (id, code) in candidate_by_id {
+            codes.extend_from_slice(&code);
+            ids.push(id);
+        }
+        let prepared = self.quantizer.prepare_contiguous_query(&prepared_query)?;
+        let distances = self
+            .quantizer
+            .score_prepared_contiguous_codes(&prepared, &codes)?;
+        let mut ranked = Vec::new();
+        for (id, distance) in ids.iter().zip(distances) {
+            observe_ranked(&mut ranked, distance, id)?;
+        }
+        let ranked = finish_d2_ranked(ranked)?;
+        cpu_ns = cpu_ns.saturating_add(
+            u64::try_from(ranking_started.elapsed().as_nanos())
+                .unwrap_or(u64::MAX)
+                .max(1),
+        );
+        let elapsed_ns = u64::try_from(elapsed_started.elapsed().as_nanos())
+            .unwrap_or(u64::MAX)
+            .max(1);
+        let total_admission_wait_ns = transient_admission_wait_ns
+            .checked_add(request_admission_wait_ns)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 D3 admission time overflows".to_string())
+            })?;
+        let service_ns = elapsed_ns
+            .checked_sub(total_admission_wait_ns)
+            .filter(|service_ns| *service_ns > 0)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 D3 measured timing differs".to_string())
+            })?;
+        let sample = V23WaveSample {
+            query_index,
+            page_ordinals,
+            encoded_bytes,
+            candidate_rows,
+            backing_gets: u32::try_from(stats.successes).map_err(|_| {
+                BorsukError::InvalidStorage("V23 D3 backing GETs exceed u32".to_string())
+            })?,
+            backing_get_concurrency: u32::try_from(self.request_gate.capacity_bytes()).map_err(
+                |_| BorsukError::InvalidStorage("V23 D3 GET capacity exceeds u32".to_string()),
+            )?,
+            backing_bytes: stats.response_bytes,
+            backing_queue_us_sum: stats.queue_us_sum,
+            backing_queue_us_max: stats.queue_us_max,
+            backing_service_us_sum: stats.service_us_sum,
+            backing_service_us_max: stats.service_us_max,
+            cpu_ns,
+            transient_admission_wait_ns,
+            request_admission_wait_ns,
+            service_ns,
+            elapsed_ns,
+        };
+        validate_wave_sample(&sample)?;
+        Ok(V23D3WaveResult {
+            sample,
+            ranked,
+            transient_peak_bytes: self.gate.peak_bytes(),
+            request_peak_gets: u32::try_from(self.request_gate.peak_bytes()).map_err(|_| {
+                BorsukError::InvalidStorage("V23 D3 request peak exceeds u32".to_string())
+            })?,
+        })
+    }
 }
 
 #[allow(dead_code, reason = "consumed by the planned D3 benchmark slice")]
@@ -645,8 +1016,22 @@ pub(crate) fn validate_wave_sample(sample: &V23WaveSample) -> Result<()> {
         || sample.encoded_bytes > V23_WAVE_MAX_BYTES
         || sample.candidate_rows == 0
         || usize::try_from(sample.backing_gets).ok() != Some(sample.page_ordinals.len())
+        || sample.backing_get_concurrency == 0
+        || usize::try_from(sample.backing_get_concurrency)
+            .ok()
+            .is_none_or(|capacity| capacity < sample.page_ordinals.len())
         || sample.backing_bytes != sample.encoded_bytes
+        || sample.backing_queue_us_max > sample.backing_queue_us_sum
+        || sample.backing_service_us_max > sample.backing_service_us_sum
+        || u128::from(sample.backing_service_us_max) * 1_000 > u128::from(sample.service_ns)
         || sample.cpu_ns == 0
+        || sample.service_ns == 0
+        || sample
+            .transient_admission_wait_ns
+            .checked_add(sample.request_admission_wait_ns)
+            .and_then(|wait| wait.checked_add(sample.service_ns))
+            != Some(sample.elapsed_ns)
+        || sample.cpu_ns > sample.service_ns
         || sample.elapsed_ns == 0
     {
         return Err(BorsukError::InvalidStorage(
@@ -2822,13 +3207,14 @@ mod tests {
 
     use super::{
         V23_DIAGNOSTIC_QUERIES, V23_WAVE_MAX_BYTES, V23D1Arm, V23D1ArmKey, V23D1QuerySample,
-        V23D1Report, V23D2Arm, V23D2QuerySample, V23D2Report, V23PageInput, V23PageRef, V23PageRow,
-        V23PlanningRow, V23QuantizerFamily, V23RankedResult, V23ReplicaCandidate, V23WaveSample,
-        decode_v23_page, encode_v23_page, fit_v23_diagnostic_quantizer, plan_v23_pages,
-        plan_v23_pages_for_metric, restore_v23_diagnostic_quantizer, select_v23_d2_frontier,
-        stream_v23_materialized_pages, v23_d2_projected_build_memory, v23_d2_projected_memory,
-        validate_d1_report, validate_d2_report, validate_v23_d2_query_binding,
-        validate_v23_d2_query_prefixes, validate_wave_sample,
+        V23D1Report, V23D2Arm, V23D2QuerySample, V23D2Report, V23D3Executor, V23PageInput,
+        V23PageRef, V23PageRow, V23PlanningRow, V23QuantizerFamily, V23RankedResult,
+        V23ReplicaCandidate, V23WaveSample, decode_v23_page, encode_v23_page,
+        fit_v23_diagnostic_quantizer, plan_v23_pages, plan_v23_pages_for_metric,
+        restore_v23_diagnostic_quantizer, select_v23_d2_frontier, stream_v23_materialized_pages,
+        v23_d2_projected_build_memory, v23_d2_projected_memory, validate_d1_report,
+        validate_d2_report, validate_v23_d2_query_binding, validate_v23_d2_query_prefixes,
+        validate_v23_d3_request_capacity, validate_wave_sample,
     };
     use crate::metric::VectorMetric;
     use crate::v22_feasibility::V22StageLQueryPrefix;
@@ -2840,10 +3226,25 @@ mod tests {
             encoded_bytes: 983_040,
             candidate_rows: 8_192,
             backing_gets: 4,
+            backing_get_concurrency: 64,
             backing_bytes: 983_040,
+            backing_queue_us_sum: 40,
+            backing_queue_us_max: 20,
+            backing_service_us_sum: 100_000,
+            backing_service_us_max: 30_000,
             cpu_ns: 2_000_000,
+            transient_admission_wait_ns: 2_000_000,
+            request_admission_wait_ns: 1_000_000,
+            service_ns: 37_000_000,
             elapsed_ns: 40_000_000,
         }
+    }
+
+    #[test]
+    fn v23_d3_request_capacity_rejects_oversized_waves_before_io() {
+        validate_v23_d3_request_capacity(4, 4).unwrap();
+        assert!(validate_v23_d3_request_capacity(4, 3).is_err());
+        assert!(validate_v23_d3_request_capacity(1, 0).is_err());
     }
 
     fn ranked_top_ten() -> V23RankedResult {
@@ -3035,13 +3436,38 @@ mod tests {
         gets_differ.backing_gets -= 1;
         assert!(validate_wave_sample(&gets_differ).is_err());
 
+        let mut no_get_capacity = canonical.clone();
+        no_get_capacity.backing_get_concurrency = 0;
+        assert!(validate_wave_sample(&no_get_capacity).is_err());
+
+        let mut insufficient_get_capacity = canonical.clone();
+        insufficient_get_capacity.backing_get_concurrency = 3;
+        assert!(validate_wave_sample(&insufficient_get_capacity).is_err());
+
         let mut backing_bytes_differ = canonical.clone();
         backing_bytes_differ.backing_bytes -= 1;
         assert!(validate_wave_sample(&backing_bytes_differ).is_err());
 
+        let mut impossible_backing_service = canonical.clone();
+        impossible_backing_service.backing_service_us_max =
+            impossible_backing_service.backing_service_us_sum + 1;
+        assert!(validate_wave_sample(&impossible_backing_service).is_err());
+
+        let mut backing_outlives_query = canonical.clone();
+        backing_outlives_query.backing_service_us_max = 38_000;
+        assert!(validate_wave_sample(&backing_outlives_query).is_err());
+
         let mut no_cpu = canonical.clone();
         no_cpu.cpu_ns = 0;
         assert!(validate_wave_sample(&no_cpu).is_err());
+
+        let mut inconsistent_latency = canonical.clone();
+        inconsistent_latency.service_ns -= 1;
+        assert!(validate_wave_sample(&inconsistent_latency).is_err());
+
+        let mut impossible_admission = canonical.clone();
+        impossible_admission.request_admission_wait_ns = impossible_admission.elapsed_ns;
+        assert!(validate_wave_sample(&impossible_admission).is_err());
 
         let mut no_elapsed = canonical;
         no_elapsed.elapsed_ns = 0;
@@ -3676,6 +4102,209 @@ mod tests {
             ),)
             .is_err()
         );
+    }
+
+    #[test]
+    fn v23_d3_executes_one_cache_disabled_backing_wave_under_one_byte_permit() {
+        let dimensions = 8_usize;
+        let training = (0..256)
+            .map(|row| {
+                (0..dimensions)
+                    .map(|dimension| (row * dimensions + dimension) as f32 / 2_048.0)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let quantizer =
+            fit_v23_diagnostic_quantizer(V23QuantizerFamily::SrhtPq, 8, dimensions, &training)
+                .unwrap();
+        let state = serde_json::to_value(quantizer.state()).unwrap();
+        let d1_arm = V23D1Arm {
+            key: V23D1ArmKey {
+                family: V23QuantizerFamily::SrhtPq,
+                code_width_bytes: 8,
+            },
+            quantizer_checksum: blake3::hash(&serde_json::to_vec(&state).unwrap())
+                .to_hex()
+                .to_string(),
+            quantizer_state: state,
+            query_samples: Vec::new(),
+            oracle_recall_ppm: 1_000_000,
+            routed_recall_ppm: 1_000_000,
+            scalar_simd_ids_equal: true,
+            scalar_simd_max_distance_delta_ppm: 0,
+            cpu_p99_ns: 1,
+            four_page_projected_bytes: 1,
+            passed: true,
+        };
+        let rows = [training[7].clone(), training[19].clone()];
+        let page_input = V23PageInput {
+            generation_checksum: [23; 32],
+            page_ordinal: 0,
+            metric: VectorMetric::SquaredEuclidean,
+            dimensions: dimensions as u32,
+            family: d1_arm.key.family,
+            code_width: d1_arm.key.code_width_bytes,
+            primary_rows: rows
+                .iter()
+                .enumerate()
+                .map(|(index, row)| V23PageRow {
+                    canonical_record_id: format!("row-{index}").into_bytes().into_boxed_slice(),
+                    code: quantizer.encode(row).unwrap().into_boxed_slice(),
+                })
+                .collect(),
+            replicated_rows: Vec::new(),
+        };
+        let page_bytes = encode_v23_page(&page_input).unwrap();
+        let checksum = blake3::hash(&page_bytes).to_hex().to_string();
+        let page_ref = V23PageRef {
+            generation_checksum: page_input.generation_checksum,
+            page_ordinal: 0,
+            metric: page_input.metric.clone(),
+            dimensions: page_input.dimensions,
+            family: page_input.family,
+            code_width: page_input.code_width,
+            path: format!("pages/{checksum}"),
+            checksum,
+            encoded_bytes: page_bytes.len() as u64,
+            primary_rows: rows.len() as u32,
+            replicated_rows: 0,
+            centroid: rows[0].clone(),
+        };
+        let mut d2_arm = canonical_d2_report().arms.remove(0);
+        d2_arm.d1_key = d1_arm.key;
+        d2_arm.maximum_query_pages = 1;
+        d2_arm.maximum_record_id_bytes = 5;
+        d2_arm.pages = vec![page_ref];
+
+        let object_root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(object_root.path().join("pages")).unwrap();
+        let page_path = object_root.path().join(&d2_arm.pages[0].path);
+        std::fs::write(&page_path, &page_bytes).unwrap();
+        let executor = V23D3Executor::new(
+            &format!("file://{}", object_root.path().display()),
+            &d1_arm,
+            &d2_arm,
+            2 * V23_WAVE_MAX_BYTES,
+        )
+        .unwrap();
+        let result = executor.execute(0, &rows[0]).unwrap();
+        validate_wave_sample(&result.sample).unwrap();
+        assert_eq!(result.sample.page_ordinals, vec![0]);
+        assert_eq!(result.sample.backing_gets, 1);
+        assert_eq!(result.sample.backing_bytes, page_bytes.len() as u64);
+        assert_eq!(result.sample.encoded_bytes, page_bytes.len() as u64);
+        assert_eq!(result.sample.candidate_rows, 2);
+        assert!(result.sample.backing_service_us_max <= result.sample.backing_service_us_sum);
+        assert!(result.sample.backing_queue_us_max <= result.sample.backing_queue_us_sum);
+        assert_eq!(result.request_peak_gets, 1);
+        assert_eq!(result.ranked.ids[0], b"row-0");
+        assert_eq!(
+            result.sample.elapsed_ns,
+            result
+                .sample
+                .transient_admission_wait_ns
+                .saturating_add(result.sample.request_admission_wait_ns)
+                .saturating_add(result.sample.service_ns)
+        );
+        assert!(result.transient_peak_bytes <= 2 * V23_WAVE_MAX_BYTES);
+
+        let old_transient_bytes = page_bytes.len() as u64
+            + result.sample.candidate_rows
+                * (2 * u64::from(d2_arm.maximum_record_id_bytes)
+                    + 2 * u64::from(d1_arm.key.code_width_bytes)
+                    + 128)
+            + dimensions as u64 * 8;
+        let under_admitted = V23D3Executor::new(
+            &format!("file://{}", object_root.path().display()),
+            &d1_arm,
+            &d2_arm,
+            old_transient_bytes,
+        )
+        .unwrap();
+        assert!(matches!(
+            under_admitted.execute(9, &rows[0]),
+            Err(crate::BorsukError::InvalidSearchOptions(_))
+        ));
+
+        let authenticated_cosine_centroid = vec![
+            -0.324_071_14,
+            0.054_700_308,
+            -0.160_832_4,
+            0.128_522_66,
+            0.155_484_07,
+            -0.537_330_4,
+            -0.602_087_5,
+            0.417_363_46,
+        ];
+        let mut cosine_arm = d2_arm.clone();
+        cosine_arm.pages[0].metric = VectorMetric::Cosine;
+        cosine_arm.pages[0].centroid = authenticated_cosine_centroid.clone();
+        let cosine_executor = V23D3Executor::new(
+            &format!("file://{}", object_root.path().display()),
+            &d1_arm,
+            &cosine_arm,
+            2 * V23_WAVE_MAX_BYTES,
+        )
+        .unwrap();
+        assert_eq!(
+            cosine_executor.router.catalog().centroids[0],
+            authenticated_cosine_centroid,
+            "D3 must route over the exact normalized centroids authenticated by D2"
+        );
+
+        let one_wave_bytes = result.transient_peak_bytes;
+        let mut bounded = V23D3Executor::new(
+            &format!("file://{}", object_root.path().display()),
+            &d1_arm,
+            &d2_arm,
+            one_wave_bytes,
+        )
+        .unwrap();
+        bounded.request_gate = std::sync::Arc::new(crate::segment_cache::ByteAdmissionGate::new(1));
+        let concurrent = std::thread::scope(|scope| {
+            let workers = (0_u32..2)
+                .map(|query_index| {
+                    let executor = &bounded;
+                    let query = &rows[0];
+                    scope.spawn(move || executor.execute(query_index, query).unwrap())
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert!(concurrent.iter().all(|wave| wave.sample.backing_gets == 1
+            && wave.sample.backing_get_concurrency == 1
+            && wave.request_peak_gets <= 1
+            && wave.transient_peak_bytes <= one_wave_bytes));
+        assert_eq!(bounded.request_gate.peak_bytes(), 1);
+
+        std::fs::write(&page_path, vec![0_u8; page_bytes.len()]).unwrap();
+        assert!(matches!(
+            executor.execute(1, &rows[0]),
+            Err(crate::BorsukError::ChecksumMismatch { .. })
+        ));
+        std::fs::write(&page_path, &page_bytes).unwrap();
+        let retry = executor.execute(2, &rows[0]).unwrap();
+        assert_eq!(retry.sample.backing_gets, 1);
+
+        std::fs::remove_file(&page_path).unwrap();
+        assert!(matches!(
+            executor.execute(3, &rows[0]),
+            Err(crate::BorsukError::ObjectStoreNotFound { .. })
+        ));
+        let constrained = V23D3Executor::new(
+            &format!("file://{}", object_root.path().display()),
+            &d1_arm,
+            &d2_arm,
+            1,
+        )
+        .unwrap();
+        assert!(matches!(
+            constrained.execute(4, &rows[0]),
+            Err(crate::BorsukError::InvalidSearchOptions(_))
+        ));
     }
 
     #[test]
