@@ -519,3 +519,55 @@ registered 1/2/4-worker profiles with the same zero-backing and positive-disk
 invariants. This is non-publication diagnostic evidence: it proves the repaired
 primer/measurement state transition on the production path, but it is not a
 performance result and does not replace the required paid immutable rerun.
+
+## V22 Deep Image 10M Stage-L layout census on 2026-08-28
+
+The claim-ineligible V22 census used a freshly rebuilt, unreleased-format
+Deep Image index rather than adding a V12 compatibility reader. The build ran
+on Spot instance `i-005ae9b51afe36680` and published
+`index-bcda7bb66812e162d45077e6`. Its terminal-marker SHA-256 was
+`b55959a6cb3f2478557606050fe22b52059b4254c9dbdbf430ae9a45a55217e1`;
+the index receipt SHA-256 was
+`19dd0f5788625bb4c87adf5cd86a942be7addd797cf2ceb0651ea80476ca5189`.
+
+The final diagnostic ran from source commit
+`14464c8a36e3cf4551735e26ee1320cbd88f4bb6` on Spot instance
+`i-085e81b0fc9885225`, under diagnostic cell
+`r01-0754b82e49c729e5bd946ca0`. The controller terminated the instance after
+completion. The immutable artifacts are under
+`s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-0754b82e49c729e5bd946ca0/runtime-v22-stage-l/arms/0000/attempts/0001/`.
+Their authenticated SHA-256 values are:
+
+- terminal marker:
+  `ad08b71b5f0c30e9b8d2d123d9d6eddac9153417d6efb49144a3bc37f6fb8ef0`;
+- result receipt:
+  `fa76d31a784edd53c0afdd1119959ea90b263538494688a677c87006cf8529bc`;
+- complete layout report:
+  `bc42a4f510d9341ea22cc7707e4fe246228644dbe14ba44028800a9953f1ab6b`;
+- derived summary:
+  `a5df4a1e0b6eedd253ea12096ac63826a4a6d1912729f3153f0b5fba1d2641c0`;
+- execution contract:
+  `fbf24381e4eba4696eb0e5cd4d5347baf67b54d82bc2d7b22448e1d5c7397cc4`.
+
+The census covered all 9,990,000 indexed rows, all 4,096 routing cells, 32
+frozen queries, seven layouts, and six exact-prefix sizes (42 arms). Routing
+covered all ten ground-truth rows for every query. No layout satisfied the
+registered combination of at most four primary exact GETs, at most 1 MiB of
+physical exact bytes, at most 2x physical amplification, and at most 512,000
+routed rows for every query.
+
+For the best 10-row candidate (`semantic-within-cell`, 64-row
+microclusters), six of 32 queries were eligible. Twenty-two queries were
+request-limited and four were amplification-limited. The request distribution
+ranged from two to ten (median seven; p95 and maximum ten), while physical
+bytes ranged from 136,768 to 341,696 (median 202,688; p95 308,736). Thus the
+small-prefix failure is request fan-out, not the 1 MiB byte ceiling. At 256
+and 512 exact rows, 30 of 32 queries were byte-limited in every tested layout;
+the worst physical payloads were about 7.4--8.5 MiB and 14--16 MiB. Repacking
+and the tested semantic orders changed those bounds only marginally.
+
+The evidence rejects V20 block scattering plus query-independent linear
+repacking as the cold production architecture. It does not establish latency
+or recall for a replacement format. The next qualified design must route a
+query directly to a bounded number of semantically coherent exact-vector
+pages, then prove the four-GET/1-MiB envelope before another publication build.
