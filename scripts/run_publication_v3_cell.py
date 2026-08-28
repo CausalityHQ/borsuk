@@ -1949,19 +1949,21 @@ def validate_and_canonicalize_v22_stage_l(
             packing = sample["useful_bytes"] * 1_000_000 // sample["physical_bytes"]
             amplification = sample["physical_bytes"] * 1_000_000 // sample["selected_bytes"]
             routing_eligible = sample["routed_rows"] <= 512_000
-            expected_physical_bound = (
-                "bytes"
+            expected_physical_bounds = (
+                {"bytes"}
                 if sample["physical_bytes"] > 1_048_576
-                else "requests"
+                else {"requests", "amplification"}
                 if sample["requests"] > 4
-                else "eligible"
+                else {"eligible"}
             )
             expected_limiting = (
                 sample["physical_limiting_bound"]
                 if routing_eligible
                 else "routing-rows"
             )
-            expected_eligible = routing_eligible and expected_physical_bound == "eligible"
+            expected_eligible = routing_eligible and expected_physical_bounds == {
+                "eligible"
+            }
             if (
                 sample["query_index"] != query_index
                 or sample["exact_prefix_rows"] != prefix_rows
@@ -1983,7 +1985,7 @@ def validate_and_canonicalize_v22_stage_l(
                 or (exact_row_bytes is not None and row_bytes != exact_row_bytes)
                 or sample["packing_purity_ppm"] != packing
                 or sample["physical_amplification_ppm"] != amplification
-                or sample["physical_limiting_bound"] != expected_physical_bound
+                or sample["physical_limiting_bound"] not in expected_physical_bounds
                 or sample["routing_eligible"] is not routing_eligible
                 or sample["limiting_bound"] != expected_limiting
                 or sample["eligible"] is not expected_eligible

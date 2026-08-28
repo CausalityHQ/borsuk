@@ -3817,12 +3817,15 @@ fn build_v22_stage_l_summary(
                 .physical_bytes
                 .checked_mul(1_000_000)
                 .and_then(|value| value.checked_div(sample.selected_bytes));
-            let expected_physical_bound = if sample.physical_bytes > 1_048_576 {
-                V22LayoutLimitingBound::Bytes
+            let physical_bound_matches = if sample.physical_bytes > 1_048_576 {
+                sample.physical_limiting_bound == V22LayoutLimitingBound::Bytes
             } else if sample.requests > 4 {
-                V22LayoutLimitingBound::Requests
+                matches!(
+                    sample.physical_limiting_bound,
+                    V22LayoutLimitingBound::Requests | V22LayoutLimitingBound::Amplification
+                )
             } else {
-                V22LayoutLimitingBound::Eligible
+                sample.physical_limiting_bound == V22LayoutLimitingBound::Eligible
             };
             if sample.query_index != query_index
                 || sample.exact_prefix_rows != arm.exact_prefix_rows
@@ -3845,7 +3848,7 @@ fn build_v22_stage_l_summary(
                     != Some(sample.physical_bytes)
                 || expected_packing_purity != Some(sample.packing_purity_ppm)
                 || expected_physical_amplification != Some(sample.physical_amplification_ppm)
-                || sample.physical_limiting_bound != expected_physical_bound
+                || !physical_bound_matches
                 || sample.limiting_bound
                     != if sample.routing_eligible {
                         sample.physical_limiting_bound
@@ -10750,6 +10753,14 @@ mod tests {
             })
             .collect();
         sample.requests = 5;
+        sample.physical_limiting_bound = V22LayoutLimitingBound::Amplification;
+        sample.limiting_bound = V22LayoutLimitingBound::Amplification;
+        sample.eligible = false;
+        drifted.layout_censuses[0].eligible = false;
+        assert!(build_v22_stage_l_summary(&identity, &drifted).is_ok());
+        let sample = &mut drifted.layout_censuses[0].query_samples[0];
+        sample.physical_limiting_bound = V22LayoutLimitingBound::Eligible;
+        sample.limiting_bound = V22LayoutLimitingBound::Eligible;
         assert!(build_v22_stage_l_summary(&identity, &drifted).is_err());
     }
 

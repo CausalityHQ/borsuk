@@ -425,6 +425,48 @@ def query_artifact_fixture(*, decoded_bytes: int) -> dict[str, str]:
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
+    def test_v22_stage_l_accepts_an_ineligible_amplification_rescue(self) -> None:
+        evidence, summary = v22_stage_l_fixture()
+        sample = evidence["report"]["layout_censuses"][0]["query_samples"][0]
+        path = sample["ranges"][0]["path"]
+        starts = (0, 13_107, 26_214, 39_321, 52_428)
+        ends = (13_107, 26_214, 39_321, 52_428, 65_536)
+        sample["ranges"] = [
+            {
+                "path": path,
+                "start": start,
+                "end": end,
+                "selected_bytes": end - start,
+                "rows": 2,
+                "blocks": 1,
+            }
+            for start, end in zip(starts, ends, strict=True)
+        ]
+        sample["requests"] = 5
+        sample["physical_limiting_bound"] = "amplification"
+        sample["limiting_bound"] = "amplification"
+        sample["eligible"] = False
+        evidence["report"]["layout_censuses"][0]["eligible"] = False
+        summary["eligible_arms"] = list(range(1, 42))
+        summary["maximum_primary_requests"] = 5
+        with tempfile.TemporaryDirectory() as root:
+            report_path = Path(root) / "bench_v22_stage_l_report.json"
+            summary_path = Path(root) / "bench_v22_stage_l_summary.json"
+            report_path.write_bytes(canonical_json_bytes(evidence) + b"\n")
+            summary_path.write_bytes(canonical_json_bytes(summary) + b"\n")
+            validated = validate_and_canonicalize_v22_stage_l(
+                report_path,
+                summary_path,
+                expected_source_archive_sha256="2" * 64,
+                expected_index_id="index-authority",
+                expected_dataset_id="deep-image-96",
+                expected_queries=1,
+                expected_dataset_rows=10_000_000,
+                expected_query_seed=23_006,
+                expected_dimensions=96,
+            )
+            self.assertEqual(validated["eligible_arms"], list(range(1, 42)))
+
     def test_v22_stage_l_accepts_struct_order_rust_json_and_float_spelling(
         self,
     ) -> None:
