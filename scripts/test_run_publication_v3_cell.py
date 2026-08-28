@@ -23,6 +23,7 @@ from scripts.run_publication_v3_cell import (
     PRODUCTION_BUILD_FIELDS,
     authorize_publication_mutation_runtime,
     authorize_publication_runtime,
+    authorize_v23_publication_runtime,
     build_execution_plan,
     build_lifecycle_publication_report,
     build_publication_report,
@@ -58,6 +59,7 @@ from scripts.run_publication_v3_cell import (
     validate_v23_d1_artifacts,
     validate_v23_d2_artifacts,
     validate_v23_d3_artifacts,
+    validate_v23_staged_inputs,
 )
 from scripts.test_publication_v3_protocol import paid_v3_manifest
 from scripts.test_publication_v3_receipts import (
@@ -3760,6 +3762,116 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
 
 
 class V23DiagnosticWorkerTests(unittest.TestCase):
+    def test_v23_plan_separates_current_source_from_historical_index(self) -> None:
+        diagnostic_cell = scheduled_cell()
+        diagnostic_cell["source"] = {
+            "state": "frozen",
+            "archive_sha256": "a" * 64,
+        }
+        diagnostic_cell["dataset"]["id"] = "deep-image-96"
+        diagnostic_cell["dataset"]["dimensions"] = 96
+        with tempfile.TemporaryDirectory() as root:
+            plan = build_v23_diagnostic_plan(
+                diagnostic_cell,
+                stage="d1",
+                workspace=Path(root),
+                borsuk_bench=Path("/bin/true"),
+                base_index_id="historical-v22-index",
+            )
+        self.assertEqual(
+            plan["environment"]["BORSUK_BENCH_V23_SOURCE_ARCHIVE_SHA256"],
+            "a" * 64,
+        )
+        self.assertEqual(
+            plan["environment"]["BORSUK_BENCH_V23_INDEX_ID"],
+            "historical-v22-index",
+        )
+
+    def test_v23_staged_inputs_are_exact_regular_output_children(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "runtime-output"
+            output.mkdir()
+            d1 = output / "bench_v23_d1_report.json"
+            d2 = output / "bench_v23_d2_report.json"
+            pages = output / "bench_v23_pages.json"
+            d1.write_bytes(b"d1")
+            d2.write_bytes(b"d2")
+            pages.write_bytes(b"pages")
+            self.assertEqual(
+                validate_v23_staged_inputs(
+                    stage="d3",
+                    output_dir=output,
+                    d1_report=d1,
+                    d2_report=d2,
+                    pages=pages,
+                ),
+                {
+                    "d1_report_sha256": hashlib.sha256(b"d1").hexdigest(),
+                    "d2_report_sha256": hashlib.sha256(b"d2").hexdigest(),
+                    "pages_sha256": hashlib.sha256(b"pages").hexdigest(),
+                },
+            )
+            with self.assertRaisesRegex(ValueError, "staged input"):
+                validate_v23_staged_inputs(
+                    stage="d2",
+                    output_dir=output,
+                    d1_report=Path(directory) / "bench_v23_d1_report.json",
+                    d2_report=None,
+                    pages=None,
+                )
+            outside = Path(directory) / "outside.json"
+            outside.write_bytes(b"outside")
+            d1.unlink()
+            d1.symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, "staged input"):
+                validate_v23_staged_inputs(
+                    stage="d2",
+                    output_dir=output,
+                    d1_report=d1,
+                    d2_report=None,
+                    pages=None,
+                )
+
+    def test_v23_runtime_replaces_normal_phase_without_losing_storage_authority(self) -> None:
+        normal = {
+            "output_dir": "/tmp/normal",
+            "steps": [
+                {
+                    "argv": ["/bin/bench"],
+                    "env": {
+                        "AWS_REGION": "eu-central-1",
+                        "BORSUK_BENCH_DATASET": "/tmp/dataset",
+                        "BORSUK_BENCH_URI": "s3://standard-bucket/index",
+                        "BORSUK_BENCH_CACHE": "/tmp/cache",
+                        "BORSUK_BENCH_RECALL_ONLY": "1",
+                        "BORSUK_BENCH_NPROBES": "32",
+                        "BORSUK_BENCH_SKIP_EXACT_RECALL": "1",
+                    },
+                }
+            ],
+        }
+        diagnostic = {
+            "command": ["/bin/bench"],
+            "environment": {
+                "BORSUK_BENCH_V23_STAGE": "d1",
+                "BORSUK_BENCH_OUTPUT_DIR": "/tmp/v23",
+                "BORSUK_BENCH_QUERIES": "32",
+                "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": "0",
+            },
+        }
+        runtime = authorize_v23_publication_runtime(normal, diagnostic)
+        environment = runtime["steps"][0]["env"]
+        self.assertEqual(runtime["output_dir"], "/tmp/v23")
+        self.assertEqual(environment["BORSUK_BENCH_URI"], "s3://standard-bucket/index")
+        self.assertEqual(environment["BORSUK_BENCH_DATASET"], "/tmp/dataset")
+        self.assertEqual(environment["BORSUK_BENCH_V23_STAGE"], "d1")
+        for forbidden in (
+            "BORSUK_BENCH_RECALL_ONLY",
+            "BORSUK_BENCH_NPROBES",
+            "BORSUK_BENCH_SKIP_EXACT_RECALL",
+        ):
+            self.assertNotIn(forbidden, environment)
+
     def test_v23_plan_is_stage_exclusive_cold_standard_s3_and_bounded(self) -> None:
         cell = scheduled_cell()
         cell["source"] = {"state": "frozen", "archive_sha256": "a" * 64}
@@ -3772,12 +3884,14 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 stage="d1",
                 workspace=workspace,
                 borsuk_bench=Path("/bin/true"),
+                base_index_id="historical-v22-index",
             )
             d2 = build_v23_diagnostic_plan(
                 cell,
                 stage="d2",
                 workspace=workspace,
                 borsuk_bench=Path("/bin/true"),
+                base_index_id="historical-v22-index",
                 d1_report_sha256="1" * 64,
                 page_uri="s3://standard-bucket/v23/pages/",
             )
@@ -3786,6 +3900,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 stage="d3",
                 workspace=workspace,
                 borsuk_bench=Path("/bin/true"),
+                base_index_id="historical-v22-index",
                 d1_report_sha256="1" * 64,
                 d2_report_sha256="2" * 64,
                 page_uri="s3://standard-bucket/v23/pages/",
@@ -3813,12 +3928,21 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 "bench_v23_pages.json",
             },
         )
+        for plan in (d2, d3):
+            output_dir = Path(plan["environment"]["BORSUK_BENCH_OUTPUT_DIR"])
+            self.assertTrue(
+                all(
+                    Path(path).parent == output_dir
+                    for path in plan["staged_inputs"].values()
+                )
+            )
         with self.assertRaisesRegex(ValueError, "D1 authority"):
             build_v23_diagnostic_plan(
                 cell,
                 stage="d2",
                 workspace=Path("/tmp/v23"),
                 borsuk_bench=Path("/bin/true"),
+                base_index_id="historical-v22-index",
                 page_uri="s3://standard-bucket/v23/pages/",
             )
         with self.assertRaisesRegex(ValueError, "Standard S3"):
@@ -3827,6 +3951,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 stage="d3",
                 workspace=Path("/tmp/v23"),
                 borsuk_bench=Path("/bin/true"),
+                base_index_id="historical-v22-index",
                 d1_report_sha256="1" * 64,
                 d2_report_sha256="2" * 64,
                 page_uri="s3express://bucket/v23/pages/",
@@ -3837,6 +3962,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 stage="d3",
                 workspace=Path("/tmp/v23"),
                 borsuk_bench=Path("/bin/true"),
+                base_index_id="historical-v22-index",
                 d1_report_sha256="1" * 64,
                 d2_report_sha256="2" * 64,
                 page_uri="s3://bucket--use1-az1--x-s3/v23/pages/",

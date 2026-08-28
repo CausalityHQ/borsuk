@@ -403,6 +403,7 @@ def build_launch_request(
     terminal_detail_log_path: str,
     max_seconds: int,
     purchase_option: str = "spot",
+    identity_role: str | None = None,
 ) -> dict[str, object]:
     """Build a hardened launch request; Spot is the mandatory default."""
 
@@ -414,6 +415,9 @@ def build_launch_request(
         raise ValueError("Publication V3 requires Spot by default")
     if purchase_option not in {"spot", "on-demand"}:
         raise ValueError("purchase option must be spot or on-demand")
+    identity_role = role if identity_role is None else identity_role
+    if identity_role not in {"runtime", "build", "diagnostic", "staging"}:
+        raise ValueError("instance identity role is invalid")
     if purchase_option != "spot" and role != "runtime":
         raise ValueError("on-demand exception is allowed only for runtime")
     resources, storage = _resource_contract(normalized, role, system)
@@ -533,7 +537,9 @@ fi
         "TagSpecifications": [
             {
                 "ResourceType": resource_type,
-                "Tags": _tags(campaign_id, cell_id, attempt, role, purchase_option),
+                "Tags": _tags(
+                    campaign_id, cell_id, attempt, identity_role, purchase_option
+                ),
             }
             for resource_type in ("instance", "volume")
         ],

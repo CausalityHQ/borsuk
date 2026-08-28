@@ -3734,12 +3734,54 @@ def _v23_standard_s3_prefix(value: object) -> str:
     return value.rstrip("/")
 
 
+def validate_v23_staged_inputs(
+    *,
+    stage: str,
+    output_dir: Path,
+    d1_report: Path | None,
+    d2_report: Path | None,
+    pages: Path | None,
+) -> dict[str, str]:
+    """Bind prior-stage bytes to fixed, regular stage-owned input paths."""
+
+    if stage not in {"d1", "d2", "d3"}:
+        raise ValueError("V23 staged input stage differs")
+    supplied = {
+        "d1_report": d1_report,
+        "d2_report": d2_report,
+        "pages": pages,
+    }
+    required = {
+        "d1": set(),
+        "d2": {"d1_report"},
+        "d3": {"d1_report", "d2_report", "pages"},
+    }[stage]
+    if {name for name, path in supplied.items() if path is not None} != required:
+        raise ValueError("V23 staged input set differs")
+    filenames = {
+        "d1_report": "bench_v23_d1_report.json",
+        "d2_report": "bench_v23_d2_report.json",
+        "pages": "bench_v23_pages.json",
+    }
+    digests: dict[str, str] = {}
+    for name in sorted(required):
+        path = supplied[name]
+        assert path is not None
+        expected = output_dir / filenames[name]
+        if path != expected or path.is_symlink() or not path.is_file():
+            raise ValueError("V23 staged input path differs")
+        digests[f"{name}_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return digests
+
+
 def build_v23_diagnostic_plan(
     cell: dict[str, object],
     *,
     stage: str,
     workspace: Path,
     borsuk_bench: Path,
+    base_index_id: str,
+    output_dir: Path | None = None,
     d1_report_sha256: str | None = None,
     d2_report_sha256: str | None = None,
     page_uri: str | None = None,
@@ -3760,10 +3802,7 @@ def build_v23_diagnostic_plan(
     ):
         raise ValueError("V23 frozen cell authority differs")
     source_sha256 = _v23_digest(source.get("archive_sha256"), "source digest")
-    index_prefix = cell.get("index_prefix")
-    if type(index_prefix) is not str:
-        raise ValueError("V23 index identity is invalid")
-    index_id = _v23_string(index_prefix.rstrip("/").rsplit("/", 1)[-1], "index identity")
+    index_id = _v23_string(base_index_id, "historical base index identity")
     if stage == "d1":
         if d1_report_sha256 is not None or d2_report_sha256 is not None or page_uri is not None:
             raise ValueError("V23 D1 authority must not contain prerequisites")
@@ -3774,22 +3813,25 @@ def build_v23_diagnostic_plan(
         if stage == "d3":
             _v23_digest(d2_report_sha256, "D2 authority")
         page_uri = _v23_standard_s3_prefix(page_uri)
+    output_dir = output_dir or workspace / f"runtime-v23-{stage}"
     staged_inputs: dict[str, str] = {}
     if stage in {"d2", "d3"}:
         staged_inputs["bench_v23_d1_report.json"] = str(
-            workspace / "bench_v23_d1_report.json"
+            output_dir / "bench_v23_d1_report.json"
         )
     if stage == "d3":
         staged_inputs["bench_v23_d2_report.json"] = str(
-            workspace / "bench_v23_d2_report.json"
+            output_dir / "bench_v23_d2_report.json"
         )
-        staged_inputs["bench_v23_pages.json"] = str(workspace / "bench_v23_pages.json")
+        staged_inputs["bench_v23_pages.json"] = str(
+            output_dir / "bench_v23_pages.json"
+        )
     environment = {
         "BORSUK_BENCH_V23_STAGE": stage,
         "BORSUK_BENCH_V23_SOURCE_ARCHIVE_SHA256": source_sha256,
         "BORSUK_BENCH_V23_INDEX_ID": index_id,
         "BORSUK_BENCH_V23_DATASET_ID": str(dataset["id"]),
-        "BORSUK_BENCH_OUTPUT_DIR": str(workspace / f"runtime-v23-{stage}"),
+        "BORSUK_BENCH_OUTPUT_DIR": str(output_dir),
         "BORSUK_BENCH_QUERIES": str(V23_QUERY_COUNT),
         "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": "0",
         "BORSUK_BENCH_RAM_BUDGET_BYTES": str(V23_RAM_BUDGET_BYTES),
@@ -3816,6 +3858,85 @@ def build_v23_diagnostic_plan(
         "environment": environment,
         "staged_inputs": staged_inputs,
     }
+
+
+V23_FORBIDDEN_PHASE_ENV = frozenset(
+    {
+        "BORSUK_BENCH_BUILD_INDEX",
+        "BORSUK_BENCH_BUILD_ONLY",
+        "BORSUK_BENCH_RECALL_ONLY",
+        "BORSUK_BENCH_SKIP_RECALL",
+        "BORSUK_BENCH_READ_ONLY",
+        "BORSUK_BENCH_INSERT_ONLY",
+        "BORSUK_BENCH_LIFECYCLE_ONLY",
+        "BORSUK_BENCH_NPROBES",
+        "BORSUK_BENCH_CANDIDATES",
+        "BORSUK_BENCH_CONCURRENCY",
+        "BORSUK_BENCH_WRITE_OPS",
+        "BORSUK_BENCH_UPDATE_PERCENT",
+        "BORSUK_BENCH_DELETE_PERCENT",
+        "BORSUK_BENCH_LIFECYCLE_WRITERS",
+        "BORSUK_BENCH_LIMIT",
+        "BORSUK_BENCH_SKIP_EXACT_RECALL",
+        "BORSUK_BENCH_RECLUSTER_BUILD",
+        "BORSUK_BENCH_PRELOAD_SERVING",
+        "BORSUK_BENCH_CACHE_PROFILE",
+        "BORSUK_BENCH_CACHE_COVERAGE_PERCENT",
+        "BORSUK_BENCH_RECALL_LEAF_MODE",
+        "BORSUK_BENCH_SERVING_MODE",
+        "BORSUK_BENCH_SERVING_LEAF_MODE",
+        "BORSUK_BENCH_SERVING_NPROBE",
+        "BORSUK_BENCH_SERVING_CANDIDATES",
+        "BORSUK_BENCH_SERVING_PREFETCH_DEPTH",
+    }
+)
+
+
+def authorize_v23_publication_runtime(
+    runtime: dict[str, object], diagnostic: dict[str, object]
+) -> dict[str, object]:
+    """Replace one authenticated read runtime with an exclusive V23 phase."""
+
+    steps = runtime.get("steps")
+    command = diagnostic.get("command")
+    diagnostic_environment = diagnostic.get("environment")
+    output_dir = (
+        diagnostic_environment.get("BORSUK_BENCH_OUTPUT_DIR")
+        if type(diagnostic_environment) is dict
+        else None
+    )
+    if (
+        type(steps) is not list
+        or len(steps) != 1
+        or type(steps[0]) is not dict
+        or type(steps[0].get("env")) is not dict
+        or type(command) is not list
+        or len(command) != 1
+        or type(command[0]) is not str
+        or type(diagnostic_environment) is not dict
+        or type(output_dir) is not str
+        or not output_dir
+    ):
+        raise ValueError("V23 publication runtime plan differs")
+    environment = copy.deepcopy(steps[0]["env"])
+    for field in V23_FORBIDDEN_PHASE_ENV:
+        environment.pop(field, None)
+    environment.update(diagnostic_environment)
+    for required in (
+        "AWS_REGION",
+        "BORSUK_BENCH_DATASET",
+        "BORSUK_BENCH_URI",
+        "BORSUK_BENCH_CACHE",
+        "BORSUK_BENCH_V23_STAGE",
+    ):
+        if type(environment.get(required)) is not str or not environment[required]:
+            raise ValueError("V23 publication runtime storage authority differs")
+    if V23_FORBIDDEN_PHASE_ENV.intersection(environment):
+        raise ValueError("V23 publication runtime retained a normal phase selector")
+    authorized = copy.deepcopy(runtime)
+    authorized["output_dir"] = output_dir
+    authorized["steps"] = [{"argv": list(command), "env": environment}]
+    return authorized
 
 
 def _validate_v23_stage_summary(
@@ -4889,6 +5010,13 @@ def main() -> int:
     parser.add_argument("--v22-stage-l", action="store_true")
     parser.add_argument("--v22-diagnostic-protocol", type=Path)
     parser.add_argument("--v22-diagnostic-manifest", type=Path)
+    parser.add_argument("--v23-stage", choices=("d1", "d2", "d3"))
+    parser.add_argument("--v23-diagnostic-protocol", type=Path)
+    parser.add_argument("--v23-diagnostic-manifest", type=Path)
+    parser.add_argument("--v23-d1-report", type=Path)
+    parser.add_argument("--v23-d2-report", type=Path)
+    parser.add_argument("--v23-pages", type=Path)
+    parser.add_argument("--v23-page-uri")
     args = parser.parse_args()
 
     runtime_flow_control = runtime_flow_control_authority(
@@ -4912,8 +5040,14 @@ def main() -> int:
 
     cell = read_protocol(args.protocol)
     diagnostic_cell = None
-    if args.v21_feasibility and args.v22_stage_l:
-        raise ValueError("V21 and V22 diagnostic modes are mutually exclusive")
+    if sum(
+        (
+            args.v21_feasibility,
+            args.v22_stage_l,
+            args.v23_stage is not None,
+        )
+    ) > 1:
+        raise ValueError("historical diagnostic modes are mutually exclusive")
     if args.v21_feasibility:
         if (
             args.v21_diagnostic_protocol is None
@@ -4934,6 +5068,16 @@ def main() -> int:
         validate_publication_cell_authority(
             diagnostic_cell, args.v22_diagnostic_manifest
         )
+    elif args.v23_stage is not None:
+        if (
+            args.v23_diagnostic_protocol is None
+            or args.v23_diagnostic_manifest is None
+        ):
+            raise ValueError("V23 diagnostic requires its source authority")
+        diagnostic_cell = read_protocol(args.v23_diagnostic_protocol)
+        validate_publication_cell_authority(
+            diagnostic_cell, args.v23_diagnostic_manifest
+        )
     if not args.v21_feasibility and (
         args.v21_diagnostic_protocol is not None
         or args.v21_diagnostic_manifest is not None
@@ -4944,6 +5088,32 @@ def main() -> int:
         or args.v22_diagnostic_manifest is not None
     ):
         raise ValueError("V22 diagnostic authority requires V22 mode")
+    if args.v23_stage is None and any(
+        value is not None
+        for value in (
+            args.v23_diagnostic_protocol,
+            args.v23_diagnostic_manifest,
+            args.v23_d1_report,
+            args.v23_d2_report,
+            args.v23_pages,
+            args.v23_page_uri,
+        )
+    ):
+        raise ValueError("V23 diagnostic authority requires V23 mode")
+    if args.v23_stage is not None:
+        expected_inputs = {
+            "d1": (False, False, False),
+            "d2": (True, False, False),
+            "d3": (True, True, True),
+        }[args.v23_stage]
+        actual_inputs = tuple(
+            value is not None
+            for value in (args.v23_d1_report, args.v23_d2_report, args.v23_pages)
+        )
+        if actual_inputs != expected_inputs or (
+            (args.v23_page_uri is not None) != (args.v23_stage in {"d2", "d3"})
+        ):
+            raise ValueError(f"V23 {args.v23_stage.upper()} prerequisites differ")
     protocol_bytes = args.protocol.read_bytes()
     arms = plan_arms(cell)
     if args.arm_index < 0 or args.arm_index >= len(arms):
@@ -5032,7 +5202,11 @@ def main() -> int:
         diagnostic_write_ops=args.diagnostic_write_ops,
         diagnostic_read_nprobes=args.diagnostic_read_nprobes,
         diagnostic_read_candidates=args.diagnostic_read_candidates,
-        diagnostic_cell=diagnostic_cell,
+        diagnostic_cell=(
+            diagnostic_cell
+            if args.v21_feasibility or args.v22_stage_l
+            else None
+        ),
         v21_feasibility=args.v21_feasibility,
         v22_stage_l=args.v22_stage_l,
     )
@@ -5119,12 +5293,53 @@ def main() -> int:
             )
         else:
             raise ValueError("publication runtime workload is not implemented")
+        if args.v23_stage is not None:
+            if diagnostic_cell is None:
+                raise ValueError("V23 diagnostic source authority is missing")
+            staged = validate_v23_staged_inputs(
+                stage=args.v23_stage,
+                output_dir=Path(str(authorized_runtime["output_dir"])),
+                d1_report=args.v23_d1_report,
+                d2_report=args.v23_d2_report,
+                pages=args.v23_pages,
+            )
+            d1_report_sha256 = staged.get("d1_report_sha256")
+            d2_report_sha256 = staged.get("d2_report_sha256")
+            diagnostic_plan = build_v23_diagnostic_plan(
+                diagnostic_cell,
+                stage=args.v23_stage,
+                workspace=args.workspace,
+                output_dir=Path(str(authorized_runtime["output_dir"])),
+                borsuk_bench=args.borsuk_bench,
+                base_index_id=str(cell["index_prefix"])
+                .rstrip("/")
+                .rsplit("/", 1)[-1],
+                d1_report_sha256=d1_report_sha256,
+                d2_report_sha256=d2_report_sha256,
+                page_uri=args.v23_page_uri,
+            )
+            authorized_runtime = authorize_v23_publication_runtime(
+                authorized_runtime, diagnostic_plan
+            )
         authorized_plan = {**plan, "runtime": authorized_runtime}
         source_root = Path(__file__).resolve().parent.parent
         attestation_cell = diagnostic_cell or cell
-        v2x_diagnostic = args.v21_feasibility or args.v22_stage_l
-        attestation_resource_role = "diagnostic" if v2x_diagnostic else "runtime"
-        attestation_memory_max = 32 * 1024**3 if v2x_diagnostic else None
+        historical_diagnostic = (
+            args.v21_feasibility
+            or args.v22_stage_l
+            or args.v23_stage is not None
+        )
+        d3_diagnostic = args.v23_stage == "d3"
+        attestation_resource_role = (
+            "diagnostic" if historical_diagnostic and not d3_diagnostic else "runtime"
+        )
+        attestation_memory_max = (
+            8 * 1024**3
+            if d3_diagnostic
+            else 32 * 1024**3
+            if historical_diagnostic
+            else None
+        )
         preflight = validate_runtime_attestation(
             collect_runtime_attestation(
                 cell=attestation_cell,
@@ -5143,6 +5358,86 @@ def main() -> int:
         output, resources, elapsed_ns = execute_publication_phase(
             authorized_plan, "runtime"
         )
+        if args.v23_stage is not None:
+            if runtime_flow_control is None or diagnostic_cell is None:
+                raise ValueError("V23 requires runtime flow and source authority")
+            execution_contract = runtime_execution_contract(
+                authorized_plan,
+                args.runtime_profile,
+                {"schema_version": 4, **runtime_flow_control},
+            )
+            (args.workspace / "RUNTIME_EXECUTION_CONTRACT.json").write_bytes(
+                canonical_json_bytes(execution_contract) + b"\n"
+            )
+            runtime_attestation = validate_runtime_attestation(
+                collect_runtime_attestation(
+                    cell=diagnostic_cell,
+                    attempt_id=str(args.attempt_id),
+                    runtime=authorized_runtime,
+                    source_root=source_root,
+                    purchase_option=args.purchase_option,
+                ),
+                cell=diagnostic_cell,
+                attempt_id=str(args.attempt_id),
+                resource_role=attestation_resource_role,
+                expected_memory_max_bytes=attestation_memory_max,
+            )
+            (args.workspace / "RUNTIME_ATTESTATION.json").write_bytes(
+                canonical_json_bytes(runtime_attestation) + b"\n"
+            )
+            expected_source = str(diagnostic_cell["source"]["archive_sha256"])
+            expected_index = str(cell["index_prefix"]).rstrip("/").rsplit("/", 1)[-1]
+            expected_dataset = str(cell["dataset"]["id"])
+            if args.v23_stage == "d1":
+                report = validate_v23_d1_artifacts(
+                    output / "bench_v23_d1_report.json",
+                    output / "bench_v23_summary.json",
+                    expected_source_archive_sha256=expected_source,
+                    expected_index_id=expected_index,
+                    expected_dataset_id=expected_dataset,
+                )
+            elif args.v23_stage == "d2":
+                assert d1_report_sha256 is not None
+                report = validate_v23_d2_artifacts(
+                    output / "bench_v23_d2_report.json",
+                    output / "bench_v23_pages.json",
+                    output / "bench_v23_summary.json",
+                    expected_source_archive_sha256=expected_source,
+                    expected_index_id=expected_index,
+                    expected_dataset_id=expected_dataset,
+                    expected_d1_report_sha256=d1_report_sha256,
+                    expected_page_uri=str(args.v23_page_uri),
+                )
+            else:
+                assert d1_report_sha256 is not None and d2_report_sha256 is not None
+                report = validate_v23_d3_artifacts(
+                    output / "bench_v23_d3_waves.csv",
+                    output / "bench_v23_summary.json",
+                    expected_source_archive_sha256=expected_source,
+                    expected_index_id=expected_index,
+                    expected_dataset_id=expected_dataset,
+                    expected_d1_report_sha256=d1_report_sha256,
+                    expected_d2_report_sha256=d2_report_sha256,
+                    expected_page_uri=str(args.v23_page_uri),
+                )
+            report.update(
+                {
+                    "cell_id": cell["cell_id"],
+                    "diagnostic_cell_id": diagnostic_cell["cell_id"],
+                    "attempt_id": args.attempt_id,
+                    "instance_identity": args.instance_identity,
+                    "dataset_materialization_sha256": (
+                        args.dataset_materialization_sha256
+                    ),
+                    "elapsed_ns": elapsed_ns,
+                    "resources": resources,
+                    "runtime_attestation": runtime_attestation,
+                }
+            )
+            destination = args.workspace / "RESULT_COMPLETE.json"
+            destination.write_bytes(canonical_json_bytes(report) + b"\n")
+            print(json.dumps(report, sort_keys=True))
+            return 0
         if args.v22_stage_l:
             if runtime_flow_control is None:
                 raise ValueError("V22 Stage L requires runtime flow authority")

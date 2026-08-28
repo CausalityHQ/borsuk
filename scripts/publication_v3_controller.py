@@ -714,6 +714,27 @@ def run_execution_job(
                                     "v22_summary_sha256",
                                 )
                             )
+                        elif expected.get("v23_stage") in {"d1", "d2", "d3"}:
+                            digest_fields.extend(
+                                {
+                                    "d1": (
+                                        "v23_result_sha256",
+                                        "v23_d1_report_sha256",
+                                        "v23_summary_sha256",
+                                    ),
+                                    "d2": (
+                                        "v23_result_sha256",
+                                        "v23_d2_report_sha256",
+                                        "v23_pages_sha256",
+                                        "v23_summary_sha256",
+                                    ),
+                                    "d3": (
+                                        "v23_result_sha256",
+                                        "v23_d3_waves_sha256",
+                                        "v23_summary_sha256",
+                                    ),
+                                }[str(expected["v23_stage"])]
+                            )
                         else:
                             digest_fields.extend(
                                 (
@@ -728,10 +749,12 @@ def run_execution_job(
                         for field in digest_fields
                     ):
                         raise ValueError("execution receipt artifact digest is invalid")
-                    if (
+                    historical_stage = (
                         expected.get("v21_feasibility") is True
                         or expected.get("v22_stage_l") is True
-                    ):
+                        or expected.get("v23_stage") in {"d1", "d2", "d3"}
+                    )
+                    if historical_stage:
                         memory_peak = value.get("memory_peak_bytes")
                         if (
                             isinstance(memory_peak, bool)
@@ -740,8 +763,12 @@ def run_execution_job(
                             or memory_peak > expected.get("memory_max_bytes", 0)
                         ):
                             raise ValueError(
-                                "V21/V22 execution receipt memory peak is invalid"
+                                "historical execution receipt memory peak is invalid"
                             )
+                    if expected.get("v23_stage") in {"d1", "d2", "d3"} and type(
+                        value.get("v23_passed")
+                    ) is not bool:
+                        raise ValueError("V23 execution receipt pass result is invalid")
                 if job.role == "build" and value.get("index_uri") != job.index_uri:
                     raise ValueError("build receipt differs from scheduled index")
                 return value
@@ -1110,6 +1137,142 @@ def authenticate_v21_base_index_authority(
         raise ValueError("V21 base-index authority differs") from error
 
 
+def authenticate_v23_prerequisites(
+    *,
+    stage: str,
+    current_manifest: dict[str, object],
+    base_authority: BaseIndexAuthority,
+    aws: Any,
+    max_attempts: int = 6,
+) -> dict[str, object]:
+    """Resolve passing immutable V23 prerequisites before any paid launch."""
+
+    if stage not in {"d1", "d2", "d3"}:
+        raise ValueError("V23 stage authority differs")
+    if stage == "d1":
+        return {}
+    normalized = validate_manifest(current_manifest)
+    cell = borsuk_cell(
+        normalized,
+        workload_id="standard-ann-read",
+        dataset_id="deep-image-96",
+        repetition_id="r01",
+        build_attempt=base_authority.build_attempt,
+    )
+    manifest_sha256 = hashlib.sha256(canonical_json_bytes(normalized)).hexdigest()
+    protocol_sha256 = hashlib.sha256(canonical_json_bytes(cell) + b"\n").hexdigest()
+    source_sha256 = str(normalized["source"]["archive_sha256"])
+    result: dict[str, object] = {}
+    required_stages = ("d1",) if stage == "d2" else ("d1", "d2")
+    for prerequisite_stage in required_stages:
+        attempt = select_execution_attempt(
+            lambda candidate, prerequisite_stage=prerequisite_stage: ExecutionJob.runtime(
+                cell,
+                attempt=candidate,
+                profile="recall",
+                arm_index=0,
+                v23_stage=prerequisite_stage,
+            ),
+            aws=aws,
+            max_attempts=max_attempts,
+            purchase_option="spot",
+            require_complete=True,
+        )
+        job = ExecutionJob.runtime(
+            cell,
+            attempt=attempt,
+            profile="recall",
+            arm_index=0,
+            v23_stage=prerequisite_stage,
+        )
+        payload = aws.read_immutable_bytes(job.complete_uri, None)
+        receipt = _json_object(payload, newline=True, canonical_keys=False)
+        expected = {
+            "schema_version": 5,
+            "status": "complete",
+            "role": "runtime",
+            "attempt": attempt,
+            "attempt_id": f"{job.cell_tag}-a{attempt:04d}",
+            "source_archive_sha256": source_sha256,
+            "manifest_sha256": manifest_sha256,
+            "protocol_sha256": protocol_sha256,
+            "purchase_option": "spot",
+            "runtime_profile": "recall",
+            "arm_index": 0,
+            "claim_eligible": False,
+            "v23_stage": prerequisite_stage,
+            "v23_passed": True,
+            "base_build_terminal_sha256": base_authority.build_terminal_sha256,
+            "base_manifest_sha256": base_authority.manifest_sha256,
+            "base_protocol_sha256": base_authority.protocol_sha256,
+            "base_source_archive_sha256": base_authority.source_archive_sha256,
+            "base_index_receipt_sha256": base_authority.index_receipt_sha256,
+            "base_object_roster_sha256": base_authority.object_roster_sha256,
+            "base_inventory_sha256": base_authority.inventory_sha256,
+            "base_index_id": base_authority.index_id,
+            "base_index_uri": base_authority.index_uri,
+            "diagnostic_source_archive_sha256": source_sha256,
+        }
+        if any(receipt.get(field) != value for field, value in expected.items()):
+            raise ValueError(f"V23 {prerequisite_stage.upper()} prerequisite differs")
+        if prerequisite_stage == "d2" and any(
+            receipt.get(field) != result[authority]
+            for field, authority in (
+                ("v23_d1_receipt_sha256", "d1_receipt_sha256"),
+                ("v23_d1_report_sha256", "d1_report_sha256"),
+                ("v23_prerequisite_binary_sha256", "binary_sha256"),
+            )
+        ):
+            raise ValueError("V23 D2 prerequisite chain differs")
+        binary_sha256 = receipt.get("binary_sha256")
+        if (
+            not isinstance(binary_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", binary_sha256) is None
+            or "binary_sha256" in result
+            and result["binary_sha256"] != binary_sha256
+        ):
+            raise ValueError("V23 prerequisite binary identity differs")
+        result["binary_sha256"] = binary_sha256
+        receipt_sha256 = hashlib.sha256(payload).hexdigest()
+        report_field = f"v23_{prerequisite_stage}_report_sha256"
+        report_sha256 = receipt.get(report_field)
+        if not isinstance(report_sha256, str) or re.fullmatch(
+            r"[0-9a-f]{64}", report_sha256
+        ) is None:
+            raise ValueError("V23 prerequisite report digest differs")
+        report_uri = f"{job.terminal_prefix}/bench_v23_{prerequisite_stage}_report.json"
+        aws.read_immutable_bytes(report_uri, report_sha256)
+        result.update(
+            {
+                f"{prerequisite_stage}_receipt_uri": job.complete_uri,
+                f"{prerequisite_stage}_receipt_sha256": receipt_sha256,
+                f"{prerequisite_stage}_report_uri": report_uri,
+                f"{prerequisite_stage}_report_sha256": report_sha256,
+            }
+        )
+        if prerequisite_stage == "d2":
+            pages_sha256 = receipt.get("v23_pages_sha256")
+            page_prefix = receipt.get("v23_page_prefix")
+            if (
+                not isinstance(pages_sha256, str)
+                or re.fullmatch(r"[0-9a-f]{64}", pages_sha256) is None
+                or not isinstance(page_prefix, str)
+                or page_prefix.rstrip("/") != f"{job.terminal_prefix}/pages"
+                or page_prefix.startswith(str(base_authority.index_uri).rstrip("/") + "/")
+            ):
+                raise ValueError("V23 D2 page authority differs")
+            pages_uri = f"{job.terminal_prefix}/bench_v23_pages.json"
+            aws.read_immutable_bytes(pages_uri, pages_sha256)
+            result.update(
+                {
+                    "pages_uri": pages_uri,
+                    "pages_sha256": pages_sha256,
+                    "page_prefix": page_prefix,
+                }
+            )
+    return result
+
+
 def prepare_qualification_execution(
     manifest: dict[str, object],
     *,
@@ -1136,6 +1299,9 @@ def prepare_qualification_execution(
     diagnostic_read_candidates: tuple[int, ...] | None = None,
     v21_base_authority: BaseIndexAuthority | None = None,
     v22_base_authority: BaseIndexAuthority | None = None,
+    v23_stage: str | None = None,
+    v23_base_authority: BaseIndexAuthority | None = None,
+    v23_prerequisites: dict[str, object] | None = None,
 ) -> PreparedExecution:
     """Prepare one immutable build or small-runtime qualification execution."""
 
@@ -1152,6 +1318,7 @@ def prepare_qualification_execution(
         "diagnose-read",
         "diagnose-v21-selector",
         "diagnose-v22-stage-l",
+        "diagnose-v23",
     }
     if operation not in supported:
         raise ValueError("unsupported qualification execution")
@@ -1166,34 +1333,85 @@ def prepare_qualification_execution(
         "diagnose-read",
         "diagnose-v21-selector",
         "diagnose-v22-stage-l",
+        "diagnose-v23",
     }
     lifecycle_diagnostic = operation == "diagnose-lifecycle"
     read_diagnostic = operation == "diagnose-read"
     v21_feasibility = operation == "diagnose-v21-selector"
     v22_stage_l = operation == "diagnose-v22-stage-l"
-    if v21_feasibility and v22_stage_l:
+    v23_diagnostic = operation == "diagnose-v23"
+    if v23_stage not in ({"d1", "d2", "d3"} if v23_diagnostic else {None}):
+        raise ValueError("V23 stage authority differs")
+    if sum((v21_feasibility, v22_stage_l, v23_diagnostic)) > 1:
         raise ValueError("diagnostic operation authority is ambiguous")
-    v2x_diagnostic = v21_feasibility or v22_stage_l
+    historical_diagnostic = v21_feasibility or v22_stage_l or v23_diagnostic
     diagnostic_label = (
         "V21 selector"
         if v21_feasibility
         else "V22 Stage L"
         if v22_stage_l
+        else f"V23 {str(v23_stage).upper()}"
+        if v23_diagnostic
         else "non-diagnostic operation"
     )
-    base_authority = v21_base_authority if v21_feasibility else v22_base_authority
+    base_authority = (
+        v21_base_authority
+        if v21_feasibility
+        else v22_base_authority
+        if v22_stage_l
+        else v23_base_authority
+    )
     if (
-        v2x_diagnostic != isinstance(base_authority, BaseIndexAuthority)
+        historical_diagnostic != isinstance(base_authority, BaseIndexAuthority)
         or v21_feasibility
         and v22_base_authority is not None
         or v22_stage_l
         and v21_base_authority is not None
-        or not v2x_diagnostic
+        or (v21_feasibility or v22_stage_l)
+        and (v23_base_authority is not None or v23_prerequisites is not None)
+        or v23_diagnostic
         and (v21_base_authority is not None or v22_base_authority is not None)
+        or not historical_diagnostic
+        and any(
+            authority is not None
+            for authority in (
+                v21_base_authority,
+                v22_base_authority,
+                v23_base_authority,
+                v23_prerequisites,
+            )
+        )
     ):
         raise ValueError(
             f"{diagnostic_label} diagnostic requires its exact base-index authority"
         )
+    if v23_diagnostic:
+        expected_fields = {
+            "d1": set(),
+            "d2": {
+                "binary_sha256",
+                "d1_receipt_uri",
+                "d1_receipt_sha256",
+                "d1_report_uri",
+                "d1_report_sha256",
+            },
+            "d3": {
+                "binary_sha256",
+                "d1_receipt_uri",
+                "d1_receipt_sha256",
+                "d1_report_uri",
+                "d1_report_sha256",
+                "d2_receipt_uri",
+                "d2_receipt_sha256",
+                "d2_report_uri",
+                "d2_report_sha256",
+                "pages_uri",
+                "pages_sha256",
+                "page_prefix",
+            },
+        }[str(v23_stage)]
+        if set(v23_prerequisites or {}) != expected_fields:
+            raise ValueError(f"V23 {str(v23_stage).upper()} prerequisite authority differs")
     diagnostic = lifecycle_diagnostic or read_diagnostic
     effective_arm_index = (
         13
@@ -1237,7 +1455,7 @@ def prepare_qualification_execution(
         )
     ):
         raise ValueError("read diagnostic authority requires diagnose-read")
-    if v2x_diagnostic and (
+    if historical_diagnostic and (
         workload_id != "standard-ann-read"
         or dataset_id != "deep-image-96"
         or repetition_id != "r01"
@@ -1247,7 +1465,7 @@ def prepare_qualification_execution(
         raise ValueError(
             f"{diagnostic_label} diagnostic requires canonical Deep Image arm 0 on Spot"
         )
-    if v2x_diagnostic:
+    if historical_diagnostic:
         frozen_source = normalized.get("source")
         matching_datasets = [
             dataset
@@ -1395,6 +1613,7 @@ def prepare_qualification_execution(
             diagnostic=diagnostic,
             v21_feasibility=v21_feasibility,
             v22_stage_l=v22_stage_l,
+            v23_stage=v23_stage,
         )
     )
     attempt_id = f"{job.cell_tag}-a{job.attempt:04d}"
@@ -1421,10 +1640,10 @@ def prepare_qualification_execution(
         role = "build"
     else:
         worker_base_authority = None
-        if v2x_diagnostic:
+        if historical_diagnostic:
             assert base_authority is not None
             if build_attempt != base_authority.build_attempt:
-                raise ValueError("V21/V22 build attempt differs from base-index authority")
+                raise ValueError("diagnostic build attempt differs from base-index authority")
             base_cell = borsuk_cell(
                 base_authority.manifest,
                 workload_id="standard-ann-read",
@@ -1519,14 +1738,21 @@ def prepare_qualification_execution(
             v21_base_authority=worker_base_authority if v21_feasibility else None,
             v22_stage_l=v22_stage_l,
             v22_base_authority=worker_base_authority if v22_stage_l else None,
+            v23_stage=v23_stage,
+            v23_base_authority=worker_base_authority if v23_diagnostic else None,
+            v23_prerequisites=v23_prerequisites if v23_diagnostic else None,
         )
         maximum = (
             diagnostic_timeout_seconds
             if lifecycle_diagnostic
             else int(normalized["budget_contract"]["max_cell_seconds"])
         )
-        role = "diagnostic" if v2x_diagnostic else "runtime"
-        if not v2x_diagnostic:
+        role = (
+            "runtime"
+            if not historical_diagnostic or v23_diagnostic and v23_stage == "d3"
+            else "diagnostic"
+        )
+        if not historical_diagnostic:
             expected["binary_sha256"] = authority["binary_sha256"]
         expected["runtime_profile"] = runtime_profile
         expected["arm_index"] = effective_arm_index
@@ -1553,10 +1779,27 @@ def prepare_qualification_execution(
             expected["diagnostic_read_candidates"] = list(
                 diagnostic_read_candidates or ()
             )
-        elif v2x_diagnostic:
+        elif historical_diagnostic:
             assert base_authority is not None
             expected["claim_eligible"] = False
-            expected["v21_feasibility" if v21_feasibility else "v22_stage_l"] = True
+            if v23_diagnostic:
+                expected["v23_stage"] = v23_stage
+                for field, value in (v23_prerequisites or {}).items():
+                    if field.endswith("_sha256"):
+                        receipt_field = (
+                            "v23_prerequisite_pages_sha256"
+                            if field == "pages_sha256"
+                            else "v23_prerequisite_binary_sha256"
+                            if field == "binary_sha256"
+                            else f"v23_{field}"
+                        )
+                        expected[receipt_field] = value
+                if v23_stage in {"d2", "d3"}:
+                    expected["binary_sha256"] = (v23_prerequisites or {})[
+                        "binary_sha256"
+                    ]
+            else:
+                expected["v21_feasibility" if v21_feasibility else "v22_stage_l"] = True
             expected.update(
                 {
                     "base_build_terminal_sha256": (
@@ -1577,7 +1820,11 @@ def prepare_qualification_execution(
                     "base_index_id": base_authority.index_id,
                     "base_index_uri": base_authority.index_uri,
                     "diagnostic_source_archive_sha256": source_sha256,
-                    "memory_max_bytes": 34_359_738_368,
+                    "memory_max_bytes": (
+                        8_589_934_592
+                        if v23_diagnostic and v23_stage == "d3"
+                        else 34_359_738_368
+                    ),
                     "memory_swap_max_bytes": 0,
                 }
             )
@@ -1599,6 +1846,7 @@ def prepare_qualification_execution(
         terminal_detail_log_path="/var/lib/borsuk-publication/worker.log",
         max_seconds=maximum,
         purchase_option=purchase_option,
+        identity_role=job.role if historical_diagnostic else None,
     )
     return PreparedExecution(job, request, expected, maximum)
 
@@ -1716,6 +1964,24 @@ def main() -> int:
     v22_diagnostic.add_argument("--purchase-option", choices=("spot",), default="spot")
     v22_diagnostic.add_argument("--base-build-terminal-uri", required=True)
     v22_diagnostic.add_argument("--base-build-terminal-sha256", required=True)
+    v23_diagnostic = subparsers.add_parser("diagnose-v23")
+    v23_diagnostic.add_argument("--stage", choices=("d1", "d2", "d3"), required=True)
+    v23_diagnostic.add_argument("--manifest", type=Path, required=True)
+    v23_diagnostic.add_argument("--source-archive", type=Path, required=True)
+    v23_diagnostic.add_argument("--workload", default="standard-ann-read")
+    v23_diagnostic.add_argument("--dataset", default="deep-image-96")
+    v23_diagnostic.add_argument("--repetition", default="r01")
+    v23_diagnostic.add_argument("--profile", default="causality")
+    v23_diagnostic.add_argument("--image-id", required=True)
+    v23_diagnostic.add_argument("--subnet-id", required=True)
+    v23_diagnostic.add_argument("--security-group-id", required=True)
+    v23_diagnostic.add_argument("--instance-profile-arn", required=True)
+    v23_diagnostic.add_argument("--attempt", type=int, default=0)
+    v23_diagnostic.add_argument("--max-attempts", type=int, default=6)
+    v23_diagnostic.add_argument("--arm-index", type=int, default=0)
+    v23_diagnostic.add_argument("--purchase-option", choices=("spot",), default="spot")
+    v23_diagnostic.add_argument("--base-build-terminal-uri", required=True)
+    v23_diagnostic.add_argument("--base-build-terminal-sha256", required=True)
     runtime = subparsers.add_parser("read-recall-sift")
     runtime.add_argument("--manifest", type=Path, required=True)
     runtime.add_argument("--source-archive", type=Path, required=True)
@@ -1812,7 +2078,19 @@ def main() -> int:
             terminal_sha256=args.base_build_terminal_sha256,
             aws=aws,
         )
-        if args.operation in {"diagnose-v21-selector", "diagnose-v22-stage-l"}
+        if args.operation
+        in {"diagnose-v21-selector", "diagnose-v22-stage-l", "diagnose-v23"}
+        else None
+    )
+    v23_prerequisites = (
+        authenticate_v23_prerequisites(
+            stage=args.stage,
+            current_manifest=normalized,
+            base_authority=v21_base_authority,
+            aws=aws,
+            max_attempts=args.max_attempts,
+        )
+        if args.operation == "diagnose-v23" and v21_base_authority is not None
         else None
     )
     aws.upload_immutable(args.source_archive, source_uri, source_sha)
@@ -1852,11 +2130,13 @@ def main() -> int:
             "diagnose-read",
             "diagnose-v21-selector",
             "diagnose-v22-stage-l",
+            "diagnose-v23",
         }
         read_diagnostic = args.operation == "diagnose-read"
         v21_feasibility = args.operation == "diagnose-v21-selector"
         v22_stage_l = args.operation == "diagnose-v22-stage-l"
-        v2x_diagnostic = v21_feasibility or v22_stage_l
+        v23_diagnostic = args.operation == "diagnose-v23"
+        historical_diagnostic = v21_feasibility or v22_stage_l or v23_diagnostic
         build_operation = args.operation in {
             "build-sift",
             "build-lifecycle",
@@ -1865,7 +2145,7 @@ def main() -> int:
         execution_attempt = getattr(args, "attempt", 1)
         build_attempt = (
             v21_base_authority.build_attempt
-            if v2x_diagnostic and v21_base_authority is not None
+            if historical_diagnostic and v21_base_authority is not None
             else execution_attempt
             if build_operation
             else args.build_attempt
@@ -1889,7 +2169,7 @@ def main() -> int:
         elif (
             generic_read
             and not build_operation
-            and not v2x_diagnostic
+            and not historical_diagnostic
             and build_attempt == 0
         ):
             build_attempt = select_execution_attempt(
@@ -1923,6 +2203,7 @@ def main() -> int:
                     diagnostic=read_diagnostic,
                     v21_feasibility=v21_feasibility,
                     v22_stage_l=v22_stage_l,
+                    v23_stage=args.stage if v23_diagnostic else None,
                 ),
                 aws=aws,
                 max_attempts=args.max_attempts,
@@ -1959,12 +2240,12 @@ def main() -> int:
         build_protocol_bytes = canonical_json_bytes(build_cell) + b"\n"
         build_protocol_sha = (
             v21_base_authority.protocol_sha256
-            if v2x_diagnostic and v21_base_authority is not None
+            if historical_diagnostic and v21_base_authority is not None
             else hashlib.sha256(build_protocol_bytes).hexdigest()
         )
         build_protocol_uri = (
             v21_base_authority.protocol_uri
-            if v2x_diagnostic and v21_base_authority is not None
+            if historical_diagnostic and v21_base_authority is not None
             else f"{campaign_root}/protocols/{build_protocol_sha}.json"
         )
         with tempfile.TemporaryDirectory(
@@ -1973,7 +2254,7 @@ def main() -> int:
             protocol_path = Path(directory) / "protocol.json"
             protocol_path.write_bytes(protocol_bytes)
             aws.upload_immutable(protocol_path, protocol_uri, protocol_sha)
-            if not v2x_diagnostic:
+            if not historical_diagnostic:
                 build_protocol_path = Path(directory) / "build-protocol.json"
                 build_protocol_path.write_bytes(build_protocol_bytes)
                 aws.upload_immutable(
@@ -2006,6 +2287,9 @@ def main() -> int:
             diagnostic_read_candidates=getattr(args, "candidates", None),
             v21_base_authority=(v21_base_authority if v21_feasibility else None),
             v22_base_authority=(v21_base_authority if v22_stage_l else None),
+            v23_stage=(args.stage if v23_diagnostic else None),
+            v23_base_authority=(v21_base_authority if v23_diagnostic else None),
+            v23_prerequisites=(v23_prerequisites if v23_diagnostic else None),
         )
         receipt = run_execution_job(
             prepared.job,

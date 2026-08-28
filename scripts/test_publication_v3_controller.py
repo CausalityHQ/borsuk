@@ -21,6 +21,7 @@ from scripts.publication_v3_controller import (
     LaunchEnvironment,
     _minimum_lifecycle_write_ops,
     authenticate_v21_base_index_authority,
+    authenticate_v23_prerequisites,
     completed_build_authority,
     prepare_qualification_execution,
     run_execution_job,
@@ -145,6 +146,213 @@ class FakeAws:
 
 
 class PublicationV3ControllerTests(unittest.TestCase):
+    def test_v23_prerequisite_authentication_requires_passing_digest_bound_receipt(
+        self,
+    ) -> None:
+        manifest = json.loads(MANIFEST.read_text())
+        cell = borsuk_cell(
+            manifest,
+            workload_id="standard-ann-read",
+            dataset_id="deep-image-96",
+            repetition_id="r01",
+            build_attempt=1,
+        )
+        base = BaseIndexAuthority(
+            manifest=copy.deepcopy(manifest),
+            manifest_uri="s3://bucket/base/manifest.json",
+            manifest_sha256="a" * 64,
+            protocol_uri="s3://bucket/base/protocol.json",
+            protocol_sha256="b" * 64,
+            source_uri="s3://bucket/base/source.tar.gz",
+            source_archive_sha256="c" * 64,
+            source_git_commit="d" * 40,
+            build_terminal_uri="s3://bucket/base/BUILD_TERMINAL_COMPLETE.json",
+            build_terminal_sha256="e" * 64,
+            build_prefix="s3://bucket/base/build",
+            build_cell_id="base-cell",
+            build_attempt=1,
+            index_id=str(cell["index_prefix"]).rstrip("/").rsplit("/", 1)[-1],
+            index_uri=str(cell["index_prefix"]),
+            index_receipt_sha256="f" * 64,
+            object_roster_sha256="0" * 64,
+            inventory_sha256="1" * 64,
+        )
+        manifest_sha256 = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+        protocol_sha256 = hashlib.sha256(canonical_json_bytes(cell) + b"\n").hexdigest()
+        report_payload = b"{}\n"
+        report_sha256 = hashlib.sha256(report_payload).hexdigest()
+        job = ExecutionJob.runtime(
+            cell, attempt=1, profile="recall", arm_index=0, v23_stage="d1"
+        )
+        receipt = {
+            "schema_version": 5,
+            "status": "complete",
+            "role": "runtime",
+            "attempt": 1,
+            "attempt_id": f"{job.cell_tag}-a0001",
+            "source_archive_sha256": manifest["source"]["archive_sha256"],
+            "manifest_sha256": manifest_sha256,
+            "protocol_sha256": protocol_sha256,
+            "purchase_option": "spot",
+            "runtime_profile": "recall",
+            "arm_index": 0,
+            "claim_eligible": False,
+            "v23_stage": "d1",
+            "v23_passed": True,
+            "binary_sha256": "8" * 64,
+            "base_build_terminal_sha256": base.build_terminal_sha256,
+            "base_manifest_sha256": base.manifest_sha256,
+            "base_protocol_sha256": base.protocol_sha256,
+            "base_source_archive_sha256": base.source_archive_sha256,
+            "base_index_receipt_sha256": base.index_receipt_sha256,
+            "base_object_roster_sha256": base.object_roster_sha256,
+            "base_inventory_sha256": base.inventory_sha256,
+            "base_index_id": base.index_id,
+            "base_index_uri": base.index_uri,
+            "diagnostic_source_archive_sha256": manifest["source"]["archive_sha256"],
+            "v23_d1_report_sha256": report_sha256,
+        }
+
+        class PrerequisiteAws:
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_immutable_bytes(self, uri: str, sha256: str | None):
+                if uri == job.complete_uri:
+                    return canonical_json_bytes(receipt) + b"\n"
+                self.asserted = (uri, sha256)
+                return report_payload
+
+        aws = PrerequisiteAws()
+        authority = authenticate_v23_prerequisites(
+            stage="d2",
+            current_manifest=manifest,
+            base_authority=base,
+            aws=aws,
+        )
+        self.assertEqual(authority["d1_report_sha256"], report_sha256)
+        self.assertEqual(authority["binary_sha256"], "8" * 64)
+        self.assertEqual(aws.asserted[1], report_sha256)
+        receipt["v23_passed"] = False
+        with self.assertRaisesRegex(ValueError, "D1 prerequisite differs"):
+            authenticate_v23_prerequisites(
+                stage="d2",
+                current_manifest=manifest,
+                base_authority=base,
+                aws=PrerequisiteAws(),
+            )
+
+        receipt["v23_passed"] = True
+        d1_payload = canonical_json_bytes(receipt) + b"\n"
+        d1_receipt_sha256 = hashlib.sha256(d1_payload).hexdigest()
+        d2_job = ExecutionJob.runtime(
+            cell, attempt=1, profile="recall", arm_index=0, v23_stage="d2"
+        )
+        d2_receipt = {
+            **receipt,
+            "attempt_id": f"{d2_job.cell_tag}-a0001",
+            "v23_stage": "d2",
+            "v23_d1_receipt_sha256": d1_receipt_sha256,
+            "v23_d1_report_sha256": report_sha256,
+            "v23_prerequisite_binary_sha256": "8" * 64,
+            "v23_d2_report_sha256": report_sha256,
+            "v23_pages_sha256": report_sha256,
+            "v23_page_prefix": f"{d2_job.terminal_prefix}/pages",
+        }
+        case = self
+
+        class D3PrerequisiteAws:
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_immutable_bytes(self, uri: str, sha256: str | None):
+                if uri == job.complete_uri:
+                    return d1_payload
+                if uri == d2_job.complete_uri:
+                    return canonical_json_bytes(d2_receipt) + b"\n"
+                case.assertEqual(sha256, report_sha256)
+                return report_payload
+
+        d3_authority = authenticate_v23_prerequisites(
+            stage="d3",
+            current_manifest=manifest,
+            base_authority=base,
+            aws=D3PrerequisiteAws(),
+        )
+        self.assertEqual(d3_authority["d1_receipt_sha256"], d1_receipt_sha256)
+        d2_receipt["v23_d1_receipt_sha256"] = "9" * 64
+        with self.assertRaisesRegex(ValueError, "D2 prerequisite chain differs"):
+            authenticate_v23_prerequisites(
+                stage="d3",
+                current_manifest=manifest,
+                base_authority=base,
+                aws=D3PrerequisiteAws(),
+            )
+
+    def test_v23_main_authenticates_base_and_prerequisites_before_publication(self) -> None:
+        manifest = json.loads(MANIFEST.read_text())
+        archive = b"current V23 diagnostic source"
+        source_sha256 = hashlib.sha256(archive).hexdigest()
+        manifest["source"] = {
+            "state": "frozen",
+            "git_commit": "2" * 40,
+            "archive_sha256": source_sha256,
+            "cargo_lock_sha256": "3" * 64,
+            "python_lock_sha256": "4" * 64,
+            "node_lock_sha256": "5" * 64,
+        }
+
+        class NoPublicationAws:
+            def upload_immutable(self, *_args: object) -> None:
+                raise AssertionError("V23 authority must precede every S3 write")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "manifest.json"
+            archive_path = root / "source.tar.gz"
+            manifest_path.write_bytes(canonical_json_bytes(manifest))
+            archive_path.write_bytes(archive)
+            arguments = [
+                "publication_v3_controller.py",
+                "diagnose-v23",
+                "--stage",
+                "d2",
+                "--manifest",
+                str(manifest_path),
+                "--source-archive",
+                str(archive_path),
+                "--image-id",
+                "ami-x",
+                "--subnet-id",
+                "subnet-x",
+                "--security-group-id",
+                "sg-x",
+                "--instance-profile-arn",
+                "arn:aws:iam::453182569524:instance-profile/x",
+                "--base-build-terminal-uri",
+                "s3://bucket/results/base/build/attempts/0001/BUILD_TERMINAL_COMPLETE.json",
+                "--base-build-terminal-sha256",
+                "a" * 64,
+            ]
+            with (
+                mock.patch.object(sys, "argv", arguments),
+                mock.patch.object(controller, "AwsCli", return_value=NoPublicationAws()),
+                mock.patch.object(
+                    controller,
+                    "authenticate_v21_base_index_authority",
+                    return_value=mock.sentinel.base_authority,
+                ) as authenticate_base,
+                mock.patch.object(
+                    controller,
+                    "authenticate_v23_prerequisites",
+                    side_effect=ValueError("V23 prerequisite rejected"),
+                ) as authenticate_prerequisites,
+                self.assertRaisesRegex(ValueError, "V23 prerequisite rejected"),
+            ):
+                controller.main()
+        authenticate_base.assert_called_once()
+        authenticate_prerequisites.assert_called_once()
+
     def test_v21_main_authenticates_base_before_any_publication(self) -> None:
         manifest = json.loads(MANIFEST.read_text())
         archive = b"current diagnostic source"
@@ -441,8 +649,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     f"prepared V21 execution reached AWS through {name}"
                 )
 
-        prepared = prepare_qualification_execution(
-            current,
+        prepare_arguments = dict(
             operation="diagnose-v21-selector",
             workload_id="standard-ann-read",
             dataset_id="deep-image-96",
@@ -468,6 +675,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
             arm_index=0,
             v21_base_authority=base_authority,
         )
+        prepared = prepare_qualification_execution(current, **prepare_arguments)
         self.assertEqual(prepared.request["InstanceType"], "r7g.8xlarge")
         self.assertEqual(prepared.expected["memory_max_bytes"], 34_359_738_368)
         self.assertEqual(prepared.expected["memory_swap_max_bytes"], 0)
@@ -480,6 +688,16 @@ class PublicationV3ControllerTests(unittest.TestCase):
             prepared.expected["diagnostic_source_archive_sha256"],
             current["source"]["archive_sha256"],
         )
+        for stray_authority in (
+            {"v23_base_authority": base_authority},
+            {"v23_prerequisites": {}},
+        ):
+            with self.subTest(stray_authority=stray_authority), self.assertRaisesRegex(
+                ValueError, "exact base-index authority"
+            ):
+                prepare_qualification_execution(
+                    current, **prepare_arguments, **stray_authority
+                )
 
     def test_v22_stage_l_execution_reuses_exact_base_in_distinct_namespace(
         self,
@@ -561,6 +779,136 @@ class PublicationV3ControllerTests(unittest.TestCase):
         worker = gzip.decompress(base64.b64decode(worker_payload)).decode()
         self.assertIn("--v22-stage-l", worker)
         self.assertIn("v22_report_sha256", worker)
+
+    def test_v23_d2_reuses_base_and_requires_exact_passing_d1_receipt(self) -> None:
+        current, historical, _base_cell, base_job, objects = (
+            self._v21_base_authority_fixture()
+        )
+
+        class AuthorityAws:
+            def read_immutable_bytes(self, uri: str, sha256: str | None) -> bytes:
+                payload = objects[uri]
+                if sha256 is not None and hashlib.sha256(payload).hexdigest() != sha256:
+                    raise ValueError("test authority digest differs")
+                return payload
+
+        base_authority = authenticate_v21_base_index_authority(
+            current_manifest=current,
+            terminal_uri=base_job.complete_uri,
+            terminal_sha256=hashlib.sha256(objects[base_job.complete_uri]).hexdigest(),
+            aws=AuthorityAws(),
+            git_is_ancestor=lambda old, new: (
+                old == historical["source"]["git_commit"]
+                and new == current["source"]["git_commit"]
+            ),
+        )
+        current_sha256 = hashlib.sha256(canonical_json_bytes(current)).hexdigest()
+        current_cell = borsuk_cell(
+            current,
+            workload_id="standard-ann-read",
+            dataset_id="deep-image-96",
+            repetition_id="r01",
+            build_attempt=1,
+        )
+        protocol_sha256 = hashlib.sha256(
+            canonical_json_bytes(current_cell) + b"\n"
+        ).hexdigest()
+        prerequisites = {
+            "binary_sha256": "8" * 64,
+            "d1_receipt_uri": "s3://bucket/v23/d1/RUNTIME_TERMINAL_COMPLETE.json",
+            "d1_receipt_sha256": "1" * 64,
+            "d1_report_uri": "s3://bucket/v23/d1/bench_v23_d1_report.json",
+            "d1_report_sha256": "2" * 64,
+        }
+
+        class NoAws:
+            def __getattr__(self, name: str):
+                raise AssertionError(f"prepared V23 execution reached AWS through {name}")
+
+        arguments = dict(
+            workload_id="standard-ann-read",
+            dataset_id="deep-image-96",
+            repetition_id="r01",
+            source_uri="s3://bucket/source/current.tar.gz",
+            source_sha256=str(current["source"]["archive_sha256"]),
+            manifest_uri="s3://bucket/manifests/current.json",
+            manifest_sha256=current_sha256,
+            protocol_uri="s3://bucket/protocols/current.json",
+            protocol_sha256=protocol_sha256,
+            launch=LaunchEnvironment(
+                "ami-x",
+                "subnet-x",
+                "sg-x",
+                "arn:aws:iam::453182569524:instance-profile/x",
+                "aarch64",
+                "eu-central-1",
+            ),
+            aws=NoAws(),
+            attempt=1,
+            build_attempt=1,
+            purchase_option="spot",
+            arm_index=0,
+            v23_stage="d2",
+            v23_base_authority=base_authority,
+        )
+        with self.assertRaisesRegex(ValueError, "V23 D2 prerequisite"):
+            prepare_qualification_execution(
+                current,
+                operation="diagnose-v23",
+                **arguments,
+            )
+        prepared = prepare_qualification_execution(
+            current,
+            operation="diagnose-v23",
+            v23_prerequisites=prerequisites,
+            **arguments,
+        )
+        self.assertTrue(
+            prepared.job.terminal_prefix.endswith(
+                "/runtime-v23-d2/arms/0000/attempts/0001"
+            )
+        )
+        self.assertEqual(prepared.request["InstanceMarketOptions"]["MarketType"], "spot")
+        self.assertEqual(prepared.request["InstanceType"], "r7g.8xlarge")
+        d2_tags = {
+            item["Key"]: item["Value"]
+            for item in prepared.request["TagSpecifications"][0]["Tags"]
+        }
+        self.assertEqual(d2_tags["Role"], prepared.job.role)
+        self.assertIs(prepared.expected["claim_eligible"], False)
+        self.assertEqual(prepared.expected["v23_stage"], "d2")
+        self.assertEqual(prepared.expected["v23_d1_receipt_sha256"], "1" * 64)
+        self.assertEqual(prepared.expected["binary_sha256"], "8" * 64)
+        self.assertEqual(prepared.expected["v23_prerequisite_binary_sha256"], "8" * 64)
+        user_data = base64.b64decode(prepared.request["UserData"]).decode()
+        worker_payload = user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
+        worker = gzip.decompress(base64.b64decode(worker_payload)).decode()
+        self.assertIn("--v23-stage d2", worker)
+        self.assertNotIn("bench_v23_summary.json --only-show-errors", worker)
+
+        d3_prerequisites = {
+            **prerequisites,
+            "d2_receipt_uri": "s3://bucket/v23/d2/RUNTIME_TERMINAL_COMPLETE.json",
+            "d2_receipt_sha256": "3" * 64,
+            "d2_report_uri": "s3://bucket/v23/d2/bench_v23_d2_report.json",
+            "d2_report_sha256": "4" * 64,
+            "pages_uri": "s3://bucket/v23/d2/bench_v23_pages.json",
+            "pages_sha256": "5" * 64,
+            "page_prefix": "s3://bucket/v23/d2/pages",
+        }
+        arguments["v23_stage"] = "d3"
+        prepared_d3 = prepare_qualification_execution(
+            current,
+            operation="diagnose-v23",
+            v23_prerequisites=d3_prerequisites,
+            **arguments,
+        )
+        self.assertEqual(prepared_d3.request["InstanceType"], "c7g.xlarge")
+        self.assertEqual(prepared_d3.expected["memory_max_bytes"], 8_589_934_592)
+        d3_user_data = base64.b64decode(prepared_d3.request["UserData"]).decode()
+        d3_worker_payload = d3_user_data.split("printf '%s' '", 1)[1].split("'", 1)[0]
+        d3_worker = gzip.decompress(base64.b64decode(d3_worker_payload)).decode()
+        self.assertIn("MemoryMax=8589934592", d3_worker)
 
     def test_attempt_reconciliation_uses_exact_frozen_job_markers(self) -> None:
         class MarkerAws:
@@ -1918,6 +2266,66 @@ class PublicationV3ControllerTests(unittest.TestCase):
                     purchase_option="spot",
                 )
 
+    def test_v23_receipt_requires_stage_artifacts_and_bounded_memory(self) -> None:
+        manifest = unstaged_sift_manifest()
+        cell = qualification_cell(
+            manifest, dataset_id="sift-128", workload_kind="read-recall"
+        )
+        job = ExecutionJob.runtime(
+            cell, attempt=1, profile="recall", arm_index=0, v23_stage="d3"
+        )
+        expected = {
+            "attempt_id": "v23-d3-0001",
+            "source_archive_sha256": "2" * 64,
+            "manifest_sha256": "6" * 64,
+            "protocol_sha256": "7" * 64,
+            "purchase_option": "spot",
+            "runtime_profile": "recall",
+            "arm_index": 0,
+            "claim_eligible": False,
+            "v23_stage": "d3",
+            "memory_max_bytes": 8_589_934_592,
+            "memory_swap_max_bytes": 0,
+        }
+
+        class V23ReceiptAws:
+            def find_execution_instance(self, _job: object, *, purchase_option: str):
+                return None
+
+            def execution_markers(self, _job: object):
+                return ("complete",)
+
+            def read_receipt(self, _job: object):
+                return {
+                    "schema_version": 5,
+                    "status": "complete",
+                    "role": "runtime",
+                    "attempt": 1,
+                    **expected,
+                    "binary_sha256": "8" * 64,
+                    "execution_contract_sha256": "9" * 64,
+                    "v23_passed": True,
+                    "v23_result_sha256": "c" * 64,
+                    "v23_d3_waves_sha256": "a" * 64,
+                    "v23_summary_sha256": "b" * 64,
+                    "memory_peak_bytes": 3 * 1024**3,
+                    "artifact_upload_reconciliations": 0,
+                }
+
+            def terminate(self, _instance: str):
+                raise AssertionError("completed observation has no active instance")
+
+        receipt = run_execution_job(
+            job,
+            request={},
+            expected=expected,
+            aws=V23ReceiptAws(),
+            timeout_seconds=60,
+            poll_seconds=0.01,
+            purchase_option="spot",
+        )
+        self.assertEqual(receipt["v23_d3_waves_sha256"], "a" * 64)
+
     def test_execution_instance_identity_is_role_cell_and_attempt_bound(self) -> None:
         manifest = unstaged_sift_manifest()
         manifest["source"] = {
@@ -2113,7 +2521,7 @@ class PublicationV3ControllerTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn(
-            "{stage,build-sift,build-read,run-read,diagnose-read,diagnose-v21-selector,diagnose-v22-stage-l,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle,diagnose-lifecycle}",
+            "{stage,build-sift,build-read,run-read,diagnose-read,diagnose-v21-selector,diagnose-v22-stage-l,diagnose-v23,read-recall-sift,read-concurrency-sift,build-lifecycle,run-lifecycle,diagnose-lifecycle}",
             completed.stdout,
         )
 

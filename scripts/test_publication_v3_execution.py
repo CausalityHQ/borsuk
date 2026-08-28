@@ -522,7 +522,6 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )
-
     def test_runtime_worker_uses_verified_binary_dedicated_cache_and_cgroup(
         self,
     ) -> None:
@@ -628,7 +627,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             job.terminal_prefix,
         )
 
-        script = runtime_worker_script(
+        worker_arguments = dict(
             job=job,
             source_uri="s3://bucket/source/source.tar.gz",
             source_sha256="2" * 64,
@@ -654,6 +653,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             diagnostic_read_nprobes=(32, 64),
             diagnostic_read_candidates=(512, 1024, 2048, 4096),
         )
+        script = runtime_worker_script(**worker_arguments)
 
         self.assertIn("--diagnostic-read-nprobes 32,64", script)
         self.assertIn("--diagnostic-read-candidates 512,1024,2048,4096", script)
@@ -720,7 +720,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             cell,
             build_prefix="s3://bucket/results/cell/build/attempts/0001",
         )
-        script = runtime_worker_script(
+        worker_arguments = dict(
             job=job,
             source_uri="s3://bucket/source/source.tar.gz",
             source_sha256="2" * 64,
@@ -746,6 +746,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             v21_feasibility=True,
             v21_base_authority=base_authority,
         )
+        script = runtime_worker_script(**worker_arguments)
         self.assertIn("--v21-feasibility", script)
         self.assertIn('"claim_eligible":false', script)
         raw_names = (
@@ -811,6 +812,14 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )
+        for stray_authority in (
+            {"v23_base_authority": base_authority},
+            {"v23_prerequisites": {}},
+        ):
+            with self.subTest(stray_authority=stray_authority), self.assertRaisesRegex(
+                ValueError, "historical diagnostic authority"
+            ):
+                runtime_worker_script(**worker_arguments, **stray_authority)
 
         receipt_fragment = script.split("        diagnostic_fields=''", 1)[1].split(
             "        concurrency_fields=''", 1
@@ -891,6 +900,187 @@ printf '{{\"schema_version\":5%s}}\n' "$diagnostic_fields"
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )
+
+    def test_v23_worker_uses_stage_namespace_prerequisites_and_exact_artifacts(
+        self,
+    ) -> None:
+        cell = qualification_cell(
+            frozen_manifest(), dataset_id="deep-image-96", workload_kind="read-recall"
+        )
+        base_authority = v21_base_authority(
+            cell,
+            build_prefix="s3://bucket/results/cell/build/attempts/0001",
+        )
+        prerequisites = {
+            "binary_sha256": "8" * 64,
+            "d1_receipt_uri": "s3://bucket/v23/d1/RUNTIME_TERMINAL_COMPLETE.json",
+            "d1_receipt_sha256": "1" * 64,
+            "d1_report_uri": "s3://bucket/v23/d1/bench_v23_d1_report.json",
+            "d1_report_sha256": "2" * 64,
+        }
+        job = ExecutionJob.runtime(
+            cell,
+            attempt=2,
+            profile="recall",
+            arm_index=0,
+            v23_stage="d2",
+        )
+        self.assertIn(
+            "/runtime-v23-d2/arms/0000/attempts/0002", job.terminal_prefix
+        )
+        script = runtime_worker_script(
+            job=job,
+            source_uri="s3://bucket/source/source.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifests/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocols/cell.json",
+            protocol_sha256="7" * 64,
+            build_prefix=base_authority["build_prefix"],
+            binary_sha256=None,
+            attempt_id="v23-d2-0002",
+            terminal_prefix=job.terminal_prefix,
+            disk_cache_max_bytes=0,
+            exact_read_max_physical_amplification=2,
+            max_active_searches=4,
+            max_waiting_searches=16,
+            leaf_read_width=32,
+            max_inflight_leaf_reads=48,
+            max_parallel_decode_rank_tasks=1,
+            cpu_threads=3,
+            io_threads=88,
+            s3_get_concurrency=64,
+            ram_budget_bytes=3 * 1024 * 1024 * 1024,
+            v23_stage="d2",
+            v23_base_authority=base_authority,
+            v23_prerequisites=prerequisites,
+        )
+        self.assertIn("--v23-stage d2", script)
+        self.assertIn(
+            '--v23-diagnostic-protocol "$work/protocol.json"', script
+        )
+        self.assertIn(
+            '--v23-diagnostic-manifest "$work/manifest.json"', script
+        )
+        self.assertIn(prerequisites["d1_receipt_uri"], script)
+        self.assertIn(prerequisites["d1_receipt_sha256"], script)
+        self.assertIn(prerequisites["d1_report_uri"], script)
+        self.assertIn(prerequisites["d1_report_sha256"], script)
+        self.assertIn(f'test "$binary_sha" = {prerequisites["binary_sha256"]}', script)
+        self.assertLess(
+            script.index('mkdir -p "$work/cell/runtime-output"'),
+            script.index(
+                'aws s3 cp s3://bucket/v23/d1/bench_v23_d1_report.json '
+                '"$work/cell/runtime-output/bench_v23_d1_report.json"'
+            ),
+        )
+        self.assertNotIn("bench_v23_summary.json --only-show-errors", script)
+        for name in (
+            "bench_v23_d2_report.json",
+            "bench_v23_pages.json",
+            "bench_v23_summary.json",
+        ):
+            self.assertIn(name, script)
+        for field in (
+            "v23_stage",
+            "v23_d1_receipt_sha256",
+            "v23_d1_report_sha256",
+            "v23_prerequisite_binary_sha256",
+            "v23_d2_report_sha256",
+            "v23_pages_sha256",
+            "v23_summary_sha256",
+            "v23_result_sha256",
+        ):
+            self.assertIn(field, script)
+        self.assertIn('"claim_eligible":false', script)
+        self.assertEqual(
+            subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
+        )
+
+        d1_script = runtime_worker_script(
+            job=ExecutionJob.runtime(
+                cell, attempt=1, profile="recall", arm_index=0, v23_stage="d1"
+            ),
+            source_uri="s3://bucket/source/source.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifests/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocols/cell.json",
+            protocol_sha256="7" * 64,
+            build_prefix=base_authority["build_prefix"],
+            binary_sha256=None,
+            attempt_id="v23-d1-0001",
+            terminal_prefix="s3://bucket/results/v23/d1/attempts/0001",
+            disk_cache_max_bytes=0,
+            exact_read_max_physical_amplification=2,
+            max_active_searches=4,
+            max_waiting_searches=16,
+            leaf_read_width=32,
+            max_inflight_leaf_reads=48,
+            max_parallel_decode_rank_tasks=1,
+            cpu_threads=3,
+            io_threads=88,
+            s3_get_concurrency=64,
+            ram_budget_bytes=3 * 1024 * 1024 * 1024,
+            v23_stage="d1",
+            v23_base_authority=base_authority,
+            v23_prerequisites={},
+        )
+        self.assertNotIn("--v23-page-uri", d1_script)
+
+        d3_prerequisites = {
+            **prerequisites,
+            "d2_receipt_uri": "s3://bucket/v23/d2/RUNTIME_TERMINAL_COMPLETE.json",
+            "d2_receipt_sha256": "3" * 64,
+            "d2_report_uri": "s3://bucket/v23/d2/bench_v23_d2_report.json",
+            "d2_report_sha256": "4" * 64,
+            "pages_uri": "s3://bucket/v23/d2/bench_v23_pages.json",
+            "pages_sha256": "5" * 64,
+            "page_prefix": "s3://bucket/v23/d2/pages",
+        }
+        d3_script = runtime_worker_script(
+            job=ExecutionJob.runtime(
+                cell, attempt=3, profile="recall", arm_index=0, v23_stage="d3"
+            ),
+            source_uri="s3://bucket/source/source.tar.gz",
+            source_sha256="2" * 64,
+            manifest_uri="s3://bucket/manifests/manifest.json",
+            manifest_sha256="6" * 64,
+            protocol_uri="s3://bucket/protocols/cell.json",
+            protocol_sha256="7" * 64,
+            build_prefix=base_authority["build_prefix"],
+            binary_sha256=None,
+            attempt_id="v23-d3-0003",
+            terminal_prefix="s3://bucket/results/v23/d3/attempts/0003",
+            disk_cache_max_bytes=0,
+            exact_read_max_physical_amplification=2,
+            max_active_searches=4,
+            max_waiting_searches=16,
+            leaf_read_width=32,
+            max_inflight_leaf_reads=48,
+            max_parallel_decode_rank_tasks=1,
+            cpu_threads=3,
+            io_threads=88,
+            s3_get_concurrency=64,
+            ram_budget_bytes=3 * 1024 * 1024 * 1024,
+            v23_stage="d3",
+            v23_base_authority=base_authority,
+            v23_prerequisites=d3_prerequisites,
+        )
+        self.assertEqual(d3_script.count('"v23_page_prefix":'), 1)
+
+    def test_v23_runtime_identity_rejects_mixed_or_noncanonical_modes(self) -> None:
+        cell = qualification_cell(
+            frozen_manifest(), dataset_id="deep-image-96", workload_kind="read-recall"
+        )
+        for arguments in (
+            {"v23_stage": "d4"},
+            {"v23_stage": "d1", "v22_stage_l": True},
+            {"v23_stage": "d1", "profile": "concurrency"},
+            {"v23_stage": "d1", "arm_index": 1},
+        ):
+            with self.subTest(arguments=arguments), self.assertRaises(ValueError):
+                ExecutionJob.runtime(cell, attempt=1, **arguments)
 
     def test_v21_worker_compiles_current_source_but_reads_historical_index_authority(
         self,

@@ -80,20 +80,23 @@ class ExecutionJob:
         diagnostic: bool = False,
         v21_feasibility: bool = False,
         v22_stage_l: bool = False,
+        v23_stage: str | None = None,
     ) -> "ExecutionJob":
         if profile not in {"recall", "concurrency", "lifecycle"}:
             raise ValueError("runtime execution profile is invalid")
         if (
             type(v21_feasibility) is not bool
             or type(v22_stage_l) is not bool
-            or v21_feasibility
-            and v22_stage_l
+            or sum((v21_feasibility, v22_stage_l, v23_stage is not None)) > 1
+            or v23_stage not in {None, "d1", "d2", "d3"}
             or arm_index < 0
             or diagnostic
             and profile not in {"recall", "lifecycle"}
             or v21_feasibility
             and (diagnostic or profile != "recall" or arm_index != 0)
             or v22_stage_l
+            and (diagnostic or profile != "recall" or arm_index != 0)
+            or v23_stage is not None
             and (diagnostic or profile != "recall" or arm_index != 0)
         ):
             raise ValueError("runtime execution arm identity is invalid")
@@ -102,6 +105,8 @@ class ExecutionJob:
             namespace = "runtime-v21-feasibility"
         elif v22_stage_l:
             namespace = "runtime-v22-stage-l"
+        elif v23_stage is not None:
+            namespace = f"runtime-v23-{v23_stage}"
         elif profile == "lifecycle" and diagnostic:
             namespace = "runtime-lifecycle-diagnostic"
         elif profile == "recall" and diagnostic:
@@ -462,6 +467,9 @@ def runtime_worker_script(
     v21_base_authority: dict[str, object] | None = None,
     v22_stage_l: bool = False,
     v22_base_authority: dict[str, object] | None = None,
+    v23_stage: str | None = None,
+    v23_base_authority: dict[str, object] | None = None,
+    v23_prerequisites: dict[str, object] | None = None,
 ) -> str:
     if job.role != "runtime":
         raise ValueError("runtime worker requires a runtime job")
@@ -513,14 +521,20 @@ def runtime_worker_script(
     if (
         type(v21_feasibility) is not bool
         or type(v22_stage_l) is not bool
-        or v21_feasibility
-        and v22_stage_l
+        or v23_stage not in {None, "d1", "d2", "d3"}
+        or sum((v21_feasibility, v22_stage_l, v23_stage is not None)) > 1
     ):
-        raise ValueError("V21/V22 diagnostic flags are invalid")
-    v2x_diagnostic = v21_feasibility or v22_stage_l
-    base_authority = v21_base_authority if v21_feasibility else v22_base_authority
+        raise ValueError("V21/V22/V23 diagnostic flags are invalid")
+    historical_diagnostic = v21_feasibility or v22_stage_l or v23_stage is not None
+    base_authority = (
+        v21_base_authority
+        if v21_feasibility
+        else v22_base_authority
+        if v22_stage_l
+        else v23_base_authority
+    )
     if (
-        v2x_diagnostic
+        historical_diagnostic
         and (
             read_diagnostic
             or diagnostic_write_ops is not None
@@ -529,14 +543,26 @@ def runtime_worker_script(
             or arm_index != 0
             or not isinstance(base_authority, dict)
         )
-        or not v2x_diagnostic
-        and (v21_base_authority is not None or v22_base_authority is not None)
+        or not historical_diagnostic
+        and any(
+            authority is not None
+            for authority in (
+                v21_base_authority,
+                v22_base_authority,
+                v23_base_authority,
+                v23_prerequisites,
+            )
+        )
         or v21_feasibility
         and v22_base_authority is not None
         or v22_stage_l
         and v21_base_authority is not None
+        or (v21_feasibility or v22_stage_l)
+        and (v23_base_authority is not None or v23_prerequisites is not None)
+        or v23_stage is not None
+        and (v21_base_authority is not None or v22_base_authority is not None)
     ):
-        raise ValueError("V21/V22 diagnostic authority is invalid")
+        raise ValueError("historical diagnostic authority is invalid")
     profile_mismatch = (
         (
             runtime_profile == "concurrency"
@@ -560,6 +586,10 @@ def runtime_worker_script(
                     v22_stage_l
                     != job.cell_tag.startswith("runtime-v22-stage-l-")
                 )
+                or (
+                    (v23_stage is not None)
+                    != job.cell_tag.startswith("runtime-v23-")
+                )
             )
         )
         or (
@@ -582,7 +612,7 @@ def runtime_worker_script(
     runtime_protocol = '"$work/protocol.json"'
     runtime_source_sha256 = source_sha256
     index_digest_checks = ""
-    if not v2x_diagnostic and (
+    if not historical_diagnostic and (
         not isinstance(binary_sha256, str)
         or len(binary_sha256) != 64
         or any(character not in "0123456789abcdef" for character in binary_sha256)
@@ -603,7 +633,7 @@ def runtime_worker_script(
     systemd_run_options = "--collect"
     cgroup_wait = ""
     cgroup_observation = ""
-    if v2x_diagnostic:
+    if historical_diagnostic:
         assert base_authority is not None
         fields = {
             "manifest_uri",
@@ -622,7 +652,7 @@ def runtime_worker_script(
             "inventory_sha256",
         }
         if set(base_authority) != fields:
-            raise ValueError("V21/V22 base-index authority fields differ")
+            raise ValueError("diagnostic base-index authority fields differ")
         for field in (
             "manifest_sha256",
             "protocol_sha256",
@@ -638,7 +668,7 @@ def runtime_worker_script(
                 or len(value) != 64
                 or any(character not in "0123456789abcdef" for character in value)
             ):
-                raise ValueError(f"V21/V22 base-index {field} differs")
+                raise ValueError(f"diagnostic base-index {field} differs")
         base_cell = base_authority["cell"]
         base_source = base_cell.get("source") if isinstance(base_cell, dict) else None
         if (
@@ -653,7 +683,7 @@ def runtime_worker_script(
             or base_authority["build_prefix"] != build_prefix
             or binary_sha256 is not None
         ):
-            raise ValueError("V21/V22 base-index cell authority differs")
+            raise ValueError("diagnostic base-index cell authority differs")
         cell = base_cell
         index_uri = str(base_authority["index_uri"])
         runtime_manifest = '"$work/base-manifest.json"'
@@ -695,8 +725,13 @@ def runtime_worker_script(
             binary_sha=$(sha256sum "$work/production_bench" | awk '{print $1}')
             """
         )
-        memory_max_bytes = 34_359_738_368
-        unit_name = f"borsuk-{'v21' if v21_feasibility else 'v22'}-{job.attempt:04d}.service"
+        memory_max_bytes = (
+            8_589_934_592 if v23_stage == "d3" else 34_359_738_368
+        )
+        diagnostic_unit = (
+            "v21" if v21_feasibility else "v22" if v22_stage_l else f"v23-{v23_stage}"
+        )
+        unit_name = f"borsuk-{diagnostic_unit}-{job.attempt:04d}.service"
         systemd_wait_option = ""
         systemd_run_options = f"--unit={unit_name} --remain-after-exit"
         cgroup_wait = textwrap.dedent(
@@ -904,7 +939,7 @@ diagnostic_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_recall_late
             done
             """
         )
-    if v2x_diagnostic:
+    if historical_diagnostic:
         assert base_authority is not None
         if v21_feasibility:
             diagnostic_arguments = " --v21-feasibility"
@@ -932,7 +967,7 @@ v21_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v21_feasibility_su
                 '"$v21_result_sha" "$v21_arms_sha" "$v21_samples_sha" '
                 '"$v21_summary_sha")'
             )
-        else:
+        elif v22_stage_l:
             diagnostic_arguments = " --v22-stage-l"
             artifact_names = (
                 "bench_v22_stage_l_report.json",
@@ -953,6 +988,168 @@ v22_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v22_stage_l_summar
                 '"v22_report_sha256":"%s",'
                 '"v22_summary_sha256":"%s"\' '
                 '"$v22_result_sha" "$v22_report_sha" "$v22_summary_sha")'
+            )
+        else:
+            assert v23_stage is not None
+            expected_prerequisite_fields = {
+                "d1": set(),
+                "d2": {
+                    "binary_sha256",
+                    "d1_receipt_uri",
+                    "d1_receipt_sha256",
+                    "d1_report_uri",
+                    "d1_report_sha256",
+                },
+                "d3": {
+                    "binary_sha256",
+                    "d1_receipt_uri",
+                    "d1_receipt_sha256",
+                    "d1_report_uri",
+                    "d1_report_sha256",
+                    "d2_receipt_uri",
+                    "d2_receipt_sha256",
+                    "d2_report_uri",
+                    "d2_report_sha256",
+                    "pages_uri",
+                    "pages_sha256",
+                    "page_prefix",
+                },
+            }[v23_stage]
+            prerequisites = v23_prerequisites or {}
+            if set(prerequisites) != expected_prerequisite_fields:
+                raise ValueError("V23 prerequisite fields differ")
+            for field, value in prerequisites.items():
+                if field.endswith("_sha256"):
+                    if (
+                        not isinstance(value, str)
+                        or len(value) != 64
+                        or any(character not in "0123456789abcdef" for character in value)
+                    ):
+                        raise ValueError(f"V23 {field} differs")
+                elif not isinstance(value, str) or not value.startswith("s3://"):
+                    raise ValueError(f"V23 {field} differs")
+            stage_inputs = []
+            for stem in ("d1", "d2"):
+                if f"{stem}_receipt_uri" not in prerequisites:
+                    continue
+                receipt_name = f"V23_{stem.upper()}_TERMINAL_COMPLETE.json"
+                report_name = f"bench_v23_{stem}_report.json"
+                stage_inputs.extend(
+                    (
+                        f'aws s3 cp {_q(prerequisites[f"{stem}_receipt_uri"])} "$work/{receipt_name}" --only-show-errors',
+                        f'test "$(sha256sum "$work/{receipt_name}" | awk \'{{print $1}}\')" = {_q(prerequisites[f"{stem}_receipt_sha256"])}',
+                        f'aws s3 cp {_q(prerequisites[f"{stem}_report_uri"])} "$work/cell/runtime-output/{report_name}" --only-show-errors',
+                        f'test "$(sha256sum "$work/cell/runtime-output/{report_name}" | awk \'{{print $1}}\')" = {_q(prerequisites[f"{stem}_report_sha256"])}',
+                    )
+                )
+            if v23_stage == "d3":
+                stage_inputs.extend(
+                    (
+                        f'aws s3 cp {_q(prerequisites["pages_uri"])} "$work/cell/runtime-output/bench_v23_pages.json" --only-show-errors',
+                        f'test "$(sha256sum "$work/cell/runtime-output/bench_v23_pages.json" | awk \'{{print $1}}\')" = {_q(prerequisites["pages_sha256"])}',
+                    )
+                )
+            if stage_inputs:
+                base_setup += (
+                    'stage=stage-v23-prerequisites\nmkdir -p "$work/cell/runtime-output"\n'
+                    + "\n".join(stage_inputs)
+                    + "\n"
+                )
+            if v23_stage in {"d2", "d3"}:
+                binary_setup += (
+                    f'\ntest "$binary_sha" = {_q(prerequisites["binary_sha256"])}\n'
+                )
+            page_prefix = (
+                str(prerequisites["page_prefix"])
+                if v23_stage == "d3"
+                else f"{terminal_prefix}/pages"
+            )
+            diagnostic_arguments = f" --v23-stage {v23_stage}"
+            if v23_stage in {"d2", "d3"}:
+                diagnostic_arguments += f" --v23-page-uri {_q(page_prefix)}"
+            if v23_stage in {"d2", "d3"}:
+                diagnostic_arguments += (
+                    ' --v23-d1-report "$work/cell/runtime-output/bench_v23_d1_report.json"'
+                )
+            if v23_stage == "d3":
+                diagnostic_arguments += (
+                    ' --v23-d2-report "$work/cell/runtime-output/bench_v23_d2_report.json"'
+                    ' --v23-pages "$work/cell/runtime-output/bench_v23_pages.json"'
+                )
+            artifact_names = {
+                "d1": ("bench_v23_d1_report.json", "bench_v23_summary.json"),
+                "d2": (
+                    "bench_v23_d2_report.json",
+                    "bench_v23_pages.json",
+                    "bench_v23_summary.json",
+                ),
+                "d3": ("bench_v23_d3_waves.csv", "bench_v23_summary.json"),
+            }[v23_stage]
+            hash_lines = []
+            receipt_parts = [
+                '"claim_eligible":false',
+                f'"v23_stage":{json.dumps(v23_stage)}',
+                '"v23_passed":%s',
+                '"v23_result_sha256":"%s"',
+            ]
+            if v23_stage in {"d2", "d3"}:
+                receipt_parts.append(f'"v23_page_prefix":{json.dumps(page_prefix)}')
+            for name in artifact_names:
+                variable = "v23_" + name.removeprefix("bench_v23_").replace(".", "_").replace("-", "_") + "_sha"
+                hash_lines.append(
+                    f'{variable}=$(sha256sum "$work/cell/runtime-output/{name}" | awk \'{{print $1}}\')'
+                )
+                receipt_field = {
+                    "bench_v23_d1_report.json": "v23_d1_report_sha256",
+                    "bench_v23_d2_report.json": "v23_d2_report_sha256",
+                    "bench_v23_pages.json": "v23_pages_sha256",
+                    "bench_v23_d3_waves.csv": "v23_d3_waves_sha256",
+                    "bench_v23_summary.json": "v23_summary_sha256",
+                }[name]
+                receipt_parts.append(f'"{receipt_field}":"%s"')
+            prerequisite_receipt_parts = []
+            for stem in ("d1", "d2"):
+                for suffix in ("receipt_sha256", "report_sha256"):
+                    field = f"{stem}_{suffix}"
+                    if field in prerequisites:
+                        prerequisite_receipt_parts.append(
+                            f'"v23_{field}":{json.dumps(prerequisites[field])}'
+                        )
+            if "pages_sha256" in prerequisites:
+                prerequisite_receipt_parts.append(
+                    f'"v23_prerequisite_pages_sha256":{json.dumps(prerequisites["pages_sha256"])}'
+                )
+            if "binary_sha256" in prerequisites:
+                prerequisite_receipt_parts.append(
+                    f'"v23_prerequisite_binary_sha256":{json.dumps(prerequisites["binary_sha256"])}'
+                )
+            receipt_parts.extend(prerequisite_receipt_parts)
+            hash_variables = " ".join(
+                '"$' + "v23_" + name.removeprefix("bench_v23_").replace(".", "_").replace("-", "_") + '_sha"'
+                for name in artifact_names
+            )
+            hash_variables = (
+                '"$actual_v23_passed" "$v23_result_sha" ' + hash_variables
+            )
+            diagnostic_validation = (
+                "actual_claim_eligible=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))[\"claim_eligible\"]))' \"$work/cell/RESULT_COMPLETE.json\")\n"
+                "actual_v23_passed=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))[\"passed\"]))' \"$work/cell/RESULT_COMPLETE.json\")\n"
+                "v23_result_sha=$(sha256sum \"$work/cell/RESULT_COMPLETE.json\" | awk '{print $1}')\n"
+                "test \"$actual_claim_eligible\" = false\n"
+                "[[ \"$actual_v23_passed\" == true || \"$actual_v23_passed\" == false ]]\n"
+                + "\n".join(
+                    f'test -s "$work/cell/runtime-output/{name}"'
+                    for name in artifact_names
+                )
+                + "\n"
+                + "\n".join(hash_lines)
+            )
+            diagnostic_receipt_fields = (
+                "diagnostic_fields=$(printf ',"
+                + ",".join(receipt_parts)
+                + "' "
+                + hash_variables
+                + ")"
             )
         receipt_authority = {
             "base_build_terminal_sha256": base_authority["build_terminal_sha256"],
@@ -1044,7 +1241,7 @@ v22_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v22_stage_l_summar
           --instance-identity "$instance_id" --purchase-option "$instance_purchase_option" \
           --borsuk-bench "$work/production_bench" \
           --index-receipt "$work/INDEX_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json" \
-          --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}{diagnostic_arguments}{' --v21-diagnostic-protocol "$work/protocol.json" --v21-diagnostic-manifest "$work/manifest.json"' if v21_feasibility else ' --v22-diagnostic-protocol "$work/protocol.json" --v22-diagnostic-manifest "$work/manifest.json"' if v22_stage_l else ''}
+          --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}{diagnostic_arguments}{' --v21-diagnostic-protocol "$work/protocol.json" --v21-diagnostic-manifest "$work/manifest.json"' if v21_feasibility else ' --v22-diagnostic-protocol "$work/protocol.json" --v22-diagnostic-manifest "$work/manifest.json"' if v22_stage_l else ' --v23-diagnostic-protocol "$work/protocol.json" --v23-diagnostic-manifest "$work/manifest.json"' if v23_stage is not None else ''}
         {cgroup_wait}
         {diagnostic_validation}
         {diagnostic_preservation_before_observation}
