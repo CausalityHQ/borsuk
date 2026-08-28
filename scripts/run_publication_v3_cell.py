@@ -3580,6 +3580,52 @@ def _read_canonical_value(path: Path, maximum_bytes: int) -> object:
     return value
 
 
+def _read_v23_staging_value(path: Path, maximum_bytes: int) -> object:
+    """Read strict bounded Rust JSON before Python canonical publication."""
+
+    payload = path.read_bytes()
+    if not payload or len(payload) > maximum_bytes or not payload.endswith(b"\n"):
+        raise ValueError(f"{path} is missing or exceeds its staging bound")
+
+    def reject_duplicate_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        value: dict[str, object] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError(f"{path} contains a duplicate JSON key")
+            value[key] = item
+        return value
+
+    def reject_nonfinite_constant(value: str) -> object:
+        raise ValueError(f"{path} contains non-finite JSON number {value}")
+
+    def parse_finite_float(value: str) -> float:
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError(f"{path} contains non-finite JSON number {value}")
+        return parsed
+
+    try:
+        return json.loads(
+            payload,
+            object_pairs_hook=reject_duplicate_pairs,
+            parse_constant=reject_nonfinite_constant,
+            parse_float=parse_finite_float,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{path} is not strict JSON") from error
+
+
+def _canonicalize_v23_staging_value(
+    path: Path, value: object, maximum_bytes: int
+) -> None:
+    payload = canonical_json_bytes(value) + b"\n"
+    if len(payload) > maximum_bytes:
+        raise ValueError(f"{path} canonical JSON exceeds its bound")
+    path.write_bytes(payload)
+    if _read_canonical_value(path, maximum_bytes) != value:
+        raise ValueError(f"{path} canonical JSON reload differs")
+
+
 V23_QUERY_COUNT = 32
 V23_D3_WAVES = 1_000
 V23_WAVE_MAX_PAGES = 4
@@ -4169,7 +4215,7 @@ def validate_v23_d1_artifacts(
     expected_dataset_id: str,
 ) -> dict[str, object]:
     artifact = _v23_mapping(
-        _read_canonical_value(report_path, 64 * 1024 * 1024),
+        _read_v23_staging_value(report_path, 64 * 1024 * 1024),
         {
             "schema",
             "document_kind",
@@ -4197,7 +4243,7 @@ def validate_v23_d1_artifacts(
         raise ValueError("V23 D1 artifact authority differs")
     report = _validate_v23_d1_report(artifact["report"])
     summary = _validate_v23_stage_summary(
-        _read_canonical_value(summary_path, 256 * 1024),
+        _read_v23_staging_value(summary_path, 256 * 1024),
         stage="d1",
         expected_source_archive_sha256=expected_source_archive_sha256,
         expected_index_id=expected_index_id,
@@ -4207,6 +4253,8 @@ def validate_v23_d1_artifacts(
         arms=report["arms"],
         pages=0,
     )
+    _canonicalize_v23_staging_value(report_path, artifact, 64 * 1024 * 1024)
+    _canonicalize_v23_staging_value(summary_path, summary, 256 * 1024)
     return {
         **summary,
         "publishable": False,
@@ -4510,12 +4558,12 @@ def validate_v23_d2_artifacts(
     _v23_digest(expected_d1_report_sha256, "expected D1 artifact SHA-256")
     expected_page_uri = _v23_standard_s3_prefix(expected_page_uri)
     artifact = _v23_mapping(
-        _read_canonical_value(report_path, 128 * 1024 * 1024),
+        _read_v23_staging_value(report_path, 128 * 1024 * 1024),
         {"schema", "document_kind", "claim_eligible", "stage", "source_archive_sha256", "index_id", "dataset_id", "d1_report_sha256", "page_uri", "report"},
         "D2 artifact",
     )
     roster = _v23_mapping(
-        _read_canonical_value(pages_path, 128 * 1024 * 1024),
+        _read_v23_staging_value(pages_path, 128 * 1024 * 1024),
         {"schema", "document_kind", "claim_eligible", "stage", "source_archive_sha256", "index_id", "dataset_id", "d1_report_sha256", "page_uri", "pages"},
         "D2 page roster",
     )
@@ -4551,7 +4599,7 @@ def validate_v23_d2_artifacts(
     if roster["pages"] != expected_pages:
         raise ValueError("V23 D2 page roster differs")
     summary = _validate_v23_stage_summary(
-        _read_canonical_value(summary_path, 256 * 1024),
+        _read_v23_staging_value(summary_path, 256 * 1024),
         stage="d2",
         expected_source_archive_sha256=expected_source_archive_sha256,
         expected_index_id=expected_index_id,
@@ -4561,6 +4609,9 @@ def validate_v23_d2_artifacts(
         arms=report["arms"],
         pages=len(expected_pages),
     )
+    _canonicalize_v23_staging_value(report_path, artifact, 128 * 1024 * 1024)
+    _canonicalize_v23_staging_value(pages_path, roster, 128 * 1024 * 1024)
+    _canonicalize_v23_staging_value(summary_path, summary, 256 * 1024)
     return {
         **summary,
         "publishable": False,
@@ -4738,7 +4789,7 @@ def validate_v23_d3_artifacts(
     _v23_digest(expected_d2_report_sha256, "expected D2 artifact SHA-256")
     expected_page_uri = _v23_standard_s3_prefix(expected_page_uri)
     summary = _v23_mapping(
-        _read_canonical_value(summary_path, 2 * 1024 * 1024),
+        _read_v23_staging_value(summary_path, 2 * 1024 * 1024),
         {
             "schema", "document_kind", "claim_eligible", "stage", "source_archive_sha256",
             "index_id", "dataset_id", "d1_report_sha256", "d2_report_sha256", "page_uri",
@@ -4864,6 +4915,7 @@ def validate_v23_d3_artifacts(
         or _v23_boolean(summary["passed"], "D3 pass result") != bool(passing)
     ):
         raise ValueError("V23 D3 aggregate result differs")
+    _canonicalize_v23_staging_value(summary_path, summary, 2 * 1024 * 1024)
     return {
         **summary,
         "publishable": False,

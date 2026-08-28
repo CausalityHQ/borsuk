@@ -3973,6 +3973,67 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             report_path = Path(root) / "bench_v23_d1_report.json"
             summary_path = Path(root) / "bench_v23_summary.json"
+            report_path.write_text(
+                json.dumps(artifact, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            summary_path.write_text(
+                json.dumps(summary, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            self.assertNotEqual(
+                report_path.read_bytes(), canonical_json_bytes(artifact) + b"\n"
+            )
+            result = validate_v23_d1_artifacts(
+                report_path,
+                summary_path,
+                expected_source_archive_sha256="a" * 64,
+                expected_index_id="index-v23",
+                expected_dataset_id="deep-image-96",
+            )
+            self.assertIs(result["passed"], True)
+            self.assertEqual(
+                report_path.read_bytes(), canonical_json_bytes(artifact) + b"\n"
+            )
+            self.assertEqual(
+                summary_path.read_bytes(), canonical_json_bytes(summary) + b"\n"
+            )
+            self.assertEqual(
+                result["artifact_sha256"],
+                hashlib.sha256(canonical_json_bytes(artifact) + b"\n").hexdigest(),
+            )
+
+            duplicate_schema = (
+                b'{"schema":"duplicate",' + canonical_json_bytes(artifact)[1:] + b"\n"
+            )
+            report_path.write_bytes(duplicate_schema)
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                validate_v23_d1_artifacts(
+                    report_path,
+                    summary_path,
+                    expected_source_archive_sha256="a" * 64,
+                    expected_index_id="index-v23",
+                    expected_dataset_id="deep-image-96",
+                )
+
+            overflow_state = (canonical_json_bytes(artifact) + b"\n").replace(
+                b'"quantizer_state":{"schema":"test-quantizer-v1"}',
+                b'"quantizer_state":{"overflow":1e999}',
+                1,
+            )
+            self.assertNotEqual(
+                overflow_state, canonical_json_bytes(artifact) + b"\n"
+            )
+            report_path.write_bytes(overflow_state)
+            with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
+                validate_v23_d1_artifacts(
+                    report_path,
+                    summary_path,
+                    expected_source_archive_sha256="a" * 64,
+                    expected_index_id="index-v23",
+                    expected_dataset_id="deep-image-96",
+                )
+
             write_canonical_json(report_path, artifact)
             write_canonical_json(summary_path, summary)
             result = validate_v23_d1_artifacts(
@@ -4070,9 +4131,18 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
             report_path = root_path / "bench_v23_d2_report.json"
             roster_path = root_path / "bench_v23_pages.json"
             summary_path = root_path / "bench_v23_summary.json"
-            write_canonical_json(report_path, artifact)
-            write_canonical_json(roster_path, roster)
-            write_canonical_json(summary_path, summary)
+            for path, value in (
+                (report_path, artifact),
+                (roster_path, roster),
+                (summary_path, summary),
+            ):
+                path.write_text(
+                    json.dumps(value, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                self.assertNotEqual(
+                    path.read_bytes(), canonical_json_bytes(value) + b"\n"
+                )
             result = validate_v23_d2_artifacts(
                 report_path,
                 roster_path,
@@ -4084,6 +4154,22 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 expected_page_uri="s3://standard-bucket/v23/pages/",
             )
             self.assertIs(result["passed"], True)
+            for path, value in (
+                (report_path, artifact),
+                (roster_path, roster),
+                (summary_path, summary),
+            ):
+                self.assertEqual(
+                    path.read_bytes(), canonical_json_bytes(value) + b"\n"
+                )
+            self.assertEqual(
+                result["artifact_sha256"],
+                hashlib.sha256(canonical_json_bytes(artifact) + b"\n").hexdigest(),
+            )
+            self.assertEqual(
+                result["pages_sha256"],
+                hashlib.sha256(canonical_json_bytes(roster) + b"\n").hexdigest(),
+            )
 
             failed_artifact = copy.deepcopy(artifact)
             failed_summary = copy.deepcopy(summary)
@@ -4141,6 +4227,14 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
             samples_path, summary_path = write_v23_d3_fixture(
                 Path(root), d1_sha256="1" * 64, d2_sha256="2" * 64
             )
+            summary = dict(reversed(json.loads(summary_path.read_bytes()).items()))
+            summary_path.write_text(
+                json.dumps(summary, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            self.assertNotEqual(
+                summary_path.read_bytes(), canonical_json_bytes(summary) + b"\n"
+            )
             result = validate_v23_d3_artifacts(
                 samples_path,
                 summary_path,
@@ -4152,6 +4246,13 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 expected_page_uri="s3://standard-bucket/v23/pages/",
             )
             self.assertIs(result["passed"], True)
+            self.assertEqual(
+                summary_path.read_bytes(), canonical_json_bytes(summary) + b"\n"
+            )
+            self.assertEqual(
+                result["summary_sha256"],
+                hashlib.sha256(canonical_json_bytes(summary) + b"\n").hexdigest(),
+            )
             with samples_path.open(encoding="utf-8") as stream:
                 rows = list(csv.DictReader(stream))
             rows[0]["hits"] = "9"
