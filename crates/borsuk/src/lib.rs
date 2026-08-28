@@ -86,6 +86,7 @@ mod v21_feasibility;
     reason = "V22 feasibility components are wired incrementally by the committed plan"
 )]
 mod v22_feasibility;
+mod v23_diagnostic;
 
 /// Print and reset the env-gated (`BORSUK_BUILD_TIMING=1`) per-phase build timing
 /// breakdown accumulated since the last call. When
@@ -140,6 +141,11 @@ pub use v22_feasibility::{
     V22LayoutKind, V22LayoutLimitingBound, V22StageLExactRow, V22StageLLayoutArmReport,
     V22StageLLayoutQuerySample, V22StageLProjectedObject, V22StageLQueryPrefix, V22StageLRange,
     V22StageLReport,
+};
+#[doc(hidden)]
+pub use v23_diagnostic::{
+    V23D1Arm, V23D1ArmKey, V23D1QuerySample, V23D1Report, V23D2Arm, V23D2QuerySample, V23D2Report,
+    V23PageRef, V23QuantizerFamily, V23RankedResult, V23WaveSample,
 };
 
 /// Maximum CPU worker threads selected by the automatic small-runtime policy.
