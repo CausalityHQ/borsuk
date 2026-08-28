@@ -148,7 +148,7 @@ Add an index test proving D1 rejects a mutable tail, uses exactly 32 distinct qu
 
 - [ ] **Step 2: Run the D1 tests and verify RED**
 
-Run: `cargo test -p borsuk --lib v23_diagnostic::tests::d1 index::tests::v23_d1 -- --nocapture`
+Run: `cargo test -p borsuk --lib v23_d1 -- --nocapture`
 
 Expected: compilation fails on the absent D1 API.
 
@@ -167,7 +167,7 @@ pub(crate) fn score_contiguous_codes(
 }
 ```
 
-Add `fit_v23_diagnostic_quantizer(family, width, dimensions, sample)` in `v23_diagnostic.rs`. SRHT-PQ uses `ProductQuantizerConfig { rotation: ProductRotation::Srht, subspaces: width, centroids: 256, sample_limit: sample.len(), iterations: 8, seed: 23, dimensions }`. Fast-TurboQuant arms are included only when `packed_code_len()` is one of 8, 16, 32, or 64.
+Add `fit_v23_diagnostic_quantizer(family, width, dimensions, sample)` in `v23_diagnostic.rs`. Build `sample` as a deterministic source-ordinal reservoir capped at 65,536 complete vectors during the single corpus pass; bind its ordered ordinal SHA-256 into the report. SRHT-PQ uses `ProductQuantizerConfig { rotation: ProductRotation::Srht, subspaces: width, centroids: 256, sample_limit: sample.len(), iterations: 8, seed: 23, dimensions }`. Fast-TurboQuant arms are included only when `packed_code_len()` is one of 8, 16, 32, or 64.
 
 - [ ] **Step 4: Implement one authenticated corpus pass**
 
@@ -177,7 +177,7 @@ The report must bind root checksum, codebook checksum, dataset rows, query ordin
 
 - [ ] **Step 5: Run D1 tests and unchanged V22 coverage**
 
-Run: `cargo test -p borsuk --lib v23_diagnostic::tests::d1 index::tests::v23_d1 index::tests::v22_stage_l -- --nocapture`
+Run: `cargo test -p borsuk --lib v23_d1 -- --nocapture && cargo test -p borsuk --lib v22_stage_l -- --nocapture`
 
 Expected: all selected tests pass and V22 artifact authority is unchanged.
 
@@ -208,13 +208,15 @@ Add rejection tests for encoded-size overflow, assignment count zero/four, ampli
 
 - [ ] **Step 2: Run D2 tests and verify RED**
 
-Run: `cargo test -p borsuk --lib v23_diagnostic::tests::d2 index::tests::v23_d2 -- --nocapture`
+Run: `cargo test -p borsuk --lib v23_d2 -- --nocapture`
 
 Expected: compilation fails on missing page planning types and D2 entrypoint.
 
 - [ ] **Step 3: Implement balanced primary assignment**
 
-Fit page centroids deterministically from the registered sample, assign rows by nearest centroid, then rebalance overflow using the smallest distance penalty. Compare every candidate with this exact closure so no float-ordering dependency is introduced:
+Use the authenticated 4,096 V20 routing cells only as diagnostic parent partitions. Within each parent, call the existing deterministic semantic microcluster projection with the registered target rows, then split an oversized final cluster so every primary page fits its exact encoded cap. Compute each page centroid from its primary rows with a fixed source-ordinal reduction. This produces roughly `ceil(parent_rows / target_rows)` pages per parent without global `O(rows * pages)` fitting.
+
+When a page exceeds its row target after deterministic tie placement, rebalance only within that parent using the smallest distance penalty. Compare every candidate with this exact closure so no float-ordering dependency is introduced:
 
 ```rust
 left_penalty
@@ -227,15 +229,15 @@ Do not add a new dependency for ordering; implement the comparison with `f32::to
 
 - [ ] **Step 4: Implement capped boundary closure**
 
-For each row, score only the registered nearest centroid set, calculate `secondary_distance / max(primary_distance, f32::MIN_POSITIVE)`, and push candidates into per-page bounded heaps. Materialize the strongest candidates in deterministic order until either the assignment limit or the page byte cap is reached. Compute amplification from actual total assignments and unique live rows.
+Build a deterministic 16-neighbor graph over the 4,096 authenticated parent centroids. For each row, score page centroids only in its primary parent and those 16 neighboring parents, calculate `secondary_distance / max(primary_distance, f32::MIN_POSITIVE)`, and push candidates into per-page bounded heaps. Materialize the strongest candidates in deterministic order until either the assignment limit or the page byte cap is reached. Compute amplification from actual total assignments and unique live rows. The bounded parent adjacency and per-parent page count make construction linear in corpus rows for each arm.
 
 - [ ] **Step 5: Implement exact production-router simulation**
 
-Prepare each query once, choose its best one-to-four pages before code scoring, concatenate only those page codes, deduplicate raw IDs, and rank via the production contiguous SIMD method. Emit page ordinals, bytes, rows, GT page coverage, hit count, recall ppm, CPU nanoseconds, and limiting bound. The validator recomputes all aggregate minima/maxima and admits at most three nondominated arms sorted by `(-recall_ppm, bytes, pages, amplification_ppm, projected_ram_bytes, cpu_p99_ns)`.
+Construct the existing `CatalogRouter` over the immutable page centroids with one registered graph-build seed and search budget. Prepare each query once, choose its best one-to-four pages before code scoring, concatenate only those page codes, deduplicate raw IDs, and rank via the production contiguous SIMD method. Emit page ordinals, bytes, rows, GT page coverage, hit count, recall ppm, CPU nanoseconds, and limiting bound. The validator recomputes all aggregate minima/maxima and admits at most three nondominated arms sorted by `(-recall_ppm, bytes, pages, amplification_ppm, projected_ram_bytes, cpu_p99_ns)`.
 
 - [ ] **Step 6: Run D2 tests and deterministic replay twice**
 
-Run: `cargo test -p borsuk --lib v23_diagnostic::tests::d2 index::tests::v23_d2 -- --nocapture`
+Run: `cargo test -p borsuk --lib v23_d2 -- --nocapture`
 
 Expected: all tests pass; repeated fixture report bytes and page checksums match exactly.
 
