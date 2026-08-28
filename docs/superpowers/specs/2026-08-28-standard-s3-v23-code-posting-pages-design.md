@@ -1,7 +1,8 @@
 # Standard-S3 V23 Quantized Posting Pages
 
-**Status:** Approved architecture, pending implementation plan. V23 remains a
-claim-ineligible diagnostic until every gate in this document passes.
+**Status:** Revision 1's `<=64`-byte codec premise was falsified by the first
+terminal D1 run. Revision 2 remains a claim-ineligible diagnostic until every
+gate in this document passes.
 
 **Predecessor:** V22 Stage L completed at source `14464c8` and is recorded in
 `docs/research/cold-read-latency-design.md`. Its authenticated Deep Image 10M
@@ -37,6 +38,35 @@ Deep Image 10M. A V23 production candidate must satisfy all of:
 The four-request/1-MiB limits are architectural inputs, not values to relax
 after an unsuccessful run. Latency is measured only after those limits and the
 quality gate pass.
+
+## Revision 2 after the terminal D1 falsification
+
+The first D1 run at source
+`0fdee19bf835920b4121ecc503067a2281dd5185` completed cleanly over the frozen
+Deep Image 10M authority and rejected every registered `<=64`-byte arm. The
+best SRHT-PQ arm used 64 bytes per 96-dimensional row and reached only
+`0.853125` oracle/routed recall while taking `57.338 ms` at p99. The smaller
+and Fast-TurboQuant arms were worse. Scalar and contiguous-scan identities
+matched, so this is representation loss rather than a correctness failure.
+The result is immutable historical evidence and is not reinterpreted as a
+performance result.
+
+Revision 2 does not lower recall, add a dependent exact-vector read, or relax
+the four-GET/1-MiB Standard-S3 envelope. It adds one near-exact `f16-flat` arm
+at exactly `2 * dimensions` bytes per row (192 bytes for Deep Image), widens
+the public V23 evidence code-width fields and private page header from `u8` to
+`u16`, and increments the page and D1/D2 report schemas. Binary16 is evaluated because the observed quality
+curve demonstrates that the original width ceiling, rather than routing, made
+the D1 requirement structurally unavailable.
+
+CPU evidence is now charged against the exact number of codes that can occupy
+four maximum pages for that arm. Arms whose encoded row fits the 2,048-row
+capacity still measure 2,048 rows per page; wider rows measure their smaller
+capacity-derived page population. The
+preparation and scan timer excludes corpus construction, encoding, buffer
+materialization, and the untimed full-routed quality replay. This preserves a
+single-wave production interpretation without pretending that four pages can
+contain 8,192 192-byte codes.
 
 ## What V22 proves
 
@@ -114,6 +144,12 @@ than inventing a new distance kernel:
 
 - SRHT product quantization at `{8,16,32,64}` bytes per row;
 - Fast TurboQuant widths whose encoded sizes are relevant to the same range.
+- IEEE-754 binary16 flat coordinates at exactly `2 * dimensions` bytes per
+  row, scored through the production contiguous squared-distance kernel, with
+  an independent `f64` scalar accumulator as its correctness oracle. Finite
+  Euclidean coordinates outside binary16 range saturate to the nearest finite
+  endpoint; D1 recall rejects the arm if that bounded representation is not
+  sufficiently faithful.
 
 One quantizer and width is frozen only after D1 and D2. The query-preparation
 and contiguous-code scan use the same production SIMD implementation as the
@@ -123,9 +159,10 @@ Each posting object uses a private V23 binary format:
 
 ```text
 header
-  magic, version, metric, dimensions, code family, code width
+  magic, version, metric, dimensions, code family, byte 7 reserved zero
   generation checksum, page ordinal, primary rows, replicated rows,
-  id section bytes, code section bytes, 32 reserved zero bytes
+  id section bytes, code section bytes, u16 code width at offset 64,
+  30 reserved zero bytes
 offsets[n + 1]       // compact raw-ID boundaries
 ids[offsets[n]]      // authenticated raw record-ID bytes
 codes[n * width]     // contiguous SIMD scan plane
@@ -280,14 +317,27 @@ For every tested quantizer width, score codes over:
 
 Emit per-query top-k IDs, approximate distances, exact GT hits, code width,
 quantizer/codebook checksum, candidate rows, SIMD CPU time, and aggregate
-recall. Scalar and SIMD output must be byte-identical in IDs and within the
-registered numeric tolerance in distance.
+recall. Exact ordered scalar/SIMD ID equality remains reported evidence. The
+pass gate permits only tolerance-bound top-10 boundary substitutions or
+reordering of the same top-10 set, and separately requires distances within the
+registered 10-ppm numeric tolerance.
+
+The routed-pool recall and capacity-derived CPU scan are deliberately
+orthogonal D1 measurements: the former isolates representation quality over
+the complete registered routed pool, while the latter times exactly the number
+of code rows that fit in one four-page production wave. Each query records both
+row counts explicitly. D2, not D1, is the binding proof that page selection
+places sufficient routed candidates inside that one-wave budget.
 
 D1 also binds a canonical BLAKE3 over every ordered query ordinal, vector
 length, and raw finite `f32` bit pattern. D2 must reproduce that digest and the
-D1 ground-truth IDs before evaluating any page arm.
+D1 ground-truth IDs before evaluating any page arm. The report's explicit
+dimension count must equal the authenticated dataset dimension and every
+restored quantizer's dimension; `f16-flat` additionally requires a code width
+of exactly twice that count. A self-consistent lower-dimensional report is not
+valid authority for the registered dataset.
 
-D1 passes only when at least one width no greater than 64 bytes reaches:
+D1 passes only when at least one registered arm reaches:
 
 - oracle-pool recall@10 at least `0.990`;
 - routed-pool recall@10 at least `0.975` at a corpus-bounded candidate count;
@@ -312,7 +362,10 @@ the complete page directory and exact encoded sizes, projected compact-root
 bytes, storage amplification, projected builder working bytes, and projected
 100M RAM. The fresh D2 worker receipt separately binds its
 observed process peak RSS; the pure scientific report never labels an
-allocation model as a measured peak.
+allocation model as a measured peak. The projected builder peak is an offline
+construction bound, not part of the 3-GiB serving-process gate; the Python
+consumer independently recomputes a conservative per-retained-arm lower bound
+including the width-dependent decoded code plane and rejects underclaims.
 
 D2 passes only if every frozen query uses at most four pages and 983,040 page
 bytes, aggregate recall@10 is at least `0.975`, no query has recall below

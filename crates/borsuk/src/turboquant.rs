@@ -837,6 +837,10 @@ pub(crate) struct FastTurboQuantMseScanQuantizer {
 }
 
 impl FastTurboQuantMseScanQuantizer {
+    pub(crate) fn dimensions(&self) -> usize {
+        self.state.dimensions
+    }
+
     pub(crate) fn new(seed: u64, dimensions: usize, bits: u8, shards: u32) -> Result<Self> {
         if dimensions == 0 || !(1..=8).contains(&bits) || shards == 0 {
             return Err(BorsukError::InvalidMetricInput(
@@ -1091,6 +1095,10 @@ pub(crate) struct FastTurboQuantProdScanQuantizer {
 }
 
 impl FastTurboQuantProdScanQuantizer {
+    pub(crate) fn dimensions(&self) -> usize {
+        self.state.dimensions
+    }
+
     pub(crate) fn new(seed: u64, dimensions: usize, bits: u8) -> Result<Self> {
         if dimensions == 0 || !(2..=8).contains(&bits) {
             return Err(BorsukError::InvalidMetricInput(

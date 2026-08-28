@@ -45713,7 +45713,19 @@ mod tests {
                         && sample.routed_candidate_rows == expected_routed_rows[query_index]
                 })
         }));
-        assert!(report.arms.iter().all(|arm| !arm.passed));
+        assert!(report.arms.iter().any(|arm| {
+            arm.passed
+                && matches!(
+                    arm.key.family,
+                    crate::v23_diagnostic::V23QuantizerFamily::F16Flat
+                )
+        }));
+        assert!(report.arms.iter().all(|arm| {
+            matches!(
+                arm.key.family,
+                crate::v23_diagnostic::V23QuantizerFamily::F16Flat
+            ) || !arm.passed
+        }));
         let mut d2_prerequisite = report.clone();
         let d2_arm = &mut d2_prerequisite.arms[0];
         for sample in &mut d2_arm.query_samples {

@@ -3633,12 +3633,13 @@ V23_PAGE_MAX_BYTES = 245_760
 V23_WAVE_MAX_BYTES = 983_040
 V23_RAM_BUDGET_BYTES = 3 * 1024**3
 V23_FAMILIES = frozenset(
-    {"srht-pq", "fast-turbo-quant-mse", "fast-turbo-quant-prod"}
+    {"srht-pq", "fast-turbo-quant-mse", "fast-turbo-quant-prod", "f16-flat"}
 )
 V23_FAMILY_ORDER = {
     "srht-pq": 0,
     "fast-turbo-quant-mse": 1,
     "fast-turbo-quant-prod": 2,
+    "f16-flat": 3,
 }
 
 
@@ -3703,10 +3704,70 @@ def _v23_identity(
 def _v23_arm_key(value: object) -> tuple[str, int]:
     key = _v23_mapping(value, {"family", "code_width_bytes"}, "arm key")
     family = _v23_string(key["family"], "quantizer family")
-    width = _v23_integer(key["code_width_bytes"], "code width", minimum=1, maximum=64)
-    if family not in V23_FAMILIES or (family == "srht-pq" and width not in {8, 16, 32, 64}):
+    width = _v23_integer(key["code_width_bytes"], "code width", minimum=1, maximum=65_535)
+    if (
+        family not in V23_FAMILIES
+        or (family == "srht-pq" and width not in {8, 16, 32, 64})
+        or (family in {"fast-turbo-quant-mse", "fast-turbo-quant-prod"} and width > 64)
+        or (family == "f16-flat" and width % 2 != 0)
+    ):
         raise ValueError("V23 arm key is invalid")
     return family, width
+
+
+def _validate_v23_quantizer_state(
+    value: object, key: tuple[str, int], dimensions: int
+) -> dict[str, object]:
+    tagged = _v23_mapping(value, {"codec", "state"}, "V23 D1 quantizer state")
+    expected_codec = "pq" if key[0] == "srht-pq" else key[0]
+    if _v23_string(tagged["codec"], "V23 D1 codec tag") != expected_codec:
+        raise ValueError("V23 D1 codec tag differs from arm family")
+    parameters = tagged["state"]
+    if type(parameters) is not dict or not parameters:
+        raise ValueError("V23 D1 quantizer parameters are invalid")
+    state_dimensions = _v23_integer(
+        parameters.get("dimensions"), "V23 D1 quantizer dimensions", minimum=1
+    )
+    if state_dimensions != dimensions:
+        raise ValueError("V23 D1 quantizer dimension differs")
+    if key[0] == "srht-pq":
+        state_width = _v23_integer(
+            parameters.get("subspaces"),
+            "V23 D1 PQ subspaces",
+            minimum=1,
+            maximum=65_535,
+        )
+    elif key[0] == "fast-turbo-quant-mse":
+        bits = _v23_integer(
+            parameters.get("bits"), "V23 D1 MSE bits", minimum=1, maximum=8
+        )
+        shards = _v23_integer(
+            parameters.get("shards"),
+            "V23 D1 MSE shards",
+            minimum=1,
+            maximum=2**32 - 1,
+        )
+        shard_count = min(shards, state_dimensions)
+        shard_width, remainder = divmod(state_dimensions, shard_count)
+        state_width = 4
+        for shard in range(shard_count):
+            dimensions_in_shard = shard_width + int(shard < remainder)
+            padded = 1 << (dimensions_in_shard - 1).bit_length()
+            state_width += (padded * bits + 7) // 8
+    elif key[0] == "fast-turbo-quant-prod":
+        bits = _v23_integer(
+            parameters.get("bits"), "V23 D1 production bits", minimum=2, maximum=8
+        )
+        padded = 1 << (state_dimensions - 1).bit_length()
+        state_width = (padded * (bits - 1) + 7) // 8 + (padded + 7) // 8 + 8
+    else:
+        parameters = _v23_mapping(
+            parameters, {"dimensions"}, "f16-flat quantizer parameters"
+        )
+        state_width = state_dimensions * 2
+    if state_width != key[1]:
+        raise ValueError("V23 D1 quantizer code width differs")
+    return value
 
 
 def _v23_identifier(value: object, label: str) -> bytes:
@@ -3738,6 +3799,36 @@ def _v23_ranked(value: object, *, minimum: int = 10) -> tuple[list[bytes], list[
     ):
         raise ValueError("V23 ranked order differs")
     return ids, distances
+
+
+def _v23_rankings_equivalent_within_tolerance(
+    left_ids: list[bytes],
+    left_distances: list[float],
+    right_ids: list[bytes],
+    right_distances: list[float],
+) -> bool:
+    if left_ids == right_ids or set(left_ids) == set(right_ids):
+        return True
+    left_set = set(left_ids)
+    right_set = set(right_ids)
+    left_boundary = left_distances[-1]
+    right_boundary = right_distances[-1]
+
+    def within_tolerance(distance: float, boundary: float) -> bool:
+        distance = _v23_f32(distance)
+        boundary = _v23_f32(boundary)
+        scale = max(abs(distance), abs(boundary), 1.0)
+        return abs(_v23_f32(distance - boundary)) * 1_000_000 <= scale * 10
+
+    return all(
+        within_tolerance(distance, right_boundary)
+        for identifier, distance in zip(left_ids, left_distances, strict=True)
+        if identifier not in right_set
+    ) and all(
+        within_tolerance(distance, left_boundary)
+        for identifier, distance in zip(right_ids, right_distances, strict=True)
+        if identifier not in left_set
+    )
 
 
 def _v23_ppm(numerator: int, denominator: int) -> int:
@@ -4053,6 +4144,7 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
             "query_vectors_checksum",
             "query_ordinals",
             "rows",
+            "dimensions",
             "routing_cell_count",
             "maximum_record_id_bytes",
             "arms",
@@ -4068,7 +4160,7 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
         _v23_digest(report[field], f"D1 {field}")
     query_ordinals = report["query_ordinals"]
     if (
-        report["schema"] != "borsuk-v23-d1-v3"
+        report["schema"] != "borsuk-v23-d1-v4"
         or type(query_ordinals) is not list
         or len(query_ordinals) != V23_QUERY_COUNT
         or any(type(item) is not int or item < 0 for item in query_ordinals)
@@ -4079,6 +4171,7 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
     ):
         raise ValueError("V23 D1 query authority differs")
     rows = _v23_integer(report["rows"], "D1 rows", minimum=1)
+    dimensions = _v23_integer(report["dimensions"], "D1 dimensions", minimum=1)
     _v23_integer(report["routing_cell_count"], "D1 routing cells", minimum=1)
     maximum_id_bytes = _v23_integer(
         report["maximum_record_id_bytes"], "D1 record ID width", minimum=1, maximum=65_535
@@ -4112,15 +4205,18 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
             raise ValueError("V23 D1 arm order differs")
         prior_key = ordered_key
         _v23_digest(arm["quantizer_checksum"], "D1 quantizer checksum")
-        if type(arm["quantizer_state"]) is not dict or not arm["quantizer_state"]:
-            raise ValueError("V23 D1 quantizer state is invalid")
+        _validate_v23_quantizer_state(arm["quantizer_state"], key, dimensions)
         samples = arm["query_samples"]
         if type(samples) is not list or len(samples) != V23_QUERY_COUNT:
             raise ValueError("V23 D1 sample cardinality differs")
+        row_bytes = 4 + key[1] + maximum_id_bytes
+        projected_rows = min(2_048, (V23_PAGE_MAX_BYTES - 96 - 4) // row_bytes)
+        wave_candidate_rows = 4 * projected_rows
         oracle_hits = 0
         routed_hits = 0
         cpu: list[int] = []
         ids_equal = True
+        rankings_equivalent = True
         maximum_delta_ppm = 0
         arm_ground_truth: list[list[bytes]] = []
         for expected_index, sample_value in enumerate(samples):
@@ -4134,6 +4230,7 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
                     "routed",
                     "oracle_candidate_rows",
                     "routed_candidate_rows",
+                    "wave_candidate_rows",
                     "oracle_hits",
                     "routed_hits",
                     "cpu_ns",
@@ -4159,6 +4256,8 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
                 or not 1
                 <= _v23_integer(sample["routed_candidate_rows"], "D1 routed rows")
                 <= rows
+                or _v23_integer(sample["wave_candidate_rows"], "D1 timed wave rows")
+                != wave_candidate_rows
                 or _v23_integer(sample["oracle_hits"], "D1 oracle hits", maximum=10)
                 != expected_oracle_hits
                 or _v23_integer(sample["routed_hits"], "D1 routed hits", maximum=10)
@@ -4169,6 +4268,12 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
             routed_hits += expected_routed_hits
             cpu.append(_v23_integer(sample["cpu_ns"], "D1 CPU time", minimum=1))
             ids_equal = ids_equal and oracle_ids == scalar_ids
+            rankings_equivalent = rankings_equivalent and _v23_rankings_equivalent_within_tolerance(
+                oracle_ids,
+                oracle_distances,
+                scalar_ids,
+                scalar_distances,
+            )
             for simd, scalar in zip(
                 oracle_distances, scalar_distances, strict=True
             ):
@@ -4183,13 +4288,16 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
         oracle_ppm = _v23_ppm(oracle_hits, V23_QUERY_COUNT * 10)
         routed_ppm = _v23_ppm(routed_hits, V23_QUERY_COUNT * 10)
         cpu_p99 = _v23_nearest_rank(cpu, 99, 100)
-        projected = 4 * (96 + 4 * 2_049 + 2_048 * (key[1] + maximum_id_bytes))
+        projected = 4 * (
+            96 + 4 * (projected_rows + 1) + projected_rows * (key[1] + maximum_id_bytes)
+        )
         passed = (
             oracle_ppm >= 990_000
             and routed_ppm >= 975_000
-            and ids_equal
+            and rankings_equivalent
             and maximum_delta_ppm <= 10
             and cpu_p99 <= 15_000_000
+            and wave_candidate_rows >= 2_048
             and projected <= V23_WAVE_MAX_BYTES
         )
         if (
@@ -4213,6 +4321,7 @@ def validate_v23_d1_artifacts(
     expected_source_archive_sha256: str,
     expected_index_id: str,
     expected_dataset_id: str,
+    expected_dimensions: int,
 ) -> dict[str, object]:
     artifact = _v23_mapping(
         _read_v23_staging_value(report_path, 64 * 1024 * 1024),
@@ -4242,6 +4351,10 @@ def validate_v23_d1_artifacts(
     ):
         raise ValueError("V23 D1 artifact authority differs")
     report = _validate_v23_d1_report(artifact["report"])
+    if report["dimensions"] != _v23_integer(
+        expected_dimensions, "expected D1 dimensions", minimum=1
+    ):
+        raise ValueError("V23 D1 dimensions differ from dataset authority")
     summary = _validate_v23_stage_summary(
         _read_v23_staging_value(summary_path, 256 * 1024),
         stage="d1",
@@ -4293,13 +4406,14 @@ def _validate_v23_page(value: object, expected_ordinal: int) -> dict[str, object
     checksum = _v23_digest(page["checksum"], "D2 page checksum")
     centroid = page["centroid"]
     dimensions = _v23_integer(page["dimensions"], "D2 dimensions", minimum=1)
+    code_width = _v23_integer(page["code_width"], "D2 code width", minimum=1, maximum=65_535)
+    family = _v23_string(page["family"], "D2 quantizer family")
+    _v23_arm_key({"family": family, "code_width_bytes": code_width})
     if (
         _v23_integer(page["page_ordinal"], "D2 page ordinal") != expected_ordinal
         or page["metric"] not in {"euclidean", "squared-euclidean", "cosine"}
         or type(page["metric"]) is not str
-        or page["family"] not in V23_FAMILIES
-        or type(page["family"]) is not str
-        or not 1 <= _v23_integer(page["code_width"], "D2 code width") <= 64
+        or (family == "f16-flat" and code_width != 2 * dimensions)
         or page["path"] != f"pages/{checksum}"
         or not 1 <= _v23_integer(page["encoded_bytes"], "D2 encoded bytes") <= V23_PAGE_MAX_BYTES
         or _v23_integer(page["primary_rows"], "D2 primary rows", minimum=1) > 65_535
@@ -4319,6 +4433,50 @@ def _v23_d2_projection(unique_rows: int, page_count: int, dimensions: int) -> tu
     catalog = projected_pages * (32 + centroid_bytes)
     router = projected_pages * 4_096
     return root, root + catalog + router + 512 * 1024**2 + 2 * V23_WAVE_MAX_BYTES
+
+
+def _v23_d2_minimum_build_projection(
+    *,
+    rows: int,
+    pages: list[dict[str, object]],
+    dimensions: int,
+    maximum_record_id_bytes: int,
+    code_width: int,
+    maximum_assignments_per_row: int,
+) -> int:
+    # Frozen registered x86_64 Rust ABI sizes. Rust locks these with exact
+    # size_of assertions beside the production projection.
+    planning_row_bytes = 64
+    replica_candidate_bytes = 32
+    usize_bytes = 8
+    decoded_row_bytes = (
+        planning_row_bytes
+        + maximum_record_id_bytes
+        + dimensions * 4
+        + code_width
+    )
+    candidate_bytes = replica_candidate_bytes * min(
+        max(maximum_assignments_per_row - 1, 0), 1
+    )
+    index_bytes = usize_bytes * 6
+    decoded_and_planner = rows * (
+        decoded_row_bytes + candidate_bytes + index_bytes
+    )
+    encoded_page_bytes = sum(
+        _v23_integer(page["encoded_bytes"], "D2 page encoded bytes", minimum=1)
+        for page in pages
+    )
+    page_authority_bytes = len(pages) * (dimensions * 4 + 4_096 + 512)
+    lightweight_evidence_bytes = 36 * V23_QUERY_COUNT * (
+        4_096 + maximum_record_id_bytes * 20
+    )
+    return (
+        decoded_and_planner
+        + encoded_page_bytes
+        + page_authority_bytes * 4
+        + lightweight_evidence_bytes
+        + V23_WAVE_MAX_BYTES * 2
+    )
 
 
 def _v23_d2_metrics(arm: dict[str, object]) -> tuple[int, int, int, int, int]:
@@ -4358,7 +4516,7 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
     _v23_digest(report["d1_report_checksum"], "D2 D1 report checksum")
     ordinals = report["query_ordinals"]
     if (
-        report["schema"] != "borsuk-v23-d2-v3"
+        report["schema"] != "borsuk-v23-d2-v4"
         or type(ordinals) is not list
         or len(ordinals) != V23_QUERY_COUNT
         or any(type(item) is not int or item < 0 for item in ordinals)
@@ -4430,6 +4588,14 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
         amplification = _v23_ppm(total_assignments, unique_rows)
         projected_root, projected_ram = _v23_d2_projection(unique_rows, len(pages), first["dimensions"])
         observed_build_peak = _v23_integer(arm["projected_build_bytes"], "D2 build projection", minimum=1)
+        minimum_build_projection = _v23_d2_minimum_build_projection(
+            rows=unique_rows,
+            pages=pages,
+            dimensions=first["dimensions"],
+            maximum_record_id_bytes=id_width,
+            code_width=width,
+            maximum_assignments_per_row=assignments_per_row,
+        )
         if build_peak is None:
             build_peak = observed_build_peak
         if (
@@ -4440,6 +4606,7 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
             or _v23_integer(arm["projected_root_bytes"], "D2 root projection") != projected_root
             or _v23_integer(arm["projected_ram_bytes"], "D2 RAM projection") != projected_ram
             or observed_build_peak != build_peak
+            or observed_build_peak < minimum_build_projection
             or id_width <= 0
             or assignments_per_row <= 0
         ):
@@ -4552,10 +4719,14 @@ def validate_v23_d2_artifacts(
     expected_source_archive_sha256: str,
     expected_index_id: str,
     expected_dataset_id: str,
+    expected_dimensions: int,
     expected_d1_report_sha256: str,
     expected_page_uri: str,
 ) -> dict[str, object]:
     _v23_digest(expected_d1_report_sha256, "expected D1 artifact SHA-256")
+    expected_dimensions = _v23_integer(
+        expected_dimensions, "expected D2 dimensions", minimum=1
+    )
     expected_page_uri = _v23_standard_s3_prefix(expected_page_uri)
     artifact = _v23_mapping(
         _read_v23_staging_value(report_path, 128 * 1024 * 1024),
@@ -4589,6 +4760,12 @@ def validate_v23_d2_artifacts(
     ):
         raise ValueError("V23 D2 artifact schema differs")
     report = _validate_v23_d2_report(artifact["report"])
+    if any(
+        page["dimensions"] != expected_dimensions
+        for arm in report["arms"]
+        for page in arm["pages"]
+    ):
+        raise ValueError("V23 D2 page dimension differs from dataset authority")
     expected_pages: list[dict[str, object]] = []
     seen_paths: set[str] = set()
     for arm in report["arms"]:
@@ -5447,6 +5624,7 @@ def main() -> int:
                     expected_source_archive_sha256=expected_source,
                     expected_index_id=expected_index,
                     expected_dataset_id=expected_dataset,
+                    expected_dimensions=int(cell["dataset"]["dimensions"]),
                 )
             elif args.v23_stage == "d2":
                 assert d1_report_sha256 is not None
@@ -5457,6 +5635,7 @@ def main() -> int:
                     expected_source_archive_sha256=expected_source,
                     expected_index_id=expected_index,
                     expected_dataset_id=expected_dataset,
+                    expected_dimensions=int(cell["dataset"]["dimensions"]),
                     expected_d1_report_sha256=d1_report_sha256,
                     expected_page_uri=str(args.v23_page_uri),
                 )

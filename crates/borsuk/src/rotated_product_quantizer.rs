@@ -60,6 +60,10 @@ pub(crate) struct ProductQuantizerState {
 }
 
 impl RotatedProductQuantizer {
+    pub(crate) fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
     pub(crate) fn fit(config: ProductQuantizerConfig, fit_vectors: &[Vec<f32>]) -> Result<Self> {
         validate_config(config, fit_vectors)?;
         let rotation = match config.rotation {

@@ -1241,8 +1241,9 @@ fn newline_json<T: Serialize>(value: &T, context: &'static str) -> io::Result<Ve
 }
 
 fn validate_v23_d1_report_shape(report: &borsuk::V23D1Report) -> io::Result<()> {
-    if report.schema != "borsuk-v23-d1-v3"
+    if report.schema != "borsuk-v23-d1-v4"
         || report.rows == 0
+        || report.dimensions == 0
         || report.query_ordinals.len() != V23_D3_QUERY_COUNT as usize
         || report
             .query_ordinals
@@ -1255,7 +1256,7 @@ fn validate_v23_d1_report_shape(report: &borsuk::V23D1Report) -> io::Result<()> 
 }
 
 fn validate_v23_d2_report_shape(report: &borsuk::V23D2Report) -> io::Result<()> {
-    if report.schema != "borsuk-v23-d2-v3"
+    if report.schema != "borsuk-v23-d2-v4"
         || report.rows == 0
         || report.query_ordinals.len() != V23_D3_QUERY_COUNT as usize
         || report
@@ -5043,6 +5044,7 @@ fn v23_d2_arm_key(arm: &borsuk::V23D2Arm) -> String {
         borsuk::V23QuantizerFamily::SrhtPq => "srht-pq",
         borsuk::V23QuantizerFamily::FastTurboQuantMse => "fast-turboquant-mse",
         borsuk::V23QuantizerFamily::FastTurboQuantProd => "fast-turboquant-prod",
+        borsuk::V23QuantizerFamily::F16Flat => "f16-flat",
     };
     format!(
         "{family}:{}:{}:{}:{}",
@@ -12898,13 +12900,14 @@ mod tests {
     fn v23_d1_d2_artifacts_bind_prerequisites_and_page_roster() {
         let query_ordinals = (0_u64..32).collect::<Vec<_>>();
         let d1_report = V23D1Report {
-            schema: "borsuk-v23-d1-v3".to_string(),
+            schema: "borsuk-v23-d1-v4".to_string(),
             v20_root_checksum: "11".repeat(32),
             v20_codebook_checksum: "22".repeat(32),
             sample_ordinals_checksum: "33".repeat(32),
             query_vectors_checksum: "44".repeat(32),
             query_ordinals: query_ordinals.clone(),
             rows: 10_000_000,
+            dimensions: 96,
             routing_cell_count: 4096,
             maximum_record_id_bytes: 16,
             arms: Vec::new(),
@@ -12962,7 +12965,7 @@ mod tests {
             centroid: vec![0.0; 96],
         }];
         let d2_report = V23D2Report {
-            schema: "borsuk-v23-d2-v3".to_string(),
+            schema: "borsuk-v23-d2-v4".to_string(),
             d1_report_checksum: "55".repeat(32),
             query_ordinals,
             rows: 10_000_000,

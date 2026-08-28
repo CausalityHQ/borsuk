@@ -94,6 +94,80 @@ pub(crate) enum GlobalScanQuantizerState {
     Pq(ProductQuantizerState),
     FastTurboQuantMse(FastTurboQuantMseScanState),
     FastTurboQuantProd(FastTurboQuantProdScanState),
+    F16Flat(F16FlatScanState),
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct F16FlatScanState {
+    dimensions: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct F16FlatScanQuantizer {
+    dimensions: usize,
+}
+
+impl F16FlatScanQuantizer {
+    pub(crate) fn new(dimensions: usize) -> Result<Self> {
+        if dimensions == 0 || dimensions > usize::from(u16::MAX) / 2 {
+            return invalid("f16-flat dimensions are invalid");
+        }
+        Ok(Self { dimensions })
+    }
+
+    fn from_state(state: F16FlatScanState) -> Result<Self> {
+        Self::new(state.dimensions)
+    }
+
+    fn state(&self) -> F16FlatScanState {
+        F16FlatScanState {
+            dimensions: self.dimensions,
+        }
+    }
+
+    fn encode(&self, vector: &[f32]) -> Result<Vec<u8>> {
+        if vector.len() != self.dimensions || vector.iter().any(|value| !value.is_finite()) {
+            return invalid("f16-flat vector is invalid");
+        }
+        let mut code = Vec::with_capacity(self.dimensions * 2);
+        for value in vector {
+            let value = half::f16::from_f32(value.clamp(-65_504.0, 65_504.0));
+            code.extend_from_slice(&value.to_bits().to_le_bytes());
+        }
+        Ok(code)
+    }
+
+    fn distance(&self, query: &[f32], code: &[u8]) -> Result<f32> {
+        if query.len() != self.dimensions || code.len() != self.dimensions * 2 {
+            return invalid("f16-flat distance input differs");
+        }
+        let mut distance = 0.0_f64;
+        for (query, bits) in query.iter().zip(code.chunks_exact(2)) {
+            let decoded = f64::from(half::f16::from_bits(u16::from_le_bytes([bits[0], bits[1]])));
+            let delta = f64::from(*query) - decoded;
+            distance += delta * delta;
+        }
+        Ok(distance as f32)
+    }
+
+    fn distances_contiguous(&self, query: &[f32], codes: &[u8]) -> Result<Vec<f32>> {
+        let code_width = self.dimensions * 2;
+        if query.len() != self.dimensions
+            || codes.is_empty()
+            || !codes.len().is_multiple_of(code_width)
+        {
+            return invalid("f16-flat contiguous codes differ");
+        }
+        let mut decoded = vec![0.0_f32; self.dimensions];
+        let mut distances = Vec::with_capacity(codes.len() / code_width);
+        for code in codes.chunks_exact(code_width) {
+            for (value, bits) in decoded.iter_mut().zip(code.chunks_exact(2)) {
+                *value = f32::from(half::f16::from_bits(u16::from_le_bytes([bits[0], bits[1]])));
+            }
+            distances.push(crate::metric::squared_euclidean_simd(query, &decoded));
+        }
+        Ok(distances)
+    }
 }
 
 impl GlobalScanQuantizerState {
@@ -111,6 +185,7 @@ impl GlobalScanQuantizerState {
             Self::FastTurboQuantProd(state) => {
                 turboquant_codebook_state_heap_bytes(&state.codebook)
             }
+            Self::F16Flat(_) => 0,
         }
     }
 }
@@ -140,6 +215,7 @@ pub(crate) enum GlobalScanQuantizer {
     Pq(RotatedProductQuantizer),
     FastTurboQuantMse(FastTurboQuantMseScanQuantizer),
     FastTurboQuantProd(FastTurboQuantProdScanQuantizer),
+    F16Flat(F16FlatScanQuantizer),
 }
 
 impl From<RotatedProductQuantizer> for GlobalScanQuantizer {
@@ -160,13 +236,29 @@ impl From<FastTurboQuantProdScanQuantizer> for GlobalScanQuantizer {
     }
 }
 
+impl From<F16FlatScanQuantizer> for GlobalScanQuantizer {
+    fn from(quantizer: F16FlatScanQuantizer) -> Self {
+        Self::F16Flat(quantizer)
+    }
+}
+
 pub(crate) enum PreparedGlobalScan {
     Pq(crate::rotated_product_quantizer::PreparedAdc),
     FastTurboQuantMse(PreparedFastTurboQuantMseScan),
     FastTurboQuantProd(PreparedFastTurboQuantProdScan),
+    F16Flat(Box<[f32]>),
 }
 
 impl GlobalScanQuantizer {
+    pub(crate) fn dimensions(&self) -> usize {
+        match self {
+            Self::Pq(quantizer) => quantizer.dimensions(),
+            Self::FastTurboQuantMse(quantizer) => quantizer.dimensions(),
+            Self::FastTurboQuantProd(quantizer) => quantizer.dimensions(),
+            Self::F16Flat(quantizer) => quantizer.dimensions,
+        }
+    }
+
     pub(crate) fn from_state(state: GlobalScanQuantizerState) -> Result<Self> {
         match state {
             GlobalScanQuantizerState::Pq(state) => {
@@ -178,6 +270,9 @@ impl GlobalScanQuantizer {
             GlobalScanQuantizerState::FastTurboQuantProd(state) => Ok(Self::FastTurboQuantProd(
                 FastTurboQuantProdScanQuantizer::from_state(state)?,
             )),
+            GlobalScanQuantizerState::F16Flat(state) => {
+                Ok(Self::F16Flat(F16FlatScanQuantizer::from_state(state)?))
+            }
         }
     }
 
@@ -190,6 +285,7 @@ impl GlobalScanQuantizer {
             Self::FastTurboQuantProd(quantizer) => {
                 GlobalScanQuantizerState::FastTurboQuantProd(quantizer.state())
             }
+            Self::F16Flat(quantizer) => GlobalScanQuantizerState::F16Flat(quantizer.state()),
         }
     }
 
@@ -198,6 +294,7 @@ impl GlobalScanQuantizer {
             Self::Pq(quantizer) => quantizer.encode(vector),
             Self::FastTurboQuantMse(quantizer) => quantizer.encode(vector),
             Self::FastTurboQuantProd(quantizer) => quantizer.encode(vector),
+            Self::F16Flat(quantizer) => quantizer.encode(vector),
         }
     }
 
@@ -266,6 +363,10 @@ impl GlobalScanQuantizer {
                 *code = quantizer.encode(vector)?;
                 Ok(())
             }
+            Self::F16Flat(quantizer) => {
+                *code = quantizer.encode(vector)?;
+                Ok(())
+            }
         }
     }
 
@@ -274,6 +375,7 @@ impl GlobalScanQuantizer {
             Self::Pq(quantizer) => quantizer.code_bytes_per_vector(),
             Self::FastTurboQuantMse(quantizer) => quantizer.packed_code_len(),
             Self::FastTurboQuantProd(quantizer) => quantizer.packed_code_len(),
+            Self::F16Flat(quantizer) => quantizer.dimensions * 2,
         }
     }
 
@@ -286,6 +388,14 @@ impl GlobalScanQuantizer {
             Self::FastTurboQuantProd(quantizer) => Ok(PreparedGlobalScan::FastTurboQuantProd(
                 quantizer.prepare_query(query)?,
             )),
+            Self::F16Flat(quantizer) => {
+                if query.len() != quantizer.dimensions
+                    || query.iter().any(|value| !value.is_finite())
+                {
+                    return invalid("f16-flat query is invalid");
+                }
+                Ok(PreparedGlobalScan::F16Flat(query.into()))
+            }
         }
     }
 
@@ -300,6 +410,9 @@ impl GlobalScanQuantizer {
                 Self::FastTurboQuantProd(quantizer),
                 PreparedGlobalScan::FastTurboQuantProd(prepared),
             ) => quantizer.distance(prepared, code),
+            (Self::F16Flat(quantizer), PreparedGlobalScan::F16Flat(query)) => {
+                quantizer.distance(query, code)
+            }
             _ => invalid("prepared query does not match the global scan codec"),
         }
     }
@@ -319,6 +432,9 @@ impl GlobalScanQuantizer {
                 Self::FastTurboQuantProd(quantizer),
                 PreparedGlobalScan::FastTurboQuantProd(prepared),
             ) => quantizer.distances_contiguous(prepared, codes),
+            (Self::F16Flat(quantizer), PreparedGlobalScan::F16Flat(query)) => {
+                quantizer.distances_contiguous(query, codes)
+            }
             _ => invalid("prepared query does not match the global scan codec"),
         }
     }
@@ -1822,6 +1938,7 @@ fn scan_dimensions(state: &GlobalScanQuantizerState) -> usize {
         GlobalScanQuantizerState::Pq(state) => state.dimensions,
         GlobalScanQuantizerState::FastTurboQuantMse(state) => state.dimensions,
         GlobalScanQuantizerState::FastTurboQuantProd(state) => state.dimensions,
+        GlobalScanQuantizerState::F16Flat(state) => state.dimensions,
     }
 }
 

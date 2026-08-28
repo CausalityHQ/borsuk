@@ -21,6 +21,7 @@ from scripts.publication_v3_receipts import build_index_receipt, receipt_documen
 from scripts.publication_v3_results import validate_cell_result
 from scripts.run_publication_v3_cell import (
     PRODUCTION_BUILD_FIELDS,
+    V23_PAGE_MAX_BYTES,
     authorize_publication_mutation_runtime,
     authorize_publication_runtime,
     authorize_v23_publication_runtime,
@@ -125,6 +126,7 @@ def v23_d1_fixture() -> tuple[dict[str, object], dict[str, object]]:
             "routed": v23_ranked_result(),
             "oracle_candidate_rows": 2_048,
             "routed_candidate_rows": 8_192,
+            "wave_candidate_rows": 8_192,
             "oracle_hits": 10,
             "routed_hits": 10,
             "cpu_ns": 1_000_000,
@@ -132,20 +134,28 @@ def v23_d1_fixture() -> tuple[dict[str, object], dict[str, object]]:
         for query_index in range(32)
     ]
     report = {
-        "schema": "borsuk-v23-d1-v3",
+        "schema": "borsuk-v23-d1-v4",
         "v20_root_checksum": "1" * 64,
         "v20_codebook_checksum": "2" * 64,
         "sample_ordinals_checksum": "3" * 64,
         "query_vectors_checksum": "4" * 64,
         "query_ordinals": list(range(32)),
         "rows": 9_990_000,
+        "dimensions": 96,
         "routing_cell_count": 4_096,
         "maximum_record_id_bytes": 8,
         "arms": [
             {
                 "key": {"family": "srht-pq", "code_width_bytes": 64},
                 "quantizer_checksum": "5" * 64,
-                "quantizer_state": {"schema": "test-quantizer-v1"},
+                "quantizer_state": {
+                    "codec": "pq",
+                    "state": {
+                        "schema": "test-quantizer-v1",
+                        "dimensions": 96,
+                        "subspaces": 64,
+                    },
+                },
                 "query_samples": samples,
                 "oracle_recall_ppm": 1_000_000,
                 "routed_recall_ppm": 1_000_000,
@@ -192,7 +202,7 @@ def v23_d2_fixture(d1_sha256: str) -> tuple[dict[str, object], dict[str, object]
         "generation_checksum": [1] * 32,
         "page_ordinal": 0,
         "metric": "squared-euclidean",
-        "dimensions": 4,
+        "dimensions": 96,
         "family": "srht-pq",
         "code_width": 64,
         "path": f"pages/{'6' * 64}",
@@ -200,7 +210,7 @@ def v23_d2_fixture(d1_sha256: str) -> tuple[dict[str, object], dict[str, object]
         "encoded_bytes": 120_000,
         "primary_rows": 1_000,
         "replicated_rows": 0,
-        "centroid": [0.0] * 4,
+        "centroid": [0.0] * 96,
     }
     samples = [
         {
@@ -218,16 +228,23 @@ def v23_d2_fixture(d1_sha256: str) -> tuple[dict[str, object], dict[str, object]
         for query_index in range(32)
     ]
     projected_pages = 100_000
-    projected_root = 96 + projected_pages * (96 + 4 * 4)
+    projected_root = 96 + projected_pages * (96 + 4 * 96)
     projected_ram = (
         projected_root
-        + projected_pages * (32 + 4 * 4)
+        + projected_pages * (32 + 4 * 96)
         + projected_pages * 4_096
         + 512 * 1024 * 1024
         + 2 * 983_040
     )
+    projected_build = (
+        1_000 * (64 + 8 + 4 * 96 + 64 + 6 * 8)
+        + 120_000
+        + 4 * (4 * 96 + 4_096 + 512)
+        + 36 * 32 * (4_096 + 8 * 20)
+        + 2 * 983_040
+    )
     report = {
-        "schema": "borsuk-v23-d2-v3",
+        "schema": "borsuk-v23-d2-v4",
         "d1_report_checksum": "7" * 64,
         "query_ordinals": list(range(32)),
         "rows": 1_000,
@@ -244,7 +261,7 @@ def v23_d2_fixture(d1_sha256: str) -> tuple[dict[str, object], dict[str, object]
                 "storage_amplification_ppm": 1_000_000,
                 "projected_root_bytes": projected_root,
                 "projected_ram_bytes": projected_ram,
-                "projected_build_bytes": 1_000_000,
+                "projected_build_bytes": projected_build,
                 "query_samples": samples,
                 "aggregate_recall_ppm": 1_000_000,
                 "minimum_query_recall_ppm": 1_000_000,
@@ -3990,6 +4007,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 expected_source_archive_sha256="a" * 64,
                 expected_index_id="index-v23",
                 expected_dataset_id="deep-image-96",
+                expected_dimensions=96,
             )
             self.assertIs(result["passed"], True)
             self.assertEqual(
@@ -4014,11 +4032,12 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                     expected_source_archive_sha256="a" * 64,
                     expected_index_id="index-v23",
                     expected_dataset_id="deep-image-96",
+                    expected_dimensions=96,
                 )
 
             overflow_state = (canonical_json_bytes(artifact) + b"\n").replace(
-                b'"quantizer_state":{"schema":"test-quantizer-v1"}',
-                b'"quantizer_state":{"overflow":1e999}',
+                b'"quantizer_state":{"codec":"pq","state":{"dimensions":96,"schema":"test-quantizer-v1","subspaces":64}}',
+                b'"quantizer_state":{"codec":"pq","state":{"overflow":1e999}}',
                 1,
             )
             self.assertNotEqual(
@@ -4032,6 +4051,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                     expected_source_archive_sha256="a" * 64,
                     expected_index_id="index-v23",
                     expected_dataset_id="deep-image-96",
+                    expected_dimensions=96,
                 )
 
             write_canonical_json(report_path, artifact)
@@ -4042,19 +4062,64 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 expected_source_archive_sha256="a" * 64,
                 expected_index_id="index-v23",
                 expected_dataset_id="deep-image-96",
+                expected_dimensions=96,
             )
             self.assertIs(result["publishable"], False)
             self.assertIs(result["claim_eligible"], False)
             self.assertIs(result["passed"], True)
+
+            boundary_artifact = copy.deepcopy(artifact)
+            boundary_summary = copy.deepcopy(summary)
+            boundary_arm = boundary_artifact["report"]["arms"][0]
+            boundary_sample = boundary_arm["query_samples"][0]
+            boundary_sample["scalar_oracle"]["ids"][-1] = [10]
+            boundary_sample["scalar_oracle"]["distances"][-1] = 9.000001
+            boundary_arm["scalar_simd_ids_equal"] = False
+            boundary_arm["scalar_simd_max_distance_delta_ppm"] = 1
+            boundary_arm["passed"] = True
+            write_canonical_json(report_path, boundary_artifact)
+            write_canonical_json(summary_path, boundary_summary)
+            boundary = validate_v23_d1_artifacts(
+                report_path,
+                summary_path,
+                expected_source_archive_sha256="a" * 64,
+                expected_index_id="index-v23",
+                expected_dataset_id="deep-image-96",
+                expected_dimensions=96,
+            )
+            self.assertIs(boundary["passed"], True)
+
+            dimension_drift = copy.deepcopy(artifact)
+            dimension_drift["report"]["arms"][0]["quantizer_state"]["state"][
+                "dimensions"
+            ] = 95
+            write_canonical_json(report_path, dimension_drift)
+            write_canonical_json(summary_path, summary)
+            with self.assertRaisesRegex(ValueError, "quantizer.*dimension"):
+                validate_v23_d1_artifacts(
+                    report_path,
+                    summary_path,
+                    expected_source_archive_sha256="a" * 64,
+                    expected_index_id="index-v23",
+                    expected_dataset_id="deep-image-96",
+                    expected_dimensions=96,
+                )
 
             ordered_artifact = copy.deepcopy(artifact)
             ordered_summary = copy.deepcopy(summary)
             second_arm = copy.deepcopy(ordered_artifact["report"]["arms"][0])
             second_arm["key"] = {
                 "family": "fast-turbo-quant-mse",
-                "code_width_bytes": 64,
+                "code_width_bytes": 52,
             }
             second_arm["quantizer_checksum"] = "6" * 64
+            second_arm["quantizer_state"] = {
+                "codec": "fast-turbo-quant-mse",
+                "state": {"dimensions": 96, "bits": 3, "shards": 1},
+            }
+            second_arm["four_page_projected_bytes"] = 4 * (
+                96 + 4 * 2_049 + 2_048 * (52 + 8)
+            )
             ordered_artifact["report"]["arms"].append(second_arm)
             ordered_summary["arms"] = 2
             ordered_summary["passing_arm_indexes"] = [0, 1]
@@ -4066,6 +4131,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 expected_source_archive_sha256="a" * 64,
                 expected_index_id="index-v23",
                 expected_dataset_id="deep-image-96",
+                expected_dimensions=96,
             )
             cross_arm_drift = copy.deepcopy(ordered_artifact)
             sample = cross_arm_drift["report"]["arms"][1]["query_samples"][0]
@@ -4082,6 +4148,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                     expected_source_archive_sha256="a" * 64,
                     expected_index_id="index-v23",
                     expected_dataset_id="deep-image-96",
+                    expected_dimensions=96,
                 )
 
             failed_artifact = copy.deepcopy(artifact)
@@ -4102,11 +4169,13 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 expected_source_archive_sha256="a" * 64,
                 expected_index_id="index-v23",
                 expected_dataset_id="deep-image-96",
+                expected_dimensions=96,
             )
             self.assertIs(result["passed"], False)
 
             for mutation in (
                 lambda value: value["report"]["arms"][0]["query_samples"][0].__setitem__("oracle_hits", 9),
+                lambda value: value["report"]["arms"][0]["query_samples"][0].__setitem__("wave_candidate_rows", 8_191),
                 lambda value: value["report"]["arms"][0].__setitem__("passed", 1),
                 lambda value: value["report"].__setitem__("query_ordinals", [0] * 32),
             ):
@@ -4121,6 +4190,158 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                         expected_source_archive_sha256="a" * 64,
                         expected_index_id="index-v23",
                         expected_dataset_id="deep-image-96",
+                        expected_dimensions=96,
+                    )
+
+    def test_v23_d1_accepts_only_dimension_bound_f16_flat_authority(self) -> None:
+        artifact, summary = v23_d1_fixture()
+        arm = artifact["report"]["arms"][0]
+        arm["key"] = {"family": "f16-flat", "code_width_bytes": 192}
+        arm["quantizer_state"] = {
+            "codec": "f16-flat",
+            "state": {"dimensions": 96},
+        }
+        maximum_id_bytes = artifact["report"]["maximum_record_id_bytes"]
+        projected_rows = min(
+            2_048,
+            (V23_PAGE_MAX_BYTES - 96 - 4) // (4 + 192 + maximum_id_bytes),
+        )
+        arm["four_page_projected_bytes"] = 4 * (
+            96 + 4 * (projected_rows + 1) + projected_rows * (192 + maximum_id_bytes)
+        )
+        for sample in arm["query_samples"]:
+            sample["wave_candidate_rows"] = 4 * projected_rows
+        self.assertEqual(projected_rows, 1_204)
+        self.assertLessEqual(arm["four_page_projected_bytes"], 983_040)
+
+        with tempfile.TemporaryDirectory() as root:
+            report_path = Path(root) / "bench_v23_d1_report.json"
+            summary_path = Path(root) / "bench_v23_summary.json"
+            write_canonical_json(report_path, artifact)
+            write_canonical_json(summary_path, summary)
+            validate_v23_d1_artifacts(
+                report_path,
+                summary_path,
+                expected_source_archive_sha256="a" * 64,
+                expected_index_id="index-v23",
+                expected_dataset_id="deep-image-96",
+                expected_dimensions=96,
+            )
+
+            insufficient_capacity = copy.deepcopy(artifact)
+            insufficient_capacity["report"]["maximum_record_id_bytes"] = 500
+            arm = insufficient_capacity["report"]["arms"][0]
+            projected_rows = min(
+                2_048,
+                (V23_PAGE_MAX_BYTES - 96 - 4) // (4 + 192 + 500),
+            )
+            arm["four_page_projected_bytes"] = 4 * (
+                96 + 4 * (projected_rows + 1) + projected_rows * (192 + 500)
+            )
+            for sample in arm["query_samples"]:
+                sample["wave_candidate_rows"] = 4 * projected_rows
+            self.assertLess(4 * projected_rows, 2_048)
+            write_canonical_json(report_path, insufficient_capacity)
+            with self.assertRaises(ValueError):
+                validate_v23_d1_artifacts(
+                    report_path,
+                    summary_path,
+                    expected_source_archive_sha256="a" * 64,
+                    expected_index_id="index-v23",
+                    expected_dataset_id="deep-image-96",
+                    expected_dimensions=96,
+                )
+
+            malformed = copy.deepcopy(artifact)
+            malformed["report"]["dimensions"] = 95
+            write_canonical_json(report_path, malformed)
+            with self.assertRaises(ValueError):
+                validate_v23_d1_artifacts(
+                    report_path,
+                    summary_path,
+                    expected_source_archive_sha256="a" * 64,
+                    expected_index_id="index-v23",
+                    expected_dataset_id="deep-image-96",
+                    expected_dimensions=96,
+                )
+            for mutation in (
+                {"codec": "f16-flat", "state": {"dimensions": 95}},
+                {"codec": "f16-flat", "state": {"dimensions": True}},
+                {"codec": "f16-flat", "state": {"dimensions": 96, "extra": 1}},
+                {"codec": "pq", "state": {"dimensions": 96}},
+                {"F16Flat": {"dimensions": 96}},
+            ):
+                malformed = copy.deepcopy(artifact)
+                malformed["report"]["arms"][0]["quantizer_state"] = mutation
+                write_canonical_json(report_path, malformed)
+                with self.assertRaises(ValueError):
+                    validate_v23_d1_artifacts(
+                        report_path,
+                        summary_path,
+                        expected_source_archive_sha256="a" * 64,
+                        expected_index_id="index-v23",
+                        expected_dataset_id="deep-image-96",
+                        expected_dimensions=96,
+                    )
+
+    def test_v23_d1_rejects_code_width_drift_from_every_quantizer_state(self) -> None:
+        cases = (
+            (
+                "srht-pq",
+                32,
+                {"codec": "pq", "state": {"dimensions": 96, "subspaces": 64}},
+            ),
+            (
+                "fast-turbo-quant-mse",
+                64,
+                {
+                    "codec": "fast-turbo-quant-mse",
+                    "state": {"dimensions": 96, "bits": 3, "shards": 1},
+                },
+            ),
+            (
+                "fast-turbo-quant-prod",
+                64,
+                {
+                    "codec": "fast-turbo-quant-prod",
+                    "state": {"dimensions": 96, "bits": 3},
+                },
+            ),
+        )
+        for family, declared_width, state in cases:
+            with self.subTest(family=family), tempfile.TemporaryDirectory() as root:
+                artifact, summary = v23_d1_fixture()
+                arm = artifact["report"]["arms"][0]
+                arm["key"] = {
+                    "family": family,
+                    "code_width_bytes": declared_width,
+                }
+                arm["quantizer_state"] = state
+                maximum_id_bytes = artifact["report"]["maximum_record_id_bytes"]
+                projected_rows = min(
+                    2_048,
+                    (V23_PAGE_MAX_BYTES - 96 - 4)
+                    // (4 + declared_width + maximum_id_bytes),
+                )
+                arm["four_page_projected_bytes"] = 4 * (
+                    96
+                    + 4 * (projected_rows + 1)
+                    + projected_rows * (declared_width + maximum_id_bytes)
+                )
+                for sample in arm["query_samples"]:
+                    sample["wave_candidate_rows"] = 4 * projected_rows
+                report_path = Path(root) / "bench_v23_d1_report.json"
+                summary_path = Path(root) / "bench_v23_summary.json"
+                write_canonical_json(report_path, artifact)
+                write_canonical_json(summary_path, summary)
+                with self.assertRaises(ValueError):
+                    validate_v23_d1_artifacts(
+                        report_path,
+                        summary_path,
+                        expected_source_archive_sha256="a" * 64,
+                        expected_index_id="index-v23",
+                        expected_dataset_id="deep-image-96",
+                        expected_dimensions=96,
                     )
 
     def test_v23_d2_recomputes_pages_projection_and_receipt_binding(self) -> None:
@@ -4150,6 +4371,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 expected_source_archive_sha256="a" * 64,
                 expected_index_id="index-v23",
                 expected_dataset_id="deep-image-96",
+                expected_dimensions=96,
                 expected_d1_report_sha256=d1_sha256,
                 expected_page_uri="s3://standard-bucket/v23/pages/",
             )
@@ -4170,6 +4392,18 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 result["pages_sha256"],
                 hashlib.sha256(canonical_json_bytes(roster) + b"\n").hexdigest(),
             )
+            with self.assertRaisesRegex(ValueError, "dimension.*dataset authority"):
+                validate_v23_d2_artifacts(
+                    report_path,
+                    roster_path,
+                    summary_path,
+                    expected_source_archive_sha256="a" * 64,
+                    expected_index_id="index-v23",
+                    expected_dataset_id="deep-image-96",
+                    expected_dimensions=95,
+                    expected_d1_report_sha256=d1_sha256,
+                    expected_page_uri="s3://standard-bucket/v23/pages/",
+                )
 
             failed_artifact = copy.deepcopy(artifact)
             failed_summary = copy.deepcopy(summary)
@@ -4193,6 +4427,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 expected_source_archive_sha256="a" * 64,
                 expected_index_id="index-v23",
                 expected_dataset_id="deep-image-96",
+                expected_dimensions=96,
                 expected_d1_report_sha256=d1_sha256,
                 expected_page_uri="s3://standard-bucket/v23/pages/",
             )
@@ -4200,8 +4435,10 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
 
             for path, mutation in (
                 (report_path, lambda value: value["report"]["arms"][0].__setitem__("storage_amplification_ppm", 999_999)),
+                (report_path, lambda value: value["report"]["arms"][0].__setitem__("projected_build_bytes", 1)),
                 (report_path, lambda value: value["report"]["arms"][0]["query_samples"][0].__setitem__("hits", True)),
                 (roster_path, lambda value: value["pages"][0].__setitem__("path", f"pages/{'8' * 64}")),
+                (roster_path, lambda value: value["pages"][0].__setitem__("code_width", 192)),
                 (summary_path, lambda value: value.__setitem__("d1_report_sha256", "9" * 64)),
             ):
                 write_canonical_json(report_path, artifact)
@@ -4218,6 +4455,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                         expected_source_archive_sha256="a" * 64,
                         expected_index_id="index-v23",
                         expected_dataset_id="deep-image-96",
+                        expected_dimensions=96,
                         expected_d1_report_sha256=d1_sha256,
                         expected_page_uri="s3://standard-bucket/v23/pages/",
                     )
