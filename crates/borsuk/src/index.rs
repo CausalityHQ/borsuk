@@ -13556,50 +13556,72 @@ impl BorsukIndex {
     #[doc(hidden)]
     pub fn diagnose_v23_d2(
         &self,
-        d1_report: &crate::v23_diagnostic::V23D1Report,
-        d1_key: crate::v23_diagnostic::V23D1ArmKey,
-        query_ordinals: &[u64],
-        queries: &[Vec<f32>],
-        ground_truth: &[Vec<String>],
-        scratch_parent: &Path,
+        request: crate::v23_diagnostic::V23D2DiagnosticRequest<'_>,
+    ) -> Result<crate::v23_diagnostic::V23D2Report> {
+        self.diagnose_v23_d2_inner(request, None)
+    }
+
+    /// Simulate V23 D2 while streaming each selected content-addressed page
+    /// exactly once to an external artifact writer.
+    #[doc(hidden)]
+    pub fn diagnose_v23_d2_with_page_sink<F>(
+        &self,
+        request: crate::v23_diagnostic::V23D2DiagnosticRequest<'_>,
+        mut page_sink: F,
+    ) -> Result<crate::v23_diagnostic::V23D2Report>
+    where
+        F: FnMut(&crate::v23_diagnostic::V23PageRef, &bytes::Bytes) -> Result<()>,
+    {
+        self.diagnose_v23_d2_inner(request, Some(&mut page_sink))
+    }
+
+    fn diagnose_v23_d2_inner(
+        &self,
+        request: crate::v23_diagnostic::V23D2DiagnosticRequest<'_>,
+        page_sink: Option<&mut crate::v23_diagnostic::V23PageSink<'_>>,
     ) -> Result<crate::v23_diagnostic::V23D2Report> {
         use crate::v23_diagnostic::{
-            V23D2CorpusAuthority, build_v23_d2_report, validate_d1_report,
+            V23D2CorpusAuthority, build_v23_d2_report, build_v23_d2_report_with_page_sink,
+            validate_d1_report,
         };
 
-        validate_d1_report(d1_report)?;
-        if d1_report.query_ordinals != query_ordinals {
+        validate_d1_report(request.d1_report)?;
+        if request.d1_report.query_ordinals != request.query_ordinals {
             return Err(BorsukError::InvalidSearchOptions(
                 "V23 D2 query ordinals differ from D1".to_string(),
             ));
         }
         let options = SearchOptions::approx(10, LeafMode::SrhtPqScan);
         let scan = self.scan_v23_diagnostic_corpus(
-            query_ordinals,
-            queries,
-            ground_truth,
+            request.query_ordinals,
+            request.queries,
+            request.ground_truth,
             &options,
-            scratch_parent,
+            request.scratch_parent,
         )?;
-        if d1_report.v20_root_checksum != scan.root_checksum
-            || d1_report.v20_codebook_checksum != scan.codebook_checksum
-            || d1_report.rows != scan.rows
-            || d1_report.routing_cell_count != scan.routing_cell_count
+        if request.d1_report.v20_root_checksum != scan.root_checksum
+            || request.d1_report.v20_codebook_checksum != scan.codebook_checksum
+            || request.d1_report.rows != scan.rows
+            || request.d1_report.routing_cell_count != scan.routing_cell_count
         {
             return Err(BorsukError::InvalidStorage(
                 "V23 D2 source generation differs from D1".to_string(),
             ));
         }
-        build_v23_d2_report(V23D2CorpusAuthority {
-            d1_report,
-            d1_key,
+        let authority = V23D2CorpusAuthority {
+            d1_report: request.d1_report,
+            d1_key: request.d1_key,
             scratch: &scan.scratch,
-            query_ordinals,
-            queries,
+            query_ordinals: request.query_ordinals,
+            queries: request.queries,
             query_prefixes: &scan.query_prefixes,
             metric: self.manifest.config.metric.clone(),
             normalize: scan.normalize,
-        })
+        };
+        match page_sink {
+            Some(sink) => build_v23_d2_report_with_page_sink(authority, sink),
+            None => build_v23_d2_report(authority),
+        }
     }
 
     /// Compute authenticated exact-prefix and complete routing-rank authority
@@ -45714,20 +45736,46 @@ mod tests {
         d2_arm.passed = true;
         let selected_d1_key = d2_arm.key;
         crate::v23_diagnostic::validate_d1_report(&d2_prerequisite).unwrap();
+        let mut emitted_pages = BTreeMap::<String, bytes::Bytes>::new();
         let d2 = index
-            .diagnose_v23_d2(
-                &d2_prerequisite,
-                selected_d1_key,
-                &query_ordinals,
-                &queries,
-                &truth,
-                scratch_parent.path(),
+            .diagnose_v23_d2_with_page_sink(
+                crate::v23_diagnostic::V23D2DiagnosticRequest {
+                    d1_report: &d2_prerequisite,
+                    d1_key: selected_d1_key,
+                    query_ordinals: &query_ordinals,
+                    queries: &queries,
+                    ground_truth: &truth,
+                    scratch_parent: scratch_parent.path(),
+                },
+                |page, body| {
+                    assert!(
+                        emitted_pages
+                            .insert(page.path.clone(), body.clone())
+                            .is_none(),
+                        "content-addressed page emitted more than once"
+                    );
+                    Ok(())
+                },
             )
             .unwrap();
         crate::v23_diagnostic::validate_d2_report(&d2).unwrap();
         assert_eq!(d2.query_ordinals, query_ordinals);
         assert_eq!(d2.rows, report.rows);
         assert!(!d2.arms.is_empty());
+        let page_refs = d2
+            .arms
+            .iter()
+            .flat_map(|arm| &arm.pages)
+            .map(|page| (page.path.clone(), page))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            emitted_pages.keys().collect::<Vec<_>>(),
+            page_refs.keys().collect::<Vec<_>>()
+        );
+        for (path, page) in page_refs {
+            crate::v23_diagnostic::decode_v23_page(emitted_pages.get(&path).unwrap().clone(), page)
+                .unwrap();
+        }
         assert_eq!(scratch_parent.path().read_dir().unwrap().count(), 0);
         assert_eq!(
             serde_json::to_vec(&index.manifest).unwrap(),

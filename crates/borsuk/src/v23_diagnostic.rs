@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, BinaryHeap},
+    path::Path,
     time::Instant,
 };
 
@@ -10,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BorsukError, Result,
     centroid_hnsw::{CatalogRouter, CatalogRoutingStrategy},
-    global_pq_sidecar::GlobalScanQuantizer,
+    global_pq_sidecar::{GlobalScanQuantizer, GlobalScanQuantizerState},
     logical_cell_catalog::LogicalCellCatalog,
     metric::VectorMetric,
     rotated_product_quantizer::{ProductQuantizerConfig, ProductRotation, RotatedProductQuantizer},
@@ -108,6 +109,8 @@ pub struct V23D1Arm {
     pub key: V23D1ArmKey,
     /// BLAKE3 of the complete serialized quantizer state.
     pub quantizer_checksum: String,
+    /// Canonical, self-contained production quantizer state used by D2 and D3.
+    pub quantizer_state: serde_json::Value,
     /// Query-major scientific evidence.
     pub query_samples: Vec<V23D1QuerySample>,
     /// Oracle-pool recall in parts per million.
@@ -179,6 +182,8 @@ pub struct V23PageRef {
     /// Full-dimensional routing centroid.
     pub centroid: Vec<f32>,
 }
+
+pub(crate) type V23PageSink<'a> = dyn FnMut(&V23PageRef, &Bytes) -> Result<()> + 'a;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct V23PageRow {
@@ -483,6 +488,32 @@ pub(crate) fn decode_v23_page(bytes: Bytes, page_ref: &V23PageRef) -> Result<V23
     })
 }
 
+fn stream_v23_materialized_pages(
+    pages: &[V23PageRef],
+    page_bytes: &[Bytes],
+    sink: &mut V23PageSink<'_>,
+) -> Result<()> {
+    if pages.len() != page_bytes.len() {
+        return Err(BorsukError::InvalidStorage(
+            "V23 materialized page bodies differ from references".to_string(),
+        ));
+    }
+    for (expected_ordinal, (page, bytes)) in pages.iter().zip(page_bytes).enumerate() {
+        let checksum = blake3::hash(bytes).to_hex().to_string();
+        if page.page_ordinal as usize != expected_ordinal
+            || page.encoded_bytes != bytes.len() as u64
+            || page.checksum != checksum
+            || page.path != format!("pages/{checksum}")
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V23 materialized page authority differs".to_string(),
+            ));
+        }
+        sink(page, bytes)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 /// D2 page-routing and code-ranking evidence for one frozen query.
 pub struct V23D2QuerySample {
@@ -562,6 +593,23 @@ pub struct V23D2Report {
     pub rows: u64,
     /// Canonically ordered D2 arms.
     pub arms: Vec<V23D2Arm>,
+}
+
+/// Complete immutable authority needed to run one D2 diagnostic.
+#[derive(Debug, Clone, Copy)]
+pub struct V23D2DiagnosticRequest<'a> {
+    /// Validated D1 prerequisite report.
+    pub d1_report: &'a V23D1Report,
+    /// Passing D1 arm selected for page planning.
+    pub d1_key: V23D1ArmKey,
+    /// Strictly increasing frozen query ordinals.
+    pub query_ordinals: &'a [u64],
+    /// Query vectors paired with `query_ordinals`.
+    pub queries: &'a [Vec<f32>],
+    /// Exact top-ten ground-truth IDs paired with the queries.
+    pub ground_truth: &'a [Vec<String>],
+    /// Parent for attempt-scoped spill storage removed before return.
+    pub scratch_parent: &'a Path,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -755,6 +803,54 @@ pub(crate) fn fit_v23_diagnostic_quantizer(
                 )
             }),
     }
+}
+
+pub(crate) fn restore_v23_diagnostic_quantizer(arm: &V23D1Arm) -> Result<GlobalScanQuantizer> {
+    if !valid_diagnostic_code_width(arm.key) || !valid_checksum(&arm.quantizer_checksum) {
+        return Err(BorsukError::InvalidStorage(
+            "V23 D1 quantizer authority differs".to_string(),
+        ));
+    }
+    let state_bytes = serde_json::to_vec(&arm.quantizer_state).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 D1 quantizer state cannot be serialized: {error}"
+        ))
+    })?;
+    if blake3::hash(&state_bytes).to_hex().as_str() != arm.quantizer_checksum {
+        return Err(BorsukError::InvalidStorage(
+            "V23 D1 quantizer state checksum differs".to_string(),
+        ));
+    }
+    let state: GlobalScanQuantizerState = serde_json::from_value(arm.quantizer_state.clone())
+        .map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "V23 D1 quantizer state cannot be decoded: {error}"
+            ))
+        })?;
+    let family_matches = matches!(
+        (&state, arm.key.family),
+        (GlobalScanQuantizerState::Pq(_), V23QuantizerFamily::SrhtPq)
+            | (
+                GlobalScanQuantizerState::FastTurboQuantMse(_),
+                V23QuantizerFamily::FastTurboQuantMse
+            )
+            | (
+                GlobalScanQuantizerState::FastTurboQuantProd(_),
+                V23QuantizerFamily::FastTurboQuantProd
+            )
+    );
+    if !family_matches {
+        return Err(BorsukError::InvalidStorage(
+            "V23 D1 quantizer family differs".to_string(),
+        ));
+    }
+    let quantizer = GlobalScanQuantizer::from_state(state)?;
+    if quantizer.code_bytes_per_vector() != usize::from(arm.key.code_width_bytes) {
+        return Err(BorsukError::InvalidStorage(
+            "V23 D1 quantizer code width differs".to_string(),
+        ));
+    }
+    Ok(quantizer)
 }
 
 pub(crate) struct V23D1CorpusAuthority<'a> {
@@ -967,9 +1063,14 @@ pub(crate) fn build_v23_d1_report(authority: V23D1CorpusAuthority<'_>) -> Result
             dimensions,
             &sample_vectors,
         )?;
-        let quantizer_state = serde_json::to_vec(&quantizer.state()).map_err(|error| {
+        let quantizer_state = serde_json::to_value(quantizer.state()).map_err(|error| {
             BorsukError::InvalidStorage(format!(
                 "V23 D1 quantizer state cannot be canonicalized: {error}"
+            ))
+        })?;
+        let quantizer_state_bytes = serde_json::to_vec(&quantizer_state).map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "V23 D1 quantizer state cannot be serialized: {error}"
             ))
         })?;
         let mut routed_ranked = (0..authority.queries.len())
@@ -1142,7 +1243,8 @@ pub(crate) fn build_v23_d1_report(authority: V23D1CorpusAuthority<'_>) -> Result
         })?;
         arms.push(V23D1Arm {
             key,
-            quantizer_checksum: blake3::hash(&quantizer_state).to_hex().to_string(),
+            quantizer_checksum: blake3::hash(&quantizer_state_bytes).to_hex().to_string(),
+            quantizer_state,
             query_samples,
             oracle_recall_ppm,
             routed_recall_ppm,
@@ -1160,7 +1262,7 @@ pub(crate) fn build_v23_d1_report(authority: V23D1CorpusAuthority<'_>) -> Result
         });
     }
     let report = V23D1Report {
-        schema: "borsuk-v23-d1-v2".to_string(),
+        schema: "borsuk-v23-d1-v3".to_string(),
         v20_root_checksum: authority.root_checksum.to_string(),
         v20_codebook_checksum: authority.codebook_checksum.to_string(),
         sample_ordinals_checksum: ordinal_hasher.finalize().to_hex().to_string(),
@@ -1903,6 +2005,7 @@ fn build_v23_d2_arms(
     primary_target_rows: u16,
     maximum_assignments_per_row: u8,
     materialized_page_budgets: Option<&BTreeSet<u8>>,
+    page_sink: Option<&mut V23PageSink<'_>>,
 ) -> Result<Vec<V23D2Arm>> {
     let planning = plan_v23_pages_for_metric(
         planning_rows,
@@ -2012,6 +2115,9 @@ fn build_v23_d2_arms(
         })
         .collect::<Result<Vec<_>>>()?;
     let (pages, page_bytes): (Vec<_>, Vec<_>) = encoded_pages.into_iter().unzip();
+    if let Some(sink) = page_sink {
+        stream_v23_materialized_pages(&pages, &page_bytes, sink)?;
+    }
     let total_assignments = pages.iter().try_fold(0_u64, |total, page| {
         total
             .checked_add(u64::from(page.primary_rows) + u64::from(page.replicated_rows))
@@ -2180,6 +2286,20 @@ fn build_v23_d2_arms(
 }
 
 pub(crate) fn build_v23_d2_report(authority: V23D2CorpusAuthority<'_>) -> Result<V23D2Report> {
+    build_v23_d2_report_inner(authority, None)
+}
+
+pub(crate) fn build_v23_d2_report_with_page_sink(
+    authority: V23D2CorpusAuthority<'_>,
+    sink: &mut V23PageSink<'_>,
+) -> Result<V23D2Report> {
+    build_v23_d2_report_inner(authority, Some(sink))
+}
+
+fn build_v23_d2_report_inner(
+    authority: V23D2CorpusAuthority<'_>,
+    mut page_sink: Option<&mut V23PageSink<'_>>,
+) -> Result<V23D2Report> {
     validate_d1_report(authority.d1_report)?;
     validate_v23_d2_query_prefixes(authority.query_prefixes)?;
     let selected = authority
@@ -2264,34 +2384,15 @@ pub(crate) fn build_v23_d2_report(authority: V23D2CorpusAuthority<'_>) -> Result
         .map(|index| index.saturating_mul(planning_rows.len()) / sample_rows)
         .collect::<Vec<_>>();
     let mut ordinal_hasher = blake3::Hasher::new();
-    let sample = sample_ordinals
-        .iter()
-        .map(|ordinal| {
-            ordinal_hasher.update(&(*ordinal as u64).to_le_bytes());
-            planning_rows[*ordinal].geometry.to_vec()
-        })
-        .collect::<Vec<_>>();
+    for ordinal in &sample_ordinals {
+        ordinal_hasher.update(&(*ordinal as u64).to_le_bytes());
+    }
     if ordinal_hasher.finalize().to_hex().as_str() != authority.d1_report.sample_ordinals_checksum {
         return Err(BorsukError::InvalidStorage(
             "V23 D2 training sample differs from D1".to_string(),
         ));
     }
-    let quantizer = fit_v23_diagnostic_quantizer(
-        authority.d1_key.family,
-        authority.d1_key.code_width_bytes,
-        dimensions,
-        &sample,
-    )?;
-    let quantizer_state = serde_json::to_vec(&quantizer.state()).map_err(|error| {
-        BorsukError::InvalidStorage(format!(
-            "V23 D2 quantizer state cannot be canonicalized: {error}"
-        ))
-    })?;
-    if blake3::hash(&quantizer_state).to_hex().as_str() != selected.quantizer_checksum {
-        return Err(BorsukError::InvalidStorage(
-            "V23 D2 quantizer differs from D1".to_string(),
-        ));
-    }
+    let quantizer = restore_v23_diagnostic_quantizer(selected)?;
     for row in &mut planning_rows {
         row.code = quantizer.encode(&row.geometry)?.into_boxed_slice();
     }
@@ -2305,6 +2406,7 @@ pub(crate) fn build_v23_d2_report(authority: V23D2CorpusAuthority<'_>) -> Result
                 primary_target_rows,
                 maximum_assignments_per_row,
                 None,
+                None,
             )?);
         }
     }
@@ -2317,15 +2419,37 @@ pub(crate) fn build_v23_d2_report(authority: V23D2CorpusAuthority<'_>) -> Result
             .insert(arm.maximum_query_pages);
     }
     let mut nondominated = Vec::with_capacity(selected.len());
+    let mut emitted_page_paths = BTreeSet::new();
     for ((primary_target_rows, maximum_assignments_per_row), budgets) in selected_budgets {
-        let rehydrated = build_v23_d2_arms(
-            &authority,
-            &quantizer,
-            &planning_rows,
-            primary_target_rows,
-            maximum_assignments_per_row,
-            Some(&budgets),
-        )?;
+        let rehydrated = match page_sink.as_deref_mut() {
+            Some(sink) => {
+                let mut unique_sink = |page: &V23PageRef, bytes: &Bytes| {
+                    if emitted_page_paths.insert(page.path.clone()) {
+                        sink(page, bytes)
+                    } else {
+                        Ok(())
+                    }
+                };
+                build_v23_d2_arms(
+                    &authority,
+                    &quantizer,
+                    &planning_rows,
+                    primary_target_rows,
+                    maximum_assignments_per_row,
+                    Some(&budgets),
+                    Some(&mut unique_sink),
+                )
+            }
+            None => build_v23_d2_arms(
+                &authority,
+                &quantizer,
+                &planning_rows,
+                primary_target_rows,
+                maximum_assignments_per_row,
+                Some(&budgets),
+                None,
+            ),
+        }?;
         for materialized in rehydrated {
             let key = d2_arm_key(&materialized);
             let mut evaluated = selected
@@ -2365,7 +2489,7 @@ pub(crate) fn build_v23_d2_report(authority: V23D2CorpusAuthority<'_>) -> Result
         BorsukError::InvalidStorage(format!("V23 D1 report cannot be canonicalized: {error}"))
     })?;
     let report = V23D2Report {
-        schema: "borsuk-v23-d2-v2".to_string(),
+        schema: "borsuk-v23-d2-v3".to_string(),
         d1_report_checksum: blake3::hash(&d1_report_bytes).to_hex().to_string(),
         query_ordinals: authority.query_ordinals.to_vec(),
         rows: authority.scratch.total_rows(),
@@ -2376,7 +2500,7 @@ pub(crate) fn build_v23_d2_report(authority: V23D2CorpusAuthority<'_>) -> Result
 }
 
 pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
-    if report.schema != "borsuk-v23-d1-v2"
+    if report.schema != "borsuk-v23-d1-v3"
         || !valid_checksum(&report.v20_root_checksum)
         || !valid_checksum(&report.v20_codebook_checksum)
         || !valid_checksum(&report.sample_ordinals_checksum)
@@ -2407,6 +2531,7 @@ pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
         let expected_wave_projection = expected_page_projection.saturating_mul(4);
         if !valid_diagnostic_code_width(arm.key)
             || !valid_checksum(&arm.quantizer_checksum)
+            || restore_v23_diagnostic_quantizer(arm).is_err()
             || arm.query_samples.len() != V23_DIAGNOSTIC_QUERIES
             || arm.four_page_projected_bytes != expected_wave_projection
         {
@@ -2503,7 +2628,7 @@ fn d2_arm_key(arm: &V23D2Arm) -> (V23D1ArmKey, u16, u8, u8) {
 }
 
 pub(crate) fn validate_d2_report(report: &V23D2Report) -> Result<()> {
-    if report.schema != "borsuk-v23-d2-v2"
+    if report.schema != "borsuk-v23-d2-v3"
         || !valid_checksum(&report.d1_report_checksum)
         || report.query_ordinals.len() != V23_DIAGNOSTIC_QUERIES
         || report
@@ -2700,9 +2825,10 @@ mod tests {
         V23D1Report, V23D2Arm, V23D2QuerySample, V23D2Report, V23PageInput, V23PageRef, V23PageRow,
         V23PlanningRow, V23QuantizerFamily, V23RankedResult, V23ReplicaCandidate, V23WaveSample,
         decode_v23_page, encode_v23_page, fit_v23_diagnostic_quantizer, plan_v23_pages,
-        plan_v23_pages_for_metric, select_v23_d2_frontier, v23_d2_projected_build_memory,
-        v23_d2_projected_memory, validate_d1_report, validate_d2_report,
-        validate_v23_d2_query_binding, validate_v23_d2_query_prefixes, validate_wave_sample,
+        plan_v23_pages_for_metric, restore_v23_diagnostic_quantizer, select_v23_d2_frontier,
+        stream_v23_materialized_pages, v23_d2_projected_build_memory, v23_d2_projected_memory,
+        validate_d1_report, validate_d2_report, validate_v23_d2_query_binding,
+        validate_v23_d2_query_prefixes, validate_wave_sample,
     };
     use crate::metric::VectorMetric;
     use crate::v22_feasibility::V22StageLQueryPrefix;
@@ -2727,7 +2853,38 @@ mod tests {
         }
     }
 
+    fn serialized_test_quantizer(
+        family: V23QuantizerFamily,
+        code_width_bytes: u8,
+        dimensions: usize,
+    ) -> (serde_json::Value, String) {
+        let sample_rows = if family == V23QuantizerFamily::SrhtPq {
+            256
+        } else {
+            1
+        };
+        let sample = (0..sample_rows)
+            .map(|row| {
+                (0..dimensions)
+                    .map(|dimension| (row * dimensions + dimension) as f32 / 4_096.0)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let quantizer =
+            fit_v23_diagnostic_quantizer(family, code_width_bytes, dimensions, &sample).unwrap();
+        let state = serde_json::to_value(quantizer.state()).unwrap();
+        let checksum = blake3::hash(&serde_json::to_vec(&state).unwrap())
+            .to_hex()
+            .to_string();
+        (state, checksum)
+    }
+
     fn canonical_d1_report() -> V23D1Report {
+        static QUANTIZER: std::sync::OnceLock<(serde_json::Value, String)> =
+            std::sync::OnceLock::new();
+        let (quantizer_state, quantizer_checksum) = QUANTIZER
+            .get_or_init(|| serialized_test_quantizer(V23QuantizerFamily::SrhtPq, 64, 64))
+            .clone();
         let query_samples = (0_u32..32)
             .map(|query_index| V23D1QuerySample {
                 query_index,
@@ -2743,7 +2900,7 @@ mod tests {
             })
             .collect();
         V23D1Report {
-            schema: "borsuk-v23-d1-v2".to_string(),
+            schema: "borsuk-v23-d1-v3".to_string(),
             v20_root_checksum: "a".repeat(64),
             v20_codebook_checksum: "b".repeat(64),
             sample_ordinals_checksum: "c".repeat(64),
@@ -2757,7 +2914,8 @@ mod tests {
                     family: V23QuantizerFamily::SrhtPq,
                     code_width_bytes: 64,
                 },
-                quantizer_checksum: "d".repeat(64),
+                quantizer_checksum,
+                quantizer_state,
                 query_samples,
                 oracle_recall_ppm: 1_000_000,
                 routed_recall_ppm: 1_000_000,
@@ -2786,7 +2944,7 @@ mod tests {
             })
             .collect();
         V23D2Report {
-            schema: "borsuk-v23-d2-v2".to_string(),
+            schema: "borsuk-v23-d2-v3".to_string(),
             d1_report_checksum: "e".repeat(64),
             query_ordinals: (0_u64..32).collect(),
             rows: 1_000,
@@ -2942,8 +3100,72 @@ mod tests {
             family: V23QuantizerFamily::FastTurboQuantMse,
             code_width_bytes: 52,
         };
+        let (state, checksum) =
+            serialized_test_quantizer(V23QuantizerFamily::FastTurboQuantMse, 52, 128);
+        report.arms[0].quantizer_state = state;
+        report.arms[0].quantizer_checksum = checksum;
         report.arms[0].four_page_projected_bytes = 4 * (96 + 4 * 2_049 + 2_048 * (52 + 32));
         validate_d1_report(&report).unwrap();
+    }
+
+    #[test]
+    fn v23_d1_persists_restorable_quantizer_state_and_rejects_mutation() {
+        let sample = (0..256)
+            .map(|row| {
+                (0..8)
+                    .map(|dimension| (row * 8 + dimension) as f32 / 255.0)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let quantizer =
+            fit_v23_diagnostic_quantizer(V23QuantizerFamily::SrhtPq, 8, 8, &sample).unwrap();
+        let state = serde_json::to_value(quantizer.state()).unwrap();
+        let mut report = canonical_d1_report();
+        report.arms[0].key = V23D1ArmKey {
+            family: V23QuantizerFamily::SrhtPq,
+            code_width_bytes: 8,
+        };
+        report.arms[0].quantizer_checksum = blake3::hash(&serde_json::to_vec(&state).unwrap())
+            .to_hex()
+            .to_string();
+        report.arms[0].quantizer_state = state;
+        report.arms[0].four_page_projected_bytes = 4 * (96 + 4 * 2_049 + 2_048 * (8 + 32));
+        validate_d1_report(&report).unwrap();
+
+        let restored = restore_v23_diagnostic_quantizer(&report.arms[0]).unwrap();
+        let query = &sample[7];
+        let encoded = quantizer.encode(&sample[13]).unwrap();
+        let expected = quantizer
+            .score_prepared_contiguous_codes(
+                &quantizer.prepare_contiguous_query(query).unwrap(),
+                &encoded,
+            )
+            .unwrap();
+        let observed = restored
+            .score_prepared_contiguous_codes(
+                &restored.prepare_contiguous_query(query).unwrap(),
+                &encoded,
+            )
+            .unwrap();
+        assert_eq!(observed, expected);
+
+        report.arms[0]
+            .quantizer_state
+            .as_object_mut()
+            .unwrap()
+            .insert("mutated".to_string(), serde_json::Value::Bool(true));
+        assert!(validate_d1_report(&report).is_err());
+    }
+
+    #[test]
+    fn v23_diagnostic_reports_reject_pre_state_authority_schemas() {
+        let mut d1 = canonical_d1_report();
+        d1.schema = "borsuk-v23-d1-v2".to_string();
+        assert!(validate_d1_report(&d1).is_err());
+
+        let mut d2 = canonical_d2_report();
+        d2.schema = "borsuk-v23-d2-v2".to_string();
+        assert!(validate_d2_report(&d2).is_err());
     }
 
     #[test]
@@ -3386,6 +3608,74 @@ mod tests {
         for mutation in reference_mutations {
             assert!(decode_v23_page(first.clone(), &mutation).is_err());
         }
+    }
+
+    #[test]
+    fn v23_d2_streams_authenticated_materialized_pages_without_retaining_bytes() {
+        let input = V23PageInput {
+            generation_checksum: [11; 32],
+            page_ordinal: 0,
+            metric: VectorMetric::SquaredEuclidean,
+            dimensions: 2,
+            family: V23QuantizerFamily::SrhtPq,
+            code_width: 8,
+            primary_rows: vec![V23PageRow {
+                canonical_record_id: b"row".to_vec().into_boxed_slice(),
+                code: vec![7; 8].into_boxed_slice(),
+            }],
+            replicated_rows: Vec::new(),
+        };
+        let bytes = encode_v23_page(&input).unwrap();
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let page = V23PageRef {
+            generation_checksum: input.generation_checksum,
+            page_ordinal: input.page_ordinal,
+            metric: input.metric,
+            dimensions: input.dimensions,
+            family: input.family,
+            code_width: input.code_width,
+            path: format!("pages/{checksum}"),
+            checksum: checksum.clone(),
+            encoded_bytes: bytes.len() as u64,
+            primary_rows: 1,
+            replicated_rows: 0,
+            centroid: vec![0.0; 2],
+        };
+        let mut observed = Vec::new();
+        stream_v23_materialized_pages(
+            std::slice::from_ref(&page),
+            std::slice::from_ref(&bytes),
+            &mut |reference, body| {
+                observed.push((reference.path.clone(), body.clone()));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(observed, vec![(format!("pages/{checksum}"), bytes.clone())]);
+
+        let mut sink_calls = 0_u8;
+        let sink_error = stream_v23_materialized_pages(
+            std::slice::from_ref(&page),
+            std::slice::from_ref(&bytes),
+            &mut |_, _| {
+                sink_calls += 1;
+                Err(crate::BorsukError::InvalidStorage(
+                    "injected sink failure".to_string(),
+                ))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(sink_calls, 1);
+        assert!(sink_error.to_string().contains("injected sink failure"));
+
+        let mut mismatched = page;
+        mismatched.checksum = "f".repeat(64);
+        assert!(
+            stream_v23_materialized_pages(&[mismatched], &[bytes], &mut |_, _| panic!(
+                "invalid page reached sink"
+            ),)
+            .is_err()
+        );
     }
 
     #[test]
