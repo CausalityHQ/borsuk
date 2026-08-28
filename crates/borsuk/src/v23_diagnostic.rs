@@ -2,7 +2,12 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{BorsukError, Result};
+use crate::{
+    BorsukError, Result,
+    global_pq_sidecar::GlobalScanQuantizer,
+    rotated_product_quantizer::{ProductQuantizerConfig, ProductRotation, RotatedProductQuantizer},
+    turboquant::{FastTurboQuantMseScanQuantizer, FastTurboQuantProdScanQuantizer},
+};
 
 pub(crate) const V23_PAGE_MAX_ENCODED_BYTES: u64 = 245_760;
 pub(crate) const V23_WAVE_MAX_PAGES: usize = 4;
@@ -278,6 +283,65 @@ fn valid_diagnostic_code_width(key: V23D1ArmKey) -> bool {
             || [8, 16, 32, 64].contains(&key.code_width_bytes))
 }
 
+fn fit_v23_diagnostic_quantizer(
+    family: V23QuantizerFamily,
+    code_width_bytes: u8,
+    dimensions: usize,
+    sample: &[Vec<f32>],
+) -> Result<GlobalScanQuantizer> {
+    if dimensions == 0
+        || sample.is_empty()
+        || sample.iter().any(|vector| {
+            vector.len() != dimensions || vector.iter().any(|value| !value.is_finite())
+        })
+        || !valid_diagnostic_code_width(V23D1ArmKey {
+            family,
+            code_width_bytes,
+        })
+    {
+        return Err(BorsukError::InvalidMetricInput(
+            "V23 diagnostic quantizer authority is invalid".to_string(),
+        ));
+    }
+    match family {
+        V23QuantizerFamily::SrhtPq => Ok(GlobalScanQuantizer::from(RotatedProductQuantizer::fit(
+            ProductQuantizerConfig {
+                rotation: ProductRotation::Srht,
+                seed: 23,
+                dimensions,
+                subspaces: usize::from(code_width_bytes),
+                centroids: 256,
+                sample_limit: sample.len().min(65_536),
+                iterations: 8,
+            },
+            sample,
+        )?)),
+        V23QuantizerFamily::FastTurboQuantMse => (1_u8..=8)
+            .find_map(|bits| {
+                let quantizer =
+                    FastTurboQuantMseScanQuantizer::new(23, dimensions, bits, 1).ok()?;
+                (quantizer.packed_code_len() == usize::from(code_width_bytes))
+                    .then(|| GlobalScanQuantizer::from(quantizer))
+            })
+            .ok_or_else(|| {
+                BorsukError::InvalidMetricInput(
+                    "V23 Fast-TurboQuant MSE width is unavailable".to_string(),
+                )
+            }),
+        V23QuantizerFamily::FastTurboQuantProd => (2_u8..=8)
+            .find_map(|bits| {
+                let quantizer = FastTurboQuantProdScanQuantizer::new(23, dimensions, bits).ok()?;
+                (quantizer.packed_code_len() == usize::from(code_width_bytes))
+                    .then(|| GlobalScanQuantizer::from(quantizer))
+            })
+            .ok_or_else(|| {
+                BorsukError::InvalidMetricInput(
+                    "V23 production Fast-TurboQuant width is unavailable".to_string(),
+                )
+            }),
+    }
+}
+
 pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
     if report.schema != "borsuk-v23-d1-v1"
         || !valid_checksum(&report.v20_root_checksum)
@@ -518,7 +582,8 @@ mod tests {
     use super::{
         V23_WAVE_MAX_BYTES, V23D1Arm, V23D1ArmKey, V23D1QuerySample, V23D1Report, V23D2Arm,
         V23D2QuerySample, V23D2Report, V23PageRef, V23QuantizerFamily, V23RankedResult,
-        V23WaveSample, validate_d1_report, validate_d2_report, validate_wave_sample,
+        V23WaveSample, fit_v23_diagnostic_quantizer, validate_d1_report, validate_d2_report,
+        validate_wave_sample,
     };
 
     fn canonical_wave() -> V23WaveSample {
@@ -747,5 +812,44 @@ mod tests {
         validate_d2_report(&low_tail_recall).unwrap();
         low_tail_recall.arms[0].passed = true;
         assert!(validate_d2_report(&low_tail_recall).is_err());
+    }
+
+    #[test]
+    fn v23_d1_production_contiguous_scores_match_scalar_scores() {
+        let vectors = (0_usize..256)
+            .map(|row| {
+                (0_usize..16)
+                    .map(|dimension| ((row * 17 + dimension * 13) % 101) as f32 / 50.5 - 1.0)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let query = vectors[7].clone();
+        for (family, width) in [
+            (V23QuantizerFamily::SrhtPq, 8_u8),
+            (V23QuantizerFamily::SrhtPq, 16_u8),
+            (V23QuantizerFamily::FastTurboQuantMse, 8_u8),
+            (V23QuantizerFamily::FastTurboQuantProd, 16_u8),
+        ] {
+            let quantizer = fit_v23_diagnostic_quantizer(family, width, 16, &vectors).unwrap();
+            assert_eq!(quantizer.code_bytes_per_vector(), usize::from(width));
+            let encoded = vectors
+                .iter()
+                .map(|vector| quantizer.encode(vector).unwrap())
+                .collect::<Vec<_>>();
+            let contiguous = encoded.concat();
+            let scalar = quantizer
+                .score_codes(&query, encoded.iter().map(Vec::as_slice))
+                .unwrap();
+            let simd = quantizer
+                .score_contiguous_codes(&query, &contiguous)
+                .unwrap();
+            assert_eq!(simd.len(), scalar.len());
+            for (observed, expected) in simd.iter().zip(scalar) {
+                assert!(
+                    (observed - expected).abs() <= 1.0e-5_f32.max(expected.abs() * 1.0e-5),
+                    "{family:?}/{width}: {observed} != {expected}"
+                );
+            }
+        }
     }
 }
