@@ -3435,13 +3435,13 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     let recall_candidates =
         env_positive_list("BORSUK_BENCH_CANDIDATES", DEFAULT_RECALL_CANDIDATES)?;
     let recall_leaf_mode = non_empty_env("BORSUK_BENCH_RECALL_LEAF_MODE")
-        .map_or(Ok(default_recall_leaf_mode()), |value| {
+        .map_or(Ok(default_recall_leaf_mode(global_scan_codec)), |value| {
             parse_leaf_mode(&value)
         })?;
     let serving_mode = non_empty_env("BORSUK_BENCH_SERVING_MODE")
         .map_or(Ok(ServingMode::Hybrid), |value| parse_serving_mode(&value))?;
     let serving_leaf_mode = non_empty_env("BORSUK_BENCH_SERVING_LEAF_MODE")
-        .map_or(Ok(default_serving_leaf_mode()), |value| {
+        .map_or(Ok(default_serving_leaf_mode(global_scan_codec)), |value| {
             parse_leaf_mode(&value)
         })?;
     for (name, leaf_mode) in [
@@ -9020,12 +9020,12 @@ fn validate_leaf_capability_modes(
     Ok(())
 }
 
-fn default_recall_leaf_mode() -> LeafMode {
-    LeafMode::SrhtPqScan
+fn default_recall_leaf_mode(global_scan_codec: GlobalScanCodec) -> LeafMode {
+    global_scan_codec.leaf_mode()
 }
 
-fn default_serving_leaf_mode() -> LeafMode {
-    LeafMode::SrhtPqScan
+fn default_serving_leaf_mode(global_scan_codec: GlobalScanCodec) -> LeafMode {
+    global_scan_codec.leaf_mode()
 }
 
 fn parse_concurrency(value: &str) -> BenchResult<Vec<usize>> {
@@ -10291,13 +10291,39 @@ mod tests {
     }
 
     #[test]
-    fn default_recall_leaf_mode_is_graph_free() {
-        assert_eq!(default_recall_leaf_mode(), LeafMode::SrhtPqScan);
+    fn v23_default_recall_leaf_mode_follows_the_authenticated_global_codec() {
+        for (codec, expected) in [
+            (GlobalScanCodec::Pq, LeafMode::PqScan),
+            (GlobalScanCodec::SrhtPq, LeafMode::SrhtPqScan),
+            (
+                GlobalScanCodec::FastTurboQuantMse,
+                LeafMode::FastTurboQuantMseScan,
+            ),
+            (
+                GlobalScanCodec::FastTurboQuantProd,
+                LeafMode::FastTurboQuantProdScan,
+            ),
+        ] {
+            assert_eq!(default_recall_leaf_mode(codec), expected);
+        }
     }
 
     #[test]
-    fn default_serving_leaf_mode_is_graph_free() {
-        assert_eq!(default_serving_leaf_mode(), LeafMode::SrhtPqScan);
+    fn v23_default_serving_leaf_mode_follows_the_authenticated_global_codec() {
+        for (codec, expected) in [
+            (GlobalScanCodec::Pq, LeafMode::PqScan),
+            (GlobalScanCodec::SrhtPq, LeafMode::SrhtPqScan),
+            (
+                GlobalScanCodec::FastTurboQuantMse,
+                LeafMode::FastTurboQuantMseScan,
+            ),
+            (
+                GlobalScanCodec::FastTurboQuantProd,
+                LeafMode::FastTurboQuantProdScan,
+            ),
+        ] {
+            assert_eq!(default_serving_leaf_mode(codec), expected);
+        }
     }
 
     #[test]
