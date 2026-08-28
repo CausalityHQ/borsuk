@@ -425,6 +425,43 @@ def query_artifact_fixture(*, decoded_bytes: int) -> dict[str, str]:
 
 
 class PublicationV3CellRunnerTests(unittest.TestCase):
+    def test_v22_stage_l_accepts_sparse_authenticated_cell_identifiers(self) -> None:
+        evidence, summary = v22_stage_l_fixture()
+        evidence["report"]["query_prefixes"][0]["rows"][0]["primary_cell"] = 65_535
+        with tempfile.TemporaryDirectory() as root:
+            report_path = Path(root) / "bench_v22_stage_l_report.json"
+            summary_path = Path(root) / "bench_v22_stage_l_summary.json"
+            report_path.write_bytes(canonical_json_bytes(evidence) + b"\n")
+            summary_path.write_bytes(canonical_json_bytes(summary) + b"\n")
+            validated = validate_and_canonicalize_v22_stage_l(
+                report_path,
+                summary_path,
+                expected_source_archive_sha256="2" * 64,
+                expected_index_id="index-authority",
+                expected_dataset_id="deep-image-96",
+                expected_queries=1,
+                expected_dataset_rows=10_000_000,
+                expected_query_seed=23_006,
+                expected_dimensions=96,
+            )
+            self.assertEqual(validated["eligible_arms"], list(range(42)))
+            evidence["report"]["query_prefixes"][0]["rows"][0][
+                "primary_cell"
+            ] = 2**32
+            report_path.write_bytes(canonical_json_bytes(evidence) + b"\n")
+            with self.assertRaisesRegex(ValueError, "exact row authority"):
+                validate_and_canonicalize_v22_stage_l(
+                    report_path,
+                    summary_path,
+                    expected_source_archive_sha256="2" * 64,
+                    expected_index_id="index-authority",
+                    expected_dataset_id="deep-image-96",
+                    expected_queries=1,
+                    expected_dataset_rows=10_000_000,
+                    expected_query_seed=23_006,
+                    expected_dimensions=96,
+                )
+
     def test_v22_stage_l_accepts_an_ineligible_amplification_rescue(self) -> None:
         evidence, summary = v22_stage_l_fixture()
         sample = evidence["report"]["layout_censuses"][0]["query_samples"][0]

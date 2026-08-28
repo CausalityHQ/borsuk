@@ -1784,7 +1784,7 @@ def validate_and_canonicalize_v22_stage_l(
                 or not canonical
                 or any(type(byte) is not int or not 0 <= byte <= 255 for byte in canonical)
                 or type(row.get("primary_cell")) is not int
-                or not 0 <= row["primary_cell"] < value["routing_cell_count"]
+                or not 0 <= row["primary_cell"] <= 2**32 - 1
                 or type(row.get("primary_cell_routing_rank")) is not int
                 or not 1
                 <= row["primary_cell_routing_rank"]
