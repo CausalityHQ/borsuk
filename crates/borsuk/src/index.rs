@@ -1417,6 +1417,18 @@ pub struct ByteAdmissionStats {
     pub wait_count: u64,
 }
 
+struct V23DiagnosticCorpusScan {
+    root_checksum: String,
+    codebook_checksum: String,
+    rows: u64,
+    routing_cell_count: usize,
+    scratch: crate::v22_feasibility::V22StageLSpill,
+    query_prefixes: Vec<crate::v22_feasibility::V22StageLQueryPrefix>,
+    routing_ranks: Vec<Vec<(u32, u32)>>,
+    routing_gates: Vec<(usize, u64)>,
+    normalize: bool,
+}
+
 /// A BORSUK index handle.
 #[derive(Clone)]
 pub struct BorsukIndex {
@@ -13023,23 +13035,20 @@ impl BorsukIndex {
         codebook.nearest_cells(query, probes)
     }
 
-    /// Replay production V23 quantizers over one authenticated immutable corpus
-    /// generation without publishing index state.
-    #[doc(hidden)]
-    pub fn diagnose_v23_d1(
+    fn scan_v23_diagnostic_corpus(
         &self,
         query_ordinals: &[u64],
         queries: &[Vec<f32>],
         ground_truth: &[Vec<String>],
         options: &SearchOptions,
         scratch_parent: &Path,
-    ) -> Result<crate::v23_diagnostic::V23D1Report> {
+    ) -> Result<V23DiagnosticCorpusScan> {
         use crate::{
             v22_feasibility::{
                 V22_STAGE_L_MAX_CELL_ROWS, V22ExactPrefixAccumulator, V22StageLExactRow,
                 V22StageLQueryPrefix, V22StageLSpillRow, V22StageLSpillWriter,
             },
-            v23_diagnostic::{V23_DIAGNOSTIC_QUERIES, V23D1CorpusAuthority, build_v23_d1_report},
+            v23_diagnostic::V23_DIAGNOSTIC_QUERIES,
         };
 
         if query_ordinals.len() != V23_DIAGNOSTIC_QUERIES
@@ -13494,18 +13503,102 @@ impl BorsukIndex {
                 Ok((registered_probes, routed_rows))
             })
             .collect::<Result<Vec<_>>>()?;
-        build_v23_d1_report(V23D1CorpusAuthority {
-            root_checksum: &root_checksum,
-            codebook_checksum: global_ref.codebook().descriptor_checksum(),
+        Ok(V23DiagnosticCorpusScan {
+            root_checksum,
+            codebook_checksum: global_ref.codebook().descriptor_checksum().to_string(),
             rows: source_ordinal,
             routing_cell_count,
-            scratch: &scratch,
+            scratch,
+            query_prefixes,
+            routing_ranks,
+            routing_gates,
+            normalize,
+        })
+    }
+
+    /// Replay production V23 quantizers over one authenticated immutable corpus
+    /// generation without publishing index state.
+    #[doc(hidden)]
+    pub fn diagnose_v23_d1(
+        &self,
+        query_ordinals: &[u64],
+        queries: &[Vec<f32>],
+        ground_truth: &[Vec<String>],
+        options: &SearchOptions,
+        scratch_parent: &Path,
+    ) -> Result<crate::v23_diagnostic::V23D1Report> {
+        use crate::v23_diagnostic::{V23D1CorpusAuthority, build_v23_d1_report};
+
+        let scan = self.scan_v23_diagnostic_corpus(
             query_ordinals,
             queries,
-            query_prefixes: &query_prefixes,
-            routing_ranks: &routing_ranks,
-            routing_gates: &routing_gates,
-            normalize,
+            ground_truth,
+            options,
+            scratch_parent,
+        )?;
+        build_v23_d1_report(V23D1CorpusAuthority {
+            root_checksum: &scan.root_checksum,
+            codebook_checksum: &scan.codebook_checksum,
+            rows: scan.rows,
+            routing_cell_count: scan.routing_cell_count,
+            scratch: &scan.scratch,
+            query_ordinals,
+            queries,
+            query_prefixes: &scan.query_prefixes,
+            routing_ranks: &scan.routing_ranks,
+            routing_gates: &scan.routing_gates,
+            normalize: scan.normalize,
+        })
+    }
+
+    /// Simulate immutable V23 posting-page arms over the same authenticated
+    /// corpus and query authority as one passing D1 report.
+    #[doc(hidden)]
+    pub fn diagnose_v23_d2(
+        &self,
+        d1_report: &crate::v23_diagnostic::V23D1Report,
+        d1_key: crate::v23_diagnostic::V23D1ArmKey,
+        query_ordinals: &[u64],
+        queries: &[Vec<f32>],
+        ground_truth: &[Vec<String>],
+        scratch_parent: &Path,
+    ) -> Result<crate::v23_diagnostic::V23D2Report> {
+        use crate::v23_diagnostic::{
+            V23D2CorpusAuthority, build_v23_d2_report, validate_d1_report,
+        };
+
+        validate_d1_report(d1_report)?;
+        if d1_report.query_ordinals != query_ordinals {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V23 D2 query ordinals differ from D1".to_string(),
+            ));
+        }
+        let options = SearchOptions::approx(10, LeafMode::SrhtPqScan);
+        let scan = self.scan_v23_diagnostic_corpus(
+            query_ordinals,
+            queries,
+            ground_truth,
+            &options,
+            scratch_parent,
+        )?;
+        if d1_report.v20_root_checksum != scan.root_checksum
+            || d1_report.v20_codebook_checksum != scan.codebook_checksum
+            || d1_report.rows != scan.rows
+            || d1_report.routing_cell_count != scan.routing_cell_count
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V23 D2 source generation differs from D1".to_string(),
+            ));
+        }
+        build_v23_d2_report(V23D2CorpusAuthority {
+            d1_report,
+            d1_key,
+            scratch: &scan.scratch,
+            query_ordinals,
+            queries,
+            query_prefixes: &scan.query_prefixes,
+            metric: self.manifest.config.metric.clone(),
+            normalize: scan.normalize,
         })
     }
 
@@ -45598,6 +45691,43 @@ mod tests {
                         && sample.routed_candidate_rows == expected_routed_rows[query_index]
                 })
         }));
+        assert!(report.arms.iter().all(|arm| !arm.passed));
+        let mut d2_prerequisite = report.clone();
+        let d2_arm = &mut d2_prerequisite.arms[0];
+        for sample in &mut d2_arm.query_samples {
+            let ranked = crate::v23_diagnostic::V23RankedResult {
+                ids: sample.ground_truth_ids.clone(),
+                distances: (0_u8..10).map(f32::from).collect(),
+            };
+            sample.oracle = ranked.clone();
+            sample.scalar_oracle = ranked.clone();
+            sample.routed = ranked;
+            sample.oracle_hits = 10;
+            sample.routed_hits = 10;
+            sample.cpu_ns = 1;
+        }
+        d2_arm.oracle_recall_ppm = 1_000_000;
+        d2_arm.routed_recall_ppm = 1_000_000;
+        d2_arm.scalar_simd_ids_equal = true;
+        d2_arm.scalar_simd_max_distance_delta_ppm = 0;
+        d2_arm.cpu_p99_ns = 1;
+        d2_arm.passed = true;
+        let selected_d1_key = d2_arm.key;
+        crate::v23_diagnostic::validate_d1_report(&d2_prerequisite).unwrap();
+        let d2 = index
+            .diagnose_v23_d2(
+                &d2_prerequisite,
+                selected_d1_key,
+                &query_ordinals,
+                &queries,
+                &truth,
+                scratch_parent.path(),
+            )
+            .unwrap();
+        crate::v23_diagnostic::validate_d2_report(&d2).unwrap();
+        assert_eq!(d2.query_ordinals, query_ordinals);
+        assert_eq!(d2.rows, report.rows);
+        assert!(!d2.arms.is_empty());
         assert_eq!(scratch_parent.path().read_dir().unwrap().count(), 0);
         assert_eq!(
             serde_json::to_vec(&index.manifest).unwrap(),

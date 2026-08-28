@@ -171,7 +171,7 @@ Add `fit_v23_diagnostic_quantizer(family, width, dimensions, sample)` in `v23_di
 
 Factor the V22 cell-card scan so D1 writes `(source_ordinal, canonical_record_id, primary_cell, exact_vector)` to the existing bounded scratch extent and encodes every passing quantizer in batches. For each query, score both its authenticated exact top-2,048 prefix and its complete registered routed pool. Sort by `(distance.total_cmp, raw_id)` and compute integer hit counts before ppm conversion.
 
-The report must bind root checksum, codebook checksum, dataset rows, query ordinals, quantizer-state BLAKE3, code width, candidate counts, SIMD CPU nanoseconds, scalar/SIMD agreement, per-query IDs, and aggregate recall.
+The report must bind root checksum, codebook checksum, dataset rows, query ordinals, the canonical raw-query-vector BLAKE3, quantizer-state BLAKE3, code width, candidate counts, SIMD CPU nanoseconds, scalar/SIMD agreement, per-query IDs, and aggregate recall.
 
 - [ ] **Step 5: Run D1 tests and unchanged V22 coverage**
 
@@ -196,7 +196,7 @@ git commit -m "Add V23 code fidelity replay"
 
 **Interfaces:**
 - Consumes: one D1-passing quantizer state, authenticated corpus scratch rows, page targets `{512,1024,2048}`, assignment limits `{1,2,3}`, and the existing resident centroid router.
-- Produces: `BorsukIndex::diagnose_v23_d2(&V23D1ArmKey, &[Vec<f32>], &[Vec<String>], &Path) -> Result<V23D2Report>` plus deterministic `V23PagePlan` values used by Task 4.
+- Produces: `BorsukIndex::diagnose_v23_d2(&V23D1Report, V23D1ArmKey, &[u64], &[Vec<f32>], &[Vec<String>], &Path) -> Result<V23D2Report>` plus deterministic `V23PagePlan` values used by Task 4. The complete validated D1 report proves the selected arm passed and binds its source generation; explicit source-query ordinals preserve the same authenticated query authority as D1.
 
 - [ ] **Step 1: Write deterministic balance, closure, and four-page RED tests**
 
@@ -227,17 +227,42 @@ Do not add a new dependency for ordering; implement the comparison with `f32::to
 
 - [ ] **Step 4: Implement capped boundary closure**
 
-Build a deterministic 16-neighbor graph over the 4,096 authenticated parent centroids. For each row, score page centroids only in its primary parent and those 16 neighboring parents, calculate `secondary_distance / max(primary_distance, f32::MIN_POSITIVE)`, and push candidates into per-page bounded heaps. Materialize the strongest candidates in deterministic order until either the assignment limit or the page byte cap is reached. Compute amplification from actual total assignments and unique live rows. The bounded parent adjacency and per-parent page count make construction linear in corpus rows for each arm.
+Build the production deterministic centroid router over the completed primary
+pages. For each row, inspect at most 17 routed page centroids (including its
+primary page when returned), calculate
+`secondary_distance / max(primary_distance, f32::MIN_POSITIVE)`, and push
+candidates into per-page bounded heaps whose capacity equals that page's
+primary-row count. The sum of retained candidates is therefore at most the
+live-row count without a corpus-wide candidate sort. Materialize each page's
+strongest candidates in deterministic order until the exact page byte cap is
+reached. Compute amplification from actual total assignments and unique live
+rows. This bound remains valid even if all corpus rows belong to one V20 parent
+cell; metrics without the production bounded routing geometry fail before
+planning rather than falling back to a full page scan.
 
 - [ ] **Step 5: Implement exact production-router simulation**
 
-Construct the existing `CatalogRouter` over the immutable page centroids with one registered graph-build seed and search budget. Prepare each query once, choose its best one-to-four pages before code scoring, concatenate only those page codes, deduplicate raw IDs, and rank via the production contiguous SIMD method. Emit page ordinals, bytes, rows, GT page coverage, hit count, recall ppm, CPU nanoseconds, and limiting bound. The validator recomputes all aggregate minima/maxima and admits at most three nondominated arms sorted by `(-recall_ppm, bytes, pages, amplification_ppm, projected_ram_bytes, cpu_p99_ns)`.
+Construct the existing `CatalogRouter` over the immutable page centroids with one registered graph-build seed and search budget. For every page-layout arm, evaluate registered query-page budgets `{1,2,3,4}`. Prepare each query once per arm, choose exactly the nearest registered number available, decode the authenticated immutable page bytes, deduplicate raw IDs, and rank via the production contiguous SIMD method. Emit page ordinals, bytes, rows, GT page coverage, hit count, recall ppm, and CPU nanoseconds. The validator recomputes all aggregate minima/maxima and admits at most three nondominated passing arms sorted by `(-recall_ppm, bytes, pages, amplification_ppm, projected_ram_bytes, arm_key)`; if none pass, it retains a failing frontier as terminal negative evidence. CPU p99 remains a hard pass gate and reported measurement. Timing jitter can flip pass/fail membership at that hard boundary, but it never participates in dominance or ordering.
+
+The conservative decoded-builder projection includes the complete decoded row
+authority at maximum authenticated ID width, at most one retained replica
+candidate per live row, six conservative corpus index vectors, all encoded page bytes,
+page-centroid/router/catalog slack, and two maximum query waves. The worker
+receipt separately records measured peak RSS.
+
+Project page count to 100,000,000 rows with ceiling division. Recompute compact
+root, decoded catalog, bounded-router, fixed 512 MiB runtime/overlay/codebook,
+and two maximum-wave charges from authenticated page/dimension authority; do
+not serialize the diagnostic JSON directory and call its current 10M length a
+100M serving projection.
 
 - [ ] **Step 6: Run D2 tests and deterministic replay twice**
 
 Run: `cargo test -p borsuk --lib v23_d2 -- --nocapture`
 
-Expected: all tests pass; repeated fixture report bytes and page checksums match exactly.
+Expected: all tests pass; repeated page memberships, encoded-size projections,
+and plan checksums match exactly. Observed CPU durations remain measured evidence
+and are explicitly excluded from byte-identical replay assertions.
 
 - [ ] **Step 7: Commit the D2 slice**
 
@@ -258,7 +283,7 @@ git commit -m "Simulate V23 replicated posting pages"
 
 - [ ] **Step 1: Write canonical codec and exhaustive mutation RED tests**
 
-Encode a page containing one primary and one replica with variable-length IDs. Assert round-trip equality and canonical bytes. Mutate magic, version, metric, dimensions, family, width, generation, ordinal, counts, each offset, ID order, code length, encoded length, reference checksum, and body checksum. Assert every mutation fails before slices are exposed.
+Encode a page containing one primary and one replica with variable-length IDs. Assert round-trip equality and canonical bytes. Mutate magic, version, metric, dimensions, family, width, generation, ordinal, counts, reserved header bytes, each offset, ID order, code length, encoded length, and reference checksum. Assert every mutation fails before slices are exposed.
 
 - [ ] **Step 2: Run codec tests and verify RED**
 
@@ -293,7 +318,15 @@ pub(crate) struct V23DecodedPage {
 }
 ```
 
-Use a fixed 96-byte little-endian header with magic `BRSKV23P`, version `23`, and checked `u32/u64` lengths. Append `(n + 1)` `u32` ID offsets, raw ID bytes, and exactly `n * code_width` code bytes. Hash the body using the repository's existing BLAKE3 checksum and reject any complete encoded length above 245,760 bytes. Decoder arithmetic uses `checked_add`/`checked_mul`; it authenticates the reference before returning ranges into the owned `Bytes`.
+Use a fixed 96-byte little-endian header with four-byte magic `BVP1`, version
+`1`, and checked `u32` lengths. (An eight-byte magic plus the registered fields,
+one 32-byte generation checksum, and reserved header bytes cannot fit the frozen
+96-byte cap.) Append `(n + 1)` `u32` ID offsets, raw ID bytes, and exactly
+`n * code_width` code bytes. Bind the complete object through the page
+reference's existing BLAKE3 checksum and reject any complete encoded length
+above 245,760 bytes. Decoder arithmetic uses
+`checked_add`/`checked_mul`; it authenticates the reference before returning
+ranges into the owned `Bytes`.
 
 - [ ] **Step 4: Run codec tests under Miri-compatible safe Rust constraints**
 
@@ -345,7 +378,7 @@ Reject all ordinary build/read/concurrency flags while a V23 stage is active. Us
 
 - [ ] **Step 4: Implement D3 one-wave execution**
 
-Upload encoded pages under `diagnostics/v23/{attempt_id}/pages/{sha256}` with immutable conditional writes. For each registered query shape, open a fresh cache-disabled handle, acquire one aggregate transient permit from the sum of referenced page bytes plus decoded/dedup/query scratch, issue all GETs through the shared I/O pool, join the wave, decode/score, and record query-scoped backing telemetry. Do not read the manifest, router, codebook, or footer inside the timed interval.
+Join each page reference's relative `pages/{blake3}` key to the attempt prefix and upload it under `diagnostics/v23/{attempt_id}/pages/{blake3}` with immutable conditional writes. For each registered query shape, open a fresh cache-disabled handle, acquire one aggregate transient permit from the sum of referenced page bytes plus decoded/dedup/query scratch, issue all GETs through the shared I/O pool, join the wave, decode/score, and record query-scoped backing telemetry. Do not read the manifest, router, codebook, or footer inside the timed interval.
 
 - [ ] **Step 5: Persist canonical evidence atomically**
 

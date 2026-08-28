@@ -124,8 +124,8 @@ Each posting object uses a private V23 binary format:
 ```text
 header
   magic, version, metric, dimensions, code family, code width
-  generation checksum, page ordinal, primary rows, replicated rows
-  id section bytes, code section bytes, body checksum
+  generation checksum, page ordinal, primary rows, replicated rows,
+  id section bytes, code section bytes, 32 reserved zero bytes
 offsets[n + 1]       // compact raw-ID boundaries
 ids[offsets[n]]      // authenticated raw record-ID bytes
 codes[n * width]     // contiguous SIMD scan plane
@@ -137,7 +137,8 @@ bytes. Four maximum pages therefore consume at most `983,040` bytes, leaving
 64 KiB of the network budget reserved for bounded headers and future receipt-
 proven overhead. The decoder checks lengths, arithmetic, concrete types,
 cardinality, sorted unique primary identities, duplicate legality, and the body
-checksum before exposing slices.
+layout after authenticating the whole-object checksum; reserved header bytes
+must remain zero before slices are exposed.
 
 Posting paths are content addressed by the complete encoded bytes. The root
 binds path, checksum, encoded bytes, row counts, centroid, and page ordinal.
@@ -156,19 +157,22 @@ watermark.
    registered row target and must fit the hard encoded cap before replicas.
 3. For every row, inspect a bounded set of neighboring page centroids. Rank
    secondary assignments by the registered distance-ratio closure score, then
-   by page ordinal.
-4. Admit secondary copies only into a page's reserved replica capacity. When
-   capacity is exhausted, retain the strongest boundary assignments. Primary
+   by page ordinal and source ordinal.
+4. Each page retains candidates in a bounded heap capped by its primary-row
+   count, so all heaps together retain at most one corpus row count and require
+   no corpus-wide candidate sort. Admit retained secondary copies in canonical
+   strength order until the exact encoded-byte capacity is exhausted. Primary
    rows are never evicted by replicas.
 5. Encode and upload one page at a time. Retain only its compact root reference
    after upload. Publish the new root atomically after every referenced page is
    durable.
 
-The diagnostic sweeps primary page targets `{512,1024,2048}` and maximum
-assignments per row `{1,2,3}`. It may add `4096` rows only if the encoded cap
-permits it at the tested width. The root reports primary and replicated row
-histograms, rejected replica counts, page encoded-size distribution, storage
-amplification, and boundary-score distribution.
+The diagnostic sweeps primary page targets `{512,1024,2048}`, maximum
+assignments per row `{1,2,3}`, and query page counts `{1,2,3,4}`. It may add
+`4096` rows only if the encoded cap permits it at the tested width. The root
+reports primary and replicated row histograms, rejected replica counts, page
+encoded-size distribution, storage amplification, and boundary-score
+distribution.
 
 The serving design permits a maximum storage amplification of `2.0x`, while
 the preferred production gate is `1.5x`. A factor above `2.0x` fails rather
@@ -236,10 +240,28 @@ wave before any GET starts, preventing partial-wave hold-and-wait. At most one
 permit transfers from physical buffers into decoded/result ownership, and all
 failure/cancellation paths release it through RAII.
 
-The 10M diagnostic records projected and measured 3-GiB process usage. The
+The diagnostic builder projection conservatively charges six corpus-sized
+index vectors in addition to decoded row payloads and one retained replica
+candidate per live row. This covers overlapping cell indexes, semantic-split
+leaves, owner/replica vectors, and materialized ordinal vectors without relying
+on allocator reuse.
+
+The 10M diagnostic records the core builder's conservative working-set
+projection and the fresh worker process's independently observed peak RSS, and
+projects and measures 3-GiB serving-process usage. The
 100M projection includes the complete router, codebook, root, overlays, four
 simultaneous maximum pages per admitted query, active-query count, and runtime
 overhead. No corpus-wide code plane is assumed resident.
+
+The D2 projection scales the observed page count to exactly 100,000,000 rows
+with ceiling division. Its compact root charges a 96-byte header plus 96 bytes
+of fixed authority and the full `f32` centroid per projected page. The decoded
+catalog charges 32 fixed bytes plus the centroid per page, the bounded
+17-level/32-neighbour production router reserves 4,096 bytes per page, and a
+separate 512 MiB reserve covers the codebook, overlays, allocator/runtime state,
+and other fixed serving authority. Two simultaneous 983,040-byte waves are
+added explicitly. The validator recomputes this formula from authenticated row,
+page, and dimension authority; a report cannot self-assert a smaller number.
 
 ## Ordered diagnostic gates
 
@@ -261,6 +283,10 @@ quantizer/codebook checksum, candidate rows, SIMD CPU time, and aggregate
 recall. Scalar and SIMD output must be byte-identical in IDs and within the
 registered numeric tolerance in distance.
 
+D1 also binds a canonical BLAKE3 over every ordered query ordinal, vector
+length, and raw finite `f32` bit pattern. D2 must reproduce that digest and the
+D1 ground-truth IDs before evaluating any page arm.
+
 D1 passes only when at least one width no greater than 64 bytes reaches:
 
 - oracle-pool recall@10 at least `0.990`;
@@ -276,23 +302,32 @@ raising the network or recall limits.
 
 Run only D1-passing widths. Build candidate balanced page assignments from the
 full corpus, add bounded closure replicas, and simulate the exact production
-router and page-byte cap. Rank directly from the actual page codes; do not use
-query labels, GT IDs, or query-specific layout decisions during the build.
+router and page-byte cap for each registered one-to-four-page query arm. Decode
+and rank directly from the authenticated immutable page bytes; do not use query
+labels, GT IDs, or query-specific layout decisions during the build.
 
 For every query emit selected page ordinals, encoded bytes, candidate rows,
-replica hits, GT coverage before ranking, code-only recall, CPU time, and the
-limiting bound. For every arm emit root bytes, page histogram, storage
-amplification, rejected replicas, build peak RSS, and projected 100M RAM.
+GT coverage before ranking, code-only recall, and CPU time. For every arm emit
+the complete page directory and exact encoded sizes, projected compact-root
+bytes, storage amplification, projected builder working bytes, and projected
+100M RAM. The fresh D2 worker receipt separately binds its
+observed process peak RSS; the pure scientific report never labels an
+allocation model as a measured peak.
 
 D2 passes only if every frozen query uses at most four pages and 983,040 page
 bytes, aggregate recall@10 is at least `0.975`, no query has recall below
 `0.8`, storage amplification is at most `2.0x`, projected process RAM is at
 most 3 GiB, and p99 CPU is at most 15 ms. Freeze at most three nondominated
-arms over recall, bytes, page count, storage, RAM, and CPU.
+passing arms over the deterministic scientific axes recall, bytes, page count,
+storage, and RAM. If no arm passes, retain a failing frontier as terminal
+negative evidence and stop before D3. CPU remains a hard gate and reported
+measurement. Timing jitter can flip pass/fail membership at that boundary, but
+it never participates in dominance or ordering.
 
 ### D3: real S3 wave replay
 
-Write representative immutable page objects for each frozen D2 arm and issue
+Join each relative `pages/{blake3}` reference to the attempt prefix, write the
+representative immutable page objects for each frozen D2 arm, and issue
 the exact measured one-wave shapes from the registered runtime host. Run at
 least 1,000 cold waves per arm with disk cache zero, unique handles, and
 positive query-scoped backing I/O. Record service/queue/total latency, bytes,
