@@ -93,6 +93,7 @@ const V21_FEASIBILITY_SCHEMA: &str = "borsuk-v21-selector-feasibility-v1";
 const V21_FEASIBILITY_ARMS_HEADER: &str = "schema,arm_index,bundle_row_limit,selector_span,hedge_delay_ms,bundle_count,region_count,projected_directory_bytes,replaced_v20_root_bytes,v20_root_checksum,baseline_rss_bytes,projected_query_transient_bytes,projected_peak_rss_bytes,gt_coverage,recall_at_10,maximum_actual_requests,maximum_physical_bytes,selector_within_frozen_cap,eligible,rows";
 const V21_FEASIBILITY_SAMPLES_HEADER: &str = "schema,arm_index,query_index,query_source_index,routed_cells,selected_rows,selected_bundles,primary_requests,maximum_actual_requests,selected_bytes,physical_bytes,gt_hits,recall_hits,limiting_bound";
 const V22_STAGE_L_SCHEMA: &str = "borsuk-v22-stage-l-layout-v1";
+const V23_DATASET_ID: &str = "deep-image-96";
 const V23_D3_WAVES_PER_ARM: usize = 1_000;
 const V23_D3_QUERY_COUNT: u32 = 32;
 const V23_D3_MAX_PAGES: usize = 4;
@@ -620,7 +621,7 @@ fn resolve_v23_mode(
                     .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
         })
         .ok_or_else(|| invalid_input("V23 index identity is invalid"))?;
-    if dataset_id != Some("deep-image-96") {
+    if dataset_id != Some(V23_DATASET_ID) {
         return Err(invalid_input("V23 dataset identity must be deep-image-96"));
     }
     if d1_report_sha256.is_some_and(|value| !valid_sha256(value))
@@ -641,7 +642,7 @@ fn resolve_v23_mode(
         stage,
         source_archive_sha256: source_archive_sha256.to_string(),
         index_id: index_id.to_string(),
-        dataset_id: "deep-image-96".to_string(),
+        dataset_id: V23_DATASET_ID.to_string(),
         d1_report_sha256: d1_report_sha256.map(str::to_string),
         d2_report_sha256: d2_report_sha256.map(str::to_string),
         page_uri,
@@ -1633,7 +1634,7 @@ struct V23QueryAuthority {
 
 fn v23_query_authority(dataset: &Dataset) -> io::Result<V23QueryAuthority> {
     let query_count = V23_D3_QUERY_COUNT as usize;
-    if dataset.meta.name != "deep-image-10m"
+    if dataset.meta.name != V23_DATASET_ID
         || dataset.meta.dim != 96
         || dataset.metric != VectorMetric::Cosine
         || dataset.train_count != dataset.meta.n_train
@@ -12787,7 +12788,7 @@ mod tests {
         let source_indices = (0_usize..40).rev().collect::<Vec<_>>();
         let dataset = Dataset {
             meta: DatasetMeta {
-                name: "deep-image-10m".to_string(),
+                name: "deep-image-96".to_string(),
                 metric: "cosine".to_string(),
                 dim: 96,
                 n_train: 9_990_000,
