@@ -1,5 +1,8 @@
 import copy
+import csv
+import hashlib
 import json
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -25,6 +28,7 @@ from scripts.run_publication_v3_cell import (
     build_publication_report,
     build_receipt_metrics,
     build_smoke_report,
+    build_v23_diagnostic_plan,
     claim_ineligible_lifecycle_diagnostic,
     concurrency_result_arm,
     disk_cached_cohort_authority,
@@ -51,6 +55,9 @@ from scripts.run_publication_v3_cell import (
     validate_and_canonicalize_v22_stage_l,
     validate_publication_cell_authority,
     validate_query_cache_cohort,
+    validate_v23_d1_artifacts,
+    validate_v23_d2_artifacts,
+    validate_v23_d3_artifacts,
 )
 from scripts.test_publication_v3_protocol import paid_v3_manifest
 from scripts.test_publication_v3_receipts import (
@@ -97,6 +104,297 @@ def runtime_flow_control(profile: str = "recall") -> dict[str, int]:
             }
         )
     return values
+
+
+def v23_ranked_result() -> dict[str, object]:
+    return {
+        "ids": [[value] for value in range(10)],
+        "distances": [float(value) for value in range(10)],
+    }
+
+
+def v23_d1_fixture() -> tuple[dict[str, object], dict[str, object]]:
+    samples = [
+        {
+            "query_index": query_index,
+            "ground_truth_ids": [[value] for value in range(10)],
+            "oracle": v23_ranked_result(),
+            "scalar_oracle": v23_ranked_result(),
+            "routed": v23_ranked_result(),
+            "oracle_candidate_rows": 2_048,
+            "routed_candidate_rows": 8_192,
+            "oracle_hits": 10,
+            "routed_hits": 10,
+            "cpu_ns": 1_000_000,
+        }
+        for query_index in range(32)
+    ]
+    report = {
+        "schema": "borsuk-v23-d1-v3",
+        "v20_root_checksum": "1" * 64,
+        "v20_codebook_checksum": "2" * 64,
+        "sample_ordinals_checksum": "3" * 64,
+        "query_vectors_checksum": "4" * 64,
+        "query_ordinals": list(range(32)),
+        "rows": 9_990_000,
+        "routing_cell_count": 4_096,
+        "maximum_record_id_bytes": 8,
+        "arms": [
+            {
+                "key": {"family": "srht-pq", "code_width_bytes": 64},
+                "quantizer_checksum": "5" * 64,
+                "quantizer_state": {"schema": "test-quantizer-v1"},
+                "query_samples": samples,
+                "oracle_recall_ppm": 1_000_000,
+                "routed_recall_ppm": 1_000_000,
+                "scalar_simd_ids_equal": True,
+                "scalar_simd_max_distance_delta_ppm": 0,
+                "cpu_p99_ns": 1_000_000,
+                "four_page_projected_bytes": 4
+                * (96 + 4 * 2_049 + 2_048 * (64 + 8)),
+                "passed": True,
+            }
+        ],
+    }
+    artifact = {
+        "schema": "borsuk-v23-d1-artifact-v1",
+        "document_kind": "publication-v3-v23-d1-report",
+        "claim_eligible": False,
+        "stage": "d1",
+        "source_archive_sha256": "a" * 64,
+        "index_id": "index-v23",
+        "dataset_id": "deep-image-96",
+        "report": report,
+    }
+    summary = {
+        "schema": "borsuk-v23-summary-v1",
+        "document_kind": "publication-v3-v23-d1-summary",
+        "claim_eligible": False,
+        "stage": "d1",
+        "source_archive_sha256": "a" * 64,
+        "index_id": "index-v23",
+        "dataset_id": "deep-image-96",
+        "d1_report_sha256": None,
+        "rows": report["rows"],
+        "queries": 32,
+        "arms": 1,
+        "passing_arm_indexes": [0],
+        "pages": 0,
+        "passed": True,
+    }
+    return artifact, summary
+
+
+def v23_d2_fixture(d1_sha256: str) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    page = {
+        "generation_checksum": [1] * 32,
+        "page_ordinal": 0,
+        "metric": "squared-euclidean",
+        "dimensions": 4,
+        "family": "srht-pq",
+        "code_width": 64,
+        "path": f"pages/{'6' * 64}",
+        "checksum": "6" * 64,
+        "encoded_bytes": 120_000,
+        "primary_rows": 1_000,
+        "replicated_rows": 0,
+        "centroid": [0.0] * 4,
+    }
+    samples = [
+        {
+            "query_index": query_index,
+            "page_ordinals": [0],
+            "encoded_bytes": 120_000,
+            "candidate_rows": 1_000,
+            "ground_truth_ids": [[value] for value in range(10)],
+            "ranked": v23_ranked_result(),
+            "gt_page_hits": 10,
+            "hits": 10,
+            "recall_ppm": 1_000_000,
+            "cpu_ns": 1_000_000,
+        }
+        for query_index in range(32)
+    ]
+    projected_pages = 100_000
+    projected_root = 96 + projected_pages * (96 + 4 * 4)
+    projected_ram = (
+        projected_root
+        + projected_pages * (32 + 4 * 4)
+        + projected_pages * 4_096
+        + 512 * 1024 * 1024
+        + 2 * 983_040
+    )
+    report = {
+        "schema": "borsuk-v23-d2-v3",
+        "d1_report_checksum": "7" * 64,
+        "query_ordinals": list(range(32)),
+        "rows": 1_000,
+        "arms": [
+            {
+                "d1_key": {"family": "srht-pq", "code_width_bytes": 64},
+                "primary_target_rows": 1_024,
+                "maximum_assignments_per_row": 1,
+                "maximum_query_pages": 1,
+                "maximum_record_id_bytes": 8,
+                "pages": [page],
+                "unique_rows": 1_000,
+                "total_assignments": 1_000,
+                "storage_amplification_ppm": 1_000_000,
+                "projected_root_bytes": projected_root,
+                "projected_ram_bytes": projected_ram,
+                "projected_build_bytes": 1_000_000,
+                "query_samples": samples,
+                "aggregate_recall_ppm": 1_000_000,
+                "minimum_query_recall_ppm": 1_000_000,
+                "cpu_p99_ns": 1_000_000,
+                "passed": True,
+            }
+        ],
+    }
+    identity = {
+        "source_archive_sha256": "a" * 64,
+        "index_id": "index-v23",
+        "dataset_id": "deep-image-96",
+        "d1_report_sha256": d1_sha256,
+        "page_uri": "s3://standard-bucket/v23/pages",
+    }
+    artifact = {
+        "schema": "borsuk-v23-d2-artifact-v1",
+        "document_kind": "publication-v3-v23-d2-report",
+        "claim_eligible": False,
+        "stage": "d2",
+        **identity,
+        "report": report,
+    }
+    roster = {
+        "schema": "borsuk-v23-pages-v1",
+        "document_kind": "publication-v3-v23-page-roster",
+        "claim_eligible": False,
+        "stage": "d2",
+        **identity,
+        "pages": [page],
+    }
+    summary = {
+        "schema": "borsuk-v23-summary-v1",
+        "document_kind": "publication-v3-v23-d2-summary",
+        "claim_eligible": False,
+        "stage": "d2",
+        "source_archive_sha256": "a" * 64,
+        "index_id": "index-v23",
+        "dataset_id": "deep-image-96",
+        "d1_report_sha256": d1_sha256,
+        "rows": 1_000,
+        "queries": 32,
+        "arms": 1,
+        "passing_arm_indexes": [0],
+        "pages": 1,
+        "passed": True,
+    }
+    return artifact, roster, summary
+
+
+def write_canonical_json(path: Path, value: object) -> str:
+    payload = canonical_json_bytes(value) + b"\n"
+    path.write_bytes(payload)
+    return hashlib.sha256(payload).hexdigest()
+
+
+def write_v23_d3_fixture(
+    root: Path, *, d1_sha256: str, d2_sha256: str
+) -> tuple[Path, Path]:
+    samples_path = root / "bench_v23_d3_waves.csv"
+    header = (
+        "schema,arm_index,d2_arm_index,arm_key,repetition_index,query_index,"
+        "page_ordinals,encoded_bytes,candidate_rows,ground_truth_ids,ranked_ids,"
+        "ranked_distance_bits,hits,recall_ppm,backing_gets,backing_get_concurrency,"
+        "backing_bytes,backing_queue_us_sum,backing_queue_us_max,"
+        "backing_service_us_sum,backing_service_us_max,cpu_ns,"
+        "transient_admission_wait_ns,request_admission_wait_ns,service_ns,"
+        "elapsed_ns,transient_peak_bytes,request_peak_gets"
+    ).split(",")
+    with samples_path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=header, lineterminator="\n")
+        writer.writeheader()
+        for query_index in range(32):
+            for repetition_index in range(query_index, 1_000, 32):
+                writer.writerow(
+                    {
+                        "schema": "borsuk-v23-d3-v1",
+                        "arm_index": 0,
+                        "d2_arm_index": 0,
+                        "arm_key": "srht-pq-w64-p1024-r1-q1",
+                        "repetition_index": repetition_index,
+                        "query_index": query_index,
+                        "page_ordinals": "0",
+                        "encoded_bytes": 120_000,
+                        "candidate_rows": 1_000,
+                        "ground_truth_ids": "|".join(
+                            f"{value:02x}" for value in range(10)
+                        ),
+                        "ranked_ids": "|".join(
+                            f"{value:02x}" for value in range(10)
+                        ),
+                        "ranked_distance_bits": "|".join(
+                            f"{struct.unpack('>I', struct.pack('>f', float(value)))[0]:08x}"
+                            for value in range(10)
+                        ),
+                        "hits": 10,
+                        "recall_ppm": 1_000_000,
+                        "backing_gets": 1,
+                        "backing_get_concurrency": 1,
+                        "backing_bytes": 120_000,
+                        "backing_queue_us_sum": 10,
+                        "backing_queue_us_max": 10,
+                        "backing_service_us_sum": 100,
+                        "backing_service_us_max": 100,
+                        "cpu_ns": 1_000_000,
+                        "transient_admission_wait_ns": 0,
+                        "request_admission_wait_ns": 0,
+                        "service_ns": 10_000_000,
+                        "elapsed_ns": 10_000_000,
+                        "transient_peak_bytes": 120_000,
+                        "request_peak_gets": 1,
+                    }
+                )
+    summary = {
+        "schema": "borsuk-v23-d3-v1",
+        "document_kind": "publication-v3-v23-d3-summary",
+        "claim_eligible": False,
+        "stage": "d3",
+        "source_archive_sha256": "a" * 64,
+        "index_id": "index-v23",
+        "dataset_id": "deep-image-96",
+        "d1_report_sha256": d1_sha256,
+        "d2_report_sha256": d2_sha256,
+        "page_uri": "s3://standard-bucket/v23/pages",
+        "disk_cache_bytes": 0,
+        "passing_arm_indexes": [0],
+        "arms": [
+            {
+                "arm_index": 0,
+                "d2_arm_index": 0,
+                "arm_key": "srht-pq-w64-p1024-r1-q1",
+                "samples": 1_000,
+                "p50_ns": 10_000_000,
+                "p95_ns": 10_000_000,
+                "p99_ns": 10_000_000,
+                "maximum_ns": 10_000_000,
+                "maximum_pages": 1,
+                "maximum_encoded_bytes": 120_000,
+                "maximum_backing_gets": 1,
+                "maximum_backing_bytes": 120_000,
+                "maximum_transient_peak_bytes": 120_000,
+                "maximum_request_peak_gets": 1,
+                "aggregate_recall_ppm": 1_000_000,
+                "minimum_wave_recall_ppm": 1_000_000,
+                "passed": True,
+            }
+        ],
+        "passed": True,
+    }
+    summary_path = root / "bench_v23_summary.json"
+    write_canonical_json(summary_path, summary)
+    return samples_path, summary_path
 
 
 def v22_stage_l_fixture() -> tuple[dict[str, object], dict[str, object]]:
@@ -3459,6 +3757,320 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(report["document_kind"], "publication-v3-smoke")
         self.assertFalse(report["publishable"])
         self.assertNotIn("object_roster", report)
+
+
+class V23DiagnosticWorkerTests(unittest.TestCase):
+    def test_v23_plan_is_stage_exclusive_cold_standard_s3_and_bounded(self) -> None:
+        cell = scheduled_cell()
+        cell["source"] = {"state": "frozen", "archive_sha256": "a" * 64}
+        cell["dataset"]["id"] = "deep-image-96"
+        cell["dataset"]["dimensions"] = 96
+        with tempfile.TemporaryDirectory() as root:
+            workspace = Path(root)
+            d1 = build_v23_diagnostic_plan(
+                cell,
+                stage="d1",
+                workspace=workspace,
+                borsuk_bench=Path("/bin/true"),
+            )
+            d2 = build_v23_diagnostic_plan(
+                cell,
+                stage="d2",
+                workspace=workspace,
+                borsuk_bench=Path("/bin/true"),
+                d1_report_sha256="1" * 64,
+                page_uri="s3://standard-bucket/v23/pages/",
+            )
+            d3 = build_v23_diagnostic_plan(
+                cell,
+                stage="d3",
+                workspace=workspace,
+                borsuk_bench=Path("/bin/true"),
+                d1_report_sha256="1" * 64,
+                d2_report_sha256="2" * 64,
+                page_uri="s3://standard-bucket/v23/pages/",
+            )
+        for stage, plan in (("d1", d1), ("d2", d2), ("d3", d3)):
+            self.assertEqual(plan["namespace"], f"runtime-v23-{stage}")
+            self.assertIs(plan["publishable"], False)
+            self.assertIs(plan["claim_eligible"], False)
+            self.assertEqual(plan["runtime_profile"], "recall")
+            self.assertEqual(plan["cache_state"], "cold")
+            self.assertEqual(plan["queries"], 32)
+            self.assertEqual(plan["disk_cache_bytes"], 0)
+            self.assertEqual(plan["ram_budget_bytes"], 3 * 1024**3)
+            self.assertEqual(plan["environment"]["BORSUK_BENCH_V23_STAGE"], stage)
+            self.assertNotIn("bench_v23_summary.json", plan["staged_inputs"])
+        self.assertEqual(d1["staged_inputs"], {})
+        self.assertEqual(
+            set(d2["staged_inputs"]), {"bench_v23_d1_report.json"}
+        )
+        self.assertEqual(
+            set(d3["staged_inputs"]),
+            {
+                "bench_v23_d1_report.json",
+                "bench_v23_d2_report.json",
+                "bench_v23_pages.json",
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "D1 authority"):
+            build_v23_diagnostic_plan(
+                cell,
+                stage="d2",
+                workspace=Path("/tmp/v23"),
+                borsuk_bench=Path("/bin/true"),
+                page_uri="s3://standard-bucket/v23/pages/",
+            )
+        with self.assertRaisesRegex(ValueError, "Standard S3"):
+            build_v23_diagnostic_plan(
+                cell,
+                stage="d3",
+                workspace=Path("/tmp/v23"),
+                borsuk_bench=Path("/bin/true"),
+                d1_report_sha256="1" * 64,
+                d2_report_sha256="2" * 64,
+                page_uri="s3express://bucket/v23/pages/",
+            )
+        with self.assertRaisesRegex(ValueError, "Standard S3"):
+            build_v23_diagnostic_plan(
+                cell,
+                stage="d3",
+                workspace=Path("/tmp/v23"),
+                borsuk_bench=Path("/bin/true"),
+                d1_report_sha256="1" * 64,
+                d2_report_sha256="2" * 64,
+                page_uri="s3://bucket--use1-az1--x-s3/v23/pages/",
+            )
+
+    def test_v23_d1_recomputes_evidence_and_accepts_scientific_failure(self) -> None:
+        artifact, summary = v23_d1_fixture()
+        with tempfile.TemporaryDirectory() as root:
+            report_path = Path(root) / "bench_v23_d1_report.json"
+            summary_path = Path(root) / "bench_v23_summary.json"
+            write_canonical_json(report_path, artifact)
+            write_canonical_json(summary_path, summary)
+            result = validate_v23_d1_artifacts(
+                report_path,
+                summary_path,
+                expected_source_archive_sha256="a" * 64,
+                expected_index_id="index-v23",
+                expected_dataset_id="deep-image-96",
+            )
+            self.assertIs(result["publishable"], False)
+            self.assertIs(result["claim_eligible"], False)
+            self.assertIs(result["passed"], True)
+
+            ordered_artifact = copy.deepcopy(artifact)
+            ordered_summary = copy.deepcopy(summary)
+            second_arm = copy.deepcopy(ordered_artifact["report"]["arms"][0])
+            second_arm["key"] = {
+                "family": "fast-turbo-quant-mse",
+                "code_width_bytes": 64,
+            }
+            second_arm["quantizer_checksum"] = "6" * 64
+            ordered_artifact["report"]["arms"].append(second_arm)
+            ordered_summary["arms"] = 2
+            ordered_summary["passing_arm_indexes"] = [0, 1]
+            write_canonical_json(report_path, ordered_artifact)
+            write_canonical_json(summary_path, ordered_summary)
+            validate_v23_d1_artifacts(
+                report_path,
+                summary_path,
+                expected_source_archive_sha256="a" * 64,
+                expected_index_id="index-v23",
+                expected_dataset_id="deep-image-96",
+            )
+            cross_arm_drift = copy.deepcopy(ordered_artifact)
+            sample = cross_arm_drift["report"]["arms"][1]["query_samples"][0]
+            sample["ground_truth_ids"] = [[value] for value in range(10, 20)]
+            sample["oracle"]["ids"] = [[value] for value in range(10, 20)]
+            sample["scalar_oracle"]["ids"] = [[value] for value in range(10, 20)]
+            sample["routed"]["ids"] = [[value] for value in range(10, 20)]
+            write_canonical_json(report_path, cross_arm_drift)
+            write_canonical_json(summary_path, ordered_summary)
+            with self.assertRaisesRegex(ValueError, "ground-truth authority"):
+                validate_v23_d1_artifacts(
+                    report_path,
+                    summary_path,
+                    expected_source_archive_sha256="a" * 64,
+                    expected_index_id="index-v23",
+                    expected_dataset_id="deep-image-96",
+                )
+
+            failed_artifact = copy.deepcopy(artifact)
+            failed_summary = copy.deepcopy(summary)
+            arm = failed_artifact["report"]["arms"][0]
+            for sample in arm["query_samples"]:
+                sample["routed"]["ids"][-1] = [255]
+                sample["routed_hits"] = 9
+            arm["routed_recall_ppm"] = 900_000
+            arm["passed"] = False
+            failed_summary["passing_arm_indexes"] = []
+            failed_summary["passed"] = False
+            write_canonical_json(report_path, failed_artifact)
+            write_canonical_json(summary_path, failed_summary)
+            result = validate_v23_d1_artifacts(
+                report_path,
+                summary_path,
+                expected_source_archive_sha256="a" * 64,
+                expected_index_id="index-v23",
+                expected_dataset_id="deep-image-96",
+            )
+            self.assertIs(result["passed"], False)
+
+            for mutation in (
+                lambda value: value["report"]["arms"][0]["query_samples"][0].__setitem__("oracle_hits", 9),
+                lambda value: value["report"]["arms"][0].__setitem__("passed", 1),
+                lambda value: value["report"].__setitem__("query_ordinals", [0] * 32),
+            ):
+                malformed = copy.deepcopy(artifact)
+                mutation(malformed)
+                write_canonical_json(report_path, malformed)
+                write_canonical_json(summary_path, summary)
+                with self.assertRaises(ValueError):
+                    validate_v23_d1_artifacts(
+                        report_path,
+                        summary_path,
+                        expected_source_archive_sha256="a" * 64,
+                        expected_index_id="index-v23",
+                        expected_dataset_id="deep-image-96",
+                    )
+
+    def test_v23_d2_recomputes_pages_projection_and_receipt_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            d1_sha256 = "1" * 64
+            artifact, roster, summary = v23_d2_fixture(d1_sha256)
+            report_path = root_path / "bench_v23_d2_report.json"
+            roster_path = root_path / "bench_v23_pages.json"
+            summary_path = root_path / "bench_v23_summary.json"
+            write_canonical_json(report_path, artifact)
+            write_canonical_json(roster_path, roster)
+            write_canonical_json(summary_path, summary)
+            result = validate_v23_d2_artifacts(
+                report_path,
+                roster_path,
+                summary_path,
+                expected_source_archive_sha256="a" * 64,
+                expected_index_id="index-v23",
+                expected_dataset_id="deep-image-96",
+                expected_d1_report_sha256=d1_sha256,
+                expected_page_uri="s3://standard-bucket/v23/pages/",
+            )
+            self.assertIs(result["passed"], True)
+
+            failed_artifact = copy.deepcopy(artifact)
+            failed_summary = copy.deepcopy(summary)
+            failed_arm = failed_artifact["report"]["arms"][0]
+            for sample in failed_arm["query_samples"]:
+                sample["ranked"]["ids"][-1] = [255]
+                sample["hits"] = 9
+                sample["recall_ppm"] = 900_000
+            failed_arm["aggregate_recall_ppm"] = 900_000
+            failed_arm["minimum_query_recall_ppm"] = 900_000
+            failed_arm["passed"] = False
+            failed_summary["passing_arm_indexes"] = []
+            failed_summary["passed"] = False
+            write_canonical_json(report_path, failed_artifact)
+            write_canonical_json(roster_path, roster)
+            write_canonical_json(summary_path, failed_summary)
+            failed = validate_v23_d2_artifacts(
+                report_path,
+                roster_path,
+                summary_path,
+                expected_source_archive_sha256="a" * 64,
+                expected_index_id="index-v23",
+                expected_dataset_id="deep-image-96",
+                expected_d1_report_sha256=d1_sha256,
+                expected_page_uri="s3://standard-bucket/v23/pages/",
+            )
+            self.assertIs(failed["passed"], False)
+
+            for path, mutation in (
+                (report_path, lambda value: value["report"]["arms"][0].__setitem__("storage_amplification_ppm", 999_999)),
+                (report_path, lambda value: value["report"]["arms"][0]["query_samples"][0].__setitem__("hits", True)),
+                (roster_path, lambda value: value["pages"][0].__setitem__("path", f"pages/{'8' * 64}")),
+                (summary_path, lambda value: value.__setitem__("d1_report_sha256", "9" * 64)),
+            ):
+                write_canonical_json(report_path, artifact)
+                write_canonical_json(roster_path, roster)
+                write_canonical_json(summary_path, summary)
+                current = json.loads(path.read_text())
+                mutation(current)
+                write_canonical_json(path, current)
+                with self.assertRaises(ValueError):
+                    validate_v23_d2_artifacts(
+                        report_path,
+                        roster_path,
+                        summary_path,
+                        expected_source_archive_sha256="a" * 64,
+                        expected_index_id="index-v23",
+                        expected_dataset_id="deep-image-96",
+                        expected_d1_report_sha256=d1_sha256,
+                        expected_page_uri="s3://standard-bucket/v23/pages/",
+                    )
+
+    def test_v23_d3_recomputes_1000_cold_waves_and_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            samples_path, summary_path = write_v23_d3_fixture(
+                Path(root), d1_sha256="1" * 64, d2_sha256="2" * 64
+            )
+            result = validate_v23_d3_artifacts(
+                samples_path,
+                summary_path,
+                expected_source_archive_sha256="a" * 64,
+                expected_index_id="index-v23",
+                expected_dataset_id="deep-image-96",
+                expected_d1_report_sha256="1" * 64,
+                expected_d2_report_sha256="2" * 64,
+                expected_page_uri="s3://standard-bucket/v23/pages/",
+            )
+            self.assertIs(result["passed"], True)
+            with samples_path.open(encoding="utf-8") as stream:
+                rows = list(csv.DictReader(stream))
+            rows[0]["hits"] = "9"
+            with samples_path.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator="\n")
+                writer.writeheader()
+                writer.writerows(rows)
+            with self.assertRaises(ValueError):
+                validate_v23_d3_artifacts(
+                    samples_path,
+                    summary_path,
+                    expected_source_archive_sha256="a" * 64,
+                    expected_index_id="index-v23",
+                    expected_dataset_id="deep-image-96",
+                    expected_d1_report_sha256="1" * 64,
+                    expected_d2_report_sha256="2" * 64,
+                    expected_page_uri="s3://standard-bucket/v23/pages/",
+                )
+
+            samples_path, summary_path = write_v23_d3_fixture(
+                Path(root), d1_sha256="1" * 64, d2_sha256="2" * 64
+            )
+            with samples_path.open(encoding="utf-8") as stream:
+                rows = list(csv.DictReader(stream))
+            rows[0]["ground_truth_ids"] = "|".join(
+                f"{value:02x}" for value in range(10, 20)
+            )
+            rows[0]["ranked_ids"] = rows[0]["ground_truth_ids"]
+            with samples_path.open("w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(
+                    stream, fieldnames=list(rows[0]), lineterminator="\n"
+                )
+                writer.writeheader()
+                writer.writerows(rows)
+            with self.assertRaisesRegex(ValueError, "ground-truth authority"):
+                validate_v23_d3_artifacts(
+                    samples_path,
+                    summary_path,
+                    expected_source_archive_sha256="a" * 64,
+                    expected_index_id="index-v23",
+                    expected_dataset_id="deep-image-96",
+                    expected_d1_report_sha256="1" * 64,
+                    expected_d2_report_sha256="2" * 64,
+                    expected_page_uri="s3://standard-bucket/v23/pages/",
+                )
 
 
 if __name__ == "__main__":

@@ -7,13 +7,16 @@ import argparse
 import copy
 import csv
 import hashlib
+import io
 import json
 import math
 import os
+import struct
 import subprocess
 import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from urllib.parse import urlsplit
 
 try:
     from scripts.production_bench_schema import (
@@ -3575,6 +3578,1178 @@ def _read_canonical_value(path: Path, maximum_bytes: int) -> object:
     if canonical_json_bytes(value) + b"\n" != payload:
         raise ValueError(f"{path} is not canonical JSON")
     return value
+
+
+V23_QUERY_COUNT = 32
+V23_D3_WAVES = 1_000
+V23_WAVE_MAX_PAGES = 4
+V23_PAGE_MAX_BYTES = 245_760
+V23_WAVE_MAX_BYTES = 983_040
+V23_RAM_BUDGET_BYTES = 3 * 1024**3
+V23_FAMILIES = frozenset(
+    {"srht-pq", "fast-turbo-quant-mse", "fast-turbo-quant-prod"}
+)
+V23_FAMILY_ORDER = {
+    "srht-pq": 0,
+    "fast-turbo-quant-mse": 1,
+    "fast-turbo-quant-prod": 2,
+}
+
+
+def _v23_digest(value: object, label: str) -> str:
+    if (
+        type(value) is not str
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"V23 {label} is invalid")
+    return value
+
+
+def _v23_mapping(value: object, fields: set[str], label: str) -> dict[str, object]:
+    if type(value) is not dict or set(value) != fields:
+        raise ValueError(f"V23 {label} fields differ")
+    return value
+
+
+def _v23_integer(
+    value: object, label: str, *, minimum: int = 0, maximum: int | None = None
+) -> int:
+    if (
+        type(value) is not int
+        or value < minimum
+        or (maximum is not None and value > maximum)
+    ):
+        raise ValueError(f"V23 {label} is invalid")
+    return value
+
+
+def _v23_boolean(value: object, label: str) -> bool:
+    if type(value) is not bool:
+        raise ValueError(f"V23 {label} is invalid")
+    return value
+
+
+def _v23_string(value: object, label: str) -> str:
+    if type(value) is not str or not value:
+        raise ValueError(f"V23 {label} is invalid")
+    return value
+
+
+def _v23_identity(
+    value: dict[str, object],
+    *,
+    expected_source_archive_sha256: str,
+    expected_index_id: str,
+    expected_dataset_id: str,
+) -> None:
+    _v23_digest(expected_source_archive_sha256, "expected source digest")
+    if (
+        value.get("source_archive_sha256") != expected_source_archive_sha256
+        or value.get("index_id") != expected_index_id
+        or value.get("dataset_id") != expected_dataset_id
+        or type(value.get("index_id")) is not str
+        or type(value.get("dataset_id")) is not str
+    ):
+        raise ValueError("V23 artifact identity differs")
+
+
+def _v23_arm_key(value: object) -> tuple[str, int]:
+    key = _v23_mapping(value, {"family", "code_width_bytes"}, "arm key")
+    family = _v23_string(key["family"], "quantizer family")
+    width = _v23_integer(key["code_width_bytes"], "code width", minimum=1, maximum=64)
+    if family not in V23_FAMILIES or (family == "srht-pq" and width not in {8, 16, 32, 64}):
+        raise ValueError("V23 arm key is invalid")
+    return family, width
+
+
+def _v23_identifier(value: object, label: str) -> bytes:
+    if (
+        type(value) is not list
+        or not value
+        or any(type(item) is not int or not 0 <= item <= 255 for item in value)
+    ):
+        raise ValueError(f"V23 {label} is invalid")
+    return bytes(value)
+
+
+def _v23_ranked(value: object, *, minimum: int = 10) -> tuple[list[bytes], list[float]]:
+    ranked = _v23_mapping(value, {"ids", "distances"}, "ranked result")
+    ids_value = ranked["ids"]
+    distances_value = ranked["distances"]
+    if type(ids_value) is not list or type(distances_value) is not list:
+        raise ValueError("V23 ranked result arrays are invalid")
+    ids = [_v23_identifier(item, "ranked ID") for item in ids_value]
+    if not minimum <= len(ids) <= 10 or len(ids) != len(distances_value) or len(set(ids)) != len(ids):
+        raise ValueError("V23 ranked result cardinality differs")
+    distances: list[float] = []
+    for item in distances_value:
+        if type(item) is not float or not math.isfinite(item):
+            raise ValueError("V23 ranked distance is invalid")
+        distances.append(item)
+    if list(zip(distances, ids, strict=True)) != sorted(
+        zip(distances, ids, strict=True)
+    ):
+        raise ValueError("V23 ranked order differs")
+    return ids, distances
+
+
+def _v23_ppm(numerator: int, denominator: int) -> int:
+    if denominator <= 0:
+        raise ValueError("V23 aggregate denominator is invalid")
+    return numerator * 1_000_000 // denominator
+
+
+def _v23_nearest_rank(values: list[int], numerator: int, denominator: int) -> int:
+    ordered = sorted(values)
+    if not ordered:
+        raise ValueError("V23 quantile input is empty")
+    index = max(0, (len(ordered) * numerator + denominator - 1) // denominator - 1)
+    return ordered[min(index, len(ordered) - 1)]
+
+
+def _v23_f32(value: float) -> float:
+    return struct.unpack("!f", struct.pack("!f", value))[0]
+
+
+def _v23_standard_s3_prefix(value: object) -> str:
+    if type(value) is not str or not value or any(character.isspace() for character in value):
+        raise ValueError("V23 diagnostic pages require Standard S3")
+    parsed = urlsplit(value)
+    bucket = parsed.netloc
+    segments = parsed.path.split("/")
+    if (
+        parsed.scheme != "s3"
+        or not bucket
+        or "@" in bucket
+        or ":" in bucket
+        or bucket.endswith("--x-s3")
+        or parsed.query
+        or parsed.fragment
+        or len(segments) < 2
+        or any(segment in {"", ".", ".."} for segment in segments[1:-1])
+        or not any(segment for segment in segments[1:])
+    ):
+        raise ValueError("V23 diagnostic pages require Standard S3")
+    return value.rstrip("/")
+
+
+def build_v23_diagnostic_plan(
+    cell: dict[str, object],
+    *,
+    stage: str,
+    workspace: Path,
+    borsuk_bench: Path,
+    d1_report_sha256: str | None = None,
+    d2_report_sha256: str | None = None,
+    page_uri: str | None = None,
+) -> dict[str, object]:
+    """Build one claim-ineligible, strict-cold V23 stage invocation."""
+
+    if stage not in {"d1", "d2", "d3"}:
+        raise ValueError("V23 stage must be d1, d2, or d3")
+    source = cell.get("source")
+    dataset = cell.get("dataset")
+    if (
+        type(source) is not dict
+        or type(dataset) is not dict
+        or source.get("state") != "frozen"
+        or dataset.get("id") != "deep-image-96"
+        or dataset.get("dimensions") != 96
+        or type(dataset.get("dimensions")) is not int
+    ):
+        raise ValueError("V23 frozen cell authority differs")
+    source_sha256 = _v23_digest(source.get("archive_sha256"), "source digest")
+    index_prefix = cell.get("index_prefix")
+    if type(index_prefix) is not str:
+        raise ValueError("V23 index identity is invalid")
+    index_id = _v23_string(index_prefix.rstrip("/").rsplit("/", 1)[-1], "index identity")
+    if stage == "d1":
+        if d1_report_sha256 is not None or d2_report_sha256 is not None or page_uri is not None:
+            raise ValueError("V23 D1 authority must not contain prerequisites")
+    else:
+        _v23_digest(d1_report_sha256, "D1 authority")
+        if stage == "d2" and d2_report_sha256 is not None:
+            raise ValueError("V23 D2 authority must not contain D2 receipt")
+        if stage == "d3":
+            _v23_digest(d2_report_sha256, "D2 authority")
+        page_uri = _v23_standard_s3_prefix(page_uri)
+    staged_inputs: dict[str, str] = {}
+    if stage in {"d2", "d3"}:
+        staged_inputs["bench_v23_d1_report.json"] = str(
+            workspace / "bench_v23_d1_report.json"
+        )
+    if stage == "d3":
+        staged_inputs["bench_v23_d2_report.json"] = str(
+            workspace / "bench_v23_d2_report.json"
+        )
+        staged_inputs["bench_v23_pages.json"] = str(workspace / "bench_v23_pages.json")
+    environment = {
+        "BORSUK_BENCH_V23_STAGE": stage,
+        "BORSUK_BENCH_V23_SOURCE_ARCHIVE_SHA256": source_sha256,
+        "BORSUK_BENCH_V23_INDEX_ID": index_id,
+        "BORSUK_BENCH_V23_DATASET_ID": str(dataset["id"]),
+        "BORSUK_BENCH_OUTPUT_DIR": str(workspace / f"runtime-v23-{stage}"),
+        "BORSUK_BENCH_QUERIES": str(V23_QUERY_COUNT),
+        "BORSUK_BENCH_DISK_CACHE_MAX_BYTES": "0",
+        "BORSUK_BENCH_RAM_BUDGET_BYTES": str(V23_RAM_BUDGET_BYTES),
+    }
+    if d1_report_sha256 is not None:
+        environment["BORSUK_BENCH_V23_D1_REPORT_SHA256"] = d1_report_sha256
+    if d2_report_sha256 is not None:
+        environment["BORSUK_BENCH_V23_D2_REPORT_SHA256"] = d2_report_sha256
+    if page_uri is not None:
+        environment["BORSUK_BENCH_V23_PAGE_URI"] = page_uri
+    return {
+        "schema_version": 1,
+        "document_kind": "publication-v3-v23-diagnostic-plan",
+        "stage": stage,
+        "namespace": f"runtime-v23-{stage}",
+        "publishable": False,
+        "claim_eligible": False,
+        "runtime_profile": "recall",
+        "cache_state": "cold",
+        "queries": V23_QUERY_COUNT,
+        "disk_cache_bytes": 0,
+        "ram_budget_bytes": V23_RAM_BUDGET_BYTES,
+        "command": [str(borsuk_bench)],
+        "environment": environment,
+        "staged_inputs": staged_inputs,
+    }
+
+
+def _validate_v23_stage_summary(
+    value: object,
+    *,
+    stage: str,
+    expected_source_archive_sha256: str,
+    expected_index_id: str,
+    expected_dataset_id: str,
+    expected_d1_report_sha256: str | None,
+    rows: int,
+    arms: list[dict[str, object]],
+    pages: int,
+) -> dict[str, object]:
+    summary = _v23_mapping(
+        value,
+        {
+            "schema",
+            "document_kind",
+            "claim_eligible",
+            "stage",
+            "source_archive_sha256",
+            "index_id",
+            "dataset_id",
+            "d1_report_sha256",
+            "rows",
+            "queries",
+            "arms",
+            "passing_arm_indexes",
+            "pages",
+            "passed",
+        },
+        f"D{stage[-1]} summary",
+    )
+    _v23_identity(
+        summary,
+        expected_source_archive_sha256=expected_source_archive_sha256,
+        expected_index_id=expected_index_id,
+        expected_dataset_id=expected_dataset_id,
+    )
+    passing = [index for index, arm in enumerate(arms) if arm["passed"] is True]
+    if (
+        summary["schema"] != "borsuk-v23-summary-v1"
+        or summary["document_kind"] != f"publication-v3-v23-{stage}-summary"
+        or _v23_boolean(summary["claim_eligible"], "summary claim eligibility")
+        or summary["stage"] != stage
+        or summary["d1_report_sha256"] != expected_d1_report_sha256
+        or _v23_integer(summary["rows"], "summary rows", minimum=1) != rows
+        or _v23_integer(summary["queries"], "summary queries") != V23_QUERY_COUNT
+        or _v23_integer(summary["arms"], "summary arms", minimum=1) != len(arms)
+        or summary["passing_arm_indexes"] != passing
+        or any(type(index) is not int for index in summary["passing_arm_indexes"])
+        or _v23_integer(summary["pages"], "summary pages") != pages
+        or _v23_boolean(summary["passed"], "summary result") != bool(passing)
+    ):
+        raise ValueError(f"V23 {stage.upper()} summary differs")
+    return summary
+
+
+def _validate_v23_d1_report(value: object) -> dict[str, object]:
+    report = _v23_mapping(
+        value,
+        {
+            "schema",
+            "v20_root_checksum",
+            "v20_codebook_checksum",
+            "sample_ordinals_checksum",
+            "query_vectors_checksum",
+            "query_ordinals",
+            "rows",
+            "routing_cell_count",
+            "maximum_record_id_bytes",
+            "arms",
+        },
+        "D1 report",
+    )
+    for field in (
+        "v20_root_checksum",
+        "v20_codebook_checksum",
+        "sample_ordinals_checksum",
+        "query_vectors_checksum",
+    ):
+        _v23_digest(report[field], f"D1 {field}")
+    query_ordinals = report["query_ordinals"]
+    if (
+        report["schema"] != "borsuk-v23-d1-v3"
+        or type(query_ordinals) is not list
+        or len(query_ordinals) != V23_QUERY_COUNT
+        or any(type(item) is not int or item < 0 for item in query_ordinals)
+        or any(
+            left >= right
+            for left, right in zip(query_ordinals, query_ordinals[1:], strict=False)
+        )
+    ):
+        raise ValueError("V23 D1 query authority differs")
+    rows = _v23_integer(report["rows"], "D1 rows", minimum=1)
+    _v23_integer(report["routing_cell_count"], "D1 routing cells", minimum=1)
+    maximum_id_bytes = _v23_integer(
+        report["maximum_record_id_bytes"], "D1 record ID width", minimum=1, maximum=65_535
+    )
+    arms = report["arms"]
+    if type(arms) is not list or not arms:
+        raise ValueError("V23 D1 arms are absent")
+    prior_key: tuple[int, int] | None = None
+    ground_truth_authority: list[list[bytes]] | None = None
+    for arm_value in arms:
+        arm = _v23_mapping(
+            arm_value,
+            {
+                "key",
+                "quantizer_checksum",
+                "quantizer_state",
+                "query_samples",
+                "oracle_recall_ppm",
+                "routed_recall_ppm",
+                "scalar_simd_ids_equal",
+                "scalar_simd_max_distance_delta_ppm",
+                "cpu_p99_ns",
+                "four_page_projected_bytes",
+                "passed",
+            },
+            "D1 arm",
+        )
+        key = _v23_arm_key(arm["key"])
+        ordered_key = (V23_FAMILY_ORDER[key[0]], key[1])
+        if prior_key is not None and prior_key >= ordered_key:
+            raise ValueError("V23 D1 arm order differs")
+        prior_key = ordered_key
+        _v23_digest(arm["quantizer_checksum"], "D1 quantizer checksum")
+        if type(arm["quantizer_state"]) is not dict or not arm["quantizer_state"]:
+            raise ValueError("V23 D1 quantizer state is invalid")
+        samples = arm["query_samples"]
+        if type(samples) is not list or len(samples) != V23_QUERY_COUNT:
+            raise ValueError("V23 D1 sample cardinality differs")
+        oracle_hits = 0
+        routed_hits = 0
+        cpu: list[int] = []
+        ids_equal = True
+        maximum_delta_ppm = 0
+        arm_ground_truth: list[list[bytes]] = []
+        for expected_index, sample_value in enumerate(samples):
+            sample = _v23_mapping(
+                sample_value,
+                {
+                    "query_index",
+                    "ground_truth_ids",
+                    "oracle",
+                    "scalar_oracle",
+                    "routed",
+                    "oracle_candidate_rows",
+                    "routed_candidate_rows",
+                    "oracle_hits",
+                    "routed_hits",
+                    "cpu_ns",
+                },
+                "D1 query sample",
+            )
+            if _v23_integer(sample["query_index"], "D1 query index") != expected_index:
+                raise ValueError("V23 D1 sample order differs")
+            truth_value = sample["ground_truth_ids"]
+            if type(truth_value) is not list:
+                raise ValueError("V23 D1 ground truth is invalid")
+            truth = [_v23_identifier(item, "ground-truth ID") for item in truth_value]
+            if len(truth) != 10 or len(set(truth)) != 10:
+                raise ValueError("V23 D1 ground truth cardinality differs")
+            arm_ground_truth.append(truth)
+            oracle_ids, oracle_distances = _v23_ranked(sample["oracle"])
+            scalar_ids, scalar_distances = _v23_ranked(sample["scalar_oracle"])
+            routed_ids, _ = _v23_ranked(sample["routed"])
+            expected_oracle_hits = sum(identifier in set(truth) for identifier in oracle_ids)
+            expected_routed_hits = sum(identifier in set(truth) for identifier in routed_ids)
+            if (
+                _v23_integer(sample["oracle_candidate_rows"], "D1 oracle rows") != 2_048
+                or not 1
+                <= _v23_integer(sample["routed_candidate_rows"], "D1 routed rows")
+                <= rows
+                or _v23_integer(sample["oracle_hits"], "D1 oracle hits", maximum=10)
+                != expected_oracle_hits
+                or _v23_integer(sample["routed_hits"], "D1 routed hits", maximum=10)
+                != expected_routed_hits
+            ):
+                raise ValueError("V23 D1 query evidence differs")
+            oracle_hits += expected_oracle_hits
+            routed_hits += expected_routed_hits
+            cpu.append(_v23_integer(sample["cpu_ns"], "D1 CPU time", minimum=1))
+            ids_equal = ids_equal and oracle_ids == scalar_ids
+            for simd, scalar in zip(
+                oracle_distances, scalar_distances, strict=True
+            ):
+                numerator = abs(_v23_f32(simd - scalar))
+                denominator = _v23_f32(max(abs(scalar), 1.0))
+                delta = math.ceil(numerator / denominator * 1_000_000)
+                maximum_delta_ppm = max(maximum_delta_ppm, delta)
+        if ground_truth_authority is None:
+            ground_truth_authority = arm_ground_truth
+        elif arm_ground_truth != ground_truth_authority:
+            raise ValueError("V23 D1 ground-truth authority differs across arms")
+        oracle_ppm = _v23_ppm(oracle_hits, V23_QUERY_COUNT * 10)
+        routed_ppm = _v23_ppm(routed_hits, V23_QUERY_COUNT * 10)
+        cpu_p99 = _v23_nearest_rank(cpu, 99, 100)
+        projected = 4 * (96 + 4 * 2_049 + 2_048 * (key[1] + maximum_id_bytes))
+        passed = (
+            oracle_ppm >= 990_000
+            and routed_ppm >= 975_000
+            and ids_equal
+            and maximum_delta_ppm <= 10
+            and cpu_p99 <= 15_000_000
+            and projected <= V23_WAVE_MAX_BYTES
+        )
+        if (
+            _v23_integer(arm["oracle_recall_ppm"], "D1 oracle recall") != oracle_ppm
+            or _v23_integer(arm["routed_recall_ppm"], "D1 routed recall") != routed_ppm
+            or _v23_boolean(arm["scalar_simd_ids_equal"], "D1 scalar equality") != ids_equal
+            or _v23_integer(arm["scalar_simd_max_distance_delta_ppm"], "D1 distance delta")
+            != maximum_delta_ppm
+            or _v23_integer(arm["cpu_p99_ns"], "D1 CPU p99") != cpu_p99
+            or _v23_integer(arm["four_page_projected_bytes"], "D1 page projection") != projected
+            or _v23_boolean(arm["passed"], "D1 pass result") != passed
+        ):
+            raise ValueError("V23 D1 arm aggregate differs")
+    return report
+
+
+def validate_v23_d1_artifacts(
+    report_path: Path,
+    summary_path: Path,
+    *,
+    expected_source_archive_sha256: str,
+    expected_index_id: str,
+    expected_dataset_id: str,
+) -> dict[str, object]:
+    artifact = _v23_mapping(
+        _read_canonical_value(report_path, 64 * 1024 * 1024),
+        {
+            "schema",
+            "document_kind",
+            "claim_eligible",
+            "stage",
+            "source_archive_sha256",
+            "index_id",
+            "dataset_id",
+            "report",
+        },
+        "D1 artifact",
+    )
+    _v23_identity(
+        artifact,
+        expected_source_archive_sha256=expected_source_archive_sha256,
+        expected_index_id=expected_index_id,
+        expected_dataset_id=expected_dataset_id,
+    )
+    if (
+        artifact["schema"] != "borsuk-v23-d1-artifact-v1"
+        or artifact["document_kind"] != "publication-v3-v23-d1-report"
+        or _v23_boolean(artifact["claim_eligible"], "D1 claim eligibility")
+        or artifact["stage"] != "d1"
+    ):
+        raise ValueError("V23 D1 artifact authority differs")
+    report = _validate_v23_d1_report(artifact["report"])
+    summary = _validate_v23_stage_summary(
+        _read_canonical_value(summary_path, 256 * 1024),
+        stage="d1",
+        expected_source_archive_sha256=expected_source_archive_sha256,
+        expected_index_id=expected_index_id,
+        expected_dataset_id=expected_dataset_id,
+        expected_d1_report_sha256=None,
+        rows=report["rows"],
+        arms=report["arms"],
+        pages=0,
+    )
+    return {
+        **summary,
+        "publishable": False,
+        "claim_eligible": False,
+        "artifact_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+    }
+
+
+def _validate_v23_page(value: object, expected_ordinal: int) -> dict[str, object]:
+    page = _v23_mapping(
+        value,
+        {
+            "generation_checksum",
+            "page_ordinal",
+            "metric",
+            "dimensions",
+            "family",
+            "code_width",
+            "path",
+            "checksum",
+            "encoded_bytes",
+            "primary_rows",
+            "replicated_rows",
+            "centroid",
+        },
+        "D2 page",
+    )
+    generation = page["generation_checksum"]
+    if (
+        type(generation) is not list
+        or len(generation) != 32
+        or all(value == 0 for value in generation)
+        or any(type(value) is not int or not 0 <= value <= 255 for value in generation)
+    ):
+        raise ValueError("V23 D2 generation checksum is invalid")
+    checksum = _v23_digest(page["checksum"], "D2 page checksum")
+    centroid = page["centroid"]
+    dimensions = _v23_integer(page["dimensions"], "D2 dimensions", minimum=1)
+    if (
+        _v23_integer(page["page_ordinal"], "D2 page ordinal") != expected_ordinal
+        or page["metric"] not in {"euclidean", "squared-euclidean", "cosine"}
+        or type(page["metric"]) is not str
+        or page["family"] not in V23_FAMILIES
+        or type(page["family"]) is not str
+        or not 1 <= _v23_integer(page["code_width"], "D2 code width") <= 64
+        or page["path"] != f"pages/{checksum}"
+        or not 1 <= _v23_integer(page["encoded_bytes"], "D2 encoded bytes") <= V23_PAGE_MAX_BYTES
+        or _v23_integer(page["primary_rows"], "D2 primary rows", minimum=1) > 65_535
+        or _v23_integer(page["replicated_rows"], "D2 replicated rows") > 65_535
+        or type(centroid) is not list
+        or len(centroid) != dimensions
+        or any(type(item) is not float or not math.isfinite(item) for item in centroid)
+    ):
+        raise ValueError("V23 D2 page authority differs")
+    return page
+
+
+def _v23_d2_projection(unique_rows: int, page_count: int, dimensions: int) -> tuple[int, int]:
+    projected_pages = max((page_count * 100_000_000 + unique_rows - 1) // unique_rows, page_count)
+    centroid_bytes = dimensions * 4
+    root = 96 + projected_pages * (96 + centroid_bytes)
+    catalog = projected_pages * (32 + centroid_bytes)
+    router = projected_pages * 4_096
+    return root, root + catalog + router + 512 * 1024**2 + 2 * V23_WAVE_MAX_BYTES
+
+
+def _v23_d2_metrics(arm: dict[str, object]) -> tuple[int, int, int, int, int]:
+    samples = arm["query_samples"]
+    return (
+        _v23_integer(arm["aggregate_recall_ppm"], "D2 aggregate recall"),
+        max(_v23_integer(sample["encoded_bytes"], "D2 sample bytes") for sample in samples),
+        max(len(sample["page_ordinals"]) for sample in samples),
+        _v23_integer(arm["storage_amplification_ppm"], "D2 amplification"),
+        _v23_integer(arm["projected_ram_bytes"], "D2 projected RAM"),
+    )
+
+
+def _v23_d2_dominates(left: dict[str, object], right: dict[str, object]) -> bool:
+    l_recall, l_bytes, l_pages, l_amp, l_ram = _v23_d2_metrics(left)
+    r_recall, r_bytes, r_pages, r_amp, r_ram = _v23_d2_metrics(right)
+    no_worse = (
+        l_recall >= r_recall
+        and l_bytes <= r_bytes
+        and l_pages <= r_pages
+        and l_amp <= r_amp
+        and l_ram <= r_ram
+    )
+    return no_worse and (l_recall, -l_bytes, -l_pages, -l_amp, -l_ram) != (
+        r_recall,
+        -r_bytes,
+        -r_pages,
+        -r_amp,
+        -r_ram,
+    )
+
+
+def _validate_v23_d2_report(value: object) -> dict[str, object]:
+    report = _v23_mapping(
+        value, {"schema", "d1_report_checksum", "query_ordinals", "rows", "arms"}, "D2 report"
+    )
+    _v23_digest(report["d1_report_checksum"], "D2 D1 report checksum")
+    ordinals = report["query_ordinals"]
+    if (
+        report["schema"] != "borsuk-v23-d2-v3"
+        or type(ordinals) is not list
+        or len(ordinals) != V23_QUERY_COUNT
+        or any(type(item) is not int or item < 0 for item in ordinals)
+        or any(
+            left >= right
+            for left, right in zip(ordinals, ordinals[1:], strict=False)
+        )
+    ):
+        raise ValueError("V23 D2 query authority differs")
+    rows = _v23_integer(report["rows"], "D2 rows", minimum=1)
+    arms = report["arms"]
+    if type(arms) is not list or not 1 <= len(arms) <= 3:
+        raise ValueError("V23 D2 frontier cardinality differs")
+    build_peak: int | None = None
+    prior_objective: tuple[object, ...] | None = None
+    ground_truth_authority: list[list[bytes]] | None = None
+    for arm_value in arms:
+        arm = _v23_mapping(
+            arm_value,
+            {
+                "d1_key",
+                "primary_target_rows",
+                "maximum_assignments_per_row",
+                "maximum_query_pages",
+                "maximum_record_id_bytes",
+                "pages",
+                "unique_rows",
+                "total_assignments",
+                "storage_amplification_ppm",
+                "projected_root_bytes",
+                "projected_ram_bytes",
+                "projected_build_bytes",
+                "query_samples",
+                "aggregate_recall_ppm",
+                "minimum_query_recall_ppm",
+                "cpu_p99_ns",
+                "passed",
+            },
+            "D2 arm",
+        )
+        family, width = _v23_arm_key(arm["d1_key"])
+        primary_target = _v23_integer(arm["primary_target_rows"], "D2 primary target")
+        assignments_per_row = _v23_integer(
+            arm["maximum_assignments_per_row"], "D2 assignment cap", minimum=1, maximum=3
+        )
+        query_page_cap = _v23_integer(
+            arm["maximum_query_pages"], "D2 query page cap", minimum=1, maximum=4
+        )
+        id_width = _v23_integer(arm["maximum_record_id_bytes"], "D2 ID width", minimum=1)
+        if primary_target not in {512, 1_024, 2_048}:
+            raise ValueError("V23 D2 primary target differs")
+        pages_value = arm["pages"]
+        if type(pages_value) is not list or not pages_value:
+            raise ValueError("V23 D2 pages are absent")
+        pages = [_validate_v23_page(page, index) for index, page in enumerate(pages_value)]
+        first = pages[0]
+        if any(
+            page["generation_checksum"] != first["generation_checksum"]
+            or page["metric"] != first["metric"]
+            or page["dimensions"] != first["dimensions"]
+            or page["family"] != family
+            or page["code_width"] != width
+            for page in pages
+        ):
+            raise ValueError("V23 D2 page family authority differs")
+        unique_rows = _v23_integer(arm["unique_rows"], "D2 unique rows", minimum=1)
+        primary_rows = sum(page["primary_rows"] for page in pages)
+        total_assignments = sum(page["primary_rows"] + page["replicated_rows"] for page in pages)
+        amplification = _v23_ppm(total_assignments, unique_rows)
+        projected_root, projected_ram = _v23_d2_projection(unique_rows, len(pages), first["dimensions"])
+        observed_build_peak = _v23_integer(arm["projected_build_bytes"], "D2 build projection", minimum=1)
+        if build_peak is None:
+            build_peak = observed_build_peak
+        if (
+            unique_rows != rows
+            or primary_rows != unique_rows
+            or _v23_integer(arm["total_assignments"], "D2 total assignments") != total_assignments
+            or _v23_integer(arm["storage_amplification_ppm"], "D2 amplification") != amplification
+            or _v23_integer(arm["projected_root_bytes"], "D2 root projection") != projected_root
+            or _v23_integer(arm["projected_ram_bytes"], "D2 RAM projection") != projected_ram
+            or observed_build_peak != build_peak
+            or id_width <= 0
+            or assignments_per_row <= 0
+        ):
+            raise ValueError("V23 D2 assignment or memory projection differs")
+        samples = arm["query_samples"]
+        if type(samples) is not list or len(samples) != V23_QUERY_COUNT:
+            raise ValueError("V23 D2 sample cardinality differs")
+        hits_total = 0
+        recalls: list[int] = []
+        cpu: list[int] = []
+        maximum_selected_pages = 0
+        arm_ground_truth: list[list[bytes]] = []
+        for expected_index, sample_value in enumerate(samples):
+            sample = _v23_mapping(
+                sample_value,
+                {
+                    "query_index",
+                    "page_ordinals",
+                    "encoded_bytes",
+                    "candidate_rows",
+                    "ground_truth_ids",
+                    "ranked",
+                    "gt_page_hits",
+                    "hits",
+                    "recall_ppm",
+                    "cpu_ns",
+                },
+                "D2 query sample",
+            )
+            if _v23_integer(sample["query_index"], "D2 query index") != expected_index:
+                raise ValueError("V23 D2 sample order differs")
+            page_ordinals = sample["page_ordinals"]
+            if (
+                type(page_ordinals) is not list
+                or not page_ordinals
+                or len(page_ordinals) > query_page_cap
+                or any(type(item) is not int or not 0 <= item < len(pages) for item in page_ordinals)
+                or page_ordinals != sorted(set(page_ordinals))
+            ):
+                raise ValueError("V23 D2 selected pages differ")
+            selected_pages = [pages[index] for index in page_ordinals]
+            encoded = sum(page["encoded_bytes"] for page in selected_pages)
+            candidates = sum(page["primary_rows"] + page["replicated_rows"] for page in selected_pages)
+            truth_value = sample["ground_truth_ids"]
+            if type(truth_value) is not list:
+                raise ValueError("V23 D2 ground truth is invalid")
+            truth = [_v23_identifier(item, "D2 ground-truth ID") for item in truth_value]
+            if len(truth) != 10 or len(set(truth)) != 10:
+                raise ValueError("V23 D2 ground truth cardinality differs")
+            arm_ground_truth.append(truth)
+            ranked_ids, _ = _v23_ranked(sample["ranked"], minimum=1)
+            hits = sum(identifier in set(truth) for identifier in ranked_ids)
+            recall = hits * 100_000
+            if (
+                encoded > V23_WAVE_MAX_BYTES
+                or _v23_integer(sample["encoded_bytes"], "D2 sample bytes") != encoded
+                or _v23_integer(sample["candidate_rows"], "D2 candidate rows", minimum=1) != candidates
+                or _v23_integer(sample["gt_page_hits"], "D2 page hits", maximum=10) < hits
+                or _v23_integer(sample["hits"], "D2 hits", maximum=10) != hits
+                or _v23_integer(sample["recall_ppm"], "D2 recall") != recall
+            ):
+                raise ValueError("V23 D2 query evidence differs")
+            hits_total += hits
+            recalls.append(recall)
+            cpu.append(_v23_integer(sample["cpu_ns"], "D2 CPU time", minimum=1))
+            maximum_selected_pages = max(maximum_selected_pages, len(page_ordinals))
+        if ground_truth_authority is None:
+            ground_truth_authority = arm_ground_truth
+        elif arm_ground_truth != ground_truth_authority:
+            raise ValueError("V23 D2 ground-truth authority differs across arms")
+        aggregate = _v23_ppm(hits_total, V23_QUERY_COUNT * 10)
+        minimum_recall = min(recalls)
+        cpu_p99 = _v23_nearest_rank(cpu, 99, 100)
+        passed = (
+            aggregate >= 975_000
+            and minimum_recall >= 800_000
+            and amplification <= 2_000_000
+            and projected_ram <= V23_RAM_BUDGET_BYTES
+            and cpu_p99 <= 15_000_000
+        )
+        if (
+            maximum_selected_pages != min(query_page_cap, len(pages))
+            or _v23_integer(arm["aggregate_recall_ppm"], "D2 aggregate recall") != aggregate
+            or _v23_integer(arm["minimum_query_recall_ppm"], "D2 minimum recall") != minimum_recall
+            or _v23_integer(arm["cpu_p99_ns"], "D2 CPU p99") != cpu_p99
+            or _v23_boolean(arm["passed"], "D2 pass result") != passed
+        ):
+            raise ValueError("V23 D2 arm aggregate differs")
+        objective = (-aggregate, max(sample["encoded_bytes"] for sample in samples), maximum_selected_pages, amplification, projected_ram, V23_FAMILY_ORDER[family], width, primary_target, assignments_per_row, query_page_cap)
+        if prior_objective is not None and prior_objective >= objective:
+            raise ValueError("V23 D2 frontier order differs")
+        prior_objective = objective
+    if any(arm["passed"] is True for arm in arms) and any(arm["passed"] is False for arm in arms):
+        raise ValueError("V23 D2 frontier mixes passing and failing arms")
+    if any(
+        _v23_d2_dominates(other, candidate)
+        for index, candidate in enumerate(arms)
+        for other_index, other in enumerate(arms)
+        if index != other_index
+    ):
+        raise ValueError("V23 D2 frontier contains a dominated arm")
+    return report
+
+
+def validate_v23_d2_artifacts(
+    report_path: Path,
+    pages_path: Path,
+    summary_path: Path,
+    *,
+    expected_source_archive_sha256: str,
+    expected_index_id: str,
+    expected_dataset_id: str,
+    expected_d1_report_sha256: str,
+    expected_page_uri: str,
+) -> dict[str, object]:
+    _v23_digest(expected_d1_report_sha256, "expected D1 artifact SHA-256")
+    expected_page_uri = _v23_standard_s3_prefix(expected_page_uri)
+    artifact = _v23_mapping(
+        _read_canonical_value(report_path, 128 * 1024 * 1024),
+        {"schema", "document_kind", "claim_eligible", "stage", "source_archive_sha256", "index_id", "dataset_id", "d1_report_sha256", "page_uri", "report"},
+        "D2 artifact",
+    )
+    roster = _v23_mapping(
+        _read_canonical_value(pages_path, 128 * 1024 * 1024),
+        {"schema", "document_kind", "claim_eligible", "stage", "source_archive_sha256", "index_id", "dataset_id", "d1_report_sha256", "page_uri", "pages"},
+        "D2 page roster",
+    )
+    for value in (artifact, roster):
+        _v23_identity(
+            value,
+            expected_source_archive_sha256=expected_source_archive_sha256,
+            expected_index_id=expected_index_id,
+            expected_dataset_id=expected_dataset_id,
+        )
+        if (
+            _v23_boolean(value["claim_eligible"], "D2 claim eligibility")
+            or value["stage"] != "d2"
+            or value["d1_report_sha256"] != expected_d1_report_sha256
+            or value["page_uri"] != expected_page_uri
+        ):
+            raise ValueError("V23 D2 prerequisite authority differs")
+    if (
+        artifact["schema"] != "borsuk-v23-d2-artifact-v1"
+        or artifact["document_kind"] != "publication-v3-v23-d2-report"
+        or roster["schema"] != "borsuk-v23-pages-v1"
+        or roster["document_kind"] != "publication-v3-v23-page-roster"
+    ):
+        raise ValueError("V23 D2 artifact schema differs")
+    report = _validate_v23_d2_report(artifact["report"])
+    expected_pages: list[dict[str, object]] = []
+    seen_paths: set[str] = set()
+    for arm in report["arms"]:
+        for page in arm["pages"]:
+            if page["path"] not in seen_paths:
+                expected_pages.append(page)
+                seen_paths.add(page["path"])
+    if roster["pages"] != expected_pages:
+        raise ValueError("V23 D2 page roster differs")
+    summary = _validate_v23_stage_summary(
+        _read_canonical_value(summary_path, 256 * 1024),
+        stage="d2",
+        expected_source_archive_sha256=expected_source_archive_sha256,
+        expected_index_id=expected_index_id,
+        expected_dataset_id=expected_dataset_id,
+        expected_d1_report_sha256=expected_d1_report_sha256,
+        rows=report["rows"],
+        arms=report["arms"],
+        pages=len(expected_pages),
+    )
+    return {
+        **summary,
+        "publishable": False,
+        "claim_eligible": False,
+        "artifact_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+        "pages_sha256": hashlib.sha256(pages_path.read_bytes()).hexdigest(),
+    }
+
+
+V23_D3_FIELDS = (
+    "schema",
+    "arm_index",
+    "d2_arm_index",
+    "arm_key",
+    "repetition_index",
+    "query_index",
+    "page_ordinals",
+    "encoded_bytes",
+    "candidate_rows",
+    "ground_truth_ids",
+    "ranked_ids",
+    "ranked_distance_bits",
+    "hits",
+    "recall_ppm",
+    "backing_gets",
+    "backing_get_concurrency",
+    "backing_bytes",
+    "backing_queue_us_sum",
+    "backing_queue_us_max",
+    "backing_service_us_sum",
+    "backing_service_us_max",
+    "cpu_ns",
+    "transient_admission_wait_ns",
+    "request_admission_wait_ns",
+    "service_ns",
+    "elapsed_ns",
+    "transient_peak_bytes",
+    "request_peak_gets",
+)
+
+
+def _v23_csv_integer(value: str, label: str, *, minimum: int = 0) -> int:
+    if (
+        not value
+        or not value.isascii()
+        or not value.isdigit()
+        or (len(value) > 1 and value.startswith("0"))
+    ):
+        raise ValueError(f"V23 D3 {label} is invalid")
+    parsed = int(value)
+    if parsed < minimum:
+        raise ValueError(f"V23 D3 {label} is invalid")
+    return parsed
+
+
+def _v23_csv_list(value: str, label: str) -> list[str]:
+    parts = value.split("|")
+    if not value or any(not part for part in parts):
+        raise ValueError(f"V23 D3 {label} is invalid")
+    return parts
+
+
+def _v23_hex_identifier(value: str, label: str) -> bytes:
+    if len(value) % 2 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError(f"V23 D3 {label} is invalid")
+    try:
+        decoded = bytes.fromhex(value)
+    except ValueError as error:
+        raise ValueError(f"V23 D3 {label} is invalid") from error
+    if not decoded:
+        raise ValueError(f"V23 D3 {label} is invalid")
+    return decoded
+
+
+def _validate_v23_d3_row(row: dict[str, str]) -> dict[str, object]:
+    if tuple(row) != V23_D3_FIELDS or row["schema"] != "borsuk-v23-d3-v1":
+        raise ValueError("V23 D3 CSV schema differs")
+    arm_key = row["arm_key"]
+    if not arm_key or any(
+        not (character.isascii() and (character.islower() or character.isdigit() or character in "-:"))
+        for character in arm_key
+    ):
+        raise ValueError("V23 D3 arm key is invalid")
+    page_ordinals = [
+        _v23_csv_integer(item, "page ordinal")
+        for item in _v23_csv_list(row["page_ordinals"], "page ordinals")
+    ]
+    if page_ordinals != sorted(set(page_ordinals)) or not 1 <= len(page_ordinals) <= 4:
+        raise ValueError("V23 D3 page ordinals differ")
+    truth = [
+        _v23_hex_identifier(item, "ground-truth ID")
+        for item in _v23_csv_list(row["ground_truth_ids"], "ground truth")
+    ]
+    ranked = [
+        _v23_hex_identifier(item, "ranked ID")
+        for item in _v23_csv_list(row["ranked_ids"], "ranked IDs")
+    ]
+    distance_bits = _v23_csv_list(row["ranked_distance_bits"], "ranked distances")
+    if (
+        len(truth) != 10
+        or len(set(truth)) != 10
+        or len(ranked) != 10
+        or len(set(ranked)) != 10
+        or len(distance_bits) != 10
+    ):
+        raise ValueError("V23 D3 ranked evidence cardinality differs")
+    distances: list[float] = []
+    for bits in distance_bits:
+        if len(bits) != 8 or any(character not in "0123456789abcdef" for character in bits):
+            raise ValueError("V23 D3 ranked distance bits differ")
+        distance = struct.unpack("!f", int(bits, 16).to_bytes(4, "big"))[0]
+        if not math.isfinite(distance):
+            raise ValueError("V23 D3 ranked distance is nonfinite")
+        distances.append(distance)
+    if list(zip(distances, ranked, strict=True)) != sorted(
+        zip(distances, ranked, strict=True)
+    ):
+        raise ValueError("V23 D3 ranked order differs")
+    values = {
+        field: _v23_csv_integer(row[field], field, minimum=1 if field in {
+            "encoded_bytes", "candidate_rows", "backing_gets", "backing_get_concurrency",
+            "backing_bytes", "cpu_ns", "service_ns", "elapsed_ns", "transient_peak_bytes",
+            "request_peak_gets",
+        } else 0)
+        for field in V23_D3_FIELDS
+        if field not in {
+            "schema", "arm_key", "page_ordinals", "ground_truth_ids", "ranked_ids",
+            "ranked_distance_bits",
+        }
+    }
+    hits = sum(identifier in set(truth) for identifier in ranked)
+    elapsed = (
+        values["transient_admission_wait_ns"]
+        + values["request_admission_wait_ns"]
+        + values["service_ns"]
+    )
+    if (
+        values["query_index"] >= V23_QUERY_COUNT
+        or values["encoded_bytes"] > V23_WAVE_MAX_BYTES
+        or values["backing_gets"] != len(page_ordinals)
+        or values["backing_get_concurrency"] < values["backing_gets"]
+        or values["backing_bytes"] != values["encoded_bytes"]
+        or values["backing_queue_us_max"] > values["backing_queue_us_sum"]
+        or values["backing_service_us_max"] > values["backing_service_us_sum"]
+        or values["backing_service_us_max"] * 1_000 > values["service_ns"]
+        or values["cpu_ns"] > values["service_ns"]
+        or values["elapsed_ns"] != elapsed
+        or values["hits"] != hits
+        or values["recall_ppm"] != hits * 100_000
+        or values["transient_peak_bytes"] < values["encoded_bytes"]
+        or values["transient_peak_bytes"] > V23_RAM_BUDGET_BYTES
+        or not values["backing_gets"] <= values["request_peak_gets"] <= values["backing_get_concurrency"]
+    ):
+        raise ValueError("V23 D3 cold-wave evidence differs")
+    return {
+        **values,
+        "arm_key": arm_key,
+        "page_ordinals": page_ordinals,
+        "ground_truth_ids": truth,
+    }
+
+
+def validate_v23_d3_artifacts(
+    samples_path: Path,
+    summary_path: Path,
+    *,
+    expected_source_archive_sha256: str,
+    expected_index_id: str,
+    expected_dataset_id: str,
+    expected_d1_report_sha256: str,
+    expected_d2_report_sha256: str,
+    expected_page_uri: str,
+) -> dict[str, object]:
+    _v23_digest(expected_d1_report_sha256, "expected D1 artifact SHA-256")
+    _v23_digest(expected_d2_report_sha256, "expected D2 artifact SHA-256")
+    expected_page_uri = _v23_standard_s3_prefix(expected_page_uri)
+    summary = _v23_mapping(
+        _read_canonical_value(summary_path, 2 * 1024 * 1024),
+        {
+            "schema", "document_kind", "claim_eligible", "stage", "source_archive_sha256",
+            "index_id", "dataset_id", "d1_report_sha256", "d2_report_sha256", "page_uri",
+            "disk_cache_bytes", "passing_arm_indexes", "arms", "passed",
+        },
+        "D3 summary",
+    )
+    _v23_identity(
+        summary,
+        expected_source_archive_sha256=expected_source_archive_sha256,
+        expected_index_id=expected_index_id,
+        expected_dataset_id=expected_dataset_id,
+    )
+    if (
+        summary["schema"] != "borsuk-v23-d3-v1"
+        or summary["document_kind"] != "publication-v3-v23-d3-summary"
+        or _v23_boolean(summary["claim_eligible"], "D3 claim eligibility")
+        or summary["stage"] != "d3"
+        or summary["d1_report_sha256"] != expected_d1_report_sha256
+        or summary["d2_report_sha256"] != expected_d2_report_sha256
+        or summary["page_uri"] != expected_page_uri
+        or _v23_integer(summary["disk_cache_bytes"], "D3 disk cache bytes") != 0
+    ):
+        raise ValueError("V23 D3 summary authority differs")
+    arms_value = summary["arms"]
+    if type(arms_value) is not list or not 1 <= len(arms_value) <= 3:
+        raise ValueError("V23 D3 arm cardinality differs")
+    samples_payload = samples_path.read_bytes()
+    if (
+        not samples_payload
+        or len(samples_payload) > 64 * 1024 * 1024
+        or not samples_payload.endswith(b"\n")
+        or b"\r" in samples_payload
+    ):
+        raise ValueError("V23 D3 CSV is missing or exceeds its canonical bound")
+    try:
+        samples_text = samples_payload.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ValueError("V23 D3 CSV is not canonical ASCII") from error
+    with io.StringIO(samples_text, newline="") as stream:
+        reader = csv.DictReader(stream)
+        if tuple(reader.fieldnames or ()) != V23_D3_FIELDS:
+            raise ValueError("V23 D3 CSV header differs")
+        raw_rows = list(reader)
+    if len(raw_rows) != len(arms_value) * V23_D3_WAVES:
+        raise ValueError("V23 D3 wave cardinality differs")
+    rows = [_validate_v23_d3_row(row) for row in raw_rows]
+    ground_truth_authority: list[list[bytes] | None] = [None] * V23_QUERY_COUNT
+    for row in rows:
+        query_index = row["query_index"]
+        truth = row["ground_truth_ids"]
+        if ground_truth_authority[query_index] is None:
+            ground_truth_authority[query_index] = truth
+        elif ground_truth_authority[query_index] != truth:
+            raise ValueError("V23 D3 ground-truth authority differs across waves")
+    computed_arms: list[dict[str, object]] = []
+    prior_d2_index: int | None = None
+    for arm_index, persisted_arm_value in enumerate(arms_value):
+        arm_rows = rows[arm_index * V23_D3_WAVES : (arm_index + 1) * V23_D3_WAVES]
+        d2_arm_index = arm_rows[0]["d2_arm_index"]
+        arm_key = arm_rows[0]["arm_key"]
+        if prior_d2_index is not None and prior_d2_index >= d2_arm_index:
+            raise ValueError("V23 D3 D2 arm order differs")
+        prior_d2_index = d2_arm_index
+        offset = 0
+        per_query_hits = [0] * V23_QUERY_COUNT
+        per_query_samples = [0] * V23_QUERY_COUNT
+        for query_index in range(V23_QUERY_COUNT):
+            for repetition_index in range(query_index, V23_D3_WAVES, V23_QUERY_COUNT):
+                row = arm_rows[offset]
+                offset += 1
+                if (
+                    row["arm_index"] != arm_index
+                    or row["d2_arm_index"] != d2_arm_index
+                    or row["arm_key"] != arm_key
+                    or row["repetition_index"] != repetition_index
+                    or row["query_index"] != query_index
+                ):
+                    raise ValueError("V23 D3 wave schedule differs")
+                per_query_hits[query_index] += row["hits"]
+                per_query_samples[query_index] += 1
+        latencies = [row["elapsed_ns"] for row in arm_rows]
+        aggregate = sum(
+            hits * 1_000_000 // (samples * 10)
+            for hits, samples in zip(
+                per_query_hits, per_query_samples, strict=True
+            )
+        ) // V23_QUERY_COUNT
+        computed = {
+            "arm_index": arm_index,
+            "d2_arm_index": d2_arm_index,
+            "arm_key": arm_key,
+            "samples": V23_D3_WAVES,
+            "p50_ns": _v23_nearest_rank(latencies, 50, 100),
+            "p95_ns": _v23_nearest_rank(latencies, 95, 100),
+            "p99_ns": _v23_nearest_rank(latencies, 99, 100),
+            "maximum_ns": max(latencies),
+            "maximum_pages": max(len(row["page_ordinals"]) for row in arm_rows),
+            "maximum_encoded_bytes": max(row["encoded_bytes"] for row in arm_rows),
+            "maximum_backing_gets": max(row["backing_gets"] for row in arm_rows),
+            "maximum_backing_bytes": max(row["backing_bytes"] for row in arm_rows),
+            "maximum_transient_peak_bytes": max(row["transient_peak_bytes"] for row in arm_rows),
+            "maximum_request_peak_gets": max(row["request_peak_gets"] for row in arm_rows),
+            "aggregate_recall_ppm": aggregate,
+            "minimum_wave_recall_ppm": min(row["recall_ppm"] for row in arm_rows),
+        }
+        computed["passed"] = (
+            computed["p50_ns"] <= 60_000_000
+            and computed["p95_ns"] <= 100_000_000
+            and computed["p99_ns"] <= 150_000_000
+            and computed["aggregate_recall_ppm"] >= 975_000
+            and computed["minimum_wave_recall_ppm"] >= 800_000
+        )
+        persisted_arm = _v23_mapping(persisted_arm_value, set(computed), "D3 arm summary")
+        for key, expected in computed.items():
+            if type(persisted_arm[key]) is not type(expected) or persisted_arm[key] != expected:
+                raise ValueError("V23 D3 arm summary differs")
+        computed_arms.append(computed)
+    passing = [arm["d2_arm_index"] for arm in computed_arms if arm["passed"] is True]
+    if (
+        summary["passing_arm_indexes"] != passing
+        or any(type(index) is not int for index in summary["passing_arm_indexes"])
+        or _v23_boolean(summary["passed"], "D3 pass result") != bool(passing)
+    ):
+        raise ValueError("V23 D3 aggregate result differs")
+    return {
+        **summary,
+        "publishable": False,
+        "claim_eligible": False,
+        "samples_sha256": hashlib.sha256(samples_payload).hexdigest(),
+        "summary_sha256": hashlib.sha256(summary_path.read_bytes()).hexdigest(),
+    }
 
 
 def runtime_execution_contract(
