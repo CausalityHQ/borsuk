@@ -677,6 +677,43 @@ pub struct V23D3WaveResult {
     pub request_peak_gets: u32,
 }
 
+/// Reusable immutable publisher for authenticated diagnostic pages.
+#[doc(hidden)]
+pub struct V23PagePublisher {
+    storage: Storage,
+}
+
+impl V23PagePublisher {
+    /// Open the backing client once for a complete D2 publication run.
+    pub fn new(storage_uri: &str) -> Result<Self> {
+        if storage_uri.is_empty() {
+            return Err(BorsukError::InvalidStorage(
+                "V23 diagnostic page publication URI is absent".to_string(),
+            ));
+        }
+        Ok(Self {
+            storage: Storage::from_uri(storage_uri)?,
+        })
+    }
+
+    /// Publish one authenticated page with immutable create semantics.
+    pub fn publish(&self, page: &V23PageRef, bytes: &[u8]) -> Result<()> {
+        if page.path != format!("pages/{}", page.checksum)
+            || bytes.len() as u64 != page.encoded_bytes
+            || page.encoded_bytes == 0
+            || page.encoded_bytes > V23_PAGE_MAX_ENCODED_BYTES
+            || !valid_checksum(&page.checksum)
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V23 diagnostic page publication authority differs".to_string(),
+            ));
+        }
+        self.storage
+            .create_bytes_verified(&page.path, bytes, &page.checksum)?;
+        Ok(())
+    }
+}
+
 fn validate_v23_d3_request_capacity(
     maximum_query_pages: usize,
     backing_get_concurrency: usize,

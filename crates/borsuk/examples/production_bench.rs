@@ -6,7 +6,7 @@ use std::{
     error::Error,
     fs::{self, File},
     io::{self, BufReader, BufWriter, Read, Write},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     str::FromStr,
     sync::{Arc, Barrier, OnceLock},
     thread,
@@ -34,6 +34,8 @@ use borsuk::{
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use url::Url;
 
 #[cfg(test)]
 use borsuk::V21FeasibilityQuerySample;
@@ -91,6 +93,15 @@ const V21_FEASIBILITY_SCHEMA: &str = "borsuk-v21-selector-feasibility-v1";
 const V21_FEASIBILITY_ARMS_HEADER: &str = "schema,arm_index,bundle_row_limit,selector_span,hedge_delay_ms,bundle_count,region_count,projected_directory_bytes,replaced_v20_root_bytes,v20_root_checksum,baseline_rss_bytes,projected_query_transient_bytes,projected_peak_rss_bytes,gt_coverage,recall_at_10,maximum_actual_requests,maximum_physical_bytes,selector_within_frozen_cap,eligible,rows";
 const V21_FEASIBILITY_SAMPLES_HEADER: &str = "schema,arm_index,query_index,query_source_index,routed_cells,selected_rows,selected_bundles,primary_requests,maximum_actual_requests,selected_bytes,physical_bytes,gt_hits,recall_hits,limiting_bound";
 const V22_STAGE_L_SCHEMA: &str = "borsuk-v22-stage-l-layout-v1";
+const V23_D3_WAVES_PER_ARM: usize = 1_000;
+const V23_D3_QUERY_COUNT: u32 = 32;
+const V23_D3_MAX_PAGES: usize = 4;
+const V23_D3_MAX_ENCODED_BYTES: u64 = 983_040;
+const V23_D3_MAX_TRANSIENT_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+const V23_D3_P50_GATE_NS: u64 = 60_000_000;
+const V23_D3_P95_GATE_NS: u64 = 100_000_000;
+const V23_D3_P99_GATE_NS: u64 = 150_000_000;
+const V23_D3_WAVES_HEADER: &str = "schema,arm_index,d2_arm_index,arm_key,repetition_index,query_index,page_ordinals,encoded_bytes,candidate_rows,ground_truth_ids,ranked_ids,ranked_distance_bits,hits,recall_ppm,backing_gets,backing_get_concurrency,backing_bytes,backing_queue_us_sum,backing_queue_us_max,backing_service_us_sum,backing_service_us_max,cpu_ns,transient_admission_wait_ns,request_admission_wait_ns,service_ns,elapsed_ns,transient_peak_bytes,request_peak_gets";
 const DEFAULT_PRODUCTION_RAM_BUDGET_BYTES: u64 = borsuk::DEFAULT_RAM_BUDGET_BYTES;
 // AWS S3 Standard GET pricing in eu-central-1 at the 2026-07-20 snapshot:
 // $0.43 per one million requests. The checked-in dated cost model records the
@@ -180,6 +191,7 @@ struct ResolvedConfig {
     v22_source_archive_sha256: Option<String>,
     v22_index_id: Option<String>,
     v22_dataset_id: Option<String>,
+    v23_mode: Option<V23ModeConfig>,
     preload_serving: bool,
     _uri_temp: Option<tempfile::TempDir>,
     _cache_temp: Option<tempfile::TempDir>,
@@ -381,6 +393,1194 @@ struct V22StageLSummary {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum V23Stage {
+    D1,
+    D2,
+    D3,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct V23ModeConfig {
+    stage: V23Stage,
+    source_archive_sha256: String,
+    index_id: String,
+    dataset_id: String,
+    d1_report_sha256: Option<String>,
+    d2_report_sha256: Option<String>,
+    page_uri: Option<String>,
+}
+
+fn parse_v23_stage(value: Option<&str>) -> io::Result<Option<V23Stage>> {
+    value
+        .map(|value| match value {
+            "d1" => Ok(V23Stage::D1),
+            "d2" => Ok(V23Stage::D2),
+            "d3" => Ok(V23Stage::D3),
+            _ => Err(invalid_input(
+                "BORSUK_BENCH_V23_STAGE must be d1, d2, or d3",
+            )),
+        })
+        .transpose()
+}
+
+fn resolve_v23_page_uri(stage: V23Stage, value: Option<&str>) -> io::Result<Option<String>> {
+    match (stage, value) {
+        (V23Stage::D1, None) => Ok(None),
+        (V23Stage::D1, Some(_)) => Err(invalid_input("V23 D1 forbids a diagnostic page URI")),
+        (V23Stage::D2 | V23Stage::D3, Some(value))
+            if !value.is_empty()
+                && value.len() <= 2_048
+                && !value.bytes().any(|byte| byte.is_ascii_whitespace()) =>
+        {
+            let normalized = value.trim_end_matches('/');
+            if normalized.is_empty() {
+                return Err(invalid_input("V23 diagnostic page URI is invalid"));
+            }
+            Ok(Some(normalized.to_string()))
+        }
+        (V23Stage::D2 | V23Stage::D3, _) => {
+            Err(invalid_input("V23 D2 and D3 require a diagnostic page URI"))
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum V23StorageNamespace {
+    Local(PathBuf),
+    Object {
+        scheme: String,
+        authority: String,
+        segments: Vec<String>,
+    },
+}
+
+fn normalize_v23_local_path(path: &Path) -> Option<PathBuf> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir().ok()?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return None;
+                }
+            }
+            Component::Normal(value) => normalized.push(value),
+        }
+    }
+    Some(normalized)
+}
+
+fn v23_has_uri_scheme(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+    {
+        return false;
+    }
+    value.split_once(':').is_some_and(|(scheme, _)| {
+        !scheme.is_empty()
+            && scheme
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+    })
+}
+
+fn normalize_v23_storage_namespace(value: &str) -> Option<V23StorageNamespace> {
+    if !v23_has_uri_scheme(value) {
+        return normalize_v23_local_path(Path::new(value)).map(V23StorageNamespace::Local);
+    }
+    let url = Url::parse(value).ok()?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    if url.scheme() == "file" {
+        return normalize_v23_local_path(&url.to_file_path().ok()?).map(V23StorageNamespace::Local);
+    }
+    // V23 production prefixes use canonical ASCII object keys. Reject encoded
+    // spellings rather than risk comparing a different path than object_store.
+    if url.path().contains('%') {
+        return None;
+    }
+    let mut raw_segments = if matches!(url.path(), "" | "/") {
+        Vec::new()
+    } else {
+        url.path_segments()?.collect::<Vec<_>>()
+    };
+    while raw_segments
+        .last()
+        .is_some_and(|segment| segment.is_empty())
+    {
+        raw_segments.pop();
+    }
+    let mut segments = Vec::with_capacity(raw_segments.len());
+    for segment in raw_segments {
+        match segment {
+            "" => return None,
+            "." => {}
+            ".." => {
+                segments.pop()?;
+            }
+            _ => segments.push(segment.to_string()),
+        }
+    }
+    let authority = match (url.host_str(), url.port()) {
+        (Some(host), Some(port)) => format!("{}:{port}", host.to_ascii_lowercase()),
+        (Some(host), None) => host.to_ascii_lowercase(),
+        (None, None) => String::new(),
+        (None, Some(_)) => return None,
+    };
+    Some(V23StorageNamespace::Object {
+        scheme: url.scheme().to_ascii_lowercase(),
+        authority,
+        segments,
+    })
+}
+
+fn v23_namespace_contains(parent: &V23StorageNamespace, child: &V23StorageNamespace) -> bool {
+    match (parent, child) {
+        (V23StorageNamespace::Local(parent), V23StorageNamespace::Local(child)) => {
+            child.starts_with(parent)
+        }
+        (
+            V23StorageNamespace::Object {
+                scheme: parent_scheme,
+                authority: parent_authority,
+                segments: parent_segments,
+            },
+            V23StorageNamespace::Object {
+                scheme: child_scheme,
+                authority: child_authority,
+                segments: child_segments,
+            },
+        ) => {
+            parent_scheme == child_scheme
+                && parent_authority == child_authority
+                && child_segments.starts_with(parent_segments)
+        }
+        _ => false,
+    }
+}
+
+fn v23_page_uri_is_disjoint(page_uri: &str, source_uri: &str) -> bool {
+    let Some(page) = normalize_v23_storage_namespace(page_uri.trim_end_matches('/')) else {
+        return false;
+    };
+    let Some(source) = normalize_v23_storage_namespace(source_uri.trim_end_matches('/')) else {
+        return false;
+    };
+    !v23_namespace_contains(&page, &source) && !v23_namespace_contains(&source, &page)
+}
+
+fn resolve_v23_mode(
+    stage: Option<&str>,
+    source_archive_sha256: Option<&str>,
+    index_id: Option<&str>,
+    dataset_id: Option<&str>,
+    d1_report_sha256: Option<&str>,
+    d2_report_sha256: Option<&str>,
+    page_uri: Option<&str>,
+) -> io::Result<Option<V23ModeConfig>> {
+    let stage = parse_v23_stage(stage)?;
+    let Some(stage) = stage else {
+        if source_archive_sha256.is_some()
+            || index_id.is_some()
+            || dataset_id.is_some()
+            || d1_report_sha256.is_some()
+            || d2_report_sha256.is_some()
+            || page_uri.is_some()
+        {
+            return Err(invalid_input(
+                "BORSUK_BENCH_V23_STAGE is required with V23 authority",
+            ));
+        }
+        return Ok(None);
+    };
+    let source_archive_sha256 = source_archive_sha256
+        .filter(|value| valid_sha256(value))
+        .ok_or_else(|| invalid_input("V23 source archive SHA-256 is invalid"))?;
+    let index_id = index_id
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+        })
+        .ok_or_else(|| invalid_input("V23 index identity is invalid"))?;
+    if dataset_id != Some("deep-image-96") {
+        return Err(invalid_input("V23 dataset identity must be deep-image-96"));
+    }
+    if d1_report_sha256.is_some_and(|value| !valid_sha256(value))
+        || d2_report_sha256.is_some_and(|value| !valid_sha256(value))
+    {
+        return Err(invalid_input("V23 prerequisite report SHA-256 is invalid"));
+    }
+    let prerequisites_match = match stage {
+        V23Stage::D1 => d1_report_sha256.is_none() && d2_report_sha256.is_none(),
+        V23Stage::D2 => d1_report_sha256.is_some() && d2_report_sha256.is_none(),
+        V23Stage::D3 => d1_report_sha256.is_some() && d2_report_sha256.is_some(),
+    };
+    if !prerequisites_match {
+        return Err(invalid_input("V23 stage prerequisite authority differs"));
+    }
+    let page_uri = resolve_v23_page_uri(stage, page_uri)?;
+    Ok(Some(V23ModeConfig {
+        stage,
+        source_archive_sha256: source_archive_sha256.to_string(),
+        index_id: index_id.to_string(),
+        dataset_id: "deep-image-96".to_string(),
+        d1_report_sha256: d1_report_sha256.map(str::to_string),
+        d2_report_sha256: d2_report_sha256.map(str::to_string),
+        page_uri,
+    }))
+}
+
+fn resolve_v23_mode_from_environment() -> io::Result<Option<V23ModeConfig>> {
+    resolve_v23_mode(
+        non_empty_env("BORSUK_BENCH_V23_STAGE").as_deref(),
+        non_empty_env("BORSUK_BENCH_V23_SOURCE_ARCHIVE_SHA256").as_deref(),
+        non_empty_env("BORSUK_BENCH_V23_INDEX_ID").as_deref(),
+        non_empty_env("BORSUK_BENCH_V23_DATASET_ID").as_deref(),
+        non_empty_env("BORSUK_BENCH_V23_D1_REPORT_SHA256").as_deref(),
+        non_empty_env("BORSUK_BENCH_V23_D2_REPORT_SHA256").as_deref(),
+        non_empty_env("BORSUK_BENCH_V23_PAGE_URI").as_deref(),
+    )
+}
+
+fn configured_output_dir() -> io::Result<PathBuf> {
+    env::var_os("BORSUK_BENCH_OUTPUT_DIR")
+        .filter(|value| !value.is_empty())
+        .map_or_else(env::current_dir, |value| Ok(PathBuf::from(value)))
+}
+
+fn v23_destinations(output_dir: &Path, stage: V23Stage) -> Vec<PathBuf> {
+    let names: &[&str] = match stage {
+        V23Stage::D1 => &["bench_v23_d1_report.json", "bench_v23_summary.json"],
+        V23Stage::D2 => &[
+            "bench_v23_d2_report.json",
+            "bench_v23_pages.json",
+            "bench_v23_summary.json",
+        ],
+        V23Stage::D3 => &["bench_v23_d3_waves.csv", "bench_v23_summary.json"],
+    };
+    names.iter().map(|name| output_dir.join(name)).collect()
+}
+
+fn preflight_v23_run(mode: Option<&V23ModeConfig>, output_dir: &Path) -> io::Result<()> {
+    if let Some(mode) = mode {
+        reject_existing_destinations(&v23_destinations(output_dir, mode.stage))?;
+    }
+    Ok(())
+}
+
+fn dispatch_v23_stage<D1, D2, D3>(
+    mode: &V23ModeConfig,
+    output_dir: &Path,
+    d1: D1,
+    d2: D2,
+    d3: D3,
+) -> BenchResult<()>
+where
+    D1: FnOnce() -> BenchResult<()>,
+    D2: FnOnce() -> BenchResult<()>,
+    D3: FnOnce() -> BenchResult<()>,
+{
+    preflight_v23_run(Some(mode), output_dir)?;
+    match mode.stage {
+        V23Stage::D1 => d1(),
+        V23Stage::D2 => d2(),
+        V23Stage::D3 => d3(),
+    }
+}
+
+fn validate_v23_phase(
+    mode: Option<&V23ModeConfig>,
+    queries: usize,
+    disk_cache_max_bytes: Option<u64>,
+    ram_budget_bytes: Option<u64>,
+    limit: usize,
+    ambient_phase: Option<&str>,
+) -> io::Result<()> {
+    if mode.is_none() {
+        return Ok(());
+    }
+    if queries != V23_D3_QUERY_COUNT as usize
+        || disk_cache_max_bytes != Some(0)
+        || ram_budget_bytes != Some(V23_D3_MAX_TRANSIENT_BYTES)
+        || limit != 0
+        || ambient_phase.is_some()
+    {
+        return Err(invalid_input(
+            "V23 requires 32 strict-cold full-corpus queries, zero disk cache, a 3-GiB RAM cap, and no ordinary phase selector",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct V23D3CsvRow {
+    arm_index: u8,
+    d2_arm_index: u16,
+    arm_key: String,
+    repetition_index: u16,
+    sample: borsuk::V23WaveSample,
+    ground_truth_ids: Vec<Vec<u8>>,
+    ranked: borsuk::V23RankedResult,
+    hits: u8,
+    recall_ppm: u64,
+    transient_peak_bytes: u64,
+    request_peak_gets: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct V23D3ArmSummary {
+    arm_index: u8,
+    d2_arm_index: u16,
+    arm_key: String,
+    samples: usize,
+    p50_ns: u64,
+    p95_ns: u64,
+    p99_ns: u64,
+    maximum_ns: u64,
+    maximum_pages: usize,
+    maximum_encoded_bytes: u64,
+    maximum_backing_gets: u32,
+    maximum_backing_bytes: u64,
+    maximum_transient_peak_bytes: u64,
+    maximum_request_peak_gets: u32,
+    aggregate_recall_ppm: u64,
+    minimum_wave_recall_ppm: u64,
+    passed: bool,
+}
+
+#[derive(Serialize)]
+struct V23D3SummaryArtifact<'a> {
+    schema: &'static str,
+    document_kind: &'static str,
+    claim_eligible: bool,
+    stage: &'static str,
+    source_archive_sha256: &'a str,
+    index_id: &'a str,
+    dataset_id: &'a str,
+    d1_report_sha256: &'a str,
+    d2_report_sha256: &'a str,
+    page_uri: &'a str,
+    disk_cache_bytes: u64,
+    passing_arm_indexes: Vec<u16>,
+    arms: &'a [V23D3ArmSummary],
+    passed: bool,
+}
+
+#[derive(Serialize)]
+struct V23D1ReportArtifact<'a> {
+    schema: &'static str,
+    document_kind: &'static str,
+    claim_eligible: bool,
+    stage: &'static str,
+    source_archive_sha256: &'a str,
+    index_id: &'a str,
+    dataset_id: &'a str,
+    report: &'a borsuk::V23D1Report,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V23D1ReportInput {
+    schema: String,
+    document_kind: String,
+    claim_eligible: bool,
+    stage: String,
+    source_archive_sha256: String,
+    index_id: String,
+    dataset_id: String,
+    report: borsuk::V23D1Report,
+}
+
+#[derive(Serialize)]
+struct V23D2ReportArtifact<'a> {
+    schema: &'static str,
+    document_kind: &'static str,
+    claim_eligible: bool,
+    stage: &'static str,
+    source_archive_sha256: &'a str,
+    index_id: &'a str,
+    dataset_id: &'a str,
+    d1_report_sha256: &'a str,
+    page_uri: &'a str,
+    report: &'a borsuk::V23D2Report,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V23D2ReportInput {
+    schema: String,
+    document_kind: String,
+    claim_eligible: bool,
+    stage: String,
+    source_archive_sha256: String,
+    index_id: String,
+    dataset_id: String,
+    d1_report_sha256: String,
+    page_uri: String,
+    report: borsuk::V23D2Report,
+}
+
+#[derive(Serialize)]
+struct V23D2PagesArtifact<'a> {
+    schema: &'static str,
+    document_kind: &'static str,
+    claim_eligible: bool,
+    stage: &'static str,
+    source_archive_sha256: &'a str,
+    index_id: &'a str,
+    dataset_id: &'a str,
+    d1_report_sha256: &'a str,
+    page_uri: &'a str,
+    pages: &'a [borsuk::V23PageRef],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V23D2PagesInput {
+    schema: String,
+    document_kind: String,
+    claim_eligible: bool,
+    stage: String,
+    source_archive_sha256: String,
+    index_id: String,
+    dataset_id: String,
+    d1_report_sha256: String,
+    page_uri: String,
+    pages: Vec<borsuk::V23PageRef>,
+}
+
+#[derive(Serialize)]
+struct V23StageSummaryArtifact<'a> {
+    schema: &'static str,
+    document_kind: &'static str,
+    claim_eligible: bool,
+    stage: &'static str,
+    source_archive_sha256: &'a str,
+    index_id: &'a str,
+    dataset_id: &'a str,
+    d1_report_sha256: Option<&'a str>,
+    rows: u64,
+    queries: usize,
+    arms: usize,
+    passing_arm_indexes: Vec<usize>,
+    pages: usize,
+    passed: bool,
+}
+
+fn nearest_rank_u64(sorted: &[u64], numerator: usize, denominator: usize) -> u64 {
+    let rank = sorted
+        .len()
+        .saturating_mul(numerator)
+        .div_ceil(denominator)
+        .saturating_sub(1);
+    sorted[rank.min(sorted.len() - 1)]
+}
+
+fn validate_v23_d3_row(row: &V23D3CsvRow) -> io::Result<()> {
+    let sample = &row.sample;
+    let page_count = sample.page_ordinals.len();
+    let wait_ns = sample
+        .transient_admission_wait_ns
+        .checked_add(sample.request_admission_wait_ns)
+        .and_then(|value| value.checked_add(sample.service_ns));
+    let ground_truth = row.ground_truth_ids.iter().collect::<BTreeSet<_>>();
+    let ranked_ids = row.ranked.ids.iter().collect::<BTreeSet<_>>();
+    let hits = row
+        .ranked
+        .ids
+        .iter()
+        .filter(|id| ground_truth.contains(id))
+        .count();
+    let ranked_ordered = row
+        .ranked
+        .distances
+        .iter()
+        .zip(&row.ranked.ids)
+        .collect::<Vec<_>>()
+        .windows(2)
+        .all(|pair| {
+            pair[0]
+                .0
+                .total_cmp(pair[1].0)
+                .then_with(|| pair[0].1.cmp(pair[1].1))
+                .is_le()
+        });
+    if row.arm_key.is_empty()
+        || row.arm_key.bytes().any(|byte| {
+            !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-:".contains(&byte))
+        })
+        || sample.query_index >= V23_D3_QUERY_COUNT
+        || page_count == 0
+        || page_count > V23_D3_MAX_PAGES
+        || sample
+            .page_ordinals
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || sample.encoded_bytes == 0
+        || sample.encoded_bytes > V23_D3_MAX_ENCODED_BYTES
+        || sample.candidate_rows == 0
+        || usize::try_from(sample.backing_gets).ok() != Some(page_count)
+        || sample.backing_get_concurrency == 0
+        || sample.backing_get_concurrency < sample.backing_gets
+        || sample.backing_bytes != sample.encoded_bytes
+        || sample.backing_queue_us_max > sample.backing_queue_us_sum
+        || sample.backing_service_us_max > sample.backing_service_us_sum
+        || u128::from(sample.backing_service_us_max) * 1_000 > u128::from(sample.service_ns)
+        || sample.cpu_ns == 0
+        || sample.cpu_ns > sample.service_ns
+        || sample.service_ns == 0
+        || wait_ns != Some(sample.elapsed_ns)
+        || sample.elapsed_ns == 0
+        || row.ground_truth_ids.len() != 10
+        || ground_truth.len() != 10
+        || row.ground_truth_ids.iter().any(Vec::is_empty)
+        || row.ranked.ids.len() != 10
+        || row.ranked.distances.len() != 10
+        || ranked_ids.len() != 10
+        || row.ranked.ids.iter().any(Vec::is_empty)
+        || row.ranked.distances.iter().any(|value| !value.is_finite())
+        || !ranked_ordered
+        || usize::from(row.hits) != hits
+        || row.recall_ppm != u64::from(row.hits).saturating_mul(100_000)
+        || row.transient_peak_bytes < sample.encoded_bytes
+        || row.transient_peak_bytes > V23_D3_MAX_TRANSIENT_BYTES
+        || row.request_peak_gets < sample.backing_gets
+        || row.request_peak_gets > sample.backing_get_concurrency
+    {
+        return Err(invalid_input("V23 D3 cold-wave evidence differs"));
+    }
+    Ok(())
+}
+
+fn summarize_v23_d3_rows(
+    rows: &[V23D3CsvRow],
+    expected_arms: usize,
+    disk_cache_bytes: u64,
+) -> io::Result<Vec<V23D3ArmSummary>> {
+    let expected_rows = expected_arms
+        .checked_mul(V23_D3_WAVES_PER_ARM)
+        .ok_or_else(|| invalid_input("V23 D3 arm count overflows"))?;
+    if expected_arms == 0 || rows.len() != expected_rows || disk_cache_bytes != 0 {
+        return Err(invalid_input("V23 D3 evidence cardinality differs"));
+    }
+
+    let mut summaries = Vec::with_capacity(expected_arms);
+    let mut previous_d2_arm_index = None;
+    for arm_index in 0..expected_arms {
+        let arm_index_u8 =
+            u8::try_from(arm_index).map_err(|_| invalid_input("V23 D3 arm index exceeds u8"))?;
+        let start = arm_index * V23_D3_WAVES_PER_ARM;
+        let arm_rows = &rows[start..start + V23_D3_WAVES_PER_ARM];
+        let d2_arm_index = arm_rows[0].d2_arm_index;
+        let arm_key = arm_rows[0].arm_key.clone();
+        if previous_d2_arm_index.is_some_and(|previous| previous >= d2_arm_index) {
+            return Err(invalid_input("V23 D3 D2 arm order differs"));
+        }
+        previous_d2_arm_index = Some(d2_arm_index);
+        let mut latencies = Vec::with_capacity(V23_D3_WAVES_PER_ARM);
+        let mut maximum_pages = 0;
+        let mut maximum_encoded_bytes = 0;
+        let mut maximum_backing_gets = 0;
+        let mut maximum_backing_bytes = 0;
+        let mut maximum_transient_peak_bytes = 0;
+        let mut maximum_request_peak_gets = 0;
+        let mut query_hits = [0_u64; V23_D3_QUERY_COUNT as usize];
+        let mut query_samples = [0_u64; V23_D3_QUERY_COUNT as usize];
+        let mut minimum_wave_recall_ppm = u64::MAX;
+        let mut row_offset = 0;
+        for query_index in 0..V23_D3_QUERY_COUNT {
+            for repetition_index in
+                (query_index as usize..V23_D3_WAVES_PER_ARM).step_by(V23_D3_QUERY_COUNT as usize)
+            {
+                let row = &arm_rows[row_offset];
+                row_offset += 1;
+                if row.arm_index != arm_index_u8
+                    || row.d2_arm_index != d2_arm_index
+                    || row.arm_key != arm_key
+                    || usize::from(row.repetition_index) != repetition_index
+                    || row.sample.query_index != query_index
+                {
+                    return Err(invalid_input("V23 D3 wave identity differs"));
+                }
+                validate_v23_d3_row(row)?;
+                latencies.push(row.sample.elapsed_ns);
+                maximum_pages = maximum_pages.max(row.sample.page_ordinals.len());
+                maximum_encoded_bytes = maximum_encoded_bytes.max(row.sample.encoded_bytes);
+                maximum_backing_gets = maximum_backing_gets.max(row.sample.backing_gets);
+                maximum_backing_bytes = maximum_backing_bytes.max(row.sample.backing_bytes);
+                maximum_transient_peak_bytes =
+                    maximum_transient_peak_bytes.max(row.transient_peak_bytes);
+                maximum_request_peak_gets = maximum_request_peak_gets.max(row.request_peak_gets);
+                let query_index = query_index as usize;
+                query_hits[query_index] =
+                    query_hits[query_index].saturating_add(u64::from(row.hits));
+                query_samples[query_index] = query_samples[query_index].saturating_add(1);
+                minimum_wave_recall_ppm = minimum_wave_recall_ppm.min(row.recall_ppm);
+            }
+        }
+        if row_offset != V23_D3_WAVES_PER_ARM {
+            return Err(invalid_input("V23 D3 wave schedule differs"));
+        }
+        latencies.sort_unstable();
+        let p50_ns = nearest_rank_u64(&latencies, 50, 100);
+        let p95_ns = nearest_rank_u64(&latencies, 95, 100);
+        let p99_ns = nearest_rank_u64(&latencies, 99, 100);
+        let aggregate_recall_ppm = query_hits
+            .iter()
+            .zip(query_samples)
+            .map(|(hits, samples)| hits.saturating_mul(1_000_000) / samples.saturating_mul(10))
+            .sum::<u64>()
+            / u64::from(V23_D3_QUERY_COUNT);
+        summaries.push(V23D3ArmSummary {
+            arm_index: arm_index_u8,
+            d2_arm_index,
+            arm_key,
+            samples: arm_rows.len(),
+            p50_ns,
+            p95_ns,
+            p99_ns,
+            maximum_ns: *latencies.last().expect("validated non-empty arm"),
+            maximum_pages,
+            maximum_encoded_bytes,
+            maximum_backing_gets,
+            maximum_backing_bytes,
+            maximum_transient_peak_bytes,
+            maximum_request_peak_gets,
+            aggregate_recall_ppm,
+            minimum_wave_recall_ppm,
+            passed: p50_ns <= V23_D3_P50_GATE_NS
+                && p95_ns <= V23_D3_P95_GATE_NS
+                && p99_ns <= V23_D3_P99_GATE_NS
+                && aggregate_recall_ppm >= 975_000
+                && minimum_wave_recall_ppm >= 800_000,
+        });
+    }
+    Ok(summaries)
+}
+
+fn v23_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn v23_sha256_hex(bytes: &[u8]) -> String {
+    v23_hex(&Sha256::digest(bytes))
+}
+
+fn serialize_v23_d3_artifacts(
+    mode: &V23ModeConfig,
+    rows: &[V23D3CsvRow],
+    expected_arms: usize,
+    disk_cache_bytes: u64,
+) -> io::Result<[Vec<u8>; 2]> {
+    if mode.stage != V23Stage::D3 {
+        return Err(invalid_input("V23 D3 artifact mode differs"));
+    }
+    let d1_report_sha256 = mode
+        .d1_report_sha256
+        .as_deref()
+        .ok_or_else(|| invalid_input("V23 D3 D1 authority is absent"))?;
+    let d2_report_sha256 = mode
+        .d2_report_sha256
+        .as_deref()
+        .ok_or_else(|| invalid_input("V23 D3 D2 authority is absent"))?;
+    let page_uri = mode
+        .page_uri
+        .as_deref()
+        .ok_or_else(|| invalid_input("V23 D3 page authority is absent"))?;
+    let summaries = summarize_v23_d3_rows(rows, expected_arms, disk_cache_bytes)?;
+    let passing_arm_indexes = summaries
+        .iter()
+        .filter_map(|summary| summary.passed.then_some(summary.d2_arm_index))
+        .collect::<Vec<_>>();
+    let mut csv = String::from(V23_D3_WAVES_HEADER);
+    csv.push('\n');
+    for row in rows {
+        let sample = &row.sample;
+        let page_ordinals = sample
+            .page_ordinals
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join("|");
+        let ground_truth_ids = row
+            .ground_truth_ids
+            .iter()
+            .map(|id| v23_hex(id))
+            .collect::<Vec<_>>()
+            .join("|");
+        let ranked_ids = row
+            .ranked
+            .ids
+            .iter()
+            .map(|id| v23_hex(id))
+            .collect::<Vec<_>>()
+            .join("|");
+        let ranked_distance_bits = row
+            .ranked
+            .distances
+            .iter()
+            .map(|distance| format!("{:08x}", distance.to_bits()))
+            .collect::<Vec<_>>()
+            .join("|");
+        csv.push_str(&format!(
+            "borsuk-v23-d3-v1,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            row.arm_index,
+            row.d2_arm_index,
+            row.arm_key,
+            row.repetition_index,
+            sample.query_index,
+            page_ordinals,
+            sample.encoded_bytes,
+            sample.candidate_rows,
+            ground_truth_ids,
+            ranked_ids,
+            ranked_distance_bits,
+            row.hits,
+            row.recall_ppm,
+            sample.backing_gets,
+            sample.backing_get_concurrency,
+            sample.backing_bytes,
+            sample.backing_queue_us_sum,
+            sample.backing_queue_us_max,
+            sample.backing_service_us_sum,
+            sample.backing_service_us_max,
+            sample.cpu_ns,
+            sample.transient_admission_wait_ns,
+            sample.request_admission_wait_ns,
+            sample.service_ns,
+            sample.elapsed_ns,
+            row.transient_peak_bytes,
+            row.request_peak_gets,
+        ));
+    }
+    let summary = V23D3SummaryArtifact {
+        schema: "borsuk-v23-d3-v1",
+        document_kind: "publication-v3-v23-d3-summary",
+        claim_eligible: false,
+        stage: "d3",
+        source_archive_sha256: &mode.source_archive_sha256,
+        index_id: &mode.index_id,
+        dataset_id: &mode.dataset_id,
+        d1_report_sha256,
+        d2_report_sha256,
+        page_uri,
+        disk_cache_bytes,
+        passed: !passing_arm_indexes.is_empty(),
+        passing_arm_indexes,
+        arms: &summaries,
+    };
+    let mut summary = serde_json::to_vec(&summary)
+        .map_err(|_| invalid_input("V23 D3 summary serialization failed"))?;
+    summary.push(b'\n');
+    Ok([csv.into_bytes(), summary])
+}
+
+fn validate_v23_d3_artifacts(
+    output_dir: &Path,
+    mode: &V23ModeConfig,
+    rows: &[V23D3CsvRow],
+    expected_arms: usize,
+    disk_cache_bytes: u64,
+) -> io::Result<()> {
+    let expected = serialize_v23_d3_artifacts(mode, rows, expected_arms, disk_cache_bytes)?;
+    let destinations: [PathBuf; 2] = v23_destinations(output_dir, V23Stage::D3)
+        .try_into()
+        .map_err(|_| invalid_input("V23 D3 destination count differs"))?;
+    for (path, expected) in destinations.iter().zip(expected) {
+        if fs::read(path)? != expected {
+            return Err(invalid_input("V23 D3 persisted evidence differs"));
+        }
+    }
+    Ok(())
+}
+
+fn write_v23_d3_artifacts(
+    output_dir: &Path,
+    mode: &V23ModeConfig,
+    rows: &[V23D3CsvRow],
+    expected_arms: usize,
+    disk_cache_bytes: u64,
+) -> io::Result<()> {
+    let destinations: [PathBuf; 2] = v23_destinations(output_dir, V23Stage::D3)
+        .try_into()
+        .map_err(|_| invalid_input("V23 D3 destination count differs"))?;
+    let payloads = serialize_v23_d3_artifacts(mode, rows, expected_arms, disk_cache_bytes)?;
+    publish_exclusive_file_set(output_dir, &destinations, &payloads)?;
+    validate_v23_d3_artifacts(output_dir, mode, rows, expected_arms, disk_cache_bytes)
+}
+
+fn newline_json<T: Serialize>(value: &T, context: &'static str) -> io::Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec(value).map_err(|_| invalid_input(context))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn validate_v23_d1_report_shape(report: &borsuk::V23D1Report) -> io::Result<()> {
+    if report.schema != "borsuk-v23-d1-v3"
+        || report.rows == 0
+        || report.query_ordinals.len() != V23_D3_QUERY_COUNT as usize
+        || report
+            .query_ordinals
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+    {
+        return Err(invalid_input("V23 D1 report authority differs"));
+    }
+    Ok(())
+}
+
+fn validate_v23_d2_report_shape(report: &borsuk::V23D2Report) -> io::Result<()> {
+    if report.schema != "borsuk-v23-d2-v3"
+        || report.rows == 0
+        || report.query_ordinals.len() != V23_D3_QUERY_COUNT as usize
+        || report
+            .query_ordinals
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+    {
+        return Err(invalid_input("V23 D2 report authority differs"));
+    }
+    Ok(())
+}
+
+fn v23_input_identity_matches(
+    mode: &V23ModeConfig,
+    source_archive_sha256: &str,
+    index_id: &str,
+    dataset_id: &str,
+) -> bool {
+    source_archive_sha256 == mode.source_archive_sha256
+        && index_id == mode.index_id
+        && dataset_id == mode.dataset_id
+}
+
+fn read_v23_d1_artifact(path: &Path, mode: &V23ModeConfig) -> io::Result<borsuk::V23D1Report> {
+    let bytes = fs::read(path)?;
+    if mode.d1_report_sha256.as_deref() != Some(v23_sha256_hex(&bytes).as_str()) {
+        return Err(invalid_input("V23 D1 prerequisite SHA-256 differs"));
+    }
+    let input: V23D1ReportInput = serde_json::from_slice(&bytes)
+        .map_err(|_| invalid_input("V23 D1 prerequisite JSON is invalid"))?;
+    if !matches!(mode.stage, V23Stage::D2 | V23Stage::D3)
+        || mode.d1_report_sha256.is_none()
+        || input.schema != "borsuk-v23-d1-artifact-v1"
+        || input.document_kind != "publication-v3-v23-d1-report"
+        || input.claim_eligible
+        || input.stage != "d1"
+        || !v23_input_identity_matches(
+            mode,
+            &input.source_archive_sha256,
+            &input.index_id,
+            &input.dataset_id,
+        )
+    {
+        return Err(invalid_input("V23 D1 prerequisite authority differs"));
+    }
+    validate_v23_d1_report_shape(&input.report)?;
+    Ok(input.report)
+}
+
+fn read_v23_d2_artifact(path: &Path, mode: &V23ModeConfig) -> io::Result<borsuk::V23D2Report> {
+    let bytes = fs::read(path)?;
+    if mode.d2_report_sha256.as_deref() != Some(v23_sha256_hex(&bytes).as_str()) {
+        return Err(invalid_input("V23 D2 prerequisite SHA-256 differs"));
+    }
+    let input: V23D2ReportInput = serde_json::from_slice(&bytes)
+        .map_err(|_| invalid_input("V23 D2 prerequisite JSON is invalid"))?;
+    if mode.stage != V23Stage::D3
+        || mode.d2_report_sha256.is_none()
+        || input.schema != "borsuk-v23-d2-artifact-v1"
+        || input.document_kind != "publication-v3-v23-d2-report"
+        || input.claim_eligible
+        || input.stage != "d2"
+        || mode.d1_report_sha256.as_deref() != Some(input.d1_report_sha256.as_str())
+        || mode.page_uri.as_deref() != Some(input.page_uri.as_str())
+        || !v23_input_identity_matches(
+            mode,
+            &input.source_archive_sha256,
+            &input.index_id,
+            &input.dataset_id,
+        )
+    {
+        return Err(invalid_input("V23 D2 prerequisite authority differs"));
+    }
+    validate_v23_d2_report_shape(&input.report)?;
+    Ok(input.report)
+}
+
+fn read_v23_d2_pages_artifact(
+    path: &Path,
+    mode: &V23ModeConfig,
+) -> io::Result<Vec<borsuk::V23PageRef>> {
+    let input: V23D2PagesInput = serde_json::from_slice(&fs::read(path)?)
+        .map_err(|_| invalid_input("V23 D2 page-roster JSON is invalid"))?;
+    if mode.stage != V23Stage::D3
+        || mode.d2_report_sha256.is_none()
+        || input.schema != "borsuk-v23-pages-v1"
+        || input.document_kind != "publication-v3-v23-page-roster"
+        || input.claim_eligible
+        || input.stage != "d2"
+        || mode.d1_report_sha256.as_deref() != Some(input.d1_report_sha256.as_str())
+        || mode.page_uri.as_deref() != Some(input.page_uri.as_str())
+        || !v23_input_identity_matches(
+            mode,
+            &input.source_archive_sha256,
+            &input.index_id,
+            &input.dataset_id,
+        )
+    {
+        return Err(invalid_input("V23 D2 page-roster authority differs"));
+    }
+    validate_v23_page_refs(&input.pages)?;
+    Ok(input.pages)
+}
+
+fn serialize_v23_d1_artifacts(
+    mode: &V23ModeConfig,
+    report: &borsuk::V23D1Report,
+) -> io::Result<[Vec<u8>; 2]> {
+    if mode.stage != V23Stage::D1 {
+        return Err(invalid_input("V23 D1 artifact mode differs"));
+    }
+    validate_v23_d1_report_shape(report)?;
+    let passing_arm_indexes = report
+        .arms
+        .iter()
+        .enumerate()
+        .filter_map(|(index, arm)| arm.passed.then_some(index))
+        .collect::<Vec<_>>();
+    let artifact = V23D1ReportArtifact {
+        schema: "borsuk-v23-d1-artifact-v1",
+        document_kind: "publication-v3-v23-d1-report",
+        claim_eligible: false,
+        stage: "d1",
+        source_archive_sha256: &mode.source_archive_sha256,
+        index_id: &mode.index_id,
+        dataset_id: &mode.dataset_id,
+        report,
+    };
+    let summary = V23StageSummaryArtifact {
+        schema: "borsuk-v23-summary-v1",
+        document_kind: "publication-v3-v23-d1-summary",
+        claim_eligible: false,
+        stage: "d1",
+        source_archive_sha256: &mode.source_archive_sha256,
+        index_id: &mode.index_id,
+        dataset_id: &mode.dataset_id,
+        d1_report_sha256: None,
+        rows: report.rows,
+        queries: report.query_ordinals.len(),
+        arms: report.arms.len(),
+        passed: !passing_arm_indexes.is_empty(),
+        passing_arm_indexes,
+        pages: 0,
+    };
+    Ok([
+        newline_json(&artifact, "V23 D1 report serialization failed")?,
+        newline_json(&summary, "V23 D1 summary serialization failed")?,
+    ])
+}
+
+fn validate_v23_d2_page_roster(
+    report: &borsuk::V23D2Report,
+    pages: &[borsuk::V23PageRef],
+) -> io::Result<()> {
+    let mut seen = BTreeSet::new();
+    let expected = report
+        .arms
+        .iter()
+        .flat_map(|arm| &arm.pages)
+        .filter(|page| seen.insert(page.path.as_str()))
+        .collect::<Vec<_>>();
+    if expected.len() != pages.len() || expected.into_iter().ne(pages) {
+        return Err(invalid_input("V23 D2 page roster differs"));
+    }
+    validate_v23_page_refs(pages)
+}
+
+fn validate_v23_page_refs(pages: &[borsuk::V23PageRef]) -> io::Result<()> {
+    if pages.is_empty()
+        || pages.iter().any(|page| {
+            page.generation_checksum == [0; 32]
+                || page.dimensions == 0
+                || page.centroid.len() != page.dimensions as usize
+                || page.centroid.iter().any(|value| !value.is_finite())
+                || page.primary_rows == 0
+                || page.encoded_bytes == 0
+                || page.encoded_bytes > 245_760
+                || !valid_sha256(&page.checksum)
+                || page.path != format!("pages/{}", page.checksum)
+        })
+        || pages
+            .iter()
+            .map(|page| page.checksum.as_str())
+            .collect::<BTreeSet<_>>()
+            .len()
+            != pages.len()
+    {
+        return Err(invalid_input("V23 D2 page roster differs"));
+    }
+    Ok(())
+}
+
+fn serialize_v23_d2_artifacts(
+    mode: &V23ModeConfig,
+    report: &borsuk::V23D2Report,
+    pages: &[borsuk::V23PageRef],
+) -> io::Result<[Vec<u8>; 3]> {
+    let d1_report_sha256 = mode
+        .d1_report_sha256
+        .as_deref()
+        .ok_or_else(|| invalid_input("V23 D2 D1 authority is absent"))?;
+    let page_uri = mode
+        .page_uri
+        .as_deref()
+        .ok_or_else(|| invalid_input("V23 D2 page authority is absent"))?;
+    if mode.stage != V23Stage::D2 {
+        return Err(invalid_input("V23 D2 artifact mode differs"));
+    }
+    validate_v23_d2_report_shape(report)?;
+    validate_v23_d2_page_roster(report, pages)?;
+    let passing_arm_indexes = report
+        .arms
+        .iter()
+        .enumerate()
+        .filter_map(|(index, arm)| arm.passed.then_some(index))
+        .collect::<Vec<_>>();
+    let artifact = V23D2ReportArtifact {
+        schema: "borsuk-v23-d2-artifact-v1",
+        document_kind: "publication-v3-v23-d2-report",
+        claim_eligible: false,
+        stage: "d2",
+        source_archive_sha256: &mode.source_archive_sha256,
+        index_id: &mode.index_id,
+        dataset_id: &mode.dataset_id,
+        d1_report_sha256,
+        page_uri,
+        report,
+    };
+    let page_artifact = V23D2PagesArtifact {
+        schema: "borsuk-v23-pages-v1",
+        document_kind: "publication-v3-v23-page-roster",
+        claim_eligible: false,
+        stage: "d2",
+        source_archive_sha256: &mode.source_archive_sha256,
+        index_id: &mode.index_id,
+        dataset_id: &mode.dataset_id,
+        d1_report_sha256,
+        page_uri,
+        pages,
+    };
+    let summary = V23StageSummaryArtifact {
+        schema: "borsuk-v23-summary-v1",
+        document_kind: "publication-v3-v23-d2-summary",
+        claim_eligible: false,
+        stage: "d2",
+        source_archive_sha256: &mode.source_archive_sha256,
+        index_id: &mode.index_id,
+        dataset_id: &mode.dataset_id,
+        d1_report_sha256: Some(d1_report_sha256),
+        rows: report.rows,
+        queries: report.query_ordinals.len(),
+        arms: report.arms.len(),
+        passed: !passing_arm_indexes.is_empty(),
+        passing_arm_indexes,
+        pages: pages.len(),
+    };
+    Ok([
+        newline_json(&artifact, "V23 D2 report serialization failed")?,
+        newline_json(&page_artifact, "V23 D2 page roster serialization failed")?,
+        newline_json(&summary, "V23 D2 summary serialization failed")?,
+    ])
+}
+
+fn validate_v23_d1_artifacts(
+    output_dir: &Path,
+    mode: &V23ModeConfig,
+    report: &borsuk::V23D1Report,
+) -> io::Result<()> {
+    let expected = serialize_v23_d1_artifacts(mode, report)?;
+    let destinations: [PathBuf; 2] = v23_destinations(output_dir, V23Stage::D1)
+        .try_into()
+        .map_err(|_| invalid_input("V23 D1 destination count differs"))?;
+    for (path, expected) in destinations.iter().zip(expected) {
+        if fs::read(path)? != expected {
+            return Err(invalid_input("V23 D1 persisted evidence differs"));
+        }
+    }
+    Ok(())
+}
+
+fn write_v23_d1_artifacts(
+    output_dir: &Path,
+    mode: &V23ModeConfig,
+    report: &borsuk::V23D1Report,
+) -> io::Result<()> {
+    let destinations: [PathBuf; 2] = v23_destinations(output_dir, V23Stage::D1)
+        .try_into()
+        .map_err(|_| invalid_input("V23 D1 destination count differs"))?;
+    let payloads = serialize_v23_d1_artifacts(mode, report)?;
+    publish_exclusive_file_set(output_dir, &destinations, &payloads)?;
+    validate_v23_d1_artifacts(output_dir, mode, report)
+}
+
+fn validate_v23_d2_artifacts(
+    output_dir: &Path,
+    mode: &V23ModeConfig,
+    report: &borsuk::V23D2Report,
+    pages: &[borsuk::V23PageRef],
+) -> io::Result<()> {
+    let expected = serialize_v23_d2_artifacts(mode, report, pages)?;
+    let destinations: [PathBuf; 3] = v23_destinations(output_dir, V23Stage::D2)
+        .try_into()
+        .map_err(|_| invalid_input("V23 D2 destination count differs"))?;
+    for (path, expected) in destinations.iter().zip(expected) {
+        if fs::read(path)? != expected {
+            return Err(invalid_input("V23 D2 persisted evidence differs"));
+        }
+    }
+    Ok(())
+}
+
+fn write_v23_d2_artifacts(
+    output_dir: &Path,
+    mode: &V23ModeConfig,
+    report: &borsuk::V23D2Report,
+    pages: &[borsuk::V23PageRef],
+) -> io::Result<()> {
+    let destinations: [PathBuf; 3] = v23_destinations(output_dir, V23Stage::D2)
+        .try_into()
+        .map_err(|_| invalid_input("V23 D2 destination count differs"))?;
+    let payloads = serialize_v23_d2_artifacts(mode, report, pages)?;
+    publish_exclusive_file_set(output_dir, &destinations, &payloads)?;
+    validate_v23_d2_artifacts(output_dir, mode, report, pages)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BenchmarkCacheProfile {
     All,
     Uncached,
@@ -423,6 +1623,62 @@ struct Dataset {
     queries: Arc<Vec<Vec<f32>>>,
     query_source_indices: Arc<Vec<usize>>,
     ground_truth: Vec<Vec<String>>,
+}
+
+struct V23QueryAuthority {
+    ordinals: Vec<u64>,
+    queries: Vec<Vec<f32>>,
+    ground_truth: Vec<Vec<String>>,
+}
+
+fn v23_query_authority(dataset: &Dataset) -> io::Result<V23QueryAuthority> {
+    let query_count = V23_D3_QUERY_COUNT as usize;
+    if dataset.meta.name != "deep-image-10m"
+        || dataset.meta.dim != 96
+        || dataset.metric != VectorMetric::Cosine
+        || dataset.train_count != dataset.meta.n_train
+        || dataset.queries.len() < query_count
+        || dataset.query_source_indices.len() < query_count
+        || dataset.ground_truth.len() < query_count
+    {
+        return Err(invalid_input("V23 query dataset authority differs"));
+    }
+    let mut rows = (0..query_count)
+        .map(|index| {
+            let ordinal = u64::try_from(dataset.query_source_indices[index])
+                .map_err(|_| invalid_input("V23 query source ordinal exceeds u64"))?;
+            if dataset.queries[index].len() != dataset.meta.dim
+                || dataset.queries[index]
+                    .iter()
+                    .any(|value| !value.is_finite())
+                || dataset.ground_truth[index].len() < RECALL_K
+            {
+                return Err(invalid_input("V23 query row authority differs"));
+            }
+            Ok((
+                ordinal,
+                dataset.queries[index].clone(),
+                dataset.ground_truth[index].clone(),
+            ))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    rows.sort_unstable_by_key(|(ordinal, _, _)| *ordinal);
+    if rows.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+        return Err(invalid_input("V23 query source ordinals differ"));
+    }
+    let mut ordinals = Vec::with_capacity(query_count);
+    let mut queries = Vec::with_capacity(query_count);
+    let mut ground_truth = Vec::with_capacity(query_count);
+    for (ordinal, query, truth) in rows {
+        ordinals.push(ordinal);
+        queries.push(query);
+        ground_truth.push(truth);
+    }
+    Ok(V23QueryAuthority {
+        ordinals,
+        queries,
+        ground_truth,
+    })
 }
 
 enum DatasetVectorSource {
@@ -1490,7 +2746,12 @@ fn main() {
 
 fn run() -> BenchResult<()> {
     configure_benchmark_process()?;
+    let early_v23_mode = resolve_v23_mode_from_environment()?;
+    preflight_v23_run(early_v23_mode.as_ref(), &configured_output_dir()?)?;
     let config = resolve_config()?;
+    if config.v23_mode != early_v23_mode {
+        return Err(invalid_input("V23 environment authority changed during preflight").into());
+    }
     if config.v21_feasibility {
         reject_existing_destinations(&v21_feasibility_destinations(&config.output_dir))?;
     }
@@ -1498,6 +2759,24 @@ fn run() -> BenchResult<()> {
         reject_existing_destinations(&v22_stage_l_destinations(&config.output_dir))?;
     }
     print_config(&config);
+    if let Some(mode) = config.v23_mode.as_ref() {
+        return dispatch_v23_stage(
+            mode,
+            &config.output_dir,
+            || {
+                let dataset = load_dataset(&config)?;
+                run_v23_d1_stage(&config, &dataset, mode)
+            },
+            || {
+                let dataset = load_dataset(&config)?;
+                run_v23_d2_stage(&config, &dataset, mode)
+            },
+            || {
+                let dataset = load_dataset(&config)?;
+                run_v23_d3_stage(&config, &dataset, mode)
+            },
+        );
+    }
     let dataset = load_dataset(&config)?;
     if config.v21_feasibility {
         write_v21_feasibility_artifacts(&config, &dataset)?;
@@ -2060,9 +3339,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
             invalid_input("BORSUK_BENCH_WRITE_BATCH_SIZE must be greater than zero").into(),
         );
     }
-    let output_dir = env::var_os("BORSUK_BENCH_OUTPUT_DIR")
-        .filter(|value| !value.is_empty())
-        .map_or_else(env::current_dir, |value| Ok(PathBuf::from(value)))?;
+    let output_dir = configured_output_dir()?;
     let concurrency = parse_concurrency(
         &env::var("BORSUK_BENCH_CONCURRENCY").unwrap_or_else(|_| DEFAULT_CONCURRENCY.to_string()),
     )?;
@@ -2268,8 +3545,12 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         .then(|| non_empty_env("BORSUK_BENCH_V21_DATASET_ID"))
         .flatten();
     let v22_stage_l = env_flag("BORSUK_BENCH_V22_STAGE_L")?;
-    if v21_feasibility && v22_stage_l {
-        return Err(invalid_input("V21 and V22 diagnostic modes are mutually exclusive").into());
+    let v23_mode = resolve_v23_mode_from_environment()?;
+    if usize::from(v21_feasibility) + usize::from(v22_stage_l) + usize::from(v23_mode.is_some()) > 1
+    {
+        return Err(
+            invalid_input("V21, V22, and V23 diagnostic modes are mutually exclusive").into(),
+        );
     }
     let v22_source_archive_sha256 = v22_stage_l
         .then(|| non_empty_env("BORSUK_BENCH_V22_SOURCE_ARCHIVE_SHA256"))
@@ -2314,7 +3595,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
     ) {
         validate_v21_evidence_identity_fields(source, index, dataset)?;
     }
-    let diagnostic_mode = v21_feasibility || v22_stage_l;
+    let diagnostic_mode = v21_feasibility || v22_stage_l || v23_mode.is_some();
     let v21_forbidden_phase_env = [
         "BORSUK_BENCH_BUILD_INDEX",
         "BORSUK_BENCH_BUILD_ONLY",
@@ -2332,13 +3613,39 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         "BORSUK_BENCH_LIFECYCLE_WRITERS",
         "BORSUK_BENCH_LIMIT",
     ];
-    if diagnostic_mode
+    let v23_forbidden_phase_env = [
+        "BORSUK_BENCH_SKIP_EXACT_RECALL",
+        "BORSUK_BENCH_RECLUSTER_BUILD",
+        "BORSUK_BENCH_PRELOAD_SERVING",
+        "BORSUK_BENCH_CACHE_PROFILE",
+        "BORSUK_BENCH_CACHE_COVERAGE_PERCENT",
+        "BORSUK_BENCH_RECALL_LEAF_MODE",
+        "BORSUK_BENCH_SERVING_MODE",
+        "BORSUK_BENCH_SERVING_LEAF_MODE",
+        "BORSUK_BENCH_SERVING_NPROBE",
+        "BORSUK_BENCH_SERVING_CANDIDATES",
+        "BORSUK_BENCH_SERVING_PREFETCH_DEPTH",
+    ];
+    if (v21_feasibility || v22_stage_l)
         && let Some(name) = v21_forbidden_phase_env
             .iter()
             .find(|name| env::var_os(name).is_some())
     {
         return Err(invalid_input(&format!(
-            "BORSUK_BENCH_V21_FEASIBILITY is the only permitted phase selector; remove {name}"
+            "diagnostic mode is the only permitted phase selector; remove {name}"
+        ))
+        .into());
+    }
+    let v23_ambient_phase = v21_forbidden_phase_env
+        .iter()
+        .chain(&v23_forbidden_phase_env)
+        .find(|name| env::var_os(name).is_some())
+        .copied();
+    if v23_mode.is_some()
+        && let Some(name) = v23_ambient_phase
+    {
+        return Err(invalid_input(&format!(
+            "V23 diagnostic mode is the only permitted phase selector; remove {name}"
         ))
         .into());
     }
@@ -2389,6 +3696,14 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
             .any(|name| env::var_os(name).is_some()),
             ambient_limit: env::var_os("BORSUK_BENCH_LIMIT").is_some(),
         },
+    )?;
+    validate_v23_phase(
+        v23_mode.as_ref(),
+        queries,
+        disk_cache_max_bytes,
+        ram_budget_bytes,
+        limit,
+        v23_ambient_phase,
     )?;
     let preload_serving = env_flag("BORSUK_BENCH_PRELOAD_SERVING")?;
     let recluster_build = env_flag("BORSUK_BENCH_RECLUSTER_BUILD")?;
@@ -2482,6 +3797,7 @@ fn resolve_config() -> BenchResult<ResolvedConfig> {
         v22_source_archive_sha256,
         v22_index_id,
         v22_dataset_id,
+        v23_mode,
         preload_serving,
         _uri_temp: uri_temp,
         _cache_temp: cache_temp,
@@ -3662,6 +4978,231 @@ fn v22_stage_l_destinations(output_dir: &Path) -> [PathBuf; 2] {
         output_dir.join("bench_v22_stage_l_report.json"),
         output_dir.join("bench_v22_stage_l_summary.json"),
     ]
+}
+
+fn open_v23_source_index(config: &ResolvedConfig) -> BenchResult<BorsukIndex> {
+    let index = BorsukIndex::open_with_options(
+        &config.uri,
+        OpenOptions {
+            cache_dir: None,
+            cache_max_bytes: Some(0),
+            ram_budget_bytes: config.ram_budget_bytes,
+            resident_routing: true,
+            cell_card_code_plane_cache_max_bytes: 0,
+            ..OpenOptions::default()
+        },
+    )?;
+    let _ = index.prepare_serving_metadata_without_complete_code_planes()?;
+    Ok(index)
+}
+
+fn v23_scratch(config: &ResolvedConfig, stage: &'static str) -> io::Result<tempfile::TempDir> {
+    let parent = v22_stage_l_scratch_parent(&config.output_dir);
+    fs::create_dir_all(parent)?;
+    tempfile::Builder::new()
+        .prefix(&format!(".borsuk-v23-{stage}-"))
+        .tempdir_in(parent)
+}
+
+fn run_v23_d1_stage(
+    config: &ResolvedConfig,
+    dataset: &Dataset,
+    mode: &V23ModeConfig,
+) -> BenchResult<()> {
+    if mode.stage != V23Stage::D1 {
+        return Err(invalid_input("V23 D1 stage mode differs").into());
+    }
+    let authority = v23_query_authority(dataset)?;
+    let index = open_v23_source_index(config)?;
+    let scratch = v23_scratch(config, "d1")?;
+    let report = index.diagnose_v23_d1(
+        &authority.ordinals,
+        &authority.queries,
+        &authority.ground_truth,
+        &SearchOptions::approx(RECALL_K, LeafMode::SrhtPqScan),
+        scratch.path(),
+    )?;
+    write_v23_d1_artifacts(&config.output_dir, mode, &report)?;
+    Ok(())
+}
+
+fn v23_report_pages(report: &borsuk::V23D2Report) -> Vec<borsuk::V23PageRef> {
+    let mut seen = BTreeSet::new();
+    report
+        .arms
+        .iter()
+        .flat_map(|arm| &arm.pages)
+        .filter(|page| seen.insert(page.path.clone()))
+        .cloned()
+        .collect()
+}
+
+fn v23_d2_arm_key(arm: &borsuk::V23D2Arm) -> String {
+    let family = match arm.d1_key.family {
+        borsuk::V23QuantizerFamily::SrhtPq => "srht-pq",
+        borsuk::V23QuantizerFamily::FastTurboQuantMse => "fast-turboquant-mse",
+        borsuk::V23QuantizerFamily::FastTurboQuantProd => "fast-turboquant-prod",
+    };
+    format!(
+        "{family}:{}:{}:{}:{}",
+        arm.d1_key.code_width_bytes,
+        arm.primary_target_rows,
+        arm.maximum_assignments_per_row,
+        arm.maximum_query_pages,
+    )
+}
+
+fn run_v23_d2_stage(
+    config: &ResolvedConfig,
+    dataset: &Dataset,
+    mode: &V23ModeConfig,
+) -> BenchResult<()> {
+    if mode.stage != V23Stage::D2 {
+        return Err(invalid_input("V23 D2 stage mode differs").into());
+    }
+    let page_uri = mode
+        .page_uri
+        .as_deref()
+        .ok_or_else(|| invalid_input("V23 D2 diagnostic page URI is absent"))?;
+    if !v23_page_uri_is_disjoint(page_uri, &config.uri) {
+        return Err(invalid_input(
+            "V23 diagnostic pages must be disjoint from the source index URI",
+        )
+        .into());
+    }
+    let authority = v23_query_authority(dataset)?;
+    let d1_report =
+        read_v23_d1_artifact(&config.output_dir.join("bench_v23_d1_report.json"), mode)?;
+    if d1_report.query_ordinals != authority.ordinals {
+        return Err(invalid_input("V23 D2 query authority differs from D1").into());
+    }
+    let d1_key = d1_report
+        .arms
+        .iter()
+        .find(|arm| arm.passed)
+        .map(|arm| arm.key)
+        .ok_or_else(|| invalid_input("V23 D1 has no passing arm"))?;
+    let index = open_v23_source_index(config)?;
+    let scratch = v23_scratch(config, "d2")?;
+    let page_publisher = borsuk::V23PagePublisher::new(page_uri)?;
+    let report = index.diagnose_v23_d2_with_page_sink(
+        borsuk::V23D2DiagnosticRequest {
+            d1_report: &d1_report,
+            d1_key,
+            query_ordinals: &authority.ordinals,
+            queries: &authority.queries,
+            ground_truth: &authority.ground_truth,
+            scratch_parent: scratch.path(),
+        },
+        |page, body| page_publisher.publish(page, body),
+    )?;
+    let pages = v23_report_pages(&report);
+    write_v23_d2_artifacts(&config.output_dir, mode, &report, &pages)?;
+    Ok(())
+}
+
+fn run_v23_d3_stage(
+    config: &ResolvedConfig,
+    dataset: &Dataset,
+    mode: &V23ModeConfig,
+) -> BenchResult<()> {
+    if mode.stage != V23Stage::D3 {
+        return Err(invalid_input("V23 D3 stage mode differs").into());
+    }
+    let page_uri = mode
+        .page_uri
+        .as_deref()
+        .ok_or_else(|| invalid_input("V23 D3 diagnostic page URI is absent"))?;
+    if !v23_page_uri_is_disjoint(page_uri, &config.uri) {
+        return Err(invalid_input(
+            "V23 diagnostic pages must be disjoint from the source index URI",
+        )
+        .into());
+    }
+    let authority = v23_query_authority(dataset)?;
+    let d1_report =
+        read_v23_d1_artifact(&config.output_dir.join("bench_v23_d1_report.json"), mode)?;
+    let d2_report =
+        read_v23_d2_artifact(&config.output_dir.join("bench_v23_d2_report.json"), mode)?;
+    let pages = read_v23_d2_pages_artifact(&config.output_dir.join("bench_v23_pages.json"), mode)?;
+    validate_v23_d2_page_roster(&d2_report, &pages)?;
+    if d1_report.query_ordinals != authority.ordinals
+        || d2_report.query_ordinals != authority.ordinals
+        || d1_report.rows != d2_report.rows
+    {
+        return Err(invalid_input("V23 D3 prerequisite query authority differs").into());
+    }
+    let passing = d2_report
+        .arms
+        .iter()
+        .enumerate()
+        .filter(|(_, arm)| arm.passed)
+        .collect::<Vec<_>>();
+    if passing.is_empty() || passing.len() > 3 {
+        return Err(invalid_input("V23 D3 requires one to three passing D2 arms").into());
+    }
+    let transient_capacity_bytes = config
+        .ram_budget_bytes
+        .ok_or_else(|| invalid_input("V23 D3 transient capacity is absent"))?;
+    let mut rows = Vec::with_capacity(passing.len().saturating_mul(V23_D3_WAVES_PER_ARM));
+    for (arm_index, (d2_arm_index, d2_arm)) in passing.iter().enumerate() {
+        let d1_arm = d1_report
+            .arms
+            .iter()
+            .find(|arm| arm.passed && arm.key == d2_arm.d1_key)
+            .ok_or_else(|| invalid_input("V23 D3 D1 arm authority is absent"))?;
+        let executor =
+            borsuk::V23D3Executor::new(page_uri, d1_arm, d2_arm, transient_capacity_bytes)?;
+        let arm_index =
+            u8::try_from(arm_index).map_err(|_| invalid_input("V23 D3 arm index exceeds u8"))?;
+        let d2_arm_index = u16::try_from(*d2_arm_index)
+            .map_err(|_| invalid_input("V23 D3 D2 arm index exceeds u16"))?;
+        let arm_key = v23_d2_arm_key(d2_arm);
+        for query_index in 0..authority.queries.len() {
+            for repetition_index in
+                (query_index..V23_D3_WAVES_PER_ARM).step_by(authority.queries.len())
+            {
+                let query_index_u32 = u32::try_from(query_index)
+                    .map_err(|_| invalid_input("V23 D3 query index exceeds u32"))?;
+                let wave = executor.execute(query_index_u32, &authority.queries[query_index])?;
+                let ground_truth_ids = authority.ground_truth[query_index][..RECALL_K]
+                    .iter()
+                    .map(|id| id.as_bytes().to_vec())
+                    .collect::<Vec<_>>();
+                let truth = ground_truth_ids.iter().collect::<BTreeSet<_>>();
+                let hits = wave
+                    .ranked
+                    .ids
+                    .iter()
+                    .filter(|id| truth.contains(id))
+                    .count();
+                let hits =
+                    u8::try_from(hits).map_err(|_| invalid_input("V23 D3 hit count exceeds u8"))?;
+                rows.push(V23D3CsvRow {
+                    arm_index,
+                    d2_arm_index,
+                    arm_key: arm_key.clone(),
+                    repetition_index: u16::try_from(repetition_index)
+                        .map_err(|_| invalid_input("V23 D3 repetition exceeds u16"))?,
+                    sample: wave.sample,
+                    ground_truth_ids,
+                    ranked: wave.ranked,
+                    hits,
+                    recall_ppm: u64::from(hits).saturating_mul(100_000),
+                    transient_peak_bytes: wave.transient_peak_bytes,
+                    request_peak_gets: wave.request_peak_gets,
+                });
+            }
+        }
+    }
+    write_v23_d3_artifacts(
+        &config.output_dir,
+        mode,
+        &rows,
+        passing.len(),
+        config.disk_cache_max_bytes.unwrap_or_default(),
+    )?;
+    Ok(())
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -7545,57 +9086,68 @@ mod tests {
         BUILD_HEADER, BenchmarkCacheProfile, BorsukIndex, BuildIngestCoordinator,
         CACHE_COVERAGE_HEADER, CACHE_STATE_HEADER, CONCURRENCY_HEADER, CONCURRENCY_SAMPLE_HEADER,
         CacheExecutionPolicy, ConcurrencyMeasurement, DEFAULT_NPROBE_SWEEP,
-        DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES,
-        EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig, LIFECYCLE_HEADER,
-        LeafCapability, LeafMode, LifecycleBatchAssignment, LifecycleDeltaLayout,
+        DEFAULT_PRODUCTION_RAM_BUDGET_BYTES, DEFAULT_RECALL_CANDIDATES, Dataset, DatasetMeta,
+        DatasetVectorSource, EffectiveRuntimeFlowControl, GlobalScanCodec, IndexConfig,
+        LIFECYCLE_HEADER, LeafCapability, LeafMode, LifecycleBatchAssignment, LifecycleDeltaLayout,
         LifecycleInsertMode, LifecycleQueryProgress, MUTATION_QUERY_HEADER,
         MUTATION_QUERY_SAMPLE_HEADER, OpenOptions, PreparedRecordBatch, QUERY_SAMPLE_HEADER,
         QuerySample, QuerySummary, RECALL_LATENCY_HEADER, SERVING_CANDIDATES,
         ServingMetadataPreparation, ServingMode, V21EvidenceIdentity, V21FeasibilityPhaseSelection,
         V21FeasibilityQuerySample, V21FeasibilityReport, V21FeasibilitySummary, V21LimitingBound,
-        V22EvidenceIdentity, VectorMetric, VectorRecord, WRITE_COST_HEADER, WRITE_SAMPLE_HEADER,
-        allow_missing_corpus_for_phase, approximate_options, benchmark_row_ids,
-        build_v21_feasibility_summary, build_v22_stage_l_summary, cache_coverage_cohort_size,
-        cache_coverage_enabled, cache_state_summary_enabled, dataset_metric,
-        default_build_leaf_capability, default_recall_leaf_mode, default_serving_leaf_mode,
-        deterministic_mutation_vector, disk_cached_concurrency_cohort_size,
-        disk_cached_query_cohort_size, dollars_per_million_queries, execute_bulk_add_wave,
-        execute_concurrency_cache_setup, execute_disk_cached_concurrency_profiles,
-        execute_disk_cached_query_cohorts, execute_isolated_recall_cache_phases, execute_put_wave,
-        execute_uncached_query_sequence, finalize_fresh_build, first_logical_batch_publish_ms,
-        ingest_batch_size, is_hot_workload_position, join_concurrency_workers,
-        lifecycle_progress_line, lifecycle_query_progress_line, lifecycle_write_operation_count,
-        lifecycle_write_waves, lifecycle_writer_open_options, mixed_concurrency_query_indices,
+        V22EvidenceIdentity, V23D3CsvRow, V23ModeConfig, V23Stage, VectorMetric, VectorRecord,
+        WRITE_COST_HEADER, WRITE_SAMPLE_HEADER, allow_missing_corpus_for_phase,
+        approximate_options, benchmark_row_ids, build_v21_feasibility_summary,
+        build_v22_stage_l_summary, cache_coverage_cohort_size, cache_coverage_enabled,
+        cache_state_summary_enabled, dataset_metric, default_build_leaf_capability,
+        default_recall_leaf_mode, default_serving_leaf_mode, deterministic_mutation_vector,
+        disk_cached_concurrency_cohort_size, disk_cached_query_cohort_size, dispatch_v23_stage,
+        dollars_per_million_queries, execute_bulk_add_wave, execute_concurrency_cache_setup,
+        execute_disk_cached_concurrency_profiles, execute_disk_cached_query_cohorts,
+        execute_isolated_recall_cache_phases, execute_put_wave, execute_uncached_query_sequence,
+        finalize_fresh_build, first_logical_batch_publish_ms, ingest_batch_size,
+        is_hot_workload_position, join_concurrency_workers, lifecycle_progress_line,
+        lifecycle_query_progress_line, lifecycle_write_operation_count, lifecycle_write_waves,
+        lifecycle_writer_open_options, mixed_concurrency_query_indices,
         mutable_resident_metadata_budget, neighbor_row, normalized_cache_access_fractions,
         open_lifecycle_writer_handles, parquet_train_files_for_phase, parse_flag_value,
         parse_global_pq_layout, parse_leaf_capability, parse_leaf_mode,
         parse_lifecycle_insert_mode, parse_optional_byte_cap, parse_positive_list,
-        parse_serving_mode, percentage_operation_count, permuted_positions, preload_query_count,
-        projected_v21_serving_rss, query_sample_cache_cohort_size,
-        query_scoped_physical_bytes_read, read_logical_cell_catalog,
-        recall_cache_profile_needs_outer_handle, recall_preloads_local_snapshot,
-        reopen_build_finalizer, reset_cache, rotated_workload_index, sample_mean, sample_stddev,
-        serialize_v21_feasibility_evidence, serving_cache_dir, serving_memory_partition,
-        shared_serving_metadata_preparation, update_vector_reservoir,
-        uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase, v21_feasibility_arms,
-        v22_stage_l_scratch_parent, validate_bounded_v20_execution, validate_build_only,
-        validate_build_writers, validate_disk_cached_network,
-        validate_exact_read_max_physical_amplification, validate_generated_id_range,
-        validate_insert_only, validate_leaf_capability_modes, validate_lifecycle_only,
-        validate_lifecycle_writers, validate_max_parallel_decode_rank_tasks,
-        validate_phase_selection, validate_serialized_v21_feasibility_evidence,
-        validate_v12_candidate_budgets, validate_v12_leaf_mode, validate_v12_leaf_page_budgets,
-        validate_v21_feasibility_phase, validate_v21_feasibility_reports,
-        validate_v22_stage_l_evidence, vector_row, verification_offsets, write_batch_len,
-        write_operation_count, write_runtime_flow_control_receipt, write_v21_feasibility_evidence,
-        write_v22_stage_l_evidence,
+        parse_serving_mode, parse_v23_stage, percentage_operation_count, permuted_positions,
+        preflight_v23_run, preload_query_count, projected_v21_serving_rss,
+        query_sample_cache_cohort_size, query_scoped_physical_bytes_read,
+        read_logical_cell_catalog, read_v23_d1_artifact, read_v23_d2_artifact,
+        read_v23_d2_pages_artifact, recall_cache_profile_needs_outer_handle,
+        recall_preloads_local_snapshot, reopen_build_finalizer, reset_cache, resolve_v23_mode,
+        resolve_v23_page_uri, rotated_workload_index, sample_mean, sample_stddev,
+        serialize_v21_feasibility_evidence, serialize_v23_d3_artifacts, serving_cache_dir,
+        serving_memory_partition, shared_serving_metadata_preparation, summarize_v23_d3_rows,
+        update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
+        v21_feasibility_arms, v22_stage_l_scratch_parent, v23_destinations,
+        v23_page_uri_is_disjoint, v23_query_authority, v23_sha256_hex,
+        validate_bounded_v20_execution, validate_build_only, validate_build_writers,
+        validate_disk_cached_network, validate_exact_read_max_physical_amplification,
+        validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
+        validate_lifecycle_only, validate_lifecycle_writers,
+        validate_max_parallel_decode_rank_tasks, validate_phase_selection,
+        validate_serialized_v21_feasibility_evidence, validate_v12_candidate_budgets,
+        validate_v12_leaf_mode, validate_v12_leaf_page_budgets, validate_v21_feasibility_phase,
+        validate_v21_feasibility_reports, validate_v22_stage_l_evidence, validate_v23_d1_artifacts,
+        validate_v23_d2_artifacts, validate_v23_d3_artifacts, validate_v23_phase, vector_row,
+        verification_offsets, write_batch_len, write_operation_count,
+        write_runtime_flow_control_receipt, write_v21_feasibility_evidence,
+        write_v22_stage_l_evidence, write_v23_d1_artifacts, write_v23_d2_artifacts,
+        write_v23_d3_artifacts,
     };
     use borsuk::{
         V22LayoutKind, V22LayoutLimitingBound, V22StageLExactRow, V22StageLLayoutArmReport,
         V22StageLLayoutQuerySample, V22StageLProjectedObject, V22StageLQueryPrefix, V22StageLRange,
-        V22StageLReport,
+        V22StageLReport, V23D1ArmKey, V23D1Report, V23D2Arm, V23D2Report, V23PagePublisher,
+        V23PageRef, V23QuantizerFamily, V23RankedResult, V23WaveSample,
     };
-    use std::{fs, path::Path};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
 
     #[test]
     fn v21_feasibility_matrix_is_exact_and_canonical() {
@@ -10773,6 +12325,748 @@ mod tests {
         assert_eq!(
             v22_stage_l_scratch_parent(Path::new("/tmp/runtime-output")),
             Path::new("/tmp")
+        );
+    }
+
+    #[test]
+    fn v23_stage_parser_and_cold_wave_summary_are_strict() {
+        assert_eq!(parse_v23_stage(None).unwrap(), None);
+        assert_eq!(parse_v23_stage(Some("d1")).unwrap(), Some(V23Stage::D1));
+        assert_eq!(parse_v23_stage(Some("d2")).unwrap(), Some(V23Stage::D2));
+        assert_eq!(parse_v23_stage(Some("d3")).unwrap(), Some(V23Stage::D3));
+        for invalid in ["", "D3", "d0", "d4", "d3 "] {
+            assert!(parse_v23_stage(Some(invalid)).is_err());
+        }
+
+        let canonical_sample = V23WaveSample {
+            query_index: 0,
+            page_ordinals: vec![3],
+            encoded_bytes: 100,
+            candidate_rows: 16,
+            backing_gets: 1,
+            backing_get_concurrency: 64,
+            backing_bytes: 100,
+            backing_queue_us_sum: 10,
+            backing_queue_us_max: 10,
+            backing_service_us_sum: 40_000,
+            backing_service_us_max: 40_000,
+            cpu_ns: 1_000_000,
+            transient_admission_wait_ns: 1_000_000,
+            request_admission_wait_ns: 1_000_000,
+            service_ns: 48_000_000,
+            elapsed_ns: 50_000_000,
+        };
+        let canonical = (0_u16..32)
+            .flat_map(|query_index| (query_index..1_000).step_by(32))
+            .map(|repetition_index| {
+                let mut sample = canonical_sample.clone();
+                sample.query_index = u32::from(repetition_index % 32);
+                let ground_truth_ids = (0_u8..10)
+                    .map(|rank| format!("id-{rank}").into_bytes())
+                    .collect::<Vec<_>>();
+                V23D3CsvRow {
+                    arm_index: 0,
+                    d2_arm_index: 0,
+                    arm_key: "srht-pq:32:1024:2:3".to_string(),
+                    repetition_index,
+                    sample,
+                    ground_truth_ids: ground_truth_ids.clone(),
+                    ranked: V23RankedResult {
+                        ids: ground_truth_ids,
+                        distances: (0_u8..10).map(f32::from).collect(),
+                    },
+                    hits: 10,
+                    recall_ppm: 1_000_000,
+                    transient_peak_bytes: 1_048_576,
+                    request_peak_gets: 1,
+                }
+            })
+            .collect::<Vec<_>>();
+        let summary = summarize_v23_d3_rows(&canonical, 1, 0).unwrap();
+        assert_eq!(summary.len(), 1);
+        assert_eq!(summary[0].samples, 1_000);
+        assert_eq!(summary[0].p50_ns, 50_000_000);
+        assert_eq!(summary[0].p95_ns, 50_000_000);
+        assert_eq!(summary[0].p99_ns, 50_000_000);
+        assert_eq!(summary[0].aggregate_recall_ppm, 1_000_000);
+        assert_eq!(summary[0].minimum_wave_recall_ppm, 1_000_000);
+        assert!(summary[0].passed);
+
+        assert!(summarize_v23_d3_rows(&canonical[..999], 1, 0).is_err());
+        assert!(summarize_v23_d3_rows(&canonical, 1, 1).is_err());
+
+        let mut duplicate_wave = canonical.clone();
+        duplicate_wave[999].repetition_index = duplicate_wave[998].repetition_index;
+        assert!(summarize_v23_d3_rows(&duplicate_wave, 1, 0).is_err());
+
+        let mut reordered = canonical.clone();
+        reordered.swap(0, 1);
+        assert!(summarize_v23_d3_rows(&reordered, 1, 0).is_err());
+
+        let mut no_backing = canonical.clone();
+        no_backing[0].sample.backing_gets = 0;
+        assert!(summarize_v23_d3_rows(&no_backing, 1, 0).is_err());
+
+        let mut dishonest_quality = canonical.clone();
+        dishonest_quality[0].ranked.ids[0] = b"not-ground-truth".to_vec();
+        assert!(summarize_v23_d3_rows(&dishonest_quality, 1, 0).is_err());
+
+        let mut too_many_bytes = canonical.clone();
+        too_many_bytes[0].sample.encoded_bytes = 983_041;
+        too_many_bytes[0].sample.backing_bytes = 983_041;
+        assert!(summarize_v23_d3_rows(&too_many_bytes, 1, 0).is_err());
+
+        let mut too_much_ram = canonical.clone();
+        too_much_ram[0].transient_peak_bytes = 3 * 1024 * 1024 * 1024 + 1;
+        assert!(summarize_v23_d3_rows(&too_much_ram, 1, 0).is_err());
+
+        let mode = V23ModeConfig {
+            stage: V23Stage::D3,
+            source_archive_sha256: "ab".repeat(32),
+            index_id: "r01-v23-index".to_string(),
+            dataset_id: "deep-image-96".to_string(),
+            d1_report_sha256: Some("22".repeat(32)),
+            d2_report_sha256: Some("33".repeat(32)),
+            page_uri: Some("memory:///diagnostics/v23/d2-attempt".to_string()),
+        };
+        let output = tempfile::tempdir().unwrap();
+        write_v23_d3_artifacts(output.path(), &mode, &canonical, 1, 0).unwrap();
+        validate_v23_d3_artifacts(output.path(), &mode, &canonical, 1, 0).unwrap();
+        assert_eq!(output.path().read_dir().unwrap().count(), 2);
+        assert!(write_v23_d3_artifacts(output.path(), &mode, &canonical, 1, 0).is_err());
+        fs::write(output.path().join("bench_v23_d3_waves.csv"), b"corrupt\n").unwrap();
+        assert!(validate_v23_d3_artifacts(output.path(), &mode, &canonical, 1, 0).is_err());
+
+        let mut slow_tail = canonical;
+        for row in &mut slow_tail[989..] {
+            row.sample.backing_service_us_sum = 151_000;
+            row.sample.backing_service_us_max = 151_000;
+            row.sample.service_ns = 151_000_000;
+            row.sample.elapsed_ns = 153_000_000;
+        }
+        let summary = summarize_v23_d3_rows(&slow_tail, 1, 0).unwrap();
+        assert_eq!(summary[0].p99_ns, 153_000_000);
+        assert!(!summary[0].passed);
+
+        let mut mixed_arms = slow_tail.clone();
+        mixed_arms.extend(slow_tail.iter().cloned().map(|mut row| {
+            row.arm_index = 1;
+            row.d2_arm_index = 3;
+            row.arm_key = "fast-turboquant-prod:32:2048:2:4".to_string();
+            row.sample.backing_service_us_sum = 40_000;
+            row.sample.backing_service_us_max = 40_000;
+            row.sample.service_ns = 48_000_000;
+            row.sample.elapsed_ns = 50_000_000;
+            row
+        }));
+        let serialized = serialize_v23_d3_artifacts(&mode, &mixed_arms, 2, 0).unwrap();
+        let summary_json: serde_json::Value = serde_json::from_slice(&serialized[1]).unwrap();
+        assert_eq!(summary_json["passed"], true);
+        assert_eq!(
+            summary_json["page_uri"],
+            "memory:///diagnostics/v23/d2-attempt"
+        );
+        assert_eq!(summary_json["passing_arm_indexes"], serde_json::json!([3]));
+        assert_eq!(summary_json["arms"][0]["d2_arm_index"], 0);
+        assert_eq!(summary_json["arms"][0]["arm_key"], "srht-pq:32:1024:2:3");
+        let csv = std::str::from_utf8(&serialized[0]).unwrap();
+        assert!(csv.lines().next().unwrap().contains("d2_arm_index,arm_key"));
+
+        let mut unequal_query_repetitions = mixed_arms[1_000..].to_vec();
+        for row in &mut unequal_query_repetitions {
+            row.arm_index = 0;
+            row.d2_arm_index = 0;
+            if row.sample.query_index >= 8 {
+                row.ranked.ids[9] = format!("miss-{}", row.sample.query_index).into_bytes();
+                row.hits = 9;
+                row.recall_ppm = 900_000;
+            }
+        }
+        let summary = summarize_v23_d3_rows(&unequal_query_repetitions, 1, 0).unwrap();
+        assert_eq!(summary[0].aggregate_recall_ppm, 925_000);
+    }
+
+    #[test]
+    fn v23_mode_authority_and_destinations_are_stage_exact() {
+        let source = "ab".repeat(32);
+        let d1 = "22".repeat(32);
+        let d2 = "33".repeat(32);
+        let expected = V23ModeConfig {
+            stage: V23Stage::D3,
+            source_archive_sha256: source.clone(),
+            index_id: "r01-v23-index".to_string(),
+            dataset_id: "deep-image-96".to_string(),
+            d1_report_sha256: Some(d1.clone()),
+            d2_report_sha256: Some(d2.clone()),
+            page_uri: Some("memory:///diagnostics/v23/d2-attempt".to_string()),
+        };
+        assert_eq!(
+            resolve_v23_mode(
+                Some("d3"),
+                Some(&source),
+                Some("r01-v23-index"),
+                Some("deep-image-96"),
+                Some(&d1),
+                Some(&d2),
+                Some("memory:///diagnostics/v23/d2-attempt"),
+            )
+            .unwrap(),
+            Some(expected)
+        );
+        assert!(
+            resolve_v23_mode(
+                Some("d1"),
+                Some(&source),
+                Some("r01-v23-index"),
+                Some("deep-image-96"),
+                None,
+                None,
+                None,
+            )
+            .is_ok()
+        );
+        assert!(
+            resolve_v23_mode(
+                Some("d2"),
+                Some(&source),
+                Some("r01-v23-index"),
+                Some("deep-image-96"),
+                Some(&d1),
+                None,
+                Some("memory:///diagnostics/v23/d2-attempt"),
+            )
+            .is_ok()
+        );
+        for invalid in [
+            resolve_v23_mode(None, Some(&source), None, None, None, None, None),
+            resolve_v23_mode(
+                Some("d1"),
+                Some(&source),
+                Some("r01-v23-index"),
+                Some("deep-image-96"),
+                Some(&d1),
+                None,
+                None,
+            ),
+            resolve_v23_mode(
+                Some("d2"),
+                Some(&source),
+                Some("r01-v23-index"),
+                Some("deep-image-96"),
+                None,
+                None,
+                Some("memory:///diagnostics/v23/d2-attempt"),
+            ),
+            resolve_v23_mode(
+                Some("d3"),
+                Some(&source),
+                Some("r01-v23-index"),
+                Some("deep-image-96"),
+                Some(&d1),
+                None,
+                Some("memory:///diagnostics/v23/d2-attempt"),
+            ),
+            resolve_v23_mode(
+                Some("d3"),
+                Some(&source.to_uppercase()),
+                Some("r01-v23-index"),
+                Some("deep-image-96"),
+                Some(&d1),
+                Some(&d2),
+                Some("memory:///diagnostics/v23/d2-attempt"),
+            ),
+            resolve_v23_mode(
+                Some("d3"),
+                Some(&source),
+                Some("bad/index"),
+                Some("deep-image-96"),
+                Some(&d1),
+                Some(&d2),
+                Some("memory:///diagnostics/v23/d2-attempt"),
+            ),
+            resolve_v23_mode(
+                Some("d3"),
+                Some(&source),
+                Some("r01-v23-index"),
+                Some("other-dataset"),
+                Some(&d1),
+                Some(&d2),
+                Some("memory:///diagnostics/v23/d2-attempt"),
+            ),
+        ] {
+            assert!(invalid.is_err());
+        }
+
+        let output = tempfile::tempdir().unwrap();
+        let d1_destinations: Vec<PathBuf> = v23_destinations(output.path(), V23Stage::D1);
+        let d2_destinations: Vec<PathBuf> = v23_destinations(output.path(), V23Stage::D2);
+        let d3_destinations: Vec<PathBuf> = v23_destinations(output.path(), V23Stage::D3);
+        assert_eq!(
+            d1_destinations
+                .iter()
+                .map(|path| path.file_name().unwrap().to_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["bench_v23_d1_report.json", "bench_v23_summary.json"]
+        );
+        assert_eq!(
+            d2_destinations
+                .iter()
+                .map(|path| path.file_name().unwrap().to_str().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "bench_v23_d2_report.json",
+                "bench_v23_pages.json",
+                "bench_v23_summary.json",
+            ]
+        );
+        assert_eq!(
+            d3_destinations
+                .iter()
+                .map(|path| path.file_name().unwrap().to_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["bench_v23_d3_waves.csv", "bench_v23_summary.json"]
+        );
+        let assert_no_clobber = |stage: V23Stage, destinations: &[PathBuf]| {
+            let mode = V23ModeConfig {
+                stage,
+                source_archive_sha256: "ab".repeat(32),
+                index_id: "r01-v23-index".to_string(),
+                dataset_id: "deep-image-96".to_string(),
+                d1_report_sha256: (stage != V23Stage::D1).then(|| "22".repeat(32)),
+                d2_report_sha256: (stage == V23Stage::D3).then(|| "33".repeat(32)),
+                page_uri: (stage != V23Stage::D1)
+                    .then(|| "memory:///diagnostics/v23/d2-attempt".to_string()),
+            };
+            for destination in destinations {
+                fs::write(destination, b"existing").unwrap();
+                assert!(preflight_v23_run(Some(&mode), output.path()).is_err());
+                fs::remove_file(destination).unwrap();
+            }
+        };
+        assert_no_clobber(V23Stage::D1, &d1_destinations);
+        assert_no_clobber(V23Stage::D2, &d2_destinations);
+        assert_no_clobber(V23Stage::D3, &d3_destinations);
+        assert!(preflight_v23_run(None, output.path()).is_ok());
+    }
+
+    #[test]
+    fn v23_phase_is_strict_cold_and_exclusive() {
+        let mode = V23ModeConfig {
+            stage: V23Stage::D1,
+            source_archive_sha256: "ab".repeat(32),
+            index_id: "r01-v23-index".to_string(),
+            dataset_id: "deep-image-96".to_string(),
+            d1_report_sha256: None,
+            d2_report_sha256: None,
+            page_uri: None,
+        };
+        assert!(
+            validate_v23_phase(
+                Some(&mode),
+                32,
+                Some(0),
+                Some(3 * 1024 * 1024 * 1024),
+                0,
+                None
+            )
+            .is_ok()
+        );
+        for invalid in [
+            validate_v23_phase(
+                Some(&mode),
+                31,
+                Some(0),
+                Some(3 * 1024 * 1024 * 1024),
+                0,
+                None,
+            ),
+            validate_v23_phase(
+                Some(&mode),
+                32,
+                Some(1),
+                Some(3 * 1024 * 1024 * 1024),
+                0,
+                None,
+            ),
+            validate_v23_phase(Some(&mode), 32, Some(0), None, 0, None),
+            validate_v23_phase(
+                Some(&mode),
+                32,
+                Some(0),
+                Some(3 * 1024 * 1024 * 1024 + 1),
+                0,
+                None,
+            ),
+            validate_v23_phase(
+                Some(&mode),
+                32,
+                Some(0),
+                Some(3 * 1024 * 1024 * 1024),
+                1,
+                None,
+            ),
+            validate_v23_phase(
+                Some(&mode),
+                32,
+                Some(0),
+                Some(3 * 1024 * 1024 * 1024),
+                0,
+                Some("BORSUK_BENCH_RECALL_ONLY"),
+            ),
+        ] {
+            assert!(invalid.is_err());
+        }
+        assert!(validate_v23_phase(None, 1, Some(1024), None, 1, None).is_ok());
+    }
+
+    #[test]
+    fn v23_dispatch_is_stage_exact_and_rejects_outputs_before_work() {
+        use std::cell::RefCell;
+
+        let output = tempfile::tempdir().unwrap();
+        let mode = V23ModeConfig {
+            stage: V23Stage::D2,
+            source_archive_sha256: "ab".repeat(32),
+            index_id: "r01-v23-index".to_string(),
+            dataset_id: "deep-image-96".to_string(),
+            d1_report_sha256: Some("66".repeat(32)),
+            d2_report_sha256: None,
+            page_uri: Some("memory:///diagnostics/v23/d2-attempt".to_string()),
+        };
+        let calls = RefCell::new(Vec::new());
+        dispatch_v23_stage(
+            &mode,
+            output.path(),
+            || -> super::BenchResult<()> {
+                calls.borrow_mut().push("d1");
+                Ok(())
+            },
+            || -> super::BenchResult<()> {
+                calls.borrow_mut().push("d2");
+                Ok(())
+            },
+            || -> super::BenchResult<()> {
+                calls.borrow_mut().push("d3");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(calls.into_inner(), ["d2"]);
+
+        fs::write(output.path().join("bench_v23_d2_report.json"), b"occupied").unwrap();
+        let calls = RefCell::new(Vec::new());
+        assert!(
+            dispatch_v23_stage(
+                &mode,
+                output.path(),
+                || -> super::BenchResult<()> {
+                    calls.borrow_mut().push("d1");
+                    Ok(())
+                },
+                || -> super::BenchResult<()> {
+                    calls.borrow_mut().push("d2");
+                    Ok(())
+                },
+                || -> super::BenchResult<()> {
+                    calls.borrow_mut().push("d3");
+                    Ok(())
+                },
+            )
+            .is_err()
+        );
+        assert!(calls.into_inner().is_empty());
+    }
+
+    #[test]
+    fn v23_stage_execution_helpers_preserve_query_and_page_authority() {
+        let source_indices = (0_usize..40).rev().collect::<Vec<_>>();
+        let dataset = Dataset {
+            meta: DatasetMeta {
+                name: "deep-image-10m".to_string(),
+                metric: "cosine".to_string(),
+                dim: 96,
+                n_train: 9_990_000,
+                n_test: 10_000,
+                k: 100,
+            },
+            metric: VectorMetric::Cosine,
+            train_count: 9_990_000,
+            source: DatasetVectorSource::Unavailable,
+            queries: std::sync::Arc::new(
+                source_indices
+                    .iter()
+                    .map(|source| vec![*source as f32; 96])
+                    .collect(),
+            ),
+            query_source_indices: std::sync::Arc::new(source_indices.clone()),
+            ground_truth: source_indices
+                .iter()
+                .map(|source| vec![format!("ground-truth-{source}"); 10])
+                .collect(),
+        };
+        let authority = v23_query_authority(&dataset).unwrap();
+        assert_eq!(authority.ordinals, (8_u64..40).collect::<Vec<_>>());
+        assert_eq!(authority.queries[0], vec![8.0; 96]);
+        assert_eq!(authority.ground_truth[0], vec!["ground-truth-8"; 10]);
+
+        assert_eq!(resolve_v23_page_uri(V23Stage::D1, None).unwrap(), None);
+        for stage in [V23Stage::D2, V23Stage::D3] {
+            assert!(resolve_v23_page_uri(stage, None).is_err());
+            assert_eq!(
+                resolve_v23_page_uri(stage, Some("memory:///diagnostics/v23/attempt-1"))
+                    .unwrap()
+                    .as_deref(),
+                Some("memory:///diagnostics/v23/attempt-1")
+            );
+        }
+        assert!(
+            resolve_v23_page_uri(V23Stage::D1, Some("memory:///diagnostics/v23/attempt-1"))
+                .is_err()
+        );
+        assert!(v23_page_uri_is_disjoint(
+            "s3://bucket/diagnostics/v23/attempt-1",
+            "s3://bucket/indexes/r01"
+        ));
+        for page_uri in [
+            "s3://bucket/indexes/r011",
+            "s3://other-bucket/indexes/r01",
+            "s3://diagnostics-bucket",
+        ] {
+            assert!(
+                v23_page_uri_is_disjoint(page_uri, "s3://bucket/indexes/r01"),
+                "disjoint page URI was rejected: {page_uri}"
+            );
+        }
+        for page_uri in [
+            "s3://bucket/indexes/r01",
+            "s3://bucket/indexes/r01/diagnostics/v23/attempt-1",
+            "s3://bucket/indexes",
+            "s3://bucket/diagnostics/../indexes/r01/pages",
+            "S3://BUCKET/indexes/r01/pages",
+            "s3://bucket/%69ndexes/r01/pages",
+            "s3://bucket//indexes/r01/pages",
+        ] {
+            assert!(
+                !v23_page_uri_is_disjoint(page_uri, "s3://bucket/indexes/r01"),
+                "overlapping page URI was accepted: {page_uri}"
+            );
+        }
+        assert!(!v23_page_uri_is_disjoint(
+            "file:///data/bench/index/pages",
+            "/data/bench/index"
+        ));
+        assert!(!v23_page_uri_is_disjoint(
+            "file:/data/bench/index/pages",
+            "/data/bench/index"
+        ));
+
+        let body = b"immutable-v23-page";
+        let checksum = blake3::hash(body).to_hex().to_string();
+        let page = V23PageRef {
+            generation_checksum: [9; 32],
+            page_ordinal: 0,
+            metric: VectorMetric::Cosine,
+            dimensions: 1,
+            family: V23QuantizerFamily::SrhtPq,
+            code_width: 1,
+            path: format!("pages/{checksum}"),
+            checksum,
+            encoded_bytes: u64::try_from(body.len()).unwrap(),
+            primary_rows: 1,
+            replicated_rows: 0,
+            centroid: vec![1.0],
+        };
+        let mut changed = body.to_vec();
+        changed[0] ^= 1;
+
+        let page_store = tempfile::tempdir().unwrap();
+        let page_uri = format!("file://{}", page_store.path().display());
+        let publisher = V23PagePublisher::new(&page_uri).unwrap();
+        publisher.publish(&page, body).unwrap();
+        assert_eq!(fs::read(page_store.path().join(&page.path)).unwrap(), body);
+        publisher.publish(&page, body).unwrap();
+        assert!(publisher.publish(&page, &changed).is_err());
+    }
+
+    #[test]
+    fn v23_d1_d2_artifacts_bind_prerequisites_and_page_roster() {
+        let query_ordinals = (0_u64..32).collect::<Vec<_>>();
+        let d1_report = V23D1Report {
+            schema: "borsuk-v23-d1-v3".to_string(),
+            v20_root_checksum: "11".repeat(32),
+            v20_codebook_checksum: "22".repeat(32),
+            sample_ordinals_checksum: "33".repeat(32),
+            query_vectors_checksum: "44".repeat(32),
+            query_ordinals: query_ordinals.clone(),
+            rows: 10_000_000,
+            routing_cell_count: 4096,
+            maximum_record_id_bytes: 16,
+            arms: Vec::new(),
+        };
+        let d1_mode = V23ModeConfig {
+            stage: V23Stage::D1,
+            source_archive_sha256: "ab".repeat(32),
+            index_id: "r01-v23-index".to_string(),
+            dataset_id: "deep-image-96".to_string(),
+            d1_report_sha256: None,
+            d2_report_sha256: None,
+            page_uri: None,
+        };
+        let d1_output = tempfile::tempdir().unwrap();
+        write_v23_d1_artifacts(d1_output.path(), &d1_mode, &d1_report).unwrap();
+        validate_v23_d1_artifacts(d1_output.path(), &d1_mode, &d1_report).unwrap();
+        assert_eq!(d1_output.path().read_dir().unwrap().count(), 2);
+        assert!(write_v23_d1_artifacts(d1_output.path(), &d1_mode, &d1_report).is_err());
+        let d1_json: serde_json::Value = serde_json::from_slice(
+            &fs::read(d1_output.path().join("bench_v23_d1_report.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            d1_json["source_archive_sha256"],
+            d1_mode.source_archive_sha256.as_str()
+        );
+        assert_eq!(d1_json["index_id"], d1_mode.index_id.as_str());
+        assert_eq!(d1_json["dataset_id"], "deep-image-96");
+        assert_eq!(d1_json["claim_eligible"], false);
+
+        let d1_path = d1_output.path().join("bench_v23_d1_report.json");
+        let d1_bytes = fs::read(&d1_path).unwrap();
+        let d1_sha256 = v23_sha256_hex(&d1_bytes);
+        let d2_mode = V23ModeConfig {
+            stage: V23Stage::D2,
+            source_archive_sha256: d1_mode.source_archive_sha256.clone(),
+            index_id: d1_mode.index_id.clone(),
+            dataset_id: d1_mode.dataset_id.clone(),
+            d1_report_sha256: Some(d1_sha256.clone()),
+            d2_report_sha256: None,
+            page_uri: Some("memory:///diagnostics/v23/d2-attempt".to_string()),
+        };
+        let pages = vec![V23PageRef {
+            generation_checksum: [7; 32],
+            page_ordinal: 0,
+            metric: VectorMetric::Cosine,
+            dimensions: 96,
+            family: V23QuantizerFamily::SrhtPq,
+            code_width: 32,
+            path: format!("pages/{}", "77".repeat(32)),
+            checksum: "77".repeat(32),
+            encoded_bytes: 1024,
+            primary_rows: 10,
+            replicated_rows: 0,
+            centroid: vec![0.0; 96],
+        }];
+        let d2_report = V23D2Report {
+            schema: "borsuk-v23-d2-v3".to_string(),
+            d1_report_checksum: "55".repeat(32),
+            query_ordinals,
+            rows: 10_000_000,
+            arms: vec![V23D2Arm {
+                d1_key: V23D1ArmKey {
+                    family: V23QuantizerFamily::SrhtPq,
+                    code_width_bytes: 32,
+                },
+                primary_target_rows: 512,
+                maximum_assignments_per_row: 1,
+                maximum_query_pages: 1,
+                maximum_record_id_bytes: 16,
+                pages: pages.clone(),
+                unique_rows: 10_000_000,
+                total_assignments: 10_000_000,
+                storage_amplification_ppm: 1_000_000,
+                projected_root_bytes: 1024,
+                projected_ram_bytes: 1024,
+                projected_build_bytes: 1024,
+                query_samples: Vec::new(),
+                aggregate_recall_ppm: 0,
+                minimum_query_recall_ppm: 0,
+                cpu_p99_ns: 1,
+                passed: false,
+            }],
+        };
+        let d2_output = tempfile::tempdir().unwrap();
+        write_v23_d2_artifacts(d2_output.path(), &d2_mode, &d2_report, &pages).unwrap();
+        validate_v23_d2_artifacts(d2_output.path(), &d2_mode, &d2_report, &pages).unwrap();
+        assert_eq!(d2_output.path().read_dir().unwrap().count(), 3);
+        assert!(write_v23_d2_artifacts(d2_output.path(), &d2_mode, &d2_report, &pages).is_err());
+        let d2_json: serde_json::Value = serde_json::from_slice(
+            &fs::read(d2_output.path().join("bench_v23_d2_report.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(d2_json["d1_report_sha256"], d1_sha256);
+        assert_eq!(d2_json["page_uri"], d2_mode.page_uri.as_deref().unwrap());
+        let pages_json: serde_json::Value = serde_json::from_slice(
+            &fs::read(d2_output.path().join("bench_v23_pages.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(pages_json["page_uri"], d2_mode.page_uri.as_deref().unwrap());
+
+        let loaded_d1 = read_v23_d1_artifact(&d1_path, &d2_mode).unwrap();
+        assert_eq!(loaded_d1, d1_report);
+        let mut changed_d1_bytes = d1_bytes.clone();
+        changed_d1_bytes.push(b'\n');
+        fs::write(&d1_path, &changed_d1_bytes).unwrap();
+        assert!(read_v23_d1_artifact(&d1_path, &d2_mode).is_err());
+        fs::write(&d1_path, &d1_bytes).unwrap();
+
+        let d2_path = d2_output.path().join("bench_v23_d2_report.json");
+        let d2_bytes = fs::read(&d2_path).unwrap();
+        let d3_mode = V23ModeConfig {
+            stage: V23Stage::D3,
+            source_archive_sha256: d2_mode.source_archive_sha256.clone(),
+            index_id: d2_mode.index_id.clone(),
+            dataset_id: d2_mode.dataset_id.clone(),
+            d1_report_sha256: d2_mode.d1_report_sha256.clone(),
+            d2_report_sha256: Some(v23_sha256_hex(&d2_bytes)),
+            page_uri: d2_mode.page_uri.clone(),
+        };
+        let loaded_d2 = read_v23_d2_artifact(&d2_path, &d3_mode).unwrap();
+        let loaded_pages =
+            read_v23_d2_pages_artifact(&d2_output.path().join("bench_v23_pages.json"), &d3_mode)
+                .unwrap();
+        assert_eq!(loaded_d2, d2_report);
+        assert_eq!(loaded_pages, pages);
+        let mut changed_d2_bytes = d2_bytes.clone();
+        changed_d2_bytes.push(b'\n');
+        fs::write(&d2_path, &changed_d2_bytes).unwrap();
+        assert!(read_v23_d2_artifact(&d2_path, &d3_mode).is_err());
+        fs::write(&d2_path, &d2_bytes).unwrap();
+
+        let mismatched_mode = V23ModeConfig {
+            index_id: "different-index".to_string(),
+            ..d3_mode.clone()
+        };
+        assert!(
+            read_v23_d2_artifact(
+                &d2_output.path().join("bench_v23_d2_report.json"),
+                &mismatched_mode,
+            )
+            .is_err()
+        );
+
+        let redirected_page_mode = V23ModeConfig {
+            page_uri: Some("memory:///diagnostics/v23/different-attempt".to_string()),
+            ..d3_mode.clone()
+        };
+        assert!(read_v23_d2_artifact(&d2_path, &redirected_page_mode).is_err());
+        assert!(
+            read_v23_d2_pages_artifact(
+                &d2_output.path().join("bench_v23_pages.json"),
+                &redirected_page_mode,
+            )
+            .is_err()
+        );
+
+        let mut duplicate_pages = pages.clone();
+        duplicate_pages.push(pages[0].clone());
+        let duplicate_output = tempfile::tempdir().unwrap();
+        assert!(
+            write_v23_d2_artifacts(
+                duplicate_output.path(),
+                &d2_mode,
+                &d2_report,
+                &duplicate_pages,
+            )
+            .is_err()
         );
     }
 }
