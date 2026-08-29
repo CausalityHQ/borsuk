@@ -1256,7 +1256,7 @@ fn validate_v23_d1_report_shape(report: &borsuk::V23D1Report) -> io::Result<()> 
 }
 
 fn validate_v23_d2_report_shape(report: &borsuk::V23D2Report) -> io::Result<()> {
-    if report.schema != "borsuk-v23-d2-v8"
+    if report.schema != "borsuk-v23-d2-v9"
         || report.rows == 0
         || report.query_ordinals.len() != V23_D3_QUERY_COUNT as usize
         || report
@@ -5103,6 +5103,18 @@ fn run_v23_d2_stage(
     Ok(())
 }
 
+fn v23_smallest_passing_d2_arm(
+    report: &borsuk::V23D2Report,
+) -> BenchResult<(usize, &borsuk::V23D2Arm)> {
+    report
+        .arms
+        .iter()
+        .enumerate()
+        .filter(|(_, arm)| arm.passed)
+        .min_by_key(|(index, arm)| (arm.selector_key.code_width_bytes, *index))
+        .ok_or_else(|| invalid_input("V23 D3 requires a passing D2 selector width").into())
+}
+
 fn run_v23_d3_stage(
     config: &ResolvedConfig,
     dataset: &Dataset,
@@ -5134,20 +5146,13 @@ fn run_v23_d3_stage(
     {
         return Err(invalid_input("V23 D3 prerequisite query authority differs").into());
     }
-    let passing = d2_report
-        .arms
-        .iter()
-        .enumerate()
-        .filter(|(_, arm)| arm.passed)
-        .collect::<Vec<_>>();
-    if passing.len() != 1 {
-        return Err(invalid_input("V23 D3 requires the one registered passing D2 arm").into());
-    }
+    let selected = v23_smallest_passing_d2_arm(&d2_report)?;
     let transient_capacity_bytes = config
         .ram_budget_bytes
         .ok_or_else(|| invalid_input("V23 D3 transient capacity is absent"))?;
-    let mut rows = Vec::with_capacity(passing.len().saturating_mul(V23_D3_WAVES_PER_ARM));
-    for (arm_index, (d2_arm_index, d2_arm)) in passing.iter().enumerate() {
+    let mut rows = Vec::with_capacity(V23_D3_WAVES_PER_ARM);
+    // D3 freezes the smallest selector width that clears every D2 gate.
+    for (arm_index, (d2_arm_index, d2_arm)) in [selected].into_iter().enumerate() {
         let d1_arm = d1_report
             .arms
             .iter()
@@ -5167,7 +5172,7 @@ fn run_v23_d3_stage(
         )?;
         let arm_index =
             u8::try_from(arm_index).map_err(|_| invalid_input("V23 D3 arm index exceeds u8"))?;
-        let d2_arm_index = u16::try_from(*d2_arm_index)
+        let d2_arm_index = u16::try_from(d2_arm_index)
             .map_err(|_| invalid_input("V23 D3 D2 arm index exceeds u16"))?;
         let arm_key = v23_d2_arm_key(d2_arm);
         for query_index in 0..authority.queries.len() {
@@ -5223,7 +5228,7 @@ fn run_v23_d3_stage(
         &config.output_dir,
         mode,
         &rows,
-        passing.len(),
+        1,
         config.disk_cache_max_bytes.unwrap_or_default(),
     )?;
     Ok(())
@@ -9147,7 +9152,7 @@ mod tests {
         serving_memory_partition, shared_serving_metadata_preparation, summarize_v23_d3_rows,
         update_vector_reservoir, uses_bounded_decoded_cache_phases, uses_memory_preloaded_phase,
         v21_feasibility_arms, v22_stage_l_scratch_parent, v23_destinations,
-        v23_page_uri_is_disjoint, v23_query_authority, v23_sha256_hex,
+        v23_page_uri_is_disjoint, v23_query_authority, v23_sha256_hex, v23_smallest_passing_d2_arm,
         validate_bounded_v20_execution, validate_build_only, validate_build_writers,
         validate_disk_cached_network, validate_exact_read_max_physical_amplification,
         validate_generated_id_range, validate_insert_only, validate_leaf_capability_modes,
@@ -12984,7 +12989,7 @@ mod tests {
             replicated_rows: 0,
         }];
         let d2_report = V23D2Report {
-            schema: "borsuk-v23-d2-v8".to_string(),
+            schema: "borsuk-v23-d2-v9".to_string(),
             d1_report_checksum: "55".repeat(32),
             query_ordinals,
             rows: 10_000_000,
@@ -12994,8 +12999,8 @@ mod tests {
                     code_width_bytes: 32,
                 },
                 selector_key: V23D1ArmKey {
-                    family: V23QuantizerFamily::F16Flat,
-                    code_width_bytes: 192,
+                    family: V23QuantizerFamily::SrhtPq,
+                    code_width_bytes: 8,
                 },
                 selector: borsuk::V23SelectorRef {
                     generation_checksum: [1; 32],
@@ -13003,15 +13008,15 @@ mod tests {
                     dimensions: 96,
                     coarse_cells: 4_096,
                     page_count: 1,
-                    anchors_per_page: 16,
-                    code_width: 192,
-                    anchor_count: 16,
+                    maximum_assignments_per_row: 2,
+                    code_width: 8,
+                    row_count: 10_000_000,
                     path: format!("selectors/{}", "66".repeat(32)),
                     checksum: "66".repeat(32),
-                    encoded_bytes: 96 + 4_096 * 96 * 4 + (4_096 + 1) * 4 + 16 * 204,
+                    encoded_bytes: 96 + 4_096 * 96 * 4 + (4_096 + 1) * 4 + 10_000_000 * 16,
                 },
                 selector_routing_cells: 320,
-                selector_ranked_anchor_cap: 8_192,
+                selector_ranked_row_cap: 4_096,
                 primary_target_rows: 384,
                 maximum_assignments_per_row: 2,
                 maximum_query_pages: 1,
@@ -13033,6 +13038,19 @@ mod tests {
                 passed: false,
             }],
         };
+        assert!(v23_smallest_passing_d2_arm(&d2_report).is_err());
+        let mut width_matrix = d2_report.clone();
+        width_matrix.arms[0].passed = true;
+        let mut width_12 = width_matrix.arms[0].clone();
+        width_12.selector_key.code_width_bytes = 12;
+        width_12.selector.code_width = 12;
+        width_matrix.arms.insert(0, width_12);
+        let (selected_index, selected_arm) = v23_smallest_passing_d2_arm(&width_matrix).unwrap();
+        assert_eq!(
+            selected_index, 1,
+            "D3 selection must not depend on arm order"
+        );
+        assert_eq!(selected_arm.selector_key.code_width_bytes, 8);
         let d2_output = tempfile::tempdir().unwrap();
         write_v23_d2_artifacts(d2_output.path(), &d2_mode, &d2_report, &pages).unwrap();
         validate_v23_d2_artifacts(d2_output.path(), &d2_mode, &d2_report, &pages).unwrap();

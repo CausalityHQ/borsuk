@@ -222,9 +222,9 @@ def v23_d2_fixture(
             "ground_truth_page_assignments": [[0] for _ in range(10)],
             "encoded_bytes": 120_000,
             "candidate_rows": 1_000,
-            "selector_candidate_anchors": 10_000,
+            "selector_candidate_rows": 1_000,
             "selector_routed_cells": 320,
-            "selector_ranked_anchors": 8_192,
+            "selector_ranked_rows": 1_000,
             "ground_truth_ids": [[value] for value in range(10)],
             "ranked": v23_ranked_result(),
             "gt_page_hits": 10,
@@ -237,51 +237,57 @@ def v23_d2_fixture(
     ]
     projected_pages = 100_000
     projected_root = 96 + projected_pages * 320
-    projected_ram = (
-        projected_root
-        + 96
-        + 4_096 * 96 * 4
-        + (4_096 + 1) * 4
-        + projected_pages * 16 * 204
-        + 4_096 * 96 * 4
-        + (4_096 + 1) * 4
-        + 512 * 1024 * 1024
-        + 2 * 1_966_080
-    )
+    projected_ram = {
+        width: (
+            projected_root
+            + 96
+            + 4_096 * 96 * 4
+            + (4_096 + 1) * 4
+            + 100_000_000 * (width + 8)
+            + 4_096 * 96 * 4
+            + (4_096 + 1) * 4
+            + 512 * 1024 * 1024
+            + 2 * 1_966_080
+        )
+        for width in (8, 12)
+    }
     projected_build = (
-        1_000 * (64 + 8 + 4 * 96 + 64 + 192 + 32 + 32 + 7 * 8)
+        1_000 * (64 + 8 + 4 * 96 + 64 + 12 + 32 + 32 + 7 * 8)
         + 120_000
         + 4 * (4 * 96 + 4_096 + 512)
-        + 32 * (4_096 + 8 * 20)
+        + 2 * 32 * (4_096 + 8 * 20)
         + 2 * 1_966_080
     )
     report = {
-        "schema": "borsuk-v23-d2-v8",
+        "schema": "borsuk-v23-d2-v9",
         "d1_report_checksum": "7" * 64,
         "query_ordinals": list(range(32)),
         "rows": 1_000,
         "arms": [
             {
                 "d1_key": {"family": "srht-pq", "code_width_bytes": 64},
-                "selector_key": {"family": "f16-flat", "code_width_bytes": 192},
+                "selector_key": {
+                    "family": "srht-pq",
+                    "code_width_bytes": selector_width,
+                },
                 "selector": {
                     "generation_checksum": [1] * 32,
                     "metric": "squared-euclidean",
                     "dimensions": 96,
                     "coarse_cells": 4_096,
                     "page_count": 1,
-                    "anchors_per_page": 16,
-                    "code_width": 192,
-                    "anchor_count": 16,
+                    "maximum_assignments_per_row": 2,
+                    "code_width": selector_width,
+                    "row_count": 1_000,
                     "path": f"selectors/{'5' * 64}",
                     "checksum": "5" * 64,
                     "encoded_bytes": 96
                     + 4_096 * 96 * 4
                     + (4_096 + 1) * 4
-                    + 16 * 204,
+                    + 1_000 * (selector_width + 8),
                 },
                 "selector_routing_cells": 320,
-                "selector_ranked_anchor_cap": 8_192,
+                "selector_ranked_row_cap": 4_096,
                 "primary_target_rows": primary_target_rows,
                 "maximum_assignments_per_row": 2,
                 "maximum_query_pages": 8,
@@ -291,7 +297,7 @@ def v23_d2_fixture(
                 "total_assignments": 1_000,
                 "storage_amplification_ppm": 1_000_000,
                 "projected_root_bytes": projected_root,
-                "projected_ram_bytes": projected_ram,
+                "projected_ram_bytes": projected_ram[selector_width],
                 "projected_build_bytes": projected_build,
                 "query_samples": samples,
                 "aggregate_recall_ppm": 1_000_000,
@@ -303,6 +309,7 @@ def v23_d2_fixture(
                 "passed": True,
             }
             for primary_target_rows in (384,)
+            for selector_width in (8, 12)
         ],
     }
     identity = {
@@ -339,8 +346,8 @@ def v23_d2_fixture(
         "d1_report_sha256": d1_sha256,
         "rows": 1_000,
         "queries": 32,
-        "arms": 1,
-        "passing_arm_indexes": [0],
+        "arms": 2,
+        "passing_arm_indexes": [0, 1],
         "pages": 1,
         "passed": True,
     }
@@ -4498,6 +4505,39 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 expected_page_uri="s3://standard-bucket/v23/pages/",
             )
             self.assertIs(failed["passed"], False)
+
+            selector_width_identity_drift = copy.deepcopy(artifact)
+            drift_arm = selector_width_identity_drift["report"]["arms"][0]
+            selector = drift_arm["selector"]
+            selector["code_width"] = 12
+            selector["encoded_bytes"] = (
+                96
+                + selector["coarse_cells"] * selector["dimensions"] * 4
+                + (selector["coarse_cells"] + 1) * 4
+                + selector["row_count"] * (selector["code_width"] + 8)
+            )
+            _, drift_arm["projected_ram_bytes"] = _v23_d2_projection(
+                drift_arm["unique_rows"],
+                len(drift_arm["pages"]),
+                selector["dimensions"],
+                selector["coarse_cells"],
+                selector["code_width"],
+            )
+            write_canonical_json(report_path, selector_width_identity_drift)
+            write_canonical_json(roster_path, roster)
+            write_canonical_json(summary_path, summary)
+            with self.assertRaises(ValueError):
+                validate_v23_d2_artifacts(
+                    report_path,
+                    roster_path,
+                    summary_path,
+                    expected_source_archive_sha256="a" * 64,
+                    expected_index_id="index-v23",
+                    expected_dataset_id="deep-image-96",
+                    expected_dimensions=96,
+                    expected_d1_report_sha256=d1_sha256,
+                    expected_page_uri="s3://standard-bucket/v23/pages/",
+                )
 
             for path, mutation in (
                 (

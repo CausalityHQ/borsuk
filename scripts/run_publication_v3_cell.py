@@ -3642,8 +3642,9 @@ V23_WAVE_MAX_PAGES = 8
 V23_PAGE_MAX_BYTES = 245_760
 V23_WAVE_MAX_BYTES = 1_966_080
 V23_RAM_BUDGET_BYTES = 3 * 1024**3
-V23_SELECTOR_CODE_BYTES = 192
-V23_SELECTOR_ANCHOR_BYTES = 12 + V23_SELECTOR_CODE_BYTES
+V23_SELECTOR_CODE_WIDTHS = {8, 12}
+V23_SELECTOR_ROW_LABEL_BYTES = 8
+V23_SELECTOR_RANKED_ROW_CAP = 4_096
 V23_FAMILIES = frozenset(
     {"srht-pq", "fast-turbo-quant-mse", "fast-turbo-quant-prod", "f16-flat"}
 )
@@ -3721,7 +3722,7 @@ def _v23_arm_key(value: object) -> tuple[str, int]:
     )
     if (
         family not in V23_FAMILIES
-        or (family == "srht-pq" and width not in {8, 16, 32, 64})
+        or (family == "srht-pq" and width not in {8, 12, 16, 32, 64})
         or (family in {"fast-turbo-quant-mse", "fast-turbo-quant-prod"} and width > 64)
         or (family == "f16-flat" and width % 2 != 0)
     ):
@@ -4472,9 +4473,9 @@ def _validate_v23_selector(
             "dimensions",
             "coarse_cells",
             "page_count",
-            "anchors_per_page",
+            "maximum_assignments_per_row",
             "code_width",
-            "anchor_count",
+            "row_count",
             "path",
             "checksum",
             "encoded_bytes",
@@ -4490,17 +4491,20 @@ def _validate_v23_selector(
         selector["coarse_cells"], "D2 selector cells", minimum=1
     )
     page_count = _v23_integer(selector["page_count"], "D2 selector pages", minimum=1)
-    anchors_per_page = _v23_integer(
-        selector["anchors_per_page"], "D2 selector anchors per page", minimum=1
+    assignments_per_row = _v23_integer(
+        selector["maximum_assignments_per_row"],
+        "D2 selector assignment cap",
+        minimum=1,
     )
-    anchor_count = _v23_integer(
-        selector["anchor_count"], "D2 selector anchors", minimum=1
+    row_count = _v23_integer(
+        selector["row_count"], "D2 selector rows", minimum=1
     )
+    code_width = _v23_integer(selector["code_width"], "D2 selector code width")
     encoded_bytes = (
         96
         + coarse_cells * dimensions * 4
         + (coarse_cells + 1) * 4
-        + anchor_count * V23_SELECTOR_ANCHOR_BYTES
+        + row_count * (code_width + V23_SELECTOR_ROW_LABEL_BYTES)
     )
     first = pages[0]
     if (
@@ -4509,10 +4513,8 @@ def _validate_v23_selector(
         or dimensions != first["dimensions"]
         or coarse_cells < selector_routing_cells
         or page_count != len(pages)
-        or anchors_per_page != 16
-        or _v23_integer(selector["code_width"], "D2 selector code width")
-        != V23_SELECTOR_CODE_BYTES
-        or not page_count <= anchor_count <= page_count * anchors_per_page
+        or assignments_per_row != 2
+        or code_width not in V23_SELECTOR_CODE_WIDTHS
         or selector["path"] != f"selectors/{checksum}"
         or _v23_integer(selector["encoded_bytes"], "D2 selector bytes") != encoded_bytes
     ):
@@ -4525,7 +4527,7 @@ def _v23_d2_projection(
     page_count: int,
     dimensions: int,
     selector_coarse_cells: int,
-    selector_anchors_per_page: int,
+    selector_code_width: int,
 ) -> tuple[int, int]:
     projected_pages = max(
         (page_count * 100_000_000 + unique_rows - 1) // unique_rows, page_count
@@ -4539,7 +4541,7 @@ def _v23_d2_projection(
         96
         + selector_centroids
         + selector_offsets
-        + projected_pages * selector_anchors_per_page * V23_SELECTOR_ANCHOR_BYTES
+        + 100_000_000 * (selector_code_width + V23_SELECTOR_ROW_LABEL_BYTES)
     )
     decoded_selector = selector_centroids + selector_offsets
     return (
@@ -4571,7 +4573,7 @@ def _v23_d2_minimum_build_projection(
     index_bytes = usize_bytes * 7
     decoded_and_planner = rows * (
         decoded_row_bytes
-        + V23_SELECTOR_CODE_BYTES
+        + max(V23_SELECTOR_CODE_WIDTHS)
         + 32
         + candidate_bytes
         + index_bytes
@@ -4581,7 +4583,7 @@ def _v23_d2_minimum_build_projection(
         for page in pages
     )
     page_authority_bytes = len(pages) * (dimensions * 4 + 4_096 + 512)
-    lightweight_evidence_bytes = V23_QUERY_COUNT * (
+    lightweight_evidence_bytes = len(V23_SELECTOR_CODE_WIDTHS) * V23_QUERY_COUNT * (
         4_096 + maximum_record_id_bytes * 20
     )
     return (
@@ -4636,7 +4638,7 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
     _v23_digest(report["d1_report_checksum"], "D2 D1 report checksum")
     ordinals = report["query_ordinals"]
     if (
-        report["schema"] != "borsuk-v23-d2-v8"
+        report["schema"] != "borsuk-v23-d2-v9"
         or type(ordinals) is not list
         or len(ordinals) != V23_QUERY_COUNT
         or any(type(item) is not int or item < 0 for item in ordinals)
@@ -4649,12 +4651,16 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
     arms = report["arms"]
     if (
         type(arms) is not list
-        or len(arms) != 1
+        or len(arms) != len(V23_SELECTOR_CODE_WIDTHS)
         or [
-            arm.get("primary_target_rows") if type(arm) is dict else None
+            (
+                arm.get("selector_key", {}).get("code_width_bytes")
+                if type(arm) is dict and type(arm.get("selector_key")) is dict
+                else None
+            )
             for arm in arms
         ]
-        != [384]
+        != sorted(V23_SELECTOR_CODE_WIDTHS)
     ):
         raise ValueError("V23 D2 frontier cardinality differs")
     build_peak: int | None = None
@@ -4667,7 +4673,7 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
                 "selector_key",
                 "selector",
                 "selector_routing_cells",
-                "selector_ranked_anchor_cap",
+                "selector_ranked_row_cap",
                 "primary_target_rows",
                 "maximum_assignments_per_row",
                 "maximum_query_pages",
@@ -4693,8 +4699,8 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
         family, width = _v23_arm_key(arm["d1_key"])
         selector_family, selector_width = _v23_arm_key(arm["selector_key"])
         if (
-            selector_family != "f16-flat"
-            or selector_width != V23_SELECTOR_CODE_BYTES
+            selector_family != "srht-pq"
+            or selector_width not in V23_SELECTOR_CODE_WIDTHS
         ):
             raise ValueError("V23 D2 selector codec differs")
         selector_routing_cells = _v23_integer(
@@ -4703,9 +4709,9 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
         if (
             not 1 <= selector_routing_cells <= 320
             or _v23_integer(
-                arm["selector_ranked_anchor_cap"], "D2 selector ranked-row cap"
+                arm["selector_ranked_row_cap"], "D2 selector ranked-row cap"
             )
-            != 8_192
+            != V23_SELECTOR_RANKED_ROW_CAP
         ):
             raise ValueError("V23 D2 selector budget differs")
         primary_target = _v23_integer(arm["primary_target_rows"], "D2 primary target")
@@ -4739,6 +4745,8 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
         selector = _validate_v23_selector(
             arm["selector"], pages, selector_routing_cells
         )
+        if selector["code_width"] != selector_width:
+            raise ValueError("V23 D2 selector width identity differs")
         if selector_routing_cells != min(320, selector["coarse_cells"]):
             raise ValueError("V23 D2 selector routing breadth differs")
         first = pages[0]
@@ -4762,7 +4770,7 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
             len(pages),
             first["dimensions"],
             selector["coarse_cells"],
-            selector["anchors_per_page"],
+            selector["code_width"],
         )
         observed_build_peak = _v23_integer(
             arm["projected_build_bytes"], "D2 build projection", minimum=1
@@ -4790,6 +4798,7 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
             != projected_ram
             or observed_build_peak != build_peak
             or observed_build_peak < minimum_build_projection
+            or selector["row_count"] != unique_rows
             or id_width <= 0
             or assignments_per_row <= 0
         ):
@@ -4815,9 +4824,9 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
                     "ground_truth_page_assignments",
                     "encoded_bytes",
                     "candidate_rows",
-                    "selector_candidate_anchors",
+                    "selector_candidate_rows",
                     "selector_routed_cells",
-                    "selector_ranked_anchors",
+                    "selector_ranked_rows",
                     "ground_truth_ids",
                     "ranked",
                     "gt_page_hits",
@@ -4899,25 +4908,25 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
                 )
                 != selector_routing_cells
                 or _v23_integer(
-                    sample["selector_candidate_anchors"],
+                    sample["selector_candidate_rows"],
                     "D2 selector candidate rows",
                     minimum=1,
                 )
                 < _v23_integer(
-                    sample["selector_ranked_anchors"],
+                    sample["selector_ranked_rows"],
                     "D2 selector ranked rows",
                     minimum=1,
-                    maximum=8_192,
+                    maximum=V23_SELECTOR_RANKED_ROW_CAP,
                 )
                 or _v23_integer(
-                    sample["selector_ranked_anchors"], "D2 selector ranked rows"
+                    sample["selector_ranked_rows"], "D2 selector ranked rows"
                 )
                 != min(
                     _v23_integer(
-                        sample["selector_candidate_anchors"],
+                        sample["selector_candidate_rows"],
                         "D2 selector candidate rows",
                     ),
-                    8_192,
+                    V23_SELECTOR_RANKED_ROW_CAP,
                 )
                 or page_hits < hits
                 or page_hits != expected_page_hits
