@@ -13558,30 +13558,33 @@ impl BorsukIndex {
         &self,
         request: crate::v23_diagnostic::V23D2DiagnosticRequest<'_>,
     ) -> Result<crate::v23_diagnostic::V23D2Report> {
-        self.diagnose_v23_d2_inner(request, None)
+        self.diagnose_v23_d2_inner(request, None, None)
     }
 
     /// Simulate V23 D2 while streaming each selected content-addressed page
-    /// exactly once to an external artifact writer.
+    /// and packed selector to external artifact writers.
     #[doc(hidden)]
-    pub fn diagnose_v23_d2_with_page_sink<F>(
+    pub fn diagnose_v23_d2_with_artifact_sinks<F, G>(
         &self,
         request: crate::v23_diagnostic::V23D2DiagnosticRequest<'_>,
         mut page_sink: F,
+        mut selector_sink: G,
     ) -> Result<crate::v23_diagnostic::V23D2Report>
     where
         F: FnMut(&crate::v23_diagnostic::V23PageRef, &bytes::Bytes) -> Result<()>,
+        G: FnMut(&crate::v23_diagnostic::V23SelectorRef, &bytes::Bytes) -> Result<()>,
     {
-        self.diagnose_v23_d2_inner(request, Some(&mut page_sink))
+        self.diagnose_v23_d2_inner(request, Some(&mut page_sink), Some(&mut selector_sink))
     }
 
     fn diagnose_v23_d2_inner(
         &self,
         request: crate::v23_diagnostic::V23D2DiagnosticRequest<'_>,
         page_sink: Option<&mut crate::v23_diagnostic::V23PageSink<'_>>,
+        selector_sink: Option<&mut crate::v23_diagnostic::V23SelectorSink<'_>>,
     ) -> Result<crate::v23_diagnostic::V23D2Report> {
         use crate::v23_diagnostic::{
-            V23D2CorpusAuthority, build_v23_d2_report, build_v23_d2_report_with_page_sink,
+            V23D2CorpusAuthority, build_v23_d2_report, build_v23_d2_report_with_artifact_sinks,
             validate_d1_report,
         };
 
@@ -13618,9 +13621,14 @@ impl BorsukIndex {
             metric: self.manifest.config.metric.clone(),
             normalize: scan.normalize,
         };
-        match page_sink {
-            Some(sink) => build_v23_d2_report_with_page_sink(authority, sink),
-            None => build_v23_d2_report(authority),
+        match (page_sink, selector_sink) {
+            (Some(page_sink), Some(selector_sink)) => {
+                build_v23_d2_report_with_artifact_sinks(authority, page_sink, selector_sink)
+            }
+            (None, None) => build_v23_d2_report(authority),
+            _ => Err(BorsukError::InvalidStorage(
+                "V23 D2 artifact sinks differ".to_string(),
+            )),
         }
     }
 
@@ -45599,14 +45607,16 @@ mod tests {
         let mut index = BorsukIndex::create(IndexConfig {
             uri,
             metric: VectorMetric::Euclidean,
-            dimensions: 8,
+            dimensions: 16,
             segment_max_vectors: 256,
             ram_budget_bytes: None,
             text: false,
             named_vectors: Default::default(),
         })
         .unwrap();
-        let vectors = (0..2055).map(|row| vec![row as f32; 8]).collect::<Vec<_>>();
+        let vectors = (0..2055)
+            .map(|row| vec![row as f32; 16])
+            .collect::<Vec<_>>();
         index
             .add(
                 vectors
@@ -45714,17 +45724,8 @@ mod tests {
                 })
         }));
         assert!(report.arms.iter().any(|arm| {
-            arm.passed
-                && matches!(
-                    arm.key.family,
-                    crate::v23_diagnostic::V23QuantizerFamily::F16Flat
-                )
-        }));
-        assert!(report.arms.iter().all(|arm| {
-            matches!(
-                arm.key.family,
-                crate::v23_diagnostic::V23QuantizerFamily::F16Flat
-            ) || !arm.passed
+            arm.key.family == crate::v23_diagnostic::V23QuantizerFamily::SrhtPq
+                && arm.key.code_width_bytes == 16
         }));
         let mut d2_prerequisite = report.clone();
         let d2_arm = &mut d2_prerequisite.arms[0];
@@ -45749,8 +45750,9 @@ mod tests {
         let selected_d1_key = d2_arm.key;
         crate::v23_diagnostic::validate_d1_report(&d2_prerequisite).unwrap();
         let mut emitted_pages = BTreeMap::<String, bytes::Bytes>::new();
+        let mut emitted_selectors = BTreeMap::<String, bytes::Bytes>::new();
         let d2 = index
-            .diagnose_v23_d2_with_page_sink(
+            .diagnose_v23_d2_with_artifact_sinks(
                 crate::v23_diagnostic::V23D2DiagnosticRequest {
                     d1_report: &d2_prerequisite,
                     d1_key: selected_d1_key,
@@ -45765,6 +45767,15 @@ mod tests {
                             .insert(page.path.clone(), body.clone())
                             .is_none(),
                         "content-addressed page emitted more than once"
+                    );
+                    Ok(())
+                },
+                |selector, body| {
+                    assert!(
+                        emitted_selectors
+                            .insert(selector.path.clone(), body.clone())
+                            .is_none(),
+                        "content-addressed selector emitted more than once"
                     );
                     Ok(())
                 },
@@ -45788,6 +45799,20 @@ mod tests {
             crate::v23_diagnostic::decode_v23_page(emitted_pages.get(&path).unwrap().clone(), page)
                 .unwrap();
         }
+        let selector_refs = d2
+            .arms
+            .iter()
+            .map(|arm| (arm.selector.path.clone(), &arm.selector))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(emitted_selectors.len(), selector_refs.len());
+        assert!(!emitted_selectors.is_empty());
+        for (path, selector) in selector_refs {
+            crate::v23_diagnostic::decode_v23_selector(
+                emitted_selectors.get(&path).unwrap().clone(),
+                selector,
+            )
+            .unwrap();
+        }
         assert_eq!(scratch_parent.path().read_dir().unwrap().count(), 0);
         assert_eq!(
             serde_json::to_vec(&index.manifest).unwrap(),
@@ -45805,7 +45830,7 @@ mod tests {
         );
 
         index
-            .add(vec![VectorRecord::new("v23-d1-mutation", vec![0.0; 8])])
+            .add(vec![VectorRecord::new("v23-d1-mutation", vec![0.0; 16])])
             .unwrap();
         let error = index
             .diagnose_v23_d1(

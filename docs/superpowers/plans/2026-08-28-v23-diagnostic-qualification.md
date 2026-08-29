@@ -38,6 +38,84 @@
 - `scripts/test_run_publication_v3_cell.py`, `scripts/test_publication_v3_execution.py`, `scripts/test_publication_v3_controller.py`, `scripts/test_launch_aws_publication_v3.py`: paid-boundary and artifact mutation tests.
 - `docs/research/cold-read-latency-design.md`: terminal D1/D2/D3 evidence ledger only after receipts exist.
 
+### Task 3A: Replace Page-Centroid Routing with a Persisted Anchor Selector
+
+**Files:**
+- Modify: `crates/borsuk/src/v23_diagnostic.rs`
+- Modify: `crates/borsuk/examples/production_bench.rs`
+- Modify: `scripts/run_publication_v3_cell.py`
+- Modify: `scripts/test_run_publication_v3_cell.py`
+
+**Interfaces:**
+- Consumes: D1's authenticated 16-byte SRHT-PQ state, D2 planning rows and
+  immutable page assignments.
+- Produces: `V23SelectorRef`, `encode_v23_selector`,
+  `decode_v23_selector`, and `V23PageSelector::select`, all shared by D2 and D3.
+
+- [x] **Step 1: Write selector codec, mutation, and no-fallback RED tests**
+
+Construct a two-cell, three-page fixture. Assert canonical encode/decode,
+content-addressed path/checksum/length, exact 16 anchors per non-small page,
+sorted cell offsets, and identical D2/D3 page choices. Mutate every header
+field, centroid bit, offset, page ordinal, code byte, checksum, and trailing
+byte. Assert D3 construction rejects every mutation and rejects an arm without
+selector authority before opening page storage.
+
+- [x] **Step 2: Verify the focused RED**
+
+Run: `cargo test -p borsuk --lib v23_selector -- --nocapture`
+
+Expected: compilation fails on missing selector types and codec.
+
+- [x] **Step 3: Implement the canonical packed selector**
+
+Encode a fixed header followed by little-endian `f32` coarse centroids,
+`u32[coarse_cells + 1]` offsets, `u32[anchors]` page ordinals,
+`u64[anchors]` source ordinals, and contiguous 16-byte codes. Authenticate the
+complete object with BLAKE3 and path it as
+`selectors/<checksum>`. Decode with checked arithmetic, exact cardinalities,
+finite centroids, monotone offsets, in-range page ordinals, zero reserved bytes,
+and no trailing bytes.
+
+- [x] **Step 4: Implement deterministic anchor construction and selection**
+
+Choose 16 primary-row anchors per page with exact-metric farthest-first
+selection and source-ordinal ties. Route at most 320 nonempty coarse centroids,
+score their anchors through the restored D1 16-byte quantizer, retain 8,192 by
+`(distance, source ordinal, page ordinal)`, aggregate reciprocal-rank scores in
+one pass, and deterministically backfill the lowest unseen page ordinals when
+routed anchors cover fewer than four distinct pages.
+
+- [x] **Step 5: Bind D2 publication and D3 loading to the same bytes**
+
+Publish one selector object per D2 arm with immutable create semantics. Store
+its `V23SelectorRef` in the arm, include it in the canonical report/receipt,
+and make D2 query simulation decode and use that serialized object. D3 fetches
+and authenticates the object once before timing and refuses any legacy
+page-centroid fallback.
+
+- [x] **Step 6: Replace the RAM projection and validators**
+
+Project the selector from authenticated per-page anchor counts at 100M rows and
+charge encoded bytes, decoded centroids/offsets/pages/codes, page references,
+quantizer tables, fixed runtime, and two maximum waves. Mirror every equation
+and schema check in Python. Persist each query's routed-cell count, selected
+pages, GT assignments, oracle pages/hits, and selector-ranked count; recompute
+coverage and regret independently.
+
+- [x] **Step 7: Run focused assurance**
+
+Run the Rust selector, grouped V23 library, production-bench V23, complete
+`V23DiagnosticWorkerTests`, formatter, strict Clippy, Python compile/Ruff, and
+diff checks serially. Require all to pass before freezing source.
+
+- [ ] **Step 8: Qualify remotely in order**
+
+Run fresh authenticated Spot D1, then D2. Terminate each worker at its terminal
+marker. Start the 1,000-wave Standard-S3-only D3 only if D2 passes every quality,
+regret, byte, and RAM gate. Publish no claim unless D3 meets recall, tail
+latency, backing-I/O, throughput, and memory requirements.
+
 ### Task 1: Freeze the V23 Diagnostic Contract
 
 **Files:**
@@ -195,7 +273,9 @@ git commit -m "Add V23 code fidelity replay"
 - Test: `crates/borsuk/src/index.rs`
 
 **Interfaces:**
-- Consumes: one D1-passing quantizer state, authenticated corpus scratch rows, page targets `{512,1024,2048}`, assignment limits `{1,2,3}`, and the existing resident centroid router.
+- Consumes: one D1-passing quantizer state, authenticated corpus scratch rows,
+  page targets `{384,512,640}`, assignment limit `2`, and immutable V20 parent
+  cell authority.
 - Produces: `BorsukIndex::diagnose_v23_d2(&V23D1Report, V23D1ArmKey, &[u64], &[Vec<f32>], &[Vec<String>], &Path) -> Result<V23D2Report>` plus deterministic `V23PagePlan` values used by Task 4. The complete validated D1 report proves the selected arm passed and binds its source generation; explicit source-query ordinals preserve the same authenticated query authority as D1.
 
 - [ ] **Step 1: Write deterministic balance, closure, and four-page RED tests**
@@ -212,7 +292,7 @@ Expected: compilation fails on missing page planning types and D2 entrypoint.
 
 - [ ] **Step 3: Implement balanced primary assignment**
 
-Use the authenticated 4,096 V20 routing cells only as diagnostic parent partitions. Within each parent, call the existing deterministic semantic microcluster projection with the registered target rows, then split an oversized final cluster so every primary page fits its exact encoded cap. Compute each page centroid from its primary rows with a fixed source-ordinal reduction. This produces roughly `ceil(parent_rows / target_rows)` pages per parent without global `O(rows * pages)` fitting.
+Use the authenticated 4,096 V20 routing cells only as diagnostic parent partitions. Within each parent, call the existing deterministic semantic microcluster projection with the registered target rows, then split an oversized final cluster so every primary page fits its exact encoded cap. Compute transient planning centroids from primary rows with a fixed source-ordinal reduction, but do not persist them or expose a serving fallback. This produces roughly `ceil(parent_rows / target_rows)` pages per parent without global `O(rows * pages)` fitting.
 
 When a page exceeds its row target after deterministic tie placement, rebalance only within that parent using the smallest distance penalty. Compare every candidate with this exact closure so no float-ordering dependency is introduced:
 
@@ -227,7 +307,7 @@ Do not add a new dependency for ordering; implement the comparison with `f32::to
 
 - [ ] **Step 4: Implement capped boundary closure**
 
-Build the production deterministic centroid router over the completed primary
+Build a transient deterministic planning router over the completed primary
 pages. For each row, inspect at most 17 routed page centroids (including its
 primary page when returned), calculate
 `secondary_distance / max(primary_distance, f32::MIN_POSITIVE)`, and push
@@ -240,21 +320,30 @@ rows. This bound remains valid even if all corpus rows belong to one V20 parent
 cell; metrics without the production bounded routing geometry fail before
 planning rather than falling back to a full page scan.
 
-- [ ] **Step 5: Implement exact production-router simulation**
+- [ ] **Step 5: Implement exact packed-selector simulation**
 
-Construct the existing `CatalogRouter` over the immutable page centroids with one registered graph-build seed and search budget. For every page-layout arm, evaluate registered query-page budgets `{1,2,3,4}`. Prepare each query once per arm, choose exactly the nearest registered number available, decode the authenticated immutable page bytes, deduplicate raw IDs, and rank via the production contiguous SIMD method. Emit page ordinals, bytes, rows, GT page coverage, hit count, recall ppm, and CPU nanoseconds. The validator recomputes all aggregate minima/maxima and admits at most three nondominated passing arms sorted by `(-recall_ppm, bytes, pages, amplification_ppm, projected_ram_bytes, arm_key)`; if none pass, it retains a failing frontier as terminal negative evidence. CPU p99 remains a hard pass gate and reported measurement. Timing jitter can flip pass/fail membership at that hard boundary, but it never participates in dominance or ordering.
+Build and encode the immutable packed selector described in Task 3A, then make
+D2 decode and query those exact bytes. Evaluate exactly one four-page wave per
+page-layout arm, decode the authenticated immutable page bytes, deduplicate raw
+IDs, and rank via the production contiguous SIMD method. Emit page ordinals,
+bytes, rows, GT page coverage, oracle coverage, selector regret, hit count,
+recall ppm, and CPU nanoseconds. The validator recomputes all aggregate
+minima/maxima and admits at most three nondominated passing arms. If none pass,
+it retains a failing frontier as terminal negative evidence. CPU p99 remains a
+hard pass gate and reported measurement.
 
 The conservative decoded-builder projection includes the complete decoded row
 authority at maximum authenticated ID width, at most one retained replica
 candidate per live row, six conservative corpus index vectors, all encoded page bytes,
-page-centroid/router/catalog slack, and two maximum query waves. The worker
+packed-selector and page-reference slack, and two maximum query waves. The worker
 receipt separately records measured peak RSS.
 
 Project page count to 100,000,000 rows with ceiling division. Recompute compact
-root, decoded catalog, bounded-router, fixed 512 MiB runtime/overlay/codebook,
-and two maximum-wave charges from authenticated page/dimension authority; do
-not serialize the diagnostic JSON directory and call its current 10M length a
-100M serving projection.
+root, encoded selector, decoded selector centroids/offsets, a conservative
+4,096-cell production floor, fixed 512 MiB runtime/overlay/codebook, and two
+maximum-wave charges from authenticated page/dimension authority; do not
+serialize the diagnostic JSON directory and call its current 10M length a 100M
+serving projection.
 
 - [ ] **Step 6: Run D2 tests and deterministic replay twice**
 

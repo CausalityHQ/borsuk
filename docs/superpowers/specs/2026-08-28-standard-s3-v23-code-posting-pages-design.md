@@ -15,6 +15,53 @@ V21/V22 production hypotheses for the next pre-release dense-ANN format. BORSUK
 is unreleased, so V23 defines one new format and no legacy reader or migration
 path.
 
+## Revision 3 after the terminal D2 routing falsification
+
+The first content-independent D2 layout/router run proved that page-centroid
+routing is structurally insufficient. Across the complete 10M arm-0 page
+directory, an independent Standard-S3 scan recomputed that even a perfect
+four-page selector over the old physical layout could reach only `796,875` ppm
+aggregate ground-truth containment and `500,000` ppm on the worst frozen query.
+The measured D2 arms reached only about 59% recall and every returned hit was
+already contained in the selected pages, isolating the loss to physical layout
+and page selection rather than code scoring. Revision 3 therefore removes the
+page-centroid serving router and does not retain a fallback.
+
+Each D2 arm now owns one content-addressed selector object used byte-for-byte by
+both D2 simulation and D3 serving. The selector contains the authenticated
+4,096 coarse centroids and exactly 16 deterministic 16-byte SRHT-PQ anchors per
+posting page. Anchors are grouped by coarse cell and stored as packed
+`(page_ordinal, source_ordinal, code)` entries behind a `u32` offset table. Query routing scans
+the nonempty coarse centroids, admits at most 320 cells (exactly 320 for the
+registered 4,096-cell production corpus), scores only their packed
+anchors, retains at most 8,192 anchors, and chooses exactly four distinct pages
+by deterministic reciprocal-rank page voting. No corpus-row sidecar, page
+centroid graph, dependent read, or query-conditioned build state remains.
+
+The binary selector object is checksum-bound in the D2 arm and fetched once
+before D3 measurement. Its complete encoded length, decoded packed arrays,
+coarse centroids, offsets, quantizer tables, page directory, two maximum waves,
+and fixed runtime allowance are included in the 100M RAM projection. D3 refuses
+an absent, mismatched, or undecodable selector and has no centroid-only path.
+At 200,000 projected pages the anchor codes occupy about 51.2 MB and anchor page
+ordinals about 12.8 MB; the coarse centroids add about 1.6 MB before small
+headers and offsets, leaving substantial headroom inside the 3 GiB process cap.
+
+Anchor selection is deterministic and query-independent. For every page, use
+only its primary rows, start with the smallest source ordinal, then repeatedly
+choose the row maximizing its minimum exact-metric distance to the already
+chosen anchors, breaking ties by source ordinal. A page with fewer than 16
+primary rows contributes every primary row. Selector objects sort anchors by
+`(coarse_cell, page_ordinal, source_ordinal)` before encoding. D2 persists the
+ordered ground-truth page assignments so independent Rust and Python validators
+recompute both the best achievable four-page coverage and selector regret.
+
+Revision 3 gates are fail-closed: layout-oracle recall must be at least 985,000
+ppm aggregate and 900,000 ppm per query; selected-page hits divided by oracle
+hits must be at least 995,000 ppm; final D2 recall remains at least 975,000 ppm
+aggregate and 800,000 ppm per query. D3 is forbidden until those gates and the
+projected RAM cap pass on a fresh authenticated D2 run.
+
 ## Objective
 
 Make strict-cold dense ANN over S3 Standard a one-wave operation while keeping
@@ -291,14 +338,18 @@ simultaneous maximum pages per admitted query, active-query count, and runtime
 overhead. No corpus-wide code plane is assumed resident.
 
 The D2 projection scales the observed page count to exactly 100,000,000 rows
-with ceiling division. Its compact root charges a 96-byte header plus 96 bytes
-of fixed authority and the full `f32` centroid per projected page. The decoded
-catalog charges 32 fixed bytes plus the centroid per page, the bounded
-17-level/32-neighbour production router reserves 4,096 bytes per page, and a
-separate 512 MiB reserve covers the codebook, overlays, allocator/runtime state,
+with ceiling division. Its compact root charges a 96-byte header plus a
+conservative 320 bytes per projected page for the Rust reference, both owned
+content-address strings, vector capacity, and allocator rounding. Page
+centroids are not persisted. The packed selector separately charges its header,
+at least 4,096 coarse `f32` centroids and offsets, and 28 bytes for each of at
+most 16 anchors per projected page; decoded centroid and offset storage is
+charged again. A
+separate 512 MiB reserve covers quantizers, overlays, allocator/runtime state,
 and other fixed serving authority. Two simultaneous 983,040-byte waves are
 added explicitly. The validator recomputes this formula from authenticated row,
-page, and dimension authority; a report cannot self-assert a smaller number.
+page, selector, and dimension authority; a report cannot self-assert a smaller
+number.
 
 ## Ordered diagnostic gates
 

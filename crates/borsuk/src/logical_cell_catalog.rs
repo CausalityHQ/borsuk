@@ -414,61 +414,6 @@ pub(crate) struct LogicalCellCatalog {
 }
 
 impl LogicalCellCatalog {
-    /// Reconstruct a catalog from centroids whose final floating-point bytes
-    /// are already authenticated by persistent authority.
-    ///
-    /// Unlike [`Self::from_centroids`], this path validates normalized-metric
-    /// centroids without normalizing them again. Re-normalization can move an
-    /// already-unit FP32 coordinate by one ULP and silently change routing.
-    pub(crate) fn from_stored_centroids(
-        routing_epoch: u64,
-        dimensions: usize,
-        metric: VectorMetric,
-        centroids: Vec<Vec<f32>>,
-    ) -> Result<Self> {
-        if routing_epoch == 0 {
-            return Err(BorsukError::InvalidStorage(
-                "logical-cell catalog routing epoch must be nonzero".to_string(),
-            ));
-        }
-        if dimensions == 0 {
-            return Err(BorsukError::InvalidStorage(
-                "logical-cell catalog dimensions must be nonzero".to_string(),
-            ));
-        }
-        if centroids.is_empty() {
-            return Err(BorsukError::InvalidStorage(
-                "logical-cell catalog must contain at least one centroid".to_string(),
-            ));
-        }
-        let count = u32::try_from(centroids.len()).map_err(|_| {
-            BorsukError::InvalidStorage(
-                "logical-cell count exceeds the u32 catalog limit".to_string(),
-            )
-        })?;
-        for (ordinal, centroid) in centroids.iter().enumerate() {
-            if centroid.len() != dimensions {
-                return Err(BorsukError::DimensionMismatch {
-                    expected: dimensions,
-                    actual: centroid.len(),
-                });
-            }
-            validate_stored_centroid(
-                u32::try_from(ordinal).map_err(|_| {
-                    BorsukError::InvalidStorage(
-                        "logical-cell centroid ordinal exceeds u32".to_string(),
-                    )
-                })?,
-                centroid,
-                &metric,
-            )?;
-        }
-        let cells = (0..count)
-            .map(|ordinal| LogicalCellId::new(routing_epoch, ordinal))
-            .collect();
-        Ok(Self { cells, centroids })
-    }
-
     pub(crate) fn from_centroids(
         routing_epoch: u64,
         dimensions: usize,

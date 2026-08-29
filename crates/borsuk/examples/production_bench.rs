@@ -1256,7 +1256,7 @@ fn validate_v23_d1_report_shape(report: &borsuk::V23D1Report) -> io::Result<()> 
 }
 
 fn validate_v23_d2_report_shape(report: &borsuk::V23D2Report) -> io::Result<()> {
-    if report.schema != "borsuk-v23-d2-v4"
+    if report.schema != "borsuk-v23-d2-v7"
         || report.rows == 0
         || report.query_ordinals.len() != V23_D3_QUERY_COUNT as usize
         || report
@@ -1429,8 +1429,6 @@ fn validate_v23_page_refs(pages: &[borsuk::V23PageRef]) -> io::Result<()> {
         || pages.iter().any(|page| {
             page.generation_checksum == [0; 32]
                 || page.dimensions == 0
-                || page.centroid.len() != page.dimensions as usize
-                || page.centroid.iter().any(|value| !value.is_finite())
                 || page.primary_rows == 0
                 || page.encoded_bytes == 0
                 || page.encoded_bytes > 245_760
@@ -5088,7 +5086,7 @@ fn run_v23_d2_stage(
     let index = open_v23_source_index(config)?;
     let scratch = v23_scratch(config, "d2")?;
     let page_publisher = borsuk::V23PagePublisher::new(page_uri)?;
-    let report = index.diagnose_v23_d2_with_page_sink(
+    let report = index.diagnose_v23_d2_with_artifact_sinks(
         borsuk::V23D2DiagnosticRequest {
             d1_report: &d1_report,
             d1_key,
@@ -5098,6 +5096,7 @@ fn run_v23_d2_stage(
             scratch_parent: scratch.path(),
         },
         |page, body| page_publisher.publish(page, body),
+        |selector, body| page_publisher.publish_selector(selector, body),
     )?;
     let pages = v23_report_pages(&report);
     write_v23_d2_artifacts(&config.output_dir, mode, &report, &pages)?;
@@ -5154,8 +5153,18 @@ fn run_v23_d3_stage(
             .iter()
             .find(|arm| arm.passed && arm.key == d2_arm.d1_key)
             .ok_or_else(|| invalid_input("V23 D3 D1 arm authority is absent"))?;
-        let executor =
-            borsuk::V23D3Executor::new(page_uri, d1_arm, d2_arm, transient_capacity_bytes)?;
+        let selector_arm = d1_report
+            .arms
+            .iter()
+            .find(|arm| arm.key == d2_arm.selector_key)
+            .ok_or_else(|| invalid_input("V23 D3 selector arm authority is absent"))?;
+        let executor = borsuk::V23D3Executor::new(
+            page_uri,
+            d1_arm,
+            selector_arm,
+            d2_arm,
+            transient_capacity_bytes,
+        )?;
         let arm_index =
             u8::try_from(arm_index).map_err(|_| invalid_input("V23 D3 arm index exceeds u8"))?;
         let d2_arm_index = u16::try_from(*d2_arm_index)
@@ -5168,6 +5177,18 @@ fn run_v23_d3_stage(
                 let query_index_u32 = u32::try_from(query_index)
                     .map_err(|_| invalid_input("V23 D3 query index exceeds u32"))?;
                 let wave = executor.execute(query_index_u32, &authority.queries[query_index])?;
+                let expected_pages = d2_arm
+                    .query_samples
+                    .get(query_index)
+                    .filter(|sample| sample.query_index == query_index_u32)
+                    .map(|sample| &sample.page_ordinals)
+                    .ok_or_else(|| invalid_input("V23 D3 selector evidence is absent"))?;
+                if &wave.sample.page_ordinals != expected_pages {
+                    return Err(invalid_input(
+                        "V23 D3 page selection differs from authenticated D2 selector evidence",
+                    )
+                    .into());
+                }
                 let ground_truth_ids = authority.ground_truth[query_index][..RECALL_K]
                     .iter()
                     .map(|id| id.as_bytes().to_vec())
@@ -12882,7 +12903,6 @@ mod tests {
             encoded_bytes: u64::try_from(body.len()).unwrap(),
             primary_rows: 1,
             replicated_rows: 0,
-            centroid: vec![1.0],
         };
         let mut changed = body.to_vec();
         changed[0] ^= 1;
@@ -12962,10 +12982,9 @@ mod tests {
             encoded_bytes: 1024,
             primary_rows: 10,
             replicated_rows: 0,
-            centroid: vec![0.0; 96],
         }];
         let d2_report = V23D2Report {
-            schema: "borsuk-v23-d2-v4".to_string(),
+            schema: "borsuk-v23-d2-v7".to_string(),
             d1_report_checksum: "55".repeat(32),
             query_ordinals,
             rows: 10_000_000,
@@ -12974,8 +12993,27 @@ mod tests {
                     family: V23QuantizerFamily::SrhtPq,
                     code_width_bytes: 32,
                 },
+                selector_key: V23D1ArmKey {
+                    family: V23QuantizerFamily::SrhtPq,
+                    code_width_bytes: 16,
+                },
+                selector: borsuk::V23SelectorRef {
+                    generation_checksum: [1; 32],
+                    metric: VectorMetric::Cosine,
+                    dimensions: 96,
+                    coarse_cells: 4_096,
+                    page_count: 1,
+                    anchors_per_page: 16,
+                    code_width: 16,
+                    anchor_count: 16,
+                    path: format!("selectors/{}", "66".repeat(32)),
+                    checksum: "66".repeat(32),
+                    encoded_bytes: 96 + 4_096 * 96 * 4 + (4_096 + 1) * 4 + 16 * 28,
+                },
+                selector_routing_cells: 320,
+                selector_ranked_anchor_cap: 8_192,
                 primary_target_rows: 512,
-                maximum_assignments_per_row: 1,
+                maximum_assignments_per_row: 2,
                 maximum_query_pages: 1,
                 maximum_record_id_bytes: 16,
                 pages: pages.clone(),
@@ -12988,6 +13026,9 @@ mod tests {
                 query_samples: Vec::new(),
                 aggregate_recall_ppm: 0,
                 minimum_query_recall_ppm: 0,
+                coverage_oracle_recall_ppm: 0,
+                coverage_oracle_minimum_query_recall_ppm: 0,
+                selector_regret_ppm: 0,
                 cpu_p99_ns: 1,
                 passed: false,
             }],

@@ -22,6 +22,7 @@ from scripts.publication_v3_results import validate_cell_result
 from scripts.run_publication_v3_cell import (
     PRODUCTION_BUILD_FIELDS,
     V23_PAGE_MAX_BYTES,
+    _v23_d2_projection,
     _validate_v23_page,
     authorize_publication_mutation_runtime,
     authorize_publication_runtime,
@@ -163,8 +164,7 @@ def v23_d1_fixture() -> tuple[dict[str, object], dict[str, object]]:
                 "scalar_simd_ids_equal": True,
                 "scalar_simd_max_distance_delta_ppm": 0,
                 "cpu_p99_ns": 1_000_000,
-                "four_page_projected_bytes": 4
-                * (96 + 4 * 2_049 + 2_048 * (64 + 8)),
+                "four_page_projected_bytes": 4 * (96 + 4 * 2_049 + 2_048 * (64 + 8)),
                 "passed": True,
             }
         ],
@@ -198,7 +198,9 @@ def v23_d1_fixture() -> tuple[dict[str, object], dict[str, object]]:
     return artifact, summary
 
 
-def v23_d2_fixture(d1_sha256: str) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+def v23_d2_fixture(
+    d1_sha256: str,
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
     page = {
         "generation_checksum": [1] * 32,
         "page_ordinal": 0,
@@ -211,17 +213,22 @@ def v23_d2_fixture(d1_sha256: str) -> tuple[dict[str, object], dict[str, object]
         "encoded_bytes": 120_000,
         "primary_rows": 1_000,
         "replicated_rows": 0,
-        "centroid": [0.0] * 96,
     }
     samples = [
         {
             "query_index": query_index,
             "page_ordinals": [0],
+            "oracle_page_ordinals": [0],
+            "ground_truth_page_assignments": [[0] for _ in range(10)],
             "encoded_bytes": 120_000,
             "candidate_rows": 1_000,
+            "selector_candidate_anchors": 10_000,
+            "selector_routed_cells": 320,
+            "selector_ranked_anchors": 8_192,
             "ground_truth_ids": [[value] for value in range(10)],
             "ranked": v23_ranked_result(),
             "gt_page_hits": 10,
+            "oracle_gt_page_hits": 10,
             "hits": 10,
             "recall_ppm": 1_000_000,
             "cpu_ns": 1_000_000,
@@ -229,32 +236,52 @@ def v23_d2_fixture(d1_sha256: str) -> tuple[dict[str, object], dict[str, object]
         for query_index in range(32)
     ]
     projected_pages = 100_000
-    projected_root = 96 + projected_pages * (96 + 4 * 96)
+    projected_root = 96 + projected_pages * 320
     projected_ram = (
         projected_root
-        + projected_pages * (32 + 4 * 96)
-        + projected_pages * 4_096
+        + 96
+        + 4_096 * 96 * 4
+        + (4_096 + 1) * 4
+        + projected_pages * 16 * 28
+        + 4_096 * 96 * 4
+        + (4_096 + 1) * 4
         + 512 * 1024 * 1024
         + 2 * 983_040
     )
     projected_build = (
-        1_000 * (64 + 8 + 4 * 96 + 64 + 6 * 8)
+        1_000 * (64 + 8 + 4 * 96 + 64 + 16 + 32 + 32 + 7 * 8)
         + 120_000
         + 4 * (4 * 96 + 4_096 + 512)
-        + 36 * 32 * (4_096 + 8 * 20)
+        + 3 * 32 * (4_096 + 8 * 20)
         + 2 * 983_040
     )
     report = {
-        "schema": "borsuk-v23-d2-v4",
+        "schema": "borsuk-v23-d2-v7",
         "d1_report_checksum": "7" * 64,
         "query_ordinals": list(range(32)),
         "rows": 1_000,
         "arms": [
             {
                 "d1_key": {"family": "srht-pq", "code_width_bytes": 64},
-                "primary_target_rows": 1_024,
-                "maximum_assignments_per_row": 1,
-                "maximum_query_pages": 1,
+                "selector_key": {"family": "srht-pq", "code_width_bytes": 16},
+                "selector": {
+                    "generation_checksum": [1] * 32,
+                    "metric": "squared-euclidean",
+                    "dimensions": 96,
+                    "coarse_cells": 4_096,
+                    "page_count": 1,
+                    "anchors_per_page": 16,
+                    "code_width": 16,
+                    "anchor_count": 16,
+                    "path": f"selectors/{'5' * 64}",
+                    "checksum": "5" * 64,
+                    "encoded_bytes": 96 + 4_096 * 96 * 4 + (4_096 + 1) * 4 + 16 * 28,
+                },
+                "selector_routing_cells": 320,
+                "selector_ranked_anchor_cap": 8_192,
+                "primary_target_rows": primary_target_rows,
+                "maximum_assignments_per_row": 2,
+                "maximum_query_pages": 4,
                 "maximum_record_id_bytes": 8,
                 "pages": [page],
                 "unique_rows": 1_000,
@@ -266,9 +293,13 @@ def v23_d2_fixture(d1_sha256: str) -> tuple[dict[str, object], dict[str, object]
                 "query_samples": samples,
                 "aggregate_recall_ppm": 1_000_000,
                 "minimum_query_recall_ppm": 1_000_000,
+                "coverage_oracle_recall_ppm": 1_000_000,
+                "coverage_oracle_minimum_query_recall_ppm": 1_000_000,
+                "selector_regret_ppm": 1_000_000,
                 "cpu_p99_ns": 1_000_000,
                 "passed": True,
             }
+            for primary_target_rows in (384, 512, 640)
         ],
     }
     identity = {
@@ -305,8 +336,8 @@ def v23_d2_fixture(d1_sha256: str) -> tuple[dict[str, object], dict[str, object]
         "d1_report_sha256": d1_sha256,
         "rows": 1_000,
         "queries": 32,
-        "arms": 1,
-        "passing_arm_indexes": [0],
+        "arms": 3,
+        "passing_arm_indexes": [0, 1, 2],
         "pages": 1,
         "passed": True,
     }
@@ -351,9 +382,7 @@ def write_v23_d3_fixture(
                         "ground_truth_ids": "|".join(
                             f"{value:02x}" for value in range(10)
                         ),
-                        "ranked_ids": "|".join(
-                            f"{value:02x}" for value in range(10)
-                        ),
+                        "ranked_ids": "|".join(f"{value:02x}" for value in range(10)),
                         "ranked_distance_bits": "|".join(
                             f"{struct.unpack('>I', struct.pack('>f', float(value)))[0]:08x}"
                             for value in range(10)
@@ -540,14 +569,18 @@ def v21_feasibility_fixture() -> tuple[
             for hedge_delay_ms in (None, 20, 35):
                 directory_bytes = 1_000 + arm_index
                 transient_bytes = 59_392
-                peak_bytes = 700_000_000 - 100_000_000 + directory_bytes + transient_bytes
+                peak_bytes = (
+                    700_000_000 - 100_000_000 + directory_bytes + transient_bytes
+                )
                 maximum_requests = 2 + int(hedge_delay_ms is not None)
                 arm = {
                     "schema": "borsuk-v21-selector-feasibility-v1",
                     "arm_index": str(arm_index),
                     "bundle_row_limit": str(bundle_row_limit),
                     "selector_span": str(selector_span),
-                    "hedge_delay_ms": "off" if hedge_delay_ms is None else str(hedge_delay_ms),
+                    "hedge_delay_ms": "off"
+                    if hedge_delay_ms is None
+                    else str(hedge_delay_ms),
                     "bundle_count": "3",
                     "region_count": "5",
                     "projected_directory_bytes": str(directory_bytes),
@@ -698,7 +731,9 @@ def concurrency_artifact_fixture(
         "global_base_exact_fetch_us": "10",
         "global_base_exact_read_attempts": "1" if backing_bytes else "0",
         "global_base_exact_read_successes": "1" if backing_bytes else "0",
-        "global_base_exact_read_response_bytes": str(backing_bytes - backing_bytes // 2),
+        "global_base_exact_read_response_bytes": str(
+            backing_bytes - backing_bytes // 2
+        ),
         "global_base_exact_read_queue_us_max": "1" if backing_bytes else "0",
         "global_base_exact_read_queue_us_sum": "1" if backing_bytes else "0",
         "global_base_exact_read_us_max": "8" if backing_bytes else "0",
@@ -763,9 +798,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                 expected_dimensions=96,
             )
             self.assertEqual(validated["eligible_arms"], list(range(42)))
-            evidence["report"]["query_prefixes"][0]["rows"][0][
-                "primary_cell"
-            ] = 2**32
+            evidence["report"]["query_prefixes"][0]["rows"][0]["primary_cell"] = 2**32
             report_path.write_bytes(canonical_json_bytes(evidence) + b"\n")
             with self.assertRaisesRegex(ValueError, "exact row authority"):
                 validate_and_canonicalize_v22_stage_l(
@@ -988,25 +1021,38 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(report["publishable"], False)
         self.assertEqual(len(report["arms"]), 12)
 
-        mutations: list[tuple[list[dict[str, str]], list[dict[str, str]], dict[str, object]]] = []
+        mutations: list[
+            tuple[list[dict[str, str]], list[dict[str, str]], dict[str, object]]
+        ] = []
         missing_arm = copy.deepcopy(arms)
         missing_arm.pop()
         mutations.append((missing_arm, copy.deepcopy(samples), copy.deepcopy(summary)))
         duplicate_arm = copy.deepcopy(arms)
         duplicate_arm[-1] = copy.deepcopy(duplicate_arm[-2])
-        mutations.append((duplicate_arm, copy.deepcopy(samples), copy.deepcopy(summary)))
+        mutations.append(
+            (duplicate_arm, copy.deepcopy(samples), copy.deepcopy(summary))
+        )
         reordered_arms = copy.deepcopy(arms)
         reordered_arms[0], reordered_arms[1] = reordered_arms[1], reordered_arms[0]
-        mutations.append((reordered_arms, copy.deepcopy(samples), copy.deepcopy(summary)))
+        mutations.append(
+            (reordered_arms, copy.deepcopy(samples), copy.deepcopy(summary))
+        )
         missing_sample = copy.deepcopy(samples)
         missing_sample.pop()
         mutations.append((copy.deepcopy(arms), missing_sample, copy.deepcopy(summary)))
         duplicate_sample = copy.deepcopy(samples)
         duplicate_sample[-1] = copy.deepcopy(duplicate_sample[-2])
-        mutations.append((copy.deepcopy(arms), duplicate_sample, copy.deepcopy(summary)))
+        mutations.append(
+            (copy.deepcopy(arms), duplicate_sample, copy.deepcopy(summary))
+        )
         reordered_samples = copy.deepcopy(samples)
-        reordered_samples[0], reordered_samples[1] = reordered_samples[1], reordered_samples[0]
-        mutations.append((copy.deepcopy(arms), reordered_samples, copy.deepcopy(summary)))
+        reordered_samples[0], reordered_samples[1] = (
+            reordered_samples[1],
+            reordered_samples[0],
+        )
+        mutations.append(
+            (copy.deepcopy(arms), reordered_samples, copy.deepcopy(summary))
+        )
         drifted_hit = copy.deepcopy(samples)
         drifted_hit[0]["gt_hits"] = "9"
         mutations.append((copy.deepcopy(arms), drifted_hit, copy.deepcopy(summary)))
@@ -1021,10 +1067,14 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         mutations.append((copy.deepcopy(arms), drifted_bytes, copy.deepcopy(summary)))
         drifted_capacity = copy.deepcopy(arms)
         drifted_capacity[0]["projected_directory_bytes"] = "40000001"
-        mutations.append((drifted_capacity, copy.deepcopy(samples), copy.deepcopy(summary)))
+        mutations.append(
+            (drifted_capacity, copy.deepcopy(samples), copy.deepcopy(summary))
+        )
         drifted_eligibility = copy.deepcopy(summary)
         drifted_eligibility["arms"][0]["eligible"] = True
-        mutations.append((copy.deepcopy(arms), copy.deepcopy(samples), drifted_eligibility))
+        mutations.append(
+            (copy.deepcopy(arms), copy.deepcopy(samples), drifted_eligibility)
+        )
         drifted_rows = copy.deepcopy(summary)
         drifted_rows["dataset_rows"] = 101
         mutations.append((copy.deepcopy(arms), copy.deepcopy(samples), drifted_rows))
@@ -1096,8 +1146,12 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         )
 
     def test_lifecycle_batch_schedule_balances_only_to_exercise_writers(self) -> None:
-        self.assertEqual(lifecycle_batch_records(19_859, 1_024, 16), [1_024] * 19 + [403])
-        self.assertEqual(lifecycle_batch_records(1_986, 1_024, 16), [125, 125, *([124] * 14)])
+        self.assertEqual(
+            lifecycle_batch_records(19_859, 1_024, 16), [1_024] * 19 + [403]
+        )
+        self.assertEqual(
+            lifecycle_batch_records(1_986, 1_024, 16), [125, 125, *([124] * 14)]
+        )
         self.assertEqual(lifecycle_batch_records(17, 1_024, 16), [2, *([1] * 15)])
 
     def test_query_samples_account_decoded_ram_cache_bytes(self) -> None:
@@ -1903,7 +1957,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             {**trace, "storage_bytes_read": -1},
         ):
             with self.subTest(invalid=invalid):
-                with self.assertRaisesRegex(ValueError, "storage accounting is invalid"):
+                with self.assertRaisesRegex(
+                    ValueError, "storage accounting is invalid"
+                ):
                     if "disk_cache_bytes_read" in invalid:
                         reconcile_read_storage_trace(invalid, trace)
                     else:
@@ -1977,13 +2033,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
         self.assertEqual(report["result"]["schema_version"], 4)
         self.assertEqual(report["result"]["metrics"]["storage_gets"], 10)
         self.assertEqual(report["result"]["metrics"]["storage_bytes_read"], 4096)
-        self.assertEqual(
-            report["result"]["metrics"]["decoded_cache_bytes_read"], 0
-        )
+        self.assertEqual(report["result"]["metrics"]["decoded_cache_bytes_read"], 0)
         self.assertEqual(report["result"]["metrics"]["disk_cache_bytes_read"], 0)
-        self.assertEqual(
-            report["result"]["metrics"]["excluded_setup_storage_gets"], 2
-        )
+        self.assertEqual(report["result"]["metrics"]["excluded_setup_storage_gets"], 2)
         self.assertEqual(
             report["result"]["metrics"]["excluded_setup_storage_bytes_read"], 1_000
         )
@@ -3659,7 +3711,9 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
                     diagnostic_read_nprobes=(32, 64),
                 )
 
-    def test_v21_feasibility_plan_is_an_exclusive_claim_ineligible_runtime(self) -> None:
+    def test_v21_feasibility_plan_is_an_exclusive_claim_ineligible_runtime(
+        self,
+    ) -> None:
         cell = scheduled_cell()
         cell["workload"]["id"] = "standard-ann-read"
         cell["dataset"]["id"] = "deep-image-96"
@@ -3688,9 +3742,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             environment["BORSUK_BENCH_V21_INDEX_ID"],
             str(cell["index_prefix"]).rstrip("/").rsplit("/", 1)[-1],
         )
-        self.assertEqual(
-            environment["BORSUK_BENCH_V21_DATASET_ID"], "deep-image-96"
-        )
+        self.assertEqual(environment["BORSUK_BENCH_V21_DATASET_ID"], "deep-image-96")
         for forbidden in (
             "BORSUK_BENCH_BUILD_INDEX",
             "BORSUK_BENCH_READ_ONLY",
@@ -3742,9 +3794,7 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
             environment["BORSUK_BENCH_V22_INDEX_ID"],
             str(cell["index_prefix"]).rstrip("/").rsplit("/", 1)[-1],
         )
-        self.assertEqual(
-            environment["BORSUK_BENCH_V22_DATASET_ID"], "deep-image-96"
-        )
+        self.assertEqual(environment["BORSUK_BENCH_V22_DATASET_ID"], "deep-image-96")
         for forbidden in (
             "BORSUK_BENCH_V21_FEASIBILITY",
             "BORSUK_BENCH_BUILD_INDEX",
@@ -3780,6 +3830,12 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
 
 
 class V23DiagnosticWorkerTests(unittest.TestCase):
+    def test_v23_d2_projection_reserves_production_coarse_cells(self) -> None:
+        self.assertEqual(
+            _v23_d2_projection(1_000, 1, 4, 1, 16),
+            _v23_d2_projection(1_000, 1, 4, 4_096, 16),
+        )
+
     def test_v23_rust_page_fixture_passes_python_page_authority(self) -> None:
         fixture_path = Path(__file__).parent / "fixtures" / "v23_page_ref.json"
         page = json.loads(fixture_path.read_text(encoding="utf-8"))
@@ -3856,7 +3912,9 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                     pages=None,
                 )
 
-    def test_v23_runtime_replaces_normal_phase_without_losing_storage_authority(self) -> None:
+    def test_v23_runtime_replaces_normal_phase_without_losing_storage_authority(
+        self,
+    ) -> None:
         normal = {
             "output_dir": "/tmp/normal",
             "steps": [
@@ -3941,9 +3999,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
             self.assertEqual(plan["environment"]["BORSUK_BENCH_V23_STAGE"], stage)
             self.assertNotIn("bench_v23_summary.json", plan["staged_inputs"])
         self.assertEqual(d1["staged_inputs"], {})
-        self.assertEqual(
-            set(d2["staged_inputs"]), {"bench_v23_d1_report.json"}
-        )
+        self.assertEqual(set(d2["staged_inputs"]), {"bench_v23_d1_report.json"})
         self.assertEqual(
             set(d3["staged_inputs"]),
             {
@@ -4047,9 +4103,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 b'"quantizer_state":{"codec":"pq","state":{"overflow":1e999}}',
                 1,
             )
-            self.assertNotEqual(
-                overflow_state, canonical_json_bytes(artifact) + b"\n"
-            )
+            self.assertNotEqual(overflow_state, canonical_json_bytes(artifact) + b"\n")
             report_path.write_bytes(overflow_state)
             with self.assertRaisesRegex(ValueError, "non-finite JSON number"):
                 validate_v23_d1_artifacts(
@@ -4181,8 +4235,12 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
             self.assertIs(result["passed"], False)
 
             for mutation in (
-                lambda value: value["report"]["arms"][0]["query_samples"][0].__setitem__("oracle_hits", 9),
-                lambda value: value["report"]["arms"][0]["query_samples"][0].__setitem__("wave_candidate_rows", 8_191),
+                lambda value: value["report"]["arms"][0]["query_samples"][
+                    0
+                ].__setitem__("oracle_hits", 9),
+                lambda value: value["report"]["arms"][0]["query_samples"][
+                    0
+                ].__setitem__("wave_candidate_rows", 8_191),
                 lambda value: value["report"]["arms"][0].__setitem__("passed", 1),
                 lambda value: value["report"].__setitem__("query_ordinals", [0] * 32),
             ):
@@ -4388,9 +4446,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 (roster_path, roster),
                 (summary_path, summary),
             ):
-                self.assertEqual(
-                    path.read_bytes(), canonical_json_bytes(value) + b"\n"
-                )
+                self.assertEqual(path.read_bytes(), canonical_json_bytes(value) + b"\n")
             self.assertEqual(
                 result["artifact_sha256"],
                 hashlib.sha256(canonical_json_bytes(artifact) + b"\n").hexdigest(),
@@ -4414,14 +4470,14 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
 
             failed_artifact = copy.deepcopy(artifact)
             failed_summary = copy.deepcopy(summary)
-            failed_arm = failed_artifact["report"]["arms"][0]
-            for sample in failed_arm["query_samples"]:
-                sample["ranked"]["ids"][-1] = [255]
-                sample["hits"] = 9
-                sample["recall_ppm"] = 900_000
-            failed_arm["aggregate_recall_ppm"] = 900_000
-            failed_arm["minimum_query_recall_ppm"] = 900_000
-            failed_arm["passed"] = False
+            for failed_arm in failed_artifact["report"]["arms"]:
+                for sample in failed_arm["query_samples"]:
+                    sample["ranked"]["ids"][-1] = [255]
+                    sample["hits"] = 9
+                    sample["recall_ppm"] = 900_000
+                failed_arm["aggregate_recall_ppm"] = 900_000
+                failed_arm["minimum_query_recall_ppm"] = 900_000
+                failed_arm["passed"] = False
             failed_summary["passing_arm_indexes"] = []
             failed_summary["passed"] = False
             write_canonical_json(report_path, failed_artifact)
@@ -4441,12 +4497,50 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
             self.assertIs(failed["passed"], False)
 
             for path, mutation in (
-                (report_path, lambda value: value["report"]["arms"][0].__setitem__("storage_amplification_ppm", 999_999)),
-                (report_path, lambda value: value["report"]["arms"][0].__setitem__("projected_build_bytes", 1)),
-                (report_path, lambda value: value["report"]["arms"][0]["query_samples"][0].__setitem__("hits", True)),
-                (roster_path, lambda value: value["pages"][0].__setitem__("path", f"pages/{'8' * 64}")),
-                (roster_path, lambda value: value["pages"][0].__setitem__("code_width", 192)),
-                (summary_path, lambda value: value.__setitem__("d1_report_sha256", "9" * 64)),
+                (
+                    report_path,
+                    lambda value: value["report"]["arms"][0].__setitem__(
+                        "storage_amplification_ppm", 999_999
+                    ),
+                ),
+                (
+                    report_path,
+                    lambda value: value["report"]["arms"][0].__setitem__(
+                        "projected_build_bytes", 1
+                    ),
+                ),
+                (
+                    report_path,
+                    lambda value: value["report"]["arms"][0]["query_samples"][
+                        0
+                    ].__setitem__("hits", True),
+                ),
+                (
+                    report_path,
+                    lambda value: value["report"]["arms"][0]["query_samples"][
+                        0
+                    ].__setitem__("selector_routed_cells", 319),
+                ),
+                (
+                    report_path,
+                    lambda value: value["report"]["arms"][0]["query_samples"][0][
+                        "ground_truth_page_assignments"
+                    ][0].clear(),
+                ),
+                (
+                    roster_path,
+                    lambda value: value["pages"][0].__setitem__(
+                        "path", f"pages/{'8' * 64}"
+                    ),
+                ),
+                (
+                    roster_path,
+                    lambda value: value["pages"][0].__setitem__("code_width", 192),
+                ),
+                (
+                    summary_path,
+                    lambda value: value.__setitem__("d1_report_sha256", "9" * 64),
+                ),
             ):
                 write_canonical_json(report_path, artifact)
                 write_canonical_json(roster_path, roster)
@@ -4502,7 +4596,9 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 rows = list(csv.DictReader(stream))
             rows[0]["hits"] = "9"
             with samples_path.open("w", newline="", encoding="utf-8") as stream:
-                writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator="\n")
+                writer = csv.DictWriter(
+                    stream, fieldnames=list(rows[0]), lineterminator="\n"
+                )
                 writer.writeheader()
                 writer.writerows(rows)
             with self.assertRaises(ValueError):
