@@ -96,8 +96,8 @@ const V22_STAGE_L_SCHEMA: &str = "borsuk-v22-stage-l-layout-v1";
 const V23_DATASET_ID: &str = "deep-image-96";
 const V23_D3_WAVES_PER_ARM: usize = 1_000;
 const V23_D3_QUERY_COUNT: u32 = 32;
-const V23_D3_MAX_PAGES: usize = 4;
-const V23_D3_MAX_ENCODED_BYTES: u64 = 983_040;
+const V23_D3_MAX_PAGES: usize = 8;
+const V23_D3_MAX_ENCODED_BYTES: u64 = 1_966_080;
 const V23_D3_MAX_TRANSIENT_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 const V23_D3_P50_GATE_NS: u64 = 60_000_000;
 const V23_D3_P95_GATE_NS: u64 = 100_000_000;
@@ -1148,7 +1148,7 @@ fn serialize_v23_d3_artifacts(
             .collect::<Vec<_>>()
             .join("|");
         csv.push_str(&format!(
-            "borsuk-v23-d3-v1,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "borsuk-v23-d3-v2,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             row.arm_index,
             row.d2_arm_index,
             row.arm_key,
@@ -1179,7 +1179,7 @@ fn serialize_v23_d3_artifacts(
         ));
     }
     let summary = V23D3SummaryArtifact {
-        schema: "borsuk-v23-d3-v1",
+        schema: "borsuk-v23-d3-v2",
         document_kind: "publication-v3-v23-d3-summary",
         claim_eligible: false,
         stage: "d3",
@@ -1241,7 +1241,7 @@ fn newline_json<T: Serialize>(value: &T, context: &'static str) -> io::Result<Ve
 }
 
 fn validate_v23_d1_report_shape(report: &borsuk::V23D1Report) -> io::Result<()> {
-    if report.schema != "borsuk-v23-d1-v4"
+    if report.schema != "borsuk-v23-d1-v5"
         || report.rows == 0
         || report.dimensions == 0
         || report.query_ordinals.len() != V23_D3_QUERY_COUNT as usize
@@ -1256,7 +1256,7 @@ fn validate_v23_d1_report_shape(report: &borsuk::V23D1Report) -> io::Result<()> 
 }
 
 fn validate_v23_d2_report_shape(report: &borsuk::V23D2Report) -> io::Result<()> {
-    if report.schema != "borsuk-v23-d2-v7"
+    if report.schema != "borsuk-v23-d2-v8"
         || report.rows == 0
         || report.query_ordinals.len() != V23_D3_QUERY_COUNT as usize
         || report
@@ -5140,8 +5140,8 @@ fn run_v23_d3_stage(
         .enumerate()
         .filter(|(_, arm)| arm.passed)
         .collect::<Vec<_>>();
-    if passing.is_empty() || passing.len() > 3 {
-        return Err(invalid_input("V23 D3 requires one to three passing D2 arms").into());
+    if passing.len() != 1 {
+        return Err(invalid_input("V23 D3 requires the one registered passing D2 arm").into());
     }
     let transient_capacity_bytes = config
         .ram_budget_bytes
@@ -12462,8 +12462,8 @@ mod tests {
         assert!(summarize_v23_d3_rows(&dishonest_quality, 1, 0).is_err());
 
         let mut too_many_bytes = canonical.clone();
-        too_many_bytes[0].sample.encoded_bytes = 983_041;
-        too_many_bytes[0].sample.backing_bytes = 983_041;
+        too_many_bytes[0].sample.encoded_bytes = super::V23_D3_MAX_ENCODED_BYTES + 1;
+        too_many_bytes[0].sample.backing_bytes = super::V23_D3_MAX_ENCODED_BYTES + 1;
         assert!(summarize_v23_d3_rows(&too_many_bytes, 1, 0).is_err());
 
         let mut too_much_ram = canonical.clone();
@@ -12920,7 +12920,7 @@ mod tests {
     fn v23_d1_d2_artifacts_bind_prerequisites_and_page_roster() {
         let query_ordinals = (0_u64..32).collect::<Vec<_>>();
         let d1_report = V23D1Report {
-            schema: "borsuk-v23-d1-v4".to_string(),
+            schema: "borsuk-v23-d1-v5".to_string(),
             v20_root_checksum: "11".repeat(32),
             v20_codebook_checksum: "22".repeat(32),
             sample_ordinals_checksum: "33".repeat(32),
@@ -12984,7 +12984,7 @@ mod tests {
             replicated_rows: 0,
         }];
         let d2_report = V23D2Report {
-            schema: "borsuk-v23-d2-v7".to_string(),
+            schema: "borsuk-v23-d2-v8".to_string(),
             d1_report_checksum: "55".repeat(32),
             query_ordinals,
             rows: 10_000_000,
@@ -12994,8 +12994,8 @@ mod tests {
                     code_width_bytes: 32,
                 },
                 selector_key: V23D1ArmKey {
-                    family: V23QuantizerFamily::SrhtPq,
-                    code_width_bytes: 16,
+                    family: V23QuantizerFamily::F16Flat,
+                    code_width_bytes: 192,
                 },
                 selector: borsuk::V23SelectorRef {
                     generation_checksum: [1; 32],
@@ -13004,15 +13004,15 @@ mod tests {
                     coarse_cells: 4_096,
                     page_count: 1,
                     anchors_per_page: 16,
-                    code_width: 16,
+                    code_width: 192,
                     anchor_count: 16,
                     path: format!("selectors/{}", "66".repeat(32)),
                     checksum: "66".repeat(32),
-                    encoded_bytes: 96 + 4_096 * 96 * 4 + (4_096 + 1) * 4 + 16 * 28,
+                    encoded_bytes: 96 + 4_096 * 96 * 4 + (4_096 + 1) * 4 + 16 * 204,
                 },
                 selector_routing_cells: 320,
                 selector_ranked_anchor_cap: 8_192,
-                primary_target_rows: 512,
+                primary_target_rows: 384,
                 maximum_assignments_per_row: 2,
                 maximum_query_pages: 1,
                 maximum_record_id_bytes: 16,

@@ -13,10 +13,10 @@
 ## Global Constraints
 
 - The diagnostic is always `claim_eligible:false`; no 32-query result is a product claim.
-- D1 must prove oracle recall@10 `>= 0.990`, routed recall@10 `>= 0.975`, p99 CPU `<= 15 ms`, code width `<= 64` bytes, and four-page projection `<= 983,040` bytes.
-- D2 must prove every query uses `<= 4` pages and `<= 983,040` bytes, aggregate recall@10 `>= 0.975`, per-query recall@10 `>= 0.8`, storage amplification `<= 2.0x`, projected process RAM `<= 3 GiB`, and p99 CPU `<= 15 ms`.
+- D1 must prove oracle recall@10 `>= 0.990`, routed recall@10 `>= 0.975`, p99 CPU `<= 15 ms`, and an eight-page projection `<= 1,966,080` bytes for the registered Deep Image 96-dimensional f16-flat authority.
+- D2 evaluates only the latency-first `384`-row layout and must prove every query uses `<= 8` pages and `<= 1,966,080` bytes, aggregate recall@10 `>= 0.975`, per-query recall@10 `>= 0.8`, storage amplification `<= 2.0x`, projected process RAM `<= 3 GiB`, and p99 CPU `<= 15 ms`.
 - D3 must issue one parallel wave of at least 1,000 strict-cold S3 Standard queries per arm, with disk cache zero, positive query-scoped backing I/O, and cold p50/p95/p99 `<= 60/100/150 ms`.
-- Posting objects are content addressed, at most `245,760` encoded bytes each, and four pages total at most `983,040` bytes.
+- Posting objects are content addressed, at most `245,760` encoded bytes each, and eight pages total at most `1,966,080` bytes.
 - No S3 Express, CDN, local index replica, persistent disk cache, dependent replacement GET, exact-vector fetch, or query-result cache is permitted in measured V23 queries.
 - RAM accounting uses actual encoded lengths and vector capacities; query admission reserves the complete page wave before the first GET.
 - The diagnostic is read-only with respect to manifest/index authority. Temporary objects live only under the exact diagnostic attempt prefix and terminal workers are terminated immediately.
@@ -47,7 +47,7 @@
 - Modify: `scripts/test_run_publication_v3_cell.py`
 
 **Interfaces:**
-- Consumes: D1's authenticated 16-byte SRHT-PQ state, D2 planning rows and
+- Consumes: D1's authenticated 192-byte f16-flat state, D2 planning rows and
   immutable page assignments.
 - Produces: `V23SelectorRef`, `encode_v23_selector`,
   `decode_v23_selector`, and `V23PageSelector::select`, all shared by D2 and D3.
@@ -71,7 +71,7 @@ Expected: compilation fails on missing selector types and codec.
 
 Encode a fixed header followed by little-endian `f32` coarse centroids,
 `u32[coarse_cells + 1]` offsets, `u32[anchors]` page ordinals,
-`u64[anchors]` source ordinals, and contiguous 16-byte codes. Authenticate the
+`u64[anchors]` source ordinals, and contiguous 192-byte codes. Authenticate the
 complete object with BLAKE3 and path it as
 `selectors/<checksum>`. Decode with checked arithmetic, exact cardinalities,
 finite centroids, monotone offsets, in-range page ordinals, zero reserved bytes,
@@ -81,10 +81,10 @@ and no trailing bytes.
 
 Choose 16 primary-row anchors per page with exact-metric farthest-first
 selection and source-ordinal ties. Route at most 320 nonempty coarse centroids,
-score their anchors through the restored D1 16-byte quantizer, retain 8,192 by
-`(distance, source ordinal, page ordinal)`, aggregate reciprocal-rank scores in
-one pass, and deterministically backfill the lowest unseen page ordinals when
-routed anchors cover fewer than four distinct pages.
+score their anchors through the restored D1 192-byte f16-flat quantizer, retain
+8,192 by `(distance, source ordinal, page ordinal)`, rank pages by minimum exact
+representative distance, and deterministically backfill the lowest unseen page
+ordinals when routed anchors cover fewer than eight distinct pages.
 
 - [x] **Step 5: Bind D2 publication and D3 loading to the same bytes**
 
@@ -129,12 +129,12 @@ latency, backing-I/O, throughput, and memory requirements.
 
 - [ ] **Step 1: Write contract and mutation tests**
 
-Add unit tests that construct one valid report and mutate each bound: code width 65, page bytes 245,761, wave pages 5, wave bytes 983,041, non-finite distance, duplicate query index, duplicate page ordinal, storage amplification 2,000,001 ppm, and RAM 3 GiB plus one. The valid constructor must use these exact constants:
+Add unit tests that construct one valid report and mutate each bound: selector dimensions 95, page bytes 245,761, wave pages 9, wave bytes 1,966,081, non-finite distance, duplicate query index, duplicate page ordinal, storage amplification 2,000,001 ppm, and RAM 3 GiB plus one. The valid constructor must use these exact constants:
 
 ```rust
 pub(crate) const V23_PAGE_MAX_ENCODED_BYTES: u64 = 245_760;
-pub(crate) const V23_WAVE_MAX_PAGES: usize = 4;
-pub(crate) const V23_WAVE_MAX_BYTES: u64 = 983_040;
+pub(crate) const V23_WAVE_MAX_PAGES: usize = 8;
+pub(crate) const V23_WAVE_MAX_BYTES: u64 = 1_966_080;
 pub(crate) const V23_PROCESS_MAX_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 pub(crate) const V23_DIAGNOSTIC_QUERIES: usize = 32;
 pub(crate) const V23_D3_WAVES: usize = 1_000;
@@ -274,15 +274,15 @@ git commit -m "Add V23 code fidelity replay"
 
 **Interfaces:**
 - Consumes: one D1-passing quantizer state, authenticated corpus scratch rows,
-  page targets `{384,512,640}`, assignment limit `2`, and immutable V20 parent
+  the latency-first page target `384`, assignment limit `2`, and immutable V20 parent
   cell authority.
 - Produces: `BorsukIndex::diagnose_v23_d2(&V23D1Report, V23D1ArmKey, &[u64], &[Vec<f32>], &[Vec<String>], &Path) -> Result<V23D2Report>` plus deterministic `V23PagePlan` values used by Task 4. The complete validated D1 report proves the selected arm passed and binds its source generation; explicit source-query ordinals preserve the same authenticated query authority as D1.
 
-- [ ] **Step 1: Write deterministic balance, closure, and four-page RED tests**
+- [ ] **Step 1: Write deterministic balance, closure, and eight-page RED tests**
 
 Use a 24-row, three-cluster fixture where boundary rows are known. Assert two independent builds are byte-identical, every row has exactly one primary page, replicas never evict primaries, page ordinals are contiguous, and replica ties resolve by `(distance_ratio.total_cmp, page_ordinal, source_ordinal)`.
 
-Add rejection tests for encoded-size overflow, assignment count zero/four, amplification above 2,000,000 ppm, query-specific/GT-informed assignment, five selected pages, and a query below 800,000 recall ppm.
+Add rejection tests for encoded-size overflow, assignment count zero/four, amplification above 2,000,000 ppm, query-specific/GT-informed assignment, nine selected pages, and a query below 800,000 recall ppm.
 
 - [ ] **Step 2: Run D2 tests and verify RED**
 
@@ -323,12 +323,12 @@ planning rather than falling back to a full page scan.
 - [ ] **Step 5: Implement exact packed-selector simulation**
 
 Build and encode the immutable packed selector described in Task 3A, then make
-D2 decode and query those exact bytes. Evaluate exactly one four-page wave per
+D2 decode and query those exact bytes. Evaluate exactly one eight-page wave per
 page-layout arm, decode the authenticated immutable page bytes, deduplicate raw
 IDs, and rank via the production contiguous SIMD method. Emit page ordinals,
 bytes, rows, GT page coverage, oracle coverage, selector regret, hit count,
 recall ppm, and CPU nanoseconds. The validator recomputes all aggregate
-minima/maxima and admits at most three nondominated passing arms. If none pass,
+minima/maxima and admits exactly the registered arm when it passes. If it fails,
 it retains a failing frontier as terminal negative evidence. CPU p99 remains a
 hard pass gate and reported measurement.
 
@@ -442,7 +442,7 @@ git commit -m "Add authenticated V23 posting pages"
 
 - [ ] **Step 1: Write exclusive-mode and artifact mutation RED tests**
 
-Add tests proving `BORSUK_BENCH_V23_STAGE` accepts exactly `d1`, `d2`, or `d3`; every mode rejects existing output before opening the index; atomic publication validates bytes both before link and after reload; D3 rejects disk cache, fewer than 1,000 samples, non-positive backing I/O, dependent waves, and any request/byte/latency/RAM breach. Fault-injection cases must also prove a missing page, short page, checksum failure, permission failure, and timeout retain their typed storage errors; cancellation releases the complete aggregate permit; and two concurrent four-page waves never exceed the configured transient capacity.
+Add tests proving `BORSUK_BENCH_V23_STAGE` accepts exactly `d1`, `d2`, or `d3`; every mode rejects existing output before opening the index; atomic publication validates bytes both before link and after reload; D3 rejects disk cache, fewer than 1,000 samples, non-positive backing I/O, dependent waves, and any request/byte/latency/RAM breach. Fault-injection cases must also prove a missing page, short page, checksum failure, permission failure, and timeout retain their typed storage errors; cancellation releases the complete aggregate permit; and two concurrent eight-page waves never exceed the configured transient capacity.
 
 - [ ] **Step 2: Run benchmark tests and verify RED**
 
@@ -557,7 +557,7 @@ Upload each artifact with its length, metadata SHA-256, and immutable conditiona
 
 - [ ] **Step 4: Implement controller stage selection**
 
-Add one controller operation with `--stage {d1,d2,d3}` and bounded automatic attempt selection. Add the launcher form `--diagnose-v23 <stage> <base-build-terminal-uri> <base-build-terminal-sha256>` with strict shell validation, clean-source freezing, and passthrough to that controller operation. Resolve prior-stage receipts before `RunInstances`. Use AWS profile `causality`, Spot purchase option, existing idempotent ClientToken logic, and `finally` termination. D3 selects only the at-most-three frozen nondominated D2 arms bound in its prerequisite receipt.
+Add one controller operation with `--stage {d1,d2,d3}` and bounded automatic attempt selection. Add the launcher form `--diagnose-v23 <stage> <base-build-terminal-uri> <base-build-terminal-sha256>` with strict shell validation, clean-source freezing, and passthrough to that controller operation. Resolve prior-stage receipts before `RunInstances`. Use AWS profile `causality`, Spot purchase option, existing idempotent ClientToken logic, and `finally` termination. D3 selects the single frozen D2 arm bound in its prerequisite receipt.
 
 - [ ] **Step 5: Run affected Python tests and shell syntax checks**
 
@@ -646,7 +646,7 @@ AWS_PROFILE=causality scripts/launch_aws_publication_v3.sh --diagnose-v23 d3 \
       --query 'Metadata.sha256' --output text)"
 ```
 
-The controller binds the exact D1/D2 receipts and the at-most-three nondominated arms.
+The controller binds the exact D1/D2 receipts and the single registered D2 arm.
 
 Expected: at least 1,000 strict-cold waves per arm, exact request/byte/RAM invariants, terminal receipt, and immediate instance termination. If every arm misses 60/100/150 ms, reject the architecture without changing the latency gate.
 

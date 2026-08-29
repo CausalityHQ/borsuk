@@ -1,8 +1,8 @@
 # Standard-S3 V23 Quantized Posting Pages
 
-**Status:** Revision 1's `<=64`-byte codec premise was falsified by the first
-terminal D1 run. Revision 2 remains a claim-ineligible diagnostic until every
-gate in this document passes.
+**Status:** Revisions 1--3 were falsified by terminal D1/D2 evidence. Revision
+4 remains a claim-ineligible diagnostic until every gate in this document
+passes.
 
 **Predecessor:** V22 Stage L completed at source `14464c8` and is recorded in
 `docs/research/cold-read-latency-design.md`. Its authenticated Deep Image 10M
@@ -15,52 +15,44 @@ V21/V22 production hypotheses for the next pre-release dense-ANN format. BORSUK
 is unreleased, so V23 defines one new format and no legacy reader or migration
 path.
 
-## Revision 3 after the terminal D2 routing falsification
+## Revision 4 after the terminal D2 selector falsification
 
-The first content-independent D2 layout/router run proved that page-centroid
-routing is structurally insufficient. Across the complete 10M arm-0 page
-directory, an independent Standard-S3 scan recomputed that even a perfect
-four-page selector over the old physical layout could reach only `796,875` ppm
-aggregate ground-truth containment and `500,000` ppm on the worst frozen query.
-The measured D2 arms reached only about 59% recall and every returned hit was
-already contained in the selected pages, isolating the loss to physical layout
-and page selection rather than code scoring. Revision 3 therefore removes the
-page-centroid serving router and does not retain a fallback.
+The authenticated Revision-3 D2 run proved that the 16-byte SRHT-PQ selector
+and four-page wave were structurally insufficient. Actual recall across the
+384/512/640-row layouts was `215,625`/`256,250`/`209,375` ppm while the
+corresponding four-page layout oracles were only
+`815,625`/`840,625`/`853,125` ppm. The 192-byte f16-flat scorer had already
+reached `996,875` ppm in D1, so the failure is page containment and selector
+quality rather than page-code fidelity.
 
-Each D2 arm now owns one content-addressed selector object used byte-for-byte by
-both D2 simulation and D3 serving. The selector contains the authenticated
-4,096 coarse centroids and exactly 16 deterministic 16-byte SRHT-PQ anchors per
-posting page. Anchors are grouped by coarse cell and stored as packed
-`(page_ordinal, source_ordinal, code)` entries behind a `u32` offset table. Query routing scans
-the nonempty coarse centroids, admits at most 320 cells (exactly 320 for the
-registered 4,096-cell production corpus), scores only their packed
-anchors, retains at most 8,192 anchors, and chooses exactly four distinct pages
-by deterministic reciprocal-rank page voting. No corpus-row sidecar, page
-centroid graph, dependent read, or query-conditioned build state remains.
+An exhaustive recomputation over the authenticated D2 truth assignments shows
+that eight pages reach `993,750` ppm aggregate and `900,000` ppm minimum-query
+oracle coverage for both the 384- and 640-row layouts. Revision 4 registers only
+the 384-row layout because its authenticated worst eight-page payload is about
+1.19 MiB versus 1.97 MiB for 640, while their oracle quality is identical. The
+512-row layout is also excluded because its `984,375`/`800,000` ppm oracle is
+below the frozen floor. Because BORSUK is unreleased, Revision 4 replaces the failed
+experimental contract: one cold wave may issue at most eight parallel Standard
+S3 GETs and read at most `1,966,080` page bytes. This is a newly frozen
+architecture, not a reinterpretation of any earlier artifact or result.
 
-The binary selector object is checksum-bound in the D2 arm and fetched once
-before D3 measurement. Its complete encoded length, decoded packed arrays,
-coarse centroids, offsets, quantizer tables, page directory, two maximum waves,
-and fixed runtime allowance are included in the 100M RAM projection. D3 refuses
-an absent, mismatched, or undecodable selector and has no centroid-only path.
-At 200,000 projected pages the anchor codes occupy about 51.2 MB and anchor page
-ordinals about 12.8 MB; the coarse centroids add about 1.6 MB before small
-headers and offsets, leaving substantial headroom inside the 3 GiB process cap.
+Each viable D2 arm owns one content-addressed selector used byte-for-byte by D2
+simulation and D3 serving. It stores the authenticated 4,096 coarse centroids
+and up to 16 deterministic 192-byte f16-flat representatives per posting page
+as packed `(page_ordinal, source_ordinal, code)` records behind a `u32` offset
+table. Routing admits at most 320 cells, retains at most 8,192 anchors, and ranks
+pages by their minimum exact representative distance with page-ordinal ties.
+The registered selector authority is explicitly Deep Image's 96 dimensions;
+other dimensions fail before selector encoding or corpus construction.
 
-Anchor selection is deterministic and query-independent. For every page, use
-only its primary rows, start with the smallest source ordinal, then repeatedly
-choose the row maximizing its minimum exact-metric distance to the already
-chosen anchors, breaking ties by source ordinal. A page with fewer than 16
-primary rows contributes every primary row. Selector objects sort anchors by
-`(coarse_cell, page_ordinal, source_ordinal)` before encoding. D2 persists the
-ordered ground-truth page assignments so independent Rust and Python validators
-recompute both the best achievable four-page coverage and selector regret.
-
-Revision 3 gates are fail-closed: layout-oracle recall must be at least 985,000
-ppm aggregate and 900,000 ppm per query; selected-page hits divided by oracle
-hits must be at least 995,000 ppm; final D2 recall remains at least 975,000 ppm
-aggregate and 800,000 ppm per query. D3 is forbidden until those gates and the
-projected RAM cap pass on a fresh authenticated D2 run.
+At 100M rows the conservative serving projection for the registered 384-row
+layout is about 1.45 GiB, including the larger selector, decoded centroid/offset
+authority, fixed 512-MiB runtime reserve, and two maximum waves. The 10M build
+projection grows by about 1.76 GB because the
+selector's f16 code plane replaces the failed 16-byte plane, but remains below
+the registered worker bound. D2 measures selector regret and CPU p99 directly;
+D3 remains forbidden unless at least one viable arm satisfies every frozen
+quality, byte, RAM, amplification, and CPU gate.
 
 ## Objective
 
@@ -69,7 +61,7 @@ quality and process memory production-safe. The first qualification dataset is
 Deep Image 10M. A V23 production candidate must satisfy all of:
 
 - recall@10 at least `0.975` over the frozen 1,000-query publication set;
-- at most four query-scoped S3 GETs and `1,048,576` backing bytes for every
+- at most eight query-scoped S3 GETs and `1,966,080` backing bytes for every
   strict-cold query;
 - one parallel S3 wave on the ordinary path, with no dependent object read;
 - cold p50/p95/p99 no worse than `60/100/150 ms`, with a target p99 below
@@ -82,9 +74,9 @@ Deep Image 10M. A V23 production candidate must satisfy all of:
 - S3 Standard only: no S3 Express, CDN, local index replica, or persistent disk
   cache.
 
-The four-request/1-MiB limits are architectural inputs, not values to relax
-after an unsuccessful run. Latency is measured only after those limits and the
-quality gate pass.
+The eight-request/1,966,080-byte limits are Revision-4 architectural inputs,
+not values to relax after an unsuccessful run. Latency is measured only after
+those limits and the quality gate pass.
 
 ## Revision 2 after the terminal D1 falsification
 
@@ -106,14 +98,15 @@ the public V23 evidence code-width fields and private page header from `u8` to
 curve demonstrates that the original width ceiling, rather than routing, made
 the D1 requirement structurally unavailable.
 
-CPU evidence is now charged against the exact number of codes that can occupy
-four maximum pages for that arm. Arms whose encoded row fits the 2,048-row
+Under Revision 2, CPU evidence was charged against the exact number of codes
+that could occupy four maximum pages for that arm. Arms whose encoded row fit the 2,048-row
 capacity still measure 2,048 rows per page; wider rows measure their smaller
 capacity-derived page population. The
 preparation and scan timer excludes corpus construction, encoding, buffer
-materialization, and the untimed full-routed quality replay. This preserves a
-single-wave production interpretation without pretending that four pages can
-contain 8,192 192-byte codes.
+materialization, and the untimed full-routed quality replay. This preserved the
+Revision-2 single-wave interpretation without pretending that four pages could
+contain 8,192 192-byte codes. Revision 4 replaces that historical four-page
+contract with the eight-page contract specified below.
 
 ## What V22 proves
 
@@ -141,12 +134,12 @@ before a persistent format is built.
 ### 1. Quantized posting pages with boundary replication — selected
 
 Keep routing metadata resident, store compact row codes and IDs in capped
-posting pages, replicate boundary rows into nearby postings, fetch at most four
+posting pages, replicate boundary rows into nearby postings, fetch at most eight
 pages concurrently, and rank directly from their codes. This matches the
-economics: one MiB holds tens of thousands of compact codes but only about
-2,700 raw Deep Image vectors. It removes the dependent exact-vector wave.
+economics: the registered 1,966,080-byte wave holds thousands of near-exact
+codes but still removes the dependent exact-vector wave.
 
-Risk: code fidelity and four-page GT coverage are inferred, not proved. D1 and
+Risk: code fidelity and eight-page GT coverage are inferred, not proved. D1 and
 D2 below exist to reject the approach cheaply if either is insufficient.
 
 ### 2. Replicated exact-vector pages — rejected as the primary path
@@ -178,7 +171,7 @@ V23 has four serving components:
    verification, rebuilds, and APIs that explicitly request exact vectors. It
    is not read by the ordinary low-latency ANN path.
 
-The router selects at most four pages before any I/O. Their GETs are submitted
+The router selects at most eight pages before any I/O. Their GETs are submitted
 as one wave. Decoding, SIMD distance evaluation, deduplication, overlay
 reconciliation, and top-k selection happen after that wave. Search returns
 approximate ANN distances. Exact vector materialization is a separate explicit
@@ -217,9 +210,8 @@ codes[n * width]     // contiguous SIMD scan plane
 
 The format contains no Arrow or Parquet per-row metadata. A page is accepted
 only when its complete authenticated encoded length is at most `245,760`
-bytes. Four maximum pages therefore consume at most `983,040` bytes, leaving
-64 KiB of the network budget reserved for bounded headers and future receipt-
-proven overhead. The decoder checks lengths, arithmetic, concrete types,
+bytes. Eight maximum pages therefore consume at most `1,966,080` bytes. The
+decoder checks lengths, arithmetic, concrete types,
 cardinality, sorted unique primary identities, duplicate legality, and the body
 layout after authenticating the whole-object checksum; reserved header bytes
 must remain zero before slices are exposed.
@@ -251,9 +243,10 @@ watermark.
    after upload. Publish the new root atomically after every referenced page is
    durable.
 
-The diagnostic sweeps primary page targets `{512,1024,2048}`, maximum
-assignments per row `{1,2,3}`, and query page counts `{1,2,3,4}`. It may add
-`4096` rows only if the encoded cap permits it at the tested width. The root
+Revision 4 evaluates only the latency-first primary page target `384`, fixes
+the maximum assignments per row at `2`, and fixes query pages at `8`. The
+rejected 512-row layout is below the frozen oracle floor; 640 has the same
+oracle as 384 but a materially larger cold payload. The root
 reports primary and replicated row histograms, rejected replica counts, page
 encoded-size distribution, storage amplification, and boundary-score
 distribution.
@@ -268,8 +261,8 @@ For one dense ANN query:
 
 1. Validate dimensionality and metric, normalize once where required, and
    prepare the frozen quantizer lookup tables.
-2. Search the resident page-centroid graph and select exactly the best one to
-   four page ordinals under the registered router search budget. The physical
+2. Search the resident packed selector and select exactly eight page ordinals
+   under the registered router search budget. The physical
    page set is fixed before I/O.
 3. Atomically acquire one transient permit for the sum of all page encoded
    bytes, decoded views, result heap capacity, and overlay scan scratch.
@@ -282,10 +275,8 @@ For one dense ANN query:
 6. Apply tombstones and newer overlay versions, scan overlay codes with the
    same query tables, merge top-k, and return approximate distances.
 
-The ordinary path is one wave. A conditional `3+1` two-wave variant may be
-tested only as a separately registered fallback after the one-wave candidate
-fails quality and only when it still respects four total GETs, one MiB, and the
-release p99. It cannot be silently substituted into one-wave evidence.
+The ordinary path is one wave. No dependent replacement GET or second-wave
+fallback may be substituted into one-wave evidence.
 
 ## Writes, mutations, and compaction
 
@@ -333,7 +324,7 @@ on allocator reuse.
 The 10M diagnostic records the core builder's conservative working-set
 projection and the fresh worker process's independently observed peak RSS, and
 projects and measures 3-GiB serving-process usage. The
-100M projection includes the complete router, codebook, root, overlays, four
+100M projection includes the complete selector, codebook, root, overlays, eight
 simultaneous maximum pages per admitted query, active-query count, and runtime
 overhead. No corpus-wide code plane is assumed resident.
 
@@ -342,11 +333,11 @@ with ceiling division. Its compact root charges a 96-byte header plus a
 conservative 320 bytes per projected page for the Rust reference, both owned
 content-address strings, vector capacity, and allocator rounding. Page
 centroids are not persisted. The packed selector separately charges its header,
-at least 4,096 coarse `f32` centroids and offsets, and 28 bytes for each of at
+at least 4,096 coarse `f32` centroids and offsets, and 204 bytes for each of at
 most 16 anchors per projected page; decoded centroid and offset storage is
 charged again. A
 separate 512 MiB reserve covers quantizers, overlays, allocator/runtime state,
-and other fixed serving authority. Two simultaneous 983,040-byte waves are
+and other fixed serving authority. Two simultaneous 1,966,080-byte waves are
 added explicitly. The validator recomputes this formula from authenticated row,
 page, selector, and dimension authority; a report cannot self-assert a smaller
 number.
@@ -376,7 +367,7 @@ registered 10-ppm numeric tolerance.
 The routed-pool recall and capacity-derived CPU scan are deliberately
 orthogonal D1 measurements: the former isolates representation quality over
 the complete registered routed pool, while the latter times exactly the number
-of code rows that fit in one four-page production wave. Each query records both
+of code rows that fit in one eight-page production wave. Each query records both
 row counts explicitly. D2, not D1, is the binding proof that page selection
 places sufficient routed candidates inside that one-wave budget.
 
@@ -394,7 +385,7 @@ D1 passes only when at least one registered arm reaches:
 - routed-pool recall@10 at least `0.975` at a corpus-bounded candidate count;
 - p99 query preparation plus code scan at most `15 ms` on the registered
   serving CPU; and
-- a four-page byte projection no greater than `983,040` bytes.
+- an eight-page byte projection no greater than `1,966,080` bytes.
 
 If no width passes, reject V23 before page construction. Do not compensate by
 raising the network or recall limits.
@@ -403,7 +394,7 @@ raising the network or recall limits.
 
 Run only D1-passing widths. Build candidate balanced page assignments from the
 full corpus, add bounded closure replicas, and simulate the exact production
-router and page-byte cap for each registered one-to-four-page query arm. Decode
+router and page-byte cap for each registered eight-page query arm. Decode
 and rank directly from the authenticated immutable page bytes; do not use query
 labels, GT IDs, or query-specific layout decisions during the build.
 
@@ -418,12 +409,11 @@ construction bound, not part of the 3-GiB serving-process gate; the Python
 consumer independently recomputes a conservative per-retained-arm lower bound
 including the width-dependent decoded code plane and rejects underclaims.
 
-D2 passes only if every frozen query uses at most four pages and 983,040 page
+D2 passes only if every frozen query uses at most eight pages and 1,966,080 page
 bytes, aggregate recall@10 is at least `0.975`, no query has recall below
 `0.8`, storage amplification is at most `2.0x`, projected process RAM is at
-most 3 GiB, and p99 CPU is at most 15 ms. Freeze at most three nondominated
-passing arms over the deterministic scientific axes recall, bytes, page count,
-storage, and RAM. If no arm passes, retain a failing frontier as terminal
+most 3 GiB, and p99 CPU is at most 15 ms. Freeze the single registered 384-row
+arm only when it passes. If it fails, retain it as terminal
 negative evidence and stop before D3. CPU remains a hard gate and reported
 measurement. Timing jitter can flip pass/fail membership at that boundary, but
 it never participates in dominance or ordering.
@@ -483,7 +473,7 @@ Implementation follows test-driven slices:
 2. Binary page encoder/decoder with mutation matrices for all lengths,
    offsets, counts, checksums, and concrete types.
 3. Deterministic balanced primary assignment and capped closure replication.
-4. Router selection and exact four-page/byte invariants.
+4. Router selection and exact eight-page/byte invariants.
 5. One-wave admission, typed errors, cancellation, and concurrent memory
    bounds.
 6. Overlay reconciliation, duplicate replicas, tombstones, and generation

@@ -571,3 +571,47 @@ repacking as the cold production architecture. It does not establish latency
 or recall for a replacement format. The next qualified design must route a
 query directly to a bounded number of semantically coherent exact-vector
 pages, then prove the four-GET/1-MiB envelope before another publication build.
+
+## V23 Deep Image 10M page-routing diagnosis on 2026-08-29
+
+The first V23 diagnostic used source commit
+`946386c3d914121b5bdb7fb2f2a016311bdb759c`, the immutable V22-built index
+whose terminal-marker SHA-256 is
+`b55959a6cb3f2478557606050fe22b52059b4254c9dbdbf430ae9a45a55217e1`, and
+Standard S3 only. D1 completed on Spot instance `i-0f851a76d0d2369b1` and D2
+completed on Spot instance `i-00421096ae5938591`; both instances were
+terminated after their terminal marker. The D1 result SHA-256 was
+`5266ef3cb60d4bed2db8c04777897084d867da7eb280f3c082d87743b7a2612e` and
+the D2 result SHA-256 was
+`311dca58e568404195647fb88770b27715fd248cd91884aedcc289855b7f4121`.
+
+D1 established that the 192-byte f16-flat codec preserves routed ranking at
+99.6875% recall with 0.587 ms CPU p99. It also rejected the original 16-byte
+SRHT-PQ selector codec, whose routed recall was only 28.4375%. D2 then failed
+closed before any D3 latency launch. Across the 384/512/640-row layout arms,
+actual recall was 21.5625%, 25.625%, and 20.9375%; the corresponding
+four-page coverage oracles were 81.5625%, 84.0625%, and 85.3125%. CPU p99 was
+5.95--6.30 ms and projected 100M-row serving RAM was 648--724 MiB, so the
+failure was page containment and selector quality rather than scoring cost or
+memory.
+
+An exact recomputation over the authenticated D2 truth assignments showed
+that an eight-page oracle reaches 99.375% aggregate recall with 90% minimum
+query recall for the 384- and 640-row layouts; the 512-row layout reaches
+98.4375% aggregate and 80% minimum. The replacement unreleased format
+therefore uses an eight-page, 1,966,080-byte maximum cold wave, 192-byte
+f16-flat page representatives, and nearest-representative page ranking rather
+than reciprocal-rank voting. Its selector, D1, D2, and D3 schemas are replaced
+rather than retaining readers for the failed experimental artifacts. A fresh
+D1 and D2 are required; D3 remains forbidden until D2 satisfies every frozen
+recall, selector-regret, amplification, RAM, and CPU gate.
+
+The replacement frontier excludes the 512-row layout because its authenticated
+eight-page oracle is below both frozen coverage gates. It also excludes the
+640-row layout: although its oracle matches 384, its observed worst eight-page
+payload reaches the registered 1.875-MiB ceiling versus about 1.19 MiB for 384.
+The registered 384-row layout projects about 1.45 GiB of serving RAM at 100M
+rows, including the 192-byte selector representatives and two maximum waves.
+These are design projections, not latency or throughput results. Fresh D2 must
+measure selector regret and CPU p99 for that one latency-first layout before any
+Standard-S3 D3 launch.

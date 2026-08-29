@@ -3638,10 +3638,12 @@ def _canonicalize_v23_staging_value(
 
 V23_QUERY_COUNT = 32
 V23_D3_WAVES = 1_000
-V23_WAVE_MAX_PAGES = 4
+V23_WAVE_MAX_PAGES = 8
 V23_PAGE_MAX_BYTES = 245_760
-V23_WAVE_MAX_BYTES = 983_040
+V23_WAVE_MAX_BYTES = 1_966_080
 V23_RAM_BUDGET_BYTES = 3 * 1024**3
+V23_SELECTOR_CODE_BYTES = 192
+V23_SELECTOR_ANCHOR_BYTES = 12 + V23_SELECTOR_CODE_BYTES
 V23_FAMILIES = frozenset(
     {"srht-pq", "fast-turbo-quant-mse", "fast-turbo-quant-prod", "f16-flat"}
 )
@@ -4182,7 +4184,7 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
         _v23_digest(report[field], f"D1 {field}")
     query_ordinals = report["query_ordinals"]
     if (
-        report["schema"] != "borsuk-v23-d1-v4"
+        report["schema"] != "borsuk-v23-d1-v5"
         or type(query_ordinals) is not list
         or len(query_ordinals) != V23_QUERY_COUNT
         or any(type(item) is not int or item < 0 for item in query_ordinals)
@@ -4219,7 +4221,7 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
                 "scalar_simd_ids_equal",
                 "scalar_simd_max_distance_delta_ppm",
                 "cpu_p99_ns",
-                "four_page_projected_bytes",
+                "wave_projected_bytes",
                 "passed",
             },
             "D1 arm",
@@ -4236,7 +4238,7 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
             raise ValueError("V23 D1 sample cardinality differs")
         row_bytes = 4 + key[1] + maximum_id_bytes
         projected_rows = min(2_048, (V23_PAGE_MAX_BYTES - 96 - 4) // row_bytes)
-        wave_candidate_rows = 4 * projected_rows
+        wave_candidate_rows = V23_WAVE_MAX_PAGES * projected_rows
         oracle_hits = 0
         routed_hits = 0
         cpu: list[int] = []
@@ -4318,7 +4320,7 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
         oracle_ppm = _v23_ppm(oracle_hits, V23_QUERY_COUNT * 10)
         routed_ppm = _v23_ppm(routed_hits, V23_QUERY_COUNT * 10)
         cpu_p99 = _v23_nearest_rank(cpu, 99, 100)
-        projected = 4 * (
+        projected = V23_WAVE_MAX_PAGES * (
             96 + 4 * (projected_rows + 1) + projected_rows * (key[1] + maximum_id_bytes)
         )
         passed = (
@@ -4340,7 +4342,7 @@ def _validate_v23_d1_report(value: object) -> dict[str, object]:
             )
             != maximum_delta_ppm
             or _v23_integer(arm["cpu_p99_ns"], "D1 CPU p99") != cpu_p99
-            or _v23_integer(arm["four_page_projected_bytes"], "D1 page projection")
+            or _v23_integer(arm["wave_projected_bytes"], "D1 page projection")
             != projected
             or _v23_boolean(arm["passed"], "D1 pass result") != passed
         ):
@@ -4495,7 +4497,10 @@ def _validate_v23_selector(
         selector["anchor_count"], "D2 selector anchors", minimum=1
     )
     encoded_bytes = (
-        96 + coarse_cells * dimensions * 4 + (coarse_cells + 1) * 4 + anchor_count * 28
+        96
+        + coarse_cells * dimensions * 4
+        + (coarse_cells + 1) * 4
+        + anchor_count * V23_SELECTOR_ANCHOR_BYTES
     )
     first = pages[0]
     if (
@@ -4505,7 +4510,8 @@ def _validate_v23_selector(
         or coarse_cells < selector_routing_cells
         or page_count != len(pages)
         or anchors_per_page != 16
-        or _v23_integer(selector["code_width"], "D2 selector code width") != 16
+        or _v23_integer(selector["code_width"], "D2 selector code width")
+        != V23_SELECTOR_CODE_BYTES
         or not page_count <= anchor_count <= page_count * anchors_per_page
         or selector["path"] != f"selectors/{checksum}"
         or _v23_integer(selector["encoded_bytes"], "D2 selector bytes") != encoded_bytes
@@ -4533,7 +4539,7 @@ def _v23_d2_projection(
         96
         + selector_centroids
         + selector_offsets
-        + projected_pages * selector_anchors_per_page * 28
+        + projected_pages * selector_anchors_per_page * V23_SELECTOR_ANCHOR_BYTES
     )
     decoded_selector = selector_centroids + selector_offsets
     return (
@@ -4564,15 +4570,19 @@ def _v23_d2_minimum_build_projection(
     )
     index_bytes = usize_bytes * 7
     decoded_and_planner = rows * (
-        decoded_row_bytes + 16 + 32 + candidate_bytes + index_bytes
+        decoded_row_bytes
+        + V23_SELECTOR_CODE_BYTES
+        + 32
+        + candidate_bytes
+        + index_bytes
     )
     encoded_page_bytes = sum(
         _v23_integer(page["encoded_bytes"], "D2 page encoded bytes", minimum=1)
         for page in pages
     )
     page_authority_bytes = len(pages) * (dimensions * 4 + 4_096 + 512)
-    lightweight_evidence_bytes = (
-        3 * V23_QUERY_COUNT * (4_096 + maximum_record_id_bytes * 20)
+    lightweight_evidence_bytes = V23_QUERY_COUNT * (
+        4_096 + maximum_record_id_bytes * 20
     )
     return (
         decoded_and_planner
@@ -4626,7 +4636,7 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
     _v23_digest(report["d1_report_checksum"], "D2 D1 report checksum")
     ordinals = report["query_ordinals"]
     if (
-        report["schema"] != "borsuk-v23-d2-v7"
+        report["schema"] != "borsuk-v23-d2-v8"
         or type(ordinals) is not list
         or len(ordinals) != V23_QUERY_COUNT
         or any(type(item) is not int or item < 0 for item in ordinals)
@@ -4639,12 +4649,12 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
     arms = report["arms"]
     if (
         type(arms) is not list
-        or len(arms) != 3
+        or len(arms) != 1
         or [
             arm.get("primary_target_rows") if type(arm) is dict else None
             for arm in arms
         ]
-        != [384, 512, 640]
+        != [384]
     ):
         raise ValueError("V23 D2 frontier cardinality differs")
     build_peak: int | None = None
@@ -4682,7 +4692,10 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
         )
         family, width = _v23_arm_key(arm["d1_key"])
         selector_family, selector_width = _v23_arm_key(arm["selector_key"])
-        if selector_family != "srht-pq" or selector_width != 16:
+        if (
+            selector_family != "f16-flat"
+            or selector_width != V23_SELECTOR_CODE_BYTES
+        ):
             raise ValueError("V23 D2 selector codec differs")
         selector_routing_cells = _v23_integer(
             arm["selector_routing_cells"], "D2 selector routing cells"
@@ -4703,15 +4716,18 @@ def _validate_v23_d2_report(value: object) -> dict[str, object]:
             maximum=3,
         )
         query_page_cap = _v23_integer(
-            arm["maximum_query_pages"], "D2 query page cap", minimum=1, maximum=4
+            arm["maximum_query_pages"],
+            "D2 query page cap",
+            minimum=1,
+            maximum=V23_WAVE_MAX_PAGES,
         )
         id_width = _v23_integer(
             arm["maximum_record_id_bytes"], "D2 ID width", minimum=1
         )
         if (
-            primary_target not in {384, 512, 640}
+            primary_target != 384
             or assignments_per_row != 2
-            or query_page_cap != 4
+            or query_page_cap != V23_WAVE_MAX_PAGES
         ):
             raise ValueError("V23 D2 primary target differs")
         pages_value = arm["pages"]
@@ -5140,7 +5156,7 @@ def _v23_hex_identifier(value: str, label: str) -> bytes:
 
 
 def _validate_v23_d3_row(row: dict[str, str]) -> dict[str, object]:
-    if tuple(row) != V23_D3_FIELDS or row["schema"] != "borsuk-v23-d3-v1":
+    if tuple(row) != V23_D3_FIELDS or row["schema"] != "borsuk-v23-d3-v2":
         raise ValueError("V23 D3 CSV schema differs")
     arm_key = row["arm_key"]
     if not arm_key or any(
@@ -5155,7 +5171,10 @@ def _validate_v23_d3_row(row: dict[str, str]) -> dict[str, object]:
         _v23_csv_integer(item, "page ordinal")
         for item in _v23_csv_list(row["page_ordinals"], "page ordinals")
     ]
-    if page_ordinals != sorted(set(page_ordinals)) or not 1 <= len(page_ordinals) <= 4:
+    if (
+        page_ordinals != sorted(set(page_ordinals))
+        or not 1 <= len(page_ordinals) <= V23_WAVE_MAX_PAGES
+    ):
         raise ValueError("V23 D3 page ordinals differ")
     truth = [
         _v23_hex_identifier(item, "ground-truth ID")
@@ -5294,7 +5313,7 @@ def validate_v23_d3_artifacts(
         expected_dataset_id=expected_dataset_id,
     )
     if (
-        summary["schema"] != "borsuk-v23-d3-v1"
+        summary["schema"] != "borsuk-v23-d3-v2"
         or summary["document_kind"] != "publication-v3-v23-d3-summary"
         or _v23_boolean(summary["claim_eligible"], "D3 claim eligibility")
         or summary["stage"] != "d3"
@@ -5305,7 +5324,7 @@ def validate_v23_d3_artifacts(
     ):
         raise ValueError("V23 D3 summary authority differs")
     arms_value = summary["arms"]
-    if type(arms_value) is not list or not 1 <= len(arms_value) <= 3:
+    if type(arms_value) is not list or len(arms_value) != 1:
         raise ValueError("V23 D3 arm cardinality differs")
     samples_payload = samples_path.read_bytes()
     if (

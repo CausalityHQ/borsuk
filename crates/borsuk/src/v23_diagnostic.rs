@@ -25,8 +25,8 @@ use crate::{
 #[allow(dead_code, reason = "consumed by the planned D2 page-codec slice")]
 pub(crate) const V23_PAGE_MAX_ENCODED_BYTES: u64 = 245_760;
 #[allow(dead_code, reason = "consumed by the planned D2 and D3 slices")]
-pub(crate) const V23_WAVE_MAX_PAGES: usize = 4;
-pub(crate) const V23_WAVE_MAX_BYTES: u64 = 983_040;
+pub(crate) const V23_WAVE_MAX_PAGES: usize = 8;
+pub(crate) const V23_WAVE_MAX_BYTES: u64 = 1_966_080;
 #[allow(dead_code, reason = "consumed by the planned D2 RAM projection")]
 pub(crate) const V23_PROCESS_MAX_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 pub(crate) const V23_DIAGNOSTIC_QUERIES: usize = 32;
@@ -44,20 +44,22 @@ const V23_PROJECTED_ROOT_FIXED_BYTES_PER_PAGE: u64 = 320;
 // allocator rounding for that bounded topology.
 const V23_PROJECTED_ROUTER_BYTES_PER_PAGE: u64 = 4_096;
 const V23_PROJECTED_FIXED_RUNTIME_BYTES: u64 = 512 * 1024 * 1024;
-const V23_D2_EVALUATED_ARMS: u64 = 3;
+const V23_D2_EVALUATED_ARMS: u64 = 1;
 const V23_D2_LIGHTWEIGHT_SAMPLE_SLACK_BYTES: u64 = 4_096;
 const V23_D1_PROJECTED_PAGE_ROWS: u64 = 2_048;
 const V23_SCALAR_SIMD_MAX_DISTANCE_DELTA_PPM: u64 = 10;
 #[allow(dead_code, reason = "consumed by the planned D3 benchmark slice")]
 pub(crate) const V23_D3_WAVES: usize = 1_000;
 const V23_D1_CPU_MAX_NS: u64 = 15_000_000;
-const V23_SELECTOR_CODE_BYTES: u16 = 16;
+const V23_SELECTOR_CODE_BYTES: u16 = 192;
+const V23_SELECTOR_DIMENSIONS: u32 = 96;
 const V23_SELECTOR_ROUTING_CELLS: usize = 320;
 const V23_SELECTOR_RANKED_ROWS: usize = 8_192;
 const V23_SELECTOR_HEADER_BYTES: usize = 96;
-const V23_SELECTOR_MAGIC: &[u8; 4] = b"BVS1";
-const V23_SELECTOR_VERSION: u8 = 1;
+const V23_SELECTOR_MAGIC: &[u8; 4] = b"BVS2";
+const V23_SELECTOR_VERSION: u8 = 2;
 const V23_SELECTOR_ANCHORS_PER_PAGE: u16 = 16;
+const V23_SELECTOR_ANCHOR_BYTES: u64 = 12 + V23_SELECTOR_CODE_BYTES as u64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -114,7 +116,7 @@ pub struct V23D1QuerySample {
     pub oracle_hits: u8,
     /// Recomputed ground-truth hits in `routed`.
     pub routed_hits: u8,
-    /// Query preparation plus one maximum four-page production SIMD scan.
+    /// Query preparation plus one maximum production page wave SIMD scan.
     pub cpu_ns: u64,
 }
 
@@ -139,8 +141,8 @@ pub struct V23D1Arm {
     pub scalar_simd_max_distance_delta_ppm: u64,
     /// Nearest-rank p99 CPU time across frozen queries.
     pub cpu_p99_ns: u64,
-    /// Conservative encoded-byte projection for four maximum pages.
-    pub four_page_projected_bytes: u64,
+    /// Conservative encoded-byte projection for one maximum page wave.
+    pub wave_projected_bytes: u64,
     /// Exact result of every D1 scientific gate.
     pub passed: bool,
 }
@@ -458,47 +460,30 @@ impl V23PageSelector {
             ranked.truncate(V23_SELECTOR_RANKED_ROWS);
         }
         ranked.sort_unstable_by(compare_anchors);
-        // Every packed anchor belongs to exactly one page, so the generic
-        // replicated-row voter would only add thousands of one-element heap
-        // allocations and four repeated map scans. Aggregate reciprocal-rank
-        // scores once, sort candidate pages once, then deterministically
-        // backfill unseen pages only when routed anchors cover a short wave.
-        let mut page_scores = ranked
-            .iter()
-            .enumerate()
-            .map(|(rank, (_, anchor))| {
-                Ok((
-                    self.decoded.anchor_page(*anchor).ok_or_else(|| {
-                        BorsukError::InvalidStorage(
-                            "V23 selector anchor page is absent".to_string(),
-                        )
-                    })?,
-                    rank,
-                    1.0_f64 / (rank as f64 + 1.0),
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        page_scores.sort_unstable_by_key(|(page, rank, _)| (*page, *rank));
-        let mut aggregated = Vec::<(u32, f64)>::new();
-        for (page, _, score) in page_scores {
-            if let Some((last_page, total)) = aggregated.last_mut()
-                && *last_page == page
-            {
-                *total += score;
-            } else {
-                aggregated.push((page, score));
-            }
+        // Each page is represented by a deterministic farthest-point cover.
+        // Its nearest exact representative is the direct page-proximity
+        // estimate; anchor multiplicity must never let several mediocre
+        // representatives outvote one closer page.
+        let mut page_distances = BTreeMap::<u32, f32>::new();
+        for (distance, anchor) in &ranked {
+            let page = self.decoded.anchor_page(*anchor).ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 selector anchor page is absent".to_string())
+            })?;
+            page_distances
+                .entry(page)
+                .and_modify(|minimum| *minimum = minimum.min(*distance))
+                .or_insert(*distance);
         }
-        aggregated.sort_unstable_by(|left, right| {
-            right
-                .1
-                .total_cmp(&left.1)
+        let mut pages = page_distances.into_iter().collect::<Vec<_>>();
+        pages.sort_unstable_by(|left, right| {
+            left.1
+                .total_cmp(&right.1)
                 .then_with(|| left.0.cmp(&right.0))
         });
-        let mut page_ordinals = aggregated
+        let mut page_ordinals = pages
             .into_iter()
             .take(maximum_pages)
-            .map(|(page, _)| page)
+            .map(|(page, _distance)| page)
             .collect::<Vec<_>>();
         for page in 0..self.page_count as u32 {
             if page_ordinals.len() == maximum_pages {
@@ -668,7 +653,7 @@ pub(crate) fn encode_v23_selector(input: &V23SelectorInput) -> Result<Bytes> {
     let coarse_cells = input.coarse_centroids.len();
     let anchor_count = input.anchors.len();
     if input.generation_checksum == [0; 32]
-        || dimensions == 0
+        || input.dimensions != V23_SELECTOR_DIMENSIONS
         || input.page_count == 0
         || input.anchors_per_page == 0
         || coarse_cells == 0
@@ -739,7 +724,7 @@ pub(crate) fn encode_v23_selector(input: &V23SelectorInput) -> Result<Bytes> {
     encoded[0..4].copy_from_slice(V23_SELECTOR_MAGIC);
     encoded[4] = V23_SELECTOR_VERSION;
     encoded[5] = metric_tag;
-    encoded[6] = v23_family_tag(V23QuantizerFamily::SrhtPq);
+    encoded[6] = v23_family_tag(V23QuantizerFamily::F16Flat);
     encoded[8..12].copy_from_slice(&input.dimensions.to_le_bytes());
     encoded[12..16].copy_from_slice(&coarse_cells_u32.to_le_bytes());
     encoded[16..20].copy_from_slice(&input.page_count.to_le_bytes());
@@ -828,7 +813,7 @@ pub(crate) fn decode_v23_selector(
     if bytes.len() as u64 != selector_ref.encoded_bytes
         || bytes.len() < V23_SELECTOR_HEADER_BYTES
         || selector_ref.generation_checksum == [0; 32]
-        || selector_ref.dimensions == 0
+        || selector_ref.dimensions != V23_SELECTOR_DIMENSIONS
         || selector_ref.coarse_cells == 0
         || selector_ref.page_count == 0
         || selector_ref.anchors_per_page == 0
@@ -852,7 +837,7 @@ pub(crate) fn decode_v23_selector(
     if bytes.get(0..4) != Some(V23_SELECTOR_MAGIC.as_slice())
         || bytes[4] != V23_SELECTOR_VERSION
         || v23_metric_tag(&selector_ref.metric) != Some(bytes[5])
-        || bytes[6] != v23_family_tag(V23QuantizerFamily::SrhtPq)
+        || bytes[6] != v23_family_tag(V23QuantizerFamily::F16Flat)
         || bytes[7] != 0
         || read_v23_u32(&bytes, 8) != Some(selector_ref.dimensions)
         || read_v23_u32(&bytes, 12) != Some(selector_ref.coarse_cells)
@@ -1324,7 +1309,7 @@ pub struct V23D2Arm {
     pub aggregate_recall_ppm: u64,
     /// Worst frozen-query recall in parts per million.
     pub minimum_query_recall_ppm: u64,
-    /// Best-achievable four-page containment under the immutable layout.
+    /// Best-achievable bounded-page containment under the immutable layout.
     pub coverage_oracle_recall_ppm: u64,
     /// Worst-query best-achievable containment under the immutable layout.
     pub coverage_oracle_minimum_query_recall_ppm: u64,
@@ -1522,7 +1507,7 @@ impl V23D3Executor {
             || !d2_arm.passed
             || d2_arm.d1_key != d1_arm.key
             || d2_arm.selector_key != selector_arm.key
-            || selector_arm.key.family != V23QuantizerFamily::SrhtPq
+            || selector_arm.key.family != V23QuantizerFamily::F16Flat
             || selector_arm.key.code_width_bytes != V23_SELECTOR_CODE_BYTES
             || d2_arm.pages.is_empty()
             || d2_arm.maximum_query_pages == 0
@@ -2612,9 +2597,11 @@ pub(crate) fn build_v23_d1_report(authority: V23D1CorpusAuthority<'_>) -> Result
         let cpu_p99_ns = cpu[cpu.len() - 1];
         let projected_page_bytes =
             v23_d1_projected_page_bytes(key.code_width_bytes, maximum_record_id_bytes);
-        let four_page_projected_bytes = projected_page_bytes.checked_mul(4).ok_or_else(|| {
-            BorsukError::InvalidStorage("V23 D1 wave projection overflows".to_string())
-        })?;
+        let wave_projected_bytes = projected_page_bytes
+            .checked_mul(V23_WAVE_MAX_PAGES as u64)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 D1 wave projection overflows".to_string())
+            })?;
         arms.push(V23D1Arm {
             key,
             quantizer_checksum,
@@ -2625,18 +2612,18 @@ pub(crate) fn build_v23_d1_report(authority: V23D1CorpusAuthority<'_>) -> Result
             scalar_simd_ids_equal,
             scalar_simd_max_distance_delta_ppm,
             cpu_p99_ns,
-            four_page_projected_bytes,
+            wave_projected_bytes,
             passed: oracle_recall_ppm >= 990_000
                 && routed_recall_ppm >= 975_000
                 && scalar_simd_rank_equivalent
                 && scalar_simd_max_distance_delta_ppm <= V23_SCALAR_SIMD_MAX_DISTANCE_DELTA_PPM
                 && cpu_p99_ns <= V23_D1_CPU_MAX_NS
                 && projected_page_bytes <= V23_PAGE_MAX_ENCODED_BYTES
-                && four_page_projected_bytes <= V23_WAVE_MAX_BYTES,
+                && wave_projected_bytes <= V23_WAVE_MAX_BYTES,
         });
     }
     let report = V23D1Report {
-        schema: "borsuk-v23-d1-v4".to_string(),
+        schema: "borsuk-v23-d1-v5".to_string(),
         v20_root_checksum: authority.root_checksum.to_string(),
         v20_codebook_checksum: authority.codebook_checksum.to_string(),
         sample_ordinals_checksum: ordinal_hasher.finalize().to_hex().to_string(),
@@ -2770,7 +2757,7 @@ pub(crate) struct V23PageCoverage {
 }
 
 /// Exact small-cardinality oracle used only for diagnostic truth (ten GT rows).
-pub(crate) fn best_v23_four_page_coverage(
+pub(crate) fn best_v23_page_coverage(
     truth_assignments: &[Vec<u32>],
     maximum_pages: usize,
 ) -> Result<V23PageCoverage> {
@@ -2861,11 +2848,16 @@ impl V23ContentSelector {
         planning_rows: &[V23PlanningRow],
         _metric: &VectorMetric,
     ) -> Result<Self> {
+        if d1_report.dimensions != V23_SELECTOR_DIMENSIONS {
+            return Err(BorsukError::InvalidSearchOptions(
+                "V23 selector requires the registered 96-dimensional authority".to_string(),
+            ));
+        }
         let selector_arm = d1_report
             .arms
             .iter()
             .find(|arm| {
-                arm.key.family == V23QuantizerFamily::SrhtPq
+                arm.key.family == V23QuantizerFamily::F16Flat
                     && arm.key.code_width_bytes == V23_SELECTOR_CODE_BYTES
             })
             .ok_or_else(|| {
@@ -3494,7 +3486,7 @@ fn v23_d2_projected_memory(
         })?;
     let projected_anchor_bytes = projected_pages
         .checked_mul(u64::from(selector_anchors_per_page))
-        .and_then(|anchors| anchors.checked_mul(28))
+        .and_then(|anchors| anchors.checked_mul(V23_SELECTOR_ANCHOR_BYTES))
         .ok_or_else(|| {
             BorsukError::InvalidStorage("V23 projected selector anchors overflow".to_string())
         })?;
@@ -3850,7 +3842,7 @@ fn build_v23_d2_arms(
                 })
                 .collect::<Result<Vec<_>>>()?;
             let oracle =
-                best_v23_four_page_coverage(&truth_assignments, usize::from(maximum_query_pages))?;
+                best_v23_page_coverage(&truth_assignments, usize::from(maximum_query_pages))?;
             let started = Instant::now();
             let selection =
                 page_selector.select(selector_query, usize::from(maximum_query_pages))?;
@@ -4147,27 +4139,25 @@ fn build_v23_d2_report_inner(
         selector: &selector,
         planning_rows: &planning_rows,
     };
-    for primary_target_rows in [384_u16, 512, 640] {
-        evaluated_arms.extend(build_v23_d2_arms(
-            build_context,
-            V23PageArmConfig {
-                primary_target_rows,
-                maximum_assignments_per_row: 2,
-            },
-            None,
-            None,
-            None,
-        )?);
-    }
+    evaluated_arms.extend(build_v23_d2_arms(
+        build_context,
+        V23PageArmConfig {
+            primary_target_rows: 384,
+            maximum_assignments_per_row: 2,
+        },
+        None,
+        None,
+        None,
+    )?);
     let selected = evaluated_arms
         .into_iter()
         .filter(|arm| arm.maximum_query_pages as usize == V23_WAVE_MAX_PAGES)
         .collect::<Vec<_>>();
-    if selected.len() != 3
+    if selected.len() != 1
         || selected
             .iter()
             .map(|arm| arm.primary_target_rows)
-            .ne([384_u16, 512, 640])
+            .ne([384_u16])
     {
         return Err(BorsukError::InvalidStorage(
             "V23 D2 registered arm matrix differs".to_string(),
@@ -4262,7 +4252,7 @@ fn build_v23_d2_report_inner(
         arm.projected_build_bytes = projected_build_peak_bytes;
     }
     let report = V23D2Report {
-        schema: "borsuk-v23-d2-v7".to_string(),
+        schema: "borsuk-v23-d2-v8".to_string(),
         d1_report_checksum: v23_d1_report_checksum(authority.d1_report)?,
         query_ordinals: authority.query_ordinals.to_vec(),
         rows: authority.scratch.total_rows(),
@@ -4273,7 +4263,7 @@ fn build_v23_d2_report_inner(
 }
 
 pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
-    if report.schema != "borsuk-v23-d1-v4"
+    if report.schema != "borsuk-v23-d1-v5"
         || !valid_checksum(&report.v20_root_checksum)
         || !valid_checksum(&report.v20_codebook_checksum)
         || !valid_checksum(&report.sample_ordinals_checksum)
@@ -4301,7 +4291,8 @@ pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
         let quantizer = restore_v23_diagnostic_quantizer(arm)?;
         let expected_page_projection =
             v23_d1_projected_page_bytes(arm.key.code_width_bytes, report.maximum_record_id_bytes);
-        let expected_wave_projection = expected_page_projection.saturating_mul(4);
+        let expected_wave_projection =
+            expected_page_projection.saturating_mul(V23_WAVE_MAX_PAGES as u64);
         let expected_wave_rows =
             v23_d1_projected_page_rows(arm.key.code_width_bytes, report.maximum_record_id_bytes)
                 .saturating_mul(V23_WAVE_MAX_PAGES as u64);
@@ -4309,7 +4300,7 @@ pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
             || !valid_checksum(&arm.quantizer_checksum)
             || quantizer.dimensions() != report.dimensions as usize
             || arm.query_samples.len() != V23_DIAGNOSTIC_QUERIES
-            || arm.four_page_projected_bytes != expected_wave_projection
+            || arm.wave_projected_bytes != expected_wave_projection
         {
             return Err(BorsukError::InvalidStorage(
                 "V23 D1 arm authority differs".to_string(),
@@ -4383,7 +4374,7 @@ pub(crate) fn validate_d1_report(report: &V23D1Report) -> Result<()> {
             && expected_cpu_p99 <= V23_D1_CPU_MAX_NS
             && expected_wave_rows >= V23_D1_PROJECTED_PAGE_ROWS
             && expected_page_projection <= V23_PAGE_MAX_ENCODED_BYTES
-            && arm.four_page_projected_bytes <= V23_WAVE_MAX_BYTES;
+            && arm.wave_projected_bytes <= V23_WAVE_MAX_BYTES;
         if arm.oracle_recall_ppm != expected_oracle_recall
             || arm.routed_recall_ppm != expected_routed_recall
             || arm.scalar_simd_ids_equal != scalar_simd_ids_equal
@@ -4409,7 +4400,7 @@ fn d2_arm_key(arm: &V23D2Arm) -> (V23D1ArmKey, u16, u8, u8) {
 }
 
 pub(crate) fn validate_d2_report(report: &V23D2Report) -> Result<()> {
-    if report.schema != "borsuk-v23-d2-v7"
+    if report.schema != "borsuk-v23-d2-v8"
         || !valid_checksum(&report.d1_report_checksum)
         || report.query_ordinals.len() != V23_DIAGNOSTIC_QUERIES
         || report
@@ -4417,12 +4408,12 @@ pub(crate) fn validate_d2_report(report: &V23D2Report) -> Result<()> {
             .windows(2)
             .any(|pair| pair[0] >= pair[1])
         || report.rows == 0
-        || report.arms.len() != 3
+        || report.arms.len() != 1
         || report
             .arms
             .iter()
             .map(|arm| arm.primary_target_rows)
-            .ne([384_u16, 512, 640])
+            .ne([384_u16])
     {
         return Err(BorsukError::InvalidStorage(
             "V23 D2 report authority differs".to_string(),
@@ -4438,13 +4429,13 @@ pub(crate) fn validate_d2_report(report: &V23D2Report) -> Result<()> {
         .ok_or_else(|| BorsukError::InvalidStorage("V23 D2 frontier is empty".to_string()))?;
     for arm in &report.arms {
         if !valid_diagnostic_code_width(arm.d1_key)
-            || arm.selector_key.family != V23QuantizerFamily::SrhtPq
+            || arm.selector_key.family != V23QuantizerFamily::F16Flat
             || arm.selector_key.code_width_bytes != V23_SELECTOR_CODE_BYTES
             || usize::from(arm.selector_routing_cells)
                 != V23_SELECTOR_ROUTING_CELLS.min(arm.selector.coarse_cells as usize)
             || usize::try_from(arm.selector_ranked_anchor_cap).ok()
                 != Some(V23_SELECTOR_RANKED_ROWS)
-            || ![384, 512, 640].contains(&arm.primary_target_rows)
+            || arm.primary_target_rows != 384
             || arm.maximum_assignments_per_row != 2
             || arm.maximum_query_pages as usize != V23_WAVE_MAX_PAGES
             || arm.maximum_record_id_bytes == 0
@@ -4473,7 +4464,13 @@ pub(crate) fn validate_d2_report(report: &V23D2Report) -> Result<()> {
             .and_then(|values| values.checked_mul(4));
         let expected_selector_bytes = selector_centroid_bytes
             .and_then(|bytes| bytes.checked_add(selector_offset_bytes?))
-            .and_then(|bytes| bytes.checked_add(arm.selector.anchor_count.checked_mul(28)?))
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    arm.selector
+                        .anchor_count
+                        .checked_mul(V23_SELECTOR_ANCHOR_BYTES)?,
+                )
+            })
             .and_then(|bytes| bytes.checked_add(V23_SELECTOR_HEADER_BYTES as u64));
         if arm.selector.generation_checksum != generation_checksum
             || &arm.selector.metric != metric
@@ -4581,7 +4578,7 @@ pub(crate) fn validate_d2_report(report: &V23D2Report) -> Result<()> {
                 })
             });
             let expected_recall = (expected_hits as u64).saturating_mul(100_000);
-            let recomputed_oracle = best_v23_four_page_coverage(
+            let recomputed_oracle = best_v23_page_coverage(
                 &sample.ground_truth_page_assignments,
                 usize::from(arm.maximum_query_pages),
             )?;
@@ -4694,13 +4691,13 @@ mod tests {
     use bytes::Bytes;
 
     use super::{
-        V23_DIAGNOSTIC_QUERIES, V23_PAGE_HEADER_BYTES, V23_SELECTOR_ANCHORS_PER_PAGE,
-        V23_SELECTOR_CODE_BYTES, V23_SELECTOR_RANKED_ROWS, V23_SELECTOR_ROUTING_CELLS,
-        V23_WAVE_MAX_BYTES, V23_WAVE_MAX_PAGES, V23D1Arm, V23D1ArmKey, V23D1QuerySample,
-        V23D1Report, V23D2Arm, V23D2QuerySample, V23D2Report, V23D3Executor, V23PageInput,
-        V23PageRef, V23PageRow, V23PageSelector, V23PlanningRow, V23QuantizerFamily,
+        V23_DIAGNOSTIC_QUERIES, V23_PAGE_HEADER_BYTES, V23_SELECTOR_ANCHOR_BYTES,
+        V23_SELECTOR_ANCHORS_PER_PAGE, V23_SELECTOR_CODE_BYTES, V23_SELECTOR_RANKED_ROWS,
+        V23_SELECTOR_ROUTING_CELLS, V23_WAVE_MAX_BYTES, V23_WAVE_MAX_PAGES, V23D1Arm, V23D1ArmKey,
+        V23D1QuerySample, V23D1Report, V23D2Arm, V23D2QuerySample, V23D2Report, V23D3Executor,
+        V23PageInput, V23PageRef, V23PageRow, V23PageSelector, V23PlanningRow, V23QuantizerFamily,
         V23RankedResult, V23ReplicaCandidate, V23SelectorAnchor, V23SelectorInput, V23SelectorRef,
-        V23WaveSample, best_v23_four_page_coverage, decode_v23_page, decode_v23_selector,
+        V23WaveSample, best_v23_page_coverage, decode_v23_page, decode_v23_selector,
         encode_v23_page, encode_v23_selector, fit_v23_diagnostic_quantizer, plan_v23_pages,
         plan_v23_pages_for_metric, read_v23_u16, restore_v23_diagnostic_quantizer,
         select_v23_anchor_ordinals, stream_v23_materialized_pages, v23_d1_arm_keys,
@@ -4714,18 +4711,19 @@ mod tests {
 
     #[test]
     fn v23_selector_codec_is_canonical_content_addressed_and_mutation_safe() {
+        let codes = [vec![0; 192], vec![1; 192], vec![2; 192], vec![3; 192]];
         let input = V23SelectorInput {
             generation_checksum: [7; 32],
             metric: VectorMetric::SquaredEuclidean,
-            dimensions: 2,
+            dimensions: 96,
             page_count: 3,
             anchors_per_page: 2,
-            coarse_centroids: vec![vec![0.0, 0.0], vec![1.0, 1.0]],
+            coarse_centroids: vec![vec![0.0; 96], vec![1.0; 96]],
             anchors: vec![
-                V23SelectorAnchor::new(0, 0, 3, &[0; 16]),
-                V23SelectorAnchor::new(0, 1, 4, &[1; 16]),
-                V23SelectorAnchor::new(1, 1, 5, &[2; 16]),
-                V23SelectorAnchor::new(1, 2, 6, &[3; 16]),
+                V23SelectorAnchor::new(0, 0, 3, &codes[0]),
+                V23SelectorAnchor::new(0, 1, 4, &codes[1]),
+                V23SelectorAnchor::new(1, 1, 5, &codes[2]),
+                V23SelectorAnchor::new(1, 2, 6, &codes[3]),
             ],
         };
         let bytes = encode_v23_selector(&input).unwrap();
@@ -4737,18 +4735,18 @@ mod tests {
             coarse_cells: 2,
             page_count: input.page_count,
             anchors_per_page: input.anchors_per_page,
-            code_width: V23_SELECTOR_CODE_BYTES,
+            code_width: 192,
             anchor_count: 4,
             path: format!("selectors/{checksum}"),
             checksum,
             encoded_bytes: bytes.len() as u64,
         };
         let decoded = decode_v23_selector(bytes.clone(), &reference).unwrap();
-        assert_eq!(decoded.coarse_centroid(1), Some(&[1.0, 1.0][..]));
+        assert_eq!(decoded.coarse_centroid(1), Some(&[1.0; 96][..]));
         assert_eq!(decoded.cell_range(0), Some(0..2));
         assert_eq!(decoded.anchor_page(3), Some(2));
         assert_eq!(decoded.anchor_source_ordinal(3), Some(6));
-        assert_eq!(decoded.anchor_code(3), Some(&[3; 16][..]));
+        assert_eq!(decoded.anchor_code(3), Some(codes[3].as_slice()));
 
         let mut mutated = bytes.to_vec();
         let last = mutated.len() - 1;
@@ -4786,7 +4784,7 @@ mod tests {
 
     #[test]
     fn v23_packed_selector_returns_exact_deterministic_page_wave() {
-        let dimensions = 64;
+        let dimensions = 96;
         let sample = (0..256)
             .map(|row| {
                 (0..dimensions)
@@ -4794,15 +4792,11 @@ mod tests {
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        let quantizer = fit_v23_diagnostic_quantizer(
-            V23QuantizerFamily::SrhtPq,
-            V23_SELECTOR_CODE_BYTES,
-            dimensions,
-            &sample,
-        )
-        .unwrap();
+        let quantizer =
+            fit_v23_diagnostic_quantizer(V23QuantizerFamily::F16Flat, 192, dimensions, &sample)
+                .unwrap();
         let mut anchors = Vec::new();
-        for page in 0_u32..5 {
+        for page in 0_u32..9 {
             for offset in 0_u64..2 {
                 let geometry = vec![page as f32; dimensions];
                 anchors.push(V23SelectorAnchor::new(
@@ -4817,9 +4811,9 @@ mod tests {
             generation_checksum: [7; 32],
             metric: VectorMetric::SquaredEuclidean,
             dimensions: dimensions as u32,
-            page_count: 5,
+            page_count: 9,
             anchors_per_page: 2,
-            coarse_centroids: vec![vec![0.0; dimensions], vec![4.0; dimensions]],
+            coarse_centroids: vec![vec![0.0; dimensions], vec![8.0; dimensions]],
             anchors,
         };
         let bytes = encode_v23_selector(&input).unwrap();
@@ -4829,35 +4823,86 @@ mod tests {
             metric: input.metric,
             dimensions: dimensions as u32,
             coarse_cells: 2,
-            page_count: 5,
+            page_count: 9,
             anchors_per_page: 2,
-            code_width: V23_SELECTOR_CODE_BYTES,
-            anchor_count: 10,
+            code_width: 192,
+            anchor_count: 18,
             path: format!("selectors/{checksum}"),
             checksum,
             encoded_bytes: bytes.len() as u64,
         };
         let selector = V23PageSelector::from_encoded(&reference, bytes, quantizer).unwrap();
-        let selected = selector.select(&vec![4.0; dimensions], 4).unwrap();
-        assert_eq!(selected.page_ordinals.len(), 4);
-        assert!(selected.page_ordinals.contains(&4));
+        let selected = selector.select(&vec![8.0; dimensions], 8).unwrap();
+        assert_eq!(selected.page_ordinals.len(), 8);
+        assert!(selected.page_ordinals.contains(&8));
         assert_eq!(selected.routed_cells, 2);
-        assert_eq!(selected.candidate_anchors, 10);
-        assert_eq!(selected.ranked_anchors, 10);
+        assert_eq!(selected.candidate_anchors, 18);
+        assert_eq!(selected.ranked_anchors, 18);
         assert_eq!(
-            selector.select(&vec![4.0; dimensions], 4).unwrap(),
+            selector.select(&vec![8.0; dimensions], 8).unwrap(),
             selected
         );
     }
 
     #[test]
+    fn v23_selector_ranks_pages_by_nearest_exact_representative() {
+        let dimensions = 96;
+        let training = vec![vec![0.0; dimensions]];
+        let quantizer = fit_v23_diagnostic_quantizer(
+            V23QuantizerFamily::F16Flat,
+            V23_SELECTOR_CODE_BYTES,
+            dimensions,
+            &training,
+        )
+        .unwrap();
+        let mediocre = quantizer.encode(&vec![0.1; dimensions]).unwrap();
+        let exact = quantizer.encode(&vec![0.0; dimensions]).unwrap();
+        let mut anchors = (0_u64..16)
+            .map(|source| V23SelectorAnchor::new(0, 0, source, &mediocre))
+            .collect::<Vec<_>>();
+        anchors.push(V23SelectorAnchor::new(0, 1, 16, &exact));
+        let input = V23SelectorInput {
+            generation_checksum: [8; 32],
+            metric: VectorMetric::SquaredEuclidean,
+            dimensions: dimensions as u32,
+            page_count: 2,
+            anchors_per_page: V23_SELECTOR_ANCHORS_PER_PAGE,
+            coarse_centroids: vec![vec![0.0; dimensions]],
+            anchors,
+        };
+        let bytes = encode_v23_selector(&input).unwrap();
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        let reference = V23SelectorRef {
+            generation_checksum: input.generation_checksum,
+            metric: input.metric,
+            dimensions: input.dimensions,
+            coarse_cells: 1,
+            page_count: input.page_count,
+            anchors_per_page: input.anchors_per_page,
+            code_width: V23_SELECTOR_CODE_BYTES,
+            anchor_count: 17,
+            path: format!("selectors/{checksum}"),
+            checksum,
+            encoded_bytes: bytes.len() as u64,
+        };
+        let selector = V23PageSelector::from_encoded(&reference, bytes, quantizer).unwrap();
+        assert_eq!(
+            selector
+                .select(&vec![0.0; dimensions], 1)
+                .unwrap()
+                .page_ordinals,
+            vec![1]
+        );
+    }
+
+    #[test]
     fn v23_selector_equal_distance_ties_and_sparse_votes_fill_the_wave() {
-        let dimensions = 64;
+        let dimensions = 96;
         let training = (0..256)
             .map(|row| vec![row as f32 / 256.0; dimensions])
             .collect::<Vec<_>>();
         let quantizer = fit_v23_diagnostic_quantizer(
-            V23QuantizerFamily::SrhtPq,
+            V23QuantizerFamily::F16Flat,
             V23_SELECTOR_CODE_BYTES,
             dimensions,
             &training,
@@ -4907,7 +4952,7 @@ mod tests {
     }
 
     #[test]
-    fn v23_four_page_coverage_oracle_separates_layout_from_router_regret() {
+    fn v23_page_coverage_oracle_separates_layout_from_router_regret() {
         let truth_assignments = vec![
             vec![0],
             vec![0, 4],
@@ -4920,7 +4965,7 @@ mod tests {
             vec![6],
             vec![7],
         ];
-        let oracle = best_v23_four_page_coverage(&truth_assignments, 4).unwrap();
+        let oracle = best_v23_page_coverage(&truth_assignments, 4).unwrap();
         assert_eq!(oracle.hits, 8);
         assert_eq!(oracle.page_ordinals, vec![0, 1, 2, 3]);
     }
@@ -4952,12 +4997,12 @@ mod tests {
     fn canonical_wave() -> V23WaveSample {
         V23WaveSample {
             query_index: 7,
-            page_ordinals: vec![3, 9, 12, 18],
-            encoded_bytes: 983_040,
-            candidate_rows: 8_192,
-            backing_gets: 4,
+            page_ordinals: vec![3, 9, 12, 18, 21, 27, 30, 36],
+            encoded_bytes: 1_966_080,
+            candidate_rows: 16_384,
+            backing_gets: 8,
             backing_get_concurrency: 64,
-            backing_bytes: 983_040,
+            backing_bytes: 1_966_080,
             backing_queue_us_sum: 40,
             backing_queue_us_max: 20,
             backing_service_us_sum: 100_000,
@@ -4972,8 +5017,8 @@ mod tests {
 
     #[test]
     fn v23_d3_request_capacity_rejects_oversized_waves_before_io() {
-        validate_v23_d3_request_capacity(4, 4).unwrap();
-        assert!(validate_v23_d3_request_capacity(4, 3).is_err());
+        validate_v23_d3_request_capacity(8, 8).unwrap();
+        assert!(validate_v23_d3_request_capacity(8, 7).is_err());
         assert!(validate_v23_d3_request_capacity(1, 0).is_err());
     }
 
@@ -5025,14 +5070,14 @@ mod tests {
                 routed: ranked_top_ten(),
                 oracle_candidate_rows: 2_048,
                 routed_candidate_rows: 8_192,
-                wave_candidate_rows: 8_192,
+                wave_candidate_rows: 16_384,
                 oracle_hits: 10,
                 routed_hits: 10,
                 cpu_ns: 1_000_000,
             })
             .collect();
         V23D1Report {
-            schema: "borsuk-v23-d1-v4".to_string(),
+            schema: "borsuk-v23-d1-v5".to_string(),
             v20_root_checksum: "a".repeat(64),
             v20_codebook_checksum: "b".repeat(64),
             sample_ordinals_checksum: "c".repeat(64),
@@ -5055,7 +5100,7 @@ mod tests {
                 scalar_simd_ids_equal: true,
                 scalar_simd_max_distance_delta_ppm: 0,
                 cpu_p99_ns: 1_000_000,
-                four_page_projected_bytes: 4 * (96 + 4 * 2_049 + 2_048 * (64 + 32)),
+                wave_projected_bytes: 8 * (96 + 4 * 2_049 + 2_048 * (64 + 32)),
                 passed: true,
             }],
         }
@@ -5083,45 +5128,45 @@ mod tests {
             })
             .collect();
         let mut report = V23D2Report {
-            schema: "borsuk-v23-d2-v7".to_string(),
+            schema: "borsuk-v23-d2-v8".to_string(),
             d1_report_checksum: "e".repeat(64),
             query_ordinals: (0_u64..32).collect(),
             rows: 1_000,
             arms: vec![V23D2Arm {
                 d1_key: V23D1ArmKey {
-                    family: V23QuantizerFamily::SrhtPq,
-                    code_width_bytes: 64,
+                    family: V23QuantizerFamily::F16Flat,
+                    code_width_bytes: 192,
                 },
                 selector_key: V23D1ArmKey {
-                    family: V23QuantizerFamily::SrhtPq,
-                    code_width_bytes: V23_SELECTOR_CODE_BYTES,
+                    family: V23QuantizerFamily::F16Flat,
+                    code_width_bytes: 192,
                 },
                 selector: V23SelectorRef {
                     generation_checksum: [1; 32],
                     metric: VectorMetric::SquaredEuclidean,
-                    dimensions: 4,
+                    dimensions: 96,
                     coarse_cells: 4_096,
                     page_count: 1,
                     anchors_per_page: V23_SELECTOR_ANCHORS_PER_PAGE,
-                    code_width: V23_SELECTOR_CODE_BYTES,
+                    code_width: 192,
                     anchor_count: 16,
                     path: format!("selectors/{}", "a".repeat(64)),
                     checksum: "a".repeat(64),
-                    encoded_bytes: 96 + 4_096 * 4 * 4 + (4_096 + 1) * 4 + 16 * 28,
+                    encoded_bytes: 96 + 4_096 * 96 * 4 + (4_096 + 1) * 4 + 16 * 204,
                 },
                 selector_routing_cells: V23_SELECTOR_ROUTING_CELLS as u16,
                 selector_ranked_anchor_cap: V23_SELECTOR_RANKED_ROWS as u32,
                 primary_target_rows: 384,
                 maximum_assignments_per_row: 2,
-                maximum_query_pages: 4,
+                maximum_query_pages: 8,
                 maximum_record_id_bytes: 32,
                 pages: vec![V23PageRef {
                     generation_checksum: [1; 32],
                     page_ordinal: 0,
                     metric: VectorMetric::SquaredEuclidean,
-                    dimensions: 4,
-                    family: V23QuantizerFamily::SrhtPq,
-                    code_width: 64,
+                    dimensions: 96,
+                    family: V23QuantizerFamily::F16Flat,
+                    code_width: 192,
                     path: format!("pages/{}", "f".repeat(64)),
                     checksum: "f".repeat(64),
                     encoded_bytes: 120_000,
@@ -5135,15 +5180,15 @@ mod tests {
                 projected_ram_bytes: 96
                     + 100_000 * 320
                     + 96
-                    + 4_096 * 4 * 4
+                    + 4_096 * 96 * 4
                     + (4_096 + 1) * 4
-                    + 100_000 * 16 * 28
-                    + 4_096 * 4 * 4
+                    + 100_000 * 16 * 204
+                    + 4_096 * 96 * 4
                     + (4_096 + 1) * 4
                     + 512 * 1024 * 1024
                     + 2 * V23_WAVE_MAX_BYTES,
                 projected_build_bytes: v23_d2_projected_build_memory(
-                    1_000, 1, 120_000, 4, 32, 64, 2,
+                    1_000, 1, 120_000, 96, 32, 192, 2,
                 )
                 .unwrap(),
                 query_samples,
@@ -5157,7 +5202,7 @@ mod tests {
             }],
         };
         let template = report.arms[0].clone();
-        report.arms = [384_u16, 512, 640]
+        report.arms = [384_u16]
             .into_iter()
             .map(|primary_target_rows| V23D2Arm {
                 primary_target_rows,
@@ -5168,13 +5213,28 @@ mod tests {
     }
 
     #[test]
-    fn v23_contract_rejects_a_fifth_page() {
+    fn v23_selector_rejects_dimensions_outside_the_registered_authority() {
+        let input = V23SelectorInput {
+            generation_checksum: [7; 32],
+            metric: VectorMetric::SquaredEuclidean,
+            dimensions: 95,
+            page_count: 1,
+            anchors_per_page: V23_SELECTOR_ANCHORS_PER_PAGE,
+            coarse_centroids: vec![vec![0.0; 95]],
+            anchors: vec![V23SelectorAnchor::new(0, 0, 0, &[0; 192])],
+        };
+
+        assert!(encode_v23_selector(&input).is_err());
+    }
+
+    #[test]
+    fn v23_contract_rejects_a_ninth_page() {
         let sample = canonical_wave();
         validate_wave_sample(&sample).unwrap();
 
         let mut overflow = sample;
-        overflow.page_ordinals.push(21);
-        overflow.backing_gets = 5;
+        overflow.page_ordinals.push(42);
+        overflow.backing_gets = 9;
         assert!(validate_wave_sample(&overflow).is_err());
     }
 
@@ -5268,26 +5328,26 @@ mod tests {
         assert!(validate_d1_report(&non_finite).is_err());
 
         let mut projection_drift = canonical.clone();
-        projection_drift.arms[0].four_page_projected_bytes += 1;
+        projection_drift.arms[0].wave_projected_bytes += 1;
         assert!(validate_d1_report(&projection_drift).is_err());
 
         let mut capacity_adjusted_projection = canonical.clone();
         capacity_adjusted_projection.maximum_record_id_bytes = 64;
-        capacity_adjusted_projection.arms[0].four_page_projected_bytes =
-            4 * v23_d1_projected_page_bytes(64, 64);
+        capacity_adjusted_projection.arms[0].wave_projected_bytes =
+            8 * v23_d1_projected_page_bytes(64, 64);
         for sample in &mut capacity_adjusted_projection.arms[0].query_samples {
-            sample.wave_candidate_rows = 4 * v23_d1_projected_page_rows(64, 64);
+            sample.wave_candidate_rows = 8 * v23_d1_projected_page_rows(64, 64);
         }
         validate_d1_report(&capacity_adjusted_projection).unwrap();
-        capacity_adjusted_projection.arms[0].four_page_projected_bytes += 1;
+        capacity_adjusted_projection.arms[0].wave_projected_bytes += 1;
         assert!(validate_d1_report(&capacity_adjusted_projection).is_err());
 
         let mut insufficient_wave_capacity = canonical.clone();
-        insufficient_wave_capacity.maximum_record_id_bytes = 500;
-        insufficient_wave_capacity.arms[0].four_page_projected_bytes =
-            4 * v23_d1_projected_page_bytes(64, 500);
+        insufficient_wave_capacity.maximum_record_id_bytes = 5_000;
+        insufficient_wave_capacity.arms[0].wave_projected_bytes =
+            8 * v23_d1_projected_page_bytes(64, 5_000);
         for sample in &mut insufficient_wave_capacity.arms[0].query_samples {
-            sample.wave_candidate_rows = 4 * v23_d1_projected_page_rows(64, 500);
+            sample.wave_candidate_rows = 8 * v23_d1_projected_page_rows(64, 5_000);
         }
         assert!(insufficient_wave_capacity.arms[0].query_samples[0].wave_candidate_rows < 2_048);
         assert!(validate_d1_report(&insufficient_wave_capacity).is_err());
@@ -5323,17 +5383,17 @@ mod tests {
         report.dimensions = 128;
         report.arms[0].quantizer_state = state;
         report.arms[0].quantizer_checksum = checksum;
-        report.arms[0].four_page_projected_bytes = 4 * (96 + 4 * 2_049 + 2_048 * (52 + 32));
+        report.arms[0].wave_projected_bytes = 8 * (96 + 4 * 2_049 + 2_048 * (52 + 32));
         validate_d1_report(&report).unwrap();
     }
 
     #[test]
     fn v23_d1_f16_arm_is_skipped_when_one_wave_is_unavailable() {
-        let f16_256d = V23D1ArmKey {
+        let f16_1024d = V23D1ArmKey {
             family: V23QuantizerFamily::F16Flat,
-            code_width_bytes: 512,
+            code_width_bytes: 2_048,
         };
-        assert!(!super::v23_d1_arm_is_eligible_for_wave(f16_256d, 16));
+        assert!(!super::v23_d1_arm_is_eligible_for_wave(f16_1024d, 16));
         let f16_96d = V23D1ArmKey {
             family: V23QuantizerFamily::F16Flat,
             code_width_bytes: 192,
@@ -5345,7 +5405,7 @@ mod tests {
         };
         assert!(!super::v23_d1_arm_is_eligible_for_wave(
             compact_with_wide_ids,
-            500
+            5_000
         ));
     }
 
@@ -5383,7 +5443,7 @@ mod tests {
             .to_hex()
             .to_string();
         report.arms[0].quantizer_state = state;
-        report.arms[0].four_page_projected_bytes = 4 * (96 + 4 * 2_049 + 2_048 * (8 + 32));
+        report.arms[0].wave_projected_bytes = 8 * (96 + 4 * 2_049 + 2_048 * (8 + 32));
         validate_d1_report(&report).unwrap();
 
         let restored = restore_v23_diagnostic_quantizer(&report.arms[0]).unwrap();
@@ -5476,10 +5536,12 @@ mod tests {
         let projected_pages = 100_000_u64;
         let projected_root_bytes = 96 + projected_pages * 320;
         let projected_selector_bytes = 96
-            + 4_096 * 4 * 4
+            + 4_096 * 96 * 4
             + (4_096 + 1) * 4
-            + projected_pages * u64::from(V23_SELECTOR_ANCHORS_PER_PAGE) * 28;
-        let projected_decoded_selector_bytes = 4_096 * 4 * 4 + (4_096 + 1) * 4;
+            + projected_pages
+                * u64::from(V23_SELECTOR_ANCHORS_PER_PAGE)
+                * V23_SELECTOR_ANCHOR_BYTES;
+        let projected_decoded_selector_bytes = 4_096 * 96 * 4 + (4_096 + 1) * 4;
         let projected_ram_bytes = projected_root_bytes
             + projected_selector_bytes
             + projected_decoded_selector_bytes
@@ -5576,16 +5638,15 @@ mod tests {
         assert!(validate_d2_report(&oracle_assignment_drift).is_err());
 
         let mut ram_overflow = canonical.clone();
-        ram_overflow.arms[0].pages[0].dimensions = 100_000;
-        ram_overflow.arms[0].selector.dimensions = 100_000;
+        ram_overflow.arms[0].selector.coarse_cells = 5_000_000;
         ram_overflow.arms[0].selector.encoded_bytes = 96
-            + u64::from(ram_overflow.arms[0].selector.coarse_cells) * 100_000 * 4
+            + u64::from(ram_overflow.arms[0].selector.coarse_cells) * 96 * 4
             + (u64::from(ram_overflow.arms[0].selector.coarse_cells) + 1) * 4
-            + ram_overflow.arms[0].selector.anchor_count * 28;
+            + ram_overflow.arms[0].selector.anchor_count * V23_SELECTOR_ANCHOR_BYTES;
         let (projected_root_bytes, projected_ram_bytes) = v23_d2_projected_memory(
             ram_overflow.arms[0].unique_rows,
             ram_overflow.arms[0].pages.len(),
-            100_000,
+            96,
             ram_overflow.arms[0].selector.coarse_cells,
             ram_overflow.arms[0].selector.anchors_per_page,
         )
@@ -5601,7 +5662,7 @@ mod tests {
                 .iter()
                 .map(|page| page.encoded_bytes)
                 .sum(),
-            100_000,
+            96,
             ram_overflow.arms[0].maximum_record_id_bytes,
             ram_overflow.arms[0].d1_key.code_width_bytes,
             ram_overflow.arms[0].maximum_assignments_per_row,
@@ -5632,7 +5693,7 @@ mod tests {
     }
 
     #[test]
-    fn v23_d2_within_gate_cpu_jitter_does_not_change_registered_arm_ordering() {
+    fn v23_d2_within_gate_cpu_jitter_preserves_the_registered_single_arm() {
         let mut report = canonical_d2_report();
         report.arms[0]
             .query_samples
@@ -5641,7 +5702,7 @@ mod tests {
         report.arms[0].cpu_p99_ns += 1;
         validate_d2_report(&report).unwrap();
 
-        report.arms.swap(0, 1);
+        report.arms[0].primary_target_rows = 640;
         assert!(validate_d2_report(&report).is_err());
     }
 
@@ -6042,7 +6103,7 @@ mod tests {
 
     #[test]
     fn v23_d3_executes_one_cache_disabled_backing_wave_under_one_byte_permit() {
-        let dimensions = 16_usize;
+        let dimensions = 96_usize;
         let training = (0..256)
             .map(|row| {
                 (0..dimensions)
@@ -6069,7 +6130,7 @@ mod tests {
             scalar_simd_ids_equal: true,
             scalar_simd_max_distance_delta_ppm: 0,
             cpu_p99_ns: 1,
-            four_page_projected_bytes: 1,
+            wave_projected_bytes: 1,
             passed: true,
         };
         let rows = [training[7].clone(), training[19].clone()];
@@ -6111,13 +6172,17 @@ mod tests {
         d2_arm.maximum_record_id_bytes = 5;
         d2_arm.pages = vec![page_ref];
 
-        let selector_quantizer =
-            fit_v23_diagnostic_quantizer(V23QuantizerFamily::SrhtPq, 16, dimensions, &training)
-                .unwrap();
+        let selector_quantizer = fit_v23_diagnostic_quantizer(
+            V23QuantizerFamily::F16Flat,
+            V23_SELECTOR_CODE_BYTES,
+            dimensions,
+            &training,
+        )
+        .unwrap();
         let selector_state = serde_json::to_value(selector_quantizer.state()).unwrap();
         let selector_arm = V23D1Arm {
             key: V23D1ArmKey {
-                family: V23QuantizerFamily::SrhtPq,
+                family: V23QuantizerFamily::F16Flat,
                 code_width_bytes: V23_SELECTOR_CODE_BYTES,
             },
             quantizer_checksum: blake3::hash(&serde_json::to_vec(&selector_state).unwrap())
@@ -6130,7 +6195,7 @@ mod tests {
             scalar_simd_ids_equal: true,
             scalar_simd_max_distance_delta_ppm: 0,
             cpu_p99_ns: 1,
-            four_page_projected_bytes: 1,
+            wave_projected_bytes: 1,
             passed: false,
         };
         let selector_input = V23SelectorInput {

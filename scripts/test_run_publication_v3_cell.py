@@ -128,7 +128,7 @@ def v23_d1_fixture() -> tuple[dict[str, object], dict[str, object]]:
             "routed": v23_ranked_result(),
             "oracle_candidate_rows": 2_048,
             "routed_candidate_rows": 8_192,
-            "wave_candidate_rows": 8_192,
+            "wave_candidate_rows": 16_384,
             "oracle_hits": 10,
             "routed_hits": 10,
             "cpu_ns": 1_000_000,
@@ -136,7 +136,7 @@ def v23_d1_fixture() -> tuple[dict[str, object], dict[str, object]]:
         for query_index in range(32)
     ]
     report = {
-        "schema": "borsuk-v23-d1-v4",
+        "schema": "borsuk-v23-d1-v5",
         "v20_root_checksum": "1" * 64,
         "v20_codebook_checksum": "2" * 64,
         "sample_ordinals_checksum": "3" * 64,
@@ -164,7 +164,7 @@ def v23_d1_fixture() -> tuple[dict[str, object], dict[str, object]]:
                 "scalar_simd_ids_equal": True,
                 "scalar_simd_max_distance_delta_ppm": 0,
                 "cpu_p99_ns": 1_000_000,
-                "four_page_projected_bytes": 4 * (96 + 4 * 2_049 + 2_048 * (64 + 8)),
+                "wave_projected_bytes": 8 * (96 + 4 * 2_049 + 2_048 * (64 + 8)),
                 "passed": True,
             }
         ],
@@ -242,28 +242,28 @@ def v23_d2_fixture(
         + 96
         + 4_096 * 96 * 4
         + (4_096 + 1) * 4
-        + projected_pages * 16 * 28
+        + projected_pages * 16 * 204
         + 4_096 * 96 * 4
         + (4_096 + 1) * 4
         + 512 * 1024 * 1024
-        + 2 * 983_040
+        + 2 * 1_966_080
     )
     projected_build = (
-        1_000 * (64 + 8 + 4 * 96 + 64 + 16 + 32 + 32 + 7 * 8)
+        1_000 * (64 + 8 + 4 * 96 + 64 + 192 + 32 + 32 + 7 * 8)
         + 120_000
         + 4 * (4 * 96 + 4_096 + 512)
-        + 3 * 32 * (4_096 + 8 * 20)
-        + 2 * 983_040
+        + 32 * (4_096 + 8 * 20)
+        + 2 * 1_966_080
     )
     report = {
-        "schema": "borsuk-v23-d2-v7",
+        "schema": "borsuk-v23-d2-v8",
         "d1_report_checksum": "7" * 64,
         "query_ordinals": list(range(32)),
         "rows": 1_000,
         "arms": [
             {
                 "d1_key": {"family": "srht-pq", "code_width_bytes": 64},
-                "selector_key": {"family": "srht-pq", "code_width_bytes": 16},
+                "selector_key": {"family": "f16-flat", "code_width_bytes": 192},
                 "selector": {
                     "generation_checksum": [1] * 32,
                     "metric": "squared-euclidean",
@@ -271,17 +271,20 @@ def v23_d2_fixture(
                     "coarse_cells": 4_096,
                     "page_count": 1,
                     "anchors_per_page": 16,
-                    "code_width": 16,
+                    "code_width": 192,
                     "anchor_count": 16,
                     "path": f"selectors/{'5' * 64}",
                     "checksum": "5" * 64,
-                    "encoded_bytes": 96 + 4_096 * 96 * 4 + (4_096 + 1) * 4 + 16 * 28,
+                    "encoded_bytes": 96
+                    + 4_096 * 96 * 4
+                    + (4_096 + 1) * 4
+                    + 16 * 204,
                 },
                 "selector_routing_cells": 320,
                 "selector_ranked_anchor_cap": 8_192,
                 "primary_target_rows": primary_target_rows,
                 "maximum_assignments_per_row": 2,
-                "maximum_query_pages": 4,
+                "maximum_query_pages": 8,
                 "maximum_record_id_bytes": 8,
                 "pages": [page],
                 "unique_rows": 1_000,
@@ -299,7 +302,7 @@ def v23_d2_fixture(
                 "cpu_p99_ns": 1_000_000,
                 "passed": True,
             }
-            for primary_target_rows in (384, 512, 640)
+            for primary_target_rows in (384,)
         ],
     }
     identity = {
@@ -336,8 +339,8 @@ def v23_d2_fixture(
         "d1_report_sha256": d1_sha256,
         "rows": 1_000,
         "queries": 32,
-        "arms": 3,
-        "passing_arm_indexes": [0, 1, 2],
+        "arms": 1,
+        "passing_arm_indexes": [0],
         "pages": 1,
         "passed": True,
     }
@@ -370,7 +373,7 @@ def write_v23_d3_fixture(
             for repetition_index in range(query_index, 1_000, 32):
                 writer.writerow(
                     {
-                        "schema": "borsuk-v23-d3-v1",
+                        "schema": "borsuk-v23-d3-v2",
                         "arm_index": 0,
                         "d2_arm_index": 0,
                         "arm_key": "srht-pq-w64-p1024-r1-q1",
@@ -406,7 +409,7 @@ def write_v23_d3_fixture(
                     }
                 )
     summary = {
-        "schema": "borsuk-v23-d3-v1",
+        "schema": "borsuk-v23-d3-v2",
         "document_kind": "publication-v3-v23-d3-summary",
         "claim_eligible": False,
         "stage": "d3",
@@ -4178,7 +4181,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 "codec": "fast-turbo-quant-mse",
                 "state": {"dimensions": 96, "bits": 3, "shards": 1},
             }
-            second_arm["four_page_projected_bytes"] = 4 * (
+            second_arm["wave_projected_bytes"] = 8 * (
                 96 + 4 * 2_049 + 2_048 * (52 + 8)
             )
             ordered_artifact["report"]["arms"].append(second_arm)
@@ -4271,13 +4274,13 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
             2_048,
             (V23_PAGE_MAX_BYTES - 96 - 4) // (4 + 192 + maximum_id_bytes),
         )
-        arm["four_page_projected_bytes"] = 4 * (
+        arm["wave_projected_bytes"] = 8 * (
             96 + 4 * (projected_rows + 1) + projected_rows * (192 + maximum_id_bytes)
         )
         for sample in arm["query_samples"]:
-            sample["wave_candidate_rows"] = 4 * projected_rows
+            sample["wave_candidate_rows"] = 8 * projected_rows
         self.assertEqual(projected_rows, 1_204)
-        self.assertLessEqual(arm["four_page_projected_bytes"], 983_040)
+        self.assertLessEqual(arm["wave_projected_bytes"], 1_966_080)
 
         with tempfile.TemporaryDirectory() as root:
             report_path = Path(root) / "bench_v23_d1_report.json"
@@ -4294,18 +4297,18 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
             )
 
             insufficient_capacity = copy.deepcopy(artifact)
-            insufficient_capacity["report"]["maximum_record_id_bytes"] = 500
+            insufficient_capacity["report"]["maximum_record_id_bytes"] = 5_000
             arm = insufficient_capacity["report"]["arms"][0]
             projected_rows = min(
                 2_048,
-                (V23_PAGE_MAX_BYTES - 96 - 4) // (4 + 192 + 500),
+                (V23_PAGE_MAX_BYTES - 96 - 4) // (4 + 192 + 5_000),
             )
-            arm["four_page_projected_bytes"] = 4 * (
-                96 + 4 * (projected_rows + 1) + projected_rows * (192 + 500)
+            arm["wave_projected_bytes"] = 8 * (
+                96 + 4 * (projected_rows + 1) + projected_rows * (192 + 5_000)
             )
             for sample in arm["query_samples"]:
-                sample["wave_candidate_rows"] = 4 * projected_rows
-            self.assertLess(4 * projected_rows, 2_048)
+                sample["wave_candidate_rows"] = 8 * projected_rows
+            self.assertLess(8 * projected_rows, 2_048)
             write_canonical_json(report_path, insufficient_capacity)
             with self.assertRaises(ValueError):
                 validate_v23_d1_artifacts(
@@ -4388,13 +4391,13 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                     (V23_PAGE_MAX_BYTES - 96 - 4)
                     // (4 + declared_width + maximum_id_bytes),
                 )
-                arm["four_page_projected_bytes"] = 4 * (
+                arm["wave_projected_bytes"] = 8 * (
                     96
                     + 4 * (projected_rows + 1)
                     + projected_rows * (declared_width + maximum_id_bytes)
                 )
                 for sample in arm["query_samples"]:
-                    sample["wave_candidate_rows"] = 4 * projected_rows
+                    sample["wave_candidate_rows"] = 8 * projected_rows
                 report_path = Path(root) / "bench_v23_d1_report.json"
                 summary_path = Path(root) / "bench_v23_summary.json"
                 write_canonical_json(report_path, artifact)

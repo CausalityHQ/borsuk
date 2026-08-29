@@ -45607,7 +45607,7 @@ mod tests {
         let mut index = BorsukIndex::create(IndexConfig {
             uri,
             metric: VectorMetric::Euclidean,
-            dimensions: 16,
+            dimensions: 96,
             segment_max_vectors: 256,
             ram_budget_bytes: None,
             text: false,
@@ -45615,7 +45615,7 @@ mod tests {
         })
         .unwrap();
         let vectors = (0..2055)
-            .map(|row| vec![row as f32; 16])
+            .map(|row| vec![row as f32; 96])
             .collect::<Vec<_>>();
         index
             .add(
@@ -45830,7 +45830,7 @@ mod tests {
         );
 
         index
-            .add(vec![VectorRecord::new("v23-d1-mutation", vec![0.0; 16])])
+            .add(vec![VectorRecord::new("v23-d1-mutation", vec![0.0; 96])])
             .unwrap();
         let error = index
             .diagnose_v23_d1(
