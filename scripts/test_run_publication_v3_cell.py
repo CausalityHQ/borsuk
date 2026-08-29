@@ -22,6 +22,7 @@ from scripts.publication_v3_results import validate_cell_result
 from scripts.run_publication_v3_cell import (
     PRODUCTION_BUILD_FIELDS,
     V23_PAGE_MAX_BYTES,
+    _validate_v23_page,
     authorize_publication_mutation_runtime,
     authorize_publication_runtime,
     authorize_v23_publication_runtime,
@@ -3779,6 +3780,12 @@ class PublicationV3CellRunnerTests(unittest.TestCase):
 
 
 class V23DiagnosticWorkerTests(unittest.TestCase):
+    def test_v23_rust_page_fixture_passes_python_page_authority(self) -> None:
+        fixture_path = Path(__file__).parent / "fixtures" / "v23_page_ref.json"
+        page = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(_validate_v23_page(page, 0), page)
+
     def test_v23_plan_separates_current_source_from_historical_index(self) -> None:
         diagnostic_cell = scheduled_cell()
         diagnostic_cell["source"] = {

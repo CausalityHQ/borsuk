@@ -171,6 +171,10 @@ pub struct V23PageRef {
     /// Contiguous zero-based page ordinal.
     pub page_ordinal: u32,
     /// Exact distance metric encoded in the page header.
+    #[serde(
+        serialize_with = "serialize_v23_page_metric",
+        deserialize_with = "deserialize_v23_page_metric"
+    )]
     pub metric: VectorMetric,
     /// Exact dense-vector dimensionality.
     pub dimensions: u32,
@@ -190,6 +194,45 @@ pub struct V23PageRef {
     pub replicated_rows: u32,
     /// Full-dimensional routing centroid.
     pub centroid: Vec<f32>,
+}
+
+fn serialize_v23_page_metric<S>(
+    metric: &VectorMetric,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if !matches!(
+        metric,
+        VectorMetric::Euclidean | VectorMetric::SquaredEuclidean | VectorMetric::Cosine
+    ) {
+        return Err(serde::ser::Error::custom(
+            "V23 page metric is not supported",
+        ));
+    }
+    serializer.serialize_str(&metric.to_string())
+}
+
+fn deserialize_v23_page_metric<'de, D>(
+    deserializer: D,
+) -> std::result::Result<VectorMetric, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    let metric = value
+        .parse::<VectorMetric>()
+        .map_err(|_| serde::de::Error::custom("V23 page metric is invalid"))?;
+    if value != metric.to_string()
+        || !matches!(
+            metric,
+            VectorMetric::Euclidean | VectorMetric::SquaredEuclidean | VectorMetric::Cosine
+        )
+    {
+        return Err(serde::de::Error::custom("V23 page metric is invalid"));
+    }
+    Ok(metric)
 }
 
 pub(crate) type V23PageSink<'a> = dyn FnMut(&V23PageRef, &Bytes) -> Result<()> + 'a;
@@ -4231,6 +4274,62 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(validate_v23_d2_query_prefixes(&prefixes).is_err());
+    }
+
+    #[test]
+    fn v23_page_reference_uses_protocol_metric_spelling() {
+        let page = V23PageRef {
+            generation_checksum: [7; 32],
+            page_ordinal: 0,
+            metric: VectorMetric::SquaredEuclidean,
+            dimensions: 1,
+            family: V23QuantizerFamily::F16Flat,
+            code_width: 2,
+            path: format!("pages/{}", "a".repeat(64)),
+            checksum: "a".repeat(64),
+            encoded_bytes: 100,
+            primary_rows: 1,
+            replicated_rows: 0,
+            centroid: vec![0.0],
+        };
+
+        let value = serde_json::to_value(&page).unwrap();
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../scripts/fixtures/v23_page_ref.json"))
+                .unwrap();
+        assert_eq!(value, fixture);
+        let decoded: V23PageRef = serde_json::from_value(fixture).unwrap();
+        assert_eq!(decoded, page);
+
+        for (metric, expected) in [
+            (VectorMetric::Euclidean, "euclidean"),
+            (VectorMetric::SquaredEuclidean, "squared-euclidean"),
+            (VectorMetric::Cosine, "cosine"),
+        ] {
+            let mut candidate = page.clone();
+            candidate.metric = metric.clone();
+            let serialized = serde_json::to_value(candidate).unwrap();
+            assert_eq!(serialized["metric"], serde_json::json!(expected));
+            assert_eq!(
+                serde_json::from_value::<V23PageRef>(serialized)
+                    .unwrap()
+                    .metric,
+                metric
+            );
+        }
+
+        for invalid in [
+            "SquaredEuclidean",
+            "sqeuclidean",
+            "l2",
+            "SQUARED-EUCLIDEAN",
+            " cosine ",
+            "inner-product",
+        ] {
+            let mut malformed = value.clone();
+            malformed["metric"] = serde_json::json!(invalid);
+            assert!(serde_json::from_value::<V23PageRef>(malformed).is_err());
+        }
     }
 
     #[test]
