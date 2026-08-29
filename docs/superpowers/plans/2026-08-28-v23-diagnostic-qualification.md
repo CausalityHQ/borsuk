@@ -116,6 +116,84 @@ marker. Start the 1,000-wave Standard-S3-only D3 only if D2 passes every quality
 regret, byte, and RAM gate. Publish no claim unless D3 meets recall, tail
 latency, backing-I/O, throughput, and memory requirements.
 
+### Task 3B: Replace Falsified Page Summaries with a Row-Vote Selector
+
+**Evidence boundary:** Revision-4 D2 reached only `267,295` ppm of its passing
+page-layout oracle. Authenticated page centroids reached only `701,257` ppm.
+An exhaustive f16 row-identification replay reached `1,000,000` ppm (318/318
+oracle hits). The page layout is retained; the selector is replaced with no
+legacy reader.
+
+**Files:**
+- Modify: `crates/borsuk/src/v23_diagnostic.rs`
+- Modify: `crates/borsuk/examples/production_bench.rs`
+- Modify: `scripts/run_publication_v3_cell.py`
+- Modify: `scripts/test_run_publication_v3_cell.py`
+- Modify: `docs/superpowers/specs/2026-08-28-standard-s3-v23-code-posting-pages-design.md`
+- Modify: `docs/research/publication-v3-attempt-ledger.md`
+
+- [ ] **Step 1: Write the format and selection RED tests**
+
+Replace the BVS2 anchor fixtures with BVS3 row fixtures. Require one row per
+unique source ordinal, canonical `(coarse_cell, source_ordinal)` construction,
+one primary page plus an optional replica page, `{8,12}`-byte code widths,
+both labels participating in deterministic page cover, and identical D2/D3
+selection from the same encoded bytes. Mutation-lock every header and section,
+duplicate/missing rows, invalid/symmetric page labels, unknown width, sentinel
+misuse, offset drift, checksum drift, and trailing bytes.
+
+- [ ] **Step 2: Capture the focused RED**
+
+Run exactly the new selector-codec and row-cover tests. Require compilation or
+behavior failure at the missing BVS3 interfaces; do not alter production first.
+
+- [ ] **Step 3: Implement the BVS3 unique-row plane**
+
+Encode fixed authority followed by coarse centroids, `u32[cell_count + 1]`
+row offsets, `u32[row_count]` primary pages, `u32[row_count]` replica pages,
+and contiguous fixed-width codes. Do not persist source ordinals: canonical
+plane position is the deterministic tie authority. Authenticate the complete
+object and reject every BVS2 byte sequence.
+
+- [ ] **Step 4: Implement compact row selection and eight-page cover**
+
+Restore the selector quantizer, rank 4,096 coarse centroids, admit at most 320
+cells, scan their unique row codes, and retain the registered top-row pool by
+`(distance, plane_position)`. Greedily choose pages by weighted uncovered-row
+coverage with `(score, page_ordinal)` ties; primary and replica labels are
+equivalent cover edges. Freeze the weight function and pool size before paid
+D2 and reject any backfill or page-summary fallback.
+
+- [ ] **Step 5: Add the 8/12-byte D2 width ladder and exact RAM accounting**
+
+Fit authenticated SRHT-PQ states at 8 and 12 bytes. Build both selector objects
+over identical pages, simulate the same queries, and accept only an arm meeting
+all quality/CPU/RAM gates. At 100M rows charge `rows * (code_width + 8)` plus
+coarse authority, page references, fixed reserve, two waves, quantizer state,
+and allocator capacities. Reject widths above 12 rather than widening after a
+failure.
+
+- [ ] **Step 6: Replace Python and publication authority**
+
+Increment D2/D3/result schemas, rename anchor evidence to row evidence, mirror
+the BVS3 length and RAM equations, and mutation-lock the concrete types and
+cross-artifact code-width/state binding. The worker publishes only BVS3 and D3
+loads exactly the D2-published selector bytes.
+
+- [ ] **Step 7: Verify and review serially**
+
+Run focused RED/GREEN selectors, grouped V23 library and production-bench
+gates, complete Python V23 worker tests, formatter, strict workspace Clippy,
+full locked workspace tests, research-doc validation, and one independent
+cross-provider review. Preserve the original terminal from every broad gate.
+
+- [ ] **Step 8: Qualify remotely in order**
+
+Freeze and push one source revision. Run fresh Spot D1, then D2. D3 remains
+forbidden unless one width passes every structural, recall, regret, CPU, RAM,
+and byte gate. Only a passing D2 may authorize the 1,000-query Standard-S3
+strict-cold D3 and competitor comparison.
+
 ### Task 1: Freeze the V23 Diagnostic Contract
 
 **Files:**

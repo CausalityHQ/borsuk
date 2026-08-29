@@ -615,3 +615,95 @@ rows, including the 192-byte selector representatives and two maximum waves.
 These are design projections, not latency or throughput results. Fresh D2 must
 measure selector regret and CPU p99 for that one latency-first layout before any
 Standard-S3 D3 launch.
+
+## V23 Revision-4 eight-page diagnosis on 2026-08-29
+
+Revision 4 ran from source commit
+`c59128ee68eb28beaa7f5eef7e0570dc7c787b88`, the same immutable base index,
+and Standard S3 only. D1 completed and passed on Spot instance
+`i-0ba5583f9b60ad3b6`; the controller terminated it immediately afterward.
+Its terminal-marker SHA-256 was
+`6d7e79e398a53eebf080309e9434f40f3021913e8137bbf733458cdfc0ece210`,
+result SHA-256 was
+`a32e9269fef037510ef843d8f8bb25d50f62d1c4c608fb270528fe7ed588556c`,
+report SHA-256 was
+`128a5d95c8f0e11ed6d58d6319de35196d8ab91dd253be518216657b57201c7c`,
+and summary SHA-256 was
+`5ea62511be3e5ea644ba68cdd9f2f78f8c605a8406ba60df6ae935209a35598e`.
+Peak memory was 6,467,158,016 bytes with no swap.
+
+D2 evaluated only the registered 384-row arm and completed on Spot instance
+`i-0ce89225cf96cad55`; the controller terminated it after terminal
+publication. Its immutable artifacts are under
+`s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-f7a6e06a6a40c1165b6cb889/runtime-v23-d2/arms/0000/attempts/0001/`.
+Their authenticated SHA-256 values are:
+
+- terminal marker:
+  `db12dd670ae5121fa4d90147fba7816d6a20878764a28d089be45be1138579ef`;
+- result receipt:
+  `41ec2b4eb9e0506f4732c2e0ff34d92e1493b24953669c486fc5714a38002a00`;
+- complete D2 report:
+  `665dc206d04073b8cbc0b8bab9e5645760440d2336ddf4bfebea81d176b4779d`;
+- materialized page manifest:
+  `dfa5759c06663655b4a963a7687b40c8bd8020bebf805d7c825a88c6d0df53e1`;
+- derived summary:
+  `f8b9341126e6bc70359d3dfceb46b405f97d5cff54c1ade1eefe1a0d1e823d1b`.
+
+The eight-page 384-row layout passed its structural bounds and reproduced the
+authenticated coverage oracle: 99.375% aggregate and 90% minimum-query
+recall@10. Projected 100M-row serving RAM was 1,558,626,504 bytes, below the
+3-GiB budget. The content selector nevertheless achieved only 26.5625%
+aggregate recall with a zero minimum-query result, for 267,295 ppm selector
+regret against the 995,000-ppm floor. CPU p99 was 15.307763 ms, narrowly above
+the 15-ms gate. Peak build-worker memory was 17,743,450,112 bytes with no swap
+or OOM.
+
+This terminal result rejects sampled nearest-representative page routing. It
+does not reject the 384-row eight-page layout: its oracle and RAM bounds passed.
+The next design must route using the same geometry that constructs primary and
+replica page membership, and must reduce rather than increase selector work.
+D3 was not launched, so Revision 4 establishes no cold-latency or throughput
+claim.
+
+Two outcome-blind offline counterfactuals then isolated the selector boundary
+without opening D3 or changing the immutable pages. A checksum-authenticated
+scan of all 28,282 pages ranked their centroids against the same 32 frozen
+queries. Primary-only centroids reached 68.75% aggregate recall, 30% minimum
+query recall, and 691,823 ppm oracle attainment. Centroids over primary plus
+replica contents reached 69.6875%, 20%, and 701,257 ppm respectively. The
+counterfactual output SHA-256 was
+`d003104bd60d3fa2192282ef6741f33c5fd5ab446e31e2a2811aeb27ed2d52e7`.
+This rejects another page-summary selector: adding replica information to one
+smooth summary per page improves the result but cannot distinguish sibling
+leaves well enough.
+
+The decisive row-granularity ceiling ran on Spot instance
+`i-03fad085c482d6718` and authenticated all 18,620,111 primary and replica
+assignments before scoring the production f16-flat distance for every query.
+For each query it retained the exact f16 top ten rows, looked up both immutable
+page assignments, and computed the best deterministic eight-page cover. The
+result matched every oracle-reachable row: 99.375% aggregate recall, 90%
+minimum-query recall, and 1,000,000 ppm selector-regret attainment (318 of 318
+oracle hits). F16 top-ten row-identity recall was 99.6875%. The terminal marker
+SHA-256 was
+`6bf0e3cc2d160a49c7e3b42c19855578b7a256da33a56409a7847818636cbf05`;
+the result SHA-256 was
+`6c2cdbe6cc251ed950e7c0238c5a7bc5c20884d2b0a6db28f2ea844e1fe3d171`.
+Artifacts are under
+`s3://borsuk-bench-453182569524-euc1/research/v23-row-vote-f0/20260829T125701Z-v23-row-vote-f0/`.
+The controller observed the instance terminating after terminal publication.
+
+One preceding Spot attempt on `i-07f3db728368d9151` authenticated and scored
+the complete assignment corpus but exited before aggregation because its
+Python 3.9 runtime rejected a nonessential `zip(strict=True)` call. It
+published no scientific result; its failure terminal SHA-256 was
+`d1864d18dde02550b11478e1ae9cffdf1f505b343c92124171bfd962ea4bfed0`.
+The replacement removed only that syntax and reran the identical algorithm.
+
+The evidence therefore accepts the page layout and rejects page-level
+selection. The next unreleased selector must identify rows with a compact
+resident code, preserve both primary and replica page labels, and choose the
+eight-page cover from those row candidates. A width ladder must now establish
+the smallest code at or below the 12-byte-per-row 100M RAM boundary before the
+format is frozen. These counterfactuals are architectural evidence, not cold
+latency or throughput measurements; D3 remains forbidden.

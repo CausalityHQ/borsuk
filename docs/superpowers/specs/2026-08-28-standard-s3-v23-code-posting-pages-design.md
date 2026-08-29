@@ -1,8 +1,8 @@
 # Standard-S3 V23 Quantized Posting Pages
 
-**Status:** Revisions 1--3 were falsified by terminal D1/D2 evidence. Revision
-4 remains a claim-ineligible diagnostic until every gate in this document
-passes.
+**Status:** Revisions 1--4 were falsified by terminal D1/D2 evidence. Revision
+5 is an evidence-backed row-granular selector qualification and remains
+claim-ineligible until every gate in this document passes.
 
 **Predecessor:** V22 Stage L completed at source `14464c8` and is recorded in
 `docs/research/cold-read-latency-design.md`. Its authenticated Deep Image 10M
@@ -14,6 +14,51 @@ joint limit of four S3 requests and 1 MiB. The V22 evidence commit is
 V21/V22 production hypotheses for the next pre-release dense-ANN format. BORSUK
 is unreleased, so V23 defines one new format and no legacy reader or migration
 path.
+
+## Revision 5 after the terminal row-granularity counterfactual
+
+Revision 4 preserved the viable 384-row/eight-page layout but falsified its
+page-summary selector. The authenticated D2 layout oracle reached `993,750`
+ppm aggregate and `900,000` ppm minimum-query recall. Sixteen exact f16
+representatives per page reached only `265,625`/`0` ppm and `267,295` ppm
+oracle attainment. An offline checksum-authenticated replay over all 28,282
+pages confirmed that a centroid over primary plus replica contents reaches
+only `696,875`/`200,000` ppm and `701,257` ppm attainment. Page summaries
+therefore cannot reliably distinguish the roughly seven sibling leaves inside
+one already-found parent cell.
+
+The decisive counterfactual authenticated all 18,620,111 primary and replica
+assignments and scanned the production f16-flat distance for the same frozen
+queries. Identifying rows first, then looking up both immutable page labels and
+computing the deterministic eight-page cover, recovered every oracle-reachable
+row: `993,750` ppm aggregate recall, `900,000` ppm minimum-query recall, and
+`1,000,000` ppm oracle attainment. F16 top-ten row identity was `996,875` ppm.
+Thus Revision 5 keeps the posting pages, replication, byte ceiling, and one-wave
+S3 contract, but replaces the selector format and query algorithm completely.
+
+The resident selector stores one compact code per unique row, ordered by
+`(coarse_cell, source_ordinal)`, plus exactly two `u32` page-label slots. The
+first slot is the primary page and the second is either the admitted replica
+page or `u32::MAX`; it never duplicates a code for a replica. Coarse-centroid
+offsets delimit row-code slices. A query ranks the registered coarse cells,
+scans all unique row codes in the admitted cells, retains a deterministic
+top-row pool, and greedily chooses at most eight pages by weighted coverage of
+those rows. Both page labels participate. No per-page representative,
+source-ID plane, legacy selector reader, dependent S3 lookup, or page-summary
+fallback remains.
+
+The width ladder is `{8,12}` SRHT-PQ bytes per unique row. The 12-byte ceiling
+is a hard 100M RAM feasibility boundary, not a quality target to relax: codes
+plus two page labels consume at most 2.0 GB for 100M unique rows, leaving the
+fixed runtime reserve, coarse authority, page references, query waves, and
+allocator headroom inside 3 GiB. D2 must charge the complete encoded selector
+and its decoded resident representation without double counting aliased
+sections. It evaluates both widths against identical pages and accepts only a
+width with aggregate recall at least `975,000` ppm, minimum-query recall at
+least `800,000` ppm, selector attainment at least `995,000` ppm, CPU p99 at
+most 15 ms, and projected process RAM at most 3 GiB. Failure of both widths
+rejects the existing split layout and triggers an assignment-consistent
+balanced-Voronoi rebuild; it does not authorize a wider selector.
 
 ## Revision 4 after the terminal D2 selector falsification
 
