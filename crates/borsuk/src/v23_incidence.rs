@@ -151,6 +151,63 @@ pub struct V23IncidenceLocalPhaseRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Bounded local request whose corpus-sized inputs are represented by one directory.
+pub struct V23IncidenceLocalDirectoryPhaseRequest {
+    /// Explicit preflight or execution gate.
+    pub mode: V23IncidenceRunMode,
+    /// Complete scientific phase manifest and its immutable identity.
+    pub manifest: V23IncidenceLocalRolePath,
+    /// Ordered manifest for only the objects staged into the bulk directory.
+    pub bulk_manifest: V23IncidenceLocalRolePath,
+    /// Absolute read-only directory containing exact role-named staged objects.
+    pub staging_directory_path: PathBuf,
+    /// Canonical receipt emitted by the credentialed stager.
+    pub staging_receipt: V23IncidenceLocalRolePath,
+    /// Successful preflight receipt required only for execution.
+    pub preflight_receipt: Option<V23IncidenceLocalRolePath>,
+    /// Phase-private bounded scratch directory.
+    pub scratch_path: PathBuf,
+    /// Phase-private canonical output receipt path.
+    pub output_path: PathBuf,
+    /// SHA-256 of the executing release binary.
+    pub executable_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V23IncidenceStagedObject {
+    digest: String,
+    digest_algorithm: String,
+    encoded_bytes: u64,
+    generation: String,
+    relative_path: String,
+    role: String,
+    uri: String,
+}
+
+impl V23IncidenceStagedObject {
+    fn identity(&self) -> V23IncidenceObjectIdentity {
+        V23IncidenceObjectIdentity {
+            role: self.role.clone(),
+            uri: self.uri.clone(),
+            digest_algorithm: self.digest_algorithm.clone(),
+            digest: self.digest.clone(),
+            encoded_bytes: self.encoded_bytes,
+            generation: self.generation.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V23IncidenceStagingReceipt {
+    claim_eligible: bool,
+    manifest_sha256: String,
+    ordered_objects: Vec<V23IncidenceStagedObject>,
+    schema: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct V23IncidenceManifestBinding {
     parent_receipt_sha256: Option<String>,
     full_input_bytes: u64,
@@ -1410,6 +1467,7 @@ fn valid_role_algorithm(role: &str, algorithm: &str) -> bool {
     let sha256_role = matches!(
         role,
         "construction-manifest"
+            | "bulk-manifest"
             | "phase-manifest"
             | "page-roster"
             | "query-parquet"
@@ -1422,6 +1480,7 @@ fn valid_role_algorithm(role: &str, algorithm: &str) -> bool {
             | "development-result"
             | "campaign-result"
             | "executable"
+            | "staging-receipt"
     ) || role.starts_with("training-shard-");
     let blake3_role = matches!(
         role,
@@ -1668,11 +1727,16 @@ impl V23IncidenceLocalPhaseRequest {
             .collect::<Vec<_>>();
         validate_identity_list(&identities)?;
         for input in &self.input_paths {
+            let handoff_role = matches!(
+                input.identity.role.as_str(),
+                "bulk-manifest" | "staging-receipt"
+            );
             let role_allowed = if self.mode.is_execute() {
                 phase_role_is_allowed(phase, &input.identity.role)
                     || input.identity.role == "preflight-receipt"
+                    || handoff_role
             } else {
-                phase_preflight_role_is_allowed(phase, &input.identity.role)
+                phase_preflight_role_is_allowed(phase, &input.identity.role) || handoff_role
             };
             if !input.path.is_absolute() || !paths.insert(input.path.as_path()) || !role_allowed {
                 return Err(BorsukError::InvalidStorage(
@@ -1781,6 +1845,258 @@ fn preflight_registered_inputs(
     Ok(selected)
 }
 
+fn expected_v23_incidence_bulk_inputs(
+    manifest: &V23IncidenceManifest,
+    mode: V23IncidenceRunMode,
+) -> Result<Vec<V23IncidenceInputAuthority>> {
+    let identities = if mode.is_execute() {
+        manifest
+            .ordered_inputs
+            .iter()
+            .map(|input| input.identity().clone())
+            .collect()
+    } else {
+        preflight_registered_inputs(manifest)?
+    };
+    identities
+        .into_iter()
+        .map(|identity| {
+            manifest
+                .ordered_inputs
+                .iter()
+                .find(|input| input.identity() == &identity)
+                .cloned()
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V23 incidence bulk manifest subset differs".to_string(),
+                    )
+                })
+        })
+        .collect()
+}
+
+fn canonical_json_document(bytes: &[u8], role: &str) -> Result<serde_json::Value> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
+        BorsukError::InvalidStorage(format!("V23 incidence {role} JSON differs: {error}"))
+    })?;
+    let mut canonical =
+        serde_json::to_vec(&canonical_json_value(value.clone())).map_err(|error| {
+            BorsukError::InvalidStorage(format!(
+                "V23 incidence {role} canonical JSON failed: {error}"
+            ))
+        })?;
+    canonical.push(b'\n');
+    if canonical != bytes {
+        return Err(BorsukError::InvalidStorage(format!(
+            "V23 incidence {role} canonical bytes differ"
+        )));
+    }
+    Ok(value)
+}
+
+fn read_authenticated_local_object(
+    input: &V23IncidenceLocalRolePath,
+    expected_role: &str,
+) -> Result<Vec<u8>> {
+    if input.identity.role != expected_role || !input.path.is_absolute() {
+        return Err(BorsukError::InvalidStorage(format!(
+            "V23 incidence {expected_role} path authority differs"
+        )));
+    }
+    authenticate_v23_incidence_local_path(&input.path, &input.identity)?;
+    fs::read(&input.path).map_err(|source| BorsukError::Io {
+        path: input.path.clone(),
+        source,
+    })
+}
+
+fn expand_v23_incidence_local_directory_request(
+    request: V23IncidenceLocalDirectoryPhaseRequest,
+) -> Result<V23IncidenceLocalPhaseRequest> {
+    let phase = request.mode.phase();
+    let manifest_role = if phase == V23IncidencePhase::TreeTraining {
+        "construction-manifest"
+    } else {
+        "phase-manifest"
+    };
+    let fixed_paths = [
+        request.manifest.path.as_path(),
+        request.bulk_manifest.path.as_path(),
+        request.staging_receipt.path.as_path(),
+        request.scratch_path.as_path(),
+        request.output_path.as_path(),
+    ];
+    if !request.staging_directory_path.is_absolute()
+        || fixed_paths.iter().any(|path| {
+            !path.is_absolute()
+                || path.starts_with(&request.staging_directory_path)
+                || *path == request.staging_directory_path
+        })
+        || request.preflight_receipt.as_ref().is_some_and(|input| {
+            !input.path.is_absolute() || input.path.starts_with(&request.staging_directory_path)
+        })
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence local directory request shape differs".to_string(),
+        ));
+    }
+
+    let manifest_bytes = read_authenticated_local_object(&request.manifest, manifest_role)?;
+    let manifest: V23IncidenceManifest =
+        serde_json::from_value(canonical_json_document(&manifest_bytes, "phase manifest")?)
+            .map_err(|error| {
+                BorsukError::InvalidStorage(format!(
+                    "V23 incidence manifest schema differs: {error}"
+                ))
+            })?;
+    validate_manifest(&manifest)?;
+    if manifest.phase != phase {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence local directory phase differs".to_string(),
+        ));
+    }
+
+    let bulk_manifest_bytes =
+        read_authenticated_local_object(&request.bulk_manifest, "bulk-manifest")?;
+    let bulk_manifest: V23IncidenceManifest = serde_json::from_value(canonical_json_document(
+        &bulk_manifest_bytes,
+        "bulk manifest",
+    )?)
+    .map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 incidence bulk manifest schema differs: {error}"
+        ))
+    })?;
+    let mut expected_bulk_manifest = manifest.clone();
+    expected_bulk_manifest.ordered_inputs =
+        expected_v23_incidence_bulk_inputs(&manifest, request.mode)?;
+    if bulk_manifest != expected_bulk_manifest {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence bulk manifest authority differs".to_string(),
+        ));
+    }
+
+    let staging_receipt_bytes =
+        read_authenticated_local_object(&request.staging_receipt, "staging-receipt")?;
+    let staging_receipt: V23IncidenceStagingReceipt = serde_json::from_value(
+        canonical_json_document(&staging_receipt_bytes, "staging receipt")?,
+    )
+    .map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 incidence staging receipt schema differs: {error}"
+        ))
+    })?;
+    let expected_identities = expected_bulk_manifest
+        .ordered_inputs
+        .iter()
+        .map(V23IncidenceInputAuthority::identity)
+        .cloned()
+        .collect::<Vec<_>>();
+    if staging_receipt.schema != "borsuk-v23-incidence-staging-receipt-v1"
+        || staging_receipt.claim_eligible
+        || staging_receipt.manifest_sha256 != request.bulk_manifest.identity.digest
+        || staging_receipt.ordered_objects.len() != expected_identities.len()
+        || staging_receipt
+            .ordered_objects
+            .iter()
+            .zip(&expected_identities)
+            .any(|(observed, expected)| {
+                observed.relative_path != expected.role || observed.identity() != *expected
+            })
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence staging receipt authority differs".to_string(),
+        ));
+    }
+
+    let directory_metadata =
+        request
+            .staging_directory_path
+            .symlink_metadata()
+            .map_err(|source| BorsukError::Io {
+                path: request.staging_directory_path.clone(),
+                source,
+            })?;
+    if !directory_metadata.file_type().is_dir() {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence staging directory shape differs".to_string(),
+        ));
+    }
+    let expected_names = staging_receipt
+        .ordered_objects
+        .iter()
+        .map(|object| object.relative_path.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut observed_names = BTreeSet::new();
+    for entry in
+        fs::read_dir(&request.staging_directory_path).map_err(|source| BorsukError::Io {
+            path: request.staging_directory_path.clone(),
+            source,
+        })?
+    {
+        let entry = entry.map_err(|source| BorsukError::Io {
+            path: request.staging_directory_path.clone(),
+            source,
+        })?;
+        let name = entry.file_name().into_string().map_err(|_| {
+            BorsukError::InvalidStorage("V23 incidence staging entry name differs".to_string())
+        })?;
+        let metadata = fs::symlink_metadata(entry.path()).map_err(|source| BorsukError::Io {
+            path: entry.path(),
+            source,
+        })?;
+        if !metadata.file_type().is_file() || !observed_names.insert(name) {
+            return Err(BorsukError::InvalidStorage(
+                "V23 incidence staging entry shape differs".to_string(),
+            ));
+        }
+    }
+    if observed_names
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>()
+        != expected_names
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence staging directory membership differs".to_string(),
+        ));
+    }
+
+    let mut input_paths = vec![
+        request.manifest.clone(),
+        request.bulk_manifest.clone(),
+        request.staging_receipt.clone(),
+    ];
+    for identity in expected_identities {
+        let path = request.staging_directory_path.join(&identity.role);
+        authenticate_v23_incidence_local_path(&path, &identity)?;
+        input_paths.push(V23IncidenceLocalRolePath { identity, path });
+    }
+    if let Some(preflight_receipt) = &request.preflight_receipt {
+        input_paths.push(preflight_receipt.clone());
+    }
+    let parent_receipt_path = input_paths
+        .iter()
+        .find(|input| input.identity.role == "parent-receipt")
+        .map(|input| input.path.clone());
+    let preflight_receipt_path = request
+        .preflight_receipt
+        .as_ref()
+        .map(|input| input.path.clone());
+    let expanded = V23IncidenceLocalPhaseRequest {
+        mode: request.mode,
+        manifest_path: request.manifest.path,
+        parent_receipt_path,
+        preflight_receipt_path,
+        input_paths,
+        scratch_path: request.scratch_path,
+        output_path: request.output_path,
+        executable_sha256: request.executable_sha256,
+    };
+    expanded.validate()?;
+    Ok(expanded)
+}
+
 fn validate_v23_incidence_request_manifest(
     request: &V23IncidenceLocalPhaseRequest,
     manifest: &V23IncidenceManifest,
@@ -1816,7 +2132,12 @@ fn validate_v23_incidence_request_manifest(
     let observed = request
         .input_paths
         .iter()
-        .filter(|input| input.identity.role != "preflight-receipt")
+        .filter(|input| {
+            !matches!(
+                input.identity.role.as_str(),
+                "preflight-receipt" | "bulk-manifest" | "staging-receipt"
+            )
+        })
         .map(|input| input.identity.clone())
         .collect::<Vec<_>>();
     if observed != expected_mounted {
@@ -1931,6 +2252,12 @@ fn authenticate_v23_incidence_request_inputs(
         },
         |total, input| {
             let measured = authenticate_v23_incidence_local_path(&input.path, &input.identity)?;
+            if matches!(
+                input.identity.role.as_str(),
+                "bulk-manifest" | "staging-receipt"
+            ) {
+                return Ok(total);
+            }
             Ok(V23IncidenceInputMeasurement {
                 input_bytes: total
                     .input_bytes
@@ -3205,6 +3532,14 @@ pub fn run_v23_incidence_local_phase(request: V23IncidenceLocalPhaseRequest) -> 
     run_v23_incidence_local_phase_with_probes(request, &sandbox_probes)
 }
 
+/// Runs one bounded directory-backed, authenticated local-only incidence phase.
+pub fn run_v23_incidence_local_directory_phase(
+    request: V23IncidenceLocalDirectoryPhaseRequest,
+) -> Result<Vec<u8>> {
+    let request = expand_v23_incidence_local_directory_request(request)?;
+    run_v23_incidence_local_phase(request)
+}
+
 pub(crate) fn validate_v23_incidence_identity(
     observed: &V23IncidenceObjectIdentity,
     registered: &V23IncidenceObjectIdentity,
@@ -4033,6 +4368,197 @@ mod tests {
                 },
             ],
         }
+    }
+
+    fn local_directory_fixture(
+        root: &Path,
+    ) -> (
+        super::V23IncidenceLocalDirectoryPhaseRequest,
+        V23IncidenceManifest,
+    ) {
+        let mut manifest = manifest_fixture();
+        let dataset_meta = b"dataset-meta\n";
+        let training_shard = b"training-shard\n";
+        for (input, bytes) in manifest
+            .ordered_inputs
+            .iter_mut()
+            .zip([dataset_meta.as_slice(), training_shard.as_slice()])
+        {
+            let identity = match input {
+                V23IncidenceInputAuthority::DatasetMeta { identity, .. }
+                | V23IncidenceInputAuthority::TrainingShard { identity, .. } => identity,
+                V23IncidenceInputAuthority::PhaseObject { .. } => unreachable!(),
+            };
+            identity.digest = format!("{:x}", Sha256::digest(bytes));
+            identity.encoded_bytes = bytes.len() as u64;
+        }
+
+        let phase_manifest_bytes = canonical_v23_incidence_manifest_bytes(&manifest).unwrap();
+        let phase_manifest_path = root.join("construction-manifest.json");
+        fs::write(&phase_manifest_path, &phase_manifest_bytes).unwrap();
+        let phase_manifest_identity = V23IncidenceObjectIdentity {
+            role: "construction-manifest".to_string(),
+            uri: "s3://borsuk-evidence/construction-manifest.json".to_string(),
+            digest_algorithm: "sha256".to_string(),
+            digest: format!("{:x}", Sha256::digest(&phase_manifest_bytes)),
+            encoded_bytes: phase_manifest_bytes.len() as u64,
+            generation: "generation-construction-manifest".to_string(),
+        };
+
+        let mut bulk_manifest = manifest.clone();
+        bulk_manifest.ordered_inputs = vec![manifest.ordered_inputs[1].clone()];
+        let value = serde_json::to_value(&bulk_manifest).unwrap();
+        let mut bulk_manifest_bytes = serde_json::to_vec(&canonical_json_value(value)).unwrap();
+        bulk_manifest_bytes.push(b'\n');
+        let bulk_manifest_path = root.join("bulk-manifest.json");
+        fs::write(&bulk_manifest_path, &bulk_manifest_bytes).unwrap();
+        let bulk_manifest_identity = V23IncidenceObjectIdentity {
+            role: "bulk-manifest".to_string(),
+            uri: "s3://borsuk-evidence/tree-preflight-bulk-manifest.json".to_string(),
+            digest_algorithm: "sha256".to_string(),
+            digest: format!("{:x}", Sha256::digest(&bulk_manifest_bytes)),
+            encoded_bytes: bulk_manifest_bytes.len() as u64,
+            generation: "generation-bulk-manifest".to_string(),
+        };
+
+        let staging_directory_path = root.join("staged");
+        fs::create_dir(&staging_directory_path).unwrap();
+        fs::write(
+            staging_directory_path.join("training-shard-0000"),
+            training_shard,
+        )
+        .unwrap();
+        let identity = manifest.ordered_inputs[1].identity();
+        let receipt_value = serde_json::json!({
+            "claim_eligible": false,
+            "manifest_sha256": bulk_manifest_identity.digest,
+            "ordered_objects": [{
+                "digest": identity.digest,
+                "digest_algorithm": identity.digest_algorithm,
+                "encoded_bytes": identity.encoded_bytes,
+                "generation": identity.generation,
+                "relative_path": identity.role,
+                "role": identity.role,
+                "uri": identity.uri,
+            }],
+            "schema": "borsuk-v23-incidence-staging-receipt-v1",
+        });
+        let mut staging_receipt_bytes =
+            serde_json::to_vec(&canonical_json_value(receipt_value)).unwrap();
+        staging_receipt_bytes.push(b'\n');
+        let staging_receipt_path = root.join("staging-receipt.json");
+        fs::write(&staging_receipt_path, &staging_receipt_bytes).unwrap();
+        let staging_receipt_identity = V23IncidenceObjectIdentity {
+            role: "staging-receipt".to_string(),
+            uri: "file:///authority/staging-receipt.json".to_string(),
+            digest_algorithm: "sha256".to_string(),
+            digest: format!("{:x}", Sha256::digest(&staging_receipt_bytes)),
+            encoded_bytes: staging_receipt_bytes.len() as u64,
+            generation: "generation-staging-receipt".to_string(),
+        };
+
+        (
+            super::V23IncidenceLocalDirectoryPhaseRequest {
+                mode: V23IncidenceRunMode::Preflight(V23IncidencePhase::TreeTraining),
+                manifest: V23IncidenceLocalRolePath {
+                    identity: phase_manifest_identity,
+                    path: phase_manifest_path,
+                },
+                bulk_manifest: V23IncidenceLocalRolePath {
+                    identity: bulk_manifest_identity,
+                    path: bulk_manifest_path,
+                },
+                staging_directory_path,
+                staging_receipt: V23IncidenceLocalRolePath {
+                    identity: staging_receipt_identity,
+                    path: staging_receipt_path,
+                },
+                preflight_receipt: None,
+                scratch_path: root.join("scratch"),
+                output_path: root.join("output.json"),
+                executable_sha256: "95".repeat(32),
+            },
+            manifest,
+        )
+    }
+
+    #[test]
+    fn v23_incidence_local_directory_expands_only_the_registered_bulk_subset() {
+        let directory = tempfile::tempdir().unwrap();
+        let (request, manifest) = local_directory_fixture(directory.path());
+        let expanded = super::expand_v23_incidence_local_directory_request(request).unwrap();
+        assert_eq!(
+            expanded
+                .input_paths
+                .iter()
+                .map(|input| input.identity.role.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "construction-manifest",
+                "bulk-manifest",
+                "staging-receipt",
+                "training-shard-0000",
+            ]
+        );
+        assert_eq!(
+            expanded.input_paths[3].identity,
+            *manifest.ordered_inputs[1].identity()
+        );
+        assert!(expanded.parent_receipt_path.is_none());
+        assert!(expanded.preflight_receipt_path.is_none());
+    }
+
+    #[test]
+    fn v23_incidence_local_directory_rejects_unregistered_and_unsafe_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let (request, _) = local_directory_fixture(directory.path());
+
+        fs::write(request.staging_directory_path.join("unexpected"), b"x").unwrap();
+        assert!(super::expand_v23_incidence_local_directory_request(request.clone()).is_err());
+        fs::remove_file(request.staging_directory_path.join("unexpected")).unwrap();
+
+        fs::remove_file(request.staging_directory_path.join("training-shard-0000")).unwrap();
+        assert!(super::expand_v23_incidence_local_directory_request(request).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_local_directory_preflight_measures_only_scientific_inputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let (request, _) = local_directory_fixture(directory.path());
+        let expanded = super::expand_v23_incidence_local_directory_request(request).unwrap();
+        let measured =
+            super::authenticate_v23_incidence_request_inputs(&expanded.input_paths).unwrap();
+        let expected_bytes = expanded
+            .input_paths
+            .iter()
+            .filter(|input| {
+                !matches!(
+                    input.identity.role.as_str(),
+                    "bulk-manifest" | "staging-receipt"
+                )
+            })
+            .map(|input| input.identity.encoded_bytes)
+            .sum::<u64>();
+        assert_eq!(measured.input_bytes, expected_bytes);
+    }
+
+    #[test]
+    fn v23_incidence_local_directory_preflight_receipt_rejects_handoff_roles() {
+        let work = v23_incidence_preflight_work(V23IncidencePhase::PostingConstruction);
+        let mut authority = posting_preflight_authority();
+        authority
+            .ordered_inputs
+            .push(object("bulk-manifest", "sha256", &"75".repeat(32)));
+        authority.full_input_bytes += 17;
+        let measurement = V23IncidencePreflightMeasurement {
+            distance_dimensions: 1_000_000,
+            distance_elapsed_ns: 1_000_000,
+            input_bytes: 4_000_000_017,
+            input_elapsed_ns: 1_000_000,
+            records: 1_048_576,
+            records_elapsed_ns: 1_000_000,
+        };
+        assert!(project_v23_incidence_preflight(work, authority, measurement).is_err());
     }
 
     fn posting_manifest_fixture() -> V23IncidenceManifest {

@@ -1,8 +1,8 @@
 //! Local-only executable boundary for the claim-ineligible V23 incidence falsifier.
 
 use borsuk::{
-    V23IncidenceLocalPhaseRequest, V23IncidenceLocalRolePath, V23IncidenceObjectIdentity,
-    V23IncidencePhase, V23IncidenceRunMode, run_v23_incidence_local_phase,
+    V23IncidenceLocalDirectoryPhaseRequest, V23IncidenceLocalRolePath, V23IncidenceObjectIdentity,
+    V23IncidencePhase, V23IncidenceRunMode, run_v23_incidence_local_directory_phase,
 };
 use std::path::PathBuf;
 
@@ -60,44 +60,126 @@ fn gate(flag: &str) -> Option<V23IncidenceRunMode> {
     })
 }
 
-fn parse_args(
+fn take_sha256_role_path(
+    arguments: &mut impl Iterator<Item = String>,
+    role: &str,
+    path: PathBuf,
+    prefix: &str,
+) -> Result<V23IncidenceLocalRolePath, String> {
+    let uri = take_named_value(arguments, &format!("--{prefix}-uri"))?;
+    let digest = take_named_value(arguments, &format!("--{prefix}-sha256"))?;
+    let encoded_bytes = take_named_value(arguments, &format!("--{prefix}-bytes"))?
+        .parse::<u64>()
+        .map_err(|_| format!("--{prefix}-bytes differs"))?;
+    let generation = take_named_value(arguments, &format!("--{prefix}-generation"))?;
+    if !path.is_absolute()
+        || uri.is_empty()
+        || !lower_hex_digest(&digest)
+        || encoded_bytes == 0
+        || generation.is_empty()
+    {
+        return Err(format!("--{prefix} authority differs"));
+    }
+    Ok(V23IncidenceLocalRolePath {
+        identity: V23IncidenceObjectIdentity {
+            role: role.to_string(),
+            uri,
+            digest_algorithm: "sha256".to_string(),
+            digest,
+            encoded_bytes,
+            generation,
+        },
+        path,
+    })
+}
+
+fn parse_directory_args(
     arguments: impl IntoIterator<Item = String>,
-) -> Result<V23IncidenceLocalPhaseRequest, String> {
+) -> Result<V23IncidenceLocalDirectoryPhaseRequest, String> {
     let mut arguments = arguments.into_iter();
-    let mut mode = None;
-    let mut manifest_path = None;
-    let mut parent_receipt_path = None;
-    let mut preflight_receipt_path = None;
+    let gate_flag = arguments
+        .next()
+        .ok_or_else(|| "phase gate is absent".to_string())?;
+    let mode = gate(&gate_flag).ok_or_else(|| "phase gate differs".to_string())?;
+    let phase = match mode {
+        V23IncidenceRunMode::Preflight(phase) | V23IncidenceRunMode::Execute(phase) => phase,
+    };
+    let manifest_role = if phase == V23IncidencePhase::TreeTraining {
+        "construction-manifest"
+    } else {
+        "phase-manifest"
+    };
+
+    let manifest_flag = arguments
+        .next()
+        .ok_or_else(|| "--manifest is absent".to_string())?;
+    if manifest_flag != "--manifest" {
+        return Err(format!("expected --manifest, got {manifest_flag}"));
+    }
+    let manifest_path = PathBuf::from(take_value(&mut arguments, "--manifest")?);
+    let manifest = take_sha256_role_path(&mut arguments, manifest_role, manifest_path, "manifest")?;
+
+    let bulk_flag = arguments
+        .next()
+        .ok_or_else(|| "--bulk-manifest is absent".to_string())?;
+    if bulk_flag != "--bulk-manifest" {
+        return Err(format!("expected --bulk-manifest, got {bulk_flag}"));
+    }
+    let bulk_path = PathBuf::from(take_value(&mut arguments, "--bulk-manifest")?);
+    let bulk_manifest =
+        take_sha256_role_path(&mut arguments, "bulk-manifest", bulk_path, "bulk-manifest")?;
+
+    let staging_directory_flag = arguments
+        .next()
+        .ok_or_else(|| "--staging-directory is absent".to_string())?;
+    if staging_directory_flag != "--staging-directory" {
+        return Err(format!(
+            "expected --staging-directory, got {staging_directory_flag}"
+        ));
+    }
+    let staging_directory_path = PathBuf::from(take_value(&mut arguments, "--staging-directory")?);
+
+    let staging_receipt_flag = arguments
+        .next()
+        .ok_or_else(|| "--staging-receipt is absent".to_string())?;
+    if staging_receipt_flag != "--staging-receipt" {
+        return Err(format!(
+            "expected --staging-receipt, got {staging_receipt_flag}"
+        ));
+    }
+    let staging_receipt_path = PathBuf::from(take_value(&mut arguments, "--staging-receipt")?);
+    let staging_receipt = take_sha256_role_path(
+        &mut arguments,
+        "staging-receipt",
+        staging_receipt_path,
+        "staging-receipt",
+    )?;
+
+    let mut preflight_receipt = None;
     let mut scratch_path = None;
     let mut output_path = None;
     let mut executable_sha256 = None;
-    let mut input_paths = Vec::new();
-
     while let Some(flag) = arguments.next() {
-        if let Some(value) = gate(&flag) {
-            set_once(&mut mode, value, "phase gate")?;
-            continue;
-        }
         match flag.as_str() {
-            "--manifest" => {
-                let value = take_value(&mut arguments, &flag)?;
-                set_once(&mut manifest_path, PathBuf::from(value), &flag)?;
-            }
-            "--parent-receipt" => {
-                let value = take_value(&mut arguments, &flag)?;
-                set_once(&mut parent_receipt_path, PathBuf::from(value), &flag)?;
-            }
             "--preflight-receipt" => {
-                let value = take_value(&mut arguments, &flag)?;
-                set_once(&mut preflight_receipt_path, PathBuf::from(value), &flag)?;
+                if preflight_receipt.is_some() {
+                    return Err("--preflight-receipt is duplicated".to_string());
+                }
+                let path = PathBuf::from(take_value(&mut arguments, &flag)?);
+                preflight_receipt = Some(take_sha256_role_path(
+                    &mut arguments,
+                    "preflight-receipt",
+                    path,
+                    "preflight-receipt",
+                )?);
             }
             "--scratch" => {
-                let value = take_value(&mut arguments, &flag)?;
-                set_once(&mut scratch_path, PathBuf::from(value), &flag)?;
+                let value = PathBuf::from(take_value(&mut arguments, &flag)?);
+                set_once(&mut scratch_path, value, &flag)?;
             }
             "--output" => {
-                let value = take_value(&mut arguments, &flag)?;
-                set_once(&mut output_path, PathBuf::from(value), &flag)?;
+                let value = PathBuf::from(take_value(&mut arguments, &flag)?);
+                set_once(&mut output_path, value, &flag)?;
             }
             "--executable-sha256" => {
                 let value = take_value(&mut arguments, &flag)?;
@@ -106,59 +188,36 @@ fn parse_args(
                 }
                 set_once(&mut executable_sha256, value, &flag)?;
             }
-            "--input-role" => {
-                let role = take_value(&mut arguments, &flag)?;
-                let path = PathBuf::from(take_named_value(&mut arguments, "--input-path")?);
-                let uri = take_named_value(&mut arguments, "--input-uri")?;
-                let digest_algorithm =
-                    take_named_value(&mut arguments, "--input-digest-algorithm")?;
-                let digest = take_named_value(&mut arguments, "--input-digest")?;
-                let encoded_bytes = take_named_value(&mut arguments, "--input-bytes")?
-                    .parse::<u64>()
-                    .map_err(|_| "--input-bytes differs".to_string())?;
-                let generation = take_named_value(&mut arguments, "--input-generation")?;
-                if !lower_hex_digest(&digest) || encoded_bytes == 0 {
-                    return Err("input identity differs".to_string());
-                }
-                input_paths.push(V23IncidenceLocalRolePath {
-                    identity: V23IncidenceObjectIdentity {
-                        role,
-                        uri,
-                        digest_algorithm,
-                        digest,
-                        encoded_bytes,
-                        generation,
-                    },
-                    path,
-                });
-            }
             _ => return Err(format!("unknown argument {flag}")),
         }
     }
-
-    let request = V23IncidenceLocalPhaseRequest {
-        mode: mode.ok_or_else(|| "phase gate is absent".to_string())?,
-        manifest_path: manifest_path.ok_or_else(|| "--manifest is absent".to_string())?,
-        parent_receipt_path,
-        preflight_receipt_path,
-        input_paths,
+    if matches!(mode, V23IncidenceRunMode::Execute(_)) != preflight_receipt.is_some()
+        || !staging_directory_path.is_absolute()
+    {
+        return Err("directory request authority differs".to_string());
+    }
+    Ok(V23IncidenceLocalDirectoryPhaseRequest {
+        mode,
+        manifest,
+        bulk_manifest,
+        staging_directory_path,
+        staging_receipt,
+        preflight_receipt,
         scratch_path: scratch_path.ok_or_else(|| "--scratch is absent".to_string())?,
         output_path: output_path.ok_or_else(|| "--output is absent".to_string())?,
         executable_sha256: executable_sha256
             .ok_or_else(|| "--executable-sha256 is absent".to_string())?,
-    };
-    request.validate().map_err(|error| error.to_string())?;
-    Ok(request)
+    })
 }
 
 #[cfg(not(test))]
 fn main() {
-    let request = parse_args(std::env::args().skip(1)).unwrap_or_else(|error| {
+    let request = parse_directory_args(std::env::args().skip(1)).unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(2);
     });
     let output_path = request.output_path.clone();
-    let bytes = run_v23_incidence_local_phase(request).unwrap_or_else(|error| {
+    let bytes = run_v23_incidence_local_directory_phase(request).unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(1);
     });
@@ -192,79 +251,12 @@ mod tests {
         }
     }
 
-    fn input_roles(
-        phase: V23IncidencePhase,
-        execute: bool,
-    ) -> &'static [(&'static str, &'static str)] {
-        match (phase, execute) {
-            (V23IncidencePhase::TreeTraining, true) => &[
-                ("construction-manifest", "sha256"),
-                ("dataset-meta", "sha256"),
-                ("training-shard-0000", "sha256"),
-            ],
-            (V23IncidencePhase::TreeTraining, false) => &[
-                ("construction-manifest", "sha256"),
-                ("training-shard-0000", "sha256"),
-            ],
-            (V23IncidencePhase::PostingConstruction, _) => &[
-                ("phase-manifest", "sha256"),
-                ("parent-receipt", "sha256"),
-                ("incidence-tree", "blake3"),
-                ("page-roster", "sha256"),
-                ("page-body-0000", "blake3"),
-            ],
-            (V23IncidencePhase::DevelopmentEvaluation, true) => &[
-                ("phase-manifest", "sha256"),
-                ("parent-receipt", "sha256"),
-                ("incidence-tree", "blake3"),
-                ("incidence-postings-one", "blake3"),
-                ("incidence-postings-two", "blake3"),
-                ("d2-report", "sha256"),
-                ("query-parquet", "sha256"),
-            ],
-            (V23IncidencePhase::DevelopmentEvaluation, false) => &[
-                ("phase-manifest", "sha256"),
-                ("parent-receipt", "sha256"),
-                ("incidence-tree", "blake3"),
-                ("incidence-postings-one", "blake3"),
-                ("incidence-postings-two", "blake3"),
-            ],
-            (V23IncidencePhase::HoldoutBinding, true) => &[
-                ("phase-manifest", "sha256"),
-                ("parent-receipt", "sha256"),
-                ("development-result", "sha256"),
-                ("page-roster", "sha256"),
-                ("neighbors-parquet", "sha256"),
-                ("page-body-0000", "blake3"),
-            ],
-            (V23IncidencePhase::HoldoutBinding, false) => &[
-                ("phase-manifest", "sha256"),
-                ("parent-receipt", "sha256"),
-                ("page-roster", "sha256"),
-                ("page-body-0000", "blake3"),
-            ],
-            (V23IncidencePhase::HoldoutEvaluation, true) => &[
-                ("phase-manifest", "sha256"),
-                ("parent-receipt", "sha256"),
-                ("development-result", "sha256"),
-                ("development-latency", "blake3"),
-                ("incidence-tree", "blake3"),
-                ("incidence-postings-one", "blake3"),
-                ("incidence-postings-two", "blake3"),
-                ("query-parquet", "sha256"),
-                ("holdout-truth", "sha256"),
-            ],
-            (V23IncidencePhase::HoldoutEvaluation, false) => &[
-                ("phase-manifest", "sha256"),
-                ("parent-receipt", "sha256"),
-                ("incidence-tree", "blake3"),
-                ("incidence-postings-one", "blake3"),
-                ("incidence-postings-two", "blake3"),
-            ],
-        }
-    }
-
-    fn arguments(phase: V23IncidencePhase, execute: bool) -> Vec<String> {
+    fn directory_arguments(phase: V23IncidencePhase, execute: bool) -> Vec<String> {
+        let manifest_role = if phase == V23IncidencePhase::TreeTraining {
+            "construction-manifest"
+        } else {
+            "phase-manifest"
+        };
         let mut arguments = vec![
             format!(
                 "--{}-{}",
@@ -272,180 +264,111 @@ mod tests {
                 phase_name(phase)
             ),
             "--manifest".to_string(),
-            if phase == V23IncidencePhase::TreeTraining {
-                "/inputs/construction-manifest".to_string()
-            } else {
-                "/inputs/phase-manifest".to_string()
-            },
+            format!("/authority/{manifest_role}.json"),
+            "--manifest-uri".to_string(),
+            format!("s3://borsuk-evidence/{manifest_role}.json"),
+            "--manifest-sha256".to_string(),
+            "11".repeat(32),
+            "--manifest-bytes".to_string(),
+            "4096".to_string(),
+            "--manifest-generation".to_string(),
+            "generation-manifest".to_string(),
+            "--bulk-manifest".to_string(),
+            "/authority/bulk-manifest.json".to_string(),
+            "--bulk-manifest-uri".to_string(),
+            "s3://borsuk-evidence/bulk-manifest.json".to_string(),
+            "--bulk-manifest-sha256".to_string(),
+            "22".repeat(32),
+            "--bulk-manifest-bytes".to_string(),
+            "2048".to_string(),
+            "--bulk-manifest-generation".to_string(),
+            "generation-bulk-manifest".to_string(),
+            "--staging-directory".to_string(),
+            "/inputs/bulk".to_string(),
+            "--staging-receipt".to_string(),
+            "/authority/staging-receipt.json".to_string(),
+            "--staging-receipt-uri".to_string(),
+            "file:///authority/staging-receipt.json".to_string(),
+            "--staging-receipt-sha256".to_string(),
+            "33".repeat(32),
+            "--staging-receipt-bytes".to_string(),
+            "1024".to_string(),
+            "--staging-receipt-generation".to_string(),
+            "generation-staging-receipt".to_string(),
             "--scratch".to_string(),
             "/scratch".to_string(),
             "--output".to_string(),
             "/output/receipt.json".to_string(),
             "--executable-sha256".to_string(),
-            "11".repeat(32),
+            "44".repeat(32),
         ];
-        if phase != V23IncidencePhase::TreeTraining {
-            arguments.extend([
-                "--parent-receipt".to_string(),
-                "/inputs/parent-receipt".to_string(),
-            ]);
-        }
         if execute {
             arguments.extend([
                 "--preflight-receipt".to_string(),
-                "/inputs/preflight-receipt".to_string(),
-            ]);
-        }
-        for (index, (role, algorithm)) in input_roles(phase, execute).iter().enumerate() {
-            arguments.extend([
-                "--input-role".to_string(),
-                (*role).to_string(),
-                "--input-path".to_string(),
-                format!("/inputs/{role}"),
-                "--input-uri".to_string(),
-                format!("s3://borsuk-evidence/{role}"),
-                "--input-digest-algorithm".to_string(),
-                (*algorithm).to_string(),
-                "--input-digest".to_string(),
-                format!("{:02x}", index + 32).repeat(32),
-                "--input-bytes".to_string(),
-                (index + 1).to_string(),
-                "--input-generation".to_string(),
-                format!("generation-{index:04}"),
-            ]);
-        }
-        if execute {
-            arguments.extend([
-                "--input-role".to_string(),
-                "preflight-receipt".to_string(),
-                "--input-path".to_string(),
-                "/inputs/preflight-receipt".to_string(),
-                "--input-uri".to_string(),
-                "s3://borsuk-evidence/preflight-receipt".to_string(),
-                "--input-digest-algorithm".to_string(),
-                "sha256".to_string(),
-                "--input-digest".to_string(),
-                "fe".repeat(32),
-                "--input-bytes".to_string(),
-                "1".to_string(),
-                "--input-generation".to_string(),
-                "generation-preflight".to_string(),
+                "/authority/preflight-receipt.json".to_string(),
+                "--preflight-receipt-uri".to_string(),
+                "file:///authority/preflight-receipt.json".to_string(),
+                "--preflight-receipt-sha256".to_string(),
+                "55".repeat(32),
+                "--preflight-receipt-bytes".to_string(),
+                "512".to_string(),
+                "--preflight-receipt-generation".to_string(),
+                "generation-preflight-receipt".to_string(),
             ]);
         }
         arguments
     }
 
     #[test]
-    fn v23_incidence_example_requires_one_phase_and_exact_local_roles() {
+    fn v23_incidence_directory_cli_is_bounded_independently_of_corpus_size() {
         for phase in PHASES {
-            let preflight = parse_args(arguments(phase, false)).unwrap();
-            assert_eq!(preflight.mode, V23IncidenceRunMode::Preflight(phase));
-            assert_eq!(
-                preflight.manifest_path,
-                if phase == V23IncidencePhase::TreeTraining {
-                    Path::new("/inputs/construction-manifest")
-                } else {
-                    Path::new("/inputs/phase-manifest")
-                }
-            );
-            assert_eq!(preflight.input_paths.len(), input_roles(phase, false).len());
-
-            let execute = parse_args(arguments(phase, true)).unwrap();
-            assert_eq!(execute.mode, V23IncidenceRunMode::Execute(phase));
-            assert!(execute.preflight_receipt_path.is_some());
+            for execute in [false, true] {
+                let arguments = directory_arguments(phase, execute);
+                assert!(arguments.iter().map(String::len).sum::<usize>() < 16 * 1024);
+                assert!(arguments.iter().all(|argument| {
+                    !argument.starts_with("training-shard-") && !argument.starts_with("page-body-")
+                }));
+                let request: V23IncidenceLocalDirectoryPhaseRequest =
+                    parse_directory_args(arguments).unwrap();
+                assert_eq!(
+                    matches!(request.mode, V23IncidenceRunMode::Execute(_)),
+                    execute
+                );
+                assert_eq!(request.staging_directory_path, Path::new("/inputs/bulk"));
+            }
         }
     }
 
     #[test]
-    fn v23_incidence_example_rejects_missing_duplicate_unknown_and_invalid_arguments() {
-        let valid = arguments(V23IncidencePhase::TreeTraining, false);
-        for changed in [
-            valid[1..].to_vec(),
-            [valid.clone(), vec![valid[0].clone()]].concat(),
-            [
-                valid.clone(),
-                vec!["--unknown".to_string(), "value".to_string()],
-            ]
-            .concat(),
-        ] {
-            assert!(parse_args(changed).is_err());
-        }
-
-        let mut changed = valid.clone();
-        *changed
-            .iter_mut()
-            .find(|value| value.as_str() == "1")
-            .unwrap() = "0".to_string();
-        assert!(parse_args(changed).is_err());
-
-        let mut changed = valid;
-        let digest = changed
-            .iter()
-            .position(|value| value == "--input-digest")
-            .unwrap()
-            + 1;
-        changed[digest] = "AA".repeat(32);
-        assert!(parse_args(changed).is_err());
-    }
-
-    #[test]
-    fn v23_incidence_example_refuses_network_storage_query_leak_and_d3_flags() {
+    fn v23_incidence_directory_cli_rejects_unbounded_and_storage_surfaces() {
+        let valid = directory_arguments(V23IncidencePhase::PostingConstruction, false);
         for flag in [
+            "--input-role",
+            "--page-body",
+            "--training-shard",
             "--bucket",
             "--aws-profile",
             "--endpoint",
-            "--page-uri",
             "--storage-uri",
             "--d3",
-            "--query",
-            "--neighbors",
         ] {
-            let mut changed = arguments(V23IncidencePhase::TreeTraining, false);
+            let mut changed = valid.clone();
             changed.extend([flag.to_string(), "forbidden".to_string()]);
-            assert!(
-                parse_args(changed).is_err(),
-                "accepted forbidden flag {flag}"
-            );
+            assert!(parse_directory_args(changed).is_err(), "accepted {flag}");
         }
-
-        let development =
-            parse_args(arguments(V23IncidencePhase::DevelopmentEvaluation, false)).unwrap();
-        assert!(
-            development
-                .input_paths
-                .iter()
-                .all(|input| input.identity.role != "query-parquet")
-        );
-        let development_execute =
-            parse_args(arguments(V23IncidencePhase::DevelopmentEvaluation, true)).unwrap();
-        assert!(
-            development_execute
-                .input_paths
-                .iter()
-                .any(|input| input.identity.role == "query-parquet")
-        );
-        let holdout = parse_args(arguments(V23IncidencePhase::HoldoutBinding, false)).unwrap();
-        assert!(
-            holdout
-                .input_paths
-                .iter()
-                .all(|input| input.identity.role != "neighbors-parquet")
-        );
-        let holdout_execute =
-            parse_args(arguments(V23IncidencePhase::HoldoutBinding, true)).unwrap();
-        assert!(
-            holdout_execute
-                .input_paths
-                .iter()
-                .any(|input| input.identity.role == "neighbors-parquet")
-        );
+        assert!(parse_directory_args(valid[1..].to_vec()).is_err());
+        assert!(parse_directory_args([valid.clone(), valid[..2].to_vec()].concat()).is_err());
     }
 
     #[test]
-    fn v23_incidence_example_calls_only_the_local_high_level_runner() {
-        let request: V23IncidenceLocalPhaseRequest =
-            parse_args(arguments(V23IncidencePhase::TreeTraining, false)).unwrap();
-        let error = run_v23_incidence_local_phase(request).unwrap_err();
-        assert!(error.to_string().contains("sandbox probes are absent"));
+    fn v23_incidence_directory_cli_calls_only_the_high_level_local_runner() {
+        let request =
+            parse_directory_args(directory_arguments(V23IncidencePhase::TreeTraining, false))
+                .unwrap();
+        let error = run_v23_incidence_local_directory_phase(request).unwrap_err();
+        assert!(
+            error.to_string().contains("construction-manifest")
+                || error.to_string().contains("sandbox probes are absent")
+        );
     }
 }

@@ -30,6 +30,7 @@ def _mount(role: str, name: str) -> subject.SandboxMount:
         source=pathlib.Path("/authority") / name,
         target=pathlib.PurePosixPath("/inputs") / name,
         read_only=True,
+        uri=f"s3://borsuk-evidence/{role}",
         digest_algorithm=algorithm,
         digest="11" * 32,
         encoded_bytes=17,
@@ -40,52 +41,26 @@ def _mount(role: str, name: str) -> subject.SandboxMount:
 def _policy(
     phase: str = "tree-training", parent_digest: str | None = None
 ) -> subject.SandboxPolicy:
+    manifest_role = (
+        "construction-manifest" if phase == "tree-training" else "phase-manifest"
+    )
     inputs = (
-        _mount("construction-manifest", "construction-manifest.json"),
-        _mount("dataset-meta", "meta.json"),
-        _mount("training-staging-receipt", "training-staging-receipt.json"),
+        _mount(manifest_role, f"{manifest_role}.json"),
+        _mount("bulk-manifest", "bulk-manifest.json"),
+        _mount("staging-receipt", "staging-receipt.json"),
+        _mount("preflight-receipt", "preflight-receipt.json"),
     )
     directory_capabilities = (
         subject.SandboxDirectoryCapability(
-            role="training-shards",
-            source=pathlib.Path("/authority/training-shards"),
-            target=pathlib.PurePosixPath("/inputs/training-shards"),
-            manifest_role="construction-manifest",
-            staging_receipt_role="training-staging-receipt",
+            role="bulk-inputs",
+            source=pathlib.Path("/authority/bulk-inputs"),
+            target=pathlib.PurePosixPath("/inputs/bulk"),
+            manifest_role="bulk-manifest",
+            staging_receipt_role="staging-receipt",
             read_only=True,
         ),
     )
-    if phase == "posting-construction":
-        inputs = (
-            _mount("phase-manifest", "phase-manifest.json"),
-            _mount("parent-receipt", "tree-receipt.json"),
-            _mount("incidence-tree", "incidence-tree.bin"),
-            _mount("page-roster", "page-roster.json"),
-            _mount("page-staging-receipt", "page-staging-receipt.json"),
-        )
-        directory_capabilities = (
-            subject.SandboxDirectoryCapability(
-                role="page-corpus",
-                source=pathlib.Path("/authority/pages"),
-                target=pathlib.PurePosixPath("/inputs/pages"),
-                manifest_role="phase-manifest",
-                staging_receipt_role="page-staging-receipt",
-                read_only=True,
-            ),
-        )
-    if phase == "development-evaluation":
-        inputs = (
-            _mount("phase-manifest", "phase-manifest.json"),
-            _mount("parent-receipt", "posting-receipt.json"),
-            _mount("incidence-tree", "incidence-tree.bin"),
-            _mount("incidence-postings-one", "postings-one.bin"),
-            _mount("incidence-postings-two", "postings-two.bin"),
-            _mount("d2-report", "d2-report.json"),
-            _mount("query-parquet", "query.parquet"),
-        )
-        directory_capabilities = ()
-    inputs += (_mount("preflight-receipt", "preflight-receipt.json"),)
-    return subject.SandboxPolicy(
+    policy = subject.SandboxPolicy(
         phase=phase,
         executable=pathlib.Path("/opt/borsuk/v23-incidence"),
         executable_sha256="aa" * 32,
@@ -96,6 +71,7 @@ def _policy(
                 source=pathlib.Path("/lib/ld-linux-aarch64.so.1"),
                 target=pathlib.PurePosixPath("/lib/ld-linux-aarch64.so.1"),
                 read_only=True,
+                uri="file:///lib/ld-linux-aarch64.so.1",
                 digest_algorithm="sha256",
                 digest="22" * 32,
                 encoded_bytes=23,
@@ -107,8 +83,9 @@ def _policy(
         output=pathlib.Path("/output/v23-incidence"),
         parent_receipt_sha256=parent_digest,
         directory_capabilities=directory_capabilities,
-        phase_argv=(f"--execute-{phase}",),
+        phase_argv=(),
     )
+    return dataclasses.replace(policy, phase_argv=subject.build_phase_argv(policy))
 
 
 def _progress_bytes(
@@ -132,6 +109,44 @@ def _progress_bytes(
 
 
 class SandboxPolicyTests(unittest.TestCase):
+    def test_phase_argv_uses_three_authorities_and_one_bulk_directory(self) -> None:
+        base = _policy()
+        policy = dataclasses.replace(
+            base,
+            inputs=(
+                _mount("construction-manifest", "construction-manifest.json"),
+                _mount("bulk-manifest", "bulk-manifest.json"),
+                _mount("staging-receipt", "staging-receipt.json"),
+                _mount("preflight-receipt", "preflight-receipt.json"),
+            ),
+            directory_capabilities=(
+                subject.SandboxDirectoryCapability(
+                    role="bulk-inputs",
+                    source=pathlib.Path("/authority/training-shards"),
+                    target=pathlib.PurePosixPath("/inputs/bulk"),
+                    manifest_role="bulk-manifest",
+                    staging_receipt_role="staging-receipt",
+                    read_only=True,
+                ),
+            ),
+            phase_argv=(),
+        )
+        argv = subject.build_phase_argv(policy)
+        self.assertLess(sum(len(argument) + 1 for argument in argv), 16_384)
+        self.assertEqual(argv[0], "--execute-tree-training")
+        self.assertEqual(argv.count("--manifest"), 1)
+        self.assertEqual(argv.count("--bulk-manifest"), 1)
+        self.assertEqual(argv.count("--staging-directory"), 1)
+        self.assertEqual(argv.count("--staging-receipt"), 1)
+        self.assertEqual(argv.count("--preflight-receipt"), 1)
+        self.assertFalse(
+            any(
+                argument.startswith(("training-shard-", "page-body-"))
+                for argument in argv
+            )
+        )
+        subject.validate_phase_inputs(dataclasses.replace(policy, phase_argv=argv))
+
     def test_progress_requires_canonical_hash_chained_completed_work(self) -> None:
         monitor = subject.AuthenticatedProgressMonitor("tree-training")
         initial = _progress_bytes()
@@ -177,17 +192,14 @@ class SandboxPolicyTests(unittest.TestCase):
                     monitor.observe(mutation)
 
     def test_bulk_directory_capabilities_replace_per_object_phase_mounts(self) -> None:
-        for phase, directory_role in (
-            ("tree-training", "training-shards"),
-            ("posting-construction", "page-corpus"),
-        ):
+        for phase in ("tree-training", "posting-construction"):
             with self.subTest(phase=phase):
                 parent = None if phase == "tree-training" else "ab" * 32
                 policy = _policy(phase, parent)
                 subject.validate_phase_inputs(policy)
                 self.assertEqual(
                     tuple(item.role for item in policy.directory_capabilities),
-                    (directory_role,),
+                    ("bulk-inputs",),
                 )
                 self.assertFalse(
                     any(
@@ -211,17 +223,7 @@ class SandboxPolicyTests(unittest.TestCase):
         self,
     ) -> None:
         policy = _policy()
-        capability = subject.SandboxDirectoryCapability(
-            role="training-shards",
-            source=pathlib.Path("/authority/training-shards"),
-            target=pathlib.PurePosixPath("/inputs/training-shards"),
-            manifest_role="construction-manifest",
-            staging_receipt_role="training-staging-receipt",
-            read_only=True,
-        )
-        policy = dataclasses.replace(
-            policy, directory_capabilities=(capability,)
-        )
+        capability = policy.directory_capabilities[0]
         subject.validate_phase_inputs(policy)
         raw = subject.canonical_policy_bytes(policy)
         self.assertEqual(subject.decode_policy_bytes(raw), policy)
@@ -253,18 +255,12 @@ class SandboxPolicyTests(unittest.TestCase):
         binding_execute, _ = subject._phase_roles("holdout-binding", preflight=False)
         self.assertEqual(
             binding_preflight,
-            {
-                "phase-manifest",
-                "parent-receipt",
-                "page-roster",
-                "page-staging-receipt",
-            },
+            {"phase-manifest", "bulk-manifest", "staging-receipt"},
         )
-        self.assertEqual(binding_prefixes, ("page-corpus",))
+        self.assertEqual(binding_prefixes, ("bulk-inputs",))
         self.assertEqual(
             binding_execute,
-            binding_preflight
-            | {"development-result", "neighbors-parquet", "preflight-receipt"},
+            binding_preflight | {"preflight-receipt"},
         )
 
         evaluation_preflight, evaluation_prefixes = subject._phase_roles(
@@ -275,25 +271,12 @@ class SandboxPolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             evaluation_preflight,
-            {
-                "phase-manifest",
-                "parent-receipt",
-                "incidence-tree",
-                "incidence-postings-one",
-                "incidence-postings-two",
-            },
+            {"phase-manifest", "bulk-manifest", "staging-receipt"},
         )
-        self.assertEqual(evaluation_prefixes, ())
+        self.assertEqual(evaluation_prefixes, ("bulk-inputs",))
         self.assertEqual(
             evaluation_execute,
-            evaluation_preflight
-            | {
-                "development-result",
-                "development-latency",
-                "preflight-receipt",
-                "query-parquet",
-                "holdout-truth",
-            },
+            evaluation_preflight | {"preflight-receipt"},
         )
 
     def test_execute_roles_require_preflight_receipt_in_every_phase(self) -> None:
@@ -361,15 +344,17 @@ class SandboxPolicyTests(unittest.TestCase):
             self.skipTest("namespace integration runtime paths are unregistered")
         root = pathlib.Path(tempfile.mkdtemp(prefix="v23-incidence-namespace-"))
         manifest = root / "construction-manifest.json"
-        staging_receipt = root / "training-staging-receipt.json"
-        training_shards = root / "training-shards"
-        shard = training_shards / "training-shard-0000.bin"
+        bulk_manifest = root / "bulk-manifest.json"
+        staging_receipt = root / "staging-receipt.json"
+        bulk_inputs = root / "bulk-inputs"
+        shard = bulk_inputs / "training-shard-0000.bin"
         launcher = root / "run_v23_leaf_page_incidence_falsifier.py"
         scratch = root / "scratch"
         output = root / "output"
         manifest.write_bytes(b"manifest\n")
+        bulk_manifest.write_bytes(b"bulk manifest\n")
         staging_receipt.write_bytes(b"staging\n")
-        training_shards.mkdir()
+        bulk_inputs.mkdir()
         shard.write_bytes(b"shard\n")
         launcher.write_bytes(pathlib.Path(subject.__file__).read_bytes())
         scratch.mkdir()
@@ -386,6 +371,7 @@ class SandboxPolicyTests(unittest.TestCase):
                 source=source.resolve(),
                 target=pathlib.PurePosixPath(target),
                 read_only=True,
+                uri=source.as_uri(),
                 digest_algorithm="sha256",
                 digest=hashlib.sha256(payload).hexdigest(),
                 encoded_bytes=len(payload),
@@ -417,9 +403,14 @@ class SandboxPolicyTests(unittest.TestCase):
                     "/inputs/construction-manifest.json",
                 ),
                 identity(
-                    "training-staging-receipt",
+                    "bulk-manifest",
+                    bulk_manifest,
+                    "/inputs/bulk-manifest.json",
+                ),
+                identity(
+                    "staging-receipt",
                     staging_receipt,
-                    "/inputs/training-staging-receipt.json",
+                    "/inputs/staging-receipt.json",
                 ),
             ),
             scratch=scratch,
@@ -427,15 +418,18 @@ class SandboxPolicyTests(unittest.TestCase):
             parent_receipt_sha256=None,
             directory_capabilities=(
                 subject.SandboxDirectoryCapability(
-                    role="training-shards",
-                    source=training_shards,
-                    target=pathlib.PurePosixPath("/inputs/training-shards"),
-                    manifest_role="construction-manifest",
-                    staging_receipt_role="training-staging-receipt",
+                    role="bulk-inputs",
+                    source=bulk_inputs,
+                    target=pathlib.PurePosixPath("/inputs/bulk"),
+                    manifest_role="bulk-manifest",
+                    staging_receipt_role="staging-receipt",
                     read_only=True,
                 ),
             ),
-            phase_argv=("--preflight-tree-training",),
+            phase_argv=(),
+        )
+        policy = dataclasses.replace(
+            policy, phase_argv=subject.build_phase_argv(policy)
         )
         original_subject_file = subject.__file__
         subject.__file__ = str(launcher)
@@ -456,11 +450,11 @@ class SandboxPolicyTests(unittest.TestCase):
             self.assertEqual(tuple(scratch.iterdir()), ())
         finally:
             subject.__file__ = original_subject_file
-            for path in (manifest, staging_receipt, shard, launcher):
+            for path in (manifest, bulk_manifest, staging_receipt, shard, launcher):
                 if path.exists():
                     path.unlink()
-            if training_shards.exists():
-                training_shards.rmdir()
+            if bulk_inputs.exists():
+                bulk_inputs.rmdir()
             for path in (scratch, output):
                 if path.exists():
                     path.rmdir()
@@ -473,15 +467,20 @@ class SandboxPolicyTests(unittest.TestCase):
 
         preflight = dataclasses.replace(
             execute,
-            inputs=execute.inputs[:5],
-            phase_argv=("--preflight-development-evaluation",),
+            inputs=tuple(
+                mount for mount in execute.inputs if mount.role != "preflight-receipt"
+            ),
+            phase_argv=(),
+        )
+        preflight = dataclasses.replace(
+            preflight, phase_argv=subject.build_phase_argv(preflight)
         )
         subject.validate_phase_inputs(preflight)
         self.assertNotIn("query-parquet", {mount.role for mount in preflight.inputs})
         self.assertNotIn("d2-report", {mount.role for mount in preflight.inputs})
 
         leaked = dataclasses.replace(
-            preflight, inputs=preflight.inputs + (execute.inputs[-1],)
+            preflight, inputs=preflight.inputs + (_mount("query-parquet", "query.parquet"),)
         )
         with self.assertRaisesRegex(ValueError, "preflight input"):
             subject.validate_phase_inputs(leaked)
@@ -513,8 +512,13 @@ class SandboxPolicyTests(unittest.TestCase):
 
         preflight = dataclasses.replace(
             policy,
-            inputs=(policy.inputs[0], policy.inputs[2]),
-            phase_argv=("--preflight-tree-training",),
+            inputs=tuple(
+                mount for mount in policy.inputs if mount.role != "preflight-receipt"
+            ),
+            phase_argv=(),
+        )
+        preflight = dataclasses.replace(
+            preflight, phase_argv=subject.build_phase_argv(preflight)
         )
         subject.validate_phase_inputs(preflight)
         self.assertNotIn("dataset-meta", {mount.role for mount in preflight.inputs})
@@ -653,6 +657,7 @@ class SandboxPolicyTests(unittest.TestCase):
             source=mutable[0].source,
             target=mutable[0].target,
             read_only=False,
+            uri=mutable[0].uri,
             digest_algorithm=mutable[0].digest_algorithm,
             digest=mutable[0].digest,
             encoded_bytes=mutable[0].encoded_bytes,
@@ -805,14 +810,16 @@ class SandboxPolicyTests(unittest.TestCase):
             executable = root / "phase"
             runtime = root / "loader"
             manifest = root / "manifest"
+            bulk_manifest = root / "bulk-manifest"
             staging = root / "staging"
-            training_shards = root / "training-shards"
-            training_shards.mkdir()
-            shard = training_shards / "shard"
+            bulk_inputs = root / "bulk-inputs"
+            bulk_inputs.mkdir()
+            shard = bulk_inputs / "shard"
             for path, payload in (
                 (executable, b"executable"),
                 (runtime, b"runtime"),
                 (manifest, b"manifest"),
+                (bulk_manifest, b"bulk manifest"),
                 (staging, b"staging"),
                 (shard, b"shard"),
             ):
@@ -836,24 +843,24 @@ class SandboxPolicyTests(unittest.TestCase):
                 runtime_mounts=(authenticated(policy.runtime_mounts[0], runtime),),
                 inputs=(
                     authenticated(policy.inputs[0], manifest),
+                    authenticated(policy.inputs[1], bulk_manifest),
                     authenticated(policy.inputs[2], staging),
                 ),
                 directory_capabilities=(
                     dataclasses.replace(
-                        policy.directory_capabilities[0], source=training_shards
+                        policy.directory_capabilities[0], source=bulk_inputs
                     ),
                 ),
-                phase_argv=("--preflight-tree-training",),
+                phase_argv=(),
+            )
+            policy = dataclasses.replace(
+                policy, phase_argv=subject.build_phase_argv(policy)
             )
             subject.authenticate_policy_files(policy)
 
-            changed = dataclasses.replace(
-                policy,
-                inputs=(dataclasses.replace(policy.inputs[0], digest="33" * 32),)
-                + policy.inputs[1:],
-            )
-            with self.assertRaisesRegex(ValueError, "digest"):
-                subject.authenticate_policy_files(changed)
+            manifest.write_bytes(b"swapped")
+            with self.assertRaisesRegex(ValueError, "digest|length"):
+                subject.authenticate_policy_files(policy)
 
     def test_bound_mount_bytes_are_reauthenticated_before_pivot_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -861,15 +868,19 @@ class SandboxPolicyTests(unittest.TestCase):
             policy = _policy()
             policy = dataclasses.replace(
                 policy,
-                inputs=(policy.inputs[0], policy.inputs[2]),
-                phase_argv=("--preflight-tree-training",),
+                inputs=policy.inputs[:3],
+                phase_argv=(),
+            )
+            policy = dataclasses.replace(
+                policy, phase_argv=subject.build_phase_argv(policy)
             )
             targets = {
                 root / "phase/v23-incidence": b"executable",
                 root
                 / policy.runtime_mounts[0].target.as_posix().lstrip("/"): b"runtime",
                 root / policy.inputs[0].target.as_posix().lstrip("/"): b"manifest",
-                root / policy.inputs[1].target.as_posix().lstrip("/"): b"staging",
+                root / policy.inputs[1].target.as_posix().lstrip("/"): b"bulk manifest",
+                root / policy.inputs[2].target.as_posix().lstrip("/"): b"staging",
             }
             for path, payload in targets.items():
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -889,7 +900,8 @@ class SandboxPolicyTests(unittest.TestCase):
                 runtime_mounts=(identity(policy.runtime_mounts[0], b"runtime"),),
                 inputs=(
                     identity(policy.inputs[0], b"manifest"),
-                    identity(policy.inputs[1], b"staging"),
+                    identity(policy.inputs[1], b"bulk manifest"),
+                    identity(policy.inputs[2], b"staging"),
                 ),
             )
             directory_target = (
@@ -899,7 +911,7 @@ class SandboxPolicyTests(unittest.TestCase):
             directory_target.mkdir(parents=True)
             subject.authenticate_mounted_policy_files(root, policy)
 
-            (root / policy.inputs[1].target.as_posix().lstrip("/")).write_bytes(
+            (root / policy.inputs[2].target.as_posix().lstrip("/")).write_bytes(
                 b"swapped"
             )
             with self.assertRaisesRegex(ValueError, "digest|length"):

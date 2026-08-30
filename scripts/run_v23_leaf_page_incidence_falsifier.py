@@ -35,6 +35,7 @@ class SandboxMount:
     source: pathlib.Path
     target: pathlib.PurePosixPath
     read_only: bool
+    uri: str
     digest_algorithm: str
     digest: str
     encoded_bytes: int
@@ -187,62 +188,15 @@ def _phase_roles(phase: str, *, preflight: bool) -> tuple[set[str], tuple[str, .
             roles.add("preflight-receipt")
         return roles, prefixes
 
-    if phase == "tree-training":
-        roles = {"construction-manifest", "training-staging-receipt"}
-        if not preflight:
-            roles.add("dataset-meta")
-        return complete(roles, ("training-shards",))
-    if phase == "posting-construction":
-        return complete(
-            {
-                "phase-manifest",
-                "parent-receipt",
-                "incidence-tree",
-                "page-roster",
-                "page-staging-receipt",
-            },
-            ("page-corpus",),
-        )
-    if phase == "development-evaluation":
-        roles = {
-            "phase-manifest",
-            "parent-receipt",
-            "incidence-tree",
-            "incidence-postings-one",
-            "incidence-postings-two",
-        }
-        if not preflight:
-            roles.update({"d2-report", "query-parquet"})
-        return complete(roles, ())
-    if phase == "holdout-binding":
-        roles = {
-            "phase-manifest",
-            "parent-receipt",
-            "page-roster",
-            "page-staging-receipt",
-        }
-        if not preflight:
-            roles.update({"development-result", "neighbors-parquet"})
-        return complete(roles, ("page-corpus",))
-    if phase == "holdout-evaluation":
-        roles = {
-            "phase-manifest",
-            "parent-receipt",
-            "incidence-tree",
-            "incidence-postings-one",
-            "incidence-postings-two",
-        }
-        if not preflight:
-            roles.update(
-                {
-                    "development-result",
-                    "development-latency",
-                    "query-parquet",
-                    "holdout-truth",
-                }
-            )
-        return complete(roles, ())
-    raise ValueError("unknown V23 incidence phase")
+    if phase not in PHASES:
+        raise ValueError("unknown V23 incidence phase")
+    manifest_role = (
+        "construction-manifest" if phase == "tree-training" else "phase-manifest"
+    )
+    return complete(
+        {manifest_role, "bulk-manifest", "staging-receipt"},
+        ("bulk-inputs",),
+    )
 
 
 def _validate_mount(mount: SandboxMount, *, runtime: bool) -> None:
@@ -250,6 +204,7 @@ def _validate_mount(mount: SandboxMount, *, runtime: bool) -> None:
         not mount.role
         or not mount.source.is_absolute()
         or not mount.target.is_absolute()
+        or not mount.uri
     ):
         raise ValueError("sandbox mounts require an absolute source and target")
     if not mount.read_only:
@@ -294,6 +249,74 @@ def _validate_mount(mount: SandboxMount, *, runtime: bool) -> None:
         expected_algorithm = "blake3" if blake3_role else "sha256"
         if mount.digest_algorithm != expected_algorithm:
             raise ValueError("phase input digest algorithm differs")
+
+
+def build_phase_argv(policy: SandboxPolicy) -> tuple[str, ...]:
+    """Build the exact corpus-size-independent Rust phase argv."""
+
+    def one_mount(role: str) -> SandboxMount:
+        matches = tuple(mount for mount in policy.inputs if mount.role == role)
+        if len(matches) != 1:
+            raise ValueError(f"{role} mount authority differs")
+        return matches[0]
+
+    def authority_arguments(
+        flag: str, prefix: str, mount: SandboxMount
+    ) -> tuple[str, ...]:
+        return (
+            flag,
+            mount.target.as_posix(),
+            f"--{prefix}-uri",
+            mount.uri,
+            f"--{prefix}-sha256",
+            mount.digest,
+            f"--{prefix}-bytes",
+            str(mount.encoded_bytes),
+            f"--{prefix}-generation",
+            mount.generation,
+        )
+
+    preflight_receipts = tuple(
+        mount for mount in policy.inputs if mount.role == "preflight-receipt"
+    )
+    if len(preflight_receipts) > 1:
+        raise ValueError("preflight receipt mount authority differs")
+    execute = bool(preflight_receipts)
+    manifest_role = (
+        "construction-manifest"
+        if policy.phase == "tree-training"
+        else "phase-manifest"
+    )
+    if len(policy.directory_capabilities) != 1:
+        raise ValueError("bulk directory capability differs")
+    capability = policy.directory_capabilities[0]
+    arguments = (
+        f"--{'execute' if execute else 'preflight'}-{policy.phase}",
+        *authority_arguments("--manifest", "manifest", one_mount(manifest_role)),
+        *authority_arguments(
+            "--bulk-manifest", "bulk-manifest", one_mount("bulk-manifest")
+        ),
+        "--staging-directory",
+        capability.target.as_posix(),
+        *authority_arguments(
+            "--staging-receipt", "staging-receipt", one_mount("staging-receipt")
+        ),
+    )
+    if preflight_receipts:
+        arguments += authority_arguments(
+            "--preflight-receipt", "preflight-receipt", preflight_receipts[0]
+        )
+    arguments += (
+        "--scratch",
+        "/scratch",
+        "--output",
+        "/output/receipt.json",
+        "--executable-sha256",
+        policy.executable_sha256,
+    )
+    if sum(len(argument) + 1 for argument in arguments) >= 16_384:
+        raise ValueError("phase argv exceeds the registered bound")
+    return arguments
 
 
 def validate_phase_inputs(policy: SandboxPolicy) -> None:
@@ -416,8 +439,7 @@ def validate_phase_inputs(policy: SandboxPolicy) -> None:
     if actual_directory_roles != directory_roles:
         raise ValueError("phase directory capability differs")
     expected_directory_bindings = {
-        "training-shards": ("construction-manifest", "training-staging-receipt"),
-        "page-corpus": ("phase-manifest", "page-staging-receipt"),
+        "bulk-inputs": ("bulk-manifest", "staging-receipt"),
     }
     for capability in policy.directory_capabilities:
         if (
@@ -425,6 +447,8 @@ def validate_phase_inputs(policy: SandboxPolicy) -> None:
             capability.staging_receipt_role,
         ) != expected_directory_bindings[capability.role]:
             raise ValueError("phase directory authority differs")
+    if policy.phase_argv != build_phase_argv(policy):
+        raise ValueError("phase argv authority differs")
 
 
 def _policy_value(policy: SandboxPolicy) -> dict[str, object]:
@@ -438,6 +462,7 @@ def _policy_value(policy: SandboxPolicy) -> dict[str, object]:
             "role": mount.role,
             "source": str(mount.source),
             "target": mount.target.as_posix(),
+            "uri": mount.uri,
         }
 
     return {
@@ -513,6 +538,7 @@ def decode_policy_bytes(raw: bytes) -> SandboxPolicy:
             "role",
             "source",
             "target",
+            "uri",
         }:
             raise ValueError("sandbox policy schema differs")
         if (
@@ -524,6 +550,7 @@ def decode_policy_bytes(raw: bytes) -> SandboxPolicy:
             or type(item["role"]) is not str
             or type(item["source"]) is not str
             or type(item["target"]) is not str
+            or type(item["uri"]) is not str
         ):
             raise ValueError("sandbox policy concrete type differs")
         return SandboxMount(
@@ -531,6 +558,7 @@ def decode_policy_bytes(raw: bytes) -> SandboxPolicy:
             source=pathlib.Path(item["source"]),
             target=pathlib.PurePosixPath(item["target"]),
             read_only=item["read_only"],
+            uri=item["uri"],
             digest_algorithm=item["digest_algorithm"],
             digest=item["digest"],
             encoded_bytes=item["encoded_bytes"],
