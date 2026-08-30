@@ -1,6 +1,11 @@
-use std::{cmp::Ordering, collections::BinaryHeap};
+use std::{
+    cmp::Ordering,
+    collections::BinaryHeap,
+    sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
+};
 
 use half::f16;
+use rayon::{ThreadPool, ThreadPoolBuilder, prelude::*};
 use sha2::{Digest, Sha256};
 
 use crate::{BorsukError, Result, v23_incidence::V23FmaBackend};
@@ -109,6 +114,143 @@ pub(crate) struct V23TrainingWork {
     pub(crate) lloyd_dimensions: u64,
     pub(crate) repartition_dimensions: u64,
     pub(crate) total_distance_dimensions: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct V23TrainingExecution {
+    worker_threads: usize,
+    resident_workers: usize,
+    workers_used: u32,
+    batch_rows: usize,
+    parallel_batches: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct V23IncidenceTrainingOutcome {
+    tree: V23IncidenceTree,
+    execution: V23TrainingExecution,
+}
+
+struct TrainingContext {
+    pool: ThreadPool,
+    worker_threads: usize,
+    batch_rows: usize,
+    parallel_batches: AtomicU64,
+    workers_used: AtomicU64,
+}
+
+impl TrainingContext {
+    fn new(worker_threads: usize, batch_rows: usize) -> Result<Self> {
+        if !(1..=64).contains(&worker_threads)
+            || batch_rows == 0
+            || rayon::current_thread_index().is_some()
+        {
+            return Err(invalid("V23 incidence execution shape differs"));
+        }
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(worker_threads)
+            .thread_name(|index| format!("borsuk-v23-train-{index}"))
+            .build()
+            .map_err(|_| invalid("V23 incidence training pool differs"))?;
+        Ok(Self {
+            pool,
+            worker_threads,
+            batch_rows,
+            parallel_batches: AtomicU64::new(0),
+            workers_used: AtomicU64::new(0),
+        })
+    }
+
+    fn record_worker(&self) {
+        if let Some(index) = rayon::current_thread_index() {
+            self.workers_used
+                .fetch_or(1_u64 << index, AtomicOrdering::Relaxed);
+        }
+    }
+
+    fn record_row_batch(&self) {
+        self.parallel_batches.fetch_add(1, AtomicOrdering::Relaxed);
+        self.record_worker();
+    }
+
+    fn map_batches<T, U, F>(&self, values: &[T], map: F) -> Vec<U>
+    where
+        T: Sync,
+        U: Send,
+        F: Fn(&[T]) -> U + Send + Sync,
+    {
+        if values.len() <= self.batch_rows {
+            return vec![map(values)];
+        }
+        self.pool.install(|| {
+            values
+                .par_chunks(self.batch_rows)
+                .map(|batch| {
+                    self.record_row_batch();
+                    map(batch)
+                })
+                .collect()
+        })
+    }
+
+    fn map_items<T, U, F>(&self, values: &[T], map: F) -> Vec<U>
+    where
+        T: Sync,
+        U: Send,
+        F: Fn(&T) -> U + Send + Sync,
+    {
+        if values.len() <= 1 {
+            return values.iter().map(map).collect();
+        }
+        self.pool.install(|| {
+            values
+                .par_iter()
+                .map(|value| {
+                    self.record_worker();
+                    map(value)
+                })
+                .collect::<Vec<_>>()
+        })
+    }
+
+    fn try_fill_batches<T, U, F>(&self, input: &[T], output: &mut [U], map: F) -> Result<()>
+    where
+        T: Sync,
+        U: Send,
+        F: Fn(&T) -> Result<U> + Send + Sync,
+    {
+        if input.len() != output.len() {
+            return Err(invalid("V23 incidence training batch length differs"));
+        }
+        if input.len() <= self.batch_rows {
+            for (input, output) in input.iter().zip(output) {
+                *output = map(input)?;
+            }
+            return Ok(());
+        }
+        self.pool.install(|| {
+            output
+                .par_chunks_mut(self.batch_rows)
+                .zip(input.par_chunks(self.batch_rows))
+                .try_for_each(|(output, input)| {
+                    self.record_row_batch();
+                    for (input, output) in input.iter().zip(output) {
+                        *output = map(input)?;
+                    }
+                    Ok(())
+                })
+        })
+    }
+
+    fn execution(&self) -> V23TrainingExecution {
+        V23TrainingExecution {
+            worker_threads: self.worker_threads,
+            resident_workers: self.pool.current_num_threads(),
+            workers_used: self.workers_used.load(AtomicOrdering::Relaxed).count_ones(),
+            batch_rows: self.batch_rows,
+            parallel_batches: self.parallel_batches.load(AtomicOrdering::Relaxed),
+        }
+    }
 }
 
 fn training_work(shape: V23IncidenceTrainingShape) -> Result<V23TrainingWork> {
@@ -324,24 +466,38 @@ fn reservoir_vector(row: &V23ReservoirRow) -> [f32; 96] {
     row.vector.map(f16::to_f32)
 }
 
-fn centroid(rows: &[usize], reservoir: &[V23ReservoirRow]) -> Result<[f32; 96]> {
+fn centroid(
+    rows: &[usize],
+    reservoir: &[V23ReservoirRow],
+    context: &TrainingContext,
+) -> Result<[f32; 96]> {
     if rows.is_empty() {
         return Err(invalid("V23 incidence tree node is empty"));
     }
     let mut ordered = rows.to_vec();
     ordered.sort_unstable_by_key(|index| reservoir[*index].source_ordinal);
-    let mut partials = ordered
-        .chunks(4096)
-        .map(|chunk| {
-            let mut partial = [0.0_f64; 96];
-            for index in chunk {
-                for (sum, value) in partial.iter_mut().zip(reservoir_vector(&reservoir[*index])) {
-                    *sum += f64::from(value);
-                }
+    let sum_partial = |batch: &[usize]| {
+        let mut partial = [0.0_f64; 96];
+        for index in batch {
+            for (sum, value) in partial.iter_mut().zip(reservoir_vector(&reservoir[*index])) {
+                *sum += f64::from(value);
             }
-            partial
+        }
+        partial
+    };
+    let mut partials = if ordered.len() <= 4096 {
+        vec![sum_partial(&ordered)]
+    } else {
+        context.pool.install(|| {
+            ordered
+                .par_chunks(4096)
+                .map(|batch| {
+                    context.record_worker();
+                    sum_partial(batch)
+                })
+                .collect::<Vec<_>>()
         })
-        .collect::<Vec<_>>();
+    };
     partials.resize(partials.len().next_power_of_two(), [0.0_f64; 96]);
     while partials.len() > 1 {
         let mut merged = Vec::with_capacity(partials.len() / 2);
@@ -374,6 +530,7 @@ fn train_split(
     reservoir: &[V23ReservoirRow],
     shape: V23IncidenceTrainingShape,
     use_fused: bool,
+    context: &TrainingContext,
 ) -> Result<(V23TreeNode, Vec<usize>, Vec<usize>)> {
     if members.len() < 2 {
         return Err(invalid("V23 incidence tree split is empty"));
@@ -383,66 +540,89 @@ fn train_split(
         .min_by_key(|index| reservoir[**index].source_ordinal)
         .unwrap();
     let first_vector = reservoir_vector(&reservoir[first]);
-    let second = *members
-        .iter()
-        .filter(|index| **index != first)
+    let farthest = context.map_batches(members, |batch| {
+        let mut farthest = None;
+        for index in batch.iter().filter(|index| **index != first) {
+            let vector = reservoir_vector(&reservoir[*index]);
+            let candidate = (
+                1.0 - training_dot(use_fused, &first_vector, &vector)?,
+                reservoir[*index].source_ordinal,
+                *index,
+            );
+            if farthest.as_ref().is_none_or(|current: &(f32, u64, usize)| {
+                candidate
+                    .0
+                    .total_cmp(&current.0)
+                    .then_with(|| current.1.cmp(&candidate.1))
+                    .is_gt()
+            }) {
+                farthest = Some(candidate);
+            }
+        }
+        Ok(farthest)
+    });
+    let second = farthest
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .max_by(|left, right| {
-            let left_vector = reservoir_vector(&reservoir[**left]);
-            let right_vector = reservoir_vector(&reservoir[**right]);
-            let left_distance = 1.0 - training_dot(use_fused, &first_vector, &left_vector).unwrap();
-            let right_distance =
-                1.0 - training_dot(use_fused, &first_vector, &right_vector).unwrap();
-            left_distance.total_cmp(&right_distance).then_with(|| {
-                reservoir[**right]
-                    .source_ordinal
-                    .cmp(&reservoir[**left].source_ordinal)
-            })
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| right.1.cmp(&left.1))
         })
-        .unwrap();
+        .ok_or_else(|| invalid("V23 incidence tree split is empty"))?
+        .2;
     let mut zero = first_vector;
     let mut one = reservoir_vector(&reservoir[second]);
     for _ in 0..shape.lloyd_iterations {
-        let mut zero_members = Vec::new();
-        let mut one_members = Vec::new();
-        for index in members {
+        let mut assignments = vec![0_u8; members.len()];
+        context.try_fill_batches(members, &mut assignments, |index| {
             let vector = reservoir_vector(&reservoir[*index]);
             let zero_distance = 1.0 - training_dot(use_fused, &vector, &zero)?;
             let one_distance = 1.0 - training_dot(use_fused, &vector, &one)?;
-            if zero_distance.total_cmp(&one_distance).is_le() {
+            Ok(u8::from(zero_distance.total_cmp(&one_distance).is_gt()))
+        })?;
+        let one_count = assignments
+            .iter()
+            .map(|assignment| *assignment as usize)
+            .sum();
+        let mut zero_members = Vec::with_capacity(members.len() - one_count);
+        let mut one_members = Vec::with_capacity(one_count);
+        for (index, assignment) in members.iter().zip(assignments) {
+            if assignment == 0 {
                 zero_members.push(*index);
             } else {
                 one_members.push(*index);
             }
         }
-        zero = centroid(&zero_members, reservoir)?;
-        one = centroid(&one_members, reservoir)?;
+        zero = centroid(&zero_members, reservoir, context)?;
+        one = centroid(&one_members, reservoir, context)?;
     }
     let (child_zero, child_zero_inverse_norm) = roundtrip_centroid(&zero)?;
     let (child_one, child_one_inverse_norm) = roundtrip_centroid(&one)?;
-    let mut scored = members
-        .iter()
-        .map(|index| {
-            let placeholder = V23TreeNode {
-                child_zero,
-                child_one,
-                child_zero_inverse_norm,
-                child_one_inverse_norm,
-                boundary_score_bits: 0,
-                boundary_source_ordinal: 0,
-                child_zero_index: 0,
-                child_one_index: 0,
-            };
-            Ok((
-                if use_fused {
-                    split_score_simd(&placeholder, &reservoir_vector(&reservoir[*index]))?.0
-                } else {
-                    split_score_scalar(&placeholder, &reservoir_vector(&reservoir[*index]))
-                },
-                reservoir[*index].source_ordinal,
-                *index,
-            ))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let placeholder = V23TreeNode {
+        child_zero,
+        child_one,
+        child_zero_inverse_norm,
+        child_one_inverse_norm,
+        boundary_score_bits: 0,
+        boundary_source_ordinal: 0,
+        child_zero_index: 0,
+        child_one_index: 0,
+    };
+    let mut scored = vec![(0.0_f32, 0_u64, 0_usize); members.len()];
+    context.try_fill_batches(members, &mut scored, |index| {
+        Ok((
+            if use_fused {
+                split_score_simd(&placeholder, &reservoir_vector(&reservoir[*index]))?.0
+            } else {
+                split_score_scalar(&placeholder, &reservoir_vector(&reservoir[*index]))
+            },
+            reservoir[*index].source_ordinal,
+            *index,
+        ))
+    })?;
     scored.sort_unstable_by(|left, right| {
         left.0
             .total_cmp(&right.0)
@@ -468,8 +648,13 @@ fn train_split(
     ))
 }
 
-fn leaf(members: &[usize], reservoir: &[V23ReservoirRow], use_fused: bool) -> Result<V23TreeLeaf> {
-    let center = centroid(members, reservoir)?;
+fn leaf(
+    members: &[usize],
+    reservoir: &[V23ReservoirRow],
+    use_fused: bool,
+    context: &TrainingContext,
+) -> Result<V23TreeLeaf> {
+    let center = centroid(members, reservoir, context)?;
     let (centroid, inverse_norm) = roundtrip_centroid(&center)?;
     let decoded = centroid.map(f16::to_f32);
     let mut residual = 0.0_f64;
@@ -513,9 +698,24 @@ fn train_incidence_tree_internal(
     batch_rows: usize,
     use_fused: bool,
 ) -> Result<V23IncidenceTree> {
+    Ok(
+        train_incidence_tree_internal_with_execution(rows, shape, threads, batch_rows, use_fused)?
+            .tree,
+    )
+}
+
+fn train_incidence_tree_internal_with_execution(
+    rows: &[V23TrainingRow],
+    shape: V23IncidenceTrainingShape,
+    threads: usize,
+    batch_rows: usize,
+    use_fused: bool,
+) -> Result<V23IncidenceTrainingOutcome> {
     let seed = reservoir_seed("77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d")?;
     let reservoir = select_reservoir(rows, shape, seed)?;
-    train_incidence_tree_from_reservoir(reservoir, shape, seed, threads, batch_rows, use_fused)
+    train_incidence_tree_from_reservoir_with_execution(
+        reservoir, shape, seed, threads, batch_rows, use_fused,
+    )
 }
 
 fn train_incidence_tree_from_reservoir(
@@ -526,9 +726,21 @@ fn train_incidence_tree_from_reservoir(
     batch_rows: usize,
     use_fused: bool,
 ) -> Result<V23IncidenceTree> {
-    if threads == 0 || batch_rows == 0 {
-        return Err(invalid("V23 incidence execution shape differs"));
-    }
+    Ok(train_incidence_tree_from_reservoir_with_execution(
+        reservoir, shape, seed, threads, batch_rows, use_fused,
+    )?
+    .tree)
+}
+
+fn train_incidence_tree_from_reservoir_with_execution(
+    reservoir: Vec<V23ReservoirRow>,
+    shape: V23IncidenceTrainingShape,
+    seed: u64,
+    threads: usize,
+    batch_rows: usize,
+    use_fused: bool,
+) -> Result<V23IncidenceTrainingOutcome> {
+    let context = TrainingContext::new(threads, batch_rows)?;
     if use_fused {
         borsuk_fma::fused_dot_8x12(&[0.0; 96], &[0.0; 96])
             .map_err(|_| invalid("V23 incidence fused SIMD backend is unavailable"))?;
@@ -537,9 +749,14 @@ fn train_incidence_tree_from_reservoir(
     let node_count = (1_usize << shape.depth) - 1;
     let mut nodes = Vec::with_capacity(node_count);
     for level in 0..shape.depth {
-        let mut next = Vec::with_capacity(groups.len() * 2);
-        for (group_index, group) in groups.iter().enumerate() {
-            let (mut node, zero, one) = train_split(group, &reservoir, shape, use_fused)?;
+        let splits = context
+            .map_items(&groups, |group| {
+                train_split(group, &reservoir, shape, use_fused, &context)
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let mut next = Vec::with_capacity(splits.len() * 2);
+        for (group_index, (mut node, zero, one)) in splits.into_iter().enumerate() {
             let child_base = (1_usize << (level + 1)) - 1 + group_index * 2;
             if level + 1 == shape.depth {
                 node.child_zero_index = u32::try_from(node_count + group_index * 2)
@@ -558,16 +775,22 @@ fn train_incidence_tree_from_reservoir(
         }
         groups = next;
     }
-    let leaves = groups
-        .iter()
-        .map(|group| leaf(group, &reservoir, use_fused))
+    let leaves = context
+        .map_items(&groups, |group| {
+            leaf(group, &reservoir, use_fused, &context)
+        })
+        .into_iter()
         .collect::<Result<Vec<_>>>()?;
-    Ok(V23IncidenceTree {
+    let tree = V23IncidenceTree {
         shape,
         reservoir_seed: seed,
         work: training_work(shape)?,
         nodes,
         leaves,
+    };
+    Ok(V23IncidenceTrainingOutcome {
+        tree,
+        execution: context.execution(),
     })
 }
 
@@ -581,6 +804,16 @@ fn train_incidence_tree_streaming_with_shape(
 ) -> Result<V23IncidenceTree> {
     let reservoir = select_reservoir_streaming(rows, shape, seed)?.rows;
     train_incidence_tree_from_reservoir(reservoir, shape, seed, threads, batch_rows, false)
+}
+
+#[cfg(test)]
+fn train_incidence_tree_with_shape_and_execution(
+    rows: &[V23TrainingRow],
+    shape: V23IncidenceTrainingShape,
+    threads: usize,
+    batch_rows: usize,
+) -> Result<V23IncidenceTrainingOutcome> {
+    train_incidence_tree_internal_with_execution(rows, shape, threads, batch_rows, false)
 }
 
 pub(crate) fn train_incidence_tree(
@@ -910,7 +1143,8 @@ mod tests {
         V23TreeNode, assign_one_leaf, assign_two_beam_leaves, decode_incidence_tree,
         encode_incidence_tree, reservoir_seed, select_reservoir_streaming, split_score_scalar,
         split_score_simd, train_incidence_tree_streaming_with_shape,
-        train_incidence_tree_with_shape, train_incidence_tree_with_shape_fused, training_work,
+        train_incidence_tree_with_shape, train_incidence_tree_with_shape_and_execution,
+        train_incidence_tree_with_shape_fused, training_work,
     };
 
     fn row(ordinal: u64) -> V23TrainingRow {
@@ -1088,6 +1322,24 @@ mod tests {
         let mut nonfinite = rows;
         nonfinite[3].vector[7] = f32::NAN;
         assert!(train_incidence_tree_with_shape(&nonfinite, shape(), 1, 8).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_tree_parallel_execution_uses_registered_workers_and_batches() {
+        let rows = (0..64).map(row).collect::<Vec<_>>();
+        let control = train_incidence_tree_with_shape(&rows, shape(), 1, 16).unwrap();
+        let parallel = train_incidence_tree_with_shape_and_execution(&rows, shape(), 8, 7).unwrap();
+
+        assert_eq!(parallel.execution.worker_threads, 8);
+        assert_eq!(parallel.execution.resident_workers, 8);
+        assert!(parallel.execution.workers_used > 1);
+        assert_eq!(parallel.execution.batch_rows, 7);
+        assert_eq!(parallel.execution.parallel_batches, 114);
+        assert_eq!(
+            encode_incidence_tree(&parallel.tree).unwrap(),
+            encode_incidence_tree(&control).unwrap()
+        );
+        assert!(train_incidence_tree_with_shape_and_execution(&rows, shape(), 65, 7).is_err());
     }
 
     fn reference_dot(left: &[f32; 96], right: &[f32; 96]) -> f32 {
