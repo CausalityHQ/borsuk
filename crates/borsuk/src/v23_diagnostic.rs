@@ -1284,7 +1284,10 @@ fn v23_global_adc_read_queries(bytes: &[u8], query_ordinals: &[u64]) -> Result<V
     }
     let expected_schema = Schema::new(vec![Field::new(
         "emb",
-        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), 96),
+        DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            96,
+        ),
         false,
     )]);
     let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
@@ -7282,43 +7285,60 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
+    #[derive(Clone, Copy)]
+    struct GlobalAdcQueryShape {
+        dimensions: usize,
+        child_name: &'static str,
+        field_nullable: bool,
+        child_nullable: bool,
+    }
+
+    const AUTHENTIC_GLOBAL_ADC_QUERY_SHAPE: GlobalAdcQueryShape = GlobalAdcQueryShape {
+        dimensions: 96,
+        child_name: "element",
+        field_nullable: false,
+        child_nullable: false,
+    };
+
     fn write_global_adc_query_fixture(
         path: &PathBuf,
         queries: &[Vec<f32>],
         physical_rows: usize,
-        dimensions: usize,
-        field_nullable: bool,
-        item_nullable: bool,
+        shape: GlobalAdcQueryShape,
         non_finite_at: Option<(usize, usize)>,
     ) {
         assert_eq!(queries.len(), V23_DIAGNOSTIC_QUERIES);
         assert!(physical_rows >= queries.len());
-        let mut values = Vec::with_capacity(physical_rows * dimensions);
+        let mut values = Vec::with_capacity(physical_rows * shape.dimensions);
         for row in 0..physical_rows {
             if let Some(query) = queries.get(row) {
-                values.extend_from_slice(&query[..dimensions]);
+                values.extend_from_slice(&query[..shape.dimensions]);
             } else {
                 values.extend(
-                    (0..dimensions)
+                    (0..shape.dimensions)
                         .map(|dimension| (((row * 17 + dimension * 13) % 251) + 1) as f32 / 252.0),
                 );
             }
         }
         if let Some((row, dimension)) = non_finite_at {
-            values[row * dimensions + dimension] = f32::NAN;
+            values[row * shape.dimensions + dimension] = f32::NAN;
         }
-        let item = Arc::new(Field::new("item", DataType::Float32, item_nullable));
+        let item = Arc::new(Field::new(
+            shape.child_name,
+            DataType::Float32,
+            shape.child_nullable,
+        ));
         let embeddings = FixedSizeListArray::try_new(
             Arc::clone(&item),
-            dimensions as i32,
+            shape.dimensions as i32,
             Arc::new(Float32Array::from(values)),
             None,
         )
         .unwrap();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "emb",
-            DataType::FixedSizeList(item, dimensions as i32),
-            field_nullable,
+            DataType::FixedSizeList(item, shape.dimensions as i32),
+            shape.field_nullable,
         )]));
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(embeddings)]).unwrap();
         let file = fs::File::create(path).unwrap();
@@ -7328,7 +7348,13 @@ mod tests {
     }
 
     fn write_global_adc_queries(path: &PathBuf, queries: &[Vec<f32>], physical_rows: usize) {
-        write_global_adc_query_fixture(path, queries, physical_rows, 96, false, false, None);
+        write_global_adc_query_fixture(
+            path,
+            queries,
+            physical_rows,
+            AUTHENTIC_GLOBAL_ADC_QUERY_SHAPE,
+            None,
+        );
     }
 
     fn global_adc_file_sha256(path: &PathBuf) -> String {
@@ -7715,7 +7741,10 @@ mod tests {
             query_builder.schema().as_ref(),
             &Schema::new(vec![Field::new(
                 "emb",
-                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), 96,),
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    96,
+                ),
                 false,
             )])
         );
@@ -7830,7 +7859,7 @@ mod tests {
             );
         }
 
-        for mutation in 0..5 {
+        for mutation in 0..6 {
             let fixture = global_adc_fixture();
             let (d1_report, d2_report) = global_adc_artifact_reports(&fixture);
             let mut bundle = global_adc_local_bundle_from_fixture(&fixture, d1_report, d2_report);
@@ -7840,37 +7869,48 @@ mod tests {
                     &bundle.paths.query,
                     &fixture.queries,
                     10_000,
-                    95,
-                    false,
-                    false,
+                    GlobalAdcQueryShape {
+                        dimensions: 95,
+                        ..AUTHENTIC_GLOBAL_ADC_QUERY_SHAPE
+                    },
                     None,
                 ),
                 2 => write_global_adc_query_fixture(
                     &bundle.paths.query,
                     &fixture.queries,
                     10_000,
-                    96,
-                    true,
-                    false,
+                    GlobalAdcQueryShape {
+                        field_nullable: true,
+                        ..AUTHENTIC_GLOBAL_ADC_QUERY_SHAPE
+                    },
                     None,
                 ),
                 3 => write_global_adc_query_fixture(
                     &bundle.paths.query,
                     &fixture.queries,
                     10_000,
-                    96,
-                    false,
-                    true,
+                    GlobalAdcQueryShape {
+                        child_nullable: true,
+                        ..AUTHENTIC_GLOBAL_ADC_QUERY_SHAPE
+                    },
                     None,
                 ),
                 4 => write_global_adc_query_fixture(
                     &bundle.paths.query,
                     &fixture.queries,
                     10_000,
-                    96,
-                    false,
-                    false,
+                    AUTHENTIC_GLOBAL_ADC_QUERY_SHAPE,
                     Some((9_999, 95)),
+                ),
+                5 => write_global_adc_query_fixture(
+                    &bundle.paths.query,
+                    &fixture.queries,
+                    10_000,
+                    GlobalAdcQueryShape {
+                        child_name: "item",
+                        ..AUTHENTIC_GLOBAL_ADC_QUERY_SHAPE
+                    },
+                    None,
                 ),
                 _ => unreachable!(),
             }
