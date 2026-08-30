@@ -87,6 +87,11 @@ mod v21_feasibility;
 )]
 mod v22_feasibility;
 mod v23_diagnostic;
+#[allow(
+    dead_code,
+    reason = "V23 incidence components are wired incrementally by the committed plan"
+)]
+mod v23_incidence;
 
 /// Print and reset the env-gated (`BORSUK_BUILD_TIMING=1`) per-phase build timing
 /// breakdown accumulated since the last call. When
