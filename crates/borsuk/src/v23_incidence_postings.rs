@@ -7,6 +7,7 @@ use std::{
 };
 
 use half::f16;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     BorsukError, Result,
@@ -29,7 +30,8 @@ const RETAINED_MASS_MINIMUM_PPM: u64 = 995_000;
 const QUANTIZATION_TV_MAXIMUM_PPM: u64 = 5_000;
 const PLANE_MAGIC: &[u8; 8] = b"BVIP\x01\0\0\0";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum PostingAssignmentArm {
     OneLeaf,
     TwoBeamLeaves,

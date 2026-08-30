@@ -1270,9 +1270,14 @@ fn v23_global_adc_json_u64(value: &serde_json::Value, key: &str, role: &str) -> 
         .ok_or_else(|| BorsukError::InvalidStorage(format!("V23 global ADC {role} {key} differs")))
 }
 
-fn v23_global_adc_read_queries(bytes: &[u8], query_ordinals: &[u64]) -> Result<Vec<Vec<f32>>> {
+pub(crate) fn read_v23_query_vectors(
+    bytes: &[u8],
+    query_ordinals: &[u64],
+    expected_queries: usize,
+) -> Result<Vec<Vec<f32>>> {
     const V23_GLOBAL_ADC_QUERY_ROWS: u64 = 10_000;
-    if query_ordinals.len() != V23_DIAGNOSTIC_QUERIES
+    if query_ordinals.len() != expected_queries
+        || expected_queries == 0
         || query_ordinals.windows(2).any(|pair| pair[0] >= pair[1])
         || query_ordinals
             .last()
@@ -1298,7 +1303,7 @@ fn v23_global_adc_read_queries(bytes: &[u8], query_ordinals: &[u64]) -> Result<V
             "V23 global ADC query Parquet schema differs".to_string(),
         ));
     }
-    let mut queries = vec![None; V23_DIAGNOSTIC_QUERIES];
+    let mut queries = vec![None; expected_queries];
     let mut physical_row = 0_u64;
     for batch in builder.build()? {
         let batch = batch?;
@@ -1855,7 +1860,11 @@ pub(crate) fn load_v23_global_adc_local_artifacts(
             "V23 global ADC D2 result derivation differs".to_string(),
         ));
     }
-    let queries = v23_global_adc_read_queries(&query_bytes, &d1_report.query_ordinals)?;
+    let queries = read_v23_query_vectors(
+        &query_bytes,
+        &d1_report.query_ordinals,
+        V23_DIAGNOSTIC_QUERIES,
+    )?;
     let loaded = V23GlobalAdcLoadedLocalArtifacts {
         d1_report,
         d2_report,

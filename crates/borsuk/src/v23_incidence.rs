@@ -399,7 +399,7 @@ fn validate_manifest_inputs(manifest: &V23IncidenceManifest) -> Result<()> {
     validate_identity_list(&identities)
 }
 
-fn canonical_json_value(value: serde_json::Value) -> serde_json::Value {
+pub(crate) fn canonical_json_value(value: serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Array(values) => {
             serde_json::Value::Array(values.into_iter().map(canonical_json_value).collect())
