@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -274,6 +275,86 @@ def _canonical_payload(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
 
 
+_REVISION4_FIXTURE_SHA256 = {
+    "RUNTIME_TERMINAL_COMPLETE.json": (
+        "db12dd670ae5121fa4d90147fba7816d6a20878764a28d089be45be1138579ef"
+    ),
+    "RESULT_COMPLETE.json": (
+        "41ec2b4eb9e0506f4732c2e0ff34d92e1493b24953669c486fc5714a38002a00"
+    ),
+    "bench_v23_d2_report.json": (
+        "665dc206d04073b8cbc0b8bab9e5645760440d2336ddf4bfebea81d176b4779d"
+    ),
+    "bench_v23_pages.json": (
+        "dfa5759c06663655b4a963a7687b40c8bd8020bebf805d7c825a88c6d0df53e1"
+    ),
+    "test.parquet": (
+        "296d45828020c1c0b88c6a1d5c822f6283280513b8c58d01cfa961f3a139a5d4"
+    ),
+}
+_REVISION4_BUCKET = "borsuk-bench-453182569524-euc1"
+_REVISION4_ATTEMPT_KEY_PREFIX = (
+    "publication/v3/20260812/results/r01-f7a6e06a6a40c1165b6cb889/"
+    "runtime-v23-d2/arms/0000/attempts/0001/"
+)
+
+
+class _FirstPageAccessForbidden:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def get_object(self, *, Bucket: str, Key: str) -> object:
+        self.calls.append((Bucket, Key))
+        raise RuntimeError("PAGE_S3_ACCESS_FORBIDDEN")
+
+
+class _Revision4Session:
+    def __init__(self, client: _FirstPageAccessForbidden) -> None:
+        self._client = client
+
+    def client(self, service_name: str, *, region_name: str, config: object) -> object:
+        if service_name != "s3" or region_name != "eu-central-1" or config is None:
+            raise AssertionError("Revision-4 S3 client authority differs")
+        return self._client
+
+
+def _revision4_boto3_module(
+    client: _FirstPageAccessForbidden,
+) -> types.ModuleType:
+    module = types.ModuleType("boto3")
+
+    def session(*, profile_name: str) -> _Revision4Session:
+        if profile_name != "causality":
+            raise AssertionError("Revision-4 AWS profile differs")
+        return _Revision4Session(client)
+
+    module.Session = session  # type: ignore[attr-defined]
+    return module
+
+
+def _registered_prefetch_locations(root: Path) -> tuple[tuple[str, str], ...]:
+    roster = json.loads((root / "bench_v23_pages.json").read_bytes())
+    if type(roster) is not dict or type(roster.get("pages")) is not list:
+        raise AssertionError("registered Revision-4 page roster shape differs")
+    locations = []
+    for expected_ordinal, page in enumerate(roster["pages"][:4]):
+        if (
+            type(page) is not dict
+            or page.get("page_ordinal") != expected_ordinal
+            or type(page.get("path")) is not str
+        ):
+            raise AssertionError("registered Revision-4 prefetch page differs")
+        locations.append(
+            (
+                _REVISION4_BUCKET,
+                _REVISION4_ATTEMPT_KEY_PREFIX + page["path"],
+            )
+        )
+    if len(locations) != 4:
+        raise AssertionError("registered Revision-4 prefetch roster is incomplete")
+    return tuple(locations)
+
+
 def _json_page(page_ordinal: int) -> dict[str, object]:
     checksum = f"{page_ordinal + 1:02x}" * 32
     return {
@@ -350,29 +431,100 @@ def _fixture_terminal(
     }
 
 
+def _fixture_result(
+    registered: subject.RegisteredAuthority,
+    report: dict[str, object],
+    digests: dict[str, str],
+) -> dict[str, object]:
+    return {
+        "schema": "borsuk-v23-summary-v1",
+        "document_kind": "publication-v3-v23-d2-summary",
+        "claim_eligible": False,
+        "stage": "d2",
+        "source_archive_sha256": report["source_archive_sha256"],
+        "index_id": "fixture-index",
+        "dataset_id": "deep-image-96",
+        "d1_report_sha256": report["d1_report_sha256"],
+        "rows": 4,
+        "queries": 2,
+        "arms": 1,
+        "passing_arm_indexes": [],
+        "pages": 3,
+        "passed": False,
+        "publishable": False,
+        "artifact_sha256": digests["report"],
+        "pages_sha256": digests["roster"],
+        "cell_id": "r01-46d286fd1e2290c1cb8b8645",
+        "diagnostic_cell_id": "r01-f7a6e06a6a40c1165b6cb889",
+        "attempt_id": (
+            "runtime-v23-d2-r01-f7a6e06a6a40c1165b6cb889-arm-0000-a0001"
+        ),
+        "instance_identity": "i-0123456789abcdef0",
+        "dataset_materialization_sha256": "12" * 32,
+        "elapsed_ns": 1,
+        "resources": {
+            "cpu_ns": 1,
+            "peak_rss_bytes": 768 * 1024**2,
+            "disk_read_bytes": 0,
+            "disk_write_bytes": 1,
+        },
+        "runtime_attestation": {
+            "schema_version": 2,
+            "cell_id": "r01-f7a6e06a6a40c1165b6cb889",
+            "attempt_id": (
+                "runtime-v23-d2-r01-f7a6e06a6a40c1165b6cb889-arm-0000-a0001"
+            ),
+            "instance_id": "i-0123456789abcdef0",
+            "instance_type": "r7i.8xlarge",
+            "purchase_option": "spot",
+            "architecture": "x86_64",
+            "vcpus": 32,
+            "memory_max_bytes": 32 * 1024**3,
+            "memory_peak_bytes": 1024**3,
+            "swap_max_bytes": 0,
+            "swap_current_bytes": 0,
+            "swap_peak_bytes": 0,
+            "oom_events": 0,
+            "oom_kill_events": 0,
+            "cache_capacity_bytes": 100 * 1024**3,
+            "effective_disk_cache_max_bytes": 0,
+            "cache_filesystem_bytes": 500 * 1024**3,
+            "cache_device": "259:1",
+            "root_device": "259:1",
+            "cache_is_mount": False,
+            "source_revision": registered.source_commit,
+        },
+    }
+
+
 @dataclasses.dataclass
 class _AuthorityFixture:
     temporary: tempfile.TemporaryDirectory[str]
     arguments: dict[str, object]
+    result: dict[str, object]
+    terminal: dict[str, object]
     report: dict[str, object]
     roster: dict[str, object]
     registered: subject.RegisteredAuthority
     shape: subject.ScientificShape
 
     def rewrite(self) -> None:
-        paths = {name: Path(self.arguments[f"{name}_path"]) for name in ("terminal", "result", "report", "roster")}
-        documents = {
-            "result": {"schema": "fixture-result-v1"},
-            "report": self.report,
-            "roster": self.roster,
+        paths = {
+            name: Path(self.arguments[f"{name}_path"])
+            for name in ("terminal", "result", "report", "roster")
         }
         digests: dict[str, str] = {}
-        for name, document in documents.items():
+        for name, document in (("report", self.report), ("roster", self.roster)):
             payload = _canonical_payload(document)
             paths[name].write_bytes(payload)
             digests[name] = hashlib.sha256(payload).hexdigest()
+        self.result = _fixture_result(self.registered, self.report, digests)
+        result_payload = _canonical_payload(self.result)
+        paths["result"].write_bytes(result_payload)
+        digests["result"] = hashlib.sha256(result_payload).hexdigest()
+        self.terminal = _fixture_terminal(self.registered, digests)
         terminal_payload = json.dumps(
-            _fixture_terminal(self.registered, digests),
+            self.terminal,
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode() + b"\n"
@@ -390,6 +542,99 @@ class _AuthorityFixture:
         )
         self.arguments["registered"] = self.registered
 
+    def rewrite_result_with_result_terminal_sha_cascade(self) -> None:
+        """Cascade result SHA into terminal and registered authority only."""
+
+        result_payload = _canonical_payload(self.result)
+        Path(self.arguments["result_path"]).write_bytes(result_payload)
+        result_sha256 = hashlib.sha256(result_payload).hexdigest()
+        self.terminal["v23_result_sha256"] = result_sha256
+        terminal_payload = json.dumps(
+            self.terminal,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode() + b"\n"
+        Path(self.arguments["terminal_path"]).write_bytes(terminal_payload)
+        self.registered = dataclasses.replace(
+            self.registered,
+            result_sha256=result_sha256,
+            terminal_sha256=hashlib.sha256(terminal_payload).hexdigest(),
+        )
+        self.arguments["registered"] = self.registered
+
+    def rewrite_terminal_with_registered_sha_cascade(self) -> None:
+        """Cascade a terminal-only mutation into its registered SHA only."""
+
+        payload = json.dumps(
+            self.terminal,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode() + b"\n"
+        Path(self.arguments["terminal_path"]).write_bytes(payload)
+        self.registered = dataclasses.replace(
+            self.registered,
+            terminal_sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        self.arguments["registered"] = self.registered
+
+    def rewrite_report_with_result_terminal_sha_cascade(self) -> None:
+        """Cascade report SHA through the result, terminal, and registration."""
+
+        report_payload = _canonical_payload(self.report)
+        Path(self.arguments["report_path"]).write_bytes(report_payload)
+        report_sha256 = hashlib.sha256(report_payload).hexdigest()
+        self.result["artifact_sha256"] = report_sha256
+        self.terminal["v23_d2_report_sha256"] = report_sha256
+        self.registered = dataclasses.replace(
+            self.registered,
+            report_sha256=report_sha256,
+        )
+        self.rewrite_result_with_result_terminal_sha_cascade()
+
+    def rewrite_roster_with_result_terminal_sha_cascade(self) -> None:
+        """Cascade roster SHA through the result, terminal, and registration."""
+
+        roster_payload = _canonical_payload(self.roster)
+        Path(self.arguments["roster_path"]).write_bytes(roster_payload)
+        roster_sha256 = hashlib.sha256(roster_payload).hexdigest()
+        self.result["pages_sha256"] = roster_sha256
+        self.terminal["v23_pages_sha256"] = roster_sha256
+        self.registered = dataclasses.replace(
+            self.registered,
+            roster_sha256=roster_sha256,
+        )
+        self.rewrite_result_with_result_terminal_sha_cascade()
+
+    def rewrite_report_roster_with_result_terminal_sha_cascade(self) -> None:
+        """Cascade both page artifacts through result, terminal, and registration."""
+
+        report_payload = _canonical_payload(self.report)
+        roster_payload = _canonical_payload(self.roster)
+        Path(self.arguments["report_path"]).write_bytes(report_payload)
+        Path(self.arguments["roster_path"]).write_bytes(roster_payload)
+        report_sha256 = hashlib.sha256(report_payload).hexdigest()
+        roster_sha256 = hashlib.sha256(roster_payload).hexdigest()
+        self.result["artifact_sha256"] = report_sha256
+        self.result["pages_sha256"] = roster_sha256
+        self.terminal["v23_d2_report_sha256"] = report_sha256
+        self.terminal["v23_pages_sha256"] = roster_sha256
+        self.registered = dataclasses.replace(
+            self.registered,
+            report_sha256=report_sha256,
+            roster_sha256=roster_sha256,
+        )
+        self.rewrite_result_with_result_terminal_sha_cascade()
+
+    def rewrite_query_with_registered_sha_cascade(self) -> None:
+        """Cascade query-object bytes into the registered query SHA only."""
+
+        payload = Path(self.arguments["query_path"]).read_bytes()
+        self.registered = dataclasses.replace(
+            self.registered,
+            query_sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        self.arguments["registered"] = self.registered
+
 
 def _authority_fixture() -> _AuthorityFixture:
     temporary = tempfile.TemporaryDirectory()
@@ -400,12 +645,16 @@ def _authority_fixture() -> _AuthorityFixture:
     roster_path = root / "roster.json"
     query_path = root / "test.parquet"
     pages = [_json_page(index) for index in range(3)]
+    pages[1]["primary_rows"] = 1
+    pages[2]["primary_rows"] = 1
     assignments = [
         [[0], [2]],
         [[0], [1]],
     ]
     samples = []
     for query_index, query_assignments in enumerate(assignments):
+        ground_truth_ids = [[query_index, rank] for rank in range(2)]
+        ranked_ids = ground_truth_ids[: query_index + 1]
         samples.append(
             {
                 "query_index": query_index,
@@ -413,16 +662,19 @@ def _authority_fixture() -> _AuthorityFixture:
                 "oracle_page_ordinals": [0, 2] if query_index == 0 else [0, 1],
                 "ground_truth_page_assignments": query_assignments,
                 "encoded_bytes": 400,
-                "candidate_rows": 6,
+                "candidate_rows": 5,
                 "selector_candidate_anchors": 3,
                 "selector_routed_cells": 1,
                 "selector_ranked_anchors": 3,
-                "ground_truth_ids": [[query_index, rank] for rank in range(2)],
-                "ranked": {"ids": [], "distances": []},
+                "ground_truth_ids": ground_truth_ids,
+                "ranked": {
+                    "ids": ranked_ids,
+                    "distances": [0.125, 0.25][: query_index + 1],
+                },
                 "gt_page_hits": 1 + query_index,
                 "oracle_gt_page_hits": 2,
-                "hits": 0,
-                "recall_ppm": 0,
+                "hits": 1 + query_index,
+                "recall_ppm": 500_000 * (query_index + 1),
                 "cpu_ns": 1,
             }
         )
@@ -432,30 +684,30 @@ def _authority_fixture() -> _AuthorityFixture:
         "dimensions": 2,
         "coarse_cells": 1,
         "page_count": 3,
-        "anchors_per_page": 1,
+        "anchors_per_page": 16,
         "code_width": 4,
         "anchor_count": 3,
         "path": f"selectors/{'55' * 32}",
         "checksum": "55" * 32,
-        "encoded_bytes": 512,
+        "encoded_bytes": 160,
     }
     arm = {
         "d1_key": {"family": "f16-flat", "code_width_bytes": 4},
         "selector_key": {"family": "f16-flat", "code_width_bytes": 4},
         "selector": selector,
         "selector_routing_cells": 1,
-        "selector_ranked_anchor_cap": 3,
-        "primary_target_rows": 2,
+        "selector_ranked_anchor_cap": 8_192,
+        "primary_target_rows": 384,
         "maximum_assignments_per_row": 2,
         "maximum_query_pages": 2,
         "maximum_record_id_bytes": 8,
         "pages": copy.deepcopy(pages),
         "unique_rows": 4,
-        "total_assignments": 9,
-        "storage_amplification_ppm": 2_250_000,
-        "projected_root_bytes": 1,
-        "projected_ram_bytes": 1,
-        "projected_build_bytes": 1,
+        "total_assignments": 7,
+        "storage_amplification_ppm": 1_750_000,
+        "projected_root_bytes": 24_000_000_096,
+        "projected_ram_bytes": 269_340_901_576,
+        "projected_build_bytes": 4_125_928,
         "query_samples": samples,
         "aggregate_recall_ppm": 750_000,
         "minimum_query_recall_ppm": 500_000,
@@ -466,7 +718,7 @@ def _authority_fixture() -> _AuthorityFixture:
         "passed": False,
     }
     source_commit = "c59128ee68eb28beaa7f5eef7e0570dc7c787b88"
-    source_archive_sha256 = "aa" * 32
+    source_archive_sha256 = "22" * 32
     page_uri = "s3://fixture-bucket/fixture-attempt/pages"
     report = {
         "schema": "borsuk-v23-d2-artifact-v1",
@@ -476,7 +728,7 @@ def _authority_fixture() -> _AuthorityFixture:
         "source_archive_sha256": source_archive_sha256,
         "index_id": "fixture-index",
         "dataset_id": "deep-image-96",
-        "d1_report_sha256": "44" * 32,
+        "d1_report_sha256": "88" * 32,
         "page_uri": page_uri,
         "report": {
             "schema": "borsuk-v23-d2-v8",
@@ -494,12 +746,12 @@ def _authority_fixture() -> _AuthorityFixture:
         "source_archive_sha256": source_archive_sha256,
         "index_id": "fixture-index",
         "dataset_id": "deep-image-96",
-        "d1_report_sha256": "44" * 32,
+        "d1_report_sha256": "88" * 32,
         "page_uri": page_uri,
         "pages": pages,
     }
     values = pa.array(
-        [1.0, 0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0, 1.0] + [1.0, 0.0] * 9_998,
         type=pa.float32(),
     )
     embeddings = pa.FixedSizeListArray.from_arrays(values, 2)
@@ -523,6 +775,9 @@ def _authority_fixture() -> _AuthorityFixture:
         roster_sha256="00" * 32,
         query_uri="s3://fixture-bucket/dataset/test.parquet",
         query_sha256="00" * 32,
+        dataset_materialization_sha256="12" * 32,
+        base_cell_id="r01-46d286fd1e2290c1cb8b8645",
+        diagnostic_cell_id="r01-f7a6e06a6a40c1165b6cb889",
     )
     fixture = _AuthorityFixture(
         temporary=temporary,
@@ -535,12 +790,107 @@ def _authority_fixture() -> _AuthorityFixture:
             "registered": registered,
             "shape": shape,
         },
+        result={},
+        terminal={},
         report=report,
         roster=roster,
         registered=registered,
         shape=shape,
     )
     fixture.rewrite()
+    return fixture
+
+
+def _write_query_fixture(
+    fixture: _AuthorityFixture,
+    *,
+    rows: int = 10_000,
+    include_unregistered_column: bool = False,
+    nullable: bool = False,
+    item_nullable: bool = False,
+    variable_list: bool = False,
+    value_type: pa.DataType | None = None,
+    dimensions: int = 2,
+    first_vector: tuple[float, ...] | None = None,
+) -> None:
+    if value_type is None:
+        value_type = pa.float32()
+    base = first_vector or tuple([1.0] + [0.0] * (dimensions - 1))
+    vectors = [list(base)] + [([1.0] + [0.0] * (dimensions - 1))] * (rows - 1)
+    if variable_list:
+        embedding_type = pa.list_(
+            pa.field("item", value_type, nullable=item_nullable)
+        )
+        embeddings = pa.array(vectors, type=embedding_type)
+    else:
+        embedding_type = pa.list_(
+            pa.field("item", value_type, nullable=item_nullable), dimensions
+        )
+        embeddings = pa.array(vectors, type=embedding_type)
+    fields = [
+        pa.field(
+            "emb",
+            embedding_type,
+            nullable=nullable,
+        )
+    ]
+    arrays: list[pa.Array] = [embeddings]
+    if include_unregistered_column:
+        fields.append(pa.field("row_id", pa.int64(), nullable=False))
+        arrays.append(pa.array(list(range(rows)), type=pa.int64()))
+    pq.write_table(
+        pa.Table.from_arrays(arrays, schema=pa.schema(fields)),
+        Path(fixture.arguments["query_path"]),
+    )
+    fixture.rewrite_query_with_registered_sha_cascade()
+
+
+def _mutate_registered_query_sha_without_byte_cascade(
+    fixture: _AuthorityFixture,
+) -> None:
+    fixture.registered = dataclasses.replace(
+        fixture.registered,
+        query_sha256="00" * 32,
+    )
+    fixture.arguments["registered"] = fixture.registered
+
+
+def _mutate_registered_query_uri_without_byte_cascade(
+    fixture: _AuthorityFixture,
+) -> None:
+    fixture.registered = dataclasses.replace(
+        fixture.registered,
+        query_uri="s3://fixture-bucket/dataset/different.parquet",
+    )
+    fixture.arguments["registered"] = fixture.registered
+
+
+def _mutate_materialization_with_result_terminal_sha_cascade(
+    fixture: _AuthorityFixture,
+) -> None:
+    fixture.result["dataset_materialization_sha256"] = "ab" * 32
+    fixture.rewrite_result_with_result_terminal_sha_cascade()
+
+
+def _mutate_oracle_tie_with_hit_and_regret_cascade(
+    arm: dict[str, object],
+) -> None:
+    """Keep hit totals coherent while violating the lowest-page oracle tie-break."""
+
+    sample = arm["query_samples"][0]
+    sample["ground_truth_page_assignments"] = [[0, 2], [0, 2]]
+    sample["gt_page_hits"] = 2
+    sample["oracle_page_ordinals"] = [0, 2]
+    sample["oracle_gt_page_hits"] = 2
+    arm["selector_regret_ppm"] = 1_000_000
+
+
+def _load_coherent_revision4_synthetic_baseline(
+    test_case: unittest.TestCase,
+) -> _AuthorityFixture:
+    fixture = _authority_fixture()
+    test_case.addCleanup(fixture.temporary.cleanup)
+    subject.load_authority(**fixture.arguments)
     return fixture
 
 
@@ -651,19 +1001,56 @@ class AuthorityAndQualityTests(unittest.TestCase):
 
     def test_authority_rejects_digest_schema_order_shape_and_type_drift(self) -> None:
         mutations = (
-            ("report-digest", lambda fixture: fixture.arguments.__setitem__(
-                "registered", dataclasses.replace(fixture.registered, report_sha256="00" * 32)
-            )),
-            ("bool-ordinal", lambda fixture: fixture.roster["pages"][0].__setitem__("page_ordinal", False)),
+            (
+                "terminal-digest",
+                lambda fixture: fixture.arguments.__setitem__(
+                    "registered",
+                    dataclasses.replace(
+                        fixture.registered, terminal_sha256="00" * 32
+                    ),
+                ),
+            ),
+            (
+                "result-digest",
+                lambda fixture: fixture.arguments.__setitem__(
+                    "registered",
+                    dataclasses.replace(
+                        fixture.registered, result_sha256="00" * 32
+                    ),
+                ),
+            ),
+            (
+                "report-digest",
+                lambda fixture: fixture.arguments.__setitem__(
+                    "registered",
+                    dataclasses.replace(
+                        fixture.registered, report_sha256="00" * 32
+                    ),
+                ),
+            ),
+            (
+                "roster-digest",
+                lambda fixture: fixture.arguments.__setitem__(
+                    "registered",
+                    dataclasses.replace(
+                        fixture.registered, roster_sha256="00" * 32
+                    ),
+                ),
+            ),
+            (
+                "bool-ordinal",
+                lambda fixture: fixture.roster["pages"][0].__setitem__(
+                    "page_ordinal", False
+                ),
+            ),
             ("page-order", lambda fixture: fixture.roster["pages"].reverse()),
             ("roster-drift", lambda fixture: fixture.roster["pages"][0].__setitem__("encoded_bytes", 201)),
-            ("query-ordinal", lambda fixture: fixture.report["report"].__setitem__("query_ordinals", [0, 2])),
         )
         for name, mutate in mutations:
             fixture = _authority_fixture()
             self.addCleanup(fixture.temporary.cleanup)
             mutate(fixture)
-            if name != "report-digest":
+            if not name.endswith("-digest"):
                 fixture.rewrite()
             with self.subTest(name=name):
                 with self.assertRaises(ValueError):
@@ -730,6 +1117,636 @@ class AuthorityAndQualityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             subject.load_authority(**fixture.arguments)
 
+    def test_revision4_result_receipt_family_rejects_schema_types_and_bindings(
+        self,
+    ) -> None:
+        """Catch the omission where load_authority hashes but discards RESULT_COMPLETE."""
+
+        _load_coherent_revision4_synthetic_baseline(self)
+        mutations = (
+            (
+                "missing-result-field",
+                lambda result: result.pop("publishable"),
+            ),
+            (
+                "extra-result-field",
+                lambda result: result.__setitem__("unregistered", 1),
+            ),
+            (
+                "bool-as-rows",
+                lambda result: result.__setitem__("rows", True),
+            ),
+            (
+                "report-artifact-binding",
+                lambda result: result.__setitem__("artifact_sha256", "ab" * 32),
+            ),
+            (
+                "roster-artifact-binding",
+                lambda result: result.__setitem__("pages_sha256", "ab" * 32),
+            ),
+            (
+                "terminal-attempt-binding",
+                lambda result: result.__setitem__("attempt_id", "wrong-attempt"),
+            ),
+            (
+                "protocol-cell-binding",
+                lambda result: result.__setitem__("cell_id", "wrong-cell"),
+            ),
+            (
+                "base-cell-must-remain-distinct-from-diagnostic-cell",
+                lambda result: result.__setitem__(
+                    "cell_id", result["diagnostic_cell_id"]
+                ),
+            ),
+            (
+                "diagnostic-cell-binding",
+                lambda result: result.__setitem__(
+                    "diagnostic_cell_id", "wrong-diagnostic-cell"
+                ),
+            ),
+            (
+                "terminal-instance-binding",
+                lambda result: result.__setitem__(
+                    "instance_identity", "i-0fedcba9876543210"
+                ),
+            ),
+            (
+                "process-peak-must-be-positive",
+                lambda result: result["resources"].__setitem__(
+                    "peak_rss_bytes", 0
+                ),
+            ),
+            (
+                "process-peak-must-not-exceed-cgroup-peak",
+                lambda result: result["resources"].__setitem__(
+                    "peak_rss_bytes", 1024**3 + 1
+                ),
+            ),
+            (
+                "terminal-source-binding",
+                lambda result: result.__setitem__(
+                    "source_archive_sha256", "ab" * 32
+                ),
+            ),
+            (
+                "terminal-index-binding",
+                lambda result: result.__setitem__("index_id", "different-index"),
+            ),
+            (
+                "terminal-d1-binding",
+                lambda result: result.__setitem__("d1_report_sha256", "ab" * 32),
+            ),
+            (
+                "query-materialization-binding",
+                lambda result: result.__setitem__(
+                    "dataset_materialization_sha256", "ab" * 32
+                ),
+            ),
+            (
+                "attested-source-binding",
+                lambda result: result["runtime_attestation"].__setitem__(
+                    "source_revision", "0" * 40
+                ),
+            ),
+            (
+                "attested-instance-binding",
+                lambda result: result["runtime_attestation"].__setitem__(
+                    "instance_id", "i-0fedcba9876543210"
+                ),
+            ),
+            (
+                "attested-cell-binding",
+                lambda result: result["runtime_attestation"].__setitem__(
+                    "cell_id", "wrong-diagnostic-cell"
+                ),
+            ),
+            (
+                "attested-attempt-binding",
+                lambda result: result["runtime_attestation"].__setitem__(
+                    "attempt_id", "wrong-attempt"
+                ),
+            ),
+            (
+                "reconstructed-summary-rows",
+                lambda result: result.__setitem__("rows", 5),
+            ),
+            (
+                "reconstructed-summary-pages",
+                lambda result: result.__setitem__("pages", 4),
+            ),
+            (
+                "reconstructed-summary-passing-arms",
+                lambda result: result.__setitem__("passing_arm_indexes", [0]),
+            ),
+            (
+                "reconstructed-summary-pass",
+                lambda result: result.__setitem__("passed", True),
+            ),
+        )
+        for name, mutate in mutations:
+            fixture = _authority_fixture()
+            self.addCleanup(fixture.temporary.cleanup)
+            mutate(fixture.result)
+            fixture.rewrite_result_with_result_terminal_sha_cascade()
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                subject.load_authority(**fixture.arguments)
+
+    def test_revision4_terminal_family_rejects_bytes_and_cross_object_bindings(
+        self,
+    ) -> None:
+        """Catch terminal acceptance without writer order and report/result bindings."""
+
+        _load_coherent_revision4_synthetic_baseline(self)
+        mutations = (
+            (
+                "missing-terminal-field",
+                lambda terminal: {
+                    key: value
+                    for key, value in terminal.items()
+                    if key != "manifest_sha256"
+                },
+            ),
+            (
+                "bool-as-terminal-integer",
+                lambda terminal: {**terminal, "cpu_threads": True},
+            ),
+            (
+                "writer-field-order",
+                lambda terminal: dict(reversed(tuple(terminal.items()))),
+            ),
+            (
+                "result-binding",
+                lambda terminal: {**terminal, "v23_result_sha256": "ab" * 32},
+            ),
+            (
+                "report-binding",
+                lambda terminal: {
+                    **terminal,
+                    "v23_d2_report_sha256": "ab" * 32,
+                },
+            ),
+            (
+                "roster-binding",
+                lambda terminal: {**terminal, "v23_pages_sha256": "ab" * 32},
+            ),
+            (
+                "report-index-binding",
+                lambda terminal: {
+                    **terminal,
+                    "base_index_id": "different-index",
+                },
+            ),
+            (
+                "page-prefix-binding",
+                lambda terminal: {
+                    **terminal,
+                    "v23_page_prefix": "s3://fixture-bucket/wrong/pages",
+                },
+            ),
+            (
+                "d1-report-binding",
+                lambda terminal: {
+                    **terminal,
+                    "v23_d1_report_sha256": "ab" * 32,
+                },
+            ),
+            (
+                "report-source-binding",
+                lambda terminal: {
+                    **terminal,
+                    "source_archive_sha256": "ab" * 32,
+                    "diagnostic_source_archive_sha256": "ab" * 32,
+                },
+            ),
+            (
+                "attempt-binding",
+                lambda terminal: {**terminal, "attempt_id": "wrong-attempt"},
+            ),
+            (
+                "instance-binding",
+                lambda terminal: {
+                    **terminal,
+                    "instance_id": "i-0fedcba9876543210",
+                },
+            ),
+            (
+                "memory-binding",
+                lambda terminal: {
+                    **terminal,
+                    "memory_peak_bytes": 1024**3 + 1,
+                },
+            ),
+            (
+                "pass-binding",
+                lambda terminal: {**terminal, "v23_passed": True},
+            ),
+        )
+        for name, mutate in mutations:
+            fixture = _authority_fixture()
+            self.addCleanup(fixture.temporary.cleanup)
+            fixture.terminal = mutate(fixture.terminal)
+            fixture.rewrite_terminal_with_registered_sha_cascade()
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                subject.load_authority(**fixture.arguments)
+
+    def test_revision4_arm_family_accepts_sparse_selector_and_rejects_formula_drift(
+        self,
+    ) -> None:
+        """Catch dense-anchor reconstruction and omitted derivable arm formulas."""
+
+        _load_coherent_revision4_synthetic_baseline(self)
+        formula_mutations = (
+            (
+                "sparse-anchor-lower-bound",
+                lambda arm: arm["selector"].update(
+                    {
+                        "anchors_per_page": 16,
+                        "anchor_count": 2,
+                        "encoded_bytes": 144,
+                    }
+                ),
+            ),
+            (
+                "sparse-anchor-upper-bound",
+                lambda arm: arm["selector"].update(
+                    {
+                        "anchors_per_page": 16,
+                        "anchor_count": 49,
+                        "encoded_bytes": 896,
+                    }
+                ),
+            ),
+            (
+                "anchors-per-page-constant",
+                lambda arm: arm["selector"].__setitem__(
+                    "anchors_per_page", 15
+                ),
+            ),
+            (
+                "selector-encoded-bytes",
+                lambda arm: arm["selector"].__setitem__("encoded_bytes", 161),
+            ),
+            (
+                "selector-routing-minimum",
+                lambda arm: arm.__setitem__("selector_routing_cells", 2),
+            ),
+            (
+                "selector-ranked-anchor-cap",
+                lambda arm: arm.__setitem__("selector_ranked_anchor_cap", 8_191),
+            ),
+            (
+                "primary-target",
+                lambda arm: arm.__setitem__("primary_target_rows", 383),
+            ),
+            (
+                "maximum-assignments",
+                lambda arm: arm.__setitem__("maximum_assignments_per_row", 3),
+            ),
+            (
+                "maximum-query-pages",
+                lambda arm: arm.__setitem__("maximum_query_pages", 1),
+            ),
+            (
+                "primary-row-sum",
+                lambda arm: arm.__setitem__("unique_rows", 5),
+            ),
+            (
+                "assignment-total",
+                lambda arm: arm.__setitem__("total_assignments", 8),
+            ),
+            (
+                "storage-amplification",
+                lambda arm: arm.__setitem__(
+                    "storage_amplification_ppm", 1_750_001
+                ),
+            ),
+            (
+                "projected-root-bytes",
+                lambda arm: arm.__setitem__(
+                    "projected_root_bytes", 24_000_000_097
+                ),
+            ),
+            (
+                "projected-ram-bytes",
+                lambda arm: arm.__setitem__(
+                    "projected_ram_bytes", 269_340_901_577
+                ),
+            ),
+            (
+                "projected-build-bytes",
+                lambda arm: arm.__setitem__("projected_build_bytes", 4_125_927),
+            ),
+        )
+        for name, mutate in formula_mutations:
+            fixture = _authority_fixture()
+            self.addCleanup(fixture.temporary.cleanup)
+            mutate(fixture.report["report"]["arms"][0])
+            fixture.rewrite_report_with_result_terminal_sha_cascade()
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                subject.load_authority(**fixture.arguments)
+
+        fixture = _authority_fixture()
+        self.addCleanup(fixture.temporary.cleanup)
+        selector = fixture.report["report"]["arms"][0]["selector"]
+        selector["anchors_per_page"] = 16
+        selector["anchor_count"] = 5
+        selector["encoded_bytes"] = 192
+        fixture.rewrite_report_with_result_terminal_sha_cascade()
+        subject.load_authority(**fixture.arguments)
+
+    def test_revision4_page_family_rejects_row_caps_and_roster_inequality(
+        self,
+    ) -> None:
+        """Catch omitted BVP2 reference validation and arm/roster inequality."""
+
+        _load_coherent_revision4_synthetic_baseline(self)
+        mutations = (
+            ("primary-row-cap", "primary_rows", 65_536, True),
+            ("replica-row-cap", "replicated_rows", 65_536, True),
+            ("generation", "generation_checksum", [0] * 32, True),
+            ("ordinal", "page_ordinal", 1, True),
+            ("path", "path", "pages/not-the-checksum", True),
+            ("checksum", "checksum", "zz" * 32, True),
+            ("encoded-length", "encoded_bytes", 245_761, True),
+            ("family", "family", "srht-pq", True),
+            ("metric", "metric", "euclidean", True),
+            ("dimension", "dimensions", 3, True),
+            ("code-width", "code_width", 5, True),
+            ("arm-roster-inequality", "primary_rows", 3, False),
+        )
+        for name, field, value, cascade_both_artifacts in mutations:
+            fixture = _authority_fixture()
+            self.addCleanup(fixture.temporary.cleanup)
+            fixture.roster["pages"][0][field] = value
+            if cascade_both_artifacts:
+                fixture.report["report"]["arms"][0]["pages"][0][field] = value
+                fixture.rewrite_report_roster_with_result_terminal_sha_cascade()
+            else:
+                fixture.rewrite_roster_with_result_terminal_sha_cascade()
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                subject.load_authority(**fixture.arguments)
+
+    def test_revision4_query_evidence_family_rejects_derivable_relation_drift(
+        self,
+    ) -> None:
+        """Catch omitted ranked-value, recall, aggregate, and pass recomputation."""
+
+        _load_coherent_revision4_synthetic_baseline(self)
+        mutations = (
+            (
+                "selected-membership",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "page_ordinals", [0, 3]
+                ),
+            ),
+            (
+                "selected-order",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "page_ordinals", [1, 0]
+                ),
+            ),
+            (
+                "selected-cardinality",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "page_ordinals", [0]
+                ),
+            ),
+            (
+                "oracle-membership",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "oracle_page_ordinals", [0, 3]
+                ),
+            ),
+            (
+                "oracle-order",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "oracle_page_ordinals", [2, 0]
+                ),
+            ),
+            (
+                "oracle-cardinality",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "oracle_page_ordinals", []
+                ),
+            ),
+            (
+                "oracle-tie-break_with_hit-and-regret-cascade",
+                _mutate_oracle_tie_with_hit_and_regret_cascade,
+            ),
+            (
+                "ground-truth-assignment-membership",
+                lambda arm: arm["query_samples"][0][
+                    "ground_truth_page_assignments"
+                ].__setitem__(0, [3]),
+            ),
+            (
+                "ground-truth-assignment-order",
+                lambda arm: arm["query_samples"][0][
+                    "ground_truth_page_assignments"
+                ].__setitem__(0, [2, 0]),
+            ),
+            (
+                "ground-truth-assignment-cardinality",
+                lambda arm: arm["query_samples"][0][
+                    "ground_truth_page_assignments"
+                ].__setitem__(0, [0, 1, 2]),
+            ),
+            (
+                "ground-truth-id-cardinality",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "ground_truth_ids", [[0, 0]]
+                ),
+            ),
+            (
+                "ground-truth-id-uniqueness",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "ground_truth_ids", [[0, 0], [0, 0]]
+                ),
+            ),
+            (
+                "ranked-schema",
+                lambda arm: arm["query_samples"][0]["ranked"].pop("distances"),
+            ),
+            (
+                "ranked-distance-finiteness",
+                lambda arm: arm["query_samples"][0]["ranked"].update(
+                    {"ids": [[0, 0]], "distances": [float("nan")]}
+                ),
+            ),
+            (
+                "ranked-order",
+                lambda arm: arm["query_samples"][1]["ranked"].__setitem__(
+                    "distances", [0.25, 0.125]
+                ),
+            ),
+            (
+                "ranked-cardinality",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "ranked", {"ids": [], "distances": []}
+                ),
+            ),
+            (
+                "ranked-hit-recall",
+                lambda arm: arm["query_samples"][0].update(
+                    {"hits": 0, "recall_ppm": 0}
+                ),
+            ),
+            (
+                "recall-from-hits",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "recall_ppm", 0
+                ),
+            ),
+            (
+                "selected-encoded-bytes",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "encoded_bytes", 401
+                ),
+            ),
+            (
+                "selected-candidate-rows",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "candidate_rows", 6
+                ),
+            ),
+            (
+                "selector-routed-telemetry",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "selector_routed_cells", 2
+                ),
+            ),
+            (
+                "selector-ranked-telemetry",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "selector_ranked_anchors", 2
+                ),
+            ),
+            (
+                "selector-candidate-telemetry",
+                lambda arm: arm["query_samples"][0].__setitem__(
+                    "selector_candidate_anchors", 2
+                ),
+            ),
+            (
+                "cpu-positive-type",
+                lambda arm: arm["query_samples"][0].__setitem__("cpu_ns", 0),
+            ),
+            (
+                "aggregate-recall",
+                lambda arm: arm.__setitem__("aggregate_recall_ppm", 750_001),
+            ),
+            (
+                "minimum-recall",
+                lambda arm: arm.__setitem__("minimum_query_recall_ppm", 500_001),
+            ),
+            (
+                "coverage-oracle-recall",
+                lambda arm: arm.__setitem__(
+                    "coverage_oracle_recall_ppm", 999_999
+                ),
+            ),
+            (
+                "coverage-oracle-minimum",
+                lambda arm: arm.__setitem__(
+                    "coverage_oracle_minimum_query_recall_ppm", 999_999
+                ),
+            ),
+            (
+                "selector-regret",
+                lambda arm: arm.__setitem__("selector_regret_ppm", 750_001),
+            ),
+            (
+                "cpu-p99",
+                lambda arm: arm.__setitem__("cpu_p99_ns", 2),
+            ),
+            (
+                "derived-pass",
+                lambda arm: arm.__setitem__("passed", True),
+            ),
+        )
+        for name, mutate in mutations:
+            fixture = _authority_fixture()
+            self.addCleanup(fixture.temporary.cleanup)
+            mutate(fixture.report["report"]["arms"][0])
+            fixture.rewrite_report_with_result_terminal_sha_cascade()
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                subject.load_authority(**fixture.arguments)
+
+    def test_revision4_parquet_family_rejects_physical_schema_and_materialization(
+        self,
+    ) -> None:
+        """Catch projected-column reads and missing row/materialization authority."""
+
+        _load_coherent_revision4_synthetic_baseline(self)
+        mutations = (
+            (
+                "unregistered-physical-column",
+                lambda fixture: _write_query_fixture(
+                    fixture, include_unregistered_column=True
+                ),
+            ),
+            (
+                "nullable-embedding",
+                lambda fixture: _write_query_fixture(fixture, nullable=True),
+            ),
+            (
+                "nullable-embedding-item",
+                lambda fixture: _write_query_fixture(
+                    fixture, item_nullable=True
+                ),
+            ),
+            (
+                "variable-list-embedding",
+                lambda fixture: _write_query_fixture(fixture, variable_list=True),
+            ),
+            (
+                "float64-embedding",
+                lambda fixture: _write_query_fixture(
+                    fixture, value_type=pa.float64()
+                ),
+            ),
+            (
+                "dimension-three-embedding",
+                lambda fixture: _write_query_fixture(fixture, dimensions=3),
+            ),
+            (
+                "registered-row-count",
+                lambda fixture: _write_query_fixture(fixture, rows=9_999),
+            ),
+            (
+                "registered-query-sha_without-byte-cascade",
+                _mutate_registered_query_sha_without_byte_cascade,
+            ),
+            (
+                "registered-query-uri_without-byte-cascade",
+                _mutate_registered_query_uri_without_byte_cascade,
+            ),
+            (
+                "result-materialization_with-result-terminal-sha-cascade",
+                _mutate_materialization_with_result_terminal_sha_cascade,
+            ),
+            (
+                "non-finite-selected-vector",
+                lambda fixture: _write_query_fixture(
+                    fixture,
+                    first_vector=(float("nan"), 0.0),
+                ),
+            ),
+            (
+                "zero-norm-selected-vector",
+                lambda fixture: _write_query_fixture(
+                    fixture,
+                    first_vector=(0.0, 0.0),
+                ),
+            ),
+        )
+        for name, mutate in mutations:
+            fixture = _authority_fixture()
+            self.addCleanup(fixture.temporary.cleanup)
+            mutate(fixture)
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                subject.load_authority(**fixture.arguments)
+
     def test_page_selection_uses_distance_then_page_ordinal(self) -> None:
         scores = numpy.asarray([[1.0, 0.5, 0.5, 0.2]], dtype=numpy.float32)
 
@@ -753,6 +1770,66 @@ class AuthorityAndQualityTests(unittest.TestCase):
     def test_projection_is_exact_and_within_three_gibibytes(self) -> None:
         self.assertEqual(subject.projected_serving_bytes(), 2_686_433_028)
         self.assertLessEqual(subject.projected_serving_bytes(), 3 * 1024**3)
+
+
+class HistoricalBundleIntegrationTests(unittest.TestCase):
+    def test_revision4_bvs2_exact_bundle_reaches_first_registered_page_get(
+        self,
+    ) -> None:
+        fixture_directory = os.environ.get("BORSUK_REV4_BVS2_FIXTURE_DIR")
+        if fixture_directory is None:
+            self.skipTest("BORSUK_REV4_BVS2_FIXTURE_DIR is not set")
+        root = Path(fixture_directory)
+        for name, expected_sha256 in _REVISION4_FIXTURE_SHA256.items():
+            path = root / name
+            self.assertTrue(path.is_file(), name)
+            self.assertEqual(
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+                expected_sha256,
+                name,
+            )
+        expected_page_locations = _registered_prefetch_locations(root)
+        client = _FirstPageAccessForbidden()
+        arguments = [
+            "--terminal",
+            str(root / "RUNTIME_TERMINAL_COMPLETE.json"),
+            "--result",
+            str(root / "RESULT_COMPLETE.json"),
+            "--report",
+            str(root / "bench_v23_d2_report.json"),
+            "--roster",
+            str(root / "bench_v23_pages.json"),
+            "--query",
+            str(root / "test.parquet"),
+            "--bucket",
+            _REVISION4_BUCKET,
+            "--prefix",
+            _REVISION4_ATTEMPT_KEY_PREFIX,
+            "--aws-profile",
+            "causality",
+            "--region",
+            "eu-central-1",
+            "--execute-complete-stream",
+        ]
+        with mock.patch.dict(
+            sys.modules,
+            {"boto3": _revision4_boto3_module(client)},
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"\APAGE_S3_ACCESS_FORBIDDEN\Z",
+            ):
+                subject.main(arguments)
+        self.assertGreaterEqual(len(client.calls), 1)
+        self.assertLessEqual(len(client.calls), 4)
+        self.assertEqual(len(client.calls), len(set(client.calls)))
+        self.assertTrue(
+            all(bucket == _REVISION4_BUCKET for bucket, _ in client.calls)
+        )
+        self.assertTrue(
+            all(call in set(expected_page_locations) for call in client.calls)
+        )
+        self.assertIn(expected_page_locations[0], client.calls)
 
 
 def _ordinal_page(ordinal: int) -> tuple[subject.PageRef, bytes]:
@@ -833,6 +1910,9 @@ def _stream_fixture(page_count: int = 3) -> tuple[subject.Authority, _FakeS3]:
             roster_sha256="24" * 32,
             query_uri="s3://fixture-bucket/query.parquet",
             query_sha256="25" * 32,
+            dataset_materialization_sha256="26" * 32,
+            base_cell_id="fixture-base-cell",
+            diagnostic_cell_id="fixture-diagnostic-cell",
         ),
         shape=shape,
         pages=pages,

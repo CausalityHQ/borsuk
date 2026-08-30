@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import itertools
 import json
+import math
 import os
 import re
 import resource
@@ -44,9 +46,8 @@ _PSI_LIMIT_PPM = 500_000
 _SWAP_GROWTH_LIMIT_BYTES = 128 * 1024**2
 _PROGRESS_LIMIT_NS = 300 * 1_000_000_000
 
-_HISTORICAL_TERMINAL_FIELDS = frozenset(
-    {
-        "schema_version",
+_HISTORICAL_TERMINAL_FIELD_ORDER = (
+    "schema_version",
         "status",
         "role",
         "attempt",
@@ -95,9 +96,9 @@ _HISTORICAL_TERMINAL_FIELDS = frozenset(
         "diagnostic_source_archive_sha256",
         "memory_max_bytes",
         "memory_swap_max_bytes",
-        "memory_peak_bytes",
-    }
+    "memory_peak_bytes",
 )
+_HISTORICAL_TERMINAL_FIELDS = frozenset(_HISTORICAL_TERMINAL_FIELD_ORDER)
 _HISTORICAL_TERMINAL_DIGEST_FIELDS = frozenset(
     {
         "source_archive_sha256",
@@ -290,6 +291,64 @@ _QUERY_SAMPLE_FIELDS = frozenset(
         "cpu_ns",
     }
 )
+_HISTORICAL_RESULT_FIELDS = frozenset(
+    {
+        "schema",
+        "document_kind",
+        "claim_eligible",
+        "stage",
+        "source_archive_sha256",
+        "index_id",
+        "dataset_id",
+        "d1_report_sha256",
+        "rows",
+        "queries",
+        "arms",
+        "passing_arm_indexes",
+        "pages",
+        "passed",
+        "publishable",
+        "artifact_sha256",
+        "pages_sha256",
+        "cell_id",
+        "diagnostic_cell_id",
+        "attempt_id",
+        "instance_identity",
+        "dataset_materialization_sha256",
+        "elapsed_ns",
+        "resources",
+        "runtime_attestation",
+    }
+)
+_HISTORICAL_RESOURCE_FIELDS = frozenset(
+    {"cpu_ns", "peak_rss_bytes", "disk_read_bytes", "disk_write_bytes"}
+)
+_HISTORICAL_ATTESTATION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "cell_id",
+        "attempt_id",
+        "instance_id",
+        "instance_type",
+        "purchase_option",
+        "architecture",
+        "vcpus",
+        "memory_max_bytes",
+        "memory_peak_bytes",
+        "swap_max_bytes",
+        "swap_current_bytes",
+        "swap_peak_bytes",
+        "oom_events",
+        "oom_kill_events",
+        "cache_capacity_bytes",
+        "effective_disk_cache_max_bytes",
+        "cache_filesystem_bytes",
+        "cache_device",
+        "root_device",
+        "cache_is_mount",
+        "source_revision",
+    }
+)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -332,6 +391,20 @@ class RegisteredAuthority:
     roster_sha256: str
     query_uri: str
     query_sha256: str
+    dataset_materialization_sha256: str
+    base_cell_id: str
+    diagnostic_cell_id: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Revision4Bvs2Paths:
+    """The five exact local prerequisites for the historical adapter."""
+
+    terminal: Path
+    result: Path
+    report: Path
+    roster: Path
+    query: Path
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -394,6 +467,11 @@ REGISTERED_AUTHORITY = RegisteredAuthority(
         "deep-image-96/attempts/0001/materialized/test.parquet"
     ),
     query_sha256="296d45828020c1c0b88c6a1d5c822f6283280513b8c58d01cfa961f3a139a5d4",
+    dataset_materialization_sha256=(
+        "02eec37494dce759433fef0983c871856b4bf445b4c93e35abceb430b7109408"
+    ),
+    base_cell_id="r01-46d286fd1e2290c1cb8b8645",
+    diagnostic_cell_id="r01-f7a6e06a6a40c1165b6cb889",
 )
 
 
@@ -443,6 +521,8 @@ def _validate_page_reference(reference: PageRef) -> None:
         or reference.family != "f16-flat"
         or code_width != dimensions * 2
         or encoded_bytes > _PAGE_MAX_ENCODED_BYTES
+        or primary_rows > 65_535
+        or reference.replicated_rows > 65_535
         or type(reference.checksum) is not str
         or _HEX_DIGEST.fullmatch(reference.checksum) is None
         or type(reference.path) is not str
@@ -728,6 +808,11 @@ def _validate_registered(registered: RegisteredAuthority) -> None:
         or not registered.attempt_prefix.endswith("/")
         or type(registered.query_uri) is not str
         or not registered.query_uri.startswith("s3://")
+        or type(registered.base_cell_id) is not str
+        or not registered.base_cell_id
+        or type(registered.diagnostic_cell_id) is not str
+        or not registered.diagnostic_cell_id
+        or registered.base_cell_id == registered.diagnostic_cell_id
         or any(
             not _digest_is_valid(value)
             for value in (
@@ -736,6 +821,7 @@ def _validate_registered(registered: RegisteredAuthority) -> None:
                 registered.report_sha256,
                 registered.roster_sha256,
                 registered.query_sha256,
+                registered.dataset_materialization_sha256,
             )
         )
     ):
@@ -778,7 +864,10 @@ def _read_historical_runtime_terminal(
         allow_nan=False,
     ).encode("utf-8") + b"\n"
     terminal = _exact_dict(value, _HISTORICAL_TERMINAL_FIELDS, "terminal marker")
-    if payload != expected_payload:
+    if (
+        payload != expected_payload
+        or tuple(terminal) != _HISTORICAL_TERMINAL_FIELD_ORDER
+    ):
         raise ValueError("terminal marker bytes are not canonical")
     if any(not _digest_is_valid(terminal[field]) for field in _HISTORICAL_TERMINAL_DIGEST_FIELDS):
         raise ValueError("terminal marker digest differs")
@@ -924,7 +1013,69 @@ def _validate_outer_artifacts(
         raise ValueError("D2 artifact authority differs")
 
 
-def _validate_arm_shape(arm: dict[str, object], shape: ScientificShape) -> None:
+def _projected_arm_memory(
+    unique_rows: int,
+    page_count: int,
+    dimensions: int,
+    coarse_cells: int,
+    anchors_per_page: int,
+) -> tuple[int, int]:
+    projected_pages = max(
+        (page_count * 100_000_000 + unique_rows - 1) // unique_rows,
+        page_count,
+    )
+    projected_root = 96 + projected_pages * 320
+    projected_coarse = max(coarse_cells, 4_096)
+    centroid_bytes = projected_coarse * dimensions * 4
+    offset_bytes = (projected_coarse + 1) * 4
+    selector_bytes = (
+        96
+        + centroid_bytes
+        + offset_bytes
+        + projected_pages * anchors_per_page * (12 + 192)
+    )
+    projected_ram = (
+        projected_root
+        + selector_bytes
+        + centroid_bytes
+        + offset_bytes
+        + 512 * 1024**2
+        + 2 * 1_966_080
+    )
+    return projected_root, projected_ram
+
+
+def _projected_build_memory(
+    rows: int,
+    pages: tuple[PageRef, ...],
+    dimensions: int,
+    maximum_record_id_bytes: int,
+    code_width: int,
+    maximum_assignments_per_row: int,
+) -> int:
+    decoded_row_bytes = 64 + maximum_record_id_bytes + dimensions * 4 + code_width
+    replica_candidate_bytes = 32 * min(
+        max(maximum_assignments_per_row - 1, 0),
+        1,
+    )
+    planner_index_bytes = 8 * 7
+    decoded_and_planner = rows * (
+        decoded_row_bytes + 192 + 32 + replica_candidate_bytes + planner_index_bytes
+    )
+    page_authority = len(pages) * (dimensions * 4 + 4_096 + 512)
+    lightweight_evidence = 32 * (4_096 + maximum_record_id_bytes * 20)
+    return (
+        decoded_and_planner
+        + sum(page.encoded_bytes for page in pages)
+        + 4 * page_authority
+        + lightweight_evidence
+        + 2 * 1_966_080
+    )
+
+
+def _validate_arm_shape(
+    arm: dict[str, object], shape: ScientificShape, pages: tuple[PageRef, ...]
+) -> None:
     _exact_dict(arm, _ARM_FIELDS, "D2 arm")
     for key in (
         "selector_routing_cells",
@@ -980,18 +1131,88 @@ def _validate_arm_shape(arm: dict[str, object], shape: ScientificShape) -> None:
         or selector["dimensions"] != shape.dimensions
         or selector["page_count"] != shape.page_count
         or selector["code_width"] != shape.dimensions * 2
-        or selector["anchor_count"]
-        != selector["page_count"] * selector["anchors_per_page"]
+        or selector["anchors_per_page"] != 16
+        or not selector["page_count"]
+        <= selector["anchor_count"]
+        <= selector["page_count"] * 16
+        or selector["encoded_bytes"]
+        != 96
+        + selector["coarse_cells"] * shape.dimensions * 4
+        + (selector["coarse_cells"] + 1) * 4
+        + selector["anchor_count"] * (12 + shape.dimensions * 2)
         or not _digest_is_valid(selector["checksum"])
         or type(selector["path"]) is not str
         or selector["path"] != f"selectors/{selector['checksum']}"
     ):
         raise ValueError("D2 selector authority differs")
+    primary_rows = sum(page.primary_rows for page in pages)
+    total_assignments = sum(page.primary_rows + page.replicated_rows for page in pages)
+    projected_root, projected_ram = _projected_arm_memory(
+        arm["unique_rows"],
+        len(pages),
+        shape.dimensions,
+        selector["coarse_cells"],
+        selector["anchors_per_page"],
+    )
+    projected_build = _projected_build_memory(
+        arm["unique_rows"],
+        pages,
+        shape.dimensions,
+        arm["maximum_record_id_bytes"],
+        arm["d1_key"]["code_width_bytes"],
+        arm["maximum_assignments_per_row"],
+    )
+    if (
+        arm["selector_routing_cells"] != min(320, selector["coarse_cells"])
+        or arm["selector_ranked_anchor_cap"] != 8_192
+        or arm["primary_target_rows"] != 384
+        or arm["maximum_assignments_per_row"] != 2
+        or arm["maximum_query_pages"] != shape.selection_width
+        or arm["maximum_record_id_bytes"] <= 0
+        or arm["unique_rows"] != primary_rows
+        or arm["total_assignments"] != total_assignments
+        or arm["storage_amplification_ppm"]
+        != total_assignments * 1_000_000 // primary_rows
+        or arm["projected_root_bytes"] != projected_root
+        or arm["projected_ram_bytes"] != projected_ram
+        or arm["projected_build_bytes"] != projected_build
+    ):
+        raise ValueError("D2 arm derived authority differs")
+
+
+def _identifier(value: object, role: str, maximum_bytes: int) -> tuple[int, ...]:
+    result = _concrete_int_list(value, role)
+    if (
+        not result
+        or len(result) > maximum_bytes
+        or any(byte > 255 for byte in result)
+    ):
+        raise ValueError(f"{role} differs")
+    return result
+
+
+def _coverage_oracle(
+    assignments: tuple[tuple[int, ...], ...], width: int
+) -> tuple[tuple[int, ...], int]:
+    candidates = tuple(sorted({page for pages in assignments for page in pages}))
+    best_pages: tuple[int, ...] = ()
+    best_hits = -1
+    for size in range(1, min(width, len(candidates)) + 1):
+        for pages in itertools.combinations(candidates, size):
+            hits = sum(
+                bool(set(assignment).intersection(pages))
+                for assignment in assignments
+            )
+            if hits > best_hits or (hits == best_hits and pages < best_pages):
+                best_pages = pages
+                best_hits = hits
+    return best_pages, best_hits
 
 
 def _query_evidence(
     arm: dict[str, object],
     shape: ScientificShape,
+    pages: tuple[PageRef, ...],
 ) -> tuple[
     tuple[tuple[tuple[int, ...], ...], ...],
     tuple[int, ...],
@@ -999,8 +1220,14 @@ def _query_evidence(
     samples = arm["query_samples"]
     if type(samples) is not list or len(samples) != shape.query_count:
         raise ValueError("query sample shape differs")
-    all_assignments = []
-    oracle_hits = []
+    all_assignments: list[tuple[tuple[int, ...], ...]] = []
+    oracle_hits: list[int] = []
+    total_hits = 0
+    total_page_hits = 0
+    total_oracle_hits = 0
+    minimum_recall = 1_000_000
+    minimum_oracle_recall = 1_000_000
+    cpu_values: list[int] = []
     for expected_query, raw_sample in enumerate(samples):
         sample = _exact_dict(raw_sample, _QUERY_SAMPLE_FIELDS, "D2 query sample")
         if (
@@ -1054,23 +1281,128 @@ def _query_evidence(
             )
             for pages in raw_assignments
         )
-        if any(not pages or pages != tuple(sorted(set(pages))) for pages in assignments):
-            raise ValueError("ground-truth page assignments differ")
-        selected_hits = sum(bool(set(pages).intersection(selected)) for pages in assignments)
-        recomputed_oracle_hits = sum(bool(set(pages).intersection(oracle)) for pages in assignments)
-        if (
-            sample["gt_page_hits"] != selected_hits
-            or sample["oracle_gt_page_hits"] != recomputed_oracle_hits
+        if any(
+            not assigned
+            or len(assigned) > arm["maximum_assignments_per_row"]
+            or assigned != tuple(sorted(set(assigned)))
+            for assigned in assignments
         ):
-            raise ValueError("query page-hit evidence differs")
+            raise ValueError("ground-truth page assignments differ")
+        truth = tuple(
+            _identifier(
+                value,
+                "ground-truth identifier",
+                arm["maximum_record_id_bytes"],
+            )
+            for value in sample["ground_truth_ids"]
+        )
+        ranked = _exact_dict(
+            sample["ranked"],
+            frozenset({"ids", "distances"}),
+            "ranked result",
+        )
+        if (
+            type(ranked["ids"]) is not list
+            or type(ranked["distances"]) is not list
+            or not 1 <= len(ranked["ids"]) <= shape.recall_k
+            or len(ranked["ids"]) != len(ranked["distances"])
+        ):
+            raise ValueError("ranked result shape differs")
+        ranked_ids = tuple(
+            _identifier(value, "ranked identifier", arm["maximum_record_id_bytes"])
+            for value in ranked["ids"]
+        )
+        distances = tuple(ranked["distances"])
+        if (
+            len(set(truth)) != shape.recall_k
+            or len(set(ranked_ids)) != len(ranked_ids)
+            or any(
+                type(distance) is not float or not math.isfinite(distance)
+                for distance in distances
+            )
+            or tuple(zip(distances, ranked_ids, strict=True))
+            != tuple(sorted(zip(distances, ranked_ids, strict=True)))
+        ):
+            raise ValueError("ranked result authority differs")
+        selected_hits = sum(
+            bool(set(assigned).intersection(selected)) for assigned in assignments
+        )
+        recomputed_oracle, recomputed_oracle_hits = _coverage_oracle(
+            assignments, arm["maximum_query_pages"]
+        )
+        expected_hits = sum(identifier in set(truth) for identifier in ranked_ids)
+        expected_bytes = sum(pages[page].encoded_bytes for page in selected)
+        expected_candidates = sum(
+            pages[page].primary_rows + pages[page].replicated_rows for page in selected
+        )
+        expected_recall = expected_hits * 1_000_000 // shape.recall_k
+        if (
+            oracle != recomputed_oracle
+            or sample["gt_page_hits"] != selected_hits
+            or sample["oracle_gt_page_hits"] != recomputed_oracle_hits
+            or sample["encoded_bytes"] != expected_bytes
+            or sample["encoded_bytes"] > 1_966_080
+            or sample["candidate_rows"] != expected_candidates
+            or sample["selector_candidate_anchors"] <= 0
+            or sample["selector_routed_cells"] != arm["selector_routing_cells"]
+            or sample["selector_ranked_anchors"]
+            != min(
+                sample["selector_candidate_anchors"],
+                arm["selector_ranked_anchor_cap"],
+            )
+            or sample["gt_page_hits"] > shape.recall_k
+            or sample["oracle_gt_page_hits"] > shape.recall_k
+            or sample["oracle_gt_page_hits"] < sample["gt_page_hits"]
+            or sample["gt_page_hits"] < sample["hits"]
+            or sample["hits"] != expected_hits
+            or sample["recall_ppm"] != expected_recall
+            or sample["cpu_ns"] <= 0
+        ):
+            raise ValueError("query evidence differs")
         all_assignments.append(assignments)
         oracle_hits.append(recomputed_oracle_hits)
+        total_hits += expected_hits
+        total_page_hits += selected_hits
+        total_oracle_hits += recomputed_oracle_hits
+        minimum_recall = min(minimum_recall, expected_recall)
+        minimum_oracle_recall = min(
+            minimum_oracle_recall,
+            recomputed_oracle_hits * 1_000_000 // shape.recall_k,
+        )
+        cpu_values.append(sample["cpu_ns"])
+    aggregate = total_hits * 1_000_000 // (shape.query_count * shape.recall_k)
+    oracle_aggregate = total_oracle_hits * 1_000_000 // (
+        shape.query_count * shape.recall_k
+    )
+    regret = total_page_hits * 1_000_000 // max(total_oracle_hits, 1)
+    cpu_p99 = sorted(cpu_values)[math.ceil(len(cpu_values) * 0.99) - 1]
+    passed = (
+        aggregate >= 975_000
+        and minimum_recall >= 800_000
+        and oracle_aggregate >= 985_000
+        and minimum_oracle_recall >= 900_000
+        and regret >= 995_000
+        and arm["storage_amplification_ppm"] <= 2_000_000
+        and arm["projected_ram_bytes"] <= 3 * 1024**3
+        and cpu_p99 <= 15_000_000
+    )
+    if (
+        arm["aggregate_recall_ppm"] != aggregate
+        or arm["minimum_query_recall_ppm"] != minimum_recall
+        or arm["coverage_oracle_recall_ppm"] != oracle_aggregate
+        or arm["coverage_oracle_minimum_query_recall_ppm"] != minimum_oracle_recall
+        or arm["selector_regret_ppm"] != regret
+        or arm["cpu_p99_ns"] != cpu_p99
+        or arm["passed"] is not passed
+    ):
+        raise ValueError("D2 aggregate authority differs")
     return tuple(all_assignments), tuple(oracle_hits)
 
 
 def _load_query_vectors(
     query_path: Path,
     expected_sha256: str,
+    expected_uri: str,
     query_ordinals: tuple[int, ...],
     shape: ScientificShape,
 ) -> numpy.ndarray:
@@ -1080,8 +1412,14 @@ def _load_query_vectors(
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    table = pq.read_table(query_path, columns=["emb"])
-    if table.schema.names != ["emb"]:
+    parquet = pq.ParquetFile(query_path)
+    table = parquet.read()
+    if (
+        urlparse(expected_uri).path.rsplit("/", 1)[-1] != Path(query_path).name
+        or parquet.metadata.num_rows != 10_000
+        or table.num_rows != 10_000
+        or table.schema.names != ["emb"]
+    ):
         raise ValueError("query Parquet fields differ")
     field = table.schema.field("emb")
     if (
@@ -1107,6 +1445,264 @@ def _load_query_vectors(
     return (selected.astype(numpy.float64) / norms[:, None]).astype(numpy.float32)
 
 
+def _validate_result_receipt(
+    result: dict[str, object],
+    terminal: dict[str, object],
+    report_artifact: dict[str, object],
+    roster_artifact: dict[str, object],
+    arm: dict[str, object],
+    registered: RegisteredAuthority,
+    shape: ScientificShape,
+) -> None:
+    _exact_dict(result, _HISTORICAL_RESULT_FIELDS, "result receipt")
+    summary = {
+        "schema": "borsuk-v23-summary-v1",
+        "document_kind": "publication-v3-v23-d2-summary",
+        "claim_eligible": False,
+        "stage": "d2",
+        "source_archive_sha256": report_artifact["source_archive_sha256"],
+        "index_id": report_artifact["index_id"],
+        "dataset_id": "deep-image-96",
+        "d1_report_sha256": report_artifact["d1_report_sha256"],
+        "rows": report_artifact["report"]["rows"],
+        "queries": shape.query_count,
+        "arms": 1,
+        "passing_arm_indexes": [0] if arm["passed"] else [],
+        "pages": shape.page_count,
+        "passed": arm["passed"],
+    }
+    if any(
+        not _same_concrete(result[key], expected)
+        for key, expected in summary.items()
+    ):
+        raise ValueError("result summary differs")
+    diagnostic_cell = result["diagnostic_cell_id"]
+    attempt_id = result["attempt_id"]
+    if (
+        result["publishable"] is not False
+        or result["artifact_sha256"] != registered.report_sha256
+        or result["pages_sha256"] != registered.roster_sha256
+        or result["cell_id"] != registered.base_cell_id
+        or type(diagnostic_cell) is not str
+        or diagnostic_cell != registered.diagnostic_cell_id
+        or type(attempt_id) is not str
+        or attempt_id != f"runtime-v23-d2-{diagnostic_cell}-arm-0000-a0001"
+        or attempt_id != terminal["attempt_id"]
+        or result["instance_identity"] != terminal["instance_id"]
+        or result["dataset_materialization_sha256"]
+        != registered.dataset_materialization_sha256
+        or result["source_archive_sha256"] != terminal["source_archive_sha256"]
+        or result["index_id"] != terminal["base_index_id"]
+        or result["d1_report_sha256"] != terminal["v23_d1_report_sha256"]
+    ):
+        raise ValueError("result binding differs")
+    _concrete_nonnegative_int(result["elapsed_ns"], "result elapsed", positive=True)
+    resources = _exact_dict(
+        result["resources"],
+        _HISTORICAL_RESOURCE_FIELDS,
+        "result resources",
+    )
+    for key in _HISTORICAL_RESOURCE_FIELDS:
+        _concrete_nonnegative_int(resources[key], f"result resource {key}")
+    attestation = _exact_dict(
+        result["runtime_attestation"],
+        _HISTORICAL_ATTESTATION_FIELDS,
+        "runtime attestation",
+    )
+    integer_fields = (
+        "schema_version",
+        "vcpus",
+        "memory_max_bytes",
+        "memory_peak_bytes",
+        "swap_max_bytes",
+        "swap_current_bytes",
+        "swap_peak_bytes",
+        "oom_events",
+        "oom_kill_events",
+        "cache_capacity_bytes",
+        "effective_disk_cache_max_bytes",
+        "cache_filesystem_bytes",
+    )
+    for key in integer_fields:
+        _concrete_nonnegative_int(attestation[key], f"runtime attestation {key}")
+    if (
+        attestation["schema_version"] != 2
+        or attestation["cell_id"] != diagnostic_cell
+        or attestation["attempt_id"] != attempt_id
+        or attestation["instance_id"] != result["instance_identity"]
+        or attestation["purchase_option"] != terminal["purchase_option"]
+        or attestation["memory_max_bytes"] != terminal["memory_max_bytes"]
+        or attestation["memory_peak_bytes"] != terminal["memory_peak_bytes"]
+        or not 0 < resources["peak_rss_bytes"] <= attestation["memory_peak_bytes"]
+        or attestation["swap_max_bytes"] != terminal["memory_swap_max_bytes"]
+        or any(
+            attestation[key] != 0
+            for key in (
+                "swap_current_bytes",
+                "swap_peak_bytes",
+                "oom_events",
+                "oom_kill_events",
+            )
+        )
+        or attestation["effective_disk_cache_max_bytes"]
+        != terminal["disk_cache_max_bytes"]
+        or attestation["source_revision"] != registered.source_commit
+        or type(attestation["instance_type"]) is not str
+        or not attestation["instance_type"]
+        or type(attestation["architecture"]) is not str
+        or not attestation["architecture"]
+        or type(attestation["cache_device"]) is not str
+        or type(attestation["root_device"]) is not str
+        or type(attestation["cache_is_mount"]) is not bool
+    ):
+        raise ValueError("runtime attestation differs")
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Revision4Bvs2Authority:
+    """Evidence-only adapter for the frozen Revision-4 BVS2 writer contract."""
+
+    registered: RegisteredAuthority
+    shape: ScientificShape
+
+    def _read_terminal(self, path: Path) -> dict[str, object]:
+        return _read_historical_runtime_terminal(path, self.registered)
+
+    def _read_sorted_json(
+        self, path: Path, expected_sha256: str, role: str
+    ) -> dict[str, object]:
+        return _read_canonical_json(path, expected_sha256, role)
+
+    def _validate_bundle(
+        self,
+        terminal: dict[str, object],
+        result: dict[str, object],
+        report_artifact: dict[str, object],
+        roster_artifact: dict[str, object],
+    ) -> tuple[dict[str, object], tuple[PageRef, ...], tuple[int, ...]]:
+        _validate_outer_artifacts(report_artifact, roster_artifact, self.registered)
+        report = _exact_dict(report_artifact["report"], _REPORT_FIELDS, "D2 report")
+        if (
+            report["schema"] != "borsuk-v23-d2-v8"
+            or not _digest_is_valid(report["d1_report_checksum"])
+            or type(report["rows"]) is not int
+            or report["rows"] <= 0
+            or type(report["arms"]) is not list
+            or len(report["arms"]) != 1
+            or terminal["source_archive_sha256"]
+            != report_artifact["source_archive_sha256"]
+            or terminal["base_index_id"] != report_artifact["index_id"]
+            or terminal["v23_d1_report_sha256"]
+            != report_artifact["d1_report_sha256"]
+            or terminal["v23_passed"] is not report["arms"][0]["passed"]
+        ):
+            raise ValueError("D2 report authority differs")
+        query_ordinals = _concrete_int_list(
+            report["query_ordinals"],
+            "query ordinal",
+            exact_length=self.shape.query_count,
+        )
+        if query_ordinals != tuple(sorted(set(query_ordinals))):
+            raise ValueError("query ordinals differ")
+        arm = _exact_dict(report["arms"][0], _ARM_FIELDS, "D2 arm")
+        raw_pages = roster_artifact["pages"]
+        raw_arm_pages = arm["pages"]
+        if (
+            type(raw_pages) is not list
+            or len(raw_pages) != self.shape.page_count
+            or type(raw_arm_pages) is not list
+            or len(raw_arm_pages) != self.shape.page_count
+        ):
+            raise ValueError("page roster shape differs")
+        pages = tuple(_page_from_json(page) for page in raw_pages)
+        arm_pages = tuple(_page_from_json(page) for page in raw_arm_pages)
+        selector_generation = bytes(arm["selector"]["generation_checksum"])
+        if (
+            pages != arm_pages
+            or tuple(page.page_ordinal for page in pages)
+            != tuple(range(self.shape.page_count))
+            or len({page.path for page in pages}) != self.shape.page_count
+            or len({page.checksum for page in pages}) != self.shape.page_count
+            or any(page.dimensions != self.shape.dimensions for page in pages)
+            or any(page.generation_checksum != selector_generation for page in pages)
+        ):
+            raise ValueError("page roster authority differs")
+        _validate_arm_shape(arm, self.shape, pages)
+        _validate_result_receipt(
+            result,
+            terminal,
+            report_artifact,
+            roster_artifact,
+            arm,
+            self.registered,
+            self.shape,
+        )
+        return arm, pages, query_ordinals
+
+    def _validate_arm_evidence(
+        self, arm: dict[str, object], pages: tuple[PageRef, ...]
+    ) -> tuple[tuple[tuple[tuple[int, ...], ...], ...], tuple[int, ...]]:
+        return _query_evidence(arm, self.shape, pages)
+
+    def _read_query(
+        self,
+        path: Path,
+        result: dict[str, object],
+        query_ordinals: tuple[int, ...],
+    ) -> numpy.ndarray:
+        if (
+            result["dataset_materialization_sha256"]
+            != self.registered.dataset_materialization_sha256
+        ):
+            raise ValueError("query materialization differs")
+        return _load_query_vectors(
+            path,
+            self.registered.query_sha256,
+            self.registered.query_uri,
+            query_ordinals,
+            self.shape,
+        )
+
+    def load(self, paths: Revision4Bvs2Paths) -> Authority:
+        _validate_registered(self.registered)
+        _validate_shape(self.shape)
+        if type(paths) is not Revision4Bvs2Paths:
+            raise ValueError("Revision-4 BVS2 paths have the wrong concrete type")
+        terminal = self._read_terminal(paths.terminal)
+        result = self._read_sorted_json(
+            paths.result,
+            self.registered.result_sha256,
+            "result receipt",
+        )
+        report = self._read_sorted_json(
+            paths.report,
+            self.registered.report_sha256,
+            "D2 report",
+        )
+        roster = self._read_sorted_json(
+            paths.roster,
+            self.registered.roster_sha256,
+            "D2 page roster",
+        )
+        arm, pages, query_ordinals = self._validate_bundle(
+            terminal,
+            result,
+            report,
+            roster,
+        )
+        assignments, oracle_hits = self._validate_arm_evidence(arm, pages)
+        queries = self._read_query(paths.query, result, query_ordinals)
+        return Authority(
+            registered=self.registered,
+            shape=self.shape,
+            pages=pages,
+            queries=queries,
+            query_ordinals=query_ordinals,
+            ground_truth_page_assignments=assignments,
+            oracle_hits=oracle_hits,
+        )
+
+
 def load_authority(
     terminal_path: Path,
     result_path: Path,
@@ -1117,70 +1713,14 @@ def load_authority(
     shape: ScientificShape = REGISTERED_SHAPE,
 ) -> Authority:
     """Authenticate the complete immutable evidence bundle before page I/O."""
-
-    _validate_registered(registered)
-    _validate_shape(shape)
-    _read_historical_runtime_terminal(Path(terminal_path), registered)
-    _read_canonical_json(Path(result_path), registered.result_sha256, "result receipt")
-    report_artifact = _read_canonical_json(
-        Path(report_path), registered.report_sha256, "D2 report"
-    )
-    roster_artifact = _read_canonical_json(
-        Path(roster_path), registered.roster_sha256, "D2 page roster"
-    )
-    _validate_outer_artifacts(report_artifact, roster_artifact, registered)
-    report = _exact_dict(report_artifact["report"], _REPORT_FIELDS, "D2 report")
-    if (
-        report["schema"] != "borsuk-v23-d2-v8"
-        or not _digest_is_valid(report["d1_report_checksum"])
-        or type(report["rows"]) is not int
-        or report["rows"] <= 0
-        or type(report["arms"]) is not list
-        or len(report["arms"]) != 1
-    ):
-        raise ValueError("D2 report authority differs")
-    query_ordinals = _concrete_int_list(
-        report["query_ordinals"],
-        "query ordinal",
-        exact_length=shape.query_count,
-    )
-    if query_ordinals != tuple(sorted(set(query_ordinals))):
-        raise ValueError("query ordinals differ")
-    arm = _exact_dict(report["arms"][0], _ARM_FIELDS, "D2 arm")
-    _validate_arm_shape(arm, shape)
-    raw_pages = roster_artifact["pages"]
-    raw_arm_pages = arm["pages"]
-    if (
-        type(raw_pages) is not list
-        or len(raw_pages) != shape.page_count
-        or type(raw_arm_pages) is not list
-        or len(raw_arm_pages) != shape.page_count
-    ):
-        raise ValueError("page roster shape differs")
-    pages = tuple(_page_from_json(page) for page in raw_pages)
-    arm_pages = tuple(_page_from_json(page) for page in raw_arm_pages)
-    selector_generation = bytes(arm["selector"]["generation_checksum"])
-    if (
-        pages != arm_pages
-        or tuple(page.page_ordinal for page in pages) != tuple(range(shape.page_count))
-        or len({page.path for page in pages}) != shape.page_count
-        or len({page.checksum for page in pages}) != shape.page_count
-        or any(page.dimensions != shape.dimensions for page in pages)
-        or any(page.generation_checksum != selector_generation for page in pages)
-    ):
-        raise ValueError("page roster authority differs")
-    assignments, oracle_hits = _query_evidence(arm, shape)
-    queries = _load_query_vectors(
-        Path(query_path), registered.query_sha256, query_ordinals, shape
-    )
-    return Authority(
-        registered=registered,
-        shape=shape,
-        pages=pages,
-        queries=queries,
-        query_ordinals=query_ordinals,
-        ground_truth_page_assignments=assignments,
-        oracle_hits=oracle_hits,
+    return Revision4Bvs2Authority(registered=registered, shape=shape).load(
+        Revision4Bvs2Paths(
+            terminal=Path(terminal_path),
+            result=Path(result_path),
+            report=Path(report_path),
+            roster=Path(roster_path),
+            query=Path(query_path),
+        )
     )
 
 
