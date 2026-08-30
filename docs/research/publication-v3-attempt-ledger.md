@@ -787,3 +787,29 @@ rank cap would worsen the already-failed RAM/CPU tradeoff. D3 was not launched,
 so this run establishes no cold-latency or throughput claim. The next paid run
 remains forbidden until an outcome-blind offline counterfactual validates a
 replacement selector architecture against the same immutable D2 evidence.
+
+A bounded no-spend replay then removed the remaining ambiguity in the
+Revision-4 representative result. It authenticated the historical
+`c59128ee68eb28beaa7f5eef7e0570dc7c787b88` BVS2 selector at
+`s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-f7a6e06a6a40c1165b6cb889/runtime-v23-d2/arms/0000/attempts/0001/pages/selectors/a1c126ecf129c12a9f5c3e7d4830a1a3a7707305f48f806c2691594482e6005e`.
+The 93,407,096-byte object's BLAKE3 checksum is the terminal path component.
+It contains 450,087 deterministic 192-byte f16 farthest-point representatives,
+at most 16 per each of 28,282 pages. The replay normalized the same 32 frozen
+queries, scored every representative without the historical 320-cell filter,
+reduced scores to the exact minimum per page, and selected exactly eight pages
+by `(distance, page ordinal)`. Ground-truth page assignments and the 318-hit
+oracle came from the authenticated D2 report whose SHA-256 is
+`665dc206d04073b8cbc0b8bab9e5645760440d2336ddf4bfebea81d176b4779d`.
+
+Removing routing changed no scientific result: the exact global scan recovered
+85 of 320 ground-truth rows, or 265,625 ppm aggregate recall, zero minimum-query
+recall, and 267,295 ppm of the oracle. The canonical counterfactual JSON
+SHA-256 was
+`dedb7ef24a08ec90639082f79a20be5678de4b849ecbedd0bb92c5c29c685e1e`.
+This rejects the farthest-point representative plane itself rather than merely
+its router. It does not qualify another paid run. Because one true mean per
+page previously reached 696,875 ppm aggregate recall, the only remaining
+page-prototype hypothesis worth falsifying is a query-independent ladder of
+multiple clustered means. That test must stream and authenticate immutable
+page objects with bounded memory; it must not materialize the multi-gigabyte
+page corpus locally or sample away competing pages.
