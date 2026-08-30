@@ -33,8 +33,14 @@ pub(crate) struct V23TrainingRow {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V23ReservoirRow {
+    pub(crate) source_ordinal: u64,
+    pub(crate) vector: [f16; 96],
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct V23IncidenceReservoir {
-    pub(crate) rows: Vec<V23TrainingRow>,
+    pub(crate) rows: Vec<V23ReservoirRow>,
     pub(crate) source_rows: u64,
     pub(crate) peak_rows: usize,
 }
@@ -42,7 +48,7 @@ pub(crate) struct V23IncidenceReservoir {
 struct ReservoirEntry {
     key: u64,
     ordinal: u64,
-    row: V23TrainingRow,
+    row: V23ReservoirRow,
 }
 
 impl PartialEq for ReservoirEntry {
@@ -242,7 +248,7 @@ pub(crate) fn select_reservoir(
     rows: &[V23TrainingRow],
     shape: V23IncidenceTrainingShape,
     seed: u64,
-) -> Result<Vec<V23TrainingRow>> {
+) -> Result<Vec<V23ReservoirRow>> {
     let mut ordered = rows.to_vec();
     ordered.sort_unstable_by_key(|row| row.source_ordinal);
     Ok(select_reservoir_streaming(ordered.into_iter().map(Ok), shape, seed)?.rows)
@@ -276,9 +282,9 @@ pub(crate) fn select_reservoir_streaming(
             return Err(invalid("V23 incidence source ordinals are not increasing"));
         }
         previous_ordinal = Some(row.source_ordinal);
-        let row = V23TrainingRow {
+        let row = V23ReservoirRow {
             source_ordinal: row.source_ordinal,
-            vector: normalized(&row.vector)?,
+            vector: normalized(&row.vector)?.map(f16::from_f32),
         };
         let candidate = ReservoirEntry {
             key: splitmix64(row.source_ordinal ^ seed),
@@ -314,7 +320,11 @@ pub(crate) fn select_reservoir_streaming(
     })
 }
 
-fn centroid(rows: &[usize], reservoir: &[V23TrainingRow]) -> Result<[f32; 96]> {
+fn reservoir_vector(row: &V23ReservoirRow) -> [f32; 96] {
+    row.vector.map(f16::to_f32)
+}
+
+fn centroid(rows: &[usize], reservoir: &[V23ReservoirRow]) -> Result<[f32; 96]> {
     if rows.is_empty() {
         return Err(invalid("V23 incidence tree node is empty"));
     }
@@ -325,7 +335,7 @@ fn centroid(rows: &[usize], reservoir: &[V23TrainingRow]) -> Result<[f32; 96]> {
         .map(|chunk| {
             let mut partial = [0.0_f64; 96];
             for index in chunk {
-                for (sum, value) in partial.iter_mut().zip(reservoir[*index].vector) {
+                for (sum, value) in partial.iter_mut().zip(reservoir_vector(&reservoir[*index])) {
                     *sum += f64::from(value);
                 }
             }
@@ -361,7 +371,7 @@ fn roundtrip_centroid(vector: &[f32; 96]) -> Result<([f16; 96], f32)> {
 
 fn train_split(
     members: &[usize],
-    reservoir: &[V23TrainingRow],
+    reservoir: &[V23ReservoirRow],
     shape: V23IncidenceTrainingShape,
     use_fused: bool,
 ) -> Result<(V23TreeNode, Vec<usize>, Vec<usize>)> {
@@ -372,15 +382,16 @@ fn train_split(
         .iter()
         .min_by_key(|index| reservoir[**index].source_ordinal)
         .unwrap();
-    let first_vector = reservoir[first].vector;
+    let first_vector = reservoir_vector(&reservoir[first]);
     let second = *members
         .iter()
         .filter(|index| **index != first)
         .max_by(|left, right| {
-            let left_distance =
-                1.0 - training_dot(use_fused, &first_vector, &reservoir[**left].vector).unwrap();
+            let left_vector = reservoir_vector(&reservoir[**left]);
+            let right_vector = reservoir_vector(&reservoir[**right]);
+            let left_distance = 1.0 - training_dot(use_fused, &first_vector, &left_vector).unwrap();
             let right_distance =
-                1.0 - training_dot(use_fused, &first_vector, &reservoir[**right].vector).unwrap();
+                1.0 - training_dot(use_fused, &first_vector, &right_vector).unwrap();
             left_distance.total_cmp(&right_distance).then_with(|| {
                 reservoir[**right]
                     .source_ordinal
@@ -388,14 +399,15 @@ fn train_split(
             })
         })
         .unwrap();
-    let mut zero = reservoir[first].vector;
-    let mut one = reservoir[second].vector;
+    let mut zero = first_vector;
+    let mut one = reservoir_vector(&reservoir[second]);
     for _ in 0..shape.lloyd_iterations {
         let mut zero_members = Vec::new();
         let mut one_members = Vec::new();
         for index in members {
-            let zero_distance = 1.0 - training_dot(use_fused, &reservoir[*index].vector, &zero)?;
-            let one_distance = 1.0 - training_dot(use_fused, &reservoir[*index].vector, &one)?;
+            let vector = reservoir_vector(&reservoir[*index]);
+            let zero_distance = 1.0 - training_dot(use_fused, &vector, &zero)?;
+            let one_distance = 1.0 - training_dot(use_fused, &vector, &one)?;
             if zero_distance.total_cmp(&one_distance).is_le() {
                 zero_members.push(*index);
             } else {
@@ -422,9 +434,9 @@ fn train_split(
             };
             Ok((
                 if use_fused {
-                    split_score_simd(&placeholder, &reservoir[*index].vector)?.0
+                    split_score_simd(&placeholder, &reservoir_vector(&reservoir[*index]))?.0
                 } else {
-                    split_score_scalar(&placeholder, &reservoir[*index].vector)
+                    split_score_scalar(&placeholder, &reservoir_vector(&reservoir[*index]))
                 },
                 reservoir[*index].source_ordinal,
                 *index,
@@ -456,14 +468,14 @@ fn train_split(
     ))
 }
 
-fn leaf(members: &[usize], reservoir: &[V23TrainingRow], use_fused: bool) -> Result<V23TreeLeaf> {
+fn leaf(members: &[usize], reservoir: &[V23ReservoirRow], use_fused: bool) -> Result<V23TreeLeaf> {
     let center = centroid(members, reservoir)?;
     let (centroid, inverse_norm) = roundtrip_centroid(&center)?;
     let decoded = centroid.map(f16::to_f32);
     let mut residual = 0.0_f64;
     for index in members {
-        let distance =
-            1.0 - training_dot(use_fused, &reservoir[*index].vector, &decoded)? * inverse_norm;
+        let vector = reservoir_vector(&reservoir[*index]);
+        let distance = 1.0 - training_dot(use_fused, &vector, &decoded)? * inverse_norm;
         residual += f64::from(distance * distance);
     }
     Ok(V23TreeLeaf {
@@ -507,7 +519,7 @@ fn train_incidence_tree_internal(
 }
 
 fn train_incidence_tree_from_reservoir(
-    reservoir: Vec<V23TrainingRow>,
+    reservoir: Vec<V23ReservoirRow>,
     shape: V23IncidenceTrainingShape,
     seed: u64,
     threads: usize,
@@ -894,11 +906,11 @@ mod tests {
     use half::f16;
 
     use super::{
-        BeamSelectedLeaves, V23IncidenceTrainingShape, V23TrainingRow, V23TreeNode,
-        assign_one_leaf, assign_two_beam_leaves, decode_incidence_tree, encode_incidence_tree,
-        reservoir_seed, select_reservoir_streaming, split_score_scalar, split_score_simd,
-        train_incidence_tree_streaming_with_shape, train_incidence_tree_with_shape,
-        train_incidence_tree_with_shape_fused, training_work,
+        BeamSelectedLeaves, V23IncidenceTrainingShape, V23ReservoirRow, V23TrainingRow,
+        V23TreeNode, assign_one_leaf, assign_two_beam_leaves, decode_incidence_tree,
+        encode_incidence_tree, reservoir_seed, select_reservoir_streaming, split_score_scalar,
+        split_score_simd, train_incidence_tree_streaming_with_shape,
+        train_incidence_tree_with_shape, train_incidence_tree_with_shape_fused, training_work,
     };
 
     fn row(ordinal: u64) -> V23TrainingRow {
@@ -922,6 +934,11 @@ mod tests {
         }
     }
 
+    fn assert_normalized_f16_row(row: &V23ReservoirRow) {
+        assert_eq!(row.vector[0].to_bits(), f16::from_f32(0.6).to_bits());
+        assert_eq!(row.vector[1].to_bits(), f16::from_f32(0.8).to_bits());
+    }
+
     #[test]
     fn v23_incidence_tree_streaming_reservoir_is_bounded_and_exact() {
         let shape = V23IncidenceTrainingShape {
@@ -943,6 +960,35 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![3, 4, 5, 7]
         );
+    }
+
+    #[test]
+    fn v23_incidence_tree_reservoir_stores_normalized_f16_rows() {
+        assert_eq!(std::mem::size_of::<V23ReservoirRow>(), 200);
+        let shape = V23IncidenceTrainingShape {
+            dimensions: 96,
+            reservoir_rows: 4,
+            depth: 2,
+            lloyd_iterations: 4,
+        };
+        let mut first = [0.0_f32; 96];
+        first[0] = 3.0;
+        first[1] = 4.0;
+        let mut rows = vec![V23TrainingRow {
+            source_ordinal: 0,
+            vector: first,
+        }];
+        for ordinal in 1..4 {
+            let mut vector = [0.0_f32; 96];
+            vector[ordinal as usize] = 1.0;
+            rows.push(V23TrainingRow {
+                source_ordinal: ordinal,
+                vector,
+            });
+        }
+
+        let selected = select_reservoir_streaming(rows.into_iter().map(Ok), shape, 0).unwrap();
+        assert_normalized_f16_row(&selected.rows[0]);
     }
 
     #[test]
