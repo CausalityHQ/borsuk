@@ -4,16 +4,20 @@ import copy
 import dataclasses
 import hashlib
 import json
-from pathlib import Path
 import struct
 import tempfile
+import threading
+import time
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from scripts import v23_clustered_page_prototype_falsifier as subject
-from blake3 import blake3
 import numpy
 import pyarrow as pa
 import pyarrow.parquet as pq
+from blake3 import blake3
+
+from scripts import v23_clustered_page_prototype_falsifier as subject
 
 
 def _page_fixture(
@@ -515,6 +519,45 @@ class AuthorityAndQualityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             subject.load_authority(**fixture.arguments)
 
+    def test_authority_rejects_bool_as_int_in_outer_artifact(self) -> None:
+        fixture = _authority_fixture()
+        self.addCleanup(fixture.temporary.cleanup)
+        fixture.report["claim_eligible"] = 0
+        fixture.rewrite()
+
+        with self.assertRaises(ValueError):
+            subject.load_authority(**fixture.arguments)
+
+    def test_authority_rejects_nested_key_and_selector_schema_drift(self) -> None:
+        mutations = (
+            (
+                "d1-key-value",
+                lambda fixture: fixture.report["report"]["arms"][0]["d1_key"].__setitem__(
+                    "code_width_bytes", True
+                ),
+            ),
+            (
+                "selector-field",
+                lambda fixture: fixture.report["report"]["arms"][0]["selector"].pop(
+                    "checksum"
+                ),
+            ),
+            (
+                "selector-metric",
+                lambda fixture: fixture.report["report"]["arms"][0]["selector"].__setitem__(
+                    "metric", "euclidean"
+                ),
+            ),
+        )
+        for name, mutate in mutations:
+            fixture = _authority_fixture()
+            self.addCleanup(fixture.temporary.cleanup)
+            mutate(fixture)
+            fixture.rewrite()
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    subject.load_authority(**fixture.arguments)
+
         fixture = _authority_fixture()
         self.addCleanup(fixture.temporary.cleanup)
         fixture.arguments["registered"] = dataclasses.replace(
@@ -547,6 +590,289 @@ class AuthorityAndQualityTests(unittest.TestCase):
     def test_projection_is_exact_and_within_three_gibibytes(self) -> None:
         self.assertEqual(subject.projected_serving_bytes(), 2_686_433_028)
         self.assertLessEqual(subject.projected_serving_bytes(), 3 * 1024**3)
+
+
+def _ordinal_page(ordinal: int) -> tuple[subject.PageRef, bytes]:
+    reference, body, _ = _page_fixture()
+    changed = bytearray(body)
+    struct.pack_into("<I", changed, 12, ordinal)
+    reference = dataclasses.replace(reference, page_ordinal=ordinal)
+    return _with_checksum(reference, bytes(changed)), bytes(changed)
+
+
+class _StreamingBody:
+    def __init__(self, client: "_FakeS3", payload: bytes, delay: float) -> None:
+        self._client = client
+        self._payload = payload
+        self._position = 0
+        self._delay = delay
+        self._closed = False
+        with client.lock:
+            client.open_bodies += 1
+            client.peak_open_bodies = max(client.peak_open_bodies, client.open_bodies)
+
+    def read(self, size: int = -1) -> bytes:
+        if self._delay:
+            time.sleep(self._delay)
+            self._delay = 0.0
+        if size < 0:
+            size = len(self._payload) - self._position
+        start = self._position
+        self._position = min(len(self._payload), start + size)
+        return self._payload[start : self._position]
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            with self._client.lock:
+                self._client.open_bodies -= 1
+
+
+class _FakeS3:
+    def __init__(self, payloads: dict[str, bytes], delays: dict[str, float] | None = None) -> None:
+        self.payloads = payloads
+        self.delays = delays or {}
+        self.lock = threading.Lock()
+        self.open_bodies = 0
+        self.peak_open_bodies = 0
+        self.requested: list[str] = []
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
+        if Bucket != "fixture-bucket" or Key not in self.payloads:
+            raise KeyError((Bucket, Key))
+        with self.lock:
+            self.requested.append(Key)
+        return {"Body": _StreamingBody(self, self.payloads[Key], self.delays.get(Key, 0.0))}
+
+
+def _stream_fixture(page_count: int = 3) -> tuple[subject.Authority, _FakeS3]:
+    pages_and_bodies = tuple(_ordinal_page(ordinal) for ordinal in range(page_count))
+    pages = tuple(reference for reference, _ in pages_and_bodies)
+    payloads = {f"attempt/{reference.path}": body for reference, body in pages_and_bodies}
+    shape = subject.ScientificShape(
+        page_count=page_count,
+        query_count=2,
+        dimensions=2,
+        recall_k=2,
+        selection_width=min(2, page_count),
+    )
+    assignments = tuple(
+        tuple(((query + neighbor) % page_count,) for neighbor in range(2))
+        for query in range(2)
+    )
+    authority = subject.Authority(
+        registered=subject.RegisteredAuthority(
+            source_commit="12" * 20,
+            attempt_prefix="s3://fixture-bucket/attempt/",
+            terminal_sha256="21" * 32,
+            result_sha256="22" * 32,
+            report_sha256="23" * 32,
+            roster_sha256="24" * 32,
+            query_uri="s3://fixture-bucket/query.parquet",
+            query_sha256="25" * 32,
+        ),
+        shape=shape,
+        pages=pages,
+        queries=numpy.asarray(((1.0, 0.0), (0.0, 1.0)), dtype=numpy.float32),
+        query_ordinals=(3, 7),
+        ground_truth_page_assignments=assignments,
+        oracle_hits=(2, 2),
+    )
+    return authority, _FakeS3(payloads)
+
+
+class _PressureProbe:
+    def __init__(self, samples: list[subject.PressureSample]) -> None:
+        self.samples = samples
+        self.index = 0
+
+    def __call__(self) -> subject.PressureSample:
+        sample = self.samples[min(self.index, len(self.samples) - 1)]
+        self.index += 1
+        return sample
+
+
+def _safe_pressure(count: int = 8) -> _PressureProbe:
+    return _PressureProbe(
+        [
+            subject.PressureSample(
+                rss_bytes=64 * 1024**2,
+                psi_full_avg10_ppm=0,
+                swap_bytes=0,
+                monotonic_ns=index * 1_000_000,
+            )
+            for index in range(count)
+        ]
+    )
+
+
+class StreamingAndResultTests(unittest.TestCase):
+    def test_ordered_fetch_never_retains_more_than_four_bodies(self) -> None:
+        authority, client = _stream_fixture(page_count=9)
+        client.delays = {
+            f"attempt/{page.path}": (9 - page.page_ordinal) * 0.0001
+            for page in authority.pages
+        }
+
+        observed = list(
+            subject.ordered_page_bodies(
+                client, "fixture-bucket", "attempt/", authority.pages, 4
+            )
+        )
+
+        self.assertEqual([page.page_ordinal for page, _ in observed], list(range(9)))
+        self.assertLessEqual(client.peak_open_bodies, 4)
+        self.assertEqual(client.open_bodies, 0)
+
+    def test_stream_rejects_short_and_overlong_bodies(self) -> None:
+        authority, client = _stream_fixture(page_count=1)
+        key = f"attempt/{authority.pages[0].path}"
+        for name, payload in (("short", client.payloads[key][:-1]), ("long", client.payloads[key] + b"x")):
+            mutant = _FakeS3({key: payload})
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    list(
+                        subject.ordered_page_bodies(
+                            mutant, "fixture-bucket", "attempt/", authority.pages, 1
+                        )
+                    )
+                self.assertEqual(mutant.open_bodies, 0)
+
+    def test_full_stream_requires_explicit_execution_flag(self) -> None:
+        authority, client = _stream_fixture()
+        with self.assertRaises(ValueError):
+            subject.run_falsifier(authority, client, _safe_pressure(), False)
+        self.assertEqual(client.requested, [])
+
+    def test_pressure_stop_emits_no_partial_quality(self) -> None:
+        authority, client = _stream_fixture()
+        pressure = _PressureProbe(
+            [
+                subject.PressureSample(1, 0, 0, 0),
+                subject.PressureSample(768 * 1024**2, 0, 0, 1),
+            ]
+        )
+
+        with self.assertRaises(subject.StreamStopped) as caught:
+            subject.run_falsifier(authority, client, pressure, True)
+
+        self.assertEqual(caught.exception.last_authenticated_page, 0)
+        self.assertFalse(hasattr(caught.exception, "aggregate_recall_ppm"))
+
+    def test_every_registered_pressure_threshold_stops_at_equality(self) -> None:
+        threshold_samples = (
+            ("rss-limit", subject.PressureSample(768 * 1024**2, 0, 0, 1)),
+            ("psi-limit", subject.PressureSample(1, 500_000, 0, 1)),
+            ("swap-growth-limit", subject.PressureSample(1, 0, 128 * 1024**2, 1)),
+            ("progress-limit", subject.PressureSample(1, 0, 0, 300 * 1_000_000_000)),
+        )
+        for reason, threshold in threshold_samples:
+            authority, client = _stream_fixture()
+            pressure = _PressureProbe(
+                [subject.PressureSample(1, 0, 0, 0), threshold]
+            )
+            with self.subTest(reason=reason):
+                with self.assertRaises(subject.StreamStopped) as caught:
+                    subject.run_falsifier(authority, client, pressure, True)
+                self.assertEqual(caught.exception.reason, reason)
+                self.assertEqual(caught.exception.last_authenticated_page, 0)
+
+    def test_stream_propagates_get_failure_and_closes_obtained_bodies(self) -> None:
+        authority, client = _stream_fixture(page_count=2)
+        del client.payloads[f"attempt/{authority.pages[1].path}"]
+
+        with self.assertRaises(KeyError):
+            list(
+                subject.ordered_page_bodies(
+                    client, "fixture-bucket", "attempt/", authority.pages, 2
+                )
+            )
+
+        self.assertEqual(client.open_bodies, 0)
+
+    def test_nonfinite_page_scores_fail_before_quality(self) -> None:
+        authority, client = _stream_fixture()
+        with mock.patch.object(
+            subject,
+            "score_page_means",
+            return_value=numpy.full(authority.shape.query_count, numpy.nan),
+        ):
+            with self.assertRaises(ValueError):
+                subject.run_falsifier(authority, client, _safe_pressure(), True)
+
+    def test_scientific_execution_writes_no_files(self) -> None:
+        authority, client = _stream_fixture()
+        with (
+            mock.patch("builtins.open", side_effect=AssertionError("file write")),
+            mock.patch.object(Path, "write_bytes", side_effect=AssertionError("file write")),
+            mock.patch("os.open", side_effect=AssertionError("file write")),
+            mock.patch("tempfile.TemporaryDirectory", side_effect=AssertionError("scratch")),
+        ):
+            result = subject.run_falsifier(authority, client, _safe_pressure(), True)
+        self.assertEqual(result["authenticated_pages"], authority.shape.page_count)
+
+    def test_complete_result_is_canonical_strict_and_hash_stable(self) -> None:
+        authority, client = _stream_fixture()
+
+        result = subject.run_falsifier(authority, client, _safe_pressure(), True)
+        validated = subject.validate_result(result)
+        payload = subject.canonical_result_bytes(validated)
+
+        expected = json.dumps(validated, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        self.assertEqual(payload, expected)
+        digest = hashlib.sha256(payload).hexdigest()
+        self.assertRegex(digest, r"\A[0-9a-f]{64}\Z")
+        self.assertEqual(
+            digest,
+            hashlib.sha256(subject.canonical_result_bytes(copy.deepcopy(validated))).hexdigest(),
+        )
+
+    def test_result_rejects_concrete_type_gate_and_cardinality_drift(self) -> None:
+        authority, client = _stream_fixture()
+        result = subject.run_falsifier(authority, client, _safe_pressure(), True)
+        mutations = (
+            ("extra", lambda value: value.__setitem__("extra", 1)),
+            ("bool-count", lambda value: value.__setitem__("page_count", True)),
+            ("query-count", lambda value: value.__setitem__("query_count", 3)),
+            ("passed", lambda value: value.__setitem__("passed", not value["passed"])),
+            (
+                "algorithm-bool",
+                lambda value: value["algorithm"].__setitem__("max_centers", True),
+            ),
+        )
+        for name, mutate in mutations:
+            changed = copy.deepcopy(result)
+            mutate(changed)
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    subject.validate_result(changed)
+
+    def test_cli_refuses_without_exact_complete_stream_flag(self) -> None:
+        bucket, prefix = subject._attempt_location(subject.REGISTERED_AUTHORITY.attempt_prefix)
+        arguments = [
+            "--terminal",
+            "terminal.json",
+            "--result",
+            "result.json",
+            "--report",
+            "report.json",
+            "--roster",
+            "roster.json",
+            "--query",
+            "query.parquet",
+            "--bucket",
+            bucket,
+            "--prefix",
+            prefix,
+            "--aws-profile",
+            "causality",
+            "--region",
+            "eu-central-1",
+        ]
+        with self.assertRaises(SystemExit):
+            subject.main(arguments)
+        with self.assertRaises(SystemExit):
+            subject.main(arguments + ["--output", "forbidden.json"])
 
 
 if __name__ == "__main__":

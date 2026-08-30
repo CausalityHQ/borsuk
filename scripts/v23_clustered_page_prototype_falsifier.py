@@ -3,7 +3,21 @@
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import json
 import os
+import re
+import resource
+import struct
+import sys
+import time
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import cast
+from urllib.parse import urlparse
 
 for _thread_variable in (
     "OPENBLAS_NUM_THREADS",
@@ -13,20 +27,65 @@ for _thread_variable in (
 ):
     os.environ[_thread_variable] = "1"
 
-import dataclasses
-import hashlib
-import json
-from pathlib import Path
-import re
-import struct
-
-from blake3 import blake3
-import numpy
+import numpy  # noqa: E402
+from blake3 import blake3  # noqa: E402
 
 _PAGE_HEADER_BYTES = 96
 _PAGE_MAX_ENCODED_BYTES = 245_760
 _HEX_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _U64_MASK = (1 << 64) - 1
+_RSS_LIMIT_BYTES = 768 * 1024**2
+_PSI_LIMIT_PPM = 500_000
+_SWAP_GROWTH_LIMIT_BYTES = 128 * 1024**2
+_PROGRESS_LIMIT_NS = 300 * 1_000_000_000
+
+_RESULT_FIELDS = frozenset(
+    {
+        "schema",
+        "source_commit",
+        "attempt_prefix",
+        "terminal_sha256",
+        "result_sha256",
+        "report_sha256",
+        "roster_sha256",
+        "query_uri",
+        "query_sha256",
+        "page_count",
+        "query_count",
+        "dimensions",
+        "recall_k",
+        "selection_width",
+        "authenticated_pages",
+        "authenticated_primary_rows",
+        "authenticated_replica_rows",
+        "total_bytes_read",
+        "algorithm",
+        "query_ordinals",
+        "selected_pages",
+        "query_hits",
+        "oracle_hits",
+        "aggregate_recall_ppm",
+        "minimum_query_recall_ppm",
+        "oracle_attainment_ppm",
+        "projected_serving_bytes",
+        "elapsed_ns",
+        "cpu_ns",
+        "peak_rss_bytes",
+        "peak_psi_full_avg10_ppm",
+        "swap_delta_bytes",
+        "passed",
+    }
+)
+_ALGORITHM = {
+    "name": "spherical-kmeans-page-prototypes-v1",
+    "max_centers": 32,
+    "lloyd_iterations": 8,
+    "prng": "splitmix64",
+    "input_dtype": "f32",
+    "accumulator_dtype": "f64",
+    "stored_dtype": "f16-le",
+    "tie_breaks": "lowest-input-and-center-position",
+}
 
 _REPORT_ARTIFACT_FIELDS = frozenset(
     {
@@ -87,6 +146,21 @@ _PAGE_FIELDS = frozenset(
         "encoded_bytes",
         "primary_rows",
         "replicated_rows",
+    }
+)
+_SELECTOR_FIELDS = frozenset(
+    {
+        "generation_checksum",
+        "metric",
+        "dimensions",
+        "coarse_cells",
+        "page_count",
+        "anchors_per_page",
+        "code_width",
+        "anchor_count",
+        "path",
+        "checksum",
+        "encoded_bytes",
     }
 )
 _QUERY_SAMPLE_FIELDS = frozenset(
@@ -164,6 +238,31 @@ class Authority:
     query_ordinals: tuple[int, ...]
     ground_truth_page_assignments: tuple[tuple[tuple[int, ...], ...], ...]
     oracle_hits: tuple[int, ...]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PressureSample:
+    """One concrete cgroup/process pressure observation."""
+
+    rss_bytes: int
+    psi_full_avg10_ppm: int
+    swap_bytes: int
+    monotonic_ns: int
+
+
+class StreamStopped(RuntimeError):
+    """Fail-closed stop carrying only the last authenticated page identity."""
+
+    def __init__(
+        self,
+        reason: str,
+        last_authenticated_page: int,
+        last_authenticated_checksum: str | None,
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.last_authenticated_page = last_authenticated_page
+        self.last_authenticated_checksum = last_authenticated_checksum
 
 
 REGISTERED_SHAPE = ScientificShape(
@@ -477,6 +576,24 @@ def _exact_dict(value: object, fields: frozenset[str], role: str) -> dict[str, o
     return value
 
 
+def _same_concrete(left: object, right: object) -> bool:
+    if type(left) is not type(right):
+        return False
+    if type(left) is dict:
+        left_dict = cast(dict[object, object], left)
+        right_dict = cast(dict[object, object], right)
+        return left_dict.keys() == right_dict.keys() and all(
+            _same_concrete(left_dict[key], right_dict[key]) for key in left_dict
+        )
+    if type(left) is list:
+        left_list = cast(list[object], left)
+        right_list = cast(list[object], right)
+        return len(left_list) == len(right_list) and all(
+            _same_concrete(a, b) for a, b in zip(left_list, right_list, strict=True)
+        )
+    return left == right
+
+
 def _digest_is_valid(value: object, *, length: int = 64) -> bool:
     return (
         type(value) is str
@@ -599,10 +716,16 @@ def _validate_outer_artifacts(
         or report_artifact["document_kind"] != "publication-v3-v23-d2-report"
         or roster_artifact["schema"] != "borsuk-v23-pages-v1"
         or roster_artifact["document_kind"] != "publication-v3-v23-page-roster"
-        or any(report_artifact[key] != value for key, value in expected.items())
-        or any(roster_artifact[key] != value for key, value in expected.items())
         or any(
-            report_artifact[key] != roster_artifact[key]
+            not _same_concrete(report_artifact[key], value)
+            for key, value in expected.items()
+        )
+        or any(
+            not _same_concrete(roster_artifact[key], value)
+            for key, value in expected.items()
+        )
+        or any(
+            not _same_concrete(report_artifact[key], roster_artifact[key])
             for key in (
                 "source_archive_sha256",
                 "index_id",
@@ -642,16 +765,46 @@ def _validate_arm_shape(arm: dict[str, object], shape: ScientificShape) -> None:
         "cpu_p99_ns",
     ):
         _concrete_nonnegative_int(arm[key], key)
+    expected_key = {"family": "f16-flat", "code_width_bytes": shape.dimensions * 2}
     if (
         arm["maximum_query_pages"] != shape.selection_width
         or type(arm["passed"]) is not bool
         or type(arm["d1_key"]) is not dict
-        or frozenset(arm["d1_key"]) != {"family", "code_width_bytes"}
+        or not _same_concrete(arm["d1_key"], expected_key)
         or type(arm["selector_key"]) is not dict
-        or frozenset(arm["selector_key"]) != {"family", "code_width_bytes"}
+        or not _same_concrete(arm["selector_key"], expected_key)
         or type(arm["selector"]) is not dict
     ):
         raise ValueError("D2 arm authority differs")
+    selector = _exact_dict(arm["selector"], _SELECTOR_FIELDS, "D2 selector")
+    generation = selector["generation_checksum"]
+    for role in (
+        "dimensions",
+        "coarse_cells",
+        "page_count",
+        "anchors_per_page",
+        "code_width",
+        "anchor_count",
+        "encoded_bytes",
+    ):
+        _concrete_nonnegative_int(selector[role], f"selector {role}", positive=True)
+    if (
+        type(generation) is not list
+        or len(generation) != 32
+        or any(type(byte) is not int or not 0 <= byte <= 255 for byte in generation)
+        or generation == [0] * 32
+        or selector["metric"] != "cosine"
+        or type(selector["metric"]) is not str
+        or selector["dimensions"] != shape.dimensions
+        or selector["page_count"] != shape.page_count
+        or selector["code_width"] != shape.dimensions * 2
+        or selector["anchor_count"]
+        != selector["page_count"] * selector["anchors_per_page"]
+        or not _digest_is_valid(selector["checksum"])
+        or type(selector["path"]) is not str
+        or selector["path"] != f"selectors/{selector['checksum']}"
+    ):
+        raise ValueError("D2 selector authority differs")
 
 
 def _query_evidence(
@@ -824,12 +977,14 @@ def load_authority(
         raise ValueError("page roster shape differs")
     pages = tuple(_page_from_json(page) for page in raw_pages)
     arm_pages = tuple(_page_from_json(page) for page in raw_arm_pages)
+    selector_generation = bytes(arm["selector"]["generation_checksum"])
     if (
         pages != arm_pages
         or tuple(page.page_ordinal for page in pages) != tuple(range(shape.page_count))
         or len({page.path for page in pages}) != shape.page_count
         or len({page.checksum for page in pages}) != shape.page_count
         or any(page.dimensions != shape.dimensions for page in pages)
+        or any(page.generation_checksum != selector_generation for page in pages)
     ):
         raise ValueError("page roster authority differs")
     assignments, oracle_hits = _query_evidence(arm, shape)
@@ -930,3 +1085,441 @@ def projected_serving_bytes() -> int:
     if total != 2_686_433_028 or total > 3 * 1024**3:
         raise ValueError("serving-memory projection differs")
     return total
+
+
+def _read_page_body(client: object, bucket: str, key: str, expected_bytes: int) -> bytes:
+    response = client.get_object(Bucket=bucket, Key=key)  # type: ignore[attr-defined]
+    if type(response) is not dict or "Body" not in response:
+        raise ValueError("S3 response differs")
+    stream = response["Body"]
+    read = getattr(stream, "read", None)
+    close = getattr(stream, "close", None)
+    if not callable(read) or not callable(close):
+        raise ValueError("S3 streaming body differs")
+    chunks: list[bytes] = []
+    remaining = expected_bytes
+    try:
+        while remaining:
+            chunk = read(remaining)
+            if type(chunk) is not bytes or not chunk:
+                raise ValueError("S3 page body ended early")
+            if len(chunk) > remaining:
+                raise ValueError("S3 page read exceeded requested bytes")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        extra = read(1)
+        if type(extra) is not bytes or extra:
+            raise ValueError("S3 page body has trailing bytes")
+        return b"".join(chunks)
+    finally:
+        close()
+
+
+def ordered_page_bodies(
+    client: object,
+    bucket: str,
+    prefix: str,
+    pages: tuple[PageRef, ...],
+    max_inflight: int = 4,
+) -> Iterator[tuple[PageRef, bytes]]:
+    """Fetch immutable pages concurrently while yielding canonical ordinal order."""
+
+    if (
+        not hasattr(client, "get_object")
+        or type(bucket) is not str
+        or not bucket
+        or type(prefix) is not str
+        or type(pages) is not tuple
+        or type(max_inflight) is not int
+        or not 1 <= max_inflight <= 4
+    ):
+        raise ValueError("bounded page stream arguments differ")
+    for expected, reference in enumerate(pages):
+        _validate_page_reference(reference)
+        if reference.page_ordinal != expected:
+            raise ValueError("page stream order differs")
+
+    executor = ThreadPoolExecutor(max_workers=max_inflight, thread_name_prefix="v23-page")
+    futures: dict[int, Future[bytes]] = {}
+    next_submit = 0
+
+    def submit(index: int) -> None:
+        reference = pages[index]
+        futures[index] = executor.submit(
+            _read_page_body,
+            client,
+            bucket,
+            f"{prefix}{reference.path}",
+            reference.encoded_bytes,
+        )
+
+    try:
+        while next_submit < min(len(pages), max_inflight):
+            submit(next_submit)
+            next_submit += 1
+        for index, reference in enumerate(pages):
+            body = futures.pop(index).result()
+            yield reference, body
+            if next_submit < len(pages):
+                submit(next_submit)
+                next_submit += 1
+    except BaseException:
+        for future in futures.values():
+            future.cancel()
+        raise
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _validated_pressure(sample: PressureSample) -> PressureSample:
+    if type(sample) is not PressureSample:
+        raise ValueError("pressure sample has the wrong concrete type")
+    for field in dataclasses.fields(PressureSample):
+        _concrete_nonnegative_int(getattr(sample, field.name), f"pressure {field.name}")
+    return sample
+
+
+def _pressure_stop_reason(
+    sample: PressureSample,
+    *,
+    baseline_swap: int,
+    previous_monotonic_ns: int,
+) -> str | None:
+    if sample.rss_bytes >= _RSS_LIMIT_BYTES:
+        return "rss-limit"
+    if sample.psi_full_avg10_ppm >= _PSI_LIMIT_PPM:
+        return "psi-limit"
+    if sample.swap_bytes - baseline_swap >= _SWAP_GROWTH_LIMIT_BYTES:
+        return "swap-growth-limit"
+    if sample.monotonic_ns - previous_monotonic_ns >= _PROGRESS_LIMIT_NS:
+        return "progress-limit"
+    return None
+
+
+def _attempt_location(attempt_prefix: str) -> tuple[str, str]:
+    parsed = urlparse(attempt_prefix)
+    if parsed.scheme != "s3" or not parsed.netloc or not parsed.path.startswith("/"):
+        raise ValueError("attempt prefix is not an S3 URI")
+    prefix = parsed.path[1:]
+    if not prefix.endswith("/"):
+        raise ValueError("attempt prefix lacks trailing slash")
+    return parsed.netloc, prefix
+
+
+def run_falsifier(
+    authority: Authority,
+    client: object,
+    pressure_probe: Callable[[], PressureSample],
+    execute_complete_stream: bool,
+) -> dict[str, object]:
+    """Authenticate and score every page without retaining a page corpus."""
+
+    if type(authority) is not Authority or not callable(pressure_probe):
+        raise ValueError("falsifier authority differs")
+    if type(execute_complete_stream) is not bool or not execute_complete_stream:
+        raise ValueError("complete stream requires explicit execution authority")
+    _validate_shape(authority.shape)
+    _validate_registered(authority.registered)
+    if (
+        type(authority.pages) is not tuple
+        or len(authority.pages) != authority.shape.page_count
+        or type(authority.query_ordinals) is not tuple
+        or len(authority.query_ordinals) != authority.shape.query_count
+        or authority.queries.shape
+        != (authority.shape.query_count, authority.shape.dimensions)
+    ):
+        raise ValueError("falsifier scientific shape differs")
+
+    bucket, prefix = _attempt_location(authority.registered.attempt_prefix)
+    initial = _validated_pressure(pressure_probe())
+    initial_reason = _pressure_stop_reason(
+        initial,
+        baseline_swap=initial.swap_bytes,
+        previous_monotonic_ns=initial.monotonic_ns,
+    )
+    if initial_reason is not None:
+        raise StreamStopped(initial_reason, -1, None)
+
+    scores = numpy.empty(
+        (authority.shape.query_count, authority.shape.page_count), dtype="<f4"
+    )
+    started_ns = time.monotonic_ns()
+    started_cpu_ns = time.process_time_ns()
+    peak_rss = initial.rss_bytes
+    peak_psi = initial.psi_full_avg10_ppm
+    previous_pressure_ns = initial.monotonic_ns
+    last_pressure = initial
+    total_bytes = 0
+    primary_rows = 0
+    replica_rows = 0
+    last_page = -1
+    last_checksum: str | None = None
+
+    for reference, body in ordered_page_bodies(
+        client, bucket, prefix, authority.pages, max_inflight=4
+    ):
+        vectors = decode_bvp2_page(reference, body)
+        means = spherical_kmeans(vectors, reference.checksum, clusters=32, iterations=8)
+        page_scores = score_page_means(authority.queries, means)
+        if page_scores.shape != (authority.shape.query_count,) or not numpy.isfinite(
+            page_scores
+        ).all():
+            raise ValueError("page scores differ")
+        scores[:, reference.page_ordinal] = page_scores.astype("<f4")
+        total_bytes += len(body)
+        primary_rows += reference.primary_rows
+        replica_rows += reference.replicated_rows
+        last_page = reference.page_ordinal
+        last_checksum = reference.checksum
+        del body, vectors, means, page_scores
+
+        sample = _validated_pressure(pressure_probe())
+        last_pressure = sample
+        peak_rss = max(peak_rss, sample.rss_bytes)
+        peak_psi = max(peak_psi, sample.psi_full_avg10_ppm)
+        reason = _pressure_stop_reason(
+            sample,
+            baseline_swap=initial.swap_bytes,
+            previous_monotonic_ns=previous_pressure_ns,
+        )
+        previous_pressure_ns = sample.monotonic_ns
+        if reason is not None:
+            raise StreamStopped(reason, last_page, last_checksum)
+
+    selected = select_pages(scores, authority.shape.selection_width)
+    metrics = quality_metrics(authority, selected)
+    elapsed_ns = time.monotonic_ns() - started_ns
+    cpu_ns = time.process_time_ns() - started_cpu_ns
+    final_swap_delta = max(0, last_pressure.swap_bytes - initial.swap_bytes)
+    passed = (
+        metrics["aggregate_recall_ppm"] >= 975_000
+        and metrics["minimum_query_recall_ppm"] >= 800_000
+        and metrics["oracle_attainment_ppm"] >= 995_000
+        and projected_serving_bytes() <= 3 * 1024**3
+        and final_swap_delta == 0
+    )
+    result: dict[str, object] = {
+        "schema": "borsuk-v23-clustered-page-falsifier-v1",
+        "source_commit": authority.registered.source_commit,
+        "attempt_prefix": authority.registered.attempt_prefix,
+        "terminal_sha256": authority.registered.terminal_sha256,
+        "result_sha256": authority.registered.result_sha256,
+        "report_sha256": authority.registered.report_sha256,
+        "roster_sha256": authority.registered.roster_sha256,
+        "query_uri": authority.registered.query_uri,
+        "query_sha256": authority.registered.query_sha256,
+        "page_count": authority.shape.page_count,
+        "query_count": authority.shape.query_count,
+        "dimensions": authority.shape.dimensions,
+        "recall_k": authority.shape.recall_k,
+        "selection_width": authority.shape.selection_width,
+        "authenticated_pages": last_page + 1,
+        "authenticated_primary_rows": primary_rows,
+        "authenticated_replica_rows": replica_rows,
+        "total_bytes_read": total_bytes,
+        "algorithm": dict(_ALGORITHM),
+        "query_ordinals": list(authority.query_ordinals),
+        "selected_pages": selected.astype(numpy.uint32).tolist(),
+        "query_hits": metrics["query_hits"],
+        "oracle_hits": metrics["oracle_hits"],
+        "aggregate_recall_ppm": metrics["aggregate_recall_ppm"],
+        "minimum_query_recall_ppm": metrics["minimum_query_recall_ppm"],
+        "oracle_attainment_ppm": metrics["oracle_attainment_ppm"],
+        "projected_serving_bytes": projected_serving_bytes(),
+        "elapsed_ns": elapsed_ns,
+        "cpu_ns": cpu_ns,
+        "peak_rss_bytes": peak_rss,
+        "peak_psi_full_avg10_ppm": peak_psi,
+        "swap_delta_bytes": final_swap_delta,
+        "passed": passed,
+    }
+    return validate_result(result)
+
+
+def _concrete_int_vector(value: object, length: int, role: str) -> list[int]:
+    if type(value) is not list or len(value) != length:
+        raise ValueError(f"{role} cardinality differs")
+    for item in value:
+        _concrete_nonnegative_int(item, role)
+    return value
+
+
+def validate_result(value: object) -> dict[str, object]:
+    """Validate the complete terminal result using concrete types and exact keys."""
+
+    result = _exact_dict(value, _RESULT_FIELDS, "falsifier result")
+    if (
+        result["schema"] != "borsuk-v23-clustered-page-falsifier-v1"
+        or type(result["schema"]) is not str
+        or type(result["source_commit"]) is not str
+        or re.fullmatch(r"[0-9a-f]{40}", result["source_commit"]) is None
+        or type(result["attempt_prefix"]) is not str
+        or type(result["query_uri"]) is not str
+    ):
+        raise ValueError("falsifier result authority differs")
+    _attempt_location(result["attempt_prefix"])
+    query_location = urlparse(result["query_uri"])
+    if query_location.scheme != "s3" or not query_location.netloc:
+        raise ValueError("falsifier query URI differs")
+    for role in (
+        "terminal_sha256",
+        "result_sha256",
+        "report_sha256",
+        "roster_sha256",
+        "query_sha256",
+    ):
+        if not _digest_is_valid(result[role]):
+            raise ValueError(f"falsifier {role} differs")
+
+    integer_fields = (
+        "page_count",
+        "query_count",
+        "dimensions",
+        "recall_k",
+        "selection_width",
+        "authenticated_pages",
+        "authenticated_primary_rows",
+        "authenticated_replica_rows",
+        "total_bytes_read",
+        "aggregate_recall_ppm",
+        "minimum_query_recall_ppm",
+        "oracle_attainment_ppm",
+        "projected_serving_bytes",
+        "elapsed_ns",
+        "cpu_ns",
+        "peak_rss_bytes",
+        "peak_psi_full_avg10_ppm",
+        "swap_delta_bytes",
+    )
+    for role in integer_fields:
+        _concrete_nonnegative_int(result[role], role)
+    page_count = result["page_count"]
+    query_count = result["query_count"]
+    recall_k = result["recall_k"]
+    selection_width = result["selection_width"]
+    if (
+        page_count <= 0
+        or query_count <= 0
+        or result["dimensions"] <= 0
+        or recall_k <= 0
+        or selection_width <= 0
+        or selection_width > page_count
+        or result["authenticated_pages"] != page_count
+        or result["authenticated_primary_rows"] <= 0
+        or result["total_bytes_read"] <= 0
+        or result["projected_serving_bytes"] != projected_serving_bytes()
+        or result["peak_rss_bytes"] >= _RSS_LIMIT_BYTES
+        or result["peak_psi_full_avg10_ppm"] >= _PSI_LIMIT_PPM
+        or result["swap_delta_bytes"] >= _SWAP_GROWTH_LIMIT_BYTES
+    ):
+        raise ValueError("falsifier result scientific bounds differ")
+    if type(result["algorithm"]) is not dict or not _same_concrete(
+        result["algorithm"], _ALGORITHM
+    ):
+        raise ValueError("falsifier algorithm authority differs")
+
+    query_ordinals = _concrete_int_vector(result["query_ordinals"], query_count, "query ordinal")
+    if len(set(query_ordinals)) != query_count:
+        raise ValueError("falsifier query ordinals duplicate")
+    selected_pages = result["selected_pages"]
+    if type(selected_pages) is not list or len(selected_pages) != query_count:
+        raise ValueError("falsifier selected-page cardinality differs")
+    for row in selected_pages:
+        selected_row = _concrete_int_vector(row, selection_width, "selected page")
+        if len(set(selected_row)) != selection_width or any(page >= page_count for page in selected_row):
+            raise ValueError("falsifier selected pages differ")
+    query_hits = _concrete_int_vector(result["query_hits"], query_count, "query hit")
+    oracle_hits = _concrete_int_vector(result["oracle_hits"], query_count, "oracle hit")
+    if any(hit > recall_k for hit in query_hits + oracle_hits) or sum(oracle_hits) <= 0:
+        raise ValueError("falsifier hit evidence differs")
+    expected_aggregate = sum(query_hits) * 1_000_000 // (query_count * recall_k)
+    expected_minimum = min(hit * 1_000_000 // recall_k for hit in query_hits)
+    expected_attainment = sum(query_hits) * 1_000_000 // sum(oracle_hits)
+    if (
+        result["aggregate_recall_ppm"] != expected_aggregate
+        or result["minimum_query_recall_ppm"] != expected_minimum
+        or result["oracle_attainment_ppm"] != expected_attainment
+    ):
+        raise ValueError("falsifier quality arithmetic differs")
+    expected_passed = (
+        expected_aggregate >= 975_000
+        and expected_minimum >= 800_000
+        and expected_attainment >= 995_000
+        and result["projected_serving_bytes"] <= 3 * 1024**3
+        and result["swap_delta_bytes"] == 0
+    )
+    if type(result["passed"]) is not bool or result["passed"] is not expected_passed:
+        raise ValueError("falsifier pass decision differs")
+    return result
+
+
+def canonical_result_bytes(value: dict[str, object]) -> bytes:
+    """Return one newline-terminated canonical result document."""
+
+    from scripts.publication_v3_protocol import canonical_json_bytes
+
+    return canonical_json_bytes(validate_result(value)) + b"\n"
+
+
+def _default_pressure_probe() -> PressureSample:
+    peak_rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+    psi_ppm = 0
+    try:
+        for line in Path("/sys/fs/cgroup/memory.pressure").read_text().splitlines():
+            if line.startswith("full "):
+                values = dict(field.split("=", 1) for field in line.split()[1:])
+                psi_ppm = int(Decimal(values["avg10"]) * 1_000_000)
+                break
+    except (FileNotFoundError, KeyError, InvalidOperation, ValueError):
+        psi_ppm = 0
+    try:
+        swap_bytes = int(Path("/sys/fs/cgroup/memory.swap.current").read_text().strip())
+    except (FileNotFoundError, ValueError):
+        swap_bytes = 0
+    return PressureSample(peak_rss_bytes, psi_ppm, swap_bytes, time.monotonic_ns())
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Authenticate local evidence and run only under the explicit stream flag."""
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    for role in ("terminal", "result", "report", "roster", "query"):
+        parser.add_argument(f"--{role}", required=True, type=Path)
+    parser.add_argument("--bucket", required=True)
+    parser.add_argument("--prefix", required=True)
+    parser.add_argument("--aws-profile", required=True)
+    parser.add_argument("--region", required=True)
+    parser.add_argument("--execute-complete-stream", action="store_true")
+    arguments = parser.parse_args(argv)
+    registered_bucket, registered_prefix = _attempt_location(REGISTERED_AUTHORITY.attempt_prefix)
+    if (
+        arguments.bucket != registered_bucket
+        or arguments.prefix != registered_prefix
+        or arguments.aws_profile != "causality"
+        or arguments.region != "eu-central-1"
+        or not arguments.execute_complete_stream
+    ):
+        parser.error("execution authority differs from the registered complete stream")
+    authority = load_authority(
+        arguments.terminal,
+        arguments.result,
+        arguments.report,
+        arguments.roster,
+        arguments.query,
+    )
+    import boto3
+
+    client = boto3.Session(profile_name=arguments.aws_profile).client(
+        "s3", region_name=arguments.region
+    )
+    result = run_falsifier(authority, client, _default_pressure_probe, True)
+    payload = canonical_result_bytes(result)
+    sys.stdout.buffer.write(payload)
+    sys.stderr.write(f"sha256={hashlib.sha256(payload).hexdigest()}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

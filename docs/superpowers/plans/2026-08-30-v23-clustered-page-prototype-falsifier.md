@@ -185,7 +185,7 @@ uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt \
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Commit the authority/quality slice**
+- [x] **Step 5: Commit the authority/quality slice**
 
 ```bash
 git add scripts/v23_clustered_page_prototype_falsifier.py \
@@ -203,7 +203,7 @@ git commit -m "Authenticate V23 clustered-page falsifier inputs"
 - Consumes: Task 2 `Authority` and an injected S3-compatible `get_object(Bucket=..., Key=...)` client.
 - Produces: `PressureSample`, `StreamStopped`, `ordered_page_bodies(client: object, bucket: str, prefix: str, pages: tuple[PageRef, ...], max_inflight: int = 4) -> Iterator[tuple[PageRef, bytes]]`, `run_falsifier(authority: Authority, client: object, pressure_probe: Callable[[], PressureSample], execute_complete_stream: bool) -> dict[str, object]`, `validate_result(value: object) -> dict[str, object]`, `canonical_result_bytes(value: dict[str, object]) -> bytes`, and `main(argv: Sequence[str] | None = None) -> int`.
 
-- [ ] **Step 1: Write failing bounded-stream and terminal-contract tests**
+- [x] **Step 1: Write failing bounded-stream and terminal-contract tests**
 
 ```python
 class StreamingAndResultTests(unittest.TestCase):
@@ -236,7 +236,7 @@ class StreamingAndResultTests(unittest.TestCase):
 
 Additional tests force GET failure, short or overlong `StreamingBody.read()`, out-of-order future completion, duplicate consumption, RSS/PSI/swap/progress stops, non-finite scores, result key/type mutation, threshold equality, query/page cardinality drift, and CLI refusal without the exact flag. Tests patch `open`, `Path.write_bytes`, `os.open`, and `tempfile` to prove no scientific scratch is written.
 
-- [ ] **Step 2: Run focused streaming tests and preserve RED**
+- [x] **Step 2: Run focused streaming tests and preserve RED**
 
 ```bash
 uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt \
@@ -246,7 +246,7 @@ uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt \
 
 Expected: failures for the missing streaming/result interfaces.
 
-- [ ] **Step 3: Implement bounded streaming and fail-closed execution**
+- [x] **Step 3: Implement bounded streaming and fail-closed execution**
 
 `ordered_page_bodies` owns one `ThreadPoolExecutor(max_workers=4)`, submits at most four consecutive refs, and after yielding ordinal N submits only the next unsubmitted ref. A worker reads exactly `encoded_bytes`, reads one additional byte to prove EOF, closes the body, and returns immutable `bytes`. On any exception the coordinator cancels pending futures and closes every obtained body.
 
@@ -254,7 +254,7 @@ Expected: failures for the missing streaming/result interfaces.
 
 The CLI requires explicit local report/roster/query paths and hashes, exact bucket/prefix, AWS profile `causality`, region `eu-central-1`, and `--execute-complete-stream`. It rejects output paths and never writes result or scratch files.
 
-- [ ] **Step 4: Run the complete focused file and require GREEN**
+- [x] **Step 4: Run the complete focused file and require GREEN**
 
 ```bash
 uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt \
@@ -263,7 +263,7 @@ uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt \
 
 Expected: all tests pass and no AWS call occurs.
 
-- [ ] **Step 5: Run scoped static checks**
+- [x] **Step 5: Run scoped static checks**
 
 ```bash
 /home/rb/worktrees/sfora-ghc/.venv/bin/ruff check \
