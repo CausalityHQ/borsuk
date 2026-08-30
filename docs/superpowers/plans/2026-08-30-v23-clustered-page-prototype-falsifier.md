@@ -346,16 +346,16 @@ Expected: FAIL before boto3 with `D2 selector authority differs`, proving the cu
 
 - [ ] **Step 3: Write six focused synthetic mutation families and preserve RED**
 
-Extend `AuthorityAndQualityTests` with one table-driven test per family. Recompute the mutated role's fixture SHA so the semantic validator is exercised; keep separate tests proving registered-SHA drift fails earlier.
+Extend `AuthorityAndQualityTests` with one table-driven test per family. For a leaf-role semantic mutation, update only the minimum dependent hash bindings needed to pass earlier integrity gates and state that exact cascade in the subtest. Keep separate tests proving registered-SHA drift fails earlier. Do not create a negative test for a fully coherent report rewrite after re-rooting its registered SHA and complete dependent binding chain: without selector bytes, that rejection would be tautological or impossible.
 
 1. Result receipt: exact key/concrete-type drift and report, roster, attempt, instance, source, index, D1, query, runtime-attestation, or reconstructed-summary binding drift.
 2. Terminal: insertion-order bytes, exact keys/types, result/report/roster/source/index/attempt/instance/memory/pass binding drift.
 3. Arm: historical sparse anchor bounds; selector byte formula `96 + coarse_cells * dimensions * 4 + (coarse_cells + 1) * 4 + anchor_count * (12 + dimensions * 2)`; routing `min(320, coarse_cells)`; rank cap 8192; target 384; assignments two; pages eight; primary/assignment sums; amplification; projected root/RAM/build.
 4. Pages: primary or replica count above 65,535 and generation, ordinal, path, checksum, encoded length, family, metric, dimension, or report/roster equality drift.
-5. Query evidence: recompute selected/oracle membership, ground-truth assignments, hits/recall, encoded bytes, candidates, selector telemetry, CPU, aggregate/minimum/oracle/regret/p99/pass, and the frozen coverage-oracle tie break from authenticated primitives. Mutation-lock ranked ID/distance schema, types, ordering, and their available relations, but do not claim to regenerate selector distances without selector bytes.
+5. Query evidence: the exact registered report SHA externally roots historical ranked IDs/distances, page choices, and CPU. Mutation-lock their exact schema, concrete types, finiteness, ordering, and cardinality. From authenticated primitives, recompute every derivable relation: selected/oracle membership, ground-truth hits, recall, encoded bytes, candidates, selector telemetry, aggregate/minimum/oracle/regret/p99/pass, and the frozen coverage-oracle tie break. Do not claim to regenerate selector outputs without selector bytes.
 6. Parquet: extra physical column, nullability/list/dtype/dimension drift, row count other than 10,000, SHA/URI/materialization drift, NaN, or zero norm.
 
-Run only the six new test methods. Expected: each mutation currently either reaches the dense-anchor rejection or is accepted, preserving the missing adapter behavior as RED.
+Run only the six new test methods. Expected: each derivable-invariant mutation currently either reaches the dense-anchor rejection or is accepted, preserving the missing adapter behavior as RED. A coherently re-rooted report rewrite is deliberately absent from the rejection matrix.
 
 - [ ] **Step 4: Implement the minimal evidence-only adapter**
 
@@ -390,7 +390,7 @@ Keep terminal insertion-order compact JSON plus newline distinct from sorted can
 
 - [ ] **Step 5: Run the six mutation families and exact no-page GREEN**
 
-Run the six focused synthetic methods first. Only if they pass, run the exact Step 2 command. Expected: every mutation is rejected at its registered relation; the exact bundle reaches `PAGE_S3_ACCESS_FORBIDDEN`; the recorded request is exactly the ordinal-zero page; no S3 page body is read.
+Run the six focused synthetic methods first. Only if they pass, run the exact Step 2 command. Expected: every registered-SHA or derivable-invariant mutation is rejected at its intended relation; no test asserts rejection of a coherently re-rooted report rewrite. The exact bundle reaches `PAGE_S3_ACCESS_FORBIDDEN`; the recorded request is exactly the ordinal-zero page; no S3 page body is read.
 
 - [ ] **Step 6: Run complete focused and static verification**
 

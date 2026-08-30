@@ -147,10 +147,14 @@ also close silent authority gaps that the current synthetic fixtures conceal:
   available from authenticated primitives: selected/oracle membership,
   ground-truth assignments, hits, recall, bytes, candidates, selector
   telemetry, CPU, all arm aggregates, pass, and the frozen coverage-oracle tie
-  break. Ranked IDs and distances retain exact schema/type/order validation and
-  feed those relational checks, but the adapter must not claim to regenerate
-  historical selector distances because selector bytes are not among the five
-  prerequisites;
+  break. The exact registered report SHA externally roots the historical
+  selector's ranked IDs, distances, page choices, and CPU observations. Those
+  fields retain exact schema, concrete-type, finiteness, ordering, and
+  cardinality validation and feed derivable relational checks, but the adapter
+  must not claim to regenerate selector outputs because selector bytes are not
+  among the five prerequisites. It therefore must not promise rejection of a
+  fully coherent report rewrite after its registered SHA and every dependent
+  binding are deliberately re-rooted;
 - the query object must bind the registered URI/SHA and dataset materialization
   and have the full physical nonnullable `emb: FixedSizeList<Float32,96>`
   schema, exactly 10,000 rows, finite selected vectors, and nonzero norms.
@@ -330,7 +334,10 @@ authority error, actual S3 request, or scientific result is a failure.
 
 The mutation matrix has six independently reviewable families: result receipt
 schema/bindings; terminal bytes/schema/bindings; arm constants and formulas;
-page row caps and roster equality; query evidence and oracle recomputation; and
-full Parquet schema/materialization binding. Each semantic mutation rehashes
-only its changed role so it reaches the intended validator. Exact registered
-SHA rejection remains a separate earlier gate.
+page row caps and roster equality; derivable query-evidence relations; and full
+Parquet schema/materialization binding. A leaf-role semantic mutation updates
+only the minimal dependent hash bindings required to pass earlier integrity
+gates, and the test states that cascade explicitly. Exact registered-SHA drift
+is a separate earlier gate. A fully coherent report rewrite whose registered
+SHA and complete dependent binding chain are re-rooted is outside this negative
+matrix because selector bytes are unavailable to falsify its outputs.
