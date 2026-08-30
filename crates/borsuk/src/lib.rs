@@ -145,8 +145,10 @@ pub use v22_feasibility::{
 #[doc(hidden)]
 pub use v23_diagnostic::{
     V23D1Arm, V23D1ArmKey, V23D1QuerySample, V23D1Report, V23D2Arm, V23D2DiagnosticRequest,
-    V23D2QuerySample, V23D2Report, V23D3Executor, V23D3WaveResult, V23PagePublisher, V23PageRef,
-    V23QuantizerFamily, V23RankedResult, V23SelectorRef, V23WaveSample,
+    V23D2QuerySample, V23D2Report, V23D3Executor, V23D3WaveResult, V23GlobalAdcEvidenceIdentity,
+    V23GlobalAdcLocalArtifactPaths, V23GlobalAdcLocalRunRequest, V23GlobalAdcObjectIdentity,
+    V23PagePublisher, V23PageRef, V23QuantizerFamily, V23RankedResult, V23SelectorRef,
+    V23WaveSample, run_v23_global_adc_local_request,
 };
 
 /// Maximum CPU worker threads selected by the automatic small-runtime policy.

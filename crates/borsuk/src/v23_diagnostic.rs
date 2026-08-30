@@ -1,13 +1,21 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, BinaryHeap},
-    path::Path,
+    fs,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
 };
 
+use arrow_array::{Array, FixedSizeListArray, Float32Array};
+use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
-use serde::{Deserialize, Serialize};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use serde::{
+    Deserialize, Serialize,
+    de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
+};
+use sha2::{Digest, Sha256};
 
 use crate::{
     BorsukError, Result,
@@ -342,6 +350,257 @@ pub(crate) struct V23PageSelection {
     pub(crate) ranked_rows: u32,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct V23GlobalAdcAuthority<'a> {
+    pub(crate) d1_selector_arm: &'a V23D1Arm,
+    pub(crate) d2_selector: &'a V23SelectorRef,
+    pub(crate) pages: &'a [V23PageRef],
+    pub(crate) selector_bytes: Bytes,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct V23GlobalAdcRequest<'a> {
+    pub(crate) authority: V23GlobalAdcAuthority<'a>,
+    pub(crate) queries: &'a [Vec<f32>],
+    pub(crate) ground_truth_page_assignments: &'a [Vec<Vec<u32>>],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[doc(hidden)]
+pub struct V23GlobalAdcObjectIdentity {
+    pub role: String,
+    pub uri: String,
+    pub digest_algorithm: String,
+    pub digest: String,
+    pub encoded_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[doc(hidden)]
+pub struct V23GlobalAdcEvidenceIdentity {
+    pub source_commit: String,
+    pub source_archive_sha256: String,
+    pub index_id: String,
+    pub d1_report: V23GlobalAdcObjectIdentity,
+    pub d2_terminal: V23GlobalAdcObjectIdentity,
+    pub d2_result: V23GlobalAdcObjectIdentity,
+    pub d2_report: V23GlobalAdcObjectIdentity,
+    pub roster: V23GlobalAdcObjectIdentity,
+    pub query: V23GlobalAdcObjectIdentity,
+    pub selector: V23GlobalAdcObjectIdentity,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct V23GlobalAdcArtifactRequest<'a> {
+    pub(crate) d1_report: &'a V23D1Report,
+    pub(crate) d2_report: &'a V23D2Report,
+    pub(crate) pages: &'a [V23PageRef],
+    pub(crate) query_ordinals: &'a [u64],
+    pub(crate) queries: &'a [Vec<f32>],
+    pub(crate) ground_truth_page_assignments: &'a [Vec<Vec<u32>>],
+    pub(crate) selector_bytes: Bytes,
+    pub(crate) registered_identity: &'a V23GlobalAdcEvidenceIdentity,
+    pub(crate) observed_identity: &'a V23GlobalAdcEvidenceIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct V23GlobalAdcArtifactResult {
+    pub(crate) schema: String,
+    pub(crate) claim_eligible: bool,
+    pub(crate) evidence: V23GlobalAdcEvidenceIdentity,
+    pub(crate) diagnostic: V23GlobalAdcResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V23GlobalAdcLocalArtifactPaths {
+    pub d1_report: PathBuf,
+    pub d2_terminal: PathBuf,
+    pub d2_result: PathBuf,
+    pub d2_report: PathBuf,
+    pub roster: PathBuf,
+    pub query: PathBuf,
+    pub selector: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V23GlobalAdcLocalRunRequest {
+    pub paths: V23GlobalAdcLocalArtifactPaths,
+    pub registered_identity: V23GlobalAdcEvidenceIdentity,
+    pub execute_global_adc: bool,
+}
+
+pub(crate) struct V23GlobalAdcLoadedLocalArtifacts {
+    d1_report: V23D1Report,
+    d2_report: V23D2Report,
+    pages: Vec<V23PageRef>,
+    queries: Vec<Vec<f32>>,
+    selector_bytes: Bytes,
+    evidence: V23GlobalAdcEvidenceIdentity,
+}
+
+impl V23GlobalAdcLoadedLocalArtifacts {
+    fn width_12_arm(&self) -> Result<&V23D2Arm> {
+        self.d2_report
+            .arms
+            .iter()
+            .find(|arm| {
+                arm.selector_key
+                    == (V23D1ArmKey {
+                        family: V23QuantizerFamily::SrhtPq,
+                        code_width_bytes: 12,
+                    })
+            })
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V23 global ADC local width-12 arm is absent".to_string(),
+                )
+            })
+    }
+
+    fn validate(&self) -> Result<()> {
+        let d2_arm = self.width_12_arm()?;
+        let ground_truth_page_assignments = d2_arm
+            .query_samples
+            .iter()
+            .map(|sample| sample.ground_truth_page_assignments.clone())
+            .collect::<Vec<_>>();
+        validate_v23_global_adc_artifact_request(V23GlobalAdcArtifactRequest {
+            d1_report: &self.d1_report,
+            d2_report: &self.d2_report,
+            pages: &self.pages,
+            query_ordinals: &self.d2_report.query_ordinals,
+            queries: &self.queries,
+            ground_truth_page_assignments: &ground_truth_page_assignments,
+            selector_bytes: self.selector_bytes.clone(),
+            registered_identity: &self.evidence,
+            observed_identity: &self.evidence,
+        })
+    }
+
+    pub(crate) fn run(&self) -> Result<V23GlobalAdcArtifactResult> {
+        self.validate()?;
+        let d2_arm = self.width_12_arm()?;
+        let ground_truth_page_assignments = d2_arm
+            .query_samples
+            .iter()
+            .map(|sample| sample.ground_truth_page_assignments.clone())
+            .collect::<Vec<_>>();
+        let d1_selector_arm = self
+            .d1_report
+            .arms
+            .iter()
+            .find(|arm| arm.key == d2_arm.selector_key)
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V23 global ADC local D1 selector arm is absent".to_string(),
+                )
+            })?;
+        let diagnostic = diagnose_v23_global_adc(V23GlobalAdcRequest {
+            authority: V23GlobalAdcAuthority {
+                d1_selector_arm,
+                d2_selector: &d2_arm.selector,
+                pages: &self.pages,
+                selector_bytes: self.selector_bytes.clone(),
+            },
+            queries: &self.queries,
+            ground_truth_page_assignments: &ground_truth_page_assignments,
+        })?;
+        let result = V23GlobalAdcArtifactResult {
+            schema: "borsuk-v23-global-adc-diagnostic-v1".to_string(),
+            claim_eligible: false,
+            evidence: self.evidence.clone(),
+            diagnostic,
+        };
+        canonical_v23_global_adc_artifact_result_bytes(&result, &self.evidence)?;
+        Ok(result)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum V23GlobalAdcCausalClass {
+    #[serde(rename = "tested-reducers-rejected")]
+    TestedReducers,
+    #[serde(rename = "faithful-reducer-rejected")]
+    FaithfulReducer,
+    #[serde(rename = "router-rejected")]
+    Router,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct V23GlobalAdcGates {
+    pub(crate) aggregate_recall_ppm: u64,
+    pub(crate) minimum_query_recall_ppm: u64,
+    pub(crate) oracle_attainment_ppm: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct V23GlobalAdcQuerySample {
+    pub(crate) query_index: u32,
+    pub(crate) page_ordinals: Vec<u32>,
+    pub(crate) gt_page_hits: u8,
+    pub(crate) oracle_gt_page_hits: u8,
+    pub(crate) recall_ppm: u64,
+    pub(crate) minimum_distance: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct V23GlobalAdcReducerResult {
+    pub(crate) reducer: String,
+    pub(crate) query_samples: Vec<V23GlobalAdcQuerySample>,
+    pub(crate) aggregate_recall_ppm: u64,
+    pub(crate) minimum_query_recall_ppm: u64,
+    pub(crate) oracle_attainment_ppm: u64,
+    pub(crate) passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct V23GlobalAdcResult {
+    pub(crate) schema: String,
+    pub(crate) claim_eligible: bool,
+    pub(crate) selector_checksum: String,
+    pub(crate) selector_code_width: u16,
+    pub(crate) selector_cells_scanned: u32,
+    pub(crate) selector_rows_scanned: u64,
+    pub(crate) selection_width: u8,
+    pub(crate) page_body_reads: u64,
+    pub(crate) scalar_simd_max_distance_delta_ppm: u64,
+    pub(crate) scalar_simd_pages_equal: bool,
+    pub(crate) gates: V23GlobalAdcGates,
+    pub(crate) faithful: V23GlobalAdcReducerResult,
+    pub(crate) per_page_min: V23GlobalAdcReducerResult,
+    pub(crate) causal_classification: V23GlobalAdcCausalClass,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct V23GlobalAdcRankedRow {
+    distance: f32,
+    row: usize,
+}
+
+impl PartialEq for V23GlobalAdcRankedRow {
+    fn eq(&self, other: &Self) -> bool {
+        self.distance.to_bits() == other.distance.to_bits() && self.row == other.row
+    }
+}
+
+impl Eq for V23GlobalAdcRankedRow {}
+
+impl PartialOrd for V23GlobalAdcRankedRow {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for V23GlobalAdcRankedRow {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.distance
+            .total_cmp(&other.distance)
+            .then_with(|| self.row.cmp(&other.row))
+    }
+}
+
 pub(crate) struct V23PageSelector {
     quantizer: GlobalScanQuantizer,
     decoded: V23DecodedSelector,
@@ -447,50 +706,7 @@ impl V23PageSelector {
             ranked.truncate(V23_SELECTOR_RANKED_ROWS);
         }
         ranked.sort_unstable_by(compare_rows);
-        // Deterministic weighted maximum coverage over both physical labels.
-        // Reciprocal rank weights keep the nearest scientific rows dominant
-        // while allowing one page to cover several strong rows. Selected rows
-        // are removed from subsequent rounds, so every page adds evidence.
-        let mut uncovered = vec![true; ranked.len()];
-        let mut page_ordinals = Vec::with_capacity(maximum_pages);
-        while page_ordinals.len() < maximum_pages {
-            let mut scores = BTreeMap::<u32, u64>::new();
-            for (rank, (_, row)) in ranked.iter().enumerate() {
-                if !uncovered[rank] {
-                    continue;
-                }
-                let weight = 1_000_000_000_u64 / u64::try_from(rank + 1).unwrap();
-                let (primary, replica) = self.decoded.row_pages(*row).ok_or_else(|| {
-                    BorsukError::InvalidStorage("V23 selector row pages are absent".to_string())
-                })?;
-                let primary_score = scores.entry(primary).or_default();
-                *primary_score = primary_score.saturating_add(weight);
-                if let Some(replica) = replica {
-                    let replica_score = scores.entry(replica).or_default();
-                    *replica_score = replica_score.saturating_add(weight);
-                }
-            }
-            let Some((page, score)) = scores
-                .into_iter()
-                .filter(|(page, _)| !page_ordinals.contains(page))
-                .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
-            else {
-                break;
-            };
-            if score == 0 {
-                break;
-            }
-            page_ordinals.push(page);
-            for (rank, (_, row)) in ranked.iter().enumerate() {
-                let (primary, replica) = self.decoded.row_pages(*row).ok_or_else(|| {
-                    BorsukError::InvalidStorage("V23 selector row pages are absent".to_string())
-                })?;
-                if primary == page || replica == Some(page) {
-                    uncovered[rank] = false;
-                }
-            }
-        }
-        page_ordinals.sort_unstable();
+        let page_ordinals = v23_reciprocal_rank_max_cover(&self.decoded, &ranked, maximum_pages)?;
         Ok(V23PageSelection {
             page_ordinals,
             candidate_rows,
@@ -502,6 +718,1506 @@ impl V23PageSelector {
             })?,
         })
     }
+}
+
+fn v23_reciprocal_rank_max_cover(
+    decoded: &V23DecodedSelector,
+    ranked: &[(f32, usize)],
+    maximum_pages: usize,
+) -> Result<Vec<u32>> {
+    // Deterministic weighted maximum coverage over both physical labels.
+    // Reciprocal rank weights keep the nearest scientific rows dominant
+    // while allowing one page to cover several strong rows. Selected rows
+    // are removed from subsequent rounds, so every page adds evidence.
+    let mut uncovered = vec![true; ranked.len()];
+    let mut page_ordinals = Vec::with_capacity(maximum_pages);
+    while page_ordinals.len() < maximum_pages {
+        let mut scores = BTreeMap::<u32, u64>::new();
+        for (rank, (_, row)) in ranked.iter().enumerate() {
+            if !uncovered[rank] {
+                continue;
+            }
+            let weight = 1_000_000_000_u64 / u64::try_from(rank + 1).unwrap();
+            let (primary, replica) = decoded.row_pages(*row).ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 selector row pages are absent".to_string())
+            })?;
+            let primary_score = scores.entry(primary).or_default();
+            *primary_score = primary_score.saturating_add(weight);
+            if let Some(replica) = replica {
+                let replica_score = scores.entry(replica).or_default();
+                *replica_score = replica_score.saturating_add(weight);
+            }
+        }
+        let Some((page, score)) = scores
+            .into_iter()
+            .filter(|(page, _)| !page_ordinals.contains(page))
+            .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
+        else {
+            break;
+        };
+        if score == 0 {
+            break;
+        }
+        page_ordinals.push(page);
+        for (rank, (_, row)) in ranked.iter().enumerate() {
+            let (primary, replica) = decoded.row_pages(*row).ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 selector row pages are absent".to_string())
+            })?;
+            if primary == page || replica == Some(page) {
+                uncovered[rank] = false;
+            }
+        }
+    }
+    page_ordinals.sort_unstable();
+    Ok(page_ordinals)
+}
+
+const V23_GLOBAL_ADC_BLOCK_ROWS: usize = 65_536;
+const V23_GLOBAL_ADC_SELECTION_WIDTH: usize = 8;
+
+fn v23_global_adc_retain(
+    heap: &mut BinaryHeap<V23GlobalAdcRankedRow>,
+    candidate: V23GlobalAdcRankedRow,
+) {
+    if heap.len() < V23_SELECTOR_RANKED_ROWS {
+        heap.push(candidate);
+    } else if heap.peek().is_some_and(|worst| candidate < *worst) {
+        heap.pop();
+        heap.push(candidate);
+    }
+}
+
+fn v23_global_adc_observe_page_minima(
+    decoded: &V23DecodedSelector,
+    minima: &mut [f32],
+    row: usize,
+    distance: f32,
+) -> Result<()> {
+    let (primary, replica) = decoded.row_pages(row).ok_or_else(|| {
+        BorsukError::InvalidStorage("V23 global ADC row pages are absent".to_string())
+    })?;
+    for page in [Some(primary), replica].into_iter().flatten() {
+        let value = minima.get_mut(page as usize).ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 global ADC page ordinal differs".to_string())
+        })?;
+        if distance.total_cmp(value).is_lt() {
+            *value = distance;
+        }
+    }
+    Ok(())
+}
+
+fn v23_global_adc_reduce(
+    decoded: &V23DecodedSelector,
+    ranked: BinaryHeap<V23GlobalAdcRankedRow>,
+    minima: Vec<f32>,
+) -> Result<(Vec<u32>, Vec<u32>)> {
+    let mut ranked = ranked
+        .into_vec()
+        .into_iter()
+        .map(|candidate| (candidate.distance, candidate.row))
+        .collect::<Vec<_>>();
+    ranked.sort_unstable_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    let faithful = v23_reciprocal_rank_max_cover(decoded, &ranked, V23_GLOBAL_ADC_SELECTION_WIDTH)?;
+    let mut per_page_min = minima
+        .into_iter()
+        .enumerate()
+        .filter(|(_, distance)| distance.is_finite())
+        .map(|(page, distance)| (distance, page as u32))
+        .collect::<Vec<_>>();
+    per_page_min.sort_unstable_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    per_page_min.truncate(V23_GLOBAL_ADC_SELECTION_WIDTH);
+    let mut per_page_min = per_page_min
+        .into_iter()
+        .map(|(_, page)| page)
+        .collect::<Vec<_>>();
+    per_page_min.sort_unstable();
+    if faithful.len() != V23_GLOBAL_ADC_SELECTION_WIDTH
+        || per_page_min.len() != V23_GLOBAL_ADC_SELECTION_WIDTH
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC cannot select eight pages".to_string(),
+        ));
+    }
+    Ok((faithful, per_page_min))
+}
+
+fn v23_global_adc_select(
+    quantizer: &GlobalScanQuantizer,
+    decoded: &V23DecodedSelector,
+    metric: &VectorMetric,
+    page_count: usize,
+    query: &[f32],
+) -> Result<(Vec<u32>, Vec<u32>, f32, u64)> {
+    let query = if metric == &VectorMetric::Cosine {
+        crate::metric::unit_l2_normalized(query)
+    } else {
+        query.to_vec()
+    };
+    let prepared = quantizer.prepare_contiguous_query(&query)?;
+    let mut simd_ranked = BinaryHeap::with_capacity(V23_SELECTOR_RANKED_ROWS + 1);
+    let mut scalar_ranked = BinaryHeap::with_capacity(V23_SELECTOR_RANKED_ROWS + 1);
+    let mut simd_minima = vec![f32::INFINITY; page_count];
+    let mut scalar_minima = vec![f32::INFINITY; page_count];
+    let mut minimum_distance = f32::INFINITY;
+    let mut maximum_delta_ppm = 0_u64;
+    for cell in 0..decoded.offsets.len() - 1 {
+        let range = decoded.cell_range(cell).ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 global ADC cell range is absent".to_string())
+        })?;
+        for start in (range.start..range.end).step_by(V23_GLOBAL_ADC_BLOCK_ROWS) {
+            let end = range
+                .end
+                .min(start.saturating_add(V23_GLOBAL_ADC_BLOCK_ROWS));
+            let codes = decoded.row_codes(start..end).ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 global ADC codes are absent".to_string())
+            })?;
+            let simd = quantizer.score_prepared_contiguous_codes(&prepared, codes)?;
+            let scalar = quantizer.score_codes(&query, codes.chunks_exact(decoded.code_width))?;
+            if simd.len() != end - start || scalar.len() != simd.len() {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 global ADC score cardinality differs".to_string(),
+                ));
+            }
+            for (offset, (simd_distance, scalar_distance)) in
+                simd.into_iter().zip(scalar).enumerate()
+            {
+                if !simd_distance.is_finite() || !scalar_distance.is_finite() {
+                    return Err(BorsukError::InvalidStorage(
+                        "V23 global ADC score is non-finite".to_string(),
+                    ));
+                }
+                let normalized = f64::from((simd_distance - scalar_distance).abs())
+                    / f64::from(scalar_distance.abs().max(1.0));
+                maximum_delta_ppm = maximum_delta_ppm
+                    .max((normalized * 1_000_000.0).ceil().min(u64::MAX as f64) as u64);
+                minimum_distance = minimum_distance.min(simd_distance);
+                let row = start + offset;
+                v23_global_adc_retain(
+                    &mut simd_ranked,
+                    V23GlobalAdcRankedRow {
+                        distance: simd_distance,
+                        row,
+                    },
+                );
+                v23_global_adc_retain(
+                    &mut scalar_ranked,
+                    V23GlobalAdcRankedRow {
+                        distance: scalar_distance,
+                        row,
+                    },
+                );
+                v23_global_adc_observe_page_minima(decoded, &mut simd_minima, row, simd_distance)?;
+                v23_global_adc_observe_page_minima(
+                    decoded,
+                    &mut scalar_minima,
+                    row,
+                    scalar_distance,
+                )?;
+            }
+        }
+    }
+    if !minimum_distance.is_finite() {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC selector is empty".to_string(),
+        ));
+    }
+    let simd = v23_global_adc_reduce(decoded, simd_ranked, simd_minima)?;
+    let scalar = v23_global_adc_reduce(decoded, scalar_ranked, scalar_minima)?;
+    if simd != scalar {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC scalar and SIMD page selections differ".to_string(),
+        ));
+    }
+    Ok((simd.0, simd.1, minimum_distance, maximum_delta_ppm))
+}
+
+fn validate_v23_global_adc_authority(
+    authority: &V23GlobalAdcAuthority<'_>,
+) -> Result<(GlobalScanQuantizer, V23DecodedSelector)> {
+    let selector = authority.d2_selector;
+    if authority.d1_selector_arm.key
+        != (V23D1ArmKey {
+            family: V23QuantizerFamily::SrhtPq,
+            code_width_bytes: 12,
+        })
+        || selector.code_width != 12
+        || selector.coarse_cells != 4_096
+        || selector.page_count as usize != authority.pages.len()
+        || authority.pages.len() < V23_GLOBAL_ADC_SELECTION_WIDTH
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC authority differs".to_string(),
+        ));
+    }
+    let quantizer = restore_v23_diagnostic_quantizer(authority.d1_selector_arm)?;
+    if quantizer.dimensions() != selector.dimensions as usize {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC quantizer dimensions differ".to_string(),
+        ));
+    }
+    let decoded = decode_v23_selector(authority.selector_bytes.clone(), selector)?;
+    let mut primary_rows = vec![0_u32; authority.pages.len()];
+    let mut replica_rows = vec![0_u32; authority.pages.len()];
+    for row in 0..decoded.row_count {
+        let (primary, replica) = decoded.row_pages(row).ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 global ADC row page is absent".to_string())
+        })?;
+        primary_rows[primary as usize] = primary_rows[primary as usize].saturating_add(1);
+        if let Some(replica) = replica {
+            replica_rows[replica as usize] = replica_rows[replica as usize].saturating_add(1);
+        }
+    }
+    for (index, page) in authority.pages.iter().enumerate() {
+        if page.page_ordinal as usize != index
+            || page.generation_checksum != selector.generation_checksum
+            || page.metric != selector.metric
+            || page.dimensions != selector.dimensions
+            || page.family != V23QuantizerFamily::F16Flat
+            || page.code_width != page.dimensions.saturating_mul(2) as u16
+            || !valid_checksum(&page.checksum)
+            || page.path != format!("pages/{}", page.checksum)
+            || page.encoded_bytes == 0
+            || page.encoded_bytes > V23_PAGE_MAX_ENCODED_BYTES
+            || page.primary_rows != primary_rows[index]
+            || page.replicated_rows != replica_rows[index]
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V23 global ADC page authority differs".to_string(),
+            ));
+        }
+    }
+    Ok((quantizer, decoded))
+}
+
+fn v23_global_adc_valid_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn validate_v23_global_adc_evidence_identity(
+    observed: &V23GlobalAdcEvidenceIdentity,
+    registered: &V23GlobalAdcEvidenceIdentity,
+) -> Result<()> {
+    if observed != registered
+        || !v23_global_adc_valid_hex(&observed.source_commit, 40)
+        || !v23_global_adc_valid_hex(&observed.source_archive_sha256, 64)
+        || observed.index_id.is_empty()
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC registered evidence identity differs".to_string(),
+        ));
+    }
+    let objects = [
+        (&observed.d1_report, "d1-report", "sha256"),
+        (&observed.d2_terminal, "d2-terminal", "sha256"),
+        (&observed.d2_result, "d2-result", "sha256"),
+        (&observed.d2_report, "d2-report", "sha256"),
+        (&observed.roster, "page-roster", "sha256"),
+        (&observed.query, "query-parquet", "sha256"),
+        (&observed.selector, "selector", "blake3"),
+    ];
+    if objects.iter().any(|(object, role, digest_algorithm)| {
+        object.role != *role
+            || object.uri.is_empty()
+            || object.digest_algorithm != *digest_algorithm
+            || !v23_global_adc_valid_hex(&object.digest, 64)
+            || object.encoded_bytes == 0
+    }) {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC object identity differs".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn v23_global_adc_read_local_role(
+    path: &Path,
+    identity: &V23GlobalAdcObjectIdentity,
+) -> Result<Vec<u8>> {
+    let bytes = fs::read(path).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 global ADC {} cannot be read: {error}",
+            identity.role
+        ))
+    })?;
+    let digest = if identity.digest_algorithm == "blake3" {
+        blake3::hash(&bytes).to_hex().to_string()
+    } else {
+        format!("{:x}", Sha256::digest(&bytes))
+    };
+    if bytes.len() as u64 != identity.encoded_bytes || digest != identity.digest {
+        return Err(BorsukError::InvalidStorage(format!(
+            "V23 global ADC {} local bytes differ",
+            identity.role
+        )));
+    }
+    Ok(bytes)
+}
+
+struct V23JsonOrderSeed<'a> {
+    expected_keys: Option<&'a [&'a str]>,
+}
+
+impl<'de> DeserializeSeed<'de> for V23JsonOrderSeed<'_> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(V23JsonOrderVisitor {
+            expected_keys: self.expected_keys,
+        })
+    }
+}
+
+struct V23JsonOrderVisitor<'a> {
+    expected_keys: Option<&'a [&'a str]>,
+}
+
+impl<'de> Visitor<'de> for V23JsonOrderVisitor<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("compact JSON with the registered object-key order")
+    }
+
+    fn visit_bool<E>(self, _value: bool) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_i64<E>(self, _value: i64) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_u64<E>(self, _value: u64) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_str<E>(self, _value: &str) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_string<E>(self, _value: String) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while sequence
+            .next_element_seed(V23JsonOrderSeed {
+                expected_keys: None,
+            })?
+            .is_some()
+        {}
+        Ok(())
+    }
+
+    fn visit_map<A>(self, mut object: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut previous: Option<String> = None;
+        let mut index = 0;
+        while let Some(key) = object.next_key::<String>()? {
+            if let Some(expected) = self.expected_keys {
+                if expected.get(index).copied() != Some(key.as_str()) {
+                    return Err(serde::de::Error::custom(
+                        "top-level object key order differs",
+                    ));
+                }
+            } else if previous.as_ref().is_some_and(|prior| prior >= &key) {
+                return Err(serde::de::Error::custom(
+                    "recursive object key order differs",
+                ));
+            }
+            object.next_value_seed(V23JsonOrderSeed {
+                expected_keys: None,
+            })?;
+            previous = Some(key);
+            index += 1;
+        }
+        if self
+            .expected_keys
+            .is_some_and(|expected| index != expected.len())
+        {
+            return Err(serde::de::Error::custom(
+                "top-level object key count differs",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn v23_global_adc_validate_json_bytes(
+    bytes: &[u8],
+    role: &str,
+    expected_top_level_order: Option<&[&str]>,
+) -> Result<()> {
+    if bytes.last() != Some(&b'\n') || bytes[..bytes.len().saturating_sub(1)].last() == Some(&b'\n')
+    {
+        return Err(BorsukError::InvalidStorage(format!(
+            "V23 global ADC {role} newline convention differs"
+        )));
+    }
+    let body = &bytes[..bytes.len() - 1];
+    let mut in_string = false;
+    let mut escaped = false;
+    for byte in body.iter().copied() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+        } else if byte == b'"' {
+            in_string = true;
+        } else if matches!(byte, b' ' | b'\t' | b'\r' | b'\n') {
+            return Err(BorsukError::InvalidStorage(format!(
+                "V23 global ADC {role} compact JSON convention differs"
+            )));
+        }
+    }
+    if in_string || escaped {
+        return Err(BorsukError::InvalidStorage(format!(
+            "V23 global ADC {role} JSON string differs"
+        )));
+    }
+    let mut deserializer = serde_json::Deserializer::from_slice(body);
+    V23JsonOrderSeed {
+        expected_keys: expected_top_level_order,
+    }
+    .deserialize(&mut deserializer)
+    .map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 global ADC {role} JSON ordering differs: {error}"
+        ))
+    })?;
+    deserializer.end().map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 global ADC {role} trailing JSON differs: {error}"
+        ))
+    })
+}
+
+fn v23_global_adc_parse_json(bytes: &[u8], role: &str) -> Result<serde_json::Value> {
+    serde_json::from_slice(bytes).map_err(|error| {
+        BorsukError::InvalidStorage(format!("V23 global ADC {role} JSON differs: {error}"))
+    })
+}
+
+fn v23_global_adc_exact_json_keys(
+    value: &serde_json::Value,
+    expected: &[&str],
+    role: &str,
+) -> Result<()> {
+    let keys = value
+        .as_object()
+        .map(|object| object.keys().map(String::as_str).collect::<BTreeSet<_>>());
+    if keys != Some(expected.iter().copied().collect()) {
+        return Err(BorsukError::InvalidStorage(format!(
+            "V23 global ADC {role} schema differs"
+        )));
+    }
+    Ok(())
+}
+
+fn v23_global_adc_json_string<'a>(
+    value: &'a serde_json::Value,
+    key: &str,
+    role: &str,
+) -> Result<&'a str> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("V23 global ADC {role} {key} differs")))
+}
+
+fn v23_global_adc_json_bool(value: &serde_json::Value, key: &str, role: &str) -> Result<bool> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("V23 global ADC {role} {key} differs")))
+}
+
+fn v23_global_adc_json_u64(value: &serde_json::Value, key: &str, role: &str) -> Result<u64> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| BorsukError::InvalidStorage(format!("V23 global ADC {role} {key} differs")))
+}
+
+fn v23_global_adc_read_queries(bytes: &[u8], query_ordinals: &[u64]) -> Result<Vec<Vec<f32>>> {
+    const V23_GLOBAL_ADC_QUERY_ROWS: u64 = 10_000;
+    if query_ordinals.len() != V23_DIAGNOSTIC_QUERIES
+        || query_ordinals.windows(2).any(|pair| pair[0] >= pair[1])
+        || query_ordinals
+            .last()
+            .is_none_or(|ordinal| *ordinal >= V23_GLOBAL_ADC_QUERY_ROWS)
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC query ordinals differ".to_string(),
+        ));
+    }
+    let expected_schema = Schema::new(vec![Field::new(
+        "emb",
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), 96),
+        false,
+    )]);
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))?;
+    if builder.schema().as_ref() != &expected_schema
+        || builder.metadata().file_metadata().num_rows() != V23_GLOBAL_ADC_QUERY_ROWS as i64
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC query Parquet schema differs".to_string(),
+        ));
+    }
+    let mut queries = vec![None; V23_DIAGNOSTIC_QUERIES];
+    let mut physical_row = 0_u64;
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.num_columns() != 1 || batch.column(0).null_count() != 0 {
+            return Err(BorsukError::InvalidStorage(
+                "V23 global ADC query Parquet columns differ".to_string(),
+            ));
+        }
+        let lists = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 global ADC query Parquet list differs".to_string())
+            })?;
+        for row in 0..batch.num_rows() {
+            if lists.is_null(row) {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 global ADC query vector is null".to_string(),
+                ));
+            }
+            let values = lists.value(row);
+            let values = values
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage("V23 global ADC query values differ".to_string())
+                })?;
+            if values.len() != 96
+                || values.null_count() != 0
+                || values.values().iter().any(|value| !value.is_finite())
+                || values.values().iter().all(|value| *value == 0.0)
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 global ADC query vector authority differs".to_string(),
+                ));
+            }
+            if let Ok(query_index) = query_ordinals.binary_search(&physical_row) {
+                queries[query_index] = Some(values.values().to_vec());
+            }
+            physical_row += 1;
+        }
+    }
+    if physical_row != V23_GLOBAL_ADC_QUERY_ROWS {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC query row count differs".to_string(),
+        ));
+    }
+    queries
+        .into_iter()
+        .map(|query| {
+            query.ok_or_else(|| {
+                BorsukError::InvalidStorage(
+                    "V23 global ADC registered query ordinal is absent".to_string(),
+                )
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn load_v23_global_adc_local_artifacts(
+    paths: &V23GlobalAdcLocalArtifactPaths,
+    observed_identity: &V23GlobalAdcEvidenceIdentity,
+    registered_identity: &V23GlobalAdcEvidenceIdentity,
+) -> Result<V23GlobalAdcLoadedLocalArtifacts> {
+    validate_v23_global_adc_evidence_identity(observed_identity, registered_identity)?;
+    let d1_bytes = v23_global_adc_read_local_role(&paths.d1_report, &observed_identity.d1_report)?;
+    let terminal_bytes =
+        v23_global_adc_read_local_role(&paths.d2_terminal, &observed_identity.d2_terminal)?;
+    let result_bytes =
+        v23_global_adc_read_local_role(&paths.d2_result, &observed_identity.d2_result)?;
+    let d2_bytes = v23_global_adc_read_local_role(&paths.d2_report, &observed_identity.d2_report)?;
+    let roster_bytes = v23_global_adc_read_local_role(&paths.roster, &observed_identity.roster)?;
+    let query_bytes = v23_global_adc_read_local_role(&paths.query, &observed_identity.query)?;
+    let selector_bytes =
+        v23_global_adc_read_local_role(&paths.selector, &observed_identity.selector)?;
+
+    const TERMINAL_KEYS: &[&str] = &[
+        "schema_version",
+        "status",
+        "role",
+        "attempt",
+        "attempt_id",
+        "instance_id",
+        "source_archive_sha256",
+        "manifest_sha256",
+        "protocol_sha256",
+        "binary_sha256",
+        "purchase_option",
+        "runtime_profile",
+        "arm_index",
+        "max_active_searches",
+        "max_waiting_searches",
+        "leaf_read_width",
+        "max_inflight_leaf_reads",
+        "max_parallel_decode_rank_tasks",
+        "cpu_threads",
+        "io_threads",
+        "s3_get_concurrency",
+        "ram_budget_bytes",
+        "disk_cache_max_bytes",
+        "exact_read_max_physical_amplification",
+        "execution_contract_sha256",
+        "artifact_upload_reconciliations",
+        "claim_eligible",
+        "v23_stage",
+        "v23_passed",
+        "v23_result_sha256",
+        "v23_page_prefix",
+        "v23_d2_report_sha256",
+        "v23_pages_sha256",
+        "v23_summary_sha256",
+        "v23_d1_receipt_sha256",
+        "v23_d1_report_sha256",
+        "v23_prerequisite_binary_sha256",
+        "base_build_terminal_sha256",
+        "base_manifest_sha256",
+        "base_protocol_sha256",
+        "base_source_archive_sha256",
+        "base_index_receipt_sha256",
+        "base_object_roster_sha256",
+        "base_inventory_sha256",
+        "base_index_id",
+        "base_index_uri",
+        "diagnostic_source_archive_sha256",
+        "memory_max_bytes",
+        "memory_swap_max_bytes",
+        "memory_peak_bytes",
+    ];
+    v23_global_adc_validate_json_bytes(&d1_bytes, "D1 report", None)?;
+    v23_global_adc_validate_json_bytes(&d2_bytes, "D2 report", None)?;
+    v23_global_adc_validate_json_bytes(&result_bytes, "D2 result", None)?;
+    v23_global_adc_validate_json_bytes(&roster_bytes, "page roster", None)?;
+    v23_global_adc_validate_json_bytes(&terminal_bytes, "D2 terminal", Some(TERMINAL_KEYS))?;
+
+    let d1_value = v23_global_adc_parse_json(&d1_bytes, "D1 report")?;
+    v23_global_adc_exact_json_keys(
+        &d1_value,
+        &[
+            "claim_eligible",
+            "dataset_id",
+            "document_kind",
+            "index_id",
+            "report",
+            "schema",
+            "source_archive_sha256",
+            "stage",
+        ],
+        "D1 report",
+    )?;
+    let d1_report: V23D1Report =
+        serde_json::from_value(d1_value.get("report").cloned().ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 global ADC D1 report is absent".to_string())
+        })?)
+        .map_err(|error| {
+            BorsukError::InvalidStorage(format!("V23 global ADC D1 report differs: {error}"))
+        })?;
+    let d2_value = v23_global_adc_parse_json(&d2_bytes, "D2 report")?;
+    v23_global_adc_exact_json_keys(
+        &d2_value,
+        &[
+            "claim_eligible",
+            "d1_report_sha256",
+            "dataset_id",
+            "document_kind",
+            "index_id",
+            "page_uri",
+            "report",
+            "schema",
+            "source_archive_sha256",
+            "stage",
+        ],
+        "D2 report",
+    )?;
+    let d2_report: V23D2Report =
+        serde_json::from_value(d2_value.get("report").cloned().ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 global ADC D2 report is absent".to_string())
+        })?)
+        .map_err(|error| {
+            BorsukError::InvalidStorage(format!("V23 global ADC D2 report differs: {error}"))
+        })?;
+    let terminal = v23_global_adc_parse_json(&terminal_bytes, "D2 terminal")?;
+    v23_global_adc_exact_json_keys(&terminal, TERMINAL_KEYS, "D2 terminal")?;
+    let result = v23_global_adc_parse_json(&result_bytes, "D2 result")?;
+    v23_global_adc_exact_json_keys(
+        &result,
+        &[
+            "arms",
+            "artifact_sha256",
+            "attempt_id",
+            "cell_id",
+            "claim_eligible",
+            "d1_report_sha256",
+            "dataset_id",
+            "dataset_materialization_sha256",
+            "diagnostic_cell_id",
+            "document_kind",
+            "elapsed_ns",
+            "index_id",
+            "instance_identity",
+            "pages",
+            "pages_sha256",
+            "passed",
+            "passing_arm_indexes",
+            "publishable",
+            "queries",
+            "resources",
+            "rows",
+            "runtime_attestation",
+            "schema",
+            "source_archive_sha256",
+            "stage",
+        ],
+        "D2 result",
+    )?;
+    let roster = v23_global_adc_parse_json(&roster_bytes, "page roster")?;
+    v23_global_adc_exact_json_keys(
+        &roster,
+        &[
+            "claim_eligible",
+            "d1_report_sha256",
+            "dataset_id",
+            "document_kind",
+            "index_id",
+            "page_uri",
+            "pages",
+            "schema",
+            "source_archive_sha256",
+            "stage",
+        ],
+        "page roster",
+    )?;
+    if v23_global_adc_json_u64(&terminal, "schema_version", "D2 terminal")? != 5
+        || terminal.get("status").and_then(serde_json::Value::as_str) != Some("complete")
+        || terminal.get("role").and_then(serde_json::Value::as_str) != Some("runtime")
+        || v23_global_adc_json_bool(&terminal, "claim_eligible", "D2 terminal")?
+        || result.get("schema").and_then(serde_json::Value::as_str) != Some("borsuk-v23-summary-v1")
+        || result
+            .get("document_kind")
+            .and_then(serde_json::Value::as_str)
+            != Some("publication-v3-v23-d2-summary")
+        || result
+            .get("claim_eligible")
+            .and_then(serde_json::Value::as_bool)
+            != Some(false)
+        || roster.get("schema").and_then(serde_json::Value::as_str) != Some("borsuk-v23-pages-v1")
+        || d1_value.get("schema").and_then(serde_json::Value::as_str)
+            != Some("borsuk-v23-d1-artifact-v1")
+        || d2_value.get("schema").and_then(serde_json::Value::as_str)
+            != Some("borsuk-v23-d2-artifact-v1")
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC role schema differs".to_string(),
+        ));
+    }
+    for (document, role, expected_kind, expected_stage) in [
+        (&d1_value, "D1 report", "publication-v3-v23-d1-report", "d1"),
+        (&d2_value, "D2 report", "publication-v3-v23-d2-report", "d2"),
+        (
+            &roster,
+            "page roster",
+            "publication-v3-v23-page-roster",
+            "d2",
+        ),
+    ] {
+        if v23_global_adc_json_bool(document, "claim_eligible", role)?
+            || v23_global_adc_json_string(document, "document_kind", role)? != expected_kind
+            || v23_global_adc_json_string(document, "stage", role)? != expected_stage
+            || v23_global_adc_json_string(document, "index_id", role)? != observed_identity.index_id
+            || v23_global_adc_json_string(document, "source_archive_sha256", role)?
+                != observed_identity.source_archive_sha256
+        {
+            return Err(BorsukError::InvalidStorage(format!(
+                "V23 global ADC {role} outer authority differs"
+            )));
+        }
+    }
+    let dataset_id = v23_global_adc_json_string(&d1_value, "dataset_id", "D1 report")?;
+    let page_uri = v23_global_adc_json_string(&d2_value, "page_uri", "D2 report")?;
+    if dataset_id.is_empty()
+        || v23_global_adc_json_string(&d2_value, "dataset_id", "D2 report")? != dataset_id
+        || v23_global_adc_json_string(&roster, "dataset_id", "page roster")? != dataset_id
+        || page_uri.is_empty()
+        || v23_global_adc_json_string(&roster, "page_uri", "page roster")? != page_uri
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC outer role binding differs".to_string(),
+        ));
+    }
+    for key in [
+        "status",
+        "role",
+        "attempt_id",
+        "instance_id",
+        "source_archive_sha256",
+        "manifest_sha256",
+        "protocol_sha256",
+        "binary_sha256",
+        "purchase_option",
+        "runtime_profile",
+        "execution_contract_sha256",
+        "v23_stage",
+        "v23_result_sha256",
+        "v23_page_prefix",
+        "v23_d2_report_sha256",
+        "v23_pages_sha256",
+        "v23_summary_sha256",
+        "v23_d1_receipt_sha256",
+        "v23_d1_report_sha256",
+        "v23_prerequisite_binary_sha256",
+        "base_build_terminal_sha256",
+        "base_manifest_sha256",
+        "base_protocol_sha256",
+        "base_source_archive_sha256",
+        "base_index_receipt_sha256",
+        "base_object_roster_sha256",
+        "base_inventory_sha256",
+        "base_index_id",
+        "base_index_uri",
+        "diagnostic_source_archive_sha256",
+    ] {
+        v23_global_adc_json_string(&terminal, key, "D2 terminal")?;
+    }
+    for key in [
+        "schema_version",
+        "attempt",
+        "arm_index",
+        "max_active_searches",
+        "max_waiting_searches",
+        "leaf_read_width",
+        "max_inflight_leaf_reads",
+        "max_parallel_decode_rank_tasks",
+        "cpu_threads",
+        "io_threads",
+        "s3_get_concurrency",
+        "ram_budget_bytes",
+        "disk_cache_max_bytes",
+        "exact_read_max_physical_amplification",
+        "artifact_upload_reconciliations",
+        "memory_max_bytes",
+        "memory_swap_max_bytes",
+        "memory_peak_bytes",
+    ] {
+        v23_global_adc_json_u64(&terminal, key, "D2 terminal")?;
+    }
+    v23_global_adc_json_bool(&terminal, "v23_passed", "D2 terminal")?;
+
+    for key in [
+        "artifact_sha256",
+        "attempt_id",
+        "cell_id",
+        "d1_report_sha256",
+        "dataset_id",
+        "dataset_materialization_sha256",
+        "diagnostic_cell_id",
+        "document_kind",
+        "index_id",
+        "instance_identity",
+        "pages_sha256",
+        "schema",
+        "source_archive_sha256",
+        "stage",
+    ] {
+        v23_global_adc_json_string(&result, key, "D2 result")?;
+    }
+    for key in ["arms", "elapsed_ns", "pages", "queries", "rows"] {
+        v23_global_adc_json_u64(&result, key, "D2 result")?;
+    }
+    for key in ["claim_eligible", "passed", "publishable"] {
+        v23_global_adc_json_bool(&result, key, "D2 result")?;
+    }
+    if result
+        .get("passing_arm_indexes")
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(|indexes| indexes.iter().any(|index| index.as_u64().is_none()))
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC D2 result passing arm indexes differ".to_string(),
+        ));
+    }
+    let resources = result.get("resources").ok_or_else(|| {
+        BorsukError::InvalidStorage("V23 global ADC D2 result resources are absent".to_string())
+    })?;
+    v23_global_adc_exact_json_keys(
+        resources,
+        &[
+            "cpu_ns",
+            "disk_read_bytes",
+            "disk_write_bytes",
+            "peak_rss_bytes",
+        ],
+        "D2 result resources",
+    )?;
+    for key in [
+        "cpu_ns",
+        "disk_read_bytes",
+        "disk_write_bytes",
+        "peak_rss_bytes",
+    ] {
+        v23_global_adc_json_u64(resources, key, "D2 result resources")?;
+    }
+    let attestation = result.get("runtime_attestation").ok_or_else(|| {
+        BorsukError::InvalidStorage("V23 global ADC runtime attestation is absent".to_string())
+    })?;
+    v23_global_adc_exact_json_keys(
+        attestation,
+        &[
+            "architecture",
+            "attempt_id",
+            "cache_capacity_bytes",
+            "cache_device",
+            "cache_filesystem_bytes",
+            "cache_is_mount",
+            "cell_id",
+            "effective_disk_cache_max_bytes",
+            "instance_id",
+            "instance_type",
+            "memory_max_bytes",
+            "memory_peak_bytes",
+            "oom_events",
+            "oom_kill_events",
+            "purchase_option",
+            "root_device",
+            "schema_version",
+            "source_revision",
+            "swap_current_bytes",
+            "swap_max_bytes",
+            "swap_peak_bytes",
+            "vcpus",
+        ],
+        "runtime attestation",
+    )?;
+    for key in [
+        "architecture",
+        "attempt_id",
+        "cache_device",
+        "cell_id",
+        "instance_id",
+        "instance_type",
+        "purchase_option",
+        "root_device",
+        "source_revision",
+    ] {
+        v23_global_adc_json_string(attestation, key, "runtime attestation")?;
+    }
+    for key in [
+        "cache_capacity_bytes",
+        "cache_filesystem_bytes",
+        "effective_disk_cache_max_bytes",
+        "memory_max_bytes",
+        "memory_peak_bytes",
+        "oom_events",
+        "oom_kill_events",
+        "schema_version",
+        "swap_current_bytes",
+        "swap_max_bytes",
+        "swap_peak_bytes",
+        "vcpus",
+    ] {
+        v23_global_adc_json_u64(attestation, key, "runtime attestation")?;
+    }
+    v23_global_adc_json_bool(attestation, "cache_is_mount", "runtime attestation")?;
+
+    let attempt_id = v23_global_adc_json_string(&terminal, "attempt_id", "D2 terminal")?;
+    let instance_id = v23_global_adc_json_string(&terminal, "instance_id", "D2 terminal")?;
+    if v23_global_adc_json_string(&result, "attempt_id", "D2 result")? != attempt_id
+        || v23_global_adc_json_string(attestation, "attempt_id", "runtime attestation")?
+            != attempt_id
+        || v23_global_adc_json_string(&result, "instance_identity", "D2 result")? != instance_id
+        || v23_global_adc_json_string(attestation, "instance_id", "runtime attestation")?
+            != instance_id
+        || v23_global_adc_json_string(attestation, "source_revision", "runtime attestation")?
+            != observed_identity.source_commit
+        || v23_global_adc_json_string(&result, "source_archive_sha256", "D2 result")?
+            != observed_identity.source_archive_sha256
+        || v23_global_adc_json_string(&result, "index_id", "D2 result")?
+            != observed_identity.index_id
+        || v23_global_adc_json_string(&result, "dataset_id", "D2 result")? != dataset_id
+        || v23_global_adc_json_string(&terminal, "base_index_id", "D2 terminal")?
+            != observed_identity.index_id
+        || v23_global_adc_json_string(&terminal, "diagnostic_source_archive_sha256", "D2 terminal")?
+            != observed_identity.source_archive_sha256
+        || v23_global_adc_json_string(&terminal, "v23_page_prefix", "D2 terminal")? != page_uri
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC runtime cross-object binding differs".to_string(),
+        ));
+    }
+    if v23_global_adc_json_string(&terminal, "source_archive_sha256", "D2 terminal")?
+        != observed_identity.source_archive_sha256
+        || v23_global_adc_json_string(&terminal, "v23_result_sha256", "D2 terminal")?
+            != observed_identity.d2_result.digest
+        || v23_global_adc_json_string(&terminal, "v23_d2_report_sha256", "D2 terminal")?
+            != observed_identity.d2_report.digest
+        || v23_global_adc_json_string(&terminal, "v23_pages_sha256", "D2 terminal")?
+            != observed_identity.roster.digest
+        || v23_global_adc_json_string(&terminal, "v23_d1_report_sha256", "D2 terminal")?
+            != observed_identity.d1_report.digest
+        || v23_global_adc_json_string(&result, "artifact_sha256", "D2 result")?
+            != observed_identity.d2_report.digest
+        || v23_global_adc_json_string(&result, "pages_sha256", "D2 result")?
+            != observed_identity.roster.digest
+        || v23_global_adc_json_string(&result, "d1_report_sha256", "D2 result")?
+            != observed_identity.d1_report.digest
+        || v23_global_adc_json_string(&d2_value, "d1_report_sha256", "D2 report")?
+            != observed_identity.d1_report.digest
+        || v23_global_adc_json_string(&roster, "d1_report_sha256", "page roster")?
+            != observed_identity.d1_report.digest
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC receipt binding differs".to_string(),
+        ));
+    }
+    let pages: Vec<V23PageRef> =
+        serde_json::from_value(roster.get("pages").cloned().ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 global ADC roster pages are absent".to_string())
+        })?)
+        .map_err(|error| {
+            BorsukError::InvalidStorage(format!("V23 global ADC roster pages differ: {error}"))
+        })?;
+    let passing_arm_indexes = d2_report
+        .arms
+        .iter()
+        .enumerate()
+        .filter_map(|(index, arm)| arm.passed.then_some(index as u64))
+        .collect::<Vec<_>>();
+    let result_passing_arm_indexes = result
+        .get("passing_arm_indexes")
+        .and_then(serde_json::Value::as_array)
+        .unwrap()
+        .iter()
+        .map(|index| index.as_u64().unwrap())
+        .collect::<Vec<_>>();
+    let result_passed = v23_global_adc_json_bool(&result, "passed", "D2 result")?;
+    let diagnostic_cell_id =
+        v23_global_adc_json_string(&result, "diagnostic_cell_id", "D2 result")?;
+    if v23_global_adc_json_u64(&result, "arms", "D2 result")? != d2_report.arms.len() as u64
+        || v23_global_adc_json_u64(&result, "pages", "D2 result")? != pages.len() as u64
+        || v23_global_adc_json_u64(&result, "queries", "D2 result")?
+            != V23_DIAGNOSTIC_QUERIES as u64
+        || v23_global_adc_json_u64(&result, "rows", "D2 result")? != d2_report.rows
+        || result_passing_arm_indexes != passing_arm_indexes
+        || result_passed != !passing_arm_indexes.is_empty()
+        || v23_global_adc_json_bool(&terminal, "v23_passed", "D2 terminal")? != result_passed
+        || v23_global_adc_json_string(attestation, "cell_id", "runtime attestation")?
+            != diagnostic_cell_id
+        || attempt_id != format!("runtime-v23-d2-{diagnostic_cell_id}-arm-0000-a0001")
+        || !v23_global_adc_valid_hex(
+            v23_global_adc_json_string(&result, "dataset_materialization_sha256", "D2 result")?,
+            64,
+        )
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC D2 result derivation differs".to_string(),
+        ));
+    }
+    let queries = v23_global_adc_read_queries(&query_bytes, &d1_report.query_ordinals)?;
+    let loaded = V23GlobalAdcLoadedLocalArtifacts {
+        d1_report,
+        d2_report,
+        pages,
+        queries,
+        selector_bytes: Bytes::from(selector_bytes),
+        evidence: observed_identity.clone(),
+    };
+    loaded.validate()?;
+    Ok(loaded)
+}
+
+#[doc(hidden)]
+pub fn run_v23_global_adc_local_request(request: V23GlobalAdcLocalRunRequest) -> Result<Vec<u8>> {
+    if !request.execute_global_adc {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC execution was not explicitly authorized".to_string(),
+        ));
+    }
+    let loaded = load_v23_global_adc_local_artifacts(
+        &request.paths,
+        &request.registered_identity,
+        &request.registered_identity,
+    )?;
+    let result = loaded.run()?;
+    canonical_v23_global_adc_artifact_result_bytes(&result, &request.registered_identity)
+}
+
+pub(crate) fn validate_v23_global_adc_artifact_request(
+    request: V23GlobalAdcArtifactRequest<'_>,
+) -> Result<()> {
+    validate_v23_global_adc_evidence_identity(
+        request.observed_identity,
+        request.registered_identity,
+    )?;
+    validate_d1_report(request.d1_report)?;
+    validate_d2_report(request.d2_report)?;
+    if request.d2_report.d1_report_checksum != v23_d1_report_checksum(request.d1_report)?
+        || request.query_ordinals != request.d1_report.query_ordinals
+        || request.query_ordinals != request.d2_report.query_ordinals
+        || v23_query_vectors_checksum(request.query_ordinals, request.queries)?
+            != request.d1_report.query_vectors_checksum
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC report and query authority differs".to_string(),
+        ));
+    }
+    let selector_key = V23D1ArmKey {
+        family: V23QuantizerFamily::SrhtPq,
+        code_width_bytes: 12,
+    };
+    let d1_selector_arm = request
+        .d1_report
+        .arms
+        .iter()
+        .find(|arm| arm.key == selector_key)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 global ADC width-12 D1 arm is absent".to_string())
+        })?;
+    let d2_arm = request
+        .d2_report
+        .arms
+        .iter()
+        .find(|arm| arm.selector_key == selector_key)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 global ADC width-12 D2 arm is absent".to_string())
+        })?;
+    if !request
+        .d1_report
+        .arms
+        .iter()
+        .any(|arm| arm.key == d2_arm.d1_key)
+        || request.pages != d2_arm.pages
+        || request.ground_truth_page_assignments.len() != V23_DIAGNOSTIC_QUERIES
+        || d2_arm.query_samples.len() != V23_DIAGNOSTIC_QUERIES
+        || request
+            .ground_truth_page_assignments
+            .iter()
+            .zip(&d2_arm.query_samples)
+            .any(|(ground_truth, sample)| ground_truth != &sample.ground_truth_page_assignments)
+        || request.observed_identity.selector.digest != d2_arm.selector.checksum
+        || request.observed_identity.selector.encoded_bytes != d2_arm.selector.encoded_bytes
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC cross-object authority differs".to_string(),
+        ));
+    }
+    validate_v23_global_adc_authority(&V23GlobalAdcAuthority {
+        d1_selector_arm,
+        d2_selector: &d2_arm.selector,
+        pages: request.pages,
+        selector_bytes: request.selector_bytes,
+    })?;
+    Ok(())
+}
+
+pub(crate) fn classify_v23_global_adc(
+    faithful_passed: bool,
+    per_page_min_passed: bool,
+) -> Result<V23GlobalAdcCausalClass> {
+    match (faithful_passed, per_page_min_passed) {
+        (false, false) => Ok(V23GlobalAdcCausalClass::TestedReducers),
+        (false, true) => Ok(V23GlobalAdcCausalClass::FaithfulReducer),
+        (true, _) => Ok(V23GlobalAdcCausalClass::Router),
+    }
+}
+
+fn v23_global_adc_reducer_result(
+    reducer: &str,
+    samples: Vec<V23GlobalAdcQuerySample>,
+) -> V23GlobalAdcReducerResult {
+    let total_hits = samples
+        .iter()
+        .map(|sample| u64::from(sample.gt_page_hits))
+        .sum::<u64>();
+    let total_oracle_hits = samples
+        .iter()
+        .map(|sample| u64::from(sample.oracle_gt_page_hits))
+        .sum::<u64>();
+    let denominator = (samples.len() as u64).saturating_mul(10);
+    let aggregate_recall_ppm = total_hits.saturating_mul(1_000_000) / denominator.max(1);
+    let minimum_query_recall_ppm = samples
+        .iter()
+        .map(|sample| sample.recall_ppm)
+        .min()
+        .unwrap_or(0);
+    let oracle_attainment_ppm = total_hits.saturating_mul(1_000_000) / total_oracle_hits.max(1);
+    let passed = aggregate_recall_ppm >= 975_000
+        && minimum_query_recall_ppm >= 800_000
+        && oracle_attainment_ppm >= 995_000;
+    V23GlobalAdcReducerResult {
+        reducer: reducer.to_string(),
+        query_samples: samples,
+        aggregate_recall_ppm,
+        minimum_query_recall_ppm,
+        oracle_attainment_ppm,
+        passed,
+    }
+}
+
+pub(crate) fn diagnose_v23_global_adc(
+    request: V23GlobalAdcRequest<'_>,
+) -> Result<V23GlobalAdcResult> {
+    let (quantizer, decoded) = validate_v23_global_adc_authority(&request.authority)?;
+    if request.queries.len() != V23_DIAGNOSTIC_QUERIES
+        || request.ground_truth_page_assignments.len() != V23_DIAGNOSTIC_QUERIES
+        || request.queries.iter().any(|query| {
+            query.len() != decoded.dimensions || query.iter().any(|value| !value.is_finite())
+        })
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC query authority differs".to_string(),
+        ));
+    }
+    let mut faithful_samples = Vec::with_capacity(V23_DIAGNOSTIC_QUERIES);
+    let mut per_page_min_samples = Vec::with_capacity(V23_DIAGNOSTIC_QUERIES);
+    let mut scalar_simd_max_distance_delta_ppm = 0_u64;
+    for (query_index, (query, assignments)) in request
+        .queries
+        .iter()
+        .zip(request.ground_truth_page_assignments)
+        .enumerate()
+    {
+        if assignments.len() != 10
+            || assignments.iter().any(|pages| {
+                pages.is_empty()
+                    || pages.windows(2).any(|pair| pair[0] >= pair[1])
+                    || pages
+                        .iter()
+                        .any(|page| *page as usize >= request.authority.pages.len())
+            })
+        {
+            return Err(BorsukError::InvalidStorage(
+                "V23 global ADC ground truth authority differs".to_string(),
+            ));
+        }
+        let oracle = best_v23_page_coverage(assignments, V23_GLOBAL_ADC_SELECTION_WIDTH)?;
+        let (faithful_pages, per_page_min_pages, minimum_distance, delta_ppm) =
+            v23_global_adc_select(
+                &quantizer,
+                &decoded,
+                &request.authority.d2_selector.metric,
+                request.authority.pages.len(),
+                query,
+            )?;
+        scalar_simd_max_distance_delta_ppm = scalar_simd_max_distance_delta_ppm.max(delta_ppm);
+        for (pages, destination) in [
+            (faithful_pages, &mut faithful_samples),
+            (per_page_min_pages, &mut per_page_min_samples),
+        ] {
+            let hits = assignments
+                .iter()
+                .filter(|assigned| {
+                    assigned
+                        .iter()
+                        .any(|page| pages.binary_search(page).is_ok())
+                })
+                .count();
+            destination.push(V23GlobalAdcQuerySample {
+                query_index: query_index as u32,
+                page_ordinals: pages,
+                gt_page_hits: hits as u8,
+                oracle_gt_page_hits: oracle.hits as u8,
+                recall_ppm: (hits as u64).saturating_mul(100_000),
+                minimum_distance,
+            });
+        }
+    }
+    let faithful =
+        v23_global_adc_reducer_result("global-top4096-reciprocal-rank-max-cover", faithful_samples);
+    let per_page_min = v23_global_adc_reducer_result("per-page-minimum-adc", per_page_min_samples);
+    let causal_classification = classify_v23_global_adc(faithful.passed, per_page_min.passed)?;
+    Ok(V23GlobalAdcResult {
+        schema: "borsuk-v23-global-adc-v1".to_string(),
+        claim_eligible: false,
+        selector_checksum: request.authority.d2_selector.checksum.clone(),
+        selector_code_width: request.authority.d2_selector.code_width,
+        selector_cells_scanned: request.authority.d2_selector.coarse_cells,
+        selector_rows_scanned: request.authority.d2_selector.row_count,
+        selection_width: V23_GLOBAL_ADC_SELECTION_WIDTH as u8,
+        page_body_reads: 0,
+        scalar_simd_max_distance_delta_ppm,
+        scalar_simd_pages_equal: true,
+        gates: V23GlobalAdcGates {
+            aggregate_recall_ppm: 975_000,
+            minimum_query_recall_ppm: 800_000,
+            oracle_attainment_ppm: 995_000,
+        },
+        faithful,
+        per_page_min,
+        causal_classification,
+    })
+}
+
+pub(crate) fn canonical_v23_global_adc_result_bytes(
+    result: &V23GlobalAdcResult,
+) -> Result<Vec<u8>> {
+    if result.claim_eligible
+        || result.schema != "borsuk-v23-global-adc-v1"
+        || result.selection_width as usize != V23_GLOBAL_ADC_SELECTION_WIDTH
+        || result.page_body_reads != 0
+        || !result.scalar_simd_pages_equal
+        || result.gates.aggregate_recall_ppm != 975_000
+        || result.gates.minimum_query_recall_ppm != 800_000
+        || result.gates.oracle_attainment_ppm != 995_000
+        || classify_v23_global_adc(result.faithful.passed, result.per_page_min.passed)?
+            != result.causal_classification
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC result authority differs".to_string(),
+        ));
+    }
+    let value = serde_json::to_value(result).map_err(|error| {
+        BorsukError::InvalidStorage(format!("V23 global ADC result cannot be encoded: {error}"))
+    })?;
+    let mut bytes = serde_json::to_vec(&v23_canonical_json_value(value)).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 global ADC result cannot be serialized: {error}"
+        ))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn validate_v23_global_adc_artifact_reducer(
+    reducer: &V23GlobalAdcReducerResult,
+    expected_name: &str,
+) -> Result<()> {
+    if reducer.reducer != expected_name
+        || reducer.query_samples.len() != V23_DIAGNOSTIC_QUERIES
+        || reducer
+            .query_samples
+            .iter()
+            .enumerate()
+            .any(|(query_index, sample)| {
+                usize::try_from(sample.query_index).ok() != Some(query_index)
+                    || sample.page_ordinals.len() != V23_GLOBAL_ADC_SELECTION_WIDTH
+                    || sample
+                        .page_ordinals
+                        .windows(2)
+                        .any(|pair| pair[0] >= pair[1])
+                    || sample.gt_page_hits > 10
+                    || sample.oracle_gt_page_hits > 10
+                    || sample.gt_page_hits > sample.oracle_gt_page_hits
+                    || sample.recall_ppm != u64::from(sample.gt_page_hits) * 100_000
+                    || !sample.minimum_distance.is_finite()
+            })
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC reducer samples differ".to_string(),
+        ));
+    }
+    let recomputed = v23_global_adc_reducer_result(expected_name, reducer.query_samples.clone());
+    if &recomputed != reducer {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC reducer aggregate differs".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn canonical_v23_global_adc_artifact_result_bytes(
+    result: &V23GlobalAdcArtifactResult,
+    expected_identity: &V23GlobalAdcEvidenceIdentity,
+) -> Result<Vec<u8>> {
+    validate_v23_global_adc_evidence_identity(&result.evidence, expected_identity)?;
+    let selector_fixed_bytes = (V23_SELECTOR_HEADER_BYTES as u64)
+        .checked_add(4_096_u64 * 96 * 4)
+        .and_then(|bytes| bytes.checked_add(4_097_u64 * 4));
+    let selector_rows_from_length = selector_fixed_bytes
+        .and_then(|fixed| result.evidence.selector.encoded_bytes.checked_sub(fixed))
+        .filter(|row_bytes| row_bytes % 20 == 0)
+        .map(|row_bytes| row_bytes / 20)
+        .filter(|rows| *rows > 0);
+    if result.schema != "borsuk-v23-global-adc-diagnostic-v1"
+        || result.claim_eligible
+        || result.diagnostic.schema != "borsuk-v23-global-adc-v1"
+        || !valid_checksum(&result.diagnostic.selector_checksum)
+        || result.diagnostic.selector_checksum != result.evidence.selector.digest
+        || result.diagnostic.selector_code_width != 12
+        || result.diagnostic.selector_cells_scanned != 4_096
+        || selector_rows_from_length != Some(result.diagnostic.selector_rows_scanned)
+        || result.diagnostic.selection_width as usize != V23_GLOBAL_ADC_SELECTION_WIDTH
+        || result.diagnostic.page_body_reads != 0
+        || !result.diagnostic.scalar_simd_pages_equal
+        || result.diagnostic.scalar_simd_max_distance_delta_ppm
+            > V23_SCALAR_SIMD_MAX_DISTANCE_DELTA_PPM
+        || result.diagnostic.gates.aggregate_recall_ppm != 975_000
+        || result.diagnostic.gates.minimum_query_recall_ppm != 800_000
+        || result.diagnostic.gates.oracle_attainment_ppm != 995_000
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC artifact result authority differs".to_string(),
+        ));
+    }
+    validate_v23_global_adc_artifact_reducer(
+        &result.diagnostic.faithful,
+        "global-top4096-reciprocal-rank-max-cover",
+    )?;
+    validate_v23_global_adc_artifact_reducer(
+        &result.diagnostic.per_page_min,
+        "per-page-minimum-adc",
+    )?;
+    if classify_v23_global_adc(
+        result.diagnostic.faithful.passed,
+        result.diagnostic.per_page_min.passed,
+    )? != result.diagnostic.causal_classification
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 global ADC causal classification differs".to_string(),
+        ));
+    }
+    canonical_v23_global_adc_result_bytes(&result.diagnostic)?;
+    let value = serde_json::to_value(result).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 global ADC artifact result cannot be encoded: {error}"
+        ))
+    })?;
+    let mut bytes = serde_json::to_vec(&v23_canonical_json_value(value)).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 global ADC artifact result cannot be serialized: {error}"
+        ))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 fn serialize_v23_page_metric<S>(
@@ -4624,27 +6340,1592 @@ pub(crate) fn validate_d2_report(report: &V23D2Report) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::{
+        collections::BTreeSet,
+        fs,
+        path::{Path, PathBuf},
+        sync::Arc,
+    };
 
+    use arrow_array::{FixedSizeListArray, Float32Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
     use bytes::Bytes;
+    use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
+    use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
+    use sha2::{Digest, Sha256};
 
     use super::{
         V23_DIAGNOSTIC_QUERIES, V23_PAGE_HEADER_BYTES, V23_SELECTOR_CODE_WIDTHS,
-        V23_SELECTOR_RANKED_ROWS, V23_SELECTOR_ROUTING_CELLS, V23_WAVE_MAX_BYTES,
-        V23_WAVE_MAX_PAGES, V23D1Arm, V23D1ArmKey, V23D1QuerySample, V23D1Report, V23D2Arm,
-        V23D2QuerySample, V23D2Report, V23D3Executor, V23PageInput, V23PageRef, V23PageRow,
+        V23_SELECTOR_HEADER_BYTES, V23_SELECTOR_RANKED_ROWS, V23_SELECTOR_ROUTING_CELLS,
+        V23_WAVE_MAX_BYTES, V23_WAVE_MAX_PAGES, V23D1Arm, V23D1ArmKey, V23D1QuerySample,
+        V23D1Report, V23D2Arm, V23D2QuerySample, V23D2Report, V23D3Executor,
+        V23GlobalAdcArtifactRequest, V23GlobalAdcArtifactResult, V23GlobalAdcAuthority,
+        V23GlobalAdcCausalClass, V23GlobalAdcEvidenceIdentity, V23GlobalAdcLocalArtifactPaths,
+        V23GlobalAdcObjectIdentity, V23GlobalAdcRequest, V23PageInput, V23PageRef, V23PageRow,
         V23PageSelector, V23PlanningRow, V23QuantizerFamily, V23RankedResult, V23ReplicaCandidate,
         V23SelectorInput, V23SelectorRef, V23SelectorRow, V23WaveSample, best_v23_page_coverage,
-        decode_v23_page, decode_v23_selector, encode_v23_page, encode_v23_selector,
-        fit_v23_diagnostic_quantizer, plan_v23_pages, plan_v23_pages_for_metric, read_v23_u16,
-        restore_v23_diagnostic_quantizer, stream_v23_materialized_pages, v23_d1_arm_keys,
-        v23_d1_bounded_wave_codes, v23_d1_projected_page_bytes, v23_d1_projected_page_rows,
-        v23_d1_report_checksum, v23_d2_projected_build_memory, v23_d2_projected_memory,
-        v23_d2_query_views, validate_d1_report, validate_d2_report, validate_v23_d2_query_binding,
-        validate_v23_d2_query_prefixes, validate_v23_d3_request_capacity, validate_wave_sample,
+        canonical_v23_global_adc_artifact_result_bytes, canonical_v23_global_adc_result_bytes,
+        classify_v23_global_adc, decode_v23_page, decode_v23_selector, diagnose_v23_global_adc,
+        encode_v23_page, encode_v23_selector, fit_v23_diagnostic_quantizer,
+        load_v23_global_adc_local_artifacts, plan_v23_pages, plan_v23_pages_for_metric,
+        read_v23_u16, restore_v23_diagnostic_quantizer, stream_v23_materialized_pages,
+        v23_d1_arm_keys, v23_d1_bounded_wave_codes, v23_d1_projected_page_bytes,
+        v23_d1_projected_page_rows, v23_d1_report_checksum, v23_d2_projected_build_memory,
+        v23_d2_projected_memory, v23_d2_query_views, validate_d1_report, validate_d2_report,
+        validate_v23_d2_query_binding, validate_v23_d2_query_prefixes,
+        validate_v23_d3_request_capacity, validate_v23_global_adc_artifact_request,
+        validate_wave_sample,
     };
     use crate::metric::VectorMetric;
     use crate::v22_feasibility::V22StageLQueryPrefix;
+
+    struct GlobalAdcFixture {
+        d1_selector_arm: V23D1Arm,
+        selector_ref: V23SelectorRef,
+        selector_bytes: Bytes,
+        pages: Vec<V23PageRef>,
+        queries: Vec<Vec<f32>>,
+        ground_truth_page_assignments: Vec<Vec<Vec<u32>>>,
+    }
+
+    impl GlobalAdcFixture {
+        fn request(&self) -> V23GlobalAdcRequest<'_> {
+            V23GlobalAdcRequest {
+                authority: V23GlobalAdcAuthority {
+                    d1_selector_arm: &self.d1_selector_arm,
+                    d2_selector: &self.selector_ref,
+                    pages: &self.pages,
+                    selector_bytes: self.selector_bytes.clone(),
+                },
+                queries: &self.queries,
+                ground_truth_page_assignments: &self.ground_truth_page_assignments,
+            }
+        }
+    }
+
+    fn global_adc_fixture() -> GlobalAdcFixture {
+        let dimensions = 96;
+        let sample = (0..256)
+            .map(|row| {
+                (0..dimensions)
+                    .map(|dimension| ((row * 17 + dimension * 13) % 251) as f32 / 251.0)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let quantizer =
+            fit_v23_diagnostic_quantizer(V23QuantizerFamily::SrhtPq, 12, dimensions, &sample)
+                .unwrap();
+        let quantizer_state = serde_json::to_value(quantizer.state()).unwrap();
+        let quantizer_checksum = blake3::hash(
+            &serde_json::to_vec(&super::v23_canonical_json_value(quantizer_state.clone())).unwrap(),
+        )
+        .to_hex()
+        .to_string();
+        let d1_selector_arm = V23D1Arm {
+            key: V23D1ArmKey {
+                family: V23QuantizerFamily::SrhtPq,
+                code_width_bytes: 12,
+            },
+            quantizer_checksum,
+            quantizer_state,
+            query_samples: Vec::new(),
+            oracle_recall_ppm: 0,
+            routed_recall_ppm: 0,
+            scalar_simd_ids_equal: false,
+            scalar_simd_max_distance_delta_ppm: 0,
+            cpu_p99_ns: 0,
+            wave_projected_bytes: 0,
+            passed: false,
+        };
+        let generation_checksum = [9; 32];
+        let pages = (0_u32..16)
+            .map(|page_ordinal| {
+                let checksum = format!("{:064x}", page_ordinal + 1);
+                V23PageRef {
+                    generation_checksum,
+                    page_ordinal,
+                    metric: VectorMetric::SquaredEuclidean,
+                    dimensions: dimensions as u32,
+                    family: V23QuantizerFamily::F16Flat,
+                    code_width: (dimensions * 2) as u16,
+                    path: format!("pages/{checksum}"),
+                    checksum,
+                    encoded_bytes: 100_000 + u64::from(page_ordinal),
+                    primary_rows: 2,
+                    replicated_rows: 2,
+                }
+            })
+            .collect::<Vec<_>>();
+        let rows = (0_u64..32)
+            .map(|row| {
+                let cell = if row == 31 { 4_095 } else { row as u32 };
+                let primary = (row % 16) as u32;
+                V23SelectorRow::new(
+                    cell,
+                    primary,
+                    Some(primary ^ 1),
+                    row,
+                    &quantizer.encode(&sample[row as usize]).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let selector_input = V23SelectorInput {
+            generation_checksum,
+            metric: VectorMetric::SquaredEuclidean,
+            dimensions: dimensions as u32,
+            page_count: pages.len() as u32,
+            code_width: 12,
+            maximum_assignments_per_row: 2,
+            coarse_centroids: vec![vec![0.0; dimensions]; 4_096],
+            rows,
+        };
+        let selector_bytes = encode_v23_selector(&selector_input).unwrap();
+        let selector_checksum = blake3::hash(&selector_bytes).to_hex().to_string();
+        let selector_ref = V23SelectorRef {
+            generation_checksum,
+            metric: VectorMetric::SquaredEuclidean,
+            dimensions: dimensions as u32,
+            coarse_cells: 4_096,
+            page_count: pages.len() as u32,
+            maximum_assignments_per_row: 2,
+            code_width: 12,
+            row_count: 32,
+            path: format!("selectors/{selector_checksum}"),
+            checksum: selector_checksum,
+            encoded_bytes: selector_bytes.len() as u64,
+        };
+        let queries = vec![sample[17].clone(); V23_DIAGNOSTIC_QUERIES];
+        let ground_truth_page_assignments = (0..V23_DIAGNOSTIC_QUERIES)
+            .map(|_| (0_u32..10).map(|rank| vec![rank % 16]).collect())
+            .collect();
+        GlobalAdcFixture {
+            d1_selector_arm,
+            selector_ref,
+            selector_bytes,
+            pages,
+            queries,
+            ground_truth_page_assignments,
+        }
+    }
+
+    #[test]
+    fn v23_global_adc_scans_all_cells_and_authenticates_width_12_inputs() {
+        let fixture = global_adc_fixture();
+        let result = diagnose_v23_global_adc(fixture.request()).unwrap();
+        assert_eq!(result.selector_cells_scanned, 4_096);
+        assert_eq!(result.selector_rows_scanned, 32);
+        assert_eq!(result.selector_code_width, 12);
+        assert_eq!(result.page_body_reads, 0);
+
+        let mut checksum_drift = global_adc_fixture();
+        checksum_drift.selector_bytes = {
+            let mut bytes = checksum_drift.selector_bytes.to_vec();
+            bytes[95] ^= 1;
+            Bytes::from(bytes)
+        };
+        assert!(diagnose_v23_global_adc(checksum_drift.request()).is_err());
+
+        let mut header_drift = global_adc_fixture();
+        let mut bytes = header_drift.selector_bytes.to_vec();
+        bytes[4] = 4;
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        header_drift.selector_ref.checksum = checksum.clone();
+        header_drift.selector_ref.path = format!("selectors/{checksum}");
+        header_drift.selector_bytes = Bytes::from(bytes);
+        assert!(diagnose_v23_global_adc(header_drift.request()).is_err());
+
+        let mut length_drift = global_adc_fixture();
+        length_drift.selector_ref.encoded_bytes += 1;
+        assert!(diagnose_v23_global_adc(length_drift.request()).is_err());
+
+        let mut state_drift = global_adc_fixture();
+        state_drift.d1_selector_arm.quantizer_checksum = "0".repeat(64);
+        assert!(diagnose_v23_global_adc(state_drift.request()).is_err());
+
+        let mut page_ref_drift = global_adc_fixture();
+        page_ref_drift.pages.pop();
+        assert!(diagnose_v23_global_adc(page_ref_drift.request()).is_err());
+    }
+
+    #[test]
+    fn v23_global_adc_reducers_are_finite_deterministic_and_cap_eight_pages() {
+        let fixture = global_adc_fixture();
+        let first = diagnose_v23_global_adc(fixture.request()).unwrap();
+        let second = diagnose_v23_global_adc(fixture.request()).unwrap();
+        assert_eq!(first, second);
+        for reducer in [&first.faithful, &first.per_page_min] {
+            assert_eq!(reducer.query_samples.len(), V23_DIAGNOSTIC_QUERIES);
+            for sample in &reducer.query_samples {
+                assert_eq!(sample.page_ordinals.len(), 8);
+                assert!(
+                    sample
+                        .page_ordinals
+                        .windows(2)
+                        .all(|pair| pair[0] < pair[1])
+                );
+                assert!(sample.minimum_distance.is_finite());
+            }
+        }
+
+        let mut non_finite = global_adc_fixture();
+        non_finite.queries[0][0] = f32::NAN;
+        assert!(diagnose_v23_global_adc(non_finite.request()).is_err());
+    }
+
+    #[test]
+    fn v23_global_adc_classifies_all_reducer_and_router_causal_states() {
+        assert_eq!(
+            classify_v23_global_adc(false, false).unwrap(),
+            V23GlobalAdcCausalClass::TestedReducers
+        );
+        assert_eq!(
+            classify_v23_global_adc(false, true).unwrap(),
+            V23GlobalAdcCausalClass::FaithfulReducer
+        );
+        assert_eq!(
+            classify_v23_global_adc(true, true).unwrap(),
+            V23GlobalAdcCausalClass::Router
+        );
+        assert_eq!(
+            classify_v23_global_adc(true, false).unwrap(),
+            V23GlobalAdcCausalClass::Router
+        );
+    }
+
+    #[test]
+    fn v23_global_adc_result_is_canonical_claim_ineligible_and_uses_frozen_gates() {
+        let fixture = global_adc_fixture();
+        let result = diagnose_v23_global_adc(fixture.request()).unwrap();
+        assert!(!result.claim_eligible);
+        assert_eq!(result.selection_width, 8);
+        assert_eq!(result.gates.aggregate_recall_ppm, 975_000);
+        assert_eq!(result.gates.minimum_query_recall_ppm, 800_000);
+        assert_eq!(result.gates.oracle_attainment_ppm, 995_000);
+        let first = canonical_v23_global_adc_result_bytes(&result).unwrap();
+        let second = canonical_v23_global_adc_result_bytes(&result).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.last(), Some(&b'\n'));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&first).unwrap()["claim_eligible"],
+            false
+        );
+    }
+
+    fn global_adc_object_identity(
+        role: &str,
+        marker: char,
+        encoded_bytes: u64,
+    ) -> V23GlobalAdcObjectIdentity {
+        V23GlobalAdcObjectIdentity {
+            role: role.to_string(),
+            uri: format!("s3://frozen-v23/{role}"),
+            digest_algorithm: if role == "selector" {
+                "blake3"
+            } else {
+                "sha256"
+            }
+            .to_string(),
+            digest: marker.to_string().repeat(64),
+            encoded_bytes,
+        }
+    }
+
+    fn global_adc_evidence_identity(fixture: &GlobalAdcFixture) -> V23GlobalAdcEvidenceIdentity {
+        let mut identity = V23GlobalAdcEvidenceIdentity {
+            source_commit: "1".repeat(40),
+            source_archive_sha256: "2".repeat(64),
+            index_id: "bvs3-frozen-index".to_string(),
+            d1_report: global_adc_object_identity("d1-report", '3', 3_749_135),
+            d2_terminal: global_adc_object_identity("d2-terminal", '4', 2_893),
+            d2_result: global_adc_object_identity("d2-result", '5', 4_096),
+            d2_report: global_adc_object_identity("d2-report", '6', 131_072),
+            roster: global_adc_object_identity("page-roster", '7', 65_536),
+            query: global_adc_object_identity("query-parquet", '8', 32 * 96 * 4),
+            selector: global_adc_object_identity("selector", '9', 201_389_348),
+        };
+        identity.selector.digest = fixture.selector_ref.checksum.clone();
+        identity.selector.encoded_bytes = fixture.selector_ref.encoded_bytes;
+        identity
+    }
+
+    fn global_adc_artifact_reports(fixture: &GlobalAdcFixture) -> (V23D1Report, V23D2Report) {
+        let dimensions = fixture.selector_ref.dimensions as usize;
+        let d1_query_samples = |key: V23D1ArmKey| {
+            let wave_candidate_rows =
+                v23_d1_projected_page_rows(key.code_width_bytes, 32) * V23_WAVE_MAX_PAGES as u64;
+            (0_u32..V23_DIAGNOSTIC_QUERIES as u32)
+                .map(|query_index| V23D1QuerySample {
+                    query_index,
+                    ground_truth_ids: ranked_top_ten().ids,
+                    oracle: ranked_top_ten(),
+                    scalar_oracle: ranked_top_ten(),
+                    routed: ranked_top_ten(),
+                    oracle_candidate_rows: 2_048,
+                    routed_candidate_rows: fixture.selector_ref.row_count,
+                    wave_candidate_rows,
+                    oracle_hits: 10,
+                    routed_hits: 10,
+                    cpu_ns: 1_000_000,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut d1_arms = [
+            V23D1ArmKey {
+                family: V23QuantizerFamily::F16Flat,
+                code_width_bytes: (dimensions * 2) as u16,
+            },
+            V23D1ArmKey {
+                family: V23QuantizerFamily::SrhtPq,
+                code_width_bytes: 8,
+            },
+            V23D1ArmKey {
+                family: V23QuantizerFamily::SrhtPq,
+                code_width_bytes: 12,
+            },
+        ]
+        .into_iter()
+        .map(|key| {
+            let (quantizer_state, quantizer_checksum) = if key
+                == (V23D1ArmKey {
+                    family: V23QuantizerFamily::SrhtPq,
+                    code_width_bytes: 12,
+                }) {
+                (
+                    fixture.d1_selector_arm.quantizer_state.clone(),
+                    fixture.d1_selector_arm.quantizer_checksum.clone(),
+                )
+            } else {
+                serialized_test_quantizer(key.family, key.code_width_bytes, dimensions)
+            };
+            V23D1Arm {
+                key,
+                quantizer_checksum,
+                quantizer_state,
+                query_samples: d1_query_samples(key),
+                oracle_recall_ppm: 1_000_000,
+                routed_recall_ppm: 1_000_000,
+                scalar_simd_ids_equal: true,
+                scalar_simd_max_distance_delta_ppm: 0,
+                cpu_p99_ns: 1_000_000,
+                wave_projected_bytes: v23_d1_projected_page_bytes(key.code_width_bytes, 32)
+                    * V23_WAVE_MAX_PAGES as u64,
+                passed: true,
+            }
+        })
+        .collect::<Vec<_>>();
+        d1_arms.sort_unstable_by_key(|arm| arm.key);
+        let query_ordinals = (0_u64..V23_DIAGNOSTIC_QUERIES as u64).collect::<Vec<_>>();
+        let d1_report = V23D1Report {
+            schema: "borsuk-v23-d1-v5".to_string(),
+            v20_root_checksum: "a".repeat(64),
+            v20_codebook_checksum: "b".repeat(64),
+            sample_ordinals_checksum: "c".repeat(64),
+            query_vectors_checksum: super::v23_query_vectors_checksum(
+                &query_ordinals,
+                &fixture.queries,
+            )
+            .unwrap(),
+            query_ordinals,
+            rows: fixture.selector_ref.row_count,
+            dimensions: fixture.selector_ref.dimensions,
+            routing_cell_count: usize::try_from(fixture.selector_ref.coarse_cells).unwrap(),
+            maximum_record_id_bytes: 32,
+            arms: d1_arms,
+        };
+
+        let ground_truth_ids = ranked_top_ten().ids;
+        let ranked = V23RankedResult {
+            ids: ground_truth_ids[..8]
+                .iter()
+                .cloned()
+                .chain([vec![b'x', 0], vec![b'x', 1]])
+                .collect(),
+            distances: (0_u8..10).map(f32::from).collect(),
+        };
+        let selected_pages = (0_u32..8).collect::<Vec<_>>();
+        let encoded_bytes = selected_pages
+            .iter()
+            .map(|page| fixture.pages[*page as usize].encoded_bytes)
+            .sum();
+        let candidate_rows = selected_pages
+            .iter()
+            .map(|page| {
+                let page = &fixture.pages[*page as usize];
+                u64::from(page.primary_rows) + u64::from(page.replicated_rows)
+            })
+            .sum();
+        let query_samples = (0_u32..V23_DIAGNOSTIC_QUERIES as u32)
+            .map(|query_index| V23D2QuerySample {
+                query_index,
+                page_ordinals: selected_pages.clone(),
+                oracle_page_ordinals: selected_pages.clone(),
+                ground_truth_page_assignments: (0_u32..10).map(|rank| vec![rank % 16]).collect(),
+                encoded_bytes,
+                candidate_rows,
+                selector_candidate_rows: fixture.selector_ref.row_count,
+                selector_routed_cells: V23_SELECTOR_ROUTING_CELLS as u16,
+                selector_ranked_rows: fixture.selector_ref.row_count as u32,
+                ground_truth_ids: ground_truth_ids.clone(),
+                ranked: ranked.clone(),
+                gt_page_hits: 8,
+                oracle_gt_page_hits: 8,
+                hits: 8,
+                recall_ppm: 800_000,
+                cpu_ns: 1_000_000,
+            })
+            .collect::<Vec<_>>();
+        let d1_key = V23D1ArmKey {
+            family: V23QuantizerFamily::F16Flat,
+            code_width_bytes: (dimensions * 2) as u16,
+        };
+        let mut d2_arms = V23_SELECTOR_CODE_WIDTHS
+            .into_iter()
+            .map(|code_width| {
+                let mut selector = fixture.selector_ref.clone();
+                selector.code_width = code_width;
+                if code_width != fixture.selector_ref.code_width {
+                    selector.checksum = format!("{:064x}", u64::from(code_width));
+                    selector.path = format!("selectors/{}", selector.checksum);
+                    selector.encoded_bytes = super::V23_SELECTOR_HEADER_BYTES as u64
+                        + u64::from(selector.coarse_cells) * u64::from(selector.dimensions) * 4
+                        + (u64::from(selector.coarse_cells) + 1) * 4
+                        + selector.row_count * (u64::from(code_width) + 8);
+                }
+                let (projected_root_bytes, projected_ram_bytes) = v23_d2_projected_memory(
+                    selector.row_count,
+                    fixture.pages.len(),
+                    dimensions,
+                    selector.coarse_cells,
+                    code_width,
+                )
+                .unwrap();
+                V23D2Arm {
+                    d1_key,
+                    selector_key: V23D1ArmKey {
+                        family: V23QuantizerFamily::SrhtPq,
+                        code_width_bytes: code_width,
+                    },
+                    selector,
+                    selector_routing_cells: V23_SELECTOR_ROUTING_CELLS as u16,
+                    selector_ranked_row_cap: V23_SELECTOR_RANKED_ROWS as u32,
+                    primary_target_rows: 384,
+                    maximum_assignments_per_row: 2,
+                    maximum_query_pages: V23_WAVE_MAX_PAGES as u8,
+                    maximum_record_id_bytes: 32,
+                    pages: fixture.pages.clone(),
+                    unique_rows: fixture.selector_ref.row_count,
+                    total_assignments: fixture
+                        .pages
+                        .iter()
+                        .map(|page| u64::from(page.primary_rows) + u64::from(page.replicated_rows))
+                        .sum(),
+                    storage_amplification_ppm: fixture
+                        .pages
+                        .iter()
+                        .map(|page| u64::from(page.primary_rows) + u64::from(page.replicated_rows))
+                        .sum::<u64>()
+                        .saturating_mul(1_000_000)
+                        / fixture.selector_ref.row_count,
+                    projected_root_bytes,
+                    projected_ram_bytes,
+                    projected_build_bytes: 1,
+                    query_samples: query_samples.clone(),
+                    aggregate_recall_ppm: 800_000,
+                    minimum_query_recall_ppm: 800_000,
+                    coverage_oracle_recall_ppm: 800_000,
+                    coverage_oracle_minimum_query_recall_ppm: 800_000,
+                    selector_regret_ppm: 1_000_000,
+                    cpu_p99_ns: 1_000_000,
+                    passed: false,
+                }
+            })
+            .collect::<Vec<_>>();
+        let projected_build_peak = d2_arms
+            .iter()
+            .map(super::v23_d2_arm_build_projection)
+            .collect::<super::Result<Vec<_>>>()
+            .unwrap()
+            .into_iter()
+            .max()
+            .unwrap();
+        for arm in &mut d2_arms {
+            arm.projected_build_bytes = projected_build_peak;
+        }
+        let d2_report = V23D2Report {
+            schema: "borsuk-v23-d2-v9".to_string(),
+            d1_report_checksum: v23_d1_report_checksum(&d1_report).unwrap(),
+            query_ordinals: d1_report.query_ordinals.clone(),
+            rows: fixture.selector_ref.row_count,
+            arms: d2_arms,
+        };
+        (d1_report, d2_report)
+    }
+
+    fn global_adc_artifact_request<'a>(
+        fixture: &'a GlobalAdcFixture,
+        d1_report: &'a V23D1Report,
+        d2_report: &'a V23D2Report,
+        registered_identity: &'a V23GlobalAdcEvidenceIdentity,
+        observed_identity: &'a V23GlobalAdcEvidenceIdentity,
+    ) -> V23GlobalAdcArtifactRequest<'a> {
+        V23GlobalAdcArtifactRequest {
+            d1_report,
+            d2_report,
+            pages: &fixture.pages,
+            query_ordinals: &d2_report.query_ordinals,
+            queries: &fixture.queries,
+            ground_truth_page_assignments: &fixture.ground_truth_page_assignments,
+            selector_bytes: fixture.selector_bytes.clone(),
+            registered_identity,
+            observed_identity,
+        }
+    }
+
+    #[test]
+    fn v23_global_adc_artifact_wrapper_rejects_inputs_and_registered_identity_drift() {
+        let fixture = global_adc_fixture();
+        let (d1_report, d2_report) = global_adc_artifact_reports(&fixture);
+        validate_d1_report(&d1_report).unwrap();
+        validate_d2_report(&d2_report).unwrap();
+        let registered = global_adc_evidence_identity(&fixture);
+        let observed = registered.clone();
+        let baseline =
+            global_adc_artifact_request(&fixture, &d1_report, &d2_report, &registered, &observed);
+        assert!(validate_v23_global_adc_artifact_request(baseline).is_ok());
+
+        let mut changed_d1 = d1_report.clone();
+        changed_d1.arms[0].quantizer_checksum = "a".repeat(64);
+        assert!(
+            validate_v23_global_adc_artifact_request(global_adc_artifact_request(
+                &fixture,
+                &changed_d1,
+                &d2_report,
+                &registered,
+                &observed,
+            ))
+            .is_err()
+        );
+
+        let mut changed_d2 = d2_report.clone();
+        changed_d2.query_ordinals.swap(0, 1);
+        assert!(
+            validate_v23_global_adc_artifact_request(global_adc_artifact_request(
+                &fixture,
+                &d1_report,
+                &changed_d2,
+                &registered,
+                &observed,
+            ))
+            .is_err()
+        );
+
+        let mut changed_fixture = global_adc_fixture();
+        changed_fixture.pages[0].checksum = "b".repeat(64);
+        assert!(
+            validate_v23_global_adc_artifact_request(global_adc_artifact_request(
+                &changed_fixture,
+                &d1_report,
+                &d2_report,
+                &registered,
+                &observed,
+            ))
+            .is_err()
+        );
+
+        let mut changed_fixture = global_adc_fixture();
+        changed_fixture.queries[0][0] = f32::from_bits(changed_fixture.queries[0][0].to_bits() + 1);
+        assert!(
+            validate_v23_global_adc_artifact_request(global_adc_artifact_request(
+                &changed_fixture,
+                &d1_report,
+                &d2_report,
+                &registered,
+                &observed,
+            ))
+            .is_err()
+        );
+
+        let mut changed_fixture = global_adc_fixture();
+        let mut changed_selector = changed_fixture.selector_bytes.to_vec();
+        changed_selector[0] ^= 1;
+        changed_fixture.selector_bytes = Bytes::from(changed_selector);
+        assert!(
+            validate_v23_global_adc_artifact_request(global_adc_artifact_request(
+                &changed_fixture,
+                &d1_report,
+                &d2_report,
+                &registered,
+                &observed,
+            ))
+            .is_err()
+        );
+
+        let mut coherent_but_unregistered = observed.clone();
+        coherent_but_unregistered.query.uri = "s3://frozen-v23/replaced-query".to_string();
+        coherent_but_unregistered.query.digest = "f".repeat(64);
+        assert!(
+            validate_v23_global_adc_artifact_request(global_adc_artifact_request(
+                &fixture,
+                &d1_report,
+                &d2_report,
+                &registered,
+                &coherent_but_unregistered,
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v23_global_adc_artifact_result_recomputes_evidence_and_rejects_identity_drift() {
+        let fixture = global_adc_fixture();
+        let identity = global_adc_evidence_identity(&fixture);
+        let diagnostic = diagnose_v23_global_adc(fixture.request()).unwrap();
+        let result = V23GlobalAdcArtifactResult {
+            schema: "borsuk-v23-global-adc-diagnostic-v1".to_string(),
+            claim_eligible: false,
+            evidence: identity.clone(),
+            diagnostic,
+        };
+        let baseline = canonical_v23_global_adc_artifact_result_bytes(&result, &identity).unwrap();
+        assert_eq!(baseline.last(), Some(&b'\n'));
+
+        let mut changed = result.clone();
+        changed.diagnostic.faithful.query_samples[0].query_index = 1;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.faithful.query_samples[0]
+            .page_ordinals
+            .swap(0, 1);
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.faithful.query_samples[0]
+            .page_ordinals
+            .pop();
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.faithful.query_samples[0].gt_page_hits ^= 1;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.faithful.query_samples[0].oracle_gt_page_hits ^= 1;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.faithful.query_samples[0].recall_ppm ^= 1;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.faithful.query_samples[0].minimum_distance = f32::NAN;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.faithful.reducer = "per-page-min".to_string();
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.faithful.aggregate_recall_ppm ^= 1;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.faithful.minimum_query_recall_ppm ^= 1;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.faithful.oracle_attainment_ppm ^= 1;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.faithful.passed = !changed.diagnostic.faithful.passed;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.per_page_min.aggregate_recall_ppm ^= 1;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.per_page_min.minimum_query_recall_ppm ^= 1;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.per_page_min.oracle_attainment_ppm ^= 1;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.per_page_min.passed = !changed.diagnostic.per_page_min.passed;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.scalar_simd_pages_equal = false;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.scalar_simd_max_distance_delta_ppm =
+            super::V23_SCALAR_SIMD_MAX_DISTANCE_DELTA_PPM + 1;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.diagnostic.causal_classification = V23GlobalAdcCausalClass::FaithfulReducer;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.schema = "borsuk-v23-global-adc-diagnostic-v2".to_string();
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let mut changed = result.clone();
+        changed.claim_eligible = true;
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        let count_mutations: [fn(&mut super::V23GlobalAdcResult); 4] = [
+            |diagnostic: &mut super::V23GlobalAdcResult| diagnostic.selector_cells_scanned ^= 1,
+            |diagnostic: &mut super::V23GlobalAdcResult| diagnostic.selector_rows_scanned ^= 1,
+            |diagnostic: &mut super::V23GlobalAdcResult| diagnostic.selection_width ^= 1,
+            |diagnostic: &mut super::V23GlobalAdcResult| diagnostic.page_body_reads ^= 1,
+        ];
+        for mutate in count_mutations {
+            let mut changed = result.clone();
+            mutate(&mut changed.diagnostic);
+            assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+        }
+
+        let mut changed = result.clone();
+        changed.evidence.source_commit = "a".repeat(40);
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+        let mut changed = result.clone();
+        changed.evidence.source_archive_sha256 = "b".repeat(64);
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+        let mut changed = result.clone();
+        changed.evidence.index_id = "valid-looking-replacement-index".to_string();
+        assert!(canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err());
+
+        for role in 0..7 {
+            for field in 0..3 {
+                let mut changed = result.clone();
+                let object = match role {
+                    0 => &mut changed.evidence.d1_report,
+                    1 => &mut changed.evidence.d2_terminal,
+                    2 => &mut changed.evidence.d2_result,
+                    3 => &mut changed.evidence.d2_report,
+                    4 => &mut changed.evidence.roster,
+                    5 => &mut changed.evidence.query,
+                    6 => &mut changed.evidence.selector,
+                    _ => unreachable!(),
+                };
+                match field {
+                    0 => object.uri.push_str("-valid-looking-replacement"),
+                    1 => object.digest = "e".repeat(64),
+                    2 => object.encoded_bytes += 1,
+                    _ => unreachable!(),
+                }
+                assert!(
+                    canonical_v23_global_adc_artifact_result_bytes(&changed, &identity).is_err()
+                );
+            }
+        }
+    }
+
+    struct GlobalAdcLocalBundle {
+        _temporary: tempfile::TempDir,
+        paths: V23GlobalAdcLocalArtifactPaths,
+        identity: V23GlobalAdcEvidenceIdentity,
+        expected_queries: Vec<Vec<f32>>,
+    }
+
+    fn write_global_adc_json(path: &PathBuf, value: &serde_json::Value) {
+        let mut bytes =
+            serde_json::to_vec(&super::v23_canonical_json_value(value.clone())).unwrap();
+        bytes.push(b'\n');
+        fs::write(path, bytes).unwrap();
+    }
+
+    struct CanonicalJsonOrder;
+
+    impl<'de> DeserializeSeed<'de> for CanonicalJsonOrder {
+        type Value = ();
+
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(CanonicalJsonOrderVisitor)
+        }
+    }
+
+    struct CanonicalJsonOrderVisitor;
+
+    impl<'de> Visitor<'de> for CanonicalJsonOrderVisitor {
+        type Value = ();
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("JSON with recursively sorted object keys")
+        }
+
+        fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+            Ok(())
+        }
+
+        fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+            Ok(())
+        }
+
+        fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
+            Ok(())
+        }
+
+        fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+            Ok(())
+        }
+
+        fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E> {
+            Ok(())
+        }
+
+        fn visit_string<E>(self, _value: String) -> Result<Self::Value, E> {
+            Ok(())
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok(())
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            while sequence.next_element_seed(CanonicalJsonOrder)?.is_some() {}
+            Ok(())
+        }
+
+        fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut previous: Option<String> = None;
+            while let Some(key) = object.next_key::<String>()? {
+                if previous.as_ref().is_some_and(|prior| prior >= &key) {
+                    return Err(serde::de::Error::custom(format!(
+                        "object key {key:?} is not after {previous:?}"
+                    )));
+                }
+                object.next_value_seed(CanonicalJsonOrder)?;
+                previous = Some(key);
+            }
+            Ok(())
+        }
+    }
+
+    fn assert_compact_sorted_json(path: &Path, bytes: &[u8]) {
+        assert_eq!(
+            bytes.last(),
+            Some(&b'\n'),
+            "{} lacks trailing LF",
+            path.display()
+        );
+        let body = &bytes[..bytes.len() - 1];
+        assert_ne!(
+            body.last(),
+            Some(&b'\n'),
+            "{} has multiple trailing LFs",
+            path.display()
+        );
+        let mut in_string = false;
+        let mut escaped = false;
+        for (offset, byte) in body.iter().copied().enumerate() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    in_string = false;
+                }
+            } else if byte == b'"' {
+                in_string = true;
+            } else {
+                assert!(
+                    !matches!(byte, b' ' | b'\t' | b'\r' | b'\n'),
+                    "{} has noncompact whitespace at byte {offset}",
+                    path.display()
+                );
+            }
+        }
+        assert!(
+            !in_string && !escaped,
+            "{} has unterminated JSON string",
+            path.display()
+        );
+        let mut deserializer = serde_json::Deserializer::from_slice(body);
+        CanonicalJsonOrder
+            .deserialize(&mut deserializer)
+            .unwrap_or_else(|error| {
+                panic!("{} is not recursively key-sorted: {error}", path.display())
+            });
+        deserializer.end().unwrap_or_else(|error| {
+            panic!("{} has trailing JSON content: {error}", path.display())
+        });
+    }
+
+    fn write_global_adc_terminal(path: &PathBuf, fields: Vec<(&'static str, serde_json::Value)>) {
+        let mut bytes = Vec::new();
+        bytes.push(b'{');
+        for (index, (key, value)) in fields.into_iter().enumerate() {
+            if index != 0 {
+                bytes.push(b',');
+            }
+            bytes.extend(serde_json::to_vec(key).unwrap());
+            bytes.push(b':');
+            bytes.extend(serde_json::to_vec(&value).unwrap());
+        }
+        bytes.extend_from_slice(b"}\n");
+        fs::write(path, bytes).unwrap();
+    }
+
+    fn write_global_adc_query_fixture(
+        path: &PathBuf,
+        queries: &[Vec<f32>],
+        physical_rows: usize,
+        dimensions: usize,
+        field_nullable: bool,
+        item_nullable: bool,
+        non_finite_at: Option<(usize, usize)>,
+    ) {
+        assert_eq!(queries.len(), V23_DIAGNOSTIC_QUERIES);
+        assert!(physical_rows >= queries.len());
+        let mut values = Vec::with_capacity(physical_rows * dimensions);
+        for row in 0..physical_rows {
+            if let Some(query) = queries.get(row) {
+                values.extend_from_slice(&query[..dimensions]);
+            } else {
+                values.extend(
+                    (0..dimensions)
+                        .map(|dimension| (((row * 17 + dimension * 13) % 251) + 1) as f32 / 252.0),
+                );
+            }
+        }
+        if let Some((row, dimension)) = non_finite_at {
+            values[row * dimensions + dimension] = f32::NAN;
+        }
+        let item = Arc::new(Field::new("item", DataType::Float32, item_nullable));
+        let embeddings = FixedSizeListArray::try_new(
+            Arc::clone(&item),
+            dimensions as i32,
+            Arc::new(Float32Array::from(values)),
+            None,
+        )
+        .unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "emb",
+            DataType::FixedSizeList(item, dimensions as i32),
+            field_nullable,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(embeddings)]).unwrap();
+        let file = fs::File::create(path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    fn write_global_adc_queries(path: &PathBuf, queries: &[Vec<f32>], physical_rows: usize) {
+        write_global_adc_query_fixture(path, queries, physical_rows, 96, false, false, None);
+    }
+
+    fn global_adc_file_sha256(path: &PathBuf) -> String {
+        format!("{:x}", Sha256::digest(fs::read(path).unwrap()))
+    }
+
+    fn refresh_global_adc_object(object: &mut V23GlobalAdcObjectIdentity, path: &PathBuf) {
+        let bytes = fs::read(path).unwrap();
+        object.encoded_bytes = bytes.len() as u64;
+        object.digest = if object.digest_algorithm == "blake3" {
+            blake3::hash(&bytes).to_hex().to_string()
+        } else {
+            format!("{:x}", Sha256::digest(bytes))
+        };
+    }
+
+    fn global_adc_unselectable_fixture() -> GlobalAdcFixture {
+        let mut fixture = global_adc_fixture();
+        let mut bytes = fixture.selector_bytes.to_vec();
+        let rows_start = V23_SELECTOR_HEADER_BYTES
+            + 4_096 * fixture.selector_ref.dimensions as usize * 4
+            + 4_097 * 4;
+        let primary_start = rows_start;
+        let replica_start = primary_start + fixture.selector_ref.row_count as usize * 4;
+        for row in 0..fixture.selector_ref.row_count as usize {
+            let primary = (row % fixture.pages.len()) as u32;
+            let replica = if primary == 0 { u32::MAX } else { 0 };
+            let primary_offset = primary_start + row * 4;
+            let replica_offset = replica_start + row * 4;
+            bytes[primary_offset..primary_offset + 4].copy_from_slice(&primary.to_le_bytes());
+            bytes[replica_offset..replica_offset + 4].copy_from_slice(&replica.to_le_bytes());
+        }
+        for page in &mut fixture.pages {
+            page.primary_rows = 2;
+            page.replicated_rows = if page.page_ordinal == 0 { 30 } else { 0 };
+        }
+        let checksum = blake3::hash(&bytes).to_hex().to_string();
+        fixture.selector_ref.checksum = checksum.clone();
+        fixture.selector_ref.path = format!("selectors/{checksum}");
+        fixture.selector_bytes = Bytes::from(bytes);
+        fixture
+    }
+
+    fn global_adc_local_bundle_from_fixture(
+        fixture: &GlobalAdcFixture,
+        d1_report: V23D1Report,
+        mut d2_report: V23D2Report,
+    ) -> GlobalAdcLocalBundle {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = |name: &str| temporary.path().join(name);
+        let paths = V23GlobalAdcLocalArtifactPaths {
+            d1_report: path("bench_v23_d1_report.json"),
+            d2_terminal: path("terminal.json"),
+            d2_result: path("RESULT_COMPLETE.json"),
+            d2_report: path("bench_v23_d2_report.json"),
+            roster: path("bench_v23_pages.json"),
+            query: path("query.parquet"),
+            selector: path("selector.bvs"),
+        };
+
+        let source_commit = "1".repeat(40);
+        let source_archive_sha256 = "2".repeat(64);
+        let index_id = "synthetic-v23-index";
+        let dataset_id = "deep-image-96";
+        let base_cell_id = "r01-synthetic-base";
+        let diagnostic_cell_id = "r01-synthetic-diagnostic";
+        let attempt_id = "runtime-v23-d2-r01-synthetic-diagnostic-arm-0000-a0001";
+        let instance_id = "i-0123456789abcdef0";
+        let page_uri = "s3://frozen-v23/runtime-v23-d2/pages";
+
+        write_global_adc_json(
+            &paths.d1_report,
+            &serde_json::json!({
+                "claim_eligible": false,
+                "dataset_id": dataset_id,
+                "document_kind": "publication-v3-v23-d1-report",
+                "index_id": index_id,
+                "report": d1_report.clone(),
+                "schema": "borsuk-v23-d1-artifact-v1",
+                "source_archive_sha256": source_archive_sha256.clone(),
+                "stage": "d1",
+            }),
+        );
+        let d1_report_sha256 = global_adc_file_sha256(&paths.d1_report);
+        d2_report.d1_report_checksum = v23_d1_report_checksum(&d1_report).unwrap();
+        write_global_adc_json(
+            &paths.d2_report,
+            &serde_json::json!({
+                "claim_eligible": false,
+                "d1_report_sha256": d1_report_sha256.clone(),
+                "dataset_id": dataset_id,
+                "document_kind": "publication-v3-v23-d2-report",
+                "index_id": index_id,
+                "page_uri": page_uri,
+                "report": d2_report,
+                "schema": "borsuk-v23-d2-artifact-v1",
+                "source_archive_sha256": source_archive_sha256.clone(),
+                "stage": "d2",
+            }),
+        );
+        write_global_adc_json(
+            &paths.roster,
+            &serde_json::json!({
+                "claim_eligible": false,
+                "d1_report_sha256": d1_report_sha256.clone(),
+                "dataset_id": dataset_id,
+                "document_kind": "publication-v3-v23-page-roster",
+                "index_id": index_id,
+                "page_uri": page_uri,
+                "pages": fixture.pages,
+                "schema": "borsuk-v23-pages-v1",
+                "source_archive_sha256": source_archive_sha256.clone(),
+                "stage": "d2",
+            }),
+        );
+        write_global_adc_queries(&paths.query, &fixture.queries, 10_000);
+        fs::write(&paths.selector, &fixture.selector_bytes).unwrap();
+
+        let report_sha256 = global_adc_file_sha256(&paths.d2_report);
+        let roster_sha256 = global_adc_file_sha256(&paths.roster);
+        let mut resources = serde_json::Map::new();
+        resources.insert("cpu_ns".to_string(), serde_json::Value::from(1));
+        resources.insert("disk_read_bytes".to_string(), serde_json::Value::from(0));
+        resources.insert("disk_write_bytes".to_string(), serde_json::Value::from(1));
+        resources.insert(
+            "peak_rss_bytes".to_string(),
+            serde_json::Value::from(768_u64 * 1024 * 1024),
+        );
+        let mut runtime_attestation = serde_json::Map::new();
+        for (key, value) in [
+            ("architecture", serde_json::Value::from("aarch64")),
+            ("attempt_id", serde_json::Value::from(attempt_id)),
+            (
+                "cache_capacity_bytes",
+                serde_json::Value::from(64_u64 * 1024 * 1024 * 1024),
+            ),
+            ("cache_device", serde_json::Value::from("259:1")),
+            (
+                "cache_filesystem_bytes",
+                serde_json::Value::from(4_398_046_511_104_u64),
+            ),
+            ("cache_is_mount", serde_json::Value::from(false)),
+            ("cell_id", serde_json::Value::from(diagnostic_cell_id)),
+            ("effective_disk_cache_max_bytes", serde_json::Value::from(0)),
+            ("instance_id", serde_json::Value::from(instance_id)),
+            ("instance_type", serde_json::Value::from("r7g.8xlarge")),
+            (
+                "memory_max_bytes",
+                serde_json::Value::from(32_u64 * 1024 * 1024 * 1024),
+            ),
+            (
+                "memory_peak_bytes",
+                serde_json::Value::from(1024_u64 * 1024 * 1024),
+            ),
+            ("oom_events", serde_json::Value::from(0)),
+            ("oom_kill_events", serde_json::Value::from(0)),
+            ("purchase_option", serde_json::Value::from("spot")),
+            ("root_device", serde_json::Value::from("259:1")),
+            ("schema_version", serde_json::Value::from(2)),
+            (
+                "source_revision",
+                serde_json::Value::from(source_commit.clone()),
+            ),
+            ("swap_current_bytes", serde_json::Value::from(0)),
+            ("swap_max_bytes", serde_json::Value::from(0)),
+            ("swap_peak_bytes", serde_json::Value::from(0)),
+            ("vcpus", serde_json::Value::from(32)),
+        ] {
+            runtime_attestation.insert(key.to_string(), value);
+        }
+        let mut result_document = serde_json::Map::new();
+        for (key, value) in [
+            ("arms", serde_json::Value::from(2)),
+            (
+                "artifact_sha256",
+                serde_json::Value::from(report_sha256.clone()),
+            ),
+            ("attempt_id", serde_json::Value::from(attempt_id)),
+            ("cell_id", serde_json::Value::from(base_cell_id)),
+            ("claim_eligible", serde_json::Value::from(false)),
+            (
+                "d1_report_sha256",
+                serde_json::Value::from(d1_report_sha256.clone()),
+            ),
+            ("dataset_id", serde_json::Value::from(dataset_id)),
+            (
+                "dataset_materialization_sha256",
+                serde_json::Value::from("ab".repeat(32)),
+            ),
+            (
+                "diagnostic_cell_id",
+                serde_json::Value::from(diagnostic_cell_id),
+            ),
+            (
+                "document_kind",
+                serde_json::Value::from("publication-v3-v23-d2-summary"),
+            ),
+            ("elapsed_ns", serde_json::Value::from(1)),
+            ("index_id", serde_json::Value::from(index_id)),
+            ("instance_identity", serde_json::Value::from(instance_id)),
+            ("pages", serde_json::Value::from(fixture.pages.len() as u64)),
+            (
+                "pages_sha256",
+                serde_json::Value::from(roster_sha256.clone()),
+            ),
+            ("passed", serde_json::Value::from(false)),
+            ("passing_arm_indexes", serde_json::Value::Array(Vec::new())),
+            ("publishable", serde_json::Value::from(false)),
+            (
+                "queries",
+                serde_json::Value::from(V23_DIAGNOSTIC_QUERIES as u64),
+            ),
+            ("resources", serde_json::Value::Object(resources)),
+            (
+                "rows",
+                serde_json::Value::from(fixture.selector_ref.row_count),
+            ),
+            (
+                "runtime_attestation",
+                serde_json::Value::Object(runtime_attestation),
+            ),
+            ("schema", serde_json::Value::from("borsuk-v23-summary-v1")),
+            (
+                "source_archive_sha256",
+                serde_json::Value::from(source_archive_sha256.clone()),
+            ),
+            ("stage", serde_json::Value::from("d2")),
+        ] {
+            result_document.insert(key.to_string(), value);
+        }
+        write_global_adc_json(
+            &paths.d2_result,
+            &serde_json::Value::Object(result_document),
+        );
+        let result_sha256 = global_adc_file_sha256(&paths.d2_result);
+        write_global_adc_terminal(
+            &paths.d2_terminal,
+            vec![
+                ("schema_version", serde_json::json!(5)),
+                ("status", serde_json::json!("complete")),
+                ("role", serde_json::json!("runtime")),
+                ("attempt", serde_json::json!(1)),
+                ("attempt_id", serde_json::json!(attempt_id)),
+                ("instance_id", serde_json::json!(instance_id)),
+                (
+                    "source_archive_sha256",
+                    serde_json::json!(source_archive_sha256.clone()),
+                ),
+                ("manifest_sha256", serde_json::json!("33".repeat(32))),
+                ("protocol_sha256", serde_json::json!("44".repeat(32))),
+                ("binary_sha256", serde_json::json!("55".repeat(32))),
+                ("purchase_option", serde_json::json!("spot")),
+                ("runtime_profile", serde_json::json!("recall")),
+                ("arm_index", serde_json::json!(0)),
+                ("max_active_searches", serde_json::json!(4)),
+                ("max_waiting_searches", serde_json::json!(16)),
+                ("leaf_read_width", serde_json::json!(32)),
+                ("max_inflight_leaf_reads", serde_json::json!(48)),
+                ("max_parallel_decode_rank_tasks", serde_json::json!(2)),
+                ("cpu_threads", serde_json::json!(3)),
+                ("io_threads", serde_json::json!(88)),
+                ("s3_get_concurrency", serde_json::json!(64)),
+                (
+                    "ram_budget_bytes",
+                    serde_json::json!(3 * 1024 * 1024 * 1024_u64),
+                ),
+                ("disk_cache_max_bytes", serde_json::json!(0)),
+                (
+                    "exact_read_max_physical_amplification",
+                    serde_json::json!(2),
+                ),
+                (
+                    "execution_contract_sha256",
+                    serde_json::json!("66".repeat(32)),
+                ),
+                ("artifact_upload_reconciliations", serde_json::json!(0)),
+                ("claim_eligible", serde_json::json!(false)),
+                ("v23_stage", serde_json::json!("d2")),
+                ("v23_passed", serde_json::json!(false)),
+                ("v23_result_sha256", serde_json::json!(result_sha256)),
+                ("v23_page_prefix", serde_json::json!(page_uri)),
+                ("v23_d2_report_sha256", serde_json::json!(report_sha256)),
+                ("v23_pages_sha256", serde_json::json!(roster_sha256)),
+                ("v23_summary_sha256", serde_json::json!("77".repeat(32))),
+                ("v23_d1_receipt_sha256", serde_json::json!("88".repeat(32))),
+                ("v23_d1_report_sha256", serde_json::json!(d1_report_sha256)),
+                (
+                    "v23_prerequisite_binary_sha256",
+                    serde_json::json!("55".repeat(32)),
+                ),
+                (
+                    "base_build_terminal_sha256",
+                    serde_json::json!("99".repeat(32)),
+                ),
+                ("base_manifest_sha256", serde_json::json!("aa".repeat(32))),
+                ("base_protocol_sha256", serde_json::json!("bb".repeat(32))),
+                (
+                    "base_source_archive_sha256",
+                    serde_json::json!("cc".repeat(32)),
+                ),
+                (
+                    "base_index_receipt_sha256",
+                    serde_json::json!("dd".repeat(32)),
+                ),
+                (
+                    "base_object_roster_sha256",
+                    serde_json::json!("ee".repeat(32)),
+                ),
+                ("base_inventory_sha256", serde_json::json!("ff".repeat(32))),
+                ("base_index_id", serde_json::json!(index_id)),
+                ("base_index_uri", serde_json::json!("s3://frozen-v23/index")),
+                (
+                    "diagnostic_source_archive_sha256",
+                    serde_json::json!(source_archive_sha256.clone()),
+                ),
+                (
+                    "memory_max_bytes",
+                    serde_json::json!(32 * 1024 * 1024 * 1024_u64),
+                ),
+                ("memory_swap_max_bytes", serde_json::json!(0)),
+                (
+                    "memory_peak_bytes",
+                    serde_json::json!(1024 * 1024 * 1024_u64),
+                ),
+            ],
+        );
+
+        let mut identity = global_adc_evidence_identity(fixture);
+        identity.source_commit = source_commit;
+        identity.source_archive_sha256 = source_archive_sha256;
+        identity.index_id = index_id.to_string();
+        for (object, path) in [
+            (&mut identity.d1_report, &paths.d1_report),
+            (&mut identity.d2_terminal, &paths.d2_terminal),
+            (&mut identity.d2_result, &paths.d2_result),
+            (&mut identity.d2_report, &paths.d2_report),
+            (&mut identity.roster, &paths.roster),
+            (&mut identity.query, &paths.query),
+            (&mut identity.selector, &paths.selector),
+        ] {
+            refresh_global_adc_object(object, path);
+        }
+        GlobalAdcLocalBundle {
+            _temporary: temporary,
+            paths,
+            identity,
+            expected_queries: fixture.queries.clone(),
+        }
+    }
+
+    fn global_adc_local_bundle() -> GlobalAdcLocalBundle {
+        let fixture = global_adc_fixture();
+        let (d1_report, d2_report) = global_adc_artifact_reports(&fixture);
+        global_adc_local_bundle_from_fixture(&fixture, d1_report, d2_report)
+    }
+
+    #[test]
+    fn v23_global_adc_local_artifacts_bind_seven_roles_and_run_without_page_bodies() {
+        let bundle = global_adc_local_bundle();
+        for path in [
+            &bundle.paths.d1_report,
+            &bundle.paths.d2_result,
+            &bundle.paths.d2_report,
+            &bundle.paths.roster,
+        ] {
+            let bytes = fs::read(path).unwrap();
+            assert_compact_sorted_json(path, &bytes);
+        }
+        let terminal_bytes = fs::read(&bundle.paths.d2_terminal).unwrap();
+        assert!(terminal_bytes.starts_with(
+            b"{\"schema_version\":5,\"status\":\"complete\",\"role\":\"runtime\",\"attempt\":1,"
+        ));
+        let terminal_value: serde_json::Value = serde_json::from_slice(&terminal_bytes).unwrap();
+        let mut sorted_terminal =
+            serde_json::to_vec(&super::v23_canonical_json_value(terminal_value)).unwrap();
+        sorted_terminal.push(b'\n');
+        assert_ne!(terminal_bytes, sorted_terminal);
+
+        let query_builder =
+            ParquetRecordBatchReaderBuilder::try_new(fs::File::open(&bundle.paths.query).unwrap())
+                .unwrap();
+        assert_eq!(query_builder.metadata().file_metadata().num_rows(), 10_000);
+        assert_eq!(
+            query_builder.schema().as_ref(),
+            &Schema::new(vec![Field::new(
+                "emb",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), 96,),
+                false,
+            )])
+        );
+        let loaded =
+            load_v23_global_adc_local_artifacts(&bundle.paths, &bundle.identity, &bundle.identity)
+                .unwrap();
+        assert_eq!(loaded.queries, bundle.expected_queries);
+        let result = loaded.run().unwrap();
+        assert_eq!(result.diagnostic.page_body_reads, 0);
+        assert!(!result.claim_eligible);
+        assert_eq!(result.evidence, bundle.identity);
+        let first =
+            canonical_v23_global_adc_artifact_result_bytes(&result, &bundle.identity).unwrap();
+        let second =
+            canonical_v23_global_adc_artifact_result_bytes(&result, &bundle.identity).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.last(), Some(&b'\n'));
+    }
+
+    #[test]
+    fn v23_global_adc_local_loaders_reject_role_and_cross_object_mutations() {
+        for role in 0..7 {
+            let mut bundle = global_adc_local_bundle();
+            let path = match role {
+                0 => &bundle.paths.d1_report,
+                1 => &bundle.paths.d2_terminal,
+                2 => &bundle.paths.d2_result,
+                3 => &bundle.paths.d2_report,
+                4 => &bundle.paths.roster,
+                5 => &bundle.paths.query,
+                6 => &bundle.paths.selector,
+                _ => unreachable!(),
+            };
+            fs::write(path, b"valid-looking-wrong-role").unwrap();
+            let object = match role {
+                0 => &mut bundle.identity.d1_report,
+                1 => &mut bundle.identity.d2_terminal,
+                2 => &mut bundle.identity.d2_result,
+                3 => &mut bundle.identity.d2_report,
+                4 => &mut bundle.identity.roster,
+                5 => &mut bundle.identity.query,
+                6 => &mut bundle.identity.selector,
+                _ => unreachable!(),
+            };
+            refresh_global_adc_object(object, path);
+            assert!(
+                load_v23_global_adc_local_artifacts(
+                    &bundle.paths,
+                    &bundle.identity,
+                    &bundle.identity,
+                )
+                .is_err()
+            );
+        }
+
+        for field in [
+            "source_archive_sha256",
+            "attempt_id",
+            "instance_id",
+            "v23_d1_report_sha256",
+            "v23_result_sha256",
+        ] {
+            let mut bundle = global_adc_local_bundle();
+            let mut terminal: serde_json::Value =
+                serde_json::from_slice(&fs::read(&bundle.paths.d2_terminal).unwrap()).unwrap();
+            terminal[field] = serde_json::Value::String("valid-looking-drift".to_string());
+            write_global_adc_json(&bundle.paths.d2_terminal, &terminal);
+            refresh_global_adc_object(&mut bundle.identity.d2_terminal, &bundle.paths.d2_terminal);
+            assert!(
+                load_v23_global_adc_local_artifacts(
+                    &bundle.paths,
+                    &bundle.identity,
+                    &bundle.identity,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn v23_global_adc_local_queries_select_registered_ordinals_from_full_artifact() {
+        let baseline = global_adc_local_bundle();
+        let loaded = load_v23_global_adc_local_artifacts(
+            &baseline.paths,
+            &baseline.identity,
+            &baseline.identity,
+        )
+        .unwrap();
+        assert_eq!(loaded.queries, baseline.expected_queries);
+
+        for mutation in 0..2 {
+            let fixture = global_adc_fixture();
+            let (mut d1_report, mut d2_report) = global_adc_artifact_reports(&fixture);
+            match mutation {
+                0 => *d1_report.query_ordinals.last_mut().unwrap() = 10_000,
+                1 => d1_report.query_ordinals.swap(0, 1),
+                _ => unreachable!(),
+            }
+            d1_report.query_vectors_checksum =
+                super::v23_query_vectors_checksum(&d1_report.query_ordinals, &fixture.queries)
+                    .unwrap();
+            d2_report.query_ordinals = d1_report.query_ordinals.clone();
+            d2_report.d1_report_checksum = v23_d1_report_checksum(&d1_report).unwrap();
+            let bundle = global_adc_local_bundle_from_fixture(&fixture, d1_report, d2_report);
+            assert!(
+                load_v23_global_adc_local_artifacts(
+                    &bundle.paths,
+                    &bundle.identity,
+                    &bundle.identity,
+                )
+                .is_err()
+            );
+        }
+
+        for mutation in 0..5 {
+            let fixture = global_adc_fixture();
+            let (d1_report, d2_report) = global_adc_artifact_reports(&fixture);
+            let mut bundle = global_adc_local_bundle_from_fixture(&fixture, d1_report, d2_report);
+            match mutation {
+                0 => write_global_adc_queries(&bundle.paths.query, &fixture.queries, 9_999),
+                1 => write_global_adc_query_fixture(
+                    &bundle.paths.query,
+                    &fixture.queries,
+                    10_000,
+                    95,
+                    false,
+                    false,
+                    None,
+                ),
+                2 => write_global_adc_query_fixture(
+                    &bundle.paths.query,
+                    &fixture.queries,
+                    10_000,
+                    96,
+                    true,
+                    false,
+                    None,
+                ),
+                3 => write_global_adc_query_fixture(
+                    &bundle.paths.query,
+                    &fixture.queries,
+                    10_000,
+                    96,
+                    false,
+                    true,
+                    None,
+                ),
+                4 => write_global_adc_query_fixture(
+                    &bundle.paths.query,
+                    &fixture.queries,
+                    10_000,
+                    96,
+                    false,
+                    false,
+                    Some((9_999, 95)),
+                ),
+                _ => unreachable!(),
+            }
+            refresh_global_adc_object(&mut bundle.identity.query, &bundle.paths.query);
+            assert!(
+                load_v23_global_adc_local_artifacts(
+                    &bundle.paths,
+                    &bundle.identity,
+                    &bundle.identity,
+                )
+                .is_err()
+            );
+        }
+
+        let fixture = global_adc_fixture();
+        let (d1_report, d2_report) = global_adc_artifact_reports(&fixture);
+        let mut bundle = global_adc_local_bundle_from_fixture(&fixture, d1_report, d2_report);
+        let mut changed_queries = fixture.queries.clone();
+        changed_queries[17][0] += 0.125;
+        write_global_adc_queries(&bundle.paths.query, &changed_queries, 10_000);
+        refresh_global_adc_object(&mut bundle.identity.query, &bundle.paths.query);
+        assert!(
+            load_v23_global_adc_local_artifacts(&bundle.paths, &bundle.identity, &bundle.identity,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn v23_global_adc_local_loader_authenticates_without_executing_science() {
+        let fixture = global_adc_unselectable_fixture();
+        let (d1_report, d2_report) = global_adc_artifact_reports(&fixture);
+        let bundle = global_adc_local_bundle_from_fixture(&fixture, d1_report, d2_report);
+        let loaded =
+            load_v23_global_adc_local_artifacts(&bundle.paths, &bundle.identity, &bundle.identity)
+                .unwrap();
+        assert!(loaded.run().is_err());
+    }
+
+    #[test]
+    fn v23_global_adc_local_loader_rejects_registered_identity_drift() {
+        let bundle = global_adc_local_bundle();
+        for field in 0..3 {
+            let mut observed = bundle.identity.clone();
+            match field {
+                0 => observed.selector.uri.push_str("-replacement"),
+                1 => observed.selector.digest = "e".repeat(64),
+                2 => observed.selector.encoded_bytes += 1,
+                _ => unreachable!(),
+            }
+            assert!(
+                load_v23_global_adc_local_artifacts(&bundle.paths, &observed, &bundle.identity,)
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn v23_row_selector_codec_binds_both_page_labels_and_cover() {
