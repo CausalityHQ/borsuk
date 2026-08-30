@@ -848,3 +848,75 @@ below the registered recall and oracle-attainment requirements. Passing the
 memory envelope does not rescue the failed quality relation. This is an
 offline architectural falsification, not a cold-latency or throughput result.
 D3 remains fenced, and no additional paid run is authorized by this result.
+
+## V23 BVS3 exact-global ADC diagnostic on 2026-08-30
+
+The no-spend exact-global ADC diagnostic ran from source commit
+`007af90de373cc10c373f8d02e0215b3c1e316a4`. Its optimized local executable was
+9,937,792 bytes with SHA-256
+`292f791e1e39c67d267270dee3f7df30cb69719e9be29e7d1fdd74666b963f8d`.
+The historical scientific source remained
+`c339a546f8f9370cb2e6e9fb3b0fd4bdefa3cb05`, with source-archive SHA-256
+`77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d`
+and index identity `index-bcda7bb66812e162d45077e6`.
+
+The run authenticated these seven immutable inputs before semantic use:
+
+- D1 report, 3,749,135 bytes, SHA-256
+  `91717a4077c8a7d6b909f1f8d14f59d6a6d422a29e06b3d665a02c29743cbc39`,
+  at
+  `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-6846520de9e7ffcfb93d5efd/runtime-v23-d1/arms/0000/attempts/0001/bench_v23_d1_report.json`;
+- D2 terminal, 2,893 bytes, SHA-256
+  `c130cdc81e46f636573583e295515c8ce9a16503eb3bb6c9b5494459932729ca`,
+  at
+  `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-6846520de9e7ffcfb93d5efd/runtime-v23-d2/arms/0000/attempts/0001/RUNTIME_TERMINAL_COMPLETE.json`;
+- D2 result, 1,782 bytes, SHA-256
+  `8d6caeac559e32fe86f58e059693166e7f133d6153b9c389d8680f428024459d`,
+  at
+  `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-6846520de9e7ffcfb93d5efd/runtime-v23-d2/arms/0000/attempts/0001/RESULT_COMPLETE.json`;
+- D2 report, 25,725,198 bytes, SHA-256
+  `bb8f97360827abd0f18964982c9729c083888ad02ad4cc08d1ba6779100f409a`,
+  at
+  `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-6846520de9e7ffcfb93d5efd/runtime-v23-d2/arms/0000/attempts/0001/bench_v23_d2_report.json`;
+- page roster, 12,825,166 bytes, SHA-256
+  `276dfa1914fc1cfa980a0d5037fd8f3d53f7a3e35d4ae64c863956b9095c4303`,
+  at
+  `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-6846520de9e7ffcfb93d5efd/runtime-v23-d2/arms/0000/attempts/0001/bench_v23_pages.json`;
+- query Parquet, 3,843,448 bytes, SHA-256
+  `296d45828020c1c0b88c6a1d5c822f6283280513b8c58d01cfa961f3a139a5d4`,
+  at
+  `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/deep-image-96/attempts/0001/materialized/test.parquet`;
+- width-12 selector, 201,389,348 bytes, BLAKE3
+  `89ca5a9a1661c84cf91540bfdf0bbf371879697adc224ae1d27aa068bed850b2`,
+  at
+  `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-6846520de9e7ffcfb93d5efd/runtime-v23-d2/arms/0000/attempts/0001/pages/selectors/89ca5a9a1661c84cf91540bfdf0bbf371879697adc224ae1d27aa068bed850b2`.
+
+The diagnostic scanned all 4,096 selector cells and all 9,990,000 width-12
+rows for each of the 32 frozen queries, selected exactly eight pages, and read
+no page bodies. Scalar and SIMD page selections were identical, with zero ppm
+maximum distance delta. Its literal gates were 975,000 ppm aggregate recall,
+800,000 ppm minimum-query recall, and 995,000 ppm oracle attainment. The
+faithful global-top-4,096 reciprocal-rank max-cover reducer reached 671,875 /
+100,000 / 676,100 ppm and failed. The per-page-minimum-ADC reducer reached
+568,750 / 0 / 572,327 ppm and also failed. The canonical causal classification
+is `tested-reducers-rejected`, and `claim_eligible` is false.
+
+The canonical local result is
+`/tmp/v23-global-adc-007af90de373cc10c373f8d02e0215b3c1e316a4.json`,
+15,061 bytes with SHA-256
+`640506d7e2ca33b046d609abe6578cdecd07a5ec5fc4b41c3eb0c4856794798a`.
+The whole wrapper completed in approximately 17.90 seconds, including the
+seven downloads, authentication, loading, and science. The result schema did
+not persist separate scientific elapsed time, CPU time, or exact peak
+process-group RSS; every five-second RSS sample stayed under the 1-GiB stop
+cap. Memory PSI full avg10 was 0.00 at the start and terminal snapshots. Swap
+used fell from 467,724 KiB to 467,524 KiB, a -200-KiB delta. No pressure stop
+fired. The process exited normally, removed all seven prerequisite files and
+its named scratch directory, and left no AWS, timeout, or diagnostic process.
+
+The faithful exact-global result exactly matches the prior routed width-12 D2
+aggregate recall, minimum-query recall, and oracle-attainment values. The
+historical 320-cell router is therefore not causal for that failure. The
+per-page-minimum alternative is worse. This result rejects only these two
+registered reducers; it does not reject every possible PQ reducer or every PQ
+representation. It authorizes no paid run, and D3 remains fenced.
