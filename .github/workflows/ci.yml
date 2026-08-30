@@ -39,7 +39,7 @@ jobs:
         run: uvx --from ruff==0.16.5 ruff check python examples scripts
       - name: Prettier
         run: >-
-          npx --yes prettier@3 --check
+          npx --yes prettier@3.9.6 --check
           "packages/borsuk/src/**/*.ts"
           "packages/borsuk/test/**/*.ts"
           "packages/borsuk/examples/**/*.ts"

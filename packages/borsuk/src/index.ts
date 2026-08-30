@@ -1862,9 +1862,7 @@ export async function open(uri: string, options: OpenOptions = {}): Promise<Inde
     exactReadMaxPhysicalAmplification !== undefined &&
     (exactReadMaxPhysicalAmplification < 1 || exactReadMaxPhysicalAmplification > 5)
   ) {
-    throw new BorsukError(
-      "exact_read_max_physical_amplification must be between 1 and 5 when set",
-    );
+    throw new BorsukError("exact_read_max_physical_amplification must be between 1 and 5 when set");
   }
   const inner = await wrapNativeError(() =>
     native.open(uri, {
