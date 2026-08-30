@@ -4,7 +4,10 @@ import copy
 import dataclasses
 import hashlib
 import json
+import os
 import struct
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -873,6 +876,69 @@ class StreamingAndResultTests(unittest.TestCase):
             subject.main(arguments)
         with self.assertRaises(SystemExit):
             subject.main(arguments + ["--output", "forbidden.json"])
+
+    def test_direct_script_resolves_canonical_json_dependency(self) -> None:
+        script = Path(subject.__file__).resolve()
+        bucket, prefix = subject._attempt_location(subject.REGISTERED_AUTHORITY.attempt_prefix)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            terminal = root / "terminal.json"
+            terminal.write_bytes(b"{}\n")
+            (root / "sitecustomize.py").write_text(
+                """\
+import hashlib
+
+_real_sha256 = hashlib.sha256
+
+class _RegisteredTerminalDigest:
+    def hexdigest(self):
+        return "db12dd670ae5121fa4d90147fba7816d6a20878764a28d089be45be1138579ef"
+
+def _sha256(payload=b""):
+    if payload == b"{}\\n":
+        return _RegisteredTerminalDigest()
+    return _real_sha256(payload)
+
+hashlib.sha256 = _sha256
+"""
+            )
+            environment = os.environ.copy()
+            environment["PYTHONPATH"] = directory
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--terminal",
+                    str(terminal),
+                    "--result",
+                    str(root / "result.json"),
+                    "--report",
+                    str(root / "report.json"),
+                    "--roster",
+                    str(root / "roster.json"),
+                    "--query",
+                    str(root / "query.parquet"),
+                    "--bucket",
+                    bucket,
+                    "--prefix",
+                    prefix,
+                    "--aws-profile",
+                    "causality",
+                    "--region",
+                    "eu-central-1",
+                    "--execute-complete-stream",
+                ],
+                cwd=script.parent.parent,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn("ModuleNotFoundError", completed.stderr)
+        self.assertIn("FileNotFoundError", completed.stderr)
+        self.assertIn("result.json", completed.stderr)
 
     def test_s3_client_timeouts_keep_one_request_below_wedge_limit(self) -> None:
         config = subject._s3_config()

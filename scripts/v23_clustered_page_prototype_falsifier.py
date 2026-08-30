@@ -19,6 +19,11 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import urlparse
 
+if __package__:
+    from scripts.publication_v3_protocol import canonical_json_bytes
+else:  # Direct ``python scripts/...`` execution.
+    from publication_v3_protocol import canonical_json_bytes
+
 for _thread_variable in (
     "OPENBLAS_NUM_THREADS",
     "OMP_NUM_THREADS",
@@ -648,8 +653,6 @@ def _read_canonical_json(path: Path, expected_sha256: str, role: str) -> dict[st
         value = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"{role} is not canonical JSON") from error
-    from scripts.publication_v3_protocol import canonical_json_bytes
-
     if type(value) is not dict or payload != canonical_json_bytes(value) + b"\n":
         raise ValueError(f"{role} bytes are not canonical")
     return value
@@ -1459,8 +1462,6 @@ def validate_result(value: object) -> dict[str, object]:
 def canonical_result_bytes(value: dict[str, object]) -> bytes:
     """Return one newline-terminated canonical result document."""
 
-    from scripts.publication_v3_protocol import canonical_json_bytes
-
     return canonical_json_bytes(validate_result(value)) + b"\n"
 
 
@@ -1483,8 +1484,6 @@ def canonical_stop_bytes(error: StreamStopped) -> bytes:
         )
     ):
         raise ValueError("stream stop receipt differs")
-    from scripts.publication_v3_protocol import canonical_json_bytes
-
     return canonical_json_bytes(
         {
             "schema": "borsuk-v23-clustered-page-falsifier-stop-v1",
