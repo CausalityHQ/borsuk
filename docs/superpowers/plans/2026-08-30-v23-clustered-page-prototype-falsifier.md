@@ -122,9 +122,9 @@ git commit -m "Add deterministic V23 page clustering falsifier core"
 
 **Interfaces:**
 - Consumes: exact local report/roster/query bytes plus their explicit SHA-256 values and Task 1 page/scoring APIs.
-- Produces: `Authority`, `load_authority(report_path: Path, report_sha256: str, roster_path: Path, roster_sha256: str, query_path: Path, query_sha256: str) -> Authority`, `select_pages(score_matrix: numpy.ndarray, width: int = 8) -> numpy.ndarray`, `quality_metrics(authority: Authority, selections: numpy.ndarray) -> dict[str, object]`, and `projected_serving_bytes() -> int`.
+- Produces: `ScientificShape`, `RegisteredAuthority`, `Authority`, `load_authority(terminal_path: Path, result_path: Path, report_path: Path, roster_path: Path, query_path: Path, registered: RegisteredAuthority = REGISTERED_AUTHORITY, shape: ScientificShape = REGISTERED_SHAPE) -> Authority`, `select_pages(score_matrix: numpy.ndarray, width: int = 8) -> numpy.ndarray`, `quality_metrics(authority: Authority, selections: numpy.ndarray) -> dict[str, object]`, and `projected_serving_bytes() -> int`.
 
-- [ ] **Step 1: Write failing authority, ordering, and arithmetic tests**
+- [x] **Step 1: Write failing authority, ordering, and arithmetic tests**
 
 ```python
 class AuthorityAndQualityTests(unittest.TestCase):
@@ -158,7 +158,7 @@ class AuthorityAndQualityTests(unittest.TestCase):
 
 Mutations cover noncanonical JSON, wrong exact key set, bool/int substitution, report or roster SHA drift, repeated/missing/out-of-order page ordinals, repeated page path/checksum, any page-reference drift from the report arm, wrong query-object hash, wrong query ordinals, non-finite or non-unit query vectors, ground-truth assignment outside the roster, wrong query count, wrong dimension, and wrong oracle hit counts.
 
-- [ ] **Step 2: Run the focused authority tests and preserve RED**
+- [x] **Step 2: Run the focused authority tests and preserve RED**
 
 ```bash
 uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt \
@@ -168,13 +168,13 @@ uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt \
 
 Expected: failures for the missing Task 2 interfaces.
 
-- [ ] **Step 3: Implement exact authority and recomputation**
+- [x] **Step 3: Implement exact authority and recomputation**
 
-Use `scripts.publication_v3_protocol.canonical_json_bytes` to require canonical report and roster payloads with one trailing newline. Select the only Revision-4 D2 arm and require the frozen source/report/roster/query identities from the spec. Read only the registered query rows from the authenticated Parquet table, normalize once in f64, cast to f32, and reject zero/non-finite rows. `select_pages` uses `numpy.lexsort((page_ordinals, scores[row]))[:width]`. Recompute per-query hits by intersecting each ground-truth row's declared page assignments with the selected page set; independently recompute the eight-page oracle from the same assignments and require its recorded hit count.
+Use `scripts.publication_v3_protocol.canonical_json_bytes` to require canonical terminal, result, report, and roster payloads with one trailing newline and their exact registered SHA-256 values. Select the only Revision-4 D2 arm and require the frozen source/report/roster/query identities from the spec. `REGISTERED_AUTHORITY` and `REGISTERED_SHAPE` are immutable defaults; smaller values may be injected only through the pure Python API for synthetic tests, never through CLI flags. Read only the registered query rows from the authenticated Parquet table, normalize once in f64, cast to f32, and reject zero/non-finite rows. `select_pages` uses `numpy.lexsort((page_ordinals, scores[row]))[:width]`. Recompute per-query hits by intersecting each ground-truth row's declared page assignments with the selected page set; independently recompute the eight-page oracle from the same assignments and require its recorded hit count.
 
 Implement the serving projection with checked nonnegative integer helpers and these exact terms: `9_050_240 * 196`, `282_820 * 320`, `65_536 * 96 * 2`, `(65_536 + 1) * 4`, `65_536 * 4_096`, `512 * 1024**2`, and `2 * 1_966_080`.
 
-- [ ] **Step 4: Run Task 1 and Task 2 tests and require GREEN**
+- [x] **Step 4: Run Task 1 and Task 2 tests and require GREEN**
 
 ```bash
 uv run --python 3.12 --with-requirements scripts/requirements-format-bench.txt \
@@ -351,4 +351,3 @@ Before executing, report the host/bucket region relationship, expected 28,282 GE
 - [ ] **Step 7: Record the result without overclaiming**
 
 If complete, independently validate the receipt and add its full SHA-256, metrics, timings, authority, and pass/fail conclusion to `docs/research/publication-v3-attempt-ledger.md`. A pass authorizes only the smaller-K ladder and a new BVS4 IVF design; a failure ends page-prototype work. In either case, do not launch D3 or paid infrastructure from this plan.
-
