@@ -3887,6 +3887,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn v23_incidence_manifest_registered_training_fixture_is_exact() {
+        let bytes =
+            include_bytes!("../../../scripts/fixtures/v23_incidence_training_manifest.json");
+        let manifest: V23IncidenceManifest = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(
+            canonical_v23_incidence_manifest_bytes(&manifest).unwrap(),
+            bytes
+        );
+        assert_eq!(manifest.ordered_inputs.len(), 59);
+        let rows = manifest
+            .ordered_inputs
+            .iter()
+            .filter_map(|input| match input {
+                V23IncidenceInputAuthority::TrainingShard { rows, .. } => Some(*rows),
+                _ => None,
+            })
+            .sum::<u64>();
+        assert_eq!(rows, 9_990_000);
+        assert_eq!(
+            manifest
+                .ordered_inputs
+                .iter()
+                .map(V23IncidenceInputAuthority::identity)
+                .map(|identity| identity.encoded_bytes)
+                .sum::<u64>(),
+            3_839_147_293,
+        );
+    }
+
     fn evaluation_preflight_authority(_phase: V23IncidencePhase) -> V23IncidencePreflightAuthority {
         let parent_digest = format!("{:x}", Sha256::digest(b"parent-receipt"));
         let mut identities = vec![

@@ -83,6 +83,27 @@ class FakeS3Client:
 
 
 class StagingTests(unittest.TestCase):
+    def test_registered_training_manifest_is_canonical_and_complete(self) -> None:
+        path = (
+            pathlib.Path(__file__).resolve().parent
+            / "fixtures/v23_incidence_training_manifest.json"
+        )
+        raw, identities = subject._read_manifest(path)
+        value = json.loads(raw)
+        self.assertEqual(len(identities), 59)
+        self.assertEqual(
+            sum(identity["encoded_bytes"] for identity in identities),
+            3_839_147_293,
+        )
+        self.assertEqual(
+            sum(
+                item.get("rows", 0)
+                for item in value["ordered_inputs"]
+                if item["authority_kind"] == "training-shard"
+            ),
+            9_990_000,
+        )
+
     def test_staging_uses_only_exact_registered_gets_and_emits_receipt(self) -> None:
         payloads = [b"first-shard", b"second-shard"]
         objects = [
