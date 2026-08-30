@@ -707,3 +707,83 @@ eight-page cover from those row candidates. A width ladder must now establish
 the smallest code at or below the 12-byte-per-row 100M RAM boundary before the
 format is frozen. These counterfactuals are architectural evidence, not cold
 latency or throughput measurements; D3 remains forbidden.
+
+## V23 BVS3 compact-selector diagnosis on 2026-08-30
+
+The BVS3 diagnostic used source commit
+`c339a546f8f9370cb2e6e9fb3b0fd4bdefa3cb05`, source-archive SHA-256
+`77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d`,
+and manifest SHA-256
+`9a4055750f62d8460a1f2b1e58ff318d7190e5ef07a46390de59a37342aad4b1`.
+The immutable V22 base terminal remained
+`s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-46d286fd1e2290c1cb8b8645/build/attempts/0001/BUILD_TERMINAL_COMPLETE.json`
+with SHA-256
+`b55959a6cb3f2478557606050fe22b52059b4254c9dbdbf430ae9a45a55217e1`.
+
+D1 completed on Spot instance `i-014619e4787fa99c1`, and the controller
+terminated the instance after publication. Its artifacts are under
+`s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-6846520de9e7ffcfb93d5efd/runtime-v23-d1/arms/0000/attempts/0001/`.
+The terminal-marker, result, report, and summary SHA-256 values were,
+respectively,
+`d547bf797507680f8946fd120592805fb32ce17b4d54c6847401d93b8ec22035`,
+`217e2ffb057008940f4b185064b4169fb9e69a21740e3295b578cb1d6a784235`,
+`91717a4077c8a7d6b909f1f8d14f59d6a6d422a29e06b3d665a02c29743cbc39`,
+and
+`4140bc045364a1e6ae660e80fe9323de532b52c84f532128c44947d67e7bbb48`.
+The 8-byte PQ arm reached 103,125 ppm routed recall against a 125,000-ppm
+oracle and 0.264186-ms CPU p99. The 12-byte PQ arm reached 243,750 ppm against
+a 246,875-ppm oracle and 0.336145-ms CPU p99. Only the 192-byte f16-flat arm
+passed, at 996,875 ppm routed and oracle recall with 1.290391-ms CPU p99. Peak
+cgroup memory was 6,465,392,640 bytes with no swap.
+
+D2 completed on Spot instance `i-0b2270ed88f29e80b`, published an authenticated
+scientific failure, and shut down without swap or OOM. Its artifacts are under
+`s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-6846520de9e7ffcfb93d5efd/runtime-v23-d2/arms/0000/attempts/0001/`.
+Their authenticated SHA-256 values are:
+
+- terminal marker:
+  `c130cdc81e46f636573583e295515c8ce9a16503eb3bb6c9b5494459932729ca`;
+- result receipt:
+  `8d6caeac559e32fe86f58e059693166e7f133d6153b9c389d8680f428024459d`;
+- complete D2 report:
+  `bb8f97360827abd0f18964982c9729c083888ad02ad4cc08d1ba6779100f409a`;
+- materialized page roster:
+  `276dfa1914fc1cfa980a0d5037fd8f3d53f7a3e35d4ae64c863956b9095c4303`;
+- derived summary:
+  `5a524a337dcf3a1a554e073c48a5ff41c1e779b5e13c534578d94485d72fbbad`.
+
+The shared geometry contained 9,990,000 unique rows, 18,620,111 primary and
+replica assignments, at most two assignments per row, and 28,282 pages. Each
+query selected at most eight pages with a primary target of 384 rows. This
+geometry passed: aggregate oracle recall was 993,750 ppm, minimum-query oracle
+recall was 900,000 ppm, and storage amplification was 1,863,874 ppm. Projected
+build peak was 12,131,787,914 bytes.
+
+The 8-byte selector encoded 161,429,348 bytes and ranked at most 4,096 rows.
+It produced 468,978 / 967,419 / 1,619,705 candidate rows per query at the
+minimum / median / maximum. Projected 100M-row serving RAM was 2,234,575,048
+bytes and passed. Aggregate recall was 556,250 ppm, minimum-query recall was
+zero, selector-regret attainment was 559,748 ppm, and CPU p99 was 49.283974
+ms; all four scientific gates failed. Query CPU minimum / median / maximum was
+17.041054 / 28.1606115 / 49.283974 ms.
+
+The 12-byte selector encoded 201,389,348 bytes and projected 2,634,575,048
+bytes of 100M-row serving RAM, which also passed. Aggregate recall was 671,875
+ppm, minimum-query recall was 100,000 ppm, selector-regret attainment was
+676,100 ppm, and CPU p99 was 50.146044 ms; the same four gates failed. Query
+CPU minimum / median / maximum was 18.586229 / 32.578573 / 50.146044 ms.
+
+Scientific elapsed time was 3,351,099,168,480 ns and measured CPU time was
+2,553,685,737,000 ns. The result recorded 5,885,296,640 bytes written and peak
+RSS of 12,459,761,664 bytes; terminal cgroup attestation recorded a
+18,372,472,832-byte peak and zero swap/OOM events.
+
+This run accepts the immutable page geometry, oracle coverage, storage
+amplification, and serving-RAM projection. It rejects both per-row PQ selector
+widths: each examines roughly half a million to 1.6 million candidate rows per
+query, misses too many oracle-reachable rows even after ranking 4,096, and
+exceeds the 15-ms CPU gate by more than threefold. Increasing selector width or
+rank cap would worsen the already-failed RAM/CPU tradeoff. D3 was not launched,
+so this run establishes no cold-latency or throughput claim. The next paid run
+remains forbidden until an outcome-blind offline counterfactual validates a
+replacement selector architecture against the same immutable D2 evidence.
