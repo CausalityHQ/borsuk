@@ -6,6 +6,9 @@ replace the failed BVS3 selector without a legacy reader; a failing result ends
 the page-prototype line of work. The full evidence run reads immutable S3
 objects and therefore requires a separately coordinated execution-location and
 request/transfer-cost check; this document does not authorize those reads.
+The page stream is additionally fenced until the exact five-artifact
+Revision-4/BVS2 authority bundle reaches the first registered page GET through
+the real direct CLI while page access is replaced by a fail-closed sentinel.
 
 **Evidence basis:** The authenticated BVS3 D2 cell at source `c339a546` proved
 that the 384-row/eight-page geometry is viable but that resident per-row PQ is
@@ -87,7 +90,7 @@ The tool accepts exact explicit inputs, never discovers a latest object:
   `s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/r01-f7a6e06a6a40c1165b6cb889/runtime-v23-d2/arms/0000/attempts/0001/`;
 - terminal-marker SHA-256
   `db12dd670ae5121fa4d90147fba7816d6a20878764a28d089be45be1138579ef`;
-- `RESULT.json` SHA-256
+- `RESULT_COMPLETE.json` SHA-256
   `41ec2b4eb9e0506f4732c2e0ff34d92e1493b24953669c486fc5714a38002a00`;
 - D2 report SHA-256
   `665dc206d04073b8cbc0b8bab9e5645760440d2336ddf4bfebea81d176b4779d`;
@@ -109,11 +112,85 @@ The historical BVP2 decoder lives only in this evidence script and is pinned
 to the listed immutable source and artifact digests. Production library code
 must not import it, dispatch to it, or retain a BVP2 compatibility path.
 
+## Revision-4/BVS2 authority boundary
+
+A read-only audit of the five immutable prerequisites found that the current
+falsifier is not literally a BVS3 reader consuming BVS2. It is a bespoke
+hybrid: it names the historical `borsuk-v23-d2-v8` report and BVP2 pages, but
+its synthetic fixtures and several validation assumptions reproduce neither
+the frozen Revision-4 writer nor the current BVS3/v9 contracts. The correction
+is one evidence-only adapter, not a production compatibility layer.
+
+The only known exact-bundle rejection is the selector's sparse final page.
+The frozen artifact has 450,087 anchors for 28,282 pages at 16 anchors per
+page, so the valid historical relation is
+`page_count <= anchor_count <= page_count * anchors_per_page`, not equality.
+Its encoded length is exactly
+`96 + coarse_cells * dimensions * 4 + (coarse_cells + 1) * 4 +
+anchor_count * (12 + dimensions * 2)` = 93,407,096 bytes. The adapter must
+also close silent authority gaps that the current synthetic fixtures conceal:
+
+- `RESULT_COMPLETE.json` must have the frozen exact key set and concrete types
+  and bind report, roster, attempt, instance, source archive, index, D1, query,
+  runtime attestation, and the reconstructed D2 summary;
+- the terminal must cross-bind those same identities and uses the historical
+  shell writer's compact insertion-order JSON plus one newline, while result,
+  report, and roster use sorted canonical JSON plus one newline;
+- arm constants and arithmetic must be recomputed: routing
+  `min(320, coarse_cells)`, ranked-anchor cap 8192, target rows 384, at most two
+  assignments per row, eight query pages, primary/assignment totals, storage
+  amplification, selector length, and projected root/RAM/build bytes;
+- every page must retain the historical 65,535 primary-row and replica-row
+  caps in addition to the existing digest, ordering, layout, and roster/report
+  equality checks;
+- query evidence must recompute every cross-object and within-report relation
+  available from authenticated primitives: selected/oracle membership,
+  ground-truth assignments, hits, recall, bytes, candidates, selector
+  telemetry, CPU, all arm aggregates, pass, and the frozen coverage-oracle tie
+  break. Ranked IDs and distances retain exact schema/type/order validation and
+  feed those relational checks, but the adapter must not claim to regenerate
+  historical selector distances because selector bytes are not among the five
+  prerequisites;
+- the query object must bind the registered URI/SHA and dataset materialization
+  and have the full physical nonnullable `emb: FixedSizeList<Float32,96>`
+  schema, exactly 10,000 rows, finite selected vectors, and nonzero norms.
+
+The evidence-adapter API is deliberately narrow:
+
+```python
+@dataclasses.dataclass(frozen=True, slots=True)
+class Revision4Bvs2Paths:
+    terminal: Path
+    result: Path
+    report: Path
+    roster: Path
+    query: Path
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Revision4Bvs2Authority:
+    registered: RegisteredAuthority
+    shape: ScientificShape
+
+```
+
+The concrete method signature is
+`Revision4Bvs2Authority.load(paths: Revision4Bvs2Paths) -> Authority`.
+
+`load` authenticates role-specific bytes, validates the dependency graph
+terminal -> result/report/roster -> query, recomputes the frozen cross-object
+and within-report relations available from those authenticated primitives, and
+returns only the normalized existing `Authority`. Raw BVS2
+dictionaries never cross that boundary. `load_authority` remains a thin
+call-compatible wrapper; the streaming and clustering code receives no legacy
+branches.
+
 ## Streaming data flow
 
-1. Authenticate the complete D2 report and page-manifest bytes before opening
-   page storage.
-2. Authenticate the test object, load only the 32 registered query rows, and
+1. Pass the five exact local prerequisites through `Revision4Bvs2Authority`;
+   authenticate every role-specific byte stream and cross-object relation
+   before constructing or invoking a page client.
+2. Authenticate the complete test object's physical schema and materialization,
+   then load only the 32 registered query rows and
    unit-normalize them exactly once.
 3. Iterate page references in ordinal order. Use at most four concurrent S3
    GETs and a bounded reorder queue, but feed training strictly in page order.
@@ -240,3 +317,20 @@ projected-memory arithmetic, canonical output, bounded fetch reordering, and
 every mutation of the authority and result schemas. A streaming test must
 prove peak retained page bodies never exceed the configured bound and that no
 page or prototype corpus is written to disk.
+
+Before another complete stream, one environment-gated integration test must
+load the exact terminal, result, report, roster, and query files, verify their
+five registered SHA-256 values, invoke the real direct CLI, replace the page
+client's first `get_object` with `PAGE_S3_ACCESS_FORBIDDEN`, and prove the
+attempted key is the registered ordinal-zero page. The test is named
+`HistoricalBundleIntegrationTests.test_revision4_bvs2_exact_bundle_reaches_first_registered_page_get`
+and is skipped unless `BORSUK_REV4_BVS2_FIXTURE_DIR` names the explicit local
+five-file directory. Reaching the sentinel is the only passing outcome; an
+authority error, actual S3 request, or scientific result is a failure.
+
+The mutation matrix has six independently reviewable families: result receipt
+schema/bindings; terminal bytes/schema/bindings; arm constants and formulas;
+page row caps and roster equality; query evidence and oracle recomputation; and
+full Parquet schema/materialization binding. Each semantic mutation rehashes
+only its changed role so it reaches the intended validator. Exact registered
+SHA rejection remains a separate earlier gate.
