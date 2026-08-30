@@ -576,7 +576,7 @@ where
     }
 }
 
-pub(crate) fn validate_posting_prefix(plane: &V23PostingPlane, cap: usize) -> Result<()> {
+pub(crate) fn posting_prefix_eligibility(plane: &V23PostingPlane, cap: usize) -> Result<bool> {
     let prefix_index = PREFIX_CAPS
         .iter()
         .position(|registered| *registered == cap)
@@ -590,20 +590,30 @@ pub(crate) fn validate_posting_prefix(plane: &V23PostingPlane, cap: usize) -> Re
     {
         return Err(invalid("V23 posting prefix authority differs"));
     }
+    let mut eligible = true;
     for leaf in plane.leaves.iter().filter(|leaf| leaf.total_mass != 0) {
         let evidence = &leaf.prefixes[prefix_index];
         let expected_retained_ppm = round_ratio_half_even(
             u128::from(evidence.retained_assignments) * 1_000_000,
             u128::from(leaf.total_mass),
         )?;
-        if u64::from(evidence.retained_mass_ppm) != expected_retained_ppm
-            || u128::from(evidence.retained_assignments) * 1_000_000
-                < u128::from(leaf.total_mass) * u128::from(RETAINED_MASS_MINIMUM_PPM)
-            || u128::from(evidence.quantization_error_numerator) * 1_000_000
-                > u128::from(leaf.total_mass) * 65_535 * 2 * u128::from(QUANTIZATION_TV_MAXIMUM_PPM)
-        {
-            return Err(invalid("V23 posting prefix eligibility differs"));
+        if u64::from(evidence.retained_mass_ppm) != expected_retained_ppm {
+            return Err(invalid("V23 posting prefix evidence differs"));
         }
+        eligible &= u128::from(evidence.retained_assignments) * 1_000_000
+            >= u128::from(leaf.total_mass) * u128::from(RETAINED_MASS_MINIMUM_PPM)
+            && u128::from(evidence.quantization_error_numerator) * 1_000_000
+                <= u128::from(leaf.total_mass)
+                    * 65_535
+                    * 2
+                    * u128::from(QUANTIZATION_TV_MAXIMUM_PPM);
+    }
+    Ok(eligible)
+}
+
+pub(crate) fn validate_posting_prefix(plane: &V23PostingPlane, cap: usize) -> Result<()> {
+    if !posting_prefix_eligibility(plane, cap)? {
+        return Err(invalid("V23 posting prefix eligibility differs"));
     }
     Ok(())
 }
@@ -942,7 +952,8 @@ mod tests {
     use super::{
         PostingAssignmentArm, V23PostingRecord, build_posting_plane, decode_posting_plane,
         decode_posting_record, encode_posting_plane, encode_posting_record, normalized_mass,
-        page_posting_records, validate_posting_prefix, validate_production_posting_plane,
+        page_posting_records, posting_prefix_eligibility, validate_posting_prefix,
+        validate_production_posting_plane,
     };
 
     fn contributions() -> Vec<V23PostingRecord> {
@@ -1212,7 +1223,9 @@ mod tests {
         )
         .unwrap();
         assert!(wide.leaves[0].masses.iter().all(|mass| *mass == 109));
+        assert!(!posting_prefix_eligibility(&wide, 512).unwrap());
         assert!(validate_posting_prefix(&wide, 512).is_err());
+        assert!(posting_prefix_eligibility(&wide, 1024).unwrap());
         validate_posting_prefix(&wide, 1024).unwrap();
         validate_posting_prefix(&wide, 2048).unwrap();
     }

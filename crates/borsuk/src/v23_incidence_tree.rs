@@ -827,6 +827,16 @@ pub(crate) fn train_incidence_tree(
     train_incidence_tree_from_reservoir(reservoir, shape, seed, threads, batch_rows, true)
 }
 
+#[cfg(test)]
+pub(crate) fn train_incidence_tree_test_shape(
+    rows: &[V23TrainingRow],
+    shape: V23IncidenceTrainingShape,
+    threads: usize,
+    batch_rows: usize,
+) -> Result<V23IncidenceTree> {
+    train_incidence_tree_with_shape(rows, shape, threads, batch_rows)
+}
+
 fn take_zero(node: &V23TreeNode, score: f32, ordinal: u64) -> bool {
     score
         .total_cmp(&f32::from_bits(node.boundary_score_bits))

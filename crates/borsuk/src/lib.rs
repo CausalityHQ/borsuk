@@ -170,6 +170,11 @@ pub use v23_diagnostic::{
     V23PagePublisher, V23PageRef, V23QuantizerFamily, V23RankedResult, V23SelectorRef,
     V23WaveSample, run_v23_global_adc_local_request,
 };
+#[doc(hidden)]
+pub use v23_incidence::{
+    V23IncidenceLocalPhaseRequest, V23IncidenceLocalRolePath, V23IncidenceObjectIdentity,
+    V23IncidencePhase, V23IncidenceRunMode, run_v23_incidence_local_phase,
+};
 
 /// Maximum CPU worker threads selected by the automatic small-runtime policy.
 pub const DEFAULT_BUILD_THREADS: usize = 4;

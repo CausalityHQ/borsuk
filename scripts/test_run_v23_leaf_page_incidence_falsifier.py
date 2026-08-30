@@ -7,7 +7,9 @@ import inspect
 import json
 import os
 import pathlib
+import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -41,15 +43,28 @@ def _policy(
 ) -> subject.SandboxPolicy:
     inputs = (
         _mount("construction-manifest", "construction-manifest.json"),
+        _mount("dataset-meta", "meta.json"),
         _mount("training-shard-0000", "train-0000.f32"),
     )
     if phase == "posting-construction":
         inputs = (
+            _mount("phase-manifest", "phase-manifest.json"),
             _mount("parent-receipt", "tree-receipt.json"),
             _mount("incidence-tree", "incidence-tree.bin"),
             _mount("page-roster", "page-roster.json"),
             _mount("page-body-0000", "page-0000.bin"),
         )
+    if phase == "development-evaluation":
+        inputs = (
+            _mount("phase-manifest", "phase-manifest.json"),
+            _mount("parent-receipt", "posting-receipt.json"),
+            _mount("incidence-tree", "incidence-tree.bin"),
+            _mount("incidence-postings-one", "postings-one.bin"),
+            _mount("incidence-postings-two", "postings-two.bin"),
+            _mount("d2-report", "d2-report.json"),
+            _mount("query-parquet", "query.parquet"),
+        )
+    inputs += (_mount("preflight-receipt", "preflight-receipt.json"),)
     return subject.SandboxPolicy(
         phase=phase,
         executable=pathlib.Path("/opt/borsuk/v23-incidence"),
@@ -71,12 +86,223 @@ def _policy(
         scratch=pathlib.Path("/scratch/v23-incidence"),
         output=pathlib.Path("/output/v23-incidence"),
         parent_receipt_sha256=parent_digest,
+        phase_argv=(f"--execute-{phase}",),
     )
 
 
 class SandboxPolicyTests(unittest.TestCase):
+    def test_holdout_preflight_roles_exclude_sealed_evaluation_inputs(self) -> None:
+        binding_preflight, binding_prefixes = subject._phase_roles(
+            "holdout-binding", preflight=True
+        )
+        binding_execute, _ = subject._phase_roles(
+            "holdout-binding", preflight=False
+        )
+        self.assertEqual(
+            binding_preflight,
+            {"phase-manifest", "parent-receipt", "page-roster"},
+        )
+        self.assertEqual(binding_prefixes, ("page-body-",))
+        self.assertEqual(
+            binding_execute,
+            binding_preflight
+            | {"development-result", "neighbors-parquet", "preflight-receipt"},
+        )
+
+        evaluation_preflight, evaluation_prefixes = subject._phase_roles(
+            "holdout-evaluation", preflight=True
+        )
+        evaluation_execute, _ = subject._phase_roles(
+            "holdout-evaluation", preflight=False
+        )
+        self.assertEqual(
+            evaluation_preflight,
+            {
+                "phase-manifest",
+                "parent-receipt",
+                "incidence-tree",
+                "incidence-postings-one",
+                "incidence-postings-two",
+            },
+        )
+        self.assertEqual(evaluation_prefixes, ())
+        self.assertEqual(
+            evaluation_execute,
+            evaluation_preflight
+            | {
+                "development-result",
+                "development-latency",
+                "preflight-receipt",
+                "query-parquet",
+                "holdout-truth",
+            },
+        )
+
+    def test_execute_roles_require_preflight_receipt_in_every_phase(self) -> None:
+        for phase in (
+            "tree-training",
+            "posting-construction",
+            "development-evaluation",
+            "holdout-binding",
+            "holdout-evaluation",
+        ):
+            with self.subTest(phase=phase):
+                preflight_roles, _ = subject._phase_roles(phase, preflight=True)
+                execute_roles, _ = subject._phase_roles(phase, preflight=False)
+                self.assertNotIn("preflight-receipt", preflight_roles)
+                self.assertIn("preflight-receipt", execute_roles)
+
+    def test_run_phase_proves_os_namespace_capability_separation(self) -> None:
+        if os.geteuid() != 0:
+            if shutil.which("sudo") is None or subprocess.run(
+                ["sudo", "-n", "true"],
+                check=False,
+                capture_output=True,
+            ).returncode:
+                self.skipTest("OS namespace integration requires root or passwordless sudo")
+            repository = pathlib.Path(__file__).resolve().parents[1]
+            completed = subprocess.run(
+                [
+                    "sudo",
+                    "-n",
+                    sys.executable,
+                    "-m",
+                    "unittest",
+                    "scripts.test_run_v23_leaf_page_incidence_falsifier."
+                    "SandboxPolicyTests."
+                    "test_run_phase_proves_os_namespace_capability_separation",
+                ],
+                cwd=repository,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                completed.returncode,
+                0,
+                f"stdout={completed.stdout}\nstderr={completed.stderr}",
+            )
+            return
+
+        runtime_paths = {
+            "aarch64": (
+                "/lib/ld-linux-aarch64.so.1",
+                "/lib/aarch64-linux-gnu/libc.so.6",
+            ),
+            "x86_64": (
+                "/lib64/ld-linux-x86-64.so.2",
+                "/lib/x86_64-linux-gnu/libc.so.6",
+            ),
+        }
+        if os.uname().machine not in runtime_paths:
+            self.skipTest("namespace integration runtime paths are unregistered")
+        root = pathlib.Path(tempfile.mkdtemp(prefix="v23-incidence-namespace-"))
+        manifest = root / "construction-manifest.json"
+        shard = root / "training-shard-0000.bin"
+        launcher = root / "run_v23_leaf_page_incidence_falsifier.py"
+        scratch = root / "scratch"
+        output = root / "output"
+        manifest.write_bytes(b"manifest\n")
+        shard.write_bytes(b"shard\n")
+        launcher.write_bytes(pathlib.Path(subject.__file__).read_bytes())
+        scratch.mkdir()
+        output.mkdir()
+
+        def identity(
+            role: str,
+            source: pathlib.Path,
+            target: str,
+        ) -> subject.SandboxMount:
+            payload = source.read_bytes()
+            return subject.SandboxMount(
+                role=role,
+                source=source.resolve(),
+                target=pathlib.PurePosixPath(target),
+                read_only=True,
+                digest_algorithm="sha256",
+                digest=hashlib.sha256(payload).hexdigest(),
+                encoded_bytes=len(payload),
+                generation="namespace-integration-v1",
+            )
+
+        executable = pathlib.Path("/usr/bin/echo").resolve()
+        loader_target, libc_target = runtime_paths[os.uname().machine]
+        loader = pathlib.Path(loader_target).resolve()
+        libc = pathlib.Path(libc_target).resolve()
+        executable_payload = executable.read_bytes()
+        policy = subject.SandboxPolicy(
+            phase="tree-training",
+            executable=executable,
+            executable_sha256=hashlib.sha256(executable_payload).hexdigest(),
+            executable_bytes=len(executable_payload),
+            runtime_mounts=(
+                identity("runtime-loader", loader, loader_target),
+                identity(
+                    "runtime-library-libc",
+                    libc,
+                    libc_target,
+                ),
+            ),
+            inputs=(
+                identity(
+                    "construction-manifest",
+                    manifest,
+                    "/inputs/construction-manifest.json",
+                ),
+                identity(
+                    "training-shard-0000",
+                    shard,
+                    "/inputs/training-shard-0000.bin",
+                ),
+            ),
+            scratch=scratch,
+            output=output,
+            parent_receipt_sha256=None,
+            phase_argv=("--preflight-tree-training",),
+        )
+        original_subject_file = subject.__file__
+        subject.__file__ = str(launcher)
+        try:
+            self.assertEqual(
+                subject.run_phase(
+                    policy,
+                    dataclasses.replace(subject.MonitorLimits(), wall_seconds=30),
+                ),
+                0,
+            )
+            self.assertEqual(tuple(output.iterdir()), ())
+            self.assertEqual(tuple(scratch.iterdir()), ())
+        finally:
+            subject.__file__ = original_subject_file
+            for path in (manifest, shard, launcher):
+                if path.exists():
+                    path.unlink()
+            for path in (scratch, output):
+                if path.exists():
+                    path.rmdir()
+            if root.exists():
+                root.rmdir()
+
+    def test_preflight_mounts_only_fixed_subset_before_remaining_inputs(self) -> None:
+        execute = _policy("development-evaluation", "ab" * 32)
+        subject.validate_phase_inputs(execute)
+
+        preflight = dataclasses.replace(
+            execute,
+            inputs=execute.inputs[:5],
+            phase_argv=("--preflight-development-evaluation",),
+        )
+        subject.validate_phase_inputs(preflight)
+        self.assertNotIn("query-parquet", {mount.role for mount in preflight.inputs})
+        self.assertNotIn("d2-report", {mount.role for mount in preflight.inputs})
+
+        leaked = dataclasses.replace(preflight, inputs=preflight.inputs + (execute.inputs[-1],))
+        with self.assertRaisesRegex(ValueError, "preflight input"):
+            subject.validate_phase_inputs(leaked)
+
     def test_training_mounts_only_manifest_shards_binary_runtime_and_output(self) -> None:
         policy = _policy()
+        subject.validate_phase_inputs(policy)
         command = subject.build_unshare_command(policy)
 
         self.assertEqual(policy.phase, "tree-training")
@@ -90,6 +316,14 @@ class SandboxPolicyTests(unittest.TestCase):
         self.assertIn("--net", command)
         self.assertIn("--pid", command)
         self.assertIn("--fork", command)
+
+        preflight = dataclasses.replace(
+            policy,
+            inputs=(policy.inputs[0], policy.inputs[2]),
+            phase_argv=("--preflight-tree-training",),
+        )
+        subject.validate_phase_inputs(preflight)
+        self.assertNotIn("dataset-meta", {mount.role for mount in preflight.inputs})
 
     def test_receipt_chain_prevents_later_capability_before_parent_digest(self) -> None:
         with self.assertRaisesRegex(ValueError, "parent receipt"):
@@ -112,6 +346,7 @@ class SandboxPolicyTests(unittest.TestCase):
                     scratch=policy.scratch,
                     output=policy.output,
                     parent_receipt_sha256=policy.parent_receipt_sha256,
+                    phase_argv=policy.phase_argv,
                 )
             )
 
@@ -361,8 +596,9 @@ class SandboxPolicyTests(unittest.TestCase):
                 runtime_mounts=(authenticated(policy.runtime_mounts[0], runtime),),
                 inputs=(
                     authenticated(policy.inputs[0], manifest),
-                    authenticated(policy.inputs[1], shard),
+                    authenticated(policy.inputs[2], shard),
                 ),
+                phase_argv=("--preflight-tree-training",),
             )
             subject.authenticate_policy_files(policy)
 

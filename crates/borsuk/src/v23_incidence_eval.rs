@@ -14,9 +14,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BorsukError, Result,
-    v23_diagnostic::read_v23_query_vectors,
+    v23_diagnostic::{
+        V23D1ArmKey, V23D2Report, V23QuantizerFamily, read_v23_query_vectors, validate_d2_report,
+    },
     v23_incidence::canonical_json_value,
-    v23_incidence_postings::{PostingAssignmentArm, V23PostingPlane, validate_posting_prefix},
+    v23_incidence_postings::{
+        PostingAssignmentArm, V23PostingPlane, posting_prefix_eligibility, validate_posting_prefix,
+    },
     v23_incidence_tree::{V23_INCIDENCE_LEAVES, V23IncidenceTree},
 };
 
@@ -72,6 +76,86 @@ pub(crate) fn read_v23_incidence_holdout_queries(
     query_ordinals: &[u64],
 ) -> Result<Vec<[f32; 96]>> {
     read_incidence_query_cohort(bytes, query_ordinals, 32, 128)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V23IncidenceD2ReportEnvelope {
+    claim_eligible: bool,
+    d1_report_sha256: String,
+    dataset_id: String,
+    document_kind: String,
+    index_id: String,
+    page_uri: String,
+    report: V23D2Report,
+    schema: String,
+    source_archive_sha256: String,
+    stage: String,
+}
+
+pub(crate) fn read_v23_incidence_development_truth(
+    bytes: &[u8],
+) -> Result<Vec<V23IncidenceQueryTruth>> {
+    let envelope: V23IncidenceD2ReportEnvelope =
+        serde_json::from_slice(bytes).map_err(|error| {
+            BorsukError::InvalidStorage(format!("V23 incidence D2 report JSON differs: {error}"))
+        })?;
+    if envelope.claim_eligible
+        || envelope.schema != "borsuk-v23-d2-artifact-v1"
+        || envelope.document_kind != "publication-v3-v23-d2-report"
+        || envelope.stage != "d2"
+        || envelope.index_id != "index-bcda7bb66812e162d45077e6"
+        || envelope.dataset_id != "deep-image-96"
+        || envelope.source_archive_sha256
+            != "77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d"
+        || !exact_lower_hex(&envelope.d1_report_sha256, 64)
+        || envelope.page_uri.is_empty()
+    {
+        return Err(invalid("V23 incidence D2 report outer authority differs"));
+    }
+    validate_d2_report(&envelope.report)?;
+    if envelope.report.query_ordinals != (0..32).collect::<Vec<_>>() {
+        return Err(invalid("V23 incidence development query ordinals differ"));
+    }
+    let selector_key = V23D1ArmKey {
+        family: V23QuantizerFamily::SrhtPq,
+        code_width_bytes: 12,
+    };
+    let arm = envelope
+        .report
+        .arms
+        .iter()
+        .find(|arm| arm.selector_key == selector_key)
+        .ok_or_else(|| invalid("V23 incidence development width-12 arm is absent"))?;
+    if arm.pages.len() != 28_282 || arm.query_samples.len() != 32 {
+        return Err(invalid("V23 incidence development truth shape differs"));
+    }
+    arm.query_samples
+        .iter()
+        .zip(&envelope.report.query_ordinals)
+        .map(|(sample, query_ordinal)| {
+            let query_ordinal = u32::try_from(*query_ordinal)
+                .map_err(|_| invalid("V23 incidence development query ordinal overflows"))?;
+            let truth = V23IncidenceQueryTruth {
+                query_ordinal,
+                ground_truth_page_assignments: sample.ground_truth_page_assignments.clone(),
+                oracle_pages: sample.oracle_page_ordinals.clone(),
+            };
+            if sample.query_index != query_ordinal
+                || truth.oracle_pages
+                    != exact_coverage_oracle(&truth.ground_truth_page_assignments, 28_282)?
+                || truth
+                    .ground_truth_page_assignments
+                    .iter()
+                    .flatten()
+                    .chain(&truth.oracle_pages)
+                    .any(|page| *page >= 28_282)
+            {
+                return Err(invalid("V23 incidence development truth differs"));
+            }
+            Ok(truth)
+        })
+        .collect()
 }
 
 pub(crate) fn read_v23_incidence_holdout_neighbors(bytes: &[u8]) -> Result<Vec<(u32, Vec<u64>)>> {
@@ -186,12 +270,13 @@ fn leaf_distance(query: &[f32; 96], centroid: &[f16; 96], inverse_norm: f32) -> 
     Ok(distance)
 }
 
-pub(crate) fn rank_incidence_leaves(
+fn rank_incidence_leaves_with_shape(
     tree: &V23IncidenceTree,
     query: &[f32; 96],
     probes: usize,
+    expected_leaves: usize,
 ) -> Result<Vec<u16>> {
-    if tree.leaves.len() != V23_INCIDENCE_LEAVES || ![32, 64, 128].contains(&probes) {
+    if tree.leaves.len() != expected_leaves || probes == 0 || probes > 128 {
         return Err(invalid("V23 incidence leaf ranking shape differs"));
     }
     let query = normalized_query(query)?;
@@ -216,6 +301,17 @@ pub(crate) fn rank_incidence_leaves(
     ranked.sort_unstable();
     ranked.truncate(probes);
     Ok(ranked.into_iter().map(|entry| entry.leaf).collect())
+}
+
+pub(crate) fn rank_incidence_leaves(
+    tree: &V23IncidenceTree,
+    query: &[f32; 96],
+    probes: usize,
+) -> Result<Vec<u16>> {
+    if ![32, 64, 128].contains(&probes) {
+        return Err(invalid("V23 incidence leaf ranking shape differs"));
+    }
+    rank_incidence_leaves_with_shape(tree, query, probes, V23_INCIDENCE_LEAVES)
 }
 
 fn reciprocal_q32(rank: usize) -> Result<u64> {
@@ -273,7 +369,7 @@ impl V23IncidenceQueryWorkspace {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct V23IncidenceQueryTruth {
     pub(crate) query_ordinal: u32,
     pub(crate) ground_truth_page_assignments: Vec<Vec<u32>>,
@@ -429,17 +525,38 @@ pub(crate) fn recompute_v23_incidence_quality(
     })
 }
 
-fn exact_coverage_oracle(assignments: &[Vec<u32>]) -> Result<Vec<u32>> {
-    let candidates = assignments
+fn exact_coverage_candidates(assignments: &[Vec<u32>], page_count: usize) -> Result<Vec<u32>> {
+    let mut candidates = assignments
         .iter()
         .flatten()
         .copied()
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    if candidates.len() < 8 || candidates.len() > 20 {
+    if page_count < 8
+        || candidates.len() > 20
+        || candidates
+            .iter()
+            .any(|page| usize::try_from(*page).map_or(true, |page| page >= page_count))
+    {
         return Err(invalid("V23 incidence oracle candidate count differs"));
     }
+    for page in
+        0..u32::try_from(page_count).map_err(|_| invalid("V23 incidence page count exceeds u32"))?
+    {
+        if candidates.len() >= 8 {
+            break;
+        }
+        if candidates.binary_search(&page).is_err() {
+            candidates.push(page);
+            candidates.sort_unstable();
+        }
+    }
+    Ok(candidates)
+}
+
+fn exact_coverage_oracle(assignments: &[Vec<u32>], page_count: usize) -> Result<Vec<u32>> {
+    let candidates = exact_coverage_candidates(assignments, page_count)?;
     fn visit(
         candidates: &[u32],
         assignments: &[Vec<u32>],
@@ -514,7 +631,7 @@ pub(crate) fn bind_v23_incidence_holdout_truth(
                 })
                 .collect::<Result<Vec<_>>>()?;
             let ground_truth_page_assignments = all_assignments[..10].to_vec();
-            let oracle_pages = exact_coverage_oracle(&ground_truth_page_assignments)?;
+            let oracle_pages = exact_coverage_oracle(&ground_truth_page_assignments, page_count)?;
             Ok(V23IncidenceQueryTruth {
                 query_ordinal: *query_ordinal,
                 ground_truth_page_assignments,
@@ -608,12 +725,13 @@ fn selected_pages_scalar(
     Ok(pages)
 }
 
-pub(crate) fn score_incidence_query(
+fn score_incidence_query_with_shape(
     tree: &V23IncidenceTree,
     plane: &V23PostingPlane,
     cell: V23IncidenceCell,
     query: &[f32; 96],
     page_count: usize,
+    expected_leaves: usize,
 ) -> Result<V23IncidenceQueryEvidence> {
     if cell.arm != plane.arm
         || ![512, 1024, 2048].contains(&cell.cap)
@@ -622,8 +740,9 @@ pub(crate) fn score_incidence_query(
     {
         return Err(invalid("V23 incidence query cell differs"));
     }
-    validate_posting_prefix(plane, usize::from(cell.cap))?;
-    let ranked_leaf_ordinals = rank_incidence_leaves(tree, query, usize::from(cell.probes))?;
+    posting_prefix_eligibility(plane, usize::from(cell.cap))?;
+    let ranked_leaf_ordinals =
+        rank_incidence_leaves_with_shape(tree, query, usize::from(cell.probes), expected_leaves)?;
     let mut workspace = V23IncidenceQueryWorkspace::new(page_count)?;
     let (page_ordinals, posting_visits, touched_pages) = selected_pages_q32(
         plane,
@@ -649,6 +768,16 @@ pub(crate) fn score_incidence_query(
     })
 }
 
+pub(crate) fn score_incidence_query(
+    tree: &V23IncidenceTree,
+    plane: &V23PostingPlane,
+    cell: V23IncidenceCell,
+    query: &[f32; 96],
+    page_count: usize,
+) -> Result<V23IncidenceQueryEvidence> {
+    score_incidence_query_with_shape(tree, plane, cell, query, page_count, V23_INCIDENCE_LEAVES)
+}
+
 pub(crate) fn score_incidence_query_native(
     tree: &V23IncidenceTree,
     plane: &V23PostingPlane,
@@ -662,7 +791,7 @@ pub(crate) fn score_incidence_query_native(
     {
         return Err(invalid("V23 incidence native query cell differs"));
     }
-    validate_posting_prefix(plane, usize::from(cell.cap))?;
+    posting_prefix_eligibility(plane, usize::from(cell.cap))?;
     let ranked_leaf_ordinals = rank_incidence_leaves(tree, query, usize::from(cell.probes))?;
     let (page_ordinals, posting_visits, touched_pages) = selected_pages_q32(
         plane,
@@ -679,7 +808,81 @@ pub(crate) fn score_incidence_query_native(
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V23IncidenceEvaluationPreflightMeasurement {
+    pub(crate) distance_dimensions: u64,
+    pub(crate) distance_elapsed_ns: u64,
+    pub(crate) posting_visits: u64,
+    pub(crate) posting_elapsed_ns: u64,
+}
+
+fn v23_incidence_synthetic_preflight_query(ordinal: u64) -> [f32; 96] {
+    std::array::from_fn(|dimension| {
+        let value = ordinal
+            .wrapping_mul(131)
+            .wrapping_add((dimension as u64).wrapping_mul(17))
+            .wrapping_add(1)
+            % 251;
+        (value as i32 - 125) as f32
+    })
+}
+
+pub(crate) fn measure_v23_incidence_evaluation_preflight(
+    tree: &V23IncidenceTree,
+    plane: &V23PostingPlane,
+    query_count: usize,
+    page_count: usize,
+) -> Result<V23IncidenceEvaluationPreflightMeasurement> {
+    if query_count == 0 {
+        return Err(invalid(
+            "V23 incidence evaluation preflight query count differs",
+        ));
+    }
+    validate_posting_prefix(plane, 2_048)?;
+    let mut workspace = V23IncidenceQueryWorkspace::new(page_count)?;
+    let mut distance_elapsed_ns = 0_u64;
+    let mut posting_elapsed_ns = 0_u64;
+    let mut posting_visits = 0_u64;
+    for ordinal in 0..query_count {
+        let query = v23_incidence_synthetic_preflight_query(ordinal as u64);
+        let started = Instant::now();
+        let ranked = rank_incidence_leaves(tree, &query, 128)?;
+        distance_elapsed_ns = distance_elapsed_ns
+            .checked_add(
+                u64::try_from(started.elapsed().as_nanos())
+                    .unwrap_or(u64::MAX)
+                    .max(1),
+            )
+            .ok_or_else(|| invalid("V23 incidence evaluation preflight time overflows"))?;
+        let started = Instant::now();
+        let (pages, visits, _) = selected_pages_q32(plane, &ranked, 2_048, &mut workspace)?;
+        std::hint::black_box(pages);
+        posting_elapsed_ns = posting_elapsed_ns
+            .checked_add(
+                u64::try_from(started.elapsed().as_nanos())
+                    .unwrap_or(u64::MAX)
+                    .max(1),
+            )
+            .ok_or_else(|| invalid("V23 incidence evaluation preflight time overflows"))?;
+        posting_visits = posting_visits
+            .checked_add(u64::from(visits))
+            .ok_or_else(|| invalid("V23 incidence evaluation preflight visits overflow"))?;
+    }
+    let distance_dimensions = u64::try_from(query_count)
+        .ok()
+        .and_then(|count| count.checked_mul(65_536))
+        .and_then(|count| count.checked_mul(96))
+        .ok_or_else(|| invalid("V23 incidence evaluation preflight work overflows"))?;
+    Ok(V23IncidenceEvaluationPreflightMeasurement {
+        distance_dimensions,
+        distance_elapsed_ns,
+        posting_visits,
+        posting_elapsed_ns,
+    })
+}
+
 const LATENCY_MAGIC: &[u8; 8] = b"BVIL\x01\0\0\0";
+const DEVELOPMENT_LATENCY_BUNDLE_MAGIC: &[u8; 8] = b"BVIB\x01\0\0\0";
 
 pub(crate) fn v23_incidence_latency_p99_ns(samples: &[u64]) -> Result<u64> {
     if samples.len() < 10_000 || samples.contains(&0) {
@@ -738,6 +941,79 @@ pub(crate) fn decode_v23_incidence_latency_samples(bytes: &[u8]) -> Result<Vec<u
         .collect::<Vec<_>>();
     v23_incidence_latency_p99_ns(&samples)?;
     Ok(samples)
+}
+
+pub(crate) fn encode_v23_incidence_development_latency_bundle(
+    artifacts: &[Vec<u8>],
+) -> Result<Vec<u8>> {
+    if artifacts.len() != 18 {
+        return Err(invalid(
+            "V23 incidence development latency artifact count differs",
+        ));
+    }
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(DEVELOPMENT_LATENCY_BUNDLE_MAGIC);
+    bytes.extend_from_slice(&(artifacts.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    for artifact in artifacts {
+        decode_v23_incidence_latency_samples(artifact)?;
+        bytes.extend_from_slice(
+            &u64::try_from(artifact.len())
+                .map_err(|_| invalid("V23 incidence latency artifact length exceeds u64"))?
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(artifact);
+    }
+    let digest = blake3::hash(&bytes);
+    bytes.extend_from_slice(digest.as_bytes());
+    Ok(bytes)
+}
+
+pub(crate) fn decode_v23_incidence_development_latency_bundle(
+    bytes: &[u8],
+) -> Result<Vec<Vec<u8>>> {
+    if bytes.len() < 48 || bytes.get(..8) != Some(DEVELOPMENT_LATENCY_BUNDLE_MAGIC) {
+        return Err(invalid(
+            "V23 incidence development latency bundle header differs",
+        ));
+    }
+    let (body, claimed_digest) = bytes.split_at(bytes.len() - 32);
+    if blake3::hash(body).as_bytes() != claimed_digest
+        || body.get(8..12) != Some(&18_u32.to_le_bytes())
+        || body.get(12..16) != Some(&0_u32.to_le_bytes())
+    {
+        return Err(invalid(
+            "V23 incidence development latency bundle authority differs",
+        ));
+    }
+    let mut cursor = 16_usize;
+    let mut artifacts = Vec::with_capacity(18);
+    for _ in 0..18 {
+        let length = body
+            .get(cursor..cursor + 8)
+            .map(|value| u64::from_le_bytes(value.try_into().unwrap()))
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| invalid("V23 incidence latency bundle length differs"))?;
+        cursor = cursor
+            .checked_add(8)
+            .ok_or_else(|| invalid("V23 incidence latency bundle offset overflows"))?;
+        let end = cursor
+            .checked_add(length)
+            .ok_or_else(|| invalid("V23 incidence latency bundle offset overflows"))?;
+        let artifact = body
+            .get(cursor..end)
+            .ok_or_else(|| invalid("V23 incidence latency bundle is truncated"))?
+            .to_vec();
+        decode_v23_incidence_latency_samples(&artifact)?;
+        artifacts.push(artifact);
+        cursor = end;
+    }
+    if cursor != body.len() {
+        return Err(invalid(
+            "V23 incidence development latency bundle length differs",
+        ));
+    }
+    Ok(artifacts)
 }
 
 pub(crate) fn measure_v23_incidence_latency(
@@ -828,6 +1104,159 @@ pub(crate) struct V23IncidenceCellResult {
     pub(crate) latency_blake3: String,
     pub(crate) latency_bytes: u64,
     pub(crate) selections: Vec<V23IncidenceSelection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct V23IncidenceDevelopmentAuthority {
+    pub(crate) source_commit: String,
+    pub(crate) source_archive_sha256: String,
+    pub(crate) index_id: String,
+    pub(crate) dataset_id: String,
+    pub(crate) query_cohort_sha256: String,
+    pub(crate) tree_blake3: String,
+    pub(crate) posting_one_blake3: String,
+    pub(crate) posting_two_blake3: String,
+    pub(crate) executable_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct V23IncidenceDevelopmentArtifact {
+    pub(crate) schema: String,
+    pub(crate) claim_eligible: bool,
+    pub(crate) authority: V23IncidenceDevelopmentAuthority,
+    pub(crate) development: Vec<V23IncidenceCellResult>,
+    pub(crate) development_truth: Vec<V23IncidenceQueryTruth>,
+    pub(crate) sealed_cell: Option<V23IncidenceCell>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct V23IncidenceHoldoutTruthAuthority {
+    pub(crate) development_result_sha256: String,
+    pub(crate) neighbors_sha256: String,
+    pub(crate) page_roster_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct V23IncidenceHoldoutTruthArtifact {
+    pub(crate) schema: String,
+    pub(crate) claim_eligible: bool,
+    pub(crate) authority: V23IncidenceHoldoutTruthAuthority,
+    pub(crate) sealed_cell: V23IncidenceCell,
+    pub(crate) truth: Vec<V23IncidenceQueryTruth>,
+    pub(crate) layout: V23IncidenceLayoutQuality,
+}
+
+pub(crate) fn canonical_v23_incidence_holdout_truth_bytes(
+    artifact: &V23IncidenceHoldoutTruthArtifact,
+    expected_authority: &V23IncidenceHoldoutTruthAuthority,
+    expected_cell: V23IncidenceCell,
+) -> Result<Vec<u8>> {
+    if artifact.schema != "borsuk-v23-incidence-holdout-truth-v1"
+        || artifact.claim_eligible
+        || artifact.authority != *expected_authority
+        || artifact.sealed_cell != expected_cell
+        || !exact_lower_hex(&artifact.authority.development_result_sha256, 64)
+        || !exact_lower_hex(&artifact.authority.neighbors_sha256, 64)
+        || !exact_lower_hex(&artifact.authority.page_roster_sha256, 64)
+        || artifact.truth.len() != 128
+        || artifact
+            .truth
+            .iter()
+            .map(|truth| truth.query_ordinal)
+            .ne(32..160)
+        || recompute_v23_incidence_layout_quality(&artifact.truth)? != artifact.layout
+    {
+        return Err(invalid("V23 incidence holdout truth authority differs"));
+    }
+    validate_layout_quality(artifact.layout)?;
+    let value = serde_json::to_value(artifact)
+        .map_err(|_| invalid("V23 incidence holdout truth serialization failed"))?;
+    let mut bytes = serde_json::to_vec(&crate::v23_incidence::canonical_json_value(value))
+        .map_err(|_| invalid("V23 incidence holdout truth serialization failed"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+pub(crate) fn canonical_v23_incidence_development_artifact_bytes(
+    artifact: &V23IncidenceDevelopmentArtifact,
+    expected_authority: &V23IncidenceDevelopmentAuthority,
+    latency_artifacts: &[Vec<u8>],
+    development_truth: &[V23IncidenceQueryTruth],
+) -> Result<Vec<u8>> {
+    let authority = &artifact.authority;
+    if artifact.schema != "borsuk-v23-incidence-development-v1"
+        || artifact.claim_eligible
+        || authority != expected_authority
+        || !exact_lower_hex(&authority.source_commit, 40)
+        || !exact_lower_hex(&authority.source_archive_sha256, 64)
+        || !exact_lower_hex(&authority.query_cohort_sha256, 64)
+        || !exact_lower_hex(&authority.tree_blake3, 64)
+        || !exact_lower_hex(&authority.posting_one_blake3, 64)
+        || !exact_lower_hex(&authority.posting_two_blake3, 64)
+        || !exact_lower_hex(&authority.executable_sha256, 64)
+        || authority.index_id.is_empty()
+        || authority.dataset_id.is_empty()
+        || artifact.development_truth != development_truth
+        || artifact.development.len() != 18
+        || latency_artifacts.len() != 18
+        || artifact
+            .development
+            .iter()
+            .map(|cell| cell.cell)
+            .ne(V23IncidenceCell::registered_ladder())
+    {
+        return Err(invalid("V23 incidence development authority differs"));
+    }
+    for (cell, latency) in artifact.development.iter().zip(latency_artifacts) {
+        let selections = cell
+            .selections
+            .iter()
+            .map(|selection| (selection.query_ordinal, selection.page_ordinals.clone()))
+            .collect::<Vec<_>>();
+        let quality = recompute_v23_incidence_quality(&selections, development_truth, 28_282)?;
+        if quality != cell.quality {
+            return Err(invalid(
+                "V23 incidence development quality evidence differs",
+            ));
+        }
+        validate_quality(cell.quality, 32)?;
+        let projection =
+            project_v23_incidence_serving_bytes(100_000_000, usize::from(cell.cell.cap))?;
+        if cell.projected_serving_bytes != projection.total_bytes
+            || cell.maximum_posting_visits > u32::from(cell.cell.cap) * u32::from(cell.cell.probes)
+            || cell.maximum_touched_pages > cell.maximum_posting_visits
+        {
+            return Err(invalid("V23 incidence development budget evidence differs"));
+        }
+        validate_latency_binding(
+            cell.p99_ns,
+            &cell.latency_blake3,
+            cell.latency_bytes,
+            latency,
+        )?;
+    }
+    let expected_sealed = artifact
+        .development
+        .iter()
+        .find(|cell| {
+            cell.retention_passed
+                && cell.quality.passed
+                && cell.determinism_passed
+                && cell.projected_serving_bytes <= 3 * 1024 * 1024 * 1024
+                && cell.maximum_posting_visits <= 262_144
+                && cell.maximum_touched_pages <= 8_192
+                && cell.p99_ns <= 15_000_000
+        })
+        .map(|cell| cell.cell);
+    if artifact.sealed_cell != expected_sealed {
+        return Err(invalid("V23 incidence development seal differs"));
+    }
+    let value = serde_json::to_value(artifact)
+        .map_err(|_| invalid("V23 incidence development serialization failed"))?;
+    let mut bytes = serde_json::to_vec(&crate::v23_incidence::canonical_json_value(value))
+        .map_err(|_| invalid("V23 incidence development serialization failed"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1047,7 +1476,8 @@ pub(crate) struct V23IncidenceCampaignResult {
     pub(crate) dataset_id: String,
     pub(crate) query_cohort_sha256: String,
     pub(crate) tree_blake3: String,
-    pub(crate) posting_blake3: String,
+    pub(crate) posting_one_blake3: String,
+    pub(crate) posting_two_blake3: String,
     pub(crate) executable_sha256: String,
     pub(crate) campaign: V23IncidenceCampaignInput,
     pub(crate) sealed_cell: Option<V23IncidenceCell>,
@@ -1067,8 +1497,9 @@ impl V23IncidenceCampaignResult {
             dataset_id: "deep-image-96".to_string(),
             query_cohort_sha256: "3".repeat(64),
             tree_blake3: "4".repeat(64),
-            posting_blake3: "5".repeat(64),
-            executable_sha256: "6".repeat(64),
+            posting_one_blake3: "5".repeat(64),
+            posting_two_blake3: "6".repeat(64),
+            executable_sha256: "7".repeat(64),
             campaign: V23IncidenceCampaignInput::passing_fixture_for_latency(latency),
             sealed_cell: Some(V23IncidenceCell::registered_ladder()[0]),
             classification: V23IncidenceCampaignClass::FalsifierPassed,
@@ -1159,7 +1590,8 @@ pub(crate) fn canonical_v23_incidence_result_bytes(
         || !exact_lower_hex(&result.source_archive_sha256, 64)
         || !exact_lower_hex(&result.query_cohort_sha256, 64)
         || !exact_lower_hex(&result.tree_blake3, 64)
-        || !exact_lower_hex(&result.posting_blake3, 64)
+        || !exact_lower_hex(&result.posting_one_blake3, 64)
+        || !exact_lower_hex(&result.posting_two_blake3, 64)
         || !exact_lower_hex(&result.executable_sha256, 64)
         || result.index_id.is_empty()
         || result.dataset_id.is_empty()
@@ -1272,19 +1704,25 @@ pub(crate) fn canonical_v23_incidence_result_bytes(
     Ok(bytes)
 }
 
-pub(crate) fn evaluate_v23_incidence_cell(
+#[derive(Debug, Clone, Copy)]
+struct V23IncidenceEvaluationShape {
+    page_count: usize,
+    expected_leaves: usize,
+}
+
+fn evaluate_v23_incidence_cell_with_shape(
     tree: &V23IncidenceTree,
     plane: &V23PostingPlane,
     cell: V23IncidenceCell,
     queries: &[[f32; 96]],
     truth: &[V23IncidenceQueryTruth],
-    page_count: usize,
     latency_artifact: &[u8],
+    shape: V23IncidenceEvaluationShape,
 ) -> Result<V23IncidenceCellResult> {
     if queries.is_empty() || queries.len() != truth.len() {
         return Err(invalid("V23 incidence evaluation cohort differs"));
     }
-    validate_posting_prefix(plane, usize::from(cell.cap))?;
+    let retention_passed = posting_prefix_eligibility(plane, usize::from(cell.cap))?;
     let latency_samples = decode_v23_incidence_latency_samples(latency_artifact)?;
     let p99_ns = v23_incidence_latency_p99_ns(&latency_samples)?;
     let mut selections = Vec::with_capacity(queries.len());
@@ -1292,17 +1730,24 @@ pub(crate) fn evaluate_v23_incidence_cell(
     let mut maximum_touched_pages = 0_u32;
     let mut determinism_passed = true;
     for (query, expected) in queries.iter().zip(truth) {
-        let evidence = score_incidence_query(tree, plane, cell, query, page_count)?;
+        let evidence = score_incidence_query_with_shape(
+            tree,
+            plane,
+            cell,
+            query,
+            shape.page_count,
+            shape.expected_leaves,
+        )?;
         maximum_posting_visits = maximum_posting_visits.max(evidence.posting_visits);
         maximum_touched_pages = maximum_touched_pages.max(evidence.touched_pages);
         determinism_passed &= evidence.scalar_pages_equal;
         selections.push((expected.query_ordinal, evidence.page_ordinals));
     }
-    let quality = recompute_v23_incidence_quality(&selections, truth, page_count)?;
+    let quality = recompute_v23_incidence_quality(&selections, truth, shape.page_count)?;
     let projection = project_v23_incidence_serving_bytes(100_000_000, usize::from(cell.cap))?;
     Ok(V23IncidenceCellResult {
         cell,
-        retention_passed: true,
+        retention_passed,
         quality,
         projected_serving_bytes: projection.total_bytes,
         maximum_posting_visits,
@@ -1319,6 +1764,53 @@ pub(crate) fn evaluate_v23_incidence_cell(
             })
             .collect(),
     })
+}
+
+pub(crate) fn evaluate_v23_incidence_cell(
+    tree: &V23IncidenceTree,
+    plane: &V23PostingPlane,
+    cell: V23IncidenceCell,
+    queries: &[[f32; 96]],
+    truth: &[V23IncidenceQueryTruth],
+    page_count: usize,
+    latency_artifact: &[u8],
+) -> Result<V23IncidenceCellResult> {
+    evaluate_v23_incidence_cell_with_shape(
+        tree,
+        plane,
+        cell,
+        queries,
+        truth,
+        latency_artifact,
+        V23IncidenceEvaluationShape {
+            page_count,
+            expected_leaves: V23_INCIDENCE_LEAVES,
+        },
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn evaluate_v23_incidence_cell_test_shape(
+    tree: &V23IncidenceTree,
+    plane: &V23PostingPlane,
+    cell: V23IncidenceCell,
+    queries: &[[f32; 96]],
+    truth: &[V23IncidenceQueryTruth],
+    page_count: usize,
+    latency_artifact: &[u8],
+) -> Result<V23IncidenceCellResult> {
+    evaluate_v23_incidence_cell_with_shape(
+        tree,
+        plane,
+        cell,
+        queries,
+        truth,
+        latency_artifact,
+        V23IncidenceEvaluationShape {
+            page_count,
+            expected_leaves: tree.leaves.len(),
+        },
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1376,12 +1868,17 @@ mod tests {
 
     use super::{
         V23IncidenceCampaignClass, V23IncidenceCampaignInput, V23IncidenceCampaignResult,
-        V23IncidenceCell, V23IncidenceQueryTruth, V23IncidenceQueryWorkspace,
-        bind_v23_incidence_holdout_truth, canonical_v23_incidence_result_bytes,
-        classify_v23_incidence_campaign, decode_v23_incidence_latency_samples,
+        V23IncidenceCell, V23IncidenceDevelopmentArtifact, V23IncidenceDevelopmentAuthority,
+        V23IncidenceHoldoutTruthArtifact, V23IncidenceHoldoutTruthAuthority,
+        V23IncidenceQueryTruth, V23IncidenceQueryWorkspace, bind_v23_incidence_holdout_truth,
+        canonical_v23_incidence_development_artifact_bytes,
+        canonical_v23_incidence_holdout_truth_bytes, canonical_v23_incidence_result_bytes,
+        classify_v23_incidence_campaign, decode_v23_incidence_development_latency_bundle,
+        decode_v23_incidence_latency_samples, encode_v23_incidence_development_latency_bundle,
         encode_v23_incidence_latency_samples, evaluate_v23_incidence_cell,
-        measure_v23_incidence_latency, project_v23_incidence_serving_bytes, rank_incidence_leaves,
-        rank_incidence_leaves_scalar, read_v23_incidence_development_queries,
+        measure_v23_incidence_evaluation_preflight, measure_v23_incidence_latency,
+        project_v23_incidence_serving_bytes, rank_incidence_leaves, rank_incidence_leaves_scalar,
+        read_v23_incidence_development_queries, read_v23_incidence_development_truth,
         read_v23_incidence_holdout_neighbors, read_v23_incidence_holdout_queries,
         recompute_v23_incidence_layout_quality, recompute_v23_incidence_quality,
         score_incidence_query, score_incidence_query_native, v23_incidence_latency_p99_ns,
@@ -1577,6 +2074,17 @@ mod tests {
     }
 
     #[test]
+    fn v23_incidence_eval_preflight_measures_leaf_scan_and_posting_visits_separately() {
+        let measured =
+            measure_v23_incidence_evaluation_preflight(&ranking_tree(), &posting_plane(), 4, 16)
+                .unwrap();
+        assert_eq!(measured.distance_dimensions, 4 * 65_536 * 96);
+        assert!(measured.distance_elapsed_ns > 0);
+        assert!((1..=4 * 128 * 2048).contains(&measured.posting_visits));
+        assert!(measured.posting_elapsed_ns > 0);
+    }
+
+    #[test]
     fn v23_incidence_eval_latency_artifact_binds_all_raw_samples_and_p99() {
         let samples = (0..10_000_u64)
             .map(|index| 1_000_000 + index * 1_000)
@@ -1595,6 +2103,121 @@ mod tests {
         let mut too_slow = samples;
         too_slow[9_899..].fill(15_000_001);
         assert!(v23_incidence_latency_p99_ns(&too_slow).unwrap() > 15_000_000);
+    }
+
+    #[test]
+    fn v23_incidence_eval_development_latency_bundle_binds_all_eighteen_cells() {
+        let artifacts = (0..18)
+            .map(|ordinal| {
+                encode_v23_incidence_latency_samples(&vec![10_000 + ordinal; 10_000]).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let bytes = encode_v23_incidence_development_latency_bundle(&artifacts).unwrap();
+        assert_eq!(
+            decode_v23_incidence_development_latency_bundle(&bytes).unwrap(),
+            artifacts
+        );
+        for changed in [
+            bytes[..bytes.len() - 1].to_vec(),
+            {
+                let mut changed = bytes.clone();
+                changed[8] ^= 1;
+                changed
+            },
+            {
+                let mut changed = bytes.clone();
+                changed[24] ^= 1;
+                changed
+            },
+        ] {
+            assert!(decode_v23_incidence_development_latency_bundle(&changed).is_err());
+        }
+        assert!(encode_v23_incidence_development_latency_bundle(&artifacts[..17]).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_eval_development_artifact_recomputes_all_cells_and_seal() {
+        let latency = encode_v23_incidence_latency_samples(&vec![1_000_000; 10_000]).unwrap();
+        let latencies = vec![latency; 18];
+        let mut base = V23IncidenceCampaignInput::passing_fixture()
+            .development
+            .remove(0);
+        base.p99_ns = 1_000_000;
+        base.latency_blake3 = blake3::hash(&latencies[0]).to_hex().to_string();
+        base.latency_bytes = latencies[0].len() as u64;
+        let development = V23IncidenceCell::registered_ladder()
+            .into_iter()
+            .map(|cell| {
+                base.cell = cell;
+                base.projected_serving_bytes =
+                    project_v23_incidence_serving_bytes(100_000_000, cell.cap as usize)
+                        .unwrap()
+                        .total_bytes;
+                base.clone()
+            })
+            .collect::<Vec<_>>();
+        let authority = V23IncidenceDevelopmentAuthority {
+            source_commit: "1".repeat(40),
+            source_archive_sha256: "2".repeat(64),
+            index_id: "index-fixture".to_string(),
+            dataset_id: "deep-image-96".to_string(),
+            query_cohort_sha256: "3".repeat(64),
+            tree_blake3: "4".repeat(64),
+            posting_one_blake3: "5".repeat(64),
+            posting_two_blake3: "6".repeat(64),
+            executable_sha256: "7".repeat(64),
+        };
+        let artifact = V23IncidenceDevelopmentArtifact {
+            schema: "borsuk-v23-incidence-development-v1".to_string(),
+            claim_eligible: false,
+            authority: authority.clone(),
+            development,
+            development_truth: canonical_truth(0, 32),
+            sealed_cell: Some(V23IncidenceCell::registered_ladder()[0]),
+        };
+        let bytes = canonical_v23_incidence_development_artifact_bytes(
+            &artifact,
+            &authority,
+            &latencies,
+            &canonical_truth(0, 32),
+        )
+        .unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+
+        let mut changed = artifact.clone();
+        changed.authority.tree_blake3 = "8".repeat(64);
+        assert!(
+            canonical_v23_incidence_development_artifact_bytes(
+                &changed,
+                &authority,
+                &latencies,
+                &canonical_truth(0, 32),
+            )
+            .is_err()
+        );
+        let mut changed = artifact.clone();
+        changed.development_truth[0].ground_truth_page_assignments[0][0] = 9;
+        assert!(
+            canonical_v23_incidence_development_artifact_bytes(
+                &changed,
+                &authority,
+                &latencies,
+                &canonical_truth(0, 32),
+            )
+            .is_err()
+        );
+        let mut changed = artifact;
+        changed.development[3].selections[0].page_ordinals[1] =
+            changed.development[3].selections[0].page_ordinals[0];
+        assert!(
+            canonical_v23_incidence_development_artifact_bytes(
+                &changed,
+                &authority,
+                &latencies,
+                &canonical_truth(0, 32),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1619,6 +2242,17 @@ mod tests {
         assert!(recompute_v23_incidence_quality(&[(32, (0..8).collect())], &changed, 16).is_err());
         assert!(read_v23_incidence_development_queries(b"not parquet").is_err());
         assert!(read_v23_incidence_holdout_queries(b"", &(31..159).collect::<Vec<_>>()).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_eval_development_truth_rejects_nonartifact_outer_schema() {
+        assert!(read_v23_incidence_development_truth(b"{}\n").is_err());
+        assert!(
+            read_v23_incidence_development_truth(
+                br#"{"claim_eligible":false,"report":null,"schema":"borsuk-v23-d2-artifact-v1"}\n"#,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1652,6 +2286,74 @@ mod tests {
 
         pages.remove(&neighbors[127].1[99]);
         assert!(bind_v23_incidence_holdout_truth(&neighbors, &pages, 16).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_eval_exact_eight_pads_low_cardinality_candidate_set() {
+        let neighbors = (32..160_u32)
+            .map(|query| (query, (0..100_u64).collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
+        let pages = (0..100_u64)
+            .map(|id| (id, vec![(id % 4) as u32]))
+            .collect::<BTreeMap<_, _>>();
+        let truth = bind_v23_incidence_holdout_truth(&neighbors, &pages, 16).unwrap();
+        assert_eq!(truth.len(), 128);
+        assert!(
+            truth
+                .iter()
+                .all(|query| query.oracle_pages == (0..8).collect::<Vec<_>>())
+        );
+    }
+
+    #[test]
+    fn v23_incidence_eval_oracle_does_not_pad_existing_exact_eight_superset() {
+        let assignments = vec![
+            vec![0, 10],
+            vec![1, 11],
+            vec![2],
+            vec![3],
+            vec![4],
+            vec![5],
+            vec![6],
+            vec![7],
+            vec![8],
+            vec![9],
+        ];
+        assert_eq!(
+            super::exact_coverage_candidates(&assignments, 28_282).unwrap(),
+            (0..12).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn v23_incidence_eval_holdout_truth_artifact_recomputes_layout_and_bindings() {
+        let truth = canonical_truth(32, 128);
+        let authority = V23IncidenceHoldoutTruthAuthority {
+            development_result_sha256: "1".repeat(64),
+            neighbors_sha256: "2".repeat(64),
+            page_roster_sha256: "3".repeat(64),
+        };
+        let cell = V23IncidenceCell::registered_ladder()[0];
+        let artifact = V23IncidenceHoldoutTruthArtifact {
+            schema: "borsuk-v23-incidence-holdout-truth-v1".to_string(),
+            claim_eligible: false,
+            authority: authority.clone(),
+            sealed_cell: cell,
+            layout: recompute_v23_incidence_layout_quality(&truth).unwrap(),
+            truth,
+        };
+        assert_eq!(
+            canonical_v23_incidence_holdout_truth_bytes(&artifact, &authority, cell)
+                .unwrap()
+                .last(),
+            Some(&b'\n')
+        );
+        let mut changed = artifact.clone();
+        changed.authority.neighbors_sha256 = "4".repeat(64);
+        assert!(canonical_v23_incidence_holdout_truth_bytes(&changed, &authority, cell).is_err());
+        let mut changed = artifact;
+        changed.truth[0].oracle_pages.pop();
+        assert!(canonical_v23_incidence_holdout_truth_bytes(&changed, &authority, cell).is_err());
     }
 
     #[test]
@@ -1721,6 +2423,24 @@ mod tests {
         assert_eq!(result.latency_bytes, latency.len() as u64);
         assert!(result.maximum_posting_visits <= 16_384);
         assert!(result.maximum_touched_pages <= 16);
+
+        let mut below_retention = plane.clone();
+        for leaf in &mut below_retention.leaves {
+            leaf.prefixes[0].retained_assignments = 0;
+            leaf.prefixes[0].retained_mass_ppm = 0;
+        }
+        let below = evaluate_v23_incidence_cell(
+            &tree,
+            &below_retention,
+            cell,
+            &[query],
+            &truth,
+            16,
+            &latency,
+        )
+        .unwrap();
+        assert!(!below.retention_passed);
+        assert_eq!(below.quality, result.quality);
 
         let mut changed = latency;
         changed[20] ^= 1;
@@ -1836,6 +2556,9 @@ mod tests {
     fn v23_incidence_eval_canonical_result_recomputes_every_gate_and_latency_artifact() {
         let samples = vec![15_000_000_u64; 10_000];
         let latency = encode_v23_incidence_latency_samples(&samples).unwrap();
+        let mut result = V23IncidenceCampaignResult::passing_fixture(&latency);
+        result.posting_two_blake3 = "not-a-digest".to_string();
+        assert!(canonical_fixture(&result, &latency).is_err());
         let mut result = V23IncidenceCampaignResult::passing_fixture(&latency);
         let bytes = canonical_fixture(&result, &latency).unwrap();
         assert_eq!(bytes.last(), Some(&b'\n'));

@@ -84,31 +84,67 @@ def _valid_sha256(value: str | None) -> bool:
     )
 
 
-def _phase_roles(phase: str) -> tuple[set[str], tuple[str, ...]]:
+def _phase_roles(phase: str, *, preflight: bool) -> tuple[set[str], tuple[str, ...]]:
+    def complete(
+        roles: set[str], prefixes: tuple[str, ...]
+    ) -> tuple[set[str], tuple[str, ...]]:
+        if not preflight:
+            roles.add("preflight-receipt")
+        return roles, prefixes
+
     if phase == "tree-training":
-        return {"construction-manifest"}, ("training-shard-",)
+        roles = {"construction-manifest"}
+        if not preflight:
+            roles.add("dataset-meta")
+        return complete(roles, ("training-shard-",))
     if phase == "posting-construction":
-        return {"parent-receipt", "incidence-tree", "page-roster"}, ("page-body-",)
+        return complete(
+            {
+                "phase-manifest",
+                "parent-receipt",
+                "incidence-tree",
+                "page-roster",
+            },
+            ("page-body-",),
+        )
     if phase == "development-evaluation":
-        return {
+        roles = {
+            "phase-manifest",
             "parent-receipt",
             "incidence-tree",
             "incidence-postings-one",
             "incidence-postings-two",
-            "d2-report",
-            "query-parquet",
-        }, ()
+        }
+        if not preflight:
+            roles.update({"d2-report", "query-parquet"})
+        return complete(roles, ())
     if phase == "holdout-binding":
-        return {"parent-receipt", "page-roster", "neighbors-parquet"}, ("page-body-",)
+        roles = {
+            "phase-manifest",
+            "parent-receipt",
+            "page-roster",
+        }
+        if not preflight:
+            roles.update({"development-result", "neighbors-parquet"})
+        return complete(roles, ("page-body-",))
     if phase == "holdout-evaluation":
-        return {
+        roles = {
+            "phase-manifest",
             "parent-receipt",
             "incidence-tree",
             "incidence-postings-one",
             "incidence-postings-two",
-            "query-parquet",
-            "holdout-truth",
-        }, ()
+        }
+        if not preflight:
+            roles.update(
+                {
+                    "development-result",
+                    "development-latency",
+                    "query-parquet",
+                    "holdout-truth",
+                }
+            )
+        return complete(roles, ())
     raise ValueError("unknown V23 incidence phase")
 
 
@@ -150,6 +186,8 @@ def _validate_mount(mount: SandboxMount, *, runtime: bool) -> None:
             "incidence-tree",
             "incidence-postings-one",
             "incidence-postings-two",
+            "development-latency",
+            "holdout-latency",
         } or mount.role.startswith("page-body-")
         expected_algorithm = "blake3" if blake3_role else "sha256"
         if mount.digest_algorithm != expected_algorithm:
@@ -186,6 +224,14 @@ def validate_phase_inputs(policy: SandboxPolicy) -> None:
         not path.is_absolute() or ".." in path.parts for path in policy.host_canaries
     ):
         raise ValueError("host canary authority differs")
+    if not policy.phase_argv:
+        raise ValueError("phase execution gate is absent")
+    gate = policy.phase_argv[0]
+    preflight_gate = f"--preflight-{policy.phase}"
+    execute_gate = f"--execute-{policy.phase}"
+    if gate not in {preflight_gate, execute_gate}:
+        raise ValueError("phase execution gate differs")
+    preflight = gate == preflight_gate
 
     later_phase = policy.phase != "tree-training"
     if later_phase and not _valid_sha256(policy.parent_receipt_sha256):
@@ -216,7 +262,7 @@ def validate_phase_inputs(policy: SandboxPolicy) -> None:
         if capability_path in seen_sources or capability_path == policy.executable:
             raise ValueError("sandbox writable and read-only capabilities overlap")
 
-    fixed_roles, prefixes = _phase_roles(policy.phase)
+    fixed_roles, prefixes = _phase_roles(policy.phase, preflight=preflight)
     actual_roles = {mount.role for mount in policy.inputs}
     if not fixed_roles.issubset(actual_roles):
         raise ValueError("required phase input is absent")
@@ -224,7 +270,9 @@ def validate_phase_inputs(policy: SandboxPolicy) -> None:
         role not in fixed_roles and not any(role.startswith(prefix) for prefix in prefixes)
         for role in actual_roles
     ):
-        raise ValueError("phase input capability differs")
+        raise ValueError(
+            "preflight input capability differs" if preflight else "phase input capability differs"
+        )
     if policy.phase == "tree-training" and not any(
         role.startswith("training-shard-") for role in actual_roles
     ):
