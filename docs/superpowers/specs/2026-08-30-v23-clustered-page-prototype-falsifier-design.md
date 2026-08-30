@@ -142,9 +142,10 @@ Training is query-independent and identical for every page:
   validated and then unit normalized;
 - K is `min(32, row_count)`;
 - initialization is deterministic k-means++ with a SplitMix64 stream seeded by
-  the page body's BLAKE3 checksum; probability mass is squared cosine distance,
-  an exact boundary chooses the lowest input position, and zero total mass
-  chooses the lowest unused input position;
+  the first eight little-endian bytes of the page body's BLAKE3 checksum; the
+  first center is `(next_u64 * row_count) >> 64`, subsequent probability mass
+  is squared cosine distance, a cumulative boundary chooses the lowest input
+  position, and zero total mass chooses the lowest unused input position;
 - run exactly eight Lloyd iterations in f64 accumulation and input order;
 - assignment uses maximum cosine similarity with the lowest-center tie;
 - normalize every nonempty mean before the next iteration;
