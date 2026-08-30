@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import dataclasses
 import hashlib
@@ -290,6 +291,65 @@ def _json_page(page_ordinal: int) -> dict[str, object]:
     }
 
 
+def _fixture_terminal(
+    registered: subject.RegisteredAuthority, digests: dict[str, str]
+) -> dict[str, object]:
+    binary_sha256 = "11" * 32
+    source_archive_sha256 = "22" * 32
+    return {
+        "schema_version": 5,
+        "status": "complete",
+        "role": "runtime",
+        "attempt": 1,
+        "attempt_id": "runtime-v23-d2-r01-f7a6e06a6a40c1165b6cb889-arm-0000-a0001",
+        "instance_id": "i-0123456789abcdef0",
+        "source_archive_sha256": source_archive_sha256,
+        "manifest_sha256": "33" * 32,
+        "protocol_sha256": "44" * 32,
+        "binary_sha256": binary_sha256,
+        "purchase_option": "spot",
+        "runtime_profile": "recall",
+        "arm_index": 0,
+        "max_active_searches": 4,
+        "max_waiting_searches": 16,
+        "leaf_read_width": 32,
+        "max_inflight_leaf_reads": 48,
+        "max_parallel_decode_rank_tasks": 2,
+        "cpu_threads": 3,
+        "io_threads": 88,
+        "s3_get_concurrency": 64,
+        "ram_budget_bytes": 3 * 1024**3,
+        "disk_cache_max_bytes": 0,
+        "exact_read_max_physical_amplification": 2,
+        "execution_contract_sha256": "55" * 32,
+        "artifact_upload_reconciliations": 0,
+        "claim_eligible": False,
+        "v23_stage": "d2",
+        "v23_passed": False,
+        "v23_result_sha256": digests["result"],
+        "v23_page_prefix": f"{registered.attempt_prefix}pages",
+        "v23_d2_report_sha256": digests["report"],
+        "v23_pages_sha256": digests["roster"],
+        "v23_summary_sha256": "66" * 32,
+        "v23_d1_receipt_sha256": "77" * 32,
+        "v23_d1_report_sha256": "88" * 32,
+        "v23_prerequisite_binary_sha256": binary_sha256,
+        "base_build_terminal_sha256": "99" * 32,
+        "base_manifest_sha256": "aa" * 32,
+        "base_protocol_sha256": "bb" * 32,
+        "base_source_archive_sha256": "cc" * 32,
+        "base_index_receipt_sha256": "dd" * 32,
+        "base_object_roster_sha256": "ee" * 32,
+        "base_inventory_sha256": "ff" * 32,
+        "base_index_id": "fixture-index",
+        "base_index_uri": "s3://fixture-bucket/indexes/fixture-index",
+        "diagnostic_source_archive_sha256": source_archive_sha256,
+        "memory_max_bytes": 32 * 1024**3,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 1024**3,
+    }
+
+
 @dataclasses.dataclass
 class _AuthorityFixture:
     temporary: tempfile.TemporaryDirectory[str]
@@ -302,7 +362,6 @@ class _AuthorityFixture:
     def rewrite(self) -> None:
         paths = {name: Path(self.arguments[f"{name}_path"]) for name in ("terminal", "result", "report", "roster")}
         documents = {
-            "terminal": {"schema": "fixture-terminal-v1"},
             "result": {"schema": "fixture-result-v1"},
             "report": self.report,
             "roster": self.roster,
@@ -312,6 +371,13 @@ class _AuthorityFixture:
             payload = _canonical_payload(document)
             paths[name].write_bytes(payload)
             digests[name] = hashlib.sha256(payload).hexdigest()
+        terminal_payload = json.dumps(
+            _fixture_terminal(self.registered, digests),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode() + b"\n"
+        paths["terminal"].write_bytes(terminal_payload)
+        digests["terminal"] = hashlib.sha256(terminal_payload).hexdigest()
         query_path = Path(self.arguments["query_path"])
         digests["query"] = hashlib.sha256(query_path.read_bytes()).hexdigest()
         self.registered = dataclasses.replace(
@@ -479,6 +545,100 @@ def _authority_fixture() -> _AuthorityFixture:
 
 
 class AuthorityAndQualityTests(unittest.TestCase):
+    def test_historical_terminal_preserves_writer_bytes_and_strict_authority(self) -> None:
+        payload = base64.b64decode(
+            "eyJzY2hlbWFfdmVyc2lvbiI6NSwic3RhdHVzIjoiY29tcGxldGUiLCJyb2xlIjoicnVudGltZSIsImF0dGVtcHQi"
+            "OjEsImF0dGVtcHRfaWQiOiJydW50aW1lLXYyMy1kMi1yMDEtZjdhNmUwNmE2YTQwYzExNjViNmNiODg5LWFybS0w"
+            "MDAwLWEwMDAxIiwiaW5zdGFuY2VfaWQiOiJpLTBjZTg5MjI1Y2Y5NmNhZDU1Iiwic291cmNlX2FyY2hpdmVfc2hh"
+            "MjU2IjoiMzhmODliOGEyYjA4NzZlMDA2NzQzM2ZmNzBiNWI1OThlNGE0N2Q1MzFhYTdkMzcyZjJkNDUzNGYzNDg2"
+            "ZDhlMCIsIm1hbmlmZXN0X3NoYTI1NiI6ImFkMjQ0MGI3ZDMxZGJhOGExNDYyNDJiNmFjNWVkZDlhNGViNTJlMTk3"
+            "Nzc4MDRkOWI4N2RiYTYyNjkyMzc1NTciLCJwcm90b2NvbF9zaGEyNTYiOiI5NjYwNGUzNjg4NTA4NDgyNGU5OWFj"
+            "YzM5ZDEyODNhMTkwMTg5MGZmMDU2YzIwZmM1OGI3ZWM2MWFhYmViNGZjIiwiYmluYXJ5X3NoYTI1NiI6IjhhZGZm"
+            "MTcwYmFmOWM0MDdiYjY2NDU4MTEyMGY2YTlkOTIzZTJhOTI5YjY4NWI2NWE2MzU0M2ZkMTdhZDI5MGQiLCJwdXJj"
+            "aGFzZV9vcHRpb24iOiJzcG90IiwicnVudGltZV9wcm9maWxlIjoicmVjYWxsIiwiYXJtX2luZGV4IjowLCJtYXhf"
+            "YWN0aXZlX3NlYXJjaGVzIjo0LCJtYXhfd2FpdGluZ19zZWFyY2hlcyI6MTYsImxlYWZfcmVhZF93aWR0aCI6MzIs"
+            "Im1heF9pbmZsaWdodF9sZWFmX3JlYWRzIjo0OCwibWF4X3BhcmFsbGVsX2RlY29kZV9yYW5rX3Rhc2tzIjoyLCJj"
+            "cHVfdGhyZWFkcyI6MywiaW9fdGhyZWFkcyI6ODgsInMzX2dldF9jb25jdXJyZW5jeSI6NjQsInJhbV9idWRnZXRf"
+            "Ynl0ZXMiOjMyMjEyMjU0NzIsImRpc2tfY2FjaGVfbWF4X2J5dGVzIjowLCJleGFjdF9yZWFkX21heF9waHlzaWNh"
+            "bF9hbXBsaWZpY2F0aW9uIjoyLCJleGVjdXRpb25fY29udHJhY3Rfc2hhMjU2IjoiZmJmMjQzODFlNGViYTQ2OTZl"
+            "YjBlNWNkNGQ1MzQ3YmFmNjdiNTRkODJiYzJkN2IyMjQ0OGUxZDVjNzM5N2NjNCIsImFydGlmYWN0X3VwbG9hZF9y"
+            "ZWNvbmNpbGlhdGlvbnMiOjAsImNsYWltX2VsaWdpYmxlIjpmYWxzZSwidjIzX3N0YWdlIjoiZDIiLCJ2MjNfcGFz"
+            "c2VkIjpmYWxzZSwidjIzX3Jlc3VsdF9zaGEyNTYiOiI0MWVjMmI0ZWI5ZTA1MDZmNDczMmMyZTBmZjM0ZDkyZTE0"
+            "OTNiMjQ5NTM2NjljNDg2ZmM1NzE0YTM4MDAyYTAwIiwidjIzX3BhZ2VfcHJlZml4IjoiczM6Ly9ib3JzdWstYmVu"
+            "Y2gtNDUzMTgyNTY5NTI0LWV1YzEvcHVibGljYXRpb24vdjMvMjAyNjA4MTIvcmVzdWx0cy9yMDEtZjdhNmUwNmE2"
+            "YTQwYzExNjViNmNiODg5L3J1bnRpbWUtdjIzLWQyL2FybXMvMDAwMC9hdHRlbXB0cy8wMDAxL3BhZ2VzIiwidjIz"
+            "X2QyX3JlcG9ydF9zaGEyNTYiOiI2NjVkYzIwNmQwNDA3M2I4Y2JjMGI4YmFiOWU1NjQ1NzYwNDQwZDIzMzZkZGY0"
+            "YmZlYmVhODFkMTc2YjQ3NzlkIiwidjIzX3BhZ2VzX3NoYTI1NiI6ImRmYTU3NTljMDY2NjM2NTViNGE5NjNhNzY4"
+            "N2I0MGM4YmQ4MDIwYmViZjgwNWQ3YzgyNWE4OGM2ZDBkZjUzZTEiLCJ2MjNfc3VtbWFyeV9zaGEyNTYiOiJmOGI5"
+            "MzQxMTI2ZTZiYzcwMzU5ZDNkZmNlYjQ2YjQwNWY5N2Q1Y2ZmNTRjMWFkZTFlZWZlMWEwZDFlODIzZDFiIiwidjIz"
+            "X2QxX3JlY2VpcHRfc2hhMjU2IjoiNmQ3ZTc5ZTM5OGE1M2VlYmYwODAzMDllOTQzNGY0MGYzMDIxOTEzZTgxMzdi"
+            "YmY3MzM0NThjZGZjMGVjZTIxMCIsInYyM19kMV9yZXBvcnRfc2hhMjU2IjoiMTI4YTVkOTVjOGYwZTExZWQ2ZDU4"
+            "ZDYzMTlkZTM1MTk2ZDhhYjkxZGQyNTNiZTUxODIxNjY1N2I1NzIwMWM3YyIsInYyM19wcmVyZXF1aXNpdGVfYmlu"
+            "YXJ5X3NoYTI1NiI6IjhhZGZmMTcwYmFmOWM0MDdiYjY2NDU4MTEyMGY2YTlkOTIzZTJhOTI5YjY4NWI2NWE2MzU0"
+            "M2ZkMTdhZDI5MGQiLCJiYXNlX2J1aWxkX3Rlcm1pbmFsX3NoYTI1NiI6ImI1NTk1OWE2Y2IzZjI0Nzg1NTc2MDYw"
+            "NTBmZTIyYjUyMDU5YjQyNTRjOWRiZGJmNDMwYWU5YTQ1YTU1MjE3ZTEiLCJiYXNlX21hbmlmZXN0X3NoYTI1NiI6"
+            "Ijg5OWRkYWMwY2JjM2ZlZGNhYzllN2NmYzQwZTBiMDNmNDlmOWU4ZDgzMTMwMDYzN2JlZWYxMjBiMWVhMTM1MGEi"
+            "LCJiYXNlX3Byb3RvY29sX3NoYTI1NiI6ImJhOTYyZDVhNzk2ZDA4MGE5YzEwZDY5MDY2YTIzNDBkNTllYTdiYTE1"
+            "ODhhMjVhZjFhZjRiOWQ5N2EyMGRhYzYiLCJiYXNlX3NvdXJjZV9hcmNoaXZlX3NoYTI1NiI6ImY1NjFhMDRkY2Jm"
+            "YTQzMzUzZjhkZDY2YzQyNzNkYTIzMzI1NjY4Y2Q1MmZkMDZlY2EzZGNmZDg0NTEyN2ExNjQiLCJiYXNlX2luZGV4"
+            "X3JlY2VpcHRfc2hhMjU2IjoiMTlkZDBmNTc4ODYyNWJiNGM4N2FkZjVjZDg2YTk0MmJlN2FkZGQ3OTdjZjJjZWIw"
+            "NjUxZWE4MDQ3NmNhNTE4OSIsImJhc2Vfb2JqZWN0X3Jvc3Rlcl9zaGEyNTYiOiIyODg5NjVkNzJkMzliMmI0MWNm"
+            "NzFlNDA4MGQzZGUzYzZhOGY1MmI5M2M2OWQxNzY1MmZhOWNlOWVmMjliOWI5IiwiYmFzZV9pbnZlbnRvcnlfc2hh"
+            "MjU2IjoiYzM3YmZmYzBjOTQxNTdkMjE2NTI2M2IwZGQ4NzNmMGM0MDlhZGQ3MmZmYzBhYTNjZmUwNWE4NTM5ZDdk"
+            "M2Y3YyIsImJhc2VfaW5kZXhfaWQiOiJpbmRleC1iY2RhN2JiNjY4MTJlMTYyZDQ1MDc3ZTYiLCJiYXNlX2luZGV4"
+            "X3VyaSI6InMzOi8vYm9yc3VrLWJlbmNoLTQ1MzE4MjU2OTUyNC1ldWMxL3B1YmxpY2F0aW9uL3YzLzIwMjYwODEy"
+            "L2luZGV4ZXMvYnVpbGQtYXR0ZW1wdHMvMDAwMS9pbmRleC1iY2RhN2JiNjY4MTJlMTYyZDQ1MDc3ZTYiLCJkaWFn"
+            "bm9zdGljX3NvdXJjZV9hcmNoaXZlX3NoYTI1NiI6IjM4Zjg5YjhhMmIwODc2ZTAwNjc0MzNmZjcwYjViNTk4ZTRh"
+            "NDdkNTMxYWE3ZDM3MmYyZDQ1MzRmMzQ4NmQ4ZTAiLCJtZW1vcnlfbWF4X2J5dGVzIjozNDM1OTczODM2OCwibWVt"
+            "b3J5X3N3YXBfbWF4X2J5dGVzIjowLCJtZW1vcnlfcGVha19ieXRlcyI6MTc3NDM0NTAxMTJ9Cg=="
+        )
+        self.assertEqual(
+            hashlib.sha256(payload).hexdigest(),
+            subject.REGISTERED_AUTHORITY.terminal_sha256,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "terminal.json"
+            path.write_bytes(payload)
+            terminal = subject._read_historical_runtime_terminal(
+                path, subject.REGISTERED_AUTHORITY
+            )
+            self.assertEqual(terminal["v23_stage"], "d2")
+
+            mutations = []
+            reordered = json.dumps(
+                json.loads(payload), sort_keys=True, separators=(",", ":")
+            ).encode() + b"\n"
+            mutations.append(
+                ("registered-bytes", reordered, subject.REGISTERED_AUTHORITY)
+            )
+            for name, mutate in (
+                ("bool-attempt", lambda value: value.__setitem__("attempt", True)),
+                ("extra-field", lambda value: value.__setitem__("extra", 1)),
+                (
+                    "result-binding",
+                    lambda value: value.__setitem__("v23_result_sha256", "00" * 32),
+                ),
+            ):
+                value = json.loads(payload)
+                mutate(value)
+                changed = json.dumps(
+                    value, ensure_ascii=False, separators=(",", ":")
+                ).encode() + b"\n"
+                mutations.append(
+                    (
+                        name,
+                        changed,
+                        dataclasses.replace(
+                            subject.REGISTERED_AUTHORITY,
+                            terminal_sha256=hashlib.sha256(changed).hexdigest(),
+                        ),
+                    )
+                )
+            for name, changed, registered in mutations:
+                path.write_bytes(changed)
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    subject._read_historical_runtime_terminal(path, registered)
+
     def test_load_authority_binds_exact_bytes_schema_and_scientific_shape(self) -> None:
         fixture = _authority_fixture()
         self.addCleanup(fixture.temporary.cleanup)
@@ -937,8 +1097,7 @@ hashlib.sha256 = _sha256
 
         self.assertNotEqual(completed.returncode, 0)
         self.assertNotIn("ModuleNotFoundError", completed.stderr)
-        self.assertIn("FileNotFoundError", completed.stderr)
-        self.assertIn("result.json", completed.stderr)
+        self.assertIn("terminal marker fields differ", completed.stderr)
 
     def test_s3_client_timeouts_keep_one_request_below_wedge_limit(self) -> None:
         config = subject._s3_config()

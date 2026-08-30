@@ -44,6 +44,105 @@ _PSI_LIMIT_PPM = 500_000
 _SWAP_GROWTH_LIMIT_BYTES = 128 * 1024**2
 _PROGRESS_LIMIT_NS = 300 * 1_000_000_000
 
+_HISTORICAL_TERMINAL_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "role",
+        "attempt",
+        "attempt_id",
+        "instance_id",
+        "source_archive_sha256",
+        "manifest_sha256",
+        "protocol_sha256",
+        "binary_sha256",
+        "purchase_option",
+        "runtime_profile",
+        "arm_index",
+        "max_active_searches",
+        "max_waiting_searches",
+        "leaf_read_width",
+        "max_inflight_leaf_reads",
+        "max_parallel_decode_rank_tasks",
+        "cpu_threads",
+        "io_threads",
+        "s3_get_concurrency",
+        "ram_budget_bytes",
+        "disk_cache_max_bytes",
+        "exact_read_max_physical_amplification",
+        "execution_contract_sha256",
+        "artifact_upload_reconciliations",
+        "claim_eligible",
+        "v23_stage",
+        "v23_passed",
+        "v23_result_sha256",
+        "v23_page_prefix",
+        "v23_d2_report_sha256",
+        "v23_pages_sha256",
+        "v23_summary_sha256",
+        "v23_d1_receipt_sha256",
+        "v23_d1_report_sha256",
+        "v23_prerequisite_binary_sha256",
+        "base_build_terminal_sha256",
+        "base_manifest_sha256",
+        "base_protocol_sha256",
+        "base_source_archive_sha256",
+        "base_index_receipt_sha256",
+        "base_object_roster_sha256",
+        "base_inventory_sha256",
+        "base_index_id",
+        "base_index_uri",
+        "diagnostic_source_archive_sha256",
+        "memory_max_bytes",
+        "memory_swap_max_bytes",
+        "memory_peak_bytes",
+    }
+)
+_HISTORICAL_TERMINAL_DIGEST_FIELDS = frozenset(
+    {
+        "source_archive_sha256",
+        "manifest_sha256",
+        "protocol_sha256",
+        "binary_sha256",
+        "execution_contract_sha256",
+        "v23_result_sha256",
+        "v23_d2_report_sha256",
+        "v23_pages_sha256",
+        "v23_summary_sha256",
+        "v23_d1_receipt_sha256",
+        "v23_d1_report_sha256",
+        "v23_prerequisite_binary_sha256",
+        "base_build_terminal_sha256",
+        "base_manifest_sha256",
+        "base_protocol_sha256",
+        "base_source_archive_sha256",
+        "base_index_receipt_sha256",
+        "base_object_roster_sha256",
+        "base_inventory_sha256",
+        "diagnostic_source_archive_sha256",
+    }
+)
+_HISTORICAL_TERMINAL_INT_FIELDS = frozenset(
+    {
+        "attempt",
+        "arm_index",
+        "max_active_searches",
+        "max_waiting_searches",
+        "leaf_read_width",
+        "max_inflight_leaf_reads",
+        "max_parallel_decode_rank_tasks",
+        "cpu_threads",
+        "io_threads",
+        "s3_get_concurrency",
+        "ram_budget_bytes",
+        "disk_cache_max_bytes",
+        "exact_read_max_physical_amplification",
+        "artifact_upload_reconciliations",
+        "memory_max_bytes",
+        "memory_swap_max_bytes",
+        "memory_peak_bytes",
+    }
+)
 _RESULT_FIELDS = frozenset(
     {
         "schema",
@@ -658,6 +757,83 @@ def _read_canonical_json(path: Path, expected_sha256: str, role: str) -> dict[st
     return value
 
 
+def _read_historical_runtime_terminal(
+    path: Path, registered: RegisteredAuthority
+) -> dict[str, object]:
+    """Authenticate the shell-writer's compact insertion-order terminal."""
+
+    if type(path) is not Path:
+        path = Path(path)
+    payload = path.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != registered.terminal_sha256:
+        raise ValueError("terminal marker SHA-256 differs")
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("terminal marker is not JSON") from error
+    expected_payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8") + b"\n"
+    terminal = _exact_dict(value, _HISTORICAL_TERMINAL_FIELDS, "terminal marker")
+    if payload != expected_payload:
+        raise ValueError("terminal marker bytes are not canonical")
+    if any(not _digest_is_valid(terminal[field]) for field in _HISTORICAL_TERMINAL_DIGEST_FIELDS):
+        raise ValueError("terminal marker digest differs")
+    for field in _HISTORICAL_TERMINAL_INT_FIELDS:
+        _concrete_nonnegative_int(terminal[field], f"terminal marker {field}")
+    fixed = {
+        "schema_version": 5,
+        "status": "complete",
+        "role": "runtime",
+        "attempt": 1,
+        "attempt_id": "runtime-v23-d2-r01-f7a6e06a6a40c1165b6cb889-arm-0000-a0001",
+        "purchase_option": "spot",
+        "runtime_profile": "recall",
+        "arm_index": 0,
+        "max_active_searches": 4,
+        "max_waiting_searches": 16,
+        "leaf_read_width": 32,
+        "max_inflight_leaf_reads": 48,
+        "max_parallel_decode_rank_tasks": 2,
+        "cpu_threads": 3,
+        "io_threads": 88,
+        "s3_get_concurrency": 64,
+        "ram_budget_bytes": 3 * 1024**3,
+        "disk_cache_max_bytes": 0,
+        "exact_read_max_physical_amplification": 2,
+        "artifact_upload_reconciliations": 0,
+        "claim_eligible": False,
+        "v23_stage": "d2",
+        "v23_passed": False,
+        "memory_max_bytes": 32 * 1024**3,
+        "memory_swap_max_bytes": 0,
+    }
+    if any(type(terminal[field]) is not type(expected) or terminal[field] != expected for field, expected in fixed.items()):
+        raise ValueError("terminal marker frozen authority differs")
+    if (
+        type(terminal["instance_id"]) is not str
+        or re.fullmatch(r"i-[0-9a-f]+", terminal["instance_id"]) is None
+        or type(terminal["base_index_id"]) is not str
+        or not terminal["base_index_id"]
+        or type(terminal["base_index_uri"]) is not str
+        or not terminal["base_index_uri"].startswith("s3://")
+        or terminal["v23_result_sha256"] != registered.result_sha256
+        or terminal["v23_d2_report_sha256"] != registered.report_sha256
+        or terminal["v23_pages_sha256"] != registered.roster_sha256
+        or terminal["v23_page_prefix"] != f"{registered.attempt_prefix}pages"
+        or terminal["v23_prerequisite_binary_sha256"] != terminal["binary_sha256"]
+        or terminal["diagnostic_source_archive_sha256"]
+        != terminal["source_archive_sha256"]
+        or terminal["memory_peak_bytes"] <= 0
+        or terminal["memory_peak_bytes"] > terminal["memory_max_bytes"]
+    ):
+        raise ValueError("terminal marker authority differs")
+    return terminal
+
+
 def _page_from_json(value: object) -> PageRef:
     item = _exact_dict(value, _PAGE_FIELDS, "page reference")
     generation = item["generation_checksum"]
@@ -944,7 +1120,7 @@ def load_authority(
 
     _validate_registered(registered)
     _validate_shape(shape)
-    _read_canonical_json(Path(terminal_path), registered.terminal_sha256, "terminal marker")
+    _read_historical_runtime_terminal(Path(terminal_path), registered)
     _read_canonical_json(Path(result_path), registered.result_sha256, "result receipt")
     report_artifact = _read_canonical_json(
         Path(report_path), registered.report_sha256, "D2 report"
