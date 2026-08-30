@@ -539,52 +539,49 @@ pub(crate) fn assign_one_leaf(
 pub(crate) fn assign_two_beam_leaves(
     tree: &V23IncidenceTree,
     vector: &[f32; 96],
-    source_ordinal: u64,
+    _source_ordinal: u64,
 ) -> Result<BeamSelectedLeaves> {
     let row = normalized(vector)?;
     let node_count = tree.nodes.len();
-    let mut candidates = vec![(0_usize, 0.0_f32)];
+    let mut candidates = vec![0_usize];
     for _ in 0..tree.shape.depth {
         let mut next = Vec::with_capacity(candidates.len() * 2);
-        for (index, penalty) in candidates {
+        for index in candidates {
             let node = tree
                 .nodes
                 .get(index)
                 .ok_or_else(|| invalid("V23 incidence beam node differs"))?;
-            let score = split_score_simd(node, &row)?.0;
-            let boundary = f32::from_bits(node.boundary_score_bits);
-            let zero = take_zero(node, score, source_ordinal);
-            next.push((
-                if zero {
-                    node.child_zero_index as usize
-                } else {
-                    node.child_one_index as usize
-                },
-                penalty,
-            ));
-            next.push((
-                if zero {
-                    node.child_one_index as usize
-                } else {
-                    node.child_zero_index as usize
-                },
-                penalty + (score - boundary).abs(),
-            ));
+            for (child, centroid, inverse_norm) in [
+                (
+                    node.child_zero_index as usize,
+                    node.child_zero.map(f16::to_f32),
+                    node.child_zero_inverse_norm,
+                ),
+                (
+                    node.child_one_index as usize,
+                    node.child_one.map(f16::to_f32),
+                    node.child_one_inverse_norm,
+                ),
+            ] {
+                let dot = borsuk_fma::fused_dot_8x12(&row, &centroid)
+                    .map_err(|_| invalid("V23 incidence fused SIMD backend is unavailable"))?
+                    .0;
+                next.push((1.0 - dot * inverse_norm, child));
+            }
         }
         next.sort_unstable_by(|left, right| {
-            left.1
-                .total_cmp(&right.1)
-                .then_with(|| left.0.cmp(&right.0))
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
         });
-        next.dedup_by_key(|entry| entry.0);
         next.truncate(2);
-        candidates = next;
+        candidates = next.into_iter().map(|entry| entry.1).collect();
     }
     if candidates.len() != 2 {
         return Err(invalid("V23 incidence beam leaves differ"));
     }
     let mut leaves = [0_u16; 2];
-    for (output, (index, _)) in leaves.iter_mut().zip(candidates) {
+    for (output, index) in leaves.iter_mut().zip(candidates) {
         *output = u16::try_from(
             index
                 .checked_sub(node_count)
@@ -910,6 +907,46 @@ mod tests {
         lanes.into_iter().fold(0.0_f32, |sum, value| sum + value)
     }
 
+    fn reference_beam(tree: &super::V23IncidenceTree, vector: &[f32; 96]) -> [u16; 2] {
+        let row = super::normalized(vector).unwrap();
+        let node_count = tree.nodes.len();
+        let mut candidates = vec![0_usize];
+        for _ in 0..tree.shape.depth {
+            let mut next = Vec::with_capacity(candidates.len() * 2);
+            for index in candidates {
+                let node = &tree.nodes[index];
+                for (child, centroid, inverse_norm) in [
+                    (
+                        node.child_zero_index as usize,
+                        node.child_zero.map(f16::to_f32),
+                        node.child_zero_inverse_norm,
+                    ),
+                    (
+                        node.child_one_index as usize,
+                        node.child_one.map(f16::to_f32),
+                        node.child_one_inverse_norm,
+                    ),
+                ] {
+                    let distance = 1.0 - reference_dot(&row, &centroid) * inverse_norm;
+                    next.push((distance, child));
+                }
+            }
+            next.sort_unstable_by(|left, right| {
+                left.0
+                    .total_cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            });
+            next.truncate(2);
+            candidates = next.into_iter().map(|entry| entry.1).collect();
+        }
+        candidates
+            .into_iter()
+            .map(|index| u16::try_from(index - node_count).unwrap())
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap()
+    }
+
     #[test]
     fn v23_incidence_tree_split_uses_exact_fma_boundary_and_beam_semantics() {
         let mut query = [0.0_f32; 96];
@@ -945,10 +982,13 @@ mod tests {
         let rows = (0..64).map(row).collect::<Vec<_>>();
         let tree = train_incidence_tree_with_shape(&rows, shape(), 2, 11).unwrap();
         let leaf = assign_one_leaf(&tree, &rows[9].vector, rows[9].source_ordinal).unwrap();
-        let BeamSelectedLeaves(pair) =
-            assign_two_beam_leaves(&tree, &rows[9].vector, rows[9].source_ordinal).unwrap();
-        assert_eq!(pair[0], leaf);
-        assert_ne!(pair[0], pair[1]);
+        assert!(leaf < 8);
+        for row in &rows {
+            let BeamSelectedLeaves(pair) =
+                assign_two_beam_leaves(&tree, &row.vector, row.source_ordinal).unwrap();
+            assert_eq!(pair, reference_beam(&tree, &row.vector));
+            assert_ne!(pair[0], pair[1]);
+        }
 
         let seed =
             reservoir_seed("77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d")
