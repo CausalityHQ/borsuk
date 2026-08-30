@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -131,11 +132,30 @@ def _s3_request(identity: Mapping[str, object]) -> dict[str, str]:
         or ".." in pathlib.PurePosixPath(parsed.path).parts
     ):
         raise ValueError("object URI differs")
-    return {
+    generation = str(identity["generation"])
+    request = {
         "Bucket": parsed.netloc,
+        "ChecksumMode": "ENABLED",
         "Key": parsed.path[1:],
-        "VersionId": str(identity["generation"]),
     }
+    if generation.startswith("s3-version:") and generation != "s3-version:":
+        request["VersionId"] = generation.removeprefix("s3-version:")
+    elif generation.startswith("unversioned-sha256:") and _valid_digest(
+        generation.removeprefix("unversioned-sha256:")
+    ):
+        pass
+    else:
+        raise ValueError("object generation authority differs")
+    return request
+
+
+def _registered_s3_sha256(identity: Mapping[str, object]) -> str | None:
+    generation = str(identity["generation"])
+    if generation.startswith("unversioned-sha256:"):
+        return generation.removeprefix("unversioned-sha256:")
+    if identity["digest_algorithm"] == "sha256":
+        return str(identity["digest"])
+    return None
 
 
 def _new_digest(algorithm: str) -> Any:
@@ -225,10 +245,25 @@ def stage_manifest(
             response = client.get_object(**request)
             if response.get("ContentLength") != identity["encoded_bytes"]:
                 raise ValueError("object length differs")
-            if response.get("VersionId") != identity["generation"]:
+            if response.get("VersionId") != request.get("VersionId"):
                 raise ValueError("object generation differs")
             if "Body" not in response:
                 raise ValueError("object body is absent")
+            registered_sha256 = _registered_s3_sha256(identity)
+            if registered_sha256 is not None:
+                try:
+                    observed_checksum = base64.b64decode(
+                        response.get("ChecksumSHA256", ""), validate=True
+                    ).hex()
+                except (ValueError, TypeError) as error:
+                    raise ValueError("object S3 checksum differs") from error
+                metadata = response.get("Metadata")
+                if (
+                    observed_checksum != registered_sha256
+                    or type(metadata) is not dict
+                    or metadata.get("borsuk-sha256") != registered_sha256
+                ):
+                    raise ValueError("object S3 checksum differs")
             partial = staging_directory / f".{role}.partial"
             final = staging_directory / role
             digest = _new_digest(str(identity["digest_algorithm"]))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -18,7 +19,7 @@ def _identity(role: str, payload: bytes, ordinal: int) -> dict[str, object]:
             "digest": hashlib.sha256(payload).hexdigest(),
             "digest_algorithm": "sha256",
             "encoded_bytes": len(payload),
-            "generation": f"version-{ordinal}",
+            "generation": f"s3-version:version-{ordinal}",
             "role": role,
             "uri": f"s3://registered-bucket/frozen/{role}",
         },
@@ -61,18 +62,22 @@ def _manifest_bytes(objects: list[dict[str, object]]) -> bytes:
 
 
 class FakeS3Client:
-    def __init__(self, payloads: dict[tuple[str, str, str], bytes]) -> None:
+    def __init__(self, payloads: dict[tuple[str, str, str | None], bytes]) -> None:
         self.payloads = payloads
         self.calls: list[dict[str, str]] = []
 
     def get_object(self, **request: str) -> dict[str, object]:
         self.calls.append(request)
-        key = (request["Bucket"], request["Key"], request["VersionId"])
+        version = request.get("VersionId")
+        key = (request["Bucket"], request["Key"], version)
         payload = self.payloads[key]
+        digest = hashlib.sha256(payload).digest()
         return {
             "Body": io.BytesIO(payload),
+            "ChecksumSHA256": base64.b64encode(digest).decode("ascii"),
             "ContentLength": len(payload),
-            "VersionId": request["VersionId"],
+            "Metadata": {"borsuk-sha256": digest.hex()},
+            "VersionId": version,
             "ETag": '"not-a-content-digest"',
         }
 
@@ -105,6 +110,7 @@ class StagingTests(unittest.TestCase):
                 [
                     {
                         "Bucket": "registered-bucket",
+                        "ChecksumMode": "ENABLED",
                         "Key": f"frozen/training-shard-{index:04}",
                         "VersionId": f"version-{index}",
                     }
@@ -121,11 +127,43 @@ class StagingTests(unittest.TestCase):
             self.assertEqual(value["ordered_objects"][0]["relative_path"], "training-shard-0000")
             self.assertFalse(value["claim_eligible"])
 
+    def test_unversioned_staging_is_rooted_by_registered_sha256(self) -> None:
+        payload = b"unversioned-registered-object"
+        object_value = _identity("training-shard-0000", payload, 0)
+        digest = hashlib.sha256(payload).hexdigest()
+        object_value["identity"]["generation"] = f"unversioned-sha256:{digest}"
+        client = FakeS3Client(
+            {
+                (
+                    "registered-bucket",
+                    "frozen/training-shard-0000",
+                    None,
+                ): payload
+            }
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            manifest = root / "manifest.json"
+            manifest.write_bytes(_manifest_bytes([object_value]))
+            subject.stage_manifest(
+                manifest, root / "staging", root / "receipt.json", client
+            )
+        self.assertEqual(
+            client.calls,
+            [
+                {
+                    "Bucket": "registered-bucket",
+                    "ChecksumMode": "ENABLED",
+                    "Key": "frozen/training-shard-0000",
+                }
+            ],
+        )
+
     def test_staging_rejects_authority_drift_and_cleans_only_known_files(self) -> None:
         payload = b"registered"
         object_value = _identity("training-shard-0000", payload, 0)
         mutations = (
-            (b"REGISTERED", "object digest differs"),
+            (b"REGISTERED", "object S3 checksum differs"),
             (payload + b"long", "object length differs"),
         )
         for observed, message in mutations:
