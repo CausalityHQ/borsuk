@@ -426,6 +426,26 @@ def authenticate_policy_files(policy: SandboxPolicy) -> None:
         )
 
 
+def authenticate_mounted_policy_files(
+    root: pathlib.Path, policy: SandboxPolicy
+) -> None:
+    """Rehash the exact bind-mounted inodes before the old root is detached."""
+
+    _authenticate_file(
+        root / "phase/v23-incidence",
+        "sha256",
+        policy.executable_sha256,
+        policy.executable_bytes,
+    )
+    for mount in (*policy.runtime_mounts, *policy.inputs):
+        _authenticate_file(
+            root / mount.target.as_posix().lstrip("/"),
+            mount.digest_algorithm,
+            mount.digest,
+            mount.encoded_bytes,
+        )
+
+
 def build_unshare_command(policy: SandboxPolicy) -> list[str]:
     """Build the sole outer namespace command without invoking a shell."""
 
@@ -628,6 +648,7 @@ def enter_sandbox(policy: SandboxPolicy) -> None:
         _bind_mount(mount.source, target, mount.read_only)
     _bind_mount(policy.scratch, root / "scratch", False)
     _bind_mount(policy.output, root / "output", False)
+    authenticate_mounted_policy_files(root, policy)
     (root / "proc").mkdir(mode=0o555)
     _mount("proc", root / "proc", "proc", 0)
     old_root = root / ".oldroot"

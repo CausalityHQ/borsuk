@@ -374,6 +374,45 @@ class SandboxPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "digest"):
                 subject.authenticate_policy_files(changed)
 
+    def test_bound_mount_bytes_are_reauthenticated_before_pivot_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            policy = _policy()
+            targets = {
+                root / "phase/v23-incidence": b"executable",
+                root / policy.runtime_mounts[0].target.as_posix().lstrip("/"): b"runtime",
+                root / policy.inputs[0].target.as_posix().lstrip("/"): b"manifest",
+                root / policy.inputs[1].target.as_posix().lstrip("/"): b"shard",
+            }
+            for path, payload in targets.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+
+            def identity(mount: subject.SandboxMount, payload: bytes):
+                return dataclasses.replace(
+                    mount,
+                    digest=hashlib.sha256(payload).hexdigest(),
+                    encoded_bytes=len(payload),
+                )
+
+            policy = dataclasses.replace(
+                policy,
+                executable_sha256=hashlib.sha256(b"executable").hexdigest(),
+                executable_bytes=len(b"executable"),
+                runtime_mounts=(identity(policy.runtime_mounts[0], b"runtime"),),
+                inputs=(
+                    identity(policy.inputs[0], b"manifest"),
+                    identity(policy.inputs[1], b"shard"),
+                ),
+            )
+            subject.authenticate_mounted_policy_files(root, policy)
+
+            (root / policy.inputs[1].target.as_posix().lstrip("/")).write_bytes(
+                b"swapped"
+            )
+            with self.assertRaisesRegex(ValueError, "digest|length"):
+                subject.authenticate_mounted_policy_files(root, policy)
+
 
 if __name__ == "__main__":
     unittest.main()
