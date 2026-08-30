@@ -292,6 +292,59 @@ pub(crate) struct V23IncidenceQuality {
     pub(crate) passed: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct V23IncidenceLayoutQuality {
+    pub(crate) query_count: u32,
+    pub(crate) total_oracle_hits: u32,
+    pub(crate) minimum_oracle_hits: u32,
+    pub(crate) aggregate_recall_ppm: u64,
+    pub(crate) minimum_query_recall_ppm: u64,
+    pub(crate) passed: bool,
+}
+
+pub(crate) fn recompute_v23_incidence_layout_quality(
+    truth: &[V23IncidenceQueryTruth],
+) -> Result<V23IncidenceLayoutQuality> {
+    if truth.is_empty() {
+        return Err(invalid("V23 incidence layout truth is empty"));
+    }
+    let mut total = 0_u64;
+    let mut minimum = 10_u64;
+    for expected in truth {
+        if expected.ground_truth_page_assignments.len() != 10 || expected.oracle_pages.len() != 8 {
+            return Err(invalid("V23 incidence layout truth shape differs"));
+        }
+        let pages = expected
+            .oracle_pages
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if pages.len() != 8 {
+            return Err(invalid("V23 incidence layout oracle pages differ"));
+        }
+        let hits = expected
+            .ground_truth_page_assignments
+            .iter()
+            .filter(|assignments| assignments.iter().any(|page| pages.contains(page)))
+            .count() as u64;
+        total += hits;
+        minimum = minimum.min(hits);
+    }
+    let query_count = u32::try_from(truth.len())
+        .map_err(|_| invalid("V23 incidence layout query count exceeds u32"))?;
+    let aggregate_recall_ppm = total * 1_000_000 / (u64::from(query_count) * 10);
+    let minimum_query_recall_ppm = minimum * 100_000;
+    Ok(V23IncidenceLayoutQuality {
+        query_count,
+        total_oracle_hits: u32::try_from(total)
+            .map_err(|_| invalid("V23 incidence layout hits exceed u32"))?,
+        minimum_oracle_hits: minimum as u32,
+        aggregate_recall_ppm,
+        minimum_query_recall_ppm,
+        passed: aggregate_recall_ppm >= 985_000 && minimum_query_recall_ppm >= 900_000,
+    })
+}
+
 pub(crate) fn recompute_v23_incidence_quality(
     selections: &[(u32, Vec<u32>)],
     truth: &[V23IncidenceQueryTruth],
@@ -757,6 +810,12 @@ impl V23IncidenceCell {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct V23IncidenceSelection {
+    pub(crate) query_ordinal: u32,
+    pub(crate) page_ordinals: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct V23IncidenceCellResult {
     pub(crate) cell: V23IncidenceCell,
     pub(crate) retention_passed: bool,
@@ -768,6 +827,7 @@ pub(crate) struct V23IncidenceCellResult {
     pub(crate) determinism_passed: bool,
     pub(crate) latency_blake3: String,
     pub(crate) latency_bytes: u64,
+    pub(crate) selections: Vec<V23IncidenceSelection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -781,6 +841,7 @@ pub(crate) struct V23IncidenceHoldoutResult {
     pub(crate) determinism_passed: bool,
     pub(crate) latency_blake3: String,
     pub(crate) latency_bytes: u64,
+    pub(crate) selections: Vec<V23IncidenceSelection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -789,7 +850,7 @@ pub(crate) struct V23IncidenceCampaignInput {
     pub(crate) resource_passed: bool,
     pub(crate) determinism_passed: bool,
     pub(crate) development: Vec<V23IncidenceCellResult>,
-    pub(crate) holdout_layout_passed: bool,
+    pub(crate) holdout_layout: V23IncidenceLayoutQuality,
     pub(crate) holdout: Option<V23IncidenceHoldoutResult>,
 }
 
@@ -814,6 +875,18 @@ impl V23IncidenceCampaignInput {
             oracle_attainment_ppm: 1_000_000,
             passed: true,
         };
+        let development_selections = (0..32)
+            .map(|query_ordinal| V23IncidenceSelection {
+                query_ordinal,
+                page_ordinals: (0..8).collect(),
+            })
+            .collect();
+        let holdout_selections = (32..160)
+            .map(|query_ordinal| V23IncidenceSelection {
+                query_ordinal,
+                page_ordinals: (0..8).collect(),
+            })
+            .collect();
         Self {
             authority_passed: true,
             resource_passed: true,
@@ -829,8 +902,16 @@ impl V23IncidenceCampaignInput {
                 determinism_passed: true,
                 latency_blake3: latency_blake3.clone(),
                 latency_bytes,
+                selections: development_selections,
             }],
-            holdout_layout_passed: true,
+            holdout_layout: V23IncidenceLayoutQuality {
+                query_count: 128,
+                total_oracle_hits: 1_280,
+                minimum_oracle_hits: 10,
+                aggregate_recall_ppm: 1_000_000,
+                minimum_query_recall_ppm: 1_000_000,
+                passed: true,
+            },
             holdout: Some(V23IncidenceHoldoutResult {
                 cell: V23IncidenceCell::registered_ladder()[0],
                 quality: V23IncidenceQuality {
@@ -846,6 +927,7 @@ impl V23IncidenceCampaignInput {
                 determinism_passed: true,
                 latency_blake3,
                 latency_bytes,
+                selections: holdout_selections,
             }),
         }
     }
@@ -928,7 +1010,7 @@ pub(crate) fn classify_v23_incidence_campaign(
         }
         return V23IncidenceCampaignClass::KernelRejected;
     }
-    if !input.holdout_layout_passed {
+    if !input.holdout_layout.passed {
         return V23IncidenceCampaignClass::HoldoutLayoutRejected;
     }
     let Some(holdout) = &input.holdout else {
@@ -1029,6 +1111,25 @@ fn validate_quality(quality: V23IncidenceQuality, expected_queries: u32) -> Resu
     Ok(())
 }
 
+fn validate_layout_quality(layout: V23IncidenceLayoutQuality) -> Result<()> {
+    if layout.query_count != 128
+        || layout.minimum_oracle_hits > 10
+        || layout.total_oracle_hits > 1_280
+    {
+        return Err(invalid("V23 incidence layout quality counts differ"));
+    }
+    let aggregate = u64::from(layout.total_oracle_hits) * 1_000_000 / 1_280;
+    let minimum = u64::from(layout.minimum_oracle_hits) * 100_000;
+    let passed = aggregate >= 985_000 && minimum >= 900_000;
+    if layout.aggregate_recall_ppm != aggregate
+        || layout.minimum_query_recall_ppm != minimum
+        || layout.passed != passed
+    {
+        return Err(invalid("V23 incidence layout quality evidence differs"));
+    }
+    Ok(())
+}
+
 fn validate_latency_binding(
     p99_ns: u64,
     digest: &str,
@@ -1048,6 +1149,8 @@ fn validate_latency_binding(
 pub(crate) fn canonical_v23_incidence_result_bytes(
     result: &V23IncidenceCampaignResult,
     latency_artifacts: &[&[u8]],
+    development_truth: &[V23IncidenceQueryTruth],
+    holdout_truth: &[V23IncidenceQueryTruth],
 ) -> Result<Vec<u8>> {
     if result.schema != "borsuk-v23-incidence-result-v1"
         || result.claim_eligible
@@ -1071,6 +1174,11 @@ pub(crate) fn canonical_v23_incidence_result_bytes(
     {
         return Err(invalid("V23 incidence result artifact count differs"));
     }
+    let layout = recompute_v23_incidence_layout_quality(holdout_truth)?;
+    if layout != result.campaign.holdout_layout {
+        return Err(invalid("V23 incidence holdout layout evidence differs"));
+    }
+    validate_layout_quality(result.campaign.holdout_layout)?;
     let ladder = V23IncidenceCell::registered_ladder();
     let mut prior_position = None;
     for (index, cell) in result.campaign.development.iter().enumerate() {
@@ -1082,6 +1190,17 @@ pub(crate) fn canonical_v23_incidence_result_bytes(
             return Err(invalid("V23 incidence development cell order differs"));
         }
         prior_position = Some(position);
+        let selections = cell
+            .selections
+            .iter()
+            .map(|selection| (selection.query_ordinal, selection.page_ordinals.clone()))
+            .collect::<Vec<_>>();
+        let quality = recompute_v23_incidence_quality(&selections, development_truth, 28_282)?;
+        if quality != cell.quality {
+            return Err(invalid(
+                "V23 incidence development quality evidence differs",
+            ));
+        }
         validate_quality(cell.quality, 32)?;
         let projection = project_v23_incidence_serving_bytes(100_000_000, cell.cell.cap as usize)?;
         if cell.projected_serving_bytes != projection.total_bytes
@@ -1098,6 +1217,15 @@ pub(crate) fn canonical_v23_incidence_result_bytes(
         )?;
     }
     if let Some(holdout) = &result.campaign.holdout {
+        let selections = holdout
+            .selections
+            .iter()
+            .map(|selection| (selection.query_ordinal, selection.page_ordinals.clone()))
+            .collect::<Vec<_>>();
+        let quality = recompute_v23_incidence_quality(&selections, holdout_truth, 28_282)?;
+        if quality != holdout.quality {
+            return Err(invalid("V23 incidence holdout quality evidence differs"));
+        }
         validate_quality(holdout.quality, 128)?;
         let projection =
             project_v23_incidence_serving_bytes(100_000_000, holdout.cell.cap as usize)?;
@@ -1183,6 +1311,13 @@ pub(crate) fn evaluate_v23_incidence_cell(
         determinism_passed,
         latency_blake3: blake3::hash(latency_artifact).to_hex().to_string(),
         latency_bytes: latency_artifact.len() as u64,
+        selections: selections
+            .into_iter()
+            .map(|(query_ordinal, page_ordinals)| V23IncidenceSelection {
+                query_ordinal,
+                page_ordinals,
+            })
+            .collect(),
     })
 }
 
@@ -1248,8 +1383,8 @@ mod tests {
         measure_v23_incidence_latency, project_v23_incidence_serving_bytes, rank_incidence_leaves,
         rank_incidence_leaves_scalar, read_v23_incidence_development_queries,
         read_v23_incidence_holdout_neighbors, read_v23_incidence_holdout_queries,
-        recompute_v23_incidence_quality, score_incidence_query, score_incidence_query_native,
-        v23_incidence_latency_p99_ns,
+        recompute_v23_incidence_layout_quality, recompute_v23_incidence_quality,
+        score_incidence_query, score_incidence_query_native, v23_incidence_latency_p99_ns,
     };
     use crate::{
         v23_incidence_postings::{
@@ -1340,6 +1475,30 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.close().unwrap();
         bytes
+    }
+
+    fn canonical_truth(first: u32, count: u32) -> Vec<V23IncidenceQueryTruth> {
+        (first..first + count)
+            .map(|query_ordinal| V23IncidenceQueryTruth {
+                query_ordinal,
+                ground_truth_page_assignments: (0..10)
+                    .map(|neighbor| vec![(neighbor % 8) as u32])
+                    .collect(),
+                oracle_pages: (0..8).collect(),
+            })
+            .collect()
+    }
+
+    fn canonical_fixture(
+        result: &V23IncidenceCampaignResult,
+        latency: &[u8],
+    ) -> crate::Result<Vec<u8>> {
+        canonical_v23_incidence_result_bytes(
+            result,
+            &[latency, latency],
+            &canonical_truth(0, 32),
+            &canonical_truth(32, 128),
+        )
     }
 
     #[test]
@@ -1485,6 +1644,11 @@ mod tests {
         assert_eq!(truth[0].query_ordinal, 32);
         assert_eq!(truth[0].ground_truth_page_assignments.len(), 10);
         assert_eq!(truth[0].oracle_pages, (0..8).collect::<Vec<_>>());
+        let layout = recompute_v23_incidence_layout_quality(&truth).unwrap();
+        assert_eq!(layout.query_count, 128);
+        assert_eq!(layout.total_oracle_hits, 1_024);
+        assert_eq!(layout.minimum_oracle_hits, 8);
+        assert!(!layout.passed);
 
         pages.remove(&neighbors[127].1[99]);
         assert!(bind_v23_incidence_holdout_truth(&neighbors, &pages, 16).is_err());
@@ -1630,7 +1794,7 @@ mod tests {
             V23IncidenceCampaignClass::KernelRejected
         );
         let mut input = V23IncidenceCampaignInput::passing_fixture();
-        input.holdout_layout_passed = false;
+        input.holdout_layout.passed = false;
         assert_eq!(
             classify_v23_incidence_campaign(&input),
             V23IncidenceCampaignClass::HoldoutLayoutRejected
@@ -1673,7 +1837,7 @@ mod tests {
         let samples = vec![15_000_000_u64; 10_000];
         let latency = encode_v23_incidence_latency_samples(&samples).unwrap();
         let mut result = V23IncidenceCampaignResult::passing_fixture(&latency);
-        let bytes = canonical_v23_incidence_result_bytes(&result, &[&latency, &latency]).unwrap();
+        let bytes = canonical_fixture(&result, &latency).unwrap();
         assert_eq!(bytes.last(), Some(&b'\n'));
         assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -1687,21 +1851,27 @@ mod tests {
         later_eligible.campaign.holdout.as_mut().unwrap().cell =
             V23IncidenceCell::registered_ladder()[3];
         later_eligible.sealed_cell = Some(V23IncidenceCell::registered_ladder()[3]);
-        canonical_v23_incidence_result_bytes(&later_eligible, &[&latency, &latency]).unwrap();
+        canonical_fixture(&later_eligible, &latency).unwrap();
 
         result.classification = V23IncidenceCampaignClass::KernelRejected;
-        assert!(canonical_v23_incidence_result_bytes(&result, &[&latency, &latency]).is_err());
+        assert!(canonical_fixture(&result, &latency).is_err());
         let mut result = V23IncidenceCampaignResult::passing_fixture(&latency);
         result.campaign.development[0].quality.query_count = 2;
         result.campaign.development[0].quality.total_hits = 10;
         result.campaign.development[0].quality.oracle_hits = 10;
-        assert!(canonical_v23_incidence_result_bytes(&result, &[&latency, &latency]).is_err());
+        assert!(canonical_fixture(&result, &latency).is_err());
+        let mut result = V23IncidenceCampaignResult::passing_fixture(&latency);
+        result.campaign.holdout_layout.total_oracle_hits -= 1;
+        assert!(canonical_fixture(&result, &latency).is_err());
+        let mut result = V23IncidenceCampaignResult::passing_fixture(&latency);
+        result.campaign.development[0].selections[0].page_ordinals[0] = 9;
+        assert!(canonical_fixture(&result, &latency).is_err());
         let mut result = V23IncidenceCampaignResult::passing_fixture(&latency);
         result.campaign.development[0].p99_ns ^= 1;
-        assert!(canonical_v23_incidence_result_bytes(&result, &[&latency, &latency]).is_err());
+        assert!(canonical_fixture(&result, &latency).is_err());
         let mut result = V23IncidenceCampaignResult::passing_fixture(&latency);
         result.sealed_cell = Some(V23IncidenceCell::registered_ladder()[1]);
-        assert!(canonical_v23_incidence_result_bytes(&result, &[&latency, &latency]).is_err());
+        assert!(canonical_fixture(&result, &latency).is_err());
         let mut result = V23IncidenceCampaignResult::passing_fixture(&latency);
         result
             .campaign
@@ -1709,10 +1879,10 @@ mod tests {
             .as_mut()
             .unwrap()
             .maximum_touched_pages = 8_193;
-        assert!(canonical_v23_incidence_result_bytes(&result, &[&latency, &latency]).is_err());
+        assert!(canonical_fixture(&result, &latency).is_err());
         let mut changed = latency;
         changed[20] ^= 1;
         let result = V23IncidenceCampaignResult::passing_fixture(&changed);
-        assert!(canonical_v23_incidence_result_bytes(&result, &[&changed, &changed]).is_err());
+        assert!(canonical_fixture(&result, &changed).is_err());
     }
 }
