@@ -497,7 +497,7 @@ impl CellWalClaimGuard {
                 )
             });
         }
-        let claims = self.locks.drain(..).collect::<Vec<_>>();
+        let claims = std::mem::take(&mut self.locks);
         let expected = claims
             .iter()
             .flat_map(|claim| claim.previous_revisions.iter().map(|(shard, _)| *shard))
@@ -567,7 +567,7 @@ impl CellWalClaimGuard {
             &self.storage,
             &self.transaction_id,
             &self.transaction_id,
-            self.locks.drain(..).collect(),
+            std::mem::take(&mut self.locks),
         )
     }
 }
@@ -579,7 +579,7 @@ impl Drop for CellWalClaimGuard {
             let _ = restore_claims(
                 &self.storage,
                 &self.transaction_id,
-                self.locks.drain(..).collect(),
+                std::mem::take(&mut self.locks),
             );
             return;
         }

@@ -501,7 +501,7 @@ fn centroid(
     partials.resize(partials.len().next_power_of_two(), [0.0_f64; 96]);
     while partials.len() > 1 {
         let mut merged = Vec::with_capacity(partials.len() / 2);
-        for pair in partials.chunks_exact(2) {
+        for pair in partials.as_chunks::<2>().0 {
             let mut sum = [0.0_f64; 96];
             for dimension in 0..96 {
                 sum[dimension] = pair[0][dimension] + pair[1][dimension];

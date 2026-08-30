@@ -2607,7 +2607,7 @@ fn v12_hash(value: &str) -> Result<[u8; 32]> {
         return Err(invalid_leaf_directory("V12 checksum hex width is invalid"));
     }
     let mut bytes = [0_u8; 32];
-    for (byte, pair) in bytes.iter_mut().zip(encoded.chunks_exact(2)) {
+    for (byte, pair) in bytes.iter_mut().zip(encoded.as_chunks::<2>().0) {
         let nibble = |value: u8| match value {
             b'0'..=b'9' => value - b'0',
             b'a'..=b'f' => value - b'a' + 10,

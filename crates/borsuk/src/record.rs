@@ -230,18 +230,24 @@ impl VectorElementType {
         }
         Ok(match self {
             Self::Float32 => encoded
-                .chunks_exact(4)
-                .map(|bytes| f32::from_le_bytes(bytes.try_into().expect("four-byte chunk")))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|bytes| f32::from_le_bytes(*bytes))
                 .collect(),
             Self::Float16 => encoded
-                .chunks_exact(2)
-                .map(|bytes| u16::from_le_bytes(bytes.try_into().expect("two-byte chunk")))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|bytes| u16::from_le_bytes(*bytes))
                 .map(half::f16::from_bits)
                 .map(f32::from)
                 .collect(),
             Self::BFloat16 => encoded
-                .chunks_exact(2)
-                .map(|bytes| u16::from_le_bytes(bytes.try_into().expect("two-byte chunk")))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|bytes| u16::from_le_bytes(*bytes))
                 .map(half::bf16::from_bits)
                 .map(f32::from)
                 .collect(),

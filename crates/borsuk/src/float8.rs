@@ -71,16 +71,11 @@ pub(crate) fn decode_e5m2_slice(bits: &[u8]) -> Vec<f32> {
 fn decode_slice(bits: &[u8], format: Format, table: &OnceLock<[f32; 256]>) -> Vec<f32> {
     let table = table.get_or_init(|| std::array::from_fn(|bits| decode(bits as u8, format)));
     let mut decoded = Vec::with_capacity(bits.len());
-    let mut blocks = bits.chunks_exact(DECODE_BLOCK);
-    for block in &mut blocks {
+    let (blocks, remainder) = bits.as_chunks::<DECODE_BLOCK>();
+    for block in blocks {
         decoded.extend(block.iter().map(|bits| table[usize::from(*bits)]));
     }
-    decoded.extend(
-        blocks
-            .remainder()
-            .iter()
-            .map(|bits| table[usize::from(*bits)]),
-    );
+    decoded.extend(remainder.iter().map(|bits| table[usize::from(*bits)]));
     decoded
 }
 

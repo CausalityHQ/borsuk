@@ -199,7 +199,7 @@ fn decode_f16_row(code: &[u8]) -> Result<[f32; 96]> {
         return Err(invalid("V23 posting f16 row width differs"));
     }
     let mut vector = [0.0_f32; 96];
-    for (output, bits) in vector.iter_mut().zip(code.chunks_exact(2)) {
+    for (output, bits) in vector.iter_mut().zip(code.as_chunks::<2>().0) {
         *output = f16::from_bits(u16::from_le_bytes([bits[0], bits[1]])).to_f32();
     }
     if vector.iter().any(|value| !value.is_finite()) {

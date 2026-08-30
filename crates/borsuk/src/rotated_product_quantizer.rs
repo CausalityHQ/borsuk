@@ -853,12 +853,16 @@ mod tests {
         let first = reorder_flat_centroids_by_locality(shuffled.clone(), 2);
         let second = reorder_flat_centroids_by_locality(shuffled.clone(), 2);
         let mut input_rows = shuffled
-            .chunks_exact(2)
-            .map(<[f32]>::to_vec)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|row| row.to_vec())
             .collect::<Vec<_>>();
         let mut output_rows = first
-            .chunks_exact(2)
-            .map(<[f32]>::to_vec)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|row| row.to_vec())
             .collect::<Vec<_>>();
         input_rows.sort_by(|left, right| {
             left.iter()

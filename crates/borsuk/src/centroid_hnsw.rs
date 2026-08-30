@@ -1022,7 +1022,9 @@ mod tests {
         bytes
             .chunks_exact(dim * 4)
             .map(|row| {
-                row.chunks_exact(4)
+                row.as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                     .collect()
             })

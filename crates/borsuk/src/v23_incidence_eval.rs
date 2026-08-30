@@ -936,8 +936,10 @@ pub(crate) fn decode_v23_incidence_latency_samples(bytes: &[u8]) -> Result<Vec<u
         return Err(invalid("V23 incidence latency length differs"));
     }
     let samples = body[16..]
-        .chunks_exact(8)
-        .map(|sample| u64::from_le_bytes(sample.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|sample| u64::from_le_bytes(*sample))
         .collect::<Vec<_>>();
     v23_incidence_latency_p99_ns(&samples)?;
     Ok(samples)

@@ -16,11 +16,11 @@ pub(crate) fn decode_i8(values: &[i8]) -> Vec<f32> {
 
 fn decode_blocks<T: Copy>(values: &[T], convert: impl Fn(T) -> f32 + Copy) -> Vec<f32> {
     let mut decoded = Vec::with_capacity(values.len());
-    let mut blocks = values.chunks_exact(DECODE_BLOCK);
-    for block in &mut blocks {
+    let (blocks, remainder) = values.as_chunks::<DECODE_BLOCK>();
+    for block in blocks {
         decoded.extend(block.iter().copied().map(convert));
     }
-    decoded.extend(blocks.remainder().iter().copied().map(convert));
+    decoded.extend(remainder.iter().copied().map(convert));
     decoded
 }
 

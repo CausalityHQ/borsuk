@@ -42697,7 +42697,7 @@ mod tests {
 
         assert_eq!(ordered.len(), 1);
         assert_eq!(ordered[0].len(), CLUSTERS * ROWS_PER_CLUSTER);
-        for block in ordered[0].chunks_exact(ROWS_PER_CLUSTER) {
+        for block in ordered[0].as_chunks::<ROWS_PER_CLUSTER>().0 {
             let cluster = block[0] / ROWS_PER_CLUSTER;
             assert!(
                 block
@@ -42810,7 +42810,7 @@ mod tests {
 
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].len(), ROWS);
-        for block in cards[0].chunks_exact(32) {
+        for block in cards[0].as_chunks::<32>().0 {
             let cluster = block[0] / 32;
             assert!(block.iter().all(|ordinal| ordinal / 32 == cluster));
         }
@@ -42866,13 +42866,8 @@ mod tests {
 
         assert_eq!(cards.len(), 2);
         assert!(cards.iter().all(|card| card.len() == 128));
-        for block in cards
-            .iter()
-            .flatten()
-            .copied()
-            .collect::<Vec<_>>()
-            .chunks_exact(32)
-        {
+        let flattened = cards.iter().flatten().copied().collect::<Vec<_>>();
+        for block in flattened.as_chunks::<32>().0 {
             let cluster = block[0] / ROWS_PER_CLUSTER;
             assert!(
                 block

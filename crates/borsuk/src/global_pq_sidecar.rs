@@ -148,7 +148,7 @@ impl F16FlatScanQuantizer {
             return invalid("f16-flat distance input differs");
         }
         let mut distance = 0.0_f64;
-        for (query, bits) in query.iter().zip(code.chunks_exact(2)) {
+        for (query, bits) in query.iter().zip(code.as_chunks::<2>().0) {
             let decoded = f64::from(half::f16::from_bits(u16::from_le_bytes([bits[0], bits[1]])));
             let delta = f64::from(*query) - decoded;
             distance += delta * delta;
@@ -167,7 +167,7 @@ impl F16FlatScanQuantizer {
         let mut decoded = vec![0.0_f32; self.dimensions];
         let mut distances = Vec::with_capacity(codes.len() / code_width);
         for code in codes.chunks_exact(code_width) {
-            for (value, bits) in decoded.iter_mut().zip(code.chunks_exact(2)) {
+            for (value, bits) in decoded.iter_mut().zip(code.as_chunks::<2>().0) {
                 *value = f32::from(half::f16::from_bits(u16::from_le_bytes([bits[0], bits[1]])));
             }
             distances.push(crate::metric::squared_euclidean_simd(query, &decoded));

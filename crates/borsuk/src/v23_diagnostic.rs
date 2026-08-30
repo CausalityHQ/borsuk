@@ -2899,7 +2899,9 @@ pub(crate) fn decode_v23_page(bytes: Bytes, page_ref: &V23PageRef) -> Result<V23
     }
     if page_ref.family == V23QuantizerFamily::F16Flat
         && bytes[code_start..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .any(|bits| !half::f16::from_bits(u16::from_le_bytes([bits[0], bits[1]])).is_finite())
     {
         return Err(BorsukError::InvalidStorage(

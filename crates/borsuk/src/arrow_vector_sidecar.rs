@@ -970,10 +970,10 @@ pub(crate) fn fixed_width_vector_array(
                 FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
                     bytes.chunks_exact(row_bytes).map(|row| {
                         Some(
-                            row.chunks_exact(4)
-                                .map(|value| {
-                                    Some(f32::from_le_bytes(value.try_into().expect("four bytes")))
-                                })
+                            row.as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|value| Some(f32::from_le_bytes(*value)))
                                 .collect::<Vec<_>>(),
                         )
                     }),
@@ -986,12 +986,10 @@ pub(crate) fn fixed_width_vector_array(
                 FixedSizeListArray::from_iter_primitive::<Float16Type, _, _>(
                     bytes.chunks_exact(row_bytes).map(|row| {
                         Some(
-                            row.chunks_exact(2)
-                                .map(|value| {
-                                    Some(half::f16::from_bits(u16::from_le_bytes(
-                                        value.try_into().expect("two bytes"),
-                                    )))
-                                })
+                            row.as_chunks::<2>()
+                                .0
+                                .iter()
+                                .map(|value| Some(half::f16::from_bits(u16::from_le_bytes(*value))))
                                 .collect::<Vec<_>>(),
                         )
                     }),
@@ -1003,10 +1001,10 @@ pub(crate) fn fixed_width_vector_array(
             Arc::new(FixedSizeListArray::from_iter_primitive::<UInt16Type, _, _>(
                 bytes.chunks_exact(row_bytes).map(|row| {
                     Some(
-                        row.chunks_exact(2)
-                            .map(|value| {
-                                Some(u16::from_le_bytes(value.try_into().expect("two bytes")))
-                            })
+                        row.as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|value| Some(u16::from_le_bytes(*value)))
                             .collect::<Vec<_>>(),
                     )
                 }),

@@ -6391,7 +6391,9 @@ mod tests {
             .collect::<Vec<_>>();
         let reordered =
             crate::rotated_product_quantizer::reorder_flat_centroids_by_locality(codebook, 2)
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|centroid| centroid[0] as u32)
                 .collect::<Vec<_>>();
         let selected_cells = [0_u32, 1, 2, 3];
