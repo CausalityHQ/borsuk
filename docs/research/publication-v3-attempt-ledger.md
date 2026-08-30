@@ -813,3 +813,38 @@ page-prototype hypothesis worth falsifying is a query-independent ladder of
 multiple clustered means. That test must stream and authenticate immutable
 page objects with bounded memory; it must not materialize the multi-gigabyte
 page corpus locally or sample away competing pages.
+
+## V23 Revision-4 clustered page-prototype falsifier on 2026-08-30
+
+The bounded K=32 falsifier at source commit
+`f3a57436f4e1df79b37a8272739510cf71c78c37` streamed the complete immutable
+Revision-4 BVS2 page corpus from Standard S3 in `eu-central-1`. It authenticated
+the historical source commit `c59128ee68eb28beaa7f5eef7e0570dc7c787b88`,
+all 28,282 pages, 9,990,000 primary rows, and 8,630,111 replica rows. It read
+exactly 3,780,639,674 page bytes without persisting a page or prototype corpus.
+The canonical falsifier result SHA-256 is
+`4c45453034324700a16d533d63234d7ac8736d5291765469c6c6403e5477bc7a`.
+
+Each page was represented by at most 32 deterministic spherical-k-means
+centers after eight Lloyd iterations, and every one of the 32 registered
+queries selected exactly eight pages. The complete result failed every quality
+gate:
+
+- aggregate recall was 725,000 ppm, below the 975,000-ppm gate;
+- minimum-query recall was 100,000 ppm, below the 800,000-ppm gate;
+- oracle attainment was 729,559 ppm, below the 995,000-ppm gate.
+
+The resource envelope passed. Projected 100M-row serving memory was
+2,686,433,028 bytes, below the 3-GiB ceiling. Peak process RSS was 234,872,832
+bytes, peak cgroup memory PSI full avg10 was zero, and swap growth was zero.
+Scientific elapsed time was 484,689,365,034 ns and measured CPU time was
+391,646,813,344 ns. The process completed normally, emitted one canonical
+result, removed its five prerequisite files and explicit temporary directory,
+and left no worker process or local page corpus.
+
+This evidence rejects fixed per-page prototypes as the Revision-4 replacement
+selector architecture: even 32 clustered representatives per page remain far
+below the registered recall and oracle-attainment requirements. Passing the
+memory envelope does not rescue the failed quality relation. This is an
+offline architectural falsification, not a cold-latency or throughput result.
+D3 remains fenced, and no additional paid run is authorized by this result.
