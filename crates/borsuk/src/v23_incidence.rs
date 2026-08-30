@@ -39,11 +39,13 @@ pub(crate) enum V23FmaBackend {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
 pub(crate) enum V23IncidenceStopClass {
-    AuthorityStop,
-    ResourceStop,
-    DeterminismStop,
+    #[serde(rename = "authority-stop")]
+    Authority,
+    #[serde(rename = "resource-stop")]
+    Resource,
+    #[serde(rename = "determinism-stop")]
+    Determinism,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

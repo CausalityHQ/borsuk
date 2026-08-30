@@ -369,6 +369,7 @@ dependencies = [
  "async-trait",
  "axum",
  "blake3",
+ "borsuk-fma",
  "bytes",
  "chrono",
  "criterion",
@@ -405,6 +406,10 @@ dependencies = [
  "tempfile",
  "thiserror",
 ]
+
+[[package]]
+name = "borsuk-fma"
+version = "0.1.0"
 
 [[package]]
 name = "borsuk-node"
