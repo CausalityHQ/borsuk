@@ -19,6 +19,13 @@
 - Evaluate cells in cap 512/1,024/2,048, assignment one/two, probe 32/64/128 lexicographic order; only the first fully passing development cell reaches holdout.
 - Enforce exact-eight-page selection, 975,000/800,000/995,000 ppm quality, 3 GiB serving projection, 262,144 visits, 8,192 observed touched pages, and 15,000,000 ns warm native p99.
 - Enforce 2 GiB build RSS, 2 GiB scratch free-space, PSI/swap/progress/two-hour stops, exact digest chains, deterministic scalar/SIMD equality, and canonical newline-terminated receipts.
+- Keep process arguments and mount count bounded independently of shard/page
+  count: pass one canonical policy file by path+digest, and expose corpus bytes
+  through manifest-backed read-only directory capabilities.
+- Stage immutable S3 objects only in a separate credentialed process; scientific
+  phases remain offline and authenticate Arrow/Parquet/binary bytes before use.
+- Build both posting arms from one authenticated page decode/stream and emit
+  truthful hash-chained Rust progress at fixed completed-work milestones.
 - Use `apply_patch` for edits, preserve configured Git identity, never add AI attribution, and push verified slices explicitly with `git push origin HEAD:main`.
 
 ---
@@ -33,6 +40,10 @@
 - Create `crates/borsuk/examples/v23_leaf_page_incidence_falsifier.rs`: strict local-only phase CLI with no network/storage/page-fetch surface.
 - Create `scripts/run_v23_leaf_page_incidence_falsifier.py`: namespace/mount capability boundary, receipt-ordered phase orchestration, resource monitoring, and explicit cleanup.
 - Create `scripts/test_run_v23_leaf_page_incidence_falsifier.py`: launcher command, capability, ordering, stop, and cleanup tests.
+- Create `scripts/stage_v23_leaf_page_incidence_inputs.py`: credentialed,
+  manifest-only S3 staging with exact generation/length/digest verification.
+- Create `scripts/test_stage_v23_leaf_page_incidence_inputs.py`: fake-client
+  acquisition, authority, partial-file, and cleanup tests.
 - Modify `scripts/requirements-format-bench.txt` only if the launcher tests expose a missing already-approved runtime dependency; do not add a dependency preemptively.
 - Modify `docs/research/publication-v3-attempt-ledger.md` only after an authorized scientific terminal exists.
 
@@ -169,7 +180,10 @@ git commit -m "Add V23 incidence authority boundary"
 
 **Interfaces:**
 - Consumes: `V23IncidencePhase` names and canonical receipt schema from Task 1.
-- Produces: `SandboxMount`, `SandboxPolicy`, `build_unshare_command(policy)`, `monitor_process_group(pid, limits)`, `run_phase(policy)`, and an explicit `--execute-<phase>` CLI.
+- Produces: `SandboxMount`, `DirectoryCapability`, `SandboxPolicy`,
+  `write_canonical_policy_file(policy)`, `build_unshare_command(policy_path,
+  policy_sha256)`, `monitor_process_group(pid, limits)`, `run_phase(policy)`,
+  and explicit matching `--preflight-<phase>` / `--execute-<phase>` CLIs.
 
 - [ ] **Step 1: Write the sandbox RED tests**
 
@@ -189,6 +203,22 @@ class SandboxPolicyTests(unittest.TestCase):
     def test_receipt_chain_prevents_later_capability_before_parent_digest(self):
         with self.assertRaises(ValueError):
             subject.validate_phase_inputs(posting_policy_fixture(parent_digest=None))
+
+    def test_policy_and_phase_argv_are_bounded_for_all_registered_pages(self):
+        policy = posting_policy_fixture(page_count=28_282)
+        path, digest = subject.write_canonical_policy_file(policy)
+        command = subject.build_unshare_command(path, digest)
+        self.assertLess(sum(len(arg) + 1 for arg in command), 16_384)
+        self.assertNotIn("base64", inspect.getsource(subject.build_unshare_command))
+        self.assertEqual(len(policy.directory_capabilities), 1)
+
+    def test_progress_requires_canonical_hash_chained_completed_work(self):
+        monitor = subject.ProgressMonitor(progress_fixture(sequence=1, completed=64))
+        monitor.observe(progress_fixture(sequence=2, completed=128,
+                                          previous=monitor.last_digest))
+        for changed in stale_heartbeat_phase_total_and_chain_mutations(monitor):
+            with self.assertRaises(ValueError):
+                monitor.observe(changed)
 
     def test_pressure_equality_stops_and_cleanup_names_are_explicit(self):
         self.assertEqual(subject.classify_sample(rss=2 << 30), "rss-cap")
@@ -216,16 +246,34 @@ class SandboxPolicy:
     output: pathlib.Path
     parent_receipt_sha256: str | None
 
-def build_unshare_command(policy: SandboxPolicy) -> list[str]:
-    validate_phase_inputs(policy)
+@dataclasses.dataclass(frozen=True)
+class DirectoryCapability:
+    role: str
+    source: pathlib.Path
+    target: pathlib.PurePosixPath
+    manifest_path: pathlib.Path
+    staging_receipt_path: pathlib.Path
+
+def build_unshare_command(policy_path: pathlib.Path, policy_sha256: str) -> list[str]:
+    validate_digest(policy_sha256)
     return [
         "unshare", "--user", "--map-root-user", "--mount", "--net",
         "--pid", "--fork", "--mount-proc", sys.executable, __file__,
-        "--enter-sandbox", canonical_policy_argument(policy),
+        "--enter-sandbox-policy", str(policy_path), "--policy-sha256", policy_sha256,
     ]
 ```
 
-The `--enter-sandbox` path mounts a fresh tmpfs root, bind-mounts only declared paths read-only plus scratch/output read-write, invokes `pivot_root`, unmounts the old root, leaves loopback down, performs namespace/canary/open/connect probes, then `execve`s the phase binary. Monitoring uses the exact RSS/PSI/swap/progress/wall equality rules and terminates the original process group once without restart. Cleanup unlinks an enumerated manifest of files, rejects unexpected entries, then `rmdir`s the empty scratch directory.
+The parent writes canonical policy bytes with mode 0600 and passes only their
+bounded path and SHA-256. `--enter-sandbox-policy` rehashes and parses them
+before mounting a fresh tmpfs root, bind-mounts only declared singleton paths
+plus one manifest-backed directory capability for the phase's bulk corpus,
+invokes `pivot_root`, unmounts the old root, leaves loopback down, performs
+namespace/canary/open/connect probes, then `execve`s a bounded phase argv. No
+base64 policy and no per-page/per-shard mount or argv expansion is permitted.
+Monitoring validates the Rust-produced canonical hash-chained progress record
+and exact RSS/PSI/swap/wall equality rules, then terminates the original process
+group once without restart. Cleanup unlinks an enumerated manifest of files,
+rejects unexpected entries, then `rmdir`s the empty scratch directory.
 
 - [ ] **Step 4: Run launcher tests and static gates**
 
@@ -238,6 +286,66 @@ Expected: all tests and static checks pass.
 ```bash
 git add scripts/run_v23_leaf_page_incidence_falsifier.py scripts/test_run_v23_leaf_page_incidence_falsifier.py
 git commit -m "Add isolated V23 incidence phase launcher"
+```
+
+### Task 2A: Credentialed immutable-object staging
+
+**Files:**
+- Create: `scripts/stage_v23_leaf_page_incidence_inputs.py`
+- Create: `scripts/test_stage_v23_leaf_page_incidence_inputs.py`
+
+**Interfaces:**
+- Consumes: one frozen canonical construction manifest whose objects have exact
+  role, URI, generation/version, encoded length, digest algorithm/digest,
+  relative path, ordinal range, row count, and physical schema.
+- Produces: one role-specific staging directory and canonical staging receipt;
+  scientific phase code imports neither boto3 nor an object-store client.
+
+- [ ] **Step 1: Write fake-client staging REDs**
+
+Mutation-lock URI/version drift, ETag substitution, missing/extra/duplicate
+relative paths, absolute/`..`/symlink paths, short/long bodies, digest drift,
+range/schema/order drift, partial downloads, retry after a terminal, unexpected
+scratch entries, and cross-role manifest reuse. Prove the tool requests only
+the exact registered bucket/key/version and never lists a prefix.
+
+Run: `python3 -m unittest scripts.test_stage_v23_leaf_page_incidence_inputs`
+
+Expected: missing staging interfaces only.
+
+- [ ] **Step 2: Implement bounded staging**
+
+Stream each exact S3 object through a same-directory temporary file while
+counting bytes and computing the registered SHA-256 or BLAKE3. `fsync`, rename
+to its manifest-relative final name, and record the observed identity only
+after all checks pass. On any failure, unlink only enumerated partial/final
+files and remove the explicit empty staging directory. Emit a sorted canonical
+newline JSON receipt binding the construction-manifest digest and every staged
+relative path. Credentials and AWS profile `causality` exist only in this
+process; the launcher receives the completed directory and receipt afterward.
+
+- [ ] **Step 3: Verify static capability separation**
+
+Run serially:
+
+```bash
+python3 -m unittest scripts.test_stage_v23_leaf_page_incidence_inputs
+uv run --python 3.12 --with ruff==0.15.20 ruff check \
+  scripts/stage_v23_leaf_page_incidence_inputs.py \
+  scripts/test_stage_v23_leaf_page_incidence_inputs.py
+python3 -m py_compile scripts/stage_v23_leaf_page_incidence_inputs.py
+git diff --check
+```
+
+Read-only callsite audit must prove AWS/object-store symbols are absent from
+the Rust scientific modules, example, and sandbox child path.
+
+- [ ] **Step 4: Commit the staging slice**
+
+```bash
+git add scripts/stage_v23_leaf_page_incidence_inputs.py \
+  scripts/test_stage_v23_leaf_page_incidence_inputs.py
+git commit -m "Add authenticated V23 incidence input staging"
 ```
 
 ### Task 3: Deterministic reservoir and balanced spherical tree
@@ -404,6 +512,16 @@ fn v23_incidence_prefixes_bind_retention_quantization_and_exact_bytes() {
         assert!(decode_posting_plane(&mutation).is_err());
     }
 }
+
+#[test]
+fn v23_incidence_both_arms_share_one_authenticated_page_stream() {
+    let fixture = posting_fixture();
+    let decoder = CountingPageDecoder::new(&fixture.pages);
+    let planes = build_both_posting_arms(&fixture.tree, decoder.clone()).unwrap();
+    assert_eq!(decoder.decode_count(), fixture.pages.len());
+    assert_eq!(planes.one_path, reference_postings_one(&fixture));
+    assert_eq!(planes.two_beam, reference_postings_two(&fixture));
+}
 ```
 
 - [ ] **Step 2: Run the posting RED**
@@ -429,14 +547,15 @@ pub(crate) const V23_POSTING_MAX_PAGES: usize = 2048;
 
 Encode every record manually as two little-endian leaf bytes, four
 little-endian page bytes, and two zero bytes; never serialize the Rust struct's
-in-memory layout. Write separate one-/two-arm partitions selected by the leaf
-high byte. Authenticate each page before decoding; normalize f16 rows; parse
-canonical decimal IDs to source ordinals; emit exactly one or two records per
-physical page assignment. Sort runs by `(leaf,page)`, unlink the unsorted
+in-memory layout. Open each registered page once, authenticate it before
+decoding, normalize f16 rows, parse canonical decimal IDs to source ordinals,
+and emit its one-path and two-beam records into separate arm partitions before
+releasing the decoded page. A second page-body stream is an authority error.
+Select each partition by the leaf high byte. Sort runs by `(leaf,page)`, unlink the unsorted
 partition only after durable runs, merge with a bounded heap, retain one
 leaf's top-2,048 counts, and stream final bytes. Enforce 55,860,333 records,
 446,882,664 record bytes, 1,027,983,056 scratch bytes, 553,648,128 posting RSS,
-and exact cleanup.
+one-pass authenticated input byte accounting, and exact cleanup.
 
 - [ ] **Step 4: Implement mass/prefix codec and eligibility**
 
@@ -595,7 +714,32 @@ Expected: missing parser/high-level runner only.
 
 - [ ] **Step 3: Implement local phase requests and preflight**
 
-Each phase accepts explicit local paths plus exact role URI/digest/length/generation flags, an executable digest, parent receipt digest, scratch/output paths, and exactly one `--preflight-<phase>` or `--execute-<phase>` gate. `V23IncidenceRunMode::Preflight(phase)` accepts only the phase's fixed preflight subset and emits a preflight receipt parented by the prior scientific receipt; `Execute(phase)` requires that exact preflight digest plus the remaining phase inputs. Tree preflight runs 65,536 vectors; posting preflight authenticates and decodes 256 pages plus sorts 1,048,576 records; evaluation preflight runs 10,000 resident synthetic queries only to project feasibility. Each receipt records distance dimensions, bytes, records, throughput, and the 80%-throughput wall projection, and refuses a projection above 5,400 seconds before remaining input acquisition. Evaluation still performs and records the separate complete-representation native timing from Task 5.
+Each phase accepts bounded singleton local-path flags, one bulk-directory path,
+one ordered bulk-manifest path, and one staging-receipt path; URI, digest, length,
+generation, and relative object paths live inside the authenticated manifest
+rather than repeating in argv. It also accepts an executable digest, parent
+receipt digest, scratch/output paths, and exactly one
+`--preflight-<phase>` or `--execute-<phase>` gate.
+`V23IncidenceRunMode::Preflight(phase)` accepts only the phase's fixed preflight
+subset and emits a preflight receipt parented by the prior scientific receipt;
+`Execute(phase)` requires that exact preflight digest plus the remaining phase
+inputs. Tree preflight runs 65,536 vectors; posting preflight authenticates and
+decodes 256 pages once while producing both arms plus sorting 1,048,576 records;
+evaluation preflight runs 10,000 resident synthetic queries only to project
+feasibility. Each receipt records distance dimensions, bytes, records,
+throughput, and the 80%-throughput wall projection, and refuses a projection
+above 5,400 seconds before remaining input acquisition. Evaluation still
+performs and records the separate complete-representation native timing from
+Task 5.
+
+Bulk inputs are represented by one directory path, one ordered manifest path,
+and one staging-receipt path in the local request. Rust resolves every relative
+path from the authenticated manifest and rejects traversal, symlinks,
+missing/unexpected files, and per-object identity drift. Phase argv must remain
+below 16 KiB for the full registered page corpus. Both preflight and execute
+emit canonical hash-chained progress after fixed completed-work milestones;
+the final receipt binds the last progress digest. Posting preflight and execute
+decode every sampled/full page once while producing both assignment arms.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

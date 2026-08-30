@@ -84,6 +84,26 @@ must bind URI, length, digest, ordinal range, physical schema, generation,
 metric, dimensions, row counts, primary/replica roles, and the exact page
 namespace. No latest-object discovery is allowed.
 
+Before scientific execution, a credentialed staging process outside every
+scientific sandbox consumes only that frozen manifest. It resolves each exact
+S3 URI and registered generation/version, verifies the registered byte length
+and SHA-256 or BLAKE3 digest while streaming, and writes the object beneath a
+role-specific staging directory. It emits a canonical staging receipt binding
+the source manifest digest, ordered object identities, relative paths, and
+observed digests. Discovery by prefix, ETag-as-digest, latest-object selection,
+and implicit retry after a terminal are forbidden. The scientific processes
+have no credentials or object-store client and accept only the staged bytes
+plus the exact staging receipt.
+
+The raw training representation is frozen before staging: every ordered shard
+must have a registered URI, generation, byte length, digest, inclusive source
+ordinal range, row count, and exact Parquet physical schema. The logical row is
+one non-null `emb: FixedSizeList<element: Float32, 96>` vector; outer or child
+nullability, field-name, dimension, dtype, row-count, range, shard-order, or
+materialization drift is an authority failure. Arrow is the typed in-memory
+boundary and Parquet is the durable table boundary; page payloads retain their
+registered binary codec and are never translated through JSON.
+
 ## Leakage boundary
 
 The pipeline is split into processes with disjoint inputs. Every scientific
@@ -102,14 +122,28 @@ network canary, and succeed only on the allowlisted inputs/output. The receipt
 binds the executable digest, namespace inode, ordered mount manifest, and probe
 results. A platform that cannot create this boundary emits `authority-stop`.
 
+The launcher never serializes the policy into argv and never emits one mount or
+one phase argument per shard/page. The parent writes one canonical policy file,
+passes only its bounded path and SHA-256 to `--enter-sandbox-policy`, and the
+child authenticates it before mounting anything. Training receives one
+read-only shard-directory capability plus its ordered manifest and staging
+receipt. Posting construction receives one read-only page-directory capability
+plus its roster, ordered manifest, and staging receipt. Rust derives every
+relative object path from the authenticated manifest, rejects absolute paths,
+`..`, symlinks, duplicate paths, missing or unexpected files, and authenticates
+each body before semantic use. The policy and phase argv therefore remain
+bounded independently of corpus size and page count.
+
 1. **Tree training** may read only the exact dataset/construction manifest and
    raw training shards. It cannot open page labels, page bodies, queries,
    neighbors, or prior results. It emits a content-addressed tree and training
    receipt.
 2. **Posting construction** may read only the sealed tree/receipt, page roster,
    and page bodies. It cannot open raw query, neighbor, or prior-result bytes.
-   It emits content-addressed one- and two-leaf posting artifacts plus a router
-   completion receipt.
+   One authenticated page stream emits contributions for both the one-leaf and
+   two-leaf arms before releasing each decoded page; a second scientific page
+   pass is forbidden. It emits content-addressed one- and two-leaf posting
+   artifacts plus a router completion receipt.
 3. **Development evaluation** may open only the sealed router, the
    authenticated D2 report, and query ordinals 0--31. The D2 report supplies
    their already-authenticated neighbor-to-page truth. These ordinals are
@@ -231,11 +265,13 @@ dimensions. Combined with training, the complete ceiling is
 Before each phase acquires its remaining full inputs, its exact scalar/SIMD
 distance kernel, page decoder/hash path, or external sorter runs the applicable
 fixed preflight over 65,536 training vectors, 256 registered page bodies, or
-1,048,576 contribution records. The end-to-end wall projection is the sum of
-distance work, authenticated input bytes, and 55,860,333 sort records, each
-divided by 80% of its observed throughput. It must not exceed 5,400 seconds;
-otherwise the current phase emits `resource-stop` before its complete stream.
-The two-hour cap remains an independent hard stop.
+1,048,576 contribution records. The posting preflight decodes each of its 256
+pages once and produces both arms from that one decode. The end-to-end wall
+projection is the sum of distance work, authenticated input bytes, and
+55,860,333 sort records, each divided by 80% of its observed throughput. It
+must not exceed 5,400 seconds; otherwise the current phase emits
+`resource-stop` before its complete stream. The two-hour cap remains an
+independent hard stop.
 
 For each leaf, exact counts are sorted by `(count descending, page ordinal
 ascending)`. The builder emits the first 2,048 pages and authenticates prefix
@@ -423,6 +459,19 @@ samples, swap growth above 256 MiB, five minutes without authenticated
 progress, or a two-hour wall cap. Each stream and any external request cost
 require separate execution authorization. D3 remains fenced throughout this
 work.
+
+Progress is produced by the authenticated Rust phase, not inferred from file
+mtime or launcher activity. Each phase atomically replaces one canonical
+`progress.json` containing the exact phase, monotonically increasing sequence,
+completed and total registered work units, the last authenticated input or
+sealed output digest, and the SHA-256 of the previous progress record. Tree
+training advances after registered shard/reservoir work and fixed node-count
+milestones; posting advances after fixed page, partition, run, and merge
+milestones; evaluation advances after fixed query/timing milestones. The
+launcher accepts progress only when the phase and total are unchanged, sequence
+and completed work strictly increase, the previous digest matches, and the
+record is canonical. The terminal receipt binds the final progress digest.
+Writing a heartbeat without completing a registered unit is forbidden.
 
 ## Success boundary
 
