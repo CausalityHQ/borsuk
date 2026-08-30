@@ -14,7 +14,9 @@ except ModuleNotFoundError:
     from production_bench_schema import QUERY_STAGE_AGGREGATE_FIELDS
     from publication_v3_protocol import canonical_json_bytes
 
-OBJECT_FIELDS = frozenset({"role", "path", "format", "bytes", "rows", "checksum", "etag"})
+OBJECT_FIELDS = frozenset(
+    {"role", "path", "format", "bytes", "rows", "checksum", "etag"}
+)
 OBJECT_ETAG = re.compile(r'"[0-9a-f]{32}(?:-[1-9][0-9]*)?"')
 OBJECT_ROLES = frozenset({"data-bundle", "query-page", "directory", "control"})
 FORMATS = {
@@ -66,9 +68,7 @@ READ_METRIC_FIELDS_V1 = frozenset(
 READ_METRIC_FIELDS_V2 = READ_METRIC_FIELDS_V1 | frozenset(
     {"global_leaf_code_requests", "global_leaf_exact_requests"}
 )
-READ_METRIC_FIELDS_V3 = READ_METRIC_FIELDS_V2 | frozenset(
-    QUERY_STAGE_AGGREGATE_FIELDS
-)
+READ_METRIC_FIELDS_V3 = READ_METRIC_FIELDS_V2 | frozenset(QUERY_STAGE_AGGREGATE_FIELDS)
 READ_METRIC_FIELDS = READ_METRIC_FIELDS_V3 | frozenset(
     {
         "decoded_cache_bytes_read",
@@ -118,7 +118,9 @@ def _positive_integer(value: object, role: str) -> int:
 
 def _checksum(value: object) -> str:
     digest = str(value)
-    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+    if len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
         raise ValueError("object checksum must be lowercase SHA-256")
     return digest
 
@@ -170,9 +172,7 @@ def _validate_result_arm(value: object, cell: dict[str, object]) -> dict[str, ob
     if not isinstance(factors, dict):
         raise ValueError("cell result arm kind is not implemented")
     if kind == "read-recall":
-        expected = frozenset(
-            {"k", "leaf_page_budget", "cache_state"}
-        )
+        expected = frozenset({"k", "leaf_page_budget", "cache_state"})
         if frozenset(arm) != expected:
             raise ValueError("cell result arm fields differ")
         for field in ("k", "leaf_page_budget"):
@@ -218,7 +218,10 @@ def _validate_result_arm(value: object, cell: dict[str, object]) -> dict[str, ob
 
 
 def validate_object_roster(
-    value: list[dict[str, object]], *, logical_rows: int, logical_cells: int | None = None
+    value: list[dict[str, object]],
+    *,
+    logical_rows: int,
+    logical_cells: int | None = None,
 ) -> dict[str, int]:
     logical_rows = _positive_integer(logical_rows, "logical rows")
     if logical_cells is not None:
@@ -389,7 +392,9 @@ def validate_cell_result(
     if attestation["instance_id"] != value["instance_identity"]:
         raise ValueError("cell result runtime instance differs from its attestation")
     if value["runtime_attestation_sha256"] != runtime_attestation_sha256(attestation):
-        raise ValueError("cell result runtime attestation differs from its measured host")
+        raise ValueError(
+            "cell result runtime attestation differs from its measured host"
+        )
 
     metrics = value["metrics"]
     result_schema_version = value["schema_version"]
@@ -430,12 +435,8 @@ def validate_cell_result(
             "delete_ops",
         ):
             _positive_integer(metrics[field], field.replace("_", " "))
-        expected_upserts = (
-            metrics["insert_ops"] * arm["update_percent"] + 99
-        ) // 100
-        expected_deletes = (
-            metrics["insert_ops"] * arm["delete_percent"] + 99
-        ) // 100
+        expected_upserts = (metrics["insert_ops"] * arm["update_percent"] + 99) // 100
+        expected_deletes = (metrics["insert_ops"] * arm["delete_percent"] + 99) // 100
         if (
             metrics["upsert_ops"] != expected_upserts
             or metrics["delete_ops"] != expected_deletes
@@ -476,7 +477,11 @@ def validate_cell_result(
     clients = environment.get("runtime_clients")
     client = clients.get(system) if isinstance(clients, dict) else None
     memory_mib = client.get("memory_mib") if isinstance(client, dict) else None
-    if isinstance(memory_mib, bool) or not isinstance(memory_mib, int) or memory_mib <= 0:
+    if (
+        isinstance(memory_mib, bool)
+        or not isinstance(memory_mib, int)
+        or memory_mib <= 0
+    ):
         raise ValueError("cell runtime-client memory is invalid")
     if peak_rss_bytes > memory_mib * 1024 * 1024:
         raise ValueError("cell result peak RSS exceeds its runtime client")

@@ -41,9 +41,7 @@ FIELDS = frozenset(
 INVENTORY_REF_FIELDS = frozenset(
     {"path", "bytes", "checksum", "objects", "total_bytes"}
 )
-INVENTORY_FIELDS = frozenset(
-    {"path", "bytes", "source_etag", "destination_etag"}
-)
+INVENTORY_FIELDS = frozenset({"path", "bytes", "source_etag", "destination_etag"})
 
 
 def _sha256(value: object, role: str) -> str:
@@ -75,8 +73,7 @@ def clone_index_uri(
     index_id = base.rsplit("/", 1)[-1]
     parent = base.rsplit("/", 1)[0]
     return (
-        f"{parent}/mutable-arms/{cell_id}/{_arm_sha256(arm)[:24]}/"
-        f"{attempt}/{index_id}"
+        f"{parent}/mutable-arms/{cell_id}/{_arm_sha256(arm)[:24]}/{attempt}/{index_id}"
     )
 
 
@@ -195,13 +192,20 @@ def validate_clone_receipt(
     ):
         raise ValueError("clone receipt base authority differs")
     expected_uri = clone_index_uri(cell, arm=arm, attempt_id=attempt_id)
-    if value["clone_index_uri"] != expected_uri or value["clone_index_uri"] == value["base_index_uri"]:
+    if (
+        value["clone_index_uri"] != expected_uri
+        or value["clone_index_uri"] == value["base_index_uri"]
+    ):
         raise ValueError("clone receipt mutable URI differs")
     reference = value["copy_inventory_ref"]
     if not isinstance(reference, dict) or frozenset(reference) != INVENTORY_REF_FIELDS:
         raise ValueError("clone receipt inventory reference differs")
     for field in ("bytes", "objects", "total_bytes"):
-        if isinstance(reference[field], bool) or not isinstance(reference[field], int) or reference[field] <= 0:
+        if (
+            isinstance(reference[field], bool)
+            or not isinstance(reference[field], int)
+            or reference[field] <= 0
+        ):
             raise ValueError("clone receipt inventory reference is invalid")
     _sha256(reference["checksum"], "clone inventory checksum")
     if (
@@ -221,7 +225,9 @@ def require_verified_clone_inventory(
     reference = receipt.get("copy_inventory_ref")
     if not isinstance(reference, dict):
         raise ValueError("clone receipt has no copy inventory")
-    if len(payload) != reference.get("bytes") or hashlib.sha256(payload).hexdigest() != reference.get("checksum"):
+    if len(payload) != reference.get("bytes") or hashlib.sha256(
+        payload
+    ).hexdigest() != reference.get("checksum"):
         raise ValueError("clone copy evidence differs from its receipt")
     try:
         value = json.loads(payload)
@@ -230,6 +236,8 @@ def require_verified_clone_inventory(
     if canonical_json_bytes(value) + b"\n" != payload:
         raise ValueError("clone copy evidence is not canonical")
     summary = _inventory_summary(value, base_roster=base_roster)
-    if summary["objects"] != reference.get("objects") or summary["total_bytes"] != reference.get("total_bytes"):
+    if summary["objects"] != reference.get("objects") or summary[
+        "total_bytes"
+    ] != reference.get("total_bytes"):
         raise ValueError("clone copy evidence summary differs from its receipt")
     return copy.deepcopy(value)

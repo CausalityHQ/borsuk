@@ -69,29 +69,23 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
     def test_terminal_result_schema_cuts_with_effective_limit_shape(self) -> None:
         self.assertEqual(REST_RESULT_SCHEMA_VERSION, 13)
 
-    def test_terminal_receipt_binds_controller_profile_and_runtime_account(self) -> None:
+    def test_terminal_receipt_binds_controller_profile_and_runtime_account(
+        self,
+    ) -> None:
         self.assertEqual(
-            validated_aws_identity(
-                "causality", "453182569524", "453182569524"
-            ),
+            validated_aws_identity("causality", "453182569524", "453182569524"),
             {
                 "controller_aws_profile": "causality",
                 "aws_account_id": "453182569524",
             },
         )
         with self.assertRaisesRegex(ValueError, "runtime AWS account differs"):
-            validated_aws_identity(
-                "causality", "453182569524", "139078140588"
-            )
+            validated_aws_identity("causality", "453182569524", "139078140588")
         with self.assertRaisesRegex(ValueError, "Causality AWS account"):
-            validated_aws_identity(
-                "causality", "139078140588", "139078140588"
-            )
+            validated_aws_identity("causality", "139078140588", "139078140588")
 
     def test_smoke_staircase_crosses_the_expected_small_runtime_knee(self) -> None:
-        self.assertEqual(
-            staircase_rates(True), [32, 64, 96, 128, 160, 192, 224, 256]
-        )
+        self.assertEqual(staircase_rates(True), [32, 64, 96, 128, 160, 192, 224, 256])
         self.assertEqual(
             staircase_rates(False), [8, 16, 32, 64, 96, 128, 160, 192, 224, 256]
         )
@@ -121,7 +115,9 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "repetition"):
             phase_schedule(False, 0)
 
-    def test_each_measured_phase_has_an_excluded_warmup_and_observed_order(self) -> None:
+    def test_each_measured_phase_has_an_excluded_warmup_and_observed_order(
+        self,
+    ) -> None:
         observed: list[str] = []
         measured = {"passed": True}
         with (
@@ -250,13 +246,27 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
 
     def test_staircase_selects_highest_clean_recall_qualified_rate(self) -> None:
         rows = [
-            {"offered_qps": 16, "accepted_qps": 15.8, "summary": {"passed": True, "search": {"rejected_429": 0}}},
-            {"offered_qps": 32, "accepted_qps": 31.5, "summary": {"passed": True, "search": {"rejected_429": 0}}},
-            {"offered_qps": 64, "accepted_qps": 40.0, "summary": {"passed": True, "search": {"rejected_429": 3}}},
+            {
+                "offered_qps": 16,
+                "accepted_qps": 15.8,
+                "summary": {"passed": True, "search": {"rejected_429": 0}},
+            },
+            {
+                "offered_qps": 32,
+                "accepted_qps": 31.5,
+                "summary": {"passed": True, "search": {"rejected_429": 0}},
+            },
+            {
+                "offered_qps": 64,
+                "accepted_qps": 40.0,
+                "summary": {"passed": True, "search": {"rejected_429": 3}},
+            },
         ]
         self.assertEqual(select_sustainable_search_qps(rows), 31.5)
 
-    def test_overload_rate_reaches_the_attested_staircase_capacity_boundary(self) -> None:
+    def test_overload_rate_reaches_the_attested_staircase_capacity_boundary(
+        self,
+    ) -> None:
         self.assertEqual(overload_search_qps(16.0, [16, 32, 64, 96]), 96.0)
         self.assertEqual(overload_search_qps(96.0, [16, 32, 64, 96]), 144.0)
 
@@ -268,11 +278,15 @@ class RestCoexistenceAttemptTest(unittest.TestCase):
                 }
             }
         ]
-        self.assertTrue(staircase_has_only_expected_capacity_failures(expected_boundary))
+        self.assertTrue(
+            staircase_has_only_expected_capacity_failures(expected_boundary)
+        )
         expected_boundary[0]["summary"]["gate_failures"].append(  # type: ignore[index]
             "vector phase must have successful requests and zero errors"
         )
-        self.assertFalse(staircase_has_only_expected_capacity_failures(expected_boundary))
+        self.assertFalse(
+            staircase_has_only_expected_capacity_failures(expected_boundary)
+        )
 
     def test_effective_limit_attestation_is_exact(self) -> None:
         expected = {

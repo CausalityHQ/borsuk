@@ -149,7 +149,11 @@ def _phase_roles(phase: str, *, preflight: bool) -> tuple[set[str], tuple[str, .
 
 
 def _validate_mount(mount: SandboxMount, *, runtime: bool) -> None:
-    if not mount.role or not mount.source.is_absolute() or not mount.target.is_absolute():
+    if (
+        not mount.role
+        or not mount.source.is_absolute()
+        or not mount.target.is_absolute()
+    ):
         raise ValueError("sandbox mounts require an absolute source and target")
     if not mount.read_only:
         raise ValueError("sandbox inputs and runtime mounts must be read-only")
@@ -165,9 +169,10 @@ def _validate_mount(mount: SandboxMount, *, runtime: bool) -> None:
     if ".." in mount.target.parts:
         raise ValueError("sandbox mount target leaves its registered root")
     if runtime:
-        allowed_target = rendered_target.startswith(
-            ("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/")
-        ) or rendered_target == "/etc/ld.so.cache/"
+        allowed_target = (
+            rendered_target.startswith(("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/"))
+            or rendered_target == "/etc/ld.so.cache/"
+        )
         if (
             mount.digest_algorithm != "sha256"
             or not (
@@ -211,7 +216,10 @@ def validate_phase_inputs(policy: SandboxPolicy) -> None:
         raise ValueError("scratch and output paths must be absolute")
     if policy.scratch == policy.output:
         raise ValueError("scratch and output must be disjoint")
-    if policy.scratch in policy.output.parents or policy.output in policy.scratch.parents:
+    if (
+        policy.scratch in policy.output.parents
+        or policy.output in policy.scratch.parents
+    ):
         raise ValueError("scratch and output must be disjoint")
     if not policy.runtime_mounts or not policy.inputs:
         raise ValueError("sandbox requires runtime and phase inputs")
@@ -244,14 +252,22 @@ def validate_phase_inputs(policy: SandboxPolicy) -> None:
     seen_roles: set[str] = set()
     for mount in policy.runtime_mounts:
         _validate_mount(mount, runtime=True)
-        if mount.source in seen_sources or mount.target in seen_targets or mount.role in seen_roles:
+        if (
+            mount.source in seen_sources
+            or mount.target in seen_targets
+            or mount.role in seen_roles
+        ):
             raise ValueError("duplicate sandbox mount authority")
         seen_sources.add(mount.source)
         seen_targets.add(mount.target)
         seen_roles.add(mount.role)
     for mount in policy.inputs:
         _validate_mount(mount, runtime=False)
-        if mount.source in seen_sources or mount.target in seen_targets or mount.role in seen_roles:
+        if (
+            mount.source in seen_sources
+            or mount.target in seen_targets
+            or mount.role in seen_roles
+        ):
             raise ValueError("duplicate sandbox mount authority")
         seen_sources.add(mount.source)
         seen_targets.add(mount.target)
@@ -267,11 +283,14 @@ def validate_phase_inputs(policy: SandboxPolicy) -> None:
     if not fixed_roles.issubset(actual_roles):
         raise ValueError("required phase input is absent")
     if any(
-        role not in fixed_roles and not any(role.startswith(prefix) for prefix in prefixes)
+        role not in fixed_roles
+        and not any(role.startswith(prefix) for prefix in prefixes)
         for role in actual_roles
     ):
         raise ValueError(
-            "preflight input capability differs" if preflight else "phase input capability differs"
+            "preflight input capability differs"
+            if preflight
+            else "phase input capability differs"
         )
     if policy.phase == "tree-training" and not any(
         role.startswith("training-shard-") for role in actual_roles
@@ -316,7 +335,9 @@ def canonical_policy_argument(policy: SandboxPolicy) -> str:
     """Return one deterministic URL-safe policy argument."""
 
     validate_phase_inputs(policy)
-    raw = json.dumps(_policy_value(policy), separators=(",", ":"), sort_keys=True).encode()
+    raw = json.dumps(
+        _policy_value(policy), separators=(",", ":"), sort_keys=True
+    ).encode()
     return base64.urlsafe_b64encode(raw).decode("ascii")
 
 
@@ -858,7 +879,9 @@ def _progress_token(path: pathlib.Path | None) -> tuple[int, str] | None:
         or not _valid_sha256(value["last_digest"])
     ):
         return None
-    canonical = json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+    canonical = (
+        json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+    )
     if raw != canonical:
         return None
     return value["authenticated_objects"], value["last_digest"]
@@ -880,7 +903,9 @@ def _process_group_rss_bytes(pgid: int) -> int:
 
 
 def _memory_psi_full_avg10() -> float:
-    for line in pathlib.Path("/proc/pressure/memory").read_text(encoding="ascii").splitlines():
+    for line in (
+        pathlib.Path("/proc/pressure/memory").read_text(encoding="ascii").splitlines()
+    ):
         if line.startswith("full "):
             fields = dict(field.split("=", 1) for field in line.split()[1:])
             return float(fields["avg10"])
@@ -944,7 +969,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
         raise ValueError("policy file bytes differ")
     policy = decode_policy_argument(raw[:-1].decode("ascii"))
     selected = next(
-        phase for phase in PHASES if getattr(parsed, f"execute_{phase.replace('-', '_')}")
+        phase
+        for phase in PHASES
+        if getattr(parsed, f"execute_{phase.replace('-', '_')}")
     )
     if policy.phase != selected:
         raise ValueError("policy phase differs from explicit execution gate")

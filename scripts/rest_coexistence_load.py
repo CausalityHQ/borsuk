@@ -113,7 +113,11 @@ def scheduled_offsets_ns(rate_per_second: float, duration_seconds: float) -> lis
     interval = 1_000_000_000 / rate_per_second
     count = math.ceil(rate_per_second * duration_seconds)
     limit = round(duration_seconds * 1_000_000_000)
-    return [round(index * interval) for index in range(count) if round(index * interval) < limit]
+    return [
+        round(index * interval)
+        for index in range(count)
+        if round(index * interval) < limit
+    ]
 
 
 def percentile(values: list[float], quantile: float) -> float:
@@ -125,17 +129,25 @@ def percentile(values: list[float], quantile: float) -> float:
     return ordered[max(0, math.ceil(quantile * len(ordered)) - 1)]
 
 
-def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[str, object]:
-    latencies = [(sample.completed_ns - sample.scheduled_ns) / 1_000_000 for sample in samples]
+def _endpoint_summary(
+    samples: list[Sample], duration_seconds: float
+) -> dict[str, object]:
+    latencies = [
+        (sample.completed_ns - sample.scheduled_ns) / 1_000_000 for sample in samples
+    ]
     lags = [(sample.started_ns - sample.scheduled_ns) / 1_000_000 for sample in samples]
-    recalls = [sample.recall_at_10 for sample in samples if sample.recall_at_10 is not None]
+    recalls = [
+        sample.recall_at_10 for sample in samples if sample.recall_at_10 is not None
+    ]
     engines = sorted({sample.engine for sample in samples if sample.engine is not None})
     winning_card_ranks = [
         sample.global_leaf_deepest_winning_card_rank
         for sample in samples
         if sample.global_leaf_deepest_winning_card_rank > 0
     ]
-    errors = sum(not 200 <= sample.status < 300 and sample.status != 429 for sample in samples)
+    errors = sum(
+        not 200 <= sample.status < 300 and sample.status != 429 for sample in samples
+    )
     return {
         "requests": len(samples),
         "successful_requests": sum(200 <= sample.status < 300 for sample in samples),
@@ -152,7 +164,9 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
         "backing_reads": sum(sample.backing_reads for sample in samples),
         "backing_bytes_read": sum(sample.backing_bytes_read for sample in samples),
         "disk_cache_reads": sum(sample.disk_cache_reads for sample in samples),
-        "disk_cache_bytes_read": sum(sample.disk_cache_bytes_read for sample in samples),
+        "disk_cache_bytes_read": sum(
+            sample.disk_cache_bytes_read for sample in samples
+        ),
         "records_scored": sum(sample.records_scored for sample in samples),
         "global_leaf_code_pages_read": sum(
             sample.global_leaf_code_pages_read for sample in samples
@@ -178,9 +192,7 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
         "global_leaf_deepest_winning_card_rank_p99": int(
             percentile(winning_card_ranks, 0.99)
         ),
-        "global_leaf_deepest_winning_card_rank_max": max(
-            winning_card_ranks, default=0
-        ),
+        "global_leaf_deepest_winning_card_rank_max": max(winning_card_ranks, default=0),
         "global_leaf_exact_groups": sum(
             sample.global_leaf_exact_groups for sample in samples
         ),
@@ -200,7 +212,9 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
         "global_base_head_admission_us": sum(
             sample.global_base_head_admission_us for sample in samples
         ),
-        "global_base_head_fetch_us": sum(sample.global_base_head_fetch_us for sample in samples),
+        "global_base_head_fetch_us": sum(
+            sample.global_base_head_fetch_us for sample in samples
+        ),
         "global_base_head_decode_admission_us": sum(
             sample.global_base_head_decode_admission_us for sample in samples
         ),
@@ -210,7 +224,9 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
         "global_base_exact_admission_us": sum(
             sample.global_base_exact_admission_us for sample in samples
         ),
-        "global_base_exact_fetch_us": sum(sample.global_base_exact_fetch_us for sample in samples),
+        "global_base_exact_fetch_us": sum(
+            sample.global_base_exact_fetch_us for sample in samples
+        ),
         "global_base_exact_cpu_us": sum(
             sample.global_base_exact_cpu_us for sample in samples
         ),
@@ -221,7 +237,9 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
             sample.global_leaf_pages_read for sample in samples
         ),
         "query_bytes_read": sum(sample.query_bytes_read for sample in samples),
-        "transient_bytes_max": max((sample.transient_bytes for sample in samples), default=0),
+        "transient_bytes_max": max(
+            (sample.transient_bytes for sample in samples), default=0
+        ),
         "transient_capacity_bytes": max(
             (sample.transient_capacity_bytes for sample in samples), default=0
         ),
@@ -231,7 +249,9 @@ def _endpoint_summary(samples: list[Sample], duration_seconds: float) -> dict[st
     }
 
 
-def summarize(phase: str, duration_seconds: float, samples: list[Sample]) -> dict[str, object]:
+def summarize(
+    phase: str, duration_seconds: float, samples: list[Sample]
+) -> dict[str, object]:
     groups = {
         endpoint: [sample for sample in samples if sample.endpoint == endpoint]
         for endpoint in ("cheap", "search")
@@ -258,7 +278,10 @@ def evaluate_phase(
     baseline_cheap = baseline.get("cheap")
     if isinstance(cheap, dict) and isinstance(baseline_cheap, dict):
         multiplier, additive = (1.5, 5.0) if phase == "mixed-overload" else (1.25, 2.0)
-        limit = max(float(baseline_cheap["p99_ms"]) * multiplier, float(baseline_cheap["p99_ms"]) + additive)
+        limit = max(
+            float(baseline_cheap["p99_ms"]) * multiplier,
+            float(baseline_cheap["p99_ms"]) + additive,
+        )
         if float(cheap["p99_ms"]) > limit:
             failures.append(f"cheap p99 {cheap['p99_ms']}ms exceeds {limit}ms")
         requests = int(cheap["requests"])
@@ -271,7 +294,9 @@ def evaluate_phase(
         rejected = int(search.get("rejected_429", 0))
         errors = int(search.get("errors", 0))
         if requests == 0 or successes == 0 or errors != 0:
-            failures.append("vector phase must have successful requests and zero errors")
+            failures.append(
+                "vector phase must have successful requests and zero errors"
+            )
         if successes + rejected + errors != requests:
             failures.append("vector statuses are not fully accounted")
         if float(search.get("schedule_lag_p99_ms", float("inf"))) > 10.0:
@@ -279,7 +304,10 @@ def evaluate_phase(
         # The overload phase deliberately drives admission into HTTP 429. Its
         # contract is app-endpoint isolation and explicit backpressure; the
         # 100 ms vector tail applies only to admitted non-overload traffic.
-        if phase != "mixed-overload" and float(search.get("p99_ms", float("inf"))) > 100.0:
+        if (
+            phase != "mixed-overload"
+            and float(search.get("p99_ms", float("inf"))) > 100.0
+        ):
             failures.append("vector p99 exceeds the frozen 100ms limit")
         if phase != "mixed-overload" and rejected != 0:
             failures.append("non-overload vector phase returned HTTP 429")
@@ -296,9 +324,10 @@ def evaluate_phase(
             failures.append("mixed overload must return explicit HTTP 429 responses")
         if successes and int(search.get("backing_reads", 0)) == 0:
             failures.append("uncached vector phase performed zero backing reads")
-        if int(search.get("disk_cache_reads", 0)) != 0 or int(
-            search.get("disk_cache_bytes_read", 0)
-        ) != 0:
+        if (
+            int(search.get("disk_cache_reads", 0)) != 0
+            or int(search.get("disk_cache_bytes_read", 0)) != 0
+        ):
             failures.append("uncached vector phase used the disk cache")
     return failures
 
@@ -363,7 +392,9 @@ def _request(
     if endpoint == "search":
         if query is None:
             raise ValueError("search request has no query")
-        body = json.dumps({"vector": query["vector"], "k": 10}, separators=(",", ":")).encode()
+        body = json.dumps(
+            {"vector": query["vector"], "k": 10}, separators=(",", ":")
+        ).encode()
         request = urllib.request.Request(
             f"{base_url}/api/search",
             data=body,
@@ -425,9 +456,7 @@ def _request(
         )
         global_base_exact_fetch_us = int(payload.get("global_base_exact_fetch_us", 0))
         global_base_exact_cpu_us = int(payload.get("global_base_exact_cpu_us", 0))
-        global_base_exact_rerank_us = int(
-            payload.get("global_base_exact_rerank_us", 0)
-        )
+        global_base_exact_rerank_us = int(payload.get("global_base_exact_rerank_us", 0))
         telemetry = _search_telemetry(payload)
         global_leaf_pages_read = telemetry["global_leaf_pages_read"]
         query_bytes_read = telemetry["query_bytes_read"]
@@ -487,8 +516,14 @@ def run_phase(
     if search_qps > 0 and not queries:
         raise ValueError("search phase requires query vectors and oracle neighbors")
     epoch = time.monotonic_ns() + 1_000_000_000
-    schedule = [(offset, "cheap") for offset in scheduled_offsets_ns(cheap_qps, duration_seconds)]
-    schedule += [(offset, "search") for offset in scheduled_offsets_ns(search_qps, duration_seconds)]
+    schedule = [
+        (offset, "cheap")
+        for offset in scheduled_offsets_ns(cheap_qps, duration_seconds)
+    ]
+    schedule += [
+        (offset, "search")
+        for offset in scheduled_offsets_ns(search_qps, duration_seconds)
+    ]
     schedule.sort(key=lambda item: (item[0], item[1]))
     futures: list[concurrent.futures.Future[Sample]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
@@ -499,7 +534,9 @@ def run_phase(
                 time.sleep(delay)
             query = queries[ordinal % len(queries)] if endpoint == "search" else None
             futures.append(
-                executor.submit(_request, base_url, endpoint, scheduled, query, timeout_seconds)
+                executor.submit(
+                    _request, base_url, endpoint, scheduled, query, timeout_seconds
+                )
             )
         return [future.result() for future in futures]
 
@@ -507,15 +544,29 @@ def run_phase(
 def _load_queries(path: Path | None) -> list[dict[str, object]]:
     if path is None:
         return []
-    queries = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    queries = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     for query in queries:
-        if set(query) != {"vector", "neighbors"} or not query["vector"] or not query["neighbors"]:
-            raise ValueError("query JSONL rows must contain nonempty vector and neighbors")
+        if (
+            set(query) != {"vector", "neighbors"}
+            or not query["vector"]
+            or not query["neighbors"]
+        ):
+            raise ValueError(
+                "query JSONL rows must contain nonempty vector and neighbors"
+            )
     return queries
 
 
 def _write_canonical(path: Path, value: object) -> None:
-    path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def main() -> int:
@@ -542,11 +593,22 @@ def main() -> int:
         args.workers,
         args.timeout_seconds,
     )
-    args.samples.write_text("".join(json.dumps(sample.as_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n" for sample in samples), encoding="utf-8")
+    args.samples.write_text(
+        "".join(
+            json.dumps(
+                sample.as_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
+            )
+            + "\n"
+            for sample in samples
+        ),
+        encoding="utf-8",
+    )
     summary = summarize(args.phase, args.duration_seconds, samples)
     failures: list[str] = []
     if args.baseline is not None:
-        failures = evaluate_phase(args.phase, json.loads(args.baseline.read_text()), summary)
+        failures = evaluate_phase(
+            args.phase, json.loads(args.baseline.read_text()), summary
+        )
     summary["gate_failures"] = failures
     summary["passed"] = not failures
     _write_canonical(args.summary, summary)

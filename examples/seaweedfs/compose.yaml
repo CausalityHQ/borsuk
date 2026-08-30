@@ -1,6 +1,6 @@
 services:
   seaweedfs:
-    image: chrislusf/seaweedfs:latest
+    image: chrislusf/seaweedfs@sha256:43b768cd62b00d132439cda881b93fd1adebf1b315e996e794087743821d771d
     command:
       - server
       - -dir=/data
@@ -13,8 +13,6 @@ services:
       - -s3.config=/etc/seaweedfs/s3.json
     ports:
       - "8333:8333"
-      - "8888:8888"
-      - "9333:9333"
     volumes:
       - seaweedfs-data:/data
       - ./s3.json:/etc/seaweedfs/s3.json:ro

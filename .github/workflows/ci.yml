@@ -34,9 +34,9 @@ jobs:
         with:
           node-version: "24"
       - name: Ruff format
-        run: uvx ruff format --check python examples scripts
+        run: uvx --from ruff==0.16.5 ruff format --check python examples scripts
       - name: Ruff lint
-        run: uvx ruff check python examples scripts
+        run: uvx --from ruff==0.16.5 ruff check python examples scripts
       - name: Prettier
         run: >-
           npx --yes prettier@3 --check

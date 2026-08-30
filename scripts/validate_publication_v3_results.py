@@ -94,7 +94,9 @@ def validate_structural_tree(
 ) -> dict[str, object]:
     root = root.resolve()
     _exact_children(root, ROOT_FILES, "result root")
-    manifest = validate_manifest(_read_canonical_json(root / "manifest.json", 256 * 1024))
+    manifest = validate_manifest(
+        _read_canonical_json(root / "manifest.json", 256 * 1024)
+    )
     schedule_value = _read_canonical_json(root / "schedule.json", 64 * 1024 * 1024)
     schedule = validate_schedule_for_manifest(schedule_value, manifest)
     environment = _validate_environment(

@@ -4188,9 +4188,7 @@ class V23DiagnosticWorkerTests(unittest.TestCase):
                 "codec": "fast-turbo-quant-mse",
                 "state": {"dimensions": 96, "bits": 3, "shards": 1},
             }
-            second_arm["wave_projected_bytes"] = 8 * (
-                96 + 4 * 2_049 + 2_048 * (52 + 8)
-            )
+            second_arm["wave_projected_bytes"] = 8 * (96 + 4 * 2_049 + 2_048 * (52 + 8))
             ordered_artifact["report"]["arms"].append(second_arm)
             ordered_summary["arms"] = 2
             ordered_summary["passing_arm_indexes"] = [0, 1]

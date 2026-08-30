@@ -128,7 +128,9 @@ class PageCodecAndClusteringTests(unittest.TestCase):
         ]:
             changed = bytearray(body)
             changed[index] = value
-            mutations.append((name, _with_checksum(reference, bytes(changed)), bytes(changed)))
+            mutations.append(
+                (name, _with_checksum(reference, bytes(changed)), bytes(changed))
+            )
 
         for name, offset, value in [
             ("dimension", 8, reference.dimensions + 1),
@@ -140,7 +142,9 @@ class PageCodecAndClusteringTests(unittest.TestCase):
         ]:
             changed = bytearray(body)
             struct.pack_into("<I", changed, offset, value)
-            mutations.append((name, _with_checksum(reference, bytes(changed)), bytes(changed)))
+            mutations.append(
+                (name, _with_checksum(reference, bytes(changed)), bytes(changed))
+            )
 
         changed_generation = bytearray(body)
         changed_generation[32] ^= 1
@@ -154,7 +158,11 @@ class PageCodecAndClusteringTests(unittest.TestCase):
         changed_width = bytearray(body)
         struct.pack_into("<H", changed_width, 64, reference.code_width + 2)
         mutations.append(
-            ("code-width", _with_checksum(reference, bytes(changed_width)), bytes(changed_width))
+            (
+                "code-width",
+                _with_checksum(reference, bytes(changed_width)),
+                bytes(changed_width),
+            )
         )
 
         for name, mutant_reference, mutant_body in mutations:
@@ -171,7 +179,9 @@ class PageCodecAndClusteringTests(unittest.TestCase):
 
         bad_offset = bytearray(body)
         struct.pack_into("<I", bad_offset, offset_start + 4, 0)
-        mutations.append(("offset", _with_checksum(reference, bytes(bad_offset)), bytes(bad_offset)))
+        mutations.append(
+            ("offset", _with_checksum(reference, bytes(bad_offset)), bytes(bad_offset))
+        )
 
         id_start = 96 + (row_count + 1) * 4
         bad_primary_order = bytearray(body)
@@ -197,7 +207,11 @@ class PageCodecAndClusteringTests(unittest.TestCase):
         non_finite = bytearray(body)
         non_finite[code_start : code_start + 2] = struct.pack("<H", 0x7E00)
         mutations.append(
-            ("non-finite", _with_checksum(reference, bytes(non_finite)), bytes(non_finite))
+            (
+                "non-finite",
+                _with_checksum(reference, bytes(non_finite)),
+                bytes(non_finite),
+            )
         )
 
         trailing = body + b"x"
@@ -456,9 +470,7 @@ def _fixture_result(
         "pages_sha256": digests["roster"],
         "cell_id": "r01-46d286fd1e2290c1cb8b8645",
         "diagnostic_cell_id": "r01-f7a6e06a6a40c1165b6cb889",
-        "attempt_id": (
-            "runtime-v23-d2-r01-f7a6e06a6a40c1165b6cb889-arm-0000-a0001"
-        ),
+        "attempt_id": ("runtime-v23-d2-r01-f7a6e06a6a40c1165b6cb889-arm-0000-a0001"),
         "instance_identity": "i-0123456789abcdef0",
         "dataset_materialization_sha256": "12" * 32,
         "elapsed_ns": 1,
@@ -523,11 +535,14 @@ class _AuthorityFixture:
         paths["result"].write_bytes(result_payload)
         digests["result"] = hashlib.sha256(result_payload).hexdigest()
         self.terminal = _fixture_terminal(self.registered, digests)
-        terminal_payload = json.dumps(
-            self.terminal,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode() + b"\n"
+        terminal_payload = (
+            json.dumps(
+                self.terminal,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode()
+            + b"\n"
+        )
         paths["terminal"].write_bytes(terminal_payload)
         digests["terminal"] = hashlib.sha256(terminal_payload).hexdigest()
         query_path = Path(self.arguments["query_path"])
@@ -549,11 +564,14 @@ class _AuthorityFixture:
         Path(self.arguments["result_path"]).write_bytes(result_payload)
         result_sha256 = hashlib.sha256(result_payload).hexdigest()
         self.terminal["v23_result_sha256"] = result_sha256
-        terminal_payload = json.dumps(
-            self.terminal,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode() + b"\n"
+        terminal_payload = (
+            json.dumps(
+                self.terminal,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode()
+            + b"\n"
+        )
         Path(self.arguments["terminal_path"]).write_bytes(terminal_payload)
         self.registered = dataclasses.replace(
             self.registered,
@@ -565,11 +583,14 @@ class _AuthorityFixture:
     def rewrite_terminal_with_registered_sha_cascade(self) -> None:
         """Cascade a terminal-only mutation into its registered SHA only."""
 
-        payload = json.dumps(
-            self.terminal,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode() + b"\n"
+        payload = (
+            json.dumps(
+                self.terminal,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode()
+            + b"\n"
+        )
         Path(self.arguments["terminal_path"]).write_bytes(payload)
         self.registered = dataclasses.replace(
             self.registered,
@@ -756,7 +777,13 @@ def _authority_fixture() -> _AuthorityFixture:
     )
     embeddings = pa.FixedSizeListArray.from_arrays(values, 2)
     schema = pa.schema(
-        [pa.field("emb", pa.list_(pa.field("item", pa.float32(), nullable=False), 2), nullable=False)]
+        [
+            pa.field(
+                "emb",
+                pa.list_(pa.field("item", pa.float32(), nullable=False), 2),
+                nullable=False,
+            )
+        ]
     )
     pq.write_table(pa.Table.from_arrays([embeddings], schema=schema), query_path)
     shape = subject.ScientificShape(
@@ -818,9 +845,7 @@ def _write_query_fixture(
     base = first_vector or tuple([1.0] + [0.0] * (dimensions - 1))
     vectors = [list(base)] + [([1.0] + [0.0] * (dimensions - 1))] * (rows - 1)
     if variable_list:
-        embedding_type = pa.list_(
-            pa.field("item", value_type, nullable=item_nullable)
-        )
+        embedding_type = pa.list_(pa.field("item", value_type, nullable=item_nullable))
         embeddings = pa.array(vectors, type=embedding_type)
     else:
         embedding_type = pa.list_(
@@ -895,7 +920,9 @@ def _load_coherent_revision4_synthetic_baseline(
 
 
 class AuthorityAndQualityTests(unittest.TestCase):
-    def test_historical_terminal_preserves_writer_bytes_and_strict_authority(self) -> None:
+    def test_historical_terminal_preserves_writer_bytes_and_strict_authority(
+        self,
+    ) -> None:
         payload = base64.b64decode(
             "eyJzY2hlbWFfdmVyc2lvbiI6NSwic3RhdHVzIjoiY29tcGxldGUiLCJyb2xlIjoicnVudGltZSIsImF0dGVtcHQi"
             "OjEsImF0dGVtcHRfaWQiOiJydW50aW1lLXYyMy1kMi1yMDEtZjdhNmUwNmE2YTQwYzExNjViNmNiODg5LWFybS0w"
@@ -955,9 +982,12 @@ class AuthorityAndQualityTests(unittest.TestCase):
             self.assertEqual(terminal["v23_stage"], "d2")
 
             mutations = []
-            reordered = json.dumps(
-                json.loads(payload), sort_keys=True, separators=(",", ":")
-            ).encode() + b"\n"
+            reordered = (
+                json.dumps(
+                    json.loads(payload), sort_keys=True, separators=(",", ":")
+                ).encode()
+                + b"\n"
+            )
             mutations.append(
                 ("registered-bytes", reordered, subject.REGISTERED_AUTHORITY)
             )
@@ -971,9 +1001,12 @@ class AuthorityAndQualityTests(unittest.TestCase):
             ):
                 value = json.loads(payload)
                 mutate(value)
-                changed = json.dumps(
-                    value, ensure_ascii=False, separators=(",", ":")
-                ).encode() + b"\n"
+                changed = (
+                    json.dumps(
+                        value, ensure_ascii=False, separators=(",", ":")
+                    ).encode()
+                    + b"\n"
+                )
                 mutations.append(
                     (
                         name,
@@ -1005,36 +1038,28 @@ class AuthorityAndQualityTests(unittest.TestCase):
                 "terminal-digest",
                 lambda fixture: fixture.arguments.__setitem__(
                     "registered",
-                    dataclasses.replace(
-                        fixture.registered, terminal_sha256="00" * 32
-                    ),
+                    dataclasses.replace(fixture.registered, terminal_sha256="00" * 32),
                 ),
             ),
             (
                 "result-digest",
                 lambda fixture: fixture.arguments.__setitem__(
                     "registered",
-                    dataclasses.replace(
-                        fixture.registered, result_sha256="00" * 32
-                    ),
+                    dataclasses.replace(fixture.registered, result_sha256="00" * 32),
                 ),
             ),
             (
                 "report-digest",
                 lambda fixture: fixture.arguments.__setitem__(
                     "registered",
-                    dataclasses.replace(
-                        fixture.registered, report_sha256="00" * 32
-                    ),
+                    dataclasses.replace(fixture.registered, report_sha256="00" * 32),
                 ),
             ),
             (
                 "roster-digest",
                 lambda fixture: fixture.arguments.__setitem__(
                     "registered",
-                    dataclasses.replace(
-                        fixture.registered, roster_sha256="00" * 32
-                    ),
+                    dataclasses.replace(fixture.registered, roster_sha256="00" * 32),
                 ),
             ),
             (
@@ -1044,7 +1069,12 @@ class AuthorityAndQualityTests(unittest.TestCase):
                 ),
             ),
             ("page-order", lambda fixture: fixture.roster["pages"].reverse()),
-            ("roster-drift", lambda fixture: fixture.roster["pages"][0].__setitem__("encoded_bytes", 201)),
+            (
+                "roster-drift",
+                lambda fixture: fixture.roster["pages"][0].__setitem__(
+                    "encoded_bytes", 201
+                ),
+            ),
         )
         for name, mutate in mutations:
             fixture = _authority_fixture()
@@ -1082,9 +1112,9 @@ class AuthorityAndQualityTests(unittest.TestCase):
         mutations = (
             (
                 "d1-key-value",
-                lambda fixture: fixture.report["report"]["arms"][0]["d1_key"].__setitem__(
-                    "code_width_bytes", True
-                ),
+                lambda fixture: fixture.report["report"]["arms"][0][
+                    "d1_key"
+                ].__setitem__("code_width_bytes", True),
             ),
             (
                 "selector-field",
@@ -1094,9 +1124,9 @@ class AuthorityAndQualityTests(unittest.TestCase):
             ),
             (
                 "selector-metric",
-                lambda fixture: fixture.report["report"]["arms"][0]["selector"].__setitem__(
-                    "metric", "euclidean"
-                ),
+                lambda fixture: fixture.report["report"]["arms"][0][
+                    "selector"
+                ].__setitem__("metric", "euclidean"),
             ),
         )
         for name, mutate in mutations:
@@ -1172,9 +1202,7 @@ class AuthorityAndQualityTests(unittest.TestCase):
             ),
             (
                 "process-peak-must-be-positive",
-                lambda result: result["resources"].__setitem__(
-                    "peak_rss_bytes", 0
-                ),
+                lambda result: result["resources"].__setitem__("peak_rss_bytes", 0),
             ),
             (
                 "process-peak-must-not-exceed-cgroup-peak",
@@ -1184,9 +1212,7 @@ class AuthorityAndQualityTests(unittest.TestCase):
             ),
             (
                 "terminal-source-binding",
-                lambda result: result.__setitem__(
-                    "source_archive_sha256", "ab" * 32
-                ),
+                lambda result: result.__setitem__("source_archive_sha256", "ab" * 32),
             ),
             (
                 "terminal-index-binding",
@@ -1378,9 +1404,7 @@ class AuthorityAndQualityTests(unittest.TestCase):
             ),
             (
                 "anchors-per-page-constant",
-                lambda arm: arm["selector"].__setitem__(
-                    "anchors_per_page", 15
-                ),
+                lambda arm: arm["selector"].__setitem__("anchors_per_page", 15),
             ),
             (
                 "selector-encoded-bytes",
@@ -1416,21 +1440,15 @@ class AuthorityAndQualityTests(unittest.TestCase):
             ),
             (
                 "storage-amplification",
-                lambda arm: arm.__setitem__(
-                    "storage_amplification_ppm", 1_750_001
-                ),
+                lambda arm: arm.__setitem__("storage_amplification_ppm", 1_750_001),
             ),
             (
                 "projected-root-bytes",
-                lambda arm: arm.__setitem__(
-                    "projected_root_bytes", 24_000_000_097
-                ),
+                lambda arm: arm.__setitem__("projected_root_bytes", 24_000_000_097),
             ),
             (
                 "projected-ram-bytes",
-                lambda arm: arm.__setitem__(
-                    "projected_ram_bytes", 269_340_901_577
-                ),
+                lambda arm: arm.__setitem__("projected_ram_bytes", 269_340_901_577),
             ),
             (
                 "projected-build-bytes",
@@ -1507,9 +1525,7 @@ class AuthorityAndQualityTests(unittest.TestCase):
             ),
             (
                 "selected-cardinality",
-                lambda arm: arm["query_samples"][0].__setitem__(
-                    "page_ordinals", [0]
-                ),
+                lambda arm: arm["query_samples"][0].__setitem__("page_ordinals", [0]),
             ),
             (
                 "oracle-membership",
@@ -1593,21 +1609,15 @@ class AuthorityAndQualityTests(unittest.TestCase):
             ),
             (
                 "recall-from-hits",
-                lambda arm: arm["query_samples"][0].__setitem__(
-                    "recall_ppm", 0
-                ),
+                lambda arm: arm["query_samples"][0].__setitem__("recall_ppm", 0),
             ),
             (
                 "selected-encoded-bytes",
-                lambda arm: arm["query_samples"][0].__setitem__(
-                    "encoded_bytes", 401
-                ),
+                lambda arm: arm["query_samples"][0].__setitem__("encoded_bytes", 401),
             ),
             (
                 "selected-candidate-rows",
-                lambda arm: arm["query_samples"][0].__setitem__(
-                    "candidate_rows", 6
-                ),
+                lambda arm: arm["query_samples"][0].__setitem__("candidate_rows", 6),
             ),
             (
                 "selector-routed-telemetry",
@@ -1641,9 +1651,7 @@ class AuthorityAndQualityTests(unittest.TestCase):
             ),
             (
                 "coverage-oracle-recall",
-                lambda arm: arm.__setitem__(
-                    "coverage_oracle_recall_ppm", 999_999
-                ),
+                lambda arm: arm.__setitem__("coverage_oracle_recall_ppm", 999_999),
             ),
             (
                 "coverage-oracle-minimum",
@@ -1691,9 +1699,7 @@ class AuthorityAndQualityTests(unittest.TestCase):
             ),
             (
                 "nullable-embedding-item",
-                lambda fixture: _write_query_fixture(
-                    fixture, item_nullable=True
-                ),
+                lambda fixture: _write_query_fixture(fixture, item_nullable=True),
             ),
             (
                 "variable-list-embedding",
@@ -1701,9 +1707,7 @@ class AuthorityAndQualityTests(unittest.TestCase):
             ),
             (
                 "float64-embedding",
-                lambda fixture: _write_query_fixture(
-                    fixture, value_type=pa.float64()
-                ),
+                lambda fixture: _write_query_fixture(fixture, value_type=pa.float64()),
             ),
             (
                 "dimension-three-embedding",
@@ -1823,9 +1827,7 @@ class HistoricalBundleIntegrationTests(unittest.TestCase):
         self.assertGreaterEqual(len(client.calls), 1)
         self.assertLessEqual(len(client.calls), 4)
         self.assertEqual(len(client.calls), len(set(client.calls)))
-        self.assertTrue(
-            all(bucket == _REVISION4_BUCKET for bucket, _ in client.calls)
-        )
+        self.assertTrue(all(bucket == _REVISION4_BUCKET for bucket, _ in client.calls))
         self.assertTrue(
             all(call in set(expected_page_locations) for call in client.calls)
         )
@@ -1869,7 +1871,9 @@ class _StreamingBody:
 
 
 class _FakeS3:
-    def __init__(self, payloads: dict[str, bytes], delays: dict[str, float] | None = None) -> None:
+    def __init__(
+        self, payloads: dict[str, bytes], delays: dict[str, float] | None = None
+    ) -> None:
         self.payloads = payloads
         self.delays = delays or {}
         self.lock = threading.Lock()
@@ -1882,15 +1886,16 @@ class _FakeS3:
             raise KeyError((Bucket, Key))
         with self.lock:
             self.requested.append(Key)
-        return {"Body": _StreamingBody(self, self.payloads[Key], self.delays.get(Key, 0.0))}
+        return {
+            "Body": _StreamingBody(self, self.payloads[Key], self.delays.get(Key, 0.0))
+        }
 
 
 def _stream_fixture(page_count: int = 3) -> tuple[subject.Authority, _FakeS3]:
     pages_and_bodies = tuple(_ordinal_page(ordinal) for ordinal in range(page_count))
     pages = tuple(reference for reference, _ in pages_and_bodies)
     payloads = {
-        f"attempt/pages/{reference.path}": body
-        for reference, body in pages_and_bodies
+        f"attempt/pages/{reference.path}": body for reference, body in pages_and_bodies
     }
     shape = subject.ScientificShape(
         page_count=page_count,
@@ -1999,7 +2004,10 @@ class StreamingAndResultTests(unittest.TestCase):
     def test_stream_rejects_short_and_overlong_bodies(self) -> None:
         authority, client = _stream_fixture(page_count=1)
         key = f"attempt/pages/{authority.pages[0].path}"
-        for name, payload in (("short", client.payloads[key][:-1]), ("long", client.payloads[key] + b"x")):
+        for name, payload in (
+            ("short", client.payloads[key][:-1]),
+            ("long", client.payloads[key] + b"x"),
+        ):
             mutant = _FakeS3({key: payload})
             with self.subTest(name=name):
                 with self.assertRaises(ValueError):
@@ -2044,9 +2052,7 @@ class StreamingAndResultTests(unittest.TestCase):
         )
         for reason, threshold in threshold_samples:
             authority, client = _stream_fixture()
-            pressure = _PressureProbe(
-                [subject.PressureSample(1, 0, 0, 0), threshold]
-            )
+            pressure = _PressureProbe([subject.PressureSample(1, 0, 0, 0), threshold])
             with self.subTest(reason=reason):
                 with self.assertRaises(subject.StreamStopped) as caught:
                     subject.run_falsifier(authority, client, pressure, True)
@@ -2084,9 +2090,13 @@ class StreamingAndResultTests(unittest.TestCase):
         authority, client = _stream_fixture()
         with (
             mock.patch("builtins.open", side_effect=AssertionError("file write")),
-            mock.patch.object(Path, "write_bytes", side_effect=AssertionError("file write")),
+            mock.patch.object(
+                Path, "write_bytes", side_effect=AssertionError("file write")
+            ),
             mock.patch("os.open", side_effect=AssertionError("file write")),
-            mock.patch("tempfile.TemporaryDirectory", side_effect=AssertionError("scratch")),
+            mock.patch(
+                "tempfile.TemporaryDirectory", side_effect=AssertionError("scratch")
+            ),
         ):
             result = subject.run_falsifier(authority, client, _safe_pressure(), True)
         self.assertEqual(result["authenticated_pages"], authority.shape.page_count)
@@ -2098,13 +2108,18 @@ class StreamingAndResultTests(unittest.TestCase):
         validated = subject.validate_result(result)
         payload = subject.canonical_result_bytes(validated)
 
-        expected = json.dumps(validated, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        expected = (
+            json.dumps(validated, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
         self.assertEqual(payload, expected)
         digest = hashlib.sha256(payload).hexdigest()
         self.assertRegex(digest, r"\A[0-9a-f]{64}\Z")
         self.assertEqual(
             digest,
-            hashlib.sha256(subject.canonical_result_bytes(copy.deepcopy(validated))).hexdigest(),
+            hashlib.sha256(
+                subject.canonical_result_bytes(copy.deepcopy(validated))
+            ).hexdigest(),
         )
 
     def test_result_rejects_concrete_type_gate_and_cardinality_drift(self) -> None:
@@ -2128,7 +2143,9 @@ class StreamingAndResultTests(unittest.TestCase):
                     subject.validate_result(changed)
 
     def test_cli_refuses_without_exact_complete_stream_flag(self) -> None:
-        bucket, prefix = subject._attempt_location(subject.REGISTERED_AUTHORITY.attempt_prefix)
+        bucket, prefix = subject._attempt_location(
+            subject.REGISTERED_AUTHORITY.attempt_prefix
+        )
         arguments = [
             "--terminal",
             "terminal.json",
@@ -2156,7 +2173,9 @@ class StreamingAndResultTests(unittest.TestCase):
 
     def test_direct_script_resolves_canonical_json_dependency(self) -> None:
         script = Path(subject.__file__).resolve()
-        bucket, prefix = subject._attempt_location(subject.REGISTERED_AUTHORITY.attempt_prefix)
+        bucket, prefix = subject._attempt_location(
+            subject.REGISTERED_AUTHORITY.attempt_prefix
+        )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             terminal = root / "terminal.json"

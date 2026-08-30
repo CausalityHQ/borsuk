@@ -988,9 +988,7 @@ def validate_manifest(value: dict[str, object]) -> dict[str, object]:
     if systems != list(SYSTEMS):
         raise ValueError("systems must be borsuk, amazon-s3-vectors, and faiss")
     environment = _validate_environment(manifest["environment_contract"])
-    borsuk_cache_mib = environment["runtime_clients"]["borsuk"][
-        "disk_cache_limit_mib"
-    ]
+    borsuk_cache_mib = environment["runtime_clients"]["borsuk"]["disk_cache_limit_mib"]
     safe_disk_cached_queries = (
         borsuk_cache_mib * 3 // 4 // DISK_CACHED_QUERY_CACHE_AUTHORITY_MIB
     )

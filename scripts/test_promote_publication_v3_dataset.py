@@ -72,7 +72,9 @@ class FakeAws:
         if operation == "get-object":
             destination = Path(command[-1])
             if uri not in self.objects:
-                return subprocess.CompletedProcess(command, 254, stdout="", stderr="missing")
+                return subprocess.CompletedProcess(
+                    command, 254, stdout="", stderr="missing"
+                )
             destination.write_bytes(self.objects[uri][0])
             return subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
         raise AssertionError(command)
@@ -113,7 +115,9 @@ class PromotePublicationV3DatasetTests(unittest.TestCase):
 
     def test_multi_object_promotion_verifies_before_marker_and_replays(self) -> None:
         manifest = frozen_manifest()
-        dataset = next(item for item in manifest["datasets"] if item["id"] == "sift-128")
+        dataset = next(
+            item for item in manifest["datasets"] if item["id"] == "sift-128"
+        )
         dataset["scale"]["rows"] = 4
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

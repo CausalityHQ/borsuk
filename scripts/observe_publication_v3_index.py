@@ -77,7 +77,9 @@ def main() -> int:
     if not isinstance(roster, list):
         raise ValueError("sealed object roster must be a JSON list")
     bucket, prefix = _s3_parts(args.index_uri)
-    client = boto3.Session(**session_configuration(args.profile, args.region)).client("s3")
+    client = boto3.Session(**session_configuration(args.profile, args.region)).client(
+        "s3"
+    )
     inventory = observe_index_inventory(
         client, bucket=bucket, prefix=prefix, roster=roster
     )

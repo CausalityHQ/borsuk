@@ -5,7 +5,9 @@ from scripts.test_seal_publication_v3_index import _FakeS3
 
 
 class PublicationV3IndexObservationTests(unittest.TestCase):
-    def test_live_listing_binds_roster_checksums_to_current_sizes_and_etags(self) -> None:
+    def test_live_listing_binds_roster_checksums_to_current_sizes_and_etags(
+        self,
+    ) -> None:
         prefix = "publication/indexes/index-1/"
         objects = {
             prefix + "segments/L0/a.parquet": b"PAR1segment-aPAR1",

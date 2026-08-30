@@ -103,7 +103,9 @@ def _validated_runtime(value: dict[str, int]) -> dict[str, int]:
     if not 1 <= value["s3_get_concurrency"] <= 128:
         raise ValueError("runtime s3_get_concurrency must be in 1..=128")
     if not value["s3_get_concurrency"] <= value["io_threads"] <= 256:
-        raise ValueError("runtime io_threads must be at least s3_get_concurrency and at most 256")
+        raise ValueError(
+            "runtime io_threads must be at least s3_get_concurrency and at most 256"
+        )
     if value["search_admission"] <= 0:
         raise ValueError("runtime search_admission must be positive")
     if not 0 <= value["max_waiting_searches"] <= 256:
@@ -634,11 +636,12 @@ def build_launch_pair(
         raise ValueError("campaign must be nonempty and attempt must be positive")
     if purchase_option not in ("spot", "on-demand"):
         raise ValueError("purchase option must be spot or on-demand")
-    if (
-        re.fullmatch(r"s3://[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+", output_uri) is None
-        or output_uri.endswith("/")
-    ):
-        raise ValueError("output URI must be a canonical S3 prefix without trailing slash")
+    if re.fullmatch(
+        r"s3://[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+", output_uri
+    ) is None or output_uri.endswith("/"):
+        raise ValueError(
+            "output URI must be a canonical S3 prefix without trailing slash"
+        )
     if not output_uri.endswith(f"/attempts/{attempt:04d}"):
         raise ValueError("output URI attempt path differs from the requested attempt")
     for label, value in (
@@ -656,10 +659,13 @@ def build_launch_pair(
     ):
         if not value:
             raise ValueError(f"{label} must be nonempty")
-    if re.fullmatch(
-        rf"arn:aws:iam::{EXPECTED_AWS_ACCOUNT}:instance-profile/[A-Za-z0-9+=,.@_/-]+",
-        instance_profile_arn,
-    ) is None:
+    if (
+        re.fullmatch(
+            rf"arn:aws:iam::{EXPECTED_AWS_ACCOUNT}:instance-profile/[A-Za-z0-9+=,.@_/-]+",
+            instance_profile_arn,
+        )
+        is None
+    ):
         raise ValueError("instance profile must belong to the Causality AWS account")
     runtime = _validated_runtime(runtime)
     expected_worker_mode = "smoke" if smoke else "full"
@@ -687,7 +693,9 @@ def build_launch_pair(
         )
     executed_smoke = bool(re.search(r"(?<!\S)--smoke(?=\s|$)", generator_worker))
     if executed_smoke != smoke:
-        raise ValueError("generator worker executed mode differs from its workload identity")
+        raise ValueError(
+            "generator worker executed mode differs from its workload identity"
+        )
     workload = {
         "cheap_baseline": True,
         "cheap_qps": 200,
@@ -708,7 +716,9 @@ def build_launch_pair(
         "warmup_seconds": 5 if smoke else 30,
     }
     server_worker_sha256 = hashlib.sha256(server_worker.encode("utf-8")).hexdigest()
-    generator_worker_sha256 = hashlib.sha256(generator_worker.encode("utf-8")).hexdigest()
+    generator_worker_sha256 = hashlib.sha256(
+        generator_worker.encode("utf-8")
+    ).hexdigest()
     workload_sha256 = hashlib.sha256(_canonical_bytes(workload)).hexdigest()
     authority = {
         "schema_version": 6,
@@ -816,8 +826,18 @@ def build_launch_pair(
 
 
 def classify_attempt(observation: AttemptObservation) -> AttemptDecision:
-    states = {"pending", "running", "stopping", "stopped", "shutting-down", "terminated"}
-    if observation.server_state not in states or observation.generator_state not in states:
+    states = {
+        "pending",
+        "running",
+        "stopping",
+        "stopped",
+        "shutting-down",
+        "terminated",
+    }
+    if (
+        observation.server_state not in states
+        or observation.generator_state not in states
+    ):
         raise ValueError("unrecognized EC2 instance state")
     markers = set(observation.terminal_markers)
     unknown = markers - KNOWN_MARKERS
@@ -881,7 +901,10 @@ def _terminate_instances(profile: str, instance_ids: list[str]) -> None:
 def _record_identity(
     profile: str, pair: dict[str, Any], role: str, instance_id: str
 ) -> None:
-    if role not in ("server", "generator") or re.fullmatch(r"i-[0-9a-f]+", instance_id) is None:
+    if (
+        role not in ("server", "generator")
+        or re.fullmatch(r"i-[0-9a-f]+", instance_id) is None
+    ):
         raise ValueError("invalid REST benchmark instance identity")
     output_uri = str(pair["receipt"]["output_uri"])
     location = output_uri.removeprefix("s3://")
@@ -997,7 +1020,9 @@ def execute_pair(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("config", help="canonical JSON config with build_launch_pair arguments")
+    parser.add_argument(
+        "config", help="canonical JSON config with build_launch_pair arguments"
+    )
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--profile", default="causality")
     args = parser.parse_args()
@@ -1010,6 +1035,7 @@ def main() -> int:
         aws_account_id=aws_account_id,
     )
     if args.execute:
+
         def announce(role: str, instance_id: str) -> None:
             _record_identity(args.profile, pair, role, instance_id)
             print(

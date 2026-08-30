@@ -69,7 +69,11 @@ def _marker_head(base: list[str], uri: str, *, owner: str) -> dict[str, object] 
         if not isinstance(value, dict):
             raise ValueError("S3 marker HEAD is not a JSON object")
         return value
-    if "404" in completed.stderr or "Not Found" in completed.stderr or "NoSuchKey" in completed.stderr:
+    if (
+        "404" in completed.stderr
+        or "Not Found" in completed.stderr
+        or "NoSuchKey" in completed.stderr
+    ):
         return None
     raise ValueError(completed.stderr.strip() or "S3 marker HEAD failed")
 
@@ -118,7 +122,9 @@ def main() -> int:
     if job is None:
         raise ValueError("dataset is not an unstaged manifest dataset")
     base = [args.aws_command, "--profile", args.profile, "--region", args.region]
-    described = _run([*base, "ec2", "describe-instances", "--instance-ids", args.instance_id])
+    described = _run(
+        [*base, "ec2", "describe-instances", "--instance-ids", args.instance_id]
+    )
     value = json.loads(described.stdout)
     instances = [
         instance

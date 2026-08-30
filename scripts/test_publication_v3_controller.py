@@ -289,7 +289,9 @@ class PublicationV3ControllerTests(unittest.TestCase):
                 aws=D3PrerequisiteAws(),
             )
 
-    def test_v23_main_authenticates_base_and_prerequisites_before_publication(self) -> None:
+    def test_v23_main_authenticates_base_and_prerequisites_before_publication(
+        self,
+    ) -> None:
         manifest = json.loads(MANIFEST.read_text())
         archive = b"current V23 diagnostic source"
         source_sha256 = hashlib.sha256(archive).hexdigest()
@@ -336,7 +338,9 @@ class PublicationV3ControllerTests(unittest.TestCase):
             ]
             with (
                 mock.patch.object(sys, "argv", arguments),
-                mock.patch.object(controller, "AwsCli", return_value=NoPublicationAws()),
+                mock.patch.object(
+                    controller, "AwsCli", return_value=NoPublicationAws()
+                ),
                 mock.patch.object(
                     controller,
                     "authenticate_v21_base_index_authority",
@@ -398,7 +402,9 @@ class PublicationV3ControllerTests(unittest.TestCase):
             ]
             with (
                 mock.patch.object(sys, "argv", arguments),
-                mock.patch.object(controller, "AwsCli", return_value=NoPublicationAws()),
+                mock.patch.object(
+                    controller, "AwsCli", return_value=NoPublicationAws()
+                ),
                 mock.patch.object(
                     controller,
                     "authenticate_v21_base_index_authority",
@@ -692,8 +698,9 @@ class PublicationV3ControllerTests(unittest.TestCase):
             {"v23_base_authority": base_authority},
             {"v23_prerequisites": {}},
         ):
-            with self.subTest(stray_authority=stray_authority), self.assertRaisesRegex(
-                ValueError, "exact base-index authority"
+            with (
+                self.subTest(stray_authority=stray_authority),
+                self.assertRaisesRegex(ValueError, "exact base-index authority"),
             ):
                 prepare_qualification_execution(
                     current, **prepare_arguments, **stray_authority
@@ -737,7 +744,9 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
         class NoAws:
             def __getattr__(self, name: str):
-                raise AssertionError(f"prepared V22 execution reached AWS through {name}")
+                raise AssertionError(
+                    f"prepared V22 execution reached AWS through {name}"
+                )
 
         prepared = prepare_qualification_execution(
             current,
@@ -823,7 +832,9 @@ class PublicationV3ControllerTests(unittest.TestCase):
 
         class NoAws:
             def __getattr__(self, name: str):
-                raise AssertionError(f"prepared V23 execution reached AWS through {name}")
+                raise AssertionError(
+                    f"prepared V23 execution reached AWS through {name}"
+                )
 
         arguments = dict(
             workload_id="standard-ann-read",
@@ -868,7 +879,9 @@ class PublicationV3ControllerTests(unittest.TestCase):
                 "/runtime-v23-d2/arms/0000/attempts/0001"
             )
         )
-        self.assertEqual(prepared.request["InstanceMarketOptions"]["MarketType"], "spot")
+        self.assertEqual(
+            prepared.request["InstanceMarketOptions"]["MarketType"], "spot"
+        )
         self.assertEqual(prepared.request["InstanceType"], "r7g.8xlarge")
         d2_tags = {
             item["Key"]: item["Value"]

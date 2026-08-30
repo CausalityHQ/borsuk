@@ -765,9 +765,10 @@ def run_execution_job(
                             raise ValueError(
                                 "historical execution receipt memory peak is invalid"
                             )
-                    if expected.get("v23_stage") in {"d1", "d2", "d3"} and type(
-                        value.get("v23_passed")
-                    ) is not bool:
+                    if (
+                        expected.get("v23_stage") in {"d1", "d2", "d3"}
+                        and type(value.get("v23_passed")) is not bool
+                    ):
                         raise ValueError("V23 execution receipt pass result is invalid")
                 if job.role == "build" and value.get("index_uri") != job.index_uri:
                     raise ValueError("build receipt differs from scheduled index")
@@ -1166,12 +1167,14 @@ def authenticate_v23_prerequisites(
     required_stages = ("d1",) if stage == "d2" else ("d1", "d2")
     for prerequisite_stage in required_stages:
         attempt = select_execution_attempt(
-            lambda candidate, prerequisite_stage=prerequisite_stage: ExecutionJob.runtime(
-                cell,
-                attempt=candidate,
-                profile="recall",
-                arm_index=0,
-                v23_stage=prerequisite_stage,
+            lambda candidate, prerequisite_stage=prerequisite_stage: (
+                ExecutionJob.runtime(
+                    cell,
+                    attempt=candidate,
+                    profile="recall",
+                    arm_index=0,
+                    v23_stage=prerequisite_stage,
+                )
             ),
             aws=aws,
             max_attempts=max_attempts,
@@ -1236,9 +1239,10 @@ def authenticate_v23_prerequisites(
         receipt_sha256 = hashlib.sha256(payload).hexdigest()
         report_field = f"v23_{prerequisite_stage}_report_sha256"
         report_sha256 = receipt.get(report_field)
-        if not isinstance(report_sha256, str) or re.fullmatch(
-            r"[0-9a-f]{64}", report_sha256
-        ) is None:
+        if (
+            not isinstance(report_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", report_sha256) is None
+        ):
             raise ValueError("V23 prerequisite report digest differs")
         report_uri = f"{job.terminal_prefix}/bench_v23_{prerequisite_stage}_report.json"
         aws.read_immutable_bytes(report_uri, report_sha256)
@@ -1258,7 +1262,9 @@ def authenticate_v23_prerequisites(
                 or re.fullmatch(r"[0-9a-f]{64}", pages_sha256) is None
                 or not isinstance(page_prefix, str)
                 or page_prefix.rstrip("/") != f"{job.terminal_prefix}/pages"
-                or page_prefix.startswith(str(base_authority.index_uri).rstrip("/") + "/")
+                or page_prefix.startswith(
+                    str(base_authority.index_uri).rstrip("/") + "/"
+                )
             ):
                 raise ValueError("V23 D2 page authority differs")
             pages_uri = f"{job.terminal_prefix}/bench_v23_pages.json"
@@ -1411,7 +1417,9 @@ def prepare_qualification_execution(
             },
         }[str(v23_stage)]
         if set(v23_prerequisites or {}) != expected_fields:
-            raise ValueError(f"V23 {str(v23_stage).upper()} prerequisite authority differs")
+            raise ValueError(
+                f"V23 {str(v23_stage).upper()} prerequisite authority differs"
+            )
     diagnostic = lifecycle_diagnostic or read_diagnostic
     effective_arm_index = (
         13
@@ -1643,7 +1651,9 @@ def prepare_qualification_execution(
         if historical_diagnostic:
             assert base_authority is not None
             if build_attempt != base_authority.build_attempt:
-                raise ValueError("diagnostic build attempt differs from base-index authority")
+                raise ValueError(
+                    "diagnostic build attempt differs from base-index authority"
+                )
             base_cell = borsuk_cell(
                 base_authority.manifest,
                 workload_id="standard-ann-read",
@@ -1810,12 +1820,8 @@ def prepare_qualification_execution(
                     "base_source_archive_sha256": (
                         base_authority.source_archive_sha256
                     ),
-                    "base_index_receipt_sha256": (
-                        base_authority.index_receipt_sha256
-                    ),
-                    "base_object_roster_sha256": (
-                        base_authority.object_roster_sha256
-                    ),
+                    "base_index_receipt_sha256": (base_authority.index_receipt_sha256),
+                    "base_object_roster_sha256": (base_authority.object_roster_sha256),
                     "base_inventory_sha256": base_authority.inventory_sha256,
                     "base_index_id": base_authority.index_id,
                     "base_index_uri": base_authority.index_uri,

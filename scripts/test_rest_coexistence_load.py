@@ -14,7 +14,9 @@ from scripts.rest_coexistence_load import (
 
 class RestCoexistenceLoadTest(unittest.TestCase):
     def test_open_loop_schedule_uses_absolute_offsets(self) -> None:
-        self.assertEqual(scheduled_offsets_ns(4.0, 1.0), [0, 250_000_000, 500_000_000, 750_000_000])
+        self.assertEqual(
+            scheduled_offsets_ns(4.0, 1.0), [0, 250_000_000, 500_000_000, 750_000_000]
+        )
         self.assertEqual(scheduled_offsets_ns(0.0, 1.0), [])
 
     def test_percentile_uses_nearest_rank(self) -> None:
@@ -57,10 +59,15 @@ class RestCoexistenceLoadTest(unittest.TestCase):
             },
         }
         self.assertTrue(
-            any("429" in failure for failure in evaluate_phase("mixed-overload", baseline, mixed))
+            any(
+                "429" in failure
+                for failure in evaluate_phase("mixed-overload", baseline, mixed)
+            )
         )
 
-    def test_overload_gate_preserves_app_isolation_without_requiring_vector_tail_latency(self) -> None:
+    def test_overload_gate_preserves_app_isolation_without_requiring_vector_tail_latency(
+        self,
+    ) -> None:
         baseline = {"cheap": {"p99_ms": 1.0, "errors": 0, "requests": 100}}
         mixed = {
             "cheap": {"p99_ms": 2.0, "errors": 0, "requests": 100},
@@ -104,7 +111,9 @@ class RestCoexistenceLoadTest(unittest.TestCase):
     def test_summary_accumulates_physical_backing_and_cache_reads(self) -> None:
         samples = [
             Sample("search", 0, 0, 1, 200, 1.0, "bounded-cell-card-v20", 4, 4096, 0, 0),
-            Sample("search", 1, 1, 2, 200, 1.0, "bounded-cell-card-v20", 3, 3072, 2, 2048),
+            Sample(
+                "search", 1, 1, 2, 200, 1.0, "bounded-cell-card-v20", 3, 3072, 2, 2048
+            ),
         ]
         summary = summarize("search", 1.0, samples)
         self.assertEqual(summary["schema_version"], 3)
@@ -249,7 +258,9 @@ class RestCoexistenceLoadTest(unittest.TestCase):
         self.assertEqual(telemetry["transient_capacity_bytes"], 8_000_000)
         self.assertEqual(telemetry["transient_peak_bytes"], 6_000_000)
 
-    def test_summary_tracks_transient_admission_high_watermarks_without_summing(self) -> None:
+    def test_summary_tracks_transient_admission_high_watermarks_without_summing(
+        self,
+    ) -> None:
         samples = [
             Sample(
                 "search",
@@ -302,7 +313,13 @@ class RestCoexistenceLoadTest(unittest.TestCase):
             {"cheap": baseline["cheap"], "search": search},
         )
         evidence = "\n".join(failures)
-        for expected in ("zero errors", "schedule lag", "HTTP 429", "zero backing", "disk cache"):
+        for expected in (
+            "zero errors",
+            "schedule lag",
+            "HTTP 429",
+            "zero backing",
+            "disk cache",
+        ):
             self.assertIn(expected, evidence)
 
     def test_staircase_gate_rejects_vector_p99_above_frozen_limit(self) -> None:

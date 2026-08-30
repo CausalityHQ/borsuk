@@ -24,7 +24,9 @@ from scripts.test_publication_v3_receipts import (
 )
 
 
-def data_object(index: int, rows: int, byte_count: int = 64 * 1024 * 1024) -> dict[str, object]:
+def data_object(
+    index: int, rows: int, byte_count: int = 64 * 1024 * 1024
+) -> dict[str, object]:
     return {
         "role": "data-bundle",
         "path": f"bundles/{index:04d}.parquet",
@@ -64,7 +66,9 @@ def receipt_for(cell: dict[str, object]) -> dict[str, object]:
         dataset_materialization_sha256="d" * 64,
         build_attempt_id="build-attempt-01",
         builder_instance_identity="i-builder-01",
-        builder_instance_type=cell["environment_contract"]["build_workers"][cell["system"]]["instance_type"],
+        builder_instance_type=cell["environment_contract"]["build_workers"][
+            cell["system"]
+        ]["instance_type"],
         build_artifact=build_artifact(cell),
         object_roster=data_roster(cell),
         build_metrics=build_metrics(),
@@ -107,7 +111,9 @@ def runtime_attestation_for(
 
 
 class PublicationV3ResultTests(unittest.TestCase):
-    def test_lifecycle_result_binds_clone_operations_accuracy_and_write_metrics(self) -> None:
+    def test_lifecycle_result_binds_clone_operations_accuracy_and_write_metrics(
+        self,
+    ) -> None:
         manifest = validate_manifest(paid_v3_manifest())
         cell = next(
             cell
@@ -246,8 +252,9 @@ class PublicationV3ResultTests(unittest.TestCase):
                 "storage_max_data_object_bytes": 128 * 1024 * 1024 + 1,
             },
         ):
-            with self.subTest(topology=topology), self.assertRaisesRegex(
-                ValueError, "bounded multi-object"
+            with (
+                self.subTest(topology=topology),
+                self.assertRaisesRegex(ValueError, "bounded multi-object"),
             ):
                 validate_cell_result(
                     {
@@ -263,13 +270,14 @@ class PublicationV3ResultTests(unittest.TestCase):
                     runtime_attestation=attestation,
                 )
 
-    def test_cell_result_binds_protocol_source_quality_latency_and_resources(self) -> None:
+    def test_cell_result_binds_protocol_source_quality_latency_and_resources(
+        self,
+    ) -> None:
         manifest = validate_manifest(paid_v3_manifest())
         cell = next(
             cell
             for cell in build_schedule_document(manifest)["cells"]
-            if cell["system"] == "borsuk"
-            and cell["workload"]["kind"] == "read-recall"
+            if cell["system"] == "borsuk" and cell["workload"]["kind"] == "read-recall"
         )
         protocol = canonical_json_bytes(cell) + b"\n"
         receipt = receipt_for(cell)
@@ -318,9 +326,7 @@ class PublicationV3ResultTests(unittest.TestCase):
         self.assertEqual(validated, result)
         current = copy.deepcopy(result)
         current["schema_version"] = 3
-        current["metrics"].update(
-            {field: 0 for field in QUERY_STAGE_AGGREGATE_FIELDS}
-        )
+        current["metrics"].update({field: 0 for field in QUERY_STAGE_AGGREGATE_FIELDS})
         self.assertEqual(
             validate_cell_result(
                 current,
@@ -375,9 +381,7 @@ class PublicationV3ResultTests(unittest.TestCase):
                         runtime_attestation=attestation,
                     )
         inconsistent = copy.deepcopy(current)
-        inconsistent["metrics"][
-            "global_base_exact_read_us_max_across_queries"
-        ] = 1
+        inconsistent["metrics"]["global_base_exact_read_us_max_across_queries"] = 1
         with self.assertRaisesRegex(ValueError, "timing aggregates"):
             validate_cell_result(
                 inconsistent,
@@ -415,7 +419,9 @@ class PublicationV3ResultTests(unittest.TestCase):
                 "metrics": {
                     **result["metrics"],
                     "peak_rss_bytes": (
-                        cell["environment_contract"]["runtime_clients"][cell["system"]]["memory_mib"]
+                        cell["environment_contract"]["runtime_clients"][cell["system"]][
+                            "memory_mib"
+                        ]
                         * 1024
                         * 1024
                         + 1
@@ -441,8 +447,7 @@ class PublicationV3ResultTests(unittest.TestCase):
         cell = next(
             cell
             for cell in build_schedule_document(manifest)["cells"]
-            if cell["system"] == "borsuk"
-            and cell["workload"]["kind"] == "read-recall"
+            if cell["system"] == "borsuk" and cell["workload"]["kind"] == "read-recall"
         )
         protocol = canonical_json_bytes(cell) + b"\n"
         receipt = receipt_for(cell)
@@ -466,7 +471,9 @@ class PublicationV3ResultTests(unittest.TestCase):
             "global_leaf_exact_requests": 6,
         }
         for missing in ("peak_rss_bytes", "storage_gets", "latency_p99_us"):
-            metrics = {key: value for key, value in base_metrics.items() if key != missing}
+            metrics = {
+                key: value for key, value in base_metrics.items() if key != missing
+            }
             value = {
                 "schema_version": 2,
                 "status": "complete",
@@ -554,7 +561,9 @@ class PublicationV3ResultTests(unittest.TestCase):
         summary = validate_object_roster(roster, logical_rows=3_633)
         self.assertEqual(summary["data_objects"], 9)
 
-    def test_roster_represents_real_multi_object_index_formats_without_relabeling(self) -> None:
+    def test_roster_represents_real_multi_object_index_formats_without_relabeling(
+        self,
+    ) -> None:
         roster = [data_object(0, 1_000_000)]
         roster.extend(
             {

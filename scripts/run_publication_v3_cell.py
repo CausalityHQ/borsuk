@@ -4496,9 +4496,7 @@ def _validate_v23_selector(
         "D2 selector assignment cap",
         minimum=1,
     )
-    row_count = _v23_integer(
-        selector["row_count"], "D2 selector rows", minimum=1
-    )
+    row_count = _v23_integer(selector["row_count"], "D2 selector rows", minimum=1)
     code_width = _v23_integer(selector["code_width"], "D2 selector code width")
     encoded_bytes = (
         96
@@ -4546,7 +4544,7 @@ def _v23_d2_projection(
     decoded_selector = selector_centroids + selector_offsets
     return (
         root,
-        root + selector + decoded_selector + 512 * 1024** 2 + 2 * V23_WAVE_MAX_BYTES,
+        root + selector + decoded_selector + 512 * 1024**2 + 2 * V23_WAVE_MAX_BYTES,
     )
 
 
@@ -4583,8 +4581,10 @@ def _v23_d2_minimum_build_projection(
         for page in pages
     )
     page_authority_bytes = len(pages) * (dimensions * 4 + 4_096 + 512)
-    lightweight_evidence_bytes = len(V23_SELECTOR_CODE_WIDTHS) * V23_QUERY_COUNT * (
-        4_096 + maximum_record_id_bytes * 20
+    lightweight_evidence_bytes = (
+        len(V23_SELECTOR_CODE_WIDTHS)
+        * V23_QUERY_COUNT
+        * (4_096 + maximum_record_id_bytes * 20)
     )
     return (
         decoded_and_planner

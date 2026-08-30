@@ -522,6 +522,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertEqual(
             subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0
         )
+
     def test_runtime_worker_uses_verified_binary_dedicated_cache_and_cgroup(
         self,
     ) -> None:
@@ -780,7 +781,7 @@ class PublicationV3ExecutionTests(unittest.TestCase):
         self.assertIn('unit_active_state" == inactive', script)
         self.assertNotIn("requested-systemd-enforced", script)
         self.assertIn("stage=disable-cache", script)
-        self.assertNotIn('cache_device=$(lsblk', script)
+        self.assertNotIn("cache_device=$(lsblk", script)
         self.assertLess(
             script.index("stage=compile-diagnostic"),
             script.index("stage=verify-index"),
@@ -816,8 +817,9 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             {"v23_base_authority": base_authority},
             {"v23_prerequisites": {}},
         ):
-            with self.subTest(stray_authority=stray_authority), self.assertRaisesRegex(
-                ValueError, "historical diagnostic authority"
+            with (
+                self.subTest(stray_authority=stray_authority),
+                self.assertRaisesRegex(ValueError, "historical diagnostic authority"),
             ):
                 runtime_worker_script(**worker_arguments, **stray_authority)
 
@@ -825,10 +827,10 @@ class PublicationV3ExecutionTests(unittest.TestCase):
             "        concurrency_fields=''", 1
         )[0]
         receipt_probe = f"""set -euo pipefail
-v21_result_sha={'1' * 64}
-v21_arms_sha={'2' * 64}
-v21_samples_sha={'3' * 64}
-v21_summary_sha={'4' * 64}
+v21_result_sha={"1" * 64}
+v21_arms_sha={"2" * 64}
+v21_samples_sha={"3" * 64}
+v21_summary_sha={"4" * 64}
 actual_memory_max=34359738368
 actual_memory_swap_max=0
 actual_memory_peak=123456789
@@ -925,9 +927,7 @@ printf '{{\"schema_version\":5%s}}\n' "$diagnostic_fields"
             arm_index=0,
             v23_stage="d2",
         )
-        self.assertIn(
-            "/runtime-v23-d2/arms/0000/attempts/0002", job.terminal_prefix
-        )
+        self.assertIn("/runtime-v23-d2/arms/0000/attempts/0002", job.terminal_prefix)
         script = runtime_worker_script(
             job=job,
             source_uri="s3://bucket/source/source.tar.gz",
@@ -956,12 +956,8 @@ printf '{{\"schema_version\":5%s}}\n' "$diagnostic_fields"
             v23_prerequisites=prerequisites,
         )
         self.assertIn("--v23-stage d2", script)
-        self.assertIn(
-            '--v23-diagnostic-protocol "$work/protocol.json"', script
-        )
-        self.assertIn(
-            '--v23-diagnostic-manifest "$work/manifest.json"', script
-        )
+        self.assertIn('--v23-diagnostic-protocol "$work/protocol.json"', script)
+        self.assertIn('--v23-diagnostic-manifest "$work/manifest.json"', script)
         self.assertIn(prerequisites["d1_receipt_uri"], script)
         self.assertIn(prerequisites["d1_receipt_sha256"], script)
         self.assertIn(prerequisites["d1_report_uri"], script)
@@ -970,7 +966,7 @@ printf '{{\"schema_version\":5%s}}\n' "$diagnostic_fields"
         self.assertLess(
             script.index('mkdir -p "$work/cell/runtime-output"'),
             script.index(
-                'aws s3 cp s3://bucket/v23/d1/bench_v23_d1_report.json '
+                "aws s3 cp s3://bucket/v23/d1/bench_v23_d1_report.json "
                 '"$work/cell/runtime-output/bench_v23_d1_report.json"'
             ),
         )

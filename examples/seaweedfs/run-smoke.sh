@@ -42,16 +42,30 @@ export BORSUK_S3_TEST_URI="$TEST_URI"
 
 trap cleanup EXIT
 
+cargo test --locked -p borsuk --test s3_compatible --no-run
+cargo test --locked -p borsuk --test s3_soak --no-run
+cargo build --locked -p borsuk --example s3_index
+
 compose up -d
 
+ready=0
 for _ in $(seq 1 60); do
-  if aws --endpoint-url "$ENDPOINT" s3 ls >/dev/null 2>&1; then
+  if aws --endpoint-url "$ENDPOINT" s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  if aws --endpoint-url "$ENDPOINT" s3 mb "s3://$BUCKET" >/dev/null 2>&1; then
+    ready=1
     break
   fi
   sleep 1
 done
 
-aws --endpoint-url "$ENDPOINT" s3 mb "s3://$BUCKET" 2>/dev/null || true
+if [[ "$ready" != "1" ]]; then
+  compose logs >&2 || true
+  echo "SeaweedFS did not become ready with bucket $BUCKET at $ENDPOINT" >&2
+  exit 1
+fi
 
 cargo test --locked -p borsuk --test s3_compatible -- --nocapture
 cargo test --locked -p borsuk --test s3_soak -- --nocapture

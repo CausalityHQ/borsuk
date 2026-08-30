@@ -109,7 +109,12 @@ def clone_index_objects(
     def copy_one(item: dict[str, object]) -> dict[str, object]:
         path = item.get("path")
         byte_count = item.get("bytes")
-        if not isinstance(path, str) or not path or path.startswith("/") or ".." in path.split("/"):
+        if (
+            not isinstance(path, str)
+            or not path
+            or path.startswith("/")
+            or ".." in path.split("/")
+        ):
             raise ValueError("clone roster path is invalid")
         source_key = f"{source_prefix}/{path}"
         destination_key = f"{destination_prefix}/{path}"

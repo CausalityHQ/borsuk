@@ -137,7 +137,9 @@ class PythonApiTests(unittest.TestCase):
         self.assertIn(borsuk.MinkowskiMetric, get_args(vector_distance_metric))
 
     def test_create_defaults_to_the_recall_qualified_turboquant_plane(self) -> None:
-        self.assertEqual(inspect.signature(borsuk.create).parameters["turboquant_bits"].default, 0)
+        self.assertEqual(
+            inspect.signature(borsuk.create).parameters["turboquant_bits"].default, 0
+        )
 
     def test_runtime_config_type_aliases_are_exported(self) -> None:
         for name in [
@@ -201,9 +203,7 @@ class PythonApiTests(unittest.TestCase):
         self.assertEqual(hints["resident_routing"], bool)
         self.assertEqual(hints["cache_max_bytes"], int | str | None)
         self.assertEqual(
-            signature.parameters[
-                "exact_read_max_physical_amplification"
-            ].default,
+            signature.parameters["exact_read_max_physical_amplification"].default,
             1,
         )
         self.assertIs(hints["return"], borsuk.Index)
@@ -1441,7 +1441,9 @@ class PythonApiTests(unittest.TestCase):
             "max_parallel_decode_rank_tasks",
         ):
             with self.subTest(field=field):
-                with self.assertRaisesRegex(ValueError, f"{field} must be greater than zero"):
+                with self.assertRaisesRegex(
+                    ValueError, f"{field} must be greater than zero"
+                ):
                     borsuk.open("unused", **{field: 0})  # type: ignore[arg-type]
         with self.assertRaisesRegex(
             ValueError, "max_waiting_searches must be non-negative"
@@ -1453,9 +1455,7 @@ class PythonApiTests(unittest.TestCase):
                     ValueError,
                     "exact_read_max_physical_amplification must be between 1 and 5",
                 ):
-                    borsuk.open(
-                        "unused", exact_read_max_physical_amplification=value
-                    )
+                    borsuk.open("unused", exact_read_max_physical_amplification=value)
 
         with tempfile.TemporaryDirectory() as tmp:
             uri = local_uri(tmp)
@@ -1471,7 +1471,9 @@ class PythonApiTests(unittest.TestCase):
             )
             self.assertEqual(reopened.stats().dimensions, 2)
 
-    def test_open_appends_new_flow_control_parameters_after_existing_positionals(self) -> None:
+    def test_open_appends_new_flow_control_parameters_after_existing_positionals(
+        self,
+    ) -> None:
         parameters = list(inspect.signature(borsuk.open).parameters)
         self.assertLess(
             parameters.index("exact_read_max_physical_amplification"),

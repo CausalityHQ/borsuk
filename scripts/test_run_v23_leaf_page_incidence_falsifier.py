@@ -95,9 +95,7 @@ class SandboxPolicyTests(unittest.TestCase):
         binding_preflight, binding_prefixes = subject._phase_roles(
             "holdout-binding", preflight=True
         )
-        binding_execute, _ = subject._phase_roles(
-            "holdout-binding", preflight=False
-        )
+        binding_execute, _ = subject._phase_roles("holdout-binding", preflight=False)
         self.assertEqual(
             binding_preflight,
             {"phase-manifest", "parent-receipt", "page-roster"},
@@ -154,12 +152,17 @@ class SandboxPolicyTests(unittest.TestCase):
 
     def test_run_phase_proves_os_namespace_capability_separation(self) -> None:
         if os.geteuid() != 0:
-            if shutil.which("sudo") is None or subprocess.run(
-                ["sudo", "-n", "true"],
-                check=False,
-                capture_output=True,
-            ).returncode:
-                self.skipTest("OS namespace integration requires root or passwordless sudo")
+            if (
+                shutil.which("sudo") is None
+                or subprocess.run(
+                    ["sudo", "-n", "true"],
+                    check=False,
+                    capture_output=True,
+                ).returncode
+            ):
+                self.skipTest(
+                    "OS namespace integration requires root or passwordless sudo"
+                )
             repository = pathlib.Path(__file__).resolve().parents[1]
             completed = subprocess.run(
                 [
@@ -296,11 +299,15 @@ class SandboxPolicyTests(unittest.TestCase):
         self.assertNotIn("query-parquet", {mount.role for mount in preflight.inputs})
         self.assertNotIn("d2-report", {mount.role for mount in preflight.inputs})
 
-        leaked = dataclasses.replace(preflight, inputs=preflight.inputs + (execute.inputs[-1],))
+        leaked = dataclasses.replace(
+            preflight, inputs=preflight.inputs + (execute.inputs[-1],)
+        )
         with self.assertRaisesRegex(ValueError, "preflight input"):
             subject.validate_phase_inputs(leaked)
 
-    def test_training_mounts_only_manifest_shards_binary_runtime_and_output(self) -> None:
+    def test_training_mounts_only_manifest_shards_binary_runtime_and_output(
+        self,
+    ) -> None:
         policy = _policy()
         subject.validate_phase_inputs(policy)
         command = subject.build_unshare_command(policy)
@@ -470,9 +477,7 @@ class SandboxPolicyTests(unittest.TestCase):
 
         duplicate = policy.inputs + (policy.inputs[0],)
         with self.assertRaisesRegex(ValueError, "duplicate"):
-            subject.validate_phase_inputs(
-                dataclasses.replace(policy, inputs=duplicate)
-            )
+            subject.validate_phase_inputs(dataclasses.replace(policy, inputs=duplicate))
 
         with self.assertRaisesRegex(ValueError, "absolute"):
             subject.validate_phase_inputs(
@@ -495,7 +500,9 @@ class SandboxPolicyTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             subject.parse_args([])
         with self.assertRaises(SystemExit):
-            subject.parse_args(["--execute-tree-training", "--aws-profile", "causality"])
+            subject.parse_args(
+                ["--execute-tree-training", "--aws-profile", "causality"]
+            )
         with self.assertRaises(SystemExit):
             subject.parse_args(
                 ["--execute-tree-training", "--execute-posting-construction"]
@@ -616,7 +623,8 @@ class SandboxPolicyTests(unittest.TestCase):
             policy = _policy()
             targets = {
                 root / "phase/v23-incidence": b"executable",
-                root / policy.runtime_mounts[0].target.as_posix().lstrip("/"): b"runtime",
+                root
+                / policy.runtime_mounts[0].target.as_posix().lstrip("/"): b"runtime",
                 root / policy.inputs[0].target.as_posix().lstrip("/"): b"manifest",
                 root / policy.inputs[1].target.as_posix().lstrip("/"): b"shard",
             }

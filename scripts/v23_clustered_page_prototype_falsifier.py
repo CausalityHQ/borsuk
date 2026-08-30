@@ -48,54 +48,54 @@ _PROGRESS_LIMIT_NS = 300 * 1_000_000_000
 
 _HISTORICAL_TERMINAL_FIELD_ORDER = (
     "schema_version",
-        "status",
-        "role",
-        "attempt",
-        "attempt_id",
-        "instance_id",
-        "source_archive_sha256",
-        "manifest_sha256",
-        "protocol_sha256",
-        "binary_sha256",
-        "purchase_option",
-        "runtime_profile",
-        "arm_index",
-        "max_active_searches",
-        "max_waiting_searches",
-        "leaf_read_width",
-        "max_inflight_leaf_reads",
-        "max_parallel_decode_rank_tasks",
-        "cpu_threads",
-        "io_threads",
-        "s3_get_concurrency",
-        "ram_budget_bytes",
-        "disk_cache_max_bytes",
-        "exact_read_max_physical_amplification",
-        "execution_contract_sha256",
-        "artifact_upload_reconciliations",
-        "claim_eligible",
-        "v23_stage",
-        "v23_passed",
-        "v23_result_sha256",
-        "v23_page_prefix",
-        "v23_d2_report_sha256",
-        "v23_pages_sha256",
-        "v23_summary_sha256",
-        "v23_d1_receipt_sha256",
-        "v23_d1_report_sha256",
-        "v23_prerequisite_binary_sha256",
-        "base_build_terminal_sha256",
-        "base_manifest_sha256",
-        "base_protocol_sha256",
-        "base_source_archive_sha256",
-        "base_index_receipt_sha256",
-        "base_object_roster_sha256",
-        "base_inventory_sha256",
-        "base_index_id",
-        "base_index_uri",
-        "diagnostic_source_archive_sha256",
-        "memory_max_bytes",
-        "memory_swap_max_bytes",
+    "status",
+    "role",
+    "attempt",
+    "attempt_id",
+    "instance_id",
+    "source_archive_sha256",
+    "manifest_sha256",
+    "protocol_sha256",
+    "binary_sha256",
+    "purchase_option",
+    "runtime_profile",
+    "arm_index",
+    "max_active_searches",
+    "max_waiting_searches",
+    "leaf_read_width",
+    "max_inflight_leaf_reads",
+    "max_parallel_decode_rank_tasks",
+    "cpu_threads",
+    "io_threads",
+    "s3_get_concurrency",
+    "ram_budget_bytes",
+    "disk_cache_max_bytes",
+    "exact_read_max_physical_amplification",
+    "execution_contract_sha256",
+    "artifact_upload_reconciliations",
+    "claim_eligible",
+    "v23_stage",
+    "v23_passed",
+    "v23_result_sha256",
+    "v23_page_prefix",
+    "v23_d2_report_sha256",
+    "v23_pages_sha256",
+    "v23_summary_sha256",
+    "v23_d1_receipt_sha256",
+    "v23_d1_report_sha256",
+    "v23_prerequisite_binary_sha256",
+    "base_build_terminal_sha256",
+    "base_manifest_sha256",
+    "base_protocol_sha256",
+    "base_source_archive_sha256",
+    "base_index_receipt_sha256",
+    "base_object_roster_sha256",
+    "base_inventory_sha256",
+    "base_index_id",
+    "base_index_uri",
+    "diagnostic_source_archive_sha256",
+    "memory_max_bytes",
+    "memory_swap_max_bytes",
     "memory_peak_bytes",
 )
 _HISTORICAL_TERMINAL_FIELDS = frozenset(_HISTORICAL_TERMINAL_FIELD_ORDER)
@@ -491,7 +491,9 @@ class SplitMix64:
         return (value ^ (value >> 31)) & _U64_MASK
 
 
-def _concrete_nonnegative_int(value: object, role: str, *, positive: bool = False) -> int:
+def _concrete_nonnegative_int(
+    value: object, role: str, *, positive: bool = False
+) -> int:
     if type(value) is not int or value < int(positive):
         qualifier = "positive" if positive else "nonnegative"
         raise ValueError(f"{role} must be a concrete {qualifier} integer")
@@ -502,8 +504,12 @@ def _validate_page_reference(reference: PageRef) -> None:
     if type(reference) is not PageRef:
         raise ValueError("page reference has the wrong concrete type")
     _concrete_nonnegative_int(reference.page_ordinal, "page ordinal")
-    dimensions = _concrete_nonnegative_int(reference.dimensions, "page dimensions", positive=True)
-    code_width = _concrete_nonnegative_int(reference.code_width, "page code width", positive=True)
+    dimensions = _concrete_nonnegative_int(
+        reference.dimensions, "page dimensions", positive=True
+    )
+    code_width = _concrete_nonnegative_int(
+        reference.code_width, "page code width", positive=True
+    )
     encoded_bytes = _concrete_nonnegative_int(
         reference.encoded_bytes, "page encoded bytes", positive=True
     )
@@ -608,7 +614,9 @@ def decode_bvp2_page(reference: PageRef, body: bytes) -> numpy.ndarray:
         raise ValueError("page record-ID authority differs")
 
     code_start = _PAGE_HEADER_BYTES + id_section_bytes
-    encoded = numpy.frombuffer(body, dtype="<f2", count=row_count * dimensions, offset=code_start)
+    encoded = numpy.frombuffer(
+        body, dtype="<f2", count=row_count * dimensions, offset=code_start
+    )
     if encoded.size != row_count * dimensions or not numpy.isfinite(encoded).all():
         raise ValueError("page f16 code authority differs")
     vectors = encoded.reshape(row_count, dimensions).astype(numpy.float32)
@@ -636,7 +644,9 @@ def _validated_unit_matrix(value: numpy.ndarray, role: str) -> numpy.ndarray:
     return matrix / norms[:, None]
 
 
-def _initial_centers(vectors: numpy.ndarray, count: int, generator: SplitMix64) -> numpy.ndarray:
+def _initial_centers(
+    vectors: numpy.ndarray, count: int, generator: SplitMix64
+) -> numpy.ndarray:
     row_count = vectors.shape[0]
     first = (generator.next_u64() * row_count) >> 64
     selected = [first]
@@ -828,7 +838,9 @@ def _validate_registered(registered: RegisteredAuthority) -> None:
         raise ValueError("registered authority differs")
 
 
-def _read_canonical_json(path: Path, expected_sha256: str, role: str) -> dict[str, object]:
+def _read_canonical_json(
+    path: Path, expected_sha256: str, role: str
+) -> dict[str, object]:
     if type(path) is not Path:
         path = Path(path)
     payload = path.read_bytes()
@@ -857,19 +869,25 @@ def _read_historical_runtime_terminal(
         value = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("terminal marker is not JSON") from error
-    expected_payload = json.dumps(
-        value,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8") + b"\n"
+    expected_payload = (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
     terminal = _exact_dict(value, _HISTORICAL_TERMINAL_FIELDS, "terminal marker")
     if (
         payload != expected_payload
         or tuple(terminal) != _HISTORICAL_TERMINAL_FIELD_ORDER
     ):
         raise ValueError("terminal marker bytes are not canonical")
-    if any(not _digest_is_valid(terminal[field]) for field in _HISTORICAL_TERMINAL_DIGEST_FIELDS):
+    if any(
+        not _digest_is_valid(terminal[field])
+        for field in _HISTORICAL_TERMINAL_DIGEST_FIELDS
+    ):
         raise ValueError("terminal marker digest differs")
     for field in _HISTORICAL_TERMINAL_INT_FIELDS:
         _concrete_nonnegative_int(terminal[field], f"terminal marker {field}")
@@ -900,7 +918,10 @@ def _read_historical_runtime_terminal(
         "memory_max_bytes": 32 * 1024**3,
         "memory_swap_max_bytes": 0,
     }
-    if any(type(terminal[field]) is not type(expected) or terminal[field] != expected for field, expected in fixed.items()):
+    if any(
+        type(terminal[field]) is not type(expected) or terminal[field] != expected
+        for field, expected in fixed.items()
+    ):
         raise ValueError("terminal marker frozen authority differs")
     if (
         type(terminal["instance_id"]) is not str
@@ -1182,11 +1203,7 @@ def _validate_arm_shape(
 
 def _identifier(value: object, role: str, maximum_bytes: int) -> tuple[int, ...]:
     result = _concrete_int_list(value, role)
-    if (
-        not result
-        or len(result) > maximum_bytes
-        or any(byte > 255 for byte in result)
-    ):
+    if not result or len(result) > maximum_bytes or any(byte > 255 for byte in result):
         raise ValueError(f"{role} differs")
     return result
 
@@ -1200,8 +1217,7 @@ def _coverage_oracle(
     for size in range(1, min(width, len(candidates)) + 1):
         for pages in itertools.combinations(candidates, size):
             hits = sum(
-                bool(set(assignment).intersection(pages))
-                for assignment in assignments
+                bool(set(assignment).intersection(pages)) for assignment in assignments
             )
             if hits > best_hits or (hits == best_hits and pages < best_pages):
                 best_pages = pages
@@ -1371,8 +1387,8 @@ def _query_evidence(
         )
         cpu_values.append(sample["cpu_ns"])
     aggregate = total_hits * 1_000_000 // (shape.query_count * shape.recall_k)
-    oracle_aggregate = total_oracle_hits * 1_000_000 // (
-        shape.query_count * shape.recall_k
+    oracle_aggregate = (
+        total_oracle_hits * 1_000_000 // (shape.query_count * shape.recall_k)
     )
     regret = total_page_hits * 1_000_000 // max(total_oracle_hits, 1)
     cpu_p99 = sorted(cpu_values)[math.ceil(len(cpu_values) * 0.99) - 1]
@@ -1472,8 +1488,7 @@ def _validate_result_receipt(
         "passed": arm["passed"],
     }
     if any(
-        not _same_concrete(result[key], expected)
-        for key, expected in summary.items()
+        not _same_concrete(result[key], expected) for key, expected in summary.items()
     ):
         raise ValueError("result summary differs")
     diagnostic_cell = result["diagnostic_cell_id"]
@@ -1592,8 +1607,7 @@ class Revision4Bvs2Authority:
             or terminal["source_archive_sha256"]
             != report_artifact["source_archive_sha256"]
             or terminal["base_index_id"] != report_artifact["index_id"]
-            or terminal["v23_d1_report_sha256"]
-            != report_artifact["d1_report_sha256"]
+            or terminal["v23_d1_report_sha256"] != report_artifact["d1_report_sha256"]
             or terminal["v23_passed"] is not report["arms"][0]["passed"]
         ):
             raise ValueError("D2 report authority differs")
@@ -1746,7 +1760,9 @@ def select_pages(score_matrix: numpy.ndarray, width: int = 8) -> numpy.ndarray:
     return selected
 
 
-def quality_metrics(authority: Authority, selections: numpy.ndarray) -> dict[str, object]:
+def quality_metrics(
+    authority: Authority, selections: numpy.ndarray
+) -> dict[str, object]:
     """Independently recompute recall and oracle attainment from page assignments."""
 
     if type(authority) is not Authority:
@@ -1809,7 +1825,9 @@ def projected_serving_bytes() -> int:
     return total
 
 
-def _read_page_body(client: object, bucket: str, key: str, expected_bytes: int) -> bytes:
+def _read_page_body(
+    client: object, bucket: str, key: str, expected_bytes: int
+) -> bytes:
     response = client.get_object(Bucket=bucket, Key=key)  # type: ignore[attr-defined]
     if type(response) is not dict or "Body" not in response:
         raise ValueError("S3 response differs")
@@ -1861,7 +1879,9 @@ def ordered_page_bodies(
         if reference.page_ordinal != expected:
             raise ValueError("page stream order differs")
 
-    executor = ThreadPoolExecutor(max_workers=max_inflight, thread_name_prefix="v23-page")
+    executor = ThreadPoolExecutor(
+        max_workers=max_inflight, thread_name_prefix="v23-page"
+    )
     futures: dict[int, Future[bytes]] = {}
     next_submit = 0
 
@@ -1984,9 +2004,10 @@ def run_falsifier(
         vectors = decode_bvp2_page(reference, body)
         means = spherical_kmeans(vectors, reference.checksum, clusters=32, iterations=8)
         page_scores = score_page_means(authority.queries, means)
-        if page_scores.shape != (authority.shape.query_count,) or not numpy.isfinite(
-            page_scores
-        ).all():
+        if (
+            page_scores.shape != (authority.shape.query_count,)
+            or not numpy.isfinite(page_scores).all()
+        ):
             raise ValueError("page scores differ")
         scores[:, reference.page_ordinal] = page_scores.astype("<f4")
         total_bytes += len(body)
@@ -2141,7 +2162,9 @@ def validate_result(value: object) -> dict[str, object]:
     ):
         raise ValueError("falsifier algorithm authority differs")
 
-    query_ordinals = _concrete_int_vector(result["query_ordinals"], query_count, "query ordinal")
+    query_ordinals = _concrete_int_vector(
+        result["query_ordinals"], query_count, "query ordinal"
+    )
     if len(set(query_ordinals)) != query_count:
         raise ValueError("falsifier query ordinals duplicate")
     selected_pages = result["selected_pages"]
@@ -2149,7 +2172,9 @@ def validate_result(value: object) -> dict[str, object]:
         raise ValueError("falsifier selected-page cardinality differs")
     for row in selected_pages:
         selected_row = _concrete_int_vector(row, selection_width, "selected page")
-        if len(set(selected_row)) != selection_width or any(page >= page_count for page in selected_row):
+        if len(set(selected_row)) != selection_width or any(
+            page >= page_count for page in selected_row
+        ):
             raise ValueError("falsifier selected pages differ")
     query_hits = _concrete_int_vector(result["query_hits"], query_count, "query hit")
     oracle_hits = _concrete_int_vector(result["oracle_hits"], query_count, "oracle hit")
@@ -2201,15 +2226,18 @@ def canonical_stop_bytes(error: StreamStopped) -> bytes:
         )
     ):
         raise ValueError("stream stop receipt differs")
-    return canonical_json_bytes(
-        {
-            "schema": "borsuk-v23-clustered-page-falsifier-stop-v1",
-            "status": "stopped",
-            "reason": error.reason,
-            "last_authenticated_page": error.last_authenticated_page,
-            "last_authenticated_checksum": error.last_authenticated_checksum,
-        }
-    ) + b"\n"
+    return (
+        canonical_json_bytes(
+            {
+                "schema": "borsuk-v23-clustered-page-falsifier-stop-v1",
+                "status": "stopped",
+                "reason": error.reason,
+                "last_authenticated_page": error.last_authenticated_page,
+                "last_authenticated_checksum": error.last_authenticated_checksum,
+            }
+        )
+        + b"\n"
+    )
 
 
 def _s3_config() -> object:
@@ -2257,7 +2285,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--region", required=True)
     parser.add_argument("--execute-complete-stream", action="store_true")
     arguments = parser.parse_args(argv)
-    registered_bucket, registered_prefix = _attempt_location(REGISTERED_AUTHORITY.attempt_prefix)
+    registered_bucket, registered_prefix = _attempt_location(
+        REGISTERED_AUTHORITY.attempt_prefix
+    )
     if (
         arguments.bucket != registered_bucket
         or arguments.prefix != registered_prefix

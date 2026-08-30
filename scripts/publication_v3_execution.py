@@ -582,14 +582,8 @@ def runtime_worker_script(
                     v21_feasibility
                     != job.cell_tag.startswith("runtime-v21-feasibility-")
                 )
-                or (
-                    v22_stage_l
-                    != job.cell_tag.startswith("runtime-v22-stage-l-")
-                )
-                or (
-                    (v23_stage is not None)
-                    != job.cell_tag.startswith("runtime-v23-")
-                )
+                or (v22_stage_l != job.cell_tag.startswith("runtime-v22-stage-l-"))
+                or ((v23_stage is not None) != job.cell_tag.startswith("runtime-v23-"))
             )
         )
         or (
@@ -725,9 +719,7 @@ def runtime_worker_script(
             binary_sha=$(sha256sum "$work/production_bench" | awk '{print $1}')
             """
         )
-        memory_max_bytes = (
-            8_589_934_592 if v23_stage == "d3" else 34_359_738_368
-        )
+        memory_max_bytes = 8_589_934_592 if v23_stage == "d3" else 34_359_738_368
         diagnostic_unit = (
             "v21" if v21_feasibility else "v22" if v22_stage_l else f"v23-{v23_stage}"
         )
@@ -861,7 +853,7 @@ def runtime_worker_script(
     diagnostic_preservation_before_observation = ""
     result_upload = (
         f'put_immutable "$work/cell/RESULT_COMPLETE.json" '
-        f'{_q(terminal_prefix + "/RESULT_COMPLETE.json")}'
+        f"{_q(terminal_prefix + '/RESULT_COMPLETE.json')}"
     )
     if (diagnostic_write_ops is None) != (diagnostic_timeout_seconds is None):
         raise ValueError("lifecycle diagnostic authority must be supplied atomically")
@@ -1023,7 +1015,9 @@ v22_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v22_stage_l_summar
                     if (
                         not isinstance(value, str)
                         or len(value) != 64
-                        or any(character not in "0123456789abcdef" for character in value)
+                        or any(
+                            character not in "0123456789abcdef" for character in value
+                        )
                     ):
                         raise ValueError(f"V23 {field} differs")
                 elif not isinstance(value, str) or not value.startswith("s3://"):
@@ -1068,9 +1062,7 @@ v22_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v22_stage_l_summar
             if v23_stage in {"d2", "d3"}:
                 diagnostic_arguments += f" --v23-page-uri {_q(page_prefix)}"
             if v23_stage in {"d2", "d3"}:
-                diagnostic_arguments += (
-                    ' --v23-d1-report "$work/cell/runtime-output/bench_v23_d1_report.json"'
-                )
+                diagnostic_arguments += ' --v23-d1-report "$work/cell/runtime-output/bench_v23_d1_report.json"'
             if v23_stage == "d3":
                 diagnostic_arguments += (
                     ' --v23-d2-report "$work/cell/runtime-output/bench_v23_d2_report.json"'
@@ -1095,9 +1087,15 @@ v22_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v22_stage_l_summar
             if v23_stage in {"d2", "d3"}:
                 receipt_parts.append(f'"v23_page_prefix":{json.dumps(page_prefix)}')
             for name in artifact_names:
-                variable = "v23_" + name.removeprefix("bench_v23_").replace(".", "_").replace("-", "_") + "_sha"
+                variable = (
+                    "v23_"
+                    + name.removeprefix("bench_v23_")
+                    .replace(".", "_")
+                    .replace("-", "_")
+                    + "_sha"
+                )
                 hash_lines.append(
-                    f'{variable}=$(sha256sum "$work/cell/runtime-output/{name}" | awk \'{{print $1}}\')'
+                    f"{variable}=$(sha256sum \"$work/cell/runtime-output/{name}\" | awk '{{print $1}}')"
                 )
                 receipt_field = {
                     "bench_v23_d1_report.json": "v23_d1_report_sha256",
@@ -1125,18 +1123,19 @@ v22_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v22_stage_l_summar
                 )
             receipt_parts.extend(prerequisite_receipt_parts)
             hash_variables = " ".join(
-                '"$' + "v23_" + name.removeprefix("bench_v23_").replace(".", "_").replace("-", "_") + '_sha"'
+                '"$'
+                + "v23_"
+                + name.removeprefix("bench_v23_").replace(".", "_").replace("-", "_")
+                + '_sha"'
                 for name in artifact_names
             )
-            hash_variables = (
-                '"$actual_v23_passed" "$v23_result_sha" ' + hash_variables
-            )
+            hash_variables = '"$actual_v23_passed" "$v23_result_sha" ' + hash_variables
             diagnostic_validation = (
-                "actual_claim_eligible=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))[\"claim_eligible\"]))' \"$work/cell/RESULT_COMPLETE.json\")\n"
-                "actual_v23_passed=$(\"$work/venv/bin/python\" -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))[\"passed\"]))' \"$work/cell/RESULT_COMPLETE.json\")\n"
+                'actual_claim_eligible=$("$work/venv/bin/python" -c \'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["claim_eligible"]))\' "$work/cell/RESULT_COMPLETE.json")\n'
+                'actual_v23_passed=$("$work/venv/bin/python" -c \'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["passed"]))\' "$work/cell/RESULT_COMPLETE.json")\n'
                 "v23_result_sha=$(sha256sum \"$work/cell/RESULT_COMPLETE.json\" | awk '{print $1}')\n"
-                "test \"$actual_claim_eligible\" = false\n"
-                "[[ \"$actual_v23_passed\" == true || \"$actual_v23_passed\" == false ]]\n"
+                'test "$actual_claim_eligible" = false\n'
+                '[[ "$actual_v23_passed" == true || "$actual_v23_passed" == false ]]\n'
                 + "\n".join(
                     f'test -s "$work/cell/runtime-output/{name}"'
                     for name in artifact_names
@@ -1241,7 +1240,7 @@ v22_summary_sha=$(sha256sum \"$work/cell/runtime-output/bench_v22_stage_l_summar
           --instance-identity "$instance_id" --purchase-option "$instance_purchase_option" \
           --borsuk-bench "$work/production_bench" \
           --index-receipt "$work/INDEX_COMPLETE.json" --object-roster "$work/INDEX_OBJECTS.json" \
-          --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}{diagnostic_arguments}{' --v21-diagnostic-protocol "$work/protocol.json" --v21-diagnostic-manifest "$work/manifest.json"' if v21_feasibility else ' --v22-diagnostic-protocol "$work/protocol.json" --v22-diagnostic-manifest "$work/manifest.json"' if v22_stage_l else ' --v23-diagnostic-protocol "$work/protocol.json" --v23-diagnostic-manifest "$work/manifest.json"' if v23_stage is not None else ''}
+          --index-inventory "$work/INDEX_INVENTORY.json"{clone_arguments}{diagnostic_arguments}{' --v21-diagnostic-protocol "$work/protocol.json" --v21-diagnostic-manifest "$work/manifest.json"' if v21_feasibility else ' --v22-diagnostic-protocol "$work/protocol.json" --v22-diagnostic-manifest "$work/manifest.json"' if v22_stage_l else ' --v23-diagnostic-protocol "$work/protocol.json" --v23-diagnostic-manifest "$work/manifest.json"' if v23_stage is not None else ""}
         {cgroup_wait}
         {diagnostic_validation}
         {diagnostic_preservation_before_observation}

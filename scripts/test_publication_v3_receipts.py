@@ -95,7 +95,9 @@ def build_metrics() -> dict[str, int]:
 
 
 class PublicationV3ReceiptTests(unittest.TestCase):
-    def test_runtime_requires_canonical_receipt_and_exact_object_inventory(self) -> None:
+    def test_runtime_requires_canonical_receipt_and_exact_object_inventory(
+        self,
+    ) -> None:
         cell = scheduled_borsuk_cell()
         receipt = build_index_receipt(
             cell=cell,
@@ -142,7 +144,10 @@ class PublicationV3ReceiptTests(unittest.TestCase):
             ],
             [{**inventory[0], "bytes": inventory[0]["bytes"] + 1}, *inventory[1:]],
             [{**inventory[0], "checksum": "4" * 64}, *inventory[1:]],
-            [{**inventory[0], "etag": '"44444444444444444444444444444444"'}, *inventory[1:]],
+            [
+                {**inventory[0], "etag": '"44444444444444444444444444444444"'},
+                *inventory[1:],
+            ],
         ):
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 reconcile_index_inventory(roster, mutation)
@@ -154,7 +159,9 @@ class PublicationV3ReceiptTests(unittest.TestCase):
                 dataset_materialization_sha256="d" * 64,
             )
 
-    def test_segment_rows_are_sufficient_without_fabricated_directory_object(self) -> None:
+    def test_segment_rows_are_sufficient_without_fabricated_directory_object(
+        self,
+    ) -> None:
         cell = scheduled_borsuk_cell()
         roster = data_roster(cell)[:1]
         receipt = build_index_receipt(
@@ -176,7 +183,9 @@ class PublicationV3ReceiptTests(unittest.TestCase):
             roster,
         )
 
-    def test_index_receipt_binds_build_authority_and_reuses_across_repetitions(self) -> None:
+    def test_index_receipt_binds_build_authority_and_reuses_across_repetitions(
+        self,
+    ) -> None:
         first = scheduled_borsuk_cell()
         manifest = validate_manifest(paid_v3_manifest())
         second = next(
@@ -211,7 +220,11 @@ class PublicationV3ReceiptTests(unittest.TestCase):
             receipt["receipt_sha256"],
             hashlib.sha256(
                 canonical_json_bytes(
-                    {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+                    {
+                        key: value
+                        for key, value in receipt.items()
+                        if key != "receipt_sha256"
+                    }
                 )
             ).hexdigest(),
         )

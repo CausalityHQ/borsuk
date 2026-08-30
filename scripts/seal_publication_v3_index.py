@@ -81,10 +81,9 @@ def classify_index_object(path: str) -> tuple[str, str]:
         or (path.startswith("positioned-log/heads/") and path.endswith(".json"))
     ):
         return "control", "json"
-    if (
-        path.startswith("id-directory/claim-pages/")
-        and path.endswith("/STATE")
-    ) or (path.startswith("transactions/") and path.endswith("/STATE")):
+    if (path.startswith("id-directory/claim-pages/") and path.endswith("/STATE")) or (
+        path.startswith("transactions/") and path.endswith("/STATE")
+    ):
         return "control", "packed"
     raise ValueError(f"index object path has no checked physical role: {path}")
 
@@ -109,10 +108,15 @@ def _validate_physical_bytes(path: str, physical_format: str, body: bytes) -> No
             raise ValueError(f"JSON control object is not a mapping: {path}")
     if physical_format == "packed" and path.endswith(".fidx") and len(body) < 96:
         raise ValueError(f"packed filter index is truncated: {path}")
-    if physical_format == "packed" and path.endswith("/STATE") and body[:4] not in {
-        b"BCL1",
-        b"BWS2",
-    }:
+    if (
+        physical_format == "packed"
+        and path.endswith("/STATE")
+        and body[:4]
+        not in {
+            b"BCL1",
+            b"BWS2",
+        }
+    ):
         raise ValueError(f"packed control object has invalid magic: {path}")
 
 
@@ -243,7 +247,9 @@ def main() -> int:
     import boto3
 
     bucket, prefix = _s3_parts(args.index_uri)
-    client = boto3.Session(**session_configuration(args.profile, args.region)).client("s3")
+    client = boto3.Session(**session_configuration(args.profile, args.region)).client(
+        "s3"
+    )
     roster, inventory = seal_index_inventory(
         client, bucket=bucket, prefix=prefix, workers=args.workers
     )

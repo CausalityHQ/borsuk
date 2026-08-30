@@ -25,10 +25,14 @@ from scripts.launch_rest_coexistence_spot import (
 
 
 class RestCoexistenceSpotLauncherTest(unittest.TestCase):
-    def test_controller_resolves_and_rejects_the_wrong_aws_account_before_launch(self) -> None:
+    def test_controller_resolves_and_rejects_the_wrong_aws_account_before_launch(
+        self,
+    ) -> None:
         calls: list[list[str]] = []
 
-        def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        def run(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
             calls.append(command)
             return subprocess.CompletedProcess(command, 0, stdout="453182569524\n")
 
@@ -218,9 +222,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("BORSUK_REST_MAX_WAITING_SEARCHES=16", user_data)
         self.assertIn("BORSUK_REST_PAGE_BUDGET=32", user_data)
         self.assertIn("BORSUK_REST_EXACT_CANDIDATES=512", user_data)
-        self.assertIn(
-            "BORSUK_REST_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION=5", user_data
-        )
+        self.assertIn("BORSUK_REST_EXACT_READ_MAX_PHYSICAL_AMPLIFICATION=5", user_data)
         self.assertNotIn("BORSUK_REST_EXACT_HEDGE_AFTER_MS", user_data)
         self.assertIn("BORSUK_REST_LEAF_READ_WIDTH=32", user_data)
         self.assertIn("BORSUK_REST_MAX_INFLIGHT_LEAF_READS=48", user_data)
@@ -234,9 +236,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
             user_data.index("watch_spot_interruption &"),
         )
         self.assertGreaterEqual(
-            user_data.count(
-                '--expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT"'
-            ),
+            user_data.count('--expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT"'),
             4,
         )
         self.assertIn('"aws_account_id":"%s"', user_data)
@@ -256,8 +256,12 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertNotIn("describe-instances", generator_data)
         self.assertIn("APP_ENDPOINT.json", generator_data)
         self.assertIn("/health", generator_data)
-        self.assertIn('--setenv=BORSUK_SERVER_ENDPOINT="$server_endpoint"', generator_data)
-        self.assertIn("systemctl stop borsuk-rest-rest-generator.service", generator_data)
+        self.assertIn(
+            '--setenv=BORSUK_SERVER_ENDPOINT="$server_endpoint"', generator_data
+        )
+        self.assertIn(
+            "systemctl stop borsuk-rest-rest-generator.service", generator_data
+        )
         self.assertIn("BORSUK_CONTROLLER_AWS_PROFILE=causality", generator_data)
         self.assertIn("BORSUK_EXPECTED_AWS_ACCOUNT=453182569524", generator_data)
         self.assertLess(
@@ -279,7 +283,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 dataset_receipt_sha256="4" * 64,
                 attempt_authority_sha256="5" * 64,
                 output_uri="s3://bucket/size-check/attempts/0001",
-                runtime={key: int(value) for key, value in self.pair["runtime"].items()},
+                runtime={
+                    key: int(value) for key, value in self.pair["runtime"].items()
+                },
             )
 
     def test_pair_binds_immutable_inputs_and_terminal_prefix(self) -> None:
@@ -342,7 +348,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertTrue(receipt["complete_uri"].endswith("/ATTEMPT_COMPLETE.json"))
         self.assertTrue(receipt["failed_uri"].endswith("/ATTEMPT_FAILED.json"))
 
-    def test_reconciliation_uses_only_terminal_markers_and_both_instance_states(self) -> None:
+    def test_reconciliation_uses_only_terminal_markers_and_both_instance_states(
+        self,
+    ) -> None:
         running = classify_attempt(AttemptObservation("running", "running", ()))
         self.assertEqual(running.action, "monitor")
         success = classify_attempt(
@@ -456,21 +464,21 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         with patch("scripts.launch_rest_coexistence_spot.subprocess.run") as run:
             _record_launch_authority("causality", self.pair)
         keys = {
-            call.args[0][call.args[0].index("--key") + 1]
-            for call in run.call_args_list
+            call.args[0][call.args[0].index("--key") + 1] for call in run.call_args_list
         }
         self.assertEqual(
             keys,
             {
                 self.pair["receipt"]["output_uri"].split("/", 3)[3]
                 + "/LAUNCH_RECEIPT.json",
-                self.pair["receipt"]["output_uri"].split("/", 3)[3]
-                + "/WORKLOAD.json",
+                self.pair["receipt"]["output_uri"].split("/", 3)[3] + "/WORKLOAD.json",
                 self.pair["receipt"]["output_uri"].split("/", 3)[3]
                 + "/LAUNCH_PLAN.json",
             },
         )
-        self.assertTrue(all("--if-none-match" in call.args[0] for call in run.call_args_list))
+        self.assertTrue(
+            all("--if-none-match" in call.args[0] for call in run.call_args_list)
+        )
         self.assertTrue(
             all(
                 call.args[0][call.args[0].index("--expected-bucket-owner") + 1]
@@ -482,12 +490,16 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
     def test_instance_identity_receipt_binds_the_aws_account_and_profile(self) -> None:
         recorded: list[dict[str, object]] = []
 
-        def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        def run(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
             body = command[command.index("--body") + 1]
             recorded.append(json.loads(Path(body).read_text(encoding="utf-8")))
             return subprocess.CompletedProcess(command, 0, stdout="")
 
-        with patch("scripts.launch_rest_coexistence_spot.subprocess.run", side_effect=run):
+        with patch(
+            "scripts.launch_rest_coexistence_spot.subprocess.run", side_effect=run
+        ):
             _record_identity("causality", self.pair, "server", "i-deadbeef")
         self.assertEqual(
             recorded,
@@ -645,7 +657,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 index_receipt_sha256="3" * 64,
                 dataset_receipt_sha256="4" * 64,
                 smoke=True,
-                runtime={key: int(value) for key, value in self.pair["runtime"].items()},
+                runtime={
+                    key: int(value) for key, value in self.pair["runtime"].items()
+                },
                 output_uri="s3://bucket/wrong-instance-account/attempts/0001",
                 server_worker="echo server",
                 generator_worker="# borsuk-rest-mode=smoke\necho generator",
@@ -699,7 +713,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 index_receipt_sha256="3" * 64,
                 dataset_receipt_sha256="4" * 64,
                 smoke=False,
-                runtime={key: int(value) for key, value in self.pair["runtime"].items()},
+                runtime={
+                    key: int(value) for key, value in self.pair["runtime"].items()
+                },
                 output_uri="s3://bucket/wrong-worker-mode/attempts/0001",
                 server_worker="echo server",
                 generator_worker="# borsuk-rest-mode=smoke\necho generator",
@@ -721,7 +737,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 index_receipt_sha256="3" * 64,
                 dataset_receipt_sha256="4" * 64,
                 smoke=True,
-                runtime={key: int(value) for key, value in self.pair["runtime"].items()},
+                runtime={
+                    key: int(value) for key, value in self.pair["runtime"].items()
+                },
                 output_uri="s3://bucket/missing-repetition/attempts/0001",
                 server_worker="echo server",
                 generator_worker="# borsuk-rest-mode=smoke\necho generator",
@@ -745,7 +763,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 index_receipt_sha256="3" * 64,
                 dataset_receipt_sha256="4" * 64,
                 smoke=True,
-                runtime={key: int(value) for key, value in self.pair["runtime"].items()},
+                runtime={
+                    key: int(value) for key, value in self.pair["runtime"].items()
+                },
                 output_uri="s3://bucket/mismatched-repetition/attempts/0001",
                 server_worker="echo server",
                 generator_worker=(
@@ -773,7 +793,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 index_receipt_sha256="3" * 64,
                 dataset_receipt_sha256="4" * 64,
                 smoke=True,
-                runtime={key: int(value) for key, value in self.pair["runtime"].items()},
+                runtime={
+                    key: int(value) for key, value in self.pair["runtime"].items()
+                },
                 output_uri="s3://bucket/mismatched-mode/attempts/0001",
                 server_worker="echo server",
                 generator_worker=(
@@ -787,9 +809,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         cells = cold_s3_cap_matrix()
         self.assertEqual(len(cells), 24)
         self.assertEqual(len({cell["cell_id"] for cell in cells}), 24)
-        self.assertEqual(
-            {cell["search_admission"] for cell in cells}, {2, 4, 8, 16}
-        )
+        self.assertEqual({cell["search_admission"] for cell in cells}, {2, 4, 8, 16})
         self.assertEqual(
             {
                 (cell["search_admission"], cell["max_waiting_searches"])
@@ -844,7 +864,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("memory.events.before", server)
         self.assertIn("memory-events.json", server)
         server_memory_gate = next(
-            line for line in server.splitlines() if "server cgroup memory events changed" in line
+            line
+            for line in server.splitlines()
+            if "server cgroup memory events changed" in line
         )
         compile(shlex.split(server_memory_gate)[2], "server-memory-gate", "exec")
         self.assertIn("generator evidence authority differs", server)
@@ -882,7 +904,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("cpu_fraction", generator)
         self.assertIn(r'+"\n"', generator)
         resource_gate = next(
-            line for line in generator.splitlines() if "generator resource gate failed" in line
+            line
+            for line in generator.splitlines()
+            if "generator resource gate failed" in line
         )
         compile(shlex.split(resource_gate)[2], "generator-resource-gate", "exec")
         self.assertGreater(
@@ -893,9 +917,15 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn('test "$(sha256sum "$queries"', generator)
         self.assertIn("run_rest_coexistence_attempt.py", generator)
         self.assertIn("aws sts get-caller-identity", generator)
-        self.assertIn('test "$runtime_aws_account" = "$BORSUK_EXPECTED_AWS_ACCOUNT"', generator)
-        self.assertIn('--controller-aws-profile "$BORSUK_CONTROLLER_AWS_PROFILE"', generator)
-        self.assertIn('--expected-aws-account "$BORSUK_EXPECTED_AWS_ACCOUNT"', generator)
+        self.assertIn(
+            'test "$runtime_aws_account" = "$BORSUK_EXPECTED_AWS_ACCOUNT"', generator
+        )
+        self.assertIn(
+            '--controller-aws-profile "$BORSUK_CONTROLLER_AWS_PROFILE"', generator
+        )
+        self.assertIn(
+            '--expected-aws-account "$BORSUK_EXPECTED_AWS_ACCOUNT"', generator
+        )
         self.assertIn('--runtime-aws-account "$runtime_aws_account"', generator)
         self.assertIn("--repetition 2", generator)
         self.assertIn("terminal repetition differs", generator)
@@ -914,7 +944,9 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
         self.assertIn("rest-generator-spot-interruption.json", generator)
         self.assertIn("--if-none-match '*'", generator)
         self.assertIn('--expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT"', server)
-        self.assertIn('--expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT"', generator)
+        self.assertIn(
+            '--expected-bucket-owner "$BORSUK_EXPECTED_AWS_ACCOUNT"', generator
+        )
         subprocess.run(["bash", "-n"], input=generator, text=True, check=True)
         runtime = {key: int(value) for key, value in self.pair["runtime"].items()}
         for role, worker in (("rest-server", server), ("rest-generator", generator)):
@@ -938,7 +970,7 @@ class RestCoexistenceSpotLauncherTest(unittest.TestCase):
                 self.assertIn("diagnostic-output", user_data)
                 self.assertLess(
                     user_data.index("diagnostic-output"),
-                    user_data.index('ATTEMPT_FAILED.json'),
+                    user_data.index("ATTEMPT_FAILED.json"),
                 )
             self.assertLessEqual(len(user_data.encode()), 16 * 1024)
 

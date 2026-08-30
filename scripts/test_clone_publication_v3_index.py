@@ -22,8 +22,7 @@ class PublicationV3CloneExecutorTests(unittest.TestCase):
         roster = data_roster(cell)
         source_etags = {item["path"]: item["etag"] for item in roster}
         destination_etags = {
-            item["path"]: f'"{index + 20:032x}"'
-            for index, item in enumerate(roster)
+            item["path"]: f'"{index + 20:032x}"' for index, item in enumerate(roster)
         }
         base_key_prefix = base["index_uri"][5:].split("/", 1)[1]
 
@@ -82,7 +81,9 @@ class PublicationV3CloneExecutorTests(unittest.TestCase):
                 inventory,
             )
 
-    def test_clone_uses_atomic_server_side_copies_and_refuses_partial_target(self) -> None:
+    def test_clone_uses_atomic_server_side_copies_and_refuses_partial_target(
+        self,
+    ) -> None:
         cell = scheduled_cell(kind="write-update-delete-compact")
         arm = next(arm for arm in plan_arms(cell) if arm["writers"] == 1)
         base = receipt_for(cell)
@@ -115,9 +116,7 @@ class PublicationV3CloneExecutorTests(unittest.TestCase):
                 return {"ContentLength": item["bytes"], "ETag": etag}
             if operation == "copy-object":
                 self.assertEqual(
-                    arguments[
-                        arguments.index("--expected-source-bucket-owner") + 1
-                    ],
+                    arguments[arguments.index("--expected-source-bucket-owner") + 1],
                     "453182569524",
                 )
                 self.assertEqual(

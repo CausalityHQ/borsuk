@@ -16,7 +16,11 @@ class _Paginator:
 
     def paginate(self, **kwargs: object) -> list[dict[str, object]]:
         self.client.list_calls += 1
-        objects = self.client.first_listing if self.client.list_calls == 1 else self.client.second_listing
+        objects = (
+            self.client.first_listing
+            if self.client.list_calls == 1
+            else self.client.second_listing
+        )
         return [{"Contents": objects}]
 
 
@@ -55,7 +59,9 @@ class PublicationV3IndexSealTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid magic"):
             _validate_physical_bytes(path, "packed", b"BWS1state")
 
-    def test_worker_uses_instance_credentials_when_no_named_profile_is_supplied(self) -> None:
+    def test_worker_uses_instance_credentials_when_no_named_profile_is_supplied(
+        self,
+    ) -> None:
         self.assertEqual(
             session_configuration(None, "eu-central-1"),
             {"region_name": "eu-central-1"},
@@ -65,7 +71,9 @@ class PublicationV3IndexSealTests(unittest.TestCase):
             {"profile_name": "causality", "region_name": "eu-central-1"},
         )
 
-    def test_classification_matches_real_standard_and_packed_path_families(self) -> None:
+    def test_classification_matches_real_standard_and_packed_path_families(
+        self,
+    ) -> None:
         cases = {
             "segments/L0/segment.parquet": ("data-bundle", "parquet"),
             "vectors/aa/vector.arrow": ("query-page", "arrow-ipc"),
@@ -112,7 +120,9 @@ class PublicationV3IndexSealTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 classify_index_object(path)
 
-    def test_seal_hashes_every_object_counts_segment_rows_and_detects_listing_drift(self) -> None:
+    def test_seal_hashes_every_object_counts_segment_rows_and_detects_listing_drift(
+        self,
+    ) -> None:
         prefix = "publication/indexes/index-1/"
         objects = {
             prefix + "segments/L0/a.parquet": b"PAR1segment-aPAR1",
@@ -130,7 +140,9 @@ class PublicationV3IndexSealTests(unittest.TestCase):
             parquet_rows=lambda path, body: 100 if path.startswith("segments/") else 0,
         )
 
-        self.assertEqual([item["path"] for item in roster], sorted(item["path"] for item in roster))
+        self.assertEqual(
+            [item["path"] for item in roster], sorted(item["path"] for item in roster)
+        )
         self.assertEqual(sum(item["rows"] for item in roster), 100)
         self.assertEqual(
             inventory,
@@ -149,7 +161,9 @@ class PublicationV3IndexSealTests(unittest.TestCase):
                 client,
                 bucket="bucket",
                 prefix=prefix,
-                parquet_rows=lambda path, body: 100 if path.startswith("segments/") else 0,
+                parquet_rows=lambda path, body: (
+                    100 if path.startswith("segments/") else 0
+                ),
             )
 
 

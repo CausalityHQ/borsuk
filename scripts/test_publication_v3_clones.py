@@ -14,7 +14,9 @@ from scripts.test_run_publication_v3_cell import plan_arms, scheduled_cell
 
 
 class PublicationV3CloneTests(unittest.TestCase):
-    def test_clone_receipt_binds_base_arm_attempt_and_exact_copy_inventory(self) -> None:
+    def test_clone_receipt_binds_base_arm_attempt_and_exact_copy_inventory(
+        self,
+    ) -> None:
         cell = scheduled_cell(kind="write-update-delete-compact")
         arm = next(arm for arm in plan_arms(cell) if arm["writers"] == 1)
         base = receipt_for(cell)
@@ -53,9 +55,7 @@ class PublicationV3CloneTests(unittest.TestCase):
         )
         payload = canonical_json_bytes(inventory) + b"\n"
         self.assertEqual(
-            require_verified_clone_inventory(
-                receipt, payload, base_roster=roster
-            ),
+            require_verified_clone_inventory(receipt, payload, base_roster=roster),
             inventory,
         )
 

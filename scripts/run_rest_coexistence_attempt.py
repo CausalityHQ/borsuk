@@ -102,7 +102,9 @@ def select_sustainable_search_qps(rows: list[dict[str, Any]]) -> float:
 
 def overload_search_qps(sustainable: float, rates: list[int]) -> float:
     if sustainable <= 0 or not rates:
-        raise ValueError("overload rate requires positive sustainable and staircase rates")
+        raise ValueError(
+            "overload rate requires positive sustainable and staircase rates"
+        )
     return max(sustainable * 1.50, float(max(rates)))
 
 
@@ -112,8 +114,7 @@ def staircase_has_only_expected_capacity_failures(rows: list[dict[str, Any]]) ->
         "vector p99 exceeds the frozen 100ms limit",
     }
     return all(
-        set(row["summary"].get("gate_failures", ())).issubset(allowed)
-        for row in rows
+        set(row["summary"].get("gate_failures", ())).issubset(allowed) for row in rows
     )
 
 
@@ -138,12 +139,15 @@ def validate_effective_limits(expected: dict[str, int], actual: dict[str, Any]) 
     observed = {key: int(actual.get(field, -1)) for key, field in mapping.items()}
     wanted = {key: int(expected[key]) for key in mapping}
     if observed != wanted:
-        raise ValueError(f"effective REST limits differ: expected {wanted}, observed {observed}")
+        raise ValueError(
+            f"effective REST limits differ: expected {wanted}, observed {observed}"
+        )
 
 
 def _canonical(path: Path, value: object) -> None:
     path.write_text(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n",
+        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        + "\n",
         encoding="utf-8",
     )
 
@@ -159,7 +163,9 @@ def flow_control_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[st
         first = before.get(field)
         last = after.get(field)
         if type(first) is not int or type(last) is not int:
-            raise ValueError(f"REST flow-control counter {field} is missing or non-integer")
+            raise ValueError(
+                f"REST flow-control counter {field} is missing or non-integer"
+            )
         if last < first:
             raise ValueError(f"REST flow-control counter {field} regressed")
         delta[field] = last - first
@@ -167,7 +173,11 @@ def flow_control_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[st
 
 
 def _queries(path: Path) -> list[dict[str, object]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
 
 
 def _run(
@@ -190,7 +200,9 @@ def _run(
     summary["passed"] = not failures
     (output / f"{name}.samples.jsonl").write_text(
         "".join(
-            json.dumps(item.as_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False)
+            json.dumps(
+                item.as_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False
+            )
             + "\n"
             for item in samples
         ),
