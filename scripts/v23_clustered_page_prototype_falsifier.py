@@ -86,6 +86,9 @@ _ALGORITHM = {
     "stored_dtype": "f16-le",
     "tie_breaks": "lowest-input-and-center-position",
 }
+_STOP_REASONS = frozenset(
+    {"rss-limit", "psi-limit", "swap-growth-limit", "progress-limit"}
+)
 
 _REPORT_ARTIFACT_FIELDS = frozenset(
     {
@@ -1461,6 +1464,51 @@ def canonical_result_bytes(value: dict[str, object]) -> bytes:
     return canonical_json_bytes(validate_result(value)) + b"\n"
 
 
+def canonical_stop_bytes(error: StreamStopped) -> bytes:
+    """Return an outcome-blind canonical stop receipt with no quality fields."""
+
+    if (
+        type(error) is not StreamStopped
+        or type(error.reason) is not str
+        or error.reason not in _STOP_REASONS
+        or type(error.last_authenticated_page) is not int
+        or error.last_authenticated_page < -1
+        or (
+            error.last_authenticated_page == -1
+            and error.last_authenticated_checksum is not None
+        )
+        or (
+            error.last_authenticated_page >= 0
+            and not _digest_is_valid(error.last_authenticated_checksum)
+        )
+    ):
+        raise ValueError("stream stop receipt differs")
+    from scripts.publication_v3_protocol import canonical_json_bytes
+
+    return canonical_json_bytes(
+        {
+            "schema": "borsuk-v23-clustered-page-falsifier-stop-v1",
+            "status": "stopped",
+            "reason": error.reason,
+            "last_authenticated_page": error.last_authenticated_page,
+            "last_authenticated_checksum": error.last_authenticated_checksum,
+        }
+    ) + b"\n"
+
+
+def _s3_config() -> object:
+    """Pin each request/retry envelope comfortably below the wedge threshold."""
+
+    from botocore.config import Config
+
+    return Config(
+        connect_timeout=10,
+        read_timeout=60,
+        retries={"total_max_attempts": 3, "mode": "standard"},
+        max_pool_connections=4,
+    )
+
+
 def _default_pressure_probe() -> PressureSample:
     peak_rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
     psi_ppm = 0
@@ -1512,9 +1560,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     import boto3
 
     client = boto3.Session(profile_name=arguments.aws_profile).client(
-        "s3", region_name=arguments.region
+        "s3", region_name=arguments.region, config=_s3_config()
     )
-    result = run_falsifier(authority, client, _default_pressure_probe, True)
+    try:
+        result = run_falsifier(authority, client, _default_pressure_probe, True)
+    except StreamStopped as error:
+        payload = canonical_stop_bytes(error)
+        digest = hashlib.sha256(payload).hexdigest().encode()
+        sys.stderr.buffer.write(payload + b"sha256=" + digest + b"\n")
+        return 3
     payload = canonical_result_bytes(result)
     sys.stdout.buffer.write(payload)
     sys.stderr.write(f"sha256={hashlib.sha256(payload).hexdigest()}\n")

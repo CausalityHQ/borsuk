@@ -277,7 +277,7 @@ git diff --check
 
 Expected: every command exits zero.
 
-- [ ] **Step 6: Commit the streaming/result slice**
+- [x] **Step 6: Commit the streaming/result slice**
 
 ```bash
 git add scripts/v23_clustered_page_prototype_falsifier.py \

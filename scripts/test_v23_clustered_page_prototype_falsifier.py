@@ -874,6 +874,39 @@ class StreamingAndResultTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             subject.main(arguments + ["--output", "forbidden.json"])
 
+    def test_s3_client_timeouts_keep_one_request_below_wedge_limit(self) -> None:
+        config = subject._s3_config()
+
+        self.assertEqual(config.connect_timeout, 10)
+        self.assertEqual(config.read_timeout, 60)
+        self.assertEqual(config.retries["total_max_attempts"], 3)
+        self.assertEqual(config.retries["mode"], "standard")
+        self.assertEqual(config.max_pool_connections, 4)
+
+    def test_stop_receipt_is_outcome_blind_canonical_and_strict(self) -> None:
+        stopped = subject.StreamStopped("psi-limit", 7, "ab" * 32)
+
+        payload = subject.canonical_stop_bytes(stopped)
+        value = json.loads(payload)
+
+        self.assertEqual(
+            set(value),
+            {
+                "schema",
+                "status",
+                "reason",
+                "last_authenticated_page",
+                "last_authenticated_checksum",
+            },
+        )
+        self.assertEqual(value["last_authenticated_page"], 7)
+        self.assertEqual(value["last_authenticated_checksum"], "ab" * 32)
+        self.assertNotIn("recall", payload.decode())
+        self.assertEqual(
+            payload,
+            json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
