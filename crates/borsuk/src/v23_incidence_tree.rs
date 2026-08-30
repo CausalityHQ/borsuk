@@ -1,3 +1,5 @@
+use std::{cmp::Ordering, collections::BinaryHeap};
+
 use half::f16;
 use sha2::{Digest, Sha256};
 
@@ -28,6 +30,39 @@ impl V23IncidenceTrainingShape {
 pub(crate) struct V23TrainingRow {
     pub(crate) source_ordinal: u64,
     pub(crate) vector: [f32; 96],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V23IncidenceReservoir {
+    pub(crate) rows: Vec<V23TrainingRow>,
+    pub(crate) source_rows: u64,
+    pub(crate) peak_rows: usize,
+}
+
+struct ReservoirEntry {
+    key: u64,
+    ordinal: u64,
+    row: V23TrainingRow,
+}
+
+impl PartialEq for ReservoirEntry {
+    fn eq(&self, other: &Self) -> bool {
+        (self.key, self.ordinal) == (other.key, other.ordinal)
+    }
+}
+
+impl Eq for ReservoirEntry {}
+
+impl PartialOrd for ReservoirEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ReservoirEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.key, self.ordinal).cmp(&(other.key, other.ordinal))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -203,10 +238,23 @@ pub(crate) fn split_score_simd(
     ))
 }
 
-fn validate_rows(rows: &[V23TrainingRow], shape: V23IncidenceTrainingShape) -> Result<()> {
+pub(crate) fn select_reservoir(
+    rows: &[V23TrainingRow],
+    shape: V23IncidenceTrainingShape,
+    seed: u64,
+) -> Result<Vec<V23TrainingRow>> {
+    let mut ordered = rows.to_vec();
+    ordered.sort_unstable_by_key(|row| row.source_ordinal);
+    Ok(select_reservoir_streaming(ordered.into_iter().map(Ok), shape, seed)?.rows)
+}
+
+pub(crate) fn select_reservoir_streaming(
+    rows: impl IntoIterator<Item = Result<V23TrainingRow>>,
+    shape: V23IncidenceTrainingShape,
+    seed: u64,
+) -> Result<V23IncidenceReservoir> {
     if shape.dimensions != 96
         || shape.reservoir_rows == 0
-        || shape.reservoir_rows > rows.len()
         || shape.depth == 0
         || shape.depth > 16
         || shape.lloyd_iterations != 4
@@ -214,47 +262,56 @@ fn validate_rows(rows: &[V23TrainingRow], shape: V23IncidenceTrainingShape) -> R
     {
         return Err(invalid("V23 incidence training shape differs"));
     }
-    let mut ordinals = rows
-        .iter()
-        .map(|row| row.source_ordinal)
-        .collect::<Vec<_>>();
-    ordinals.sort_unstable();
-    if ordinals.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(invalid("V23 incidence source ordinal is duplicated"));
-    }
-    for row in rows {
-        normalized(&row.vector)?;
-    }
-    Ok(())
-}
 
-pub(crate) fn select_reservoir(
-    rows: &[V23TrainingRow],
-    shape: V23IncidenceTrainingShape,
-    seed: u64,
-) -> Result<Vec<V23TrainingRow>> {
-    validate_rows(rows, shape)?;
-    let mut keyed = rows
-        .iter()
-        .map(|row| {
-            (
-                splitmix64(row.source_ordinal ^ seed),
-                row.source_ordinal,
-                row,
-            )
-        })
-        .collect::<Vec<_>>();
-    keyed.sort_unstable_by_key(|(key, ordinal, _)| (*key, *ordinal));
-    let mut selected = keyed
-        .into_iter()
-        .take(shape.reservoir_rows)
-        .map(|(_, _, row)| V23TrainingRow {
+    let mut selected = BinaryHeap::with_capacity(shape.reservoir_rows);
+    let mut previous_ordinal = None;
+    let mut source_rows = 0_u64;
+    let mut peak_rows = 0_usize;
+    for row in rows {
+        let row = row?;
+        source_rows = source_rows
+            .checked_add(1)
+            .ok_or_else(|| invalid("V23 incidence source row count overflows"))?;
+        if previous_ordinal.is_some_and(|previous| row.source_ordinal <= previous) {
+            return Err(invalid("V23 incidence source ordinals are not increasing"));
+        }
+        previous_ordinal = Some(row.source_ordinal);
+        let row = V23TrainingRow {
             source_ordinal: row.source_ordinal,
-            vector: normalized(&row.vector).unwrap(),
-        })
+            vector: normalized(&row.vector)?,
+        };
+        let candidate = ReservoirEntry {
+            key: splitmix64(row.source_ordinal ^ seed),
+            ordinal: row.source_ordinal,
+            row,
+        };
+        if selected.len() < shape.reservoir_rows {
+            selected.push(candidate);
+        } else if selected
+            .peek()
+            .is_some_and(|worst| candidate.cmp(worst).is_lt())
+        {
+            selected.pop();
+            selected.push(candidate);
+        }
+        peak_rows = peak_rows.max(selected.len());
+    }
+    if source_rows
+        < u64::try_from(shape.reservoir_rows)
+            .map_err(|_| invalid("V23 incidence reservoir row count overflows"))?
+    {
+        return Err(invalid("V23 incidence training shape differs"));
+    }
+    let mut rows = selected
+        .into_iter()
+        .map(|entry| entry.row)
         .collect::<Vec<_>>();
-    selected.sort_unstable_by_key(|row| row.source_ordinal);
-    Ok(selected)
+    rows.sort_unstable_by_key(|row| row.source_ordinal);
+    Ok(V23IncidenceReservoir {
+        rows,
+        source_rows,
+        peak_rows,
+    })
 }
 
 fn centroid(rows: &[usize], reservoir: &[V23TrainingRow]) -> Result<[f32; 96]> {
@@ -444,6 +501,19 @@ fn train_incidence_tree_internal(
     batch_rows: usize,
     use_fused: bool,
 ) -> Result<V23IncidenceTree> {
+    let seed = reservoir_seed("77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d")?;
+    let reservoir = select_reservoir(rows, shape, seed)?;
+    train_incidence_tree_from_reservoir(reservoir, shape, seed, threads, batch_rows, use_fused)
+}
+
+fn train_incidence_tree_from_reservoir(
+    reservoir: Vec<V23TrainingRow>,
+    shape: V23IncidenceTrainingShape,
+    seed: u64,
+    threads: usize,
+    batch_rows: usize,
+    use_fused: bool,
+) -> Result<V23IncidenceTree> {
     if threads == 0 || batch_rows == 0 {
         return Err(invalid("V23 incidence execution shape differs"));
     }
@@ -451,8 +521,6 @@ fn train_incidence_tree_internal(
         borsuk_fma::fused_dot_8x12(&[0.0; 96], &[0.0; 96])
             .map_err(|_| invalid("V23 incidence fused SIMD backend is unavailable"))?;
     }
-    let seed = reservoir_seed("77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d")?;
-    let reservoir = select_reservoir(rows, shape, seed)?;
     let mut groups = vec![(0..reservoir.len()).collect::<Vec<_>>()];
     let node_count = (1_usize << shape.depth) - 1;
     let mut nodes = Vec::with_capacity(node_count);
@@ -491,18 +559,27 @@ fn train_incidence_tree_internal(
     })
 }
 
-pub(crate) fn train_incidence_tree(
-    rows: &[V23TrainingRow],
+#[cfg(test)]
+fn train_incidence_tree_streaming_with_shape(
+    rows: impl IntoIterator<Item = Result<V23TrainingRow>>,
+    shape: V23IncidenceTrainingShape,
+    seed: u64,
     threads: usize,
     batch_rows: usize,
 ) -> Result<V23IncidenceTree> {
-    train_incidence_tree_internal(
-        rows,
-        V23IncidenceTrainingShape::PRODUCTION,
-        threads,
-        batch_rows,
-        true,
-    )
+    let reservoir = select_reservoir_streaming(rows, shape, seed)?.rows;
+    train_incidence_tree_from_reservoir(reservoir, shape, seed, threads, batch_rows, false)
+}
+
+pub(crate) fn train_incidence_tree(
+    rows: impl IntoIterator<Item = Result<V23TrainingRow>>,
+    threads: usize,
+    batch_rows: usize,
+) -> Result<V23IncidenceTree> {
+    let shape = V23IncidenceTrainingShape::PRODUCTION;
+    let seed = reservoir_seed("77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d")?;
+    let reservoir = select_reservoir_streaming(rows, shape, seed)?.rows;
+    train_incidence_tree_from_reservoir(reservoir, shape, seed, threads, batch_rows, true)
 }
 
 fn take_zero(node: &V23TreeNode, score: f32, ordinal: u64) -> bool {
@@ -819,7 +896,8 @@ mod tests {
     use super::{
         BeamSelectedLeaves, V23IncidenceTrainingShape, V23TrainingRow, V23TreeNode,
         assign_one_leaf, assign_two_beam_leaves, decode_incidence_tree, encode_incidence_tree,
-        reservoir_seed, split_score_scalar, split_score_simd, train_incidence_tree_with_shape,
+        reservoir_seed, select_reservoir_streaming, split_score_scalar, split_score_simd,
+        train_incidence_tree_streaming_with_shape, train_incidence_tree_with_shape,
         train_incidence_tree_with_shape_fused, training_work,
     };
 
@@ -842,6 +920,76 @@ mod tests {
             depth: 3,
             lloyd_iterations: 4,
         }
+    }
+
+    #[test]
+    fn v23_incidence_tree_streaming_reservoir_is_bounded_and_exact() {
+        let shape = V23IncidenceTrainingShape {
+            dimensions: 96,
+            reservoir_rows: 4,
+            depth: 2,
+            lloyd_iterations: 4,
+        };
+        let rows = (0..8).map(row).collect::<Vec<_>>();
+        let selected = select_reservoir_streaming(rows.iter().cloned().map(Ok), shape, 0).unwrap();
+
+        assert_eq!(selected.source_rows, 8);
+        assert_eq!(selected.peak_rows, 4);
+        assert_eq!(
+            selected
+                .rows
+                .iter()
+                .map(|selected| selected.source_ordinal)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5, 7]
+        );
+    }
+
+    #[test]
+    fn v23_incidence_tree_streaming_reservoir_validates_every_source_row() {
+        let shape = V23IncidenceTrainingShape {
+            dimensions: 96,
+            reservoir_rows: 4,
+            depth: 2,
+            lloyd_iterations: 4,
+        };
+        let mut duplicate = (0..8).map(row).collect::<Vec<_>>();
+        duplicate[7].source_ordinal = duplicate[0].source_ordinal;
+        assert!(select_reservoir_streaming(duplicate.into_iter().map(Ok), shape, 0).is_err());
+
+        let out_of_order = (0..8).rev().map(row).map(Ok);
+        assert!(select_reservoir_streaming(out_of_order, shape, 0).is_err());
+
+        let mut nonfinite = (0..8).map(row).collect::<Vec<_>>();
+        nonfinite[7].vector[0] = f32::NAN;
+        assert!(select_reservoir_streaming(nonfinite.into_iter().map(Ok), shape, 0).is_err());
+
+        let interrupted = (0..8).map(|ordinal| {
+            if ordinal == 7 {
+                Err(super::invalid("fixture stream failed"))
+            } else {
+                Ok(row(ordinal))
+            }
+        });
+        assert!(select_reservoir_streaming(interrupted, shape, 0).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_tree_streaming_training_matches_the_slice_control() {
+        let rows = (0..64).map(row).collect::<Vec<_>>();
+        let expected = train_incidence_tree_with_shape(&rows, shape(), 1, 16).unwrap();
+        let actual = train_incidence_tree_streaming_with_shape(
+            rows.into_iter().map(Ok),
+            shape(),
+            expected.reservoir_seed,
+            1,
+            16,
+        )
+        .unwrap();
+        assert_eq!(
+            encode_incidence_tree(&actual).unwrap(),
+            encode_incidence_tree(&expected).unwrap()
+        );
     }
 
     #[test]
