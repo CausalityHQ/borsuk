@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BorsukError, Result,
     v23_diagnostic::V23DecodedPage,
-    v23_incidence_tree::{V23IncidenceTree, assign_one_leaf, assign_two_beam_leaves},
+    v23_incidence_tree::{
+        V23IncidenceTree, assign_one_leaf, assign_one_leaf_normalized, assign_two_beam_leaves,
+        assign_two_beam_leaves_normalized, normalize_incidence_row,
+    },
 };
 
 const LEAF_COUNT: usize = 65_536;
@@ -42,6 +45,12 @@ pub(crate) struct V23PostingRecord {
     pub(crate) leaf: u16,
     pub(crate) page: u32,
     pub(crate) reserved: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V23PostingArmRecords {
+    pub(crate) one: V23PostingRecord,
+    pub(crate) two: [V23PostingRecord; 2],
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -277,6 +286,59 @@ pub(crate) fn page_posting_records<'a>(
     }
 }
 
+pub(crate) struct PagePostingRecordsBoth<'a> {
+    tree: &'a V23IncidenceTree,
+    page: &'a V23DecodedPage,
+    row: usize,
+}
+
+impl Iterator for PagePostingRecordsBoth<'_> {
+    type Item = Result<V23PostingArmRecords>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.row >= self.page.primary_rows() + self.page.replicated_rows() {
+            return None;
+        }
+        let row = self.row;
+        self.row += 1;
+        Some((|| {
+            let source_ordinal = canonical_source_ordinal(
+                self.page
+                    .record_id(row)
+                    .ok_or_else(|| invalid("V23 posting page record ID is absent"))?,
+            )?;
+            let vector = decode_f16_row(
+                self.page
+                    .code(row)
+                    .ok_or_else(|| invalid("V23 posting page row is absent"))?,
+            )?;
+            let normalized = normalize_incidence_row(&vector)?;
+            let one = assign_one_leaf_normalized(self.tree, &normalized, source_ordinal)?;
+            let two = assign_two_beam_leaves_normalized(self.tree, &normalized, source_ordinal)?.0;
+            let page = self.page.page_ordinal();
+            Ok(V23PostingArmRecords {
+                one: V23PostingRecord {
+                    leaf: one,
+                    page,
+                    reserved: 0,
+                },
+                two: two.map(|leaf| V23PostingRecord {
+                    leaf,
+                    page,
+                    reserved: 0,
+                }),
+            })
+        })())
+    }
+}
+
+pub(crate) fn page_posting_records_both<'a>(
+    tree: &'a V23IncidenceTree,
+    page: &'a V23DecodedPage,
+) -> PagePostingRecordsBoth<'a> {
+    PagePostingRecordsBoth { tree, page, row: 0 }
+}
+
 fn read_record(reader: &mut BufReader<File>) -> Result<Option<V23PostingRecord>> {
     let mut bytes = [0_u8; 8];
     let mut read = 0;
@@ -328,33 +390,56 @@ struct RunEvidence {
     scratch_bytes_peak: u64,
 }
 
-fn write_runs<I>(records: I, scratch: &Path, run_records: usize) -> Result<(RunFiles, RunEvidence)>
-where
-    I: IntoIterator<Item = Result<V23PostingRecord>>,
-{
-    let mut runs = RunFiles::new();
-    let mut records = records.into_iter();
-    let mut source_records = 0_u64;
-    let mut maximum_resident_records = 0_u64;
-    let mut scratch_bytes_peak = 0_u64;
-    let mut run_index = 0_u64;
-    loop {
-        let mut chunk = Vec::with_capacity(run_records);
-        for _ in 0..run_records {
-            let Some(record) = records.next() else {
-                break;
-            };
-            chunk.push(record?);
+struct RunWriter<'a> {
+    scratch: &'a Path,
+    label: &'static str,
+    run_records: usize,
+    runs: RunFiles,
+    chunk: Vec<V23PostingRecord>,
+    evidence: RunEvidence,
+    run_index: u64,
+}
+
+impl<'a> RunWriter<'a> {
+    fn new(scratch: &'a Path, label: &'static str, run_records: usize) -> Self {
+        Self {
+            scratch,
+            label,
+            run_records,
+            runs: RunFiles::new(),
+            chunk: Vec::with_capacity(run_records),
+            evidence: RunEvidence {
+                source_records: 0,
+                maximum_resident_records: 0,
+                scratch_bytes_peak: 0,
+            },
+            run_index: 0,
         }
-        if chunk.is_empty() {
-            break;
+    }
+
+    fn push(&mut self, record: V23PostingRecord) -> Result<()> {
+        self.chunk.push(record);
+        if self.chunk.len() == self.run_records {
+            self.flush()?;
         }
-        source_records = source_records
-            .checked_add(chunk.len() as u64)
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        if self.chunk.is_empty() {
+            return Ok(());
+        }
+        self.evidence.source_records = self
+            .evidence
+            .source_records
+            .checked_add(self.chunk.len() as u64)
             .ok_or_else(|| invalid("V23 posting source record count overflows"))?;
-        maximum_resident_records = maximum_resident_records.max(chunk.len() as u64);
+        self.evidence.maximum_resident_records = self
+            .evidence
+            .maximum_resident_records
+            .max(self.chunk.len() as u64);
         let mut partitions = vec![Vec::new(); V23_POSTING_PARTITIONS];
-        for record in chunk {
+        for record in self.chunk.drain(..) {
             encode_posting_record(record)?;
             partitions[usize::from(record.leaf >> 8)].push(record);
         }
@@ -363,10 +448,13 @@ where
                 continue;
             }
             values.sort_unstable_by_key(|record| (record.leaf, record.page));
-            let path = scratch.join(format!("partition-{partition:03}-run-{run_index:08}.bin"));
+            let path = self.scratch.join(format!(
+                "{}-partition-{partition:03}-run-{:08}.bin",
+                self.label, self.run_index
+            ));
             let mut writer =
                 BufWriter::new(File::create(&path).map_err(|error| io_error(&path, error))?);
-            runs.paths.push(path.clone());
+            self.runs.paths.push(path.clone());
             for value in values {
                 writer
                     .write_all(&encode_posting_record(value)?)
@@ -378,27 +466,38 @@ where
                 .metadata()
                 .map_err(|error| io_error(&path, error))?
                 .len();
-            scratch_bytes_peak = scratch_bytes_peak
+            self.evidence.scratch_bytes_peak = self
+                .evidence
+                .scratch_bytes_peak
                 .checked_add(bytes)
                 .ok_or_else(|| invalid("V23 posting scratch bytes overflow"))?;
-            if scratch_bytes_peak > SCRATCH_CEILING_BYTES {
+            if self.evidence.scratch_bytes_peak > SCRATCH_CEILING_BYTES {
                 return Err(invalid("V23 posting scratch ceiling exceeded"));
             }
-            runs.by_partition[partition].push(path);
+            self.runs.by_partition[partition].push(path);
         }
-        run_index += 1;
+        self.run_index += 1;
+        Ok(())
     }
-    if source_records == 0 {
-        return Err(invalid("V23 posting source is empty"));
+
+    fn finish(mut self) -> Result<(RunFiles, RunEvidence)> {
+        self.flush()?;
+        if self.evidence.source_records == 0 {
+            return Err(invalid("V23 posting source is empty"));
+        }
+        Ok((self.runs, self.evidence))
     }
-    Ok((
-        runs,
-        RunEvidence {
-            source_records,
-            maximum_resident_records,
-            scratch_bytes_peak,
-        },
-    ))
+}
+
+fn write_runs<I>(records: I, scratch: &Path, run_records: usize) -> Result<(RunFiles, RunEvidence)>
+where
+    I: IntoIterator<Item = Result<V23PostingRecord>>,
+{
+    let mut writer = RunWriter::new(scratch, "single", run_records);
+    for record in records {
+        writer.push(record?)?;
+    }
+    writer.finish()
 }
 
 fn empty_posting_leaf() -> V23PostingLeaf {
@@ -527,16 +626,11 @@ fn merge_partition(
     Ok(maximum_merge_entries)
 }
 
-pub(crate) fn build_posting_plane<I>(
-    records: I,
-    arm: PostingAssignmentArm,
+fn validate_posting_build_boundary(
     scratch: &Path,
     run_records: usize,
     max_pages_per_leaf: usize,
-) -> Result<V23PostingPlane>
-where
-    I: IntoIterator<Item = Result<V23PostingRecord>>,
-{
+) -> Result<()> {
     if run_records == 0
         || run_records > MAX_RUN_RECORDS
         || !(1..=V23_POSTING_MAX_PAGES).contains(&max_pages_per_leaf)
@@ -549,30 +643,126 @@ where
     {
         return Err(invalid("V23 posting build boundary differs"));
     }
+    Ok(())
+}
+
+fn merge_posting_runs(
+    runs: &RunFiles,
+    evidence: RunEvidence,
+    arm: PostingAssignmentArm,
+    max_pages_per_leaf: usize,
+) -> Result<V23PostingPlane> {
+    let mut leaves = vec![empty_posting_leaf(); LEAF_COUNT];
+    let mut maximum_merge_entries = 0_usize;
+    for paths in &runs.by_partition {
+        maximum_merge_entries =
+            maximum_merge_entries.max(merge_partition(paths, max_pages_per_leaf, &mut leaves)?);
+    }
+    Ok(V23PostingPlane {
+        arm,
+        max_pages_per_leaf: max_pages_per_leaf as u16,
+        partition_count: V23_POSTING_PARTITIONS as u16,
+        source_records: evidence.source_records,
+        maximum_resident_records: evidence.maximum_resident_records,
+        maximum_merge_entries: u32::try_from(maximum_merge_entries)
+            .map_err(|_| invalid("V23 posting merge entries exceed u32"))?,
+        scratch_bytes_peak: evidence.scratch_bytes_peak,
+        leaves,
+    })
+}
+
+pub(crate) fn build_posting_plane<I>(
+    records: I,
+    arm: PostingAssignmentArm,
+    scratch: &Path,
+    run_records: usize,
+    max_pages_per_leaf: usize,
+) -> Result<V23PostingPlane>
+where
+    I: IntoIterator<Item = Result<V23PostingRecord>>,
+{
+    validate_posting_build_boundary(scratch, run_records, max_pages_per_leaf)?;
     let (mut runs, evidence) = write_runs(records, scratch, run_records)?;
-    let result = (|| {
-        let mut leaves = vec![empty_posting_leaf(); LEAF_COUNT];
-        let mut maximum_merge_entries = 0_usize;
-        for paths in &runs.by_partition {
-            maximum_merge_entries =
-                maximum_merge_entries.max(merge_partition(paths, max_pages_per_leaf, &mut leaves)?);
-        }
-        Ok(V23PostingPlane {
-            arm,
-            max_pages_per_leaf: max_pages_per_leaf as u16,
-            partition_count: V23_POSTING_PARTITIONS as u16,
-            source_records: evidence.source_records,
-            maximum_resident_records: evidence.maximum_resident_records,
-            maximum_merge_entries: u32::try_from(maximum_merge_entries)
-                .map_err(|_| invalid("V23 posting merge entries exceed u32"))?,
-            scratch_bytes_peak: evidence.scratch_bytes_peak,
-            leaves,
-        })
-    })();
+    let result = merge_posting_runs(&runs, evidence, arm, max_pages_per_leaf);
     let cleanup = runs.cleanup();
     match (result, cleanup) {
         (Ok(plane), Ok(())) => Ok(plane),
         (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+    }
+}
+
+pub(crate) fn build_both_posting_planes<I>(
+    records: I,
+    scratch: &Path,
+    run_records: usize,
+    max_pages_per_leaf: usize,
+) -> Result<(V23PostingPlane, V23PostingPlane)>
+where
+    I: IntoIterator<Item = Result<V23PostingArmRecords>>,
+{
+    validate_posting_build_boundary(scratch, run_records, max_pages_per_leaf)?;
+    let per_arm_run_records = run_records / 2;
+    if per_arm_run_records == 0 {
+        return Err(invalid("V23 posting combined run size differs"));
+    }
+    let mut one_writer = RunWriter::new(scratch, "one", per_arm_run_records);
+    let mut two_writer = RunWriter::new(scratch, "two", per_arm_run_records);
+    for records in records {
+        let records = records?;
+        one_writer.push(records.one)?;
+        for record in records.two {
+            two_writer.push(record)?;
+        }
+        let scratch_bytes = one_writer
+            .evidence
+            .scratch_bytes_peak
+            .checked_add(two_writer.evidence.scratch_bytes_peak)
+            .ok_or_else(|| invalid("V23 posting combined scratch bytes overflow"))?;
+        if scratch_bytes > SCRATCH_CEILING_BYTES {
+            return Err(invalid("V23 posting combined scratch ceiling exceeded"));
+        }
+    }
+    let (mut one_runs, one_evidence) = one_writer.finish()?;
+    let (mut two_runs, two_evidence) = two_writer.finish()?;
+    if two_evidence.source_records
+        != one_evidence
+            .source_records
+            .checked_mul(2)
+            .ok_or_else(|| invalid("V23 posting combined source count overflows"))?
+        || one_evidence
+            .scratch_bytes_peak
+            .checked_add(two_evidence.scratch_bytes_peak)
+            .ok_or_else(|| invalid("V23 posting combined scratch bytes overflow"))?
+            > SCRATCH_CEILING_BYTES
+        || one_evidence
+            .maximum_resident_records
+            .checked_add(two_evidence.maximum_resident_records)
+            .ok_or_else(|| invalid("V23 posting combined resident records overflow"))?
+            > run_records as u64
+    {
+        return Err(invalid("V23 posting combined evidence differs"));
+    }
+    let result = (|| {
+        Ok((
+            merge_posting_runs(
+                &one_runs,
+                one_evidence,
+                PostingAssignmentArm::OneLeaf,
+                max_pages_per_leaf,
+            )?,
+            merge_posting_runs(
+                &two_runs,
+                two_evidence,
+                PostingAssignmentArm::TwoBeamLeaves,
+                max_pages_per_leaf,
+            )?,
+        ))
+    })();
+    let one_cleanup = one_runs.cleanup();
+    let two_cleanup = two_runs.cleanup();
+    match (result, one_cleanup, two_cleanup) {
+        (Ok(planes), Ok(()), Ok(())) => Ok(planes),
+        (Err(error), _, _) | (Ok(_), Err(error), _) | (Ok(_), Ok(()), Err(error)) => Err(error),
     }
 }
 
@@ -932,7 +1122,7 @@ pub(crate) fn decode_posting_plane(bytes: &[u8]) -> Result<V23PostingPlane> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{cell::Cell, collections::BTreeMap};
 
     use bytes::Bytes;
     use half::f16;
@@ -950,10 +1140,10 @@ mod tests {
     };
 
     use super::{
-        PostingAssignmentArm, V23PostingRecord, build_posting_plane, decode_posting_plane,
-        decode_posting_record, encode_posting_plane, encode_posting_record, normalized_mass,
-        page_posting_records, posting_prefix_eligibility, validate_posting_prefix,
-        validate_production_posting_plane,
+        PostingAssignmentArm, V23PostingArmRecords, V23PostingRecord, build_both_posting_planes,
+        build_posting_plane, decode_posting_plane, decode_posting_record, encode_posting_plane,
+        encode_posting_record, normalized_mass, page_posting_records, page_posting_records_both,
+        posting_prefix_eligibility, validate_posting_prefix, validate_production_posting_plane,
     };
 
     fn contributions() -> Vec<V23PostingRecord> {
@@ -1097,6 +1287,54 @@ mod tests {
                 .unwrap()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn v23_incidence_postings_both_arms_share_one_page_stream() {
+        let tree = incidence_tree();
+        let (_, decoded) = decoded_page(["1", "2", "3"]);
+        let bundles = page_posting_records_both(&tree, &decoded)
+            .collect::<Result<Vec<V23PostingArmRecords>, _>>()
+            .unwrap();
+        assert_eq!(bundles.len(), 3);
+        assert_eq!(
+            bundles
+                .iter()
+                .map(|records| records.one)
+                .collect::<Vec<_>>(),
+            page_posting_records(&tree, &decoded, PostingAssignmentArm::OneLeaf)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        );
+        assert_eq!(
+            bundles
+                .iter()
+                .flat_map(|records| records.two)
+                .collect::<Vec<_>>(),
+            page_posting_records(&tree, &decoded, PostingAssignmentArm::TwoBeamLeaves)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        );
+
+        let consumed = Cell::new(0_usize);
+        let records = bundles.into_iter().map(|records| {
+            consumed.set(consumed.get() + 1);
+            Ok(records)
+        });
+        let temporary = tempdir().unwrap();
+        let (one, two) = build_both_posting_planes(records, temporary.path(), 2, 32).unwrap();
+
+        assert_eq!(consumed.get(), 3);
+        assert_eq!(one.arm, PostingAssignmentArm::OneLeaf);
+        assert_eq!(two.arm, PostingAssignmentArm::TwoBeamLeaves);
+        assert_eq!(one.source_records, 3);
+        assert_eq!(two.source_records, 6);
+        assert!(one.maximum_resident_records <= 2);
+        assert!(two.maximum_resident_records <= 2);
+        assert!(one.maximum_resident_records + two.maximum_resident_records <= 2);
+        assert!(one.leaves.iter().all(|leaf| leaf.pages.len() <= 32));
+        assert!(two.leaves.iter().all(|leaf| leaf.pages.len() <= 32));
+        assert!(temporary.path().read_dir().unwrap().next().is_none());
     }
 
     #[test]

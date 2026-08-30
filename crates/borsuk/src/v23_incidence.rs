@@ -34,9 +34,9 @@ use crate::{
         recompute_v23_incidence_layout_quality, score_incidence_query_native,
     },
     v23_incidence_postings::{
-        PostingAssignmentArm, V23_POSTING_MAX_PAGES, V23_POSTING_RUN_BYTES, V23PostingRecord,
-        build_posting_plane, decode_posting_plane, encode_posting_plane, page_posting_records,
-        validate_production_posting_plane,
+        PostingAssignmentArm, V23_POSTING_MAX_PAGES, V23_POSTING_RUN_BYTES, V23PostingArmRecords,
+        V23PostingRecord, build_both_posting_planes, build_posting_plane, decode_posting_plane,
+        encode_posting_plane, page_posting_records_both, validate_production_posting_plane,
     },
     v23_incidence_tree::{
         V23TrainingRow, V23TreeNode, decode_incidence_tree, encode_incidence_tree,
@@ -494,14 +494,13 @@ fn decode_v23_incidence_page(
 struct V23IncidencePagePostingStream<'a> {
     tree: &'a crate::v23_incidence_tree::V23IncidenceTree,
     pages: std::vec::IntoIter<V23IncidenceLocalRolePath>,
-    arm: PostingAssignmentArm,
     ordinal: usize,
-    pending: std::vec::IntoIter<V23PostingRecord>,
+    pending: std::vec::IntoIter<V23PostingArmRecords>,
     failed: bool,
 }
 
 impl Iterator for V23IncidencePagePostingStream<'_> {
-    type Item = Result<V23PostingRecord>;
+    type Item = Result<V23PostingArmRecords>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -521,7 +520,7 @@ impl Iterator for V23IncidencePagePostingStream<'_> {
                 let decoded =
                     decode_v23_incidence_page(&page.identity, Bytes::from(bytes), self.ordinal)?;
                 self.ordinal += 1;
-                page_posting_records(self.tree, &decoded, self.arm).collect::<Result<Vec<_>>>()
+                page_posting_records_both(self.tree, &decoded).collect::<Result<Vec<_>>>()
             })();
             match result {
                 Ok(records) => self.pending = records.into_iter(),
@@ -537,12 +536,10 @@ impl Iterator for V23IncidencePagePostingStream<'_> {
 fn v23_incidence_page_posting_stream(
     tree: &crate::v23_incidence_tree::V23IncidenceTree,
     pages: Vec<V23IncidenceLocalRolePath>,
-    arm: PostingAssignmentArm,
 ) -> V23IncidencePagePostingStream<'_> {
     V23IncidencePagePostingStream {
         tree,
         pages: pages.into_iter(),
-        arm,
         ordinal: 0,
         pending: Vec::new().into_iter(),
         failed: false,
@@ -573,13 +570,8 @@ fn measure_v23_incidence_posting_pages_preflight(
                     "V23 incidence posting preflight row count overflows".to_string(),
                 )
             })?;
-        for arm in [
-            PostingAssignmentArm::OneLeaf,
-            PostingAssignmentArm::TwoBeamLeaves,
-        ] {
-            for record in page_posting_records(&tree, &decoded, arm) {
-                std::hint::black_box(record?);
-            }
+        for records in page_posting_records_both(&tree, &decoded) {
+            std::hint::black_box(records?);
         }
     }
     let scores_per_row = u64::try_from(tree.shape.depth)
@@ -2728,22 +2720,14 @@ fn run_v23_incidence_posting_build(
     let run_records = usize::try_from(V23_POSTING_RUN_BYTES / 8).map_err(|_| {
         BorsukError::InvalidStorage("V23 incidence posting run size overflows".to_string())
     })?;
-    let one = build_posting_plane(
-        v23_incidence_page_posting_stream(&tree, pages.clone(), PostingAssignmentArm::OneLeaf),
-        PostingAssignmentArm::OneLeaf,
+    let (one, two) = build_both_posting_planes(
+        v23_incidence_page_posting_stream(&tree, pages),
         &request.scratch_path,
         run_records,
         V23_POSTING_MAX_PAGES,
     )?;
     validate_production_posting_plane(&one)?;
     let one_bytes = encode_posting_plane(&one)?;
-    let two = build_posting_plane(
-        v23_incidence_page_posting_stream(&tree, pages, PostingAssignmentArm::TwoBeamLeaves),
-        PostingAssignmentArm::TwoBeamLeaves,
-        &request.scratch_path,
-        run_records,
-        V23_POSTING_MAX_PAGES,
-    )?;
     validate_production_posting_plane(&two)?;
     let two_bytes = encode_posting_plane(&two)?;
 
@@ -5749,7 +5733,7 @@ mod tests {
     }
 
     #[test]
-    fn v23_incidence_local_posting_file_stream_is_page_bounded_and_ordered() {
+    fn v23_incidence_local_posting_file_stream_decodes_once_for_both_arms() {
         let directory = tempfile::tempdir().unwrap();
         let tree = decode_incidence_tree(&reduced_preflight_tree_bytes()).unwrap();
         let pages = (0..4)
@@ -5760,15 +5744,23 @@ mod tests {
                 V23IncidenceLocalRolePath { identity, path }
             })
             .collect::<Vec<_>>();
-        let records =
-            v23_incidence_page_posting_stream(&tree, pages, PostingAssignmentArm::OneLeaf)
-                .collect::<crate::Result<Vec<_>>>()
-                .unwrap();
+        let records = v23_incidence_page_posting_stream(&tree, pages)
+            .collect::<crate::Result<Vec<_>>>()
+            .unwrap();
         assert_eq!(records.len(), 4);
         assert_eq!(
-            records.iter().map(|record| record.page).collect::<Vec<_>>(),
+            records
+                .iter()
+                .map(|records| records.one.page)
+                .collect::<Vec<_>>(),
             vec![0, 1, 2, 3]
         );
+        assert!(records.iter().all(|records| {
+            records.two[0].page == records.one.page
+                && records.two[1].page == records.one.page
+                && records.one.reserved == 0
+                && records.two.iter().all(|record| record.reserved == 0)
+        }));
     }
 
     #[test]

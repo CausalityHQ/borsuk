@@ -336,6 +336,12 @@ fn normalized(vector: &[f32; 96]) -> Result<[f32; 96]> {
     Ok(vector.map(|value| value * inverse))
 }
 
+pub(crate) struct V23NormalizedRow([f32; 96]);
+
+pub(crate) fn normalize_incidence_row(vector: &[f32; 96]) -> Result<V23NormalizedRow> {
+    normalized(vector).map(V23NormalizedRow)
+}
+
 fn exact_dot(left: &[f32; 96], right: &[f32; 96]) -> f32 {
     let mut lanes = [0.0_f32; 8];
     for (lane, accumulator) in lanes.iter_mut().enumerate() {
@@ -849,12 +855,20 @@ pub(crate) fn assign_one_leaf(
     vector: &[f32; 96],
     source_ordinal: u64,
 ) -> Result<u16> {
-    let row = normalized(vector)?;
+    let row = normalize_incidence_row(vector)?;
+    assign_one_leaf_normalized(tree, &row, source_ordinal)
+}
+
+pub(crate) fn assign_one_leaf_normalized(
+    tree: &V23IncidenceTree,
+    row: &V23NormalizedRow,
+    source_ordinal: u64,
+) -> Result<u16> {
     let node_count = tree.nodes.len();
     let mut index = 0_usize;
     while index < node_count {
         let node = &tree.nodes[index];
-        let score = split_score_simd(node, &row)?.0;
+        let score = split_score_simd(node, &row.0)?.0;
         index = if take_zero(node, score, source_ordinal) {
             node.child_zero_index as usize
         } else {
@@ -871,9 +885,17 @@ pub(crate) fn assign_one_leaf(
 pub(crate) fn assign_two_beam_leaves(
     tree: &V23IncidenceTree,
     vector: &[f32; 96],
+    source_ordinal: u64,
+) -> Result<BeamSelectedLeaves> {
+    let row = normalize_incidence_row(vector)?;
+    assign_two_beam_leaves_normalized(tree, &row, source_ordinal)
+}
+
+pub(crate) fn assign_two_beam_leaves_normalized(
+    tree: &V23IncidenceTree,
+    row: &V23NormalizedRow,
     _source_ordinal: u64,
 ) -> Result<BeamSelectedLeaves> {
-    let row = normalized(vector)?;
     let node_count = tree.nodes.len();
     let mut candidates = vec![0_usize];
     for _ in 0..tree.shape.depth {
@@ -895,7 +917,7 @@ pub(crate) fn assign_two_beam_leaves(
                     node.child_one_inverse_norm,
                 ),
             ] {
-                let dot = borsuk_fma::fused_dot_8x12(&row, &centroid)
+                let dot = borsuk_fma::fused_dot_8x12(&row.0, &centroid)
                     .map_err(|_| invalid("V23 incidence fused SIMD backend is unavailable"))?
                     .0;
                 next.push((1.0 - dot * inverse_norm, child));
@@ -1150,8 +1172,9 @@ mod tests {
 
     use super::{
         BeamSelectedLeaves, V23IncidenceTrainingShape, V23ReservoirRow, V23TrainingRow,
-        V23TreeNode, assign_one_leaf, assign_two_beam_leaves, decode_incidence_tree,
-        encode_incidence_tree, reservoir_seed, select_reservoir_streaming, split_score_scalar,
+        V23TreeNode, assign_one_leaf, assign_one_leaf_normalized, assign_two_beam_leaves,
+        assign_two_beam_leaves_normalized, decode_incidence_tree, encode_incidence_tree,
+        normalize_incidence_row, reservoir_seed, select_reservoir_streaming, split_score_scalar,
         split_score_simd, train_incidence_tree_streaming_with_shape,
         train_incidence_tree_with_shape, train_incidence_tree_with_shape_and_execution,
         train_incidence_tree_with_shape_fused, training_work,
@@ -1350,6 +1373,25 @@ mod tests {
             encode_incidence_tree(&control).unwrap()
         );
         assert!(train_incidence_tree_with_shape_and_execution(&rows, shape(), 65, 7).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_assignment_shared_normalization_matches_public_controls() {
+        let rows = (0..64).map(row).collect::<Vec<_>>();
+        let tree = train_incidence_tree_with_shape(&rows, shape(), 2, 11).unwrap();
+        let input = &rows[9];
+        let normalized = normalize_incidence_row(&input.vector).unwrap();
+
+        assert_eq!(
+            assign_one_leaf_normalized(&tree, &normalized, input.source_ordinal).unwrap(),
+            assign_one_leaf(&tree, &input.vector, input.source_ordinal).unwrap()
+        );
+        assert_eq!(
+            assign_two_beam_leaves_normalized(&tree, &normalized, input.source_ordinal).unwrap(),
+            assign_two_beam_leaves(&tree, &input.vector, input.source_ordinal).unwrap()
+        );
+
+        assert!(normalize_incidence_row(&[0.0; 96]).is_err());
     }
 
     fn reference_dot(left: &[f32; 96], right: &[f32; 96]) -> f32 {
