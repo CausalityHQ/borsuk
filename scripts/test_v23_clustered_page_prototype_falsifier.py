@@ -1888,7 +1888,10 @@ class _FakeS3:
 def _stream_fixture(page_count: int = 3) -> tuple[subject.Authority, _FakeS3]:
     pages_and_bodies = tuple(_ordinal_page(ordinal) for ordinal in range(page_count))
     pages = tuple(reference for reference, _ in pages_and_bodies)
-    payloads = {f"attempt/{reference.path}": body for reference, body in pages_and_bodies}
+    payloads = {
+        f"attempt/pages/{reference.path}": body
+        for reference, body in pages_and_bodies
+    }
     shape = subject.ScientificShape(
         page_count=page_count,
         query_count=2,
@@ -1950,16 +1953,42 @@ def _safe_pressure(count: int = 8) -> _PressureProbe:
 
 
 class StreamingAndResultTests(unittest.TestCase):
+    def test_run_falsifier_fetches_roster_path_beneath_registered_page_namespace(
+        self,
+    ) -> None:
+        """Catch composing roster paths directly beneath the attempt prefix."""
+
+        authority, client = _stream_fixture(page_count=1)
+        page = authority.pages[0]
+        bucket, attempt_prefix = subject._attempt_location(
+            authority.registered.attempt_prefix
+        )
+        page_namespace_prefix = f"{attempt_prefix}pages/"
+        expected_key = f"{page_namespace_prefix}{page.path}"
+
+        result = subject.run_falsifier(
+            authority,
+            client,
+            _safe_pressure(),
+            True,
+        )
+
+        self.assertEqual(bucket, "fixture-bucket")
+        self.assertEqual(page_namespace_prefix, "attempt/pages/")
+        self.assertEqual(expected_key, f"attempt/pages/pages/{page.checksum}")
+        self.assertEqual(client.requested, [expected_key])
+        self.assertEqual(result["authenticated_pages"], 1)
+
     def test_ordered_fetch_never_retains_more_than_four_bodies(self) -> None:
         authority, client = _stream_fixture(page_count=9)
         client.delays = {
-            f"attempt/{page.path}": (9 - page.page_ordinal) * 0.0001
+            f"attempt/pages/{page.path}": (9 - page.page_ordinal) * 0.0001
             for page in authority.pages
         }
 
         observed = list(
             subject.ordered_page_bodies(
-                client, "fixture-bucket", "attempt/", authority.pages, 4
+                client, "fixture-bucket", "attempt/pages/", authority.pages, 4
             )
         )
 
@@ -1969,14 +1998,18 @@ class StreamingAndResultTests(unittest.TestCase):
 
     def test_stream_rejects_short_and_overlong_bodies(self) -> None:
         authority, client = _stream_fixture(page_count=1)
-        key = f"attempt/{authority.pages[0].path}"
+        key = f"attempt/pages/{authority.pages[0].path}"
         for name, payload in (("short", client.payloads[key][:-1]), ("long", client.payloads[key] + b"x")):
             mutant = _FakeS3({key: payload})
             with self.subTest(name=name):
                 with self.assertRaises(ValueError):
                     list(
                         subject.ordered_page_bodies(
-                            mutant, "fixture-bucket", "attempt/", authority.pages, 1
+                            mutant,
+                            "fixture-bucket",
+                            "attempt/pages/",
+                            authority.pages,
+                            1,
                         )
                     )
                 self.assertEqual(mutant.open_bodies, 0)
@@ -2022,12 +2055,16 @@ class StreamingAndResultTests(unittest.TestCase):
 
     def test_stream_propagates_get_failure_and_closes_obtained_bodies(self) -> None:
         authority, client = _stream_fixture(page_count=2)
-        del client.payloads[f"attempt/{authority.pages[1].path}"]
+        del client.payloads[f"attempt/pages/{authority.pages[1].path}"]
 
         with self.assertRaises(KeyError):
             list(
                 subject.ordered_page_bodies(
-                    client, "fixture-bucket", "attempt/", authority.pages, 2
+                    client,
+                    "fixture-bucket",
+                    "attempt/pages/",
+                    authority.pages,
+                    2,
                 )
             )
 

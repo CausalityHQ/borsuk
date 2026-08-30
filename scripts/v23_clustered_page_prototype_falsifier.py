@@ -1952,7 +1952,8 @@ def run_falsifier(
     ):
         raise ValueError("falsifier scientific shape differs")
 
-    bucket, prefix = _attempt_location(authority.registered.attempt_prefix)
+    bucket, attempt_prefix = _attempt_location(authority.registered.attempt_prefix)
+    page_namespace_prefix = f"{attempt_prefix}pages/"
     initial = _validated_pressure(pressure_probe())
     initial_reason = _pressure_stop_reason(
         initial,
@@ -1978,7 +1979,7 @@ def run_falsifier(
     last_checksum: str | None = None
 
     for reference, body in ordered_page_bodies(
-        client, bucket, prefix, authority.pages, max_inflight=4
+        client, bucket, page_namespace_prefix, authority.pages, max_inflight=4
     ):
         vectors = decode_bvp2_page(reference, body)
         means = spherical_kmeans(vectors, reference.checksum, clusters=32, iterations=8)
