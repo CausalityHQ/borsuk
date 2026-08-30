@@ -88,6 +88,89 @@ class MonitorLimits:
     wall_seconds: int = 7200
 
 
+class AuthenticatedProgressMonitor:
+    """Validate one phase's canonical completed-work progress chain."""
+
+    def __init__(self, phase: str) -> None:
+        if phase not in PHASES:
+            raise ValueError("progress phase differs")
+        self._phase = phase
+        self._sequence: int | None = None
+        self._completed_units: int | None = None
+        self._total_units: int | None = None
+        self._digest: str | None = None
+
+    def observe(self, raw: bytes) -> tuple[int, int, str]:
+        """Accept exactly the next canonical progress record."""
+
+        try:
+            if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
+                raise ValueError("progress canonical bytes differ")
+            value = json.loads(raw)
+        except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError("progress encoding differs") from error
+        expected_keys = {
+            "completed_units",
+            "last_object_digest",
+            "phase",
+            "previous_progress_sha256",
+            "sequence",
+            "total_units",
+        }
+        if type(value) is not dict or set(value) != expected_keys:  # noqa: E721
+            raise ValueError("progress schema differs")
+        if (
+            type(value["phase"]) is not str
+            or type(value["sequence"]) is not int
+            or type(value["completed_units"]) is not int
+            or type(value["total_units"]) is not int
+            or type(value["last_object_digest"]) is not str
+            or (
+                value["previous_progress_sha256"] is not None
+                and type(value["previous_progress_sha256"]) is not str
+            )
+        ):
+            raise ValueError("progress concrete type differs")
+        canonical = (
+            json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+            + b"\n"
+        )
+        if raw != canonical:
+            raise ValueError("progress canonical bytes differ")
+        sequence = value["sequence"]
+        completed_units = value["completed_units"]
+        total_units = value["total_units"]
+        if (
+            value["phase"] != self._phase
+            or sequence < 0
+            or completed_units < 0
+            or total_units <= 0
+            or completed_units > total_units
+            or not _valid_sha256(value["last_object_digest"])
+        ):
+            raise ValueError("progress authority differs")
+        if self._sequence is None:
+            if (
+                sequence != 0
+                or completed_units != 0
+                or value["previous_progress_sha256"] is not None
+            ):
+                raise ValueError("progress chain root differs")
+            self._total_units = total_units
+        elif (
+            sequence != self._sequence + 1
+            or completed_units <= self._completed_units
+            or total_units != self._total_units
+            or value["previous_progress_sha256"] != self._digest
+        ):
+            raise ValueError("progress chain differs")
+        digest = hashlib.sha256(raw).hexdigest()
+        self._sequence = sequence
+        self._completed_units = completed_units
+        self._digest = digest
+        return sequence, completed_units, digest
+
+
 def _valid_sha256(value: str | None) -> bool:
     return (
         isinstance(value, str)
@@ -948,29 +1031,45 @@ def monitor_process_group(
     *,
     sample_interval_seconds: float = 5.0,
     progress_path: pathlib.Path | None = None,
+    progress_phase: str | None = None,
     term_grace_seconds: float = 15.0,
 ) -> tuple[int, str | None]:
     """Monitor and stop one original process group without restart."""
 
     if pid <= 1:
         raise ValueError("invalid process group leader")
+    if (progress_path is None) != (progress_phase is None):
+        raise ValueError("progress path and phase must be supplied together")
     started = time.monotonic()
     initial_swap = _swap_used_bytes()
     sustained = 0
     last_progress = started
-    progress_token: tuple[int, str] | None = None
+    progress_monitor = (
+        None
+        if progress_phase is None
+        else AuthenticatedProgressMonitor(progress_phase)
+    )
+    progress_file_digest: str | None = None
     while True:
         completed, status = os.waitpid(pid, os.WNOHANG)
         if completed == pid:
             return os.waitstatus_to_exitcode(status), None
         psi = _memory_psi_full_avg10()
         sustained = sustained + 1 if psi >= limits.psi_sustained else 0
-        observed_progress = _progress_token(progress_path)
-        if observed_progress is not None and (
-            progress_token is None or observed_progress[0] > progress_token[0]
-        ):
-            progress_token = observed_progress
-            last_progress = time.monotonic()
+        if progress_path is not None and progress_path.exists():
+            try:
+                if progress_path.is_symlink() or not progress_path.is_file():
+                    raise ValueError("progress file authority differs")
+                raw_progress = progress_path.read_bytes()
+                observed_digest = hashlib.sha256(raw_progress).hexdigest()
+                if observed_digest != progress_file_digest:
+                    assert progress_monitor is not None
+                    progress_monitor.observe(raw_progress)
+                    progress_file_digest = observed_digest
+                    last_progress = time.monotonic()
+            except (OSError, ValueError):
+                status = _terminate_process_group(pid, term_grace_seconds)
+                return os.waitstatus_to_exitcode(status), "progress-authority"
         stop_reason = classify_sample(
             limits=limits,
             rss_bytes=_process_group_rss_bytes(pid),
@@ -1007,32 +1106,6 @@ def _terminate_process_group(pid: int, grace_seconds: float) -> int:
         pass
     _, status = os.waitpid(pid, 0)
     return status
-
-
-def _progress_token(path: pathlib.Path | None) -> tuple[int, str] | None:
-    if path is None or not path.is_file() or path.is_symlink():
-        return None
-    try:
-        raw = path.read_bytes()
-        value = json.loads(raw)
-    except (OSError, json.JSONDecodeError):
-        return None
-    if (
-        not raw.endswith(b"\n")
-        or raw.count(b"\n") != 1
-        or type(value) is not dict
-        or set(value) != {"authenticated_objects", "last_digest"}
-        or type(value["authenticated_objects"]) is not int
-        or value["authenticated_objects"] < 0
-        or not _valid_sha256(value["last_digest"])
-    ):
-        return None
-    canonical = (
-        json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
-    )
-    if raw != canonical:
-        return None
-    return value["authenticated_objects"], value["last_digest"]
 
 
 def _process_group_rss_bytes(pgid: int) -> int:
@@ -1087,6 +1160,7 @@ def run_phase(policy: SandboxPolicy, limits: MonitorLimits | None = None) -> int
                 process.pid,
                 limits or MonitorLimits(),
                 progress_path=policy.output / "progress.json",
+                progress_phase=policy.phase,
             )
             process.returncode = status
         finally:

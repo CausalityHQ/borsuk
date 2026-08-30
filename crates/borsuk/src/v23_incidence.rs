@@ -1389,6 +1389,16 @@ pub(crate) struct V23IncidenceReceipt {
     pub(crate) stop: Option<V23IncidenceStopClass>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct V23IncidenceProgress {
+    completed_units: u64,
+    last_object_digest: String,
+    phase: V23IncidencePhase,
+    previous_progress_sha256: Option<String>,
+    sequence: u64,
+    total_units: u64,
+}
+
 fn valid_lower_hex(value: &str, length: usize) -> bool {
     value.len() == length
         && value
@@ -3596,6 +3606,131 @@ pub(crate) fn canonical_v23_incidence_manifest_bytes(
     Ok(bytes)
 }
 
+fn canonical_v23_incidence_progress_bytes(
+    progress: &V23IncidenceProgress,
+    previous_bytes: Option<&[u8]>,
+) -> Result<Vec<u8>> {
+    if progress.total_units == 0
+        || progress.completed_units > progress.total_units
+        || !valid_lower_hex(&progress.last_object_digest, 64)
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence progress authority differs".to_string(),
+        ));
+    }
+    match (progress.sequence, previous_bytes) {
+        (0, None)
+            if progress.completed_units == 0 && progress.previous_progress_sha256.is_none() => {}
+        (0, _) => {
+            return Err(BorsukError::InvalidStorage(
+                "V23 incidence progress root differs".to_string(),
+            ));
+        }
+        (_, Some(previous_bytes)) => {
+            let previous: V23IncidenceProgress =
+                serde_json::from_slice(previous_bytes).map_err(|error| {
+                    BorsukError::InvalidStorage(format!(
+                        "V23 incidence prior progress JSON differs: {error}"
+                    ))
+                })?;
+            let previous_value = serde_json::to_value(&previous).map_err(|error| {
+                BorsukError::InvalidStorage(format!(
+                    "V23 incidence prior progress serialization failed: {error}"
+                ))
+            })?;
+            let mut previous_canonical = serde_json::to_vec(&canonical_json_value(previous_value))
+                .map_err(|error| {
+                    BorsukError::InvalidStorage(format!(
+                        "V23 incidence prior progress canonical JSON failed: {error}"
+                    ))
+                })?;
+            previous_canonical.push(b'\n');
+            if previous_canonical != previous_bytes
+                || previous.phase != progress.phase
+                || previous.total_units != progress.total_units
+                || progress.sequence != previous.sequence + 1
+                || progress.completed_units <= previous.completed_units
+                || progress.previous_progress_sha256.as_deref()
+                    != Some(format!("{:x}", Sha256::digest(previous_bytes)).as_str())
+            {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 incidence progress chain differs".to_string(),
+                ));
+            }
+        }
+        (_, None) => {
+            return Err(BorsukError::InvalidStorage(
+                "V23 incidence prior progress is absent".to_string(),
+            ));
+        }
+    }
+    let value = serde_json::to_value(progress).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 incidence progress serialization failed: {error}"
+        ))
+    })?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value)).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 incidence progress canonical JSON failed: {error}"
+        ))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn write_v23_incidence_progress(
+    path: &Path,
+    progress: &V23IncidenceProgress,
+    previous_bytes: Option<&[u8]>,
+) -> Result<String> {
+    let parent = path.parent().ok_or_else(|| {
+        BorsukError::InvalidStorage("V23 incidence progress parent is absent".to_string())
+    })?;
+    if !path.is_absolute()
+        || path.file_name().and_then(|name| name.to_str()) != Some("progress.json")
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence progress path differs".to_string(),
+        ));
+    }
+    let bytes = canonical_v23_incidence_progress_bytes(progress, previous_bytes)?;
+    let temporary = path.with_extension("json.tmp");
+    let result = (|| -> Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|source| BorsukError::Io {
+                path: temporary.clone(),
+                source,
+            })?;
+        file.write_all(&bytes).map_err(|source| BorsukError::Io {
+            path: temporary.clone(),
+            source,
+        })?;
+        file.sync_all().map_err(|source| BorsukError::Io {
+            path: temporary.clone(),
+            source,
+        })?;
+        fs::rename(&temporary, path).map_err(|source| BorsukError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|source| BorsukError::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        Ok(())
+    })();
+    if result.is_err() && temporary.exists() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result?;
+    Ok(format!("{:x}", Sha256::digest(&bytes)))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeSet, fs, io::Write, path::Path, process::Command, sync::Arc};
@@ -3635,9 +3770,9 @@ mod tests {
         V23IncidenceReceiptRunMode, V23IncidenceRunMode, authenticate_v23_incidence_local_path,
         canonical_json_value, canonical_v23_incidence_development_artifact_bytes,
         canonical_v23_incidence_holdout_truth_bytes, canonical_v23_incidence_manifest_bytes,
-        canonical_v23_incidence_preflight_bytes, canonical_v23_incidence_receipt_bytes,
-        canonical_v23_incidence_result_bytes, classify_v23_incidence_campaign,
-        decode_v23_incidence_development_latency_bundle,
+        canonical_v23_incidence_preflight_bytes, canonical_v23_incidence_progress_bytes,
+        canonical_v23_incidence_receipt_bytes, canonical_v23_incidence_result_bytes,
+        classify_v23_incidence_campaign, decode_v23_incidence_development_latency_bundle,
         encode_v23_incidence_development_latency_bundle,
         measure_v23_incidence_posting_pages_preflight,
         measure_v23_incidence_posting_sort_preflight, measure_v23_incidence_tree_preflight,
@@ -3648,8 +3783,69 @@ mod tests {
         v23_incidence_preflight_work, v23_incidence_training_row_stream,
         validate_v23_incidence_execution_preflight, validate_v23_incidence_identity,
         validate_v23_incidence_parent_receipt, validate_v23_incidence_request_manifest,
-        write_v23_incidence_local_output,
+        write_v23_incidence_local_output, write_v23_incidence_progress,
     };
+
+    #[test]
+    fn v23_incidence_progress_is_canonical_atomic_and_hash_chained() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("progress.json");
+        let root = super::V23IncidenceProgress {
+            completed_units: 0,
+            last_object_digest: "11".repeat(32),
+            phase: V23IncidencePhase::TreeTraining,
+            previous_progress_sha256: None,
+            sequence: 0,
+            total_units: 128,
+        };
+        let root_bytes = canonical_v23_incidence_progress_bytes(&root, None).unwrap();
+        let root_digest = write_v23_incidence_progress(&path, &root, None).unwrap();
+        assert_eq!(root_digest, format!("{:x}", Sha256::digest(&root_bytes)));
+        assert_eq!(fs::read(&path).unwrap(), root_bytes);
+        assert!(!path.with_extension("json.tmp").exists());
+
+        let advanced = super::V23IncidenceProgress {
+            completed_units: 64,
+            last_object_digest: "22".repeat(32),
+            phase: V23IncidencePhase::TreeTraining,
+            previous_progress_sha256: Some(root_digest),
+            sequence: 1,
+            total_units: 128,
+        };
+        let advanced_digest =
+            write_v23_incidence_progress(&path, &advanced, Some(&root_bytes)).unwrap();
+        assert_eq!(
+            advanced_digest,
+            format!("{:x}", Sha256::digest(fs::read(&path).unwrap()))
+        );
+
+        for changed in [
+            super::V23IncidenceProgress {
+                completed_units: 64,
+                sequence: 2,
+                previous_progress_sha256: Some(advanced_digest.clone()),
+                ..advanced.clone()
+            },
+            super::V23IncidenceProgress {
+                completed_units: 65,
+                sequence: 2,
+                previous_progress_sha256: Some("33".repeat(32)),
+                ..advanced.clone()
+            },
+            super::V23IncidenceProgress {
+                completed_units: 65,
+                sequence: 2,
+                total_units: 129,
+                previous_progress_sha256: Some(advanced_digest.clone()),
+                ..advanced.clone()
+            },
+        ] {
+            assert!(
+                canonical_v23_incidence_progress_bytes(&changed, Some(&fs::read(&path).unwrap()),)
+                    .is_err()
+            );
+        }
+    }
 
     fn object(role: &str, algorithm: &str, digest: &str) -> V23IncidenceObjectIdentity {
         V23IncidenceObjectIdentity {

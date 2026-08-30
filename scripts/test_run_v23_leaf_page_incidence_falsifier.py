@@ -111,7 +111,71 @@ def _policy(
     )
 
 
+def _progress_bytes(
+    *,
+    phase: str = "tree-training",
+    sequence: int = 0,
+    completed_units: int = 0,
+    total_units: int = 128,
+    last_object_digest: str = "66" * 32,
+    previous_progress_sha256: str | None = None,
+) -> bytes:
+    value = {
+        "completed_units": completed_units,
+        "last_object_digest": last_object_digest,
+        "phase": phase,
+        "previous_progress_sha256": previous_progress_sha256,
+        "sequence": sequence,
+        "total_units": total_units,
+    }
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+
+
 class SandboxPolicyTests(unittest.TestCase):
+    def test_progress_requires_canonical_hash_chained_completed_work(self) -> None:
+        monitor = subject.AuthenticatedProgressMonitor("tree-training")
+        initial = _progress_bytes()
+        initial_digest = hashlib.sha256(initial).hexdigest()
+        self.assertEqual(monitor.observe(initial), (0, 0, initial_digest))
+
+        advanced = _progress_bytes(
+            sequence=1,
+            completed_units=64,
+            previous_progress_sha256=initial_digest,
+        )
+        advanced_digest = hashlib.sha256(advanced).hexdigest()
+        self.assertEqual(monitor.observe(advanced), (1, 64, advanced_digest))
+
+        mutations = (
+            _progress_bytes(
+                sequence=2,
+                completed_units=64,
+                previous_progress_sha256=advanced_digest,
+            ),
+            _progress_bytes(
+                sequence=2,
+                completed_units=65,
+                previous_progress_sha256="77" * 32,
+            ),
+            _progress_bytes(
+                phase="posting-construction",
+                sequence=2,
+                completed_units=65,
+                previous_progress_sha256=advanced_digest,
+            ),
+            _progress_bytes(
+                sequence=2,
+                completed_units=65,
+                total_units=129,
+                previous_progress_sha256=advanced_digest,
+            ),
+            advanced[:-1] + b" \n",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation[:80]):
+                with self.assertRaises(ValueError):
+                    monitor.observe(mutation)
+
     def test_bulk_directory_capabilities_replace_per_object_phase_mounts(self) -> None:
         for phase, directory_role in (
             ("tree-training", "training-shards"),
@@ -379,7 +443,12 @@ class SandboxPolicyTests(unittest.TestCase):
             self.assertEqual(
                 subject.run_phase(
                     policy,
-                    dataclasses.replace(subject.MonitorLimits(), wall_seconds=30),
+                    dataclasses.replace(
+                        subject.MonitorLimits(),
+                        psi_immediate=float("inf"),
+                        psi_sustained=float("inf"),
+                        wall_seconds=30,
+                    ),
                 ),
                 0,
             )
@@ -664,7 +733,11 @@ class SandboxPolicyTests(unittest.TestCase):
         )
         status, stop = subject.monitor_process_group(
             pid,
-            subject.MonitorLimits(),
+            dataclasses.replace(
+                subject.MonitorLimits(),
+                psi_immediate=float("inf"),
+                psi_sustained=float("inf"),
+            ),
             sample_interval_seconds=0.001,
         )
         self.assertEqual((status, stop), (0, None))
@@ -702,6 +775,29 @@ class SandboxPolicyTests(unittest.TestCase):
             term_grace_seconds=0.01,
         )
         self.assertEqual((status, stop), (-signal.SIGKILL, "wall-cap"))
+
+    def test_monitor_stops_immediately_on_invalid_authenticated_progress(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            progress = pathlib.Path(temporary) / "progress.json"
+            progress.write_bytes(_progress_bytes(phase="posting-construction"))
+            pid = os.posix_spawn(
+                sys.executable,
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                os.environ.copy(),
+                setsid=True,
+            )
+            status, stop = subject.monitor_process_group(
+                pid,
+                subject.MonitorLimits(),
+                sample_interval_seconds=0.001,
+                progress_path=progress,
+                progress_phase="tree-training",
+                term_grace_seconds=0.01,
+            )
+            self.assertLess(status, 0)
+            self.assertEqual(stop, "progress-authority")
 
     def test_mount_bytes_are_authenticated_before_namespace_creation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
