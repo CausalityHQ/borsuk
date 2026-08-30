@@ -243,6 +243,11 @@ git commit -m "Add isolated V23 incidence phase launcher"
 ### Task 3: Deterministic reservoir and balanced spherical tree
 
 **Files:**
+- Create: `crates/borsuk-fma/Cargo.toml`
+- Create: `crates/borsuk-fma/src/lib.rs`
+- Modify: `Cargo.toml`
+- Modify: `Cargo.lock`
+- Modify: `crates/borsuk/Cargo.toml`
 - Create: `crates/borsuk/src/v23_incidence_tree.rs`
 - Modify: `crates/borsuk/src/lib.rs`
 - Test: `crates/borsuk/src/v23_incidence_tree.rs`
@@ -327,7 +332,12 @@ scientific artifacts always reject a non-production shape.
 
 - [ ] **Step 4: Add optimized score/assignment and differential tests**
 
-Implement `split_score_simd` with architecture-specific fused intrinsics;
+Keep `crates/borsuk` under its repository-wide `#![forbid(unsafe_code)]`.
+Implement the architecture-specific fused intrinsics in the narrowly scoped
+`borsuk-fma` workspace crate and expose only a safe fixed-96-dimension dot API
+plus an explicit backend identity; no pointer, slice-length, or raw-intrinsic
+surface crosses into `borsuk`. Implement `split_score_simd` through that safe
+API;
 ordinary vector multiply followed by add and `wide`'s target-dependent
 `mul_add` fallback are forbidden because they are not bit-equivalent to the
 scalar `f32::mul_add` authority. On aarch64, use two `float32x4_t` accumulators
@@ -357,7 +367,7 @@ Run: `cargo test -p borsuk --lib v23_incidence_tree_ -- --nocapture && cargo fmt
 Expected: all tree tests pass with no warnings.
 
 ```bash
-git add crates/borsuk/src/v23_incidence_tree.rs crates/borsuk/src/lib.rs
+git add Cargo.toml Cargo.lock crates/borsuk-fma/Cargo.toml crates/borsuk-fma/src/lib.rs crates/borsuk/Cargo.toml crates/borsuk/src/v23_incidence_tree.rs crates/borsuk/src/lib.rs
 git commit -m "Add deterministic V23 incidence tree"
 ```
 
