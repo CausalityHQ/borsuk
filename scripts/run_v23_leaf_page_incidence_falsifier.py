@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import ctypes
 import dataclasses
 import hashlib
@@ -43,6 +42,18 @@ class SandboxMount:
 
 
 @dataclasses.dataclass(frozen=True)
+class SandboxDirectoryCapability:
+    """One manifest-backed read-only corpus directory exposed to a phase."""
+
+    role: str
+    source: pathlib.Path
+    target: pathlib.PurePosixPath
+    manifest_role: str
+    staging_receipt_role: str
+    read_only: bool
+
+
+@dataclasses.dataclass(frozen=True)
 class SandboxPolicy:
     """Complete capability policy for one scientific phase process."""
 
@@ -55,6 +66,7 @@ class SandboxPolicy:
     scratch: pathlib.Path
     output: pathlib.Path
     parent_receipt_sha256: str | None
+    directory_capabilities: tuple[SandboxDirectoryCapability, ...] = ()
     phase_argv: tuple[str, ...] = ()
     host_network_namespace_inode: int | None = None
     host_canaries: tuple[pathlib.PurePosixPath, ...] = (
@@ -93,10 +105,10 @@ def _phase_roles(phase: str, *, preflight: bool) -> tuple[set[str], tuple[str, .
         return roles, prefixes
 
     if phase == "tree-training":
-        roles = {"construction-manifest"}
+        roles = {"construction-manifest", "training-staging-receipt"}
         if not preflight:
             roles.add("dataset-meta")
-        return complete(roles, ("training-shard-",))
+        return complete(roles, ("training-shards",))
     if phase == "posting-construction":
         return complete(
             {
@@ -104,8 +116,9 @@ def _phase_roles(phase: str, *, preflight: bool) -> tuple[set[str], tuple[str, .
                 "parent-receipt",
                 "incidence-tree",
                 "page-roster",
+                "page-staging-receipt",
             },
-            ("page-body-",),
+            ("page-corpus",),
         )
     if phase == "development-evaluation":
         roles = {
@@ -123,10 +136,11 @@ def _phase_roles(phase: str, *, preflight: bool) -> tuple[set[str], tuple[str, .
             "phase-manifest",
             "parent-receipt",
             "page-roster",
+            "page-staging-receipt",
         }
         if not preflight:
             roles.update({"development-result", "neighbors-parquet"})
-        return complete(roles, ("page-body-",))
+        return complete(roles, ("page-corpus",))
     if phase == "holdout-evaluation":
         roles = {
             "phase-manifest",
@@ -272,34 +286,62 @@ def validate_phase_inputs(policy: SandboxPolicy) -> None:
         seen_sources.add(mount.source)
         seen_targets.add(mount.target)
         seen_roles.add(mount.role)
+    input_roles = {mount.role for mount in policy.inputs}
+    for capability in policy.directory_capabilities:
+        if (
+            not capability.role
+            or not capability.source.is_absolute()
+            or not capability.target.is_absolute()
+            or ".." in capability.target.parts
+            or not capability.target.as_posix().startswith("/inputs/")
+        ):
+            raise ValueError("sandbox directory capability path differs")
+        if not capability.read_only:
+            raise ValueError("sandbox directory capability must be read-only")
+        if (
+            capability.manifest_role not in input_roles
+            or capability.staging_receipt_role not in input_roles
+            or capability.manifest_role == capability.staging_receipt_role
+        ):
+            raise ValueError("sandbox directory authority role is absent")
+        if (
+            capability.source in seen_sources
+            or capability.target in seen_targets
+            or capability.role in seen_roles
+        ):
+            raise ValueError("duplicate sandbox mount authority")
+        seen_sources.add(capability.source)
+        seen_targets.add(capability.target)
+        seen_roles.add(capability.role)
     if policy.executable in seen_sources:
         raise ValueError("duplicate sandbox mount authority")
     for capability_path in (policy.scratch, policy.output):
         if capability_path in seen_sources or capability_path == policy.executable:
             raise ValueError("sandbox writable and read-only capabilities overlap")
 
-    fixed_roles, prefixes = _phase_roles(policy.phase, preflight=preflight)
+    fixed_roles, directory_roles = _phase_roles(policy.phase, preflight=preflight)
     actual_roles = {mount.role for mount in policy.inputs}
-    if not fixed_roles.issubset(actual_roles):
-        raise ValueError("required phase input is absent")
-    if any(
-        role not in fixed_roles
-        and not any(role.startswith(prefix) for prefix in prefixes)
-        for role in actual_roles
-    ):
+    if actual_roles != fixed_roles:
         raise ValueError(
             "preflight input capability differs"
             if preflight
             else "phase input capability differs"
         )
-    if policy.phase == "tree-training" and not any(
-        role.startswith("training-shard-") for role in actual_roles
-    ):
-        raise ValueError("training shard authority is absent")
-    if policy.phase in {"posting-construction", "holdout-binding"} and not any(
-        role.startswith("page-body-") for role in actual_roles
-    ):
-        raise ValueError("page body authority is absent")
+    actual_directory_roles = tuple(
+        capability.role for capability in policy.directory_capabilities
+    )
+    if actual_directory_roles != directory_roles:
+        raise ValueError("phase directory capability differs")
+    expected_directory_bindings = {
+        "training-shards": ("construction-manifest", "training-staging-receipt"),
+        "page-corpus": ("phase-manifest", "page-staging-receipt"),
+    }
+    for capability in policy.directory_capabilities:
+        if (
+            capability.manifest_role,
+            capability.staging_receipt_role,
+        ) != expected_directory_bindings[capability.role]:
+            raise ValueError("phase directory authority differs")
 
 
 def _policy_value(policy: SandboxPolicy) -> dict[str, object]:
@@ -316,6 +358,17 @@ def _policy_value(policy: SandboxPolicy) -> dict[str, object]:
         }
 
     return {
+        "directory_capabilities": [
+            {
+                "manifest_role": capability.manifest_role,
+                "read_only": capability.read_only,
+                "role": capability.role,
+                "source": str(capability.source),
+                "staging_receipt_role": capability.staging_receipt_role,
+                "target": capability.target.as_posix(),
+            }
+            for capability in policy.directory_capabilities
+        ],
         "executable": str(policy.executable),
         "executable_bytes": policy.executable_bytes,
         "executable_sha256": policy.executable_sha256,
@@ -331,25 +384,26 @@ def _policy_value(policy: SandboxPolicy) -> dict[str, object]:
     }
 
 
-def canonical_policy_argument(policy: SandboxPolicy) -> str:
-    """Return one deterministic URL-safe policy argument."""
+def canonical_policy_bytes(policy: SandboxPolicy) -> bytes:
+    """Return one deterministic newline-terminated policy document."""
 
     validate_phase_inputs(policy)
-    raw = json.dumps(
+    return json.dumps(
         _policy_value(policy), separators=(",", ":"), sort_keys=True
-    ).encode()
-    return base64.urlsafe_b64encode(raw).decode("ascii")
+    ).encode() + b"\n"
 
 
-def decode_policy_argument(argument: str) -> SandboxPolicy:
-    """Decode one exact canonical policy argument and reject schema drift."""
+def decode_policy_bytes(raw: bytes) -> SandboxPolicy:
+    """Decode exact canonical policy bytes and reject schema drift."""
 
     try:
-        raw = base64.b64decode(argument.encode("ascii"), altchars=b"-_", validate=True)
+        if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
+            raise ValueError("sandbox policy canonical bytes differ")
         value = json.loads(raw)
-    except (UnicodeEncodeError, ValueError, json.JSONDecodeError) as error:
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
         raise ValueError("sandbox policy encoding differs") from error
     expected_keys = {
+        "directory_capabilities",
         "executable",
         "executable_bytes",
         "executable_sha256",
@@ -400,6 +454,35 @@ def decode_policy_argument(argument: str) -> SandboxPolicy:
             generation=item["generation"],
         )
 
+    def decode_directory(item: object) -> SandboxDirectoryCapability:
+        expected = {
+            "manifest_role",
+            "read_only",
+            "role",
+            "source",
+            "staging_receipt_role",
+            "target",
+        }
+        if type(item) is not dict or set(item) != expected:  # noqa: E721
+            raise ValueError("sandbox policy schema differs")
+        if (
+            type(item["manifest_role"]) is not str
+            or type(item["read_only"]) is not bool
+            or type(item["role"]) is not str
+            or type(item["source"]) is not str
+            or type(item["staging_receipt_role"]) is not str
+            or type(item["target"]) is not str
+        ):
+            raise ValueError("sandbox policy concrete type differs")
+        return SandboxDirectoryCapability(
+            role=item["role"],
+            source=pathlib.Path(item["source"]),
+            target=pathlib.PurePosixPath(item["target"]),
+            manifest_role=item["manifest_role"],
+            staging_receipt_role=item["staging_receipt_role"],
+            read_only=item["read_only"],
+        )
+
     if (
         type(value["phase"]) is not str
         or type(value["executable"]) is not str
@@ -407,6 +490,7 @@ def decode_policy_argument(argument: str) -> SandboxPolicy:
         or type(value["executable_bytes"]) is not int
         or type(value["scratch"]) is not str
         or type(value["output"]) is not str
+        or type(value["directory_capabilities"]) is not list
         or type(value["inputs"]) is not list
         or type(value["runtime_mounts"]) is not list
         or type(value["phase_argv"]) is not list
@@ -433,6 +517,9 @@ def decode_policy_argument(argument: str) -> SandboxPolicy:
         scratch=pathlib.Path(value["scratch"]),
         output=pathlib.Path(value["output"]),
         parent_receipt_sha256=value["parent_receipt_sha256"],
+        directory_capabilities=tuple(
+            decode_directory(item) for item in value["directory_capabilities"]
+        ),
         phase_argv=tuple(value["phase_argv"]),
         host_network_namespace_inode=value["host_network_namespace_inode"],
         host_canaries=tuple(
@@ -440,9 +527,48 @@ def decode_policy_argument(argument: str) -> SandboxPolicy:
         ),
     )
     validate_phase_inputs(policy)
-    if canonical_policy_argument(policy) != argument:
+    if canonical_policy_bytes(policy) != raw:
         raise ValueError("sandbox policy canonical bytes differ")
     return policy
+
+
+def write_canonical_policy_file(policy: SandboxPolicy, path: pathlib.Path) -> str:
+    """Create one exclusive mode-0600 policy file and return its SHA-256."""
+
+    if not path.is_absolute() or path.name in {"", ".", ".."}:
+        raise ValueError("sandbox policy path differs")
+    raw = canonical_policy_bytes(policy)
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        offset = 0
+        while offset < len(raw):
+            written = os.write(descriptor, raw[offset:])
+            if written <= 0:
+                raise OSError("sandbox policy write made no progress")
+            offset += written
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return hashlib.sha256(raw).hexdigest()
+
+
+def read_canonical_policy_file(
+    path: pathlib.Path, expected_sha256: str
+) -> SandboxPolicy:
+    """Authenticate and decode one regular canonical policy file."""
+
+    if not path.is_absolute() or not _valid_sha256(expected_sha256):
+        raise ValueError("sandbox policy digest authority differs")
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("sandbox policy file authority differs")
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise ValueError("sandbox policy digest authority differs")
+    return decode_policy_bytes(raw)
 
 
 def _digest_file(path: pathlib.Path, algorithm: str) -> str:
@@ -493,6 +619,9 @@ def authenticate_policy_files(policy: SandboxPolicy) -> None:
             mount.digest,
             mount.encoded_bytes,
         )
+    for capability in policy.directory_capabilities:
+        if capability.source.is_symlink() or not capability.source.is_dir():
+            raise ValueError("sandbox directory capability authority differs")
 
 
 def authenticate_mounted_policy_files(
@@ -513,16 +642,19 @@ def authenticate_mounted_policy_files(
             mount.digest,
             mount.encoded_bytes,
         )
+    for capability in policy.directory_capabilities:
+        path = root / capability.target.as_posix().lstrip("/")
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError("sandbox mounted directory authority differs")
 
 
-def build_unshare_command(policy: SandboxPolicy) -> list[str]:
-    """Build the sole outer namespace command without invoking a shell."""
+def build_unshare_command(
+    policy_path: pathlib.Path, policy_sha256: str
+) -> list[str]:
+    """Build the bounded outer namespace command without invoking a shell."""
 
-    validate_phase_inputs(policy)
-    bound_policy = dataclasses.replace(
-        policy,
-        host_network_namespace_inode=_network_namespace_inode(),
-    )
+    if not policy_path.is_absolute() or not _valid_sha256(policy_sha256):
+        raise ValueError("sandbox policy path or digest differs")
     return [
         "unshare",
         "--user",
@@ -534,8 +666,10 @@ def build_unshare_command(policy: SandboxPolicy) -> list[str]:
         "--mount-proc",
         sys.executable,
         str(pathlib.Path(__file__).resolve()),
-        "--enter-sandbox",
-        canonical_policy_argument(bound_policy),
+        "--enter-sandbox-policy",
+        str(policy_path),
+        "--policy-sha256",
+        policy_sha256,
     ]
 
 
@@ -650,6 +784,17 @@ def _startup_probes(policy: SandboxPolicy) -> dict[str, object]:
             break
         else:
             os.close(descriptor)
+    for capability in policy.directory_capabilities:
+        try:
+            descriptor = os.open(
+                capability.target.as_posix(),
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+            )
+        except OSError:
+            allowlisted_inputs_opened = False
+            break
+        else:
+            os.close(descriptor)
 
     probe_path = pathlib.Path("/output/.capability-probe")
     output_writable = False
@@ -715,6 +860,9 @@ def enter_sandbox(policy: SandboxPolicy) -> None:
     for mount in (*policy.runtime_mounts, *policy.inputs):
         target = root / mount.target.as_posix().lstrip("/")
         _bind_mount(mount.source, target, mount.read_only)
+    for capability in policy.directory_capabilities:
+        target = root / capability.target.as_posix().lstrip("/")
+        _bind_mount(capability.source, target, capability.read_only)
     _bind_mount(policy.scratch, root / "scratch", False)
     _bind_mount(policy.output, root / "output", False)
     authenticate_mounted_policy_files(root, policy)
@@ -924,19 +1072,31 @@ def _swap_used_bytes() -> int:
 def run_phase(policy: SandboxPolicy, limits: MonitorLimits | None = None) -> int:
     """Launch and monitor one original sandbox process group."""
 
-    command = build_unshare_command(policy)
-    root = _sandbox_root(policy)
-    process = subprocess.Popen(command, start_new_session=True)  # noqa: S603
+    bound_policy = dataclasses.replace(
+        policy,
+        host_network_namespace_inode=_network_namespace_inode(),
+    )
+    policy_path = policy.scratch.parent / f".{policy.scratch.name}.policy.json"
+    policy_sha256 = write_canonical_policy_file(bound_policy, policy_path)
+    command = build_unshare_command(policy_path, policy_sha256)
+    root = _sandbox_root(bound_policy)
     try:
-        status, stop_reason = monitor_process_group(
-            process.pid,
-            limits or MonitorLimits(),
-            progress_path=policy.output / "progress.json",
-        )
-        process.returncode = status
+        process = subprocess.Popen(command, start_new_session=True)  # noqa: S603
+        try:
+            status, stop_reason = monitor_process_group(
+                process.pid,
+                limits or MonitorLimits(),
+                progress_path=policy.output / "progress.json",
+            )
+            process.returncode = status
+        finally:
+            if root.exists():
+                root.rmdir()
     finally:
-        if root.exists():
-            root.rmdir()
+        if policy_path.exists():
+            if policy_path.is_symlink() or not policy_path.is_file():
+                raise ValueError("sandbox policy cleanup authority differs")
+            policy_path.unlink()
     if stop_reason is not None:
         raise RuntimeError(f"V23 incidence phase stopped: {stop_reason}")
     return status
@@ -949,10 +1109,16 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     gates = parser.add_mutually_exclusive_group(required=True)
     for phase in PHASES:
         gates.add_argument(f"--execute-{phase}", action="store_true")
-    gates.add_argument("--enter-sandbox", metavar="POLICY")
+    gates.add_argument("--enter-sandbox-policy", type=pathlib.Path)
+    parser.add_argument("--policy-sha256")
     parser.add_argument("--policy", type=pathlib.Path)
     parsed = parser.parse_args(arguments)
-    if parsed.enter_sandbox is None and parsed.policy is None:
+    if parsed.enter_sandbox_policy is not None:
+        if parsed.policy_sha256 is None or parsed.policy is not None:
+            parser.error("private sandbox entry requires only policy path and digest")
+    elif parsed.policy_sha256 is not None:
+        parser.error("public phase execution cannot accept a private policy digest")
+    if parsed.enter_sandbox_policy is None and parsed.policy is None:
         parser.error("public phase execution requires --policy")
     return parsed
 
@@ -961,13 +1127,15 @@ def main(arguments: Sequence[str] | None = None) -> int:
     """Run one explicit launcher mode."""
 
     parsed = parse_args(arguments)
-    if parsed.enter_sandbox is not None:
-        enter_sandbox(decode_policy_argument(parsed.enter_sandbox))
+    if parsed.enter_sandbox_policy is not None:
+        enter_sandbox(
+            read_canonical_policy_file(
+                parsed.enter_sandbox_policy, parsed.policy_sha256
+            )
+        )
         raise RuntimeError("sandbox executable returned unexpectedly")
     raw = parsed.policy.read_bytes()
-    if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
-        raise ValueError("policy file bytes differ")
-    policy = decode_policy_argument(raw[:-1].decode("ascii"))
+    policy = decode_policy_bytes(raw)
     selected = next(
         phase
         for phase in PHASES
