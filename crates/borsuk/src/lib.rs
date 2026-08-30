@@ -94,6 +94,11 @@ mod v23_diagnostic;
 mod v23_incidence;
 #[allow(
     dead_code,
+    reason = "V23 incidence postings are wired incrementally by the committed plan"
+)]
+mod v23_incidence_postings;
+#[allow(
+    dead_code,
     reason = "V23 incidence tree is wired incrementally by the committed plan"
 )]
 mod v23_incidence_tree;

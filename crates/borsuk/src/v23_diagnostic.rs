@@ -2287,6 +2287,7 @@ pub(crate) struct V23PageInput {
 pub(crate) struct V23DecodedPage {
     bytes: Bytes,
     offsets: Box<[u32]>,
+    page_ordinal: u32,
     id_start: usize,
     code_start: usize,
     primary_rows: usize,
@@ -2295,6 +2296,10 @@ pub(crate) struct V23DecodedPage {
 }
 
 impl V23DecodedPage {
+    pub(crate) fn page_ordinal(&self) -> u32 {
+        self.page_ordinal
+    }
+
     pub(crate) fn primary_rows(&self) -> usize {
         self.primary_rows
     }
@@ -2895,6 +2900,7 @@ pub(crate) fn decode_v23_page(bytes: Bytes, page_ref: &V23PageRef) -> Result<V23
     Ok(V23DecodedPage {
         bytes,
         offsets: offsets.into_boxed_slice(),
+        page_ordinal: page_ref.page_ordinal,
         id_start,
         code_start,
         primary_rows,
