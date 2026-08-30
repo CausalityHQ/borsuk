@@ -336,9 +336,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
         import boto3
     except ImportError as error:
         raise RuntimeError("boto3 is required for credentialed staging") from error
-    client = boto3.Session(profile_name=parsed.profile, region_name=parsed.region).client(
-        "s3"
-    )
+    client = boto3.Session(
+        profile_name=parsed.profile, region_name=parsed.region
+    ).client("s3")
     stage_manifest(parsed.manifest, parsed.staging_directory, parsed.receipt, client)
     return 0
 

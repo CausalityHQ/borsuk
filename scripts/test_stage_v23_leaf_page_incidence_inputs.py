@@ -112,7 +112,11 @@ class StagingTests(unittest.TestCase):
         ]
         client = FakeS3Client(
             {
-                ("registered-bucket", f"frozen/training-shard-{index:04}", f"version-{index}"): payload
+                (
+                    "registered-bucket",
+                    f"frozen/training-shard-{index:04}",
+                    f"version-{index}",
+                ): payload
                 for index, payload in enumerate(payloads)
             }
         )
@@ -122,9 +126,7 @@ class StagingTests(unittest.TestCase):
             staging = root / "staging"
             receipt = root / "staging-receipt.json"
             manifest.write_bytes(_manifest_bytes(objects))
-            receipt_bytes = subject.stage_manifest(
-                manifest, staging, receipt, client
-            )
+            receipt_bytes = subject.stage_manifest(manifest, staging, receipt, client)
 
             self.assertEqual(
                 client.calls,
@@ -144,8 +146,13 @@ class StagingTests(unittest.TestCase):
             )
             self.assertEqual(receipt.read_bytes(), receipt_bytes)
             value = json.loads(receipt_bytes)
-            self.assertEqual(value["manifest_sha256"], hashlib.sha256(manifest.read_bytes()).hexdigest())
-            self.assertEqual(value["ordered_objects"][0]["relative_path"], "training-shard-0000")
+            self.assertEqual(
+                value["manifest_sha256"],
+                hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                value["ordered_objects"][0]["relative_path"], "training-shard-0000"
+            )
             self.assertFalse(value["claim_eligible"])
 
     def test_unversioned_staging_is_rooted_by_registered_sha256(self) -> None:

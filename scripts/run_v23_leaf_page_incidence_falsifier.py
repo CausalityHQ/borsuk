@@ -133,8 +133,7 @@ class AuthenticatedProgressMonitor:
         ):
             raise ValueError("progress concrete type differs")
         canonical = (
-            json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
-            + b"\n"
+            json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
         )
         if raw != canonical:
             raise ValueError("progress canonical bytes differ")
@@ -283,9 +282,7 @@ def build_phase_argv(policy: SandboxPolicy) -> tuple[str, ...]:
         raise ValueError("preflight receipt mount authority differs")
     execute = bool(preflight_receipts)
     manifest_role = (
-        "construction-manifest"
-        if policy.phase == "tree-training"
-        else "phase-manifest"
+        "construction-manifest" if policy.phase == "tree-training" else "phase-manifest"
     )
     if len(policy.directory_capabilities) != 1:
         raise ValueError("bulk directory capability differs")
@@ -496,9 +493,12 @@ def canonical_policy_bytes(policy: SandboxPolicy) -> bytes:
     """Return one deterministic newline-terminated policy document."""
 
     validate_phase_inputs(policy)
-    return json.dumps(
-        _policy_value(policy), separators=(",", ":"), sort_keys=True
-    ).encode() + b"\n"
+    return (
+        json.dumps(
+            _policy_value(policy), separators=(",", ":"), sort_keys=True
+        ).encode()
+        + b"\n"
+    )
 
 
 def decode_policy_bytes(raw: bytes) -> SandboxPolicy:
@@ -759,9 +759,7 @@ def authenticate_mounted_policy_files(
             raise ValueError("sandbox mounted directory authority differs")
 
 
-def build_unshare_command(
-    policy_path: pathlib.Path, policy_sha256: str
-) -> list[str]:
+def build_unshare_command(policy_path: pathlib.Path, policy_sha256: str) -> list[str]:
     """Build the bounded outer namespace command without invoking a shell."""
 
     if not policy_path.is_absolute() or not _valid_sha256(policy_sha256):
@@ -1073,9 +1071,7 @@ def monitor_process_group(
     sustained = 0
     last_progress = started
     progress_monitor = (
-        None
-        if progress_phase is None
-        else AuthenticatedProgressMonitor(progress_phase)
+        None if progress_phase is None else AuthenticatedProgressMonitor(progress_phase)
     )
     progress_file_digest: str | None = None
     while True:

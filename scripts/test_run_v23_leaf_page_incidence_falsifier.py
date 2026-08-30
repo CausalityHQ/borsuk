@@ -480,7 +480,8 @@ class SandboxPolicyTests(unittest.TestCase):
         self.assertNotIn("d2-report", {mount.role for mount in preflight.inputs})
 
         leaked = dataclasses.replace(
-            preflight, inputs=preflight.inputs + (_mount("query-parquet", "query.parquet"),)
+            preflight,
+            inputs=preflight.inputs + (_mount("query-parquet", "query.parquet"),),
         )
         with self.assertRaisesRegex(ValueError, "preflight input"):
             subject.validate_phase_inputs(leaked)
@@ -904,10 +905,9 @@ class SandboxPolicyTests(unittest.TestCase):
                     identity(policy.inputs[2], b"staging"),
                 ),
             )
-            directory_target = (
-                root
-                / policy.directory_capabilities[0].target.as_posix().lstrip("/")
-            )
+            directory_target = root / policy.directory_capabilities[
+                0
+            ].target.as_posix().lstrip("/")
             directory_target.mkdir(parents=True)
             subject.authenticate_mounted_policy_files(root, policy)
 
