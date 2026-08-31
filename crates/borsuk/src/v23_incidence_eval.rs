@@ -1550,21 +1550,32 @@ pub(crate) const fn classify_v23_incidence_screen(
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct V23IncidenceScreenObjectIdentity {
-    pub(crate) role: String,
-    pub(crate) uri: String,
-    pub(crate) digest_algorithm: String,
-    pub(crate) digest: String,
-    pub(crate) encoded_bytes: u64,
+/// Exact immutable-object identity used by the local development screen.
+pub struct V23IncidenceScreenObjectIdentity {
+    /// Semantic role in the fixed seven-object input sequence.
+    pub role: String,
+    /// Registered immutable S3 URI.
+    pub uri: String,
+    /// Registered digest algorithm (`sha256` or `blake3`).
+    pub digest_algorithm: String,
+    /// Registered lowercase hexadecimal digest.
+    pub digest: String,
+    /// Registered encoded byte length.
+    pub encoded_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct V23IncidenceScreenAuthority {
-    pub(crate) source_commit: String,
-    pub(crate) source_archive_sha256: String,
-    pub(crate) index_id: String,
-    pub(crate) objects: Vec<V23IncidenceScreenObjectIdentity>,
+/// Source and seven-object authority for one claim-ineligible development screen.
+pub struct V23IncidenceScreenAuthority {
+    /// Exact source commit used to build the screen executable.
+    pub source_commit: String,
+    /// SHA-256 of the exact source archive used to build the executable.
+    pub source_archive_sha256: String,
+    /// Frozen index identity whose development truth is evaluated.
+    pub index_id: String,
+    /// Seven immutable input identities in their registered role order.
+    pub objects: Vec<V23IncidenceScreenObjectIdentity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1605,6 +1616,39 @@ pub(crate) struct V23IncidenceScreenResult {
     pub(crate) classification: V23IncidenceScreenClass,
     pub(crate) page_body_reads: u64,
     pub(crate) holdout_rows_read: u64,
+}
+
+pub(crate) fn validate_v23_incidence_screen_authority(
+    authority: &V23IncidenceScreenAuthority,
+) -> Result<()> {
+    let roles = [
+        ("tree-receipt", "sha256"),
+        ("incidence-tree", "blake3"),
+        ("posting-receipt", "sha256"),
+        ("incidence-postings-one", "blake3"),
+        ("incidence-postings-two", "blake3"),
+        ("d2-report", "sha256"),
+        ("query-parquet", "sha256"),
+    ];
+    if !exact_lower_hex(&authority.source_commit, 40)
+        || !exact_lower_hex(&authority.source_archive_sha256, 64)
+        || authority.index_id.is_empty()
+        || authority.objects.len() != roles.len()
+        || authority
+            .objects
+            .iter()
+            .zip(roles)
+            .any(|(object, (role, algorithm))| {
+                object.role != role
+                    || object.digest_algorithm != algorithm
+                    || !object.uri.starts_with("s3://")
+                    || !exact_lower_hex(&object.digest, 64)
+                    || object.encoded_bytes == 0
+            })
+    {
+        return Err(invalid("V23 incidence screen authority differs"));
+    }
+    Ok(())
 }
 
 impl V23IncidenceScreenResult {
@@ -1727,33 +1771,8 @@ pub(crate) fn canonical_v23_incidence_screen_result_bytes(
     result: &V23IncidenceScreenResult,
     expected_authority: &V23IncidenceScreenAuthority,
 ) -> Result<Vec<u8>> {
-    let roles = [
-        ("tree-receipt", "sha256"),
-        ("incidence-tree", "blake3"),
-        ("posting-receipt", "sha256"),
-        ("incidence-postings-one", "blake3"),
-        ("incidence-postings-two", "blake3"),
-        ("d2-report", "sha256"),
-        ("query-parquet", "sha256"),
-    ];
-    if result.authority != *expected_authority
-        || !exact_lower_hex(&result.authority.source_commit, 40)
-        || !exact_lower_hex(&result.authority.source_archive_sha256, 64)
-        || result.authority.index_id.is_empty()
-        || result.authority.objects.len() != roles.len()
-        || result
-            .authority
-            .objects
-            .iter()
-            .zip(roles)
-            .any(|(object, (role, algorithm))| {
-                object.role != role
-                    || object.digest_algorithm != algorithm
-                    || !object.uri.starts_with("s3://")
-                    || !exact_lower_hex(&object.digest, 64)
-                    || object.encoded_bytes == 0
-            })
-    {
+    validate_v23_incidence_screen_authority(expected_authority)?;
+    if result.authority != *expected_authority {
         return Err(invalid("V23 incidence screen authority differs"));
     }
     let ladder = V23IncidenceCell::registered_ladder();
@@ -1832,6 +1851,12 @@ pub(crate) fn canonical_v23_incidence_screen_result_bytes(
     Ok(bytes)
 }
 
+#[derive(Clone, Copy)]
+struct V23IncidenceScreenShape {
+    page_count: usize,
+    expected_leaves: usize,
+}
+
 fn evaluate_v23_incidence_screen_cell(
     tree: &V23IncidenceTree,
     plane: &V23PostingPlane,
@@ -1839,8 +1864,7 @@ fn evaluate_v23_incidence_screen_cell(
     selector: V23IncidenceScreenSelector,
     queries: &[[f32; 96]],
     truth: &[V23IncidenceQueryTruth],
-    page_count: usize,
-    expected_leaves: usize,
+    shape: V23IncidenceScreenShape,
 ) -> Result<V23IncidenceScreenCellResult> {
     if queries.len() != 32 || truth.len() != 32 || cell.arm != plane.arm {
         return Err(invalid("V23 incidence screen cohort differs"));
@@ -1872,14 +1896,14 @@ fn evaluate_v23_incidence_screen_cell(
                     tree,
                     query,
                     usize::from(cell.beam_width),
-                    expected_leaves,
+                    shape.expected_leaves,
                 )?;
                 if ranked
                     != rank_incidence_leaves_scalar_with_shape(
                         tree,
                         query,
                         usize::from(cell.beam_width),
-                        expected_leaves,
+                        shape.expected_leaves,
                     )?
                 {
                     return Err(invalid(
@@ -1889,11 +1913,11 @@ fn evaluate_v23_incidence_screen_cell(
                 ranked
             }
         };
-        let mut workspace = V23IncidenceQueryWorkspace::new(page_count)?;
+        let mut workspace = V23IncidenceQueryWorkspace::new(shape.page_count)?;
         let (page_ordinals, posting_visits, touched_pages) =
             selected_pages_q32(plane, &ranked, usize::from(cell.cap), &mut workspace)?;
         if page_ordinals
-            != selected_pages_scalar(plane, &ranked, usize::from(cell.cap), page_count)?
+            != selected_pages_scalar(plane, &ranked, usize::from(cell.cap), shape.page_count)?
         {
             return Err(invalid("V23 incidence screen page reducer differs"));
         }
@@ -1910,13 +1934,13 @@ fn evaluate_v23_incidence_screen_cell(
             .map(|selection| (selection.query_ordinal, selection.page_ordinals.clone()))
             .collect::<Vec<_>>(),
         truth,
-        page_count,
+        shape.page_count,
     )?;
     let scored_centroids_per_query = match selector {
         V23IncidenceScreenSelector::TreeBeam => {
             v23_tree_beam_centroid_scores_for_depth(tree.shape.depth, usize::from(cell.beam_width))?
         }
-        V23IncidenceScreenSelector::ExhaustiveControl => u32::try_from(expected_leaves)
+        V23IncidenceScreenSelector::ExhaustiveControl => u32::try_from(shape.expected_leaves)
             .map_err(|_| invalid("V23 incidence screen leaf count exceeds u32"))?,
     };
     Ok(V23IncidenceScreenCellResult {
@@ -1945,13 +1969,12 @@ fn evaluate_v23_incidence_development_screen_with_shape(
     two: &V23PostingPlane,
     queries: &[[f32; 96]],
     truth: &[V23IncidenceQueryTruth],
-    page_count: usize,
-    expected_leaves: usize,
+    shape: V23IncidenceScreenShape,
     authority: V23IncidenceScreenAuthority,
 ) -> Result<V23IncidenceScreenResult> {
     if one.arm != PostingAssignmentArm::OneLeaf
         || two.arm != PostingAssignmentArm::TwoBeamLeaves
-        || tree.leaves.len() != expected_leaves
+        || tree.leaves.len() != shape.expected_leaves
     {
         return Err(invalid("V23 incidence screen artifact shape differs"));
     }
@@ -1969,8 +1992,7 @@ fn evaluate_v23_incidence_development_screen_with_shape(
             V23IncidenceScreenSelector::TreeBeam,
             queries,
             truth,
-            page_count,
-            expected_leaves,
+            shape,
         )?);
         exhaustive_control.push(evaluate_v23_incidence_screen_cell(
             tree,
@@ -1979,8 +2001,7 @@ fn evaluate_v23_incidence_development_screen_with_shape(
             V23IncidenceScreenSelector::ExhaustiveControl,
             queries,
             truth,
-            page_count,
-            expected_leaves,
+            shape,
         )?);
     }
     let cell_passed = |cell: &V23IncidenceScreenCellResult| {
@@ -2026,8 +2047,10 @@ pub(crate) fn evaluate_v23_incidence_development_screen(
         two,
         queries,
         truth,
-        28_282,
-        V23_INCIDENCE_LEAVES,
+        V23IncidenceScreenShape {
+            page_count: 28_282,
+            expected_leaves: V23_INCIDENCE_LEAVES,
+        },
         authority,
     )
 }
@@ -2048,8 +2071,10 @@ pub(crate) fn evaluate_v23_incidence_development_screen_test_shape(
         two,
         queries,
         truth,
-        page_count,
-        tree.leaves.len(),
+        V23IncidenceScreenShape {
+            page_count,
+            expected_leaves: tree.leaves.len(),
+        },
         authority,
     )
 }

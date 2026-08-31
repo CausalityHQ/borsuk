@@ -23,25 +23,28 @@ use crate::{
         V23IncidenceCampaignInput, V23IncidenceCampaignResult, V23IncidenceCell,
         V23IncidenceDevelopmentArtifact, V23IncidenceDevelopmentAuthority,
         V23IncidenceHoldoutResult, V23IncidenceHoldoutTruthArtifact,
-        V23IncidenceHoldoutTruthAuthority, V23IncidenceQueryWorkspace,
-        bind_v23_incidence_holdout_truth, canonical_v23_incidence_development_artifact_bytes,
+        V23IncidenceHoldoutTruthAuthority, V23IncidenceQueryWorkspace, V23IncidenceScreenAuthority,
+        V23IncidenceScreenObjectIdentity, bind_v23_incidence_holdout_truth,
+        canonical_v23_incidence_development_artifact_bytes,
         canonical_v23_incidence_holdout_truth_bytes, canonical_v23_incidence_result_bytes,
-        classify_v23_incidence_campaign, decode_v23_incidence_development_latency_bundle,
+        canonical_v23_incidence_screen_result_bytes, classify_v23_incidence_campaign,
+        decode_v23_incidence_development_latency_bundle,
         encode_v23_incidence_development_latency_bundle, evaluate_v23_incidence_cell,
-        measure_v23_incidence_evaluation_preflight, measure_v23_incidence_latency,
-        read_v23_incidence_development_queries, read_v23_incidence_development_truth,
-        read_v23_incidence_holdout_neighbors, read_v23_incidence_holdout_queries,
-        recompute_v23_incidence_layout_quality, score_incidence_query_native,
+        evaluate_v23_incidence_development_screen, measure_v23_incidence_evaluation_preflight,
+        measure_v23_incidence_latency, read_v23_incidence_development_queries,
+        read_v23_incidence_development_truth, read_v23_incidence_holdout_neighbors,
+        read_v23_incidence_holdout_queries, recompute_v23_incidence_layout_quality,
+        score_incidence_query_native, validate_v23_incidence_screen_authority,
     },
     v23_incidence_postings::{
         PostingAssignmentArm, V23_POSTING_MAX_PAGES, V23_POSTING_RUN_BYTES, V23PostingArmRecords,
         V23PostingRecord, build_both_posting_plane_files, build_posting_plane,
-        decode_posting_plane, page_posting_records_both,
+        decode_posting_plane, page_posting_records_both, validate_production_posting_plane,
     },
     v23_incidence_tree::{
-        V23_INCIDENCE_PROGRESS_SOURCE_ROWS, V23IncidenceTrainingMilestone, V23TrainingRow,
-        V23TreeNode, decode_incidence_tree, encode_incidence_tree, split_score_simd,
-        train_incidence_tree,
+        V23_INCIDENCE_PROGRESS_SOURCE_ROWS, V23IncidenceTrainingMilestone,
+        V23IncidenceTrainingShape, V23TrainingRow, V23TreeNode, decode_incidence_tree,
+        encode_incidence_tree, split_score_simd, train_incidence_tree,
     },
 };
 
@@ -177,6 +180,36 @@ pub struct V23IncidenceLocalDirectoryPhaseRequest {
     pub output_path: PathBuf,
     /// SHA-256 of the executing release binary.
     pub executable_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V23IncidenceScreenLocalPaths {
+    pub tree_receipt: PathBuf,
+    pub incidence_tree: PathBuf,
+    pub posting_receipt: PathBuf,
+    pub incidence_postings_one: PathBuf,
+    pub incidence_postings_two: PathBuf,
+    pub d2_report: PathBuf,
+    pub query_parquet: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V23IncidenceScreenLocalRunRequest {
+    pub paths: V23IncidenceScreenLocalPaths,
+    pub authority: V23IncidenceScreenAuthority,
+    pub execute_development_screen: bool,
+}
+
+pub(crate) struct V23IncidenceScreenLocalObjects {
+    pub(crate) tree_receipt: Vec<u8>,
+    pub(crate) incidence_tree: Vec<u8>,
+    pub(crate) posting_receipt: Vec<u8>,
+    pub(crate) incidence_postings_one: Vec<u8>,
+    pub(crate) incidence_postings_two: Vec<u8>,
+    pub(crate) d2_report: Vec<u8>,
+    pub(crate) query_parquet: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2010,6 +2043,161 @@ fn canonical_json_document(bytes: &[u8], role: &str) -> Result<serde_json::Value
         )));
     }
     Ok(value)
+}
+
+fn validate_v23_incidence_screen_object_bytes(
+    identity: &V23IncidenceScreenObjectIdentity,
+    bytes: &[u8],
+) -> Result<()> {
+    let digest = match identity.digest_algorithm.as_str() {
+        "sha256" => format!("{:x}", Sha256::digest(bytes)),
+        "blake3" => blake3::hash(bytes).to_hex().to_string(),
+        _ => {
+            return Err(BorsukError::InvalidStorage(
+                "V23 incidence screen digest algorithm differs".to_string(),
+            ));
+        }
+    };
+    if identity.encoded_bytes != bytes.len() as u64 || identity.digest != digest {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence screen object bytes differ".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn read_v23_incidence_screen_local_object(
+    path: &Path,
+    identity: &V23IncidenceScreenObjectIdentity,
+) -> Result<Vec<u8>> {
+    if !path.is_absolute() {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence screen path is not absolute".to_string(),
+        ));
+    }
+    let metadata = path.symlink_metadata().map_err(|source| BorsukError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.file_type().is_file() || metadata.len() != identity.encoded_bytes {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence screen local object shape differs".to_string(),
+        ));
+    }
+    let bytes = fs::read(path).map_err(|source| BorsukError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    validate_v23_incidence_screen_object_bytes(identity, &bytes)?;
+    Ok(bytes)
+}
+
+pub(crate) fn read_v23_incidence_screen_local_objects(
+    paths: &V23IncidenceScreenLocalPaths,
+    authority: &V23IncidenceScreenAuthority,
+) -> Result<V23IncidenceScreenLocalObjects> {
+    validate_v23_incidence_screen_authority(authority)?;
+    let ordered_paths = [
+        &paths.tree_receipt,
+        &paths.incidence_tree,
+        &paths.posting_receipt,
+        &paths.incidence_postings_one,
+        &paths.incidence_postings_two,
+        &paths.d2_report,
+        &paths.query_parquet,
+    ];
+    if ordered_paths.iter().collect::<BTreeSet<_>>().len() != ordered_paths.len() {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence screen local paths are duplicated".to_string(),
+        ));
+    }
+    let mut loaded = ordered_paths
+        .into_iter()
+        .zip(&authority.objects)
+        .map(|(path, identity)| read_v23_incidence_screen_local_object(path, identity));
+    Ok(V23IncidenceScreenLocalObjects {
+        tree_receipt: loaded.next().unwrap()?,
+        incidence_tree: loaded.next().unwrap()?,
+        posting_receipt: loaded.next().unwrap()?,
+        incidence_postings_one: loaded.next().unwrap()?,
+        incidence_postings_two: loaded.next().unwrap()?,
+        d2_report: loaded.next().unwrap()?,
+        query_parquet: loaded.next().unwrap()?,
+    })
+}
+
+fn v23_incidence_screen_receipt_identity_matches(
+    receipt: &V23IncidenceObjectIdentity,
+    screen: &V23IncidenceScreenObjectIdentity,
+) -> bool {
+    receipt.role == screen.role
+        && receipt.uri == screen.uri
+        && receipt.digest_algorithm == screen.digest_algorithm
+        && receipt.digest == screen.digest
+        && receipt.encoded_bytes == screen.encoded_bytes
+}
+
+pub(crate) fn validate_v23_incidence_screen_receipts(
+    tree_receipt_bytes: &[u8],
+    posting_receipt_bytes: &[u8],
+    authority: &V23IncidenceScreenAuthority,
+) -> Result<()> {
+    validate_v23_incidence_screen_authority(authority)?;
+    validate_v23_incidence_screen_object_bytes(&authority.objects[0], tree_receipt_bytes)?;
+    validate_v23_incidence_screen_object_bytes(&authority.objects[2], posting_receipt_bytes)?;
+    let tree: V23IncidenceReceipt = serde_json::from_value(canonical_json_document(
+        tree_receipt_bytes,
+        "screen tree receipt",
+    )?)
+    .map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 incidence screen tree receipt schema differs: {error}"
+        ))
+    })?;
+    let posting: V23IncidenceReceipt = serde_json::from_value(canonical_json_document(
+        posting_receipt_bytes,
+        "screen posting receipt",
+    )?)
+    .map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 incidence screen posting receipt schema differs: {error}"
+        ))
+    })?;
+    validate_receipt(&tree)?;
+    validate_receipt(&posting)?;
+    let tree_output_matches = tree.outputs.len() == 1
+        && tree.outputs.first().is_some_and(|identity| {
+            v23_incidence_screen_receipt_identity_matches(identity, &authority.objects[1])
+        });
+    let posting_inputs_bind_tree = posting.ordered_inputs.iter().any(|identity| {
+        v23_incidence_screen_receipt_identity_matches(identity, &authority.objects[1])
+    });
+    let posting_outputs_match = posting.outputs.len() == 2
+        && posting
+            .outputs
+            .iter()
+            .zip([&authority.objects[3], &authority.objects[4]])
+            .all(|(identity, expected)| {
+                v23_incidence_screen_receipt_identity_matches(identity, expected)
+            });
+    let tree_receipt_sha256 = format!("{:x}", Sha256::digest(tree_receipt_bytes));
+    if tree.phase != V23IncidencePhase::TreeTraining
+        || tree.run_mode != V23IncidenceReceiptRunMode::Execute
+        || tree.stop.is_some()
+        || tree.outputs.len() != 1
+        || !tree_output_matches
+        || posting.phase != V23IncidencePhase::PostingConstruction
+        || posting.run_mode != V23IncidenceReceiptRunMode::Execute
+        || posting.stop.is_some()
+        || posting.parent_receipt_sha256.as_deref() != Some(tree_receipt_sha256.as_str())
+        || !posting_inputs_bind_tree
+        || !posting_outputs_match
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence screen receipt binding differs".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn read_authenticated_local_object(
@@ -3875,6 +4063,44 @@ pub fn run_v23_incidence_local_directory_phase(
     run_v23_incidence_local_phase(request)
 }
 
+#[doc(hidden)]
+pub fn run_v23_incidence_development_screen_local(
+    request: V23IncidenceScreenLocalRunRequest,
+) -> Result<Vec<u8>> {
+    if !request.execute_development_screen {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence development screen was not explicitly authorized".to_string(),
+        ));
+    }
+    let objects = read_v23_incidence_screen_local_objects(&request.paths, &request.authority)?;
+    validate_v23_incidence_screen_receipts(
+        &objects.tree_receipt,
+        &objects.posting_receipt,
+        &request.authority,
+    )?;
+    let tree = decode_incidence_tree(&objects.incidence_tree)?;
+    if tree.shape != V23IncidenceTrainingShape::PRODUCTION {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence screen tree shape differs".to_string(),
+        ));
+    }
+    let one = decode_posting_plane(&objects.incidence_postings_one)?;
+    let two = decode_posting_plane(&objects.incidence_postings_two)?;
+    validate_production_posting_plane(&one)?;
+    validate_production_posting_plane(&two)?;
+    let queries = read_v23_incidence_development_queries(&objects.query_parquet)?;
+    let truth = read_v23_incidence_development_truth(&objects.d2_report)?;
+    let result = evaluate_v23_incidence_development_screen(
+        &tree,
+        &one,
+        &two,
+        &queries,
+        &truth,
+        request.authority.clone(),
+    )?;
+    canonical_v23_incidence_screen_result_bytes(&result, &request.authority)
+}
+
 pub(crate) fn validate_v23_incidence_identity(
     observed: &V23IncidenceObjectIdentity,
     registered: &V23IncidenceObjectIdentity,
@@ -4466,7 +4692,14 @@ fn write_v23_incidence_progress(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, fs, io::Write, path::Path, process::Command, sync::Arc};
+    use std::{
+        collections::BTreeSet,
+        fs,
+        io::Write,
+        path::{Path, PathBuf},
+        process::Command,
+        sync::Arc,
+    };
 
     use arrow_array::{FixedSizeListArray, Float32Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
@@ -4500,7 +4733,8 @@ mod tests {
         V23IncidenceInputAuthority, V23IncidenceLocalPhaseRequest, V23IncidenceLocalRolePath,
         V23IncidenceManifest, V23IncidenceObjectIdentity, V23IncidencePhase,
         V23IncidencePreflightAuthority, V23IncidencePreflightMeasurement, V23IncidenceReceipt,
-        V23IncidenceReceiptRunMode, V23IncidenceRunMode, authenticate_v23_incidence_local_path,
+        V23IncidenceReceiptRunMode, V23IncidenceRunMode, V23IncidenceScreenLocalPaths,
+        V23IncidenceScreenLocalRunRequest, authenticate_v23_incidence_local_path,
         canonical_json_value, canonical_v23_incidence_development_artifact_bytes,
         canonical_v23_incidence_holdout_truth_bytes, canonical_v23_incidence_manifest_bytes,
         canonical_v23_incidence_preflight_bytes, canonical_v23_incidence_progress_bytes,
@@ -4511,14 +4745,18 @@ mod tests {
         measure_v23_incidence_posting_pages_preflight,
         measure_v23_incidence_posting_sort_preflight, measure_v23_incidence_tree_preflight,
         parse_v23_incidence_offline_probes, phase_manifest_roles, project_v23_incidence_preflight,
-        read_v23_incidence_preflight_receipt, read_v23_incidence_training_preflight_rows,
-        recompute_v23_incidence_layout_quality, run_v23_incidence_holdout_evaluation,
+        read_v23_incidence_preflight_receipt, read_v23_incidence_screen_local_objects,
+        read_v23_incidence_training_preflight_rows, recompute_v23_incidence_layout_quality,
+        run_v23_incidence_development_screen_local, run_v23_incidence_holdout_evaluation,
         run_v23_incidence_local_phase_with_probes, v23_incidence_page_posting_stream,
         v23_incidence_page_posting_stream_with_progress, v23_incidence_preflight_work,
         v23_incidence_training_row_stream, validate_v23_incidence_execution_preflight,
         validate_v23_incidence_identity, validate_v23_incidence_parent_receipt,
-        validate_v23_incidence_request_manifest, write_v23_incidence_local_output,
-        write_v23_incidence_progress,
+        validate_v23_incidence_request_manifest, validate_v23_incidence_screen_receipts,
+        write_v23_incidence_local_output, write_v23_incidence_progress,
+    };
+    use crate::v23_incidence_eval::{
+        V23IncidenceScreenAuthority, V23IncidenceScreenObjectIdentity,
     };
 
     #[test]
@@ -4846,6 +5084,209 @@ mod tests {
             vec![("incidence-tree", b"tree-output".as_slice())]
         };
         canonical_v23_incidence_receipt_bytes(receipt, parent_bytes, &outputs)
+    }
+
+    fn screen_object(
+        role: &str,
+        algorithm: &str,
+        bytes: &[u8],
+    ) -> V23IncidenceScreenObjectIdentity {
+        let digest = match algorithm {
+            "sha256" => format!("{:x}", Sha256::digest(bytes)),
+            "blake3" => blake3::hash(bytes).to_hex().to_string(),
+            _ => unreachable!(),
+        };
+        V23IncidenceScreenObjectIdentity {
+            role: role.to_string(),
+            uri: format!("s3://fixture/{role}"),
+            digest_algorithm: algorithm.to_string(),
+            digest,
+            encoded_bytes: bytes.len() as u64,
+        }
+    }
+
+    #[test]
+    fn v23_incidence_screen_local_files_authenticate_exact_seven_roles() {
+        let directory = tempfile::tempdir().unwrap();
+        let roles = [
+            ("tree-receipt", "sha256", b"tree-receipt".as_slice()),
+            ("incidence-tree", "blake3", b"tree".as_slice()),
+            ("posting-receipt", "sha256", b"posting-receipt".as_slice()),
+            ("incidence-postings-one", "blake3", b"one".as_slice()),
+            ("incidence-postings-two", "blake3", b"two".as_slice()),
+            ("d2-report", "sha256", b"report".as_slice()),
+            ("query-parquet", "sha256", b"query".as_slice()),
+        ];
+        let mut paths = Vec::new();
+        let objects = roles
+            .iter()
+            .map(|(role, algorithm, bytes)| {
+                let path = directory.path().join(role);
+                fs::write(&path, bytes).unwrap();
+                paths.push(path);
+                screen_object(role, algorithm, bytes)
+            })
+            .collect();
+        let authority = V23IncidenceScreenAuthority {
+            source_commit: "1".repeat(40),
+            source_archive_sha256: "2".repeat(64),
+            index_id: "index-fixture".to_string(),
+            objects,
+        };
+        let local = V23IncidenceScreenLocalPaths {
+            tree_receipt: paths[0].clone(),
+            incidence_tree: paths[1].clone(),
+            posting_receipt: paths[2].clone(),
+            incidence_postings_one: paths[3].clone(),
+            incidence_postings_two: paths[4].clone(),
+            d2_report: paths[5].clone(),
+            query_parquet: paths[6].clone(),
+        };
+        let loaded = read_v23_incidence_screen_local_objects(&local, &authority).unwrap();
+        assert_eq!(loaded.incidence_tree, b"tree");
+        assert_eq!(loaded.query_parquet, b"query");
+
+        let mut changed = authority.clone();
+        changed.objects[1].digest = "0".repeat(64);
+        assert!(read_v23_incidence_screen_local_objects(&local, &changed).is_err());
+        let mut changed = local;
+        changed.incidence_tree = PathBuf::from("relative-tree");
+        assert!(read_v23_incidence_screen_local_objects(&changed, &authority).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_screen_receipts_bind_tree_and_posting_objects() {
+        let tree = b"tree-output";
+        let one = b"posting-one";
+        let two = b"posting-two";
+        let tree_object = screen_object("incidence-tree", "blake3", tree);
+        let one_object = screen_object("incidence-postings-one", "blake3", one);
+        let two_object = screen_object("incidence-postings-two", "blake3", two);
+        let receipt_identity =
+            |identity: &V23IncidenceScreenObjectIdentity| V23IncidenceObjectIdentity {
+                role: identity.role.clone(),
+                uri: identity.uri.clone(),
+                digest_algorithm: identity.digest_algorithm.clone(),
+                digest: identity.digest.clone(),
+                encoded_bytes: identity.encoded_bytes,
+                generation: "generation-0001".to_string(),
+            };
+        let mut tree_receipt = receipt_fixture();
+        tree_receipt.outputs = vec![receipt_identity(&tree_object)];
+        let tree_receipt_bytes = canonical_v23_incidence_receipt_bytes(
+            &tree_receipt,
+            Some(b"preflight-receipt"),
+            &[("incidence-tree", tree)],
+        )
+        .unwrap();
+
+        let mut posting_receipt = receipt_fixture();
+        posting_receipt.phase = V23IncidencePhase::PostingConstruction;
+        posting_receipt.parent_receipt_sha256 =
+            Some(format!("{:x}", Sha256::digest(&tree_receipt_bytes)));
+        posting_receipt.ordered_inputs = vec![
+            object("phase-manifest", "sha256", &"22".repeat(32)),
+            receipt_identity(&tree_object),
+        ];
+        posting_receipt.outputs =
+            vec![receipt_identity(&one_object), receipt_identity(&two_object)];
+        let posting_receipt_bytes = canonical_v23_incidence_receipt_bytes(
+            &posting_receipt,
+            Some(&tree_receipt_bytes),
+            &[
+                ("incidence-postings-one", one),
+                ("incidence-postings-two", two),
+            ],
+        )
+        .unwrap();
+        let authority = V23IncidenceScreenAuthority {
+            source_commit: "1".repeat(40),
+            source_archive_sha256: "2".repeat(64),
+            index_id: "index-fixture".to_string(),
+            objects: vec![
+                screen_object("tree-receipt", "sha256", &tree_receipt_bytes),
+                tree_object,
+                screen_object("posting-receipt", "sha256", &posting_receipt_bytes),
+                one_object,
+                two_object,
+                screen_object("d2-report", "sha256", b"report"),
+                screen_object("query-parquet", "sha256", b"query"),
+            ],
+        };
+        validate_v23_incidence_screen_receipts(
+            &tree_receipt_bytes,
+            &posting_receipt_bytes,
+            &authority,
+        )
+        .unwrap();
+
+        posting_receipt.outputs.swap(0, 1);
+        let mut changed = serde_json::to_vec(&canonical_json_value(
+            serde_json::to_value(posting_receipt).unwrap(),
+        ))
+        .unwrap();
+        changed.push(b'\n');
+        let mut changed_authority = authority.clone();
+        changed_authority.objects[2] = screen_object("posting-receipt", "sha256", &changed);
+        assert!(
+            validate_v23_incidence_screen_receipts(
+                &tree_receipt_bytes,
+                &changed,
+                &changed_authority,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v23_incidence_screen_local_runner_requires_explicit_execution() {
+        let directory = tempfile::tempdir().unwrap();
+        let roles = [
+            ("tree-receipt", "sha256", b"tree-receipt".as_slice()),
+            ("incidence-tree", "blake3", b"tree".as_slice()),
+            ("posting-receipt", "sha256", b"posting-receipt".as_slice()),
+            ("incidence-postings-one", "blake3", b"one".as_slice()),
+            ("incidence-postings-two", "blake3", b"two".as_slice()),
+            ("d2-report", "sha256", b"report".as_slice()),
+            ("query-parquet", "sha256", b"query".as_slice()),
+        ];
+        let mut paths = Vec::new();
+        let objects = roles
+            .iter()
+            .map(|(role, algorithm, bytes)| {
+                let path = directory.path().join(role);
+                fs::write(&path, bytes).unwrap();
+                paths.push(path);
+                screen_object(role, algorithm, bytes)
+            })
+            .collect();
+        let request = V23IncidenceScreenLocalRunRequest {
+            paths: V23IncidenceScreenLocalPaths {
+                tree_receipt: paths[0].clone(),
+                incidence_tree: paths[1].clone(),
+                posting_receipt: paths[2].clone(),
+                incidence_postings_one: paths[3].clone(),
+                incidence_postings_two: paths[4].clone(),
+                d2_report: paths[5].clone(),
+                query_parquet: paths[6].clone(),
+            },
+            authority: V23IncidenceScreenAuthority {
+                source_commit: "1".repeat(40),
+                source_archive_sha256: "2".repeat(64),
+                index_id: "index-fixture".to_string(),
+                objects,
+            },
+            execute_development_screen: false,
+        };
+        let error = run_v23_incidence_development_screen_local(request.clone()).unwrap_err();
+        assert!(error.to_string().contains("not explicitly authorized"));
+
+        let error = run_v23_incidence_development_screen_local(V23IncidenceScreenLocalRunRequest {
+            execute_development_screen: true,
+            ..request
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("tree receipt JSON differs"));
     }
 
     #[test]

@@ -174,8 +174,12 @@ pub use v23_diagnostic::{
 pub use v23_incidence::{
     V23IncidenceLocalDirectoryPhaseRequest, V23IncidenceLocalPhaseRequest,
     V23IncidenceLocalRolePath, V23IncidenceObjectIdentity, V23IncidencePhase, V23IncidenceRunMode,
-    run_v23_incidence_local_directory_phase, run_v23_incidence_local_phase,
+    V23IncidenceScreenLocalPaths, V23IncidenceScreenLocalRunRequest,
+    run_v23_incidence_development_screen_local, run_v23_incidence_local_directory_phase,
+    run_v23_incidence_local_phase,
 };
+#[doc(hidden)]
+pub use v23_incidence_eval::{V23IncidenceScreenAuthority, V23IncidenceScreenObjectIdentity};
 
 /// Maximum CPU worker threads selected by the automatic small-runtime policy.
 pub const DEFAULT_BUILD_THREADS: usize = 4;
