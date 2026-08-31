@@ -175,41 +175,68 @@ pub(crate) fn read_v23_rabitq_row_planes(
     identity: &V23RaBitQObjectIdentity,
 ) -> Result<V23RaBitQRowPlanes> {
     authenticate_bytes(bytes, identity, "row-codes")?;
-    let batch = read_one_batch(bytes, &row_schema())?;
-    let codes = batch.columns()[0]
-        .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
-        .ok_or_else(|| invalid("V23 RaBitQ sign-code column differs"))?;
-    let residual_norms = batch.columns()[1]
-        .as_any()
-        .downcast_ref::<Float32Array>()
-        .ok_or_else(|| invalid("V23 RaBitQ residual-norm column differs"))?;
-    let alignments = batch.columns()[2]
-        .as_any()
-        .downcast_ref::<Float32Array>()
-        .ok_or_else(|| invalid("V23 RaBitQ alignment column differs"))?;
-    let primary_pages = batch.columns()[3]
-        .as_any()
-        .downcast_ref::<UInt32Array>()
-        .ok_or_else(|| invalid("V23 RaBitQ primary-page column differs"))?;
-    let replica_pages = batch.columns()[4]
-        .as_any()
-        .downcast_ref::<UInt32Array>()
-        .ok_or_else(|| invalid("V23 RaBitQ replica-page column differs"))?;
-    let value = V23RaBitQRowPlanes {
-        sign_codes: (0..batch.num_rows())
-            .map(|ordinal| {
+    let schema = row_schema();
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.schema().as_ref() != &schema {
+        return Err(invalid("V23 RaBitQ Arrow schema differs"));
+    }
+    let mut value = V23RaBitQRowPlanes {
+        sign_codes: Vec::new(),
+        residual_norms: Vec::new(),
+        alignments: Vec::new(),
+        primary_pages: Vec::new(),
+        replica_pages: Vec::new(),
+    };
+    for batch in &mut reader {
+        let batch = batch?;
+        if batch.num_rows() == 0
+            || batch.num_columns() != schema.fields().len()
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V23 RaBitQ Arrow row batch differs"));
+        }
+        let codes = batch.columns()[0]
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .ok_or_else(|| invalid("V23 RaBitQ sign-code column differs"))?;
+        let residual_norms = batch.columns()[1]
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("V23 RaBitQ residual-norm column differs"))?;
+        let alignments = batch.columns()[2]
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("V23 RaBitQ alignment column differs"))?;
+        let primary_pages = batch.columns()[3]
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V23 RaBitQ primary-page column differs"))?;
+        let replica_pages = batch.columns()[4]
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V23 RaBitQ replica-page column differs"))?;
+        for ordinal in 0..batch.num_rows() {
+            value.sign_codes.push(
                 codes
                     .value(ordinal)
                     .try_into()
-                    .map_err(|_| invalid("V23 RaBitQ sign-code width differs"))
-            })
-            .collect::<Result<Vec<_>>>()?,
-        residual_norms: residual_norms.values().to_vec(),
-        alignments: alignments.values().to_vec(),
-        primary_pages: primary_pages.values().to_vec(),
-        replica_pages: replica_pages.values().to_vec(),
-    };
+                    .map_err(|_| invalid("V23 RaBitQ sign-code width differs"))?,
+            );
+        }
+        value
+            .residual_norms
+            .extend_from_slice(residual_norms.values());
+        value.alignments.extend_from_slice(alignments.values());
+        value
+            .primary_pages
+            .extend_from_slice(primary_pages.values());
+        value
+            .replica_pages
+            .extend_from_slice(replica_pages.values());
+    }
     validate_row_planes(&value)?;
     Ok(value)
 }
@@ -521,7 +548,17 @@ mod tests {
         assert!(read_v23_rabitq_row_planes(&mutation, &identity("row-codes", &mutation)).is_err());
 
         let mutation = rewrite_columns(&bytes, fields, &[0, 1, 2, 3, 4], 2);
-        assert!(read_v23_rabitq_row_planes(&mutation, &identity("row-codes", &mutation)).is_err());
+        let decoded =
+            read_v23_rabitq_row_planes(&mutation, &identity("row-codes", &mutation)).unwrap();
+        assert_eq!(decoded.sign_codes.len(), expected.sign_codes.len() * 2);
+        assert_eq!(
+            &decoded.sign_codes[..expected.sign_codes.len()],
+            &expected.sign_codes
+        );
+        assert_eq!(
+            &decoded.sign_codes[expected.sign_codes.len()..],
+            &expected.sign_codes
+        );
 
         let mut reader = FileReader::try_new(Cursor::new(&bytes), None).unwrap();
         let batch = reader.next().unwrap().unwrap();
