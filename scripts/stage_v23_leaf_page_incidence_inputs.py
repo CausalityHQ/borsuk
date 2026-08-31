@@ -258,17 +258,20 @@ def stage_manifest(
                 raise ValueError("object body is absent")
             registered_sha256 = _registered_s3_sha256(identity)
             if registered_sha256 is not None:
-                try:
-                    observed_checksum = base64.b64decode(
-                        response.get("ChecksumSHA256", ""), validate=True
-                    ).hex()
-                except (ValueError, TypeError) as error:
-                    raise ValueError("object S3 checksum differs") from error
+                checksum = response.get("ChecksumSHA256")
                 metadata = response.get("Metadata")
-                if (
-                    observed_checksum != registered_sha256
-                    or type(metadata) is not dict
-                    or metadata.get("borsuk-sha256") != registered_sha256
+                if checksum is not None:
+                    try:
+                        observed_checksum = base64.b64decode(
+                            checksum, validate=True
+                        ).hex()
+                    except (ValueError, TypeError) as error:
+                        raise ValueError("object S3 checksum differs") from error
+                    if observed_checksum != registered_sha256:
+                        raise ValueError("object S3 checksum differs")
+                if type(metadata) is not dict or (
+                    "borsuk-sha256" in metadata
+                    and metadata["borsuk-sha256"] != registered_sha256
                 ):
                     raise ValueError("object S3 checksum differs")
             partial = staging_directory / f".{role}.partial"

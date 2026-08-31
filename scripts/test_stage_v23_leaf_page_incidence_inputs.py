@@ -82,6 +82,20 @@ class FakeS3Client:
         }
 
 
+class FakeS3ClientWithoutChecksumMetadata(FakeS3Client):
+    def get_object(self, **request: str) -> dict[str, object]:
+        self.calls.append(request)
+        version = request.get("VersionId")
+        payload = self.payloads[(request["Bucket"], request["Key"], version)]
+        return {
+            "Body": io.BytesIO(payload),
+            "ContentLength": len(payload),
+            "Metadata": {},
+            "VersionId": version,
+            "ETag": '"not-a-content-digest"',
+        }
+
+
 class StagingTests(unittest.TestCase):
     def test_registered_training_manifest_is_canonical_and_complete(self) -> None:
         path = (
@@ -186,6 +200,26 @@ class StagingTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_unversioned_sha_staging_uses_streamed_digest_without_s3_metadata(
+        self,
+    ) -> None:
+        payload = b"unversioned-registered-object"
+        object_value = _identity("parent-receipt", payload, 0)
+        digest = hashlib.sha256(payload).hexdigest()
+        object_value["identity"]["generation"] = f"unversioned-sha256:{digest}"
+        client = FakeS3ClientWithoutChecksumMetadata(
+            {("registered-bucket", "frozen/parent-receipt", None): payload}
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            manifest = root / "manifest.json"
+            manifest.write_bytes(_manifest_bytes([object_value]))
+            subject.stage_manifest(
+                manifest, root / "staging", root / "receipt.json", client
+            )
+
+        self.assertEqual(len(client.calls), 1)
 
     def test_unversioned_blake3_staging_is_rooted_by_registered_content(self) -> None:
         import blake3
