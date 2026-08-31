@@ -24,12 +24,14 @@ from scripts.launch_v23_incidence_spot import (
     _validate_terminal_bytes,
     _validate_tree_progress_binding,
     _write_bulk_manifest,
+    build_development_manifest,
     build_launch_plan,
     build_launch_spec,
     build_posting_manifest,
     build_worker_script,
     main,
     offline_probe,
+    worker_development,
     worker_posting,
     worker_tree,
 )
@@ -66,6 +68,425 @@ def _canonical_progress_bytes(
 
 
 class V23IncidenceSpotLauncherTests(unittest.TestCase):
+    def test_development_manifest_binds_sealed_postings_and_burned_queries(
+        self,
+    ) -> None:
+        tree = {
+            "digest": "21" * 32,
+            "digest_algorithm": "blake3",
+            "encoded_bytes": 40_369_836,
+            "generation": f"content-{'21' * 32}",
+            "role": "incidence-tree",
+            "uri": "s3://fixture/tree.bin",
+        }
+        one = {
+            "digest": "22" * 32,
+            "digest_algorithm": "blake3",
+            "encoded_bytes": 51_502_404,
+            "generation": f"content-{'22' * 32}",
+            "role": "incidence-postings-one",
+            "uri": "s3://fixture/one.bin",
+        }
+        two = {
+            "digest": "23" * 32,
+            "digest_algorithm": "blake3",
+            "encoded_bytes": 59_186_088,
+            "generation": f"content-{'23' * 32}",
+            "role": "incidence-postings-two",
+            "uri": "s3://fixture/two.bin",
+        }
+        posting_receipt = {
+            "claim_eligible": False,
+            "executable_sha256": "24" * 32,
+            "final_progress_sha256": "25" * 32,
+            "fma_backend": "aarch64-neon-fma",
+            "network_namespace_inode": 42,
+            "ordered_inputs": [
+                {
+                    "digest": "26" * 32,
+                    "digest_algorithm": "sha256",
+                    "encoded_bytes": 123,
+                    "generation": "fixture-parent",
+                    "role": "parent-receipt",
+                    "uri": "s3://fixture/tree-receipt.json",
+                },
+                tree,
+            ],
+            "outputs": [one, two],
+            "parent_receipt_sha256": "27" * 32,
+            "phase": "posting-construction",
+            "preflight_evidence": None,
+            "probes": {
+                "allowlisted_inputs_opened": True,
+                "forbidden_roles_absent": True,
+                "network_canary_denied": True,
+                "network_namespace_changed": True,
+                "output_writable": True,
+            },
+            "run_mode": "execute",
+            "schema": "borsuk-v23-incidence-receipt-v3",
+            "stop": None,
+        }
+        posting_bytes = (
+            json.dumps(posting_receipt, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
+        d2_bytes = b'{"fixture":"d2"}\n'
+        query_bytes = b"PAR1fixture"
+
+        def identity(role: str, uri: str, raw: bytes) -> dict[str, object]:
+            digest = hashlib.sha256(raw).hexdigest()
+            return {
+                "digest": digest,
+                "digest_algorithm": "sha256",
+                "encoded_bytes": len(raw),
+                "generation": f"unversioned-sha256:{digest}",
+                "role": role,
+                "uri": uri,
+            }
+
+        posting_identity = identity(
+            "parent-receipt", "s3://fixture/posting-receipt.json", posting_bytes
+        )
+        d2_identity = identity("d2-report", "s3://fixture/d2.json", d2_bytes)
+        query_identity = identity(
+            "query-parquet", "s3://fixture/query.parquet", query_bytes
+        )
+        with (
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_POSTING_RECEIPT_URI",
+                posting_identity["uri"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_POSTING_RECEIPT_SHA256",
+                posting_identity["digest"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_POSTING_RECEIPT_BYTES",
+                posting_identity["encoded_bytes"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_D2_REPORT_URI",
+                d2_identity["uri"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_D2_REPORT_SHA256",
+                d2_identity["digest"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_D2_REPORT_BYTES",
+                d2_identity["encoded_bytes"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_QUERY_URI",
+                query_identity["uri"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_QUERY_SHA256",
+                query_identity["digest"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_QUERY_BYTES",
+                query_identity["encoded_bytes"],
+            ),
+        ):
+            raw = build_development_manifest(
+                posting_receipt_bytes=posting_bytes,
+                posting_receipt_identity=posting_identity,
+                d2_report_bytes=d2_bytes,
+                d2_report_identity=d2_identity,
+                query_bytes=query_bytes,
+                query_identity=query_identity,
+            )
+        manifest = json.loads(raw)
+        self.assertEqual(raw, json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n")
+        self.assertEqual(manifest["phase"], "development-evaluation")
+        self.assertEqual(manifest["parent_receipt_sha256"], posting_identity["digest"])
+        self.assertEqual(
+            [item["identity"]["role"] for item in manifest["ordered_inputs"]],
+            [
+                "parent-receipt",
+                "incidence-tree",
+                "incidence-postings-one",
+                "incidence-postings-two",
+                "d2-report",
+                "query-parquet",
+            ],
+        )
+
+    def test_development_plan_binds_sealed_inputs_and_keeps_holdout_fenced(self) -> None:
+        plan = build_launch_plan(
+            phase="development-evaluation",
+            run_id="fixture-development-run",
+            source_commit=SOURCE_SHA,
+        )
+        self.assertEqual(plan["preflight_input_count"], 4)
+        self.assertEqual(plan["execute_input_count"], 6)
+        self.assertIn("development-evaluation", plan["supported_phases"])
+        self.assertNotIn("development-evaluation", plan["blocked_phases"])
+        self.assertIn("holdout-binding", plan["blocked_phases"])
+        self.assertFalse(plan["d3_allowed"])
+
+    def test_development_worker_has_no_page_body_or_holdout_surface(self) -> None:
+        worker = build_worker_script(
+            phase="development-evaluation",
+            run_id="fixture-development-run",
+            source_commit=SOURCE_SHA,
+            source_uri="s3://borsuk-evidence/source.tar",
+            source_sha256="11" * 32,
+            result_uri="s3://borsuk-evidence/incidence/fixture-development-run",
+            spot_price_usd_per_hour="0.321",
+        )
+        self.assertIn("--build-development-manifest", worker)
+        self.assertIn("--worker-development", worker)
+        self.assertIn("development-result.json", worker)
+        self.assertIn("development-latency.bin", worker)
+        self.assertIn("development-receipt.json", worker)
+        self.assertNotIn("page-body-", worker)
+        self.assertNotIn("neighbors-parquet", worker)
+        self.assertNotIn("holdout-evaluation", worker)
+        self.assertLessEqual(len(worker.encode()), 16_384)
+
+    def test_development_bulk_manifest_preflight_excludes_burned_queries(self) -> None:
+        construction = json.loads(
+            (ROOT / "scripts/fixtures/v23_incidence_training_manifest.json").read_bytes()
+        )
+        identity = construction["ordered_inputs"][0]["identity"]
+
+        def phase_object(role: str) -> dict[str, object]:
+            changed = dict(identity)
+            changed["role"] = role
+            changed["uri"] = f"s3://fixture/{role}"
+            return {"authority_kind": "phase-object", "identity": changed}
+
+        fixed = [
+            phase_object("parent-receipt"),
+            phase_object("incidence-tree"),
+            phase_object("incidence-postings-one"),
+            phase_object("incidence-postings-two"),
+        ]
+        burned = [phase_object("d2-report"), phase_object("query-parquet")]
+        manifest = dict(construction)
+        manifest["phase"] = "development-evaluation"
+        manifest["ordered_inputs"] = fixed + burned
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "development.json"
+            preflight = root / "preflight.json"
+            execute = root / "execute.json"
+            source.write_bytes(
+                json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n"
+            )
+            _write_bulk_manifest(source, preflight, False)
+            _write_bulk_manifest(source, execute, True)
+            self.assertEqual(json.loads(preflight.read_bytes())["ordered_inputs"], fixed)
+            self.assertEqual(json.loads(execute.read_bytes())["ordered_inputs"], fixed + burned)
+
+    def test_development_cli_builds_manifest_and_dispatches_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            posting = root / "posting-receipt.json"
+            d2 = root / "d2.json"
+            query = root / "query.parquet"
+            manifest = root / "development-manifest.json"
+            evidence = root / "evidence"
+            posting.write_bytes(b"posting\n")
+            d2.write_bytes(b"d2\n")
+            query.write_bytes(b"query\n")
+            expected = b'{"phase":"development-evaluation"}\n'
+            with patch(
+                "scripts.launch_v23_incidence_spot.build_development_manifest",
+                return_value=expected,
+            ) as build:
+                self.assertEqual(
+                    main(
+                        [
+                            "--build-development-manifest",
+                            "--posting-receipt",
+                            str(posting),
+                            "--d2-report",
+                            str(d2),
+                            "--query-parquet",
+                            str(query),
+                            "--development-manifest-output",
+                            str(manifest),
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(manifest.read_bytes(), expected)
+            self.assertEqual(build.call_args.kwargs["posting_receipt_bytes"], posting.read_bytes())
+            self.assertEqual(build.call_args.kwargs["d2_report_bytes"], d2.read_bytes())
+            self.assertEqual(build.call_args.kwargs["query_bytes"], query.read_bytes())
+
+            binary = Path("/bin/true").resolve()
+            binary_sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
+            with patch(
+                "scripts.launch_v23_incidence_spot.worker_development",
+                return_value=0,
+            ) as worker:
+                self.assertEqual(
+                    main(
+                        [
+                            "--worker-development",
+                            "--binary",
+                            str(binary),
+                            "--binary-sha256",
+                            binary_sha256,
+                            "--evidence-directory",
+                            str(evidence),
+                            "--output-uri-prefix",
+                            "s3://fixture/development",
+                            "--development-manifest",
+                            str(manifest),
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(worker.call_args.args[4], expected)
+
+    def test_worker_development_runs_two_modes_and_publishes_canonical_outputs(
+        self,
+    ) -> None:
+        import blake3
+
+        manifest = {
+            "algorithm": "fixture",
+            "claim_eligible": False,
+            "dataset_id": "deep-image-96",
+            "index_id": "fixture-index",
+            "ordered_inputs": [],
+            "parent_receipt_sha256": "ab" * 32,
+            "phase": "development-evaluation",
+            "schema": "borsuk-v23-incidence-manifest-v1",
+            "source_archive_sha256": "cd" * 32,
+            "source_commit": SOURCE_SHA,
+        }
+        manifest_bytes = (
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
+
+        def stage_stub(_manifest: Path, directory: Path, receipt: Path) -> None:
+            directory.mkdir()
+            receipt.write_text('{"staged":true}\n', encoding="utf-8")
+
+        calls = 0
+        progress_bytes = b""
+
+        def run_stub(policy: Any, _limits: object) -> int:
+            nonlocal calls, progress_bytes
+            calls += 1
+            policy.output.mkdir(exist_ok=True)
+            if calls == 1:
+                policy.output.joinpath("receipt.json").write_text(
+                    '{"preflight":true}\n', encoding="utf-8"
+                )
+                return 0
+            result = b'{"claim_eligible":false}\n'
+            latency = b"latency-bundle"
+            result_digest = hashlib.sha256(result).hexdigest()
+            latency_digest = blake3.blake3(latency).hexdigest()
+            result_path = policy.output / f"development-result-{result_digest}.bin"
+            latency_path = policy.output / f"development-latency-{latency_digest}.bin"
+            result_path.write_bytes(result)
+            latency_path.write_bytes(latency)
+            progress_start = _canonical_progress_bytes(
+                completed_units=0,
+                previous_progress_sha256=None,
+                sequence=0,
+                total_units=18,
+                phase="development-evaluation",
+            )
+            progress_final = _canonical_progress_bytes(
+                completed_units=18,
+                previous_progress_sha256=hashlib.sha256(progress_start).hexdigest(),
+                sequence=1,
+                total_units=18,
+                phase="development-evaluation",
+            )
+            progress = progress_start + progress_final
+            progress_bytes = progress
+            policy.output.joinpath("progress.json").write_bytes(progress)
+            identities = [
+                {
+                    "digest": result_digest,
+                    "digest_algorithm": "sha256",
+                    "encoded_bytes": len(result),
+                    "generation": f"content-{result_digest}",
+                    "role": "development-result",
+                    "uri": f"file://{result_path}",
+                },
+                {
+                    "digest": latency_digest,
+                    "digest_algorithm": "blake3",
+                    "encoded_bytes": len(latency),
+                    "generation": f"content-{latency_digest}",
+                    "role": "development-latency",
+                    "uri": f"file://{latency_path}",
+                },
+            ]
+            policy.output.joinpath("receipt.json").write_bytes(
+                json.dumps(
+                    {
+                        "final_progress_sha256": hashlib.sha256(progress).hexdigest(),
+                        "outputs": identities,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+                + b"\n"
+            )
+            return 0
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("scripts.launch_v23_incidence_spot._stage", side_effect=stage_stub),
+            patch(
+                "scripts.run_v23_leaf_page_incidence_falsifier.run_phase",
+                side_effect=run_stub,
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_POSTING_RECEIPT_SHA256",
+                "ab" * 32,
+            ),
+        ):
+            root = Path(directory)
+            binary = Path("/bin/true").resolve()
+            self.assertEqual(
+                worker_development(
+                    binary=binary,
+                    binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
+                    evidence=root / "evidence",
+                    output_uri_prefix="s3://fixture/development-run",
+                    manifest_bytes=manifest_bytes,
+                ),
+                0,
+            )
+            evidence = root / "evidence"
+            self.assertEqual(calls, 2)
+            self.assertTrue(evidence.joinpath("preflight-receipt.json").is_file())
+            self.assertEqual(
+                evidence.joinpath("progress.json").read_bytes(), progress_bytes
+            )
+            self.assertEqual(
+                evidence.joinpath("development-result.json").read_bytes(),
+                b'{"claim_eligible":false}\n',
+            )
+            self.assertEqual(
+                evidence.joinpath("development-latency.bin").read_bytes(),
+                b"latency-bundle",
+            )
+            receipt = json.loads(evidence.joinpath("development-receipt.json").read_bytes())
+            self.assertEqual(
+                [item["uri"] for item in receipt["outputs"]],
+                [
+                    "s3://fixture/development-run/development-result.json",
+                    "s3://fixture/development-run/development-latency.bin",
+                ],
+            )
+
     def test_posting_manifest_binds_tree_roster_and_every_page_without_reads(
         self,
     ) -> None:
@@ -576,7 +997,7 @@ with tempfile.TemporaryDirectory() as directory:
         self.assertIn("posting-receipt.json", worker)
         self.assertIn("incidence-postings-one.bin", worker)
         self.assertIn("incidence-postings-two.bin", worker)
-        self.assertIn('"phase":"posting-construction"', worker)
+        self.assertIn('"phase":phase', worker)
         self.assertLessEqual(len(worker.encode()), 16_384)
         self.assertLess(
             worker.index(
@@ -1068,7 +1489,7 @@ with tempfile.TemporaryDirectory() as directory:
         self.assertFalse(plan["d3_allowed"])
         self.assertEqual(
             plan["supported_phases"],
-            ["tree-training", "posting-construction"],
+            ["tree-training", "posting-construction", "development-evaluation"],
         )
         self.assertNotIn("posting-construction", plan["blocked_phases"])
 
@@ -1096,18 +1517,14 @@ with tempfile.TemporaryDirectory() as directory:
         self.assertEqual(plan["page_roster_uri"], FROZEN_PAGE_ROSTER_URI)
         self.assertEqual(
             plan["supported_phases"],
-            ["tree-training", "posting-construction"],
+            ["tree-training", "posting-construction", "development-evaluation"],
         )
         self.assertNotIn("posting-construction", plan["blocked_phases"])
-        self.assertIn("development-evaluation", plan["blocked_phases"])
+        self.assertNotIn("development-evaluation", plan["blocked_phases"])
         self.assertFalse(plan["d3_allowed"])
 
     def test_later_phases_refuse_without_committed_immutable_manifests(self) -> None:
-        for phase in (
-            "development-evaluation",
-            "holdout-binding",
-            "holdout-evaluation",
-        ):
+        for phase in ("holdout-binding", "holdout-evaluation"):
             with self.subTest(phase=phase), self.assertRaisesRegex(
                 ValueError, "immutable phase manifest"
             ):
@@ -1617,6 +2034,33 @@ with tempfile.TemporaryDirectory() as directory:
                 SOURCE_SHA,
                 "posting-construction",
             )
+
+    def test_development_terminal_binds_result_latency_and_receipt(self) -> None:
+        value = {
+            "binary": {"encoded_bytes": 1, "sha256": "22" * 32},
+            "claim_eligible": False,
+            "development_latency": {"encoded_bytes": 2, "sha256": "33" * 32},
+            "development_result": {"encoded_bytes": 3, "sha256": "44" * 32},
+            "phase": "development-evaluation",
+            "purchase_option": "spot",
+            "receipt": {"encoded_bytes": 4, "sha256": "55" * 32},
+            "run_id": "fixture-development-run",
+            "schema": "borsuk-v23-incidence-attempt-complete-v1",
+            "source_archive_sha256": "11" * 32,
+            "source_commit": SOURCE_SHA,
+            "spot_price_usd_per_hour": "0.321",
+            "status": "complete",
+        }
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        self.assertEqual(
+            _validate_terminal_bytes(
+                raw,
+                "fixture-development-run",
+                SOURCE_SHA,
+                "development-evaluation",
+            ),
+            "complete",
+        )
 
     def test_spot_price_is_scoped_to_the_registered_subnet_zone(self) -> None:
         with patch(

@@ -61,9 +61,38 @@ FROZEN_TREE_RECEIPT_SHA256 = (
     "c1af5ab84ef20797ffe52fa0a93872008df817c142957f009895c8b7fc853a99"
 )
 FROZEN_TREE_RECEIPT_BYTES = 26_106
-SUPPORTED_PHASES = ("tree-training", "posting-construction")
-BLOCKED_PHASES = (
+FROZEN_POSTING_RECEIPT_URI = (
+    "s3://borsuk-bench-453182569524-euc1/research/v23-leaf-page-incidence/"
+    "7f9d1350948112ecef393dc5c6994cef642ce965639c7f682d47aabfb87976a2/"
+    "v23-incidence-posting-20260831T152007Z/posting-receipt.json"
+)
+FROZEN_POSTING_RECEIPT_SHA256 = (
+    "cca5b1f895fd633ad5e6fab0288f6838d3efa9087f83809fc0c2032736ff6aca"
+)
+FROZEN_POSTING_RECEIPT_BYTES = 13_407_759
+FROZEN_D2_REPORT_URI = (
+    "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/"
+    "r01-6846520de9e7ffcfb93d5efd/runtime-v23-d2/arms/0000/attempts/0001/"
+    "bench_v23_d2_report.json"
+)
+FROZEN_D2_REPORT_SHA256 = (
+    "bb8f97360827abd0f18964982c9729c083888ad02ad4cc08d1ba6779100f409a"
+)
+FROZEN_D2_REPORT_BYTES = 25_725_198
+FROZEN_QUERY_URI = (
+    "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/"
+    "deep-image-96/attempts/0001/materialized/test.parquet"
+)
+FROZEN_QUERY_SHA256 = (
+    "296d45828020c1c0b88c6a1d5c822f6283280513b8c58d01cfa961f3a139a5d4"
+)
+FROZEN_QUERY_BYTES = 3_843_448
+SUPPORTED_PHASES = (
+    "tree-training",
+    "posting-construction",
     "development-evaluation",
+)
+BLOCKED_PHASES = (
     "holdout-binding",
     "holdout-evaluation",
 )
@@ -379,6 +408,164 @@ def build_posting_manifest(
     return _canonical_bytes(manifest)
 
 
+def build_development_manifest(
+    *,
+    posting_receipt_bytes: bytes,
+    posting_receipt_identity: dict[str, object],
+    d2_report_bytes: bytes,
+    d2_report_identity: dict[str, object],
+    query_bytes: bytes,
+    query_identity: dict[str, object],
+) -> bytes:
+    """Bind the sealed posting outputs to the burned development cohort."""
+
+    identity_keys = {
+        "digest",
+        "digest_algorithm",
+        "encoded_bytes",
+        "generation",
+        "role",
+        "uri",
+    }
+
+    def authenticate_sha256(
+        identity: dict[str, object],
+        role: str,
+        raw: bytes,
+        frozen: tuple[str, str, int],
+    ) -> None:
+        uri, digest, encoded_bytes = frozen
+        if (
+            type(identity) is not dict
+            or set(identity) != identity_keys
+            or identity.get("role") != role
+            or identity.get("digest_algorithm") != "sha256"
+            or identity.get("uri") != uri
+            or identity.get("digest") != digest
+            or identity.get("encoded_bytes") != encoded_bytes
+            or len(raw) != encoded_bytes
+            or hashlib.sha256(raw).hexdigest() != digest
+            or type(identity.get("generation")) is not str
+            or not identity["generation"]
+        ):
+            raise ValueError(f"{role} authority differs")
+
+    authenticate_sha256(
+        posting_receipt_identity,
+        "parent-receipt",
+        posting_receipt_bytes,
+        (
+            FROZEN_POSTING_RECEIPT_URI,
+            FROZEN_POSTING_RECEIPT_SHA256,
+            FROZEN_POSTING_RECEIPT_BYTES,
+        ),
+    )
+    authenticate_sha256(
+        d2_report_identity,
+        "d2-report",
+        d2_report_bytes,
+        (FROZEN_D2_REPORT_URI, FROZEN_D2_REPORT_SHA256, FROZEN_D2_REPORT_BYTES),
+    )
+    authenticate_sha256(
+        query_identity,
+        "query-parquet",
+        query_bytes,
+        (FROZEN_QUERY_URI, FROZEN_QUERY_SHA256, FROZEN_QUERY_BYTES),
+    )
+    try:
+        posting_receipt = json.loads(posting_receipt_bytes)
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("posting receipt JSON differs") from error
+    receipt_keys = {
+        "claim_eligible",
+        "executable_sha256",
+        "final_progress_sha256",
+        "fma_backend",
+        "network_namespace_inode",
+        "ordered_inputs",
+        "outputs",
+        "parent_receipt_sha256",
+        "phase",
+        "preflight_evidence",
+        "probes",
+        "run_mode",
+        "schema",
+        "stop",
+    }
+    if (
+        posting_receipt_bytes != _canonical_bytes(posting_receipt)
+        or type(posting_receipt) is not dict
+        or set(posting_receipt) != receipt_keys
+        or posting_receipt.get("schema") != "borsuk-v23-incidence-receipt-v3"
+        or posting_receipt.get("claim_eligible") is not False
+        or posting_receipt.get("phase") != "posting-construction"
+        or posting_receipt.get("run_mode") != "execute"
+        or posting_receipt.get("stop") is not None
+        or posting_receipt.get("preflight_evidence") is not None
+        or type(posting_receipt.get("ordered_inputs")) is not list
+        or type(posting_receipt.get("outputs")) is not list
+    ):
+        raise ValueError("posting receipt authority differs")
+
+    def registered_identity(value: object, role: str, algorithm: str) -> dict[str, object]:
+        if (
+            type(value) is not dict
+            or set(value) != identity_keys
+            or value.get("role") != role
+            or value.get("digest_algorithm") != algorithm
+            or type(value.get("digest")) is not str
+            or LOWER_SHA256.fullmatch(value["digest"]) is None
+            or type(value.get("encoded_bytes")) is not int
+            or value["encoded_bytes"] <= 0
+            or value.get("generation") != f"content-{value['digest']}"
+            or type(value.get("uri")) is not str
+            or not value["uri"].startswith("s3://")
+        ):
+            raise ValueError(f"{role} authority differs")
+        return value
+
+    tree_matches = [
+        value
+        for value in posting_receipt["ordered_inputs"]
+        if type(value) is dict and value.get("role") == "incidence-tree"
+    ]
+    if len(tree_matches) != 1 or len(posting_receipt["outputs"]) != 2:
+        raise ValueError("posting receipt handoff differs")
+    tree = registered_identity(tree_matches[0], "incidence-tree", "blake3")
+    one = registered_identity(
+        posting_receipt["outputs"][0], "incidence-postings-one", "blake3"
+    )
+    two = registered_identity(
+        posting_receipt["outputs"][1], "incidence-postings-two", "blake3"
+    )
+    base = _manifest()
+
+    def phase_object(identity: dict[str, object]) -> dict[str, object]:
+        return {"authority_kind": "phase-object", "identity": identity}
+
+    return _canonical_bytes(
+        {
+            "algorithm": base["algorithm"],
+            "claim_eligible": False,
+            "dataset_id": base["dataset_id"],
+            "index_id": base["index_id"],
+            "ordered_inputs": [
+                phase_object(posting_receipt_identity),
+                phase_object(tree),
+                phase_object(one),
+                phase_object(two),
+                phase_object(d2_report_identity),
+                phase_object(query_identity),
+            ],
+            "parent_receipt_sha256": posting_receipt_identity["digest"],
+            "phase": "development-evaluation",
+            "schema": "borsuk-v23-incidence-manifest-v1",
+            "source_archive_sha256": base["source_archive_sha256"],
+            "source_commit": base["source_commit"],
+        }
+    )
+
+
 def build_launch_plan(
     *, phase: str, run_id: str, source_commit: str
 ) -> dict[str, object]:
@@ -396,11 +583,16 @@ def build_launch_plan(
         execute_input_count = len(manifest["ordered_inputs"])
         parent_receipt_uri = None
         page_roster_uri = None
-    else:
+    elif phase == "posting-construction":
         preflight_input_count = 3 + 256
         execute_input_count = 3 + 28_282
         parent_receipt_uri = FROZEN_TREE_RECEIPT_URI
         page_roster_uri = FROZEN_PAGE_ROSTER_URI
+    else:
+        preflight_input_count = 4
+        execute_input_count = 6
+        parent_receipt_uri = FROZEN_POSTING_RECEIPT_URI
+        page_roster_uri = None
     return {
         "aws_account_id": EXPECTED_AWS_ACCOUNT,
         "aws_profile": PROFILE,
@@ -546,6 +738,11 @@ posting_bootstrap=/var/lib/borsuk-v23-incidence/posting-bootstrap
 posting_tree_receipt="$posting_bootstrap/tree-receipt.json"
 posting_roster="$posting_bootstrap/page-roster.json"
 posting_manifest="$posting_bootstrap/posting-manifest.json"
+development_bootstrap=/var/lib/borsuk-v23-incidence/development-bootstrap
+development_posting_receipt="$development_bootstrap/posting-receipt.json"
+development_d2_report="$development_bootstrap/d2-report.json"
+development_query="$development_bootstrap/query.parquet"
+development_manifest="$development_bootstrap/development-manifest.json"
 worker_log=/var/lib/borsuk-v23-incidence/worker.log
 phase_log="$evidence/phase.log"
 phase_journal="$evidence/phase-journal.txt"
@@ -570,20 +767,29 @@ finish() {{
   primary_evidence_attempted=0
   if [[ "$status" -eq 0 && ! -f "$evidence/spot-interruption.json" ]] && {{
     [[ "$phase" == "tree-training" && -f "$evidence/tree-receipt.json" && -f "$evidence/incidence-tree.bin" ]] ||
-    [[ "$phase" == "posting-construction" && -f "$evidence/posting-receipt.json" && -f "$evidence/incidence-postings-one.bin" && -f "$evidence/incidence-postings-two.bin" ]]
+    [[ "$phase" == "posting-construction" && -f "$evidence/posting-receipt.json" && -f "$evidence/incidence-postings-one.bin" && -f "$evidence/incidence-postings-two.bin" ]] ||
+    [[ "$phase" == "development-evaluation" && -f "$evidence/development-receipt.json" && -f "$evidence/development-result.json" && -f "$evidence/development-latency.bin" ]]
   }}; then
     if [[ "$phase" == "tree-training" ]]; then
-    python3 - "$evidence/ATTEMPT_COMPLETE.json" "$run_id" "$source_commit" "$source_sha256" "$spot_price" "$evidence/tree-receipt.json" "$evidence/incidence-tree.bin" "$binary" <<'PY'
+      complete_files=(receipt "$evidence/tree-receipt.json" incidence_tree "$evidence/incidence-tree.bin")
+    elif [[ "$phase" == "posting-construction" ]]; then
+      complete_files=(receipt "$evidence/posting-receipt.json" incidence_postings_one "$evidence/incidence-postings-one.bin" incidence_postings_two "$evidence/incidence-postings-two.bin")
+    else
+      complete_files=(receipt "$evidence/development-receipt.json" development_result "$evidence/development-result.json" development_latency "$evidence/development-latency.bin")
+    fi
+    python3 - "$evidence/ATTEMPT_COMPLETE.json" "$run_id" "$source_commit" "$source_sha256" "$spot_price" "$phase" "$binary" "${{complete_files[@]}}" <<'PY'
 import hashlib,json,os,sys
-path,run_id,commit,archive_sha,price,receipt,tree,binary=sys.argv[1:]
-def identity(source):
-    digest=hashlib.sha256()
-    with open(source,"rb") as stream:
-        for chunk in iter(lambda:stream.read(1024*1024),b""): digest.update(chunk)
-    return {{"encoded_bytes":os.path.getsize(source),"sha256":digest.hexdigest()}}
-value={{"binary":identity(binary),"claim_eligible":False,"incidence_tree":identity(tree),"phase":"tree-training","purchase_option":"spot","receipt":identity(receipt),"run_id":run_id,"schema":"borsuk-v23-incidence-attempt-complete-v1","source_archive_sha256":archive_sha,"source_commit":commit,"spot_price_usd_per_hour":price,"status":"complete"}}
-open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\\n")
+p,r,c,a,price,phase,binary,*items=sys.argv[1:]
+def ident(source):
+ d=hashlib.sha256()
+ with open(source,"rb") as f:
+  for x in iter(lambda:f.read(1048576),b""):d.update(x)
+ return {{"encoded_bytes":os.path.getsize(source),"sha256":d.hexdigest()}}
+v={{"binary":ident(binary),"claim_eligible":False,"phase":phase,"purchase_option":"spot","run_id":r,"schema":"borsuk-v23-incidence-attempt-complete-v1","source_archive_sha256":a,"source_commit":c,"spot_price_usd_per_hour":price,"status":"complete"}}
+for k,f in zip(items[::2],items[1::2]):v[k]=ident(f)
+open(p,"wb").write(json.dumps(v,sort_keys=True,separators=(",", ":")).encode()+b"\\n")
 PY
+    if [[ "$phase" == "tree-training" ]]; then
     primary_evidence_attempted=1
     put_once "$evidence/binary.json" binary.json || publish_status=86
     put_once "$binary" incidence-executable || publish_status=86
@@ -591,18 +797,7 @@ PY
     put_once "$evidence/progress.json" progress.json || publish_status=86
     put_once "$evidence/incidence-tree.bin" incidence-tree.bin || publish_status=86
     put_once "$evidence/tree-receipt.json" tree-receipt.json || publish_status=86
-    else
-    python3 - "$evidence/ATTEMPT_COMPLETE.json" "$run_id" "$source_commit" "$source_sha256" "$spot_price" "$evidence/posting-receipt.json" "$evidence/incidence-postings-one.bin" "$evidence/incidence-postings-two.bin" "$binary" <<'PY'
-import hashlib,json,os,sys
-path,run_id,commit,archive_sha,price,receipt,one,two,binary=sys.argv[1:]
-def identity(source):
-    digest=hashlib.sha256()
-    with open(source,"rb") as stream:
-        for chunk in iter(lambda:stream.read(1024*1024),b""): digest.update(chunk)
-    return {{"encoded_bytes":os.path.getsize(source),"sha256":digest.hexdigest()}}
-value={{"binary":identity(binary),"claim_eligible":False,"incidence_postings_one":identity(one),"incidence_postings_two":identity(two),"phase":"posting-construction","purchase_option":"spot","receipt":identity(receipt),"run_id":run_id,"schema":"borsuk-v23-incidence-attempt-complete-v1","source_archive_sha256":archive_sha,"source_commit":commit,"spot_price_usd_per_hour":price,"status":"complete"}}
-open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\\n")
-PY
+    elif [[ "$phase" == "posting-construction" ]]; then
     primary_evidence_attempted=1
     put_once "$evidence/binary.json" binary.json || publish_status=86
     put_once "$binary" incidence-executable || publish_status=86
@@ -611,6 +806,14 @@ PY
     put_once "$evidence/incidence-postings-one.bin" incidence-postings-one.bin || publish_status=86
     put_once "$evidence/incidence-postings-two.bin" incidence-postings-two.bin || publish_status=86
     put_once "$evidence/posting-receipt.json" posting-receipt.json || publish_status=86
+    else
+    primary_evidence_attempted=1
+    put_once "$evidence/binary.json" binary.json || publish_status=86
+    put_once "$binary" incidence-executable || publish_status=86
+    put_once "$evidence/preflight-receipt.json" preflight-receipt.json || publish_status=86
+    put_once "$evidence/development-result.json" development-result.json || publish_status=86
+    put_once "$evidence/development-latency.bin" development-latency.bin || publish_status=86
+    put_once "$evidence/development-receipt.json" development-receipt.json || publish_status=86
     fi
   else
     publish_status="$status"
@@ -651,6 +854,10 @@ PY
   if [[ "$phase" == "posting-construction" ]]; then
     rm -f "$posting_tree_receipt" "$posting_roster" "$posting_manifest"
     rmdir "$posting_bootstrap" 2>/dev/null || true
+  fi
+  if [[ "$phase" == "development-evaluation" ]]; then
+    rm -f "$development_posting_receipt" "$development_d2_report" "$development_query" "$development_manifest"
+    rmdir "$development_bootstrap" 2>/dev/null || true
   fi
   rm -f "$archive"
   shutdown -h now
@@ -705,6 +912,22 @@ if [[ "$phase" == "posting-construction" ]]; then
     --tree-receipt "$posting_tree_receipt" --page-roster "$posting_roster" \
     --posting-manifest-output "$posting_manifest"
   worker_mode=(--worker-posting --posting-manifest "$posting_manifest")
+fi
+if [[ "$phase" == "development-evaluation" ]]; then
+  mkdir "$development_bootstrap"
+  aws s3 cp {shlex.quote(FROZEN_POSTING_RECEIPT_URI)} "$development_posting_receipt" --only-show-errors
+  test "$(stat -c %s "$development_posting_receipt")" -eq {FROZEN_POSTING_RECEIPT_BYTES}
+  test "$(sha256sum "$development_posting_receipt" | awk '{{print $1}}')" = {FROZEN_POSTING_RECEIPT_SHA256}
+  aws s3 cp {shlex.quote(FROZEN_D2_REPORT_URI)} "$development_d2_report" --only-show-errors
+  test "$(stat -c %s "$development_d2_report")" -eq {FROZEN_D2_REPORT_BYTES}
+  test "$(sha256sum "$development_d2_report" | awk '{{print $1}}')" = {FROZEN_D2_REPORT_SHA256}
+  aws s3 cp {shlex.quote(FROZEN_QUERY_URI)} "$development_query" --only-show-errors
+  test "$(stat -c %s "$development_query")" -eq {FROZEN_QUERY_BYTES}
+  test "$(sha256sum "$development_query" | awk '{{print $1}}')" = {FROZEN_QUERY_SHA256}
+  /opt/borsuk-incidence-venv/bin/python scripts/launch_v23_incidence_spot.py --build-development-manifest \
+    --posting-receipt "$development_posting_receipt" --d2-report "$development_d2_report" \
+    --query-parquet "$development_query" --development-manifest-output "$development_manifest"
+  worker_mode=(--worker-development --development-manifest "$development_manifest")
 fi
 
 if ! interruption_token="$(curl --fail --silent --request PUT --header 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)"; then
@@ -952,11 +1175,12 @@ def _validate_terminal_bytes(
             raise ValueError("interrupted terminal authority differs")
         return status
     if status == "complete":
-        artifact_roles = (
-            ("incidence_tree",)
-            if phase == "tree-training"
-            else ("incidence_postings_one", "incidence_postings_two")
-        )
+        if phase == "tree-training":
+            artifact_roles = ("incidence_tree",)
+        elif phase == "posting-construction":
+            artifact_roles = ("incidence_postings_one", "incidence_postings_two")
+        else:
+            artifact_roles = ("development_result", "development_latency")
         if (
             set(value)
             != {
@@ -1221,6 +1445,8 @@ def _write_bulk_manifest(source: pathlib.Path, target: pathlib.Path, full: bool)
             value["ordered_inputs"] = [value["ordered_inputs"][1]]
         elif value.get("phase") == "posting-construction":
             value["ordered_inputs"] = value["ordered_inputs"][: 3 + 256]
+        elif value.get("phase") == "development-evaluation":
+            value["ordered_inputs"] = value["ordered_inputs"][:4]
         else:
             raise ValueError("preflight bulk manifest phase differs")
     target.write_bytes(_canonical_bytes(value))
@@ -1367,6 +1593,76 @@ def _rewrite_posting_receipt_uris(
         ):
             raise ValueError("posting output URI or bytes differ")
         identity["uri"] = f"{output_uri_prefix.rstrip('/')}/{role}.bin"
+        paths[role] = path
+    temporary = receipt_path.with_name(f".{receipt_path.name}.rewrite")
+    _write_exclusive(temporary, _canonical_bytes(value))
+    os.replace(temporary, receipt_path)
+    return paths
+
+
+def _rewrite_development_receipt_uris(
+    receipt_path: pathlib.Path,
+    output_directory: pathlib.Path,
+    output_uri_prefix: str,
+) -> dict[str, pathlib.Path]:
+    import blake3
+
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise ValueError("development output URI or bytes differ")
+    raw = receipt_path.read_bytes()
+    value = json.loads(raw)
+    outputs = value.get("outputs") if type(value) is dict else None
+    roles = ("development-result", "development-latency")
+    algorithms = ("sha256", "blake3")
+    suffixes = ("json", "bin")
+    if (
+        output_directory.is_symlink()
+        or not output_directory.is_dir()
+        or raw != _canonical_bytes(value)
+        or type(outputs) is not list
+        or len(outputs) != 2
+        or re.fullmatch(r"s3://[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+", output_uri_prefix)
+        is None
+    ):
+        raise ValueError("development output URI or bytes differ")
+    paths: dict[str, pathlib.Path] = {}
+    for identity, role, algorithm, suffix in zip(
+        outputs, roles, algorithms, suffixes, strict=True
+    ):
+        path = pathlib.Path(str(identity.get("uri", "")).removeprefix("file://"))
+        if (
+            not str(identity.get("uri", "")).startswith("file://")
+            or path.parent != output_directory
+            or path.is_symlink()
+            or not path.is_file()
+        ):
+            raise ValueError("development output authority differs")
+        encoded = path.read_bytes()
+        digest = (
+            hashlib.sha256(encoded).hexdigest()
+            if algorithm == "sha256"
+            else blake3.blake3(encoded).hexdigest()
+        )
+        if (
+            type(identity) is not dict
+            or identity.get("role") != role
+            or identity.get("digest_algorithm") != algorithm
+            or identity.get("encoded_bytes") != len(encoded)
+            or identity.get("digest") != digest
+            or identity.get("generation") != f"content-{digest}"
+            or identity.get("uri") != f"file://{path}"
+            or set(identity)
+            != {
+                "digest",
+                "digest_algorithm",
+                "encoded_bytes",
+                "generation",
+                "role",
+                "uri",
+            }
+        ):
+            raise ValueError("development output authority differs")
+        identity["uri"] = f"{output_uri_prefix.rstrip('/')}/{role}.{suffix}"
         paths[role] = path
     temporary = receipt_path.with_name(f".{receipt_path.name}.rewrite")
     _write_exclusive(temporary, _canonical_bytes(value))
@@ -1816,6 +2112,135 @@ def worker_posting(
         shutil.rmtree(root)
 
 
+def worker_development(
+    binary: pathlib.Path,
+    binary_sha256: str,
+    evidence: pathlib.Path,
+    output_uri_prefix: str,
+    manifest_bytes: bytes,
+) -> int:
+    """Stage and execute one monitored burned-development evaluation."""
+
+    from scripts.run_v23_leaf_page_incidence_falsifier import MonitorLimits, run_phase
+
+    root = pathlib.Path(tempfile.mkdtemp(prefix="v23-incidence-development-"))
+    manifest = root / "phase-manifest.json"
+    preflight_manifest = root / "preflight-manifest.json"
+    execute_manifest = root / "execute-manifest.json"
+    preflight_receipt = root / "preflight-staging-receipt.json"
+    execute_receipt = root / "execute-staging-receipt.json"
+    preflight_staging = root / "preflight-inputs"
+    execute_staging = root / "execute-inputs"
+    preflight_scratch = root / "preflight-scratch"
+    execute_scratch = root / "execute-scratch"
+    preflight_output = root / "preflight-output"
+    execute_output = root / "execute-output"
+    phase_preflight_receipt = preflight_output / "receipt.json"
+    execute_progress = execute_output / "progress.json"
+    stage = "initialization"
+    try:
+        _write_exclusive(manifest, manifest_bytes)
+        manifest_value = json.loads(manifest_bytes)
+        if (
+            manifest_bytes != _canonical_bytes(manifest_value)
+            or manifest_value.get("phase") != "development-evaluation"
+            or manifest_value.get("parent_receipt_sha256")
+            != FROZEN_POSTING_RECEIPT_SHA256
+        ):
+            raise ValueError("development parent receipt authority differs")
+        for path in (
+            preflight_scratch,
+            execute_scratch,
+            preflight_output,
+            execute_output,
+        ):
+            path.mkdir()
+        stage = "preflight-manifest"
+        _write_bulk_manifest(manifest, preflight_manifest, False)
+        stage = "preflight-staging"
+        _stage(preflight_manifest, preflight_staging, preflight_receipt)
+        stage = "preflight-policy"
+        preflight_policy = _phase_policy(
+            phase="development-evaluation",
+            binary=binary,
+            binary_sha256=binary_sha256,
+            manifest=manifest,
+            bulk_manifest=preflight_manifest,
+            staging=preflight_staging,
+            staging_receipt=preflight_receipt,
+            scratch=preflight_scratch,
+            output=preflight_output,
+            preflight_receipt=None,
+        )
+        stage = "preflight-run"
+        if run_phase(preflight_policy, MonitorLimits()) != 0:
+            raise RuntimeError("development preflight failed")
+        if phase_preflight_receipt.is_symlink() or not phase_preflight_receipt.is_file():
+            raise RuntimeError("development preflight receipt is absent")
+        evidence.mkdir(parents=True, exist_ok=True)
+        _write_exclusive(
+            evidence / "preflight-receipt.json", phase_preflight_receipt.read_bytes()
+        )
+        stage = "execute-manifest"
+        _write_bulk_manifest(manifest, execute_manifest, True)
+        stage = "execute-staging"
+        _stage(execute_manifest, execute_staging, execute_receipt)
+        stage = "execute-policy"
+        execute_policy = _phase_policy(
+            phase="development-evaluation",
+            binary=binary,
+            binary_sha256=binary_sha256,
+            manifest=manifest,
+            bulk_manifest=execute_manifest,
+            staging=execute_staging,
+            staging_receipt=execute_receipt,
+            scratch=execute_scratch,
+            output=execute_output,
+            preflight_receipt=phase_preflight_receipt,
+        )
+        stage = "execute-run"
+        if run_phase(execute_policy, MonitorLimits()) != 0:
+            raise RuntimeError("development execution failed")
+        stage = "execute-receipt"
+        final_receipt = execute_output / "receipt.json"
+        if final_receipt.is_symlink() or not final_receipt.is_file():
+            raise RuntimeError("development receipt is absent")
+        receipt_value = json.loads(final_receipt.read_bytes())
+        _validate_phase_progress_binding(
+            receipt_value, execute_progress, "development-evaluation"
+        )
+        paths = _rewrite_development_receipt_uris(
+            final_receipt, execute_output, output_uri_prefix
+        )
+        _write_exclusive(evidence / "progress.json", execute_progress.read_bytes())
+        for role, path in paths.items():
+            suffix = "json" if role == "development-result" else "bin"
+            os.replace(path, evidence / f"{role}.{suffix}")
+        os.replace(final_receipt, evidence / "development-receipt.json")
+        return 0
+    except BaseException as error:
+        try:
+            _preserve_worker_failure(
+                evidence,
+                "development-evaluation",
+                stage,
+                error,
+                (
+                    (preflight_receipt, "preflight-staging-receipt.json"),
+                    (execute_receipt, "execute-staging-receipt.json"),
+                    (phase_preflight_receipt, "preflight-receipt.json"),
+                    (execute_progress, "progress.json"),
+                ),
+            )
+        except BaseException:
+            traceback.print_exc()
+        raise
+    finally:
+        import shutil
+
+        shutil.rmtree(root)
+
+
 def offline_probe() -> int:
     """Prove memory-pressure visibility and an isolated network namespace."""
 
@@ -1891,6 +2316,50 @@ def _build_posting_manifest_file(
     _write_exclusive(output_path, manifest_bytes)
 
 
+def _build_development_manifest_file(
+    posting_receipt_path: pathlib.Path,
+    d2_report_path: pathlib.Path,
+    query_path: pathlib.Path,
+    output_path: pathlib.Path,
+) -> None:
+    inputs = (posting_receipt_path, d2_report_path, query_path)
+    if (
+        any(path.is_symlink() or not path.is_file() for path in inputs)
+        or output_path.exists()
+        or output_path.parent.is_symlink()
+        or not output_path.parent.is_dir()
+    ):
+        raise ValueError("development manifest file boundary differs")
+
+    def identity(role: str, uri: str, raw: bytes) -> dict[str, object]:
+        digest = hashlib.sha256(raw).hexdigest()
+        return {
+            "digest": digest,
+            "digest_algorithm": "sha256",
+            "encoded_bytes": len(raw),
+            "generation": f"unversioned-sha256:{digest}",
+            "role": role,
+            "uri": uri,
+        }
+
+    posting = posting_receipt_path.read_bytes()
+    d2 = d2_report_path.read_bytes()
+    query = query_path.read_bytes()
+    _write_exclusive(
+        output_path,
+        build_development_manifest(
+            posting_receipt_bytes=posting,
+            posting_receipt_identity=identity(
+                "parent-receipt", FROZEN_POSTING_RECEIPT_URI, posting
+            ),
+            d2_report_bytes=d2,
+            d2_report_identity=identity("d2-report", FROZEN_D2_REPORT_URI, d2),
+            query_bytes=query,
+            query_identity=identity("query-parquet", FROZEN_QUERY_URI, query),
+        ),
+    )
+
+
 def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--phase", choices=SUPPORTED_PHASES + BLOCKED_PHASES)
@@ -1899,7 +2368,9 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     private = parser.add_mutually_exclusive_group()
     private.add_argument("--worker-tree", action="store_true")
     private.add_argument("--worker-posting", action="store_true")
+    private.add_argument("--worker-development", action="store_true")
     private.add_argument("--build-posting-manifest", action="store_true")
+    private.add_argument("--build-development-manifest", action="store_true")
     private.add_argument("--offline-probe", action="store_true")
     parser.add_argument("--binary", type=pathlib.Path)
     parser.add_argument("--binary-sha256")
@@ -1909,6 +2380,11 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--page-roster", type=pathlib.Path)
     parser.add_argument("--posting-manifest-output", type=pathlib.Path)
     parser.add_argument("--posting-manifest", type=pathlib.Path)
+    parser.add_argument("--posting-receipt", type=pathlib.Path)
+    parser.add_argument("--d2-report", type=pathlib.Path)
+    parser.add_argument("--query-parquet", type=pathlib.Path)
+    parser.add_argument("--development-manifest-output", type=pathlib.Path)
+    parser.add_argument("--development-manifest", type=pathlib.Path)
     parsed = parser.parse_args(arguments)
     if parsed.worker_tree:
         if any(
@@ -1920,6 +2396,11 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
                 parsed.page_roster,
                 parsed.posting_manifest_output,
                 parsed.posting_manifest,
+                parsed.posting_receipt,
+                parsed.d2_report,
+                parsed.query_parquet,
+                parsed.development_manifest_output,
+                parsed.development_manifest,
             )
         ) or not all(
             (
@@ -1939,6 +2420,11 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
                 parsed.tree_receipt,
                 parsed.page_roster,
                 parsed.posting_manifest_output,
+                parsed.posting_receipt,
+                parsed.d2_report,
+                parsed.query_parquet,
+                parsed.development_manifest_output,
+                parsed.development_manifest,
             )
         ) or not all(
             (
@@ -1950,6 +2436,31 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
             )
         ):
             parser.error("worker posting arguments differ")
+    elif parsed.worker_development:
+        if any(
+            (
+                parsed.phase,
+                parsed.run_id,
+                parsed.dry_run,
+                parsed.tree_receipt,
+                parsed.page_roster,
+                parsed.posting_manifest_output,
+                parsed.posting_manifest,
+                parsed.posting_receipt,
+                parsed.d2_report,
+                parsed.query_parquet,
+                parsed.development_manifest_output,
+            )
+        ) or not all(
+            (
+                parsed.binary,
+                parsed.binary_sha256,
+                parsed.evidence_directory,
+                parsed.output_uri_prefix,
+                parsed.development_manifest,
+            )
+        ):
+            parser.error("worker development arguments differ")
     elif parsed.build_posting_manifest:
         if any(
             (
@@ -1961,6 +2472,11 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
                 parsed.evidence_directory,
                 parsed.output_uri_prefix,
                 parsed.posting_manifest,
+                parsed.posting_receipt,
+                parsed.d2_report,
+                parsed.query_parquet,
+                parsed.development_manifest_output,
+                parsed.development_manifest,
             )
         ) or not all(
             (
@@ -1970,6 +2486,31 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
             )
         ):
             parser.error("posting manifest arguments differ")
+    elif parsed.build_development_manifest:
+        if any(
+            (
+                parsed.phase,
+                parsed.run_id,
+                parsed.dry_run,
+                parsed.binary,
+                parsed.binary_sha256,
+                parsed.evidence_directory,
+                parsed.output_uri_prefix,
+                parsed.tree_receipt,
+                parsed.page_roster,
+                parsed.posting_manifest_output,
+                parsed.posting_manifest,
+                parsed.development_manifest,
+            )
+        ) or not all(
+            (
+                parsed.posting_receipt,
+                parsed.d2_report,
+                parsed.query_parquet,
+                parsed.development_manifest_output,
+            )
+        ):
+            parser.error("development manifest arguments differ")
     elif parsed.offline_probe:
         if any(
             (
@@ -1984,6 +2525,11 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
                 parsed.page_roster,
                 parsed.posting_manifest_output,
                 parsed.posting_manifest,
+                parsed.posting_receipt,
+                parsed.d2_report,
+                parsed.query_parquet,
+                parsed.development_manifest_output,
+                parsed.development_manifest,
             )
         ):
             parser.error("offline probe arguments differ")
@@ -2000,6 +2546,11 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
                 parsed.page_roster,
                 parsed.posting_manifest_output,
                 parsed.posting_manifest,
+                parsed.posting_receipt,
+                parsed.d2_report,
+                parsed.query_parquet,
+                parsed.development_manifest_output,
+                parsed.development_manifest,
             )
         )
     ):
@@ -2026,11 +2577,32 @@ def main(arguments: Sequence[str] | None = None) -> int:
             parsed.output_uri_prefix,
             parsed.posting_manifest.read_bytes(),
         )
+    if parsed.worker_development:
+        if (
+            parsed.development_manifest.is_symlink()
+            or not parsed.development_manifest.is_file()
+        ):
+            raise ValueError("development manifest path differs")
+        return worker_development(
+            parsed.binary.resolve(),
+            _require_sha256("binary SHA-256", parsed.binary_sha256),
+            parsed.evidence_directory.resolve(),
+            parsed.output_uri_prefix,
+            parsed.development_manifest.read_bytes(),
+        )
     if parsed.build_posting_manifest:
         _build_posting_manifest_file(
             parsed.tree_receipt.resolve(),
             parsed.page_roster.resolve(),
             parsed.posting_manifest_output.resolve(),
+        )
+        return 0
+    if parsed.build_development_manifest:
+        _build_development_manifest_file(
+            parsed.posting_receipt.resolve(),
+            parsed.d2_report.resolve(),
+            parsed.query_parquet.resolve(),
+            parsed.development_manifest_output.resolve(),
         )
         return 0
     if parsed.offline_probe:

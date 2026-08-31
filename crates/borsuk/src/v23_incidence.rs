@@ -3139,9 +3139,38 @@ fn run_v23_incidence_development_evaluation(
             "V23 incidence development input authority differs".to_string(),
         ));
     }
-    let mut development = Vec::with_capacity(18);
-    let mut latency_artifacts = Vec::with_capacity(18);
-    for cell in V23IncidenceCell::registered_ladder() {
+    let manifest_identity = request
+        .input_paths
+        .iter()
+        .find(|input| input.identity.role == "phase-manifest")
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V23 incidence development phase manifest is absent".to_string(),
+            )
+        })?;
+    let output_directory = request
+        .output_path
+        .parent()
+        .filter(|path| path.is_dir())
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V23 incidence development output directory differs".to_string(),
+            )
+        })?;
+    let cells = V23IncidenceCell::registered_ladder();
+    let total_units = u64::try_from(cells.len()).map_err(|_| {
+        BorsukError::InvalidStorage("V23 incidence development cell count overflows".to_string())
+    })?;
+    let mut progress = V23IncidenceProgressChain::start(
+        &output_directory.join("progress.json"),
+        V23IncidencePhase::DevelopmentEvaluation,
+        total_units,
+        &manifest_identity.identity.digest,
+    )?;
+    let mut development = Vec::with_capacity(cells.len());
+    let mut latency_artifacts = Vec::with_capacity(cells.len());
+    let mut final_progress_sha256 = None;
+    for cell in cells {
         let plane = match cell.arm {
             PostingAssignmentArm::OneLeaf => &one,
             PostingAssignmentArm::TwoBeamLeaves => &two,
@@ -3153,10 +3182,26 @@ fn run_v23_incidence_development_evaluation(
             ordinal += 1;
             score_incidence_query_native(&tree, plane, cell, query, &mut workspace).map(|_| ())
         })?;
-        development.push(evaluate_v23_incidence_cell(
-            &tree, plane, cell, &queries, &truth, 28_282, &latency,
-        )?);
+        let evaluation =
+            evaluate_v23_incidence_cell(&tree, plane, cell, &queries, &truth, 28_282, &latency)?;
+        let evidence_digest = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&evaluation).map_err(|error| {
+                BorsukError::InvalidStorage(format!(
+                    "V23 incidence development progress JSON differs: {error}"
+                ))
+            })?)
+        );
+        development.push(evaluation);
         latency_artifacts.push(latency);
+        final_progress_sha256 = Some(progress.advance(
+            u64::try_from(development.len()).map_err(|_| {
+                BorsukError::InvalidStorage(
+                    "V23 incidence development progress overflows".to_string(),
+                )
+            })?,
+            &evidence_digest,
+        )?);
     }
     let authority = V23IncidenceDevelopmentAuthority {
         source_commit: V23_INCIDENCE_SOURCE_COMMIT.to_string(),
@@ -3251,7 +3296,7 @@ fn run_v23_incidence_development_evaluation(
             .collect(),
         probes,
         preflight_evidence: None,
-        final_progress_sha256: None,
+        final_progress_sha256,
         outputs: vec![artifact_identity, latency_identity],
         stop: None,
     };
@@ -3878,7 +3923,9 @@ fn validate_receipt(receipt: &V23IncidenceReceipt) -> Result<()> {
     };
     let progress_shape_is_valid = match (receipt.phase, receipt.run_mode, receipt.stop) {
         (
-            V23IncidencePhase::TreeTraining | V23IncidencePhase::PostingConstruction,
+            V23IncidencePhase::TreeTraining
+            | V23IncidencePhase::PostingConstruction
+            | V23IncidencePhase::DevelopmentEvaluation,
             V23IncidenceReceiptRunMode::Execute,
             None,
         ) => receipt
@@ -4578,6 +4625,23 @@ mod tests {
         receipt.outputs = vec![
             object("incidence-postings-one", "blake3", &"31".repeat(32)),
             object("incidence-postings-two", "blake3", &"32".repeat(32)),
+        ];
+
+        assert!(super::validate_receipt(&receipt).is_ok());
+        receipt.final_progress_sha256 = None;
+        assert!(super::validate_receipt(&receipt).is_err());
+        receipt.final_progress_sha256 = Some("44".repeat(31));
+        assert!(super::validate_receipt(&receipt).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_development_progress_terminal_receipt_binds_final_record() {
+        let mut receipt = receipt_fixture();
+        receipt.phase = V23IncidencePhase::DevelopmentEvaluation;
+        receipt.ordered_inputs = vec![object("phase-manifest", "sha256", &"22".repeat(32))];
+        receipt.outputs = vec![
+            object("development-result", "sha256", &"31".repeat(32)),
+            object("development-latency", "blake3", &"32".repeat(32)),
         ];
 
         assert!(super::validate_receipt(&receipt).is_ok());
@@ -6500,7 +6564,6 @@ mod tests {
         let development_latency = b"development-latency\n";
         let mut parent_receipt = receipt_fixture();
         parent_receipt.phase = V23IncidencePhase::DevelopmentEvaluation;
-        parent_receipt.final_progress_sha256 = None;
         parent_receipt.executable_sha256 = "94".repeat(32);
         parent_receipt.outputs = vec![
             V23IncidenceObjectIdentity {
@@ -6779,7 +6842,9 @@ mod tests {
             preflight_evidence: None,
             final_progress_sha256: matches!(
                 phase,
-                V23IncidencePhase::TreeTraining | V23IncidencePhase::PostingConstruction
+                V23IncidencePhase::TreeTraining
+                    | V23IncidencePhase::PostingConstruction
+                    | V23IncidencePhase::DevelopmentEvaluation
             )
             .then(|| format!("{:x}", Sha256::digest(b"test-phase-progress"))),
             outputs: output_identities,
