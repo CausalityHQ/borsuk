@@ -8,6 +8,7 @@ use crate::{
     BorsukError, Result,
     v23_diagnostic::v23_reciprocal_rank_page_cover,
     v23_incidence_tree::normalize_v23_incidence_vector,
+    v23_rabitq::V23RaBitQObjectIdentity,
     v23_rabitq_arrow::{V23RaBitQGeometry, V23RaBitQRowPlanes},
     v23_rabitq_quantizer::{
         V23RaBitQCode, V23RaBitQEstimate, V23RaBitQPreparedQuery, estimate_v23_rabitq_from_dot,
@@ -55,6 +56,67 @@ pub(crate) struct V23RaBitQQueryEvidence {
     pub(crate) backend: V23RaBitQBackend,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum V23RaBitQControl {
+    ExactExhaustive,
+    ExactTree,
+    RaBitQExhaustive,
+    RaBitQTree,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum V23RaBitQClassification {
+    AuthorityStop,
+    TreePruningRejected,
+    RaBitQRepresentationRejected,
+    TreeRaBitQCompositionRejected,
+    DevelopmentCandidateAccepted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V23RaBitQQuerySample {
+    pub(crate) query_ordinal: u32,
+    pub(crate) page_ordinals: [u32; SELECTED_PAGES],
+    pub(crate) hits: u16,
+    pub(crate) oracle_hits: u16,
+    pub(crate) recall_ppm: u32,
+    pub(crate) scored_rows: u32,
+    pub(crate) retained_rows: u16,
+    pub(crate) page_assignments: u16,
+    pub(crate) backend: V23RaBitQBackend,
+    pub(crate) scalar_pages_equal: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V23RaBitQCellResult {
+    pub(crate) control: V23RaBitQControl,
+    pub(crate) probe_count: u32,
+    pub(crate) samples: Vec<V23RaBitQQuerySample>,
+    pub(crate) total_hits: u16,
+    pub(crate) total_oracle_hits: u16,
+    pub(crate) aggregate_recall_ppm: u32,
+    pub(crate) minimum_recall_ppm: u32,
+    pub(crate) oracle_attainment_ppm: u32,
+    pub(crate) passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V23RaBitQScreenResult {
+    pub(crate) schema: String,
+    pub(crate) source_commit: String,
+    pub(crate) source_archive_sha256: String,
+    pub(crate) index_id: String,
+    pub(crate) inputs: Vec<V23RaBitQObjectIdentity>,
+    pub(crate) cells: Vec<V23RaBitQCellResult>,
+    pub(crate) classification: V23RaBitQClassification,
+    pub(crate) claim_eligible: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct V23RaBitQRankedRow {
     pub(crate) distance: f32,
@@ -86,6 +148,156 @@ impl Ord for V23RaBitQRankedRow {
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_string())
+}
+
+fn valid_lower_hex(value: &str, width: usize) -> bool {
+    value.len() == width
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn expected_cell_shape(ordinal: usize) -> (V23RaBitQControl, u32) {
+    match ordinal {
+        0 => (V23RaBitQControl::ExactExhaustive, 65_536),
+        1 => (V23RaBitQControl::ExactTree, 32),
+        2 => (V23RaBitQControl::ExactTree, 64),
+        3 => (V23RaBitQControl::ExactTree, 128),
+        4 => (V23RaBitQControl::RaBitQExhaustive, 65_536),
+        5 => (V23RaBitQControl::RaBitQTree, 32),
+        6 => (V23RaBitQControl::RaBitQTree, 64),
+        _ => (V23RaBitQControl::RaBitQTree, 128),
+    }
+}
+
+fn validate_cell_shape(cells: &[V23RaBitQCellResult]) -> Result<()> {
+    if cells.len() != 8
+        || cells.iter().enumerate().any(|(ordinal, cell)| {
+            let expected = expected_cell_shape(ordinal);
+            (cell.control, cell.probe_count) != expected
+        })
+    {
+        return Err(invalid("V23 RaBitQ screen cell shape differs"));
+    }
+    Ok(())
+}
+
+pub(crate) fn classify_v23_rabitq_controls(
+    cells: &[V23RaBitQCellResult],
+) -> Result<V23RaBitQClassification> {
+    validate_cell_shape(cells)?;
+    if cells[0].total_hits != 318 || cells[0].total_oracle_hits != 318 || !cells[0].passed {
+        return Ok(V23RaBitQClassification::AuthorityStop);
+    }
+    if !cells[1..4].iter().any(|cell| cell.passed) {
+        return Ok(V23RaBitQClassification::TreePruningRejected);
+    }
+    if !cells[4].passed {
+        return Ok(V23RaBitQClassification::RaBitQRepresentationRejected);
+    }
+    if !cells[5..].iter().any(|cell| cell.passed) {
+        return Ok(V23RaBitQClassification::TreeRaBitQCompositionRejected);
+    }
+    Ok(V23RaBitQClassification::DevelopmentCandidateAccepted)
+}
+
+fn validate_cell(cell: &V23RaBitQCellResult) -> Result<()> {
+    if cell.samples.len() != 32 {
+        return Err(invalid("V23 RaBitQ query sample count differs"));
+    }
+    let mut total_hits = 0u16;
+    let mut total_oracle_hits = 0u16;
+    let mut minimum_recall_ppm = u32::MAX;
+    for (ordinal, sample) in cell.samples.iter().enumerate() {
+        if sample.query_ordinal != ordinal as u32
+            || sample
+                .page_ordinals
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || sample.hits > 10
+            || sample.oracle_hits > 10
+            || sample.hits > sample.oracle_hits
+            || sample.recall_ppm != u32::from(sample.hits) * 100_000
+            || sample.scored_rows == 0
+            || sample.scored_rows > MAX_SCORED_ROWS as u32
+            || sample.retained_rows == 0
+            || usize::from(sample.retained_rows) > MAX_RETAINED_ROWS
+            || usize::from(sample.page_assignments) > MAX_PAGE_ASSIGNMENTS
+            || sample.backend == V23RaBitQBackend::ScalarControl
+            || !sample.scalar_pages_equal
+        {
+            return Err(invalid("V23 RaBitQ query sample evidence differs"));
+        }
+        total_hits = total_hits
+            .checked_add(sample.hits)
+            .ok_or_else(|| invalid("V23 RaBitQ hit count overflows"))?;
+        total_oracle_hits = total_oracle_hits
+            .checked_add(sample.oracle_hits)
+            .ok_or_else(|| invalid("V23 RaBitQ oracle hit count overflows"))?;
+        minimum_recall_ppm = minimum_recall_ppm.min(sample.recall_ppm);
+    }
+    let aggregate_recall_ppm = u32::from(total_hits) * 1_000_000 / 320;
+    let oracle_attainment_ppm = if total_oracle_hits == 0 {
+        0
+    } else {
+        u32::from(total_hits) * 1_000_000 / u32::from(total_oracle_hits)
+    };
+    let passed = total_hits == 318
+        && aggregate_recall_ppm == 993_750
+        && minimum_recall_ppm >= 900_000
+        && oracle_attainment_ppm == 1_000_000;
+    if cell.total_hits != total_hits
+        || cell.total_oracle_hits != total_oracle_hits
+        || cell.aggregate_recall_ppm != aggregate_recall_ppm
+        || cell.minimum_recall_ppm != minimum_recall_ppm
+        || cell.oracle_attainment_ppm != oracle_attainment_ppm
+        || cell.passed != passed
+    {
+        return Err(invalid("V23 RaBitQ cell aggregate differs"));
+    }
+    Ok(())
+}
+
+pub(crate) fn canonical_v23_rabitq_screen_result_bytes(
+    result: &V23RaBitQScreenResult,
+    expected_inputs: &[V23RaBitQObjectIdentity],
+) -> Result<Vec<u8>> {
+    if result.schema != "borsuk-v23-rabitq-screen-v1"
+        || !valid_lower_hex(&result.source_commit, 40)
+        || !valid_lower_hex(&result.source_archive_sha256, 64)
+        || result.index_id.is_empty()
+        || result.inputs != expected_inputs
+        || result.inputs.is_empty()
+        || result.claim_eligible
+    {
+        return Err(invalid("V23 RaBitQ screen authority differs"));
+    }
+    let mut roles = std::collections::BTreeSet::new();
+    let mut uris = std::collections::BTreeSet::new();
+    for identity in &result.inputs {
+        if identity.role.is_empty()
+            || !roles.insert(identity.role.as_str())
+            || !identity.uri.starts_with("s3://")
+            || !uris.insert(identity.uri.as_str())
+            || !valid_lower_hex(&identity.sha256, 64)
+            || identity.blake3.is_some()
+            || identity.encoded_bytes == 0
+        {
+            return Err(invalid("V23 RaBitQ screen input identity differs"));
+        }
+    }
+    validate_cell_shape(&result.cells)?;
+    result.cells.iter().try_for_each(validate_cell)?;
+    if result.classification != classify_v23_rabitq_controls(&result.cells)? {
+        return Err(invalid("V23 RaBitQ screen classification differs"));
+    }
+    let value = serde_json::to_value(result)
+        .map_err(|error| invalid(&format!("V23 RaBitQ screen JSON failed: {error}")))?;
+    let value = crate::v23_incidence::canonical_json_value(value);
+    let mut bytes = serde_json::to_vec(&value)
+        .map_err(|error| invalid(&format!("V23 RaBitQ screen JSON failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 fn map_backend(value: FmaBackend) -> V23RaBitQBackend {
@@ -379,15 +591,20 @@ mod tests {
     use half::f16;
 
     use super::{
-        V23RaBitQBackend, V23RaBitQEvalRequest, detected_v23_rabitq_backend, rank_v23_rabitq_rows,
-        score_v23_rabitq_code, select_v23_rabitq_pages,
+        V23RaBitQBackend, V23RaBitQCellResult, V23RaBitQClassification, V23RaBitQControl,
+        V23RaBitQEvalRequest, V23RaBitQQuerySample, V23RaBitQScreenResult,
+        canonical_v23_rabitq_screen_result_bytes, classify_v23_rabitq_controls,
+        detected_v23_rabitq_backend, rank_v23_rabitq_rows, score_v23_rabitq_code,
+        select_v23_rabitq_pages,
     };
     use crate::{
+        v23_rabitq::V23RaBitQObjectIdentity,
         v23_rabitq_arrow::{V23RaBitQGeometry, V23RaBitQRowPlanes},
         v23_rabitq_quantizer::{
             build_v23_rabitq_rotation, encode_v23_rabitq_residual, prepare_v23_rabitq_query,
         },
     };
+    use sha2::{Digest, Sha256};
 
     fn identity_rotation() -> [[f32; 96]; 96] {
         let mut value = [[0.0; 96]; 96];
@@ -425,6 +642,74 @@ mod tests {
                 replica_pages: (0..rows).map(|row| (row as u32 + 1) % pages).collect(),
             },
         )
+    }
+
+    fn identity(role: &str) -> V23RaBitQObjectIdentity {
+        let bytes = role.as_bytes();
+        V23RaBitQObjectIdentity {
+            role: role.to_string(),
+            uri: format!("s3://borsuk-v23-rabitq/development/{role}"),
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+            blake3: None,
+            encoded_bytes: bytes.len() as u64,
+        }
+    }
+
+    fn samples() -> Vec<V23RaBitQQuerySample> {
+        (0..32)
+            .map(|query_ordinal| {
+                let hits = if query_ordinal < 2 { 9 } else { 10 };
+                V23RaBitQQuerySample {
+                    query_ordinal,
+                    page_ordinals: std::array::from_fn(|page| query_ordinal * 8 + page as u32),
+                    hits,
+                    oracle_hits: hits,
+                    recall_ppm: u32::from(hits) * 100_000,
+                    scored_rows: 65_536,
+                    retained_rows: 4_096,
+                    page_assignments: 8_192,
+                    backend: V23RaBitQBackend::Aarch64Neon,
+                    scalar_pages_equal: true,
+                }
+            })
+            .collect()
+    }
+
+    fn cell(control: V23RaBitQControl, probe_count: u32, passed: bool) -> V23RaBitQCellResult {
+        V23RaBitQCellResult {
+            control,
+            probe_count,
+            samples: samples(),
+            total_hits: 318,
+            total_oracle_hits: 318,
+            aggregate_recall_ppm: 993_750,
+            minimum_recall_ppm: 900_000,
+            oracle_attainment_ppm: 1_000_000,
+            passed,
+        }
+    }
+
+    fn screen() -> V23RaBitQScreenResult {
+        let cells = vec![
+            cell(V23RaBitQControl::ExactExhaustive, 65_536, true),
+            cell(V23RaBitQControl::ExactTree, 32, true),
+            cell(V23RaBitQControl::ExactTree, 64, true),
+            cell(V23RaBitQControl::ExactTree, 128, true),
+            cell(V23RaBitQControl::RaBitQExhaustive, 65_536, true),
+            cell(V23RaBitQControl::RaBitQTree, 32, true),
+            cell(V23RaBitQControl::RaBitQTree, 64, true),
+            cell(V23RaBitQControl::RaBitQTree, 128, true),
+        ];
+        V23RaBitQScreenResult {
+            schema: "borsuk-v23-rabitq-screen-v1".to_string(),
+            source_commit: "1".repeat(40),
+            source_archive_sha256: "2".repeat(64),
+            index_id: "deep-image-96-v23-rabitq".to_string(),
+            inputs: vec![identity("construction-receipt"), identity("query-parquet")],
+            cells,
+            classification: V23RaBitQClassification::DevelopmentCandidateAccepted,
+            claim_eligible: false,
+        }
     }
 
     #[test]
@@ -571,5 +856,88 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn v23_rabitq_screen_classification_precedence_is_outcome_blind() {
+        let accepted = screen().cells;
+        assert_eq!(
+            classify_v23_rabitq_controls(&accepted).unwrap(),
+            V23RaBitQClassification::DevelopmentCandidateAccepted
+        );
+
+        let mut cells = accepted.clone();
+        cells[0].total_hits = 317;
+        assert_eq!(
+            classify_v23_rabitq_controls(&cells).unwrap(),
+            V23RaBitQClassification::AuthorityStop
+        );
+        let mut cells = accepted.clone();
+        cells[1..4].iter_mut().for_each(|cell| cell.passed = false);
+        assert_eq!(
+            classify_v23_rabitq_controls(&cells).unwrap(),
+            V23RaBitQClassification::TreePruningRejected
+        );
+        let mut cells = accepted.clone();
+        cells[4].passed = false;
+        assert_eq!(
+            classify_v23_rabitq_controls(&cells).unwrap(),
+            V23RaBitQClassification::RaBitQRepresentationRejected
+        );
+        let mut cells = accepted;
+        cells[5..].iter_mut().for_each(|cell| cell.passed = false);
+        assert_eq!(
+            classify_v23_rabitq_controls(&cells).unwrap(),
+            V23RaBitQClassification::TreeRaBitQCompositionRejected
+        );
+    }
+
+    #[test]
+    fn v23_rabitq_screen_canonical_result_recomputes_every_quality_and_authority_field() {
+        let expected = screen();
+        let bytes = canonical_v23_rabitq_screen_result_bytes(&expected, &expected.inputs).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert_eq!(
+            bytes,
+            canonical_v23_rabitq_screen_result_bytes(&expected, &expected.inputs).unwrap()
+        );
+
+        let mut mutations = Vec::new();
+        let mut changed = expected.clone();
+        changed.cells[0].samples[0].page_ordinals.swap(0, 1);
+        mutations.push(changed);
+        let mut changed = expected.clone();
+        changed.cells[0].samples[0].hits = 8;
+        mutations.push(changed);
+        let mut changed = expected.clone();
+        changed.cells[0].samples[0].recall_ppm = 800_000;
+        mutations.push(changed);
+        let mut changed = expected.clone();
+        changed.cells[0].aggregate_recall_ppm = 993_749;
+        mutations.push(changed);
+        let mut changed = expected.clone();
+        changed.cells[7].samples[0].scored_rows = 262_145;
+        mutations.push(changed);
+        let mut changed = expected.clone();
+        changed.cells[7].samples[0].retained_rows = 4_097;
+        mutations.push(changed);
+        let mut changed = expected.clone();
+        changed.cells[7].samples[0].page_assignments = 8_193;
+        mutations.push(changed);
+        let mut changed = expected.clone();
+        changed.cells[7].samples[0].scalar_pages_equal = false;
+        mutations.push(changed);
+        let mut changed = expected.clone();
+        changed.classification = V23RaBitQClassification::AuthorityStop;
+        mutations.push(changed);
+        let mut changed = expected.clone();
+        changed.inputs[0].sha256 = "3".repeat(64);
+        mutations.push(changed);
+        let mut changed = expected.clone();
+        changed.claim_eligible = true;
+        mutations.push(changed);
+        for mutation in mutations {
+            assert!(canonical_v23_rabitq_screen_result_bytes(&mutation, &expected.inputs).is_err());
+        }
     }
 }
