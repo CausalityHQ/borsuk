@@ -1020,3 +1020,52 @@ and the full locked workspace/all-targets Rust gate with 1,747 tests passed and
 23 ignored. This second failed attempt remains bootstrap-only evidence,
 authorizes no quality claim or D3 phase, and does not count as a scientific
 repetition.
+
+## V23 leaf-page incidence tree construction on 2026-08-31
+
+The first successful tree-training attempt after deleting the private-root
+runtime used source commit `717c845bc895dc7cb5ffef45fa10bb45e09dbb0d`,
+source-archive SHA-256
+`a321c473cb38a3b38c4757a50acf14e144b0441b0ca4bbbe7a8c7f3baaef78cc`,
+and run ID `v23-incidence-tree-20260831T120514Z`. One `c7g.8xlarge` Spot
+instance, `i-000e178f6f00087b4`, ran in `eu-central-1` at 0.524900 USD/hour.
+Both EC2 health checks reached `ok`; the original controller authenticated the
+terminal and the instance then reached `terminated`. Its immutable evidence
+prefix is
+`s3://borsuk-bench-453182569524-euc1/research/v23-leaf-page-incidence/a321c473cb38a3b38c4757a50acf14e144b0441b0ca4bbbe7a8c7f3baaef78cc/v23-incidence-tree-20260831T120514Z/`.
+
+The 10,633,816-byte release executable has SHA-256
+`eba95fc1f83443843e6c69bd62e332ca0d825b73d92c8e251d6cdb1758554a64`.
+The preflight used the `aarch64-neon-fma` backend, authenticated the construction
+manifest and one 67,160,858-byte Parquet sample shard, and measured 395,213,929
+distance dimensions/second and 319,222,756 input bytes/second. It projected
+127,103,895,168 ns for the full 3,839,183,629-byte input, below the registered
+5,400,000,000,000-ns limit. All five capability probes passed: declared inputs
+opened, forbidden roles were absent, the network canary was denied, the network
+namespace changed, and the output directory was writable. The 1,855-byte
+preflight receipt has SHA-256
+`f2cd86f078b164fb4b9f7e51fc6fa16f42ffb2dd46438d94743c075be9d40c45`.
+
+Execution authenticated 63 ordered inputs, including all 59 frozen Parquet
+training shards, and completed all 115 progress units. The 30,226-byte progress
+chain has SHA-256
+`b08cf082e7488ba7293a20cacb1982c7d0675cbe3e50a0a8c5b725b73683af12`.
+The scientific unit ran from 12:08:31 to 12:12:35 UTC and consumed 2 minutes
+57.360 seconds of CPU time. It emitted a 40,369,836-byte incidence tree with
+BLAKE3 `aa72bf926c6fcbd17890188d8b3bd3b35393d9c392bffc032e75328ea47fae64`
+at the evidence prefix above. The 26,106-byte tree receipt has SHA-256
+`c1af5ab84ef20797ffe52fa0a93872008df817c142957f009895c8b7fc853a99`,
+binds the preflight receipt, progress chain, executable, inputs, and output, and
+records `stop=null`. Its execution probes repeat the same five passing
+capability checks.
+
+The canonical 722-byte `ATTEMPT_COMPLETE.json` has SHA-256
+`a8905b94b7f89aab80465d2d466056e36d08dfaf7aff31c16c236dfed2612630`.
+It records the exact source, executable, tree, receipt, Spot price, and run
+identities with `status=complete` and `claim_eligible=false`. The bounded local
+receipt inspection explicitly removed its five named files and temporary
+directory after process clearance. This result establishes only deterministic,
+bounded, offline construction of the preregistered incidence tree. It contains
+no query-quality, recall, or serving-latency measurement, does not authorize a
+product claim, and leaves posting construction, evaluation, and D3 fenced until
+their own committed immutable phase boundaries exist.
