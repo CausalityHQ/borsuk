@@ -5,9 +5,11 @@ import inspect
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from scripts.launch_v23_incidence_spot import (
@@ -18,10 +20,12 @@ from scripts.launch_v23_incidence_spot import (
     _rewrite_tree_receipt_uri,
     _spot_price,
     _validate_terminal_bytes,
+    _validate_tree_progress_binding,
     _write_bulk_manifest,
     build_launch_plan,
     build_launch_spec,
     build_worker_script,
+    namespace_probe,
     worker_tree,
 )
 from scripts.run_v23_leaf_page_incidence_falsifier import validate_phase_inputs
@@ -31,7 +35,325 @@ LAUNCHER = ROOT / "scripts/launch_v23_incidence_spot.py"
 SOURCE_SHA = "4dfe1c0ddfff86a2c346405e3df2336b22a00920"
 
 
+def _canonical_progress_bytes(
+    *,
+    completed_units: int,
+    previous_progress_sha256: str | None,
+    sequence: int,
+    total_units: int,
+) -> bytes:
+    return (
+        json.dumps(
+            {
+                "completed_units": completed_units,
+                "last_object_digest": "11" * 32,
+                "phase": "tree-training",
+                "previous_progress_sha256": previous_progress_sha256,
+                "sequence": sequence,
+                "total_units": total_units,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        + b"\n"
+    )
+
+
 class V23IncidenceSpotLauncherTests(unittest.TestCase):
+    def test_launcher_entrypoint_preserves_full_traceback(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(LAUNCHER),
+                "--phase",
+                "tree-training",
+                "--run-id",
+                "/",
+                "--dry-run",
+            ],
+            cwd=ROOT,
+            env={**os.environ, "BORSUK_SOURCE_COMMIT": SOURCE_SHA},
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("Traceback (most recent call last):", completed.stderr)
+        self.assertIn("_require_token", completed.stderr)
+
+    def test_tree_receipt_binds_the_final_canonical_progress_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            progress = Path(directory) / "progress.json"
+            root = _canonical_progress_bytes(
+                completed_units=0,
+                previous_progress_sha256=None,
+                sequence=0,
+                total_units=18,
+            )
+            final = _canonical_progress_bytes(
+                completed_units=18,
+                previous_progress_sha256=hashlib.sha256(root).hexdigest(),
+                sequence=1,
+                total_units=18,
+            )
+            progress.write_bytes(root + final)
+            digest = hashlib.sha256(progress.read_bytes()).hexdigest()
+            receipt = {"final_progress_sha256": digest}
+
+            _validate_tree_progress_binding(receipt, progress)
+            receipt["final_progress_sha256"] = "00" * 32
+            with self.assertRaisesRegex(ValueError, "progress binding"):
+                _validate_tree_progress_binding(receipt, progress)
+
+    def test_worker_captures_and_publishes_failure_evidence(self) -> None:
+        worker = build_worker_script(
+            run_id="fixture-run",
+            source_commit=SOURCE_SHA,
+            source_uri="s3://borsuk-evidence/source.tar",
+            source_sha256="11" * 32,
+            result_uri="s3://borsuk-evidence/incidence/fixture-run",
+            spot_price_usd_per_hour="0.321",
+        )
+
+        self.assertIn('phase_log="$evidence/phase.log"', worker)
+        self.assertIn('phase_journal="$evidence/phase-journal.txt"', worker)
+        self.assertIn('exec >>"$worker_log" 2>&1', worker)
+        self.assertNotIn("tee -a", worker)
+        self.assertIn("--property=StandardOutput=append:$phase_log", worker)
+        self.assertIn("--property=StandardError=append:$phase_log", worker)
+        self.assertIn(
+            'journalctl --no-pager -o short-iso -u "$unit" >"$phase_journal"',
+            worker,
+        )
+        for evidence_name in (
+            "binary.json",
+            "preflight-receipt.json",
+            "preflight-staging-receipt.json",
+            "execute-staging-receipt.json",
+            "phase.log",
+            "phase-journal.txt",
+            "phase-traceback.txt",
+            "phase-failure.json",
+            "progress.json",
+        ):
+            self.assertIn(evidence_name, worker)
+        evidence_upload = worker.index("phase-failure.json")
+        self.assertLess(evidence_upload, worker.index("ATTEMPT_FAILED.json"))
+        self.assertIn(
+            'put_once "$evidence/progress.json" progress.json || publish_status=86',
+            worker,
+        )
+        self.assertEqual(
+            worker.count(
+                "cargo build --locked --release -p borsuk --example "
+                "v23_leaf_page_incidence_falsifier"
+            ),
+            1,
+        )
+
+    def test_worker_tree_preserves_traceback_and_partial_receipts(self) -> None:
+        def stage_stub(
+            _manifest: Path, directory: Path, receipt: Path
+        ) -> None:
+            directory.mkdir()
+            receipt.write_text('{"staged":true}\n', encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "evidence"
+            binary = Path("/bin/true").resolve()
+            binary_sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
+            with (
+                patch(
+                    "scripts.launch_v23_incidence_spot._stage",
+                    side_effect=stage_stub,
+                ),
+                patch(
+                    "scripts.launch_v23_incidence_spot._phase_policy",
+                    return_value=object(),
+                ),
+                patch(
+                    "scripts.run_v23_leaf_page_incidence_falsifier.run_phase",
+                    side_effect=RuntimeError("phase boom"),
+                ),
+                self.assertRaisesRegex(RuntimeError, "phase boom"),
+            ):
+                worker_tree(
+                    binary=binary,
+                    binary_sha256=binary_sha256,
+                    evidence=evidence,
+                    output_uri_prefix="s3://borsuk-evidence/incidence/fixture-run",
+                )
+
+            traceback_bytes = (evidence / "phase-traceback.txt").read_bytes()
+            self.assertIn(b"RuntimeError: phase boom", traceback_bytes)
+            failure_bytes = (evidence / "phase-failure.json").read_bytes()
+            failure = json.loads(failure_bytes)
+            self.assertEqual(
+                failure_bytes,
+                json.dumps(failure, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n",
+            )
+            self.assertEqual(failure["phase"], "tree-training")
+            self.assertEqual(failure["stage"], "preflight-run")
+            self.assertEqual(failure["exception_type"], "RuntimeError")
+            self.assertEqual(failure["message"], "phase boom")
+            self.assertFalse(failure["claim_eligible"])
+            self.assertEqual(
+                (evidence / "preflight-staging-receipt.json").read_text(
+                    encoding="utf-8"
+                ),
+                '{"staged":true}\n',
+            )
+
+    def test_worker_tree_cleans_private_root_when_initialization_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            private_root = parent / "private-root"
+            private_root.mkdir()
+            evidence = parent / "evidence"
+            binary = Path("/bin/true").resolve()
+            binary_sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
+            original_mkdir = Path.mkdir
+
+            def mkdir(path: Path, *args: Any, **kwargs: Any) -> None:
+                if path.name == "preflight-scratch":
+                    raise OSError("scratch mkdir boom")
+                original_mkdir(path, *args, **kwargs)
+
+            with (
+                patch(
+                    "scripts.launch_v23_incidence_spot.tempfile.mkdtemp",
+                    return_value=str(private_root),
+                ),
+                patch("pathlib.Path.mkdir", new=mkdir),
+                self.assertRaisesRegex(OSError, "scratch mkdir boom"),
+            ):
+                worker_tree(
+                    binary=binary,
+                    binary_sha256=binary_sha256,
+                    evidence=evidence,
+                    output_uri_prefix="s3://borsuk-evidence/incidence/fixture-run",
+                )
+
+            self.assertFalse(private_root.exists())
+            self.assertEqual(
+                json.loads((evidence / "phase-failure.json").read_bytes())["stage"],
+                "initialization",
+            )
+
+    def test_worker_tree_preserves_existing_preflight_receipt_on_execute_failure(
+        self,
+    ) -> None:
+        def stage_stub(
+            _manifest: Path, directory: Path, receipt: Path
+        ) -> None:
+            directory.mkdir()
+            receipt.write_text('{"staged":true}\n', encoding="utf-8")
+
+        calls = 0
+
+        def run_stub(policy: Any, _limits: object) -> int:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                output = policy.output
+                output.joinpath("receipt.json").write_text(
+                    '{"preflight":true}\n', encoding="utf-8"
+                )
+                return 0
+            policy.output.joinpath("progress.json").write_text(
+                '{"completed_units":2}\n', encoding="utf-8"
+            )
+            raise RuntimeError("execute boom")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "evidence"
+            evidence.mkdir()
+            evidence.joinpath("preflight-staging-receipt.json").write_text(
+                '{"stale":true}\n', encoding="utf-8"
+            )
+            binary = Path("/bin/true").resolve()
+            binary_sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
+            with (
+                patch(
+                    "scripts.launch_v23_incidence_spot._stage",
+                    side_effect=stage_stub,
+                ),
+                patch(
+                    "scripts.run_v23_leaf_page_incidence_falsifier.run_phase",
+                    side_effect=run_stub,
+                ),
+                self.assertRaisesRegex(RuntimeError, "execute boom"),
+            ):
+                worker_tree(
+                    binary=binary,
+                    binary_sha256=binary_sha256,
+                    evidence=evidence,
+                    output_uri_prefix="s3://borsuk-evidence/incidence/fixture-run",
+                )
+
+            self.assertEqual(
+                (evidence / "preflight-receipt.json").read_text(encoding="utf-8"),
+                '{"preflight":true}\n',
+            )
+            self.assertIn(
+                "RuntimeError: execute boom",
+                (evidence / "phase-traceback.txt").read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                json.loads((evidence / "phase-failure.json").read_bytes())["stage"],
+                "execute-run",
+            )
+            self.assertEqual(
+                (evidence / "progress.json").read_text(encoding="utf-8"),
+                '{"completed_units":2}\n',
+            )
+            self.assertEqual(
+                (evidence / "preflight-staging-receipt.json").read_text(
+                    encoding="utf-8"
+                ),
+                '{"stale":true}\n',
+            )
+
+    def test_namespace_probe_requires_memory_psi_full_avg10(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            absent = Path(directory) / "missing-memory-psi"
+            with (
+                patch(
+                    "scripts.launch_v23_incidence_spot.MEMORY_PSI_PATH",
+                    absent,
+                ),
+                patch("scripts.launch_v23_incidence_spot.subprocess.run") as run,
+                self.assertRaises(FileNotFoundError),
+            ):
+                namespace_probe()
+            run.assert_not_called()
+
+            malformed = Path(directory) / "malformed-memory-psi"
+            for content in (
+                "some avg10=0.00 total=0\n",
+                "full total=0\n",
+                "full avg10=not-a-number total=0\n",
+                "full avg10=nan total=0\n",
+                "full avg10=-0.01 total=0\n",
+            ):
+                with self.subTest(content=content):
+                    malformed.write_text(content, encoding="ascii")
+                    with (
+                        patch(
+                            "scripts.launch_v23_incidence_spot.MEMORY_PSI_PATH",
+                            malformed,
+                        ),
+                        patch(
+                            "scripts.launch_v23_incidence_spot.subprocess.run"
+                        ) as run,
+                        self.assertRaisesRegex(RuntimeError, "memory PSI full avg10"),
+                    ):
+                        namespace_probe()
+                    run.assert_not_called()
+
     def test_tree_plan_is_one_ephemeral_spot_worker_with_registered_stops(self) -> None:
         plan = build_launch_plan(
             phase="tree-training",
@@ -155,6 +477,12 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         self.assertNotIn("source /root/.cargo/env", worker)
         self.assertIn("v23_leaf_page_incidence_falsifier", worker)
         self.assertIn("--worker-tree", worker)
+        self.assertIn("primary_evidence_attempted=0", worker)
+        self.assertIn("primary_evidence_attempted=1", worker)
+        self.assertIn(
+            "binary.json|preflight-receipt.json|progress.json) continue",
+            worker,
+        )
         worker_source = inspect.getsource(worker_tree)
         self.assertLess(
             worker_source.index("preflight_policy"),

@@ -13,6 +13,7 @@ use crate::{BorsukError, Result, v23_incidence::V23FmaBackend};
 pub(crate) const V23_INCIDENCE_RESERVOIR_ROWS: usize = 2_097_152;
 pub(crate) const V23_INCIDENCE_TREE_DEPTH: usize = 16;
 pub(crate) const V23_INCIDENCE_LEAVES: usize = 65_536;
+pub(crate) const V23_INCIDENCE_PROGRESS_SOURCE_ROWS: u64 = 262_144;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct V23IncidenceTrainingShape {
@@ -129,6 +130,60 @@ struct V23TrainingExecution {
 struct V23IncidenceTrainingOutcome {
     tree: V23IncidenceTree,
     execution: V23TrainingExecution,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum V23IncidenceTrainingMilestone {
+    SourceRows {
+        completed_rows: u64,
+    },
+    Reservoir {
+        source_rows: u64,
+        reservoir_rows: u64,
+    },
+    TreeLevel {
+        level: u64,
+        completed_nodes: u64,
+    },
+}
+
+fn select_reservoir_with_progress(
+    rows: impl IntoIterator<Item = Result<V23TrainingRow>>,
+    shape: V23IncidenceTrainingShape,
+    seed: u64,
+    expected_source_rows: u64,
+    progress_block_rows: u64,
+    progress: &mut impl FnMut(V23IncidenceTrainingMilestone) -> Result<()>,
+) -> Result<V23IncidenceReservoir> {
+    if expected_source_rows == 0 || progress_block_rows == 0 {
+        return Err(invalid("V23 incidence progress row schedule differs"));
+    }
+    let mut completed_rows = 0_u64;
+    let mut reported_rows = 0_u64;
+    let reservoir = {
+        let tracked_rows = rows.into_iter().map(|result| {
+            let row = result?;
+            completed_rows = completed_rows
+                .checked_add(1)
+                .ok_or_else(|| invalid("V23 incidence progress row count overflows"))?;
+            if completed_rows > expected_source_rows {
+                return Err(invalid("V23 incidence progress source rows differ"));
+            }
+            if completed_rows.is_multiple_of(progress_block_rows) {
+                progress(V23IncidenceTrainingMilestone::SourceRows { completed_rows })?;
+                reported_rows = completed_rows;
+            }
+            Ok(row)
+        });
+        select_reservoir_streaming(tracked_rows, shape, seed)?
+    };
+    if completed_rows != expected_source_rows {
+        return Err(invalid("V23 incidence progress source rows differ"));
+    }
+    if reported_rows != completed_rows {
+        progress(V23IncidenceTrainingMilestone::SourceRows { completed_rows })?;
+    }
+    Ok(reservoir)
 }
 
 struct TrainingContext {
@@ -720,7 +775,7 @@ fn train_incidence_tree_internal_with_execution(
     let seed = reservoir_seed("77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d")?;
     let reservoir = select_reservoir(rows, shape, seed)?;
     train_incidence_tree_from_reservoir_with_execution(
-        reservoir, shape, seed, threads, batch_rows, use_fused,
+        reservoir, shape, seed, threads, batch_rows, use_fused, None,
     )
 }
 
@@ -733,7 +788,7 @@ fn train_incidence_tree_from_reservoir(
     use_fused: bool,
 ) -> Result<V23IncidenceTree> {
     Ok(train_incidence_tree_from_reservoir_with_execution(
-        reservoir, shape, seed, threads, batch_rows, use_fused,
+        reservoir, shape, seed, threads, batch_rows, use_fused, None,
     )?
     .tree)
 }
@@ -745,6 +800,7 @@ fn train_incidence_tree_from_reservoir_with_execution(
     threads: usize,
     batch_rows: usize,
     use_fused: bool,
+    mut progress: Option<&mut dyn FnMut(V23IncidenceTrainingMilestone) -> Result<()>>,
 ) -> Result<V23IncidenceTrainingOutcome> {
     let context = TrainingContext::new(threads, batch_rows)?;
     if use_fused {
@@ -780,6 +836,14 @@ fn train_incidence_tree_from_reservoir_with_execution(
             next.push(one);
         }
         groups = next;
+        if let Some(progress) = progress.as_deref_mut() {
+            progress(V23IncidenceTrainingMilestone::TreeLevel {
+                level: u64::try_from(level + 1)
+                    .map_err(|_| invalid("V23 incidence progress level overflows"))?,
+                completed_nodes: u64::try_from(nodes.len())
+                    .map_err(|_| invalid("V23 incidence progress node count overflows"))?,
+            })?;
+        }
     }
     let leaves = context
         .map_items(&groups, |group| {
@@ -824,13 +888,36 @@ fn train_incidence_tree_with_shape_and_execution(
 
 pub(crate) fn train_incidence_tree(
     rows: impl IntoIterator<Item = Result<V23TrainingRow>>,
+    expected_source_rows: u64,
     threads: usize,
     batch_rows: usize,
+    mut progress: impl FnMut(V23IncidenceTrainingMilestone) -> Result<()>,
 ) -> Result<V23IncidenceTree> {
     let shape = V23IncidenceTrainingShape::PRODUCTION;
     let seed = reservoir_seed("77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d")?;
-    let reservoir = select_reservoir_streaming(rows, shape, seed)?.rows;
-    train_incidence_tree_from_reservoir(reservoir, shape, seed, threads, batch_rows, true)
+    let reservoir = select_reservoir_with_progress(
+        rows,
+        shape,
+        seed,
+        expected_source_rows,
+        V23_INCIDENCE_PROGRESS_SOURCE_ROWS,
+        &mut progress,
+    )?;
+    progress(V23IncidenceTrainingMilestone::Reservoir {
+        source_rows: reservoir.source_rows,
+        reservoir_rows: u64::try_from(reservoir.rows.len())
+            .map_err(|_| invalid("V23 incidence progress reservoir count overflows"))?,
+    })?;
+    Ok(train_incidence_tree_from_reservoir_with_execution(
+        reservoir.rows,
+        shape,
+        seed,
+        threads,
+        batch_rows,
+        true,
+        Some(&mut progress),
+    )?
+    .tree)
 }
 
 #[cfg(test)]
@@ -841,6 +928,42 @@ pub(crate) fn train_incidence_tree_test_shape(
     batch_rows: usize,
 ) -> Result<V23IncidenceTree> {
     train_incidence_tree_with_shape(rows, shape, threads, batch_rows)
+}
+
+#[cfg(test)]
+pub(crate) fn train_incidence_tree_test_shape_with_progress(
+    rows: impl IntoIterator<Item = Result<V23TrainingRow>>,
+    expected_source_rows: u64,
+    progress_block_rows: u64,
+    shape: V23IncidenceTrainingShape,
+    threads: usize,
+    batch_rows: usize,
+    mut progress: impl FnMut(V23IncidenceTrainingMilestone) -> Result<()>,
+) -> Result<V23IncidenceTree> {
+    let seed = reservoir_seed("77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d")?;
+    let reservoir = select_reservoir_with_progress(
+        rows,
+        shape,
+        seed,
+        expected_source_rows,
+        progress_block_rows,
+        &mut progress,
+    )?;
+    progress(V23IncidenceTrainingMilestone::Reservoir {
+        source_rows: reservoir.source_rows,
+        reservoir_rows: u64::try_from(reservoir.rows.len())
+            .map_err(|_| invalid("V23 incidence progress reservoir count overflows"))?,
+    })?;
+    Ok(train_incidence_tree_from_reservoir_with_execution(
+        reservoir.rows,
+        shape,
+        seed,
+        threads,
+        batch_rows,
+        false,
+        Some(&mut progress),
+    )?
+    .tree)
 }
 
 fn take_zero(node: &V23TreeNode, score: f32, ordinal: u64) -> bool {
@@ -1226,6 +1349,55 @@ mod tests {
                 .map(|selected| selected.source_ordinal)
                 .collect::<Vec<_>>(),
             vec![3, 4, 5, 7]
+        );
+    }
+
+    #[test]
+    fn v23_incidence_tree_progress_reports_reservoir_and_fixed_node_milestones() {
+        let shape = shape();
+        let rows = (0..64).map(row).collect::<Vec<_>>();
+        let mut observed = Vec::new();
+
+        let tree = super::train_incidence_tree_test_shape_with_progress(
+            rows.iter().cloned().map(Ok),
+            64,
+            16,
+            shape,
+            1,
+            16,
+            |milestone| {
+                observed.push(milestone);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(tree.nodes.len(), 7);
+        assert_eq!(tree.leaves.len(), 8);
+        assert_eq!(
+            observed,
+            vec![
+                super::V23IncidenceTrainingMilestone::SourceRows { completed_rows: 16 },
+                super::V23IncidenceTrainingMilestone::SourceRows { completed_rows: 32 },
+                super::V23IncidenceTrainingMilestone::SourceRows { completed_rows: 48 },
+                super::V23IncidenceTrainingMilestone::SourceRows { completed_rows: 64 },
+                super::V23IncidenceTrainingMilestone::Reservoir {
+                    source_rows: 64,
+                    reservoir_rows: 32,
+                },
+                super::V23IncidenceTrainingMilestone::TreeLevel {
+                    level: 1,
+                    completed_nodes: 1,
+                },
+                super::V23IncidenceTrainingMilestone::TreeLevel {
+                    level: 2,
+                    completed_nodes: 3,
+                },
+                super::V23IncidenceTrainingMilestone::TreeLevel {
+                    level: 3,
+                    completed_nodes: 7,
+                },
+            ]
         );
     }
 

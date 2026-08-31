@@ -462,16 +462,20 @@ work.
 
 Progress is produced by the authenticated Rust phase, not inferred from file
 mtime or launcher activity. Each phase atomically replaces one canonical
-`progress.json` containing the exact phase, monotonically increasing sequence,
+newline-delimited `progress.json` containing the complete progress history.
+Every record binds the exact phase, monotonically increasing sequence,
 completed and total registered work units, the last authenticated input or
-sealed output digest, and the SHA-256 of the previous progress record. Tree
+sealed output digest, and the SHA-256 of the preceding individual record. Tree
 training advances after registered shard/reservoir work and fixed node-count
 milestones; posting advances after fixed page, partition, run, and merge
 milestones; evaluation advances after fixed query/timing milestones. The
-launcher accepts progress only when the phase and total are unchanged, sequence
-and completed work strictly increase, the previous digest matches, and the
-record is canonical. The terminal receipt binds the final progress digest.
-Writing a heartbeat without completing a registered unit is forbidden.
+launcher accepts a new snapshot only when its previous bytes are an exact
+prefix and every appended canonical record preserves phase and total, strictly
+increases sequence and completed work, and matches the preceding-record digest.
+This permits a monitor to catch up after missing multiple writes without
+accepting a gap or an overwritten history. The terminal receipt binds the
+SHA-256 of the complete final snapshot. Writing a heartbeat without completing
+a registered unit is forbidden.
 
 The credentialed worker treats diagnostic evidence as a first-class immutable
 output. Each transient scientific unit writes stdout and stderr directly to a

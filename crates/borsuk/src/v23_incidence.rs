@@ -39,12 +39,13 @@ use crate::{
         decode_posting_plane, page_posting_records_both,
     },
     v23_incidence_tree::{
-        V23TrainingRow, V23TreeNode, decode_incidence_tree, encode_incidence_tree,
-        split_score_simd, train_incidence_tree,
+        V23_INCIDENCE_PROGRESS_SOURCE_ROWS, V23IncidenceTrainingMilestone, V23TrainingRow,
+        V23TreeNode, decode_incidence_tree, encode_incidence_tree, split_score_simd,
+        train_incidence_tree,
     },
 };
 
-const V23_INCIDENCE_RECEIPT_SCHEMA: &str = "borsuk-v23-incidence-receipt-v1";
+const V23_INCIDENCE_RECEIPT_SCHEMA: &str = "borsuk-v23-incidence-receipt-v2";
 const V23_INCIDENCE_MANIFEST_SCHEMA: &str = "borsuk-v23-incidence-manifest-v1";
 const V23_INCIDENCE_PREFLIGHT_WALL_LIMIT_NS: u64 = 5_400_000_000_000;
 const V23_INCIDENCE_SOURCE_COMMIT: &str = "c339a546f8f9370cb2e6e9fb3b0fd4bdefa3cb05";
@@ -1336,6 +1337,7 @@ pub(crate) fn canonical_v23_incidence_preflight_bytes(
         ordered_mounts: expected_authority.ordered_inputs.clone(),
         probes: expected_authority.probes.clone(),
         preflight_evidence: Some(evidence.clone()),
+        final_progress_sha256: None,
         outputs: Vec::new(),
         stop: evidence
             .resource_stop
@@ -1434,6 +1436,7 @@ pub(crate) struct V23IncidenceReceipt {
     pub(crate) ordered_mounts: Vec<V23IncidenceObjectIdentity>,
     pub(crate) probes: V23IncidenceCapabilityProbes,
     pub(crate) preflight_evidence: Option<V23IncidencePreflightEvidence>,
+    pub(crate) final_progress_sha256: Option<String>,
     pub(crate) outputs: Vec<V23IncidenceObjectIdentity>,
     pub(crate) stop: Option<V23IncidenceStopClass>,
 }
@@ -1446,6 +1449,95 @@ struct V23IncidenceProgress {
     previous_progress_sha256: Option<String>,
     sequence: u64,
     total_units: u64,
+}
+
+struct V23IncidenceProgressChain {
+    path: PathBuf,
+    phase: V23IncidencePhase,
+    total_units: u64,
+    sequence: u64,
+    previous_record_bytes: Vec<u8>,
+    history_bytes: Vec<u8>,
+    #[cfg(test)]
+    records: Vec<Vec<u8>>,
+}
+
+impl V23IncidenceProgressChain {
+    fn start(
+        path: &Path,
+        phase: V23IncidencePhase,
+        total_units: u64,
+        initial_object_digest: &str,
+    ) -> Result<Self> {
+        match fs::symlink_metadata(path) {
+            Ok(_) => {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 incidence progress already exists".to_string(),
+                ));
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(BorsukError::Io {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        }
+        let root = V23IncidenceProgress {
+            completed_units: 0,
+            last_object_digest: initial_object_digest.to_string(),
+            phase,
+            previous_progress_sha256: None,
+            sequence: 0,
+            total_units,
+        };
+        let root_bytes = canonical_v23_incidence_progress_bytes(&root, None)?;
+        write_v23_incidence_progress_snapshot(path, &root_bytes)?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            phase,
+            total_units,
+            sequence: 0,
+            #[cfg(test)]
+            records: vec![root_bytes.clone()],
+            previous_record_bytes: root_bytes.clone(),
+            history_bytes: root_bytes,
+        })
+    }
+
+    fn advance(&mut self, completed_units: u64, last_object_digest: &str) -> Result<String> {
+        let previous_progress_sha256 = format!("{:x}", Sha256::digest(&self.previous_record_bytes));
+        let sequence = self.sequence.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 incidence progress sequence overflows".to_string())
+        })?;
+        let progress = V23IncidenceProgress {
+            completed_units,
+            last_object_digest: last_object_digest.to_string(),
+            phase: self.phase,
+            previous_progress_sha256: Some(previous_progress_sha256),
+            sequence,
+            total_units: self.total_units,
+        };
+        let record_bytes = canonical_v23_incidence_progress_bytes(
+            &progress,
+            Some(self.previous_record_bytes.as_slice()),
+        )?;
+        let mut history_bytes = self.history_bytes.clone();
+        history_bytes.extend_from_slice(&record_bytes);
+        write_v23_incidence_progress_snapshot(&self.path, &history_bytes)?;
+        let digest = format!("{:x}", Sha256::digest(&history_bytes));
+        self.sequence = sequence;
+        self.previous_record_bytes = record_bytes.clone();
+        self.history_bytes = history_bytes;
+        #[cfg(test)]
+        self.records.push(record_bytes);
+        Ok(digest)
+    }
+
+    #[cfg(test)]
+    fn records(&self) -> &[Vec<u8>] {
+        &self.records
+    }
 }
 
 fn valid_lower_hex(value: &str, length: usize) -> bool {
@@ -2272,6 +2364,19 @@ fn authenticate_v23_incidence_request_inputs(
     )
 }
 
+fn authenticate_v23_incidence_tree_inputs_with_progress(
+    inputs: &[V23IncidenceLocalRolePath],
+    mut progress: impl FnMut(&V23IncidenceObjectIdentity) -> Result<()>,
+) -> Result<()> {
+    for input in inputs {
+        authenticate_v23_incidence_local_path(&input.path, &input.identity)?;
+        if input.identity.role.starts_with("training-shard-") {
+            progress(&input.identity)?;
+        }
+    }
+    Ok(())
+}
+
 fn run_v23_incidence_tree_preflight(
     request: &V23IncidenceLocalPhaseRequest,
     binding: V23IncidenceManifestBinding,
@@ -2608,7 +2713,89 @@ fn run_v23_incidence_tree_training(
     preflight_bytes: &[u8],
     sandbox_probes: &str,
 ) -> Result<Vec<u8>> {
-    authenticate_v23_incidence_request_inputs(&request.input_paths)?;
+    let manifest_identity = request
+        .input_paths
+        .iter()
+        .find(|input| input.identity.role == "construction-manifest")
+        .map(|input| &input.identity)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V23 incidence construction manifest identity is absent".to_string(),
+            )
+        })?;
+    let shard_identities = manifest
+        .ordered_inputs
+        .iter()
+        .filter_map(|input| match input {
+            V23IncidenceInputAuthority::TrainingShard { identity, .. } => Some(identity),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let shard_units = u64::try_from(shard_identities.len()).map_err(|_| {
+        BorsukError::InvalidStorage("V23 incidence progress shard count overflows".to_string())
+    })?;
+    let source_rows = manifest
+        .ordered_inputs
+        .iter()
+        .try_fold(0_u64, |sum, input| match input {
+            V23IncidenceInputAuthority::TrainingShard {
+                ordinal_start,
+                ordinal_end,
+                ..
+            } => ordinal_end
+                .checked_sub(*ordinal_start)
+                .and_then(|rows| sum.checked_add(rows))
+                .ok_or_else(|| {
+                    BorsukError::InvalidStorage(
+                        "V23 incidence progress source rows overflow".to_string(),
+                    )
+                }),
+            _ => Ok(sum),
+        })?;
+    let source_row_units = source_rows
+        .checked_add(V23_INCIDENCE_PROGRESS_SOURCE_ROWS - 1)
+        .map(|rows| rows / V23_INCIDENCE_PROGRESS_SOURCE_ROWS)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 incidence progress work overflows".to_string())
+        })?;
+    let total_units = shard_units
+        .checked_add(source_row_units)
+        .and_then(|units| units.checked_add(1))
+        .and_then(|units| units.checked_add(u64::from(manifest.algorithm.tree_depth)))
+        .and_then(|units| units.checked_add(1))
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 incidence progress work overflows".to_string())
+        })?;
+    let progress_path = request
+        .output_path
+        .parent()
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V23 incidence progress output directory is absent".to_string(),
+            )
+        })?
+        .join("progress.json");
+    let mut progress = V23IncidenceProgressChain::start(
+        &progress_path,
+        V23IncidencePhase::TreeTraining,
+        total_units,
+        &manifest_identity.digest,
+    )?;
+    let mut completed_units = 0_u64;
+    let mut last_input_digest = manifest_identity.digest.clone();
+    authenticate_v23_incidence_tree_inputs_with_progress(&request.input_paths, |identity| {
+        completed_units = completed_units.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 incidence progress work overflows".to_string())
+        })?;
+        last_input_digest.clone_from(&identity.digest);
+        progress.advance(completed_units, &last_input_digest)?;
+        Ok(())
+    })?;
+    if completed_units != shard_units {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence progress shard count differs".to_string(),
+        ));
+    }
     let shards = manifest
         .ordered_inputs
         .iter()
@@ -2636,7 +2823,53 @@ fn run_v23_incidence_tree_training(
         })
         .collect::<Result<Vec<_>>>()?;
     let rows = v23_incidence_training_row_stream(shards)?;
-    let tree = train_incidence_tree(rows, 8, 4_096)?;
+    let mut expected_level = 0_u64;
+    let mut completed_source_rows = 0_u64;
+    let mut reservoir_complete = false;
+    let tree = train_incidence_tree(rows, source_rows, 8, 4_096, |milestone| {
+        match milestone {
+            V23IncidenceTrainingMilestone::SourceRows { completed_rows }
+                if !reservoir_complete
+                    && completed_rows > completed_source_rows
+                    && completed_rows <= source_rows =>
+            {
+                completed_source_rows = completed_rows;
+            }
+            V23IncidenceTrainingMilestone::Reservoir {
+                source_rows: observed_source_rows,
+                reservoir_rows,
+            } if !reservoir_complete
+                && completed_source_rows == source_rows
+                && observed_source_rows == source_rows
+                && reservoir_rows == u64::from(manifest.algorithm.reservoir_rows) =>
+            {
+                reservoir_complete = true;
+            }
+            V23IncidenceTrainingMilestone::TreeLevel { level, .. }
+                if reservoir_complete && level == expected_level + 1 =>
+            {
+                expected_level = level;
+            }
+            _ => {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 incidence training progress milestone differs".to_string(),
+                ));
+            }
+        }
+        completed_units = completed_units.checked_add(1).ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 incidence progress work overflows".to_string())
+        })?;
+        progress.advance(completed_units, &last_input_digest)?;
+        Ok(())
+    })?;
+    if !reservoir_complete
+        || expected_level != u64::from(manifest.algorithm.tree_depth)
+        || completed_units + 1 != total_units
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence training progress completion differs".to_string(),
+        ));
+    }
     let tree_bytes = encode_incidence_tree(&tree)?;
 
     let mut probe = [0.0_f32; 96];
@@ -2659,6 +2892,7 @@ fn run_v23_incidence_tree_training(
         &request.scratch_path,
         &request.output_path,
     )?;
+    let final_progress_sha256 = progress.advance(total_units, &output.digest)?;
     let receipt = V23IncidenceReceipt {
         schema: V23_INCIDENCE_RECEIPT_SCHEMA.to_string(),
         claim_eligible: false,
@@ -2675,6 +2909,7 @@ fn run_v23_incidence_tree_training(
             .collect(),
         probes,
         preflight_evidence: None,
+        final_progress_sha256: Some(final_progress_sha256),
         outputs: vec![output],
         stop: None,
     };
@@ -2685,6 +2920,7 @@ fn run_v23_incidence_tree_training(
     );
     if result.is_err() {
         let _ = fs::remove_file(output_path);
+        let _ = fs::remove_file(progress_path);
     }
     result
 }
@@ -2796,6 +3032,7 @@ fn run_v23_incidence_posting_build(
             .collect(),
         probes,
         preflight_evidence: None,
+        final_progress_sha256: None,
         outputs: vec![one_identity, two_identity],
         stop: None,
     };
@@ -2965,6 +3202,7 @@ fn run_v23_incidence_development_evaluation(
             .collect(),
         probes,
         preflight_evidence: None,
+        final_progress_sha256: None,
         outputs: vec![artifact_identity, latency_identity],
         stop: None,
     };
@@ -3143,6 +3381,7 @@ fn run_v23_incidence_holdout_binding(
             .collect(),
         probes,
         preflight_evidence: None,
+        final_progress_sha256: None,
         outputs: vec![output],
         stop: None,
     };
@@ -3391,6 +3630,7 @@ fn run_v23_incidence_holdout_evaluation(
             .collect(),
         probes,
         preflight_evidence: None,
+        final_progress_sha256: None,
         outputs: vec![result_identity, latency_identity],
         stop: None,
     };
@@ -3592,6 +3832,13 @@ fn validate_receipt(receipt: &V23IncidenceReceipt) -> Result<()> {
                 }
         }
     };
+    let progress_shape_is_valid = match (receipt.phase, receipt.run_mode, receipt.stop) {
+        (V23IncidencePhase::TreeTraining, V23IncidenceReceiptRunMode::Execute, None) => receipt
+            .final_progress_sha256
+            .as_deref()
+            .is_some_and(|digest| valid_lower_hex(digest, 64)),
+        _ => receipt.final_progress_sha256.is_none(),
+    };
     if receipt.schema != V23_INCIDENCE_RECEIPT_SCHEMA
         || receipt.claim_eligible
         || !parent_is_valid
@@ -3601,6 +3848,7 @@ fn validate_receipt(receipt: &V23IncidenceReceipt) -> Result<()> {
         || receipt.ordered_mounts.is_empty()
         || !receipt.probes.all_passed()
         || !result_shape_is_valid
+        || !progress_shape_is_valid
     {
         return Err(BorsukError::InvalidStorage(
             "V23 incidence receipt authority differs".to_string(),
@@ -4051,11 +4299,7 @@ fn canonical_v23_incidence_progress_bytes(
     Ok(bytes)
 }
 
-fn write_v23_incidence_progress(
-    path: &Path,
-    progress: &V23IncidenceProgress,
-    previous_bytes: Option<&[u8]>,
-) -> Result<String> {
+fn write_v23_incidence_progress_snapshot(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().ok_or_else(|| {
         BorsukError::InvalidStorage("V23 incidence progress parent is absent".to_string())
     })?;
@@ -4066,7 +4310,6 @@ fn write_v23_incidence_progress(
             "V23 incidence progress path differs".to_string(),
         ));
     }
-    let bytes = canonical_v23_incidence_progress_bytes(progress, previous_bytes)?;
     let temporary = path.with_extension("json.tmp");
     let result = (|| -> Result<()> {
         let mut file = OpenOptions::new()
@@ -4077,7 +4320,7 @@ fn write_v23_incidence_progress(
                 path: temporary.clone(),
                 source,
             })?;
-        file.write_all(&bytes).map_err(|source| BorsukError::Io {
+        file.write_all(bytes).map_err(|source| BorsukError::Io {
             path: temporary.clone(),
             source,
         })?;
@@ -4101,6 +4344,17 @@ fn write_v23_incidence_progress(
         let _ = fs::remove_file(&temporary);
     }
     result?;
+    Ok(())
+}
+
+#[cfg(test)]
+fn write_v23_incidence_progress(
+    path: &Path,
+    progress: &V23IncidenceProgress,
+    previous_bytes: Option<&[u8]>,
+) -> Result<String> {
+    let bytes = canonical_v23_incidence_progress_bytes(progress, previous_bytes)?;
+    write_v23_incidence_progress_snapshot(path, &bytes)?;
     Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
 
@@ -4221,6 +4475,95 @@ mod tests {
         }
     }
 
+    #[test]
+    fn v23_incidence_tree_progress_terminal_receipt_binds_final_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("progress.json");
+        let mut progress = super::V23IncidenceProgressChain::start(
+            &path,
+            V23IncidencePhase::TreeTraining,
+            3,
+            &"11".repeat(32),
+        )
+        .unwrap();
+        assert!(
+            super::V23IncidenceProgressChain::start(
+                &path,
+                V23IncidencePhase::TreeTraining,
+                3,
+                &"11".repeat(32),
+            )
+            .is_err()
+        );
+        progress.advance(1, &"22".repeat(32)).unwrap();
+        progress.advance(2, &"33".repeat(32)).unwrap();
+        let tree_digest = blake3::hash(b"tree-output").to_hex().to_string();
+        let final_progress_sha256 = progress.advance(3, &tree_digest).unwrap();
+
+        assert_eq!(progress.records().len(), 4);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            progress.records().concat(),
+            "the atomic snapshot must retain every hash-chain record",
+        );
+        assert_eq!(
+            final_progress_sha256,
+            format!("{:x}", Sha256::digest(fs::read(&path).unwrap()))
+        );
+
+        let mut receipt = receipt_fixture();
+        receipt.final_progress_sha256 = Some(final_progress_sha256);
+        assert!(canonical_receipt(&receipt).is_ok());
+
+        receipt.final_progress_sha256 = None;
+        assert!(canonical_receipt(&receipt).is_err());
+        receipt.final_progress_sha256 = Some("44".repeat(31));
+        assert!(canonical_receipt(&receipt).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_tree_progress_authenticates_shards_incrementally() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.parquet");
+        let second = directory.path().join("second.parquet");
+        fs::write(&first, b"first-shard").unwrap();
+        fs::write(&second, b"second-shard").unwrap();
+        let inputs = vec![
+            V23IncidenceLocalRolePath {
+                identity: V23IncidenceObjectIdentity {
+                    role: "training-shard-0000".to_string(),
+                    uri: "file:///authority/training-shard-0000".to_string(),
+                    digest_algorithm: "sha256".to_string(),
+                    digest: format!("{:x}", Sha256::digest(b"first-shard")),
+                    encoded_bytes: 11,
+                    generation: "generation-0001".to_string(),
+                },
+                path: first,
+            },
+            V23IncidenceLocalRolePath {
+                identity: V23IncidenceObjectIdentity {
+                    role: "training-shard-0001".to_string(),
+                    uri: "file:///authority/training-shard-0001".to_string(),
+                    digest_algorithm: "sha256".to_string(),
+                    digest: "55".repeat(32),
+                    encoded_bytes: 12,
+                    generation: "generation-0001".to_string(),
+                },
+                path: second,
+            },
+        ];
+        let mut authenticated = Vec::new();
+
+        assert!(
+            super::authenticate_v23_incidence_tree_inputs_with_progress(&inputs, |identity| {
+                authenticated.push(identity.role.clone());
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(authenticated, vec!["training-shard-0000"]);
+    }
+
     fn object(role: &str, algorithm: &str, digest: &str) -> V23IncidenceObjectIdentity {
         V23IncidenceObjectIdentity {
             role: role.to_string(),
@@ -4323,8 +4666,9 @@ mod tests {
     fn receipt_fixture() -> V23IncidenceReceipt {
         let parent_receipt_sha256 = format!("{:x}", Sha256::digest(b"preflight-receipt"));
         let tree_digest = blake3::hash(b"tree-output").to_hex().to_string();
+        let progress_digest = format!("{:x}", Sha256::digest(b"progress-record"));
         V23IncidenceReceipt {
-            schema: "borsuk-v23-incidence-receipt-v1".to_string(),
+            schema: V23_INCIDENCE_RECEIPT_SCHEMA.to_string(),
             claim_eligible: false,
             phase: V23IncidencePhase::TreeTraining,
             run_mode: V23IncidenceReceiptRunMode::Execute,
@@ -4341,6 +4685,7 @@ mod tests {
                 output_writable: true,
             },
             preflight_evidence: None,
+            final_progress_sha256: Some(progress_digest.clone()),
             outputs: vec![V23IncidenceObjectIdentity {
                 encoded_bytes: 11,
                 ..object("incidence-tree", "blake3", &tree_digest)
@@ -4916,6 +5261,7 @@ mod tests {
         );
 
         parent.phase = V23IncidencePhase::PostingConstruction;
+        parent.final_progress_sha256 = None;
         let changed_bytes = canonical_receipt(&parent).unwrap();
         manifest.parent_receipt_sha256 = Some(format!("{:x}", Sha256::digest(&changed_bytes)));
         let V23IncidenceInputAuthority::PhaseObject { identity } = &mut manifest.ordered_inputs[0]
@@ -4935,6 +5281,7 @@ mod tests {
         );
 
         parent.phase = V23IncidencePhase::TreeTraining;
+        parent.final_progress_sha256 = Some(format!("{:x}", Sha256::digest(b"progress-record")));
         let changed_output = b"different-tree";
         parent.outputs[0].digest = blake3::hash(changed_output).to_hex().to_string();
         parent.outputs[0].encoded_bytes = changed_output.len() as u64;
@@ -5527,6 +5874,8 @@ mod tests {
     #[test]
     fn v23_incidence_local_tree_execute_requires_passing_preflight_before_training() {
         let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join("scratch")).unwrap();
+        fs::create_dir(directory.path().join("output")).unwrap();
         let training_path = directory.path().join("training.parquet");
         let training_bytes = training_preflight_parquet("element", 16);
         fs::write(&training_path, &training_bytes).unwrap();
@@ -6004,6 +6353,7 @@ mod tests {
         let development_latency = b"development-latency\n";
         let mut parent_receipt = receipt_fixture();
         parent_receipt.phase = V23IncidencePhase::DevelopmentEvaluation;
+        parent_receipt.final_progress_sha256 = None;
         parent_receipt.executable_sha256 = "95".repeat(32);
         parent_receipt.outputs = vec![
             V23IncidenceObjectIdentity {
@@ -6278,6 +6628,8 @@ mod tests {
                 output_writable: true,
             },
             preflight_evidence: None,
+            final_progress_sha256: (phase == V23IncidencePhase::TreeTraining)
+                .then(|| format!("{:x}", Sha256::digest(b"test-tree-progress"))),
             outputs: output_identities,
             stop: None,
         };

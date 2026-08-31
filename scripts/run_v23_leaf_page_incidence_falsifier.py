@@ -8,6 +8,7 @@ import ctypes
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import pathlib
 import signal
@@ -15,6 +16,7 @@ import socket
 import subprocess
 import sys
 import time
+import traceback
 from collections.abc import Sequence
 
 PHASES = (
@@ -100,10 +102,29 @@ class AuthenticatedProgressMonitor:
         self._completed_units: int | None = None
         self._total_units: int | None = None
         self._digest: str | None = None
+        self._history = b""
 
     def observe(self, raw: bytes) -> tuple[int, int, str]:
-        """Accept exactly the next canonical progress record."""
+        """Accept an atomically replaced canonical snapshot of the full chain."""
 
+        if (
+            not raw.endswith(b"\n")
+            or not raw
+            or (self._history and not raw.startswith(self._history))
+            or len(raw) <= len(self._history)
+        ):
+            raise ValueError("progress history differs")
+        records = raw[len(self._history) :].splitlines(keepends=True)
+        if not records or any(record == b"\n" for record in records):
+            raise ValueError("progress history differs")
+        observed: tuple[int, int, str] | None = None
+        for record in records:
+            observed = self._observe_record(record)
+        self._history = raw
+        assert observed is not None
+        return observed
+
+    def _observe_record(self, raw: bytes) -> tuple[int, int, str]:
         try:
             if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
                 raise ValueError("progress canonical bytes differ")
@@ -1067,46 +1088,55 @@ def monitor_process_group(
     if (progress_path is None) != (progress_phase is None):
         raise ValueError("progress path and phase must be supplied together")
     started = time.monotonic()
-    initial_swap = _swap_used_bytes()
-    sustained = 0
-    last_progress = started
-    progress_monitor = (
-        None if progress_phase is None else AuthenticatedProgressMonitor(progress_phase)
-    )
-    progress_file_digest: str | None = None
-    while True:
-        completed, status = os.waitpid(pid, os.WNOHANG)
-        if completed == pid:
-            return os.waitstatus_to_exitcode(status), None
-        psi = _memory_psi_full_avg10()
-        sustained = sustained + 1 if psi >= limits.psi_sustained else 0
-        if progress_path is not None and progress_path.exists():
-            try:
-                if progress_path.is_symlink() or not progress_path.is_file():
-                    raise ValueError("progress file authority differs")
-                raw_progress = progress_path.read_bytes()
-                observed_digest = hashlib.sha256(raw_progress).hexdigest()
-                if observed_digest != progress_file_digest:
-                    assert progress_monitor is not None
-                    progress_monitor.observe(raw_progress)
-                    progress_file_digest = observed_digest
-                    last_progress = time.monotonic()
-            except (OSError, ValueError):
-                status = _terminate_process_group(pid, term_grace_seconds)
-                return os.waitstatus_to_exitcode(status), "progress-authority"
-        stop_reason = classify_sample(
-            limits=limits,
-            rss_bytes=_process_group_rss_bytes(pid),
-            psi_full_avg10=psi,
-            consecutive_psi_samples=sustained,
-            swap_delta_bytes=max(0, _swap_used_bytes() - initial_swap),
-            progress_age_seconds=time.monotonic() - last_progress,
-            wall_seconds=time.monotonic() - started,
+    try:
+        initial_swap = _swap_used_bytes()
+        sustained = 0
+        last_progress = started
+        progress_monitor = (
+            None
+            if progress_phase is None
+            else AuthenticatedProgressMonitor(progress_phase)
         )
-        if stop_reason is not None:
-            status = _terminate_process_group(pid, term_grace_seconds)
-            return os.waitstatus_to_exitcode(status), stop_reason
-        time.sleep(sample_interval_seconds)
+        progress_file_digest: str | None = None
+        while True:
+            completed, status = os.waitpid(pid, os.WNOHANG)
+            if completed == pid:
+                return os.waitstatus_to_exitcode(status), None
+            psi = _memory_psi_full_avg10()
+            sustained = sustained + 1 if psi >= limits.psi_sustained else 0
+            if progress_path is not None and progress_path.exists():
+                try:
+                    if progress_path.is_symlink() or not progress_path.is_file():
+                        raise ValueError("progress file authority differs")
+                    raw_progress = progress_path.read_bytes()
+                    observed_digest = hashlib.sha256(raw_progress).hexdigest()
+                    if observed_digest != progress_file_digest:
+                        assert progress_monitor is not None
+                        progress_monitor.observe(raw_progress)
+                        progress_file_digest = observed_digest
+                        last_progress = time.monotonic()
+                except (OSError, ValueError):
+                    status = _terminate_process_group(pid, term_grace_seconds)
+                    return os.waitstatus_to_exitcode(status), "progress-authority"
+            stop_reason = classify_sample(
+                limits=limits,
+                rss_bytes=_process_group_rss_bytes(pid),
+                psi_full_avg10=psi,
+                consecutive_psi_samples=sustained,
+                swap_delta_bytes=max(0, _swap_used_bytes() - initial_swap),
+                progress_age_seconds=time.monotonic() - last_progress,
+                wall_seconds=time.monotonic() - started,
+            )
+            if stop_reason is not None:
+                status = _terminate_process_group(pid, term_grace_seconds)
+                return os.waitstatus_to_exitcode(status), stop_reason
+            time.sleep(sample_interval_seconds)
+    except BaseException:
+        try:
+            _terminate_process_group(pid, term_grace_seconds)
+        except ChildProcessError:
+            pass
+        raise
 
 
 def _terminate_process_group(pid: int, grace_seconds: float) -> int:
@@ -1147,14 +1177,22 @@ def _process_group_rss_bytes(pgid: int) -> int:
     return total_pages * os.sysconf("SC_PAGE_SIZE")
 
 
-def _memory_psi_full_avg10() -> float:
+def _memory_psi_full_avg10(
+    path: pathlib.Path = pathlib.Path("/proc/pressure/memory"),
+) -> float:
     for line in (
-        pathlib.Path("/proc/pressure/memory").read_text(encoding="ascii").splitlines()
+        path.read_text(encoding="ascii").splitlines()
     ):
         if line.startswith("full "):
-            fields = dict(field.split("=", 1) for field in line.split()[1:])
-            return float(fields["avg10"])
-    raise RuntimeError("memory PSI full sample is absent")
+            try:
+                fields = dict(field.split("=", 1) for field in line.split()[1:])
+                value = float(fields["avg10"])
+            except (KeyError, ValueError) as error:
+                raise RuntimeError("memory PSI full avg10 sample differs") from error
+            if not math.isfinite(value) or value < 0.0:
+                raise RuntimeError("memory PSI full avg10 sample differs")
+            return value
+    raise RuntimeError("memory PSI full avg10 sample is absent")
 
 
 def _swap_used_bytes() -> int:
@@ -1248,5 +1286,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as error:  # noqa: BLE001
-        print(error, file=sys.stderr)
+        traceback.print_exc()
         raise SystemExit(1) from error

@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from collections.abc import Sequence
 from typing import Any
 
@@ -42,6 +43,7 @@ BLOCKED_PHASES = (
 LOWER_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 LOWER_GIT_SHA1 = re.compile(r"[0-9a-f]{40}\Z")
 INSTANCE_WALL_STOP_SECONDS = 21_600
+MEMORY_PSI_PATH = pathlib.Path("/proc/pressure/memory")
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -231,11 +233,13 @@ evidence=/var/lib/borsuk-v23-incidence/evidence
 scratch_root=/var/lib/borsuk-v23-incidence/scratch
 archive=/var/lib/borsuk-v23-incidence/source.tar
 worker_log=/var/lib/borsuk-v23-incidence/worker.log
+phase_log="$evidence/phase.log"
+phase_journal="$evidence/phase-journal.txt"
 unit="borsuk-v23-incidence-$run_id"
 status=99
 export HOME=/root PATH=/root/.cargo/bin:$PATH
 mkdir -p "$evidence" "$scratch_root"
-exec > >(tee -a "$worker_log") 2>&1
+exec >>"$worker_log" 2>&1
 put_once() {{
   local path="$1" name="$2" bucket prefix
   bucket="${{result_uri#s3://}}"; bucket="${{bucket%%/*}}"
@@ -249,6 +253,7 @@ finish() {{
   set +e
   publish_status=0
   complete_attempted=0
+  primary_evidence_attempted=0
   if [[ "$status" -eq 0 && ! -f "$evidence/spot-interruption.json" && -f "$evidence/tree-receipt.json" && -f "$evidence/incidence-tree.bin" ]]; then
     python3 - "$evidence/ATTEMPT_COMPLETE.json" "$run_id" "$source_commit" "$source_sha256" "$spot_price" "$evidence/tree-receipt.json" "$evidence/incidence-tree.bin" "$binary" <<'PY'
 import hashlib,json,os,sys
@@ -257,9 +262,11 @@ identity=lambda p: {{"encoded_bytes":os.path.getsize(p),"sha256":hashlib.sha256(
 value={{"binary":identity(binary),"claim_eligible":False,"incidence_tree":identity(tree),"phase":"tree-training","purchase_option":"spot","receipt":identity(receipt),"run_id":run_id,"schema":"borsuk-v23-incidence-attempt-complete-v1","source_archive_sha256":archive_sha,"source_commit":commit,"spot_price_usd_per_hour":price,"status":"complete"}}
 open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\\n")
 PY
+    primary_evidence_attempted=1
     put_once "$evidence/binary.json" binary.json || publish_status=86
     put_once "$binary" incidence-executable || publish_status=86
     put_once "$evidence/preflight-receipt.json" preflight-receipt.json || publish_status=86
+    put_once "$evidence/progress.json" progress.json || publish_status=86
     put_once "$evidence/incidence-tree.bin" incidence-tree.bin || publish_status=86
     put_once "$evidence/tree-receipt.json" tree-receipt.json || publish_status=86
   else
@@ -268,6 +275,14 @@ PY
   fi
   [[ -f "$evidence/spot-interruption.json" ]] && put_once "$evidence/spot-interruption.json" spot-interruption.json || true
   [[ -f "$evidence/interruption-monitor-failed.json" ]] && put_once "$evidence/interruption-monitor-failed.json" interruption-monitor-failed.json || true
+  for evidence_name in binary.json preflight-receipt.json preflight-staging-receipt.json execute-staging-receipt.json progress.json phase.log phase-journal.txt phase-traceback.txt phase-failure.json; do
+    if [[ "$primary_evidence_attempted" -eq 1 ]]; then
+      case "$evidence_name" in
+        binary.json|preflight-receipt.json|progress.json) continue ;;
+      esac
+    fi
+    [[ -f "$evidence/$evidence_name" ]] && put_once "$evidence/$evidence_name" "$evidence_name" || true
+  done
   [[ -f "$worker_log" ]] && put_once "$worker_log" worker.log || true
   if [[ "$publish_status" -eq 0 ]]; then
     complete_attempted=1
@@ -338,12 +353,15 @@ watch_spot_interruption & interruption_watcher=$!
 set +e
 systemd-run --wait --collect --unit="$unit" \
   --property=MemoryMax=3G --property=MemorySwapMax=0 --property=RuntimeMaxSec=16200 \
+  --property=StandardOutput=append:$phase_log --property=StandardError=append:$phase_log \
   --working-directory="$workspace" --setenv=PYTHONPATH="$workspace" --setenv=TMPDIR="$scratch_root" \
   --setenv=AWS_REGION={REGION} --setenv=AWS_DEFAULT_REGION={REGION} \
   /opt/borsuk-incidence-venv/bin/python scripts/launch_v23_incidence_spot.py --worker-tree \
   --binary "$binary" --binary-sha256 "$binary_sha256" \
   --evidence-directory "$evidence" --output-uri-prefix "$result_uri"
 phase_status=$?
+journalctl --no-pager -o short-iso -u "$unit" >"$phase_journal" 2>&1 || true
+[[ -f "$phase_log" ]] && sync "$phase_log" || true
 set -e
 kill "$interruption_watcher" 2>/dev/null || true
 wait "$interruption_watcher" 2>/dev/null || true
@@ -867,6 +885,31 @@ def _write_bulk_manifest(source: pathlib.Path, target: pathlib.Path, full: bool)
     target.write_bytes(_canonical_bytes(value))
 
 
+def _validate_tree_progress_binding(
+    receipt: dict[str, object], progress_path: pathlib.Path
+) -> None:
+    from scripts.run_v23_leaf_page_incidence_falsifier import (
+        AuthenticatedProgressMonitor,
+    )
+
+    if progress_path.is_symlink() or not progress_path.is_file():
+        raise ValueError("tree progress binding differs")
+    raw = progress_path.read_bytes()
+    try:
+        _, completed_units, _ = AuthenticatedProgressMonitor("tree-training").observe(
+            raw
+        )
+        final_record = json.loads(raw.splitlines()[-1])
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("tree progress binding differs") from error
+    if (
+        final_record["sequence"] <= 0
+        or completed_units != final_record["total_units"]
+        or receipt.get("final_progress_sha256") != hashlib.sha256(raw).hexdigest()
+    ):
+        raise ValueError("tree progress binding differs")
+
+
 def _rewrite_tree_receipt_uri(
     receipt_path: pathlib.Path, tree_path: pathlib.Path, output_uri: str
 ) -> None:
@@ -983,6 +1026,86 @@ def _phase_policy(
     return dataclasses.replace(policy, phase_argv=build_phase_argv(policy))
 
 
+def _write_exclusive(path: pathlib.Path, payload: bytes) -> None:
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("exclusive evidence write made no progress")
+            offset += written
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _preserve_worker_failure(
+    evidence: pathlib.Path,
+    stage: str,
+    error: BaseException,
+    partial_receipts: Sequence[tuple[pathlib.Path, str]],
+) -> None:
+    evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
+    preservation_errors: list[str] = []
+    failure_artifacts = (
+        (
+            evidence / "phase-traceback.txt",
+            traceback.format_exc().encode("utf-8"),
+        ),
+        (
+            evidence / "phase-failure.json",
+            _canonical_bytes(
+                {
+                    "claim_eligible": False,
+                    "exception_type": type(error).__name__,
+                    "message": str(error),
+                    "phase": "tree-training",
+                    "stage": stage,
+                }
+            ),
+        ),
+    )
+    for target, payload in failure_artifacts:
+        try:
+            _write_exclusive(target, payload)
+        except BaseException as preservation_error:
+            preservation_errors.append(
+                f"{target.name}: {type(preservation_error).__name__}: "
+                f"{preservation_error}"
+            )
+    for source, name in partial_receipts:
+        try:
+            if not source.exists():
+                continue
+            if source.is_symlink() or not source.is_file():
+                raise ValueError("partial receipt evidence differs")
+            payload = source.read_bytes()
+            target = evidence / name
+            if target.exists():
+                if (
+                    target.is_symlink()
+                    or not target.is_file()
+                    or target.read_bytes() != payload
+                ):
+                    raise ValueError("partial receipt evidence differs")
+                continue
+            _write_exclusive(target, payload)
+        except BaseException as preservation_error:
+            preservation_errors.append(
+                f"{name}: {type(preservation_error).__name__}: {preservation_error}"
+            )
+    if preservation_errors:
+        raise RuntimeError(
+            "worker failure evidence preservation failed: "
+            + "; ".join(preservation_errors)
+        )
+
+
 def worker_tree(
     binary: pathlib.Path,
     binary_sha256: str,
@@ -1007,15 +1130,26 @@ def worker_tree(
     execute_scratch = root / "execute-scratch"
     preflight_output = root / "preflight-output"
     execute_output = root / "execute-output"
-    for path in (preflight_scratch, execute_scratch, preflight_output, execute_output):
-        path.mkdir()
+    stage = "initialization"
+    preflight_manifest = root / known[0]
+    execute_manifest = root / known[1]
+    preflight_receipt = root / known[2]
+    execute_receipt = root / known[3]
+    phase_preflight_receipt = preflight_output / "receipt.json"
+    execute_progress = execute_output / "progress.json"
     try:
-        preflight_manifest = root / known[0]
-        execute_manifest = root / known[1]
-        preflight_receipt = root / known[2]
-        execute_receipt = root / known[3]
+        for path in (
+            preflight_scratch,
+            execute_scratch,
+            preflight_output,
+            execute_output,
+        ):
+            path.mkdir()
+        stage = "preflight-manifest"
         _write_bulk_manifest(manifest, preflight_manifest, False)
+        stage = "preflight-staging"
         _stage(preflight_manifest, preflight_staging, preflight_receipt)
+        stage = "preflight-policy"
         preflight_policy = _phase_policy(
             binary=binary,
             binary_sha256=binary_sha256,
@@ -1027,17 +1161,21 @@ def worker_tree(
             output=preflight_output,
             preflight_receipt=None,
         )
-        if run_phase(preflight_policy, MonitorLimits()) != 0:
-            raise RuntimeError("tree preflight failed")
-        phase_preflight_receipt = preflight_output / "receipt.json"
+        stage = "preflight-run"
+        preflight_status = run_phase(preflight_policy, MonitorLimits())
+        if preflight_status != 0:
+            raise RuntimeError(f"tree preflight failed with exit {preflight_status}")
         if not phase_preflight_receipt.is_file():
             raise RuntimeError("tree preflight receipt is absent")
         evidence.mkdir(parents=True, exist_ok=True)
         (evidence / "preflight-receipt.json").write_bytes(
             phase_preflight_receipt.read_bytes()
         )
+        stage = "execute-manifest"
         _write_bulk_manifest(manifest, execute_manifest, True)
+        stage = "execute-staging"
         _stage(execute_manifest, execute_staging, execute_receipt)
+        stage = "execute-policy"
         execute_policy = _phase_policy(
             binary=binary,
             binary_sha256=binary_sha256,
@@ -1049,12 +1187,19 @@ def worker_tree(
             output=execute_output,
             preflight_receipt=phase_preflight_receipt,
         )
-        if run_phase(execute_policy, MonitorLimits()) != 0:
-            raise RuntimeError("tree execution failed")
+        stage = "execute-run"
+        execute_status = run_phase(execute_policy, MonitorLimits())
+        if execute_status != 0:
+            raise RuntimeError(f"tree execution failed with exit {execute_status}")
+        stage = "execute-receipt"
         final_receipt = execute_output / "receipt.json"
         if not final_receipt.is_file():
             raise RuntimeError("tree receipt is absent")
+        if execute_progress.is_symlink() or not execute_progress.is_file():
+            raise RuntimeError("tree progress is absent")
         receipt_value = json.loads(final_receipt.read_bytes())
+        _validate_tree_progress_binding(receipt_value, execute_progress)
+        _write_exclusive(evidence / "progress.json", execute_progress.read_bytes())
         outputs = receipt_value.get("outputs")
         if type(outputs) is not list or len(outputs) != 1:  # noqa: E721
             raise RuntimeError("tree receipt output authority differs")
@@ -1072,6 +1217,22 @@ def worker_tree(
         os.replace(tree_path, evidence / "incidence-tree.bin")
         os.replace(final_receipt, evidence / "tree-receipt.json")
         return 0
+    except BaseException as error:
+        try:
+            _preserve_worker_failure(
+                evidence,
+                stage,
+                error,
+                (
+                    (preflight_receipt, "preflight-staging-receipt.json"),
+                    (execute_receipt, "execute-staging-receipt.json"),
+                    (phase_preflight_receipt, "preflight-receipt.json"),
+                    (execute_progress, "progress.json"),
+                ),
+            )
+        except BaseException:
+            traceback.print_exc()
+        raise
     finally:
         # Scientific cleanup is fail-closed: only the private mkdtemp tree is removed.
         import shutil
@@ -1082,6 +1243,11 @@ def worker_tree(
 def namespace_probe() -> int:
     """Prove user/mount/network namespaces and pivot_root before data staging."""
 
+    from scripts.run_v23_leaf_page_incidence_falsifier import (
+        _memory_psi_full_avg10,
+    )
+
+    _memory_psi_full_avg10(MEMORY_PSI_PATH)
     probe_root = pathlib.Path(tempfile.mkdtemp(prefix="v23-incidence-probe-"))
     program = """
 import ctypes, os, pathlib, socket, sys
@@ -1212,5 +1378,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as error:  # noqa: BLE001
-        print(error, file=sys.stderr)
+        traceback.print_exc()
         raise SystemExit(1) from error

@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from scripts import run_v23_leaf_page_incidence_falsifier as subject
 
@@ -109,6 +110,27 @@ def _progress_bytes(
 
 
 class SandboxPolicyTests(unittest.TestCase):
+    def test_scientific_entrypoint_preserves_full_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = pathlib.Path(directory) / "invalid-policy.json"
+            policy.write_bytes(b"{}\n")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(pathlib.Path(subject.__file__).resolve()),
+                    "--enter-sandbox-policy",
+                    str(policy),
+                    "--policy-sha256",
+                    hashlib.sha256(policy.read_bytes()).hexdigest(),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("Traceback (most recent call last):", completed.stderr)
+        self.assertIn("decode_policy_bytes", completed.stderr)
+
     def test_phase_argv_uses_three_authorities_and_one_bulk_directory(self) -> None:
         base = _policy()
         policy = dataclasses.replace(
@@ -159,7 +181,28 @@ class SandboxPolicyTests(unittest.TestCase):
             previous_progress_sha256=initial_digest,
         )
         advanced_digest = hashlib.sha256(advanced).hexdigest()
-        self.assertEqual(monitor.observe(advanced), (1, 64, advanced_digest))
+        self.assertEqual(
+            monitor.observe(initial + advanced), (1, 64, advanced_digest)
+        )
+
+        second = _progress_bytes(
+            sequence=2,
+            completed_units=96,
+            previous_progress_sha256=advanced_digest,
+        )
+        second_digest = hashlib.sha256(second).hexdigest()
+        third = _progress_bytes(
+            sequence=3,
+            completed_units=128,
+            previous_progress_sha256=second_digest,
+        )
+        third_digest = hashlib.sha256(third).hexdigest()
+        catchup_monitor = subject.AuthenticatedProgressMonitor("tree-training")
+        self.assertEqual(catchup_monitor.observe(initial), (0, 0, initial_digest))
+        self.assertEqual(
+            catchup_monitor.observe(initial + advanced + second + third),
+            (3, 128, third_digest),
+        )
 
         mutations = (
             _progress_bytes(
@@ -189,7 +232,10 @@ class SandboxPolicyTests(unittest.TestCase):
         for mutation in mutations:
             with self.subTest(mutation=mutation[:80]):
                 with self.assertRaises(ValueError):
-                    monitor.observe(mutation)
+                    monitor.observe(initial + advanced + mutation)
+
+        with self.assertRaises(ValueError):
+            catchup_monitor.observe(initial + second + third)
 
     def test_bulk_directory_capabilities_replace_per_object_phase_mounts(self) -> None:
         for phase in ("tree-training", "posting-construction"):
@@ -781,6 +827,45 @@ class SandboxPolicyTests(unittest.TestCase):
             term_grace_seconds=0.01,
         )
         self.assertEqual((status, stop), (-signal.SIGKILL, "wall-cap"))
+
+    def test_monitor_exception_terminates_and_reaps_original_group(self) -> None:
+        pid = os.posix_spawn(
+            sys.executable,
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            os.environ.copy(),
+            setsid=True,
+        )
+        leaked = True
+        try:
+            with (
+                patch.object(
+                    subject,
+                    "_memory_psi_full_avg10",
+                    side_effect=RuntimeError("PSI unavailable"),
+                ),
+                self.assertRaisesRegex(RuntimeError, "PSI unavailable"),
+            ):
+                subject.monitor_process_group(
+                    pid,
+                    subject.MonitorLimits(),
+                    sample_interval_seconds=0.001,
+                    term_grace_seconds=0.01,
+                )
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                leaked = False
+        finally:
+            if leaked:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    os.waitpid(pid, 0)
+                except ChildProcessError:
+                    pass
+        self.assertFalse(leaked, "monitor exception leaked its process group")
 
     def test_monitor_stops_immediately_on_invalid_authenticated_progress(
         self,
