@@ -959,3 +959,64 @@ affected 41-test gate and dependency-complete 921-test Python discovery passed,
 with one expected skip; Ruff, pycompile, generated Bash syntax, ShellCheck, and
 diff checks also passed. This failed attempt establishes no performance or
 quality evidence, authorizes no downstream phase, and leaves D3 fenced.
+
+## V23 leaf-page incidence second Spot bootstrap failure on 2026-08-31
+
+The second tree-training bootstrap attempt used source commit
+`68d9da84d8e127cc9549ba59de1cee0e748a325d`, source-archive SHA-256
+`4054ff21c7c8adbf216d5873f3b973326c2e651057a63cb04395fb278e2b0788`,
+and run ID `v23-incidence-tree-20260831T085730Z`. The controller recorded one
+`c7g.8xlarge` Spot instance, `i-0d4e4e3f172ea8cc2`, in `eu-central-1`; the
+terminated instance has since aged out of the current EC2 query surface. Its
+immutable evidence prefix is
+`s3://borsuk-bench-453182569524-euc1/research/v23-leaf-page-incidence/4054ff21c7c8adbf216d5873f3b973326c2e651057a63cb04395fb278e2b0788/v23-incidence-tree-20260831T085730Z/`.
+
+The worker again built the release executable and installed its pinned Python
+environment. The 10,633,936-byte executable had SHA-256
+`366ca766f81816ea7fafc38afaea35fc2400cbbafa2b6687ccd984e956ae35a8`.
+The systemd scientific unit then ran for 6.633 seconds and consumed 1.057
+CPU-seconds before failing in the old private-root bootstrap. The failure path
+was `enter_sandbox` to `authenticate_policy_files` to `_authenticate_file`,
+which raised `ValueError: sandbox authenticated file authority differs` while
+authenticating a dynamic-loader runtime mount represented by a symlink. This
+occurred before the Rust preflight or any scientific training work.
+
+The canonical 330-byte `ATTEMPT_FAILED.json` has SHA-256
+`a91ad4d385ab1fc319fd9f5b986feb535de19ad47646b13803bffbb93371fb05`
+and records `claim_eligible=false`, phase `tree-training`, `worker_exit=1`, and
+the exact source identities above. The remaining authenticated evidence is:
+
+- 210-byte `binary.json`, SHA-256
+  `76587e8a1ec6261a64fd063f8a42a9bc2809a2d0eed8ad058e95c684608e7e`;
+- 151-byte `phase-failure.json`, SHA-256
+  `c09b8757a50675f4bb6a892781b354eb726fab1342dc84e2aae8b0772cabf764`;
+- 1,206-byte `phase-journal.txt`, SHA-256
+  `8993ca82f99c678dfb5a078e4f7828ca1a9ba29a8aff12785b5414a3c4072770`;
+- 271-byte `phase-traceback.txt`, SHA-256
+  `786384cdc299e61fbeb979503b0b813e22515e1656c2a91767ba72a84fb1bc15`;
+- 1,505-byte `phase.log`, SHA-256
+  `52459ce36fddd08b3ca111a234c622243f22c30fa740930950aaec0f27028249`;
+- 619-byte `preflight-staging-receipt.json`, SHA-256
+  `7c086d071440ebe9f9e052e4c189fc8b98a8bad1eb0f38c2b5b92bafa03a4845`;
+- 110,181-byte `worker.log`, SHA-256
+  `d9a079fa549995ba3c8be6abfed53d070bd3435dc0f46838067c3fb231a8eb7f`.
+
+No preflight scientific receipt, progress record, trained tree, performance
+measurement, or quality result exists. The bounded evidence inspection removed
+all eight named local files and its explicit temporary directory after process
+clearance.
+
+The failed private-root architecture has since been deleted rather than made
+compatible. Source commit `093be8cf40c86bb0b7335eb41d50f162b173c986`
+runs the dynamically linked executable against the normal operating-system
+runtime and removes `ldd`, `pivot_root`, runtime-library mounts, and loader
+discovery. It retains exact byte authentication for every declared input,
+phase-specific role allowlists, a network/PID namespace with child reaping,
+canonical receipts, and post-run input reauthentication. Receipt schema v3 is
+an intentional pre-release break, not a legacy adapter. The replacement passed
+54 affected Python tests, 75 grouped Rust library tests, three Rust example
+tests, strict workspace Clippy, dependency-complete 934-test Python discovery,
+and the full locked workspace/all-targets Rust gate with 1,747 tests passed and
+23 ignored. This second failed attempt remains bootstrap-only evidence,
+authorizes no quality claim or D3 phase, and does not count as a scientific
+repetition.
