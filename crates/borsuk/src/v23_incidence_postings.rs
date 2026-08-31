@@ -1,8 +1,8 @@
 use std::{
     cmp::Reverse,
     collections::BinaryHeap,
-    fs::{self, File},
-    io::{BufReader, BufWriter, Read, Write},
+    fs::{self, File, OpenOptions},
+    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -31,7 +31,12 @@ const SCRATCH_CEILING_BYTES: u64 = 1_027_983_056;
 const PREFIX_CAPS: [usize; 3] = [512, 1024, 2048];
 const RETAINED_MASS_MINIMUM_PPM: u64 = 995_000;
 const QUANTIZATION_TV_MAXIMUM_PPM: u64 = 5_000;
-const PLANE_MAGIC: &[u8; 8] = b"BVIP\x01\0\0\0";
+const PLANE_MAGIC: &[u8; 8] = b"BVIP\x02\0\0\0";
+const PLANE_HEADER_BYTES: u64 = 60;
+const PLANE_OFFSET_BYTES: u64 = (LEAF_COUNT as u64 + 1) * 4;
+const PLANE_LEAF_EVIDENCE_BYTES: u64 = LEAF_COUNT as u64 * 80;
+const PLANE_ENTRIES_OFFSET: u64 =
+    PLANE_HEADER_BYTES + PLANE_OFFSET_BYTES + PLANE_LEAF_EVIDENCE_BYTES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -79,6 +84,19 @@ pub(crate) struct V23PostingPlane {
     pub(crate) maximum_merge_entries: u32,
     pub(crate) scratch_bytes_peak: u64,
     pub(crate) leaves: Vec<V23PostingLeaf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V23PostingArtifact {
+    pub(crate) arm: PostingAssignmentArm,
+    pub(crate) max_pages_per_leaf: u16,
+    pub(crate) path: PathBuf,
+    pub(crate) digest: String,
+    pub(crate) encoded_bytes: u64,
+    pub(crate) source_records: u64,
+    pub(crate) maximum_resident_records: u64,
+    pub(crate) maximum_merge_entries: u32,
+    pub(crate) scratch_bytes_peak: u64,
 }
 
 impl V23PostingPlane {
@@ -353,6 +371,30 @@ fn read_record(reader: &mut BufReader<File>) -> Result<Option<V23PostingRecord>>
     decode_posting_record(&bytes).map(Some)
 }
 
+fn read_stream_u16(reader: &mut impl Read, path: &Path) -> Result<u16> {
+    let mut bytes = [0_u8; 2];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| io_error(path, error))?;
+    Ok(u16::from_le_bytes(bytes))
+}
+
+fn read_stream_u32(reader: &mut impl Read, path: &Path) -> Result<u32> {
+    let mut bytes = [0_u8; 4];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| io_error(path, error))?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn read_stream_u64(reader: &mut impl Read, path: &Path) -> Result<u64> {
+    let mut bytes = [0_u8; 8];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| io_error(path, error))?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
 struct RunFiles {
     by_partition: Vec<Vec<PathBuf>>,
     paths: Vec<PathBuf>,
@@ -509,12 +551,10 @@ fn empty_posting_leaf() -> V23PostingLeaf {
     }
 }
 
-fn finish_posting_leaf(
-    leaf: u16,
+fn completed_posting_leaf(
     total_mass: u64,
     top: BinaryHeap<(Reverse<u64>, u32)>,
-    leaves: &mut [V23PostingLeaf],
-) -> Result<()> {
+) -> Result<V23PostingLeaf> {
     let mut pages = top
         .into_iter()
         .map(|(Reverse(count), page)| Ok((page, normalized_mass(count, total_mass)?, count)))
@@ -527,12 +567,21 @@ fn finish_posting_leaf(
         .collect::<Result<Vec<_>>>()?
         .try_into()
         .map_err(|_| invalid("V23 posting prefix evidence count differs"))?;
-    leaves[usize::from(leaf)] = V23PostingLeaf {
+    Ok(V23PostingLeaf {
         pages: pages.iter().map(|entry| entry.0).collect(),
         masses: pages.iter().map(|entry| entry.1).collect(),
         total_mass,
         prefixes,
-    };
+    })
+}
+
+fn finish_posting_leaf(
+    leaf: u16,
+    total_mass: u64,
+    top: BinaryHeap<(Reverse<u64>, u32)>,
+    leaves: &mut [V23PostingLeaf],
+) -> Result<()> {
+    leaves[usize::from(leaf)] = completed_posting_leaf(total_mass, top)?;
     Ok(())
 }
 
@@ -626,6 +675,78 @@ fn merge_partition(
     Ok(maximum_merge_entries)
 }
 
+fn merge_partition_stream(
+    paths: &[PathBuf],
+    max_pages_per_leaf: usize,
+    emit: &mut impl FnMut(u16, V23PostingLeaf) -> Result<()>,
+) -> Result<usize> {
+    let mut readers = paths
+        .iter()
+        .map(|path| File::open(path).map_err(|error| io_error(path, error)))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .map(BufReader::new)
+        .collect::<Vec<_>>();
+    let mut records = BinaryHeap::new();
+    for (index, reader) in readers.iter_mut().enumerate() {
+        if let Some(record) = read_record(reader)? {
+            records.push(Reverse((record.leaf, record.page, index, record)));
+        }
+    }
+    let mut active_leaf = None;
+    let mut active_pair = None;
+    let mut pair_count = 0_u64;
+    let mut total_mass = 0_u64;
+    let mut top = BinaryHeap::new();
+    let mut maximum_merge_entries = 0;
+    while let Some(Reverse((leaf, page, index, _))) = records.pop() {
+        if active_pair != Some((leaf, page)) {
+            if let Some((prior_leaf, prior_page)) = active_pair {
+                if active_leaf != Some(prior_leaf) {
+                    if let Some(completed_leaf) = active_leaf {
+                        emit(completed_leaf, completed_posting_leaf(total_mass, top)?)?;
+                        top = BinaryHeap::new();
+                        total_mass = 0;
+                    }
+                    active_leaf = Some(prior_leaf);
+                }
+                total_mass = total_mass
+                    .checked_add(pair_count)
+                    .ok_or_else(|| invalid("V23 posting total mass overflows"))?;
+                retain_top_posting(&mut top, max_pages_per_leaf, prior_page, pair_count);
+                maximum_merge_entries = maximum_merge_entries.max(top.len());
+            }
+            active_pair = Some((leaf, page));
+            pair_count = 0;
+        }
+        pair_count = pair_count
+            .checked_add(1)
+            .ok_or_else(|| invalid("V23 posting mass overflows"))?;
+        if let Some(record) = read_record(&mut readers[index])? {
+            records.push(Reverse((record.leaf, record.page, index, record)));
+        }
+    }
+    if let Some((leaf, page)) = active_pair {
+        if active_leaf != Some(leaf) {
+            if let Some(completed_leaf) = active_leaf {
+                emit(completed_leaf, completed_posting_leaf(total_mass, top)?)?;
+                top = BinaryHeap::new();
+                total_mass = 0;
+            }
+            active_leaf = Some(leaf);
+        }
+        total_mass = total_mass
+            .checked_add(pair_count)
+            .ok_or_else(|| invalid("V23 posting total mass overflows"))?;
+        retain_top_posting(&mut top, max_pages_per_leaf, page, pair_count);
+        maximum_merge_entries = maximum_merge_entries.max(top.len());
+    }
+    if let Some(leaf) = active_leaf {
+        emit(leaf, completed_posting_leaf(total_mass, top)?)?;
+    }
+    Ok(maximum_merge_entries)
+}
+
 fn validate_posting_build_boundary(
     scratch: &Path,
     run_records: usize,
@@ -691,6 +812,7 @@ where
     }
 }
 
+#[cfg(test)]
 pub(crate) fn build_both_posting_planes<I>(
     records: I,
     scratch: &Path,
@@ -764,6 +886,491 @@ where
         (Ok(planes), Ok(()), Ok(())) => Ok(planes),
         (Err(error), _, _) | (Ok(_), Err(error), _) | (Ok(_), Ok(()), Err(error)) => Err(error),
     }
+}
+
+fn write_posting_header(
+    writer: &mut (impl Write + Seek),
+    arm: PostingAssignmentArm,
+    max_pages_per_leaf: usize,
+    entry_count: u64,
+    evidence: RunEvidence,
+    maximum_merge_entries: usize,
+) -> Result<()> {
+    writer
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| io_error(Path::new("posting-artifact"), error))?;
+    writer
+        .write_all(PLANE_MAGIC)
+        .and_then(|_| {
+            writer.write_all(
+                &(match arm {
+                    PostingAssignmentArm::OneLeaf => 1_u32,
+                    PostingAssignmentArm::TwoBeamLeaves => 2_u32,
+                })
+                .to_le_bytes(),
+            )
+        })
+        .and_then(|_| writer.write_all(&(LEAF_COUNT as u32).to_le_bytes()))
+        .and_then(|_| writer.write_all(&(max_pages_per_leaf as u32).to_le_bytes()))
+        .and_then(|_| writer.write_all(&(V23_POSTING_PARTITIONS as u32).to_le_bytes()))
+        .and_then(|_| writer.write_all(&entry_count.to_le_bytes()))
+        .and_then(|_| writer.write_all(&evidence.source_records.to_le_bytes()))
+        .and_then(|_| writer.write_all(&evidence.maximum_resident_records.to_le_bytes()))
+        .and_then(|_| writer.write_all(&(maximum_merge_entries as u32).to_le_bytes()))
+        .and_then(|_| writer.write_all(&evidence.scratch_bytes_peak.to_le_bytes()))
+        .map_err(|error| io_error(Path::new("posting-artifact"), error))
+}
+
+fn stream_posting_artifact(
+    runs: &RunFiles,
+    evidence: RunEvidence,
+    arm: PostingAssignmentArm,
+    max_pages_per_leaf: usize,
+    output_directory: &Path,
+) -> Result<V23PostingArtifact> {
+    let label = match arm {
+        PostingAssignmentArm::OneLeaf => "incidence-postings-one",
+        PostingAssignmentArm::TwoBeamLeaves => "incidence-postings-two",
+    };
+    let temporary = output_directory.join(format!(".{label}-v2.tmp"));
+    if temporary.exists() {
+        return Err(invalid("V23 posting temporary output already exists"));
+    }
+    let mut renamed_path = None;
+    let result = (|| {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| io_error(&temporary, error))?;
+        let mut writer = BufWriter::with_capacity(1024 * 1024, file);
+        writer
+            .seek(SeekFrom::Start(PLANE_ENTRIES_OFFSET))
+            .map_err(|error| io_error(&temporary, error))?;
+        let mut counts = vec![0_u32; LEAF_COUNT];
+        let mut totals = vec![0_u64; LEAF_COUNT];
+        let mut prefixes = vec![[V23PostingPrefixEvidence::default(); 3]; LEAF_COUNT];
+        let mut entry_count = 0_u64;
+        let mut last_leaf = None;
+        let mut maximum_merge_entries = 0_usize;
+        for paths in &runs.by_partition {
+            maximum_merge_entries = maximum_merge_entries.max(merge_partition_stream(
+                paths,
+                max_pages_per_leaf,
+                &mut |leaf, posting| {
+                    if last_leaf.is_some_and(|prior| leaf <= prior) {
+                        return Err(invalid("V23 posting streamed leaf order differs"));
+                    }
+                    last_leaf = Some(leaf);
+                    let index = usize::from(leaf);
+                    counts[index] = u32::try_from(posting.pages.len())
+                        .map_err(|_| invalid("V23 posting streamed leaf count overflows"))?;
+                    totals[index] = posting.total_mass;
+                    prefixes[index] = posting.prefixes;
+                    for (&page, &mass) in posting.pages.iter().zip(&posting.masses) {
+                        writer
+                            .write_all(&page.to_le_bytes())
+                            .and_then(|_| writer.write_all(&mass.to_le_bytes()))
+                            .map_err(|error| io_error(&temporary, error))?;
+                    }
+                    entry_count = entry_count
+                        .checked_add(posting.pages.len() as u64)
+                        .ok_or_else(|| invalid("V23 posting streamed entry count overflows"))?;
+                    Ok(())
+                },
+            )?);
+        }
+        if maximum_merge_entries == 0 {
+            return Err(invalid("V23 posting streamed merge is empty"));
+        }
+        let body_bytes = PLANE_ENTRIES_OFFSET
+            .checked_add(
+                entry_count
+                    .checked_mul(6)
+                    .ok_or_else(|| invalid("V23 posting streamed length overflows"))?,
+            )
+            .ok_or_else(|| invalid("V23 posting streamed length overflows"))?;
+        if writer
+            .stream_position()
+            .map_err(|error| io_error(&temporary, error))?
+            != body_bytes
+        {
+            return Err(invalid("V23 posting streamed body length differs"));
+        }
+        write_posting_header(
+            &mut writer,
+            arm,
+            max_pages_per_leaf,
+            entry_count,
+            evidence,
+            maximum_merge_entries,
+        )?;
+        let mut offset = 0_u32;
+        writer
+            .write_all(&offset.to_le_bytes())
+            .map_err(|error| io_error(&temporary, error))?;
+        for count in counts {
+            offset = offset
+                .checked_add(count)
+                .ok_or_else(|| invalid("V23 posting streamed offset overflows"))?;
+            writer
+                .write_all(&offset.to_le_bytes())
+                .map_err(|error| io_error(&temporary, error))?;
+        }
+        if u64::from(offset) != entry_count {
+            return Err(invalid("V23 posting streamed offsets differ"));
+        }
+        for (total, leaf_prefixes) in totals.into_iter().zip(prefixes) {
+            writer
+                .write_all(&total.to_le_bytes())
+                .map_err(|error| io_error(&temporary, error))?;
+            for prefix in leaf_prefixes {
+                writer
+                    .write_all(&prefix.retained_assignments.to_le_bytes())
+                    .and_then(|_| writer.write_all(&prefix.retained_mass_ppm.to_le_bytes()))
+                    .and_then(|_| {
+                        writer.write_all(&prefix.quantization_error_numerator.to_le_bytes())
+                    })
+                    .and_then(|_| writer.write_all(&prefix.quantization_tv_ppm.to_le_bytes()))
+                    .map_err(|error| io_error(&temporary, error))?;
+            }
+        }
+        if writer
+            .stream_position()
+            .map_err(|error| io_error(&temporary, error))?
+            != PLANE_ENTRIES_OFFSET
+        {
+            return Err(invalid("V23 posting streamed metadata length differs"));
+        }
+        writer
+            .flush()
+            .map_err(|error| io_error(&temporary, error))?;
+        let mut file = writer
+            .into_inner()
+            .map_err(|error| io_error(&temporary, error.into_error()))?;
+        file.sync_all()
+            .map_err(|error| io_error(&temporary, error))?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| io_error(&temporary, error))?;
+        let mut hasher = blake3::Hasher::new();
+        let mut remaining = body_bytes;
+        let mut buffer = vec![0_u8; 1024 * 1024];
+        while remaining != 0 {
+            let wanted = usize::try_from(remaining.min(buffer.len() as u64)).unwrap();
+            file.read_exact(&mut buffer[..wanted])
+                .map_err(|error| io_error(&temporary, error))?;
+            hasher.update(&buffer[..wanted]);
+            remaining -= wanted as u64;
+        }
+        let internal_digest = hasher.finalize();
+        file.seek(SeekFrom::End(0))
+            .map_err(|error| io_error(&temporary, error))?;
+        file.write_all(internal_digest.as_bytes())
+            .map_err(|error| io_error(&temporary, error))?;
+        file.sync_all()
+            .map_err(|error| io_error(&temporary, error))?;
+        hasher.update(internal_digest.as_bytes());
+        let digest = hasher.finalize().to_hex().to_string();
+        let final_path = output_directory.join(format!("{label}-{digest}.bin"));
+        if final_path.exists() {
+            return Err(invalid(
+                "V23 posting content-addressed output already exists",
+            ));
+        }
+        fs::rename(&temporary, &final_path).map_err(|error| io_error(&final_path, error))?;
+        renamed_path = Some(final_path.clone());
+        File::open(output_directory)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| io_error(output_directory, error))?;
+        let artifact = V23PostingArtifact {
+            arm,
+            max_pages_per_leaf: max_pages_per_leaf as u16,
+            path: final_path,
+            digest,
+            encoded_bytes: body_bytes + 32,
+            source_records: evidence.source_records,
+            maximum_resident_records: evidence.maximum_resident_records,
+            maximum_merge_entries: maximum_merge_entries as u32,
+            scratch_bytes_peak: evidence.scratch_bytes_peak,
+        };
+        if let Err(error) = validate_posting_artifact(&artifact) {
+            let _ = fs::remove_file(&artifact.path);
+            return Err(error);
+        }
+        Ok(artifact)
+    })();
+    if result.is_err() && temporary.exists() {
+        let _ = fs::remove_file(&temporary);
+    }
+    if result.is_err()
+        && let Some(path) = renamed_path
+    {
+        let _ = fs::remove_file(path);
+    }
+    result
+}
+
+pub(crate) fn validate_posting_artifact(artifact: &V23PostingArtifact) -> Result<()> {
+    let metadata = artifact
+        .path
+        .symlink_metadata()
+        .map_err(|error| io_error(&artifact.path, error))?;
+    let expected_scratch_bytes = artifact
+        .source_records
+        .checked_mul(POSTING_RECORD_BYTES)
+        .ok_or_else(|| invalid("V23 posting artifact scratch bytes overflow"))?;
+    if !metadata.file_type().is_file()
+        || metadata.len() != artifact.encoded_bytes
+        || artifact.encoded_bytes < PLANE_ENTRIES_OFFSET + 32
+        || artifact.digest.len() != 64
+        || !artifact
+            .digest
+            .bytes()
+            .all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value))
+        || artifact.source_records == 0
+        || artifact.maximum_resident_records == 0
+        || artifact.maximum_resident_records > MAX_RUN_RECORDS as u64
+        || artifact.maximum_merge_entries == 0
+        || artifact.maximum_merge_entries > u32::from(artifact.max_pages_per_leaf)
+        || !(1..=V23_POSTING_MAX_PAGES).contains(&usize::from(artifact.max_pages_per_leaf))
+        || artifact.scratch_bytes_peak != expected_scratch_bytes
+        || artifact.scratch_bytes_peak > SCRATCH_CEILING_BYTES
+    {
+        return Err(invalid("V23 posting artifact authority differs"));
+    }
+    let mut file = File::open(&artifact.path).map_err(|error| io_error(&artifact.path, error))?;
+    let mut header = [0_u8; PLANE_HEADER_BYTES as usize];
+    file.read_exact(&mut header)
+        .map_err(|error| io_error(&artifact.path, error))?;
+    let mut offset = 8;
+    let arm = match read_u32(&header, &mut offset)? {
+        1 => PostingAssignmentArm::OneLeaf,
+        2 => PostingAssignmentArm::TwoBeamLeaves,
+        _ => return Err(invalid("V23 posting artifact arm differs")),
+    };
+    let leaf_count = read_u32(&header, &mut offset)?;
+    let max_pages_per_leaf = read_u32(&header, &mut offset)?;
+    let partition_count = read_u32(&header, &mut offset)?;
+    let entry_count = read_u64(&header, &mut offset)?;
+    let source_records = read_u64(&header, &mut offset)?;
+    let maximum_resident_records = read_u64(&header, &mut offset)?;
+    let maximum_merge_entries = read_u32(&header, &mut offset)?;
+    let scratch_bytes_peak = read_u64(&header, &mut offset)?;
+    let expected_encoded_bytes = PLANE_ENTRIES_OFFSET
+        .checked_add(
+            entry_count
+                .checked_mul(6)
+                .ok_or_else(|| invalid("V23 posting artifact length overflows"))?,
+        )
+        .and_then(|value| value.checked_add(32))
+        .ok_or_else(|| invalid("V23 posting artifact length overflows"))?;
+    if &header[..8] != PLANE_MAGIC
+        || arm != artifact.arm
+        || leaf_count as usize != LEAF_COUNT
+        || max_pages_per_leaf != u32::from(artifact.max_pages_per_leaf)
+        || partition_count as usize != V23_POSTING_PARTITIONS
+        || source_records != artifact.source_records
+        || maximum_resident_records != artifact.maximum_resident_records
+        || maximum_merge_entries != artifact.maximum_merge_entries
+        || scratch_bytes_peak != artifact.scratch_bytes_peak
+        || expected_encoded_bytes != artifact.encoded_bytes
+    {
+        return Err(invalid("V23 posting artifact header differs"));
+    }
+    let mut internal_hasher = blake3::Hasher::new();
+    let mut object_hasher = blake3::Hasher::new();
+    internal_hasher.update(&header);
+    object_hasher.update(&header);
+    let mut remaining = artifact.encoded_bytes - 32 - PLANE_HEADER_BYTES;
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    while remaining != 0 {
+        let wanted = usize::try_from(remaining.min(buffer.len() as u64)).unwrap();
+        file.read_exact(&mut buffer[..wanted])
+            .map_err(|error| io_error(&artifact.path, error))?;
+        internal_hasher.update(&buffer[..wanted]);
+        object_hasher.update(&buffer[..wanted]);
+        remaining -= wanted as u64;
+    }
+    let mut trailer = [0_u8; 32];
+    file.read_exact(&mut trailer)
+        .map_err(|error| io_error(&artifact.path, error))?;
+    object_hasher.update(&trailer);
+    if internal_hasher.finalize().as_bytes() != &trailer
+        || object_hasher.finalize().to_hex().as_str() != artifact.digest
+    {
+        return Err(invalid("V23 posting artifact checksum differs"));
+    }
+    let label = match artifact.arm {
+        PostingAssignmentArm::OneLeaf => "incidence-postings-one",
+        PostingAssignmentArm::TwoBeamLeaves => "incidence-postings-two",
+    };
+    if artifact.path.file_name().and_then(|name| name.to_str())
+        != Some(format!("{label}-{}.bin", artifact.digest).as_str())
+    {
+        return Err(invalid("V23 posting artifact path differs"));
+    }
+    let mut metadata_reader = BufReader::new(
+        File::open(&artifact.path).map_err(|error| io_error(&artifact.path, error))?,
+    );
+    metadata_reader
+        .seek(SeekFrom::Start(PLANE_HEADER_BYTES))
+        .map_err(|error| io_error(&artifact.path, error))?;
+    let mut offsets = Vec::with_capacity(LEAF_COUNT + 1);
+    for _ in 0..=LEAF_COUNT {
+        offsets.push(read_stream_u32(&mut metadata_reader, &artifact.path)? as usize);
+    }
+    if offsets[0] != 0
+        || offsets[LEAF_COUNT] != entry_count as usize
+        || offsets.windows(2).any(|pair| {
+            pair[0] > pair[1] || pair[1] - pair[0] > usize::from(artifact.max_pages_per_leaf)
+        })
+    {
+        return Err(invalid("V23 posting artifact offsets differ"));
+    }
+    let mut entry_reader = BufReader::new(
+        File::open(&artifact.path).map_err(|error| io_error(&artifact.path, error))?,
+    );
+    entry_reader
+        .seek(SeekFrom::Start(PLANE_ENTRIES_OFFSET))
+        .map_err(|error| io_error(&artifact.path, error))?;
+    let mut total_mass_sum = 0_u64;
+    for leaf_index in 0..LEAF_COUNT {
+        let total_mass = read_stream_u64(&mut metadata_reader, &artifact.path)?;
+        total_mass_sum = total_mass_sum
+            .checked_add(total_mass)
+            .ok_or_else(|| invalid("V23 posting artifact total mass overflows"))?;
+        let mut prefixes = [V23PostingPrefixEvidence::default(); 3];
+        for prefix in &mut prefixes {
+            *prefix = V23PostingPrefixEvidence {
+                retained_assignments: read_stream_u64(&mut metadata_reader, &artifact.path)?,
+                retained_mass_ppm: read_stream_u32(&mut metadata_reader, &artifact.path)?,
+                quantization_error_numerator: read_stream_u64(
+                    &mut metadata_reader,
+                    &artifact.path,
+                )?,
+                quantization_tv_ppm: read_stream_u32(&mut metadata_reader, &artifact.path)?,
+            };
+        }
+        let count = offsets[leaf_index + 1] - offsets[leaf_index];
+        let mut pages = Vec::with_capacity(count);
+        let mut masses = Vec::with_capacity(count);
+        for _ in 0..count {
+            pages.push(read_stream_u32(&mut entry_reader, &artifact.path)?);
+            masses.push(read_stream_u16(&mut entry_reader, &artifact.path)?);
+        }
+        validate_posting_leaf_semantics(
+            &V23PostingLeaf {
+                pages,
+                masses,
+                total_mass,
+                prefixes,
+            },
+            usize::from(artifact.max_pages_per_leaf),
+        )?;
+    }
+    if total_mass_sum != artifact.source_records
+        || metadata_reader
+            .stream_position()
+            .map_err(|error| io_error(&artifact.path, error))?
+            != PLANE_ENTRIES_OFFSET
+        || entry_reader
+            .stream_position()
+            .map_err(|error| io_error(&artifact.path, error))?
+            != artifact.encoded_bytes - 32
+    {
+        return Err(invalid("V23 posting artifact streamed semantics differ"));
+    }
+    Ok(())
+}
+
+pub(crate) fn build_both_posting_plane_files<I>(
+    records: I,
+    scratch: &Path,
+    output_directory: &Path,
+    run_records: usize,
+    max_pages_per_leaf: usize,
+) -> Result<[V23PostingArtifact; 2]>
+where
+    I: IntoIterator<Item = Result<V23PostingArmRecords>>,
+{
+    validate_posting_build_boundary(scratch, run_records, max_pages_per_leaf)?;
+    if output_directory == scratch || !output_directory.is_dir() {
+        return Err(invalid("V23 posting streamed output boundary differs"));
+    }
+    let per_arm_run_records = run_records / 2;
+    if per_arm_run_records == 0 {
+        return Err(invalid("V23 posting combined run size differs"));
+    }
+    let mut one_writer = RunWriter::new(scratch, "one", per_arm_run_records);
+    let mut two_writer = RunWriter::new(scratch, "two", per_arm_run_records);
+    for records in records {
+        let records = records?;
+        one_writer.push(records.one)?;
+        for record in records.two {
+            two_writer.push(record)?;
+        }
+        if one_writer
+            .evidence
+            .scratch_bytes_peak
+            .checked_add(two_writer.evidence.scratch_bytes_peak)
+            .ok_or_else(|| invalid("V23 posting combined scratch bytes overflow"))?
+            > SCRATCH_CEILING_BYTES
+        {
+            return Err(invalid("V23 posting combined scratch ceiling exceeded"));
+        }
+    }
+    let (mut one_runs, one_evidence) = one_writer.finish()?;
+    let (mut two_runs, two_evidence) = two_writer.finish()?;
+    let evidence_valid = two_evidence.source_records
+        == one_evidence
+            .source_records
+            .checked_mul(2)
+            .ok_or_else(|| invalid("V23 posting combined source count overflows"))?
+        && one_evidence
+            .scratch_bytes_peak
+            .checked_add(two_evidence.scratch_bytes_peak)
+            .ok_or_else(|| invalid("V23 posting combined scratch bytes overflow"))?
+            <= SCRATCH_CEILING_BYTES
+        && one_evidence
+            .maximum_resident_records
+            .checked_add(two_evidence.maximum_resident_records)
+            .ok_or_else(|| invalid("V23 posting combined resident records overflow"))?
+            <= run_records as u64;
+    let mut created = Vec::new();
+    let result = if evidence_valid {
+        (|| {
+            let one = stream_posting_artifact(
+                &one_runs,
+                one_evidence,
+                PostingAssignmentArm::OneLeaf,
+                max_pages_per_leaf,
+                output_directory,
+            )?;
+            created.push(one.path.clone());
+            one_runs.cleanup()?;
+            let two = stream_posting_artifact(
+                &two_runs,
+                two_evidence,
+                PostingAssignmentArm::TwoBeamLeaves,
+                max_pages_per_leaf,
+                output_directory,
+            )?;
+            created.push(two.path.clone());
+            two_runs.cleanup()?;
+            Ok([one, two])
+        })()
+    } else {
+        Err(invalid("V23 posting combined evidence differs"))
+    };
+    if result.is_err() {
+        let _ = one_runs.cleanup();
+        let _ = two_runs.cleanup();
+        for path in created {
+            let _ = fs::remove_file(path);
+        }
+    }
+    result
 }
 
 pub(crate) fn posting_prefix_eligibility(plane: &V23PostingPlane, cap: usize) -> Result<bool> {
@@ -846,48 +1453,53 @@ fn validate_posting_plane_semantics(plane: &V23PostingPlane) -> Result<()> {
         return Err(invalid("V23 posting plane shape differs"));
     }
     for leaf in &plane.leaves {
-        if leaf.pages.len() != leaf.masses.len()
-            || leaf.pages.len() > usize::from(plane.max_pages_per_leaf)
-            || leaf.masses.contains(&0)
-            || leaf.masses.windows(2).any(|pair| pair[0] < pair[1])
-            || leaf
-                .pages
-                .iter()
-                .copied()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != leaf.pages.len()
-            || (leaf.total_mass == 0 && !leaf.pages.is_empty())
+        validate_posting_leaf_semantics(leaf, usize::from(plane.max_pages_per_leaf))?;
+    }
+    Ok(())
+}
+
+fn validate_posting_leaf_semantics(leaf: &V23PostingLeaf, max_pages_per_leaf: usize) -> Result<()> {
+    if leaf.pages.len() != leaf.masses.len()
+        || leaf.pages.len() > max_pages_per_leaf
+        || leaf.masses.contains(&0)
+        || leaf.masses.windows(2).any(|pair| pair[0] < pair[1])
+        || leaf
+            .pages
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != leaf.pages.len()
+        || (leaf.total_mass == 0 && !leaf.pages.is_empty())
+    {
+        return Err(invalid("V23 posting leaf shape differs"));
+    }
+    let mut prior_retained = 0;
+    for evidence in &leaf.prefixes {
+        if evidence.retained_assignments < prior_retained
+            || evidence.retained_assignments > leaf.total_mass
+            || (leaf.total_mass == 0
+                && (evidence.retained_assignments != 0
+                    || evidence.retained_mass_ppm != 0
+                    || evidence.quantization_error_numerator != 0
+                    || evidence.quantization_tv_ppm != 0))
+            || (leaf.total_mass != 0
+                && u64::from(evidence.retained_mass_ppm)
+                    != round_ratio_half_even(
+                        u128::from(evidence.retained_assignments) * 1_000_000,
+                        u128::from(leaf.total_mass),
+                    )?)
+            || (leaf.total_mass != 0
+                && u64::from(evidence.quantization_tv_ppm)
+                    != round_ratio_half_even(
+                        u128::from(evidence.quantization_error_numerator) * 1_000_000,
+                        u128::from(leaf.total_mass) * 65_535 * 2,
+                    )?)
+            || evidence.quantization_tv_ppm > 500_000
         {
-            return Err(invalid("V23 posting leaf shape differs"));
+            return Err(invalid("V23 posting prefix evidence differs"));
         }
-        let mut prior_retained = 0;
-        for evidence in &leaf.prefixes {
-            if evidence.retained_assignments < prior_retained
-                || evidence.retained_assignments > leaf.total_mass
-                || (leaf.total_mass == 0
-                    && (evidence.retained_assignments != 0
-                        || evidence.retained_mass_ppm != 0
-                        || evidence.quantization_error_numerator != 0
-                        || evidence.quantization_tv_ppm != 0))
-                || (leaf.total_mass != 0
-                    && u64::from(evidence.retained_mass_ppm)
-                        != round_ratio_half_even(
-                            u128::from(evidence.retained_assignments) * 1_000_000,
-                            u128::from(leaf.total_mass),
-                        )?)
-                || (leaf.total_mass != 0
-                    && u64::from(evidence.quantization_tv_ppm)
-                        != round_ratio_half_even(
-                            u128::from(evidence.quantization_error_numerator) * 1_000_000,
-                            u128::from(leaf.total_mass) * 65_535 * 2,
-                        )?)
-                || evidence.quantization_tv_ppm > 500_000
-            {
-                return Err(invalid("V23 posting prefix evidence differs"));
-            }
-            prior_retained = evidence.retained_assignments;
-        }
+        prior_retained = evidence.retained_assignments;
     }
     Ok(())
 }
@@ -1122,7 +1734,7 @@ pub(crate) fn decode_posting_plane(bytes: &[u8]) -> Result<V23PostingPlane> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, collections::BTreeMap};
+    use std::{cell::Cell, collections::BTreeMap, fs};
 
     use bytes::Bytes;
     use half::f16;
@@ -1140,10 +1752,12 @@ mod tests {
     };
 
     use super::{
-        PostingAssignmentArm, V23PostingArmRecords, V23PostingRecord, build_both_posting_planes,
-        build_posting_plane, decode_posting_plane, decode_posting_record, encode_posting_plane,
-        encode_posting_record, normalized_mass, page_posting_records, page_posting_records_both,
-        posting_prefix_eligibility, validate_posting_prefix, validate_production_posting_plane,
+        PostingAssignmentArm, V23PostingArmRecords, V23PostingRecord,
+        build_both_posting_plane_files, build_both_posting_planes, build_posting_plane,
+        decode_posting_plane, decode_posting_record, encode_posting_plane, encode_posting_record,
+        normalized_mass, page_posting_records, page_posting_records_both,
+        posting_prefix_eligibility, validate_posting_artifact, validate_posting_prefix,
+        validate_production_posting_plane,
     };
 
     fn contributions() -> Vec<V23PostingRecord> {
@@ -1335,6 +1949,147 @@ mod tests {
         assert!(one.leaves.iter().all(|leaf| leaf.pages.len() <= 32));
         assert!(two.leaves.iter().all(|leaf| leaf.pages.len() <= 32));
         assert!(temporary.path().read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn v23_incidence_postings_stream_v2_artifacts_without_materializing_both_planes() {
+        let tree = incidence_tree();
+        let (_, decoded) = decoded_page(["1", "2", "3"]);
+        let bundles = page_posting_records_both(&tree, &decoded)
+            .collect::<Result<Vec<V23PostingArmRecords>, _>>()
+            .unwrap();
+        let consumed = Cell::new(0_usize);
+        let records = bundles.into_iter().map(|records| {
+            consumed.set(consumed.get() + 1);
+            Ok(records)
+        });
+        let scratch = tempdir().unwrap();
+        let output = tempdir().unwrap();
+
+        let artifacts =
+            build_both_posting_plane_files(records, scratch.path(), output.path(), 2, 32).unwrap();
+
+        assert_eq!(consumed.get(), 3);
+        assert_eq!(artifacts[0].arm, PostingAssignmentArm::OneLeaf);
+        assert_eq!(artifacts[1].arm, PostingAssignmentArm::TwoBeamLeaves);
+        assert_eq!(artifacts[0].source_records, 3);
+        assert_eq!(artifacts[1].source_records, 6);
+        assert!(artifacts.iter().all(|artifact| {
+            artifact.maximum_resident_records <= 2
+                && artifact.maximum_merge_entries <= 32
+                && artifact.encoded_bytes > 32
+                && artifact.path.parent() == Some(output.path())
+                && artifact
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(&artifact.digest)
+        }));
+        let one_bytes = fs::read(&artifacts[0].path).unwrap();
+        let two_bytes = fs::read(&artifacts[1].path).unwrap();
+        let reference_scratch = tempdir().unwrap();
+        let reference_records = page_posting_records_both(&tree, &decoded);
+        let (reference_one, reference_two) =
+            build_both_posting_planes(reference_records, reference_scratch.path(), 2, 32).unwrap();
+        assert_eq!(one_bytes, encode_posting_plane(&reference_one).unwrap());
+        assert_eq!(two_bytes, encode_posting_plane(&reference_two).unwrap());
+        assert_eq!(&one_bytes[..8], b"BVIP\x02\0\0\0");
+        assert_eq!(&two_bytes[..8], b"BVIP\x02\0\0\0");
+        assert_eq!(decode_posting_plane(&one_bytes).unwrap().source_records, 3);
+        assert_eq!(decode_posting_plane(&two_bytes).unwrap().source_records, 6);
+        validate_posting_artifact(&artifacts[0]).unwrap();
+        validate_posting_artifact(&artifacts[1]).unwrap();
+        let mut changed_artifact = artifacts[0].clone();
+        changed_artifact.scratch_bytes_peak ^= 8;
+        assert!(validate_posting_artifact(&changed_artifact).is_err());
+        let mut legacy = one_bytes;
+        legacy[..8].copy_from_slice(b"BVIP\x01\0\0\0");
+        let body_len = legacy.len() - 32;
+        let digest = blake3::hash(&legacy[..body_len]);
+        legacy[body_len..].copy_from_slice(digest.as_bytes());
+        assert!(decode_posting_plane(&legacy).is_err());
+        let mut corrupted = fs::read(&artifacts[0].path).unwrap();
+        corrupted[super::PLANE_ENTRIES_OFFSET as usize] ^= 1;
+        fs::write(&artifacts[0].path, corrupted).unwrap();
+        assert!(validate_posting_artifact(&artifacts[0]).is_err());
+        assert!(scratch.path().read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn v23_incidence_postings_streamed_build_unlinks_partial_inputs_and_outputs() {
+        let records = vec![
+            Ok(V23PostingArmRecords {
+                one: V23PostingRecord {
+                    leaf: 1,
+                    page: 2,
+                    reserved: 0,
+                },
+                two: [
+                    V23PostingRecord {
+                        leaf: 1,
+                        page: 2,
+                        reserved: 0,
+                    },
+                    V23PostingRecord {
+                        leaf: 3,
+                        page: 2,
+                        reserved: 0,
+                    },
+                ],
+            }),
+            Err(super::invalid("injected posting input failure")),
+        ];
+        let scratch = tempdir().unwrap();
+        let output = tempdir().unwrap();
+
+        assert!(
+            build_both_posting_plane_files(records, scratch.path(), output.path(), 2, 32).is_err()
+        );
+        assert!(scratch.path().read_dir().unwrap().next().is_none());
+        assert!(output.path().read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn v23_incidence_postings_artifact_validation_recomputes_streamed_leaf_semantics() {
+        let tree = incidence_tree();
+        let (_, decoded) = decoded_page(["1", "2", "3"]);
+        let scratch = tempdir().unwrap();
+        let output = tempdir().unwrap();
+        let [artifact, _] = build_both_posting_plane_files(
+            page_posting_records_both(&tree, &decoded),
+            scratch.path(),
+            output.path(),
+            2,
+            32,
+        )
+        .unwrap();
+        let mut bytes = fs::read(&artifact.path).unwrap();
+        let plane = decode_posting_plane(&bytes).unwrap();
+        let leaf = plane
+            .leaves
+            .iter()
+            .position(|posting| posting.total_mass != 0)
+            .unwrap();
+        let total_offset =
+            (super::PLANE_HEADER_BYTES + super::PLANE_OFFSET_BYTES) as usize + leaf * 80;
+        let total = u64::from_le_bytes(bytes[total_offset..total_offset + 8].try_into().unwrap());
+        bytes[total_offset..total_offset + 8].copy_from_slice(&(total + 1).to_le_bytes());
+        let body_len = bytes.len() - 32;
+        let internal = blake3::hash(&bytes[..body_len]);
+        bytes[body_len..].copy_from_slice(internal.as_bytes());
+        let digest = blake3::hash(&bytes).to_hex().to_string();
+        let changed_path = output
+            .path()
+            .join(format!("incidence-postings-one-{digest}.bin"));
+        fs::write(&changed_path, bytes).unwrap();
+        let changed = super::V23PostingArtifact {
+            path: changed_path,
+            digest,
+            ..artifact
+        };
+
+        assert!(validate_posting_artifact(&changed).is_err());
     }
 
     #[test]

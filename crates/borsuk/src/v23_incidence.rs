@@ -35,8 +35,8 @@ use crate::{
     },
     v23_incidence_postings::{
         PostingAssignmentArm, V23_POSTING_MAX_PAGES, V23_POSTING_RUN_BYTES, V23PostingArmRecords,
-        V23PostingRecord, build_both_posting_planes, build_posting_plane, decode_posting_plane,
-        encode_posting_plane, page_posting_records_both, validate_production_posting_plane,
+        V23PostingRecord, build_both_posting_plane_files, build_posting_plane,
+        decode_posting_plane, page_posting_records_both,
     },
     v23_incidence_tree::{
         V23TrainingRow, V23TreeNode, decode_incidence_tree, encode_incidence_tree,
@@ -2720,17 +2720,6 @@ fn run_v23_incidence_posting_build(
     let run_records = usize::try_from(V23_POSTING_RUN_BYTES / 8).map_err(|_| {
         BorsukError::InvalidStorage("V23 incidence posting run size overflows".to_string())
     })?;
-    let (one, two) = build_both_posting_planes(
-        v23_incidence_page_posting_stream(&tree, pages),
-        &request.scratch_path,
-        run_records,
-        V23_POSTING_MAX_PAGES,
-    )?;
-    validate_production_posting_plane(&one)?;
-    let one_bytes = encode_posting_plane(&one)?;
-    validate_production_posting_plane(&two)?;
-    let two_bytes = encode_posting_plane(&two)?;
-
     let mut probe = [0.0_f32; 96];
     probe[0] = 1.0;
     let (_, fma_backend) = split_score_simd(
@@ -2749,26 +2738,48 @@ fn run_v23_incidence_posting_build(
         preflight.network_namespace_inode,
         network_namespace_inode,
     )?;
-    let (one_identity, one_path) = write_v23_incidence_local_output(
-        "incidence-postings-one",
-        "blake3",
-        &one_bytes,
+    if request.output_path.exists() {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence posting receipt already exists".to_string(),
+        ));
+    }
+    let output_directory = request
+        .output_path
+        .parent()
+        .filter(|path| path.is_dir())
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V23 incidence posting output directory differs".to_string(),
+            )
+        })?;
+    let [one, two] = build_both_posting_plane_files(
+        v23_incidence_page_posting_stream(&tree, pages),
         &request.scratch_path,
-        &request.output_path,
+        output_directory,
+        run_records,
+        V23_POSTING_MAX_PAGES,
     )?;
-    let (two_identity, two_path) = match write_v23_incidence_local_output(
-        "incidence-postings-two",
-        "blake3",
-        &two_bytes,
-        &request.scratch_path,
-        &request.output_path,
-    ) {
-        Ok(output) => output,
-        Err(error) => {
-            let _ = fs::remove_file(&one_path);
-            return Err(error);
+    if one.source_records != crate::v23_incidence_postings::V23_POSTING_ONE_ARM_RECORDS
+        || two.source_records != crate::v23_incidence_postings::V23_POSTING_TWO_ARM_RECORDS
+    {
+        let _ = fs::remove_file(&one.path);
+        let _ = fs::remove_file(&two.path);
+        return Err(BorsukError::InvalidStorage(
+            "V23 production posting record count differs".to_string(),
+        ));
+    }
+    let identity = |role: &str, artifact: &crate::v23_incidence_postings::V23PostingArtifact| {
+        V23IncidenceObjectIdentity {
+            role: role.to_string(),
+            uri: format!("file://{}", artifact.path.display()),
+            digest_algorithm: "blake3".to_string(),
+            digest: artifact.digest.clone(),
+            encoded_bytes: artifact.encoded_bytes,
+            generation: format!("content-{}", artifact.digest),
         }
     };
+    let one_identity = identity("incidence-postings-one", &one);
+    let two_identity = identity("incidence-postings-two", &two);
     let receipt = V23IncidenceReceipt {
         schema: V23_INCIDENCE_RECEIPT_SCHEMA.to_string(),
         claim_eligible: false,
@@ -2788,17 +2799,17 @@ fn run_v23_incidence_posting_build(
         outputs: vec![one_identity, two_identity],
         stop: None,
     };
-    let result = canonical_v23_incidence_receipt_bytes(
+    let result = canonical_v23_incidence_receipt_path_bytes(
         &receipt,
         Some(preflight_bytes),
         &[
-            ("incidence-postings-one", one_bytes.as_slice()),
-            ("incidence-postings-two", two_bytes.as_slice()),
+            ("incidence-postings-one", one.path.as_path()),
+            ("incidence-postings-two", two.path.as_path()),
         ],
     );
     if result.is_err() {
-        let _ = fs::remove_file(one_path);
-        let _ = fs::remove_file(two_path);
+        let _ = fs::remove_file(one.path);
+        let _ = fs::remove_file(two.path);
     }
     result
 }
@@ -3909,6 +3920,49 @@ pub(crate) fn canonical_v23_incidence_receipt_bytes(
     Ok(bytes)
 }
 
+pub(crate) fn canonical_v23_incidence_receipt_path_bytes(
+    receipt: &V23IncidenceReceipt,
+    parent_receipt_bytes: Option<&[u8]>,
+    output_paths: &[(&str, &Path)],
+) -> Result<Vec<u8>> {
+    validate_receipt(receipt)?;
+    match (
+        receipt.parent_receipt_sha256.as_deref(),
+        parent_receipt_bytes,
+    ) {
+        (None, None) => {}
+        (Some(expected), Some(bytes)) if format!("{:x}", Sha256::digest(bytes)) == expected => {}
+        _ => {
+            return Err(BorsukError::InvalidStorage(
+                "V23 incidence parent receipt bytes differ".to_string(),
+            ));
+        }
+    }
+    if receipt.outputs.len() != output_paths.len() {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence output count differs".to_string(),
+        ));
+    }
+    for (identity, (role, path)) in receipt.outputs.iter().zip(output_paths) {
+        if identity.role != *role {
+            return Err(BorsukError::InvalidStorage(
+                "V23 incidence output order differs".to_string(),
+            ));
+        }
+        authenticate_v23_incidence_local_path(path, identity)?;
+    }
+    let value = serde_json::to_value(receipt).map_err(|error| {
+        BorsukError::InvalidStorage(format!(
+            "V23 incidence receipt serialization failed: {error}"
+        ))
+    })?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value)).map_err(|error| {
+        BorsukError::InvalidStorage(format!("V23 incidence canonical JSON failed: {error}"))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 pub(crate) fn canonical_v23_incidence_manifest_bytes(
     manifest: &V23IncidenceManifest,
 ) -> Result<Vec<u8>> {
@@ -4090,8 +4144,9 @@ mod tests {
         canonical_json_value, canonical_v23_incidence_development_artifact_bytes,
         canonical_v23_incidence_holdout_truth_bytes, canonical_v23_incidence_manifest_bytes,
         canonical_v23_incidence_preflight_bytes, canonical_v23_incidence_progress_bytes,
-        canonical_v23_incidence_receipt_bytes, canonical_v23_incidence_result_bytes,
-        classify_v23_incidence_campaign, decode_v23_incidence_development_latency_bundle,
+        canonical_v23_incidence_receipt_bytes, canonical_v23_incidence_receipt_path_bytes,
+        canonical_v23_incidence_result_bytes, classify_v23_incidence_campaign,
+        decode_v23_incidence_development_latency_bundle,
         encode_v23_incidence_development_latency_bundle,
         measure_v23_incidence_posting_pages_preflight,
         measure_v23_incidence_posting_sort_preflight, measure_v23_incidence_tree_preflight,
@@ -4305,6 +4360,31 @@ mod tests {
             vec![("incidence-tree", b"tree-output".as_slice())]
         };
         canonical_v23_incidence_receipt_bytes(receipt, parent_bytes, &outputs)
+    }
+
+    #[test]
+    fn v23_incidence_receipt_stream_authenticates_output_paths_after_rename() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("tree-output.bin");
+        fs::write(&output, b"tree-output").unwrap();
+        let receipt = receipt_fixture();
+        let canonical = canonical_v23_incidence_receipt_path_bytes(
+            &receipt,
+            Some(b"preflight-receipt"),
+            &[("incidence-tree", output.as_path())],
+        )
+        .unwrap();
+        assert_eq!(canonical, canonical_receipt(&receipt).unwrap());
+
+        fs::write(&output, b"tree-outpuu").unwrap();
+        assert!(
+            canonical_v23_incidence_receipt_path_bytes(
+                &receipt,
+                Some(b"preflight-receipt"),
+                &[("incidence-tree", output.as_path())],
+            )
+            .is_err()
+        );
     }
 
     fn manifest_fixture() -> V23IncidenceManifest {
