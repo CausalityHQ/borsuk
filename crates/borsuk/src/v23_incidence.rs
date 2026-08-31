@@ -497,6 +497,7 @@ struct V23IncidencePagePostingStream<'a> {
     pages: std::vec::IntoIter<V23IncidenceLocalRolePath>,
     ordinal: usize,
     pending: std::vec::IntoIter<V23PostingArmRecords>,
+    progress: Option<&'a mut V23IncidenceProgressChain>,
     failed: bool,
 }
 
@@ -512,6 +513,7 @@ impl Iterator for V23IncidencePagePostingStream<'_> {
                 return Some(Ok(record));
             }
             let page = self.pages.next()?;
+            let page_digest = page.identity.digest.clone();
             let result = (|| {
                 authenticate_v23_incidence_local_path(&page.path, &page.identity)?;
                 let bytes = fs::read(&page.path).map_err(|source| BorsukError::Io {
@@ -521,7 +523,15 @@ impl Iterator for V23IncidencePagePostingStream<'_> {
                 let decoded =
                     decode_v23_incidence_page(&page.identity, Bytes::from(bytes), self.ordinal)?;
                 self.ordinal += 1;
-                page_posting_records_both(self.tree, &decoded).collect::<Result<Vec<_>>>()
+                let records =
+                    page_posting_records_both(self.tree, &decoded).collect::<Result<Vec<_>>>()?;
+                if let Some(progress) = self.progress.as_deref_mut()
+                    && (self.ordinal.is_multiple_of(64) || self.pages.len() == 0)
+                {
+                    let completed_units = self.ordinal.div_ceil(64) as u64;
+                    progress.advance(completed_units, &page_digest)?;
+                }
+                Ok(records)
             })();
             match result {
                 Ok(records) => self.pending = records.into_iter(),
@@ -543,6 +553,22 @@ fn v23_incidence_page_posting_stream(
         pages: pages.into_iter(),
         ordinal: 0,
         pending: Vec::new().into_iter(),
+        progress: None,
+        failed: false,
+    }
+}
+
+fn v23_incidence_page_posting_stream_with_progress<'a>(
+    tree: &'a crate::v23_incidence_tree::V23IncidenceTree,
+    pages: Vec<V23IncidenceLocalRolePath>,
+    progress: &'a mut V23IncidenceProgressChain,
+) -> V23IncidencePagePostingStream<'a> {
+    V23IncidencePagePostingStream {
+        tree,
+        pages: pages.into_iter(),
+        ordinal: 0,
+        pending: Vec::new().into_iter(),
+        progress: Some(progress),
         failed: false,
     }
 }
@@ -2953,6 +2979,43 @@ fn run_v23_incidence_posting_build(
         .filter(|input| input.identity.role.starts_with("page-body-"))
         .cloned()
         .collect::<Vec<_>>();
+    let manifest_identity = request
+        .input_paths
+        .iter()
+        .find(|input| input.identity.role == "phase-manifest")
+        .map(|input| &input.identity)
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V23 incidence posting manifest identity is absent".to_string(),
+            )
+        })?;
+    let page_progress_units = u64::try_from(pages.len().div_ceil(64)).map_err(|_| {
+        BorsukError::InvalidStorage("V23 incidence posting progress overflows".to_string())
+    })?;
+    let total_progress_units = page_progress_units.checked_add(2).ok_or_else(|| {
+        BorsukError::InvalidStorage("V23 incidence posting progress overflows".to_string())
+    })?;
+    if request.output_path.exists() {
+        return Err(BorsukError::InvalidStorage(
+            "V23 incidence posting receipt already exists".to_string(),
+        ));
+    }
+    let output_directory = request
+        .output_path
+        .parent()
+        .filter(|path| path.is_dir())
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage(
+                "V23 incidence posting output directory differs".to_string(),
+            )
+        })?;
+    let progress_path = output_directory.join("progress.json");
+    let mut progress = V23IncidenceProgressChain::start(
+        &progress_path,
+        V23IncidencePhase::PostingConstruction,
+        total_progress_units,
+        &manifest_identity.digest,
+    )?;
     let run_records = usize::try_from(V23_POSTING_RUN_BYTES / 8).map_err(|_| {
         BorsukError::InvalidStorage("V23 incidence posting run size overflows".to_string())
     })?;
@@ -2974,22 +3037,8 @@ fn run_v23_incidence_posting_build(
         preflight.network_namespace_inode,
         network_namespace_inode,
     )?;
-    if request.output_path.exists() {
-        return Err(BorsukError::InvalidStorage(
-            "V23 incidence posting receipt already exists".to_string(),
-        ));
-    }
-    let output_directory = request
-        .output_path
-        .parent()
-        .filter(|path| path.is_dir())
-        .ok_or_else(|| {
-            BorsukError::InvalidStorage(
-                "V23 incidence posting output directory differs".to_string(),
-            )
-        })?;
     let [one, two] = build_both_posting_plane_files(
-        v23_incidence_page_posting_stream(&tree, pages),
+        v23_incidence_page_posting_stream_with_progress(&tree, pages, &mut progress),
         &request.scratch_path,
         output_directory,
         run_records,
@@ -3004,6 +3053,8 @@ fn run_v23_incidence_posting_build(
             "V23 production posting record count differs".to_string(),
         ));
     }
+    progress.advance(page_progress_units + 1, &one.digest)?;
+    let final_progress_sha256 = progress.advance(total_progress_units, &two.digest)?;
     let identity = |role: &str, artifact: &crate::v23_incidence_postings::V23PostingArtifact| {
         V23IncidenceObjectIdentity {
             role: role.to_string(),
@@ -3032,7 +3083,7 @@ fn run_v23_incidence_posting_build(
             .collect(),
         probes,
         preflight_evidence: None,
-        final_progress_sha256: None,
+        final_progress_sha256: Some(final_progress_sha256),
         outputs: vec![one_identity, two_identity],
         stop: None,
     };
@@ -3833,7 +3884,11 @@ fn validate_receipt(receipt: &V23IncidenceReceipt) -> Result<()> {
         }
     };
     let progress_shape_is_valid = match (receipt.phase, receipt.run_mode, receipt.stop) {
-        (V23IncidencePhase::TreeTraining, V23IncidenceReceiptRunMode::Execute, None) => receipt
+        (
+            V23IncidencePhase::TreeTraining | V23IncidencePhase::PostingConstruction,
+            V23IncidenceReceiptRunMode::Execute,
+            None,
+        ) => receipt
             .final_progress_sha256
             .as_deref()
             .is_some_and(|digest| valid_lower_hex(digest, 64)),
@@ -4408,10 +4463,11 @@ mod tests {
         read_v23_incidence_preflight_receipt, read_v23_incidence_training_preflight_rows,
         recompute_v23_incidence_layout_quality, run_v23_incidence_holdout_evaluation,
         run_v23_incidence_local_phase_with_probes, v23_incidence_page_posting_stream,
-        v23_incidence_preflight_work, v23_incidence_training_row_stream,
-        validate_v23_incidence_execution_preflight, validate_v23_incidence_identity,
-        validate_v23_incidence_parent_receipt, validate_v23_incidence_request_manifest,
-        write_v23_incidence_local_output, write_v23_incidence_progress,
+        v23_incidence_page_posting_stream_with_progress, v23_incidence_preflight_work,
+        v23_incidence_training_row_stream, validate_v23_incidence_execution_preflight,
+        validate_v23_incidence_identity, validate_v23_incidence_parent_receipt,
+        validate_v23_incidence_request_manifest, write_v23_incidence_local_output,
+        write_v23_incidence_progress,
     };
 
     #[test]
@@ -4519,6 +4575,23 @@ mod tests {
         assert!(canonical_receipt(&receipt).is_err());
         receipt.final_progress_sha256 = Some("44".repeat(31));
         assert!(canonical_receipt(&receipt).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_posting_progress_terminal_receipt_binds_final_record() {
+        let mut receipt = receipt_fixture();
+        receipt.phase = V23IncidencePhase::PostingConstruction;
+        receipt.ordered_inputs = vec![object("phase-manifest", "sha256", &"22".repeat(32))];
+        receipt.outputs = vec![
+            object("incidence-postings-one", "blake3", &"31".repeat(32)),
+            object("incidence-postings-two", "blake3", &"32".repeat(32)),
+        ];
+
+        assert!(super::validate_receipt(&receipt).is_ok());
+        receipt.final_progress_sha256 = None;
+        assert!(super::validate_receipt(&receipt).is_err());
+        receipt.final_progress_sha256 = Some("44".repeat(31));
+        assert!(super::validate_receipt(&receipt).is_err());
     }
 
     #[test]
@@ -5280,7 +5353,6 @@ mod tests {
         );
 
         parent.phase = V23IncidencePhase::PostingConstruction;
-        parent.final_progress_sha256 = None;
         let changed_bytes = canonical_receipt(&parent).unwrap();
         manifest.parent_receipt_sha256 = Some(format!("{:x}", Sha256::digest(&changed_bytes)));
         let V23IncidenceInputAuthority::PhaseObject { identity } = &mut manifest.ordered_inputs[0]
@@ -6228,6 +6300,54 @@ mod tests {
     }
 
     #[test]
+    fn v23_incidence_posting_progress_advances_at_fixed_page_milestones() {
+        let directory = tempfile::tempdir().unwrap();
+        let tree = decode_incidence_tree(&reduced_preflight_tree_bytes()).unwrap();
+        let pages = (0..65)
+            .map(posting_preflight_page)
+            .map(|(identity, bytes)| {
+                let path = directory.path().join(&identity.role);
+                fs::write(&path, bytes).unwrap();
+                V23IncidenceLocalRolePath { identity, path }
+            })
+            .collect::<Vec<_>>();
+        let expected_last_digests = [
+            pages[63].identity.digest.clone(),
+            pages[64].identity.digest.clone(),
+        ];
+        let progress_path = directory.path().join("progress.json");
+        let mut progress = super::V23IncidenceProgressChain::start(
+            &progress_path,
+            V23IncidencePhase::PostingConstruction,
+            4,
+            &"11".repeat(32),
+        )
+        .unwrap();
+
+        let records = v23_incidence_page_posting_stream_with_progress(&tree, pages, &mut progress)
+            .collect::<crate::Result<Vec<_>>>()
+            .unwrap();
+        let observed = fs::read(&progress_path)
+            .unwrap()
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice::<super::V23IncidenceProgress>(line).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(records.len(), 65);
+        assert_eq!(
+            observed
+                .iter()
+                .map(|record| record.completed_units)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2],
+        );
+        assert_eq!(observed[1].last_object_digest, expected_last_digests[0]);
+        assert_eq!(observed[2].last_object_digest, expected_last_digests[1]);
+        assert_eq!(observed[2].total_units, 4);
+    }
+
+    #[test]
     fn v23_incidence_local_holdout_execute_requires_every_sealed_input() {
         let directory = tempfile::tempdir().unwrap();
         let request = V23IncidenceLocalPhaseRequest {
@@ -6663,8 +6783,11 @@ mod tests {
                 output_writable: true,
             },
             preflight_evidence: None,
-            final_progress_sha256: (phase == V23IncidencePhase::TreeTraining)
-                .then(|| format!("{:x}", Sha256::digest(b"test-tree-progress"))),
+            final_progress_sha256: matches!(
+                phase,
+                V23IncidencePhase::TreeTraining | V23IncidencePhase::PostingConstruction
+            )
+            .then(|| format!("{:x}", Sha256::digest(b"test-phase-progress"))),
             outputs: output_identities,
             stop: None,
         };

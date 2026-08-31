@@ -898,6 +898,57 @@ with tempfile.TemporaryDirectory() as directory:
                 hashlib.sha256(execute.read_bytes()).hexdigest(),
             )
 
+    def test_posting_bulk_manifest_preflight_keeps_authority_and_256_pages(
+        self,
+    ) -> None:
+        construction = json.loads(
+            (ROOT / "scripts/fixtures/v23_incidence_training_manifest.json").read_bytes()
+        )
+        identity = construction["ordered_inputs"][0]["identity"]
+
+        def phase_object(role: str, ordinal: int) -> dict[str, object]:
+            changed = dict(identity)
+            changed["role"] = role
+            changed["uri"] = f"s3://fixture/{role}-{ordinal}"
+            return {"authority_kind": "phase-object", "identity": changed}
+
+        fixed = [
+            phase_object("parent-receipt", 0),
+            phase_object("incidence-tree", 0),
+            phase_object("page-roster", 0),
+        ]
+        pages = [
+            phase_object(f"page-body-{ordinal:05}", ordinal)
+            for ordinal in range(300)
+        ]
+        posting = dict(construction)
+        posting["phase"] = "posting-construction"
+        posting["ordered_inputs"] = fixed + pages
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "posting.json"
+            preflight = root / "preflight.json"
+            execute = root / "execute.json"
+            source.write_bytes(
+                json.dumps(posting, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n"
+            )
+
+            _write_bulk_manifest(source, preflight, False)
+            _write_bulk_manifest(source, execute, True)
+
+            preflight_value = json.loads(preflight.read_bytes())
+            execute_value = json.loads(execute.read_bytes())
+            self.assertEqual(preflight_value["ordered_inputs"], fixed + pages[:256])
+            self.assertEqual(execute_value, posting)
+            self.assertEqual(
+                preflight.read_bytes(),
+                json.dumps(
+                    preflight_value, sort_keys=True, separators=(",", ":")
+                ).encode()
+                + b"\n",
+            )
+
     def test_policy_builder_registers_distinct_manifest_roles_and_runtime_closure(
         self,
     ) -> None:
@@ -918,6 +969,7 @@ with tempfile.TemporaryDirectory() as directory:
             binary_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
 
             policy = _phase_policy(
+                phase="tree-training",
                 binary=binary,
                 binary_sha256=binary_sha,
                 manifest=source,
@@ -940,6 +992,7 @@ with tempfile.TemporaryDirectory() as directory:
             preflight_receipt = root / "preflight-receipt.json"
             preflight_receipt.write_text("{}\n", encoding="utf-8")
             execute_policy = _phase_policy(
+                phase="tree-training",
                 binary=binary,
                 binary_sha256=binary_sha,
                 manifest=source,
@@ -956,6 +1009,82 @@ with tempfile.TemporaryDirectory() as directory:
                 [mount.role for mount in execute_policy.inputs][-1],
                 "preflight-receipt",
             )
+
+    def test_posting_policy_binds_phase_manifest_and_parent_tree_receipt(self) -> None:
+        construction = json.loads(
+            (ROOT / "scripts/fixtures/v23_incidence_training_manifest.json").read_bytes()
+        )
+        construction["phase"] = "posting-construction"
+        construction["parent_receipt_sha256"] = "ab" * 32
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "posting-manifest.json"
+            bulk = root / "posting-bulk.json"
+            receipt = root / "staging-receipt.json"
+            preflight_receipt = root / "preflight-receipt.json"
+            staging = root / "staging"
+            scratch = root / "scratch"
+            output = root / "output"
+            manifest.write_bytes(
+                json.dumps(
+                    construction, sort_keys=True, separators=(",", ":")
+                ).encode()
+                + b"\n"
+            )
+            bulk.write_bytes(manifest.read_bytes())
+            receipt.write_text("{}\n", encoding="utf-8")
+            preflight_receipt.write_text("{}\n", encoding="utf-8")
+            for path in (staging, scratch, output):
+                path.mkdir()
+            binary = Path("/bin/true").resolve()
+            binary_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+
+            preflight = _phase_policy(
+                phase="posting-construction",
+                binary=binary,
+                binary_sha256=binary_sha,
+                manifest=manifest,
+                bulk_manifest=bulk,
+                staging=staging,
+                staging_receipt=receipt,
+                scratch=scratch,
+                output=output,
+                preflight_receipt=None,
+            )
+            execute = _phase_policy(
+                phase="posting-construction",
+                binary=binary,
+                binary_sha256=binary_sha,
+                manifest=manifest,
+                bulk_manifest=bulk,
+                staging=staging,
+                staging_receipt=receipt,
+                scratch=scratch,
+                output=output,
+                preflight_receipt=preflight_receipt,
+            )
+
+            validate_phase_inputs(preflight)
+            validate_phase_inputs(execute)
+            self.assertEqual(preflight.phase, "posting-construction")
+            self.assertEqual(preflight.parent_receipt_sha256, "ab" * 32)
+            self.assertEqual(
+                [item.role for item in preflight.inputs],
+                ["phase-manifest", "bulk-manifest", "staging-receipt"],
+            )
+            self.assertEqual(
+                [item.role for item in execute.inputs],
+                [
+                    "phase-manifest",
+                    "bulk-manifest",
+                    "staging-receipt",
+                    "preflight-receipt",
+                ],
+            )
+            self.assertEqual(
+                preflight.phase_argv[0], "--preflight-posting-construction"
+            )
+            self.assertEqual(execute.phase_argv[0], "--execute-posting-construction")
 
     def test_source_archive_contains_exact_commit_marker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

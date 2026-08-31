@@ -1115,7 +1115,12 @@ def _identity(role: str, path: pathlib.Path, uri: str) -> Any:
 def _write_bulk_manifest(source: pathlib.Path, target: pathlib.Path, full: bool) -> None:
     value = json.loads(source.read_bytes())
     if not full:
-        value["ordered_inputs"] = [value["ordered_inputs"][1]]
+        if value.get("phase") == "tree-training":
+            value["ordered_inputs"] = [value["ordered_inputs"][1]]
+        elif value.get("phase") == "posting-construction":
+            value["ordered_inputs"] = value["ordered_inputs"][: 3 + 256]
+        else:
+            raise ValueError("preflight bulk manifest phase differs")
     target.write_bytes(_canonical_bytes(value))
 
 
@@ -1207,6 +1212,7 @@ def _stage(manifest: pathlib.Path, directory: pathlib.Path, receipt: pathlib.Pat
 
 def _phase_policy(
     *,
+    phase: str,
     binary: pathlib.Path,
     binary_sha256: str,
     manifest: pathlib.Path,
@@ -1223,8 +1229,35 @@ def _phase_policy(
         build_phase_argv,
     )
 
+    manifest_raw = manifest.read_bytes()
+    manifest_value = json.loads(manifest_raw)
+    parent_receipt_sha256 = manifest_value.get("parent_receipt_sha256")
+    if (
+        manifest_raw != _canonical_bytes(manifest_value)
+        or manifest_value.get("phase") != phase
+        or (
+            phase == "tree-training"
+            and parent_receipt_sha256 is not None
+        )
+        or (
+            phase != "tree-training"
+            and (
+                type(parent_receipt_sha256) is not str
+                or LOWER_SHA256.fullmatch(parent_receipt_sha256) is None
+            )
+        )
+    ):
+        raise ValueError("phase manifest authority differs")
+    manifest_role = (
+        "construction-manifest" if phase == "tree-training" else "phase-manifest"
+    )
+    manifest_uri = (
+        f"git://borsuk/{MANIFEST_RELATIVE}"
+        if phase == "tree-training"
+        else f"file://{manifest}"
+    )
     inputs = [
-        _identity("construction-manifest", manifest, f"git://borsuk/{MANIFEST_RELATIVE}"),
+        _identity(manifest_role, manifest, manifest_uri),
         _identity("bulk-manifest", bulk_manifest, f"file://{bulk_manifest}"),
         _identity("staging-receipt", staging_receipt, f"file://{staging_receipt}"),
     ]
@@ -1236,14 +1269,14 @@ def _phase_policy(
     if hashlib.sha256(binary_bytes).hexdigest() != binary_sha256:
         raise ValueError("worker binary authority differs")
     policy = OfflinePhasePolicy(
-        phase="tree-training",
+        phase=phase,
         executable=binary,
         executable_sha256=binary_sha256,
         executable_bytes=len(binary_bytes),
         inputs=tuple(inputs),
         scratch=scratch,
         output=output,
-        parent_receipt_sha256=None,
+        parent_receipt_sha256=parent_receipt_sha256,
         directory_capabilities=(
             AuthenticatedDirectory(
                 role="bulk-inputs",
@@ -1382,6 +1415,7 @@ def worker_tree(
         _stage(preflight_manifest, preflight_staging, preflight_receipt)
         stage = "preflight-policy"
         preflight_policy = _phase_policy(
+            phase="tree-training",
             binary=binary,
             binary_sha256=binary_sha256,
             manifest=manifest,
@@ -1408,6 +1442,7 @@ def worker_tree(
         _stage(execute_manifest, execute_staging, execute_receipt)
         stage = "execute-policy"
         execute_policy = _phase_policy(
+            phase="tree-training",
             binary=binary,
             binary_sha256=binary_sha256,
             manifest=manifest,
