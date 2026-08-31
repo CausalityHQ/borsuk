@@ -473,6 +473,27 @@ and completed work strictly increase, the previous digest matches, and the
 record is canonical. The terminal receipt binds the final progress digest.
 Writing a heartbeat without completing a registered unit is forbidden.
 
+The credentialed worker treats diagnostic evidence as a first-class immutable
+output. Each transient scientific unit writes stdout and stderr directly to a
+regular file under the attempt evidence directory; the parent also snapshots
+the unit journal after the unit terminates. Python entrypoints preserve the
+complete traceback, and a failed phase writes a canonical failure detail plus
+any completed preflight or staging receipts before private scratch cleanup.
+The outer worker uses direct file-descriptor append rather than an asynchronous
+`tee`, uploads every allowlisted evidence role before writing the terminal
+marker, and writes that marker last. Terminal publication therefore never
+depends on journald surviving instance termination or on a buffered helper
+flushing before upload.
+
+Every advertised pressure stop must be demonstrably available before immutable
+scientific inputs are staged. In particular, the namespace/bootstrap preflight
+requires readable Linux memory PSI with a concrete `full avg10` field; absence
+is a bootstrap failure, not permission to omit the gate. Any exception raised
+inside resource monitoring terminates and reaps the original process group
+before propagating. A phase that advertises the five-minute progress stop must
+emit the registered completed-work chain in production; test-only progress
+writers or inferred activity are invalid.
+
 ## Success boundary
 
 The falsifier succeeds only if the sealed development cell passes unchanged on

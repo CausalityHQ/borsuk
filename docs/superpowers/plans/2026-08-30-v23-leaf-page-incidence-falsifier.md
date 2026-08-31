@@ -879,7 +879,138 @@ git add crates/borsuk/src/v23_incidence.rs \
 git commit -m "Add V23 leaf-page incidence falsifier"
 ```
 
-### Task 8: Repository assurance and execution handoff
+### Task 8: Repair worker evidence and production progress
+
+**Files:**
+- Modify: `scripts/launch_v23_incidence_spot.py`
+- Modify: `scripts/run_v23_leaf_page_incidence_falsifier.py`
+- Modify: `scripts/test_launch_v23_incidence_spot.py`
+- Modify: `scripts/test_run_v23_leaf_page_incidence_falsifier.py`
+- Modify: `crates/borsuk/src/v23_incidence.rs`
+
+**Interfaces:**
+- Consumes: the Task 7 local phase runner, canonical progress record, resource monitor, and credentialed Spot worker.
+- Produces: durable `phase.log`, `phase-journal.txt`, `phase-traceback.txt`, canonical `phase-failure.json`, enforceable PSI/progress stops, and leak-free process termination.
+
+- [ ] **Step 1: RED-lock durable failure evidence**
+
+Add focused launcher tests requiring direct
+`StandardOutput=append:$evidence/phase.log` and
+`StandardError=append:$evidence/phase.log`, a post-unit
+`journalctl --no-pager -o short-iso -u "$unit"` snapshot, direct
+`exec >>"$worker_log" 2>&1` with no `tee`, and publication of a fixed
+evidence-role allowlist before either terminal marker. Patch `run_phase` to
+raise in a worker test and require a full traceback naming the raising frame,
+a canonical phase-failure document, and preservation of completed preflight
+and staging receipts before private-root cleanup.
+
+Run:
+
+```bash
+uv run --offline --python 3.12 \
+  --with-requirements scripts/requirements-format-bench.txt \
+  python -m unittest \
+    scripts.test_launch_v23_incidence_spot.V23IncidenceSpotLauncherTests.test_worker_captures_and_publishes_failure_evidence \
+    scripts.test_launch_v23_incidence_spot.V23IncidenceSpotLauncherTests.test_worker_tree_preserves_traceback_and_partial_receipts
+```
+
+Expected: both fail only because the durable evidence paths and failure record
+do not yet exist.
+
+- [ ] **Step 2: Implement the durable evidence sink and rerun GREEN**
+
+Write transient-unit stdout/stderr to `$evidence/phase.log`, snapshot the unit
+journal after `systemd-run --wait`, and append the outer worker directly to
+`worker.log`. In `worker_tree`, track the current stage, catch `BaseException`,
+write `traceback.format_exc()` and sorted compact newline JSON containing
+`claim_eligible=false`, phase, stage, exception type, and message, copy only
+completed registered receipts into evidence, then re-raise before the existing
+private-root cleanup. Publish the fixed evidence basenames conditionally and
+write `ATTEMPT_COMPLETE`, `ATTEMPT_INTERRUPTED`, or `ATTEMPT_FAILED` last.
+
+Run the exact Step 1 command. Expected: 2 passed.
+
+- [ ] **Step 3: RED-lock PSI availability and monitor exception cleanup**
+
+Add `test_namespace_probe_requires_memory_psi_full_avg10` with an injected PSI
+path whose content is absent/malformed, and
+`test_monitor_exception_terminates_and_reaps_original_group` with a short child
+and injected PSI reader that raises. Require a legible bootstrap error for the
+first and no surviving PID/process group plus the original exception for the
+second.
+
+Run:
+
+```bash
+python3 -m unittest \
+  scripts.test_launch_v23_incidence_spot.V23IncidenceSpotLauncherTests.test_namespace_probe_requires_memory_psi_full_avg10 \
+  scripts.test_run_v23_leaf_page_incidence_falsifier.ResourceMonitorTests.test_monitor_exception_terminates_and_reaps_original_group
+```
+
+Expected: both fail at the missing capability/cleanup boundaries.
+
+- [ ] **Step 4: Implement fail-closed PSI and monitor cleanup, then rerun GREEN**
+
+Make the namespace probe call the same strict PSI parser used by monitoring
+before any object staging. Wrap monitor sampling so every exception first sends
+TERM, waits the registered grace, sends KILL if needed, and reaps the original
+process group before re-raising unchanged. Do not add a no-PSI fallback or
+weaken the registered thresholds. Run the exact Step 3 command. Expected: 2
+passed.
+
+- [ ] **Step 5: RED-lock real tree-training progress**
+
+Extend the reduced-shape tree-training fixture so the production training path
+must atomically write canonical `progress.json` after registered
+shard/reservoir work and fixed node-count milestones. Feed every observed
+record through `AuthenticatedProgressMonitor`, require strict sequence and
+completed-work growth, and require the final receipt to bind the last progress
+SHA-256. Also assert an execute phase that omits progress reaches the exact
+`progress-gap` stop.
+
+Run: `cargo test -p borsuk --lib v23_incidence_tree_progress_ -- --nocapture`
+
+Expected: fail because `write_v23_incidence_progress` has no production call
+site and the final receipt lacks the live chain binding.
+
+- [ ] **Step 6: Emit completed-work progress and rerun GREEN**
+
+Thread one progress writer through tree training. Emit only after immutable
+shard/reservoir units and fixed completed node counts; write a temporary
+canonical record, fsync it, rename it to `progress.json`, and carry the last
+digest into the terminal receipt. Do not emit time-based heartbeats.
+
+Run the exact Step 5 command, then these focused gates serially:
+
+```bash
+uv run --offline --python 3.12 \
+  --with-requirements scripts/requirements-format-bench.txt \
+  python -m unittest scripts.test_launch_v23_incidence_spot \
+    scripts.test_run_v23_leaf_page_incidence_falsifier
+cargo test -p borsuk --lib v23_incidence_ -- --nocapture
+cargo test -p borsuk --example v23_leaf_page_incidence_falsifier v23_incidence_ -- --nocapture
+cargo fmt --all -- --check
+git diff --check
+```
+
+Expected: every focused gate passes and generated worker Bash is clean under
+`bash -n` and `shellcheck -S warning`.
+
+- [ ] **Step 7: Commit before any new Spot attempt**
+
+```bash
+git add scripts/launch_v23_incidence_spot.py \
+  scripts/run_v23_leaf_page_incidence_falsifier.py \
+  scripts/test_launch_v23_incidence_spot.py \
+  scripts/test_run_v23_leaf_page_incidence_falsifier.py \
+  crates/borsuk/src/v23_incidence.rs
+git commit -m "Harden V23 incidence worker evidence"
+```
+
+No Spot attempt starts until this repair is pushed fast-forward and proves
+readable PSI before staging, durable failure evidence, and live progress.
+
+### Task 9: Repository assurance and execution handoff
 
 **Files:**
 - Modify: only files required by concrete verification findings.
