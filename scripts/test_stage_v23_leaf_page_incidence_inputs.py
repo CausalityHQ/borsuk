@@ -251,6 +251,30 @@ class StagingTests(unittest.TestCase):
             ],
         )
 
+    def test_content_addressed_blake3_staging_preserves_receipt_identity(
+        self,
+    ) -> None:
+        import blake3
+
+        payload = b"content-addressed-tree"
+        object_value = _identity("incidence-tree", payload, 0)
+        digest = blake3.blake3(payload).hexdigest()
+        object_value["identity"]["digest_algorithm"] = "blake3"
+        object_value["identity"]["digest"] = digest
+        object_value["identity"]["generation"] = f"content-{digest}"
+        client = FakeS3ClientWithoutChecksumMetadata(
+            {("registered-bucket", "frozen/incidence-tree", None): payload}
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            manifest = root / "manifest.json"
+            manifest.write_bytes(_manifest_bytes([object_value]))
+            subject.stage_manifest(
+                manifest, root / "staging", root / "receipt.json", client
+            )
+
+        self.assertEqual(len(client.calls), 1)
+
     def test_staging_rejects_authority_drift_and_cleans_only_known_files(self) -> None:
         payload = b"registered"
         object_value = _identity("training-shard-0000", payload, 0)
