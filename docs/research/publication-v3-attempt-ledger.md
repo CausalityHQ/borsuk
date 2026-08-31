@@ -1201,3 +1201,58 @@ latency result and authorizes no product claim. Development evaluation may use
 only the already-burned query ordinals 0--31 to select one preregistered ladder
 cell. Holdout evaluation and D3 remain fenced until their own sealed phase
 boundaries and terminal receipts exist.
+
+## V23 leaf-page incidence development preflight rejection on 2026-08-31
+
+The first development-evaluation attempt used source commit
+`7e267587ae169ddf62bcf74eabcc96fcd9b2ad1c`, source-archive SHA-256
+`9f86243caac3836cda3e22533d7db87947db99fefa84ce901669f1496994d8af`,
+and run ID `v23-incidence-development-20260831T171643Z`. One
+`c7g.8xlarge` Spot instance, `i-067274d328dcf28b8`, ran in
+`eu-central-1` at the controller-recorded 0.524900 USD/hour. Both EC2 health
+checks reached `ok`. The controller authenticated the failed terminal,
+terminated the instance, and the instance reached `terminated`. The immutable
+evidence prefix is
+`s3://borsuk-bench-453182569524-euc1/research/v23-leaf-page-incidence/9f86243caac3836cda3e22533d7db87947db99fefa84ce901669f1496994d8af/v23-incidence-development-20260831T171643Z/`.
+
+The 10,644,400-byte release executable has SHA-256
+`ca3aa923601a79424a642d2826b79edb1e6f864fa8d5030be011684aac7b186b`.
+Preflight authenticated the sealed posting receipt, incidence tree, and both
+posting planes without opening the burned D2 report or query Parquet. It used
+the `aarch64-neon-fma` backend and measured:
+
+| Preflight metric | Result |
+|---|---:|
+| distance dimensions | 62,914,560,000 |
+| distance elapsed | 186,810,141,755 ns |
+| distance dimensions/second | 336,783,428 |
+| posting records/second | 75,531,651 |
+| input bytes/second | 885,802,267 |
+| projected full distance dimensions | 1,252,050,075,648 |
+| projected full posting records | 52,168,753,152 |
+| projected full input bytes | 194,038,337 |
+| projected wall | 5,510,722,051,549 ns |
+| registered wall limit | 5,400,000,000,000 ns |
+
+The 3,447-byte preflight receipt has SHA-256
+`4beb5a9d429c559f54a04984f74b44741508a4c1703b15b013aea370a59fd8ec`,
+records `resource_stop=true`, and binds `stop=resource-stop`. Execution then
+failed closed before reading the burned query cohort because a stopped
+preflight cannot authorize execution. The 153-byte `phase-failure.json` has
+SHA-256
+`fa2d79926b70dc72a3b60af9e70ab41dd8349779898e90b577d17ae4391d5515`
+and records `development execution failed` at `execute-run`. The canonical
+346-byte `ATTEMPT_FAILED.json` has SHA-256
+`760987e25a1e9758f36104642bf74297c55d377ba4d661b091e949cb7074373a`
+and records `status=failed` and `claim_eligible=false`.
+
+This is a preregistered performance rejection, not a quality result. The
+distance-only preflight averaged about 18.681 ms for each exhaustive
+65,536-leaf query scan before posting accumulation, already above the 15 ms
+serving p99 gate. The registered 1.25 safety projection also exceeded the
+90-minute scientific wall gate by about 2.05%. The gate will not be weakened
+and this exact architecture will not be rerun. No development result or
+latency artifact was produced, no ladder cell was selected, and no holdout or
+D3 work is authorized. The next candidate must avoid exhaustive 65,536-leaf
+scoring on the serving path rather than disguise the same scan behind a larger
+timeout.
