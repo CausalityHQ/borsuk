@@ -920,3 +920,42 @@ historical 320-cell router is therefore not causal for that failure. The
 per-page-minimum alternative is worse. This result rejects only these two
 registered reducers; it does not reject every possible PQ reducer or every PQ
 representation. It authorizes no paid run, and D3 remains fenced.
+
+## V23 leaf-page incidence Spot bootstrap failure on 2026-08-31
+
+The first post-hardening tree-training attempt used source commit
+`354e25778184fde91f98c6db0c38180f9fdb4ff9`, source-archive SHA-256
+`80f851d8fc1bad29809c897f934c87e575d7aa3216875e283a929faea836262e`,
+and run ID `v23-incidence-tree-20260831T084254Z`. One `c7g.8xlarge` Spot
+instance, `i-0a7426c3bbd9009c8`, launched in `eu-central-1` at a recorded
+price of 0.525300 USD/hour. Its immutable evidence prefix is
+`s3://borsuk-bench-453182569524-euc1/research/v23-leaf-page-incidence/80f851d8fc1bad29809c897f934c87e575d7aa3216875e283a929faea836262e/v23-incidence-tree-20260831T084254Z/`.
+
+The worker built the release example successfully in 97 seconds and recorded
+a 10,633,936-byte executable with SHA-256
+`366ca766f81816ea7fafc38afaea35fc2400cbbafa2b6687ccd984e956ae35a8`.
+It then installed the pinned Python environment but failed before the namespace
+probe, input staging, preflight, or scientific execution. Direct execution of
+`scripts/launch_v23_incidence_spot.py --namespace-probe` could not resolve the
+sibling `scripts.run_v23_leaf_page_incidence_falsifier` package and raised
+`ModuleNotFoundError: No module named 'scripts'`. No training shard, corpus
+body, progress record, scientific receipt, or incidence tree was produced.
+
+The canonical `ATTEMPT_FAILED.json` is 330 bytes with SHA-256
+`bf06d6c05698a55eab34e405f1bf954b0b701bf24e2f7e61b95fa2f426cfb2bb`;
+it records `claim_eligible=false`, `worker_exit=1`, and the exact source and
+archive identities above. `binary.json` has SHA-256
+`12619701973a5507879c61900a41bcdb266d6e58dba5a152529ba53448912b86`,
+and the 110,549-byte `worker.log` has SHA-256
+`9f07a2f949457fb56868ac4eb82eef81f539295a391bf061e6353fb3cc5065ba`.
+The controller authenticated the failed terminal, terminated the instance, and
+the local bounded evidence inspection removed its three named scratch files
+and temporary directory.
+
+The direct-script import boundary was repaired test-first and published as
+`d89a0fd7498b4a5dfa769099e34c60d6a9450721`. The repair uses the repository's
+single direct-execution import pattern rather than a compatibility reader. Its
+affected 41-test gate and dependency-complete 921-test Python discovery passed,
+with one expected skip; Ruff, pycompile, generated Bash syntax, ShellCheck, and
+diff checks also passed. This failed attempt establishes no performance or
+quality evidence, authorizes no downstream phase, and leaves D3 fenced.
