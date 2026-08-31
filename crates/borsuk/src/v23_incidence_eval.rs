@@ -21,8 +21,14 @@ use crate::{
     v23_incidence_postings::{
         PostingAssignmentArm, V23PostingPlane, posting_prefix_eligibility, validate_posting_prefix,
     },
-    v23_incidence_tree::{V23_INCIDENCE_LEAVES, V23IncidenceTree},
+    v23_incidence_tree::{
+        V23_INCIDENCE_LEAVES, V23IncidenceTree, rank_v23_incidence_tree_beam,
+        v23_tree_beam_centroid_scores,
+    },
 };
+
+#[cfg(test)]
+use crate::v23_incidence_tree::rank_v23_incidence_tree_beam_scalar;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_string())
@@ -370,6 +376,7 @@ impl V23IncidenceQueryWorkspace {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceQueryTruth {
     pub(crate) query_ordinal: u32,
     pub(crate) ground_truth_page_assignments: Vec<Vec<u32>>,
@@ -377,6 +384,7 @@ pub(crate) struct V23IncidenceQueryTruth {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceQuality {
     pub(crate) query_count: u32,
     pub(crate) total_hits: u32,
@@ -389,6 +397,7 @@ pub(crate) struct V23IncidenceQuality {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceLayoutQuality {
     pub(crate) query_count: u32,
     pub(crate) total_oracle_hits: u32,
@@ -735,14 +744,25 @@ fn score_incidence_query_with_shape(
 ) -> Result<V23IncidenceQueryEvidence> {
     if cell.arm != plane.arm
         || ![512, 1024, 2048].contains(&cell.cap)
-        || ![32, 64, 128].contains(&cell.probes)
+        || ![32, 64, 128].contains(&cell.beam_width)
         || page_count < 8
+        || tree.leaves.len() != expected_leaves
     {
         return Err(invalid("V23 incidence query cell differs"));
     }
     posting_prefix_eligibility(plane, usize::from(cell.cap))?;
     let ranked_leaf_ordinals =
-        rank_incidence_leaves_with_shape(tree, query, usize::from(cell.probes), expected_leaves)?;
+        rank_v23_incidence_tree_beam(tree, query, usize::from(cell.beam_width))?;
+    #[cfg(test)]
+    {
+        if ranked_leaf_ordinals
+            != rank_v23_incidence_tree_beam_scalar(tree, query, usize::from(cell.beam_width))?
+        {
+            return Err(invalid(
+                "V23 incidence scalar and optimized tree-beam leaves differ",
+            ));
+        }
+    }
     let mut workspace = V23IncidenceQueryWorkspace::new(page_count)?;
     let (page_ordinals, posting_visits, touched_pages) = selected_pages_q32(
         plane,
@@ -787,12 +807,13 @@ pub(crate) fn score_incidence_query_native(
 ) -> Result<V23IncidenceQueryEvidence> {
     if cell.arm != plane.arm
         || ![512, 1024, 2048].contains(&cell.cap)
-        || ![32, 64, 128].contains(&cell.probes)
+        || ![32, 64, 128].contains(&cell.beam_width)
     {
         return Err(invalid("V23 incidence native query cell differs"));
     }
     posting_prefix_eligibility(plane, usize::from(cell.cap))?;
-    let ranked_leaf_ordinals = rank_incidence_leaves(tree, query, usize::from(cell.probes))?;
+    let ranked_leaf_ordinals =
+        rank_v23_incidence_tree_beam(tree, query, usize::from(cell.beam_width))?;
     let (page_ordinals, posting_visits, touched_pages) = selected_pages_q32(
         plane,
         &ranked_leaf_ordinals,
@@ -1064,10 +1085,11 @@ fn rank_incidence_leaves_scalar(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceCell {
     pub(crate) cap: u16,
     pub(crate) arm: PostingAssignmentArm,
-    pub(crate) probes: u16,
+    pub(crate) beam_width: u16,
 }
 
 impl V23IncidenceCell {
@@ -1078,8 +1100,12 @@ impl V23IncidenceCell {
                 PostingAssignmentArm::OneLeaf,
                 PostingAssignmentArm::TwoBeamLeaves,
             ] {
-                for probes in [32, 64, 128] {
-                    cells.push(Self { cap, arm, probes });
+                for beam_width in [32, 64, 128] {
+                    cells.push(Self {
+                        cap,
+                        arm,
+                        beam_width,
+                    });
                 }
             }
         }
@@ -1088,14 +1114,18 @@ impl V23IncidenceCell {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceSelection {
     pub(crate) query_ordinal: u32,
     pub(crate) page_ordinals: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceCellResult {
     pub(crate) cell: V23IncidenceCell,
+    pub(crate) scored_centroids_per_query: u32,
+    pub(crate) distance_dimensions_per_query: u32,
     pub(crate) retention_passed: bool,
     pub(crate) quality: V23IncidenceQuality,
     pub(crate) projected_serving_bytes: u64,
@@ -1109,7 +1139,9 @@ pub(crate) struct V23IncidenceCellResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceDevelopmentAuthority {
+    pub(crate) query_router: String,
     pub(crate) source_commit: String,
     pub(crate) source_archive_sha256: String,
     pub(crate) index_id: String,
@@ -1122,6 +1154,7 @@ pub(crate) struct V23IncidenceDevelopmentAuthority {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceDevelopmentArtifact {
     pub(crate) schema: String,
     pub(crate) claim_eligible: bool,
@@ -1132,6 +1165,7 @@ pub(crate) struct V23IncidenceDevelopmentArtifact {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceHoldoutTruthAuthority {
     pub(crate) development_result_sha256: String,
     pub(crate) neighbors_sha256: String,
@@ -1139,6 +1173,7 @@ pub(crate) struct V23IncidenceHoldoutTruthAuthority {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceHoldoutTruthArtifact {
     pub(crate) schema: String,
     pub(crate) claim_eligible: bool,
@@ -1153,7 +1188,7 @@ pub(crate) fn canonical_v23_incidence_holdout_truth_bytes(
     expected_authority: &V23IncidenceHoldoutTruthAuthority,
     expected_cell: V23IncidenceCell,
 ) -> Result<Vec<u8>> {
-    if artifact.schema != "borsuk-v23-incidence-holdout-truth-v1"
+    if artifact.schema != "borsuk-v23-incidence-holdout-truth-v2"
         || artifact.claim_eligible
         || artifact.authority != *expected_authority
         || artifact.sealed_cell != expected_cell
@@ -1186,9 +1221,10 @@ pub(crate) fn canonical_v23_incidence_development_artifact_bytes(
     development_truth: &[V23IncidenceQueryTruth],
 ) -> Result<Vec<u8>> {
     let authority = &artifact.authority;
-    if artifact.schema != "borsuk-v23-incidence-development-v1"
+    if artifact.schema != "borsuk-v23-incidence-development-v2"
         || artifact.claim_eligible
         || authority != expected_authority
+        || authority.query_router != "centroid-tree-beam-v1"
         || !exact_lower_hex(&authority.source_commit, 40)
         || !exact_lower_hex(&authority.source_archive_sha256, 64)
         || !exact_lower_hex(&authority.query_cohort_sha256, 64)
@@ -1224,8 +1260,12 @@ pub(crate) fn canonical_v23_incidence_development_artifact_bytes(
         validate_quality(cell.quality, 32)?;
         let projection =
             project_v23_incidence_serving_bytes(100_000_000, usize::from(cell.cell.cap))?;
-        if cell.projected_serving_bytes != projection.total_bytes
-            || cell.maximum_posting_visits > u32::from(cell.cell.cap) * u32::from(cell.cell.probes)
+        let scored_centroids = v23_tree_beam_centroid_scores(usize::from(cell.cell.beam_width))?;
+        if cell.scored_centroids_per_query != scored_centroids
+            || cell.distance_dimensions_per_query != scored_centroids * 96
+            || cell.projected_serving_bytes != projection.total_bytes
+            || cell.maximum_posting_visits
+                > u32::from(cell.cell.cap) * u32::from(cell.cell.beam_width)
             || cell.maximum_touched_pages > cell.maximum_posting_visits
         {
             return Err(invalid("V23 incidence development budget evidence differs"));
@@ -1262,6 +1302,7 @@ pub(crate) fn canonical_v23_incidence_development_artifact_bytes(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceHoldoutResult {
     pub(crate) cell: V23IncidenceCell,
     pub(crate) quality: V23IncidenceQuality,
@@ -1276,6 +1317,7 @@ pub(crate) struct V23IncidenceHoldoutResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceCampaignInput {
     pub(crate) authority_passed: bool,
     pub(crate) resource_passed: bool,
@@ -1324,6 +1366,8 @@ impl V23IncidenceCampaignInput {
             determinism_passed: true,
             development: vec![V23IncidenceCellResult {
                 cell: V23IncidenceCell::registered_ladder()[0],
+                scored_centroids_per_query: 766,
+                distance_dimensions_per_query: 73_536,
                 retention_passed: true,
                 quality,
                 projected_serving_bytes: 1_119_235_716,
@@ -1469,9 +1513,11 @@ pub(crate) fn classify_v23_incidence_campaign(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct V23IncidenceCampaignResult {
     pub(crate) schema: String,
     pub(crate) claim_eligible: bool,
+    pub(crate) query_router: String,
     pub(crate) source_commit: String,
     pub(crate) source_archive_sha256: String,
     pub(crate) index_id: String,
@@ -1491,8 +1537,9 @@ impl V23IncidenceCampaignResult {
     #[cfg(test)]
     fn passing_fixture(latency: &[u8]) -> Self {
         Self {
-            schema: "borsuk-v23-incidence-result-v1".to_string(),
+            schema: "borsuk-v23-incidence-result-v2".to_string(),
             claim_eligible: false,
+            query_router: "centroid-tree-beam-v1".to_string(),
             source_commit: "1".repeat(40),
             source_archive_sha256: "2".repeat(64),
             index_id: "index-fixture".to_string(),
@@ -1585,8 +1632,9 @@ pub(crate) fn canonical_v23_incidence_result_bytes(
     development_truth: &[V23IncidenceQueryTruth],
     holdout_truth: &[V23IncidenceQueryTruth],
 ) -> Result<Vec<u8>> {
-    if result.schema != "borsuk-v23-incidence-result-v1"
+    if result.schema != "borsuk-v23-incidence-result-v2"
         || result.claim_eligible
+        || result.query_router != "centroid-tree-beam-v1"
         || result.page_body_reads != 0
         || !exact_lower_hex(&result.source_commit, 40)
         || !exact_lower_hex(&result.source_archive_sha256, 64)
@@ -1637,8 +1685,12 @@ pub(crate) fn canonical_v23_incidence_result_bytes(
         }
         validate_quality(cell.quality, 32)?;
         let projection = project_v23_incidence_serving_bytes(100_000_000, cell.cell.cap as usize)?;
-        if cell.projected_serving_bytes != projection.total_bytes
-            || cell.maximum_posting_visits > u32::from(cell.cell.cap) * u32::from(cell.cell.probes)
+        let scored_centroids = v23_tree_beam_centroid_scores(usize::from(cell.cell.beam_width))?;
+        if cell.scored_centroids_per_query != scored_centroids
+            || cell.distance_dimensions_per_query != scored_centroids * 96
+            || cell.projected_serving_bytes != projection.total_bytes
+            || cell.maximum_posting_visits
+                > u32::from(cell.cell.cap) * u32::from(cell.cell.beam_width)
             || cell.maximum_touched_pages > cell.maximum_posting_visits
         {
             return Err(invalid("V23 incidence development budget evidence differs"));
@@ -1665,7 +1717,7 @@ pub(crate) fn canonical_v23_incidence_result_bytes(
             project_v23_incidence_serving_bytes(100_000_000, holdout.cell.cap as usize)?;
         if holdout.projected_serving_bytes != projection.total_bytes
             || holdout.maximum_posting_visits
-                > u32::from(holdout.cell.cap) * u32::from(holdout.cell.probes)
+                > u32::from(holdout.cell.cap) * u32::from(holdout.cell.beam_width)
             || holdout.maximum_touched_pages > holdout.maximum_posting_visits
         {
             return Err(invalid("V23 incidence holdout budget evidence differs"));
@@ -1749,6 +1801,10 @@ fn evaluate_v23_incidence_cell_with_shape(
     let projection = project_v23_incidence_serving_bytes(100_000_000, usize::from(cell.cap))?;
     Ok(V23IncidenceCellResult {
         cell,
+        scored_centroids_per_query: v23_tree_beam_centroid_scores(usize::from(cell.beam_width))?,
+        distance_dimensions_per_query: v23_tree_beam_centroid_scores(usize::from(cell.beam_width))?
+            .checked_mul(96)
+            .ok_or_else(|| invalid("V23 incidence tree-beam dimensions overflow"))?,
         retention_passed,
         quality,
         projected_serving_bytes: projection.total_bytes,
@@ -1890,11 +1946,27 @@ mod tests {
             PostingAssignmentArm, V23PostingLeaf, V23PostingPlane, V23PostingPrefixEvidence,
         },
         v23_incidence_tree::{
-            V23IncidenceTrainingShape, V23IncidenceTree, V23TrainingWork, V23TreeLeaf,
+            V23IncidenceTrainingShape, V23IncidenceTree, V23TrainingWork, V23TreeLeaf, V23TreeNode,
+            v23_tree_beam_centroid_scores,
         },
     };
 
     fn ranking_tree() -> V23IncidenceTree {
+        let node_count = 65_535_usize;
+        let mut child = [f16::ZERO; 96];
+        child[0] = f16::from_f32(1.0);
+        let nodes = (0..node_count)
+            .map(|ordinal| V23TreeNode {
+                child_zero: child,
+                child_one: child,
+                child_zero_inverse_norm: 1.0,
+                child_one_inverse_norm: 1.0,
+                boundary_score_bits: 0,
+                boundary_source_ordinal: 0,
+                child_zero_index: u32::try_from(ordinal * 2 + 1).unwrap(),
+                child_one_index: u32::try_from(ordinal * 2 + 2).unwrap(),
+            })
+            .collect();
         let leaves = (0..65_536_u32)
             .map(|ordinal| {
                 let mut centroid = [f16::ZERO; 96];
@@ -1920,7 +1992,7 @@ mod tests {
                 repartition_dimensions: 0,
                 total_distance_dimensions: 0,
             },
-            nodes: Vec::new(),
+            nodes,
             leaves,
         }
     }
@@ -1942,7 +2014,7 @@ mod tests {
             scratch_bytes_peak: 65_536 * 65_535 * 8,
             leaves: (0..65_536_u32)
                 .map(|leaf| V23PostingLeaf {
-                    pages: vec![(leaf / 96) % 16, ((leaf / 96) + 7) % 16],
+                    pages: vec![leaf % 16, (leaf / 96) % 16],
                     masses: vec![40_000, 25_535],
                     total_mass: 65_535,
                     prefixes,
@@ -2025,14 +2097,14 @@ mod tests {
         for (dimension, value) in query.iter_mut().enumerate() {
             *value = (dimension as f32 + 1.0) / 97.0;
         }
-        for probes in [32, 64, 128] {
+        for beam_width in [32, 64, 128] {
             let evidence = score_incidence_query(
                 &tree,
                 &plane,
                 V23IncidenceCell {
                     cap: 2048,
                     arm: PostingAssignmentArm::OneLeaf,
-                    probes,
+                    beam_width,
                 },
                 &query,
                 16,
@@ -2052,7 +2124,7 @@ mod tests {
         let cell = V23IncidenceCell {
             cap: 2048,
             arm: PostingAssignmentArm::OneLeaf,
-            probes: 128,
+            beam_width: 128,
         };
         let mut query = [0.0_f32; 96];
         for (dimension, value) in query.iter_mut().enumerate() {
@@ -2151,6 +2223,10 @@ mod tests {
             .into_iter()
             .map(|cell| {
                 base.cell = cell;
+                base.scored_centroids_per_query =
+                    v23_tree_beam_centroid_scores(usize::from(cell.beam_width)).unwrap();
+                base.distance_dimensions_per_query =
+                    base.scored_centroids_per_query.checked_mul(96).unwrap();
                 base.projected_serving_bytes =
                     project_v23_incidence_serving_bytes(100_000_000, cell.cap as usize)
                         .unwrap()
@@ -2159,6 +2235,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let authority = V23IncidenceDevelopmentAuthority {
+            query_router: "centroid-tree-beam-v1".to_string(),
             source_commit: "1".repeat(40),
             source_archive_sha256: "2".repeat(64),
             index_id: "index-fixture".to_string(),
@@ -2170,7 +2247,7 @@ mod tests {
             executable_sha256: "7".repeat(64),
         };
         let artifact = V23IncidenceDevelopmentArtifact {
-            schema: "borsuk-v23-incidence-development-v1".to_string(),
+            schema: "borsuk-v23-incidence-development-v2".to_string(),
             claim_eligible: false,
             authority: authority.clone(),
             development,
@@ -2337,7 +2414,7 @@ mod tests {
         };
         let cell = V23IncidenceCell::registered_ladder()[0];
         let artifact = V23IncidenceHoldoutTruthArtifact {
-            schema: "borsuk-v23-incidence-holdout-truth-v1".to_string(),
+            schema: "borsuk-v23-incidence-holdout-truth-v2".to_string(),
             claim_eligible: false,
             authority: authority.clone(),
             sealed_cell: cell,
@@ -2395,7 +2472,7 @@ mod tests {
         let cell = V23IncidenceCell {
             cap: 512,
             arm: PostingAssignmentArm::OneLeaf,
-            probes: 32,
+            beam_width: 32,
         };
         let mut query = [0.0_f32; 96];
         for (dimension, value) in query.iter_mut().enumerate() {
@@ -2461,7 +2538,7 @@ mod tests {
             V23IncidenceCell {
                 cap: 512,
                 arm: PostingAssignmentArm::OneLeaf,
-                probes: 32,
+                beam_width: 32,
             }
         );
         assert_eq!(
@@ -2469,7 +2546,7 @@ mod tests {
             V23IncidenceCell {
                 cap: 2048,
                 arm: PostingAssignmentArm::TwoBeamLeaves,
-                probes: 128,
+                beam_width: 128,
             }
         );
 
@@ -2566,7 +2643,7 @@ mod tests {
         assert_eq!(bytes.last(), Some(&b'\n'));
         assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["schema"], "borsuk-v23-incidence-result-v1");
+        assert_eq!(value["schema"], "borsuk-v23-incidence-result-v2");
         assert_eq!(value["claim_eligible"], false);
         assert_eq!(value["page_body_reads"], 0);
         assert_eq!(value["classification"], "incidence-falsifier-passed");
@@ -2609,5 +2686,65 @@ mod tests {
         changed[20] ^= 1;
         let result = V23IncidenceCampaignResult::passing_fixture(&changed);
         assert!(canonical_fixture(&result, &changed).is_err());
+    }
+
+    #[test]
+    fn v23_tree_beam_evaluation_contract_versions_router_and_work() {
+        let cell = V23IncidenceCell {
+            cap: 512,
+            arm: PostingAssignmentArm::OneLeaf,
+            beam_width: 32,
+        };
+        assert_eq!(V23IncidenceCell::registered_ladder()[0], cell);
+
+        let latency = encode_v23_incidence_latency_samples(&vec![15_000_000; 10_000]).unwrap();
+        let result = V23IncidenceCampaignResult::passing_fixture(&latency);
+        assert_eq!(result.schema, "borsuk-v23-incidence-result-v2");
+        assert_eq!(result.query_router, "centroid-tree-beam-v1");
+        assert_eq!(
+            result.campaign.development[0].scored_centroids_per_query,
+            766
+        );
+        assert_eq!(
+            result.campaign.development[0].distance_dimensions_per_query,
+            73_536
+        );
+    }
+
+    #[test]
+    fn v23_tree_beam_evaluation_rejects_schema_router_work_and_unknown_field_drift() {
+        let latency = encode_v23_incidence_latency_samples(&vec![15_000_000; 10_000]).unwrap();
+        let base = V23IncidenceCampaignResult::passing_fixture(&latency);
+
+        let mut changed = base.clone();
+        changed.schema = "borsuk-v23-incidence-result-v1".to_string();
+        assert!(canonical_fixture(&changed, &latency).is_err());
+        let mut changed = base.clone();
+        changed.query_router = "exhaustive-leaf-scan".to_string();
+        assert!(canonical_fixture(&changed, &latency).is_err());
+        let mut changed = base.clone();
+        changed.campaign.development[0].scored_centroids_per_query += 1;
+        assert!(canonical_fixture(&changed, &latency).is_err());
+        let mut changed = base.clone();
+        changed.campaign.development[0].distance_dimensions_per_query += 96;
+        assert!(canonical_fixture(&changed, &latency).is_err());
+        let mut changed = base.clone();
+        changed.campaign.development[0].cell.beam_width = 31;
+        assert!(canonical_fixture(&changed, &latency).is_err());
+
+        let bytes = canonical_fixture(&base, &latency).unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("legacy_alias".to_string(), serde_json::json!(true));
+        assert!(serde_json::from_value::<V23IncidenceCampaignResult>(value).is_err());
+
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value["campaign"]["development"][0]
+            .as_object_mut()
+            .unwrap()
+            .insert("probes".to_string(), serde_json::json!(32));
+        assert!(serde_json::from_value::<V23IncidenceCampaignResult>(value).is_err());
     }
 }

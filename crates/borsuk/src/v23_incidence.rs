@@ -3204,6 +3204,7 @@ fn run_v23_incidence_development_evaluation(
         )?);
     }
     let authority = V23IncidenceDevelopmentAuthority {
+        query_router: "centroid-tree-beam-v1".to_string(),
         source_commit: V23_INCIDENCE_SOURCE_COMMIT.to_string(),
         source_archive_sha256: V23_INCIDENCE_SOURCE_ARCHIVE_SHA256.to_string(),
         index_id: V23_INCIDENCE_INDEX_ID.to_string(),
@@ -3227,7 +3228,7 @@ fn run_v23_incidence_development_evaluation(
         })
         .map(|cell| cell.cell);
     let artifact = V23IncidenceDevelopmentArtifact {
-        schema: "borsuk-v23-incidence-development-v1".to_string(),
+        schema: "borsuk-v23-incidence-development-v2".to_string(),
         claim_eligible: false,
         authority: authority.clone(),
         development,
@@ -3362,7 +3363,7 @@ fn run_v23_incidence_holdout_binding(
         BorsukError::InvalidStorage("V23 incidence development did not seal a cell".to_string())
     })?;
     if canonical_development != development_bytes
-        || development.schema != "borsuk-v23-incidence-development-v1"
+        || development.schema != "borsuk-v23-incidence-development-v2"
         || development.claim_eligible
         || development.development.len() != 18
     {
@@ -3430,7 +3431,7 @@ fn run_v23_incidence_holdout_binding(
         page_roster_sha256: roster_input.identity.digest.clone(),
     };
     let artifact = V23IncidenceHoldoutTruthArtifact {
-        schema: "borsuk-v23-incidence-holdout-truth-v1".to_string(),
+        schema: "borsuk-v23-incidence-holdout-truth-v2".to_string(),
         claim_eligible: false,
         authority: authority.clone(),
         sealed_cell,
@@ -3548,6 +3549,7 @@ fn run_v23_incidence_holdout_evaluation(
     let development_latencies =
         decode_v23_incidence_development_latency_bundle(&development_latency_bytes)?;
     let expected_development_authority = V23IncidenceDevelopmentAuthority {
+        query_router: "centroid-tree-beam-v1".to_string(),
         source_commit: V23_INCIDENCE_SOURCE_COMMIT.to_string(),
         source_archive_sha256: V23_INCIDENCE_SOURCE_ARCHIVE_SHA256.to_string(),
         index_id: V23_INCIDENCE_INDEX_ID.to_string(),
@@ -3642,8 +3644,9 @@ fn run_v23_incidence_holdout_evaluation(
     };
     let classification = classify_v23_incidence_campaign(&campaign);
     let result = V23IncidenceCampaignResult {
-        schema: "borsuk-v23-incidence-result-v1".to_string(),
+        schema: "borsuk-v23-incidence-result-v2".to_string(),
         claim_eligible: false,
+        query_router: "centroid-tree-beam-v1".to_string(),
         source_commit: V23_INCIDENCE_SOURCE_COMMIT.to_string(),
         source_archive_sha256: V23_INCIDENCE_SOURCE_ARCHIVE_SHA256.to_string(),
         index_id: V23_INCIDENCE_INDEX_ID.to_string(),
@@ -6894,7 +6897,7 @@ mod tests {
                     V23IncidenceTrainingShape {
                         dimensions: 96,
                         reservoir_rows: 4_096,
-                        depth: 5,
+                        depth: 7,
                         lloyd_iterations: 4,
                     },
                     threads,
@@ -7022,6 +7025,7 @@ mod tests {
                     })
                     .collect::<crate::Result<Vec<_>>>()?;
                 let authority = V23IncidenceDevelopmentAuthority {
+                    query_router: "centroid-tree-beam-v1".to_string(),
                     source_commit: V23_INCIDENCE_SOURCE_COMMIT.to_string(),
                     source_archive_sha256: V23_INCIDENCE_SOURCE_ARCHIVE_SHA256.to_string(),
                     index_id: V23_INCIDENCE_INDEX_ID.to_string(),
@@ -7033,7 +7037,7 @@ mod tests {
                     executable_sha256: EXECUTABLE.to_string(),
                 };
                 let artifact = V23IncidenceDevelopmentArtifact {
-                    schema: "borsuk-v23-incidence-development-v1".to_string(),
+                    schema: "borsuk-v23-incidence-development-v2".to_string(),
                     claim_eligible: false,
                     authority: authority.clone(),
                     development,
@@ -7081,7 +7085,7 @@ mod tests {
                 };
                 let truth = test_campaign_truth(32, 128);
                 let artifact = V23IncidenceHoldoutTruthArtifact {
-                    schema: "borsuk-v23-incidence-holdout-truth-v1".to_string(),
+                    schema: "borsuk-v23-incidence-holdout-truth-v2".to_string(),
                     claim_eligible: false,
                     authority: authority.clone(),
                     sealed_cell,
@@ -7184,8 +7188,9 @@ mod tests {
                     holdout: Some(holdout),
                 };
                 let result = V23IncidenceCampaignResult {
-                    schema: "borsuk-v23-incidence-result-v1".to_string(),
+                    schema: "borsuk-v23-incidence-result-v2".to_string(),
                     claim_eligible: false,
+                    query_router: "centroid-tree-beam-v1".to_string(),
                     source_commit: V23_INCIDENCE_SOURCE_COMMIT.to_string(),
                     source_archive_sha256: V23_INCIDENCE_SOURCE_ARCHIVE_SHA256.to_string(),
                     index_id: V23_INCIDENCE_INDEX_ID.to_string(),
@@ -7279,8 +7284,8 @@ mod tests {
             let trained_tree =
                 decode_incidence_tree(&fs::read(root.join("incidence-tree.bin")).unwrap()).unwrap();
             assert_eq!(trained_tree.shape.reservoir_rows, 4_096);
-            assert_eq!(trained_tree.shape.depth, 5);
-            assert_eq!(trained_tree.leaves.len(), 32);
+            assert_eq!(trained_tree.shape.depth, 7);
+            assert_eq!(trained_tree.leaves.len(), 128);
             for (name, arm) in [
                 ("postings-one.bin", PostingAssignmentArm::OneLeaf),
                 ("postings-two.bin", PostingAssignmentArm::TwoBeamLeaves),
@@ -7324,7 +7329,7 @@ mod tests {
             assert_eq!(result.page_body_reads, 0);
             assert!(result.sealed_cell.is_some());
             assert!(result.campaign.development.iter().all(|cell| {
-                cell.maximum_posting_visits <= u32::from(cell.cell.probes) * 8
+                cell.maximum_posting_visits <= u32::from(cell.cell.beam_width) * 8
                     && cell.maximum_touched_pages == 8
             }));
             assert!(
@@ -7337,7 +7342,7 @@ mod tests {
             );
             let holdout = result.campaign.holdout.as_ref().unwrap();
             assert!(
-                holdout.maximum_posting_visits <= u32::from(holdout.cell.probes) * 8
+                holdout.maximum_posting_visits <= u32::from(holdout.cell.beam_width) * 8
                     && holdout.maximum_touched_pages == 8
             );
             assert_eq!(
