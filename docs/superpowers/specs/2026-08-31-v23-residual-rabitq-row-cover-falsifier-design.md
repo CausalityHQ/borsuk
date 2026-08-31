@@ -153,9 +153,12 @@ measured projection above the total fails closed.
 3. Use the centroid tree to return the fixed leaf-probe ladder `32, 64, 128`.
 4. Reject a cell before scoring if its leaf ranges contain more than 262,144
    rows at the 100M projection.
-5. Estimate every candidate residual distance with the RaBitQ formula. The
-   implementation must agree with a scalar f64 reference within a registered
-   bound and use deterministic `(distance, row_ordinal)` ties.
+5. For each probed leaf, form the rotated query residual and quantize its 96
+   components with the fixed four-bit query quantizer described by RaBitQ.
+   Estimate every candidate residual distance with the registered SIMD
+   estimator. The implementation must agree with an unquantized scalar f64
+   reference within the preregistered estimator bound and use deterministic
+   `(distance, row_ordinal)` ties.
 6. Retain only the best 4,096 rows in a bounded heap. Full ranked-row
    allocation or sort is forbidden.
 7. Apply the existing deterministic reciprocal-rank page cover to the two page
@@ -165,10 +168,12 @@ measured projection above the total fails closed.
 
 At 100M rows, 128 balanced leaves contain about 195,313 rows. The hard scan
 cap is 262,144 rows. A maximal query reads at most 7,340,032 row bytes, performs
-at most 524,288 64-bit sign-word comparisons plus bounded scalar arithmetic,
-and considers at most 8,192 page assignments in the cover. Tree work remains
-the already-measured bounded centroid subset rather than a 65,536-centroid
-scan.
+one 96-component four-bit query quantization per probed leaf and at most
+262,144 fixed 96-component bitwise/SIMD estimations, and considers at most
+8,192 page assignments in the cover. The preflight measures this complete
+kernel; no operation-count estimate substitutes for the 15-ms p99 gate. Tree
+work remains the already-measured bounded centroid subset rather than a
+65,536-centroid scan.
 
 ## Causal falsifier
 
