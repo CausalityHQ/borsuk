@@ -117,6 +117,11 @@ mod v23_rabitq;
     reason = "V23 residual RaBitQ Arrow artifacts are wired incrementally by the committed plan"
 )]
 mod v23_rabitq_arrow;
+#[allow(
+    dead_code,
+    reason = "V23 residual RaBitQ quantization is wired incrementally by the committed plan"
+)]
+mod v23_rabitq_quantizer;
 
 /// Print and reset the env-gated (`BORSUK_BUILD_TIMING=1`) per-phase build timing
 /// breakdown accumulated since the last call. When
