@@ -1014,6 +1014,175 @@ pub(crate) fn assign_two_beam_leaves(
     assign_two_beam_leaves_normalized(tree, &row, source_ordinal)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct V23TreeBeamCandidate {
+    distance: f32,
+    global_index: u32,
+}
+
+impl PartialEq for V23TreeBeamCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.distance.to_bits() == other.distance.to_bits()
+            && self.global_index == other.global_index
+    }
+}
+
+impl Eq for V23TreeBeamCandidate {}
+
+impl PartialOrd for V23TreeBeamCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for V23TreeBeamCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.distance
+            .total_cmp(&other.distance)
+            .then_with(|| self.global_index.cmp(&other.global_index))
+    }
+}
+
+pub(crate) fn v23_tree_beam_centroid_scores(beam_width: usize) -> Result<u32> {
+    if ![32, 64, 128].contains(&beam_width) {
+        return Err(invalid("V23 incidence tree-beam width differs"));
+    }
+    let mut scores = 0_u32;
+    for level in 1..=V23_INCIDENCE_TREE_DEPTH {
+        let level_candidates = 1_usize
+            .checked_shl(u32::try_from(level).unwrap())
+            .ok_or_else(|| invalid("V23 incidence tree-beam work overflows"))?;
+        scores = scores
+            .checked_add(
+                u32::try_from(level_candidates.min(beam_width * 2))
+                    .map_err(|_| invalid("V23 incidence tree-beam work exceeds u32"))?,
+            )
+            .ok_or_else(|| invalid("V23 incidence tree-beam work overflows"))?;
+    }
+    Ok(scores)
+}
+
+fn v23_tree_beam_child_distance(
+    query: &[f32; 96],
+    centroid: &[f16; 96],
+    inverse_norm: f32,
+    use_fused: bool,
+) -> Result<f32> {
+    if !inverse_norm.is_finite() || inverse_norm <= 0.0 {
+        return Err(invalid("V23 incidence tree-beam inverse norm differs"));
+    }
+    let centroid = centroid.map(f16::to_f32);
+    if centroid.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("V23 incidence tree-beam centroid is non-finite"));
+    }
+    let distance = 1.0 - training_dot(use_fused, query, &centroid)? * inverse_norm;
+    if !distance.is_finite() {
+        return Err(invalid("V23 incidence tree-beam distance is non-finite"));
+    }
+    Ok(distance)
+}
+
+fn rank_v23_incidence_tree_beam_impl(
+    tree: &V23IncidenceTree,
+    query: &[f32; 96],
+    beam_width: usize,
+    use_fused: bool,
+) -> Result<Vec<u16>> {
+    if ![32, 64, 128].contains(&beam_width)
+        || tree.shape.dimensions != 96
+        || tree.shape.depth == 0
+        || tree.shape.depth > V23_INCIDENCE_TREE_DEPTH
+    {
+        return Err(invalid("V23 incidence tree-beam shape differs"));
+    }
+    let expected_leaves = 1_usize
+        .checked_shl(u32::try_from(tree.shape.depth).unwrap())
+        .ok_or_else(|| invalid("V23 incidence tree-beam shape overflows"))?;
+    let expected_nodes = expected_leaves - 1;
+    if tree.nodes.len() != expected_nodes
+        || tree.leaves.len() != expected_leaves
+        || beam_width > expected_leaves
+    {
+        return Err(invalid("V23 incidence tree-beam topology differs"));
+    }
+    let query = normalized(query)?;
+    let mut current = Vec::with_capacity(beam_width);
+    let mut next = Vec::with_capacity(beam_width * 2);
+    current.push(0_u32);
+    for level in 0..tree.shape.depth {
+        next.clear();
+        for index in current.drain(..) {
+            let node = tree
+                .nodes
+                .get(usize::try_from(index).unwrap())
+                .ok_or_else(|| invalid("V23 incidence tree-beam node differs"))?;
+            for (global_index, centroid, inverse_norm) in [
+                (
+                    node.child_zero_index,
+                    &node.child_zero,
+                    node.child_zero_inverse_norm,
+                ),
+                (
+                    node.child_one_index,
+                    &node.child_one,
+                    node.child_one_inverse_norm,
+                ),
+            ] {
+                next.push(V23TreeBeamCandidate {
+                    distance: v23_tree_beam_child_distance(
+                        &query,
+                        centroid,
+                        inverse_norm,
+                        use_fused,
+                    )?,
+                    global_index,
+                });
+            }
+        }
+        next.sort_unstable();
+        next.truncate(beam_width);
+        if level + 1 < tree.shape.depth
+            && next
+                .iter()
+                .any(|candidate| candidate.global_index as usize >= expected_nodes)
+        {
+            return Err(invalid("V23 incidence tree-beam child differs"));
+        }
+        current.extend(next.iter().map(|candidate| candidate.global_index));
+    }
+    if current.len() != beam_width {
+        return Err(invalid("V23 incidence tree-beam leaves differ"));
+    }
+    current
+        .into_iter()
+        .map(|global_index| {
+            let leaf = usize::try_from(global_index)
+                .unwrap()
+                .checked_sub(expected_nodes)
+                .filter(|leaf| *leaf < expected_leaves)
+                .ok_or_else(|| invalid("V23 incidence tree-beam leaf differs"))?;
+            u16::try_from(leaf).map_err(|_| invalid("V23 incidence tree-beam leaf exceeds u16"))
+        })
+        .collect()
+}
+
+pub(crate) fn rank_v23_incidence_tree_beam(
+    tree: &V23IncidenceTree,
+    query: &[f32; 96],
+    beam_width: usize,
+) -> Result<Vec<u16>> {
+    rank_v23_incidence_tree_beam_impl(tree, query, beam_width, true)
+}
+
+#[cfg(test)]
+pub(crate) fn rank_v23_incidence_tree_beam_scalar(
+    tree: &V23IncidenceTree,
+    query: &[f32; 96],
+    beam_width: usize,
+) -> Result<Vec<u16>> {
+    rank_v23_incidence_tree_beam_impl(tree, query, beam_width, false)
+}
+
 pub(crate) fn assign_two_beam_leaves_normalized(
     tree: &V23IncidenceTree,
     row: &V23NormalizedRow,
@@ -1297,10 +1466,11 @@ mod tests {
         BeamSelectedLeaves, V23IncidenceTrainingShape, V23ReservoirRow, V23TrainingRow,
         V23TreeNode, assign_one_leaf, assign_one_leaf_normalized, assign_two_beam_leaves,
         assign_two_beam_leaves_normalized, decode_incidence_tree, encode_incidence_tree,
-        normalize_incidence_row, reservoir_seed, select_reservoir_streaming, split_score_scalar,
-        split_score_simd, train_incidence_tree_streaming_with_shape,
-        train_incidence_tree_with_shape, train_incidence_tree_with_shape_and_execution,
-        train_incidence_tree_with_shape_fused, training_work,
+        normalize_incidence_row, rank_v23_incidence_tree_beam, rank_v23_incidence_tree_beam_scalar,
+        reservoir_seed, select_reservoir_streaming, split_score_scalar, split_score_simd,
+        train_incidence_tree_streaming_with_shape, train_incidence_tree_with_shape,
+        train_incidence_tree_with_shape_and_execution, train_incidence_tree_with_shape_fused,
+        training_work, v23_tree_beam_centroid_scores,
     };
 
     fn row(ordinal: u64) -> V23TrainingRow {
@@ -1615,6 +1785,92 @@ mod tests {
             .collect::<Vec<_>>()
             .try_into()
             .unwrap()
+    }
+
+    fn tree_beam_fixture() -> super::V23IncidenceTree {
+        let depth = 8_usize;
+        let node_count = (1_usize << depth) - 1;
+        let leaf_count = 1_usize << depth;
+        let centroid = {
+            let mut value = [f16::ZERO; 96];
+            value[0] = f16::ONE;
+            value
+        };
+        let nodes = (0..node_count)
+            .map(|index| V23TreeNode {
+                child_zero: centroid,
+                child_one: centroid,
+                child_zero_inverse_norm: 1.0,
+                child_one_inverse_norm: 1.0,
+                boundary_score_bits: 0.0_f32.to_bits(),
+                boundary_source_ordinal: index as u64,
+                child_zero_index: u32::try_from(index * 2 + 1).unwrap(),
+                child_one_index: u32::try_from(index * 2 + 2).unwrap(),
+            })
+            .collect();
+        let leaves = (0..leaf_count)
+            .map(|_| super::V23TreeLeaf {
+                centroid,
+                inverse_norm: 1.0,
+                population: 1,
+                mean_squared_residual: 0.0,
+            })
+            .collect();
+        super::V23IncidenceTree {
+            shape: V23IncidenceTrainingShape {
+                dimensions: 96,
+                reservoir_rows: leaf_count,
+                depth,
+                lloyd_iterations: 4,
+            },
+            reservoir_seed: 1,
+            work: super::V23TrainingWork {
+                farthest_seed_dimensions: 0,
+                lloyd_dimensions: 0,
+                repartition_dimensions: 0,
+                total_distance_dimensions: 0,
+            },
+            nodes,
+            leaves,
+        }
+    }
+
+    #[test]
+    fn v23_tree_beam_work_is_exact_and_bounded() {
+        assert_eq!(v23_tree_beam_centroid_scores(32).unwrap(), 766);
+        assert_eq!(v23_tree_beam_centroid_scores(64).unwrap(), 1_406);
+        assert_eq!(v23_tree_beam_centroid_scores(128).unwrap(), 2_558);
+        assert!(v23_tree_beam_centroid_scores(0).is_err());
+        assert!(v23_tree_beam_centroid_scores(31).is_err());
+        assert!(v23_tree_beam_centroid_scores(129).is_err());
+    }
+
+    #[test]
+    fn v23_tree_beam_orders_ties_and_matches_scalar() {
+        let tree = tree_beam_fixture();
+        let mut query = [0.0_f32; 96];
+        query[0] = 1.0;
+        for width in [32, 64, 128] {
+            let actual = rank_v23_incidence_tree_beam(&tree, &query, width).unwrap();
+            assert_eq!(
+                actual,
+                (0..u16::try_from(width).unwrap()).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                actual,
+                rank_v23_incidence_tree_beam_scalar(&tree, &query, width).unwrap()
+            );
+        }
+
+        assert!(rank_v23_incidence_tree_beam(&tree, &[0.0; 96], 32).is_err());
+
+        let mut malformed = tree.clone();
+        malformed.nodes[0].child_zero_index = u32::MAX;
+        assert!(rank_v23_incidence_tree_beam(&malformed, &query, 32).is_err());
+
+        let mut nonfinite = tree;
+        nonfinite.nodes[0].child_zero_inverse_norm = f32::NAN;
+        assert!(rank_v23_incidence_tree_beam(&nonfinite, &query, 32).is_err());
     }
 
     #[test]
