@@ -146,6 +146,11 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         self.assertIn("shutdown --poweroff +360", worker)
         self.assertLess(worker.index("shutdown --poweroff +360"), worker.index("aws s3 cp"))
         self.assertIn("cargo build --locked --release", worker)
+        install_line = next(
+            line for line in worker.splitlines() if line.startswith("dnf install -y ")
+        )
+        self.assertNotIn("curl", install_line.split())
+        self.assertIn("curl --proto '=https'", worker)
         self.assertIn("v23_leaf_page_incidence_falsifier", worker)
         self.assertIn("--worker-tree", worker)
         worker_source = inspect.getsource(worker_tree)

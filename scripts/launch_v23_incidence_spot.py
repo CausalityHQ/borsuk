@@ -307,7 +307,7 @@ watch_spot_interruption() {{
   done
 }}
 
-dnf install -y gcc gcc-c++ make cmake perl pkgconf-pkg-config openssl-devel clang python3 python3-pip util-linux curl git tar gzip
+dnf install -y gcc gcc-c++ make cmake perl pkgconf-pkg-config openssl-devel clang python3 python3-pip util-linux git tar gzip
 aws s3api put-object --generate-cli-skeleton input | python3 -c 'import json,sys; value=json.load(sys.stdin); assert "IfNoneMatch" in value'
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.91.0
 source /root/.cargo/env
