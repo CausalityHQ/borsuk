@@ -1201,14 +1201,16 @@ mod tests {
         .unwrap()
     }
 
-    fn evaluation_fixture() -> (
+    type EvaluationFixture = (
         crate::v23_incidence_tree::V23IncidenceTree,
         V23RaBitQGeometry,
         V23RaBitQRowPlanes,
         Vec<[f16; 96]>,
         Vec<[f32; 96]>,
         Vec<V23IncidenceQueryTruth>,
-    ) {
+    );
+
+    fn evaluation_fixture() -> EvaluationFixture {
         let source = (0..2_048)
             .map(|source_ordinal| V23TrainingRow {
                 source_ordinal,

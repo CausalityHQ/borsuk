@@ -391,6 +391,54 @@ pub(crate) fn read_v23_rabitq_geometry(
     Ok(value)
 }
 
+pub(crate) fn read_v23_rabitq_f16_control(
+    bytes: &[u8],
+    identity: &V23RaBitQObjectIdentity,
+    expected_rows: usize,
+) -> Result<Vec<[f16; 96]>> {
+    authenticate_bytes(bytes, identity, "f16-control")?;
+    let schema = fixed_list_schema("row", DataType::Float16);
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.schema().as_ref() != &schema {
+        return Err(invalid("V23 RaBitQ f16-control schema differs"));
+    }
+    let mut rows: Vec<[f16; 96]> = Vec::with_capacity(expected_rows);
+    for batch in &mut reader {
+        let batch = batch?;
+        if batch.num_rows() == 0 || batch.num_columns() != 1 || batch.column(0).null_count() != 0 {
+            return Err(invalid("V23 RaBitQ f16-control batch differs"));
+        }
+        let values = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V23 RaBitQ f16-control column differs"))?
+            .values();
+        let values = values
+            .as_any()
+            .downcast_ref::<Float16Array>()
+            .ok_or_else(|| invalid("V23 RaBitQ f16-control child differs"))?;
+        if values.null_count() != 0 {
+            return Err(invalid("V23 RaBitQ f16-control nullability differs"));
+        }
+        for row in values.values().chunks_exact(96) {
+            let row: [f16; 96] = row
+                .try_into()
+                .map_err(|_| invalid("V23 RaBitQ f16-control width differs"))?;
+            rows.push(row);
+        }
+    }
+    if rows.len() != expected_rows
+        || rows
+            .iter()
+            .flatten()
+            .any(|component| !component.is_finite())
+    {
+        return Err(invalid("V23 RaBitQ f16-control authority differs"));
+    }
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{io::Cursor, sync::Arc};
@@ -450,7 +498,7 @@ mod tests {
         let mut reader = FileReader::try_new(Cursor::new(bytes), None).unwrap();
         let batch = reader.next().unwrap().unwrap();
         assert!(reader.next().is_none());
-        let columns = batch.columns().iter().cloned().collect::<Vec<ArrayRef>>();
+        let columns = batch.columns().to_vec();
         let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
         let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
         let mut output = Vec::new();

@@ -127,6 +127,7 @@ mod v23_rabitq_build;
     reason = "V23 residual RaBitQ evaluation is wired incrementally by the committed plan"
 )]
 mod v23_rabitq_eval;
+mod v23_rabitq_local;
 #[allow(
     dead_code,
     reason = "V23 residual RaBitQ quantization is wired incrementally by the committed plan"
@@ -205,6 +206,11 @@ pub use v23_incidence::{
 };
 #[doc(hidden)]
 pub use v23_incidence_eval::{V23IncidenceScreenAuthority, V23IncidenceScreenObjectIdentity};
+#[doc(hidden)]
+pub use v23_rabitq_local::{
+    V23RaBitQLocalArtifactPaths, V23RaBitQLocalObjectIdentity, V23RaBitQLocalRunRequest,
+    run_v23_rabitq_local_request,
+};
 
 /// Maximum CPU worker threads selected by the automatic small-runtime policy.
 pub const DEFAULT_BUILD_THREADS: usize = 4;

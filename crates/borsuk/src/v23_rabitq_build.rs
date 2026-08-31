@@ -36,8 +36,8 @@ const OUTPUT_BATCH_ROWS: usize = 32_768;
 pub(crate) struct V23RaBitQSourceRow {
     pub(crate) canonical_record_id: Vec<u8>,
     pub(crate) vector: [f32; 96],
-    pub(crate) primary_page: u32,
-    pub(crate) replica_page: Option<u32>,
+    pub(crate) page_ordinal: u32,
+    pub(crate) is_primary: bool,
 }
 
 pub(crate) struct V23RaBitQBuildRequest<'a, I>
@@ -445,12 +445,31 @@ struct Progress<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct BuildReceipt {
-    schema: String,
-    source_rows: u64,
-    sort_runs: u32,
-    final_progress_sha256: String,
-    outputs: Vec<V23RaBitQObjectIdentity>,
+pub(crate) struct BuildReceipt {
+    pub(crate) schema: String,
+    pub(crate) source_rows: u64,
+    pub(crate) sort_runs: u32,
+    pub(crate) final_progress_sha256: String,
+    pub(crate) outputs: Vec<V23RaBitQObjectIdentity>,
+}
+
+pub(crate) fn read_v23_rabitq_build_receipt(bytes: &[u8]) -> Result<BuildReceipt> {
+    let receipt: BuildReceipt = serde_json::from_slice(bytes)
+        .map_err(|error| invalid(&format!("V23 RaBitQ build receipt JSON differs: {error}")))?;
+    if canonical_bytes(&receipt)? != bytes
+        || receipt.schema != "borsuk-v23-rabitq-build-receipt-v1"
+        || receipt.source_rows == 0
+        || receipt.sort_runs == 0
+        || receipt.outputs.len() != 5
+        || receipt.final_progress_sha256.len() != 64
+        || !receipt
+            .final_progress_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(invalid("V23 RaBitQ build receipt authority differs"));
+    }
+    Ok(receipt)
 }
 
 fn progress_bytes(value: &Progress<'_>) -> Result<Vec<u8>> {
@@ -499,6 +518,35 @@ fn validate_paths(request_scratch: &Path, request_output: &Path) -> Result<()> {
     Ok(())
 }
 
+fn push_unique_row(
+    row: SortRow,
+    buffer: &mut Vec<SortRow>,
+    buffer_bytes: &mut usize,
+    paths: &mut Vec<PathBuf>,
+    scratch: &Path,
+    run_target_bytes: usize,
+    maximum_sort_run_bytes: usize,
+) -> Result<()> {
+    if row.primary_page == u32::MAX || row.replica_page == Some(row.primary_page) {
+        return Err(invalid("V23 RaBitQ source occurrence authority differs"));
+    }
+    let row_bytes = row.estimated_bytes();
+    if !buffer.is_empty()
+        && buffer_bytes
+            .checked_add(row_bytes)
+            .is_none_or(|value| value > run_target_bytes)
+    {
+        let path = scratch.join(format!("rabitq-leaf-run-{:08}.arrow", paths.len()));
+        write_run(&path, buffer, maximum_sort_run_bytes, true)?;
+        paths.push(path);
+        buffer.clear();
+        *buffer_bytes = 0;
+    }
+    *buffer_bytes += row_bytes;
+    buffer.push(row);
+    Ok(())
+}
+
 pub(crate) fn build_v23_rabitq_artifacts<I>(
     request: V23RaBitQBuildRequest<'_, I>,
 ) -> Result<V23RaBitQBuiltArtifacts>
@@ -525,14 +573,13 @@ where
     let mut run_paths = Vec::new();
     let mut buffer = Vec::<SortRow>::new();
     let mut buffer_bytes = 0usize;
-    let mut source_rows = 0u64;
+    let mut source_occurrences = 0u64;
     for item in request.source_rows {
         let row = item?;
         if row.canonical_record_id.is_empty()
             || row.canonical_record_id.len() > u16::MAX as usize
             || row.vector.iter().any(|value| !value.is_finite())
-            || row.primary_page == u32::MAX
-            || row.replica_page == Some(row.primary_page)
+            || row.page_ordinal == u32::MAX
         {
             return Err(invalid("V23 RaBitQ source row authority differs"));
         }
@@ -543,8 +590,12 @@ where
             leaf_ordinal,
             canonical_record_id: row.canonical_record_id,
             vector: row.vector,
-            primary_page: row.primary_page,
-            replica_page: row.replica_page,
+            primary_page: if row.is_primary {
+                row.page_ordinal
+            } else {
+                u32::MAX
+            },
+            replica_page: (!row.is_primary).then_some(row.page_ordinal),
         };
         let row_bytes = row.estimated_bytes();
         if row_bytes > run_target_bytes {
@@ -566,7 +617,7 @@ where
                 &progress_path,
                 &Progress {
                     schema: "borsuk-v23-rabitq-progress-v1",
-                    completed_rows: source_rows,
+                    completed_rows: source_occurrences,
                     expected_rows: request.expected_unique_rows,
                     sort_runs: u32::try_from(run_paths.len()).unwrap(),
                     terminal: false,
@@ -575,14 +626,14 @@ where
         }
         buffer_bytes += row_bytes;
         buffer.push(row);
-        source_rows = source_rows
+        source_occurrences = source_occurrences
             .checked_add(1)
             .ok_or_else(|| invalid("V23 RaBitQ source row count overflows"))?;
-        if source_rows > request.expected_unique_rows {
+        if source_occurrences > request.expected_unique_rows.saturating_mul(2) {
             return Err(invalid("V23 RaBitQ source row count differs"));
         }
     }
-    if source_rows != request.expected_unique_rows {
+    if source_occurrences < request.expected_unique_rows {
         return Err(invalid("V23 RaBitQ source row count differs"));
     }
     if !buffer.is_empty() {
@@ -609,39 +660,66 @@ where
     let mut leaf_run_paths = Vec::new();
     let mut leaf_buffer = Vec::new();
     let mut leaf_buffer_bytes = 0usize;
-    let mut previous_id: Option<Vec<u8>> = None;
+    let mut pending: Option<SortRow> = None;
+    let mut unique_rows = 0u64;
     while let Some(IdHeapRow { run, row }) = id_heap.pop() {
-        if previous_id
-            .as_ref()
-            .is_some_and(|prior| prior == &row.canonical_record_id)
-        {
-            return Err(invalid("V23 RaBitQ duplicate primary row"));
+        match pending.as_mut() {
+            Some(current) if current.canonical_record_id == row.canonical_record_id => {
+                if current.leaf_ordinal != row.leaf_ordinal
+                    || current
+                        .vector
+                        .iter()
+                        .zip(row.vector)
+                        .any(|(left, right)| left.to_bits() != right.to_bits())
+                {
+                    return Err(invalid("V23 RaBitQ source occurrence vector differs"));
+                }
+                if row.primary_page != u32::MAX {
+                    if current.primary_page != u32::MAX {
+                        return Err(invalid("V23 RaBitQ duplicate primary row"));
+                    }
+                    current.primary_page = row.primary_page;
+                }
+                if let Some(replica) = row.replica_page {
+                    if current.replica_page.is_some() {
+                        return Err(invalid("V23 RaBitQ duplicate replica row"));
+                    }
+                    current.replica_page = Some(replica);
+                }
+            }
+            Some(_) => {
+                let complete = pending.replace(row).unwrap();
+                push_unique_row(
+                    complete,
+                    &mut leaf_buffer,
+                    &mut leaf_buffer_bytes,
+                    &mut leaf_run_paths,
+                    request.scratch_directory,
+                    run_target_bytes,
+                    request.maximum_sort_run_bytes,
+                )?;
+                unique_rows += 1;
+            }
+            None => pending = Some(row),
         }
-        previous_id = Some(row.canonical_record_id.clone());
-        let row_bytes = row.estimated_bytes();
-        if !leaf_buffer.is_empty()
-            && leaf_buffer_bytes
-                .checked_add(row_bytes)
-                .is_none_or(|value| value > run_target_bytes)
-        {
-            let path = request
-                .scratch_directory
-                .join(format!("rabitq-leaf-run-{:08}.arrow", leaf_run_paths.len()));
-            write_run(
-                &path,
-                &mut leaf_buffer,
-                request.maximum_sort_run_bytes,
-                true,
-            )?;
-            leaf_run_paths.push(path);
-            leaf_buffer.clear();
-            leaf_buffer_bytes = 0;
-        }
-        leaf_buffer_bytes += row_bytes;
-        leaf_buffer.push(row);
         if let Some(next) = id_readers[run].next_row()? {
             id_heap.push(IdHeapRow { run, row: next });
         }
+    }
+    if let Some(complete) = pending {
+        push_unique_row(
+            complete,
+            &mut leaf_buffer,
+            &mut leaf_buffer_bytes,
+            &mut leaf_run_paths,
+            request.scratch_directory,
+            run_target_bytes,
+            request.maximum_sort_run_bytes,
+        )?;
+        unique_rows += 1;
+    }
+    if unique_rows != request.expected_unique_rows {
+        return Err(invalid("V23 RaBitQ unique source row count differs"));
     }
     if !leaf_buffer.is_empty() {
         let path = request
@@ -759,7 +837,7 @@ where
         &progress_path,
         &Progress {
             schema: "borsuk-v23-rabitq-progress-v1",
-            completed_rows: source_rows,
+            completed_rows: unique_rows,
             expected_rows: request.expected_unique_rows,
             sort_runs: u32::try_from(total_sort_runs)
                 .map_err(|_| invalid("V23 RaBitQ sort-run count overflows"))?,
@@ -783,7 +861,7 @@ where
     let receipt_path = request.output_directory.join("construction-receipt.json");
     let receipt = BuildReceipt {
         schema: "borsuk-v23-rabitq-build-receipt-v1".to_string(),
-        source_rows,
+        source_rows: unique_rows,
         sort_runs: u32::try_from(total_sort_runs).unwrap(),
         final_progress_sha256: final_progress_sha256.clone(),
         outputs: outputs.clone(),
@@ -799,7 +877,7 @@ where
     )?);
     let row_codes_sha256 = outputs[0].sha256.clone();
     let built = V23RaBitQBuiltArtifacts {
-        source_rows,
+        source_rows: unique_rows,
         f16_control_rows: merged_rows,
         sort_runs: u32::try_from(total_sort_runs).unwrap(),
         final_progress_sha256: Some(final_progress_sha256),
@@ -853,10 +931,8 @@ pub(crate) fn validate_v23_rabitq_built_artifacts(built: &V23RaBitQBuiltArtifact
     }
     let receipt_path = built.output_directory.join("construction-receipt.json");
     let receipt_bytes = io(&receipt_path, fs::read(&receipt_path))?;
-    let receipt: BuildReceipt = serde_json::from_slice(&receipt_bytes)
-        .map_err(|error| invalid(&format!("V23 RaBitQ build receipt JSON differs: {error}")))?;
-    if canonical_bytes(&receipt)? != receipt_bytes
-        || receipt.schema != "borsuk-v23-rabitq-build-receipt-v1"
+    let receipt = read_v23_rabitq_build_receipt(&receipt_bytes)?;
+    if receipt.schema != "borsuk-v23-rabitq-build-receipt-v1"
         || receipt.source_rows != built.source_rows
         || receipt.sort_runs != built.sort_runs
         || Some(receipt.final_progress_sha256.as_str()) != built.final_progress_sha256.as_deref()
@@ -880,7 +956,7 @@ mod tests {
     use crate::v23_incidence_tree::{
         V23IncidenceTrainingShape, V23TrainingRow, train_incidence_tree_test_shape,
     };
-    use crate::v23_rabitq_arrow::read_v23_rabitq_row_planes;
+    use crate::v23_rabitq_arrow::{read_v23_rabitq_f16_control, read_v23_rabitq_row_planes};
 
     fn vector(ordinal: usize) -> [f32; 96] {
         std::array::from_fn(|dimension| {
@@ -913,8 +989,8 @@ mod tests {
         V23RaBitQSourceRow {
             canonical_record_id: format!("record-{ordinal:08}").into_bytes(),
             vector: vector(ordinal),
-            primary_page: (ordinal % 16) as u32,
-            replica_page: Some(((ordinal + 1) % 16) as u32),
+            page_ordinal: (ordinal % 16) as u32,
+            is_primary: true,
         }
     }
 
@@ -1003,8 +1079,7 @@ mod tests {
                 let mut value = rows.clone();
                 let mut conflicting = value[0].clone();
                 conflicting.vector = vector(10_001);
-                conflicting.primary_page = 15;
-                conflicting.replica_page = Some(14);
+                conflicting.page_ordinal = 15;
                 value.push(conflicting);
                 value
             },
@@ -1020,7 +1095,9 @@ mod tests {
             },
             {
                 let mut value = rows.clone();
-                value[4].replica_page = Some(value[4].primary_page);
+                let mut replica = value[4].clone();
+                replica.is_primary = false;
+                value.push(replica);
                 value
             },
             rows[..23].to_vec(),
@@ -1088,9 +1165,49 @@ mod tests {
         let row_bytes = fs::read(output.path().join("row-codes.arrow")).unwrap();
         let decoded = read_v23_rabitq_row_planes(&row_bytes, &built.outputs[0]).unwrap();
         assert_eq!(decoded.sign_codes.len(), 24);
+        let exact_bytes = fs::read(output.path().join("f16-control.arrow")).unwrap();
+        let exact = read_v23_rabitq_f16_control(&exact_bytes, &built.outputs[4], 24).unwrap();
+        assert_eq!(exact.len(), 24);
 
         let mut changed = built.clone();
         changed.row_codes_sha256.replace_range(0..1, "0");
         assert!(validate_v23_rabitq_built_artifacts(&changed).is_err());
+    }
+
+    #[test]
+    fn v23_rabitq_build_joins_one_primary_and_replica_occurrence_in_either_order() {
+        let primary = V23RaBitQSourceRow {
+            canonical_record_id: b"record-occurrence".to_vec(),
+            vector: vector(7),
+            page_ordinal: 3,
+            is_primary: true,
+        };
+        let replica = V23RaBitQSourceRow {
+            canonical_record_id: primary.canonical_record_id.clone(),
+            vector: primary.vector,
+            page_ordinal: 11,
+            is_primary: false,
+        };
+        for rows in [
+            vec![primary.clone(), replica.clone()],
+            vec![replica.clone(), primary.clone()],
+        ] {
+            let tree = tree(32);
+            let scratch = tempdir().unwrap();
+            let output = tempdir().unwrap();
+            let built = build_v23_rabitq_artifacts(request(
+                &tree,
+                rows.into_iter().map(Ok),
+                1,
+                scratch.path(),
+                output.path(),
+                8_192,
+            ))
+            .unwrap();
+            let bytes = fs::read(output.path().join("row-codes.arrow")).unwrap();
+            let decoded = read_v23_rabitq_row_planes(&bytes, &built.outputs[0]).unwrap();
+            assert_eq!(decoded.primary_pages, vec![3]);
+            assert_eq!(decoded.replica_pages, vec![11]);
+        }
     }
 }
