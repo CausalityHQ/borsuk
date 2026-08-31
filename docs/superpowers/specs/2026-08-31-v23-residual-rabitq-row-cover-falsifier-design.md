@@ -156,9 +156,12 @@ measured projection above the total fails closed.
 5. For each probed leaf, form the rotated query residual and quantize its 96
    components with the fixed four-bit query quantizer described by RaBitQ.
    Estimate every candidate residual distance with the registered SIMD
-   estimator. The implementation must agree with an unquantized scalar f64
-   reference within the preregistered estimator bound and use deterministic
-   `(distance, row_ordinal)` ties.
+   estimator. Every optimized score must remain within eight ULP of the scalar
+   implementation of the identical quantized estimator, and the two paths must
+   select identical pages. Error against the unquantized scalar f64 distance is
+   recorded as scientific evidence and is governed by the recall gates rather
+   than an invented dataset-independent cutoff. Ties are deterministic
+   `(distance, row_ordinal)`.
 6. Retain only the best 4,096 rows in a bounded heap. Full ranked-row
    allocation or sort is forbidden.
 7. Apply the existing deterministic reciprocal-rank page cover to the two page
