@@ -1243,9 +1243,12 @@ def worker_tree(
 def namespace_probe() -> int:
     """Prove user/mount/network namespaces and pivot_root before data staging."""
 
-    from scripts.run_v23_leaf_page_incidence_falsifier import (
-        _memory_psi_full_avg10,
-    )
+    if __package__:
+        from scripts.run_v23_leaf_page_incidence_falsifier import (
+            _memory_psi_full_avg10,
+        )
+    else:  # Direct ``python scripts/...`` execution.
+        from run_v23_leaf_page_incidence_falsifier import _memory_psi_full_avg10
 
     _memory_psi_full_avg10(MEMORY_PSI_PATH)
     probe_root = pathlib.Path(tempfile.mkdtemp(prefix="v23-incidence-probe-"))

@@ -60,6 +60,43 @@ def _canonical_progress_bytes(
 
 
 class V23IncidenceSpotLauncherTests(unittest.TestCase):
+    def test_launcher_direct_script_namespace_probe_resolves_sibling_module(
+        self,
+    ) -> None:
+        program = r"""
+import importlib.util
+import pathlib
+import sys
+import tempfile
+import types
+
+root = pathlib.Path(sys.argv[1])
+scripts = root / "scripts"
+sys.path.insert(0, str(scripts))
+spec = importlib.util.spec_from_file_location(
+    "launch_v23_incidence_spot_direct",
+    scripts / "launch_v23_incidence_spot.py",
+)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+with tempfile.TemporaryDirectory() as directory:
+    psi = pathlib.Path(directory) / "memory.pressure"
+    psi.write_text("full avg10=0.00 total=0\n", encoding="ascii")
+    module.MEMORY_PSI_PATH = psi
+    module.subprocess.run = lambda *args, **kwargs: types.SimpleNamespace(returncode=0)
+    assert module.namespace_probe() == 0
+"""
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", program, str(ROOT)],
+            cwd="/",
+            env={"PATH": os.environ["PATH"]},
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_launcher_entrypoint_preserves_full_traceback(self) -> None:
         completed = subprocess.run(
             [
