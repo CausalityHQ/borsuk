@@ -1146,3 +1146,58 @@ before the final gates. These bootstrap failures are operational evidence only.
 They authorize no performance or quality claim, and development evaluation,
 holdout evaluation, paid follow-on work, and D3 remain fenced until a posting
 construction attempt produces its own authenticated terminal receipt.
+
+## V23 leaf-page incidence posting construction on 2026-08-31
+
+The first posting-construction attempt after the complete phase-authority audit
+used source commit `f32fa92c89fbd30aeeb2555aa0f3edcfd0b840e8`,
+source-archive SHA-256
+`7f9d1350948112ecef393dc5c6994cef642ce965639c7f682d47aabfb87976a2`,
+and run ID `v23-incidence-posting-20260831T152007Z`. One `c7g.8xlarge`
+Spot instance, `i-0cbf035208a9d4e29`, ran in `eu-central-1` at 0.524900
+USD/hour. Both EC2 health checks reached `ok`; the worker published its
+terminal marker, initiated shutdown at 15:59:45 UTC, and reached `terminated`.
+Its immutable evidence prefix is
+`s3://borsuk-bench-453182569524-euc1/research/v23-leaf-page-incidence/7f9d1350948112ecef393dc5c6994cef642ce965639c7f682d47aabfb87976a2/v23-incidence-posting-20260831T152007Z/`.
+
+The 10,638,192-byte release executable has SHA-256
+`597ad6d9d3d76a8fd7283cead4259216ad2411affaecae2ef5dad67a6d2ab008`.
+Preflight authenticated 260 ordered inputs, decoded 256 page bodies once, and
+processed 1,048,576 records. It measured 290,655,343 distance dimensions,
+648,197,787 input bytes, and 6,912,793 records per second. The projected full
+wall was 740,147,631,792 ns, below the registered 5,400,000,000,000-ns gate,
+with `resource_stop=false`. The 124,249-byte preflight receipt has SHA-256
+`315ac5c5d5233c83a97a022bb54b5426f37319059808488f1e80c1b286171be4`.
+
+Execution authenticated 28,289 ordered inputs, including all 28,282 frozen
+page bodies, and completed with `stop=null` on the `aarch64-neon-fma` backend.
+The 119,868-byte final progress chain has SHA-256
+`379d29677e036807f7e8a738d203905b311a1acc8275018db9c204eca3f1c28d`.
+The scientific service ran from 15:23:11 to 15:59:35 UTC and consumed 10
+minutes 30.302 seconds of CPU time. It emitted:
+
+- a 51,502,404-byte one-leaf posting artifact with BLAKE3
+  `b5f6b1009e67d8286f012d80d4eea0f52d2516db70ddbad88e1e4477e3ae7c61`
+  and uploaded-object SHA-256
+  `67f4368abd274c446776cb4ac1ecd12a2d61696da6ad9191aed74c914b81aaf7`;
+- a 59,186,088-byte two-leaf posting artifact with BLAKE3
+  `ad75479318297d9c95e0f8f71220e7a5f2d283440be762238ea0bb8959f6897d`
+  and uploaded-object SHA-256
+  `2bb075ac78d086c8c4b2dc0ea8680cf83cb3763dba08b686e7e2087a8289c084`.
+
+The 13,407,759-byte posting receipt has SHA-256
+`cca5b1f895fd633ad5e6fab0288f6838d3efa9087f83809fc0c2032736ff6aca`
+and binds the preflight receipt, current executable, progress chain, 28,289
+inputs, and both content-addressed outputs. The canonical 871-byte
+`ATTEMPT_COMPLETE.json` has SHA-256
+`a891743cf34c8f758a89459de39411703ec8e124247c1cfa4775f0e11aadfe89`
+and records `status=complete`, `purchase_option=spot`, and
+`claim_eligible=false`. The bounded local inspection removed its six named
+files and explicit temporary directory after process clearance.
+
+This phase establishes deterministic, bounded construction of the two
+preregistered posting representations. It contains no query recall or serving
+latency result and authorizes no product claim. Development evaluation may use
+only the already-burned query ordinals 0--31 to select one preregistered ladder
+cell. Holdout evaluation and D3 remain fenced until their own sealed phase
+boundaries and terminal receipts exist.
