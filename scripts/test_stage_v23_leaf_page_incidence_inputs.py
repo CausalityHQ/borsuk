@@ -187,6 +187,36 @@ class StagingTests(unittest.TestCase):
             ],
         )
 
+    def test_unversioned_blake3_staging_is_rooted_by_registered_content(self) -> None:
+        import blake3
+
+        payload = b"unversioned-blake3-page"
+        object_value = _identity("training-shard-0000", payload, 0)
+        digest = blake3.blake3(payload).hexdigest()
+        object_value["identity"]["digest_algorithm"] = "blake3"
+        object_value["identity"]["digest"] = digest
+        object_value["identity"]["generation"] = f"unversioned-blake3:{digest}"
+        client = FakeS3Client(
+            {("registered-bucket", "frozen/training-shard-0000", None): payload}
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            manifest = root / "manifest.json"
+            manifest.write_bytes(_manifest_bytes([object_value]))
+            subject.stage_manifest(
+                manifest, root / "staging", root / "receipt.json", client
+            )
+        self.assertEqual(
+            client.calls,
+            [
+                {
+                    "Bucket": "registered-bucket",
+                    "ChecksumMode": "ENABLED",
+                    "Key": "frozen/training-shard-0000",
+                }
+            ],
+        )
+
     def test_staging_rejects_authority_drift_and_cleans_only_known_files(self) -> None:
         payload = b"registered"
         object_value = _identity("training-shard-0000", payload, 0)

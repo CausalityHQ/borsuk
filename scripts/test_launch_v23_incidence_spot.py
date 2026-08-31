@@ -24,6 +24,7 @@ from scripts.launch_v23_incidence_spot import (
     _write_bulk_manifest,
     build_launch_plan,
     build_launch_spec,
+    build_posting_manifest,
     build_worker_script,
     offline_probe,
     worker_tree,
@@ -60,6 +61,271 @@ def _canonical_progress_bytes(
 
 
 class V23IncidenceSpotLauncherTests(unittest.TestCase):
+    def test_posting_manifest_binds_tree_roster_and_every_page_without_reads(
+        self,
+    ) -> None:
+        construction_raw = (
+            ROOT / "scripts/fixtures/v23_incidence_training_manifest.json"
+        ).read_bytes()
+        construction_digest = hashlib.sha256(construction_raw).hexdigest()
+        tree_digest = "ab" * 32
+        tree_receipt = {
+            "claim_eligible": False,
+            "executable_sha256": "12" * 32,
+            "final_progress_sha256": "13" * 32,
+            "fma_backend": "aarch64-neon-fma",
+            "network_namespace_inode": 42,
+            "ordered_inputs": [
+                {
+                    "digest": construction_digest,
+                    "digest_algorithm": "sha256",
+                    "encoded_bytes": len(construction_raw),
+                    "generation": f"unversioned-sha256:{construction_digest}",
+                    "role": "construction-manifest",
+                    "uri": (
+                        "git://borsuk/scripts/fixtures/"
+                        "v23_incidence_training_manifest.json"
+                    ),
+                }
+            ],
+            "outputs": [
+                {
+                    "digest": tree_digest,
+                    "digest_algorithm": "blake3",
+                    "encoded_bytes": 40_369_836,
+                    "generation": f"content-{tree_digest}",
+                    "role": "incidence-tree",
+                    "uri": "s3://borsuk-evidence/tree/incidence-tree.bin",
+                }
+            ],
+            "parent_receipt_sha256": "16" * 32,
+            "phase": "tree-training",
+            "preflight_evidence": None,
+            "probes": {
+                "allowlisted_inputs_opened": True,
+                "forbidden_roles_absent": True,
+                "network_canary_denied": True,
+                "network_namespace_changed": True,
+                "output_writable": True,
+            },
+            "run_mode": "execute",
+            "schema": "borsuk-v23-incidence-receipt-v3",
+            "stop": None,
+        }
+        tree_receipt_bytes = (
+            json.dumps(tree_receipt, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
+        generation = list(
+            bytes.fromhex(
+                "b20f22206edd140fdd5474a3786f3f1a"
+                "6ff51fa5f9d5f1be9363092156cb74ec"
+            )
+        )
+        primary_base, primary_extra = divmod(9_990_000, 28_282)
+        replica_base, replica_extra = divmod(8_630_111, 28_282)
+        encoded_base, encoded_extra = divmod(3_780_639_674, 28_282)
+        pages = [
+            {
+                "checksum": f"{ordinal + 1:064x}",
+                "code_width": 192,
+                "dimensions": 96,
+                "encoded_bytes": encoded_base + int(ordinal < encoded_extra),
+                "family": "f16-flat",
+                "generation_checksum": generation,
+                "metric": "cosine",
+                "page_ordinal": ordinal,
+                "path": f"pages/{ordinal + 1:064x}",
+                "primary_rows": primary_base + int(ordinal < primary_extra),
+                "replicated_rows": replica_base + int(ordinal < replica_extra),
+            }
+            for ordinal in range(28_282)
+        ]
+        roster = {
+            "claim_eligible": False,
+            "d1_report_sha256": (
+                "91717a4077c8a7d6b909f1f8d14f59d6"
+                "a6d422a29e06b3d665a02c29743cbc39"
+            ),
+            "dataset_id": "deep-image-96",
+            "document_kind": "publication-v3-v23-page-roster",
+            "index_id": "index-bcda7bb66812e162d45077e6",
+            "page_uri": (
+                "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/"
+                "results/r01-6846520de9e7ffcfb93d5efd/runtime-v23-d2/arms/"
+                "0000/attempts/0001/pages"
+            ),
+            "pages": pages,
+            "schema": "borsuk-v23-pages-v1",
+            "source_archive_sha256": (
+                "77917b0f5621d2580fef444ee362669a"
+                "39d01c8453bee1c10ca1823631117f6d"
+            ),
+            "stage": "d2",
+        }
+        roster_bytes = (
+            json.dumps(roster, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        )
+        tree_receipt_identity = {
+            "digest": hashlib.sha256(tree_receipt_bytes).hexdigest(),
+            "digest_algorithm": "sha256",
+            "encoded_bytes": len(tree_receipt_bytes),
+            "generation": "generation-tree-receipt",
+            "role": "parent-receipt",
+            "uri": "s3://borsuk-evidence/tree/tree-receipt.json",
+        }
+        roster_identity = {
+            "digest": hashlib.sha256(roster_bytes).hexdigest(),
+            "digest_algorithm": "sha256",
+            "encoded_bytes": len(roster_bytes),
+            "generation": "generation-page-roster",
+            "role": "page-roster",
+            "uri": (
+                "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/"
+                "results/r01-6846520de9e7ffcfb93d5efd/runtime-v23-d2/arms/"
+                "0000/attempts/0001/bench_v23_pages.json"
+            ),
+        }
+        frozen_roster = (
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_SHA256",
+                roster_identity["digest"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_BYTES",
+                roster_identity["encoded_bytes"],
+            ),
+        )
+        with frozen_roster[0], frozen_roster[1]:
+            manifest_bytes = build_posting_manifest(
+                tree_receipt_bytes=tree_receipt_bytes,
+                tree_receipt_identity=tree_receipt_identity,
+                roster_bytes=roster_bytes,
+                roster_identity=roster_identity,
+            )
+        manifest = json.loads(manifest_bytes)
+
+        self.assertEqual(
+            manifest_bytes,
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n",
+        )
+        self.assertEqual(manifest["phase"], "posting-construction")
+        self.assertEqual(
+            manifest["parent_receipt_sha256"],
+            hashlib.sha256(tree_receipt_bytes).hexdigest(),
+        )
+        self.assertEqual(len(manifest["ordered_inputs"]), 28_285)
+        identities = [item["identity"] for item in manifest["ordered_inputs"]]
+        self.assertEqual(
+            [item["role"] for item in identities[:3]],
+            ["parent-receipt", "incidence-tree", "page-roster"],
+        )
+        self.assertEqual(identities[1], tree_receipt["outputs"][0])
+        self.assertEqual(identities[3]["role"], "page-body-00000")
+        self.assertEqual(
+            identities[3]["uri"],
+            roster["page_uri"] + "/pages/"
+            + pages[0]["checksum"],
+        )
+        self.assertEqual(identities[3]["digest_algorithm"], "blake3")
+        self.assertEqual(
+            identities[3]["generation"],
+            f"unversioned-blake3:{pages[0]['checksum']}",
+        )
+        self.assertEqual(identities[-1]["role"], "page-body-28281")
+        self.assertEqual(identities[-1]["encoded_bytes"], pages[-1]["encoded_bytes"])
+
+        changed = json.loads(roster_bytes)
+        changed["pages"][7]["page_ordinal"] = 8
+        changed_bytes = (
+            json.dumps(changed, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        )
+        changed_identity = dict(roster_identity)
+        changed_identity["digest"] = hashlib.sha256(changed_bytes).hexdigest()
+        changed_identity["encoded_bytes"] = len(changed_bytes)
+        with frozen_roster[0], frozen_roster[1], self.assertRaisesRegex(
+            ValueError, "page roster authority"
+        ):
+            build_posting_manifest(
+                tree_receipt_bytes=tree_receipt_bytes,
+                tree_receipt_identity=tree_receipt_identity,
+                roster_bytes=changed_bytes,
+                roster_identity=changed_identity,
+            )
+
+        duplicate = json.loads(roster_bytes)
+        duplicate["pages"][1]["checksum"] = duplicate["pages"][0]["checksum"]
+        duplicate["pages"][1]["path"] = duplicate["pages"][0]["path"]
+        duplicate_bytes = (
+            json.dumps(duplicate, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
+        duplicate_identity = dict(roster_identity)
+        duplicate_identity["digest"] = hashlib.sha256(duplicate_bytes).hexdigest()
+        duplicate_identity["encoded_bytes"] = len(duplicate_bytes)
+        with patch(
+            "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_SHA256",
+            duplicate_identity["digest"],
+        ), patch(
+            "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_BYTES",
+            duplicate_identity["encoded_bytes"],
+        ), self.assertRaisesRegex(ValueError, "page roster authority"):
+            build_posting_manifest(
+                tree_receipt_bytes=tree_receipt_bytes,
+                tree_receipt_identity=tree_receipt_identity,
+                roster_bytes=duplicate_bytes,
+                roster_identity=duplicate_identity,
+            )
+
+        encoded_drift = json.loads(roster_bytes)
+        encoded_drift["pages"][0]["encoded_bytes"] += 1
+        encoded_drift_bytes = (
+            json.dumps(
+                encoded_drift, sort_keys=True, separators=(",", ":")
+            ).encode()
+            + b"\n"
+        )
+        encoded_drift_identity = dict(roster_identity)
+        encoded_drift_identity["digest"] = hashlib.sha256(
+            encoded_drift_bytes
+        ).hexdigest()
+        encoded_drift_identity["encoded_bytes"] = len(encoded_drift_bytes)
+        with patch(
+            "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_SHA256",
+            encoded_drift_identity["digest"],
+        ), patch(
+            "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_BYTES",
+            encoded_drift_identity["encoded_bytes"],
+        ), self.assertRaisesRegex(ValueError, "page roster authority"):
+            build_posting_manifest(
+                tree_receipt_bytes=tree_receipt_bytes,
+                tree_receipt_identity=tree_receipt_identity,
+                roster_bytes=encoded_drift_bytes,
+                roster_identity=encoded_drift_identity,
+            )
+
+        changed_receipt = json.loads(tree_receipt_bytes)
+        changed_receipt["ordered_inputs"][0]["digest"] = "17" * 32
+        changed_receipt_bytes = (
+            json.dumps(changed_receipt, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
+        changed_receipt_identity = dict(tree_receipt_identity)
+        changed_receipt_identity["digest"] = hashlib.sha256(
+            changed_receipt_bytes
+        ).hexdigest()
+        changed_receipt_identity["encoded_bytes"] = len(changed_receipt_bytes)
+        with frozen_roster[0], frozen_roster[1], self.assertRaisesRegex(
+            ValueError, "tree receipt authority"
+        ):
+            build_posting_manifest(
+                tree_receipt_bytes=changed_receipt_bytes,
+                tree_receipt_identity=changed_receipt_identity,
+                roster_bytes=roster_bytes,
+                roster_identity=roster_identity,
+            )
+
     def test_worker_uses_disposable_offline_phase_without_runtime_discovery(
         self,
     ) -> None:

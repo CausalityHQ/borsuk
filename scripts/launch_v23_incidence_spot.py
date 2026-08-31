@@ -33,6 +33,25 @@ KEY_NAME = "borsuk-bench"
 INSTANCE_PROFILE = "borsuk-bench-profile"
 BUCKET = "borsuk-bench-453182569524-euc1"
 MANIFEST_RELATIVE = "scripts/fixtures/v23_incidence_training_manifest.json"
+FROZEN_PAGE_ROSTER_URI = (
+    "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/"
+    "r01-6846520de9e7ffcfb93d5efd/runtime-v23-d2/arms/0000/attempts/0001/"
+    "bench_v23_pages.json"
+)
+FROZEN_PAGE_ROSTER_SHA256 = (
+    "276dfa1914fc1cfa980a0d5037fd8f3d53f7a3e35d4ae64c863956b9095c4303"
+)
+FROZEN_PAGE_ROSTER_BYTES = 12_825_166
+FROZEN_PAGE_URI = (
+    "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/results/"
+    "r01-6846520de9e7ffcfb93d5efd/runtime-v23-d2/arms/0000/attempts/0001/pages"
+)
+FROZEN_D1_REPORT_SHA256 = (
+    "91717a4077c8a7d6b909f1f8d14f59d6a6d422a29e06b3d665a02c29743cbc39"
+)
+FROZEN_PAGE_GENERATION = (
+    "b20f22206edd140fdd5474a3786f3f1a6ff51fa5f9d5f1be9363092156cb74ec"
+)
 SUPPORTED_PHASES = ("tree-training",)
 BLOCKED_PHASES = (
     "posting-construction",
@@ -86,6 +105,264 @@ def _manifest() -> dict[str, object]:
     ):
         raise ValueError("construction manifest authority differs")
     return value
+
+
+def build_posting_manifest(
+    *,
+    tree_receipt_bytes: bytes,
+    tree_receipt_identity: dict[str, object],
+    roster_bytes: bytes,
+    roster_identity: dict[str, object],
+) -> bytes:
+    """Bind one completed tree and the frozen page roster without page reads."""
+
+    identity_keys = {
+        "digest",
+        "digest_algorithm",
+        "encoded_bytes",
+        "generation",
+        "role",
+        "uri",
+    }
+
+    def authenticate_identity(
+        identity: dict[str, object], role: str, raw: bytes
+    ) -> None:
+        if (
+            type(identity) is not dict
+            or set(identity) != identity_keys
+            or identity.get("role") != role
+            or identity.get("digest_algorithm") != "sha256"
+            or identity.get("encoded_bytes") != len(raw)
+            or identity.get("digest") != hashlib.sha256(raw).hexdigest()
+            or type(identity.get("generation")) is not str
+            or not identity["generation"]
+            or type(identity.get("uri")) is not str
+            or not identity["uri"].startswith("s3://")
+        ):
+            raise ValueError(f"{role} authority differs")
+
+    authenticate_identity(tree_receipt_identity, "parent-receipt", tree_receipt_bytes)
+    authenticate_identity(roster_identity, "page-roster", roster_bytes)
+    if (
+        roster_identity["uri"] != FROZEN_PAGE_ROSTER_URI
+        or roster_identity["digest"] != FROZEN_PAGE_ROSTER_SHA256
+        or roster_identity["encoded_bytes"] != FROZEN_PAGE_ROSTER_BYTES
+    ):
+        raise ValueError("page roster authority differs")
+
+    try:
+        tree_receipt = json.loads(tree_receipt_bytes)
+        roster = json.loads(roster_bytes)
+        tree_is_canonical = tree_receipt_bytes == _canonical_bytes(tree_receipt)
+        roster_is_canonical = roster_bytes == _canonical_bytes(roster)
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("posting authority JSON differs") from error
+
+    receipt_keys = {
+        "claim_eligible",
+        "executable_sha256",
+        "final_progress_sha256",
+        "fma_backend",
+        "network_namespace_inode",
+        "ordered_inputs",
+        "outputs",
+        "parent_receipt_sha256",
+        "phase",
+        "preflight_evidence",
+        "probes",
+        "run_mode",
+        "schema",
+        "stop",
+    }
+    expected_probes = {
+        "allowlisted_inputs_opened": True,
+        "forbidden_roles_absent": True,
+        "network_canary_denied": True,
+        "network_namespace_changed": True,
+        "output_writable": True,
+    }
+    if (
+        not tree_is_canonical
+        or type(tree_receipt) is not dict
+        or set(tree_receipt) != receipt_keys
+        or tree_receipt["schema"] != "borsuk-v23-incidence-receipt-v3"
+        or tree_receipt["claim_eligible"] is not False
+        or tree_receipt["phase"] != "tree-training"
+        or tree_receipt["run_mode"] != "execute"
+        or tree_receipt["stop"] is not None
+        or tree_receipt["preflight_evidence"] is not None
+        or tree_receipt["probes"] != expected_probes
+        or type(tree_receipt["network_namespace_inode"]) is not int
+        or tree_receipt["network_namespace_inode"] <= 0
+        or type(tree_receipt["ordered_inputs"]) is not list
+        or not tree_receipt["ordered_inputs"]
+        or type(tree_receipt["outputs"]) is not list
+        or len(tree_receipt["outputs"]) != 1
+        or type(tree_receipt["parent_receipt_sha256"]) is not str
+        or LOWER_SHA256.fullmatch(tree_receipt["parent_receipt_sha256"]) is None
+        or type(tree_receipt["final_progress_sha256"]) is not str
+        or LOWER_SHA256.fullmatch(tree_receipt["final_progress_sha256"]) is None
+        or type(tree_receipt["executable_sha256"]) is not str
+        or LOWER_SHA256.fullmatch(tree_receipt["executable_sha256"]) is None
+        or tree_receipt["fma_backend"]
+        not in {"aarch64-neon-fma", "x86-avx-fma"}
+    ):
+        raise ValueError("tree receipt authority differs")
+    tree_identity = tree_receipt["outputs"][0]
+    if (
+        type(tree_identity) is not dict
+        or set(tree_identity) != identity_keys
+        or tree_identity.get("role") != "incidence-tree"
+        or tree_identity.get("digest_algorithm") != "blake3"
+        or type(tree_identity.get("digest")) is not str
+        or LOWER_SHA256.fullmatch(tree_identity["digest"]) is None
+        or tree_identity.get("generation") != f"content-{tree_identity['digest']}"
+        or type(tree_identity.get("encoded_bytes")) is not int
+        or tree_identity["encoded_bytes"] <= 0
+        or type(tree_identity.get("uri")) is not str
+        or not tree_identity["uri"].startswith("s3://")
+    ):
+        raise ValueError("incidence tree authority differs")
+    construction_bytes = (ROOT / MANIFEST_RELATIVE).read_bytes()
+    construction_digest = hashlib.sha256(construction_bytes).hexdigest()
+    expected_construction = {
+        "digest": construction_digest,
+        "digest_algorithm": "sha256",
+        "encoded_bytes": len(construction_bytes),
+        "generation": f"unversioned-sha256:{construction_digest}",
+        "role": "construction-manifest",
+        "uri": f"git://borsuk/{MANIFEST_RELATIVE}",
+    }
+    construction_inputs = [
+        identity
+        for identity in tree_receipt["ordered_inputs"]
+        if type(identity) is dict and identity.get("role") == "construction-manifest"
+    ]
+    if construction_inputs != [expected_construction]:
+        raise ValueError("tree receipt authority differs")
+
+    roster_keys = {
+        "claim_eligible",
+        "d1_report_sha256",
+        "dataset_id",
+        "document_kind",
+        "index_id",
+        "page_uri",
+        "pages",
+        "schema",
+        "source_archive_sha256",
+        "stage",
+    }
+    base = _manifest()
+    if (
+        not roster_is_canonical
+        or type(roster) is not dict
+        or set(roster) != roster_keys
+        or roster["schema"] != "borsuk-v23-pages-v1"
+        or roster["document_kind"] != "publication-v3-v23-page-roster"
+        or roster["claim_eligible"] is not False
+        or roster["stage"] != "d2"
+        or roster["dataset_id"] != base["dataset_id"]
+        or roster["index_id"] != base["index_id"]
+        or roster["source_archive_sha256"] != base["source_archive_sha256"]
+        or roster["d1_report_sha256"] != FROZEN_D1_REPORT_SHA256
+        or roster["page_uri"] != FROZEN_PAGE_URI
+        or type(roster["pages"]) is not list
+        or len(roster["pages"]) != 28_282
+    ):
+        raise ValueError("page roster authority differs")
+
+    page_keys = {
+        "checksum",
+        "code_width",
+        "dimensions",
+        "encoded_bytes",
+        "family",
+        "generation_checksum",
+        "metric",
+        "page_ordinal",
+        "path",
+        "primary_rows",
+        "replicated_rows",
+    }
+    generation = list(bytes.fromhex(FROZEN_PAGE_GENERATION))
+    page_inputs = []
+    page_checksums = set()
+    encoded_bytes = 0
+    primary_rows = 0
+    replicated_rows = 0
+    for ordinal, page in enumerate(roster["pages"]):
+        checksum = page.get("checksum") if type(page) is dict else None
+        if (
+            type(page) is not dict
+            or set(page) != page_keys
+            or type(checksum) is not str
+            or LOWER_SHA256.fullmatch(checksum) is None
+            or page["page_ordinal"] != ordinal
+            or type(page["page_ordinal"]) is not int
+            or page["path"] != f"pages/{checksum}"
+            or page["family"] != "f16-flat"
+            or page["code_width"] != 192
+            or page["dimensions"] != 96
+            or page["metric"] != "cosine"
+            or page["generation_checksum"] != generation
+            or type(page["encoded_bytes"]) is not int
+            or page["encoded_bytes"] <= 0
+            or type(page["primary_rows"]) is not int
+            or page["primary_rows"] <= 0
+            or type(page["replicated_rows"]) is not int
+            or page["replicated_rows"] < 0
+            or checksum in page_checksums
+        ):
+            raise ValueError("page roster authority differs")
+        page_checksums.add(checksum)
+        encoded_bytes += page["encoded_bytes"]
+        primary_rows += page["primary_rows"]
+        replicated_rows += page["replicated_rows"]
+        page_inputs.append(
+            {
+                "authority_kind": "phase-object",
+                "identity": {
+                    "digest": checksum,
+                    "digest_algorithm": "blake3",
+                    "encoded_bytes": page["encoded_bytes"],
+                    "generation": f"unversioned-blake3:{checksum}",
+                    "role": f"page-body-{ordinal:05}",
+                    "uri": f"{FROZEN_PAGE_URI}/{page['path']}",
+                },
+            }
+        )
+    if (
+        encoded_bytes != 3_780_639_674
+        or primary_rows != 9_990_000
+        or replicated_rows != 8_630_111
+    ):
+        raise ValueError("page roster authority differs")
+
+    def phase_object(identity: dict[str, object]) -> dict[str, object]:
+        return {
+            "authority_kind": "phase-object",
+            "identity": identity,
+        }
+    manifest = {
+        "algorithm": base["algorithm"],
+        "claim_eligible": False,
+        "dataset_id": base["dataset_id"],
+        "index_id": base["index_id"],
+        "ordered_inputs": [
+            phase_object(tree_receipt_identity),
+            phase_object(tree_identity),
+            phase_object(roster_identity),
+            *page_inputs,
+        ],
+        "parent_receipt_sha256": tree_receipt_identity["digest"],
+        "phase": "posting-construction",
+        "schema": "borsuk-v23-incidence-manifest-v1",
+        "source_archive_sha256": base["source_archive_sha256"],
+        "source_commit": base["source_commit"],
+    }
+    return _canonical_bytes(manifest)
 
 
 def build_launch_plan(

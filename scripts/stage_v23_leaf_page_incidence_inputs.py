@@ -144,6 +144,13 @@ def _s3_request(identity: Mapping[str, object]) -> dict[str, str]:
         generation.removeprefix("unversioned-sha256:")
     ):
         pass
+    elif (
+        generation.startswith("unversioned-blake3:")
+        and _valid_digest(generation.removeprefix("unversioned-blake3:"))
+        and identity["digest_algorithm"] == "blake3"
+        and identity["digest"] == generation.removeprefix("unversioned-blake3:")
+    ):
+        pass
     else:
         raise ValueError("object generation authority differs")
     return request
