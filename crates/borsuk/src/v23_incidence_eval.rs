@@ -831,6 +831,8 @@ pub(crate) fn score_incidence_query_native(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct V23IncidenceEvaluationPreflightMeasurement {
+    pub(crate) beam_width: u16,
+    pub(crate) scored_centroids_per_query: u32,
     pub(crate) distance_dimensions: u64,
     pub(crate) distance_elapsed_ns: u64,
     pub(crate) posting_visits: u64,
@@ -864,10 +866,12 @@ pub(crate) fn measure_v23_incidence_evaluation_preflight(
     let mut distance_elapsed_ns = 0_u64;
     let mut posting_elapsed_ns = 0_u64;
     let mut posting_visits = 0_u64;
+    let beam_width = 128_usize;
+    let scored_centroids_per_query = v23_tree_beam_centroid_scores(beam_width)?;
     for ordinal in 0..query_count {
         let query = v23_incidence_synthetic_preflight_query(ordinal as u64);
         let started = Instant::now();
-        let ranked = rank_incidence_leaves(tree, &query, 128)?;
+        let ranked = rank_v23_incidence_tree_beam(tree, &query, beam_width)?;
         distance_elapsed_ns = distance_elapsed_ns
             .checked_add(
                 u64::try_from(started.elapsed().as_nanos())
@@ -891,10 +895,12 @@ pub(crate) fn measure_v23_incidence_evaluation_preflight(
     }
     let distance_dimensions = u64::try_from(query_count)
         .ok()
-        .and_then(|count| count.checked_mul(65_536))
+        .and_then(|count| count.checked_mul(u64::from(scored_centroids_per_query)))
         .and_then(|count| count.checked_mul(96))
         .ok_or_else(|| invalid("V23 incidence evaluation preflight work overflows"))?;
     Ok(V23IncidenceEvaluationPreflightMeasurement {
+        beam_width: u16::try_from(beam_width).unwrap(),
+        scored_centroids_per_query,
         distance_dimensions,
         distance_elapsed_ns,
         posting_visits,
@@ -1370,7 +1376,7 @@ impl V23IncidenceCampaignInput {
                 distance_dimensions_per_query: 73_536,
                 retention_passed: true,
                 quality,
-                projected_serving_bytes: 1_119_235_716,
+                projected_serving_bytes: 1_172_979_332,
                 maximum_posting_visits: 16_384,
                 maximum_touched_pages: 8_192,
                 p99_ns: 15_000_000,
@@ -1395,7 +1401,7 @@ impl V23IncidenceCampaignInput {
                     oracle_hits: 1_280,
                     ..quality
                 },
-                projected_serving_bytes: 1_119_235_716,
+                projected_serving_bytes: 1_172_979_332,
                 maximum_posting_visits: 16_384,
                 maximum_touched_pages: 8_192,
                 p99_ns: 15_000_000,
@@ -1874,6 +1880,8 @@ pub(crate) fn evaluate_v23_incidence_cell_test_shape(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct V23IncidenceServingProjection {
     pub(crate) projected_pages: u64,
+    pub(crate) decoded_tree_bytes: u64,
+    pub(crate) beam_workspace_bytes: u64,
     pub(crate) posting_bytes: u64,
     pub(crate) touched_workspace_bytes: u64,
     pub(crate) total_bytes: u64,
@@ -1895,20 +1903,42 @@ pub(crate) fn project_v23_incidence_serving_bytes(
         .ok_or_else(|| {
             BorsukError::InvalidStorage("V23 incidence serving projection overflows".to_string())
         })?;
-    let posting_bytes = 65_536_u64 * cap as u64 * 6;
+    let decoded_tree_bytes = 64_u64 * 1024 * 1024;
+    let beam_workspace_bytes = 4_096_u64;
+    let posting_bytes = 65_536_u64
+        .checked_mul(cap as u64)
+        .and_then(|value| value.checked_mul(6))
+        .ok_or_else(|| {
+            BorsukError::InvalidStorage("V23 incidence serving projection overflows".to_string())
+        })?;
     let touched_workspace_bytes = 262_144_u64 * 4;
-    let total_bytes = 12_582_912_u64
-        + 262_148
-        + 786_432
-        + posting_bytes
-        + projected_pages * 12
-        + touched_workspace_bytes
-        + projected_pages * 320
-        + 3_932_160
-        + 536_870_912
-        + 268_435_456;
+    let page_reference_bytes = projected_pages.checked_mul(12).ok_or_else(|| {
+        BorsukError::InvalidStorage("V23 incidence serving projection overflows".to_string())
+    })?;
+    let page_workspace_bytes = projected_pages.checked_mul(320).ok_or_else(|| {
+        BorsukError::InvalidStorage("V23 incidence serving projection overflows".to_string())
+    })?;
+    let total_bytes = [
+        decoded_tree_bytes,
+        beam_workspace_bytes,
+        262_148,
+        posting_bytes,
+        page_reference_bytes,
+        touched_workspace_bytes,
+        page_workspace_bytes,
+        3_932_160,
+        536_870_912,
+        268_435_456,
+    ]
+    .into_iter()
+    .try_fold(0_u64, |sum, value| sum.checked_add(value))
+    .ok_or_else(|| {
+        BorsukError::InvalidStorage("V23 incidence serving projection overflows".to_string())
+    })?;
     Ok(V23IncidenceServingProjection {
         projected_pages,
+        decoded_tree_bytes,
+        beam_workspace_bytes,
         posting_bytes,
         touched_workspace_bytes,
         total_bytes,
@@ -2148,11 +2178,13 @@ mod tests {
     }
 
     #[test]
-    fn v23_incidence_eval_preflight_measures_leaf_scan_and_posting_visits_separately() {
+    fn v23_tree_beam_preflight_measures_width_128_and_posting_visits_separately() {
         let measured =
             measure_v23_incidence_evaluation_preflight(&ranking_tree(), &posting_plane(), 4, 16)
                 .unwrap();
-        assert_eq!(measured.distance_dimensions, 4 * 65_536 * 96);
+        assert_eq!(measured.beam_width, 128);
+        assert_eq!(measured.scored_centroids_per_query, 2_558);
+        assert_eq!(measured.distance_dimensions, 4 * 2_558 * 96);
         assert!(measured.distance_elapsed_ns > 0);
         assert!((1..=4 * 128 * 2048).contains(&measured.posting_visits));
         assert!(measured.posting_elapsed_ns > 0);
@@ -2623,12 +2655,16 @@ mod tests {
     }
 
     #[test]
-    fn v23_incidence_eval_serving_projection_is_exact_at_maximum_cell() {
+    fn v23_tree_beam_preflight_serving_projection_is_exact_at_maximum_cell() {
         let projection = project_v23_incidence_serving_bytes(100_000_000, 2048).unwrap();
         assert_eq!(projection.projected_pages, 283_104);
+        assert_eq!(projection.decoded_tree_bytes, 64 * 1024 * 1024);
+        assert_eq!(projection.beam_workspace_bytes, 4_096);
         assert_eq!(projection.posting_bytes, 805_306_368);
         assert_eq!(projection.touched_workspace_bytes, 1_048_576);
-        assert_eq!(projection.total_bytes, 1_723_215_492);
+        assert_eq!(projection.total_bytes, 1_776_959_108);
+        assert!(project_v23_incidence_serving_bytes(u64::MAX, 2048).is_err());
+        assert!(project_v23_incidence_serving_bytes(100_000_000, 4096).is_err());
     }
 
     #[test]

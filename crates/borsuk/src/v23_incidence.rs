@@ -48,6 +48,11 @@ use crate::{
 const V23_INCIDENCE_RECEIPT_SCHEMA: &str = "borsuk-v23-incidence-receipt-v3";
 const V23_INCIDENCE_MANIFEST_SCHEMA: &str = "borsuk-v23-incidence-manifest-v1";
 const V23_INCIDENCE_PREFLIGHT_WALL_LIMIT_NS: u64 = 5_400_000_000_000;
+const V23_INCIDENCE_TREE_BEAM_WIDTH_128_SCORES: u64 = 2_558;
+const V23_INCIDENCE_DEVELOPMENT_DISTANCE_DIMENSIONS: u64 =
+    (1_024 + 10_000 + 32) * 6 * (766 + 1_406 + 2_558) * 96;
+const V23_INCIDENCE_HOLDOUT_DISTANCE_DIMENSIONS: u64 =
+    (1_024 + 10_000 + 128) * V23_INCIDENCE_TREE_BEAM_WIDTH_128_SCORES * 96;
 const V23_INCIDENCE_SOURCE_COMMIT: &str = "c339a546f8f9370cb2e6e9fb3b0fd4bdefa3cb05";
 const V23_INCIDENCE_SOURCE_ARCHIVE_SHA256: &str =
     "77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d";
@@ -1132,7 +1137,7 @@ pub(crate) const fn v23_incidence_preflight_work(
             sample_page_bodies: 0,
             sample_queries: 10_000,
             sample_records: 2_621_440_000,
-            full_distance_dimensions: 1_252_050_075_648,
+            full_distance_dimensions: V23_INCIDENCE_DEVELOPMENT_DISTANCE_DIMENSIONS,
             full_records: 52_168_753_152,
             record_kind: V23IncidencePreflightRecordKind::PostingVisits,
         },
@@ -1142,7 +1147,7 @@ pub(crate) const fn v23_incidence_preflight_work(
             sample_page_bodies: 0,
             sample_queries: 10_000,
             sample_records: 2_621_440_000,
-            full_distance_dimensions: 70_162_317_312,
+            full_distance_dimensions: V23_INCIDENCE_HOLDOUT_DISTANCE_DIMENSIONS,
             full_records: 2_923_429_888,
             record_kind: V23IncidencePreflightRecordKind::PostingVisits,
         },
@@ -1251,7 +1256,10 @@ pub(crate) fn project_v23_incidence_preflight(
         }
         V23IncidencePhase::PostingConstruction => measurement.distance_dimensions != 0,
         V23IncidencePhase::DevelopmentEvaluation | V23IncidencePhase::HoldoutEvaluation => {
-            measurement.distance_dimensions == work.sample_queries * 65_536 * 96
+            work.sample_queries
+                .checked_mul(V23_INCIDENCE_TREE_BEAM_WIDTH_128_SCORES)
+                .and_then(|value| value.checked_mul(96))
+                == Some(measurement.distance_dimensions)
         }
         V23IncidencePhase::HoldoutBinding => measurement.distance_dimensions == 0,
     };
@@ -5458,7 +5466,7 @@ mod tests {
     }
 
     #[test]
-    fn v23_incidence_preflight_work_and_projection_are_fixed_and_bounded() {
+    fn v23_tree_beam_preflight_work_and_projection_are_fixed_and_bounded() {
         let tree = v23_incidence_preflight_work(V23IncidencePhase::TreeTraining);
         assert_eq!(tree.sample_vectors, 65_536);
         assert_eq!(tree.full_distance_dimensions, 35_433_480_192);
@@ -5472,11 +5480,11 @@ mod tests {
 
         let evaluation = v23_incidence_preflight_work(V23IncidencePhase::DevelopmentEvaluation);
         assert_eq!(evaluation.sample_queries, 10_000);
-        assert_eq!(evaluation.full_distance_dimensions, 1_252_050_075_648);
+        assert_eq!(evaluation.full_distance_dimensions, 30_121_850_880);
         assert_eq!(evaluation.full_records, 52_168_753_152);
         let holdout = v23_incidence_preflight_work(V23IncidencePhase::HoldoutEvaluation);
         assert_eq!(holdout.sample_queries, evaluation.sample_queries);
-        assert_eq!(holdout.full_distance_dimensions, 70_162_317_312);
+        assert_eq!(holdout.full_distance_dimensions, 2_738_574_336);
         assert_eq!(holdout.full_records, 2_923_429_888);
 
         let measurement = V23IncidencePreflightMeasurement {
@@ -5504,7 +5512,7 @@ mod tests {
         );
 
         let evaluation_measurement = V23IncidencePreflightMeasurement {
-            distance_dimensions: 10_000 * 65_536 * 96,
+            distance_dimensions: 10_000 * 2_558 * 96,
             distance_elapsed_ns: 2_000_000_000,
             input_bytes: 5_000_000,
             input_elapsed_ns: 1_000_000,
@@ -5540,6 +5548,17 @@ mod tests {
                     distance_dimensions: evaluation_measurement.distance_dimensions - 96,
                     ..evaluation_measurement
                 },
+            )
+            .is_err()
+        );
+
+        let mut overflowing_work = evaluation;
+        overflowing_work.sample_queries = u64::MAX;
+        assert!(
+            project_v23_incidence_preflight(
+                overflowing_work,
+                evaluation_preflight_authority(V23IncidencePhase::DevelopmentEvaluation),
+                evaluation_measurement,
             )
             .is_err()
         );
