@@ -13,7 +13,10 @@ use arrow_schema::{DataType, Field, Schema};
 use half::f16;
 use sha2::{Digest, Sha256};
 
-use crate::{BorsukError, Result, v23_rabitq::V23RaBitQObjectIdentity};
+use crate::{
+    BorsukError, Result,
+    v23_rabitq::{V23_RABITQ_MIN_ALIGNMENT, V23RaBitQObjectIdentity},
+};
 
 const DIMENSIONS: i32 = 96;
 const SIGN_CODE_BYTES: i32 = 12;
@@ -140,8 +143,7 @@ fn validate_row_planes(value: &V23RaBitQRowPlanes) -> Result<()> {
         if !norm.is_finite()
             || norm < 0.0
             || !alignment.is_finite()
-            || alignment <= 0.0
-            || alignment > 1.0
+            || !(V23_RABITQ_MIN_ALIGNMENT - 1.0e-6..=1.0).contains(&alignment)
             || primary == u32::MAX
             || (replica != u32::MAX && replica == primary)
             || (norm == 0.0
@@ -546,6 +548,9 @@ mod tests {
         assert!(encode_v23_rabitq_row_planes(&invalid).is_err());
         let mut invalid = expected.clone();
         invalid.alignments[1] = f32::NAN;
+        assert!(encode_v23_rabitq_row_planes(&invalid).is_err());
+        let mut invalid = expected.clone();
+        invalid.alignments[1] = 0.01;
         assert!(encode_v23_rabitq_row_planes(&invalid).is_err());
         let mut invalid = expected.clone();
         invalid.primary_pages[1] = u32::MAX;

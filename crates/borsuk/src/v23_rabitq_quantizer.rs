@@ -9,7 +9,7 @@ use std::f64::consts::TAU;
 
 use sha2::{Digest, Sha256};
 
-use crate::{BorsukError, Result};
+use crate::{BorsukError, Result, v23_rabitq::V23_RABITQ_MIN_ALIGNMENT};
 
 const DIMENSIONS: usize = 96;
 const INVERSE_SQRT_DIMENSIONS: f64 = 0.102_062_072_615_965_75;
@@ -31,6 +31,14 @@ pub(crate) struct V23RaBitQEstimate {
     pub(crate) query_code_max: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct V23RaBitQPreparedQuery {
+    pub(crate) query_norm: f32,
+    pub(crate) reconstructed: [f32; DIMENSIONS],
+    pub(crate) quantization_step: f32,
+    pub(crate) code_max: u8,
+}
+
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_string())
 }
@@ -42,7 +50,7 @@ fn validate_vector(value: &[f32; DIMENSIONS], role: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_rotation(value: &[[f32; DIMENSIONS]; DIMENSIONS]) -> Result<()> {
+pub(crate) fn validate_v23_rabitq_rotation(value: &[[f32; DIMENSIONS]; DIMENSIONS]) -> Result<()> {
     if value
         .iter()
         .flatten()
@@ -111,7 +119,7 @@ pub(crate) fn build_v23_rabitq_rotation(seed: [u8; 32]) -> Result<[[f32; DIMENSI
             rotation[output][input] = columns[output][input] as f32;
         }
     }
-    validate_rotation(&rotation)?;
+    validate_v23_rabitq_rotation(&rotation)?;
     Ok(rotation)
 }
 
@@ -151,8 +159,7 @@ fn validate_code(value: &V23RaBitQCode) -> Result<()> {
     if !value.residual_norm.is_finite()
         || value.residual_norm < 0.0
         || !value.alignment.is_finite()
-        || value.alignment <= 0.0
-        || value.alignment > 1.0 + 1.0e-5
+        || !(V23_RABITQ_MIN_ALIGNMENT - 1.0e-6..=1.0 + 1.0e-5).contains(&value.alignment)
         || (value.residual_norm == 0.0
             && (value.sign_code != [0; 12] || value.alignment.to_bits() != 1.0f32.to_bits()))
     {
@@ -166,7 +173,7 @@ pub(crate) fn encode_v23_rabitq_residual(
     rotation: &[[f32; DIMENSIONS]; DIMENSIONS],
 ) -> Result<V23RaBitQCode> {
     validate_vector(residual, "residual")?;
-    validate_rotation(rotation)?;
+    validate_v23_rabitq_rotation(rotation)?;
     let residual_norm = norm(residual);
     if residual_norm == 0.0 {
         return Ok(V23RaBitQCode {
@@ -192,15 +199,12 @@ pub(crate) fn encode_v23_rabitq_residual(
     Ok(value)
 }
 
-fn rounding_uniform(query: &[f32; DIMENSIONS], ordinal: usize) -> f64 {
-    let mut hasher = Sha256::new();
-    hasher.update(b"borsuk-v23-rabitq-four-bit-query-v1");
-    for value in query {
-        hasher.update(value.to_bits().to_le_bytes());
-    }
-    hasher.update((ordinal as u64).to_le_bytes());
-    let digest = hasher.finalize();
-    let word = u64::from_le_bytes(digest[0..8].try_into().expect("SHA-256 word width"));
+fn rounding_uniform(ordinal: usize) -> f64 {
+    let mut word = (ordinal as u64) ^ 0x7261_6269_7471_7631;
+    word = word.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    word = (word ^ (word >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    word = (word ^ (word >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    word ^= word >> 31;
     ((word as f64) + 0.5) / ((u64::MAX as f64) + 1.0)
 }
 
@@ -220,7 +224,7 @@ pub(crate) fn score_v23_rabitq_f64_reference(
     rotation: &[[f32; DIMENSIONS]; DIMENSIONS],
 ) -> Result<f64> {
     validate_vector(query_residual, "query residual")?;
-    validate_rotation(rotation)?;
+    validate_v23_rabitq_rotation(rotation)?;
     validate_code(code)?;
     let query_norm = norm(query_residual);
     let row_norm = f64::from(code.residual_norm);
@@ -232,23 +236,27 @@ pub(crate) fn score_v23_rabitq_f64_reference(
     Ok(row_norm * row_norm + query_norm * query_norm - 2.0 * row_norm * query_norm * cosine)
 }
 
-pub(crate) fn score_v23_rabitq_scalar(
+pub(crate) fn prepare_v23_rabitq_query(
     query_residual: &[f32; DIMENSIONS],
-    code: &V23RaBitQCode,
     rotation: &[[f32; DIMENSIONS]; DIMENSIONS],
-) -> Result<V23RaBitQEstimate> {
+) -> Result<V23RaBitQPreparedQuery> {
     validate_vector(query_residual, "query residual")?;
-    validate_rotation(rotation)?;
-    validate_code(code)?;
+    validate_v23_rabitq_rotation(rotation)?;
+    prepare_v23_rabitq_query_with_validated_rotation(query_residual, rotation)
+}
+
+pub(crate) fn prepare_v23_rabitq_query_with_validated_rotation(
+    query_residual: &[f32; DIMENSIONS],
+    rotation: &[[f32; DIMENSIONS]; DIMENSIONS],
+) -> Result<V23RaBitQPreparedQuery> {
+    validate_vector(query_residual, "query residual")?;
     let query_norm = norm(query_residual);
-    let row_norm = f64::from(code.residual_norm);
-    if row_norm == 0.0 || query_norm == 0.0 {
-        return Ok(V23RaBitQEstimate {
-            distance_squared: (row_norm * row_norm + query_norm * query_norm) as f32,
-            estimated_cosine: 0.0,
-            absolute_error_bound: 0.0,
-            query_quantization_step: 0.0,
-            query_code_max: 0,
+    if query_norm == 0.0 {
+        return Ok(V23RaBitQPreparedQuery {
+            query_norm: 0.0,
+            reconstructed: [0.0; DIMENSIONS],
+            quantization_step: 0.0,
+            code_max: 0,
         });
     }
     let rotated_query = rotate(query_residual, rotation, query_norm.recip());
@@ -259,39 +267,108 @@ pub(crate) fn score_v23_rabitq_scalar(
         .fold(f64::NEG_INFINITY, f64::max);
     let step = (maximum - minimum) / 15.0;
     let mut query_codes = [0u8; DIMENSIONS];
-    let mut reconstructed = [minimum; DIMENSIONS];
+    let mut reconstructed = [minimum as f32; DIMENSIONS];
     if step > 0.0 {
         for ordinal in 0..DIMENSIONS {
             let scaled = (rotated_query[ordinal] - minimum) / step;
             let lower = scaled.floor().clamp(0.0, 15.0);
             let fraction = scaled - lower;
-            let upper = u8::from(rounding_uniform(query_residual, ordinal) < fraction);
+            let upper = u8::from(rounding_uniform(ordinal) < fraction);
             query_codes[ordinal] = (lower as u8).saturating_add(upper).min(15);
-            reconstructed[ordinal] = minimum + step * f64::from(query_codes[ordinal]);
+            reconstructed[ordinal] = (minimum + step * f64::from(query_codes[ordinal])) as f32;
         }
     }
-    let cosine = exact_estimated_cosine(&reconstructed, code);
-    let distance =
-        row_norm * row_norm + query_norm * query_norm - 2.0 * row_norm * query_norm * cosine;
+    Ok(V23RaBitQPreparedQuery {
+        query_norm: query_norm as f32,
+        reconstructed,
+        quantization_step: step as f32,
+        code_max: query_codes.into_iter().max().unwrap_or(0),
+    })
+}
+
+fn scalar_sign_dot(prepared: &V23RaBitQPreparedQuery, code: &V23RaBitQCode) -> f32 {
+    let inverse_sqrt = INVERSE_SQRT_DIMENSIONS as f32;
+    let mut lanes = [0.0f32; 8];
+    for (lane, accumulator) in lanes.iter_mut().enumerate() {
+        for step in 0..12 {
+            let ordinal = lane * 12 + step;
+            let sign = if code.sign_code[ordinal / 8] & (1 << (ordinal % 8)) == 0 {
+                -inverse_sqrt
+            } else {
+                inverse_sqrt
+            };
+            *accumulator = sign.mul_add(prepared.reconstructed[ordinal], *accumulator);
+        }
+    }
+    lanes.into_iter().fold(0.0, |sum, value| sum + value)
+}
+
+pub(crate) fn estimate_v23_rabitq_from_dot(
+    prepared: &V23RaBitQPreparedQuery,
+    code: &V23RaBitQCode,
+    dot: f32,
+) -> Result<V23RaBitQEstimate> {
+    validate_code(code)?;
+    if !dot.is_finite() {
+        return Err(invalid("V23 RaBitQ fused dot is nonfinite"));
+    }
+    let row_norm = code.residual_norm;
+    let query_norm = prepared.query_norm;
+    if row_norm == 0.0 || query_norm == 0.0 {
+        return Ok(V23RaBitQEstimate {
+            distance_squared: row_norm.mul_add(row_norm, query_norm * query_norm),
+            estimated_cosine: 0.0,
+            absolute_error_bound: 0.0,
+            query_quantization_step: prepared.quantization_step,
+            query_code_max: prepared.code_max,
+        });
+    }
+    let cosine = dot / code.alignment;
+    let distance = (-2.0 * row_norm * query_norm)
+        .mul_add(cosine, row_norm.mul_add(row_norm, query_norm * query_norm));
+    if !distance.is_finite() || !cosine.is_finite() {
+        return Err(invalid("V23 RaBitQ estimated distance is nonfinite"));
+    }
+    let row_norm_f64 = f64::from(row_norm);
+    let query_norm_f64 = f64::from(query_norm);
     let alignment = f64::from(code.alignment);
     let estimator_cosine_bound = ((1.0 - alignment * alignment).max(0.0) / (alignment * alignment))
         .sqrt()
         * ESTIMATOR_EPSILON
         / ((DIMENSIONS - 1) as f64).sqrt();
-    let quantized_cosine_bound = (DIMENSIONS as f64).sqrt() * step / alignment;
+    let quantized_cosine_bound =
+        (DIMENSIONS as f64).sqrt() * f64::from(prepared.quantization_step) / alignment;
     let rounding_bound = 16.0
         * f64::from(f32::EPSILON)
-        * (row_norm * row_norm + query_norm * query_norm + 2.0 * row_norm * query_norm);
+        * (row_norm_f64 * row_norm_f64
+            + query_norm_f64 * query_norm_f64
+            + 2.0 * row_norm_f64 * query_norm_f64);
     let absolute_error_bound =
-        2.0 * row_norm * query_norm * (estimator_cosine_bound + quantized_cosine_bound)
+        2.0 * row_norm_f64 * query_norm_f64 * (estimator_cosine_bound + quantized_cosine_bound)
             + rounding_bound;
     Ok(V23RaBitQEstimate {
-        distance_squared: distance as f32,
-        estimated_cosine: cosine as f32,
+        distance_squared: distance,
+        estimated_cosine: cosine,
         absolute_error_bound: absolute_error_bound as f32,
-        query_quantization_step: step as f32,
-        query_code_max: query_codes.into_iter().max().unwrap_or(0),
+        query_quantization_step: prepared.quantization_step,
+        query_code_max: prepared.code_max,
     })
+}
+
+pub(crate) fn score_v23_rabitq_prepared_scalar(
+    prepared: &V23RaBitQPreparedQuery,
+    code: &V23RaBitQCode,
+) -> Result<V23RaBitQEstimate> {
+    estimate_v23_rabitq_from_dot(prepared, code, scalar_sign_dot(prepared, code))
+}
+
+pub(crate) fn score_v23_rabitq_scalar(
+    query_residual: &[f32; DIMENSIONS],
+    code: &V23RaBitQCode,
+    rotation: &[[f32; DIMENSIONS]; DIMENSIONS],
+) -> Result<V23RaBitQEstimate> {
+    let prepared = prepare_v23_rabitq_query(query_residual, rotation)?;
+    score_v23_rabitq_prepared_scalar(&prepared, code)
 }
 
 #[cfg(test)]
@@ -397,7 +474,7 @@ mod tests {
         let invalid = V23RaBitQCode {
             sign_code: [1; 12],
             residual_norm: 1.0,
-            alignment: 0.0,
+            alignment: 0.01,
         };
         assert!(score_v23_rabitq_scalar(&[1.0; 96], &invalid, &rotation).is_err());
     }

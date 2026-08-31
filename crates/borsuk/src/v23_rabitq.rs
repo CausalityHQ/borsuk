@@ -7,6 +7,7 @@ use crate::{BorsukError, Result};
 
 const MANIFEST_SCHEMA: &str = "borsuk-v23-rabitq-manifest-v1";
 const RECEIPT_SCHEMA: &str = "borsuk-v23-rabitq-receipt-v1";
+pub(crate) const V23_RABITQ_MIN_ALIGNMENT: f32 = 0.102_062_07;
 const CONSTRUCTION_INPUT_ROLES: [&str; 3] = ["tree-receipt", "incidence-tree", "source-pages"];
 const CONSTRUCTION_OUTPUT_ROLES: [&str; 6] = [
     "row-codes",

@@ -725,26 +725,49 @@ fn v23_reciprocal_rank_max_cover(
     ranked: &[(f32, usize)],
     maximum_pages: usize,
 ) -> Result<Vec<u32>> {
+    let row_pages = ranked
+        .iter()
+        .map(|(_, row)| {
+            decoded.row_pages(*row).ok_or_else(|| {
+                BorsukError::InvalidStorage("V23 selector row pages are absent".to_string())
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    v23_reciprocal_rank_page_cover(&row_pages, maximum_pages)
+}
+
+pub(crate) fn v23_reciprocal_rank_page_cover(
+    row_pages: &[(u32, Option<u32>)],
+    maximum_pages: usize,
+) -> Result<Vec<u32>> {
     // Deterministic weighted maximum coverage over both physical labels.
     // Reciprocal rank weights keep the nearest scientific rows dominant
     // while allowing one page to cover several strong rows. Selected rows
     // are removed from subsequent rounds, so every page adds evidence.
-    let mut uncovered = vec![true; ranked.len()];
+    if row_pages.is_empty()
+        || maximum_pages == 0
+        || maximum_pages > V23_WAVE_MAX_PAGES
+        || row_pages
+            .iter()
+            .any(|(primary, replica)| replica == &Some(*primary))
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 page-cover authority differs".to_string(),
+        ));
+    }
+    let mut uncovered = vec![true; row_pages.len()];
     let mut page_ordinals = Vec::with_capacity(maximum_pages);
     while page_ordinals.len() < maximum_pages {
         let mut scores = BTreeMap::<u32, u64>::new();
-        for (rank, (_, row)) in ranked.iter().enumerate() {
+        for (rank, (primary, replica)) in row_pages.iter().enumerate() {
             if !uncovered[rank] {
                 continue;
             }
             let weight = 1_000_000_000_u64 / u64::try_from(rank + 1).unwrap();
-            let (primary, replica) = decoded.row_pages(*row).ok_or_else(|| {
-                BorsukError::InvalidStorage("V23 selector row pages are absent".to_string())
-            })?;
-            let primary_score = scores.entry(primary).or_default();
+            let primary_score = scores.entry(*primary).or_default();
             *primary_score = primary_score.saturating_add(weight);
             if let Some(replica) = replica {
-                let replica_score = scores.entry(replica).or_default();
+                let replica_score = scores.entry(*replica).or_default();
                 *replica_score = replica_score.saturating_add(weight);
             }
         }
@@ -759,11 +782,8 @@ fn v23_reciprocal_rank_max_cover(
             break;
         }
         page_ordinals.push(page);
-        for (rank, (_, row)) in ranked.iter().enumerate() {
-            let (primary, replica) = decoded.row_pages(*row).ok_or_else(|| {
-                BorsukError::InvalidStorage("V23 selector row pages are absent".to_string())
-            })?;
-            if primary == page || replica == Some(page) {
+        for (rank, (primary, replica)) in row_pages.iter().enumerate() {
+            if *primary == page || *replica == Some(page) {
                 uncovered[rank] = false;
             }
         }

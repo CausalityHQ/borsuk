@@ -391,6 +391,10 @@ fn normalized(vector: &[f32; 96]) -> Result<[f32; 96]> {
     Ok(vector.map(|value| value * inverse))
 }
 
+pub(crate) fn normalize_v23_incidence_vector(vector: &[f32; 96]) -> Result<[f32; 96]> {
+    normalized(vector)
+}
+
 pub(crate) struct V23NormalizedRow([f32; 96]);
 
 pub(crate) fn normalize_incidence_row(vector: &[f32; 96]) -> Result<V23NormalizedRow> {

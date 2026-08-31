@@ -119,6 +119,11 @@ mod v23_rabitq;
 mod v23_rabitq_arrow;
 #[allow(
     dead_code,
+    reason = "V23 residual RaBitQ evaluation is wired incrementally by the committed plan"
+)]
+mod v23_rabitq_eval;
+#[allow(
+    dead_code,
     reason = "V23 residual RaBitQ quantization is wired incrementally by the committed plan"
 )]
 mod v23_rabitq_quantizer;
