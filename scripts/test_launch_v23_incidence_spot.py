@@ -25,7 +25,7 @@ from scripts.launch_v23_incidence_spot import (
     build_launch_plan,
     build_launch_spec,
     build_worker_script,
-    namespace_probe,
+    offline_probe,
     worker_tree,
 )
 from scripts.run_v23_leaf_page_incidence_falsifier import validate_phase_inputs
@@ -60,7 +60,28 @@ def _canonical_progress_bytes(
 
 
 class V23IncidenceSpotLauncherTests(unittest.TestCase):
-    def test_launcher_direct_script_namespace_probe_resolves_sibling_module(
+    def test_worker_uses_disposable_offline_phase_without_runtime_discovery(
+        self,
+    ) -> None:
+        worker = build_worker_script(
+            run_id="fixture-run",
+            source_commit=SOURCE_SHA,
+            source_uri="s3://borsuk-evidence/source.tar",
+            source_sha256="11" * 32,
+            result_uri="s3://borsuk-evidence/incidence/fixture-run",
+            spot_price_usd_per_hour="0.321",
+        )
+        launcher_source = inspect.getsource(
+            sys.modules["scripts.launch_v23_incidence_spot"]
+        )
+        self.assertNotIn("ldd", worker)
+        self.assertNotIn("_runtime_mounts", launcher_source)
+        self.assertNotIn("runtime-loader", launcher_source)
+        self.assertNotIn('"--mount-proc"', launcher_source)
+        self.assertNotIn("--namespace-probe", worker)
+        self.assertIn("--offline-probe", worker)
+
+    def test_launcher_direct_script_offline_probe_resolves_sibling_module(
         self,
     ) -> None:
         program = r"""
@@ -85,7 +106,7 @@ with tempfile.TemporaryDirectory() as directory:
     psi.write_text("full avg10=0.00 total=0\n", encoding="ascii")
     module.MEMORY_PSI_PATH = psi
     module.subprocess.run = lambda *args, **kwargs: types.SimpleNamespace(returncode=0)
-    assert module.namespace_probe() == 0
+    assert module.offline_probe() == 0
 """
         completed = subprocess.run(
             [sys.executable, "-I", "-c", program, str(ROOT)],
@@ -354,7 +375,7 @@ with tempfile.TemporaryDirectory() as directory:
                 '{"stale":true}\n',
             )
 
-    def test_namespace_probe_requires_memory_psi_full_avg10(self) -> None:
+    def test_offline_probe_requires_memory_psi_full_avg10(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             absent = Path(directory) / "missing-memory-psi"
             with (
@@ -365,7 +386,7 @@ with tempfile.TemporaryDirectory() as directory:
                 patch("scripts.launch_v23_incidence_spot.subprocess.run") as run,
                 self.assertRaises(FileNotFoundError),
             ):
-                namespace_probe()
+                offline_probe()
             run.assert_not_called()
 
             malformed = Path(directory) / "malformed-memory-psi"
@@ -388,7 +409,7 @@ with tempfile.TemporaryDirectory() as directory:
                         ) as run,
                         self.assertRaisesRegex(RuntimeError, "memory PSI full avg10"),
                     ):
-                        namespace_probe()
+                        offline_probe()
                     run.assert_not_called()
 
     def test_tree_plan_is_one_ephemeral_spot_worker_with_registered_stops(self) -> None:
@@ -548,8 +569,8 @@ with tempfile.TemporaryDirectory() as directory:
             worker,
         )
         self.assertNotIn("find /data/target target", worker)
-        self.assertIn("--namespace-probe", worker)
-        self.assertLess(worker.index("--namespace-probe"), worker.index("--worker-tree"))
+        self.assertIn("--offline-probe", worker)
+        self.assertLess(worker.index("--offline-probe"), worker.index("--worker-tree"))
         self.assertIn("spot/instance-action", worker)
         self.assertIn("systemctl stop", worker)
         self.assertIn("ATTEMPT_COMPLETE.json", worker)

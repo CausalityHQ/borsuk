@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import errno
 import hashlib
 import inspect
 import json
@@ -12,13 +13,14 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest.mock import patch
 
 from scripts import run_v23_leaf_page_incidence_falsifier as subject
 
 
-def _mount(role: str, name: str) -> subject.SandboxMount:
+def _mount(role: str, name: str) -> subject.AuthenticatedInput:
     algorithm = (
         "blake3"
         if role
@@ -26,11 +28,9 @@ def _mount(role: str, name: str) -> subject.SandboxMount:
         or role.startswith("page-body-")
         else "sha256"
     )
-    return subject.SandboxMount(
+    return subject.AuthenticatedInput(
         role=role,
         source=pathlib.Path("/authority") / name,
-        target=pathlib.PurePosixPath("/inputs") / name,
-        read_only=True,
         uri=f"s3://borsuk-evidence/{role}",
         digest_algorithm=algorithm,
         digest="11" * 32,
@@ -41,7 +41,7 @@ def _mount(role: str, name: str) -> subject.SandboxMount:
 
 def _policy(
     phase: str = "tree-training", parent_digest: str | None = None
-) -> subject.SandboxPolicy:
+) -> subject.OfflinePhasePolicy:
     manifest_role = (
         "construction-manifest" if phase == "tree-training" else "phase-manifest"
     )
@@ -52,33 +52,18 @@ def _policy(
         _mount("preflight-receipt", "preflight-receipt.json"),
     )
     directory_capabilities = (
-        subject.SandboxDirectoryCapability(
+        subject.AuthenticatedDirectory(
             role="bulk-inputs",
             source=pathlib.Path("/authority/bulk-inputs"),
-            target=pathlib.PurePosixPath("/inputs/bulk"),
             manifest_role="bulk-manifest",
             staging_receipt_role="staging-receipt",
-            read_only=True,
         ),
     )
-    policy = subject.SandboxPolicy(
+    policy = subject.OfflinePhasePolicy(
         phase=phase,
         executable=pathlib.Path("/opt/borsuk/v23-incidence"),
         executable_sha256="aa" * 32,
         executable_bytes=19,
-        runtime_mounts=(
-            subject.SandboxMount(
-                role="runtime-loader",
-                source=pathlib.Path("/lib/ld-linux-aarch64.so.1"),
-                target=pathlib.PurePosixPath("/lib/ld-linux-aarch64.so.1"),
-                read_only=True,
-                uri="file:///lib/ld-linux-aarch64.so.1",
-                digest_algorithm="sha256",
-                digest="22" * 32,
-                encoded_bytes=23,
-                generation="runtime-0001",
-            ),
-        ),
         inputs=inputs,
         scratch=pathlib.Path("/scratch/v23-incidence"),
         output=pathlib.Path("/output/v23-incidence"),
@@ -109,7 +94,300 @@ def _progress_bytes(
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
 
 
-class SandboxPolicyTests(unittest.TestCase):
+def _write_staged_inventory(
+    bulk_manifest: pathlib.Path,
+    staging_receipt: pathlib.Path,
+    staging: pathlib.Path,
+    role: str = "training-shard-0000",
+    payload: bytes = b"shard\n",
+) -> None:
+    staging.mkdir()
+    staged = staging / role
+    staged.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    identity = {
+        "digest": digest,
+        "digest_algorithm": "sha256",
+        "encoded_bytes": len(payload),
+        "generation": f"unversioned-sha256:{digest}",
+        "role": role,
+        "uri": f"s3://borsuk-evidence/{role}",
+    }
+    bulk_manifest.write_bytes(
+        json.dumps(
+            {"ordered_inputs": [{"identity": identity}]},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        + b"\n"
+    )
+    staging_receipt.write_bytes(
+        json.dumps(
+            {
+                "claim_eligible": False,
+                "manifest_sha256": hashlib.sha256(
+                    bulk_manifest.read_bytes()
+                ).hexdigest(),
+                "ordered_objects": [{**identity, "relative_path": role}],
+                "schema": "borsuk-v23-incidence-staging-receipt-v1",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        + b"\n"
+    )
+
+
+class OfflinePhasePolicyTests(unittest.TestCase):
+    def test_offline_phase_contract_has_no_private_root_or_runtime_mounts(self) -> None:
+        self.assertTrue(hasattr(subject, "OfflinePhasePolicy"))
+        self.assertTrue(hasattr(subject, "AuthenticatedInput"))
+        self.assertTrue(hasattr(subject, "AuthenticatedDirectory"))
+        self.assertTrue(hasattr(subject, "build_offline_command"))
+        source = inspect.getsource(subject)
+        self.assertNotIn("pivot_root", source)
+        self.assertNotIn("runtime_mounts", source)
+        self.assertNotIn("runtime-loader", source)
+        self.assertNotIn("_bind_mount", source)
+
+    def test_offline_phase_reauthenticates_complete_staged_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            staging = root / "staging"
+            staging.mkdir()
+            shard = staging / "training-shard-0000"
+            shard.write_bytes(b"shard\n")
+            identity = {
+                "digest": hashlib.sha256(shard.read_bytes()).hexdigest(),
+                "digest_algorithm": "sha256",
+                "encoded_bytes": shard.stat().st_size,
+                "generation": "unversioned-sha256:" + hashlib.sha256(
+                    shard.read_bytes()
+                ).hexdigest(),
+                "role": shard.name,
+                "uri": "s3://borsuk-evidence/training-shard-0000",
+            }
+            bulk_manifest = root / "bulk-manifest.json"
+            bulk_manifest.write_bytes(
+                json.dumps(
+                    {"ordered_inputs": [{"identity": identity}]},
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+                + b"\n"
+            )
+            staging_receipt = root / "staging-receipt.json"
+            staging_receipt.write_bytes(
+                json.dumps(
+                    {
+                        "claim_eligible": False,
+                        "manifest_sha256": hashlib.sha256(
+                            bulk_manifest.read_bytes()
+                        ).hexdigest(),
+                        "ordered_objects": [
+                            {**identity, "relative_path": shard.name}
+                        ],
+                        "schema": "borsuk-v23-incidence-staging-receipt-v1",
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+                + b"\n"
+            )
+            singleton_payloads = {
+                "construction-manifest": b"manifest\n",
+                "bulk-manifest": bulk_manifest.read_bytes(),
+                "staging-receipt": staging_receipt.read_bytes(),
+                "preflight-receipt": b"preflight\n",
+            }
+            inputs = []
+            for role, payload in singleton_payloads.items():
+                path = root / role
+                path.write_bytes(payload)
+                inputs.append(
+                    subject.AuthenticatedInput(
+                        role=role,
+                        source=path,
+                        uri=f"file://{path}",
+                        digest_algorithm="sha256",
+                        digest=hashlib.sha256(payload).hexdigest(),
+                        encoded_bytes=len(payload),
+                        generation="fixture-v1",
+                    )
+                )
+            executable = pathlib.Path("/bin/true").resolve()
+            policy = subject.OfflinePhasePolicy(
+                phase="tree-training",
+                executable=executable,
+                executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
+                executable_bytes=executable.stat().st_size,
+                inputs=tuple(inputs),
+                scratch=root / "scratch",
+                output=root / "output",
+                parent_receipt_sha256=None,
+                directory_capabilities=(
+                    subject.AuthenticatedDirectory(
+                        role="bulk-inputs",
+                        source=staging,
+                        manifest_role="bulk-manifest",
+                        staging_receipt_role="staging-receipt",
+                    ),
+                ),
+                phase_argv=(),
+            )
+            policy = dataclasses.replace(
+                policy, phase_argv=subject.build_phase_argv(policy)
+            )
+            subject.authenticate_policy_files(policy)
+            (staging / "unexpected").write_bytes(b"leak\n")
+            with self.assertRaisesRegex(ValueError, "inventory"):
+                subject.authenticate_policy_files(policy)
+
+    def test_staged_inventory_rejects_coherent_concrete_type_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            bulk_manifest = root / "bulk-manifest.json"
+            staging_receipt = root / "staging-receipt.json"
+            staging = root / "staging"
+            _write_staged_inventory(bulk_manifest, staging_receipt, staging)
+
+            manifest = json.loads(bulk_manifest.read_bytes())
+            manifest["ordered_inputs"][0]["identity"]["encoded_bytes"] = "6"
+            bulk_manifest.write_bytes(
+                json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+            receipt = json.loads(staging_receipt.read_bytes())
+            receipt["manifest_sha256"] = hashlib.sha256(
+                bulk_manifest.read_bytes()
+            ).hexdigest()
+            receipt["ordered_objects"][0]["encoded_bytes"] = "6"
+            staging_receipt.write_bytes(
+                json.dumps(receipt, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+
+            def authority(role: str, path: pathlib.Path) -> subject.AuthenticatedInput:
+                payload = path.read_bytes()
+                return subject.AuthenticatedInput(
+                    role=role,
+                    source=path,
+                    uri=path.as_uri(),
+                    digest_algorithm="sha256",
+                    digest=hashlib.sha256(payload).hexdigest(),
+                    encoded_bytes=len(payload),
+                    generation="fixture-v1",
+                )
+
+            policy = types.SimpleNamespace(
+                inputs=(
+                    authority("bulk-manifest", bulk_manifest),
+                    authority("staging-receipt", staging_receipt),
+                )
+            )
+            capability = subject.AuthenticatedDirectory(
+                role="bulk-inputs",
+                source=staging,
+                manifest_role="bulk-manifest",
+                staging_receipt_role="staging-receipt",
+            )
+            with self.assertRaisesRegex(ValueError, "manifest"):
+                subject._authenticate_staged_inventory(policy, capability)
+
+    def test_run_phase_strips_credentials_from_offline_child_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            scratch = root / "scratch"
+            output = root / "output"
+            scratch.mkdir()
+            output.mkdir()
+            policy = dataclasses.replace(
+                _policy(), scratch=scratch, output=output, phase_argv=()
+            )
+            policy = dataclasses.replace(
+                policy, phase_argv=subject.build_phase_argv(policy)
+            )
+            process = types.SimpleNamespace(pid=12345, returncode=None)
+            with (
+                patch.object(subject, "_network_namespace_inode", return_value=91),
+                patch.object(subject, "authenticate_policy_files"),
+                patch.object(subject.subprocess, "Popen", return_value=process) as popen,
+                patch.object(
+                    subject, "monitor_process_group", return_value=(0, None)
+                ),
+            ):
+                self.assertEqual(subject.run_phase(policy), 0)
+            environment = popen.call_args.kwargs["env"]
+            self.assertEqual(environment["HOME"], "/nonexistent")
+            self.assertEqual(environment["TMPDIR"], str(scratch))
+            self.assertFalse(
+                any(key.startswith(("AWS_", "BOTO_")) for key in environment)
+            )
+
+    def test_run_phase_authenticates_inputs_before_and_after_science(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            scratch = root / "scratch"
+            output = root / "output"
+            scratch.mkdir()
+            output.mkdir()
+            policy = dataclasses.replace(
+                _policy(), scratch=scratch, output=output, phase_argv=()
+            )
+            policy = dataclasses.replace(
+                policy, phase_argv=subject.build_phase_argv(policy)
+            )
+            process = types.SimpleNamespace(pid=12345, returncode=None)
+            with (
+                patch.object(subject, "_network_namespace_inode", return_value=91),
+                patch.object(subject, "authenticate_policy_files") as authenticate,
+                patch.object(subject.subprocess, "Popen", return_value=process),
+                patch.object(
+                    subject, "monitor_process_group", return_value=(0, None)
+                ),
+            ):
+                self.assertEqual(subject.run_phase(policy), 0)
+            self.assertEqual(authenticate.call_count, 2)
+            for call in authenticate.call_args_list:
+                (bound_policy,) = call.args
+                self.assertEqual(bound_policy.host_network_namespace_inode, 91)
+
+    def test_run_phase_cleans_policy_when_input_authentication_fails(self) -> None:
+        for stage in ("before", "after"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                scratch = root / "scratch"
+                output = root / "output"
+                scratch.mkdir()
+                output.mkdir()
+                policy = dataclasses.replace(
+                    _policy(), scratch=scratch, output=output, phase_argv=()
+                )
+                policy = dataclasses.replace(
+                    policy, phase_argv=subject.build_phase_argv(policy)
+                )
+                process = types.SimpleNamespace(pid=12345, returncode=None)
+                side_effect = (
+                    [ValueError("pre-authentication failed")]
+                    if stage == "before"
+                    else [None, ValueError("post-authentication failed")]
+                )
+                with (
+                    patch.object(subject, "_network_namespace_inode", return_value=91),
+                    patch.object(
+                        subject,
+                        "authenticate_policy_files",
+                        side_effect=side_effect,
+                    ),
+                    patch.object(subject.subprocess, "Popen", return_value=process),
+                    patch.object(
+                        subject, "monitor_process_group", return_value=(0, None)
+                    ),
+                    self.assertRaisesRegex(ValueError, "authentication failed"),
+                ):
+                    subject.run_phase(policy)
+                self.assertFalse((root / ".scratch.policy.json").exists())
+
     def test_scientific_entrypoint_preserves_full_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             policy = pathlib.Path(directory) / "invalid-policy.json"
@@ -118,7 +396,7 @@ class SandboxPolicyTests(unittest.TestCase):
                 [
                     sys.executable,
                     str(pathlib.Path(subject.__file__).resolve()),
-                    "--enter-sandbox-policy",
+                    "--enter-offline-policy",
                     str(policy),
                     "--policy-sha256",
                     hashlib.sha256(policy.read_bytes()).hexdigest(),
@@ -142,13 +420,11 @@ class SandboxPolicyTests(unittest.TestCase):
                 _mount("preflight-receipt", "preflight-receipt.json"),
             ),
             directory_capabilities=(
-                subject.SandboxDirectoryCapability(
+                subject.AuthenticatedDirectory(
                     role="bulk-inputs",
                     source=pathlib.Path("/authority/training-shards"),
-                    target=pathlib.PurePosixPath("/inputs/bulk"),
                     manifest_role="bulk-manifest",
                     staging_receipt_role="staging-receipt",
-                    read_only=True,
                 ),
             ),
             phase_argv=(),
@@ -276,8 +552,7 @@ class SandboxPolicyTests(unittest.TestCase):
 
         for changed in (
             dataclasses.replace(capability, source=pathlib.Path("relative")),
-            dataclasses.replace(capability, target=pathlib.PurePosixPath("/output")),
-            dataclasses.replace(capability, read_only=False),
+            dataclasses.replace(capability, source=policy.inputs[0].source),
             dataclasses.replace(capability, manifest_role="missing-manifest"),
             dataclasses.replace(capability, staging_receipt_role="missing-receipt"),
         ):
@@ -361,7 +636,7 @@ class SandboxPolicyTests(unittest.TestCase):
                     "-m",
                     "unittest",
                     "scripts.test_run_v23_leaf_page_incidence_falsifier."
-                    "SandboxPolicyTests."
+                    "OfflinePhasePolicyTests."
                     "test_run_phase_proves_os_namespace_capability_separation",
                 ],
                 cwd=repository,
@@ -376,32 +651,22 @@ class SandboxPolicyTests(unittest.TestCase):
             )
             return
 
-        runtime_paths = {
-            "aarch64": (
-                "/lib/ld-linux-aarch64.so.1",
-                "/lib/aarch64-linux-gnu/libc.so.6",
-            ),
-            "x86_64": (
-                "/lib64/ld-linux-x86-64.so.2",
-                "/lib/x86_64-linux-gnu/libc.so.6",
-            ),
-        }
-        if os.uname().machine not in runtime_paths:
-            self.skipTest("namespace integration runtime paths are unregistered")
         root = pathlib.Path(tempfile.mkdtemp(prefix="v23-incidence-namespace-"))
         manifest = root / "construction-manifest.json"
         bulk_manifest = root / "bulk-manifest.json"
         staging_receipt = root / "staging-receipt.json"
         bulk_inputs = root / "bulk-inputs"
-        shard = bulk_inputs / "training-shard-0000.bin"
+        shard = bulk_inputs / "training-shard-0000"
         launcher = root / "run_v23_leaf_page_incidence_falsifier.py"
         scratch = root / "scratch"
         output = root / "output"
         manifest.write_bytes(b"manifest\n")
-        bulk_manifest.write_bytes(b"bulk manifest\n")
-        staging_receipt.write_bytes(b"staging\n")
-        bulk_inputs.mkdir()
-        shard.write_bytes(b"shard\n")
+        _write_staged_inventory(
+            bulk_manifest,
+            staging_receipt,
+            bulk_inputs,
+            "training-shard-0000",
+        )
         launcher.write_bytes(pathlib.Path(subject.__file__).read_bytes())
         scratch.mkdir()
         output.mkdir()
@@ -409,14 +674,11 @@ class SandboxPolicyTests(unittest.TestCase):
         def identity(
             role: str,
             source: pathlib.Path,
-            target: str,
-        ) -> subject.SandboxMount:
+        ) -> subject.AuthenticatedInput:
             payload = source.read_bytes()
-            return subject.SandboxMount(
+            return subject.AuthenticatedInput(
                 role=role,
                 source=source.resolve(),
-                target=pathlib.PurePosixPath(target),
-                read_only=True,
                 uri=source.as_uri(),
                 digest_algorithm="sha256",
                 digest=hashlib.sha256(payload).hexdigest(),
@@ -425,51 +687,35 @@ class SandboxPolicyTests(unittest.TestCase):
             )
 
         executable = pathlib.Path("/usr/bin/echo").resolve()
-        loader_target, libc_target = runtime_paths[os.uname().machine]
-        loader = pathlib.Path(loader_target).resolve()
-        libc = pathlib.Path(libc_target).resolve()
         executable_payload = executable.read_bytes()
-        policy = subject.SandboxPolicy(
+        policy = subject.OfflinePhasePolicy(
             phase="tree-training",
             executable=executable,
             executable_sha256=hashlib.sha256(executable_payload).hexdigest(),
             executable_bytes=len(executable_payload),
-            runtime_mounts=(
-                identity("runtime-loader", loader, loader_target),
-                identity(
-                    "runtime-library-libc",
-                    libc,
-                    libc_target,
-                ),
-            ),
             inputs=(
                 identity(
                     "construction-manifest",
                     manifest,
-                    "/inputs/construction-manifest.json",
                 ),
                 identity(
                     "bulk-manifest",
                     bulk_manifest,
-                    "/inputs/bulk-manifest.json",
                 ),
                 identity(
                     "staging-receipt",
                     staging_receipt,
-                    "/inputs/staging-receipt.json",
                 ),
             ),
             scratch=scratch,
             output=output,
             parent_receipt_sha256=None,
             directory_capabilities=(
-                subject.SandboxDirectoryCapability(
+                subject.AuthenticatedDirectory(
                     role="bulk-inputs",
                     source=bulk_inputs,
-                    target=pathlib.PurePosixPath("/inputs/bulk"),
                     manifest_role="bulk-manifest",
                     staging_receipt_role="staging-receipt",
-                    read_only=True,
                 ),
             ),
             phase_argv=(),
@@ -532,12 +778,12 @@ class SandboxPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "preflight input"):
             subject.validate_phase_inputs(leaked)
 
-    def test_training_mounts_only_manifest_shards_binary_runtime_and_output(
+    def test_training_offline_command_has_no_filesystem_namespace_or_runtime_mounts(
         self,
     ) -> None:
         policy = _policy()
         subject.validate_phase_inputs(policy)
-        command = subject.build_unshare_command(
+        command = subject.build_offline_command(
             pathlib.Path("/authority/policy.json"), "44" * 32
         )
 
@@ -546,13 +792,14 @@ class SandboxPolicyTests(unittest.TestCase):
         self.assertNotIn("query.parquet", rendered)
         self.assertNotIn("neighbors.parquet", rendered)
         self.assertNotIn("page-roster", rendered)
-        self.assertIn("--user", command)
-        self.assertIn("--map-root-user", command)
-        self.assertIn("--mount", command)
+        self.assertNotIn("--user", command)
+        self.assertNotIn("--map-root-user", command)
+        self.assertFalse(any(argument.startswith("--mount") for argument in command))
         self.assertIn("--net", command)
         self.assertIn("--pid", command)
         self.assertIn("--fork", command)
-        self.assertIn("--enter-sandbox-policy", command)
+        self.assertIn("--kill-child=SIGKILL", command)
+        self.assertIn("--enter-offline-policy", command)
         self.assertIn("--policy-sha256", command)
         self.assertLess(sum(len(argument) + 1 for argument in command), 16_384)
         self.assertNotIn(policy.executable_sha256, rendered)
@@ -581,12 +828,11 @@ class SandboxPolicyTests(unittest.TestCase):
         forbidden.append(_mount("query-parquet", "query.parquet"))
         with self.assertRaisesRegex(ValueError, "phase input"):
             subject.validate_phase_inputs(
-                subject.SandboxPolicy(
+                subject.OfflinePhasePolicy(
                     phase=policy.phase,
                     executable=policy.executable,
                     executable_sha256=policy.executable_sha256,
                     executable_bytes=policy.executable_bytes,
-                    runtime_mounts=policy.runtime_mounts,
                     inputs=tuple(forbidden),
                     scratch=policy.scratch,
                     output=policy.output,
@@ -595,6 +841,66 @@ class SandboxPolicyTests(unittest.TestCase):
                     phase_argv=policy.phase_argv,
                 )
             )
+
+    def test_forbidden_role_probe_is_derived_from_exact_phase_inventory(self) -> None:
+        policy = _policy()
+        self.assertTrue(
+            subject._forbidden_roles_absent(
+                policy, frozenset({"dataset-meta", "training-shard-0000"})
+            )
+        )
+        self.assertFalse(
+            subject._forbidden_roles_absent(policy, frozenset({"query-parquet"}))
+        )
+        leaked = dataclasses.replace(
+            policy,
+            inputs=(*policy.inputs, _mount("query-parquet", "query.parquet")),
+        )
+        self.assertFalse(subject._forbidden_roles_absent(leaked, frozenset()))
+
+    def test_network_canary_requires_explicit_kernel_denial(self) -> None:
+        class SocketStub:
+            def __init__(self, failure: BaseException | None) -> None:
+                self.failure = failure
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def settimeout(self, _seconds: float) -> None:
+                pass
+
+            def connect(self, _address: tuple[str, int]) -> None:
+                if self.failure is not None:
+                    raise self.failure
+
+        for failure, expected in (
+            (None, False),
+            (TimeoutError(), False),
+            (OSError(errno.ENETUNREACH, "network unreachable"), True),
+        ):
+            with self.subTest(failure=failure), patch.object(
+                subject.socket, "socket", return_value=SocketStub(failure)
+            ):
+                self.assertEqual(subject._network_canary_denied(), expected)
+
+    def test_offline_probe_failure_names_exact_failed_capability(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = types.SimpleNamespace(
+                host_network_namespace_inode=91,
+                inputs=(),
+                directory_capabilities=(),
+                output=pathlib.Path(directory),
+            )
+            with (
+                patch.object(subject, "_network_namespace_inode", return_value=92),
+                patch.object(subject, "_network_canary_denied", return_value=False),
+                patch.object(subject, "_forbidden_roles_absent", return_value=True),
+                self.assertRaisesRegex(RuntimeError, "network_canary_denied"),
+            ):
+                subject._offline_startup_probes(policy, frozenset())
 
     def test_pressure_equality_stops_and_cleanup_names_are_explicit(self) -> None:
         limits = subject.MonitorLimits()
@@ -699,18 +1005,10 @@ class SandboxPolicyTests(unittest.TestCase):
         policy = _policy()
 
         mutable = list(policy.inputs)
-        mutable[0] = subject.SandboxMount(
-            role=mutable[0].role,
-            source=mutable[0].source,
-            target=mutable[0].target,
-            read_only=False,
-            uri=mutable[0].uri,
-            digest_algorithm=mutable[0].digest_algorithm,
-            digest=mutable[0].digest,
-            encoded_bytes=mutable[0].encoded_bytes,
-            generation=mutable[0].generation,
+        mutable[0] = dataclasses.replace(
+            mutable[0], source=pathlib.Path("relative")
         )
-        with self.assertRaisesRegex(ValueError, "read-only"):
+        with self.assertRaisesRegex(ValueError, "absolute"):
             subject.validate_phase_inputs(
                 dataclasses.replace(policy, inputs=tuple(mutable))
             )
@@ -728,6 +1026,20 @@ class SandboxPolicyTests(unittest.TestCase):
             subject.validate_phase_inputs(
                 dataclasses.replace(policy, output=policy.scratch)
             )
+
+    def test_phase_input_identity_rejects_non_string_uri_and_generation(self) -> None:
+        policy = _policy()
+        for field in ("uri", "generation"):
+            changed = dataclasses.replace(policy.inputs[0], **{field: 7})
+            with self.subTest(field=field), self.assertRaisesRegex(
+                ValueError, "phase input"
+            ):
+                subject.validate_phase_inputs(
+                    dataclasses.replace(
+                        policy,
+                        inputs=(changed, *policy.inputs[1:]),
+                    )
+                )
 
     def test_cleanup_removes_only_registered_names_and_empty_root(self) -> None:
         root = pathlib.Path(tempfile.mkdtemp())
@@ -747,6 +1059,48 @@ class SandboxPolicyTests(unittest.TestCase):
             subject.parse_args(
                 ["--execute-tree-training", "--execute-posting-construction"]
             )
+
+    def test_cli_gate_must_match_preflight_or_execute_policy_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            execute_path = root / "execute-policy.json"
+            execute = _policy()
+            execute_path.write_bytes(subject.canonical_policy_bytes(execute))
+            with self.assertRaisesRegex(ValueError, "execution gate"):
+                subject.main(
+                    [
+                        "--preflight-tree-training",
+                        "--policy",
+                        str(execute_path),
+                    ]
+                )
+
+            preflight = dataclasses.replace(
+                execute,
+                inputs=tuple(
+                    item
+                    for item in execute.inputs
+                    if item.role != "preflight-receipt"
+                ),
+                phase_argv=(),
+            )
+            preflight = dataclasses.replace(
+                preflight, phase_argv=subject.build_phase_argv(preflight)
+            )
+            preflight_path = root / "preflight-policy.json"
+            preflight_path.write_bytes(subject.canonical_policy_bytes(preflight))
+            with patch.object(subject, "run_phase", return_value=0) as run:
+                self.assertEqual(
+                    subject.main(
+                        [
+                            "--preflight-tree-training",
+                            "--policy",
+                            str(preflight_path),
+                        ]
+                    ),
+                    0,
+                )
+            run.assert_called_once_with(preflight)
 
     def test_canonical_policy_bytes_round_trip_without_ambient_fields(self) -> None:
         policy = _policy()
@@ -828,6 +1182,108 @@ class SandboxPolicyTests(unittest.TestCase):
         )
         self.assertEqual((status, stop), (-signal.SIGKILL, "wall-cap"))
 
+    def test_offline_namespace_stop_reaps_scientific_child(self) -> None:
+        node = (
+            "scripts.test_run_v23_leaf_page_incidence_falsifier."
+            "OfflinePhasePolicyTests."
+            "test_offline_namespace_stop_reaps_scientific_child"
+        )
+        if os.geteuid() != 0:
+            if shutil.which("sudo") is None:
+                self.skipTest("offline namespace stop integration requires root")
+            completed = subprocess.run(
+                ["sudo", "-n", sys.executable, "-m", "unittest", node],
+                cwd=pathlib.Path(__file__).resolve().parents[1],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode == 1 and "password" in completed.stderr.lower():
+                self.skipTest("passwordless sudo is unavailable")
+            self.assertEqual(
+                completed.returncode,
+                0,
+                f"stdout={completed.stdout}\nstderr={completed.stderr}",
+            )
+            return
+
+        process = subprocess.Popen(  # noqa: S603
+            [
+                "unshare",
+                "--net",
+                "--pid",
+                "--fork",
+                "--kill-child=SIGKILL",
+                sys.executable,
+                "-c",
+                "import time; time.sleep(60)",
+            ],
+            start_new_session=True,
+        )
+
+        def group_members() -> list[int]:
+            members = []
+            for entry in pathlib.Path("/proc").iterdir():
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    candidate = int(entry.name)
+                    if os.getpgid(candidate) == process.pid:
+                        members.append(candidate)
+                except (ProcessLookupError, PermissionError):
+                    continue
+            return members
+
+        try:
+            time.sleep(0.05)
+            _, stop = subject.monitor_process_group(
+                process.pid,
+                dataclasses.replace(subject.MonitorLimits(), wall_seconds=0),
+                sample_interval_seconds=0.001,
+                term_grace_seconds=0.05,
+            )
+            self.assertEqual(stop, "wall-cap")
+            self.assertEqual(group_members(), [])
+        finally:
+            for member in group_members():
+                os.kill(member, signal.SIGKILL)
+
+    def test_termination_waits_for_group_after_leader_exit(self) -> None:
+        arguments = [
+            sys.executable,
+            "-c",
+            "import os,signal,time; child=os.fork(); "
+            "(signal.signal(signal.SIGTERM, signal.SIG_IGN), time.sleep(60)) "
+            "if child == 0 else time.sleep(0.05)",
+        ]
+        pid = os.posix_spawn(
+            sys.executable,
+            arguments,
+            os.environ.copy(),
+            setsid=True,
+        )
+
+        def group_members() -> list[int]:
+            members = []
+            for entry in pathlib.Path("/proc").iterdir():
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    candidate = int(entry.name)
+                    if os.getpgid(candidate) == pid:
+                        members.append(candidate)
+                except (ProcessLookupError, PermissionError):
+                    continue
+            return members
+
+        try:
+            time.sleep(0.1)
+            subject._terminate_process_group(pid, 0.01)
+            self.assertEqual(group_members(), [])
+        finally:
+            for member in group_members():
+                os.kill(member, signal.SIGKILL)
+
     def test_monitor_exception_terminates_and_reaps_original_group(self) -> None:
         pid = os.posix_spawn(
             sys.executable,
@@ -890,28 +1346,22 @@ class SandboxPolicyTests(unittest.TestCase):
             self.assertLess(status, 0)
             self.assertEqual(stop, "progress-authority")
 
-    def test_mount_bytes_are_authenticated_before_namespace_creation(self) -> None:
+    def test_phase_input_bytes_are_authenticated_before_offline_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             executable = root / "phase"
-            runtime = root / "loader"
             manifest = root / "manifest"
             bulk_manifest = root / "bulk-manifest"
             staging = root / "staging"
             bulk_inputs = root / "bulk-inputs"
-            bulk_inputs.mkdir()
-            shard = bulk_inputs / "shard"
             for path, payload in (
                 (executable, b"executable"),
-                (runtime, b"runtime"),
                 (manifest, b"manifest"),
-                (bulk_manifest, b"bulk manifest"),
-                (staging, b"staging"),
-                (shard, b"shard"),
             ):
                 path.write_bytes(payload)
+            _write_staged_inventory(bulk_manifest, staging, bulk_inputs, "shard", b"shard")
 
-            def authenticated(mount: subject.SandboxMount, path: pathlib.Path):
+            def authenticated(mount: subject.AuthenticatedInput, path: pathlib.Path):
                 payload = path.read_bytes()
                 return dataclasses.replace(
                     mount,
@@ -926,7 +1376,6 @@ class SandboxPolicyTests(unittest.TestCase):
                 executable=executable,
                 executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
                 executable_bytes=executable.stat().st_size,
-                runtime_mounts=(authenticated(policy.runtime_mounts[0], runtime),),
                 inputs=(
                     authenticated(policy.inputs[0], manifest),
                     authenticated(policy.inputs[1], bulk_manifest),
@@ -947,61 +1396,6 @@ class SandboxPolicyTests(unittest.TestCase):
             manifest.write_bytes(b"swapped")
             with self.assertRaisesRegex(ValueError, "digest|length"):
                 subject.authenticate_policy_files(policy)
-
-    def test_bound_mount_bytes_are_reauthenticated_before_pivot_root(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = pathlib.Path(temporary)
-            policy = _policy()
-            policy = dataclasses.replace(
-                policy,
-                inputs=policy.inputs[:3],
-                phase_argv=(),
-            )
-            policy = dataclasses.replace(
-                policy, phase_argv=subject.build_phase_argv(policy)
-            )
-            targets = {
-                root / "phase/v23-incidence": b"executable",
-                root
-                / policy.runtime_mounts[0].target.as_posix().lstrip("/"): b"runtime",
-                root / policy.inputs[0].target.as_posix().lstrip("/"): b"manifest",
-                root / policy.inputs[1].target.as_posix().lstrip("/"): b"bulk manifest",
-                root / policy.inputs[2].target.as_posix().lstrip("/"): b"staging",
-            }
-            for path, payload in targets.items():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(payload)
-
-            def identity(mount: subject.SandboxMount, payload: bytes):
-                return dataclasses.replace(
-                    mount,
-                    digest=hashlib.sha256(payload).hexdigest(),
-                    encoded_bytes=len(payload),
-                )
-
-            policy = dataclasses.replace(
-                policy,
-                executable_sha256=hashlib.sha256(b"executable").hexdigest(),
-                executable_bytes=len(b"executable"),
-                runtime_mounts=(identity(policy.runtime_mounts[0], b"runtime"),),
-                inputs=(
-                    identity(policy.inputs[0], b"manifest"),
-                    identity(policy.inputs[1], b"bulk manifest"),
-                    identity(policy.inputs[2], b"staging"),
-                ),
-            )
-            directory_target = root / policy.directory_capabilities[
-                0
-            ].target.as_posix().lstrip("/")
-            directory_target.mkdir(parents=True)
-            subject.authenticate_mounted_policy_files(root, policy)
-
-            (root / policy.inputs[2].target.as_posix().lstrip("/")).write_bytes(
-                b"swapped"
-            )
-            with self.assertRaisesRegex(ValueError, "digest|length"):
-                subject.authenticate_mounted_policy_files(root, policy)
-
 
 if __name__ == "__main__":
     unittest.main()

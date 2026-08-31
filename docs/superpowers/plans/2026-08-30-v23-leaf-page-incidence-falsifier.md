@@ -151,7 +151,7 @@ pub struct V23IncidenceReceipt {
     pub executable_sha256: String,
     pub fma_backend: V23FmaBackend,
     pub network_namespace_inode: u64,
-    pub ordered_mounts: Vec<V23IncidenceObjectIdentity>,
+    pub ordered_inputs: Vec<V23IncidenceObjectIdentity>,
     pub probes: V23IncidenceCapabilityProbes,
     pub outputs: Vec<V23IncidenceObjectIdentity>,
     pub stop: Option<V23IncidenceStopClass>,
@@ -200,8 +200,9 @@ Add tests requiring the generated worker and Python call graph to contain no
 `ldd`, `pivot_root`, runtime-loader/library role, tmpfs root, bind mount, or
 `--mount` namespace. Require a canonical policy with zero runtime mounts, one
 complete manifest-backed staged directory, exact executable/input identities,
-and a child command containing `unshare --net --pid --fork --mount-proc` but no
-user or mount namespace. Mutation-lock a staged extra file, absent registered
+and a child command containing
+`unshare --net --pid --fork --kill-child=SIGKILL` but no user or mount
+namespace. Mutation-lock a staged extra file, absent registered
 file, forbidden later-phase role, AWS environment variable, unchanged network
 namespace inode, network canary success, and nonempty initial output.
 
@@ -253,7 +254,9 @@ uv run --offline --python 3.12 --with ruff==0.15.20 ruff check \
 python3 -m py_compile \
   scripts/launch_v23_incidence_spot.py \
   scripts/run_v23_leaf_page_incidence_falsifier.py
-bash -n <(python3 scripts/launch_v23_incidence_spot.py --render-worker-test)
+set -o pipefail
+python3 -c "from scripts.launch_v23_incidence_spot import build_worker_script; print(build_worker_script(run_id='syntax-check', source_commit='0'*40, source_uri='s3://fixture/source.tar', source_sha256='1'*64, result_uri='s3://fixture/result', spot_price_usd_per_hour='0.1'))" \
+  | bash -n
 git diff --check
 ```
 

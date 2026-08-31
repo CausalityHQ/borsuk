@@ -368,7 +368,7 @@ mod tests {
         let error = run_v23_incidence_local_directory_phase(request).unwrap_err();
         assert!(
             error.to_string().contains("construction-manifest")
-                || error.to_string().contains("sandbox probes are absent")
+                || error.to_string().contains("offline probes are absent")
         );
     }
 }

@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
 import dataclasses
+import errno
 import hashlib
 import json
 import math
@@ -30,13 +30,11 @@ _LOWER_HEX = frozenset("0123456789abcdef")
 
 
 @dataclasses.dataclass(frozen=True)
-class SandboxMount:
-    """One exact host path exposed at one exact sandbox path."""
+class AuthenticatedInput:
+    """One exact phase input with immutable content authority."""
 
     role: str
     source: pathlib.Path
-    target: pathlib.PurePosixPath
-    read_only: bool
     uri: str
     digest_algorithm: str
     digest: str
@@ -45,37 +43,30 @@ class SandboxMount:
 
 
 @dataclasses.dataclass(frozen=True)
-class SandboxDirectoryCapability:
-    """One manifest-backed read-only corpus directory exposed to a phase."""
+class AuthenticatedDirectory:
+    """One manifest-backed corpus directory staged for a phase."""
 
     role: str
     source: pathlib.Path
-    target: pathlib.PurePosixPath
     manifest_role: str
     staging_receipt_role: str
-    read_only: bool
 
 
 @dataclasses.dataclass(frozen=True)
-class SandboxPolicy:
-    """Complete capability policy for one scientific phase process."""
+class OfflinePhasePolicy:
+    """Complete offline policy for one scientific phase process."""
 
     phase: str
     executable: pathlib.Path
     executable_sha256: str
     executable_bytes: int
-    runtime_mounts: tuple[SandboxMount, ...]
-    inputs: tuple[SandboxMount, ...]
+    inputs: tuple[AuthenticatedInput, ...]
     scratch: pathlib.Path
     output: pathlib.Path
     parent_receipt_sha256: str | None
-    directory_capabilities: tuple[SandboxDirectoryCapability, ...] = ()
+    directory_capabilities: tuple[AuthenticatedDirectory, ...] = ()
     phase_argv: tuple[str, ...] = ()
     host_network_namespace_inode: int | None = None
-    host_canaries: tuple[pathlib.PurePosixPath, ...] = (
-        pathlib.PurePosixPath("/etc/hostname"),
-        pathlib.PurePosixPath("/root/.aws/credentials"),
-    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -219,73 +210,56 @@ def _phase_roles(phase: str, *, preflight: bool) -> tuple[set[str], tuple[str, .
     )
 
 
-def _validate_mount(mount: SandboxMount, *, runtime: bool) -> None:
+def _validate_input(mount: AuthenticatedInput) -> None:
     if (
-        not mount.role
+        type(mount.role) is not str
+        or not mount.role
+        or not isinstance(mount.source, pathlib.Path)
         or not mount.source.is_absolute()
-        or not mount.target.is_absolute()
+        or type(mount.uri) is not str
         or not mount.uri
+        or type(mount.digest_algorithm) is not str
+        or type(mount.digest) is not str
+        or type(mount.generation) is not str
+        or not mount.generation
     ):
-        raise ValueError("sandbox mounts require an absolute source and target")
-    if not mount.read_only:
-        raise ValueError("sandbox inputs and runtime mounts must be read-only")
+        raise ValueError("phase inputs require an absolute source")
     if (
         mount.digest_algorithm not in {"sha256", "blake3"}
         or not _valid_sha256(mount.digest)
         or type(mount.encoded_bytes) is not int
         or mount.encoded_bytes <= 0
-        or not mount.generation
     ):
-        raise ValueError("sandbox mount digest authority differs")
-    rendered_target = f"{mount.target.as_posix().rstrip('/')}/"
-    if ".." in mount.target.parts:
-        raise ValueError("sandbox mount target leaves its registered root")
-    if runtime:
-        allowed_target = (
-            rendered_target.startswith(("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/"))
-            or rendered_target == "/etc/ld.so.cache/"
-        )
-        if (
-            mount.digest_algorithm != "sha256"
-            or not (
-                mount.role == "runtime-loader"
-                or mount.role.startswith("runtime-library-")
-            )
-            or not allowed_target
-        ):
-            raise ValueError("runtime mount authority differs")
-        if rendered_target.startswith(("/inputs/", "/scratch/", "/output/", "/phase/")):
-            raise ValueError("runtime mount target overlaps a phase capability")
-    elif not rendered_target.startswith("/inputs/"):
-        raise ValueError("sandbox mount target leaves its registered root")
-    if not runtime:
-        blake3_role = mount.role in {
-            "incidence-tree",
-            "incidence-postings-one",
-            "incidence-postings-two",
-            "development-latency",
-            "holdout-latency",
-        } or mount.role.startswith("page-body-")
-        expected_algorithm = "blake3" if blake3_role else "sha256"
-        if mount.digest_algorithm != expected_algorithm:
-            raise ValueError("phase input digest algorithm differs")
+        raise ValueError("phase input digest authority differs")
+    if ".." in mount.source.parts:
+        raise ValueError("phase input path leaves its registered root")
+    blake3_role = mount.role in {
+        "incidence-tree",
+        "incidence-postings-one",
+        "incidence-postings-two",
+        "development-latency",
+        "holdout-latency",
+    } or mount.role.startswith("page-body-")
+    expected_algorithm = "blake3" if blake3_role else "sha256"
+    if mount.digest_algorithm != expected_algorithm:
+        raise ValueError("phase input digest algorithm differs")
 
 
-def build_phase_argv(policy: SandboxPolicy) -> tuple[str, ...]:
+def build_phase_argv(policy: OfflinePhasePolicy) -> tuple[str, ...]:
     """Build the exact corpus-size-independent Rust phase argv."""
 
-    def one_mount(role: str) -> SandboxMount:
+    def one_mount(role: str) -> AuthenticatedInput:
         matches = tuple(mount for mount in policy.inputs if mount.role == role)
         if len(matches) != 1:
             raise ValueError(f"{role} mount authority differs")
         return matches[0]
 
     def authority_arguments(
-        flag: str, prefix: str, mount: SandboxMount
+        flag: str, prefix: str, mount: AuthenticatedInput
     ) -> tuple[str, ...]:
         return (
             flag,
-            mount.target.as_posix(),
+            str(mount.source),
             f"--{prefix}-uri",
             mount.uri,
             f"--{prefix}-sha256",
@@ -315,7 +289,7 @@ def build_phase_argv(policy: SandboxPolicy) -> tuple[str, ...]:
             "--bulk-manifest", "bulk-manifest", one_mount("bulk-manifest")
         ),
         "--staging-directory",
-        capability.target.as_posix(),
+        str(capability.source),
         *authority_arguments(
             "--staging-receipt", "staging-receipt", one_mount("staging-receipt")
         ),
@@ -326,9 +300,9 @@ def build_phase_argv(policy: SandboxPolicy) -> tuple[str, ...]:
         )
     arguments += (
         "--scratch",
-        "/scratch",
+        str(policy.scratch),
         "--output",
-        "/output/receipt.json",
+        str(policy.output / "receipt.json"),
         "--executable-sha256",
         policy.executable_sha256,
     )
@@ -337,19 +311,19 @@ def build_phase_argv(policy: SandboxPolicy) -> tuple[str, ...]:
     return arguments
 
 
-def validate_phase_inputs(policy: SandboxPolicy) -> None:
+def validate_phase_inputs(policy: OfflinePhasePolicy) -> None:
     """Validate exact phase capabilities before namespace construction."""
 
     if policy.phase not in PHASES:
         raise ValueError("unknown V23 incidence phase")
     if not policy.executable.is_absolute():
-        raise ValueError("sandbox executable must be absolute")
+        raise ValueError("offline phase executable must be absolute")
     if (
         not _valid_sha256(policy.executable_sha256)
         or type(policy.executable_bytes) is not int
         or policy.executable_bytes <= 0
     ):
-        raise ValueError("sandbox executable identity differs")
+        raise ValueError("offline phase executable identity differs")
     if not policy.scratch.is_absolute() or not policy.output.is_absolute():
         raise ValueError("scratch and output paths must be absolute")
     if policy.scratch == policy.output:
@@ -359,17 +333,13 @@ def validate_phase_inputs(policy: SandboxPolicy) -> None:
         or policy.output in policy.scratch.parents
     ):
         raise ValueError("scratch and output must be disjoint")
-    if not policy.runtime_mounts or not policy.inputs:
-        raise ValueError("sandbox requires runtime and phase inputs")
+    if not policy.inputs:
+        raise ValueError("offline phase requires authenticated inputs")
     if policy.host_network_namespace_inode is not None and (
         type(policy.host_network_namespace_inode) is not int
         or policy.host_network_namespace_inode <= 0
     ):
         raise ValueError("host network namespace authority differs")
-    if not policy.host_canaries or any(
-        not path.is_absolute() or ".." in path.parts for path in policy.host_canaries
-    ):
-        raise ValueError("host canary authority differs")
     if not policy.phase_argv:
         raise ValueError("phase execution gate is absent")
     gate = policy.phase_argv[0]
@@ -386,62 +356,42 @@ def validate_phase_inputs(policy: SandboxPolicy) -> None:
         raise ValueError("tree training cannot have a parent receipt")
 
     seen_sources: set[pathlib.Path] = set()
-    seen_targets: set[pathlib.PurePosixPath] = set()
     seen_roles: set[str] = set()
-    for mount in policy.runtime_mounts:
-        _validate_mount(mount, runtime=True)
-        if (
-            mount.source in seen_sources
-            or mount.target in seen_targets
-            or mount.role in seen_roles
-        ):
-            raise ValueError("duplicate sandbox mount authority")
-        seen_sources.add(mount.source)
-        seen_targets.add(mount.target)
-        seen_roles.add(mount.role)
     for mount in policy.inputs:
-        _validate_mount(mount, runtime=False)
+        _validate_input(mount)
         if (
             mount.source in seen_sources
-            or mount.target in seen_targets
             or mount.role in seen_roles
         ):
-            raise ValueError("duplicate sandbox mount authority")
+            raise ValueError("duplicate offline phase authority")
         seen_sources.add(mount.source)
-        seen_targets.add(mount.target)
         seen_roles.add(mount.role)
     input_roles = {mount.role for mount in policy.inputs}
     for capability in policy.directory_capabilities:
         if (
             not capability.role
             or not capability.source.is_absolute()
-            or not capability.target.is_absolute()
-            or ".." in capability.target.parts
-            or not capability.target.as_posix().startswith("/inputs/")
+            or ".." in capability.source.parts
         ):
-            raise ValueError("sandbox directory capability path differs")
-        if not capability.read_only:
-            raise ValueError("sandbox directory capability must be read-only")
+            raise ValueError("offline phase directory capability path differs")
         if (
             capability.manifest_role not in input_roles
             or capability.staging_receipt_role not in input_roles
             or capability.manifest_role == capability.staging_receipt_role
         ):
-            raise ValueError("sandbox directory authority role is absent")
+            raise ValueError("offline phase directory authority role is absent")
         if (
             capability.source in seen_sources
-            or capability.target in seen_targets
             or capability.role in seen_roles
         ):
-            raise ValueError("duplicate sandbox mount authority")
+            raise ValueError("duplicate offline phase authority")
         seen_sources.add(capability.source)
-        seen_targets.add(capability.target)
         seen_roles.add(capability.role)
     if policy.executable in seen_sources:
-        raise ValueError("duplicate sandbox mount authority")
+        raise ValueError("duplicate offline phase authority")
     for capability_path in (policy.scratch, policy.output):
         if capability_path in seen_sources or capability_path == policy.executable:
-            raise ValueError("sandbox writable and read-only capabilities overlap")
+            raise ValueError("offline phase writable and input capabilities overlap")
 
     fixed_roles, directory_roles = _phase_roles(policy.phase, preflight=preflight)
     actual_roles = {mount.role for mount in policy.inputs}
@@ -469,17 +419,15 @@ def validate_phase_inputs(policy: SandboxPolicy) -> None:
         raise ValueError("phase argv authority differs")
 
 
-def _policy_value(policy: SandboxPolicy) -> dict[str, object]:
-    def mount_value(mount: SandboxMount) -> dict[str, object]:
+def _policy_value(policy: OfflinePhasePolicy) -> dict[str, object]:
+    def mount_value(mount: AuthenticatedInput) -> dict[str, object]:
         return {
             "digest": mount.digest,
             "digest_algorithm": mount.digest_algorithm,
             "encoded_bytes": mount.encoded_bytes,
             "generation": mount.generation,
-            "read_only": mount.read_only,
             "role": mount.role,
             "source": str(mount.source),
-            "target": mount.target.as_posix(),
             "uri": mount.uri,
         }
 
@@ -487,11 +435,9 @@ def _policy_value(policy: SandboxPolicy) -> dict[str, object]:
         "directory_capabilities": [
             {
                 "manifest_role": capability.manifest_role,
-                "read_only": capability.read_only,
                 "role": capability.role,
                 "source": str(capability.source),
                 "staging_receipt_role": capability.staging_receipt_role,
-                "target": capability.target.as_posix(),
             }
             for capability in policy.directory_capabilities
         ],
@@ -499,18 +445,16 @@ def _policy_value(policy: SandboxPolicy) -> dict[str, object]:
         "executable_bytes": policy.executable_bytes,
         "executable_sha256": policy.executable_sha256,
         "inputs": [mount_value(mount) for mount in policy.inputs],
-        "host_canaries": [path.as_posix() for path in policy.host_canaries],
         "host_network_namespace_inode": policy.host_network_namespace_inode,
         "output": str(policy.output),
         "parent_receipt_sha256": policy.parent_receipt_sha256,
         "phase": policy.phase,
         "phase_argv": list(policy.phase_argv),
-        "runtime_mounts": [mount_value(mount) for mount in policy.runtime_mounts],
         "scratch": str(policy.scratch),
     }
 
 
-def canonical_policy_bytes(policy: SandboxPolicy) -> bytes:
+def canonical_policy_bytes(policy: OfflinePhasePolicy) -> bytes:
     """Return one deterministic newline-terminated policy document."""
 
     validate_phase_inputs(policy)
@@ -522,63 +466,55 @@ def canonical_policy_bytes(policy: SandboxPolicy) -> bytes:
     )
 
 
-def decode_policy_bytes(raw: bytes) -> SandboxPolicy:
+def decode_policy_bytes(raw: bytes) -> OfflinePhasePolicy:
     """Decode exact canonical policy bytes and reject schema drift."""
 
     try:
         if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
-            raise ValueError("sandbox policy canonical bytes differ")
+            raise ValueError("offline phase policy canonical bytes differ")
         value = json.loads(raw)
     except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
-        raise ValueError("sandbox policy encoding differs") from error
+        raise ValueError("offline phase policy encoding differs") from error
     expected_keys = {
         "directory_capabilities",
         "executable",
         "executable_bytes",
         "executable_sha256",
-        "host_canaries",
         "host_network_namespace_inode",
         "inputs",
         "output",
         "parent_receipt_sha256",
         "phase",
         "phase_argv",
-        "runtime_mounts",
         "scratch",
     }
     if type(value) is not dict or set(value) != expected_keys:  # noqa: E721
-        raise ValueError("sandbox policy schema differs")
+        raise ValueError("offline phase policy schema differs")
 
-    def decode_mount(item: object) -> SandboxMount:
+    def decode_mount(item: object) -> AuthenticatedInput:
         if type(item) is not dict or set(item) != {  # noqa: E721
             "digest",
             "digest_algorithm",
             "encoded_bytes",
             "generation",
-            "read_only",
             "role",
             "source",
-            "target",
             "uri",
         }:
-            raise ValueError("sandbox policy schema differs")
+            raise ValueError("offline phase policy schema differs")
         if (
-            type(item["read_only"]) is not bool
-            or type(item["digest"]) is not str
+            type(item["digest"]) is not str
             or type(item["digest_algorithm"]) is not str
             or type(item["encoded_bytes"]) is not int
             or type(item["generation"]) is not str
             or type(item["role"]) is not str
             or type(item["source"]) is not str
-            or type(item["target"]) is not str
             or type(item["uri"]) is not str
         ):
-            raise ValueError("sandbox policy concrete type differs")
-        return SandboxMount(
+            raise ValueError("offline phase policy concrete type differs")
+        return AuthenticatedInput(
             role=item["role"],
             source=pathlib.Path(item["source"]),
-            target=pathlib.PurePosixPath(item["target"]),
-            read_only=item["read_only"],
             uri=item["uri"],
             digest_algorithm=item["digest_algorithm"],
             digest=item["digest"],
@@ -586,33 +522,27 @@ def decode_policy_bytes(raw: bytes) -> SandboxPolicy:
             generation=item["generation"],
         )
 
-    def decode_directory(item: object) -> SandboxDirectoryCapability:
+    def decode_directory(item: object) -> AuthenticatedDirectory:
         expected = {
             "manifest_role",
-            "read_only",
             "role",
             "source",
             "staging_receipt_role",
-            "target",
         }
         if type(item) is not dict or set(item) != expected:  # noqa: E721
-            raise ValueError("sandbox policy schema differs")
+            raise ValueError("offline phase policy schema differs")
         if (
             type(item["manifest_role"]) is not str
-            or type(item["read_only"]) is not bool
             or type(item["role"]) is not str
             or type(item["source"]) is not str
             or type(item["staging_receipt_role"]) is not str
-            or type(item["target"]) is not str
         ):
-            raise ValueError("sandbox policy concrete type differs")
-        return SandboxDirectoryCapability(
+            raise ValueError("offline phase policy concrete type differs")
+        return AuthenticatedDirectory(
             role=item["role"],
             source=pathlib.Path(item["source"]),
-            target=pathlib.PurePosixPath(item["target"]),
             manifest_role=item["manifest_role"],
             staging_receipt_role=item["staging_receipt_role"],
-            read_only=item["read_only"],
         )
 
     if (
@@ -624,11 +554,8 @@ def decode_policy_bytes(raw: bytes) -> SandboxPolicy:
         or type(value["output"]) is not str
         or type(value["directory_capabilities"]) is not list
         or type(value["inputs"]) is not list
-        or type(value["runtime_mounts"]) is not list
         or type(value["phase_argv"]) is not list
         or not all(type(item) is str for item in value["phase_argv"])
-        or type(value["host_canaries"]) is not list
-        or not all(type(item) is str for item in value["host_canaries"])
         or (
             value["host_network_namespace_inode"] is not None
             and type(value["host_network_namespace_inode"]) is not int
@@ -638,13 +565,12 @@ def decode_policy_bytes(raw: bytes) -> SandboxPolicy:
             and type(value["parent_receipt_sha256"]) is not str
         )
     ):
-        raise ValueError("sandbox policy concrete type differs")
-    policy = SandboxPolicy(
+        raise ValueError("offline phase policy concrete type differs")
+    policy = OfflinePhasePolicy(
         phase=value["phase"],
         executable=pathlib.Path(value["executable"]),
         executable_sha256=value["executable_sha256"],
         executable_bytes=value["executable_bytes"],
-        runtime_mounts=tuple(decode_mount(item) for item in value["runtime_mounts"]),
         inputs=tuple(decode_mount(item) for item in value["inputs"]),
         scratch=pathlib.Path(value["scratch"]),
         output=pathlib.Path(value["output"]),
@@ -654,21 +580,18 @@ def decode_policy_bytes(raw: bytes) -> SandboxPolicy:
         ),
         phase_argv=tuple(value["phase_argv"]),
         host_network_namespace_inode=value["host_network_namespace_inode"],
-        host_canaries=tuple(
-            pathlib.PurePosixPath(item) for item in value["host_canaries"]
-        ),
     )
     validate_phase_inputs(policy)
     if canonical_policy_bytes(policy) != raw:
-        raise ValueError("sandbox policy canonical bytes differ")
+        raise ValueError("offline phase policy canonical bytes differ")
     return policy
 
 
-def write_canonical_policy_file(policy: SandboxPolicy, path: pathlib.Path) -> str:
+def write_canonical_policy_file(policy: OfflinePhasePolicy, path: pathlib.Path) -> str:
     """Create one exclusive mode-0600 policy file and return its SHA-256."""
 
     if not path.is_absolute() or path.name in {"", ".", ".."}:
-        raise ValueError("sandbox policy path differs")
+        raise ValueError("offline phase policy path differs")
     raw = canonical_policy_bytes(policy)
     descriptor = os.open(
         path,
@@ -680,7 +603,7 @@ def write_canonical_policy_file(policy: SandboxPolicy, path: pathlib.Path) -> st
         while offset < len(raw):
             written = os.write(descriptor, raw[offset:])
             if written <= 0:
-                raise OSError("sandbox policy write made no progress")
+                raise OSError("offline phase policy write made no progress")
             offset += written
         os.fsync(descriptor)
     finally:
@@ -690,16 +613,16 @@ def write_canonical_policy_file(policy: SandboxPolicy, path: pathlib.Path) -> st
 
 def read_canonical_policy_file(
     path: pathlib.Path, expected_sha256: str
-) -> SandboxPolicy:
+) -> OfflinePhasePolicy:
     """Authenticate and decode one regular canonical policy file."""
 
     if not path.is_absolute() or not _valid_sha256(expected_sha256):
-        raise ValueError("sandbox policy digest authority differs")
+        raise ValueError("offline phase policy digest authority differs")
     if path.is_symlink() or not path.is_file():
-        raise ValueError("sandbox policy file authority differs")
+        raise ValueError("offline phase policy file authority differs")
     raw = path.read_bytes()
     if hashlib.sha256(raw).hexdigest() != expected_sha256:
-        raise ValueError("sandbox policy digest authority differs")
+        raise ValueError("offline phase policy digest authority differs")
     return decode_policy_bytes(raw)
 
 
@@ -713,7 +636,7 @@ def _digest_file(path: pathlib.Path, algorithm: str) -> str:
             raise RuntimeError("the pinned blake3 module is required") from error
         digest = blake3.blake3()
     else:
-        raise ValueError("sandbox digest algorithm differs")
+        raise ValueError("offline phase digest algorithm differs")
     with path.open("rb") as stream:
         while chunk := stream.read(1024 * 1024):
             digest.update(chunk)
@@ -727,15 +650,108 @@ def _authenticate_file(
     expected_bytes: int,
 ) -> None:
     if path.is_symlink() or not path.is_file():
-        raise ValueError("sandbox authenticated file authority differs")
+        raise ValueError("offline phase authenticated file authority differs")
     if path.stat().st_size != expected_bytes:
-        raise ValueError("sandbox authenticated file length differs")
+        raise ValueError("offline phase authenticated file length differs")
     if _digest_file(path, algorithm) != expected_digest:
-        raise ValueError("sandbox authenticated file digest differs")
+        raise ValueError("offline phase authenticated file digest differs")
 
 
-def authenticate_policy_files(policy: SandboxPolicy) -> None:
-    """Rehash every executable/runtime/input file before namespace creation."""
+def _read_canonical_json_file(path: pathlib.Path, label: str) -> tuple[bytes, object]:
+    raw = path.read_bytes()
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{label} JSON differs") from error
+    canonical = json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+    if raw != canonical:
+        raise ValueError(f"{label} canonical bytes differ")
+    return raw, value
+
+
+def _authenticate_staged_inventory(
+    policy: OfflinePhasePolicy, capability: AuthenticatedDirectory
+) -> frozenset[str]:
+    inputs = {item.role: item for item in policy.inputs}
+    manifest_input = inputs[capability.manifest_role]
+    receipt_input = inputs[capability.staging_receipt_role]
+    manifest_raw, manifest = _read_canonical_json_file(
+        manifest_input.source, "bulk manifest"
+    )
+    _, receipt = _read_canonical_json_file(
+        receipt_input.source, "staging receipt"
+    )
+    if (
+        type(manifest) is not dict
+        or type(manifest.get("ordered_inputs")) is not list
+        or not manifest["ordered_inputs"]
+        or type(receipt) is not dict
+        or set(receipt)
+        != {"claim_eligible", "manifest_sha256", "ordered_objects", "schema"}
+        or receipt["claim_eligible"] is not False
+        or receipt["schema"] != "borsuk-v23-incidence-staging-receipt-v1"
+        or receipt["manifest_sha256"] != hashlib.sha256(manifest_raw).hexdigest()
+        or type(receipt["ordered_objects"]) is not list
+    ):
+        raise ValueError("staged inventory authority differs")
+    expected_objects: list[dict[str, object]] = []
+    seen_roles: set[str] = set()
+    seen_uris: set[str] = set()
+    for item in manifest["ordered_inputs"]:
+        if type(item) is not dict or type(item.get("identity")) is not dict:
+            raise ValueError("staged inventory manifest differs")
+        identity = item["identity"]
+        if set(identity) != {
+            "digest",
+            "digest_algorithm",
+            "encoded_bytes",
+            "generation",
+            "role",
+            "uri",
+        }:
+            raise ValueError("staged inventory manifest identity differs")
+        role = identity["role"]
+        uri = identity["uri"]
+        if (
+            type(role) is not str
+            or not role
+            or "/" in role
+            or role in {".", ".."}
+            or type(uri) is not str
+            or not uri
+            or type(identity["digest_algorithm"]) is not str
+            or identity["digest_algorithm"] not in {"sha256", "blake3"}
+            or not _valid_sha256(identity["digest"])
+            or type(identity["encoded_bytes"]) is not int
+            or identity["encoded_bytes"] <= 0
+            or type(identity["generation"]) is not str
+            or not identity["generation"]
+            or role in seen_roles
+            or uri in seen_uris
+        ):
+            raise ValueError("staged inventory manifest authority differs")
+        seen_roles.add(role)
+        seen_uris.add(uri)
+        expected_objects.append({**identity, "relative_path": role})
+    if receipt["ordered_objects"] != expected_objects:
+        raise ValueError("staged inventory receipt differs")
+    actual = tuple(sorted(path.name for path in capability.source.iterdir()))
+    expected = tuple(sorted(str(item["relative_path"]) for item in expected_objects))
+    if actual != expected:
+        raise ValueError("staged inventory differs")
+    for item in expected_objects:
+        path = capability.source / str(item["relative_path"])
+        _authenticate_file(
+            path,
+            item["digest_algorithm"],
+            item["digest"],
+            item["encoded_bytes"],
+        )
+    return frozenset(seen_roles)
+
+
+def authenticate_policy_files(policy: OfflinePhasePolicy) -> frozenset[str]:
+    """Rehash every executable and phase input before offline execution."""
 
     validate_phase_inputs(policy)
     _authenticate_file(
@@ -744,59 +760,35 @@ def authenticate_policy_files(policy: SandboxPolicy) -> None:
         policy.executable_sha256,
         policy.executable_bytes,
     )
-    for mount in (*policy.runtime_mounts, *policy.inputs):
+    for mount in policy.inputs:
         _authenticate_file(
             mount.source,
             mount.digest_algorithm,
             mount.digest,
             mount.encoded_bytes,
         )
+    staged_roles: set[str] = set()
     for capability in policy.directory_capabilities:
         if capability.source.is_symlink() or not capability.source.is_dir():
-            raise ValueError("sandbox directory capability authority differs")
+            raise ValueError("offline phase directory capability authority differs")
+        staged_roles.update(_authenticate_staged_inventory(policy, capability))
+    return frozenset(staged_roles)
 
 
-def authenticate_mounted_policy_files(
-    root: pathlib.Path, policy: SandboxPolicy
-) -> None:
-    """Rehash the exact bind-mounted inodes before the old root is detached."""
-
-    _authenticate_file(
-        root / "phase/v23-incidence",
-        "sha256",
-        policy.executable_sha256,
-        policy.executable_bytes,
-    )
-    for mount in (*policy.runtime_mounts, *policy.inputs):
-        _authenticate_file(
-            root / mount.target.as_posix().lstrip("/"),
-            mount.digest_algorithm,
-            mount.digest,
-            mount.encoded_bytes,
-        )
-    for capability in policy.directory_capabilities:
-        path = root / capability.target.as_posix().lstrip("/")
-        if path.is_symlink() or not path.is_dir():
-            raise ValueError("sandbox mounted directory authority differs")
-
-
-def build_unshare_command(policy_path: pathlib.Path, policy_sha256: str) -> list[str]:
-    """Build the bounded outer namespace command without invoking a shell."""
+def build_offline_command(policy_path: pathlib.Path, policy_sha256: str) -> list[str]:
+    """Build the bounded offline-child command without invoking a shell."""
 
     if not policy_path.is_absolute() or not _valid_sha256(policy_sha256):
-        raise ValueError("sandbox policy path or digest differs")
+        raise ValueError("offline phase policy path or digest differs")
     return [
         "unshare",
-        "--user",
-        "--map-root-user",
-        "--mount",
         "--net",
         "--pid",
         "--fork",
-        "--mount-proc",
+        "--kill-child=SIGKILL",
         sys.executable,
         str(pathlib.Path(__file__).resolve()),
-        "--enter-sandbox-policy",
+        "--enter-offline-policy",
         str(policy_path),
         "--policy-sha256",
         policy_sha256,
@@ -810,105 +802,102 @@ def _network_namespace_inode() -> int:
     return int(rendered[5:-1])
 
 
-def _sandbox_root(policy: SandboxPolicy) -> pathlib.Path:
-    return policy.scratch.parent / f".{policy.scratch.name}.sandbox-root"
+def _bulk_role_is_allowed(phase: str, role: str) -> bool:
+    if phase == "tree-training":
+        suffix = role.removeprefix("training-shard-")
+        return role == "dataset-meta" or (
+            len(suffix) == 4 and suffix.isdigit() and int(suffix) < 58
+        )
+    if phase in {"posting-construction", "holdout-binding"}:
+        fixed = (
+            {"parent-receipt", "incidence-tree", "page-roster"}
+            if phase == "posting-construction"
+            else {
+                "parent-receipt",
+                "development-result",
+                "page-roster",
+                "neighbors-parquet",
+            }
+        )
+        suffix = role.removeprefix("page-body-")
+        return role in fixed or (
+            len(suffix) == 5 and suffix.isdigit() and int(suffix) < 28_282
+        )
+    allowed = {
+        "development-evaluation": {
+            "parent-receipt",
+            "incidence-tree",
+            "incidence-postings-one",
+            "incidence-postings-two",
+            "d2-report",
+            "query-parquet",
+        },
+        "holdout-evaluation": {
+            "parent-receipt",
+            "development-result",
+            "development-latency",
+            "incidence-tree",
+            "incidence-postings-one",
+            "incidence-postings-two",
+            "query-parquet",
+            "holdout-truth",
+        },
+    }
+    return role in allowed.get(phase, set())
 
 
-def _libc_call(name: str, result: int) -> None:
-    if result != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, f"{name} failed: {os.strerror(error)}")
-
-
-def _mount(
-    source: str | None,
-    target: pathlib.Path | str,
-    filesystem: str | None,
-    flags: int,
-    data: str | None = None,
-) -> None:
-    libc = ctypes.CDLL(None, use_errno=True)
-
-    def encoded(value: str | None) -> bytes | None:
-        return None if value is None else os.fsencode(value)
-
-    result = libc.mount(
-        encoded(source),
-        encoded(os.fspath(target)),
-        encoded(filesystem),
-        ctypes.c_ulong(flags),
-        encoded(data),
+def _forbidden_roles_absent(
+    policy: OfflinePhasePolicy, staged_roles: frozenset[str]
+) -> bool:
+    if not policy.phase_argv:
+        return False
+    fixed_roles, directory_roles = _phase_roles(
+        policy.phase,
+        preflight=policy.phase_argv[0].startswith("--preflight-"),
     )
-    _libc_call("mount", result)
-
-
-def _bind_mount(source: pathlib.Path, target: pathlib.Path, read_only: bool) -> None:
-    ms_bind = 4096
-    ms_remount = 32
-    ms_rdonly = 1
-    if source.is_symlink() or not source.exists():
-        raise ValueError("sandbox source authority differs")
-    target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-    if source.is_dir():
-        target.mkdir(mode=0o755, exist_ok=True)
-    elif source.is_file():
-        target.touch(mode=0o600, exist_ok=False)
-    else:
-        raise ValueError("sandbox source is not a regular file or directory")
-    _mount(str(source), target, None, ms_bind)
-    if read_only:
-        _mount(None, target, None, ms_bind | ms_remount | ms_rdonly)
-
-
-def _pivot_root(new_root: pathlib.Path, old_root: pathlib.Path) -> None:
-    machine = os.uname().machine
-    syscall_number = {"aarch64": 41, "x86_64": 155}.get(machine)
-    if syscall_number is None:
-        raise RuntimeError("pivot_root is unsupported on this architecture")
-    libc = ctypes.CDLL(None, use_errno=True)
-    result = libc.syscall(
-        ctypes.c_long(syscall_number),
-        os.fsencode(new_root),
-        os.fsencode(old_root),
+    input_roles = [item.role for item in policy.inputs]
+    actual_directory_roles = [item.role for item in policy.directory_capabilities]
+    return (
+        len(input_roles) == len(fixed_roles)
+        and set(input_roles) == fixed_roles
+        and len(actual_directory_roles) == len(directory_roles)
+        and set(actual_directory_roles) == set(directory_roles)
+        and all(_bulk_role_is_allowed(policy.phase, role) for role in staged_roles)
     )
-    _libc_call("pivot_root", result)
 
 
-def _detach_old_root() -> None:
-    libc = ctypes.CDLL(None, use_errno=True)
-    result = libc.umount2(os.fsencode("/.oldroot"), ctypes.c_int(2))
-    _libc_call("umount2", result)
-    os.rmdir("/.oldroot")
+def _network_canary_denied() -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+            connection.settimeout(0.05)
+            connection.connect(("198.51.100.1", 9))
+    except TimeoutError:
+        return False
+    except OSError as error:
+        return error.errno in {
+            errno.EACCES,
+            errno.EAFNOSUPPORT,
+            errno.EHOSTUNREACH,
+            errno.ENETUNREACH,
+            errno.EPERM,
+        }
+    return False
 
 
-def _startup_probes(policy: SandboxPolicy) -> dict[str, object]:
+def _offline_startup_probes(
+    policy: OfflinePhasePolicy, staged_roles: frozenset[str]
+) -> dict[str, object]:
     current_inode = _network_namespace_inode()
     namespace_changed = (
         policy.host_network_namespace_inode is not None
         and current_inode != policy.host_network_namespace_inode
     )
-    host_canary_denied = True
-    for path in policy.host_canaries:
-        try:
-            descriptor = os.open(path.as_posix(), os.O_RDONLY | os.O_CLOEXEC)
-        except OSError:
-            continue
-        else:
-            os.close(descriptor)
-            host_canary_denied = False
-
-    network_canary_denied = False
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
-            connection.settimeout(0.05)
-            connection.connect(("198.51.100.1", 9))
-    except OSError:
-        network_canary_denied = True
+    network_canary_denied = _network_canary_denied()
 
     allowlisted_inputs_opened = True
     for mount in policy.inputs:
         try:
-            descriptor = os.open(mount.target.as_posix(), os.O_RDONLY | os.O_CLOEXEC)
+            descriptor = os.open(mount.source, os.O_RDONLY | os.O_CLOEXEC)
         except OSError:
             allowlisted_inputs_opened = False
             break
@@ -917,7 +906,7 @@ def _startup_probes(policy: SandboxPolicy) -> dict[str, object]:
     for capability in policy.directory_capabilities:
         try:
             descriptor = os.open(
-                capability.target.as_posix(),
+                capability.source,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
             )
         except OSError:
@@ -926,7 +915,7 @@ def _startup_probes(policy: SandboxPolicy) -> dict[str, object]:
         else:
             os.close(descriptor)
 
-    probe_path = pathlib.Path("/output/.capability-probe")
+    probe_path = policy.output / ".capability-probe"
     output_writable = False
     try:
         descriptor = os.open(
@@ -943,78 +932,53 @@ def _startup_probes(policy: SandboxPolicy) -> dict[str, object]:
 
     probes = {
         "allowlisted_inputs_opened": allowlisted_inputs_opened,
-        "host_canary_denied": host_canary_denied,
+        "forbidden_roles_absent": _forbidden_roles_absent(policy, staged_roles),
         "network_canary_denied": network_canary_denied,
         "network_namespace_changed": namespace_changed,
         "network_namespace_inode": current_inode,
         "output_writable": output_writable,
     }
-    if not all(
-        probes[key]
-        for key in (
-            "allowlisted_inputs_opened",
-            "host_canary_denied",
-            "network_canary_denied",
-            "network_namespace_changed",
-            "output_writable",
+    required = (
+        "allowlisted_inputs_opened",
+        "forbidden_roles_absent",
+        "network_canary_denied",
+        "network_namespace_changed",
+        "output_writable",
+    )
+    failed = [key for key in required if not probes[key]]
+    if failed:
+        raise RuntimeError(
+            "offline phase capability probe failed: " + ",".join(failed)
         )
-    ):
-        raise RuntimeError("sandbox capability probe failed")
     return probes
 
 
-def enter_sandbox(policy: SandboxPolicy) -> None:
-    """Construct the fresh root, prove capability separation, and exec the phase."""
+def enter_offline_phase(policy: OfflinePhasePolicy) -> None:
+    """Reauthenticate one staged phase, prove it is offline, and exec it."""
 
     validate_phase_inputs(policy)
-    authenticate_policy_files(policy)
+    staged_roles = authenticate_policy_files(policy)
     if policy.host_network_namespace_inode is None:
         raise ValueError("host network namespace authority is absent")
-    root = _sandbox_root(policy)
-    if root.exists():
-        raise ValueError("sandbox root already exists")
     for path in (policy.executable, policy.scratch, policy.output):
         if path.is_symlink() or not path.exists():
-            raise ValueError("sandbox host path authority differs")
+            raise ValueError("offline phase host path authority differs")
     if not policy.scratch.is_dir() or not policy.output.is_dir():
-        raise ValueError("sandbox scratch/output authority differs")
+        raise ValueError("offline phase scratch/output authority differs")
+    if any(policy.output.iterdir()):
+        raise ValueError("offline phase output must begin empty")
 
-    root.mkdir(mode=0o700)
-    ms_rec = 16384
-    ms_private = 1 << 18
-    _mount(None, "/", None, ms_rec | ms_private)
-    _mount("tmpfs", root, "tmpfs", 0, "mode=0700,size=67108864")
-
-    executable_target = root / "phase/v23-incidence"
-    _bind_mount(policy.executable, executable_target, True)
-    for mount in (*policy.runtime_mounts, *policy.inputs):
-        target = root / mount.target.as_posix().lstrip("/")
-        _bind_mount(mount.source, target, mount.read_only)
-    for capability in policy.directory_capabilities:
-        target = root / capability.target.as_posix().lstrip("/")
-        _bind_mount(capability.source, target, capability.read_only)
-    _bind_mount(policy.scratch, root / "scratch", False)
-    _bind_mount(policy.output, root / "output", False)
-    authenticate_mounted_policy_files(root, policy)
-    (root / "proc").mkdir(mode=0o555)
-    _mount("proc", root / "proc", "proc", 0)
-    old_root = root / ".oldroot"
-    old_root.mkdir(mode=0o700)
-    _pivot_root(root, old_root)
-    os.chdir("/")
-    _detach_old_root()
-
-    probes = _startup_probes(policy)
+    probes = _offline_startup_probes(policy, staged_roles)
     environment = {
-        "BORSUK_V23_INCIDENCE_SANDBOX_PROBES": json.dumps(
+        "BORSUK_V23_INCIDENCE_OFFLINE_PROBES": json.dumps(
             probes, separators=(",", ":"), sort_keys=True
         ),
         "LANG": "C",
         "LC_ALL": "C",
     }
     os.execve(
-        "/phase/v23-incidence",
-        ("/phase/v23-incidence", *policy.phase_argv),
+        policy.executable,
+        (str(policy.executable), *policy.phase_argv),
         environment,
     )
 
@@ -1142,15 +1106,27 @@ def monitor_process_group(
 def _terminate_process_group(pid: int, grace_seconds: float) -> int:
     if grace_seconds < 0:
         raise ValueError("termination grace differs")
+
+    def group_exists() -> bool:
+        try:
+            os.killpg(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    leader_status: int | None = None
     try:
         os.killpg(pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
     deadline = time.monotonic() + grace_seconds
     while True:
-        completed, status = os.waitpid(pid, os.WNOHANG)
-        if completed == pid:
-            return status
+        if leader_status is None:
+            completed, status = os.waitpid(pid, os.WNOHANG)
+            if completed == pid:
+                leader_status = status
+        if leader_status is not None and not group_exists():
+            return leader_status
         if time.monotonic() >= deadline:
             break
         time.sleep(min(0.05, max(0.001, grace_seconds / 10)))
@@ -1158,8 +1134,14 @@ def _terminate_process_group(pid: int, grace_seconds: float) -> int:
         os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    _, status = os.waitpid(pid, 0)
-    return status
+    if leader_status is None:
+        _, leader_status = os.waitpid(pid, 0)
+    clearance_deadline = time.monotonic() + 1.0
+    while group_exists() and time.monotonic() < clearance_deadline:
+        time.sleep(0.01)
+    if group_exists():
+        raise RuntimeError("offline phase process group did not terminate")
+    return leader_status
 
 
 def _process_group_rss_bytes(pgid: int) -> int:
@@ -1204,8 +1186,8 @@ def _swap_used_bytes() -> int:
     return values["SwapTotal:"] - values["SwapFree:"]
 
 
-def run_phase(policy: SandboxPolicy, limits: MonitorLimits | None = None) -> int:
-    """Launch and monitor one original sandbox process group."""
+def run_phase(policy: OfflinePhasePolicy, limits: MonitorLimits | None = None) -> int:
+    """Launch and monitor one original offline scientific process group."""
 
     bound_policy = dataclasses.replace(
         policy,
@@ -1213,48 +1195,61 @@ def run_phase(policy: SandboxPolicy, limits: MonitorLimits | None = None) -> int
     )
     policy_path = policy.scratch.parent / f".{policy.scratch.name}.policy.json"
     policy_sha256 = write_canonical_policy_file(bound_policy, policy_path)
-    command = build_unshare_command(policy_path, policy_sha256)
-    root = _sandbox_root(bound_policy)
+    command = build_offline_command(policy_path, policy_sha256)
+    process_started = False
     try:
-        process = subprocess.Popen(command, start_new_session=True)  # noqa: S603
-        try:
-            status, stop_reason = monitor_process_group(
-                process.pid,
-                limits or MonitorLimits(),
-                progress_path=policy.output / "progress.json",
-                progress_phase=policy.phase,
-            )
-            process.returncode = status
-        finally:
-            if root.exists():
-                root.rmdir()
+        authenticate_policy_files(bound_policy)
+        process = subprocess.Popen(  # noqa: S603
+            command,
+            start_new_session=True,
+            env={
+                "HOME": "/nonexistent",
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": "/usr/bin:/bin",
+                "TMPDIR": str(policy.scratch),
+            },
+        )
+        process_started = True
+        status, stop_reason = monitor_process_group(
+            process.pid,
+            limits or MonitorLimits(),
+            progress_path=policy.output / "progress.json",
+            progress_phase=policy.phase,
+        )
+        process.returncode = status
     finally:
-        if policy_path.exists():
-            if policy_path.is_symlink() or not policy_path.is_file():
-                raise ValueError("sandbox policy cleanup authority differs")
-            policy_path.unlink()
+        try:
+            if process_started:
+                authenticate_policy_files(bound_policy)
+        finally:
+            if policy_path.exists():
+                if policy_path.is_symlink() or not policy_path.is_file():
+                    raise ValueError("offline phase policy cleanup authority differs")
+                policy_path.unlink()
     if stop_reason is not None:
         raise RuntimeError(f"V23 incidence phase stopped: {stop_reason}")
     return status
 
 
 def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse one explicit public phase gate or the private sandbox entry gate."""
+    """Parse one explicit public phase gate or the private offline entry gate."""
 
     parser = argparse.ArgumentParser(allow_abbrev=False)
     gates = parser.add_mutually_exclusive_group(required=True)
     for phase in PHASES:
+        gates.add_argument(f"--preflight-{phase}", action="store_true")
         gates.add_argument(f"--execute-{phase}", action="store_true")
-    gates.add_argument("--enter-sandbox-policy", type=pathlib.Path)
+    gates.add_argument("--enter-offline-policy", type=pathlib.Path)
     parser.add_argument("--policy-sha256")
     parser.add_argument("--policy", type=pathlib.Path)
     parsed = parser.parse_args(arguments)
-    if parsed.enter_sandbox_policy is not None:
+    if parsed.enter_offline_policy is not None:
         if parsed.policy_sha256 is None or parsed.policy is not None:
-            parser.error("private sandbox entry requires only policy path and digest")
+            parser.error("private offline entry requires only policy path and digest")
     elif parsed.policy_sha256 is not None:
         parser.error("public phase execution cannot accept a private policy digest")
-    if parsed.enter_sandbox_policy is None and parsed.policy is None:
+    if parsed.enter_offline_policy is None and parsed.policy is None:
         parser.error("public phase execution requires --policy")
     return parsed
 
@@ -1263,22 +1258,23 @@ def main(arguments: Sequence[str] | None = None) -> int:
     """Run one explicit launcher mode."""
 
     parsed = parse_args(arguments)
-    if parsed.enter_sandbox_policy is not None:
-        enter_sandbox(
+    if parsed.enter_offline_policy is not None:
+        enter_offline_phase(
             read_canonical_policy_file(
-                parsed.enter_sandbox_policy, parsed.policy_sha256
+                parsed.enter_offline_policy, parsed.policy_sha256
             )
         )
-        raise RuntimeError("sandbox executable returned unexpectedly")
+        raise RuntimeError("offline executable returned unexpectedly")
     raw = parsed.policy.read_bytes()
     policy = decode_policy_bytes(raw)
-    selected = next(
-        phase
+    selected_gate, selected_phase = next(
+        (f"--{mode}-{phase}", phase)
         for phase in PHASES
-        if getattr(parsed, f"execute_{phase.replace('-', '_')}")
+        for mode in ("preflight", "execute")
+        if getattr(parsed, f"{mode}_{phase.replace('-', '_')}")
     )
-    if policy.phase != selected:
-        raise ValueError("policy phase differs from explicit execution gate")
+    if policy.phase != selected_phase or policy.phase_argv[0] != selected_gate:
+        raise ValueError("policy mode or phase differs from explicit execution gate")
     return run_phase(policy)
 
 

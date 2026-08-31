@@ -343,7 +343,7 @@ printf '{{"binary_bytes":%s,"binary_sha256":"%s","schema":"borsuk-v23-incidence-
 "$(command -v uv)" python install 3.12
 "$(command -v uv)" venv --python 3.12 /opt/borsuk-incidence-venv
 "$(command -v uv)" pip install --python /opt/borsuk-incidence-venv/bin/python --requirement scripts/requirements-format-bench.txt
-/opt/borsuk-incidence-venv/bin/python scripts/launch_v23_incidence_spot.py --namespace-probe
+/opt/borsuk-incidence-venv/bin/python scripts/launch_v23_incidence_spot.py --offline-probe
 
 if ! interruption_token="$(curl --fail --silent --request PUT --header 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)"; then
   printf '{{"schema":"borsuk-v23-incidence-interruption-monitor-failed-v1"}}\n' >"$evidence/interruption-monitor-failed.json"
@@ -820,62 +820,19 @@ def launch(phase: str, run_id: str, source_commit: str) -> tuple[str, str]:
 
 
 def _identity(role: str, path: pathlib.Path, uri: str) -> Any:
-    from scripts.run_v23_leaf_page_incidence_falsifier import SandboxMount
+    from scripts.run_v23_leaf_page_incidence_falsifier import AuthenticatedInput
 
     raw = path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
-    return SandboxMount(
+    return AuthenticatedInput(
         role=role,
         source=path,
-        target=pathlib.PurePosixPath("/inputs") / path.name,
-        read_only=True,
         uri=uri,
         digest_algorithm="sha256",
         digest=digest,
         encoded_bytes=len(raw),
         generation=f"unversioned-sha256:{digest}",
     )
-
-
-def _runtime_mounts(binary: pathlib.Path) -> tuple[Any, ...]:
-    from scripts.run_v23_leaf_page_incidence_falsifier import SandboxMount
-
-    output = _run(["ldd", str(binary)]).stdout
-    paths: set[pathlib.Path] = set()
-    for line in output.splitlines():
-        for token in line.replace("=>", " ").split():
-            if token.startswith("/") and pathlib.Path(token).is_file():
-                paths.add(pathlib.Path(token))
-                break
-    cache = pathlib.Path("/etc/ld.so.cache")
-    if cache.is_file():
-        paths.add(cache)
-    if not paths:
-        raise RuntimeError("runtime dependency closure is empty")
-    mounts = []
-    for ordinal, path in enumerate(sorted(paths)):
-        raw = path.read_bytes()
-        digest = hashlib.sha256(raw).hexdigest()
-        mounts.append(
-            SandboxMount(
-                role=(
-                    "runtime-loader"
-                    if "ld-linux" in path.name
-                    else f"runtime-library-{ordinal:04d}"
-                ),
-                source=path,
-                target=pathlib.PurePosixPath(path.as_posix()),
-                read_only=True,
-                uri=f"file://{path}",
-                digest_algorithm="sha256",
-                digest=digest,
-                encoded_bytes=len(raw),
-                generation=f"unversioned-sha256:{digest}",
-            )
-        )
-    if not any(mount.role == "runtime-loader" for mount in mounts):
-        raise RuntimeError("runtime loader is absent")
-    return tuple(mounts)
 
 
 def _write_bulk_manifest(source: pathlib.Path, target: pathlib.Path, full: bool) -> None:
@@ -984,8 +941,8 @@ def _phase_policy(
     preflight_receipt: pathlib.Path | None,
 ) -> Any:
     from scripts.run_v23_leaf_page_incidence_falsifier import (
-        SandboxDirectoryCapability,
-        SandboxPolicy,
+        AuthenticatedDirectory,
+        OfflinePhasePolicy,
         build_phase_argv,
     )
 
@@ -1001,24 +958,21 @@ def _phase_policy(
     binary_bytes = binary.read_bytes()
     if hashlib.sha256(binary_bytes).hexdigest() != binary_sha256:
         raise ValueError("worker binary authority differs")
-    policy = SandboxPolicy(
+    policy = OfflinePhasePolicy(
         phase="tree-training",
         executable=binary,
         executable_sha256=binary_sha256,
         executable_bytes=len(binary_bytes),
-        runtime_mounts=_runtime_mounts(binary),
         inputs=tuple(inputs),
         scratch=scratch,
         output=output,
         parent_receipt_sha256=None,
         directory_capabilities=(
-            SandboxDirectoryCapability(
+            AuthenticatedDirectory(
                 role="bulk-inputs",
                 source=staging,
-                target=pathlib.PurePosixPath("/inputs/bulk"),
                 manifest_role="bulk-manifest",
                 staging_receipt_role="staging-receipt",
-                read_only=True,
             ),
         ),
         phase_argv=(),
@@ -1240,8 +1194,8 @@ def worker_tree(
         shutil.rmtree(root)
 
 
-def namespace_probe() -> int:
-    """Prove user/mount/network namespaces and pivot_root before data staging."""
+def offline_probe() -> int:
+    """Prove memory-pressure visibility and an isolated network namespace."""
 
     if __package__:
         from scripts.run_v23_leaf_page_incidence_falsifier import (
@@ -1251,47 +1205,28 @@ def namespace_probe() -> int:
         from run_v23_leaf_page_incidence_falsifier import _memory_psi_full_avg10
 
     _memory_psi_full_avg10(MEMORY_PSI_PATH)
-    probe_root = pathlib.Path(tempfile.mkdtemp(prefix="v23-incidence-probe-"))
     program = """
-import ctypes, os, pathlib, socket, sys
-root=pathlib.Path(sys.argv[1]); old=root/'.oldroot'
-libc=ctypes.CDLL(None,use_errno=True)
-def check(name,result):
-    if result != 0: raise OSError(ctypes.get_errno(),name)
-check('mount',libc.mount(b'tmpfs',os.fsencode(root),b'tmpfs',0,b'size=4m,mode=755'))
-old.mkdir(); os.chdir(root)
-number={'aarch64':41,'x86_64':155}[os.uname().machine]
-check('pivot_root',libc.syscall(number,os.fsencode(root),os.fsencode(old)))
-os.chdir('/'); check('umount2',libc.umount2(b'/.oldroot',2)); os.rmdir('/.oldroot')
-if pathlib.Path('/etc/hostname').exists(): raise RuntimeError('host root remains visible')
+import socket
 sock=socket.socket(); sock.settimeout(0.2)
 try: sock.connect(('169.254.169.254',80))
 except OSError: pass
 else: raise RuntimeError('network namespace is not isolated')
 """
-    try:
-        completed = subprocess.run(
-            [
-                "unshare",
-                "--user",
-                "--map-root-user",
-                "--mount",
-                "--net",
-                "--pid",
-                "--fork",
-                "--mount-proc",
-                sys.executable,
-                "-c",
-                program,
-                str(probe_root),
-            ],
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError("V23 incidence namespace probe failed")
-        return 0
-    finally:
-        probe_root.rmdir()
+    completed = subprocess.run(
+        [
+            "unshare",
+            "--net",
+            "--pid",
+            "--fork",
+            sys.executable,
+            "-c",
+            program,
+        ],
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("V23 incidence offline probe failed")
+    return 0
 
 
 def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
@@ -1301,7 +1236,7 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     private = parser.add_mutually_exclusive_group()
     private.add_argument("--worker-tree", action="store_true")
-    private.add_argument("--namespace-probe", action="store_true")
+    private.add_argument("--offline-probe", action="store_true")
     parser.add_argument("--binary", type=pathlib.Path)
     parser.add_argument("--binary-sha256")
     parser.add_argument("--evidence-directory", type=pathlib.Path)
@@ -1317,7 +1252,7 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
             )
         ):
             parser.error("worker tree arguments differ")
-    elif parsed.namespace_probe:
+    elif parsed.offline_probe:
         if any(
             (
                 parsed.phase,
@@ -1329,7 +1264,7 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
                 parsed.output_uri_prefix,
             )
         ):
-            parser.error("namespace probe arguments differ")
+            parser.error("offline probe arguments differ")
     elif (
         not parsed.phase
         or not parsed.run_id
@@ -1355,8 +1290,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
             parsed.evidence_directory.resolve(),
             parsed.output_uri_prefix,
         )
-    if parsed.namespace_probe:
-        return namespace_probe()
+    if parsed.offline_probe:
+        return offline_probe()
     source_commit = _git_source_commit()
     plan = build_launch_plan(
         phase=parsed.phase, run_id=parsed.run_id, source_commit=source_commit

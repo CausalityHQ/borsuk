@@ -45,7 +45,7 @@ use crate::{
     },
 };
 
-const V23_INCIDENCE_RECEIPT_SCHEMA: &str = "borsuk-v23-incidence-receipt-v2";
+const V23_INCIDENCE_RECEIPT_SCHEMA: &str = "borsuk-v23-incidence-receipt-v3";
 const V23_INCIDENCE_MANIFEST_SCHEMA: &str = "borsuk-v23-incidence-manifest-v1";
 const V23_INCIDENCE_PREFLIGHT_WALL_LIMIT_NS: u64 = 5_400_000_000_000;
 const V23_INCIDENCE_SOURCE_COMMIT: &str = "c339a546f8f9370cb2e6e9fb3b0fd4bdefa3cb05";
@@ -122,7 +122,7 @@ pub struct V23IncidenceObjectIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// One authenticated object identity paired with its sandbox-local path.
+/// One authenticated object identity paired with its phase-local path.
 pub struct V23IncidenceLocalRolePath {
     /// Registered immutable object identity.
     pub identity: V23IncidenceObjectIdentity,
@@ -254,7 +254,7 @@ impl V23IncidenceInputAuthority {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct V23IncidenceCapabilityProbes {
     pub(crate) network_namespace_changed: bool,
-    pub(crate) host_canary_denied: bool,
+    pub(crate) forbidden_roles_absent: bool,
     pub(crate) network_canary_denied: bool,
     pub(crate) allowlisted_inputs_opened: bool,
     pub(crate) output_writable: bool,
@@ -841,32 +841,32 @@ fn v23_incidence_training_row_stream(
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct V23IncidenceSandboxProbeEnvelope {
+struct V23IncidenceOfflineProbeEnvelope {
     allowlisted_inputs_opened: bool,
-    host_canary_denied: bool,
+    forbidden_roles_absent: bool,
     network_canary_denied: bool,
     network_namespace_changed: bool,
     network_namespace_inode: u64,
     output_writable: bool,
 }
 
-fn parse_v23_incidence_sandbox_probes(raw: &str) -> Result<(V23IncidenceCapabilityProbes, u64)> {
-    let envelope: V23IncidenceSandboxProbeEnvelope =
+fn parse_v23_incidence_offline_probes(raw: &str) -> Result<(V23IncidenceCapabilityProbes, u64)> {
+    let envelope: V23IncidenceOfflineProbeEnvelope =
         serde_json::from_str(raw).map_err(|error| {
             BorsukError::InvalidStorage(format!(
-                "V23 incidence sandbox probe JSON differs: {error}"
+                "V23 incidence offline probe JSON differs: {error}"
             ))
         })?;
     let probes = V23IncidenceCapabilityProbes {
         network_namespace_changed: envelope.network_namespace_changed,
-        host_canary_denied: envelope.host_canary_denied,
+        forbidden_roles_absent: envelope.forbidden_roles_absent,
         network_canary_denied: envelope.network_canary_denied,
         allowlisted_inputs_opened: envelope.allowlisted_inputs_opened,
         output_writable: envelope.output_writable,
     };
     if envelope.network_namespace_inode == 0 || !probes.all_passed() {
         return Err(BorsukError::InvalidStorage(
-            "V23 incidence sandbox probes differ".to_string(),
+            "V23 incidence offline probes differ".to_string(),
         ));
     }
     Ok((probes, envelope.network_namespace_inode))
@@ -1334,7 +1334,7 @@ pub(crate) fn canonical_v23_incidence_preflight_bytes(
         executable_sha256: expected_authority.executable_sha256.clone(),
         fma_backend: expected_authority.fma_backend,
         network_namespace_inode: expected_authority.network_namespace_inode,
-        ordered_mounts: expected_authority.ordered_inputs.clone(),
+        ordered_inputs: expected_authority.ordered_inputs.clone(),
         probes: expected_authority.probes.clone(),
         preflight_evidence: Some(evidence.clone()),
         final_progress_sha256: None,
@@ -1416,7 +1416,7 @@ pub(crate) struct V23IncidenceManifest {
 impl V23IncidenceCapabilityProbes {
     fn all_passed(&self) -> bool {
         self.network_namespace_changed
-            && self.host_canary_denied
+            && self.forbidden_roles_absent
             && self.network_canary_denied
             && self.allowlisted_inputs_opened
             && self.output_writable
@@ -1433,7 +1433,7 @@ pub(crate) struct V23IncidenceReceipt {
     pub(crate) executable_sha256: String,
     pub(crate) fma_backend: V23FmaBackend,
     pub(crate) network_namespace_inode: u64,
-    pub(crate) ordered_mounts: Vec<V23IncidenceObjectIdentity>,
+    pub(crate) ordered_inputs: Vec<V23IncidenceObjectIdentity>,
     pub(crate) probes: V23IncidenceCapabilityProbes,
     pub(crate) preflight_evidence: Option<V23IncidencePreflightEvidence>,
     pub(crate) final_progress_sha256: Option<String>,
@@ -2301,7 +2301,7 @@ fn validate_v23_incidence_parent_receipt(
         receipt
             .outputs
             .iter()
-            .chain(receipt.ordered_mounts.iter())
+            .chain(receipt.ordered_inputs.iter())
             .find(|identity| identity.role == role)
     };
     let bound_roles: &[&str] = match phase {
@@ -2380,7 +2380,7 @@ fn authenticate_v23_incidence_tree_inputs_with_progress(
 fn run_v23_incidence_tree_preflight(
     request: &V23IncidenceLocalPhaseRequest,
     binding: V23IncidenceManifestBinding,
-    sandbox_probes: &str,
+    offline_probes: &str,
 ) -> Result<Vec<u8>> {
     let measured_inputs = authenticate_v23_incidence_request_inputs(&request.input_paths)?;
     let training_path = request
@@ -2403,7 +2403,7 @@ fn run_v23_incidence_tree_preflight(
         })?,
     )?;
     let measured_kernel = measure_v23_incidence_tree_preflight(&rows)?;
-    let (probes, network_namespace_inode) = parse_v23_incidence_sandbox_probes(sandbox_probes)?;
+    let (probes, network_namespace_inode) = parse_v23_incidence_offline_probes(offline_probes)?;
     let authority = V23IncidencePreflightAuthority {
         parent_receipt_sha256: binding.parent_receipt_sha256,
         executable_sha256: request.executable_sha256.clone(),
@@ -2431,7 +2431,7 @@ fn run_v23_incidence_tree_preflight(
 fn run_v23_incidence_posting_preflight(
     request: &V23IncidenceLocalPhaseRequest,
     binding: V23IncidenceManifestBinding,
-    sandbox_probes: &str,
+    offline_probes: &str,
 ) -> Result<Vec<u8>> {
     let measured_inputs = authenticate_v23_incidence_request_inputs(&request.input_paths)?;
     let tree_path = request
@@ -2464,7 +2464,7 @@ fn run_v23_incidence_posting_preflight(
         .collect::<Result<Vec<_>>>()?;
     let measured_kernel = measure_v23_incidence_posting_pages_preflight(&tree_bytes, &pages)?;
     let measured_records = measure_v23_incidence_posting_sort_preflight(&request.scratch_path)?;
-    let (probes, network_namespace_inode) = parse_v23_incidence_sandbox_probes(sandbox_probes)?;
+    let (probes, network_namespace_inode) = parse_v23_incidence_offline_probes(offline_probes)?;
     let authority = V23IncidencePreflightAuthority {
         parent_receipt_sha256: binding.parent_receipt_sha256,
         executable_sha256: request.executable_sha256.clone(),
@@ -2499,7 +2499,7 @@ fn run_v23_incidence_posting_preflight(
 fn run_v23_incidence_holdout_binding_preflight(
     request: &V23IncidenceLocalPhaseRequest,
     binding: V23IncidenceManifestBinding,
-    sandbox_probes: &str,
+    offline_probes: &str,
 ) -> Result<Vec<u8>> {
     let mut measured_inputs = authenticate_v23_incidence_request_inputs(&request.input_paths)?;
     let decode_started = Instant::now();
@@ -2533,7 +2533,7 @@ fn run_v23_incidence_holdout_binding_preflight(
     let mut probe = [0.0_f32; 96];
     probe[0] = 1.0;
     let measured_kernel = measure_v23_incidence_tree_preflight(&[probe])?;
-    let (probes, network_namespace_inode) = parse_v23_incidence_sandbox_probes(sandbox_probes)?;
+    let (probes, network_namespace_inode) = parse_v23_incidence_offline_probes(offline_probes)?;
     let authority = V23IncidencePreflightAuthority {
         parent_receipt_sha256: binding.parent_receipt_sha256,
         executable_sha256: request.executable_sha256.clone(),
@@ -2568,7 +2568,7 @@ fn run_v23_incidence_holdout_binding_preflight(
 fn run_v23_incidence_evaluation_preflight(
     request: &V23IncidenceLocalPhaseRequest,
     binding: V23IncidenceManifestBinding,
-    sandbox_probes: &str,
+    offline_probes: &str,
     phase: V23IncidencePhase,
 ) -> Result<Vec<u8>> {
     let measured_inputs = authenticate_v23_incidence_request_inputs(&request.input_paths)?;
@@ -2603,7 +2603,7 @@ fn run_v23_incidence_evaluation_preflight(
     let mut probe = [0.0_f32; 96];
     probe[0] = 1.0;
     let measured_kernel = measure_v23_incidence_tree_preflight(&[probe])?;
-    let (probes, network_namespace_inode) = parse_v23_incidence_sandbox_probes(sandbox_probes)?;
+    let (probes, network_namespace_inode) = parse_v23_incidence_offline_probes(offline_probes)?;
     let authority = V23IncidencePreflightAuthority {
         parent_receipt_sha256: binding.parent_receipt_sha256,
         executable_sha256: request.executable_sha256.clone(),
@@ -2711,7 +2711,7 @@ fn run_v23_incidence_tree_training(
     manifest: &V23IncidenceManifest,
     preflight: &V23IncidenceReceipt,
     preflight_bytes: &[u8],
-    sandbox_probes: &str,
+    offline_probes: &str,
 ) -> Result<Vec<u8>> {
     let manifest_identity = request
         .input_paths
@@ -2880,7 +2880,7 @@ fn run_v23_incidence_tree_training(
             "V23 incidence execution FMA backend differs".to_string(),
         ));
     }
-    let (probes, network_namespace_inode) = parse_v23_incidence_sandbox_probes(sandbox_probes)?;
+    let (probes, network_namespace_inode) = parse_v23_incidence_offline_probes(offline_probes)?;
     validate_v23_incidence_execution_namespace(
         preflight.network_namespace_inode,
         network_namespace_inode,
@@ -2902,7 +2902,7 @@ fn run_v23_incidence_tree_training(
         executable_sha256: request.executable_sha256.clone(),
         fma_backend: kernel.fma_backend,
         network_namespace_inode,
-        ordered_mounts: request
+        ordered_inputs: request
             .input_paths
             .iter()
             .map(|input| input.identity.clone())
@@ -2929,7 +2929,7 @@ fn run_v23_incidence_posting_build(
     request: &V23IncidenceLocalPhaseRequest,
     preflight: &V23IncidenceReceipt,
     preflight_bytes: &[u8],
-    sandbox_probes: &str,
+    offline_probes: &str,
 ) -> Result<Vec<u8>> {
     authenticate_v23_incidence_request_inputs(&request.input_paths)?;
     let tree_path = request
@@ -2969,7 +2969,7 @@ fn run_v23_incidence_posting_build(
             "V23 incidence execution FMA backend differs".to_string(),
         ));
     }
-    let (probes, network_namespace_inode) = parse_v23_incidence_sandbox_probes(sandbox_probes)?;
+    let (probes, network_namespace_inode) = parse_v23_incidence_offline_probes(offline_probes)?;
     validate_v23_incidence_execution_namespace(
         preflight.network_namespace_inode,
         network_namespace_inode,
@@ -3025,7 +3025,7 @@ fn run_v23_incidence_posting_build(
         executable_sha256: request.executable_sha256.clone(),
         fma_backend,
         network_namespace_inode,
-        ordered_mounts: request
+        ordered_inputs: request
             .input_paths
             .iter()
             .map(|input| input.identity.clone())
@@ -3055,7 +3055,7 @@ fn run_v23_incidence_development_evaluation(
     request: &V23IncidenceLocalPhaseRequest,
     preflight: &V23IncidenceReceipt,
     preflight_bytes: &[u8],
-    sandbox_probes: &str,
+    offline_probes: &str,
 ) -> Result<Vec<u8>> {
     authenticate_v23_incidence_request_inputs(&request.input_paths)?;
     let read_role = |role: &str| -> Result<(&V23IncidenceObjectIdentity, Vec<u8>)> {
@@ -3161,7 +3161,7 @@ fn run_v23_incidence_development_evaluation(
             "V23 incidence execution FMA backend differs".to_string(),
         ));
     }
-    let (probes, network_namespace_inode) = parse_v23_incidence_sandbox_probes(sandbox_probes)?;
+    let (probes, network_namespace_inode) = parse_v23_incidence_offline_probes(offline_probes)?;
     validate_v23_incidence_execution_namespace(
         preflight.network_namespace_inode,
         network_namespace_inode,
@@ -3195,7 +3195,7 @@ fn run_v23_incidence_development_evaluation(
         executable_sha256: request.executable_sha256.clone(),
         fma_backend,
         network_namespace_inode,
-        ordered_mounts: request
+        ordered_inputs: request
             .input_paths
             .iter()
             .map(|input| input.identity.clone())
@@ -3225,7 +3225,7 @@ fn run_v23_incidence_holdout_binding(
     request: &V23IncidenceLocalPhaseRequest,
     preflight: &V23IncidenceReceipt,
     preflight_bytes: &[u8],
-    sandbox_probes: &str,
+    offline_probes: &str,
 ) -> Result<Vec<u8>> {
     authenticate_v23_incidence_request_inputs(&request.input_paths)?;
     let role = |name: &str| {
@@ -3353,7 +3353,7 @@ fn run_v23_incidence_holdout_binding(
             "V23 incidence execution FMA backend differs".to_string(),
         ));
     }
-    let (probes, network_namespace_inode) = parse_v23_incidence_sandbox_probes(sandbox_probes)?;
+    let (probes, network_namespace_inode) = parse_v23_incidence_offline_probes(offline_probes)?;
     validate_v23_incidence_execution_namespace(
         preflight.network_namespace_inode,
         network_namespace_inode,
@@ -3374,7 +3374,7 @@ fn run_v23_incidence_holdout_binding(
         executable_sha256: request.executable_sha256.clone(),
         fma_backend: kernel.fma_backend,
         network_namespace_inode,
-        ordered_mounts: request
+        ordered_inputs: request
             .input_paths
             .iter()
             .map(|input| input.identity.clone())
@@ -3417,7 +3417,7 @@ fn run_v23_incidence_holdout_evaluation(
     request: &V23IncidenceLocalPhaseRequest,
     preflight: &V23IncidenceReceipt,
     preflight_bytes: &[u8],
-    sandbox_probes: &str,
+    offline_probes: &str,
 ) -> Result<Vec<u8>> {
     authenticate_v23_incidence_request_inputs(&request.input_paths)?;
     let read = |role: &str| -> Result<(&V23IncidenceObjectIdentity, Vec<u8>)> {
@@ -3589,7 +3589,7 @@ fn run_v23_incidence_holdout_evaluation(
             "V23 incidence execution FMA backend differs".to_string(),
         ));
     }
-    let (probes, network_namespace_inode) = parse_v23_incidence_sandbox_probes(sandbox_probes)?;
+    let (probes, network_namespace_inode) = parse_v23_incidence_offline_probes(offline_probes)?;
     validate_v23_incidence_execution_namespace(
         preflight.network_namespace_inode,
         network_namespace_inode,
@@ -3623,7 +3623,7 @@ fn run_v23_incidence_holdout_evaluation(
         executable_sha256: request.executable_sha256.clone(),
         fma_backend,
         network_namespace_inode,
-        ordered_mounts: request
+        ordered_inputs: request
             .input_paths
             .iter()
             .map(|input| input.identity.clone())
@@ -3651,7 +3651,7 @@ fn run_v23_incidence_holdout_evaluation(
 
 fn run_v23_incidence_local_phase_with_probes(
     request: V23IncidenceLocalPhaseRequest,
-    sandbox_probes: &str,
+    offline_probes: &str,
 ) -> Result<Vec<u8>> {
     request.validate()?;
     let bytes = fs::read(&request.manifest_path).map_err(|source| BorsukError::Io {
@@ -3708,18 +3708,18 @@ fn run_v23_incidence_local_phase_with_probes(
     };
     match request.mode {
         V23IncidenceRunMode::Preflight(V23IncidencePhase::TreeTraining) => {
-            run_v23_incidence_tree_preflight(&request, binding, sandbox_probes)
+            run_v23_incidence_tree_preflight(&request, binding, offline_probes)
         }
         V23IncidenceRunMode::Preflight(V23IncidencePhase::PostingConstruction) => {
-            run_v23_incidence_posting_preflight(&request, binding, sandbox_probes)
+            run_v23_incidence_posting_preflight(&request, binding, offline_probes)
         }
         V23IncidenceRunMode::Preflight(V23IncidencePhase::HoldoutBinding) => {
-            run_v23_incidence_holdout_binding_preflight(&request, binding, sandbox_probes)
+            run_v23_incidence_holdout_binding_preflight(&request, binding, offline_probes)
         }
         V23IncidenceRunMode::Preflight(
             phase @ (V23IncidencePhase::DevelopmentEvaluation
             | V23IncidencePhase::HoldoutEvaluation),
-        ) => run_v23_incidence_evaluation_preflight(&request, binding, sandbox_probes, phase),
+        ) => run_v23_incidence_evaluation_preflight(&request, binding, offline_probes, phase),
         V23IncidenceRunMode::Execute(V23IncidencePhase::TreeTraining) => {
             let (preflight, preflight_bytes) = execution_preflight.as_ref().unwrap();
             run_v23_incidence_tree_training(
@@ -3727,12 +3727,12 @@ fn run_v23_incidence_local_phase_with_probes(
                 &manifest,
                 preflight,
                 preflight_bytes,
-                sandbox_probes,
+                offline_probes,
             )
         }
         V23IncidenceRunMode::Execute(V23IncidencePhase::PostingConstruction) => {
             let (preflight, preflight_bytes) = execution_preflight.as_ref().unwrap();
-            run_v23_incidence_posting_build(&request, preflight, preflight_bytes, sandbox_probes)
+            run_v23_incidence_posting_build(&request, preflight, preflight_bytes, offline_probes)
         }
         V23IncidenceRunMode::Execute(V23IncidencePhase::DevelopmentEvaluation) => {
             let (preflight, preflight_bytes) = execution_preflight.as_ref().unwrap();
@@ -3740,12 +3740,12 @@ fn run_v23_incidence_local_phase_with_probes(
                 &request,
                 preflight,
                 preflight_bytes,
-                sandbox_probes,
+                offline_probes,
             )
         }
         V23IncidenceRunMode::Execute(V23IncidencePhase::HoldoutBinding) => {
             let (preflight, preflight_bytes) = execution_preflight.as_ref().unwrap();
-            run_v23_incidence_holdout_binding(&request, preflight, preflight_bytes, sandbox_probes)
+            run_v23_incidence_holdout_binding(&request, preflight, preflight_bytes, offline_probes)
         }
         V23IncidenceRunMode::Execute(V23IncidencePhase::HoldoutEvaluation) => {
             let (preflight, preflight_bytes) = execution_preflight.as_ref().unwrap();
@@ -3753,7 +3753,7 @@ fn run_v23_incidence_local_phase_with_probes(
                 &request,
                 preflight,
                 preflight_bytes,
-                sandbox_probes,
+                offline_probes,
             )
         }
     }
@@ -3761,10 +3761,10 @@ fn run_v23_incidence_local_phase_with_probes(
 
 /// Runs one authenticated local-only V23 incidence preflight or phase.
 pub fn run_v23_incidence_local_phase(request: V23IncidenceLocalPhaseRequest) -> Result<Vec<u8>> {
-    let sandbox_probes = std::env::var("BORSUK_V23_INCIDENCE_SANDBOX_PROBES").map_err(|_| {
-        BorsukError::InvalidStorage("V23 incidence sandbox probes are absent".to_string())
+    let offline_probes = std::env::var("BORSUK_V23_INCIDENCE_OFFLINE_PROBES").map_err(|_| {
+        BorsukError::InvalidStorage("V23 incidence offline probes are absent".to_string())
     })?;
-    run_v23_incidence_local_phase_with_probes(request, &sandbox_probes)
+    run_v23_incidence_local_phase_with_probes(request, &offline_probes)
 }
 
 /// Runs one bounded directory-backed, authenticated local-only incidence phase.
@@ -3845,7 +3845,7 @@ fn validate_receipt(receipt: &V23IncidenceReceipt) -> Result<()> {
         || !valid_lower_hex(&receipt.executable_sha256, 64)
         || receipt.fma_backend == V23FmaBackend::ScalarControl
         || receipt.network_namespace_inode == 0
-        || receipt.ordered_mounts.is_empty()
+        || receipt.ordered_inputs.is_empty()
         || !receipt.probes.all_passed()
         || !result_shape_is_valid
         || !progress_shape_is_valid
@@ -3854,7 +3854,7 @@ fn validate_receipt(receipt: &V23IncidenceReceipt) -> Result<()> {
             "V23 incidence receipt authority differs".to_string(),
         ));
     }
-    validate_identity_list(&receipt.ordered_mounts)?;
+    validate_identity_list(&receipt.ordered_inputs)?;
     validate_identity_list(&receipt.outputs)?;
     if let Some(evidence) = &receipt.preflight_evidence {
         let authority = V23IncidencePreflightAuthority {
@@ -3864,7 +3864,7 @@ fn validate_receipt(receipt: &V23IncidenceReceipt) -> Result<()> {
             network_namespace_inode: receipt.network_namespace_inode,
             probes: receipt.probes.clone(),
             full_input_bytes: evidence.full_input_bytes,
-            ordered_inputs: receipt.ordered_mounts.clone(),
+            ordered_inputs: receipt.ordered_inputs.clone(),
         };
         if project_v23_incidence_preflight(
             v23_incidence_preflight_work(receipt.phase),
@@ -3878,12 +3878,12 @@ fn validate_receipt(receipt: &V23IncidenceReceipt) -> Result<()> {
         }
     }
     let mounted_roles = receipt
-        .ordered_mounts
+        .ordered_inputs
         .iter()
         .map(|identity| identity.role.as_str())
         .collect::<BTreeSet<_>>();
     let mounted_uris = receipt
-        .ordered_mounts
+        .ordered_inputs
         .iter()
         .map(|identity| identity.uri.as_str())
         .collect::<BTreeSet<_>>();
@@ -4404,7 +4404,7 @@ mod tests {
         encode_v23_incidence_development_latency_bundle,
         measure_v23_incidence_posting_pages_preflight,
         measure_v23_incidence_posting_sort_preflight, measure_v23_incidence_tree_preflight,
-        parse_v23_incidence_sandbox_probes, phase_manifest_roles, project_v23_incidence_preflight,
+        parse_v23_incidence_offline_probes, phase_manifest_roles, project_v23_incidence_preflight,
         read_v23_incidence_preflight_receipt, read_v23_incidence_training_preflight_rows,
         recompute_v23_incidence_layout_quality, run_v23_incidence_holdout_evaluation,
         run_v23_incidence_local_phase_with_probes, v23_incidence_page_posting_stream,
@@ -4594,7 +4594,7 @@ mod tests {
             network_namespace_inode: 91,
             probes: V23IncidenceCapabilityProbes {
                 network_namespace_changed: true,
-                host_canary_denied: true,
+                forbidden_roles_absent: true,
                 network_canary_denied: true,
                 allowlisted_inputs_opened: true,
                 output_writable: true,
@@ -4653,7 +4653,7 @@ mod tests {
             network_namespace_inode: 91,
             probes: V23IncidenceCapabilityProbes {
                 network_namespace_changed: true,
-                host_canary_denied: true,
+                forbidden_roles_absent: true,
                 network_canary_denied: true,
                 allowlisted_inputs_opened: true,
                 output_writable: true,
@@ -4676,10 +4676,10 @@ mod tests {
             executable_sha256: "11".repeat(32),
             fma_backend: V23FmaBackend::Aarch64NeonFma,
             network_namespace_inode: 91,
-            ordered_mounts: vec![object("construction-manifest", "sha256", &"22".repeat(32))],
+            ordered_inputs: vec![object("construction-manifest", "sha256", &"22".repeat(32))],
             probes: V23IncidenceCapabilityProbes {
                 network_namespace_changed: true,
-                host_canary_denied: true,
+                forbidden_roles_absent: true,
                 network_canary_denied: true,
                 allowlisted_inputs_opened: true,
                 output_writable: true,
@@ -5127,11 +5127,11 @@ mod tests {
         assert!(canonical_receipt(&changed).is_err());
 
         let mut changed = receipt_fixture();
-        changed.outputs[0].role = changed.ordered_mounts[0].role.clone();
+        changed.outputs[0].role = changed.ordered_inputs[0].role.clone();
         assert!(canonical_receipt(&changed).is_err());
 
         let mut changed = receipt_fixture();
-        changed.outputs[0].uri = changed.ordered_mounts[0].uri.clone();
+        changed.outputs[0].uri = changed.ordered_inputs[0].uri.clone();
         assert!(canonical_receipt(&changed).is_err());
 
         let receipt = receipt_fixture();
@@ -5151,6 +5151,25 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn v23_incidence_authority_receipt_names_inputs_without_legacy_mounts() {
+        let bytes = canonical_receipt(&receipt_fixture()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(
+            object.get("schema").and_then(serde_json::Value::as_str),
+            Some("borsuk-v23-incidence-receipt-v3")
+        );
+        assert!(object.contains_key("ordered_inputs"));
+        assert!(!object.contains_key("ordered_mounts"));
+        let probes = object
+            .get("probes")
+            .and_then(serde_json::Value::as_object)
+            .unwrap();
+        assert!(probes.contains_key("forbidden_roles_absent"));
+        assert!(!probes.contains_key("host_canary_denied"));
     }
 
     #[test]
@@ -5700,11 +5719,27 @@ mod tests {
         changed.encoded_bytes += 1;
         assert!(authenticate_v23_incidence_local_path(&path, &changed).is_err());
 
-        let raw = r#"{"allowlisted_inputs_opened":true,"host_canary_denied":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":91,"output_writable":true}"#;
-        let (probes, inode) = parse_v23_incidence_sandbox_probes(raw).unwrap();
+        let raw = r#"{"allowlisted_inputs_opened":true,"forbidden_roles_absent":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":91,"output_writable":true}"#;
+        let (probes, inode) = parse_v23_incidence_offline_probes(raw).unwrap();
         assert!(probes.all_passed());
         assert_eq!(inode, 91);
-        assert!(parse_v23_incidence_sandbox_probes(&raw.replace("true", "false")).is_err());
+        assert!(parse_v23_incidence_offline_probes(&raw.replace("true", "false")).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_offline_probes_bind_forbidden_role_absence() {
+        let raw = r#"{"allowlisted_inputs_opened":true,"forbidden_roles_absent":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":91,"output_writable":true}"#;
+        let (probes, inode) = parse_v23_incidence_offline_probes(raw).unwrap();
+        assert!(probes.all_passed());
+        assert!(probes.forbidden_roles_absent);
+        assert_eq!(inode, 91);
+        assert!(
+            parse_v23_incidence_offline_probes(&raw.replace(
+                "\"forbidden_roles_absent\":true",
+                "\"host_canary_denied\":true"
+            ))
+            .is_err()
+        );
     }
 
     #[test]
@@ -5858,7 +5893,7 @@ mod tests {
             output_path: directory.path().join("preflight.json"),
             executable_sha256: "95".repeat(32),
         };
-        let probes = r#"{"allowlisted_inputs_opened":true,"host_canary_denied":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":92,"output_writable":true}"#;
+        let probes = r#"{"allowlisted_inputs_opened":true,"forbidden_roles_absent":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":92,"output_writable":true}"#;
         let receipt = run_v23_incidence_local_phase_with_probes(request, probes).unwrap();
         let parsed: V23IncidenceReceipt = serde_json::from_slice(&receipt).unwrap();
         let evidence = parsed.preflight_evidence.unwrap();
@@ -5915,7 +5950,7 @@ mod tests {
             network_namespace_inode: 91,
             probes: V23IncidenceCapabilityProbes {
                 network_namespace_changed: true,
-                host_canary_denied: true,
+                forbidden_roles_absent: true,
                 network_canary_denied: true,
                 allowlisted_inputs_opened: true,
                 output_writable: true,
@@ -5983,7 +6018,7 @@ mod tests {
                 executable_sha256: "95".repeat(32),
             }
         };
-        let probes = r#"{"allowlisted_inputs_opened":true,"host_canary_denied":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":91,"output_writable":true}"#;
+        let probes = r#"{"allowlisted_inputs_opened":true,"forbidden_roles_absent":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":91,"output_writable":true}"#;
         let error = run_v23_incidence_local_phase_with_probes(
             request_for(&passing_preflight_bytes),
             probes,
@@ -6209,7 +6244,7 @@ mod tests {
             &request,
             &receipt_fixture(),
             b"preflight\n",
-            r#"{"allowlisted_inputs_opened":true,"host_canary_denied":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":92,"output_writable":true}"#,
+            r#"{"allowlisted_inputs_opened":true,"forbidden_roles_absent":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":92,"output_writable":true}"#,
         )
         .unwrap_err();
         assert!(error.to_string().contains("development-result is absent"));
@@ -6331,7 +6366,7 @@ mod tests {
             output_path: directory.path().join("preflight.json"),
             executable_sha256: "95".repeat(32),
         };
-        let probes = r#"{"allowlisted_inputs_opened":true,"host_canary_denied":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":91,"output_writable":true}"#;
+        let probes = r#"{"allowlisted_inputs_opened":true,"forbidden_roles_absent":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":91,"output_writable":true}"#;
         let receipt = run_v23_incidence_local_phase_with_probes(request, probes).unwrap();
         let parsed: V23IncidenceReceipt = serde_json::from_slice(&receipt).unwrap();
         let evidence = parsed.preflight_evidence.unwrap();
@@ -6465,7 +6500,7 @@ mod tests {
             output_path: directory.path().join("preflight.json"),
             executable_sha256: "95".repeat(32),
         };
-        let probes = r#"{"allowlisted_inputs_opened":true,"host_canary_denied":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":91,"output_writable":true}"#;
+        let probes = r#"{"allowlisted_inputs_opened":true,"forbidden_roles_absent":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":91,"output_writable":true}"#;
         let receipt = run_v23_incidence_local_phase_with_probes(request, probes).unwrap();
         let parsed: V23IncidenceReceipt = serde_json::from_slice(&receipt).unwrap();
         let evidence = parsed.preflight_evidence.unwrap();
@@ -6612,7 +6647,7 @@ mod tests {
             executable_sha256: "95".repeat(32),
             fma_backend: V23FmaBackend::Aarch64NeonFma,
             network_namespace_inode: 91,
-            ordered_mounts: vec![V23IncidenceObjectIdentity {
+            ordered_inputs: vec![V23IncidenceObjectIdentity {
                 role: mount_role.to_string(),
                 uri: format!("file:///test-input/{phase_name}/manifest"),
                 digest_algorithm: "sha256".to_string(),
@@ -6622,7 +6657,7 @@ mod tests {
             }],
             probes: V23IncidenceCapabilityProbes {
                 network_namespace_changed: true,
-                host_canary_denied: true,
+                forbidden_roles_absent: true,
                 network_canary_denied: true,
                 allowlisted_inputs_opened: true,
                 output_writable: true,
