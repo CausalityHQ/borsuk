@@ -4,9 +4,9 @@
 
 **Goal:** Build a local, claim-ineligible 65,536-leaf corpus-trained page-incidence falsifier with capability-separated construction, burned-query development selection, and one sealed untouched holdout.
 
-**Architecture:** A private Rust subsystem authenticates inputs, trains the deterministic balanced spherical tree, externally builds capped leaf-to-page postings, and evaluates the frozen 18-cell ladder. A dedicated local-file example exposes phase-specific commands; a Python launcher creates the allowlisted offline namespace, chains receipts, and refuses to reveal later-phase inputs early. No production search, Storage, object-store, AWS, page-fetch, or D3 API is added.
+**Architecture:** A private Rust subsystem authenticates inputs, trains the deterministic balanced spherical tree, externally builds capped leaf-to-page postings, and evaluates the frozen 18-cell ladder. A dedicated local-file example exposes phase-specific commands; a Python orchestrator assigns each phase to a fresh disposable worker, stages only that phase's authenticated inputs, launches the child offline, chains receipts, and refuses to create later-phase workers early. No production search, Storage, object-store, AWS, page-fetch, or D3 API is added.
 
-**Tech Stack:** Rust 2024, Arrow/Parquet 58.3, `half`, architecture-specific `core::arch` fused-f32 intrinsics, `rayon`, `serde`, `sha2`, `blake3`, Python 3.12 standard library, util-linux namespace/mount tools.
+**Tech Stack:** Rust 2024, Arrow/Parquet 58.3, `half`, architecture-specific `core::arch` fused-f32 intrinsics, `rayon`, `serde`, `sha2`, `blake3`, Python 3.12 standard library, util-linux network/PID namespaces, and ephemeral EC2 Spot workers.
 
 **Spec:** `docs/superpowers/specs/2026-08-30-v23-leaf-page-incidence-falsifier-design.md`
 
@@ -19,9 +19,13 @@
 - Evaluate cells in cap 512/1,024/2,048, assignment one/two, probe 32/64/128 lexicographic order; only the first fully passing development cell reaches holdout.
 - Enforce exact-eight-page selection, 975,000/800,000/995,000 ppm quality, 3 GiB serving projection, 262,144 visits, 8,192 observed touched pages, and 15,000,000 ns warm native p99.
 - Enforce 2 GiB build RSS, 2 GiB scratch free-space, PSI/swap/progress/two-hour stops, exact digest chains, deterministic scalar/SIMD equality, and canonical newline-terminated receipts.
-- Keep process arguments and mount count bounded independently of shard/page
-  count: pass one canonical policy file by path+digest, and expose corpus bytes
-  through manifest-backed read-only directory capabilities.
+- Keep process arguments bounded independently of shard/page count: pass one
+  manifest and one directory path per bulk role, never one argument per object.
+- Use one fresh disposable worker per phase/attempt. Stage no later-phase role,
+  start science with network and AWS credential access absent, upload receipts
+  from the parent after child exit, and terminate the worker immediately.
+- Forbid custom roots, `pivot_root`, `ldd`, runtime-loader discovery, and
+  runtime-library mounts. The normal OS runtime is not scientific authority.
 - Stage immutable S3 objects only in a separate credentialed process; scientific
   phases remain offline and authenticate Arrow/Parquet/binary bytes before use.
 - Build both posting arms from one authenticated page decode/stream and emit
@@ -38,7 +42,7 @@
 - Create `crates/borsuk/src/v23_incidence_eval.rs`: query/neighbor authority, scalar/SIMD page scoring, oracle recomputation, development selection, holdout binding, and campaign results.
 - Modify `crates/borsuk/src/lib.rs`: declare the private modules and doc-hidden local-file phase boundary only.
 - Create `crates/borsuk/examples/v23_leaf_page_incidence_falsifier.rs`: strict local-only phase CLI with no network/storage/page-fetch surface.
-- Create `scripts/run_v23_leaf_page_incidence_falsifier.py`: namespace/mount capability boundary, receipt-ordered phase orchestration, resource monitoring, and explicit cleanup.
+- Create `scripts/run_v23_leaf_page_incidence_falsifier.py`: offline child boundary, receipt-ordered phase execution, resource monitoring, complete staged-input inventory, and explicit cleanup.
 - Create `scripts/test_run_v23_leaf_page_incidence_falsifier.py`: launcher command, capability, ordering, stop, and cleanup tests.
 - Create `scripts/stage_v23_leaf_page_incidence_inputs.py`: credentialed,
   manifest-only S3 staging with exact generation/length/digest verification.
@@ -172,120 +176,102 @@ git add crates/borsuk/src/v23_incidence.rs crates/borsuk/src/lib.rs
 git commit -m "Add V23 incidence authority boundary"
 ```
 
-### Task 2: Capability-separated sandbox launcher
+### Task 2: Disposable offline phase worker
 
 **Files:**
 - Create: `scripts/run_v23_leaf_page_incidence_falsifier.py`
 - Create: `scripts/test_run_v23_leaf_page_incidence_falsifier.py`
+- Modify: `scripts/launch_v23_incidence_spot.py`
+- Modify: `scripts/test_launch_v23_incidence_spot.py`
+- Modify: `crates/borsuk/src/v23_incidence.rs`
 
 **Interfaces:**
-- Consumes: `V23IncidencePhase` names and canonical receipt schema from Task 1.
-- Produces: `SandboxMount`, `DirectoryCapability`, `SandboxPolicy`,
-  `write_canonical_policy_file(policy)`, `build_unshare_command(policy_path,
-  policy_sha256)`, `monitor_process_group(pid, limits)`, `run_phase(policy)`,
-  and explicit matching `--preflight-<phase>` / `--execute-<phase>` CLIs.
+- Consumes: `V23IncidencePhase` names, canonical receipt schema, one
+  authenticated staging receipt, and one fresh EC2 instance identity.
+- Produces: `AuthenticatedInput`, `AuthenticatedDirectory`,
+  `OfflinePhasePolicy`, `write_canonical_policy_file(policy)`,
+  `build_offline_command(policy_path, policy_sha256)`,
+  `monitor_process_group(pid, limits)`, `run_phase(policy)`, and explicit
+  matching `--preflight-<phase>` / `--execute-<phase>` CLIs.
 
-- [ ] **Step 1: Write the sandbox RED tests**
+- [ ] **Step 1: Write the offline-worker RED tests**
 
-```python
-class SandboxPolicyTests(unittest.TestCase):
-    def test_training_mounts_only_manifest_shards_binary_runtime_and_output(self):
-        policy = training_policy_fixture()
-        command = subject.build_unshare_command(policy)
-        self.assertEqual(policy.phase, "tree-training")
-        self.assertNotIn("query.parquet", " ".join(command))
-        self.assertNotIn("neighbors.parquet", " ".join(command))
-        self.assertNotIn("pages", " ".join(command))
-        self.assertIn("--user", command)
-        self.assertIn("--mount", command)
-        self.assertIn("--net", command)
+Add tests requiring the generated worker and Python call graph to contain no
+`ldd`, `pivot_root`, runtime-loader/library role, tmpfs root, bind mount, or
+`--mount` namespace. Require a canonical policy with zero runtime mounts, one
+complete manifest-backed staged directory, exact executable/input identities,
+and a child command containing `unshare --net --pid --fork --mount-proc` but no
+user or mount namespace. Mutation-lock a staged extra file, absent registered
+file, forbidden later-phase role, AWS environment variable, unchanged network
+namespace inode, network canary success, and nonempty initial output.
 
-    def test_receipt_chain_prevents_later_capability_before_parent_digest(self):
-        with self.assertRaises(ValueError):
-            subject.validate_phase_inputs(posting_policy_fixture(parent_digest=None))
+- [ ] **Step 2: Run focused RED**
 
-    def test_policy_and_phase_argv_are_bounded_for_all_registered_pages(self):
-        policy = posting_policy_fixture(page_count=28_282)
-        path, digest = subject.write_canonical_policy_file(policy)
-        command = subject.build_unshare_command(path, digest)
-        self.assertLess(sum(len(arg) + 1 for arg in command), 16_384)
-        self.assertNotIn("base64", inspect.getsource(subject.build_unshare_command))
-        self.assertEqual(len(policy.directory_capabilities), 1)
-
-    def test_progress_requires_canonical_hash_chained_completed_work(self):
-        monitor = subject.ProgressMonitor(progress_fixture(sequence=1, completed=64))
-        monitor.observe(progress_fixture(sequence=2, completed=128,
-                                          previous=monitor.last_digest))
-        for changed in stale_heartbeat_phase_total_and_chain_mutations(monitor):
-            with self.assertRaises(ValueError):
-                monitor.observe(changed)
-
-    def test_pressure_equality_stops_and_cleanup_names_are_explicit(self):
-        self.assertEqual(subject.classify_sample(rss=2 << 30), "rss-cap")
-        self.assertEqual(subject.classify_sample(psi=0.79), "psi-immediate")
-        self.assertEqual(subject.classify_sample(swap_delta=256 * 1024 * 1024 + 1), "swap-delta")
-        self.assertNotIn("rm -rf", inspect.getsource(subject))
-```
-
-- [ ] **Step 2: Run the launcher RED**
-
-Run: `python3 -m unittest scripts.test_run_v23_leaf_page_incidence_falsifier.SandboxPolicyTests`
-
-Expected: import or missing-interface errors only.
-
-- [ ] **Step 3: Implement the namespace and monitor boundary**
-
-```python
-@dataclasses.dataclass(frozen=True)
-class SandboxPolicy:
-    phase: str
-    executable: pathlib.Path
-    runtime_mounts: tuple[SandboxMount, ...]
-    inputs: tuple[SandboxMount, ...]
-    scratch: pathlib.Path
-    output: pathlib.Path
-    parent_receipt_sha256: str | None
-
-@dataclasses.dataclass(frozen=True)
-class DirectoryCapability:
-    role: str
-    source: pathlib.Path
-    target: pathlib.PurePosixPath
-    manifest_path: pathlib.Path
-    staging_receipt_path: pathlib.Path
-
-def build_unshare_command(policy_path: pathlib.Path, policy_sha256: str) -> list[str]:
-    validate_digest(policy_sha256)
-    return [
-        "unshare", "--user", "--map-root-user", "--mount", "--net",
-        "--pid", "--fork", "--mount-proc", sys.executable, __file__,
-        "--enter-sandbox-policy", str(policy_path), "--policy-sha256", policy_sha256,
-    ]
-```
-
-The parent writes canonical policy bytes with mode 0600 and passes only their
-bounded path and SHA-256. `--enter-sandbox-policy` rehashes and parses them
-before mounting a fresh tmpfs root, bind-mounts only declared singleton paths
-plus one manifest-backed directory capability for the phase's bulk corpus,
-invokes `pivot_root`, unmounts the old root, leaves loopback down, performs
-namespace/canary/open/connect probes, then `execve`s a bounded phase argv. No
-base64 policy and no per-page/per-shard mount or argv expansion is permitted.
-Monitoring validates the Rust-produced canonical hash-chained progress record
-and exact RSS/PSI/swap/wall equality rules, then terminates the original process
-group once without restart. Cleanup unlinks an enumerated manifest of files,
-rejects unexpected entries, then `rmdir`s the empty scratch directory.
-
-- [ ] **Step 4: Run launcher tests and static gates**
-
-Run: `python3 -m unittest scripts.test_run_v23_leaf_page_incidence_falsifier && uv run --python 3.12 --with ruff==0.15.20 ruff check scripts/run_v23_leaf_page_incidence_falsifier.py scripts/test_run_v23_leaf_page_incidence_falsifier.py && python3 -m py_compile scripts/run_v23_leaf_page_incidence_falsifier.py scripts/test_run_v23_leaf_page_incidence_falsifier.py && git diff --check`
-
-Expected: all tests and static checks pass.
-
-- [ ] **Step 5: Commit the sandbox slice**
+Run:
 
 ```bash
-git add scripts/run_v23_leaf_page_incidence_falsifier.py scripts/test_run_v23_leaf_page_incidence_falsifier.py
-git commit -m "Add isolated V23 incidence phase launcher"
+python3 -m unittest \
+  scripts.test_launch_v23_incidence_spot.V23IncidenceSpotLauncherTests.test_worker_uses_disposable_offline_phase_without_runtime_discovery \
+  scripts.test_run_v23_leaf_page_incidence_falsifier.OfflinePhasePolicyTests
+```
+
+Expected: fail only because the old sandbox/runtime-mount interfaces remain.
+
+- [ ] **Step 3: Implement the disposable offline boundary**
+
+Replace the sandbox types with phase/input names. The credentialed parent
+authenticates the executable, manifest, staging receipt, and complete staged
+inventory before launch. It rejects every unexpected path and every role not
+permitted for the phase. The child reauthenticates the same bytes, verifies a
+fresh network namespace with loopback down, receives a minimal explicit
+environment without AWS/credential variables, performs registered input and
+output probes, and execs the ordinary dynamically linked Rust binary. It does
+not create a private filesystem root or inspect/link/mount runtime libraries.
+
+Monitoring preserves the Rust-produced canonical hash-chained progress record
+and exact RSS/PSI/swap/wall equality rules, then terminates the original process
+group once without restart. Cleanup unlinks an enumerated manifest of files,
+rejects unexpected entries, and removes only explicit empty directories. The
+credentialed parent publishes evidence after child exit and terminates the
+phase-dedicated instance. Later phases start only on new instances after the
+parent receipt digest is available.
+
+- [ ] **Step 4: Run focused GREEN and affected gates**
+
+Run serially:
+
+```bash
+python3 -m unittest \
+  scripts.test_launch_v23_incidence_spot \
+  scripts.test_run_v23_leaf_page_incidence_falsifier
+cargo test -p borsuk --lib v23_incidence_ -- --nocapture
+uv run --offline --python 3.12 --with ruff==0.15.20 ruff check \
+  scripts/launch_v23_incidence_spot.py \
+  scripts/test_launch_v23_incidence_spot.py \
+  scripts/run_v23_leaf_page_incidence_falsifier.py \
+  scripts/test_run_v23_leaf_page_incidence_falsifier.py
+python3 -m py_compile \
+  scripts/launch_v23_incidence_spot.py \
+  scripts/run_v23_leaf_page_incidence_falsifier.py
+bash -n <(python3 scripts/launch_v23_incidence_spot.py --render-worker-test)
+git diff --check
+```
+
+Expected: all affected tests and static checks pass, with repository search
+confirming no `ldd`, `pivot_root`, runtime-loader, or runtime-library symbol in
+the V23 incidence execution path.
+
+- [ ] **Step 5: Commit the offline-worker slice**
+
+```bash
+git add scripts/launch_v23_incidence_spot.py \
+  scripts/test_launch_v23_incidence_spot.py \
+  scripts/run_v23_leaf_page_incidence_falsifier.py \
+  scripts/test_run_v23_leaf_page_incidence_falsifier.py \
+  crates/borsuk/src/v23_incidence.rs \
+  docs/superpowers/specs/2026-08-30-v23-leaf-page-incidence-falsifier-design.md \
+  docs/superpowers/plans/2026-08-30-v23-leaf-page-incidence-falsifier.md
+git commit -m "Simplify V23 incidence phase isolation"
 ```
 
 ### Task 2A: Credentialed immutable-object staging
@@ -338,7 +324,7 @@ git diff --check
 ```
 
 Read-only callsite audit must prove AWS/object-store symbols are absent from
-the Rust scientific modules, example, and sandbox child path.
+the Rust scientific modules, example, and offline scientific child path.
 
 - [ ] **Step 4: Commit the staging slice**
 
@@ -836,11 +822,11 @@ Run: `cargo test -p borsuk --lib v23_incidence_campaign_end_to_end_ -- --nocaptu
 Expected: fail at the first missing cross-phase binding or single-use guard, not at fixture construction.
 
 This library child chain proves phase/request/receipt separation. It does not
-claim to prove OS namespace isolation. Add a separate Python integration node
-that sends one harmless canary command through `run_phase(policy)` from Task 2
-and asserts the changed network-namespace inode, inaccessible host canaries,
-down loopback/network failure, allowlisted input success, output success, and
-explicit cleanup.
+claim to prove worker isolation. Add a separate Python integration node that
+sends one harmless canary command through `run_phase(policy)` from Task 2 and
+asserts the changed network-namespace inode, down loopback/network failure,
+exact staged-inventory equality, forbidden-role absence, registered input
+success, output success, stripped AWS environment, and explicit cleanup.
 
 - [ ] **Step 2: Add capability and corruption mutations**
 
@@ -1068,9 +1054,11 @@ Record the exact binary path, SHA-256, length, source SHA, and clean-worktree pr
 
 Prepare three commands, each remaining unstarted until separately authorized:
 
-1. sandbox/preflight plus tree training and tree receipt;
-2. posting construction plus burned-query development selection and sealed-cell receipt;
-3. holdout truth binding plus the one permitted holdout evaluation.
+1. one disposable tree worker for offline preflight, training, and tree receipt;
+2. fresh disposable workers for posting construction and independently
+   preregistered development cells, followed by a sealed-cell receipt;
+3. one fresh holdout worker for truth binding and the one permitted holdout
+   evaluation.
 
 Each command must assert the source/binary identities, use exact frozen objects, enforce the registered RSS/scratch/PSI/swap/progress/wall stops, retain only canonical complete/stop receipts, explicitly unlink named scratch files after PID clearance, and forbid restart. No command may include D3.
 

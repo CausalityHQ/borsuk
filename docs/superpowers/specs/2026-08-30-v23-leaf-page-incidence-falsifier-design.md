@@ -84,8 +84,9 @@ must bind URI, length, digest, ordinal range, physical schema, generation,
 metric, dimensions, row counts, primary/replica roles, and the exact page
 namespace. No latest-object discovery is allowed.
 
-Before scientific execution, a credentialed staging process outside every
-scientific sandbox consumes only that frozen manifest. It resolves each exact
+Before scientific execution, a credentialed bootstrap process on a fresh,
+phase-dedicated disposable worker consumes only that frozen manifest. It
+resolves each exact
 S3 URI and registered generation/version, verifies the registered byte length
 and SHA-256 or BLAKE3 digest while streaming, and writes the object beneath a
 role-specific staging directory. It emits a canonical staging receipt binding
@@ -106,33 +107,39 @@ registered binary codec and are never translated through JSON.
 
 ## Leakage boundary
 
-The pipeline is split into processes with disjoint inputs. Every scientific
-process runs offline in an input-allowlisted filesystem sandbox with one empty
-scratch/output directory; ordinary repository, credential, AWS, network, and
-D3 capabilities are absent.
+The pipeline is split across fresh disposable workers with disjoint staged
+inputs. A worker is assigned exactly one scientific phase and one attempt. Its
+credentialed parent downloads only that phase's frozen manifest and registered
+objects, proves the complete on-disk inventory, creates empty scratch/output
+directories, and then starts the scientific child in fresh network and PID
+namespaces with loopback down. The child receives a minimal environment with no
+AWS variables or credential paths. It can use the worker's ordinary read-only
+OS runtime and source tree because no sealed later-phase scientific bytes are
+present on that worker; it cannot fetch missing bytes after network isolation.
+The parent never exposes an object-store client to Rust.
 
-The fail-closed launcher creates new user, mount, and network namespaces,
-mounts a fresh tmpfs root, bind-mounts only the authenticated executable and
-its exact runtime loader/libraries plus phase inputs read-only, and
-scratch/output read-write, then `pivot_root`s
-before exec. Loopback remains down and no host network device or credential
-path is mounted. Startup probes must observe a different network-namespace
-inode, fail to open registered host canary files, fail to resolve/connect a
-network canary, and succeed only on the allowlisted inputs/output. The receipt
-binds the executable digest, namespace inode, ordered mount manifest, and probe
-results. A platform that cannot create this boundary emits `authority-stop`.
+This boundary deliberately has no private root filesystem, dynamic-loader
+discovery, runtime-library allowlist, bind-mounted loader, or `pivot_root`.
+`ldd` and equivalent dependency discovery are forbidden. The authoritative
+capability is the complete phase-input inventory plus absence of every
+later-phase role on a newly created worker, not an emulated operating system.
+Startup probes must observe a different network-namespace inode, fail a network
+canary, open every registered phase input, write the registered output
+directory, and confirm that the staged inventory contains exactly the manifest
+paths and no forbidden role. The receipt binds the executable digest, source
+commit/archive, instance and AMI identities, network namespace inode, complete
+staging receipt digest, ordered inventory, and probe results. Any unexpected
+regular file in a scientific input directory, any forbidden role, or inability
+to create the offline child emits `authority-stop`.
 
-The launcher never serializes the policy into argv and never emits one mount or
-one phase argument per shard/page. The parent writes one canonical policy file,
-passes only its bounded path and SHA-256 to `--enter-sandbox-policy`, and the
-child authenticates it before mounting anything. Training receives one
-read-only shard-directory capability plus its ordered manifest and staging
-receipt. Posting construction receives one read-only page-directory capability
-plus its roster, ordered manifest, and staging receipt. Rust derives every
-relative object path from the authenticated manifest, rejects absolute paths,
-`..`, symlinks, duplicate paths, missing or unexpected files, and authenticates
-each body before semantic use. The policy and phase argv therefore remain
-bounded independently of corpus size and page count.
+The launcher never emits one argument per shard/page. Training receives one
+shard-directory path plus its ordered manifest and staging receipt. Posting
+construction receives one page-directory path plus its roster, ordered
+manifest, and staging receipt. Rust derives every relative object path from the
+authenticated manifest, rejects absolute paths, `..`, symlinks, duplicate
+paths, missing or unexpected files, and authenticates each body before semantic
+use. The phase argv therefore remains bounded independently of corpus size and
+page count.
 
 1. **Tree training** may read only the exact dataset/construction manifest and
    raw training shards. It cannot open page labels, page bodies, queries,
@@ -160,16 +167,23 @@ bounded independently of corpus size and page count.
    parameter, score, layout, threshold, or kernel change is permitted after any
    holdout metric is visible.
 
-The launcher does not acquire page objects until the tree-training sandbox has
-sealed its tree. It does not acquire query or neighbor objects until posting
-construction has sealed the router bytes, construction manifest, binary
-digest, and immutable object generation/version identities into a completion
-receipt. The subsequent development capability contains only ordinals 0--31.
-The holdout capability is created only after that development receipt seals the
-chosen cell. Receipt ordering is a digest chain, not filesystem time: each
+The orchestrator does not create or stage the posting worker until the
+tree-training worker has sealed and uploaded its tree receipt, then terminates
+the training instance. It does not create or stage a development worker with
+query or neighbor objects until posting construction has sealed the router
+bytes, construction manifest, binary digest, and immutable object
+generation/version identities into a completion receipt. The subsequent
+development worker contains only ordinals 0--31. The holdout worker is created
+only after that development receipt seals the chosen cell. Receipt ordering is
+a digest chain, not filesystem time: each
 receipt embeds the exact parent receipt digest, and every consumer rehashes all
 parents and content-addressed objects. K32 outputs and the earlier 32-query
 global-ADC result are never accepted as labels or builder inputs.
+
+Independent preregistered training or development cells may run concurrently
+only on separate disposable workers with disjoint attempt prefixes and scratch.
+They never share mutable files or a process namespace. Holdout remains one
+sealed cell on one fresh worker and is never parallelized across tunable cells.
 
 ## Corpus-only leaf training
 
