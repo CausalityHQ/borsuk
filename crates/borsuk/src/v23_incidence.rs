@@ -2274,7 +2274,6 @@ fn validate_v23_incidence_parent_receipt(
     phase: V23IncidencePhase,
     manifest: &V23IncidenceManifest,
     bytes: &[u8],
-    executable_sha256: &str,
 ) -> Result<V23IncidenceReceipt> {
     let receipt: V23IncidenceReceipt = serde_json::from_slice(bytes).map_err(|error| {
         BorsukError::InvalidStorage(format!(
@@ -2310,7 +2309,6 @@ fn validate_v23_incidence_parent_receipt(
         || receipt.phase != predecessor
         || receipt.run_mode != V23IncidenceReceiptRunMode::Execute
         || receipt.stop.is_some()
-        || receipt.executable_sha256 != executable_sha256
     {
         return Err(BorsukError::InvalidStorage(
             "V23 incidence parent receipt authority differs".to_string(),
@@ -3740,12 +3738,7 @@ fn run_v23_incidence_local_phase_with_probes(
             path: parent_path.to_path_buf(),
             source,
         })?;
-        validate_v23_incidence_parent_receipt(
-            request.mode.phase(),
-            &manifest,
-            &parent_bytes,
-            &request.executable_sha256,
-        )?;
+        validate_v23_incidence_parent_receipt(request.mode.phase(), &manifest, &parent_bytes)?;
     }
     let execution_preflight = if request.mode.is_execute() {
         Some(validate_v23_incidence_request_execution_preflight(
@@ -5347,7 +5340,6 @@ mod tests {
                 V23IncidencePhase::PostingConstruction,
                 &manifest,
                 &parent_bytes,
-                &parent.executable_sha256,
             )
             .is_ok()
         );
@@ -5366,7 +5358,6 @@ mod tests {
                 V23IncidencePhase::PostingConstruction,
                 &manifest,
                 &changed_bytes,
-                &parent.executable_sha256,
             )
             .is_err()
         );
@@ -5394,7 +5385,6 @@ mod tests {
                 V23IncidencePhase::PostingConstruction,
                 &manifest,
                 &changed_bytes,
-                &parent.executable_sha256,
             )
             .is_err()
         );
@@ -6377,7 +6367,7 @@ mod tests {
         fs::create_dir(&scratch).unwrap();
         let tree = reduced_preflight_tree_bytes();
         let mut parent_receipt = receipt_fixture();
-        parent_receipt.executable_sha256 = "95".repeat(32);
+        parent_receipt.executable_sha256 = "94".repeat(32);
         parent_receipt.outputs[0].digest = blake3::hash(&tree).to_hex().to_string();
         parent_receipt.outputs[0].encoded_bytes = tree.len() as u64;
         let parent = canonical_v23_incidence_receipt_bytes(
@@ -6489,6 +6479,8 @@ mod tests {
         let probes = r#"{"allowlisted_inputs_opened":true,"forbidden_roles_absent":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":91,"output_writable":true}"#;
         let receipt = run_v23_incidence_local_phase_with_probes(request, probes).unwrap();
         let parsed: V23IncidenceReceipt = serde_json::from_slice(&receipt).unwrap();
+        assert_eq!(parsed.executable_sha256, "95".repeat(32));
+        assert_ne!(parsed.executable_sha256, parent_receipt.executable_sha256);
         let evidence = parsed.preflight_evidence.unwrap();
         assert_eq!(evidence.phase, V23IncidencePhase::PostingConstruction);
         assert_eq!(evidence.measurement.input_bytes, mounted_bytes);
@@ -6509,7 +6501,7 @@ mod tests {
         let mut parent_receipt = receipt_fixture();
         parent_receipt.phase = V23IncidencePhase::DevelopmentEvaluation;
         parent_receipt.final_progress_sha256 = None;
-        parent_receipt.executable_sha256 = "95".repeat(32);
+        parent_receipt.executable_sha256 = "94".repeat(32);
         parent_receipt.outputs = vec![
             V23IncidenceObjectIdentity {
                 encoded_bytes: development.len() as u64,
@@ -6623,6 +6615,8 @@ mod tests {
         let probes = r#"{"allowlisted_inputs_opened":true,"forbidden_roles_absent":true,"network_canary_denied":true,"network_namespace_changed":true,"network_namespace_inode":91,"output_writable":true}"#;
         let receipt = run_v23_incidence_local_phase_with_probes(request, probes).unwrap();
         let parsed: V23IncidenceReceipt = serde_json::from_slice(&receipt).unwrap();
+        assert_eq!(parsed.executable_sha256, "95".repeat(32));
+        assert_ne!(parsed.executable_sha256, parent_receipt.executable_sha256);
         let evidence = parsed.preflight_evidence.unwrap();
         assert_eq!(evidence.phase, V23IncidencePhase::HoldoutBinding);
         assert_eq!(evidence.measurement.input_bytes, mounted_bytes);
