@@ -2130,7 +2130,15 @@ fn v23_incidence_screen_receipt_identity_matches(
     receipt: &V23IncidenceObjectIdentity,
     screen: &V23IncidenceScreenObjectIdentity,
 ) -> bool {
-    receipt.role == screen.role
+    v23_incidence_screen_receipt_identity_matches_role(receipt, screen, &screen.role)
+}
+
+fn v23_incidence_screen_receipt_identity_matches_role(
+    receipt: &V23IncidenceObjectIdentity,
+    screen: &V23IncidenceScreenObjectIdentity,
+    receipt_role: &str,
+) -> bool {
+    receipt.role == receipt_role
         && receipt.uri == screen.uri
         && receipt.digest_algorithm == screen.digest_algorithm
         && receipt.digest == screen.digest
@@ -2172,6 +2180,18 @@ pub(crate) fn validate_v23_incidence_screen_receipts(
     let posting_inputs_bind_tree = posting.ordered_inputs.iter().any(|identity| {
         v23_incidence_screen_receipt_identity_matches(identity, &authority.objects[1])
     });
+    let posting_inputs_bind_tree_receipt = posting.ordered_inputs.iter().any(|identity| {
+        v23_incidence_screen_receipt_identity_matches_role(
+            identity,
+            &authority.objects[0],
+            "parent-receipt",
+        )
+    });
+    let posting_parent_binds_preflight = posting.ordered_inputs.iter().any(|identity| {
+        identity.role == "preflight-receipt"
+            && identity.digest_algorithm == "sha256"
+            && posting.parent_receipt_sha256.as_deref() == Some(identity.digest.as_str())
+    });
     let posting_outputs_match = posting.outputs.len() == 2
         && posting
             .outputs
@@ -2180,7 +2200,6 @@ pub(crate) fn validate_v23_incidence_screen_receipts(
             .all(|(identity, expected)| {
                 v23_incidence_screen_receipt_identity_matches(identity, expected)
             });
-    let tree_receipt_sha256 = format!("{:x}", Sha256::digest(tree_receipt_bytes));
     if tree.phase != V23IncidencePhase::TreeTraining
         || tree.run_mode != V23IncidenceReceiptRunMode::Execute
         || tree.stop.is_some()
@@ -2189,7 +2208,8 @@ pub(crate) fn validate_v23_incidence_screen_receipts(
         || posting.phase != V23IncidencePhase::PostingConstruction
         || posting.run_mode != V23IncidenceReceiptRunMode::Execute
         || posting.stop.is_some()
-        || posting.parent_receipt_sha256.as_deref() != Some(tree_receipt_sha256.as_str())
+        || !posting_parent_binds_preflight
+        || !posting_inputs_bind_tree_receipt
         || !posting_inputs_bind_tree
         || !posting_outputs_match
     {
@@ -5179,20 +5199,30 @@ mod tests {
             &[("incidence-tree", tree)],
         )
         .unwrap();
+        let tree_receipt_object = screen_object("tree-receipt", "sha256", &tree_receipt_bytes);
 
         let mut posting_receipt = receipt_fixture();
         posting_receipt.phase = V23IncidencePhase::PostingConstruction;
+        let posting_preflight = b"posting-preflight-receipt";
         posting_receipt.parent_receipt_sha256 =
-            Some(format!("{:x}", Sha256::digest(&tree_receipt_bytes)));
+            Some(format!("{:x}", Sha256::digest(posting_preflight)));
+        let mut parent_receipt_input = receipt_identity(&tree_receipt_object);
+        parent_receipt_input.role = "parent-receipt".to_string();
         posting_receipt.ordered_inputs = vec![
             object("phase-manifest", "sha256", &"22".repeat(32)),
+            parent_receipt_input,
             receipt_identity(&tree_object),
+            object(
+                "preflight-receipt",
+                "sha256",
+                &format!("{:x}", Sha256::digest(posting_preflight)),
+            ),
         ];
         posting_receipt.outputs =
             vec![receipt_identity(&one_object), receipt_identity(&two_object)];
         let posting_receipt_bytes = canonical_v23_incidence_receipt_bytes(
             &posting_receipt,
-            Some(&tree_receipt_bytes),
+            Some(posting_preflight),
             &[
                 ("incidence-postings-one", one),
                 ("incidence-postings-two", two),
@@ -5204,7 +5234,7 @@ mod tests {
             source_archive_sha256: "2".repeat(64),
             index_id: "index-fixture".to_string(),
             objects: vec![
-                screen_object("tree-receipt", "sha256", &tree_receipt_bytes),
+                tree_receipt_object,
                 tree_object,
                 screen_object("posting-receipt", "sha256", &posting_receipt_bytes),
                 one_object,
