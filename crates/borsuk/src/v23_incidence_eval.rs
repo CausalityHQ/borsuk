@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BorsukError, Result,
     v23_diagnostic::{
-        V23D1ArmKey, V23D2Report, V23QuantizerFamily, read_v23_query_vectors, validate_d2_report,
+        V23D1ArmKey, V23D2Report, V23QuantizerFamily, best_v23_page_coverage,
+        read_v23_query_vectors, validate_d2_report,
     },
     v23_incidence::canonical_json_value,
     v23_incidence_postings::{
@@ -414,7 +415,10 @@ pub(crate) fn recompute_v23_incidence_layout_quality(
     let mut total = 0_u64;
     let mut minimum = 10_u64;
     for expected in truth {
-        if expected.ground_truth_page_assignments.len() != 10 || expected.oracle_pages.len() != 8 {
+        if expected.ground_truth_page_assignments.len() != 10
+            || expected.oracle_pages.is_empty()
+            || expected.oracle_pages.len() > 8
+        {
             return Err(invalid("V23 incidence layout truth shape differs"));
         }
         let pages = expected
@@ -422,7 +426,7 @@ pub(crate) fn recompute_v23_incidence_layout_quality(
             .iter()
             .copied()
             .collect::<BTreeSet<_>>();
-        if pages.len() != 8 {
+        if pages.len() != expected.oracle_pages.len() {
             return Err(invalid("V23 incidence layout oracle pages differ"));
         }
         let hits = expected
@@ -472,8 +476,9 @@ pub(crate) fn recompute_v23_incidence_quality(
         if *query_ordinal != expected.query_ordinal
             || selected.len() != 8
             || unique_selected.len() != 8
-            || expected.oracle_pages.len() != 8
-            || unique_oracle.len() != 8
+            || expected.oracle_pages.is_empty()
+            || expected.oracle_pages.len() > 8
+            || unique_oracle.len() != expected.oracle_pages.len()
             || selected
                 .iter()
                 .chain(&expected.oracle_pages)
@@ -532,76 +537,16 @@ pub(crate) fn recompute_v23_incidence_quality(
     })
 }
 
-fn exact_coverage_candidates(assignments: &[Vec<u32>], page_count: usize) -> Result<Vec<u32>> {
-    let mut candidates = assignments
-        .iter()
-        .flatten()
-        .copied()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
+fn exact_coverage_oracle(assignments: &[Vec<u32>], page_count: usize) -> Result<Vec<u32>> {
     if page_count < 8
-        || candidates.len() > 20
-        || candidates
+        || assignments
             .iter()
+            .flatten()
             .any(|page| usize::try_from(*page).map_or(true, |page| page >= page_count))
     {
-        return Err(invalid("V23 incidence oracle candidate count differs"));
+        return Err(invalid("V23 incidence oracle page authority differs"));
     }
-    for page in
-        0..u32::try_from(page_count).map_err(|_| invalid("V23 incidence page count exceeds u32"))?
-    {
-        if candidates.len() >= 8 {
-            break;
-        }
-        if candidates.binary_search(&page).is_err() {
-            candidates.push(page);
-            candidates.sort_unstable();
-        }
-    }
-    Ok(candidates)
-}
-
-fn exact_coverage_oracle(assignments: &[Vec<u32>], page_count: usize) -> Result<Vec<u32>> {
-    let candidates = exact_coverage_candidates(assignments, page_count)?;
-    fn visit(
-        candidates: &[u32],
-        assignments: &[Vec<u32>],
-        start: usize,
-        selected: &mut Vec<u32>,
-        best: &mut Option<(usize, Vec<u32>)>,
-    ) {
-        if selected.len() == 8 {
-            let hits = assignments
-                .iter()
-                .filter(|pages| {
-                    pages
-                        .iter()
-                        .any(|page| selected.binary_search(page).is_ok())
-                })
-                .count();
-            if best.as_ref().is_none_or(|current| hits > current.0) {
-                *best = Some((hits, selected.clone()));
-            }
-            return;
-        }
-        let needed = 8 - selected.len();
-        for index in start..=candidates.len() - needed {
-            selected.push(candidates[index]);
-            visit(candidates, assignments, index + 1, selected, best);
-            selected.pop();
-        }
-    }
-    let mut best = None;
-    visit(
-        &candidates,
-        assignments,
-        0,
-        &mut Vec::with_capacity(8),
-        &mut best,
-    );
-    best.map(|entry| entry.1)
-        .ok_or_else(|| invalid("V23 incidence oracle is absent"))
+    Ok(best_v23_page_coverage(assignments, 8)?.page_ordinals)
 }
 
 pub(crate) fn bind_v23_incidence_holdout_truth(
@@ -2979,7 +2924,7 @@ mod tests {
     }
 
     #[test]
-    fn v23_incidence_eval_exact_eight_pads_low_cardinality_candidate_set() {
+    fn v23_incidence_eval_oracle_preserves_minimum_lexicographic_cover() {
         let neighbors = (32..160_u32)
             .map(|query| (query, (0..100_u64).collect::<Vec<_>>()))
             .collect::<Vec<_>>();
@@ -2991,12 +2936,12 @@ mod tests {
         assert!(
             truth
                 .iter()
-                .all(|query| query.oracle_pages == (0..8).collect::<Vec<_>>())
+                .all(|query| query.oracle_pages == (0..4).collect::<Vec<_>>())
         );
     }
 
     #[test]
-    fn v23_incidence_eval_oracle_does_not_pad_existing_exact_eight_superset() {
+    fn v23_incidence_eval_oracle_selects_lexicographic_best_without_padding() {
         let assignments = vec![
             vec![0, 10],
             vec![1, 11],
@@ -3010,8 +2955,8 @@ mod tests {
             vec![9],
         ];
         assert_eq!(
-            super::exact_coverage_candidates(&assignments, 28_282).unwrap(),
-            (0..12).collect::<Vec<_>>()
+            super::exact_coverage_oracle(&assignments, 28_282).unwrap(),
+            (0..8).collect::<Vec<_>>()
         );
     }
 
