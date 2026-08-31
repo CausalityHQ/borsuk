@@ -14,9 +14,11 @@ from unittest.mock import patch
 
 from scripts.launch_v23_incidence_spot import (
     EXPECTED_AWS_ACCOUNT,
+    FROZEN_PAGE_ROSTER_URI,
     _build_source_archive,
     _maximum_compute_cost,
     _phase_policy,
+    _rewrite_posting_receipt_uris,
     _rewrite_tree_receipt_uri,
     _spot_price,
     _validate_terminal_bytes,
@@ -26,7 +28,9 @@ from scripts.launch_v23_incidence_spot import (
     build_launch_spec,
     build_posting_manifest,
     build_worker_script,
+    main,
     offline_probe,
+    worker_posting,
     worker_tree,
 )
 from scripts.run_v23_leaf_page_incidence_falsifier import validate_phase_inputs
@@ -42,13 +46,14 @@ def _canonical_progress_bytes(
     previous_progress_sha256: str | None,
     sequence: int,
     total_units: int,
+    phase: str = "tree-training",
 ) -> bytes:
     return (
         json.dumps(
             {
                 "completed_units": completed_units,
                 "last_object_digest": "11" * 32,
-                "phase": "tree-training",
+                "phase": phase,
                 "previous_progress_sha256": previous_progress_sha256,
                 "sequence": sequence,
                 "total_units": total_units,
@@ -196,7 +201,27 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
                 roster_identity["encoded_bytes"],
             ),
         )
-        with frozen_roster[0], frozen_roster[1]:
+        frozen_tree = (
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_TREE_RECEIPT_URI",
+                tree_receipt_identity["uri"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_TREE_RECEIPT_SHA256",
+                tree_receipt_identity["digest"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_TREE_RECEIPT_BYTES",
+                tree_receipt_identity["encoded_bytes"],
+            ),
+        )
+        with (
+            frozen_roster[0],
+            frozen_roster[1],
+            frozen_tree[0],
+            frozen_tree[1],
+            frozen_tree[2],
+        ):
             manifest_bytes = build_posting_manifest(
                 tree_receipt_bytes=tree_receipt_bytes,
                 tree_receipt_identity=tree_receipt_identity,
@@ -236,6 +261,23 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         self.assertEqual(identities[-1]["role"], "page-body-28281")
         self.assertEqual(identities[-1]["encoded_bytes"], pages[-1]["encoded_bytes"])
 
+        wrong_tree_identity = dict(tree_receipt_identity)
+        wrong_tree_identity["uri"] = "s3://borsuk-evidence/tree/wrong-receipt.json"
+        with (
+            frozen_roster[0],
+            frozen_roster[1],
+            frozen_tree[0],
+            frozen_tree[1],
+            frozen_tree[2],
+            self.assertRaisesRegex(ValueError, "parent receipt authority"),
+        ):
+            build_posting_manifest(
+                tree_receipt_bytes=tree_receipt_bytes,
+                tree_receipt_identity=wrong_tree_identity,
+                roster_bytes=roster_bytes,
+                roster_identity=roster_identity,
+            )
+
         changed = json.loads(roster_bytes)
         changed["pages"][7]["page_ordinal"] = 8
         changed_bytes = (
@@ -244,8 +286,13 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         changed_identity = dict(roster_identity)
         changed_identity["digest"] = hashlib.sha256(changed_bytes).hexdigest()
         changed_identity["encoded_bytes"] = len(changed_bytes)
-        with frozen_roster[0], frozen_roster[1], self.assertRaisesRegex(
-            ValueError, "page roster authority"
+        with (
+            frozen_roster[0],
+            frozen_roster[1],
+            frozen_tree[0],
+            frozen_tree[1],
+            frozen_tree[2],
+            self.assertRaisesRegex(ValueError, "page roster authority"),
         ):
             build_posting_manifest(
                 tree_receipt_bytes=tree_receipt_bytes,
@@ -270,7 +317,9 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         ), patch(
             "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_BYTES",
             duplicate_identity["encoded_bytes"],
-        ), self.assertRaisesRegex(ValueError, "page roster authority"):
+        ), frozen_tree[0], frozen_tree[1], frozen_tree[2], self.assertRaisesRegex(
+            ValueError, "page roster authority"
+        ):
             build_posting_manifest(
                 tree_receipt_bytes=tree_receipt_bytes,
                 tree_receipt_identity=tree_receipt_identity,
@@ -297,7 +346,9 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         ), patch(
             "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_BYTES",
             encoded_drift_identity["encoded_bytes"],
-        ), self.assertRaisesRegex(ValueError, "page roster authority"):
+        ), frozen_tree[0], frozen_tree[1], frozen_tree[2], self.assertRaisesRegex(
+            ValueError, "page roster authority"
+        ):
             build_posting_manifest(
                 tree_receipt_bytes=tree_receipt_bytes,
                 tree_receipt_identity=tree_receipt_identity,
@@ -316,8 +367,22 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
             changed_receipt_bytes
         ).hexdigest()
         changed_receipt_identity["encoded_bytes"] = len(changed_receipt_bytes)
-        with frozen_roster[0], frozen_roster[1], self.assertRaisesRegex(
-            ValueError, "tree receipt authority"
+        with (
+            frozen_roster[0],
+            frozen_roster[1],
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_TREE_RECEIPT_URI",
+                changed_receipt_identity["uri"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_TREE_RECEIPT_SHA256",
+                changed_receipt_identity["digest"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_TREE_RECEIPT_BYTES",
+                changed_receipt_identity["encoded_bytes"],
+            ),
+            self.assertRaisesRegex(ValueError, "tree receipt authority"),
         ):
             build_posting_manifest(
                 tree_receipt_bytes=changed_receipt_bytes,
@@ -330,6 +395,7 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         self,
     ) -> None:
         worker = build_worker_script(
+            phase="tree-training",
             run_id="fixture-run",
             source_commit=SOURCE_SHA,
             source_uri="s3://borsuk-evidence/source.tar",
@@ -431,6 +497,7 @@ with tempfile.TemporaryDirectory() as directory:
 
     def test_worker_captures_and_publishes_failure_evidence(self) -> None:
         worker = build_worker_script(
+            phase="tree-training",
             run_id="fixture-run",
             source_commit=SOURCE_SHA,
             source_uri="s3://borsuk-evidence/source.tar",
@@ -473,6 +540,49 @@ with tempfile.TemporaryDirectory() as directory:
                 "v23_leaf_page_incidence_falsifier"
             ),
             1,
+        )
+
+    def test_posting_worker_builds_manifest_and_publishes_both_artifacts(
+        self,
+    ) -> None:
+        worker = build_worker_script(
+            phase="posting-construction",
+            run_id="fixture-posting-run",
+            source_commit=SOURCE_SHA,
+            source_uri="s3://borsuk-evidence/source.tar",
+            source_sha256="11" * 32,
+            result_uri="s3://borsuk-evidence/incidence/fixture-posting-run",
+            spot_price_usd_per_hour="0.321",
+        )
+
+        self.assertIn(
+            "s3://borsuk-bench-453182569524-euc1/research/"
+            "v23-leaf-page-incidence/"
+            "a321c473cb38a3b38c4757a50acf14e144b0441b0ca4bbbe7a8c7f3baaef78cc/"
+            "v23-incidence-tree-20260831T120514Z/tree-receipt.json",
+            worker,
+        )
+        self.assertIn(FROZEN_PAGE_ROSTER_URI, worker)
+        self.assertIn("--build-posting-manifest", worker)
+        self.assertIn("--worker-posting", worker)
+        self.assertIn('phase=posting-construction', worker)
+        self.assertIn(
+            'if [[ "$phase" == "posting-construction" ]]; then', worker
+        )
+        self.assertIn(
+            'worker_mode=(--worker-posting --posting-manifest "$posting_manifest")',
+            worker,
+        )
+        self.assertIn("posting-receipt.json", worker)
+        self.assertIn("incidence-postings-one.bin", worker)
+        self.assertIn("incidence-postings-two.bin", worker)
+        self.assertIn('"phase":"posting-construction"', worker)
+        self.assertLessEqual(len(worker.encode()), 16_384)
+        self.assertLess(
+            worker.index(
+                "posting_bootstrap=/var/lib/borsuk-v23-incidence/posting-bootstrap"
+            ),
+            worker.index("trap finish EXIT"),
         )
 
     def test_worker_tree_preserves_traceback_and_partial_receipts(self) -> None:
@@ -641,6 +751,251 @@ with tempfile.TemporaryDirectory() as directory:
                 '{"stale":true}\n',
             )
 
+    def test_worker_posting_runs_two_staged_modes_and_publishes_two_artifacts(
+        self,
+    ) -> None:
+        import blake3
+
+        construction = json.loads(
+            (ROOT / "scripts/fixtures/v23_incidence_training_manifest.json").read_bytes()
+        )
+        template = construction["ordered_inputs"][0]["identity"]
+
+        def phase_object(role: str, ordinal: int) -> dict[str, object]:
+            identity = dict(template)
+            identity["role"] = role
+            identity["uri"] = f"s3://fixture/{role}-{ordinal}"
+            return {"authority_kind": "phase-object", "identity": identity}
+
+        construction["phase"] = "posting-construction"
+        construction["parent_receipt_sha256"] = (
+            "c1af5ab84ef20797ffe52fa0a93872008"
+            "df817c142957f009895c8b7fc853a99"
+        )
+        construction["ordered_inputs"] = [
+            phase_object("parent-receipt", 0),
+            phase_object("incidence-tree", 0),
+            phase_object("page-roster", 0),
+            *[
+                phase_object(f"page-body-{ordinal:05}", ordinal)
+                for ordinal in range(300)
+            ],
+        ]
+        manifest_bytes = (
+            json.dumps(construction, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
+
+        def stage_stub(manifest: Path, directory: Path, receipt: Path) -> None:
+            staged_counts.append(len(json.loads(manifest.read_bytes())["ordered_inputs"]))
+            directory.mkdir()
+            receipt.write_text('{"staged":true}\n', encoding="utf-8")
+
+        calls = 0
+
+        def run_stub(policy: Any, _limits: object) -> int:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                policy.output.joinpath("receipt.json").write_text(
+                    '{"preflight":true}\n', encoding="utf-8"
+                )
+                return 0
+            outputs = []
+            for role, payload in {
+                "incidence-postings-one": b"posting-one",
+                "incidence-postings-two": b"posting-two",
+            }.items():
+                path = policy.output / f"{role}-content.bin"
+                path.write_bytes(payload)
+                digest = blake3.blake3(payload).hexdigest()
+                outputs.append(
+                    {
+                        "digest": digest,
+                        "digest_algorithm": "blake3",
+                        "encoded_bytes": len(payload),
+                        "generation": f"content-{digest}",
+                        "role": role,
+                        "uri": f"file://{path}",
+                    }
+                )
+            root_progress = _canonical_progress_bytes(
+                completed_units=0,
+                previous_progress_sha256=None,
+                sequence=0,
+                total_units=1,
+                phase="posting-construction",
+            )
+            final_progress = _canonical_progress_bytes(
+                completed_units=1,
+                previous_progress_sha256=hashlib.sha256(root_progress).hexdigest(),
+                sequence=1,
+                total_units=1,
+                phase="posting-construction",
+            )
+            progress = root_progress + final_progress
+            policy.output.joinpath("progress.json").write_bytes(progress)
+            policy.output.joinpath("receipt.json").write_bytes(
+                json.dumps(
+                    {
+                        "final_progress_sha256": hashlib.sha256(progress).hexdigest(),
+                        "outputs": outputs,
+                        "schema": "fixture-receipt",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+                + b"\n"
+            )
+            return 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private_root = root / "posting-private"
+            private_root.mkdir()
+            evidence = root / "evidence"
+            binary = Path("/bin/true").resolve()
+            binary_sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
+            staged_counts: list[int] = []
+            with (
+                patch(
+                    "scripts.launch_v23_incidence_spot.tempfile.mkdtemp",
+                    return_value=str(private_root),
+                ),
+                patch(
+                    "scripts.launch_v23_incidence_spot._stage",
+                    side_effect=stage_stub,
+                ),
+                patch(
+                    "scripts.run_v23_leaf_page_incidence_falsifier.run_phase",
+                    side_effect=run_stub,
+                ),
+            ):
+                status = worker_posting(
+                    binary=binary,
+                    binary_sha256=binary_sha256,
+                    evidence=evidence,
+                    output_uri_prefix="s3://borsuk-evidence/posting/fixture-run",
+                    manifest_bytes=manifest_bytes,
+                )
+
+            self.assertEqual(status, 0)
+            self.assertEqual(staged_counts, [259, 303])
+            self.assertEqual(calls, 2)
+            self.assertFalse(private_root.exists())
+            self.assertEqual(
+                evidence.joinpath("incidence-postings-one.bin").read_bytes(),
+                b"posting-one",
+            )
+            self.assertEqual(
+                evidence.joinpath("incidence-postings-two.bin").read_bytes(),
+                b"posting-two",
+            )
+            receipt = json.loads(evidence.joinpath("posting-receipt.json").read_bytes())
+            self.assertEqual(
+                [output["uri"] for output in receipt["outputs"]],
+                [
+                    "s3://borsuk-evidence/posting/fixture-run/incidence-postings-one.bin",
+                    "s3://borsuk-evidence/posting/fixture-run/incidence-postings-two.bin",
+                ],
+            )
+            self.assertTrue(evidence.joinpath("progress.json").is_file())
+
+    def test_worker_posting_rejects_unregistered_parent_before_staging(self) -> None:
+        construction = json.loads(
+            (ROOT / "scripts/fixtures/v23_incidence_training_manifest.json").read_bytes()
+        )
+        construction["phase"] = "posting-construction"
+        construction["parent_receipt_sha256"] = "ab" * 32
+        manifest_bytes = (
+            json.dumps(construction, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+        )
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "scripts.launch_v23_incidence_spot._stage",
+                side_effect=AssertionError("staging must not start"),
+            ),
+            self.assertRaisesRegex(ValueError, "parent receipt authority"),
+        ):
+            root = Path(directory)
+            binary = Path("/bin/true").resolve()
+            worker_posting(
+                binary=binary,
+                binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
+                evidence=root / "evidence",
+                output_uri_prefix="s3://borsuk-evidence/posting/fixture-run",
+                manifest_bytes=manifest_bytes,
+            )
+
+    def test_posting_cli_builds_manifest_and_dispatches_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tree = root / "tree-receipt.json"
+            roster = root / "page-roster.json"
+            manifest = root / "posting-manifest.json"
+            evidence = root / "evidence"
+            tree.write_bytes(b"tree-receipt\n")
+            roster.write_bytes(b"page-roster\n")
+            expected_manifest = b'{"phase":"posting-construction"}\n'
+            with patch(
+                "scripts.launch_v23_incidence_spot.build_posting_manifest",
+                return_value=expected_manifest,
+            ) as build:
+                self.assertEqual(
+                    main(
+                        [
+                            "--build-posting-manifest",
+                            "--tree-receipt",
+                            str(tree),
+                            "--page-roster",
+                            str(roster),
+                            "--posting-manifest-output",
+                            str(manifest),
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(manifest.read_bytes(), expected_manifest)
+            request = build.call_args.kwargs
+            self.assertEqual(request["tree_receipt_bytes"], tree.read_bytes())
+            self.assertEqual(request["roster_bytes"], roster.read_bytes())
+            self.assertEqual(
+                request["tree_receipt_identity"]["digest"],
+                hashlib.sha256(tree.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                request["roster_identity"]["digest"],
+                hashlib.sha256(roster.read_bytes()).hexdigest(),
+            )
+
+            binary = Path("/bin/true").resolve()
+            binary_sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
+            with patch(
+                "scripts.launch_v23_incidence_spot.worker_posting", return_value=0
+            ) as worker:
+                self.assertEqual(
+                    main(
+                        [
+                            "--worker-posting",
+                            "--binary",
+                            str(binary),
+                            "--binary-sha256",
+                            binary_sha256,
+                            "--evidence-directory",
+                            str(evidence),
+                            "--output-uri-prefix",
+                            "s3://borsuk-evidence/posting/fixture-run",
+                            "--posting-manifest",
+                            str(manifest),
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(worker.call_args.args[4], expected_manifest)
+
     def test_offline_probe_requires_memory_psi_full_avg10(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             absent = Path(directory) / "missing-memory-psi"
@@ -711,12 +1066,44 @@ with tempfile.TemporaryDirectory() as directory:
         self.assertEqual(plan["preflight_input_count"], 1)
         self.assertEqual(plan["execute_input_count"], 59)
         self.assertFalse(plan["d3_allowed"])
-        self.assertEqual(plan["supported_phases"], ["tree-training"])
-        self.assertIn("posting-construction", plan["blocked_phases"])
+        self.assertEqual(
+            plan["supported_phases"],
+            ["tree-training", "posting-construction"],
+        )
+        self.assertNotIn("posting-construction", plan["blocked_phases"])
 
-    def test_non_tree_phases_refuse_without_committed_immutable_manifests(self) -> None:
+    def test_posting_plan_is_one_ephemeral_spot_worker_with_immutable_handoff(
+        self,
+    ) -> None:
+        plan = build_launch_plan(
+            phase="posting-construction",
+            run_id="fixture-posting-run",
+            source_commit=SOURCE_SHA,
+        )
+
+        self.assertEqual(plan["phase"], "posting-construction")
+        self.assertEqual(plan["instance_count"], 1)
+        self.assertEqual(plan["purchase_option"], "spot")
+        self.assertEqual(plan["preflight_input_count"], 259)
+        self.assertEqual(plan["execute_input_count"], 28_285)
+        self.assertEqual(
+            plan["parent_receipt_uri"],
+            "s3://borsuk-bench-453182569524-euc1/research/"
+            "v23-leaf-page-incidence/"
+            "a321c473cb38a3b38c4757a50acf14e144b0441b0ca4bbbe7a8c7f3baaef78cc/"
+            "v23-incidence-tree-20260831T120514Z/tree-receipt.json",
+        )
+        self.assertEqual(plan["page_roster_uri"], FROZEN_PAGE_ROSTER_URI)
+        self.assertEqual(
+            plan["supported_phases"],
+            ["tree-training", "posting-construction"],
+        )
+        self.assertNotIn("posting-construction", plan["blocked_phases"])
+        self.assertIn("development-evaluation", plan["blocked_phases"])
+        self.assertFalse(plan["d3_allowed"])
+
+    def test_later_phases_refuse_without_committed_immutable_manifests(self) -> None:
         for phase in (
-            "posting-construction",
             "development-evaluation",
             "holdout-binding",
             "holdout-evaluation",
@@ -733,6 +1120,7 @@ with tempfile.TemporaryDirectory() as directory:
     def test_launch_spec_is_one_time_spot_and_self_terminating(self) -> None:
         user_data = "#!/bin/bash\nshutdown -h now\n"
         spec = build_launch_spec(
+            phase="tree-training",
             run_id="fixture-run",
             source_commit=SOURCE_SHA,
             user_data=user_data,
@@ -769,15 +1157,31 @@ with tempfile.TemporaryDirectory() as directory:
 
         with self.assertRaisesRegex(ValueError, "user data length"):
             build_launch_spec(
+                phase="tree-training",
                 run_id="fixture-run",
                 source_commit=SOURCE_SHA,
                 user_data="#!/bin/bash\nshutdown -h now\n" + "x" * 16_384,
             )
 
+    def test_posting_launch_spec_tags_the_actual_phase(self) -> None:
+        spec = build_launch_spec(
+            phase="posting-construction",
+            run_id="fixture-posting-run",
+            source_commit=SOURCE_SHA,
+            user_data="#!/bin/bash\nshutdown -h now\n",
+        )
+        tags = {
+            item["Key"]: item["Value"]
+            for item in spec["TagSpecifications"][0]["Tags"]
+        }
+        self.assertEqual(tags["Phase"], "posting-construction")
+        self.assertEqual(tags["RunId"], "fixture-posting-run")
+
     def test_worker_runs_preflight_then_execute_and_publishes_only_terminal_evidence(
         self,
     ) -> None:
         worker = build_worker_script(
+            phase="tree-training",
             run_id="fixture-run",
             source_commit=SOURCE_SHA,
             source_uri="s3://borsuk-evidence/source.tar",
@@ -1112,7 +1516,8 @@ with tempfile.TemporaryDirectory() as directory:
         }
         raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
         self.assertEqual(
-            _validate_terminal_bytes(raw, "fixture-run", SOURCE_SHA), "failed"
+            _validate_terminal_bytes(raw, "fixture-run", SOURCE_SHA, "tree-training"),
+            "failed",
         )
         for mutation in (
             raw[:-1],
@@ -1121,7 +1526,9 @@ with tempfile.TemporaryDirectory() as directory:
             raw.replace(b'"claim_eligible":false', b'"claim_eligible":true'),
         ):
             with self.subTest(mutation=mutation[:100]), self.assertRaises(ValueError):
-                _validate_terminal_bytes(mutation, "fixture-run", SOURCE_SHA)
+                _validate_terminal_bytes(
+                    mutation, "fixture-run", SOURCE_SHA, "tree-training"
+                )
 
         interrupted = {
             "claim_eligible": False,
@@ -1137,7 +1544,9 @@ with tempfile.TemporaryDirectory() as directory:
             + b"\n"
         )
         self.assertEqual(
-            _validate_terminal_bytes(interrupted_raw, "fixture-run", SOURCE_SHA),
+            _validate_terminal_bytes(
+                interrupted_raw, "fixture-run", SOURCE_SHA, "tree-training"
+            ),
             "interrupted",
         )
 
@@ -1160,7 +1569,54 @@ with tempfile.TemporaryDirectory() as directory:
             + b"\n"
         )
         with self.assertRaisesRegex(ValueError, "Spot price"):
-            _validate_terminal_bytes(complete_raw, "fixture-run", SOURCE_SHA)
+            _validate_terminal_bytes(
+                complete_raw, "fixture-run", SOURCE_SHA, "tree-training"
+            )
+
+    def test_posting_terminal_binds_both_posting_artifacts(self) -> None:
+        value = {
+            "binary": {"encoded_bytes": 1, "sha256": "22" * 32},
+            "claim_eligible": False,
+            "incidence_postings_one": {
+                "encoded_bytes": 2,
+                "sha256": "33" * 32,
+            },
+            "incidence_postings_two": {
+                "encoded_bytes": 3,
+                "sha256": "44" * 32,
+            },
+            "phase": "posting-construction",
+            "purchase_option": "spot",
+            "receipt": {"encoded_bytes": 4, "sha256": "55" * 32},
+            "run_id": "fixture-posting-run",
+            "schema": "borsuk-v23-incidence-attempt-complete-v1",
+            "source_archive_sha256": "11" * 32,
+            "source_commit": SOURCE_SHA,
+            "spot_price_usd_per_hour": "0.321",
+            "status": "complete",
+        }
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+        self.assertEqual(
+            _validate_terminal_bytes(
+                raw,
+                "fixture-posting-run",
+                SOURCE_SHA,
+                "posting-construction",
+            ),
+            "complete",
+        )
+        del value["incidence_postings_two"]
+        mutation = (
+            json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        )
+        with self.assertRaisesRegex(ValueError, "complete terminal authority"):
+            _validate_terminal_bytes(
+                mutation,
+                "fixture-posting-run",
+                SOURCE_SHA,
+                "posting-construction",
+            )
 
     def test_spot_price_is_scoped_to_the_registered_subnet_zone(self) -> None:
         with patch(
@@ -1220,6 +1676,65 @@ with tempfile.TemporaryDirectory() as directory:
                     receipt,
                     tree,
                     "s3://borsuk-evidence/incidence/source/run/other.bin",
+                )
+
+    def test_posting_receipt_rewrite_authenticates_both_artifacts(self) -> None:
+        import blake3
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            receipt_path = root / "receipt.json"
+            artifacts = {
+                "incidence-postings-one": root / "one-content.bin",
+                "incidence-postings-two": root / "two-content.bin",
+            }
+            outputs = []
+            for role, path in artifacts.items():
+                payload = f"{role}-payload".encode()
+                path.write_bytes(payload)
+                digest = blake3.blake3(payload).hexdigest()
+                outputs.append(
+                    {
+                        "digest": digest,
+                        "digest_algorithm": "blake3",
+                        "encoded_bytes": len(payload),
+                        "generation": f"content-{digest}",
+                        "role": role,
+                        "uri": f"file://{path}",
+                    }
+                )
+            receipt = {"outputs": outputs, "schema": "fixture-receipt"}
+            receipt_path.write_bytes(
+                json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n"
+            )
+
+            rewritten = _rewrite_posting_receipt_uris(
+                receipt_path,
+                root,
+                "s3://borsuk-evidence/run",
+            )
+
+            value = json.loads(receipt_path.read_bytes())
+            self.assertEqual(rewritten, artifacts)
+            self.assertEqual(
+                [item["uri"] for item in value["outputs"]],
+                [
+                    "s3://borsuk-evidence/run/incidence-postings-one.bin",
+                    "s3://borsuk-evidence/run/incidence-postings-two.bin",
+                ],
+            )
+            original_receipt_bytes = (
+                json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n"
+            )
+            artifacts["incidence-postings-two"].write_bytes(b"changed")
+            receipt_path.write_bytes(original_receipt_bytes)
+            with self.assertRaisesRegex(ValueError, "posting output URI or bytes"):
+                _rewrite_posting_receipt_uris(
+                    receipt_path,
+                    root,
+                    "s3://borsuk-evidence/run",
                 )
 
     def test_dry_run_has_no_aws_side_effect(self) -> None:

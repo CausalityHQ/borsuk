@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch one evidence-bound V23 incidence tree phase on ephemeral EC2 Spot."""
+"""Launch one evidence-bound V23 incidence phase on ephemeral EC2 Spot."""
 
 from __future__ import annotations
 
@@ -52,9 +52,17 @@ FROZEN_D1_REPORT_SHA256 = (
 FROZEN_PAGE_GENERATION = (
     "b20f22206edd140fdd5474a3786f3f1a6ff51fa5f9d5f1be9363092156cb74ec"
 )
-SUPPORTED_PHASES = ("tree-training",)
+FROZEN_TREE_RECEIPT_URI = (
+    "s3://borsuk-bench-453182569524-euc1/research/v23-leaf-page-incidence/"
+    "a321c473cb38a3b38c4757a50acf14e144b0441b0ca4bbbe7a8c7f3baaef78cc/"
+    "v23-incidence-tree-20260831T120514Z/tree-receipt.json"
+)
+FROZEN_TREE_RECEIPT_SHA256 = (
+    "c1af5ab84ef20797ffe52fa0a93872008df817c142957f009895c8b7fc853a99"
+)
+FROZEN_TREE_RECEIPT_BYTES = 26_106
+SUPPORTED_PHASES = ("tree-training", "posting-construction")
 BLOCKED_PHASES = (
-    "posting-construction",
     "development-evaluation",
     "holdout-binding",
     "holdout-evaluation",
@@ -144,6 +152,12 @@ def build_posting_manifest(
 
     authenticate_identity(tree_receipt_identity, "parent-receipt", tree_receipt_bytes)
     authenticate_identity(roster_identity, "page-roster", roster_bytes)
+    if (
+        tree_receipt_identity["uri"] != FROZEN_TREE_RECEIPT_URI
+        or tree_receipt_identity["digest"] != FROZEN_TREE_RECEIPT_SHA256
+        or tree_receipt_identity["encoded_bytes"] != FROZEN_TREE_RECEIPT_BYTES
+    ):
+        raise ValueError("parent receipt authority differs")
     if (
         roster_identity["uri"] != FROZEN_PAGE_ROSTER_URI
         or roster_identity["digest"] != FROZEN_PAGE_ROSTER_SHA256
@@ -377,20 +391,32 @@ def build_launch_plan(
             raise ValueError(f"{phase} has no committed immutable phase manifest")
         raise ValueError("unknown incidence phase")
     manifest = _manifest()
+    if phase == "tree-training":
+        preflight_input_count = 1
+        execute_input_count = len(manifest["ordered_inputs"])
+        parent_receipt_uri = None
+        page_roster_uri = None
+    else:
+        preflight_input_count = 3 + 256
+        execute_input_count = 3 + 28_282
+        parent_receipt_uri = FROZEN_TREE_RECEIPT_URI
+        page_roster_uri = FROZEN_PAGE_ROSTER_URI
     return {
         "aws_account_id": EXPECTED_AWS_ACCOUNT,
         "aws_profile": PROFILE,
         "blocked_phases": list(BLOCKED_PHASES),
         "construction_manifest": MANIFEST_RELATIVE,
         "d3_allowed": False,
-        "execute_input_count": len(manifest["ordered_inputs"]),
+        "execute_input_count": execute_input_count,
         "instance_count": 1,
         "billable_wall_stop_seconds": INSTANCE_WALL_STOP_SECONDS,
         "instance_type": INSTANCE_TYPE,
         "maximum_compute_cost_usd": 5.0,
         "outer_wall_stop_seconds": 16_200,
         "phase": phase,
-        "preflight_input_count": 1,
+        "parent_receipt_uri": parent_receipt_uri,
+        "page_roster_uri": page_roster_uri,
+        "preflight_input_count": preflight_input_count,
         "progress_stop_seconds": 300,
         "psi_full_immediate": 0.79,
         "psi_full_sustained": 0.50,
@@ -408,12 +434,14 @@ def build_launch_plan(
 
 
 def build_launch_spec(
-    *, run_id: str, source_commit: str, user_data: str
+    *, phase: str, run_id: str, source_commit: str, user_data: str
 ) -> dict[str, object]:
     """Build the exact one-time Spot request."""
 
     _require_token("run ID", run_id)
     _require_source_commit(source_commit)
+    if phase not in SUPPORTED_PHASES:
+        raise ValueError("unsupported incidence phase")
     if not user_data.startswith("#!/") or "shutdown -h now" not in user_data:
         raise ValueError("worker user data does not self-terminate")
     if len(user_data.encode()) > 16_384:
@@ -462,7 +490,7 @@ def build_launch_spec(
                     {"Key": "Name", "Value": f"borsuk-v23-incidence-{run_id}"},
                     {"Key": "Project", "Value": "BorsukBenchmark"},
                     {"Key": "Campaign", "Value": "v23-leaf-page-incidence"},
-                    {"Key": "Phase", "Value": "tree-training"},
+                    {"Key": "Phase", "Value": phase},
                     {"Key": "RunId", "Value": run_id},
                     {"Key": "SourceCommit", "Value": source_commit},
                     {"Key": "AutoTerminate", "Value": "true"},
@@ -475,6 +503,7 @@ def build_launch_spec(
 
 def build_worker_script(
     *,
+    phase: str,
     run_id: str,
     source_commit: str,
     source_uri: str,
@@ -484,12 +513,15 @@ def build_worker_script(
 ) -> str:
     """Return a bootstrap that builds, runs once, publishes, and terminates."""
 
+    if phase not in SUPPORTED_PHASES:
+        raise ValueError("unsupported incidence phase")
     _require_token("run ID", run_id)
     _require_source_commit(source_commit)
     _require_sha256("source archive", source_sha256)
     if not source_uri.startswith("s3://") or not result_uri.startswith("s3://"):
         raise ValueError("worker S3 authority differs")
     quoted = {
+        "phase": shlex.quote(phase),
         "run": shlex.quote(run_id),
         "commit": shlex.quote(source_commit),
         "source_uri": shlex.quote(source_uri),
@@ -499,6 +531,7 @@ def build_worker_script(
     }
     return f"""#!/usr/bin/env bash
 set -euo pipefail
+phase={quoted['phase']}
 run_id={quoted['run']}
 source_commit={quoted['commit']}
 source_uri={quoted['source_uri']}
@@ -509,6 +542,10 @@ workspace=/var/lib/borsuk-v23-incidence/source
 evidence=/var/lib/borsuk-v23-incidence/evidence
 scratch_root=/var/lib/borsuk-v23-incidence/scratch
 archive=/var/lib/borsuk-v23-incidence/source.tar
+posting_bootstrap=/var/lib/borsuk-v23-incidence/posting-bootstrap
+posting_tree_receipt="$posting_bootstrap/tree-receipt.json"
+posting_roster="$posting_bootstrap/page-roster.json"
+posting_manifest="$posting_bootstrap/posting-manifest.json"
 worker_log=/var/lib/borsuk-v23-incidence/worker.log
 phase_log="$evidence/phase.log"
 phase_journal="$evidence/phase-journal.txt"
@@ -531,11 +568,19 @@ finish() {{
   publish_status=0
   complete_attempted=0
   primary_evidence_attempted=0
-  if [[ "$status" -eq 0 && ! -f "$evidence/spot-interruption.json" && -f "$evidence/tree-receipt.json" && -f "$evidence/incidence-tree.bin" ]]; then
+  if [[ "$status" -eq 0 && ! -f "$evidence/spot-interruption.json" ]] && {{
+    [[ "$phase" == "tree-training" && -f "$evidence/tree-receipt.json" && -f "$evidence/incidence-tree.bin" ]] ||
+    [[ "$phase" == "posting-construction" && -f "$evidence/posting-receipt.json" && -f "$evidence/incidence-postings-one.bin" && -f "$evidence/incidence-postings-two.bin" ]]
+  }}; then
+    if [[ "$phase" == "tree-training" ]]; then
     python3 - "$evidence/ATTEMPT_COMPLETE.json" "$run_id" "$source_commit" "$source_sha256" "$spot_price" "$evidence/tree-receipt.json" "$evidence/incidence-tree.bin" "$binary" <<'PY'
 import hashlib,json,os,sys
 path,run_id,commit,archive_sha,price,receipt,tree,binary=sys.argv[1:]
-identity=lambda p: {{"encoded_bytes":os.path.getsize(p),"sha256":hashlib.sha256(open(p,"rb").read()).hexdigest()}}
+def identity(source):
+    digest=hashlib.sha256()
+    with open(source,"rb") as stream:
+        for chunk in iter(lambda:stream.read(1024*1024),b""): digest.update(chunk)
+    return {{"encoded_bytes":os.path.getsize(source),"sha256":digest.hexdigest()}}
 value={{"binary":identity(binary),"claim_eligible":False,"incidence_tree":identity(tree),"phase":"tree-training","purchase_option":"spot","receipt":identity(receipt),"run_id":run_id,"schema":"borsuk-v23-incidence-attempt-complete-v1","source_archive_sha256":archive_sha,"source_commit":commit,"spot_price_usd_per_hour":price,"status":"complete"}}
 open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\\n")
 PY
@@ -546,6 +591,27 @@ PY
     put_once "$evidence/progress.json" progress.json || publish_status=86
     put_once "$evidence/incidence-tree.bin" incidence-tree.bin || publish_status=86
     put_once "$evidence/tree-receipt.json" tree-receipt.json || publish_status=86
+    else
+    python3 - "$evidence/ATTEMPT_COMPLETE.json" "$run_id" "$source_commit" "$source_sha256" "$spot_price" "$evidence/posting-receipt.json" "$evidence/incidence-postings-one.bin" "$evidence/incidence-postings-two.bin" "$binary" <<'PY'
+import hashlib,json,os,sys
+path,run_id,commit,archive_sha,price,receipt,one,two,binary=sys.argv[1:]
+def identity(source):
+    digest=hashlib.sha256()
+    with open(source,"rb") as stream:
+        for chunk in iter(lambda:stream.read(1024*1024),b""): digest.update(chunk)
+    return {{"encoded_bytes":os.path.getsize(source),"sha256":digest.hexdigest()}}
+value={{"binary":identity(binary),"claim_eligible":False,"incidence_postings_one":identity(one),"incidence_postings_two":identity(two),"phase":"posting-construction","purchase_option":"spot","receipt":identity(receipt),"run_id":run_id,"schema":"borsuk-v23-incidence-attempt-complete-v1","source_archive_sha256":archive_sha,"source_commit":commit,"spot_price_usd_per_hour":price,"status":"complete"}}
+open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\\n")
+PY
+    primary_evidence_attempted=1
+    put_once "$evidence/binary.json" binary.json || publish_status=86
+    put_once "$binary" incidence-executable || publish_status=86
+    put_once "$evidence/preflight-receipt.json" preflight-receipt.json || publish_status=86
+    put_once "$evidence/progress.json" progress.json || publish_status=86
+    put_once "$evidence/incidence-postings-one.bin" incidence-postings-one.bin || publish_status=86
+    put_once "$evidence/incidence-postings-two.bin" incidence-postings-two.bin || publish_status=86
+    put_once "$evidence/posting-receipt.json" posting-receipt.json || publish_status=86
+    fi
   else
     publish_status="$status"
     [[ "$publish_status" -ne 0 ]] || publish_status=87
@@ -566,21 +632,25 @@ PY
     put_once "$evidence/ATTEMPT_COMPLETE.json" ATTEMPT_COMPLETE.json || publish_status=86
   fi
   if [[ -f "$evidence/spot-interruption.json" && "$complete_attempted" -eq 0 ]]; then
-    python3 - "$evidence/ATTEMPT_INTERRUPTED.json" "$run_id" "$source_commit" "$source_sha256" <<'PY'
+    python3 - "$evidence/ATTEMPT_INTERRUPTED.json" "$run_id" "$source_commit" "$source_sha256" "$phase" <<'PY'
 import json,sys
-path,run_id,commit,archive_sha=sys.argv[1:]
-value={{"claim_eligible":False,"phase":"tree-training","run_id":run_id,"schema":"borsuk-v23-incidence-attempt-interrupted-v1","source_archive_sha256":archive_sha,"source_commit":commit,"status":"interrupted"}}
+path,run_id,commit,archive_sha,phase=sys.argv[1:]
+value={{"claim_eligible":False,"phase":phase,"run_id":run_id,"schema":"borsuk-v23-incidence-attempt-interrupted-v1","source_archive_sha256":archive_sha,"source_commit":commit,"status":"interrupted"}}
 open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\\n")
 PY
     put_once "$evidence/ATTEMPT_INTERRUPTED.json" ATTEMPT_INTERRUPTED.json || true
   elif [[ "$publish_status" -ne 0 && "$complete_attempted" -eq 0 ]]; then
-    python3 - "$evidence/ATTEMPT_FAILED.json" "$run_id" "$source_commit" "$source_sha256" "$publish_status" <<'PY'
+    python3 - "$evidence/ATTEMPT_FAILED.json" "$run_id" "$source_commit" "$source_sha256" "$publish_status" "$phase" <<'PY'
 import json,sys
-path,run_id,commit,archive_sha,status=sys.argv[1:]
-value={{"claim_eligible":False,"phase":"tree-training","run_id":run_id,"schema":"borsuk-v23-incidence-attempt-failed-v1","source_archive_sha256":archive_sha,"source_commit":commit,"status":"failed","worker_exit":int(status)}}
+path,run_id,commit,archive_sha,status,phase=sys.argv[1:]
+value={{"claim_eligible":False,"phase":phase,"run_id":run_id,"schema":"borsuk-v23-incidence-attempt-failed-v1","source_archive_sha256":archive_sha,"source_commit":commit,"status":"failed","worker_exit":int(status)}}
 open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\\n")
 PY
     put_once "$evidence/ATTEMPT_FAILED.json" ATTEMPT_FAILED.json || true
+  fi
+  if [[ "$phase" == "posting-construction" ]]; then
+    rm -f "$posting_tree_receipt" "$posting_roster" "$posting_manifest"
+    rmdir "$posting_bootstrap" 2>/dev/null || true
   fi
   rm -f "$archive"
   shutdown -h now
@@ -622,6 +692,21 @@ printf '{{"binary_bytes":%s,"binary_sha256":"%s","schema":"borsuk-v23-incidence-
 "$(command -v uv)" pip install --python /opt/borsuk-incidence-venv/bin/python --requirement scripts/requirements-format-bench.txt
 /opt/borsuk-incidence-venv/bin/python scripts/launch_v23_incidence_spot.py --offline-probe
 
+worker_mode=(--worker-tree)
+if [[ "$phase" == "posting-construction" ]]; then
+  mkdir "$posting_bootstrap"
+  aws s3 cp {shlex.quote(FROZEN_TREE_RECEIPT_URI)} "$posting_tree_receipt" --only-show-errors
+  test "$(stat -c %s "$posting_tree_receipt")" -eq {FROZEN_TREE_RECEIPT_BYTES}
+  test "$(sha256sum "$posting_tree_receipt" | awk '{{print $1}}')" = {FROZEN_TREE_RECEIPT_SHA256}
+  aws s3 cp {shlex.quote(FROZEN_PAGE_ROSTER_URI)} "$posting_roster" --only-show-errors
+  test "$(stat -c %s "$posting_roster")" -eq {FROZEN_PAGE_ROSTER_BYTES}
+  test "$(sha256sum "$posting_roster" | awk '{{print $1}}')" = {FROZEN_PAGE_ROSTER_SHA256}
+  /opt/borsuk-incidence-venv/bin/python scripts/launch_v23_incidence_spot.py --build-posting-manifest \
+    --tree-receipt "$posting_tree_receipt" --page-roster "$posting_roster" \
+    --posting-manifest-output "$posting_manifest"
+  worker_mode=(--worker-posting --posting-manifest "$posting_manifest")
+fi
+
 if ! interruption_token="$(curl --fail --silent --request PUT --header 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)"; then
   printf '{{"schema":"borsuk-v23-incidence-interruption-monitor-failed-v1"}}\n' >"$evidence/interruption-monitor-failed.json"
   false
@@ -633,7 +718,7 @@ systemd-run --wait --collect --unit="$unit" \
   --property=StandardOutput=append:$phase_log --property=StandardError=append:$phase_log \
   --working-directory="$workspace" --setenv=PYTHONPATH="$workspace" --setenv=TMPDIR="$scratch_root" \
   --setenv=AWS_REGION={REGION} --setenv=AWS_DEFAULT_REGION={REGION} \
-  /opt/borsuk-incidence-venv/bin/python scripts/launch_v23_incidence_spot.py --worker-tree \
+  /opt/borsuk-incidence-venv/bin/python scripts/launch_v23_incidence_spot.py "${{worker_mode[@]}}" \
   --binary "$binary" --binary-sha256 "$binary_sha256" \
   --evidence-directory "$evidence" --output-uri-prefix "$result_uri"
 phase_status=$?
@@ -807,7 +892,14 @@ def _maximum_compute_cost(spot_price_usd_per_hour: str) -> decimal.Decimal:
     return price * decimal.Decimal(INSTANCE_WALL_STOP_SECONDS) / decimal.Decimal(3600)
 
 
-def _validate_terminal_bytes(raw: bytes, run_id: str, source_commit: str) -> str:
+def _validate_terminal_bytes(
+    raw: bytes,
+    run_id: str,
+    source_commit: str,
+    phase: str,
+) -> str:
+    if phase not in SUPPORTED_PHASES:
+        raise ValueError("attempt terminal phase differs")
     try:
         value = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -816,7 +908,7 @@ def _validate_terminal_bytes(raw: bytes, run_id: str, source_commit: str) -> str
         raise ValueError("attempt terminal canonical bytes differ")
     common = {
         "claim_eligible": False,
-        "phase": "tree-training",
+        "phase": phase,
         "run_id": run_id,
         "source_commit": source_commit,
     }
@@ -860,12 +952,16 @@ def _validate_terminal_bytes(raw: bytes, run_id: str, source_commit: str) -> str
             raise ValueError("interrupted terminal authority differs")
         return status
     if status == "complete":
+        artifact_roles = (
+            ("incidence_tree",)
+            if phase == "tree-training"
+            else ("incidence_postings_one", "incidence_postings_two")
+        )
         if (
             set(value)
             != {
                 "binary",
                 "claim_eligible",
-                "incidence_tree",
                 "phase",
                 "purchase_option",
                 "receipt",
@@ -876,12 +972,13 @@ def _validate_terminal_bytes(raw: bytes, run_id: str, source_commit: str) -> str
                 "spot_price_usd_per_hour",
                 "status",
             }
+            | set(artifact_roles)
             or value["schema"] != "borsuk-v23-incidence-attempt-complete-v1"
             or value["purchase_option"] != "spot"
             or LOWER_SHA256.fullmatch(value.get("source_archive_sha256", "")) is None
         ):
             raise ValueError("complete terminal authority differs")
-        for role in ("binary", "incidence_tree", "receipt"):
+        for role in ("binary", *artifact_roles, "receipt"):
             identity = value.get(role)
             if (
                 type(identity) is not dict  # noqa: E721
@@ -919,6 +1016,7 @@ def monitor_attempt(
     result_uri: str,
     run_id: str,
     source_commit: str,
+    phase: str,
     *,
     poll_seconds: float = 15.0,
     wall_seconds: float = 21_600.0,
@@ -975,7 +1073,7 @@ def monitor_attempt(
                     ]
                 )
                 observed = _validate_terminal_bytes(
-                    terminal_path.read_bytes(), run_id, source_commit
+                    terminal_path.read_bytes(), run_id, source_commit, phase
                 )
             finally:
                 terminal_path.unlink(missing_ok=True)
@@ -1052,6 +1150,7 @@ def launch(phase: str, run_id: str, source_commit: str) -> tuple[str, str]:
             f"projected Spot compute cost exceeds $5 ceiling: {projected_compute_cost:.2f}"
         )
     worker = build_worker_script(
+        phase=phase,
         run_id=run_id,
         source_commit=source_commit,
         source_uri=source_uri,
@@ -1060,7 +1159,10 @@ def launch(phase: str, run_id: str, source_commit: str) -> tuple[str, str]:
         spot_price_usd_per_hour=price,
     )
     spec = build_launch_spec(
-        run_id=run_id, source_commit=source_commit, user_data=worker
+        phase=phase,
+        run_id=run_id,
+        source_commit=source_commit,
+        user_data=worker,
     )
     with tempfile.NamedTemporaryFile("w", suffix=".json") as handle:
         json.dump(spec, handle, separators=(",", ":"), sort_keys=True)
@@ -1127,26 +1229,30 @@ def _write_bulk_manifest(source: pathlib.Path, target: pathlib.Path, full: bool)
 def _validate_tree_progress_binding(
     receipt: dict[str, object], progress_path: pathlib.Path
 ) -> None:
+    _validate_phase_progress_binding(receipt, progress_path, "tree-training")
+
+
+def _validate_phase_progress_binding(
+    receipt: dict[str, object], progress_path: pathlib.Path, phase: str
+) -> None:
     from scripts.run_v23_leaf_page_incidence_falsifier import (
         AuthenticatedProgressMonitor,
     )
 
     if progress_path.is_symlink() or not progress_path.is_file():
-        raise ValueError("tree progress binding differs")
+        raise ValueError(f"{phase} progress binding differs")
     raw = progress_path.read_bytes()
     try:
-        _, completed_units, _ = AuthenticatedProgressMonitor("tree-training").observe(
-            raw
-        )
+        _, completed_units, _ = AuthenticatedProgressMonitor(phase).observe(raw)
         final_record = json.loads(raw.splitlines()[-1])
     except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
-        raise ValueError("tree progress binding differs") from error
+        raise ValueError(f"{phase} progress binding differs") from error
     if (
         final_record["sequence"] <= 0
         or completed_units != final_record["total_units"]
         or receipt.get("final_progress_sha256") != hashlib.sha256(raw).hexdigest()
     ):
-        raise ValueError("tree progress binding differs")
+        raise ValueError(f"{phase} progress binding differs")
 
 
 def _rewrite_tree_receipt_uri(
@@ -1199,6 +1305,73 @@ def _rewrite_tree_receipt_uri(
     finally:
         os.close(descriptor)
     os.replace(temporary, receipt_path)
+
+
+def _rewrite_posting_receipt_uris(
+    receipt_path: pathlib.Path,
+    output_directory: pathlib.Path,
+    output_uri_prefix: str,
+) -> dict[str, pathlib.Path]:
+    import blake3
+
+    if (
+        receipt_path.is_symlink()
+        or not receipt_path.is_file()
+        or output_directory.is_symlink()
+        or not output_directory.is_dir()
+        or re.fullmatch(r"s3://[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+", output_uri_prefix)
+        is None
+    ):
+        raise ValueError("posting output URI or bytes differ")
+    raw = receipt_path.read_bytes()
+    value = json.loads(raw)
+    outputs = value.get("outputs") if type(value) is dict else None
+    roles = ("incidence-postings-one", "incidence-postings-two")
+    if (
+        raw != _canonical_bytes(value)
+        or type(outputs) is not list
+        or len(outputs) != len(roles)
+        or [item.get("role") if type(item) is dict else None for item in outputs]
+        != list(roles)
+    ):
+        raise ValueError("posting output URI or bytes differ")
+    paths: dict[str, pathlib.Path] = {}
+    for role, identity in zip(roles, outputs, strict=True):
+        path = pathlib.Path(str(identity.get("uri", "")).removeprefix("file://"))
+        digest = blake3.blake3()
+        if (
+            not str(identity.get("uri", "")).startswith("file://")
+            or path.parent != output_directory
+            or path.is_symlink()
+            or not path.is_file()
+        ):
+            raise ValueError("posting output URI or bytes differ")
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+        observed_digest = digest.hexdigest()
+        if (
+            set(identity)
+            != {
+                "digest",
+                "digest_algorithm",
+                "encoded_bytes",
+                "generation",
+                "role",
+                "uri",
+            }
+            or identity["digest_algorithm"] != "blake3"
+            or identity["digest"] != observed_digest
+            or identity["encoded_bytes"] != path.stat().st_size
+            or identity["generation"] != f"content-{observed_digest}"
+        ):
+            raise ValueError("posting output URI or bytes differ")
+        identity["uri"] = f"{output_uri_prefix.rstrip('/')}/{role}.bin"
+        paths[role] = path
+    temporary = receipt_path.with_name(f".{receipt_path.name}.rewrite")
+    _write_exclusive(temporary, _canonical_bytes(value))
+    os.replace(temporary, receipt_path)
+    return paths
 
 
 def _stage(manifest: pathlib.Path, directory: pathlib.Path, receipt: pathlib.Path) -> None:
@@ -1310,6 +1483,7 @@ def _write_exclusive(path: pathlib.Path, payload: bytes) -> None:
 
 def _preserve_worker_failure(
     evidence: pathlib.Path,
+    phase: str,
     stage: str,
     error: BaseException,
     partial_receipts: Sequence[tuple[pathlib.Path, str]],
@@ -1328,7 +1502,7 @@ def _preserve_worker_failure(
                     "claim_eligible": False,
                     "exception_type": type(error).__name__,
                     "message": str(error),
-                    "phase": "tree-training",
+                    "phase": phase,
                     "stage": stage,
                 }
             ),
@@ -1487,6 +1661,7 @@ def worker_tree(
         try:
             _preserve_worker_failure(
                 evidence,
+                "tree-training",
                 stage,
                 error,
                 (
@@ -1501,6 +1676,141 @@ def worker_tree(
         raise
     finally:
         # Scientific cleanup is fail-closed: only the private mkdtemp tree is removed.
+        import shutil
+
+        shutil.rmtree(root)
+
+
+def worker_posting(
+    binary: pathlib.Path,
+    binary_sha256: str,
+    evidence: pathlib.Path,
+    output_uri_prefix: str,
+    manifest_bytes: bytes,
+) -> int:
+    """Stage and execute one monitored posting-construction phase."""
+
+    from scripts.run_v23_leaf_page_incidence_falsifier import MonitorLimits, run_phase
+
+    root = pathlib.Path(tempfile.mkdtemp(prefix="v23-incidence-posting-"))
+    manifest = root / "phase-manifest.json"
+    preflight_manifest = root / "preflight-manifest.json"
+    execute_manifest = root / "execute-manifest.json"
+    preflight_receipt = root / "preflight-staging-receipt.json"
+    execute_receipt = root / "execute-staging-receipt.json"
+    preflight_staging = root / "preflight-inputs"
+    execute_staging = root / "execute-inputs"
+    preflight_scratch = root / "preflight-scratch"
+    execute_scratch = root / "execute-scratch"
+    preflight_output = root / "preflight-output"
+    execute_output = root / "execute-output"
+    phase_preflight_receipt = preflight_output / "receipt.json"
+    execute_progress = execute_output / "progress.json"
+    stage = "initialization"
+    try:
+        _write_exclusive(manifest, manifest_bytes)
+        manifest_value = json.loads(manifest_bytes)
+        if (
+            manifest_bytes != _canonical_bytes(manifest_value)
+            or manifest_value.get("phase") != "posting-construction"
+            or manifest_value.get("parent_receipt_sha256")
+            != FROZEN_TREE_RECEIPT_SHA256
+        ):
+            raise ValueError("posting parent receipt authority differs")
+        for path in (
+            preflight_scratch,
+            execute_scratch,
+            preflight_output,
+            execute_output,
+        ):
+            path.mkdir()
+        stage = "preflight-manifest"
+        _write_bulk_manifest(manifest, preflight_manifest, False)
+        stage = "preflight-staging"
+        _stage(preflight_manifest, preflight_staging, preflight_receipt)
+        stage = "preflight-policy"
+        preflight_policy = _phase_policy(
+            phase="posting-construction",
+            binary=binary,
+            binary_sha256=binary_sha256,
+            manifest=manifest,
+            bulk_manifest=preflight_manifest,
+            staging=preflight_staging,
+            staging_receipt=preflight_receipt,
+            scratch=preflight_scratch,
+            output=preflight_output,
+            preflight_receipt=None,
+        )
+        stage = "preflight-run"
+        preflight_status = run_phase(preflight_policy, MonitorLimits())
+        if preflight_status != 0:
+            raise RuntimeError(f"posting preflight failed with exit {preflight_status}")
+        if phase_preflight_receipt.is_symlink() or not phase_preflight_receipt.is_file():
+            raise RuntimeError("posting preflight receipt is absent")
+        evidence.mkdir(parents=True, exist_ok=True)
+        _write_exclusive(
+            evidence / "preflight-receipt.json",
+            phase_preflight_receipt.read_bytes(),
+        )
+        stage = "execute-manifest"
+        _write_bulk_manifest(manifest, execute_manifest, True)
+        stage = "execute-staging"
+        _stage(execute_manifest, execute_staging, execute_receipt)
+        stage = "execute-policy"
+        execute_policy = _phase_policy(
+            phase="posting-construction",
+            binary=binary,
+            binary_sha256=binary_sha256,
+            manifest=manifest,
+            bulk_manifest=execute_manifest,
+            staging=execute_staging,
+            staging_receipt=execute_receipt,
+            scratch=execute_scratch,
+            output=execute_output,
+            preflight_receipt=phase_preflight_receipt,
+        )
+        stage = "execute-run"
+        execute_status = run_phase(execute_policy, MonitorLimits())
+        if execute_status != 0:
+            raise RuntimeError(f"posting execution failed with exit {execute_status}")
+        stage = "execute-receipt"
+        final_receipt = execute_output / "receipt.json"
+        if final_receipt.is_symlink() or not final_receipt.is_file():
+            raise RuntimeError("posting receipt is absent")
+        receipt_value = json.loads(final_receipt.read_bytes())
+        _validate_phase_progress_binding(
+            receipt_value,
+            execute_progress,
+            "posting-construction",
+        )
+        paths = _rewrite_posting_receipt_uris(
+            final_receipt,
+            execute_output,
+            output_uri_prefix,
+        )
+        _write_exclusive(evidence / "progress.json", execute_progress.read_bytes())
+        for role, path in paths.items():
+            os.replace(path, evidence / f"{role}.bin")
+        os.replace(final_receipt, evidence / "posting-receipt.json")
+        return 0
+    except BaseException as error:
+        try:
+            _preserve_worker_failure(
+                evidence,
+                "posting-construction",
+                stage,
+                error,
+                (
+                    (preflight_receipt, "preflight-staging-receipt.json"),
+                    (execute_receipt, "execute-staging-receipt.json"),
+                    (phase_preflight_receipt, "preflight-receipt.json"),
+                    (execute_progress, "progress.json"),
+                ),
+            )
+        except BaseException:
+            traceback.print_exc()
+        raise
+    finally:
         import shutil
 
         shutil.rmtree(root)
@@ -1541,6 +1851,46 @@ else: raise RuntimeError('network namespace is not isolated')
     return 0
 
 
+def _build_posting_manifest_file(
+    tree_receipt_path: pathlib.Path,
+    roster_path: pathlib.Path,
+    output_path: pathlib.Path,
+) -> None:
+    if (
+        tree_receipt_path.is_symlink()
+        or not tree_receipt_path.is_file()
+        or roster_path.is_symlink()
+        or not roster_path.is_file()
+        or output_path.exists()
+        or output_path.parent.is_symlink()
+        or not output_path.parent.is_dir()
+    ):
+        raise ValueError("posting manifest file boundary differs")
+    tree_receipt_bytes = tree_receipt_path.read_bytes()
+    roster_bytes = roster_path.read_bytes()
+
+    def identity(role: str, uri: str, raw: bytes) -> dict[str, object]:
+        digest = hashlib.sha256(raw).hexdigest()
+        return {
+            "digest": digest,
+            "digest_algorithm": "sha256",
+            "encoded_bytes": len(raw),
+            "generation": f"unversioned-sha256:{digest}",
+            "role": role,
+            "uri": uri,
+        }
+
+    manifest_bytes = build_posting_manifest(
+        tree_receipt_bytes=tree_receipt_bytes,
+        tree_receipt_identity=identity(
+            "parent-receipt", FROZEN_TREE_RECEIPT_URI, tree_receipt_bytes
+        ),
+        roster_bytes=roster_bytes,
+        roster_identity=identity("page-roster", FROZEN_PAGE_ROSTER_URI, roster_bytes),
+    )
+    _write_exclusive(output_path, manifest_bytes)
+
+
 def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--phase", choices=SUPPORTED_PHASES + BLOCKED_PHASES)
@@ -1548,14 +1898,30 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     private = parser.add_mutually_exclusive_group()
     private.add_argument("--worker-tree", action="store_true")
+    private.add_argument("--worker-posting", action="store_true")
+    private.add_argument("--build-posting-manifest", action="store_true")
     private.add_argument("--offline-probe", action="store_true")
     parser.add_argument("--binary", type=pathlib.Path)
     parser.add_argument("--binary-sha256")
     parser.add_argument("--evidence-directory", type=pathlib.Path)
     parser.add_argument("--output-uri-prefix")
+    parser.add_argument("--tree-receipt", type=pathlib.Path)
+    parser.add_argument("--page-roster", type=pathlib.Path)
+    parser.add_argument("--posting-manifest-output", type=pathlib.Path)
+    parser.add_argument("--posting-manifest", type=pathlib.Path)
     parsed = parser.parse_args(arguments)
     if parsed.worker_tree:
-        if any((parsed.phase, parsed.run_id, parsed.dry_run)) or not all(
+        if any(
+            (
+                parsed.phase,
+                parsed.run_id,
+                parsed.dry_run,
+                parsed.tree_receipt,
+                parsed.page_roster,
+                parsed.posting_manifest_output,
+                parsed.posting_manifest,
+            )
+        ) or not all(
             (
                 parsed.binary,
                 parsed.binary_sha256,
@@ -1564,6 +1930,46 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
             )
         ):
             parser.error("worker tree arguments differ")
+    elif parsed.worker_posting:
+        if any(
+            (
+                parsed.phase,
+                parsed.run_id,
+                parsed.dry_run,
+                parsed.tree_receipt,
+                parsed.page_roster,
+                parsed.posting_manifest_output,
+            )
+        ) or not all(
+            (
+                parsed.binary,
+                parsed.binary_sha256,
+                parsed.evidence_directory,
+                parsed.output_uri_prefix,
+                parsed.posting_manifest,
+            )
+        ):
+            parser.error("worker posting arguments differ")
+    elif parsed.build_posting_manifest:
+        if any(
+            (
+                parsed.phase,
+                parsed.run_id,
+                parsed.dry_run,
+                parsed.binary,
+                parsed.binary_sha256,
+                parsed.evidence_directory,
+                parsed.output_uri_prefix,
+                parsed.posting_manifest,
+            )
+        ) or not all(
+            (
+                parsed.tree_receipt,
+                parsed.page_roster,
+                parsed.posting_manifest_output,
+            )
+        ):
+            parser.error("posting manifest arguments differ")
     elif parsed.offline_probe:
         if any(
             (
@@ -1574,6 +1980,10 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
                 parsed.binary_sha256,
                 parsed.evidence_directory,
                 parsed.output_uri_prefix,
+                parsed.tree_receipt,
+                parsed.page_roster,
+                parsed.posting_manifest_output,
+                parsed.posting_manifest,
             )
         ):
             parser.error("offline probe arguments differ")
@@ -1586,6 +1996,10 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
                 parsed.binary_sha256,
                 parsed.evidence_directory,
                 parsed.output_uri_prefix,
+                parsed.tree_receipt,
+                parsed.page_roster,
+                parsed.posting_manifest_output,
+                parsed.posting_manifest,
             )
         )
     ):
@@ -1602,6 +2016,23 @@ def main(arguments: Sequence[str] | None = None) -> int:
             parsed.evidence_directory.resolve(),
             parsed.output_uri_prefix,
         )
+    if parsed.worker_posting:
+        if parsed.posting_manifest.is_symlink() or not parsed.posting_manifest.is_file():
+            raise ValueError("posting manifest path differs")
+        return worker_posting(
+            parsed.binary.resolve(),
+            _require_sha256("binary SHA-256", parsed.binary_sha256),
+            parsed.evidence_directory.resolve(),
+            parsed.output_uri_prefix,
+            parsed.posting_manifest.read_bytes(),
+        )
+    if parsed.build_posting_manifest:
+        _build_posting_manifest_file(
+            parsed.tree_receipt.resolve(),
+            parsed.page_roster.resolve(),
+            parsed.posting_manifest_output.resolve(),
+        )
+        return 0
     if parsed.offline_probe:
         return offline_probe()
     source_commit = _git_source_commit()
@@ -1614,13 +2045,17 @@ def main(arguments: Sequence[str] | None = None) -> int:
     instance_id, result_uri = launch(parsed.phase, parsed.run_id, source_commit)
     try:
         status = monitor_attempt(
-            instance_id, result_uri, parsed.run_id, source_commit
+            instance_id,
+            result_uri,
+            parsed.run_id,
+            source_commit,
+            parsed.phase,
         )
     except BaseException:
         _terminate_instance(instance_id)
         raise
     if status != "complete":
-        raise RuntimeError("V23 incidence tree attempt failed")
+        raise RuntimeError(f"V23 incidence {parsed.phase} attempt failed")
     return 0
 
 
