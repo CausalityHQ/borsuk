@@ -1069,3 +1069,80 @@ bounded, offline construction of the preregistered incidence tree. It contains
 no query-quality, recall, or serving-latency measurement, does not authorize a
 product claim, and leaves posting construction, evaluation, and D3 fenced until
 their own committed immutable phase boundaries exist.
+
+## V23 leaf-page incidence posting-construction bootstrap failures on 2026-08-31
+
+Three `c7g.8xlarge` Spot workers attempted the first posting-construction phase.
+Every worker terminated after its canonical failed marker; none produced a
+posting artifact, performance measurement, quality result, or downstream phase
+authority.
+
+The first attempt used source commit
+`293294719d9c33014c4a0a772ddab31e463e86b5`, source-archive SHA-256
+`001f14cbb9c1ec4b68503cc2e443ba881d33d28e48358542e2938966aa4266d9`,
+run ID `v23-incidence-posting-20260831T135801Z`, and instance
+`i-0783c5d4f53055b36`. Its evidence prefix is
+`s3://borsuk-bench-453182569524-euc1/research/v23-leaf-page-incidence/001f14cbb9c1ec4b68503cc2e443ba881d33d28e48358542e2938966aa4266d9/v23-incidence-posting-20260831T135801Z/`.
+The 340-byte `ATTEMPT_FAILED.json` has SHA-256
+`c4fdd3b103aeef1302d8c910738aeddfce42b51860b4e4d0236831a20c7da436`.
+Staging stopped before Rust preflight because the frozen tree receipt object did
+not expose an optional S3-computed checksum even though its downloaded bytes
+matched the registered SHA-256. The 153-byte `phase-failure.json` has SHA-256
+`eb521f04a0363da7b7b8931b3a2607a728d1a5a0dd173b767d6cf267c21bfbeb`
+and records `object S3 checksum differs` at `preflight-staging`.
+
+The second attempt used source commit
+`d6d81da316e667b29cbc98448b7d54e3dc8a8588`, source-archive SHA-256
+`deb23894217c8771432c864ec9ef1cb908ea460523f65739437b61621ff32fc7`,
+run ID `v23-incidence-posting-20260831T140733Z`, and instance
+`i-01c709f291edfe1c7`. Its evidence prefix is
+`s3://borsuk-bench-453182569524-euc1/research/v23-leaf-page-incidence/deb23894217c8771432c864ec9ef1cb908ea460523f65739437b61621ff32fc7/v23-incidence-posting-20260831T140733Z/`.
+The 340-byte `ATTEMPT_FAILED.json` has SHA-256
+`87488e086e8cd4df5f772734fc27a4619d78133684a7a4b3dbb25593d7884cc8`.
+Staging stopped because the exact current incidence-tree identity uses the
+content-addressed generation `content-aa72bf926c6fcbd17890188d8b3bd3b35393d9c392bffc032e75328ea47fae64`,
+which the stager had not accepted. The 162-byte `phase-failure.json` has
+SHA-256
+`965bcd7bcec981ceac28f95ca4945f4f29d92582e01250311d08386ce3afe4b7`
+and records `object generation authority differs` at `preflight-staging`.
+
+The third attempt used source commit
+`45b85249eec7590fb0687063d617f36915f6a477`, source-archive SHA-256
+`42edd3822b99cbff40d728d1e84d71169f674574db554e73cde93aceab363bb7`,
+run ID `v23-incidence-posting-20260831T141438Z`, and instance
+`i-030a3e69114c8963c`. Its evidence prefix is
+`s3://borsuk-bench-453182569524-euc1/research/v23-leaf-page-incidence/42edd3822b99cbff40d728d1e84d71169f674574db554e73cde93aceab363bb7/v23-incidence-posting-20260831T141438Z/`.
+The 340-byte `ATTEMPT_FAILED.json` has SHA-256
+`ebdc33cc2fa7289e20ef19af24f1901ca204e4d28a8ddf9c50be64ea51cd8143`.
+This attempt authenticated and staged all 259 bounded preflight objects. Its
+131,628-byte `preflight-staging-receipt.json` has SHA-256
+`a580268cc3e7c5097ee078d469058bf6bef5ca31f2c0d4cb9de4c173ad663d09`.
+Rust then rejected the exact immutable parent receipt before page decoding with
+`V23 incidence parent receipt authority differs`. The 161-byte
+`phase-failure.json` has SHA-256
+`2bb108e9047622b62adfbf57bd0abfc99e05665ed759e2220bf4b3bc9e40c245`
+and records `posting preflight failed with exit 1` at `preflight-run`.
+
+All three workers used the same 10,638,112-byte posting executable with SHA-256
+`a000b6068ba8bd1ffc05295fecb6ee7665c52abc0b43330048635b88f60432d2`.
+The authenticated tree receipt instead correctly binds its own prior-phase
+executable SHA-256
+`eba95fc1f83443843e6c69bd62e332ca0d825b73d92c8e251d6cdb1758554a64`.
+The Rust validator had incorrectly required those two phase-specific binaries
+to be identical. Source commit
+`4c853f6f03475ab2b778dccba2480034c2a0d83c` removes only that cross-phase
+equality: the parent remains canonical, exact-byte SHA-256 rooted, predecessor
+phase/run/stop validated, and output-bound, while same-phase preflight and
+execution still require the same executable. Two live-path tests now cross
+from a distinct predecessor executable to the current phase executable. An
+explicit mutation restoring the old equality reproduced the production error.
+
+The correction passed 77 grouped incidence tests, strict locked
+workspace/all-targets Clippy, and the full locked workspace/all-targets gate
+with 1,749 tests passed and 23 ignored. An independent Claude authority review
+found no Critical issue and confirmed that the parent binary remains bound by
+the exact receipt digest; its end-to-end coverage finding was incorporated
+before the final gates. These bootstrap failures are operational evidence only.
+They authorize no performance or quality claim, and development evaluation,
+holdout evaluation, paid follow-on work, and D3 remain fenced until a posting
+construction attempt produces its own authenticated terminal receipt.
