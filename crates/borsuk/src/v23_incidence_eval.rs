@@ -23,12 +23,10 @@ use crate::{
     },
     v23_incidence_tree::{
         V23_INCIDENCE_LEAVES, V23IncidenceTree, rank_v23_incidence_tree_beam,
-        v23_tree_beam_centroid_scores,
+        rank_v23_incidence_tree_beam_scalar, v23_tree_beam_centroid_scores,
+        v23_tree_beam_centroid_scores_for_depth,
     },
 };
-
-#[cfg(test)]
-use crate::v23_incidence_tree::rank_v23_incidence_tree_beam_scalar;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_string())
@@ -1063,13 +1061,13 @@ pub(crate) fn measure_v23_incidence_latency(
     encode_v23_incidence_latency_samples(&samples)
 }
 
-#[cfg(test)]
-fn rank_incidence_leaves_scalar(
+fn rank_incidence_leaves_scalar_with_shape(
     tree: &V23IncidenceTree,
     query: &[f32; 96],
     probes: usize,
+    expected_leaves: usize,
 ) -> Result<Vec<u16>> {
-    if tree.leaves.len() != V23_INCIDENCE_LEAVES || ![32, 64, 128].contains(&probes) {
+    if tree.leaves.len() != expected_leaves || ![32, 64, 128].contains(&probes) {
         return Err(invalid("V23 incidence scalar leaf ranking shape differs"));
     }
     let query = normalized_query(query)?;
@@ -1088,6 +1086,15 @@ fn rank_incidence_leaves_scalar(
     ranked.sort_unstable();
     ranked.truncate(probes);
     Ok(ranked.into_iter().map(|entry| entry.leaf).collect())
+}
+
+#[cfg(test)]
+fn rank_incidence_leaves_scalar(
+    tree: &V23IncidenceTree,
+    query: &[f32; 96],
+    probes: usize,
+) -> Result<Vec<u16>> {
+    rank_incidence_leaves_scalar_with_shape(tree, query, probes, V23_INCIDENCE_LEAVES)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1516,6 +1523,535 @@ pub(crate) fn classify_v23_incidence_campaign(
         return V23IncidenceCampaignClass::HoldoutKernelRejected;
     }
     V23IncidenceCampaignClass::FalsifierPassed
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum V23IncidenceScreenClass {
+    #[serde(rename = "leaf-incidence-quality-rejected")]
+    LeafIncidenceQualityRejected,
+    #[serde(rename = "tree-beam-selector-rejected")]
+    TreeBeamSelectorRejected,
+    #[serde(rename = "tree-beam-screen-passed")]
+    TreeBeamScreenPassed,
+}
+
+pub(crate) const fn classify_v23_incidence_screen(
+    exhaustive_control_passed: bool,
+    tree_beam_passed: bool,
+) -> V23IncidenceScreenClass {
+    if tree_beam_passed {
+        V23IncidenceScreenClass::TreeBeamScreenPassed
+    } else if exhaustive_control_passed {
+        V23IncidenceScreenClass::TreeBeamSelectorRejected
+    } else {
+        V23IncidenceScreenClass::LeafIncidenceQualityRejected
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V23IncidenceScreenObjectIdentity {
+    pub(crate) role: String,
+    pub(crate) uri: String,
+    pub(crate) digest_algorithm: String,
+    pub(crate) digest: String,
+    pub(crate) encoded_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V23IncidenceScreenAuthority {
+    pub(crate) source_commit: String,
+    pub(crate) source_archive_sha256: String,
+    pub(crate) index_id: String,
+    pub(crate) objects: Vec<V23IncidenceScreenObjectIdentity>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum V23IncidenceScreenSelector {
+    #[serde(rename = "centroid-tree-beam-v1")]
+    TreeBeam,
+    #[serde(rename = "exhaustive-leaf-control-v1")]
+    ExhaustiveControl,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V23IncidenceScreenCellResult {
+    pub(crate) selector: V23IncidenceScreenSelector,
+    pub(crate) cell: V23IncidenceCell,
+    pub(crate) scored_centroids_per_query: u32,
+    pub(crate) distance_dimensions_per_query: u32,
+    pub(crate) quality: V23IncidenceQuality,
+    pub(crate) projected_serving_bytes: u64,
+    pub(crate) maximum_posting_visits: u32,
+    pub(crate) maximum_touched_pages: u32,
+    pub(crate) determinism_passed: bool,
+    pub(crate) selections: Vec<V23IncidenceSelection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V23IncidenceScreenResult {
+    pub(crate) schema: String,
+    pub(crate) claim_eligible: bool,
+    pub(crate) authority: V23IncidenceScreenAuthority,
+    pub(crate) development_truth: Vec<V23IncidenceQueryTruth>,
+    pub(crate) tree_beam: Vec<V23IncidenceScreenCellResult>,
+    pub(crate) exhaustive_control: Vec<V23IncidenceScreenCellResult>,
+    pub(crate) exhaustive_control_passed: bool,
+    pub(crate) tree_beam_passed: bool,
+    pub(crate) selected_cell: Option<V23IncidenceCell>,
+    pub(crate) classification: V23IncidenceScreenClass,
+    pub(crate) page_body_reads: u64,
+    pub(crate) holdout_rows_read: u64,
+}
+
+impl V23IncidenceScreenResult {
+    #[cfg(test)]
+    fn passing_fixture() -> Self {
+        let quality = V23IncidenceQuality {
+            query_count: 32,
+            total_hits: 320,
+            minimum_hits: 10,
+            oracle_hits: 320,
+            aggregate_recall_ppm: 1_000_000,
+            minimum_query_recall_ppm: 1_000_000,
+            oracle_attainment_ppm: 1_000_000,
+            passed: true,
+        };
+        let development_truth = (0..32)
+            .map(|query_ordinal| V23IncidenceQueryTruth {
+                query_ordinal,
+                ground_truth_page_assignments: (0..10).map(|page| vec![page % 8]).collect(),
+                oracle_pages: (0..8).collect(),
+            })
+            .collect::<Vec<_>>();
+        let selections = (0..32)
+            .map(|query_ordinal| V23IncidenceSelection {
+                query_ordinal,
+                page_ordinals: (0..8).collect(),
+            })
+            .collect::<Vec<_>>();
+        let cells = V23IncidenceCell::registered_ladder();
+        let tree_beam = cells
+            .iter()
+            .map(|cell| {
+                let scored_centroids_per_query =
+                    v23_tree_beam_centroid_scores(usize::from(cell.beam_width)).unwrap();
+                V23IncidenceScreenCellResult {
+                    selector: V23IncidenceScreenSelector::TreeBeam,
+                    cell: *cell,
+                    scored_centroids_per_query,
+                    distance_dimensions_per_query: scored_centroids_per_query * 96,
+                    quality,
+                    projected_serving_bytes: project_v23_incidence_serving_bytes(
+                        100_000_000,
+                        usize::from(cell.cap),
+                    )
+                    .unwrap()
+                    .total_bytes,
+                    maximum_posting_visits: 8,
+                    maximum_touched_pages: 8,
+                    determinism_passed: true,
+                    selections: selections.clone(),
+                }
+            })
+            .collect();
+        let exhaustive_control = cells
+            .iter()
+            .map(|cell| V23IncidenceScreenCellResult {
+                selector: V23IncidenceScreenSelector::ExhaustiveControl,
+                cell: *cell,
+                scored_centroids_per_query: 65_536,
+                distance_dimensions_per_query: 65_536 * 96,
+                quality,
+                projected_serving_bytes: project_v23_incidence_serving_bytes(
+                    100_000_000,
+                    usize::from(cell.cap),
+                )
+                .unwrap()
+                .total_bytes,
+                maximum_posting_visits: 8,
+                maximum_touched_pages: 8,
+                determinism_passed: true,
+                selections: selections.clone(),
+            })
+            .collect();
+        let roles = [
+            ("tree-receipt", "sha256"),
+            ("incidence-tree", "blake3"),
+            ("posting-receipt", "sha256"),
+            ("incidence-postings-one", "blake3"),
+            ("incidence-postings-two", "blake3"),
+            ("d2-report", "sha256"),
+            ("query-parquet", "sha256"),
+        ];
+        Self {
+            schema: "borsuk-v23-incidence-development-screen-v1".to_string(),
+            claim_eligible: false,
+            authority: V23IncidenceScreenAuthority {
+                source_commit: "1".repeat(40),
+                source_archive_sha256: "2".repeat(64),
+                index_id: "index-fixture".to_string(),
+                objects: roles
+                    .into_iter()
+                    .enumerate()
+                    .map(
+                        |(index, (role, digest_algorithm))| V23IncidenceScreenObjectIdentity {
+                            role: role.to_string(),
+                            uri: format!("s3://fixture/{role}"),
+                            digest_algorithm: digest_algorithm.to_string(),
+                            digest: char::from(b'3' + u8::try_from(index).unwrap())
+                                .to_string()
+                                .repeat(64),
+                            encoded_bytes: u64::try_from(index + 1).unwrap(),
+                        },
+                    )
+                    .collect(),
+            },
+            development_truth,
+            tree_beam,
+            exhaustive_control,
+            exhaustive_control_passed: true,
+            tree_beam_passed: true,
+            selected_cell: Some(cells[0]),
+            classification: V23IncidenceScreenClass::TreeBeamScreenPassed,
+            page_body_reads: 0,
+            holdout_rows_read: 0,
+        }
+    }
+}
+
+pub(crate) fn canonical_v23_incidence_screen_result_bytes(
+    result: &V23IncidenceScreenResult,
+    expected_authority: &V23IncidenceScreenAuthority,
+) -> Result<Vec<u8>> {
+    let roles = [
+        ("tree-receipt", "sha256"),
+        ("incidence-tree", "blake3"),
+        ("posting-receipt", "sha256"),
+        ("incidence-postings-one", "blake3"),
+        ("incidence-postings-two", "blake3"),
+        ("d2-report", "sha256"),
+        ("query-parquet", "sha256"),
+    ];
+    if result.authority != *expected_authority
+        || !exact_lower_hex(&result.authority.source_commit, 40)
+        || !exact_lower_hex(&result.authority.source_archive_sha256, 64)
+        || result.authority.index_id.is_empty()
+        || result.authority.objects.len() != roles.len()
+        || result
+            .authority
+            .objects
+            .iter()
+            .zip(roles)
+            .any(|(object, (role, algorithm))| {
+                object.role != role
+                    || object.digest_algorithm != algorithm
+                    || !object.uri.starts_with("s3://")
+                    || !exact_lower_hex(&object.digest, 64)
+                    || object.encoded_bytes == 0
+            })
+    {
+        return Err(invalid("V23 incidence screen authority differs"));
+    }
+    let ladder = V23IncidenceCell::registered_ladder();
+    let validate_cells = |cells: &[V23IncidenceScreenCellResult],
+                          selector: V23IncidenceScreenSelector|
+     -> Result<bool> {
+        if cells.len() != ladder.len() {
+            return Err(invalid("V23 incidence screen cell count differs"));
+        }
+        let mut any_passed = false;
+        for (cell, expected_cell) in cells.iter().zip(&ladder) {
+            let expected_scores = match selector {
+                V23IncidenceScreenSelector::TreeBeam => {
+                    v23_tree_beam_centroid_scores(usize::from(expected_cell.beam_width))?
+                }
+                V23IncidenceScreenSelector::ExhaustiveControl => 65_536,
+            };
+            let quality = recompute_v23_incidence_quality(
+                &cell
+                    .selections
+                    .iter()
+                    .map(|selection| (selection.query_ordinal, selection.page_ordinals.clone()))
+                    .collect::<Vec<_>>(),
+                &result.development_truth,
+                28_282,
+            )?;
+            let projection =
+                project_v23_incidence_serving_bytes(100_000_000, usize::from(cell.cell.cap))?;
+            if cell.selector != selector
+                || cell.cell != *expected_cell
+                || cell.scored_centroids_per_query != expected_scores
+                || cell.distance_dimensions_per_query != expected_scores * 96
+                || cell.quality != quality
+                || cell.projected_serving_bytes != projection.total_bytes
+                || cell.maximum_posting_visits > 262_144
+                || cell.maximum_touched_pages > 8_192
+                || cell.maximum_touched_pages > cell.maximum_posting_visits
+                || !cell.determinism_passed
+            {
+                return Err(invalid("V23 incidence screen cell evidence differs"));
+            }
+            any_passed |= quality.passed;
+        }
+        Ok(any_passed)
+    };
+    let tree_beam_passed = validate_cells(&result.tree_beam, V23IncidenceScreenSelector::TreeBeam)?;
+    let exhaustive_control_passed = validate_cells(
+        &result.exhaustive_control,
+        V23IncidenceScreenSelector::ExhaustiveControl,
+    )?;
+    let expected_selected = result
+        .tree_beam
+        .iter()
+        .find(|cell| cell.quality.passed)
+        .map(|cell| cell.cell);
+    if result.schema != "borsuk-v23-incidence-development-screen-v1"
+        || result.claim_eligible
+        || result.tree_beam_passed != tree_beam_passed
+        || result.exhaustive_control_passed != exhaustive_control_passed
+        || result.selected_cell != expected_selected
+        || result.page_body_reads != 0
+        || result.holdout_rows_read != 0
+        || result.classification
+            != classify_v23_incidence_screen(
+                result.exhaustive_control_passed,
+                result.tree_beam_passed,
+            )
+    {
+        return Err(invalid("V23 incidence screen result differs"));
+    }
+    let value = serde_json::to_value(result)
+        .map_err(|_| invalid("V23 incidence screen result serialization failed"))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|_| invalid("V23 incidence screen result serialization failed"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn evaluate_v23_incidence_screen_cell(
+    tree: &V23IncidenceTree,
+    plane: &V23PostingPlane,
+    cell: V23IncidenceCell,
+    selector: V23IncidenceScreenSelector,
+    queries: &[[f32; 96]],
+    truth: &[V23IncidenceQueryTruth],
+    page_count: usize,
+    expected_leaves: usize,
+) -> Result<V23IncidenceScreenCellResult> {
+    if queries.len() != 32 || truth.len() != 32 || cell.arm != plane.arm {
+        return Err(invalid("V23 incidence screen cohort differs"));
+    }
+    posting_prefix_eligibility(plane, usize::from(cell.cap))?;
+    let mut selections = Vec::with_capacity(32);
+    let mut maximum_posting_visits = 0_u32;
+    let mut maximum_touched_pages = 0_u32;
+    for (query, expected) in queries.iter().zip(truth) {
+        let ranked = match selector {
+            V23IncidenceScreenSelector::TreeBeam => {
+                let ranked =
+                    rank_v23_incidence_tree_beam(tree, query, usize::from(cell.beam_width))?;
+                if ranked
+                    != rank_v23_incidence_tree_beam_scalar(
+                        tree,
+                        query,
+                        usize::from(cell.beam_width),
+                    )?
+                {
+                    return Err(invalid(
+                        "V23 incidence screen tree-beam determinism differs",
+                    ));
+                }
+                ranked
+            }
+            V23IncidenceScreenSelector::ExhaustiveControl => {
+                let ranked = rank_incidence_leaves_with_shape(
+                    tree,
+                    query,
+                    usize::from(cell.beam_width),
+                    expected_leaves,
+                )?;
+                if ranked
+                    != rank_incidence_leaves_scalar_with_shape(
+                        tree,
+                        query,
+                        usize::from(cell.beam_width),
+                        expected_leaves,
+                    )?
+                {
+                    return Err(invalid(
+                        "V23 incidence screen exhaustive-control determinism differs",
+                    ));
+                }
+                ranked
+            }
+        };
+        let mut workspace = V23IncidenceQueryWorkspace::new(page_count)?;
+        let (page_ordinals, posting_visits, touched_pages) =
+            selected_pages_q32(plane, &ranked, usize::from(cell.cap), &mut workspace)?;
+        if page_ordinals
+            != selected_pages_scalar(plane, &ranked, usize::from(cell.cap), page_count)?
+        {
+            return Err(invalid("V23 incidence screen page reducer differs"));
+        }
+        maximum_posting_visits = maximum_posting_visits.max(posting_visits);
+        maximum_touched_pages = maximum_touched_pages.max(touched_pages);
+        selections.push(V23IncidenceSelection {
+            query_ordinal: expected.query_ordinal,
+            page_ordinals,
+        });
+    }
+    let quality = recompute_v23_incidence_quality(
+        &selections
+            .iter()
+            .map(|selection| (selection.query_ordinal, selection.page_ordinals.clone()))
+            .collect::<Vec<_>>(),
+        truth,
+        page_count,
+    )?;
+    let scored_centroids_per_query = match selector {
+        V23IncidenceScreenSelector::TreeBeam => {
+            v23_tree_beam_centroid_scores_for_depth(tree.shape.depth, usize::from(cell.beam_width))?
+        }
+        V23IncidenceScreenSelector::ExhaustiveControl => u32::try_from(expected_leaves)
+            .map_err(|_| invalid("V23 incidence screen leaf count exceeds u32"))?,
+    };
+    Ok(V23IncidenceScreenCellResult {
+        selector,
+        cell,
+        scored_centroids_per_query,
+        distance_dimensions_per_query: scored_centroids_per_query
+            .checked_mul(96)
+            .ok_or_else(|| invalid("V23 incidence screen dimensions overflow"))?,
+        quality,
+        projected_serving_bytes: project_v23_incidence_serving_bytes(
+            100_000_000,
+            usize::from(cell.cap),
+        )?
+        .total_bytes,
+        maximum_posting_visits,
+        maximum_touched_pages,
+        determinism_passed: true,
+        selections,
+    })
+}
+
+fn evaluate_v23_incidence_development_screen_with_shape(
+    tree: &V23IncidenceTree,
+    one: &V23PostingPlane,
+    two: &V23PostingPlane,
+    queries: &[[f32; 96]],
+    truth: &[V23IncidenceQueryTruth],
+    page_count: usize,
+    expected_leaves: usize,
+    authority: V23IncidenceScreenAuthority,
+) -> Result<V23IncidenceScreenResult> {
+    if one.arm != PostingAssignmentArm::OneLeaf
+        || two.arm != PostingAssignmentArm::TwoBeamLeaves
+        || tree.leaves.len() != expected_leaves
+    {
+        return Err(invalid("V23 incidence screen artifact shape differs"));
+    }
+    let mut tree_beam = Vec::with_capacity(18);
+    let mut exhaustive_control = Vec::with_capacity(18);
+    for cell in V23IncidenceCell::registered_ladder() {
+        let plane = match cell.arm {
+            PostingAssignmentArm::OneLeaf => one,
+            PostingAssignmentArm::TwoBeamLeaves => two,
+        };
+        tree_beam.push(evaluate_v23_incidence_screen_cell(
+            tree,
+            plane,
+            cell,
+            V23IncidenceScreenSelector::TreeBeam,
+            queries,
+            truth,
+            page_count,
+            expected_leaves,
+        )?);
+        exhaustive_control.push(evaluate_v23_incidence_screen_cell(
+            tree,
+            plane,
+            cell,
+            V23IncidenceScreenSelector::ExhaustiveControl,
+            queries,
+            truth,
+            page_count,
+            expected_leaves,
+        )?);
+    }
+    let cell_passed = |cell: &V23IncidenceScreenCellResult| {
+        cell.quality.passed
+            && cell.projected_serving_bytes <= 3 * 1024 * 1024 * 1024
+            && cell.maximum_posting_visits <= 262_144
+            && cell.maximum_touched_pages <= 8_192
+            && cell.determinism_passed
+    };
+    let tree_beam_passed = tree_beam.iter().any(cell_passed);
+    let exhaustive_control_passed = exhaustive_control.iter().any(cell_passed);
+    let selected_cell = tree_beam
+        .iter()
+        .find(|cell| cell_passed(cell))
+        .map(|cell| cell.cell);
+    Ok(V23IncidenceScreenResult {
+        schema: "borsuk-v23-incidence-development-screen-v1".to_string(),
+        claim_eligible: false,
+        authority,
+        development_truth: truth.to_vec(),
+        tree_beam,
+        exhaustive_control,
+        exhaustive_control_passed,
+        tree_beam_passed,
+        selected_cell,
+        classification: classify_v23_incidence_screen(exhaustive_control_passed, tree_beam_passed),
+        page_body_reads: 0,
+        holdout_rows_read: 0,
+    })
+}
+
+pub(crate) fn evaluate_v23_incidence_development_screen(
+    tree: &V23IncidenceTree,
+    one: &V23PostingPlane,
+    two: &V23PostingPlane,
+    queries: &[[f32; 96]],
+    truth: &[V23IncidenceQueryTruth],
+    authority: V23IncidenceScreenAuthority,
+) -> Result<V23IncidenceScreenResult> {
+    evaluate_v23_incidence_development_screen_with_shape(
+        tree,
+        one,
+        two,
+        queries,
+        truth,
+        28_282,
+        V23_INCIDENCE_LEAVES,
+        authority,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn evaluate_v23_incidence_development_screen_test_shape(
+    tree: &V23IncidenceTree,
+    one: &V23PostingPlane,
+    two: &V23PostingPlane,
+    queries: &[[f32; 96]],
+    truth: &[V23IncidenceQueryTruth],
+    page_count: usize,
+    authority: V23IncidenceScreenAuthority,
+) -> Result<V23IncidenceScreenResult> {
+    evaluate_v23_incidence_development_screen_with_shape(
+        tree,
+        one,
+        two,
+        queries,
+        truth,
+        page_count,
+        tree.leaves.len(),
+        authority,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1958,12 +2494,15 @@ mod tests {
         V23IncidenceCampaignClass, V23IncidenceCampaignInput, V23IncidenceCampaignResult,
         V23IncidenceCell, V23IncidenceDevelopmentArtifact, V23IncidenceDevelopmentAuthority,
         V23IncidenceHoldoutTruthArtifact, V23IncidenceHoldoutTruthAuthority,
-        V23IncidenceQueryTruth, V23IncidenceQueryWorkspace, bind_v23_incidence_holdout_truth,
+        V23IncidenceQueryTruth, V23IncidenceQueryWorkspace, V23IncidenceScreenClass,
+        V23IncidenceScreenResult, bind_v23_incidence_holdout_truth,
         canonical_v23_incidence_development_artifact_bytes,
         canonical_v23_incidence_holdout_truth_bytes, canonical_v23_incidence_result_bytes,
-        classify_v23_incidence_campaign, decode_v23_incidence_development_latency_bundle,
+        canonical_v23_incidence_screen_result_bytes, classify_v23_incidence_campaign,
+        classify_v23_incidence_screen, decode_v23_incidence_development_latency_bundle,
         decode_v23_incidence_latency_samples, encode_v23_incidence_development_latency_bundle,
         encode_v23_incidence_latency_samples, evaluate_v23_incidence_cell,
+        evaluate_v23_incidence_development_screen_test_shape,
         measure_v23_incidence_evaluation_preflight, measure_v23_incidence_latency,
         project_v23_incidence_serving_bytes, rank_incidence_leaves, rank_incidence_leaves_scalar,
         read_v23_incidence_development_queries, read_v23_incidence_development_truth,
@@ -2051,6 +2590,21 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    fn screen_tree() -> V23IncidenceTree {
+        let mut tree = ranking_tree();
+        tree.shape.depth = 7;
+        tree.shape.reservoir_rows = 128;
+        tree.nodes.truncate(127);
+        tree.leaves.truncate(128);
+        tree
+    }
+
+    fn screen_posting_plane(arm: PostingAssignmentArm) -> V23PostingPlane {
+        let mut plane = posting_plane();
+        plane.arm = arm;
+        plane
     }
 
     fn neighbor_parquet(child_name: &str, width: i32) -> Vec<u8> {
@@ -2782,5 +3336,147 @@ mod tests {
             .unwrap()
             .insert("probes".to_string(), serde_json::json!(32));
         assert!(serde_json::from_value::<V23IncidenceCampaignResult>(value).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_screen_classification_has_tree_beam_precedence() {
+        assert_eq!(
+            classify_v23_incidence_screen(false, false),
+            V23IncidenceScreenClass::LeafIncidenceQualityRejected
+        );
+        assert_eq!(
+            classify_v23_incidence_screen(true, false),
+            V23IncidenceScreenClass::TreeBeamSelectorRejected
+        );
+        for exhaustive_passed in [false, true] {
+            assert_eq!(
+                classify_v23_incidence_screen(exhaustive_passed, true),
+                V23IncidenceScreenClass::TreeBeamScreenPassed
+            );
+        }
+    }
+
+    #[test]
+    fn v23_incidence_screen_result_is_canonical_claim_ineligible_and_exact() {
+        let result = V23IncidenceScreenResult::passing_fixture();
+        let expected_authority = result.authority.clone();
+        let bytes =
+            canonical_v23_incidence_screen_result_bytes(&result, &expected_authority).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["schema"],
+            "borsuk-v23-incidence-development-screen-v1"
+        );
+        assert_eq!(value["claim_eligible"], false);
+        assert_eq!(value["page_body_reads"], 0);
+        assert_eq!(value["holdout_rows_read"], 0);
+        assert_eq!(value["classification"], "tree-beam-screen-passed");
+        assert_eq!(result.tree_beam.len(), 18);
+        assert_eq!(result.exhaustive_control.len(), 18);
+        assert_eq!(
+            result.selected_cell,
+            Some(V23IncidenceCell::registered_ladder()[0])
+        );
+        assert_eq!(
+            result
+                .authority
+                .objects
+                .iter()
+                .map(|object| object.role.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "tree-receipt",
+                "incidence-tree",
+                "posting-receipt",
+                "incidence-postings-one",
+                "incidence-postings-two",
+                "d2-report",
+                "query-parquet",
+            ]
+        );
+        assert_eq!(result.tree_beam[0].scored_centroids_per_query, 766);
+        assert_eq!(
+            result.exhaustive_control[0].scored_centroids_per_query,
+            65_536
+        );
+
+        let mut changed = result.clone();
+        changed.claim_eligible = true;
+        assert!(
+            canonical_v23_incidence_screen_result_bytes(&changed, &expected_authority).is_err()
+        );
+        let mut changed = result.clone();
+        changed.classification = V23IncidenceScreenClass::TreeBeamSelectorRejected;
+        assert!(
+            canonical_v23_incidence_screen_result_bytes(&changed, &expected_authority).is_err()
+        );
+        let mut changed = result;
+        changed.page_body_reads = 1;
+        assert!(
+            canonical_v23_incidence_screen_result_bytes(&changed, &expected_authority).is_err()
+        );
+
+        let result = V23IncidenceScreenResult::passing_fixture();
+        let expected_authority = result.authority.clone();
+        let mut changed = result.clone();
+        changed.authority.objects[0].digest = "0".repeat(64);
+        assert!(
+            canonical_v23_incidence_screen_result_bytes(&changed, &expected_authority).is_err()
+        );
+        let mut changed = result.clone();
+        changed.tree_beam[0].scored_centroids_per_query += 1;
+        assert!(
+            canonical_v23_incidence_screen_result_bytes(&changed, &expected_authority).is_err()
+        );
+        let mut changed = result.clone();
+        changed.exhaustive_control[0].distance_dimensions_per_query -= 96;
+        assert!(
+            canonical_v23_incidence_screen_result_bytes(&changed, &expected_authority).is_err()
+        );
+        let mut changed = result;
+        changed.selected_cell = Some(V23IncidenceCell::registered_ladder()[1]);
+        assert!(
+            canonical_v23_incidence_screen_result_bytes(&changed, &expected_authority).is_err()
+        );
+    }
+
+    #[test]
+    fn v23_incidence_screen_evaluates_complete_beam_and_exhaustive_ladders() {
+        let tree = screen_tree();
+        let one = screen_posting_plane(PostingAssignmentArm::OneLeaf);
+        let two = screen_posting_plane(PostingAssignmentArm::TwoBeamLeaves);
+        let mut query = [0.0_f32; 96];
+        query[0] = 1.0;
+        let queries = vec![query; 32];
+        let truth = canonical_truth(0, 32);
+        let authority = V23IncidenceScreenResult::passing_fixture().authority;
+        let result = evaluate_v23_incidence_development_screen_test_shape(
+            &tree,
+            &one,
+            &two,
+            &queries,
+            &truth,
+            16,
+            authority.clone(),
+        )
+        .unwrap();
+        assert_eq!(result.tree_beam.len(), 18);
+        assert_eq!(result.exhaustive_control.len(), 18);
+        assert_eq!(result.tree_beam[0].scored_centroids_per_query, 190);
+        assert_eq!(result.exhaustive_control[0].scored_centroids_per_query, 128);
+        assert!(
+            result
+                .tree_beam
+                .iter()
+                .chain(&result.exhaustive_control)
+                .flat_map(|cell| &cell.selections)
+                .all(|selection| selection.page_ordinals.len() == 8)
+        );
+        assert_eq!(result.tree_beam[0].distance_dimensions_per_query, 190 * 96);
+        assert_eq!(
+            result.exhaustive_control[0].distance_dimensions_per_query,
+            128 * 96
+        );
     }
 }

@@ -1043,12 +1043,24 @@ impl Ord for V23TreeBeamCandidate {
     }
 }
 
-pub(crate) fn v23_tree_beam_centroid_scores(beam_width: usize) -> Result<u32> {
-    if ![32, 64, 128].contains(&beam_width) {
+pub(crate) fn v23_tree_beam_centroid_scores_for_depth(
+    depth: usize,
+    beam_width: usize,
+) -> Result<u32> {
+    let shift =
+        u32::try_from(depth).map_err(|_| invalid("V23 incidence tree-beam work exceeds u32"))?;
+    let leaf_count = 1_usize
+        .checked_shl(shift)
+        .ok_or_else(|| invalid("V23 incidence tree-beam work overflows"))?;
+    if ![32, 64, 128].contains(&beam_width)
+        || depth == 0
+        || depth > V23_INCIDENCE_TREE_DEPTH
+        || beam_width > leaf_count
+    {
         return Err(invalid("V23 incidence tree-beam width differs"));
     }
     let mut scores = 0_u32;
-    for level in 1..=V23_INCIDENCE_TREE_DEPTH {
+    for level in 1..=depth {
         let level_candidates = 1_usize
             .checked_shl(u32::try_from(level).unwrap())
             .ok_or_else(|| invalid("V23 incidence tree-beam work overflows"))?;
@@ -1060,6 +1072,10 @@ pub(crate) fn v23_tree_beam_centroid_scores(beam_width: usize) -> Result<u32> {
             .ok_or_else(|| invalid("V23 incidence tree-beam work overflows"))?;
     }
     Ok(scores)
+}
+
+pub(crate) fn v23_tree_beam_centroid_scores(beam_width: usize) -> Result<u32> {
+    v23_tree_beam_centroid_scores_for_depth(V23_INCIDENCE_TREE_DEPTH, beam_width)
 }
 
 fn v23_tree_beam_child_distance(
@@ -1174,7 +1190,6 @@ pub(crate) fn rank_v23_incidence_tree_beam(
     rank_v23_incidence_tree_beam_impl(tree, query, beam_width, true)
 }
 
-#[cfg(test)]
 pub(crate) fn rank_v23_incidence_tree_beam_scalar(
     tree: &V23IncidenceTree,
     query: &[f32; 96],
