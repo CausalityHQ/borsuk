@@ -151,6 +151,8 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         )
         self.assertNotIn("curl", install_line.split())
         self.assertIn("curl --proto '=https'", worker)
+        self.assertIn("export HOME=/root PATH=/root/.cargo/bin:$PATH", worker)
+        self.assertNotIn("source /root/.cargo/env", worker)
         self.assertIn("v23_leaf_page_incidence_falsifier", worker)
         self.assertIn("--worker-tree", worker)
         worker_source = inspect.getsource(worker_tree)

@@ -233,6 +233,7 @@ archive=/var/lib/borsuk-v23-incidence/source.tar
 worker_log=/var/lib/borsuk-v23-incidence/worker.log
 unit="borsuk-v23-incidence-$run_id"
 status=99
+export HOME=/root PATH=/root/.cargo/bin:$PATH
 mkdir -p "$evidence" "$scratch_root"
 exec > >(tee -a "$worker_log") 2>&1
 put_once() {{
@@ -310,7 +311,6 @@ watch_spot_interruption() {{
 dnf install -y gcc gcc-c++ make cmake perl pkgconf-pkg-config openssl-devel clang python3 python3-pip util-linux git tar gzip
 aws s3api put-object --generate-cli-skeleton input | python3 -c 'import json,sys; value=json.load(sys.stdin); assert "IfNoneMatch" in value'
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.91.0
-source /root/.cargo/env
 python3 -m pip install uv==0.8.17
 aws s3 cp "$source_uri" "$archive" --only-show-errors
 test "$(sha256sum "$archive" | awk '{{print $1}}')" = "$source_sha256"
