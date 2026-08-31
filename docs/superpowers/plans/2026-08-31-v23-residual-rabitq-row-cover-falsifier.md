@@ -186,7 +186,13 @@ Run focused tests, fmt, and diff-check. Commit as `feat: add scalar RaBitQ quant
 
 - [ ] **Step 1: Add SIMD and bound REDs**
 
-Cover x86 AVX2/FMA and aarch64 NEON fused backends, unavailable-backend stop, at-most-eight-ULP scalar differential agreement and exact selected-page equality on random/ties/zeros/subnormals/reversed blocks, nonfinite rejection, scan cap 262,144, heap cap 4,096, page-assignment cap 8,192, exactly eight unique pages, and permutation-independent cover output.
+Cover x86 AVX2/FMA and aarch64 NEON fused backends, unavailable-backend stop,
+the fixed primitive-dot forward-error bound `abs(simd - scalar) <= 8 *
+f32::EPSILON * sum(abs(products))`, and exact selected-page equality on
+random/ties/zeros/subnormals/reversed blocks. Also cover nonfinite rejection,
+scan cap 262,144, heap cap 4,096, page-assignment cap 8,192, exactly eight
+unique pages, and permutation-independent cover output. Do not use raw
+distance ULP as authority because cancellation near zero makes it unstable.
 
 ```rust
 pub(crate) enum V23RaBitQBackend { Aarch64Neon, X86Avx2Fma, ScalarControl }

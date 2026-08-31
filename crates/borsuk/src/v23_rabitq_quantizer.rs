@@ -286,7 +286,10 @@ pub(crate) fn prepare_v23_rabitq_query_with_validated_rotation(
     })
 }
 
-fn scalar_sign_dot(prepared: &V23RaBitQPreparedQuery, code: &V23RaBitQCode) -> f32 {
+pub(crate) fn scalar_v23_rabitq_sign_dot(
+    prepared: &V23RaBitQPreparedQuery,
+    code: &V23RaBitQCode,
+) -> f32 {
     let inverse_sqrt = INVERSE_SQRT_DIMENSIONS as f32;
     let mut lanes = [0.0f32; 8];
     for (lane, accumulator) in lanes.iter_mut().enumerate() {
@@ -359,7 +362,7 @@ pub(crate) fn score_v23_rabitq_prepared_scalar(
     prepared: &V23RaBitQPreparedQuery,
     code: &V23RaBitQCode,
 ) -> Result<V23RaBitQEstimate> {
-    estimate_v23_rabitq_from_dot(prepared, code, scalar_sign_dot(prepared, code))
+    estimate_v23_rabitq_from_dot(prepared, code, scalar_v23_rabitq_sign_dot(prepared, code))
 }
 
 pub(crate) fn score_v23_rabitq_scalar(

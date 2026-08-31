@@ -156,9 +156,11 @@ measured projection above the total fails closed.
 5. For each probed leaf, form the rotated query residual and quantize its 96
    components with the fixed four-bit query quantizer described by RaBitQ.
    Estimate every candidate residual distance with the registered SIMD
-   estimator. Every optimized score must remain within eight ULP of the scalar
-   implementation of the identical quantized estimator, and the two paths must
-   select identical pages. Error against the unquantized scalar f64 distance is
+   estimator. Raw ULP counts are unstable when a dot or distance cancels near
+   zero, so the optimized primitive dot must satisfy the fixed forward-error
+   bound `abs(simd - scalar) <= 8 * f32::EPSILON * sum(abs(products))`; the two
+   paths must still select identical pages exactly. Error against the
+   unquantized scalar f64 distance is
    recorded as scientific evidence and is governed by the recall gates rather
    than an invented dataset-independent cutoff. Ties are deterministic
    `(distance, row_ordinal)`.

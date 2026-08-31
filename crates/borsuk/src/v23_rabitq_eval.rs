@@ -7,13 +7,16 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BorsukError, Result,
     v23_diagnostic::v23_reciprocal_rank_page_cover,
-    v23_incidence_tree::normalize_v23_incidence_vector,
-    v23_rabitq::V23RaBitQObjectIdentity,
+    v23_incidence_eval::V23IncidenceQueryTruth,
+    v23_incidence_tree::{
+        V23IncidenceTree, normalize_v23_incidence_vector, rank_v23_incidence_tree_beam,
+    },
+    v23_rabitq::{V23RaBitQObjectIdentity, project_v23_rabitq_serving_bytes},
     v23_rabitq_arrow::{V23RaBitQGeometry, V23RaBitQRowPlanes},
     v23_rabitq_quantizer::{
         V23RaBitQCode, V23RaBitQEstimate, V23RaBitQPreparedQuery, estimate_v23_rabitq_from_dot,
-        prepare_v23_rabitq_query_with_validated_rotation, score_v23_rabitq_prepared_scalar,
-        validate_v23_rabitq_rotation,
+        prepare_v23_rabitq_query_with_validated_rotation, scalar_v23_rabitq_sign_dot,
+        score_v23_rabitq_prepared_scalar, validate_v23_rabitq_rotation,
     },
 };
 
@@ -22,6 +25,17 @@ const MAX_RETAINED_ROWS: usize = 4_096;
 const MAX_PAGE_ASSIGNMENTS: usize = 8_192;
 const SELECTED_PAGES: usize = 8;
 const INVERSE_SQRT_DIMENSIONS: f32 = 0.102_062_07;
+const SCREEN_INPUT_ROLES: [&str; 9] = [
+    "construction-receipt",
+    "incidence-tree",
+    "row-codes",
+    "leaf-offsets",
+    "centroids",
+    "rotation",
+    "f16-control",
+    "d2-report",
+    "query-parquet",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -41,6 +55,20 @@ pub(crate) struct V23RaBitQEvalRequest<'a> {
     pub(crate) backend: V23RaBitQBackend,
 }
 
+pub(crate) struct V23RaBitQDevelopmentRequest<'a> {
+    pub(crate) source_commit: String,
+    pub(crate) source_archive_sha256: String,
+    pub(crate) index_id: String,
+    pub(crate) inputs: &'a [V23RaBitQObjectIdentity],
+    pub(crate) tree: &'a V23IncidenceTree,
+    pub(crate) geometry: &'a V23RaBitQGeometry,
+    pub(crate) rows: &'a V23RaBitQRowPlanes,
+    pub(crate) exact_rows: &'a [[f16; 96]],
+    pub(crate) queries: &'a [[f32; 96]],
+    pub(crate) truth: &'a [V23IncidenceQueryTruth],
+    pub(crate) backend: V23RaBitQBackend,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct V23RaBitQQueryEvidence {
@@ -51,7 +79,7 @@ pub(crate) struct V23RaBitQQueryEvidence {
     pub(crate) page_assignments: u16,
     pub(crate) page_ordinals: [u32; SELECTED_PAGES],
     pub(crate) max_estimator_error_ppm: u64,
-    pub(crate) max_scalar_simd_ulp: u8,
+    pub(crate) max_scalar_simd_error_ppm: u32,
     pub(crate) scalar_pages_equal: bool,
     pub(crate) backend: V23RaBitQBackend,
 }
@@ -111,6 +139,8 @@ pub(crate) struct V23RaBitQScreenResult {
     pub(crate) source_commit: String,
     pub(crate) source_archive_sha256: String,
     pub(crate) index_id: String,
+    pub(crate) indexed_rows: u64,
+    pub(crate) projected_serving_bytes: u64,
     pub(crate) inputs: Vec<V23RaBitQObjectIdentity>,
     pub(crate) cells: Vec<V23RaBitQCellResult>,
     pub(crate) classification: V23RaBitQClassification,
@@ -123,6 +153,13 @@ pub(crate) struct V23RaBitQRankedRow {
     pub(crate) row_ordinal: u32,
     pub(crate) absolute_error_bound: f32,
 }
+
+type V23RaBitQRankOutcome = (
+    Vec<V23RaBitQRankedRow>,
+    Option<Vec<V23RaBitQRankedRow>>,
+    u32,
+    usize,
+);
 
 impl PartialEq for V23RaBitQRankedRow {
     fn eq(&self, other: &Self) -> bool {
@@ -219,7 +256,10 @@ fn validate_cell(cell: &V23RaBitQCellResult) -> Result<()> {
             || sample.hits > sample.oracle_hits
             || sample.recall_ppm != u32::from(sample.hits) * 100_000
             || sample.scored_rows == 0
-            || sample.scored_rows > MAX_SCORED_ROWS as u32
+            || (matches!(
+                cell.control,
+                V23RaBitQControl::ExactTree | V23RaBitQControl::RaBitQTree
+            ) && sample.scored_rows > MAX_SCORED_ROWS as u32)
             || sample.retained_rows == 0
             || usize::from(sample.retained_rows) > MAX_RETAINED_ROWS
             || usize::from(sample.page_assignments) > MAX_PAGE_ASSIGNMENTS
@@ -266,16 +306,19 @@ pub(crate) fn canonical_v23_rabitq_screen_result_bytes(
         || !valid_lower_hex(&result.source_commit, 40)
         || !valid_lower_hex(&result.source_archive_sha256, 64)
         || result.index_id.is_empty()
+        || result.projected_serving_bytes
+            != project_v23_rabitq_serving_bytes(result.indexed_rows)?.total_bytes
         || result.inputs != expected_inputs
-        || result.inputs.is_empty()
+        || result.inputs.len() != SCREEN_INPUT_ROLES.len()
         || result.claim_eligible
     {
         return Err(invalid("V23 RaBitQ screen authority differs"));
     }
     let mut roles = std::collections::BTreeSet::new();
     let mut uris = std::collections::BTreeSet::new();
-    for identity in &result.inputs {
+    for (identity, expected_role) in result.inputs.iter().zip(SCREEN_INPUT_ROLES) {
         if identity.role.is_empty()
+            || identity.role != expected_role
             || !roles.insert(identity.role.as_str())
             || !identity.uri.starts_with("s3://")
             || !uris.insert(identity.uri.as_str())
@@ -333,8 +376,17 @@ pub(crate) fn score_v23_rabitq_code(
     code: &V23RaBitQCode,
     backend: V23RaBitQBackend,
 ) -> Result<V23RaBitQEstimate> {
+    Ok(score_v23_rabitq_code_with_dot(prepared, code, backend)?.0)
+}
+
+fn score_v23_rabitq_code_with_dot(
+    prepared: &V23RaBitQPreparedQuery,
+    code: &V23RaBitQCode,
+    backend: V23RaBitQBackend,
+) -> Result<(V23RaBitQEstimate, f32)> {
     if backend == V23RaBitQBackend::ScalarControl {
-        return score_v23_rabitq_prepared_scalar(prepared, code);
+        let dot = scalar_v23_rabitq_sign_dot(prepared, code);
+        return Ok((score_v23_rabitq_prepared_scalar(prepared, code)?, dot));
     }
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if backend == V23RaBitQBackend::X86Avx2Fma && !std::arch::is_x86_feature_detected!("avx2") {
@@ -345,7 +397,7 @@ pub(crate) fn score_v23_rabitq_code(
     if map_backend(actual) != backend {
         return Err(invalid("V23 RaBitQ fused backend authority differs"));
     }
-    estimate_v23_rabitq_from_dot(prepared, code, dot)
+    Ok((estimate_v23_rabitq_from_dot(prepared, code, dot)?, dot))
 }
 
 fn float_ulp_distance(left: f32, right: f32) -> u32 {
@@ -377,10 +429,12 @@ fn validate_shapes(
     ranked_leaf_ordinals: &[u16],
     geometry: &V23RaBitQGeometry,
     rows: &V23RaBitQRowPlanes,
+    maximum_leaves: usize,
+    maximum_rows: usize,
 ) -> Result<(Vec<u16>, usize)> {
     let row_count = rows.sign_codes.len();
     if ranked_leaf_ordinals.is_empty()
-        || ranked_leaf_ordinals.len() > 128
+        || ranked_leaf_ordinals.len() > maximum_leaves
         || row_count == 0
         || rows.residual_norms.len() != row_count
         || rows.alignments.len() != row_count
@@ -417,7 +471,7 @@ fn validate_shapes(
             .checked_add(end - start)
             .ok_or_else(|| invalid("V23 RaBitQ scored rows overflow"))?;
     }
-    if scored_rows == 0 || scored_rows > MAX_SCORED_ROWS {
+    if scored_rows == 0 || scored_rows > maximum_rows {
         return Err(invalid("V23 RaBitQ scored-row cap differs"));
     }
     Ok((leaves, scored_rows))
@@ -429,14 +483,24 @@ fn rank_rows_internal(
     geometry: &V23RaBitQGeometry,
     rows: &V23RaBitQRowPlanes,
     backend: V23RaBitQBackend,
-) -> Result<(Vec<V23RaBitQRankedRow>, u8, usize)> {
+    maximum_leaves: usize,
+    maximum_rows: usize,
+) -> Result<V23RaBitQRankOutcome> {
     if query.iter().any(|value| !value.is_finite()) {
         return Err(invalid("V23 RaBitQ query is nonfinite"));
     }
-    let (leaves, scored_rows) = validate_shapes(ranked_leaf_ordinals, geometry, rows)?;
+    let (leaves, scored_rows) = validate_shapes(
+        ranked_leaf_ordinals,
+        geometry,
+        rows,
+        maximum_leaves,
+        maximum_rows,
+    )?;
     let normalized_query = normalize_v23_incidence_vector(query)?;
     let mut heap = BinaryHeap::with_capacity(MAX_RETAINED_ROWS + 1);
-    let mut maximum_ulp = 0u32;
+    let mut scalar_heap = (backend != V23RaBitQBackend::ScalarControl)
+        .then(|| BinaryHeap::with_capacity(MAX_RETAINED_ROWS + 1));
+    let mut maximum_error_ppm = 0u32;
     for leaf in leaves {
         let leaf = usize::from(leaf);
         let centroid = geometry.centroids[leaf].map(f16::to_f32);
@@ -451,14 +515,43 @@ fn rank_rows_internal(
         let end = usize::try_from(geometry.leaf_offsets[leaf + 1]).unwrap();
         for row_ordinal in start..end {
             let code = code_at(rows, row_ordinal)?;
-            let estimate = score_v23_rabitq_code(&prepared, &code, backend)?;
+            let (estimate, fused_dot) = score_v23_rabitq_code_with_dot(&prepared, &code, backend)?;
             if backend != V23RaBitQBackend::ScalarControl {
-                let scalar = score_v23_rabitq_prepared_scalar(&prepared, &code)?;
-                let ulp = float_ulp_distance(estimate.distance_squared, scalar.distance_squared);
-                if ulp > 8 {
-                    return Err(invalid("V23 RaBitQ scalar/SIMD distance differs"));
+                let scalar_dot = scalar_v23_rabitq_sign_dot(&prepared, &code);
+                let scale = INVERSE_SQRT_DIMENSIONS
+                    * prepared
+                        .reconstructed
+                        .iter()
+                        .map(|value| value.abs())
+                        .sum::<f32>();
+                let absolute_error = (fused_dot - scalar_dot).abs();
+                let permitted_error = 8.0 * f32::EPSILON * scale.max(f32::MIN_POSITIVE);
+                if absolute_error > permitted_error {
+                    return Err(invalid(&format!(
+                        "V23 RaBitQ scalar/SIMD dot differs at row {row_ordinal}"
+                    )));
                 }
-                maximum_ulp = maximum_ulp.max(ulp);
+                let error_ppm = (absolute_error / scale.max(f32::MIN_POSITIVE) * 1_000_000.0)
+                    .ceil()
+                    .min(u32::MAX as f32) as u32;
+                maximum_error_ppm = maximum_error_ppm.max(error_ppm);
+                let scalar = estimate_v23_rabitq_from_dot(&prepared, &code, scalar_dot)?;
+                let scalar_candidate = V23RaBitQRankedRow {
+                    distance: scalar.distance_squared,
+                    row_ordinal: u32::try_from(row_ordinal)
+                        .map_err(|_| invalid("V23 RaBitQ row ordinal exceeds u32"))?,
+                    absolute_error_bound: scalar.absolute_error_bound,
+                };
+                let scalar_heap = scalar_heap.as_mut().unwrap();
+                if scalar_heap.len() < MAX_RETAINED_ROWS {
+                    scalar_heap.push(scalar_candidate);
+                } else if scalar_heap
+                    .peek()
+                    .is_some_and(|worst| scalar_candidate < *worst)
+                {
+                    scalar_heap.pop();
+                    scalar_heap.push(scalar_candidate);
+                }
             }
             let candidate = V23RaBitQRankedRow {
                 distance: estimate.distance_squared,
@@ -476,11 +569,12 @@ fn rank_rows_internal(
     }
     let mut ranked = heap.into_vec();
     ranked.sort_unstable();
-    Ok((
-        ranked,
-        u8::try_from(maximum_ulp).unwrap_or(u8::MAX),
-        scored_rows,
-    ))
+    let scalar_ranked = scalar_heap.map(|heap| {
+        let mut ranked = heap.into_vec();
+        ranked.sort_unstable();
+        ranked
+    });
+    Ok((ranked, scalar_ranked, maximum_error_ppm, scored_rows))
 }
 
 pub(crate) fn rank_v23_rabitq_rows(
@@ -490,7 +584,16 @@ pub(crate) fn rank_v23_rabitq_rows(
     rows: &V23RaBitQRowPlanes,
     backend: V23RaBitQBackend,
 ) -> Result<Vec<V23RaBitQRankedRow>> {
-    Ok(rank_rows_internal(query, ranked_leaf_ordinals, geometry, rows, backend)?.0)
+    Ok(rank_rows_internal(
+        query,
+        ranked_leaf_ordinals,
+        geometry,
+        rows,
+        backend,
+        128,
+        MAX_SCORED_ROWS,
+    )?
+    .0)
 }
 
 fn ranked_page_assignments(
@@ -531,12 +634,14 @@ pub(crate) fn select_v23_rabitq_pages(
     if request.backend == V23RaBitQBackend::ScalarControl {
         return Err(invalid("V23 RaBitQ production backend is not fused"));
     }
-    let (ranked, max_ulp, scored_rows) = rank_rows_internal(
+    let (ranked, scalar_ranked, max_error_ppm, scored_rows) = rank_rows_internal(
         request.query,
         request.ranked_leaf_ordinals,
         request.geometry,
         request.rows,
         request.backend,
+        128,
+        MAX_SCORED_ROWS,
     )?;
     let assignments = ranked_page_assignments(&ranked, request.rows)?;
     let pages = v23_reciprocal_rank_page_cover(&assignments, SELECTED_PAGES)?;
@@ -544,13 +649,8 @@ pub(crate) fn select_v23_rabitq_pages(
         return Err(invalid("V23 RaBitQ cannot select exactly eight pages"));
     }
 
-    let (scalar_ranked, _, _) = rank_rows_internal(
-        request.query,
-        request.ranked_leaf_ordinals,
-        request.geometry,
-        request.rows,
-        V23RaBitQBackend::ScalarControl,
-    )?;
+    let scalar_ranked =
+        scalar_ranked.ok_or_else(|| invalid("V23 RaBitQ scalar control ranking is absent"))?;
     let scalar_assignments = ranked_page_assignments(&scalar_ranked, request.rows)?;
     let scalar_pages = v23_reciprocal_rank_page_cover(&scalar_assignments, SELECTED_PAGES)?;
     if scalar_pages != pages {
@@ -580,10 +680,352 @@ pub(crate) fn select_v23_rabitq_pages(
             .try_into()
             .map_err(|_| invalid("V23 RaBitQ selected-page width differs"))?,
         max_estimator_error_ppm,
-        max_scalar_simd_ulp: max_ulp,
+        max_scalar_simd_error_ppm: max_error_ppm,
         scalar_pages_equal: true,
         backend: request.backend,
     })
+}
+
+fn scalar_dot_8x12(left: &[f32; 96], right: &[f32; 96]) -> f32 {
+    let mut lanes = [0.0f32; 8];
+    for (lane, accumulator) in lanes.iter_mut().enumerate() {
+        for step in 0..12 {
+            let ordinal = lane * 12 + step;
+            *accumulator = left[ordinal].mul_add(right[ordinal], *accumulator);
+        }
+    }
+    lanes.into_iter().sum()
+}
+
+fn rank_exact_rows(
+    query: &[f32; 96],
+    leaves: &[u16],
+    geometry: &V23RaBitQGeometry,
+    exact_rows: &[[f16; 96]],
+    backend: V23RaBitQBackend,
+    use_fused: bool,
+) -> Result<(Vec<V23RaBitQRankedRow>, u8, usize)> {
+    if backend == V23RaBitQBackend::ScalarControl
+        || exact_rows.len() != geometry.leaf_offsets.last().copied().unwrap_or(0) as usize
+    {
+        return Err(invalid("V23 RaBitQ exact control authority differs"));
+    }
+    let normalized = normalize_v23_incidence_vector(query)?;
+    let mut heap = BinaryHeap::with_capacity(MAX_RETAINED_ROWS + 1);
+    let mut maximum_ulp = 0u32;
+    let mut scored_rows = 0usize;
+    for &leaf in leaves {
+        let leaf = usize::from(leaf);
+        if leaf + 1 >= geometry.leaf_offsets.len() {
+            return Err(invalid("V23 RaBitQ exact control leaf differs"));
+        }
+        let start = usize::try_from(geometry.leaf_offsets[leaf])
+            .map_err(|_| invalid("V23 RaBitQ exact offset exceeds usize"))?;
+        let end = usize::try_from(geometry.leaf_offsets[leaf + 1])
+            .map_err(|_| invalid("V23 RaBitQ exact offset exceeds usize"))?;
+        scored_rows = scored_rows
+            .checked_add(end - start)
+            .ok_or_else(|| invalid("V23 RaBitQ exact scanned rows overflow"))?;
+        for (row_ordinal, exact_row) in exact_rows.iter().enumerate().take(end).skip(start) {
+            let row = exact_row.map(f16::to_f32);
+            if row.iter().any(|value| !value.is_finite()) {
+                return Err(invalid("V23 RaBitQ exact row is nonfinite"));
+            }
+            let difference =
+                std::array::from_fn(|dimension| normalized[dimension] - row[dimension]);
+            let scalar = scalar_dot_8x12(&difference, &difference);
+            let distance = if use_fused {
+                let (distance, actual) = fused_dot_8x12(&difference, &difference)
+                    .map_err(|_| invalid("V23 RaBitQ exact fused backend is unavailable"))?;
+                if map_backend(actual) != backend {
+                    return Err(invalid("V23 RaBitQ exact fused backend authority differs"));
+                }
+                distance
+            } else {
+                scalar
+            };
+            let ulp = float_ulp_distance(distance, scalar);
+            if ulp > 8 || !distance.is_finite() {
+                return Err(invalid("V23 RaBitQ exact scalar/SIMD distance differs"));
+            }
+            maximum_ulp = maximum_ulp.max(ulp);
+            let candidate = V23RaBitQRankedRow {
+                distance,
+                row_ordinal: u32::try_from(row_ordinal)
+                    .map_err(|_| invalid("V23 RaBitQ exact row ordinal exceeds u32"))?,
+                absolute_error_bound: 0.0,
+            };
+            if heap.len() < MAX_RETAINED_ROWS {
+                heap.push(candidate);
+            } else if heap.peek().is_some_and(|worst| candidate < *worst) {
+                heap.pop();
+                heap.push(candidate);
+            }
+        }
+    }
+    let mut ranked = heap.into_vec();
+    ranked.sort_unstable();
+    Ok((
+        ranked,
+        u8::try_from(maximum_ulp).unwrap_or(u8::MAX),
+        scored_rows,
+    ))
+}
+
+fn pages_from_ranked(
+    ranked: &[V23RaBitQRankedRow],
+    rows: &V23RaBitQRowPlanes,
+) -> Result<(Vec<u32>, usize)> {
+    let assignments = ranked_page_assignments(ranked, rows)?;
+    let count = assignments
+        .iter()
+        .map(|(_, replica)| 1 + usize::from(replica.is_some()))
+        .sum();
+    let pages = v23_reciprocal_rank_page_cover(&assignments, SELECTED_PAGES)?;
+    if pages.len() != SELECTED_PAGES {
+        return Err(invalid(
+            "V23 RaBitQ control cannot select exactly eight pages",
+        ));
+    }
+    Ok((pages, count))
+}
+
+fn sample_from_pages(
+    query_ordinal: u32,
+    pages: &[u32],
+    truth: &V23IncidenceQueryTruth,
+    scored_rows: usize,
+    retained_rows: usize,
+    page_assignments: usize,
+    backend: V23RaBitQBackend,
+) -> Result<V23RaBitQQuerySample> {
+    if truth.query_ordinal != query_ordinal
+        || truth.ground_truth_page_assignments.len() != 10
+        || truth.oracle_pages.is_empty()
+        || truth.oracle_pages.len() > SELECTED_PAGES
+        || truth.oracle_pages.windows(2).any(|pair| pair[0] >= pair[1])
+        || truth
+            .ground_truth_page_assignments
+            .iter()
+            .any(|assignments| {
+                assignments.is_empty()
+                    || assignments.len() > 2
+                    || assignments.windows(2).any(|pair| pair[0] >= pair[1])
+            })
+    {
+        return Err(invalid("V23 RaBitQ development truth differs"));
+    }
+    let hits = truth
+        .ground_truth_page_assignments
+        .iter()
+        .filter(|assignments| {
+            assignments
+                .iter()
+                .any(|page| pages.binary_search(page).is_ok())
+        })
+        .count();
+    let oracle_hits = truth
+        .ground_truth_page_assignments
+        .iter()
+        .filter(|assignments| {
+            assignments
+                .iter()
+                .any(|page| truth.oracle_pages.binary_search(page).is_ok())
+        })
+        .count();
+    Ok(V23RaBitQQuerySample {
+        query_ordinal,
+        page_ordinals: pages
+            .try_into()
+            .map_err(|_| invalid("V23 RaBitQ control page width differs"))?,
+        hits: u16::try_from(hits).unwrap(),
+        oracle_hits: u16::try_from(oracle_hits).unwrap(),
+        recall_ppm: u32::try_from(hits).unwrap() * 100_000,
+        scored_rows: u32::try_from(scored_rows)
+            .map_err(|_| invalid("V23 RaBitQ scored rows exceed u32"))?,
+        retained_rows: u16::try_from(retained_rows)
+            .map_err(|_| invalid("V23 RaBitQ retained rows exceed u16"))?,
+        page_assignments: u16::try_from(page_assignments)
+            .map_err(|_| invalid("V23 RaBitQ page assignments exceed u16"))?,
+        backend,
+        scalar_pages_equal: true,
+    })
+}
+
+fn cell_from_samples(
+    control: V23RaBitQControl,
+    probe_count: u32,
+    samples: Vec<V23RaBitQQuerySample>,
+) -> Result<V23RaBitQCellResult> {
+    let total_hits = samples
+        .iter()
+        .map(|sample| u32::from(sample.hits))
+        .sum::<u32>();
+    let total_oracle_hits = samples
+        .iter()
+        .map(|sample| u32::from(sample.oracle_hits))
+        .sum::<u32>();
+    let aggregate_recall_ppm = total_hits * 1_000_000 / 320;
+    let minimum_recall_ppm = samples
+        .iter()
+        .map(|sample| sample.recall_ppm)
+        .min()
+        .unwrap_or(0);
+    let oracle_attainment_ppm = total_hits
+        .checked_mul(1_000_000)
+        .and_then(|value| value.checked_div(total_oracle_hits))
+        .unwrap_or(0);
+    let passed = total_hits == 318
+        && aggregate_recall_ppm == 993_750
+        && minimum_recall_ppm >= 900_000
+        && oracle_attainment_ppm == 1_000_000;
+    Ok(V23RaBitQCellResult {
+        control,
+        probe_count,
+        samples,
+        total_hits: u16::try_from(total_hits).unwrap(),
+        total_oracle_hits: u16::try_from(total_oracle_hits).unwrap(),
+        aggregate_recall_ppm,
+        minimum_recall_ppm,
+        oracle_attainment_ppm,
+        passed,
+    })
+}
+
+fn evaluate_control(
+    request: &V23RaBitQDevelopmentRequest<'_>,
+    control: V23RaBitQControl,
+    probe_count: u32,
+    all_leaves: &[u16],
+) -> Result<V23RaBitQCellResult> {
+    let mut samples = Vec::with_capacity(32);
+    for (ordinal, (query, truth)) in request.queries.iter().zip(request.truth).enumerate() {
+        let leaves = match control {
+            V23RaBitQControl::ExactExhaustive | V23RaBitQControl::RaBitQExhaustive => {
+                all_leaves.to_vec()
+            }
+            V23RaBitQControl::ExactTree | V23RaBitQControl::RaBitQTree => {
+                rank_v23_incidence_tree_beam(request.tree, query, probe_count as usize)?
+            }
+        };
+        let (ranked, scored_rows) = match control {
+            V23RaBitQControl::ExactExhaustive | V23RaBitQControl::ExactTree => {
+                let (ranked, _, scored) = rank_exact_rows(
+                    query,
+                    &leaves,
+                    request.geometry,
+                    request.exact_rows,
+                    request.backend,
+                    true,
+                )?;
+                let (scalar, _, _) = rank_exact_rows(
+                    query,
+                    &leaves,
+                    request.geometry,
+                    request.exact_rows,
+                    request.backend,
+                    false,
+                )?;
+                if pages_from_ranked(&ranked, request.rows)?.0
+                    != pages_from_ranked(&scalar, request.rows)?.0
+                {
+                    return Err(invalid("V23 exact control scalar/SIMD pages differ"));
+                }
+                (ranked, scored)
+            }
+            V23RaBitQControl::RaBitQExhaustive | V23RaBitQControl::RaBitQTree => {
+                let exhaustive = control == V23RaBitQControl::RaBitQExhaustive;
+                let (ranked, scalar, _, scored) = rank_rows_internal(
+                    query,
+                    &leaves,
+                    request.geometry,
+                    request.rows,
+                    request.backend,
+                    if exhaustive {
+                        request.geometry.centroids.len()
+                    } else {
+                        128
+                    },
+                    if exhaustive {
+                        request.rows.sign_codes.len()
+                    } else {
+                        MAX_SCORED_ROWS
+                    },
+                )?;
+                let scalar =
+                    scalar.ok_or_else(|| invalid("V23 RaBitQ scalar control ranking is absent"))?;
+                if pages_from_ranked(&ranked, request.rows)?.0
+                    != pages_from_ranked(&scalar, request.rows)?.0
+                {
+                    return Err(invalid("V23 RaBitQ control scalar/SIMD pages differ"));
+                }
+                (ranked, scored)
+            }
+        };
+        let (pages, assignments) = pages_from_ranked(&ranked, request.rows)?;
+        samples.push(sample_from_pages(
+            ordinal as u32,
+            &pages,
+            truth,
+            scored_rows,
+            ranked.len(),
+            assignments,
+            request.backend,
+        )?);
+    }
+    cell_from_samples(control, probe_count, samples)
+}
+
+pub(crate) fn evaluate_v23_rabitq_development(
+    request: V23RaBitQDevelopmentRequest<'_>,
+) -> Result<V23RaBitQScreenResult> {
+    if request.queries.len() != 32
+        || request.truth.len() != 32
+        || request.rows.sign_codes.len() != request.exact_rows.len()
+        || request.geometry.centroids.len() != request.tree.leaves.len()
+        || request
+            .geometry
+            .centroids
+            .iter()
+            .zip(&request.tree.leaves)
+            .any(|(centroid, leaf)| centroid != &leaf.centroid)
+        || request.geometry.centroids.is_empty()
+        || request.geometry.centroids.len() > u16::MAX as usize + 1
+        || request.backend == V23RaBitQBackend::ScalarControl
+    {
+        return Err(invalid("V23 RaBitQ development request differs"));
+    }
+    let all_leaves = (0..request.geometry.centroids.len())
+        .map(|leaf| u16::try_from(leaf).unwrap())
+        .collect::<Vec<_>>();
+    let mut cells = Vec::with_capacity(8);
+    for ordinal in 0..8 {
+        let (control, probe_count) = expected_cell_shape(ordinal);
+        cells.push(evaluate_control(
+            &request,
+            control,
+            probe_count,
+            &all_leaves,
+        )?);
+    }
+    let classification = classify_v23_rabitq_controls(&cells)?;
+    let result = V23RaBitQScreenResult {
+        schema: "borsuk-v23-rabitq-screen-v1".to_string(),
+        source_commit: request.source_commit,
+        source_archive_sha256: request.source_archive_sha256,
+        index_id: request.index_id,
+        indexed_rows: request.rows.sign_codes.len() as u64,
+        projected_serving_bytes: project_v23_rabitq_serving_bytes(
+            request.rows.sign_codes.len() as u64
+        )?
+        .total_bytes,
+        inputs: request.inputs.to_vec(),
+        cells,
+        classification,
+        claim_eligible: false,
+    };
+    canonical_v23_rabitq_screen_result_bytes(&result, request.inputs)?;
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -592,12 +1034,17 @@ mod tests {
 
     use super::{
         V23RaBitQBackend, V23RaBitQCellResult, V23RaBitQClassification, V23RaBitQControl,
-        V23RaBitQEvalRequest, V23RaBitQQuerySample, V23RaBitQScreenResult,
-        canonical_v23_rabitq_screen_result_bytes, classify_v23_rabitq_controls,
-        detected_v23_rabitq_backend, rank_v23_rabitq_rows, score_v23_rabitq_code,
-        select_v23_rabitq_pages,
+        V23RaBitQDevelopmentRequest, V23RaBitQEvalRequest, V23RaBitQQuerySample,
+        V23RaBitQScreenResult, canonical_v23_rabitq_screen_result_bytes,
+        classify_v23_rabitq_controls, detected_v23_rabitq_backend, evaluate_v23_rabitq_development,
+        rank_v23_rabitq_rows, score_v23_rabitq_code, select_v23_rabitq_pages,
     };
     use crate::{
+        v23_incidence_eval::V23IncidenceQueryTruth,
+        v23_incidence_tree::{
+            V23IncidenceTrainingShape, V23TrainingRow, assign_one_leaf,
+            normalize_v23_incidence_vector, train_incidence_tree_test_shape,
+        },
         v23_rabitq::V23RaBitQObjectIdentity,
         v23_rabitq_arrow::{V23RaBitQGeometry, V23RaBitQRowPlanes},
         v23_rabitq_quantizer::{
@@ -655,6 +1102,23 @@ mod tests {
         }
     }
 
+    fn screen_inputs() -> Vec<V23RaBitQObjectIdentity> {
+        [
+            "construction-receipt",
+            "incidence-tree",
+            "row-codes",
+            "leaf-offsets",
+            "centroids",
+            "rotation",
+            "f16-control",
+            "d2-report",
+            "query-parquet",
+        ]
+        .into_iter()
+        .map(identity)
+        .collect()
+    }
+
     fn samples() -> Vec<V23RaBitQQuerySample> {
         (0..32)
             .map(|query_ordinal| {
@@ -705,11 +1169,126 @@ mod tests {
             source_commit: "1".repeat(40),
             source_archive_sha256: "2".repeat(64),
             index_id: "deep-image-96-v23-rabitq".to_string(),
-            inputs: vec![identity("construction-receipt"), identity("query-parquet")],
+            indexed_rows: 100_000_000,
+            projected_serving_bytes: 2_920_622_772,
+            inputs: screen_inputs(),
             cells,
             classification: V23RaBitQClassification::DevelopmentCandidateAccepted,
             claim_eligible: false,
         }
+    }
+
+    fn reduced_tree() -> crate::v23_incidence_tree::V23IncidenceTree {
+        let rows = (0..32)
+            .map(|source_ordinal| V23TrainingRow {
+                source_ordinal,
+                vector: std::array::from_fn(|dimension| {
+                    (((source_ordinal as usize + 1) * (dimension + 3) % 211) as f32 + 1.0) / 212.0
+                }),
+            })
+            .collect::<Vec<_>>();
+        train_incidence_tree_test_shape(
+            &rows,
+            V23IncidenceTrainingShape {
+                dimensions: 96,
+                reservoir_rows: 32,
+                depth: 3,
+                lloyd_iterations: 4,
+            },
+            1,
+            16,
+        )
+        .unwrap()
+    }
+
+    fn evaluation_fixture() -> (
+        crate::v23_incidence_tree::V23IncidenceTree,
+        V23RaBitQGeometry,
+        V23RaBitQRowPlanes,
+        Vec<[f16; 96]>,
+        Vec<[f32; 96]>,
+        Vec<V23IncidenceQueryTruth>,
+    ) {
+        let source = (0..2_048)
+            .map(|source_ordinal| V23TrainingRow {
+                source_ordinal,
+                vector: std::array::from_fn(|dimension| {
+                    let mut word = source_ordinal
+                        ^ ((dimension as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+                    word = (word ^ (word >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                    word = (word ^ (word >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                    word ^= word >> 31;
+                    ((word >> 40) as f32 + 1.0) / 16_777_217.0
+                }),
+            })
+            .collect::<Vec<_>>();
+        let tree = train_incidence_tree_test_shape(
+            &source,
+            V23IncidenceTrainingShape {
+                dimensions: 96,
+                reservoir_rows: 2_048,
+                depth: 7,
+                lloyd_iterations: 4,
+            },
+            1,
+            64,
+        )
+        .unwrap();
+        let rotation = build_v23_rabitq_rotation([0x42; 32]).unwrap();
+        let mut grouped = (0..128).map(|_| Vec::new()).collect::<Vec<Vec<_>>>();
+        for row in &source {
+            let leaf =
+                usize::from(assign_one_leaf(&tree, &row.vector, row.source_ordinal).unwrap());
+            grouped[leaf].push(row);
+        }
+        let mut offsets = Vec::with_capacity(129);
+        let mut sign_codes = Vec::new();
+        let mut residual_norms = Vec::new();
+        let mut alignments = Vec::new();
+        let mut primary_pages = Vec::new();
+        let mut replica_pages = Vec::new();
+        let mut exact_rows = Vec::new();
+        offsets.push(0);
+        for (leaf, rows) in grouped.iter().enumerate() {
+            let centroid = tree.leaves[leaf].centroid.map(f16::to_f32);
+            for row in rows {
+                let normalized = normalize_v23_incidence_vector(&row.vector).unwrap();
+                let residual =
+                    std::array::from_fn(|dimension| normalized[dimension] - centroid[dimension]);
+                let code = encode_v23_rabitq_residual(&residual, &rotation).unwrap();
+                sign_codes.push(code.sign_code);
+                residual_norms.push(code.residual_norm);
+                alignments.push(code.alignment);
+                primary_pages.push(row.source_ordinal as u32 % 16);
+                replica_pages.push((row.source_ordinal as u32 + 1) % 16);
+                exact_rows.push(normalized.map(f16::from_f32));
+            }
+            offsets.push(sign_codes.len() as u64);
+        }
+        let geometry = V23RaBitQGeometry {
+            leaf_offsets: offsets,
+            centroids: tree.leaves.iter().map(|leaf| leaf.centroid).collect(),
+            rotation,
+        };
+        let rows = V23RaBitQRowPlanes {
+            sign_codes,
+            residual_norms,
+            alignments,
+            primary_pages,
+            replica_pages,
+        };
+        let queries = source[..32]
+            .iter()
+            .map(|row| row.vector)
+            .collect::<Vec<_>>();
+        let truth = (0..32)
+            .map(|query_ordinal| V23IncidenceQueryTruth {
+                query_ordinal,
+                ground_truth_page_assignments: (0..10).map(|page| vec![page]).collect(),
+                oracle_pages: (0..8).collect(),
+            })
+            .collect();
+        (tree, geometry, rows, exact_rows, queries, truth)
     }
 
     #[test]
@@ -928,6 +1507,9 @@ mod tests {
         changed.cells[7].samples[0].scalar_pages_equal = false;
         mutations.push(changed);
         let mut changed = expected.clone();
+        changed.projected_serving_bytes -= 1;
+        mutations.push(changed);
+        let mut changed = expected.clone();
         changed.classification = V23RaBitQClassification::AuthorityStop;
         mutations.push(changed);
         let mut changed = expected.clone();
@@ -939,5 +1521,58 @@ mod tests {
         for mutation in mutations {
             assert!(canonical_v23_rabitq_screen_result_bytes(&mutation, &expected.inputs).is_err());
         }
+    }
+
+    #[test]
+    fn v23_rabitq_screen_evaluator_rejects_incomplete_development_authority() {
+        let tree = reduced_tree();
+        let (geometry, rows) = fixture(32, 16);
+        let exact_rows = vec![[f16::ZERO; 96]; 32];
+        let queries = Vec::<[f32; 96]>::new();
+        let truth = Vec::<V23IncidenceQueryTruth>::new();
+        let inputs = screen_inputs();
+        assert!(
+            evaluate_v23_rabitq_development(V23RaBitQDevelopmentRequest {
+                source_commit: "1".repeat(40),
+                source_archive_sha256: "2".repeat(64),
+                index_id: "deep-image-96-v23-rabitq".to_string(),
+                inputs: &inputs,
+                tree: &tree,
+                geometry: &geometry,
+                rows: &rows,
+                exact_rows: &exact_rows,
+                queries: &queries,
+                truth: &truth,
+                backend: detected_v23_rabitq_backend().unwrap(),
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v23_rabitq_screen_evaluator_executes_all_eight_cells_without_page_bodies() {
+        let (tree, geometry, rows, exact_rows, queries, truth) = evaluation_fixture();
+        let inputs = screen_inputs();
+        let result = evaluate_v23_rabitq_development(V23RaBitQDevelopmentRequest {
+            source_commit: "1".repeat(40),
+            source_archive_sha256: "2".repeat(64),
+            index_id: "deep-image-96-v23-rabitq".to_string(),
+            inputs: &inputs,
+            tree: &tree,
+            geometry: &geometry,
+            rows: &rows,
+            exact_rows: &exact_rows,
+            queries: &queries,
+            truth: &truth,
+            backend: detected_v23_rabitq_backend().unwrap(),
+        })
+        .unwrap();
+        assert_eq!(result.cells.len(), 8);
+        assert_eq!(
+            result.classification,
+            V23RaBitQClassification::AuthorityStop
+        );
+        assert!(result.cells.iter().all(|cell| cell.samples.len() == 32));
+        assert!(canonical_v23_rabitq_screen_result_bytes(&result, &inputs).is_ok());
     }
 }
