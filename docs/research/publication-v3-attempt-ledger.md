@@ -1256,3 +1256,47 @@ latency artifact was produced, no ladder cell was selected, and no holdout or
 D3 work is authorized. The next candidate must avoid exhaustive 65,536-leaf
 scoring on the serving path rather than disguise the same scan behind a larger
 timeout.
+
+## V23 leaf-page incidence local causal screen on 2026-08-31
+
+The no-spend development screen ran once from source commit
+`245ef61938c269b0813a5726668e824641b469de`, with source-archive SHA-256
+`71f257185f398c783b3676fde2de5225a60d26f41061a1d877bf9958786d4aec`.
+Its 9,828,704-byte optimized local executable had SHA-256
+`463cb628694f5d9e62392644d7b4b5c97ceeadfe1194e31b23c1e890ee158ff2`.
+The run authenticated the exact incidence tree, one-leaf and two-leaf posting
+planes, their two receipts, the frozen D2 report, and query Parquet recorded by
+the preceding construction sections. It used only the already-burned query
+ordinals 0--31, read zero page bodies and zero sealed holdout rows, and emitted
+`claim_eligible=false`.
+
+The registered quality gates were 975,000 ppm aggregate recall, 800,000 ppm
+minimum-query recall, and 995,000 ppm oracle attainment. The best tree-beam
+cell was one-leaf, beam width 128, cap 512. It scored 2,558 centroids per query,
+visited at most 18,366 posting records, touched at most 4,952 pages, projected
+1,172,979,332 serving bytes, and reached 581,250 / 100,000 / 584,905 ppm. The
+best exhaustive-leaf control was one-leaf, cap 512. It scored all 65,536
+centroids per query, visited at most 5,190 posting records, touched at most
+2,265 pages, projected the same 1,172,979,332 serving bytes, and reached the
+same 581,250 / 100,000 / 584,905 ppm. Both were deterministic. None of the 18
+tree-beam cells or 18 exhaustive controls passed, and no ladder cell was
+selected.
+
+The canonical local result is
+`/tmp/v23-incidence-development-screen-245ef61938c269b0813a5726668e824641b469de.json`,
+124,665 bytes with SHA-256
+`26a1550d4b53a55ecec395c990f60934aeb3b922d69c66ff53ab9ecaa1bad586`.
+The result schema did not persist separate scientific elapsed time, CPU time,
+or exact peak RSS; the observed process remained below 1 GiB, memory PSI was
+0.00 at terminal, the process exited, and no staging directory or worker
+remained.
+
+The canonical classification is `leaf-incidence-quality-rejected`. Exhaustive
+leaf scoring does not improve the best tree-beam result, so tree traversal is
+not the causal quality bottleneck. The fixed leaf-to-page incidence
+representation loses too much neighbor-page evidence even before the 15 ms
+serving constraint is applied. Increasing beam width, posting cap, timeout, or
+paid compute cannot repair this representation. The architecture is rejected;
+no sealed holdout, paid evaluation, or D3 work is authorized. The next
+falsifier must change the page-routing representation itself and must retain
+the exact eight-page and 15 ms serving constraints.
