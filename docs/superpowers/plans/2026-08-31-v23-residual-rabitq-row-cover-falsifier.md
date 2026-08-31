@@ -73,7 +73,7 @@ pub(crate) fn canonical_v23_rabitq_receipt_bytes(value: &V23RaBitQReceipt) -> Re
 pub(crate) fn project_v23_rabitq_serving_bytes(rows: u64) -> Result<V23RaBitQServingProjection>;
 ```
 
-Use `#[serde(deny_unknown_fields)]`. Exact input roles are `tree-receipt`, `incidence-tree`, `source-pages`, `d2-report`, `query-parquet`; exact output roles are `row-codes`, `leaf-offsets`, `centroids`, `rotation`, `f16-control`, `construction-receipt`, `screen-result`. Projection is `rows*28 + 65_537*8 + 65_536*96*2 + 40_369_836 + 96*96*4 + 64*1024*1024`.
+Use `#[serde(deny_unknown_fields)]`. Construction input roles are `tree-receipt`, `incidence-tree`, `page-roster`; evaluation input roles are `construction-receipt`, `incidence-tree`, `row-codes`, `leaf-offsets`, `centroids`, `rotation`, `f16-control`, `d2-report`, `query-parquet`. A manifest carries an exact output URI prefix and ordered role names, never pre-execution output digests. Construction output roles are `row-codes`, `leaf-offsets`, `centroids`, `rotation`, `f16-control`, `construction-receipt`; evaluation output role is `screen-result`. Projection is `rows*28 + 65_537*8 + 65_536*96*2 + 40_369_836 + 96*96*4 + 64*1024*1024`.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -326,6 +326,40 @@ Rust `main` parses, calls the library, and writes canonical bytes. Python stages
 - [ ] **Step 4: Verify and commit**
 
 Run the Rust example tests, both Python modules, fmt, Ruff 0.15.20 on the new scripts, py_compile, and diff-check. Commit as `feat: orchestrate RaBitQ falsifier`.
+
+---
+
+### Task 7A: Explicit one-pass construction command
+
+**Files:**
+- Create: `crates/borsuk/examples/v23_rabitq_construct.rs`
+- Create: `scripts/run_v23_rabitq_construction.py`
+- Create: `scripts/test_run_v23_rabitq_construction.py`
+- Modify: `crates/borsuk/src/v23_rabitq.rs`
+- Modify: `crates/borsuk/src/v23_rabitq_build.rs`
+- Modify: `crates/borsuk/src/lib.rs`
+- Modify: `scripts/launch_v23_rabitq_spot.py`
+- Modify: `scripts/test_launch_v23_rabitq_spot.py`
+
+**Interfaces:**
+- Consumes one authenticated BVP2 page-roster/body pass only in the Python research adapter.
+- Produces a standard Arrow IPC occurrence stream on stdin, six exact construction outputs, a terminal construction receipt, and an exact post-construction development manifest.
+
+- [ ] **Step 1: Stage authority and stream REDs**
+
+Add manifest tests proving output digests cannot appear before execution and receipts must bind the actual ordered output identities. Add constructor-example tests for exact construction-plan/tree/roster paths, explicit scratch/output directories, `--execute-construction`, and rejection of query, endpoint, holdout, D3, relative, duplicate, or unknown flags. Add Python tests for exact roster/page authentication, the four-field Arrow stream schema, primary/replica occurrence preservation, one binary invocation, bounded four-GET concurrency, and explicit known-file cleanup.
+
+- [ ] **Step 2: Run the narrow REDs**
+
+Run `cargo test -p borsuk --lib v23_rabitq_authority_ -- --nocapture`, `cargo test -p borsuk --example v23_rabitq_construct v23_rabitq_construct_ -- --nocapture`, and `python3 -m unittest scripts.test_run_v23_rabitq_construction`. Expected failures are only the missing output-role authority and construction stream boundary.
+
+- [ ] **Step 3: Implement the minimal construction boundary**
+
+Use a standard Arrow IPC stream with non-nullable `canonical_record_id: binary`, `vector: fixed_size_list<float32>[96]`, `page_ordinal: uint32`, and `is_primary: bool`. Rust iterates batches without materializing the stream, feeds `V23RaBitQSourceRow` occurrences to `build_v23_rabitq_artifacts`, and emits canonical receipt/manifest bytes. Python alone validates historical BVP2 envelopes and S3 bodies; it emits each occurrence once and never persists a converted corpus. Construction manifests bind existing inputs, ordered output roles, and an output URI prefix; terminal receipts bind actual output SHA-256 and lengths.
+
+- [ ] **Step 4: Verify and commit**
+
+Run the three focused gates, grouped `v23_rabitq_`, fmt, pinned Ruff 0.15.20, py_compile, strict workspace/all-targets Clippy, and diff-check. Commit as `feat: add RaBitQ construction command`.
 
 ---
 

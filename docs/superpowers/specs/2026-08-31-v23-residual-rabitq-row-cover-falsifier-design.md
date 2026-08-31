@@ -120,6 +120,21 @@ strict canonical newline JSON. Every role binds URI, SHA-256, BLAKE3 where
 registered, exact byte length, schema fingerprint, source commit, source
 archive, dataset identity, seed, and predecessor receipt.
 
+The historical-page adapter and Rust constructor communicate through one
+standard Arrow IPC stream with non-nullable `canonical_record_id: binary`,
+`vector: fixed_size_list<float32>[96]`, `page_ordinal: uint32`, and
+`is_primary: bool` fields. Each authenticated BVP2 occurrence appears once;
+the Rust external ID merge derives exactly one primary plus zero or one
+replica before encoding a unique row. The stream is never persisted as a
+corpus copy and is not a production index format.
+
+Manifests authenticate existing inputs and declare an ordered output-role set
+plus one immutable output URI prefix. They never pretend to know output
+digests or lengths before execution. A terminal receipt authenticates every
+produced output with its exact URI, SHA-256, length, and predecessor manifest
+digest. The development manifest is generated only after the construction
+receipt and Arrow outputs exist, so all nine development inputs are exact.
+
 The serving implementation maps Arrow buffers directly. It does not invoke a
 dynamic loader, copy a runtime, deserialize an old schema, or use a hidden
 storage client.
@@ -252,9 +267,15 @@ authorized until the sealed holdout and resident timing gates pass.
 ## Construction and execution boundaries
 
 The construction phase may perform one authenticated streaming pass over the
-frozen unique primary rows. It must deduplicate replicas by canonical record
-identity, use bounded external sorting, checkpoint only canonical Arrow/JSON
-artifacts, and stop on RSS, PSI, swap, timeout, or progress failure. Spot is
+frozen page roster and page bodies. A phase-private Python adapter validates
+the immutable historical page envelope and emits the standard Arrow occurrence
+stream; it cannot name queries or outputs. Rust consumes that stream once,
+deduplicates replicas by canonical record identity with bounded external
+sorting, and writes only canonical Arrow/JSON artifacts. The construction plan
+binds the tree receipt, tree, page roster, page-generation namespace, source
+archive, rotation seed, expected page/occurrence/unique-row counts, ordered
+output roles, and output prefix. The receipt binds all actual output bytes.
+Construction stops on RSS, PSI, swap, timeout, or progress failure. Spot is
 required for new AWS work. The instance terminates immediately after a
 terminal receipt.
 
