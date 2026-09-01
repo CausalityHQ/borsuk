@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     cmp::Ordering,
     collections::{BTreeSet, BinaryHeap, HashMap},
     io::Cursor,
@@ -648,47 +649,59 @@ fn greedy_descend(
     }
 }
 
-fn search_layer(
-    graph: &V24WitnessGraph,
-    query: &[f32; 96],
-    entrypoints: &[u32],
+#[derive(Clone, Copy)]
+struct SearchLayerOptions {
     ef: usize,
     level: u8,
     node_limit: usize,
     backend: V24DistanceBackend,
+}
+
+fn search_layer(
+    graph: &V24WitnessGraph,
+    query: &[f32; 96],
+    entrypoints: &[u32],
+    options: SearchLayerOptions,
+    workspace: Option<&mut EpochWorkspace>,
 ) -> Vec<RankedWitness> {
-    let mut visited = BTreeSet::new();
+    let mut visited =
+        workspace.map_or_else(|| VisitedSet::Tree(BTreeSet::new()), EpochWorkspace::begin);
     let mut candidates = BinaryHeap::<std::cmp::Reverse<RankedWitness>>::new();
     let mut best = BinaryHeap::<RankedWitness>::new();
     for entry in entrypoints.iter().copied() {
-        if usize::try_from(entry).map_or(true, |value| value >= node_limit)
+        if usize::try_from(entry).map_or(true, |value| value >= options.node_limit)
             || !visited.insert(entry)
         {
             continue;
         }
         let ranked = RankedWitness {
-            distance: graph.distance_with_backend(query, entry, backend),
+            distance: graph.distance_with_backend(query, entry, options.backend),
             ordinal: entry,
         };
         candidates.push(std::cmp::Reverse(ranked));
         best.push(ranked);
     }
     while let Some(std::cmp::Reverse(candidate)) = candidates.pop() {
-        if best.len() == ef && best.peek().is_some_and(|worst| candidate > *worst) {
+        if best.len() == options.ef && best.peek().is_some_and(|worst| candidate > *worst) {
             break;
         }
-        for neighbor in graph.neighbors(candidate.ordinal, level).iter().copied() {
-            if usize::try_from(neighbor).unwrap() >= node_limit || !visited.insert(neighbor) {
+        for neighbor in graph
+            .neighbors(candidate.ordinal, options.level)
+            .iter()
+            .copied()
+        {
+            if usize::try_from(neighbor).unwrap() >= options.node_limit || !visited.insert(neighbor)
+            {
                 continue;
             }
             let ranked = RankedWitness {
-                distance: graph.distance_with_backend(query, neighbor, backend),
+                distance: graph.distance_with_backend(query, neighbor, options.backend),
                 ordinal: neighbor,
             };
-            if best.len() < ef || best.peek().is_some_and(|worst| ranked < *worst) {
+            if best.len() < options.ef || best.peek().is_some_and(|worst| ranked < *worst) {
                 candidates.push(std::cmp::Reverse(ranked));
                 best.push(ranked);
-                if best.len() > ef {
+                if best.len() > options.ef {
                     best.pop();
                 }
             }
@@ -697,6 +710,47 @@ fn search_layer(
     let mut ranked = best.into_vec();
     ranked.sort_unstable();
     ranked
+}
+
+struct EpochWorkspace {
+    marks: Vec<u32>,
+    epoch: u32,
+}
+
+impl EpochWorkspace {
+    fn begin(&mut self) -> VisitedSet<'_> {
+        self.epoch = self.epoch.wrapping_add(1);
+        if self.epoch == 0 {
+            self.marks.fill(0);
+            self.epoch = 1;
+        }
+        VisitedSet::Epoch {
+            marks: &mut self.marks,
+            epoch: self.epoch,
+        }
+    }
+}
+
+enum VisitedSet<'a> {
+    Tree(BTreeSet<u32>),
+    Epoch { marks: &'a mut [u32], epoch: u32 },
+}
+
+impl VisitedSet<'_> {
+    fn insert(&mut self, ordinal: u32) -> bool {
+        match self {
+            Self::Tree(values) => values.insert(ordinal),
+            Self::Epoch { marks, epoch } => {
+                let mark = &mut marks[usize::try_from(ordinal).unwrap()];
+                if *mark == *epoch {
+                    false
+                } else {
+                    *mark = *epoch;
+                    true
+                }
+            }
+        }
+    }
 }
 
 fn validate_graph(graph: &V24WitnessGraph) -> Result<()> {
@@ -842,10 +896,13 @@ pub(crate) fn build_v24_witness_graph(
                 &graph,
                 &query,
                 &[current],
-                V24_GRAPH_EF_CONSTRUCTION.min(node_index),
-                level,
-                node_index,
-                backend,
+                SearchLayerOptions {
+                    ef: V24_GRAPH_EF_CONSTRUCTION.min(node_index),
+                    level,
+                    node_limit: node_index,
+                    backend,
+                },
+                None,
             );
             let mut selected = found
                 .iter()
@@ -888,6 +945,7 @@ pub(crate) fn search_v24_witness_graph(
 pub(crate) struct V24WitnessSearch<'a> {
     graph: &'a V24WitnessGraph,
     backend: V24DistanceBackend,
+    workspace: RefCell<EpochWorkspace>,
 }
 
 impl<'a> V24WitnessSearch<'a> {
@@ -897,7 +955,18 @@ impl<'a> V24WitnessSearch<'a> {
         if graph.distance_backend != backend {
             return Err(invalid("V24 witness graph distance backend differs"));
         }
-        Ok(Self { graph, backend })
+        Ok(Self {
+            graph,
+            backend,
+            workspace: RefCell::new(EpochWorkspace {
+                marks: vec![0; graph.node_count()],
+                epoch: 0,
+            }),
+        })
+    }
+
+    pub(crate) fn workspace_bytes(&self) -> usize {
+        self.workspace.borrow().marks.len() * std::mem::size_of::<u32>()
     }
 
     pub(crate) fn search(&self, query: &[f32; 96], k: usize, ef: usize) -> Result<Vec<u32>> {
@@ -950,13 +1019,23 @@ impl<'a> V24WitnessSearch<'a> {
         for level in (1..=maximum_level).rev() {
             current = greedy_descend(graph, query, current, level, graph.node_count(), backend);
         }
-        Ok(
-            search_layer(graph, query, &[current], ef, 0, graph.node_count(), backend)
-                .into_iter()
-                .take(k)
-                .map(|value| value.ordinal)
-                .collect(),
+        let mut workspace = self.workspace.borrow_mut();
+        Ok(search_layer(
+            graph,
+            query,
+            &[current],
+            SearchLayerOptions {
+                ef,
+                level: 0,
+                node_limit: graph.node_count(),
+                backend,
+            },
+            Some(&mut workspace),
         )
+        .into_iter()
+        .take(k)
+        .map(|value| value.ordinal)
+        .collect())
     }
 }
 
@@ -1431,6 +1510,7 @@ mod tests {
         let witnesses = graph_witnesses(96);
         let graph = build_v24_witness_graph(&witnesses, SEED).unwrap();
         let search = V24WitnessSearch::new(&graph).unwrap();
+        assert_eq!(search.workspace_bytes(), 96 * std::mem::size_of::<u32>());
         for query_ordinal in [0_usize, 1, 17, 63, 95] {
             let query = witnesses[query_ordinal].vector.map(f32::from);
             for witness in &witnesses {

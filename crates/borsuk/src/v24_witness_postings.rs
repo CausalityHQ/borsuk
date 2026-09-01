@@ -14,6 +14,7 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use half::f16;
+use rayon::{ThreadPoolBuilder, prelude::*};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -26,6 +27,7 @@ const SOURCE_RECORD_BYTES: usize = 208;
 const RUN_PARTITIONS: usize = 256;
 const POSTING_CAP: usize = 64;
 const V24_POSTING_ASSIGNMENT_EF: usize = 128;
+const V24_POSTING_MAX_WORKERS: usize = 64;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -109,15 +111,15 @@ fn source_run_path(scratch: &Path, partition: usize) -> PathBuf {
     scratch.join(format!("source-{partition:03}.run"))
 }
 
-fn posting_run_path(scratch: &Path, partition: usize) -> PathBuf {
-    scratch.join(format!("posting-{partition:03}.run"))
+fn posting_source_run_path(scratch: &Path, partition: usize) -> PathBuf {
+    scratch.join(format!("posting-source-{partition:03}.run"))
 }
 
 fn cleanup_runs(scratch: &Path) -> Result<()> {
     for partition in 0..RUN_PARTITIONS {
         for path in [
             source_run_path(scratch, partition),
-            posting_run_path(scratch, partition),
+            posting_source_run_path(scratch, partition),
         ] {
             match fs::remove_file(&path) {
                 Ok(()) => {}
@@ -186,29 +188,6 @@ fn decode_source_records(bytes: &[u8]) -> Result<Vec<SourceOccurrence>> {
         .collect()
 }
 
-fn append_posting(
-    writers: &mut [Option<BufWriter<File>>],
-    scratch: &Path,
-    witness: u32,
-    page: u32,
-) -> Result<()> {
-    let partition = usize::try_from((witness >> 12) & 0xff).unwrap();
-    if writers[partition].is_none() {
-        let path = posting_run_path(scratch, partition);
-        let file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&path)
-            .map_err(|source| io_error(&path, source))?;
-        writers[partition] = Some(BufWriter::new(file));
-    }
-    let writer = writers[partition].as_mut().unwrap();
-    writer
-        .write_all(&witness.to_le_bytes())
-        .and_then(|()| writer.write_all(&page.to_le_bytes()))
-        .map_err(|source| io_error(scratch, source))
-}
-
 fn flush_run_writers(writers: &mut [Option<BufWriter<File>>], scratch: &Path) -> Result<()> {
     for writer in writers.iter_mut().flatten() {
         writer.flush().map_err(|source| io_error(scratch, source))?;
@@ -216,19 +195,98 @@ fn flush_run_writers(writers: &mut [Option<BufWriter<File>>], scratch: &Path) ->
     Ok(())
 }
 
+fn process_source_partition(
+    graph: &V24WitnessGraph,
+    source_index: &[(u64, u32)],
+    scratch: &Path,
+    partition: usize,
+) -> Result<u64> {
+    let path = source_run_path(scratch, partition);
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(source) => return Err(io_error(&path, source)),
+    };
+    let mut occurrences = decode_source_records(&bytes)?;
+    occurrences.sort_by_key(|row| (row.source_ordinal, row.replica, row.page_ordinal));
+    let search = V24WitnessSearch::new(graph)?;
+    let mut raw = Vec::<(u32, u32)>::new();
+    let mut unique_source_rows = 0_u64;
+    let mut start = 0;
+    while start < occurrences.len() {
+        let source_ordinal = occurrences[start].source_ordinal;
+        let mut end = start + 1;
+        while end < occurrences.len() && occurrences[end].source_ordinal == source_ordinal {
+            end += 1;
+        }
+        let group = &occurrences[start..end];
+        let primaries = group.iter().filter(|row| !row.replica).collect::<Vec<_>>();
+        let replicas = group.iter().filter(|row| row.replica).collect::<Vec<_>>();
+        if primaries.len() != 1
+            || replicas.len() > 1
+            || group.iter().any(|row| row.vector != primaries[0].vector)
+            || replicas
+                .first()
+                .is_some_and(|replica| replica.page_ordinal == primaries[0].page_ordinal)
+        {
+            return Err(invalid("V24 posting source occurrence authority differs"));
+        }
+        let query = primaries[0].vector.map(f32::from);
+        if let Ok(position) =
+            source_index.binary_search_by_key(&source_ordinal, |(registered, _)| *registered)
+        {
+            let witness = source_index[position].1;
+            if graph.witness_vector(witness) != Some(&primaries[0].vector) {
+                return Err(invalid("V24 posting witness source vector differs"));
+            }
+        }
+        let nearest =
+            search.search(&query, 2, graph.node_count().min(V24_POSTING_ASSIGNMENT_EF))?;
+        for witness in nearest {
+            raw.push((witness, primaries[0].page_ordinal));
+            if let Some(replica) = replicas.first() {
+                raw.push((witness, replica.page_ordinal));
+            }
+        }
+        unique_source_rows = unique_source_rows
+            .checked_add(1)
+            .ok_or_else(|| invalid("V24 posting unique row count overflows"))?;
+        start = end;
+    }
+    raw.sort_unstable();
+    let posting_path = posting_source_run_path(scratch, partition);
+    let file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&posting_path)
+        .map_err(|source| io_error(&posting_path, source))?;
+    let mut writer = BufWriter::new(file);
+    for (witness, page) in raw {
+        writer
+            .write_all(&witness.to_le_bytes())
+            .and_then(|()| writer.write_all(&page.to_le_bytes()))
+            .map_err(|source| io_error(&posting_path, source))?;
+    }
+    writer
+        .flush()
+        .map_err(|source| io_error(&posting_path, source))?;
+    fs::remove_file(&path).map_err(|source| io_error(&path, source))?;
+    Ok(unique_source_rows)
+}
+
 fn build_postings_inner<I>(
     graph: &V24WitnessGraph,
     source_row_count: u64,
     pages: I,
     scratch: &Path,
+    worker_threads: usize,
 ) -> Result<V24PostingPlane>
 where
     I: IntoIterator<Item = Result<V24PostingPage>>,
 {
-    if source_row_count == 0 {
+    if source_row_count == 0 || worker_threads == 0 {
         return Err(invalid("V24 posting source row count differs"));
     }
-    let search = V24WitnessSearch::new(graph)?;
     let source_index = graph.source_index();
     let mut source_writers = (0..RUN_PARTITIONS).map(|_| None).collect::<Vec<_>>();
     let mut page_ordinals = BTreeSet::new();
@@ -268,71 +326,24 @@ where
     flush_run_writers(&mut source_writers, scratch)?;
     drop(source_writers);
 
-    let mut posting_writers = (0..RUN_PARTITIONS).map(|_| None).collect::<Vec<_>>();
-    let mut unique_source_rows = 0_u64;
-    for partition in 0..RUN_PARTITIONS {
-        let path = source_run_path(scratch, partition);
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(source) => return Err(io_error(&path, source)),
-        };
-        let mut occurrences = decode_source_records(&bytes)?;
-        occurrences.sort_by_key(|row| (row.source_ordinal, row.replica, row.page_ordinal));
-        let mut start = 0;
-        while start < occurrences.len() {
-            let source_ordinal = occurrences[start].source_ordinal;
-            let mut end = start + 1;
-            while end < occurrences.len() && occurrences[end].source_ordinal == source_ordinal {
-                end += 1;
-            }
-            let group = &occurrences[start..end];
-            let primaries = group.iter().filter(|row| !row.replica).collect::<Vec<_>>();
-            let replicas = group.iter().filter(|row| row.replica).collect::<Vec<_>>();
-            if primaries.len() != 1
-                || replicas.len() > 1
-                || group.iter().any(|row| row.vector != primaries[0].vector)
-                || replicas
-                    .first()
-                    .is_some_and(|replica| replica.page_ordinal == primaries[0].page_ordinal)
-            {
-                return Err(invalid("V24 posting source occurrence authority differs"));
-            }
-            let query = primaries[0].vector.map(f32::from);
-            if let Ok(position) =
-                source_index.binary_search_by_key(&source_ordinal, |(registered, _)| *registered)
-            {
-                let witness = source_index[position].1;
-                if graph.witness_vector(witness) != Some(&primaries[0].vector) {
-                    return Err(invalid("V24 posting witness source vector differs"));
-                }
-            }
-            let nearest =
-                search.search(&query, 2, graph.node_count().min(V24_POSTING_ASSIGNMENT_EF))?;
-            for witness in nearest {
-                append_posting(
-                    &mut posting_writers,
-                    scratch,
-                    witness,
-                    primaries[0].page_ordinal,
-                )?;
-                if let Some(replica) = replicas.first() {
-                    append_posting(&mut posting_writers, scratch, witness, replica.page_ordinal)?;
-                }
-            }
-            unique_source_rows = unique_source_rows
-                .checked_add(1)
-                .ok_or_else(|| invalid("V24 posting unique row count overflows"))?;
-            start = end;
-        }
-        fs::remove_file(&path).map_err(|source| io_error(&path, source))?;
-    }
-    flush_run_writers(&mut posting_writers, scratch)?;
-    drop(posting_writers);
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(worker_threads)
+        .build()
+        .map_err(|error| invalid(&format!("V24 posting worker pool differs: {error}")))?;
+    let partition_counts = pool.install(|| {
+        (0..RUN_PARTITIONS)
+            .into_par_iter()
+            .map(|partition| process_source_partition(graph, &source_index, scratch, partition))
+            .collect::<Result<Vec<_>>>()
+    })?;
+    let unique_source_rows = partition_counts.into_iter().try_fold(0_u64, |sum, count| {
+        sum.checked_add(count)
+            .ok_or_else(|| invalid("V24 posting unique row count overflows"))
+    })?;
 
-    let mut postings = vec![Vec::new(); graph.node_count()];
+    let mut posting_pages = vec![Vec::<u32>::new(); graph.node_count()];
     for partition in 0..RUN_PARTITIONS {
-        let path = posting_run_path(scratch, partition);
+        let path = posting_source_run_path(scratch, partition);
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => continue,
@@ -341,38 +352,40 @@ where
         if !bytes.len().is_multiple_of(8) {
             return Err(invalid("V24 posting accumulation run is truncated"));
         }
-        let mut raw = bytes
-            .chunks_exact(8)
-            .map(|record| {
-                (
-                    u32::from_le_bytes(record[0..4].try_into().unwrap()),
-                    u32::from_le_bytes(record[4..8].try_into().unwrap()),
-                )
-            })
-            .collect::<Vec<_>>();
-        raw.sort_unstable();
-        let mut start = 0;
-        while start < raw.len() {
-            let key = raw[start];
-            let mut end = start + 1;
-            while end < raw.len() && raw[end] == key {
-                end += 1;
-            }
-            let mass =
-                u32::try_from(end - start).map_err(|_| invalid("V24 posting mass overflows"))?;
-            let witness = usize::try_from(key.0).unwrap();
-            if witness >= postings.len() {
+        for record in bytes.chunks_exact(8) {
+            let witness =
+                usize::try_from(u32::from_le_bytes(record[0..4].try_into().unwrap())).unwrap();
+            if witness >= posting_pages.len() {
                 return Err(invalid("V24 posting witness differs"));
             }
-            postings[witness].push((key.1, mass));
-            start = end;
+            posting_pages[witness].push(u32::from_le_bytes(record[4..8].try_into().unwrap()));
         }
         fs::remove_file(&path).map_err(|source| io_error(&path, source))?;
     }
-    for records in &mut postings {
-        records.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
-        records.truncate(POSTING_CAP);
-    }
+    let postings = pool.install(|| {
+        posting_pages
+            .into_par_iter()
+            .map(|mut pages| {
+                pages.sort_unstable();
+                let mut records = Vec::new();
+                let mut start = 0;
+                while start < pages.len() {
+                    let page = pages[start];
+                    let mut end = start + 1;
+                    while end < pages.len() && pages[end] == page {
+                        end += 1;
+                    }
+                    let mass = u32::try_from(end - start)
+                        .map_err(|_| invalid("V24 posting mass overflows"))?;
+                    records.push((page, mass));
+                    start = end;
+                }
+                records.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+                records.truncate(POSTING_CAP);
+                Ok(records)
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
     let plane = V24PostingPlane {
         postings,
         unique_source_rows,
@@ -387,6 +400,23 @@ pub(crate) fn build_v24_witness_postings<I>(
     source_row_count: u64,
     pages: I,
     scratch: &Path,
+) -> Result<V24PostingPlane>
+where
+    I: IntoIterator<Item = Result<V24PostingPage>>,
+{
+    let worker_threads = std::thread::available_parallelism()
+        .map(|threads| threads.get())
+        .unwrap_or(1)
+        .min(V24_POSTING_MAX_WORKERS);
+    build_v24_witness_postings_with_workers(graph, source_row_count, pages, scratch, worker_threads)
+}
+
+fn build_v24_witness_postings_with_workers<I>(
+    graph: &V24WitnessGraph,
+    source_row_count: u64,
+    pages: I,
+    scratch: &Path,
+    worker_threads: usize,
 ) -> Result<V24PostingPlane>
 where
     I: IntoIterator<Item = Result<V24PostingPage>>,
@@ -410,7 +440,7 @@ where
         .flush()
         .map_err(|source| io_error(&owner, source))?;
     drop(owner_file);
-    let result = build_postings_inner(graph, source_row_count, pages, scratch);
+    let result = build_postings_inner(graph, source_row_count, pages, scratch, worker_threads);
     let cleanup = cleanup_runs(scratch);
     let release = fs::remove_file(&owner).map_err(|source| io_error(&owner, source));
     match (result, cleanup, release) {
@@ -608,7 +638,8 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        V24PostingPage, V24PostingPageRow, build_v24_witness_postings, read_v24_witness_postings,
+        V24PostingPage, V24PostingPageRow, build_v24_witness_postings,
+        build_v24_witness_postings_with_workers, read_v24_witness_postings,
         write_v24_witness_postings,
     };
     use crate::{
@@ -769,13 +800,14 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
+        let determinism_pages = pages.clone();
         let observed = Arc::clone(&decoded);
         let stream = pages.into_iter().map(move |page| {
             observed.fetch_add(1, Ordering::SeqCst);
             Ok(page)
         });
-        let scratch = scratch("bounds");
-        let plane = build_v24_witness_postings(&graph, 10_000, stream, &scratch).unwrap();
+        let bounds_scratch = scratch("bounds");
+        let plane = build_v24_witness_postings(&graph, 10_000, stream, &bounds_scratch).unwrap();
         assert_eq!(decoded.load(Ordering::SeqCst), 66);
         let top64 = plane.records_for(0, 64);
         assert_eq!(top64.len(), 64);
@@ -783,6 +815,30 @@ mod tests {
         assert_eq!(top64[63], (63, 3));
         assert_eq!(plane.records_for(0, 16), &top64[..16]);
         assert_eq!(plane.records_for(0, 32), &top64[..32]);
+
+        let one_scratch = scratch("one-worker");
+        let four_scratch = scratch("four-workers");
+        let one = build_v24_witness_postings_with_workers(
+            &graph,
+            10_000,
+            determinism_pages.clone().into_iter().map(Ok),
+            &one_scratch,
+            1,
+        )
+        .unwrap();
+        let four = build_v24_witness_postings_with_workers(
+            &graph,
+            10_000,
+            determinism_pages.into_iter().map(Ok),
+            &four_scratch,
+            4,
+        )
+        .unwrap();
+        assert_eq!(one, four);
+        assert!(fs::read_dir(&one_scratch).unwrap().next().is_none());
+        assert!(fs::read_dir(&four_scratch).unwrap().next().is_none());
+        fs::remove_dir(one_scratch).unwrap();
+        fs::remove_dir(four_scratch).unwrap();
 
         let duplicate = vec![
             V24PostingPage {
@@ -797,8 +853,13 @@ mod tests {
             },
         ];
         assert!(
-            build_v24_witness_postings(&graph, 10_000, duplicate.into_iter().map(Ok), &scratch,)
-                .is_err()
+            build_v24_witness_postings(
+                &graph,
+                10_000,
+                duplicate.into_iter().map(Ok),
+                &bounds_scratch,
+            )
+            .is_err()
         );
         let duplicate_replica = vec![
             V24PostingPage {
@@ -822,12 +883,12 @@ mod tests {
                 &graph,
                 10_000,
                 duplicate_replica.into_iter().map(Ok),
-                &scratch,
+                &bounds_scratch,
             )
             .is_err()
         );
-        assert!(fs::read_dir(&scratch).unwrap().next().is_none());
-        fs::remove_dir(&scratch).unwrap();
+        assert!(fs::read_dir(&bounds_scratch).unwrap().next().is_none());
+        fs::remove_dir(&bounds_scratch).unwrap();
     }
 
     #[test]
