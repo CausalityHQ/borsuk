@@ -111,13 +111,14 @@ fn v23_balanced_training_excludes_pseudoqueries_and_is_worker_deterministic() {
     assert!(one.training_ordinals().is_disjoint(one.pseudoquery_ordinals()));
 }
 #[test]
-fn v23_balanced_scoring_is_exhaustive_and_scalar_fused_equal() {
-    let m = trained_fixture(); assert_eq!(score_scalar(&m, query()), score_fused(&m, query()).unwrap());
+fn v23_balanced_scoring_is_exhaustive_and_matches_independent_f64_order() {
+    let m = trained_fixture();
+    assert_eq!(page_order_f64(&m, query()), page_order_fused(&m, query()).unwrap());
     assert_eq!(m.last_score_count(), m.supercell_count());
 }
 ```
 - [ ] **Step 2:** Run `cargo test -p borsuk --lib v23_balanced_training_ -- --nocapture`; require missing training RED.
-- [ ] **Step 3:** Implement hash split 2,096,128/1,024, four Lloyd refinements/split, source-ordinal ties, f16 centroids, population rejection, beam-two write routing, fixed-block exhaustive read scoring. Fused is authority; scalar is control.
+- [ ] **Step 3:** Implement hash split 2,096,128/1,024, four Lloyd refinements/split, source-ordinal ties, f16 persistent centroids, population rejection, boundary-consistent runner-up write routing, and fixed-block exhaustive read scoring over once-decoded f32 serving centroids. Fused is authority; an independent f64 reference is the page-set control.
 - [ ] **Step 4:** Run GREEN/fmt/diff-check; commit `feat: train balanced page supercells`.
 
 ### Task 4: Bounded pages and replicas
@@ -168,7 +169,7 @@ fn v23_balanced_result_recomputes_samples_gates_and_class() {
 }
 ```
 - [ ] **Step 2:** Run `cargo test -p borsuk --lib v23_balanced_eval_ -- --nocapture`; require missing evaluator RED.
-- [ ] **Step 3:** Implement bounded pseudoquery top-ten, top-96 cells, all child pages, centroid-minus-radius order, exactly eight pages, set-cover controls, 1,024 warmups, 10,000 resident timings, fixed percentile, classification precedence, and independent serialization recomputation.
+- [ ] **Step 3:** During the full-corpus routing pass compute bounded leave-self-out pseudoquery top-ten heaps; implement supercell-radius top-96 cells, all child pages, page centroid-minus-radius order, exactly eight pages, pseudoquery and development containment gates, set-cover controls, 1,024 warmups, 10,000 resident timings, fixed percentile, classification precedence, and independent serialization recomputation.
 - [ ] **Step 4:** Run GREEN/fmt/diff-check; commit `feat: evaluate balanced page routing`.
 
 ### Task 6: Thin local executable

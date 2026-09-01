@@ -141,10 +141,15 @@ routed through the tree once. A production construction is rejected unless
 every supercell contains from 6,144 through 24,576 primary rows after the
 complete stream; changing this bound requires a new schema and experiment.
 
-The serving representation stores the final f16 centroid for every supercell.
+The persistent representation stores the final f16 centroid and the maximum
+cosine radius of every supercell, both recomputed from its complete routed
+population. The serving loader normalizes and expands every authenticated f16
+centroid to f32 once before timing; query execution never decodes f16 values.
 The binary tree remains construction/write-routing evidence but is not used by
-the read selector. Reads exhaustively score all `S` supercell centroids, which
-removes hierarchical pruning as a causal variable.
+the read selector. Reads exhaustively score all `S` supercell centroids and
+rank them by `(max(0, centroid_distance - cosine_radius), supercell_ordinal)`,
+which removes both hierarchical pruning and centroid-only containment as causal
+variables.
 
 ### Pages
 
@@ -212,6 +217,7 @@ Exactly one row per supercell, ordered by ordinal:
 - `supercell_ordinal: uint32`, non-nullable;
 - `centroid: fixed_size_list<float16>[96]`, non-nullable with non-nullable
   `element` child;
+- `cosine_radius: float32`, finite, nonnegative, non-nullable;
 - `primary_rows: uint64`, non-nullable;
 - `first_page: uint32`, non-nullable; and
 - `page_count: uint32`, non-nullable.
@@ -251,12 +257,13 @@ and every parent/output binding before canonical serialization.
 
 ## Pseudoquery arm selection
 
-For each of the 1,024 pseudoqueries, exact normalized f16 distance selects ten
-training-reservoir neighbors with `(distance, source_ordinal)` ordering. Their
+For each of the 1,024 pseudoqueries, the corpus-routing pass also computes ten
+exact full-corpus neighbors with bounded `(distance, source_ordinal)` heaps.
+The pseudoquery's own source ordinal is excluded from its neighbor heap. Their
 new page assignments define the layout oracle. The serving selector described
 below runs without access to those neighbor IDs.
 
-This exact pseudoquery control performs exactly `1,024 * 2,096,128 * 96`
+This exact pseudoquery control performs exactly `1,024 * N * 96`
 scored dimensions and uses a bounded top-ten heap; it cannot allocate or sort
 all row-distance pairs. Its work count, backend, scalar differential, and
 leave-self-out evidence are registered before arm selection.
@@ -279,7 +286,8 @@ The read selector performs these deterministic steps:
 
 1. normalize the query;
 2. fused-SIMD score all supercell centroids by cosine distance;
-3. retain the 96 smallest `(distance, supercell_ordinal)` pairs;
+3. retain the 96 smallest
+   `(max(0, distance - cosine_radius), supercell_ordinal)` pairs;
 4. enumerate every page belonging to those supercells;
 5. fused-SIMD score page centroids;
 6. rank pages by
@@ -351,9 +359,9 @@ At 100 million rows:
   primary rows per supercell;
 - page centroid dimensions/query: at most `6,144 * 96 = 589,824`;
 - total scored dimensions/query: at most 1,376,256;
-- f16 supercell centroids: 1,572,864 bytes;
-- f16 page centroids: at most 51,572,736 bytes;
-- page radii/counts/ranges and object references: less than 16 MiB; and
+- serving f32 supercell centroids plus radii/ranges: at most 3,276,800 bytes;
+- serving f32 page centroids: at most 103,145,472 bytes;
+- page radii/counts/ranges and object references: at most 17,190,912 bytes; and
 - conservative tree, selector workspaces, page cache, and runtime reserve:
   less than 850 MiB total.
 

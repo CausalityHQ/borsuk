@@ -185,8 +185,8 @@ pub(crate) fn project_v23_balanced_shape(rows: u64) -> Result<V23BalancedProject
         .checked_add(page_dimensions)
         .ok_or_else(|| invalid("query work projection overflows"))?;
     let serving_bytes = supercells
-        .checked_mul(DIMENSIONS * 2)
-        .and_then(|value| value.checked_add(maximum_pages.checked_mul(DIMENSIONS * 2 + 64)?))
+        .checked_mul(DIMENSIONS * 4 + 16)
+        .and_then(|value| value.checked_add(maximum_pages.checked_mul(DIMENSIONS * 4 + 64)?))
         .and_then(|value| value.checked_add(RUNTIME_RESERVE_BYTES))
         .ok_or_else(|| invalid("serving memory projection overflows"))?;
     Ok(V23BalancedProjection {
@@ -331,6 +331,7 @@ mod tests {
         assert_eq!(projection.supercells, 8_192);
         assert_eq!(projection.maximum_pages, 268_608);
         assert_eq!(projection.maximum_scored_dimensions, 1_376_256);
+        assert_eq!(projection.serving_bytes, 1_014_902_784);
         assert!(projection.serving_bytes < 3 * 1024 * 1024 * 1024);
         assert!(project_v23_balanced_shape(0).is_err());
     }

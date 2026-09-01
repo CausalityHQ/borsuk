@@ -120,21 +120,9 @@ pub(crate) fn train_v23_balanced_tree(
     })
 }
 
-fn exact_dot(left: &[f32; 96], right: &[f32; 96]) -> f32 {
-    let mut lanes = [0.0_f32; 8];
-    for (lane, accumulator) in lanes.iter_mut().enumerate() {
-        for step in 0..12 {
-            let dimension = lane * 12 + step;
-            *accumulator = left[dimension].mul_add(right[dimension], *accumulator);
-        }
-    }
-    lanes.into_iter().fold(0.0_f32, |sum, value| sum + value)
-}
-
 fn score_all_v23_supercells(
     model: &V23SupercellModel,
     query: &[f32; 96],
-    fused: bool,
 ) -> Result<Vec<(f32, u32)>> {
     let query = normalize_v23_incidence_vector(query)?;
     model
@@ -147,13 +135,9 @@ fn score_all_v23_supercells(
                 return Err(invalid("supercell inverse norm differs"));
             }
             let centroid = leaf.centroid.map(f16::to_f32);
-            let dot = if fused {
-                borsuk_fma::fused_dot_8x12(&query, &centroid)
-                    .map_err(|_| invalid("fused SIMD backend unavailable"))?
-                    .0
-            } else {
-                exact_dot(&query, &centroid)
-            };
+            let dot = borsuk_fma::fused_dot_8x12(&query, &centroid)
+                .map_err(|_| invalid("fused SIMD backend unavailable"))?
+                .0;
             let distance: f32 = 1.0 - dot * leaf.inverse_norm;
             if !distance.is_finite() {
                 return Err(invalid("supercell distance is non-finite"));
@@ -166,18 +150,43 @@ fn score_all_v23_supercells(
         .collect()
 }
 
-pub(crate) fn score_all_v23_supercells_scalar(
+pub(crate) fn score_all_v23_supercells_f64_reference(
     model: &V23SupercellModel,
     query: &[f32; 96],
-) -> Result<Vec<(f32, u32)>> {
-    score_all_v23_supercells(model, query, false)
+) -> Result<Vec<(f64, u32)>> {
+    let query = normalize_v23_incidence_vector(query)?;
+    model
+        .tree
+        .leaves
+        .iter()
+        .enumerate()
+        .map(|(ordinal, leaf)| {
+            let centroid = leaf.centroid.map(f16::to_f32);
+            let dot = query
+                .iter()
+                .zip(centroid)
+                .map(|(left, right)| f64::from(*left) * f64::from(right))
+                .sum::<f64>();
+            let squared_norm = centroid
+                .iter()
+                .map(|value| f64::from(*value) * f64::from(*value))
+                .sum::<f64>();
+            if !dot.is_finite() || !squared_norm.is_finite() || squared_norm <= 0.0 {
+                return Err(invalid("f64 supercell reference differs"));
+            }
+            Ok((
+                1.0 - dot / squared_norm.sqrt(),
+                u32::try_from(ordinal).map_err(|_| invalid("supercell ordinal overflows"))?,
+            ))
+        })
+        .collect()
 }
 
 pub(crate) fn score_all_v23_supercells_fused(
     model: &V23SupercellModel,
     query: &[f32; 96],
 ) -> Result<Vec<(f32, u32)>> {
-    score_all_v23_supercells(model, query, true)
+    score_all_v23_supercells(model, query)
 }
 
 pub(crate) fn route_v23_supercell_beam2(
@@ -199,8 +208,8 @@ pub(crate) fn route_v23_supercell_beam2(
 #[cfg(test)]
 mod tests {
     use super::{
-        V23BalancedTrainingRow, route_v23_supercell_beam2, score_all_v23_supercells_fused,
-        score_all_v23_supercells_scalar, train_v23_balanced_tree,
+        V23BalancedTrainingRow, route_v23_supercell_beam2, score_all_v23_supercells_f64_reference,
+        score_all_v23_supercells_fused, train_v23_balanced_tree,
     };
     use crate::v23_incidence_tree::{
         V23IncidenceTrainingShape, V23IncidenceTree, V23TrainingWork, V23TreeLeaf, V23TreeNode,
@@ -263,16 +272,32 @@ mod tests {
     }
 
     #[test]
-    fn v23_balanced_training_scores_every_supercell_with_scalar_fused_equality() {
+    fn v23_balanced_training_scores_every_supercell_with_independent_f64_order_control() {
         let model = train_v23_balanced_tree(rows(), 8, 8, 0x1234_5678, 2, 7).unwrap();
         let query = rows()[3].vector;
-        let scalar = score_all_v23_supercells_scalar(&model, &query).unwrap();
-        let fused = score_all_v23_supercells_fused(&model, &query).unwrap();
-        assert_eq!(scalar, fused);
-        assert_eq!(scalar.len(), 8);
+        let mut reference = score_all_v23_supercells_f64_reference(&model, &query).unwrap();
+        let mut fused = score_all_v23_supercells_fused(&model, &query).unwrap();
+        reference.sort_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        fused.sort_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
         assert_eq!(
-            scalar.iter().map(|entry| entry.1).collect::<Vec<_>>(),
-            (0_u32..8).collect::<Vec<_>>()
+            fused.iter().map(|entry| entry.1).collect::<Vec<_>>(),
+            reference.iter().map(|entry| entry.1).collect::<Vec<_>>()
+        );
+        assert_eq!(fused.len(), 8);
+        assert_eq!(
+            fused
+                .iter()
+                .map(|entry| entry.1)
+                .collect::<std::collections::BTreeSet<_>>(),
+            (0_u32..8).collect::<std::collections::BTreeSet<_>>()
         );
     }
 

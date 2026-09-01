@@ -25,6 +25,7 @@ const DIMENSIONS: i32 = 96;
 pub(crate) struct V23SupercellRow {
     pub(crate) supercell_ordinal: u32,
     pub(crate) centroid: [f16; 96],
+    pub(crate) cosine_radius: f32,
     pub(crate) primary_rows: u64,
     pub(crate) first_page: u32,
     pub(crate) page_count: u32,
@@ -62,6 +63,7 @@ fn supercell_schema() -> Schema {
     Schema::new(vec![
         Field::new("supercell_ordinal", DataType::UInt32, false),
         Field::new("centroid", centroid_field(), false),
+        Field::new("cosine_radius", DataType::Float32, false),
         Field::new("primary_rows", DataType::UInt64, false),
         Field::new("first_page", DataType::UInt32, false),
         Field::new("page_count", DataType::UInt32, false),
@@ -79,7 +81,7 @@ fn page_schema() -> Schema {
     ])
 }
 
-fn row_page_schema() -> Schema {
+pub(crate) fn v23_row_page_schema() -> Schema {
     Schema::new(vec![
         Field::new("source_ordinal", DataType::UInt64, false),
         Field::new("primary_page", DataType::UInt32, false),
@@ -188,6 +190,8 @@ fn validate_supercells(rows: &[V23SupercellRow]) -> Result<()> {
             || row.primary_rows == 0
             || row.first_page != next_page
             || row.page_count == 0
+            || !row.cosine_radius.is_finite()
+            || row.cosine_radius < 0.0
             || row.centroid.iter().any(|value| !value.is_finite())
         {
             return Err(invalid("supercell row differs"));
@@ -202,16 +206,17 @@ fn validate_supercells(rows: &[V23SupercellRow]) -> Result<()> {
     Ok(())
 }
 
-fn validate_pages(rows: &[V23PageRow]) -> Result<()> {
-    if rows.is_empty() {
+fn validate_pages(rows: &[V23PageRow], maximum_replica_rows: u16) -> Result<()> {
+    if rows.is_empty() || maximum_replica_rows > 192 {
         return Err(invalid("pages are empty"));
     }
     for (ordinal, row) in rows.iter().enumerate() {
         if row.page_ordinal != ordinal as u32
             || row.primary_rows == 0
             || row.primary_rows > 384
-            || row.replica_rows > 192
-            || u32::from(row.primary_rows) + u32::from(row.replica_rows) > 576
+            || row.replica_rows > maximum_replica_rows
+            || u32::from(row.primary_rows) + u32::from(row.replica_rows)
+                > 384 + u32::from(maximum_replica_rows)
             || !row.cosine_radius.is_finite()
             || row.cosine_radius < 0.0
             || row.centroid.iter().any(|value| !value.is_finite())
@@ -222,8 +227,8 @@ fn validate_pages(rows: &[V23PageRow]) -> Result<()> {
     Ok(())
 }
 
-fn validate_row_pages(rows: &[V23RowPage]) -> Result<()> {
-    if rows.is_empty() {
+fn validate_row_pages(rows: &[V23RowPage], page_count: u32) -> Result<()> {
+    if rows.is_empty() || page_count == 0 || page_count == u32::MAX {
         return Err(invalid("row assignments are empty"));
     }
     for pair in rows.windows(2) {
@@ -232,7 +237,8 @@ fn validate_row_pages(rows: &[V23RowPage]) -> Result<()> {
         }
     }
     if rows.iter().any(|row| {
-        row.primary_page == u32::MAX
+        row.primary_page >= page_count
+            || (row.replica_page != u32::MAX && row.replica_page >= page_count)
             || (row.replica_page != u32::MAX && row.replica_page == row.primary_page)
     }) {
         return Err(invalid("row assignment differs"));
@@ -251,6 +257,9 @@ pub(crate) fn write_v23_supercells(path: &Path, rows: &[V23SupercellRow]) -> Res
                     rows.iter().map(|r| r.supercell_ordinal),
                 )),
                 centroid_array(rows.iter().map(|r| &r.centroid))?,
+                Arc::new(Float32Array::from_iter_values(
+                    rows.iter().map(|r| r.cosine_radius),
+                )),
                 Arc::new(UInt64Array::from_iter_values(
                     rows.iter().map(|r| r.primary_rows),
                 )),
@@ -265,8 +274,12 @@ pub(crate) fn write_v23_supercells(path: &Path, rows: &[V23SupercellRow]) -> Res
     )
 }
 
-pub(crate) fn write_v23_pages(path: &Path, rows: &[V23PageRow]) -> Result<()> {
-    validate_pages(rows)?;
+pub(crate) fn write_v23_pages(
+    path: &Path,
+    rows: &[V23PageRow],
+    maximum_replica_rows: u16,
+) -> Result<()> {
+    validate_pages(rows, maximum_replica_rows)?;
     write_batch(
         path,
         RecordBatch::try_new(
@@ -293,12 +306,12 @@ pub(crate) fn write_v23_pages(path: &Path, rows: &[V23PageRow]) -> Result<()> {
     )
 }
 
-pub(crate) fn write_v23_row_pages(path: &Path, rows: &[V23RowPage]) -> Result<()> {
-    validate_row_pages(rows)?;
+pub(crate) fn write_v23_row_pages(path: &Path, rows: &[V23RowPage], page_count: u32) -> Result<()> {
+    validate_row_pages(rows, page_count)?;
     write_batch(
         path,
         RecordBatch::try_new(
-            Arc::new(row_page_schema()),
+            Arc::new(v23_row_page_schema()),
             vec![
                 Arc::new(UInt64Array::from_iter_values(
                     rows.iter().map(|r| r.source_ordinal),
@@ -326,18 +339,23 @@ pub(crate) fn read_v23_supercells(
             .as_any()
             .downcast_ref::<UInt32Array>()
             .ok_or_else(|| invalid("supercell ordinal differs"))?;
-        let primary = batch
+        let radius = batch
             .column(2)
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("supercell radius differs"))?;
+        let primary = batch
+            .column(3)
             .as_any()
             .downcast_ref::<UInt64Array>()
             .ok_or_else(|| invalid("supercell population differs"))?;
         let first = batch
-            .column(3)
+            .column(4)
             .as_any()
             .downcast_ref::<UInt32Array>()
             .ok_or_else(|| invalid("first page differs"))?;
         let count = batch
-            .column(4)
+            .column(5)
             .as_any()
             .downcast_ref::<UInt32Array>()
             .ok_or_else(|| invalid("page count differs"))?;
@@ -345,6 +363,7 @@ pub(crate) fn read_v23_supercells(
             rows.push(V23SupercellRow {
                 supercell_ordinal: ordinal.value(row),
                 centroid: decode_centroid(batch.column(1), row)?,
+                cosine_radius: radius.value(row),
                 primary_rows: primary.value(row),
                 first_page: first.value(row),
                 page_count: count.value(row),
@@ -358,8 +377,10 @@ pub(crate) fn read_v23_supercells(
 pub(crate) fn read_v23_pages(
     path: &Path,
     identity: &V23BalancedIdentity,
+    expected_role: &str,
+    maximum_replica_rows: u16,
 ) -> Result<Vec<V23PageRow>> {
-    authenticate_path(path, identity, "pages-parquet")?;
+    authenticate_path(path, identity, expected_role)?;
     let mut rows = Vec::new();
     for batch in read_batches(path, &page_schema())? {
         let ordinal = batch
@@ -398,17 +419,19 @@ pub(crate) fn read_v23_pages(
             });
         }
     }
-    validate_pages(&rows)?;
+    validate_pages(&rows, maximum_replica_rows)?;
     Ok(rows)
 }
 
 pub(crate) fn read_v23_row_pages(
     path: &Path,
     identity: &V23BalancedIdentity,
+    expected_role: &str,
+    page_count: u32,
 ) -> Result<Vec<V23RowPage>> {
-    authenticate_path(path, identity, "row-pages-parquet")?;
+    authenticate_path(path, identity, expected_role)?;
     let mut rows = Vec::new();
-    for batch in read_batches(path, &row_page_schema())? {
+    for batch in read_batches(path, &v23_row_page_schema())? {
         let source = batch
             .column(0)
             .as_any()
@@ -432,8 +455,65 @@ pub(crate) fn read_v23_row_pages(
             });
         }
     }
-    validate_row_pages(&rows)?;
+    validate_row_pages(&rows, page_count)?;
     Ok(rows)
+}
+
+pub(crate) fn reconcile_v23_balanced_arm(
+    supercells: &[V23SupercellRow],
+    pages: &[V23PageRow],
+    assignments: &[V23RowPage],
+    maximum_replica_rows: u16,
+) -> Result<()> {
+    validate_supercells(supercells)?;
+    validate_pages(pages, maximum_replica_rows)?;
+    let page_count = u32::try_from(pages.len()).map_err(|_| invalid("page count overflows"))?;
+    validate_row_pages(assignments, page_count)?;
+    let mut primary_counts = vec![0_u64; pages.len()];
+    let mut replica_counts = vec![0_u64; pages.len()];
+    for row in assignments {
+        primary_counts[usize::try_from(row.primary_page).unwrap()] += 1;
+        if row.replica_page != u32::MAX {
+            replica_counts[usize::try_from(row.replica_page).unwrap()] += 1;
+        }
+    }
+    for (ordinal, page) in pages.iter().enumerate() {
+        let supercell = supercells
+            .get(usize::try_from(page.supercell_ordinal).unwrap())
+            .ok_or_else(|| invalid("page supercell is out of range"))?;
+        let page_ordinal = u32::try_from(ordinal).unwrap();
+        let end = supercell
+            .first_page
+            .checked_add(supercell.page_count)
+            .ok_or_else(|| invalid("supercell page range overflows"))?;
+        if page_ordinal < supercell.first_page
+            || page_ordinal >= end
+            || primary_counts[ordinal] != u64::from(page.primary_rows)
+            || replica_counts[ordinal] != u64::from(page.replica_rows)
+        {
+            return Err(invalid("page assignment reconciliation differs"));
+        }
+    }
+    for supercell in supercells {
+        let start = usize::try_from(supercell.first_page).unwrap();
+        let end = usize::try_from(
+            supercell
+                .first_page
+                .checked_add(supercell.page_count)
+                .ok_or_else(|| invalid("supercell page range overflows"))?,
+        )
+        .unwrap();
+        let primary_rows = pages
+            .get(start..end)
+            .ok_or_else(|| invalid("supercell page range is out of bounds"))?
+            .iter()
+            .map(|page| u64::from(page.primary_rows))
+            .sum::<u64>();
+        if primary_rows != supercell.primary_rows {
+            return Err(invalid("supercell population reconciliation differs"));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -445,7 +525,8 @@ mod tests {
 
     use super::{
         V23PageRow, V23RowPage, V23SupercellRow, read_v23_pages, read_v23_row_pages,
-        read_v23_supercells, write_v23_pages, write_v23_row_pages, write_v23_supercells,
+        read_v23_supercells, reconcile_v23_balanced_arm, write_v23_pages, write_v23_row_pages,
+        write_v23_supercells,
     };
     use crate::v23_balanced_pages::V23BalancedIdentity;
 
@@ -473,6 +554,7 @@ mod tests {
         let supercells = vec![V23SupercellRow {
             supercell_ordinal: 0,
             centroid: centroid(0.125),
+            cosine_radius: 0.75,
             primary_rows: 384,
             first_page: 0,
             page_count: 1,
@@ -499,8 +581,8 @@ mod tests {
         ];
 
         write_v23_supercells(&supercell_path, &supercells).unwrap();
-        write_v23_pages(&page_path, &pages).unwrap();
-        write_v23_row_pages(&row_page_path, &row_pages).unwrap();
+        write_v23_pages(&page_path, &pages, 48).unwrap();
+        write_v23_row_pages(&row_page_path, &row_pages, 1).unwrap();
 
         assert_eq!(
             read_v23_supercells(
@@ -511,13 +593,21 @@ mod tests {
             supercells
         );
         assert_eq!(
-            read_v23_pages(&page_path, &identity(&page_path, "pages-parquet")).unwrap(),
+            read_v23_pages(
+                &page_path,
+                &identity(&page_path, "pages-amp-1125-parquet"),
+                "pages-amp-1125-parquet",
+                48,
+            )
+            .unwrap(),
             pages
         );
         assert_eq!(
             read_v23_row_pages(
                 &row_page_path,
-                &identity(&row_page_path, "row-pages-parquet")
+                &identity(&row_page_path, "row-pages-amp-1125-parquet"),
+                "row-pages-amp-1125-parquet",
+                1,
             )
             .unwrap(),
             row_pages
@@ -532,6 +622,7 @@ mod tests {
             V23SupercellRow {
                 supercell_ordinal: 0,
                 centroid: centroid(0.1),
+                cosine_radius: 0.8,
                 primary_rows: 384,
                 first_page: 0,
                 page_count: 1,
@@ -539,6 +630,7 @@ mod tests {
             V23SupercellRow {
                 supercell_ordinal: 1,
                 centroid: centroid(0.2),
+                cosine_radius: 0.7,
                 primary_rows: 384,
                 first_page: 1,
                 page_count: 1,
@@ -548,6 +640,16 @@ mod tests {
         let mut changed_identity = identity(&path, "supercells-parquet");
         changed_identity.digest.replace_range(..2, "ff");
         assert!(read_v23_supercells(&path, &changed_identity).is_err());
+
+        let mut invalid_radius = rows.clone();
+        invalid_radius[0].cosine_radius = f32::NAN;
+        assert!(
+            write_v23_supercells(
+                &directory.path().join("nan-supercell.parquet"),
+                &invalid_radius,
+            )
+            .is_err()
+        );
 
         let mut reversed = rows;
         reversed.reverse();
@@ -562,7 +664,9 @@ mod tests {
             centroid: centroid(0.2),
             cosine_radius: f32::NAN,
         };
-        assert!(write_v23_pages(&directory.path().join("nan.parquet"), &[invalid_page]).is_err());
+        assert!(
+            write_v23_pages(&directory.path().join("nan.parquet"), &[invalid_page], 48).is_err()
+        );
         let invalid_assignment = V23RowPage {
             source_ordinal: 0,
             primary_page: 7,
@@ -571,9 +675,53 @@ mod tests {
         assert!(
             write_v23_row_pages(
                 &directory.path().join("same-page.parquet"),
-                &[invalid_assignment]
+                &[invalid_assignment],
+                8,
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn v23_balanced_arrow_reconciles_arm_counts_ranges_and_assignments() {
+        let supercells = vec![V23SupercellRow {
+            supercell_ordinal: 0,
+            centroid: centroid(0.125),
+            cosine_radius: 0.75,
+            primary_rows: 2,
+            first_page: 0,
+            page_count: 1,
+        }];
+        let pages = vec![V23PageRow {
+            page_ordinal: 0,
+            supercell_ordinal: 0,
+            primary_rows: 2,
+            replica_rows: 0,
+            centroid: centroid(0.25),
+            cosine_radius: 0.5,
+        }];
+        let assignments = vec![
+            V23RowPage {
+                source_ordinal: 0,
+                primary_page: 0,
+                replica_page: u32::MAX,
+            },
+            V23RowPage {
+                source_ordinal: 1,
+                primary_page: 0,
+                replica_page: u32::MAX,
+            },
+        ];
+        reconcile_v23_balanced_arm(&supercells, &pages, &assignments, 48).unwrap();
+
+        let mut bad_assignment = assignments.clone();
+        bad_assignment[1].primary_page = 1;
+        assert!(reconcile_v23_balanced_arm(&supercells, &pages, &bad_assignment, 48).is_err());
+        let mut bad_count = pages.clone();
+        bad_count[0].primary_rows = 1;
+        assert!(reconcile_v23_balanced_arm(&supercells, &bad_count, &assignments, 48).is_err());
+        let mut bad_range = supercells.clone();
+        bad_range[0].page_count = 2;
+        assert!(reconcile_v23_balanced_arm(&bad_range, &pages, &assignments, 48).is_err());
     }
 }
