@@ -85,8 +85,8 @@ class BalancedOfflineWorkerTests(unittest.TestCase):
             "manifest_sha256": "11" * 32,
             "ordered_inputs": [{"role": "f16-control"}],
             "outputs": [],
-            "pseudoquery_pairs": [],
-            "schema": "borsuk-v23-balanced-page-receipt-v3",
+            "pseudoquery_pairs": [{} for _ in range(12)],
+            "schema": "borsuk-v23-balanced-page-receipt-v4",
             "selected_pair": None,
             "stop": None,
         }
@@ -98,6 +98,13 @@ class BalancedOfflineWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "authority"):
             subject.validate_terminal(
                 json.dumps(changed, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+
+        old = dict(value, schema="borsuk-v23-balanced-page-receipt-v3")
+        with self.assertRaisesRegex(ValueError, "authority"):
+            subject.validate_terminal(
+                json.dumps(old, separators=(",", ":"), sort_keys=True).encode()
                 + b"\n"
             )
 

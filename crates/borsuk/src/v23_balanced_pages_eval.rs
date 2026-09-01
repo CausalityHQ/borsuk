@@ -14,11 +14,11 @@ use crate::{
     v23_incidence_tree::normalize_v23_incidence_vector,
 };
 
-const RESULT_SCHEMA: &str = "borsuk-v23-balanced-page-result-v2";
+const RESULT_SCHEMA: &str = "borsuk-v23-balanced-page-result-v3";
 const MAX_SCORED_DIMENSIONS: u64 = 4_000_000;
 const MAX_SERVING_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 const MAX_SCALAR_SIMD_DISTANCE_DELTA_PPM: u64 = 10;
-const MAX_PROJECTED_PAGE_BYTES: u64 = 1_966_080;
+const MAX_PROJECTED_PAGE_BYTES: u64 = 7_864_320;
 const MAX_ENCODED_PAGE_BYTES: u64 = 122_880;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +80,24 @@ pub(crate) struct V23BalancedServingGeometry {
     total_replica_rows: u64,
     supercells: Vec<V23BalancedServingSupercell>,
     pages: Vec<V23BalancedServingPage>,
+}
+
+impl V23BalancedServingGeometry {
+    pub(crate) fn page_count(&self) -> usize {
+        self.pages.len()
+    }
+
+    pub(crate) fn complete_geometry_dimensions(&self) -> Result<u64> {
+        u64::try_from(
+            self.supercells
+                .len()
+                .checked_add(self.pages.len())
+                .ok_or_else(|| invalid("selector work projection overflows"))?,
+        )
+        .map_err(|_| invalid("selector work projection overflows"))?
+        .checked_mul(96)
+        .ok_or_else(|| invalid("selector work projection overflows"))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -421,7 +439,7 @@ pub(crate) fn select_v23_balanced_pair(
 pub(crate) fn classify_v23_balanced_pair_ladder(
     pairs: &[V23BalancedPseudoqueryPair],
 ) -> Result<Option<V23BalancedSelectedPairEvidence>> {
-    let expected = [8_u8, 12, 16]
+    let expected = [8_u8, 16, 32, 64]
         .into_iter()
         .flat_map(|budget| {
             [
@@ -1208,7 +1226,7 @@ mod tests {
     #[test]
     fn v23_balanced_eval_selection_freezes_budget_major_pair_without_official_inputs() {
         let mut pairs = Vec::new();
-        for budget in [8, 12, 16] {
+        for budget in [8, 16, 32, 64] {
             for arm in [
                 V23BalancedArm::Amp1125,
                 V23BalancedArm::Amp1250,
@@ -1217,24 +1235,24 @@ mod tests {
                 pairs.push(pseudo_pair(budget, arm, 993_749, 900_000));
             }
         }
-        pairs[4] = pseudo_pair(12, V23BalancedArm::Amp1250, 993_750, 900_000);
-        pairs[6] = pseudo_pair(16, V23BalancedArm::Amp1125, 1_000_000, 1_000_000);
+        pairs[4] = pseudo_pair(16, V23BalancedArm::Amp1250, 993_750, 900_000);
+        pairs[6] = pseudo_pair(32, V23BalancedArm::Amp1125, 1_000_000, 1_000_000);
 
         let selected = select_v23_balanced_pair(&pairs).unwrap();
         assert_eq!(
             selected.selected_pair,
             V23BalancedSelectedPair {
-                page_budget: V23BalancedPageBudget::new(12).unwrap(),
+                page_budget: V23BalancedPageBudget::new(16).unwrap(),
                 arm: V23BalancedArm::Amp1250,
             }
         );
         assert_eq!(selected.official_query_reads, 0);
 
-        pairs[4] = pseudo_pair(12, V23BalancedArm::Amp1250, 993_749, 900_000);
+        pairs[4] = pseudo_pair(16, V23BalancedArm::Amp1250, 993_749, 900_000);
         let selected = select_v23_balanced_pair(&pairs).unwrap();
-        assert_eq!(selected.selected_pair.page_budget.get(), 16);
+        assert_eq!(selected.selected_pair.page_budget.get(), 32);
 
-        pairs[6] = pseudo_pair(16, V23BalancedArm::Amp1125, 993_749, 900_000);
+        pairs[6] = pseudo_pair(32, V23BalancedArm::Amp1125, 993_749, 900_000);
         assert_eq!(classify_v23_balanced_pair_ladder(&pairs).unwrap(), None);
 
         pairs[0].aggregate_recall_ppm = 1_000_001;
@@ -1266,7 +1284,7 @@ mod tests {
             })
             .collect();
         V23BalancedResult {
-            schema: "borsuk-v23-balanced-page-result-v2".to_owned(),
+            schema: "borsuk-v23-balanced-page-result-v3".to_owned(),
             claim_eligible: false,
             selected_arm: V23BalancedArm::Amp1250,
             selected_page_budget: V23BalancedPageBudget::new(8).unwrap(),
@@ -1307,7 +1325,7 @@ mod tests {
         assert!(canonical_v23_balanced_result_bytes(&class_drift).is_err());
 
         let mut budget_drift = valid_result();
-        budget_drift.selected_page_budget = V23BalancedPageBudget::new(12).unwrap();
+        budget_drift.selected_page_budget = V23BalancedPageBudget::new(16).unwrap();
         assert!(canonical_v23_balanced_result_bytes(&budget_drift).is_err());
 
         let mut bytes_drift = valid_result();
@@ -1392,12 +1410,12 @@ mod tests {
             0,
             (0_u32..10).map(|page| vec![page]).collect(),
             (0_u32..16).collect(),
-            (0_u32..12).collect(),
+            (0_u32..16).collect(),
             1_376_256,
-            V23BalancedPageBudget::new(12).unwrap(),
+            V23BalancedPageBudget::new(16).unwrap(),
         )
         .unwrap();
-        assert_eq!(sample.selected_pages.len(), 12);
+        assert_eq!(sample.selected_pages.len(), 16);
         assert_eq!(sample.layout_oracle_hits, 10);
         assert_eq!(sample.containment_hits, 10);
         assert_eq!(sample.selector_hits, 10);
@@ -1409,7 +1427,7 @@ mod tests {
                 sample.containment_page_universe,
                 (0_u32..8).collect(),
                 1_376_256,
-                V23BalancedPageBudget::new(12).unwrap(),
+                V23BalancedPageBudget::new(16).unwrap(),
             )
             .is_err()
         );
@@ -1580,10 +1598,13 @@ mod tests {
             prepare_v23_balanced_serving_geometry(&supercells, &pages, V23BalancedArm::Amp1500)
                 .unwrap();
         let selected =
-            select_v23_balanced_pages(&query, &geometry, V23BalancedPageBudget::new(12).unwrap())
+            select_v23_balanced_pages(&query, &geometry, V23BalancedPageBudget::new(16).unwrap())
                 .unwrap();
-        assert_eq!(selected.pages, [0, 96, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        assert_eq!(selected.pages.len(), 12);
+        assert_eq!(
+            selected.pages,
+            [0, 96, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        );
+        assert_eq!(selected.pages.len(), 16);
         assert_eq!(selected.scored_dimensions, (100 + 96) * 96);
         assert!(selected.scalar_simd_pages_equal);
     }
@@ -1751,11 +1772,11 @@ mod tests {
             supercell_ordinal: 0,
             centroid,
             cosine_radius: 0.0,
-            primary_rows: 13,
+            primary_rows: 17,
             first_page: 0,
-            page_count: 13,
+            page_count: 17,
         }];
-        let pages = (0_u32..13)
+        let pages = (0_u32..17)
             .map(|page_ordinal| V23PageRow {
                 page_ordinal,
                 supercell_ordinal: 0,
@@ -1774,18 +1795,18 @@ mod tests {
                 evaluate_v23_balanced_sample(
                     query_index,
                     (0_u32..10)
-                        .map(|rank| vec![if misses_one && rank == 9 { 12 } else { rank }])
+                        .map(|rank| vec![if misses_one && rank == 9 { 16 } else { rank }])
                         .collect(),
-                    (0_u32..13).collect(),
-                    (0_u32..12).collect(),
+                    (0_u32..17).collect(),
+                    (0_u32..16).collect(),
                     1_376_256,
-                    V23BalancedPageBudget::new(12).unwrap(),
+                    V23BalancedPageBudget::new(16).unwrap(),
                 )
                 .unwrap()
             })
             .collect::<Vec<_>>();
         let selected_pair = V23BalancedSelectedPair {
-            page_budget: V23BalancedPageBudget::new(12).unwrap(),
+            page_budget: V23BalancedPageBudget::new(16).unwrap(),
             arm: V23BalancedArm::Amp1250,
         };
         let pair =
@@ -1794,7 +1815,7 @@ mod tests {
         assert_eq!(pair.minimum_recall_ppm, 900_000);
         assert_eq!(pair.oracle_attainment_ppm, 998_925);
         assert!(pair.every_query_has_budget);
-        assert_eq!(pair.projected_page_bytes, 12 * 122_880);
+        assert_eq!(pair.projected_page_bytes, 16 * 122_880);
         assert_eq!(pair.maximum_scored_dimensions, 1_376_256);
         assert!(pair.amplification_and_page_caps_valid);
 

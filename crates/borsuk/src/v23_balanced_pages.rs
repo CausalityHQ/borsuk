@@ -39,13 +39,13 @@ use crate::{
     },
 };
 
-const MANIFEST_SCHEMA: &str = "borsuk-v23-balanced-page-manifest-v3";
-const RECEIPT_SCHEMA: &str = "borsuk-v23-balanced-page-receipt-v3";
+const MANIFEST_SCHEMA: &str = "borsuk-v23-balanced-page-manifest-v4";
+const RECEIPT_SCHEMA: &str = "borsuk-v23-balanced-page-receipt-v4";
 const DIMENSIONS: u64 = 96;
 const SUPERCELL_TARGET_ROWS: u64 = 12_288;
 const PRIMARY_ROWS_PER_PAGE: u64 = 384;
 const TOP_SUPERCELLS: u64 = 96;
-const PAGE_BUDGETS: [u8; 3] = [8, 12, 16];
+const PAGE_BUDGETS: [u8; 4] = [8, 16, 32, 64];
 const F16_MAX_BATCH_ROWS: usize = 262_144;
 const F16_MAX_FOOTER_BYTES: usize = 1024 * 1024;
 const F16_MAX_BATCH_METADATA_BYTES: usize = 1024 * 1024;
@@ -1381,10 +1381,28 @@ pub(crate) fn evaluate_v23_balanced_pseudoquery_ladder_for_expected_count(
         )?;
         arms.push((selected_arm, truth, geometry));
     }
-    let mut pairs = Vec::with_capacity(9);
+    let mut pairs = Vec::with_capacity(PAGE_BUDGETS.len() * arms.len());
     for page_budget in PAGE_BUDGETS.map(V23BalancedPageBudget::new) {
         let page_budget = page_budget?;
         for (selected_arm, truth, geometry) in &arms {
+            let selected_pair = V23BalancedSelectedPair {
+                page_budget,
+                arm: *selected_arm,
+            };
+            if geometry.page_count() < usize::from(page_budget.get()) {
+                let maximum_scored_dimensions = geometry.complete_geometry_dimensions()?;
+                pairs.push(V23BalancedPseudoqueryPair {
+                    selected_pair,
+                    aggregate_recall_ppm: 0,
+                    minimum_recall_ppm: 0,
+                    oracle_attainment_ppm: 0,
+                    every_query_has_budget: false,
+                    projected_page_bytes: u64::from(page_budget.get()) * 122_880,
+                    maximum_scored_dimensions,
+                    amplification_and_page_caps_valid: true,
+                });
+                continue;
+            }
             let samples = build_v23_balanced_pseudoquery_samples_from_truth(
                 primary,
                 truth,
@@ -1392,10 +1410,7 @@ pub(crate) fn evaluate_v23_balanced_pseudoquery_ladder_for_expected_count(
                 page_budget,
             )?;
             pairs.push(evaluate_v23_balanced_pseudoquery_pair_for_expected_count(
-                V23BalancedSelectedPair {
-                    page_budget,
-                    arm: *selected_arm,
-                },
+                selected_pair,
                 &samples,
                 geometry,
                 expected_count,
@@ -1688,7 +1703,7 @@ mod tests {
     }
 
     fn receipt_pairs(passing: bool) -> Vec<V23BalancedPseudoqueryPair> {
-        [8_u8, 12, 16]
+        [8_u8, 16, 32, 64]
             .into_iter()
             .flat_map(|budget| {
                 [
@@ -1737,7 +1752,7 @@ mod tests {
 
     fn manifest_fixture(rows: u64) -> V23BalancedManifest {
         V23BalancedManifest {
-            schema: "borsuk-v23-balanced-page-manifest-v3".to_owned(),
+            schema: "borsuk-v23-balanced-page-manifest-v4".to_owned(),
             claim_eligible: false,
             source_commit: sha256(0x11).chars().take(40).collect(),
             source_archive_sha256: sha256(0x12),
@@ -1754,8 +1769,9 @@ mod tests {
             top_supercells: 96,
             page_budgets: vec![
                 V23BalancedPageBudget::new(8).unwrap(),
-                V23BalancedPageBudget::new(12).unwrap(),
                 V23BalancedPageBudget::new(16).unwrap(),
+                V23BalancedPageBudget::new(32).unwrap(),
+                V23BalancedPageBudget::new(64).unwrap(),
             ],
             arms: vec![
                 V23BalancedArmConfig {
@@ -1818,7 +1834,7 @@ mod tests {
         changed.page_budgets.swap(0, 1);
         mutations.push(changed);
         let mut changed = valid.clone();
-        changed.page_budgets[2] = V23BalancedPageBudget(15);
+        changed.page_budgets[2] = V23BalancedPageBudget(12);
         mutations.push(changed);
         let mut changed = valid.clone();
         changed.ordered_inputs[0].digest_algorithm = "blake3".to_owned();
@@ -1872,7 +1888,7 @@ mod tests {
     #[test]
     fn v23_balanced_authority_receipt_is_claim_ineligible_and_canonical() {
         let receipt = V23BalancedReceipt {
-            schema: "borsuk-v23-balanced-page-receipt-v3".to_owned(),
+            schema: "borsuk-v23-balanced-page-receipt-v4".to_owned(),
             claim_eligible: false,
             manifest_sha256: sha256(0x31),
             ordered_inputs: manifest_fixture(100_000_000).ordered_inputs,
@@ -1915,7 +1931,7 @@ mod tests {
         assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
 
         let rejected = V23BalancedReceipt {
-            schema: "borsuk-v23-balanced-page-receipt-v3".to_owned(),
+            schema: "borsuk-v23-balanced-page-receipt-v4".to_owned(),
             claim_eligible: false,
             manifest_sha256: sha256(0x31),
             ordered_inputs: manifest_fixture(100_000_000).ordered_inputs,
@@ -2378,14 +2394,14 @@ mod tests {
             8,
         )
         .unwrap();
-        assert_eq!(ladder.pairs.len(), 9);
+        assert_eq!(ladder.pairs.len(), 12);
         assert_eq!(
             ladder
                 .pairs
                 .iter()
                 .map(|pair| (pair.selected_pair.page_budget.get(), pair.selected_pair.arm,))
                 .collect::<Vec<_>>(),
-            [8_u8, 12, 16]
+            [8_u8, 16, 32, 64]
                 .into_iter()
                 .flat_map(|budget| {
                     [
@@ -2433,7 +2449,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(construction.outputs.len(), 10);
-        assert_eq!(construction.ladder.pairs.len(), 9);
+        assert_eq!(construction.ladder.pairs.len(), 12);
         assert!(construction.ladder.selected.is_some());
         assert_eq!(construction.primary.primary.source_rows, 64);
         assert_eq!(construction.replicas.len(), 3);

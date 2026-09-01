@@ -317,7 +317,7 @@ one 96-dimensional f16 vector and bounded page metadata. The falsifier records
 the projection; a later page-body integration must authenticate the actual
 bytes before any production or D3 qualification.
 
-The typed result records `selected_page_budget: uint8` and rejects values
+Result schema v3 records `selected_page_budget: uint8` and rejects values
 outside `8, 16, 32, 64`. Every sample must contain exactly that many distinct,
 in-range page ordinals. Serialization independently recomputes the selected
 pair, sample hits, aggregates, oracle attainment, timing evidence, memory

@@ -166,7 +166,7 @@ def validate_terminal(raw: bytes) -> dict[str, object]:
     }
     if (
         set(value) != expected_keys
-        or value["schema"] != "borsuk-v23-balanced-page-receipt-v3"
+        or value["schema"] != "borsuk-v23-balanced-page-receipt-v4"
         or value["claim_eligible"] is not False
         or not _valid_sha256(value["manifest_sha256"])
         or type(value["ordered_inputs"]) is not list  # noqa: E721
