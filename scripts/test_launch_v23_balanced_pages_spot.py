@@ -71,6 +71,16 @@ class FakeS3Client:
         return {"Body": io.BytesIO(body)}
 
 
+class EmptyS3Client:
+    def list_objects_v2(self, **_: object) -> dict[str, object]:
+        return {}
+
+
+class TerminatedEc2Client(FakeEc2Client):
+    def describe_instances(self, **_: object) -> dict[str, object]:
+        return {"Reservations": [{"Instances": [{"State": {"Name": "terminated"}}]}]}
+
+
 class FakeStsClient:
     def get_caller_identity(self) -> dict[str, str]:
         return {"Account": "453182569524"}
@@ -228,6 +238,20 @@ class BalancedSpotLifecycleTests(unittest.TestCase):
         self.assertEqual(len(ec2.launches), 1)
         self.assertTrue(subject.payload_is_spot(ec2.launches[0]))
         self.assertEqual(ec2.terminations, [["i-balanced-0001"]])
+
+    def test_boto_adapter_stops_when_instance_terminates_without_terminal_marker(self) -> None:
+        prefix = "publication/v23/balanced/attempt-0001/"
+        cloud = subject.Boto3SpotCloud(
+            ec2_client=TerminatedEc2Client(),
+            s3_client=EmptyS3Client(),
+            terminal_prefix=("borsuk-bench-453182569524-euc1", prefix),
+            wall_seconds=30,
+            poll_seconds=0,
+            sleep=lambda _: None,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "terminated without terminal marker"):
+            cloud.wait_terminal("i-balanced-0001")
 
     def test_staging_downloads_only_registered_objects_and_reauthenticates(self) -> None:
         first = _object("manifest", b"manifest\n")

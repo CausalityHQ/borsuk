@@ -175,6 +175,20 @@ class Boto3SpotCloud:
                 ):
                     raise ValueError("terminal authority differs")
                 return expected[key]
+            state_response = self._ec2.describe_instances(InstanceIds=[instance_id])
+            reservations = state_response.get("Reservations")
+            if type(reservations) is not list or len(reservations) != 1:  # noqa: E721
+                raise ValueError("instance state authority differs")
+            instances = reservations[0].get("Instances")
+            if type(instances) is not list or len(instances) != 1:  # noqa: E721
+                raise ValueError("instance state authority differs")
+            state = instances[0].get("State", {}).get("Name")
+            if state in {"shutting-down", "terminated", "stopping", "stopped"}:
+                raise RuntimeError(
+                    "balanced page Spot cell terminated without terminal marker"
+                )
+            if state not in {"pending", "running"}:
+                raise ValueError("instance state authority differs")
             self._sleep(self._poll_seconds)
         raise TimeoutError("balanced page Spot cell exceeded wall stop")
 
