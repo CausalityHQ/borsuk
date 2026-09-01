@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::File,
     io::{BufReader, Read},
     path::Path,
@@ -438,6 +439,41 @@ pub(crate) fn read_v23_row_pages(
     Ok(rows)
 }
 
+pub(crate) fn read_v23_row_page_assignments(
+    path: &Path,
+    identity: &V23BalancedIdentity,
+    expected_role: &str,
+    page_count: u32,
+    source_ordinals: &[u64],
+) -> Result<Vec<Vec<u32>>> {
+    if source_ordinals.is_empty() {
+        return Err(invalid("requested assignment ordinals are empty"));
+    }
+    let mut positions = BTreeMap::new();
+    for (index, source_ordinal) in source_ordinals.iter().copied().enumerate() {
+        if positions.insert(source_ordinal, index).is_some() {
+            return Err(invalid("requested assignment ordinal duplicates"));
+        }
+    }
+    let mut assignments = vec![None; source_ordinals.len()];
+    for row in open_v23_row_pages(path, identity, expected_role, page_count)? {
+        let row = row?;
+        let Some(index) = positions.get(&row.source_ordinal).copied() else {
+            continue;
+        };
+        let mut pages = vec![row.primary_page];
+        if row.replica_page != u32::MAX {
+            pages.push(row.replica_page);
+            pages.sort_unstable();
+        }
+        assignments[index] = Some(pages);
+    }
+    assignments
+        .into_iter()
+        .map(|assignment| assignment.ok_or_else(|| invalid("requested assignment is missing")))
+        .collect()
+}
+
 pub(crate) struct V23RowPageStream {
     reader: ParquetRecordBatchReader,
     batch: Option<RecordBatch>,
@@ -644,8 +680,8 @@ mod tests {
 
     use super::{
         V23PageRow, V23RowPage, V23SupercellRow, open_v23_row_pages, read_v23_pages,
-        read_v23_row_pages, read_v23_supercells, reconcile_v23_balanced_arm, write_v23_pages,
-        write_v23_row_pages, write_v23_supercells,
+        read_v23_row_page_assignments, read_v23_row_pages, read_v23_supercells,
+        reconcile_v23_balanced_arm, write_v23_pages, write_v23_row_pages, write_v23_supercells,
     };
     use crate::v23_balanced_pages::V23BalancedIdentity;
 
@@ -742,6 +778,27 @@ mod tests {
             .collect::<crate::Result<Vec<_>>>()
             .unwrap(),
             row_pages
+        );
+        assert_eq!(
+            read_v23_row_page_assignments(
+                &row_page_path,
+                &identity(&row_page_path, "row-pages-amp-1125-parquet"),
+                "row-pages-amp-1125-parquet",
+                1,
+                &[1, 0],
+            )
+            .unwrap(),
+            vec![vec![0], vec![0]]
+        );
+        assert!(
+            read_v23_row_page_assignments(
+                &row_page_path,
+                &identity(&row_page_path, "row-pages-amp-1125-parquet"),
+                "row-pages-amp-1125-parquet",
+                1,
+                &[0, 0],
+            )
+            .is_err()
         );
     }
 
