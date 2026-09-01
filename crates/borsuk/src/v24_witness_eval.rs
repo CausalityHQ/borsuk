@@ -49,7 +49,7 @@ impl V24Cell {
         cells
     }
 
-    fn is_registered(self) -> bool {
+    pub(crate) fn is_registered(self) -> bool {
         [8, 16, 32, 64].contains(&self.page_budget)
             && [128, 256, 512].contains(&self.ef_search)
             && [8, 16, 32].contains(&self.selected_witnesses)
@@ -122,11 +122,19 @@ pub(crate) enum V24Disposition {
     WitnessRouterCandidate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum V24EvaluationScope {
+    Development,
+    Holdout,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct V24Result {
     pub(crate) schema: String,
     pub(crate) claim_eligible: bool,
+    pub(crate) evaluation_scope: V24EvaluationScope,
     pub(crate) distance_backend: V24DistanceBackend,
     pub(crate) identities: Vec<V24ObjectIdentity>,
     pub(crate) evaluated_cells: Vec<V24Evaluation>,
@@ -547,21 +555,29 @@ pub(crate) fn canonical_v24_result_bytes(
         .into_iter()
         .filter(|cell| usize::try_from(cell.page_budget).unwrap() <= page_count)
         .collect::<Vec<_>>();
-    if result.evaluated_cells.is_empty()
-        || result.evaluated_cells.len() > registered_cells.len()
-        || result.evaluated_cells.last() != Some(&result.serving)
-        || result
-            .evaluated_cells
-            .iter()
-            .zip(&registered_cells)
-            .any(|(evaluation, cell)| evaluation.cell != *cell)
-        || result
-            .evaluated_cells
-            .iter()
-            .take(result.evaluated_cells.len() - 1)
-            .any(|evaluation| evaluation.passed)
-        || !result.serving.passed && result.evaluated_cells.len() != registered_cells.len()
-    {
+    let ladder_valid = match result.evaluation_scope {
+        V24EvaluationScope::Development => {
+            !result.evaluated_cells.is_empty()
+                && result.evaluated_cells.len() <= registered_cells.len()
+                && result.evaluated_cells.last() == Some(&result.serving)
+                && !result
+                    .evaluated_cells
+                    .iter()
+                    .zip(&registered_cells)
+                    .any(|(evaluation, cell)| evaluation.cell != *cell)
+                && !result
+                    .evaluated_cells
+                    .iter()
+                    .take(result.evaluated_cells.len() - 1)
+                    .any(|evaluation| evaluation.passed)
+                && (result.serving.passed || result.evaluated_cells.len() == registered_cells.len())
+        }
+        V24EvaluationScope::Holdout => {
+            result.evaluated_cells.as_slice() == [result.serving.clone()]
+                && registered_cells.contains(&result.serving.cell)
+        }
+    };
+    if !ladder_valid {
         return Err(invalid("V24 evaluated ladder authority differs"));
     }
     for evaluation in &result.evaluated_cells {
@@ -606,8 +622,8 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        V24Cell, V24Disposition, V24Evaluation, V24QuerySample, V24QueryTruth, V24Result,
-        canonical_v24_result_bytes, classify_v24_ladder, evaluate_v24_cell,
+        V24Cell, V24Disposition, V24Evaluation, V24EvaluationScope, V24QuerySample, V24QueryTruth,
+        V24Result, canonical_v24_result_bytes, classify_v24_ladder, evaluate_v24_cell,
         evaluate_v24_exact_control, fuse_v24_pages,
     };
     use crate::{
@@ -756,6 +772,7 @@ mod tests {
             V24Result {
                 schema: "borsuk-v24-witness-result-v1".to_owned(),
                 claim_eligible: false,
+                evaluation_scope: V24EvaluationScope::Development,
                 distance_backend: v24_scientific_distance_backend().unwrap(),
                 identities: identities.clone(),
                 evaluated_cells: vec![serving.clone()],
@@ -817,6 +834,27 @@ mod tests {
         let mut expected = identities;
         expected[0].uri.push_str("-drift");
         assert!(canonical_v24_result_bytes(&result, &expected, &truth, 32).is_err());
+
+        let mut holdout = result.clone();
+        holdout.evaluation_scope = V24EvaluationScope::Holdout;
+        let sealed_cell = V24Cell::registered_ladder()[1];
+        holdout.serving = evaluate_v24_cell(
+            sealed_cell,
+            samples(),
+            &truth,
+            32,
+            vec![1_000_000_u64; 10_000],
+            SERVING_BYTES,
+            samples()
+                .into_iter()
+                .map(|sample| sample.page_ordinals)
+                .collect(),
+        )
+        .unwrap();
+        holdout.evaluated_cells = vec![holdout.serving.clone()];
+        assert!(canonical_v24_result_bytes(&holdout, &holdout.identities, &truth, 32).is_ok());
+        holdout.evaluation_scope = V24EvaluationScope::Development;
+        assert!(canonical_v24_result_bytes(&holdout, &holdout.identities, &truth, 32).is_err());
     }
 
     #[test]

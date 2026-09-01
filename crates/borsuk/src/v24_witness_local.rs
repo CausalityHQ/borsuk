@@ -20,8 +20,8 @@ use crate::{
     BorsukError, Result,
     v24_witness::{V24ObjectIdentity, V24SourceRow, validate_v24_identity},
     v24_witness_eval::{
-        V24Cell, V24Evaluation, V24QuerySample, V24QueryTruth, V24Result,
-        canonical_v24_result_bytes, classify_v24_ladder, evaluate_v24_cell,
+        V24Cell, V24Disposition, V24Evaluation, V24EvaluationScope, V24QuerySample, V24QueryTruth,
+        V24Result, canonical_v24_result_bytes, classify_v24_ladder, evaluate_v24_cell,
         evaluate_v24_exact_control, fuse_v24_posting_plane,
     },
     v24_witness_graph::{
@@ -38,6 +38,7 @@ use crate::{
 
 const V24_LOCAL_MANIFEST_SCHEMA: &str = "borsuk-v24-local-manifest-v1";
 const V24_TRAINING_RESULT_SCHEMA: &str = "borsuk-v24-training-result-v1";
+const V24_HOLDOUT_BINDING_SCHEMA: &str = "borsuk-v24-holdout-binding-v1";
 const CONSTRUCTION_ROWS_FILE: &str = "construction-rows.parquet";
 const WITNESSES_FILE: &str = "witnesses.arrow";
 const WITNESS_GRAPH_FILE: &str = "witness-graph.arrow";
@@ -48,6 +49,8 @@ const POSTINGS_FILE: &str = "witness-postings.arrow";
 const POSTING_SCRATCH_DIR: &str = ".posting-scratch";
 const QUERIES_FILE: &str = "queries.parquet";
 const NEIGHBORS_FILE: &str = "neighbors.parquet";
+const DEVELOPMENT_RESULT_FILE: &str = "development-result.json";
+const HOLDOUT_BINDING_FILE: &str = "holdout-binding.json";
 const V24_SERVING_BYTES: u64 = 1_644_167_168;
 
 /// One offline V24 scientific phase.
@@ -159,6 +162,21 @@ pub struct V24PostingResult {
     pub(crate) physical_source_rows: u64,
     pub(crate) inputs: Vec<V24ObjectIdentity>,
     pub(crate) outputs: Vec<V24ObjectIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V24HoldoutBinding {
+    schema: String,
+    claim_eligible: bool,
+    generation: String,
+    page_count: u32,
+    query_count: u32,
+    witness_count: u64,
+    serving_bytes: u64,
+    selected_cell: V24Cell,
+    development_result_sha256: String,
+    identities: Vec<V24ObjectIdentity>,
 }
 
 fn invalid(message: &str) -> BorsukError {
@@ -1314,6 +1332,7 @@ fn run_development_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
     let result = V24Result {
         schema: "borsuk-v24-witness-result-v1".to_owned(),
         claim_eligible: false,
+        evaluation_scope: V24EvaluationScope::Development,
         distance_backend: v24_scientific_distance_backend()?,
         identities: manifest.inputs,
         evaluated_cells,
@@ -1328,6 +1347,312 @@ fn run_development_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
     Ok(result_bytes)
 }
 
+fn run_holdout_binding(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
+    let manifest_bytes = fs::read(&request.manifest).map_err(|source| BorsukError::Io {
+        path: request.manifest.clone(),
+        source,
+    })?;
+    let manifest: V24DevelopmentManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| invalid(&format!("V24 holdout binding manifest differs: {error}")))?;
+    let roles = manifest
+        .inputs
+        .iter()
+        .map(|identity| identity.role.as_str())
+        .collect::<Vec<_>>();
+    if canonical_json_bytes(&manifest)? != manifest_bytes
+        || manifest.schema != V24_LOCAL_MANIFEST_SCHEMA
+        || manifest.claim_eligible
+        || manifest.phase != "holdout-binding"
+        || manifest.generation.is_empty()
+        || manifest.page_count < 8
+        || manifest.query_count != 32
+        || manifest.witness_count < 32
+        || manifest.serving_bytes != V24_SERVING_BYTES
+        || roles != ["development-result", "query-parquet", "neighbors-parquet"]
+        || manifest
+            .output_uris
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            != ["holdout-truth"]
+        || !manifest.output_uris["holdout-truth"].starts_with("s3://")
+    {
+        return Err(invalid("V24 holdout binding manifest authority differs"));
+    }
+    let mut names = fs::read_dir(&request.input_dir)
+        .map_err(|source| BorsukError::Io {
+            path: request.input_dir.clone(),
+            source,
+        })?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|source| BorsukError::Io {
+            path: request.input_dir.clone(),
+            source,
+        })?;
+    names.sort();
+    if names != [DEVELOPMENT_RESULT_FILE, NEIGHBORS_FILE, QUERIES_FILE] {
+        return Err(invalid("V24 local input inventory differs"));
+    }
+    let registered = |role: &str| {
+        manifest
+            .inputs
+            .iter()
+            .find(|identity| identity.role == role)
+            .unwrap()
+    };
+    for (role, name) in [
+        ("development-result", DEVELOPMENT_RESULT_FILE),
+        ("query-parquet", QUERIES_FILE),
+        ("neighbors-parquet", NEIGHBORS_FILE),
+    ] {
+        let authority = registered(role);
+        let observed = sha256_file_identity(
+            &request.input_dir.join(name),
+            role,
+            &authority.uri,
+            &manifest.generation,
+        )?;
+        validate_v24_identity(&observed, authority)?;
+    }
+    let query_count = usize::try_from(manifest.query_count).unwrap();
+    let page_count = usize::try_from(manifest.page_count).unwrap();
+    let queries = read_development_queries(&request.input_dir.join(QUERIES_FILE), query_count)?;
+    let truth = read_development_truth(
+        &request.input_dir.join(NEIGHBORS_FILE),
+        query_count,
+        page_count,
+    )?;
+    if queries.len() != truth.len() {
+        return Err(invalid("V24 holdout query/truth cardinality differs"));
+    }
+    let development_path = request.input_dir.join(DEVELOPMENT_RESULT_FILE);
+    let development_bytes = fs::read(&development_path).map_err(|source| BorsukError::Io {
+        path: development_path,
+        source,
+    })?;
+    let development: V24Result = serde_json::from_slice(&development_bytes)
+        .map_err(|error| invalid(&format!("V24 development result differs: {error}")))?;
+    if canonical_json_bytes(&development)? != development_bytes
+        || development.schema != "borsuk-v24-witness-result-v1"
+        || development.claim_eligible
+        || development.evaluation_scope != V24EvaluationScope::Development
+        || development.distance_backend != v24_scientific_distance_backend()?
+        || !development.serving.passed
+        || development.evaluated_cells.last() != Some(&development.serving)
+        || development.exact_control.is_some()
+        || development.disposition != V24Disposition::PageIntegrationRejected
+        || development.page_integration_passed
+        || development.page_body_reads != 0
+    {
+        return Err(invalid("V24 sealed development result differs"));
+    }
+    let binding = V24HoldoutBinding {
+        schema: V24_HOLDOUT_BINDING_SCHEMA.to_owned(),
+        claim_eligible: false,
+        generation: manifest.generation,
+        page_count: manifest.page_count,
+        query_count: manifest.query_count,
+        witness_count: manifest.witness_count,
+        serving_bytes: manifest.serving_bytes,
+        selected_cell: development.serving.cell,
+        development_result_sha256: registered("development-result").digest.clone(),
+        identities: manifest.inputs,
+    };
+    let bytes = canonical_json_bytes(&binding)?;
+    write_owned_file(&request.output_dir, HOLDOUT_BINDING_FILE, &bytes)?;
+    Ok(bytes)
+}
+
+fn run_holdout_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
+    let manifest_bytes = fs::read(&request.manifest).map_err(|source| BorsukError::Io {
+        path: request.manifest.clone(),
+        source,
+    })?;
+    let manifest: V24DevelopmentManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| invalid(&format!("V24 holdout evaluation manifest differs: {error}")))?;
+    let roles = manifest
+        .inputs
+        .iter()
+        .map(|identity| identity.role.as_str())
+        .collect::<Vec<_>>();
+    if canonical_json_bytes(&manifest)? != manifest_bytes
+        || manifest.schema != V24_LOCAL_MANIFEST_SCHEMA
+        || manifest.claim_eligible
+        || manifest.phase != "holdout-evaluation"
+        || manifest.generation.is_empty()
+        || manifest.page_count < 8
+        || manifest.query_count != 32
+        || manifest.witness_count < 32
+        || manifest.serving_bytes != V24_SERVING_BYTES
+        || roles
+            != [
+                "holdout-truth",
+                "witness-graph",
+                "witness-postings",
+                "query-parquet",
+                "neighbors-parquet",
+            ]
+        || manifest
+            .output_uris
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            != ["holdout-result"]
+        || !manifest.output_uris["holdout-result"].starts_with("s3://")
+    {
+        return Err(invalid("V24 holdout evaluation manifest authority differs"));
+    }
+    let mut names = fs::read_dir(&request.input_dir)
+        .map_err(|source| BorsukError::Io {
+            path: request.input_dir.clone(),
+            source,
+        })?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|source| BorsukError::Io {
+            path: request.input_dir.clone(),
+            source,
+        })?;
+    names.sort();
+    if names
+        != [
+            HOLDOUT_BINDING_FILE,
+            NEIGHBORS_FILE,
+            QUERIES_FILE,
+            WITNESS_GRAPH_FILE,
+            POSTINGS_FILE,
+        ]
+    {
+        return Err(invalid("V24 local input inventory differs"));
+    }
+    let registered = |role: &str| {
+        manifest
+            .inputs
+            .iter()
+            .find(|identity| identity.role == role)
+            .unwrap()
+    };
+    for (role, name) in [
+        ("holdout-truth", HOLDOUT_BINDING_FILE),
+        ("witness-graph", WITNESS_GRAPH_FILE),
+        ("witness-postings", POSTINGS_FILE),
+        ("query-parquet", QUERIES_FILE),
+        ("neighbors-parquet", NEIGHBORS_FILE),
+    ] {
+        let authority = registered(role);
+        let observed = sha256_file_identity(
+            &request.input_dir.join(name),
+            role,
+            &authority.uri,
+            &manifest.generation,
+        )?;
+        validate_v24_identity(&observed, authority)?;
+    }
+    let binding_path = request.input_dir.join(HOLDOUT_BINDING_FILE);
+    let binding_bytes = fs::read(&binding_path).map_err(|source| BorsukError::Io {
+        path: binding_path,
+        source,
+    })?;
+    let binding: V24HoldoutBinding = serde_json::from_slice(&binding_bytes)
+        .map_err(|error| invalid(&format!("V24 holdout binding differs: {error}")))?;
+    let binding_role = |role: &str| {
+        binding
+            .identities
+            .iter()
+            .find(|identity| identity.role == role)
+    };
+    if canonical_json_bytes(&binding)? != binding_bytes
+        || binding.schema != V24_HOLDOUT_BINDING_SCHEMA
+        || binding.claim_eligible
+        || binding.generation != manifest.generation
+        || binding.page_count != manifest.page_count
+        || binding.query_count != manifest.query_count
+        || binding.witness_count != manifest.witness_count
+        || binding.serving_bytes != manifest.serving_bytes
+        || !binding.selected_cell.is_registered()
+        || binding.development_result_sha256.len() != 64
+        || binding.identities.len() != 3
+        || binding_role("query-parquet") != Some(registered("query-parquet"))
+        || binding_role("neighbors-parquet") != Some(registered("neighbors-parquet"))
+    {
+        return Err(invalid("V24 holdout binding authority differs"));
+    }
+    let expected_witnesses = usize::try_from(manifest.witness_count).unwrap();
+    let graph_path = request.input_dir.join(WITNESS_GRAPH_FILE);
+    let graph_bytes = fs::read(&graph_path).map_err(|source| BorsukError::Io {
+        path: graph_path,
+        source,
+    })?;
+    let graph = read_v24_witness_graph(
+        &graph_bytes,
+        registered("witness-graph"),
+        expected_witnesses,
+    )?;
+    let posting_path = request.input_dir.join(POSTINGS_FILE);
+    let posting_bytes = fs::read(&posting_path).map_err(|source| BorsukError::Io {
+        path: posting_path,
+        source,
+    })?;
+    let plane = read_v24_witness_postings(
+        &posting_bytes,
+        registered("witness-postings"),
+        expected_witnesses,
+    )?;
+    let query_count = usize::try_from(manifest.query_count).unwrap();
+    let page_count = usize::try_from(manifest.page_count).unwrap();
+    let queries = read_development_queries(&request.input_dir.join(QUERIES_FILE), query_count)?;
+    let truth = read_development_truth(
+        &request.input_dir.join(NEIGHBORS_FILE),
+        query_count,
+        page_count,
+    )?;
+    let search = V24WitnessSearch::new(&graph)?;
+    let serving = evaluate_development_cell(
+        &search,
+        &plane,
+        &queries,
+        &truth,
+        binding.selected_cell,
+        page_count,
+    )?;
+    let exact_control = if serving.passed {
+        None
+    } else {
+        Some(evaluate_exact_control(
+            &search,
+            &plane,
+            &queries,
+            &truth,
+            binding.selected_cell,
+            page_count,
+        )?)
+    };
+    let disposition = classify_v24_ladder(
+        serving.passed,
+        exact_control
+            .as_ref()
+            .is_some_and(|control| control.quality.passed),
+        false,
+    );
+    let result = V24Result {
+        schema: "borsuk-v24-witness-result-v1".to_owned(),
+        claim_eligible: false,
+        evaluation_scope: V24EvaluationScope::Holdout,
+        distance_backend: v24_scientific_distance_backend()?,
+        identities: manifest.inputs,
+        evaluated_cells: vec![serving.clone()],
+        serving,
+        exact_control,
+        disposition,
+        page_integration_passed: false,
+        page_body_reads: 0,
+    };
+    let bytes = canonical_v24_result_bytes(&result, &result.identities, &truth, page_count)?;
+    write_owned_file(&request.output_dir, RESULT_FILE, &bytes)?;
+    Ok(bytes)
+}
+
 /// Execute one offline V24 phase after validating its complete local boundary.
 ///
 #[doc(hidden)]
@@ -1337,9 +1662,8 @@ pub fn run_v24_local_request(request: V24LocalRunRequest) -> Result<Vec<u8>> {
         V24LocalPhase::TrainWitnesses => run_training(&request),
         V24LocalPhase::BuildPostings => run_posting_construction(&request),
         V24LocalPhase::EvaluateDevelopment => run_development_evaluation(&request),
-        V24LocalPhase::BindHoldout | V24LocalPhase::EvaluateHoldout => {
-            Err(invalid("V24 local phase execution is not yet wired"))
-        }
+        V24LocalPhase::BindHoldout => run_holdout_binding(&request),
+        V24LocalPhase::EvaluateHoldout => run_holdout_evaluation(&request),
     }
 }
 
@@ -1676,6 +2000,31 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
+    fn write_holdout_manifest(
+        path: &std::path::Path,
+        phase: &str,
+        inputs: &[V24ObjectIdentity],
+        output_role: &str,
+    ) {
+        let manifest = json!({
+            "claim_eligible": false,
+            "generation": "generation-v24-training-fixture",
+            "inputs": inputs,
+            "output_uris": {
+                (output_role): format!("s3://borsuk-v24/{output_role}.json")
+            },
+            "page_count": 16,
+            "phase": phase,
+            "query_count": 32,
+            "schema": "borsuk-v24-local-manifest-v1",
+            "serving_bytes": 1_644_167_168_u64,
+            "witness_count": 32
+        });
+        let mut bytes = serde_json::to_vec(&manifest).unwrap();
+        bytes.push(b'\n');
+        fs::write(path, bytes).unwrap();
+    }
+
     fn write_manifest(path: &std::path::Path, input: &V24ObjectIdentity) {
         write_training_manifest(path, input, 17);
     }
@@ -1892,6 +2241,10 @@ mod tests {
         let posting_output = root.join("posting-output");
         let development_input = root.join("development-input");
         let development_output = root.join("development-output");
+        let holdout_bind_input = root.join("holdout-bind-input");
+        let holdout_bind_output = root.join("holdout-bind-output");
+        let holdout_eval_input = root.join("holdout-eval-input");
+        let holdout_eval_output = root.join("holdout-eval-output");
         for directory in [
             &training_input,
             &training_output,
@@ -1899,6 +2252,10 @@ mod tests {
             &posting_output,
             &development_input,
             &development_output,
+            &holdout_bind_input,
+            &holdout_bind_output,
+            &holdout_eval_input,
+            &holdout_eval_output,
         ] {
             fs::create_dir_all(directory).unwrap();
         }
@@ -1999,7 +2356,7 @@ mod tests {
         write_development_manifest(&development_manifest, &inputs);
         let result_bytes = run_v24_local_request(V24LocalRunRequest {
             manifest: development_manifest,
-            input_dir: development_input,
+            input_dir: development_input.clone(),
             output_dir: development_output.clone(),
             phase: V24LocalPhase::EvaluateDevelopment,
         })
@@ -2019,6 +2376,118 @@ mod tests {
         assert_eq!(
             fs::read(development_output.join("result.json")).unwrap(),
             result_bytes
+        );
+
+        fs::copy(
+            development_output.join("result.json"),
+            holdout_bind_input.join("development-result.json"),
+        )
+        .unwrap();
+        fs::copy(
+            development_input.join("queries.parquet"),
+            holdout_bind_input.join("queries.parquet"),
+        )
+        .unwrap();
+        fs::copy(
+            development_input.join("neighbors.parquet"),
+            holdout_bind_input.join("neighbors.parquet"),
+        )
+        .unwrap();
+        let bind_inputs = vec![
+            file_identity(
+                &holdout_bind_input.join("development-result.json"),
+                "development-result",
+                "s3://borsuk-v24/development-result.json",
+            ),
+            file_identity(
+                &holdout_bind_input.join("queries.parquet"),
+                "query-parquet",
+                "s3://borsuk-v24/holdout-queries.parquet",
+            ),
+            file_identity(
+                &holdout_bind_input.join("neighbors.parquet"),
+                "neighbors-parquet",
+                "s3://borsuk-v24/holdout-neighbors.parquet",
+            ),
+        ];
+        let bind_manifest = root.join("holdout-bind-manifest.json");
+        write_holdout_manifest(
+            &bind_manifest,
+            "holdout-binding",
+            &bind_inputs,
+            "holdout-truth",
+        );
+        let binding_bytes = run_v24_local_request(V24LocalRunRequest {
+            manifest: bind_manifest,
+            input_dir: holdout_bind_input,
+            output_dir: holdout_bind_output.clone(),
+            phase: V24LocalPhase::BindHoldout,
+        })
+        .unwrap();
+        assert_eq!(
+            fs::read(holdout_bind_output.join("holdout-binding.json")).unwrap(),
+            binding_bytes
+        );
+
+        for name in ["witness-graph.arrow", "witness-postings.arrow"] {
+            fs::copy(development_input.join(name), holdout_eval_input.join(name)).unwrap();
+        }
+        for name in ["queries.parquet", "neighbors.parquet"] {
+            fs::copy(development_input.join(name), holdout_eval_input.join(name)).unwrap();
+        }
+        fs::copy(
+            holdout_bind_output.join("holdout-binding.json"),
+            holdout_eval_input.join("holdout-binding.json"),
+        )
+        .unwrap();
+        let holdout_inputs = vec![
+            file_identity(
+                &holdout_eval_input.join("holdout-binding.json"),
+                "holdout-truth",
+                "s3://borsuk-v24/holdout-truth.json",
+            ),
+            file_identity(
+                &holdout_eval_input.join("witness-graph.arrow"),
+                "witness-graph",
+                "s3://borsuk-v24/witness-graph.arrow",
+            ),
+            file_identity(
+                &holdout_eval_input.join("witness-postings.arrow"),
+                "witness-postings",
+                "s3://borsuk-v24/witness-postings.arrow",
+            ),
+            file_identity(
+                &holdout_eval_input.join("queries.parquet"),
+                "query-parquet",
+                "s3://borsuk-v24/holdout-queries.parquet",
+            ),
+            file_identity(
+                &holdout_eval_input.join("neighbors.parquet"),
+                "neighbors-parquet",
+                "s3://borsuk-v24/holdout-neighbors.parquet",
+            ),
+        ];
+        let holdout_manifest = root.join("holdout-eval-manifest.json");
+        write_holdout_manifest(
+            &holdout_manifest,
+            "holdout-evaluation",
+            &holdout_inputs,
+            "holdout-result",
+        );
+        let holdout_bytes = run_v24_local_request(V24LocalRunRequest {
+            manifest: holdout_manifest,
+            input_dir: holdout_eval_input,
+            output_dir: holdout_eval_output.clone(),
+            phase: V24LocalPhase::EvaluateHoldout,
+        })
+        .unwrap();
+        let holdout: V24Result = serde_json::from_slice(&holdout_bytes).unwrap();
+        assert_eq!(holdout.evaluated_cells.len(), 1);
+        assert_eq!(holdout.serving.cell, result.serving.cell);
+        assert_eq!(holdout.page_body_reads, 0);
+        assert_eq!(
+            fs::read(holdout_eval_output.join("result.json")).unwrap(),
+            holdout_bytes
         );
 
         fs::remove_dir_all(root).unwrap();
