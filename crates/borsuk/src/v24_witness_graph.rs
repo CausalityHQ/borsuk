@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeSet, BinaryHeap},
+    collections::{BTreeSet, BinaryHeap, HashMap},
     io::Cursor,
     sync::Arc,
 };
@@ -323,6 +323,7 @@ pub(crate) struct V24WitnessGraph {
     adjacency: Vec<u32>,
     entrypoint: u32,
     seed: u64,
+    distance_backend: V24DistanceBackend,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -364,6 +365,25 @@ pub(crate) enum V24DistanceBackend {
     Aarch64NeonFma,
     X86AvxFma,
     ScalarControl,
+}
+
+impl V24DistanceBackend {
+    fn authority_name(self) -> &'static str {
+        match self {
+            Self::Aarch64NeonFma => "aarch64-neon-fma",
+            Self::X86AvxFma => "x86-avx-fma",
+            Self::ScalarControl => "scalar-control",
+        }
+    }
+
+    fn from_authority_name(value: &str) -> Option<Self> {
+        match value {
+            "aarch64-neon-fma" => Some(Self::Aarch64NeonFma),
+            "x86-avx-fma" => Some(Self::X86AvxFma),
+            "scalar-control" => Some(Self::ScalarControl),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) fn v24_scientific_distance_backend() -> Result<V24DistanceBackend> {
@@ -425,12 +445,6 @@ pub(crate) fn v24_witness_distance(
     Ok(distance)
 }
 
-fn graph_distance(query: &[f32; 96], witness: &[f16; 96]) -> f32 {
-    let backend = v24_scientific_distance_backend()
-        .expect("V24 graph build/search requires a fused SIMD backend");
-    unchecked_distance(query, witness, backend)
-}
-
 impl V24WitnessGraph {
     pub(crate) fn node_count(&self) -> usize {
         self.source_ordinals.len()
@@ -444,16 +458,16 @@ impl V24WitnessGraph {
         self.source_ordinals.len() * std::mem::size_of::<u64>()
     }
 
+    pub(crate) fn distance_backend(&self) -> V24DistanceBackend {
+        self.distance_backend
+    }
+
     fn vector(&self, ordinal: u32) -> Option<&[f16; 96]> {
         let ordinal = usize::try_from(ordinal).ok()?;
         self.vectors
             .get(ordinal.checked_mul(96)?..ordinal.checked_add(1)?.checked_mul(96)?)?
             .try_into()
             .ok()
-    }
-
-    fn distance(&self, query: &[f32; 96], ordinal: u32) -> f32 {
-        graph_distance(query, self.vector(ordinal).unwrap())
     }
 
     fn distance_with_backend(
@@ -553,7 +567,13 @@ impl V24WitnessGraph {
         Ok(())
     }
 
-    fn add_and_prune_neighbor(&mut self, node: u32, level: u8, added: u32) -> Result<()> {
+    fn add_and_prune_neighbor(
+        &mut self,
+        node: u32,
+        level: u8,
+        added: u32,
+        backend: V24DistanceBackend,
+    ) -> Result<()> {
         let mut candidates = self.neighbors(node, level).to_vec();
         candidates.push(added);
         candidates.sort_unstable();
@@ -562,7 +582,7 @@ impl V24WitnessGraph {
         let mut ranked = candidates
             .into_iter()
             .map(|ordinal| RankedWitness {
-                distance: self.distance(&query, ordinal),
+                distance: self.distance_with_backend(&query, ordinal, backend),
                 ordinal,
             })
             .collect::<Vec<_>>();
@@ -682,6 +702,7 @@ fn search_layer(
 fn validate_graph(graph: &V24WitnessGraph) -> Result<()> {
     let rows = graph.node_count();
     if rows < 2
+        || graph.distance_backend == V24DistanceBackend::ScalarControl
         || graph.vectors.len() != rows.saturating_mul(96)
         || graph
             .source_ordinals
@@ -803,6 +824,7 @@ pub(crate) fn build_v24_witness_graph(
         ],
         entrypoint: 0,
         seed,
+        distance_backend: backend,
     };
     let mut maximum_level = graph.levels[0];
     for node_index in 1..graph.node_count() {
@@ -841,7 +863,7 @@ pub(crate) fn build_v24_witness_graph(
             }
             graph.set_neighbors(node, level, &selected)?;
             for neighbor in selected {
-                graph.add_and_prune_neighbor(neighbor, level, node)?;
+                graph.add_and_prune_neighbor(neighbor, level, node, backend)?;
             }
         }
         if node_level > maximum_level {
@@ -865,17 +887,21 @@ pub(crate) fn search_v24_witness_graph(
 
 pub(crate) struct V24WitnessSearch<'a> {
     graph: &'a V24WitnessGraph,
+    backend: V24DistanceBackend,
 }
 
 impl<'a> V24WitnessSearch<'a> {
     pub(crate) fn new(graph: &'a V24WitnessGraph) -> Result<Self> {
-        v24_scientific_distance_backend()?;
+        let backend = v24_scientific_distance_backend()?;
         validate_graph(graph)?;
-        Ok(Self { graph })
+        if graph.distance_backend != backend {
+            return Err(invalid("V24 witness graph distance backend differs"));
+        }
+        Ok(Self { graph, backend })
     }
 
     pub(crate) fn search(&self, query: &[f32; 96], k: usize, ef: usize) -> Result<Vec<u32>> {
-        self.search_with_backend(query, k, ef, v24_scientific_distance_backend()?)
+        self.search_with_backend(query, k, ef, self.backend)
     }
 
     pub(crate) fn search_scalar_control(
@@ -934,27 +960,33 @@ impl<'a> V24WitnessSearch<'a> {
     }
 }
 
-fn graph_schema() -> Schema {
-    Schema::new(vec![
-        Field::new("witness_ordinal", DataType::UInt32, false),
-        Field::new("source_ordinal", DataType::UInt64, false),
-        Field::new("level", DataType::UInt8, false),
-        Field::new(
-            "vector",
-            DataType::FixedSizeList(
-                Arc::new(Field::new("element", DataType::Float16, false)),
-                96,
+fn graph_schema(backend: V24DistanceBackend) -> Schema {
+    Schema::new_with_metadata(
+        vec![
+            Field::new("witness_ordinal", DataType::UInt32, false),
+            Field::new("source_ordinal", DataType::UInt64, false),
+            Field::new("level", DataType::UInt8, false),
+            Field::new(
+                "vector",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float16, false)),
+                    96,
+                ),
+                false,
             ),
-            false,
-        ),
-        Field::new(
-            "adjacency",
-            DataType::List(Arc::new(Field::new("neighbor", DataType::UInt32, false))),
-            false,
-        ),
-        Field::new("entrypoint", DataType::UInt32, false),
-        Field::new("seed", DataType::UInt64, false),
-    ])
+            Field::new(
+                "adjacency",
+                DataType::List(Arc::new(Field::new("neighbor", DataType::UInt32, false))),
+                false,
+            ),
+            Field::new("entrypoint", DataType::UInt32, false),
+            Field::new("seed", DataType::UInt64, false),
+        ],
+        HashMap::from([(
+            "distance_backend".to_owned(),
+            backend.authority_name().to_owned(),
+        )]),
+    )
 }
 
 pub(crate) fn write_v24_witness_graph(graph: &V24WitnessGraph) -> Result<Vec<u8>> {
@@ -991,7 +1023,7 @@ pub(crate) fn write_v24_witness_graph(graph: &V24WitnessGraph) -> Result<Vec<u8>
             graph.node_count(),
         ))),
     ];
-    let schema = Arc::new(graph_schema());
+    let schema = Arc::new(graph_schema(graph.distance_backend));
     let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
     let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
     let mut bytes = Vec::new();
@@ -1016,8 +1048,15 @@ pub(crate) fn read_v24_witness_graph(
     {
         return Err(invalid("V24 witness graph byte authority differs"));
     }
-    let schema = graph_schema();
     let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    let distance_backend = reader
+        .schema()
+        .metadata()
+        .get("distance_backend")
+        .and_then(|value| V24DistanceBackend::from_authority_name(value))
+        .filter(|backend| *backend != V24DistanceBackend::ScalarControl)
+        .ok_or_else(|| invalid("V24 witness graph distance backend differs"))?;
+    let schema = graph_schema(distance_backend);
     if reader.schema().as_ref() != &schema {
         return Err(invalid("V24 witness graph Arrow schema differs"));
     }
@@ -1103,6 +1142,7 @@ pub(crate) fn read_v24_witness_graph(
         adjacency,
         entrypoint,
         seed,
+        distance_backend,
     };
     validate_graph(&graph)?;
     Ok(graph)
@@ -1309,6 +1349,10 @@ mod tests {
         assert_eq!(first.node_count(), 96);
         assert_eq!(first.packed_vector_bytes(), 96 * 96 * 2);
         assert_eq!(first.source_ordinal_bytes(), 96 * 8);
+        assert_eq!(
+            first.distance_backend(),
+            v24_scientific_distance_backend().unwrap()
+        );
         assert!(first.maximum_degree() <= 16);
         assert!(first.has_exact_sorted_unique_adjacency());
 
@@ -1327,6 +1371,9 @@ mod tests {
         let mut invalid = first;
         invalid.adjacency.fill(u32::MAX);
         assert!(write_v24_witness_graph(&invalid).is_err());
+        let mut invalid_backend = second;
+        invalid_backend.distance_backend = V24DistanceBackend::ScalarControl;
+        assert!(write_v24_witness_graph(&invalid_backend).is_err());
     }
 
     fn scalar_topk(witnesses: &[V24Witness], query: &[f32; 96], k: usize) -> Vec<u32> {

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -25,9 +25,10 @@ use crate::{
         evaluate_v24_exact_control, fuse_v24_posting_plane,
     },
     v24_witness_graph::{
-        V24WitnessGraph, V24WitnessSampler, V24WitnessSearch, build_v24_witness_graph,
-        normalize_v24_witness_vector, read_v24_witness_graph, read_v24_witnesses,
-        v24_scientific_distance_backend, write_v24_witness_graph, write_v24_witnesses,
+        V24DistanceBackend, V24WitnessGraph, V24WitnessSampler, V24WitnessSearch,
+        build_v24_witness_graph, normalize_v24_witness_vector, read_v24_witness_graph,
+        read_v24_witnesses, v24_scientific_distance_backend, write_v24_witness_graph,
+        write_v24_witnesses,
     },
     v24_witness_postings::{
         V24PostingPage, V24PostingPageRow, V24PostingPlane, build_v24_witness_postings,
@@ -41,6 +42,7 @@ const CONSTRUCTION_ROWS_FILE: &str = "construction-rows.parquet";
 const WITNESSES_FILE: &str = "witnesses.arrow";
 const WITNESS_GRAPH_FILE: &str = "witness-graph.arrow";
 const RESULT_FILE: &str = "result.json";
+const TRAINING_RESULT_FILE: &str = "training-result.json";
 const PAGE_ROWS_FILE: &str = "page-rows.parquet";
 const POSTINGS_FILE: &str = "witness-postings.arrow";
 const POSTING_SCRATCH_DIR: &str = ".posting-scratch";
@@ -101,6 +103,8 @@ struct V24PostingManifest {
     phase: String,
     source_row_count: u64,
     witness_count: u64,
+    construction_rows_digest: String,
+    parent_result_sha256: String,
     inputs: Vec<V24ObjectIdentity>,
     output_uris: BTreeMap<String, String>,
 }
@@ -132,6 +136,7 @@ pub struct V24TrainingResult {
     pub(crate) seed: u64,
     pub(crate) source_row_count: u64,
     pub(crate) witness_count: u64,
+    pub(crate) distance_backend: V24DistanceBackend,
     pub(crate) inputs: Vec<V24ObjectIdentity>,
     pub(crate) outputs: Vec<V24ObjectIdentity>,
 }
@@ -147,6 +152,9 @@ pub struct V24PostingResult {
     pub(crate) generation: String,
     pub(crate) source_row_count: u64,
     pub(crate) witness_count: u64,
+    pub(crate) construction_rows_digest: String,
+    pub(crate) parent_result_sha256: String,
+    pub(crate) distance_backend: V24DistanceBackend,
     pub(crate) unique_source_rows: u64,
     pub(crate) physical_source_rows: u64,
     pub(crate) inputs: Vec<V24ObjectIdentity>,
@@ -283,20 +291,29 @@ fn construction_schema() -> Schema {
     ])
 }
 
-fn page_rows_schema() -> Schema {
-    Schema::new(vec![
-        Field::new("page_ordinal", DataType::UInt32, false),
-        Field::new("replica", DataType::Boolean, false),
-        Field::new("record_id", DataType::Utf8, false),
-        Field::new(
-            "vector",
-            DataType::FixedSizeList(
-                Arc::new(Field::new("element", DataType::Float32, false)),
-                96,
+fn page_rows_schema(construction_rows_digest: &str, generation: &str) -> Schema {
+    Schema::new_with_metadata(
+        vec![
+            Field::new("page_ordinal", DataType::UInt32, false),
+            Field::new("replica", DataType::Boolean, false),
+            Field::new("record_id", DataType::Utf8, false),
+            Field::new(
+                "vector",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    96,
+                ),
+                false,
             ),
-            false,
-        ),
-    ])
+        ],
+        HashMap::from([
+            (
+                "construction_rows_sha256".to_owned(),
+                construction_rows_digest.to_owned(),
+            ),
+            ("generation".to_owned(), generation.to_owned()),
+        ]),
+    )
 }
 
 fn query_schema() -> Schema {
@@ -490,14 +507,19 @@ struct V24PageRows {
 }
 
 impl V24PageRows {
-    fn open(path: &Path, source_row_count: u64) -> Result<Self> {
+    fn open(
+        path: &Path,
+        source_row_count: u64,
+        construction_rows_digest: &str,
+        generation: &str,
+    ) -> Result<Self> {
         let file = fs::File::open(path).map_err(|source| BorsukError::Io {
             path: path.to_owned(),
             source,
         })?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
         let physical_rows = builder.metadata().file_metadata().num_rows();
-        if builder.schema().as_ref() != &page_rows_schema()
+        if builder.schema().as_ref() != &page_rows_schema(construction_rows_digest, generation)
             || physical_rows <= 0
             || u64::try_from(physical_rows).ok().is_none_or(|rows| {
                 rows < source_row_count || rows > source_row_count.saturating_mul(2)
@@ -793,6 +815,7 @@ fn run_training(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         seed: manifest.seed,
         source_row_count: manifest.source_row_count,
         witness_count: manifest.witness_count,
+        distance_backend: graph.distance_backend(),
         inputs: manifest.inputs,
         outputs,
     };
@@ -830,7 +853,15 @@ fn run_posting_construction(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         || manifest.source_row_count == 0
         || manifest.witness_count < 2
         || manifest.witness_count > u64::from(u32::MAX)
-        || roles != ["witness-graph", "witnesses-arrow", "page-rows-parquet"]
+        || roles
+            != [
+                "training-result",
+                "witness-graph",
+                "witnesses-arrow",
+                "page-rows-parquet",
+            ]
+        || manifest.construction_rows_digest.len() != 64
+        || manifest.parent_result_sha256.len() != 64
         || manifest.output_uris.len() != 1
         || manifest
             .output_uris
@@ -854,7 +885,14 @@ fn run_posting_construction(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
             source,
         })?;
     names.sort();
-    if names != [PAGE_ROWS_FILE, WITNESS_GRAPH_FILE, WITNESSES_FILE] {
+    if names
+        != [
+            PAGE_ROWS_FILE,
+            TRAINING_RESULT_FILE,
+            WITNESS_GRAPH_FILE,
+            WITNESSES_FILE,
+        ]
+    {
         return Err(invalid("V24 local input inventory differs"));
     }
 
@@ -866,6 +904,7 @@ fn run_posting_construction(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
             .unwrap()
     };
     for (role, name) in [
+        ("training-result", TRAINING_RESULT_FILE),
         ("witness-graph", WITNESS_GRAPH_FILE),
         ("witnesses-arrow", WITNESSES_FILE),
         ("page-rows-parquet", PAGE_ROWS_FILE),
@@ -878,6 +917,37 @@ fn run_posting_construction(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
             &manifest.generation,
         )?;
         validate_v24_identity(&observed, authority)?;
+    }
+
+    let training_result_path = request.input_dir.join(TRAINING_RESULT_FILE);
+    let training_result_bytes =
+        fs::read(&training_result_path).map_err(|source| BorsukError::Io {
+            path: training_result_path,
+            source,
+        })?;
+    let training_result: V24TrainingResult = serde_json::from_slice(&training_result_bytes)
+        .map_err(|error| invalid(&format!("V24 training result differs: {error}")))?;
+    let registered_training = registered("training-result");
+    if canonical_json_bytes(&training_result)? != training_result_bytes
+        || training_result.schema != V24_TRAINING_RESULT_SCHEMA
+        || training_result.claim_eligible
+        || training_result.phase != "witness-training"
+        || training_result.generation != manifest.generation
+        || training_result.source_row_count != manifest.source_row_count
+        || training_result.witness_count != manifest.witness_count
+        || training_result.inputs.len() != 1
+        || training_result.inputs[0].role != "construction-rows-parquet"
+        || training_result.inputs[0].digest_algorithm != "sha256"
+        || training_result.inputs[0].digest != manifest.construction_rows_digest
+        || training_result.outputs
+            != [
+                registered("witness-graph").clone(),
+                registered("witnesses-arrow").clone(),
+            ]
+        || registered_training.digest != manifest.parent_result_sha256
+        || training_result.distance_backend != v24_scientific_distance_backend()?
+    {
+        return Err(invalid("V24 posting parent authority differs"));
     }
 
     let expected_witnesses = usize::try_from(manifest.witness_count).unwrap();
@@ -901,9 +971,14 @@ fn run_posting_construction(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         registered("witness-graph"),
         expected_witnesses,
     )?;
+    if graph.distance_backend() != training_result.distance_backend {
+        return Err(invalid("V24 posting graph backend differs"));
+    }
     let pages = V24PageRows::open(
         &request.input_dir.join(PAGE_ROWS_FILE),
         manifest.source_row_count,
+        &manifest.construction_rows_digest,
+        &manifest.generation,
     )?;
     let scratch = request.output_dir.join(POSTING_SCRATCH_DIR);
     fs::create_dir(&scratch).map_err(|source| BorsukError::Io {
@@ -939,6 +1014,9 @@ fn run_posting_construction(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         generation: manifest.generation,
         source_row_count: manifest.source_row_count,
         witness_count: manifest.witness_count,
+        construction_rows_digest: manifest.construction_rows_digest,
+        parent_result_sha256: manifest.parent_result_sha256,
+        distance_backend: training_result.distance_backend,
         unique_source_rows: plane.unique_source_rows(),
         physical_source_rows: plane.physical_source_rows(),
         inputs: manifest.inputs,
@@ -1267,7 +1345,7 @@ pub fn run_v24_local_request(request: V24LocalRunRequest) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, sync::Arc};
+    use std::{collections::HashMap, fs, sync::Arc};
 
     use arrow_array::{
         ArrayRef, BooleanArray, FixedSizeListArray, Float32Array, RecordBatch, StringArray,
@@ -1342,18 +1420,30 @@ mod tests {
         }
     }
 
-    fn write_page_rows(path: &std::path::Path, rows: u64) {
+    fn write_page_rows(path: &std::path::Path, rows: u64, construction_digest: &str) {
         let child = Arc::new(Field::new("element", DataType::Float32, false));
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("page_ordinal", DataType::UInt32, false),
-            Field::new("replica", DataType::Boolean, false),
-            Field::new("record_id", DataType::Utf8, false),
-            Field::new(
-                "vector",
-                DataType::FixedSizeList(Arc::clone(&child), 96),
-                false,
-            ),
-        ]));
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("page_ordinal", DataType::UInt32, false),
+                Field::new("replica", DataType::Boolean, false),
+                Field::new("record_id", DataType::Utf8, false),
+                Field::new(
+                    "vector",
+                    DataType::FixedSizeList(Arc::clone(&child), 96),
+                    false,
+                ),
+            ],
+            HashMap::from([
+                (
+                    "construction_rows_sha256".to_owned(),
+                    construction_digest.to_owned(),
+                ),
+                (
+                    "generation".to_owned(),
+                    "generation-v24-training-fixture".to_owned(),
+                ),
+            ]),
+        ));
         let source_order = (0..16)
             .flat_map(|page| (0..rows).filter(move |source| source % 16 == page))
             .collect::<Vec<_>>();
@@ -1393,15 +1483,19 @@ mod tests {
         path: &std::path::Path,
         inputs: &[V24ObjectIdentity],
         witness_count: u64,
+        construction_rows_digest: &str,
+        parent_result_sha256: &str,
     ) {
         let manifest = json!({
             "claim_eligible": false,
+            "construction_rows_digest": construction_rows_digest,
             "generation": "generation-v24-training-fixture",
             "inputs": inputs,
             "output_uris": {
                 "witness-postings": "s3://borsuk-v24/witness-postings.arrow"
             },
             "phase": "posting-construction",
+            "parent_result_sha256": parent_result_sha256,
             "schema": "borsuk-v24-local-manifest-v1",
             "source_row_count": 257,
             "witness_count": witness_count
@@ -1411,18 +1505,30 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
-    fn write_evaluation_page_rows(path: &std::path::Path, rows: u64) {
+    fn write_evaluation_page_rows(path: &std::path::Path, rows: u64, construction_digest: &str) {
         let child = Arc::new(Field::new("element", DataType::Float32, false));
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("page_ordinal", DataType::UInt32, false),
-            Field::new("replica", DataType::Boolean, false),
-            Field::new("record_id", DataType::Utf8, false),
-            Field::new(
-                "vector",
-                DataType::FixedSizeList(Arc::clone(&child), 96),
-                false,
-            ),
-        ]));
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("page_ordinal", DataType::UInt32, false),
+                Field::new("replica", DataType::Boolean, false),
+                Field::new("record_id", DataType::Utf8, false),
+                Field::new(
+                    "vector",
+                    DataType::FixedSizeList(Arc::clone(&child), 96),
+                    false,
+                ),
+            ],
+            HashMap::from([
+                (
+                    "construction_rows_sha256".to_owned(),
+                    construction_digest.to_owned(),
+                ),
+                (
+                    "generation".to_owned(),
+                    "generation-v24-training-fixture".to_owned(),
+                ),
+            ]),
+        ));
         let order = (0..rows)
             .map(|source| (0_u32, false, source))
             .chain((1_u32..16).flat_map(|page| {
@@ -1627,6 +1733,10 @@ mod tests {
         let result: V24TrainingResult = serde_json::from_slice(&result_bytes).unwrap();
         assert_eq!(result.source_row_count, 257);
         assert_eq!(result.witness_count, 17);
+        assert_eq!(
+            result.distance_backend,
+            v24_scientific_distance_backend().unwrap()
+        );
         assert_eq!(result.inputs, vec![input.clone()]);
         assert_eq!(result.outputs.len(), 2);
 
@@ -1703,10 +1813,21 @@ mod tests {
         for name in ["witnesses.arrow", "witness-graph.arrow"] {
             fs::rename(training_output.join(name), posting_input.join(name)).unwrap();
         }
-        fs::remove_file(training_output.join("result.json")).unwrap();
+        let training_result_path = posting_input.join("training-result.json");
+        fs::rename(training_output.join("result.json"), &training_result_path).unwrap();
+        let training_result_bytes = fs::read(&training_result_path).unwrap();
+        let training_result: V24TrainingResult =
+            serde_json::from_slice(&training_result_bytes).unwrap();
+        let construction_digest = training_result.inputs[0].digest.clone();
+        let parent_result_sha256 = format!("{:x}", Sha256::digest(&training_result_bytes));
         let page_rows = posting_input.join("page-rows.parquet");
-        write_page_rows(&page_rows, 257);
+        write_page_rows(&page_rows, 257, &construction_digest);
         let inputs = vec![
+            file_identity(
+                &training_result_path,
+                "training-result",
+                "s3://borsuk-v24/training-result.json",
+            ),
             file_identity(
                 &posting_input.join("witness-graph.arrow"),
                 "witness-graph",
@@ -1724,7 +1845,13 @@ mod tests {
             ),
         ];
         let posting_manifest = root.join("posting-manifest.json");
-        write_posting_manifest(&posting_manifest, &inputs, 17);
+        write_posting_manifest(
+            &posting_manifest,
+            &inputs,
+            17,
+            &construction_digest,
+            &parent_result_sha256,
+        );
         let result_bytes = run_v24_local_request(V24LocalRunRequest {
             manifest: posting_manifest,
             input_dir: posting_input,
@@ -1734,6 +1861,9 @@ mod tests {
         .unwrap();
         let result: V24PostingResult = serde_json::from_slice(&result_bytes).unwrap();
         assert_eq!(result.inputs, inputs);
+        assert_eq!(result.construction_rows_digest, construction_digest);
+        assert_eq!(result.parent_result_sha256, parent_result_sha256);
+        assert_eq!(result.distance_backend, training_result.distance_backend);
         assert_eq!(result.outputs.len(), 1);
         assert_eq!(result.unique_source_rows, 257);
         assert_eq!(result.physical_source_rows, 257);
@@ -1786,10 +1916,21 @@ mod tests {
         for name in ["witnesses.arrow", "witness-graph.arrow"] {
             fs::rename(training_output.join(name), posting_input.join(name)).unwrap();
         }
-        fs::remove_file(training_output.join("result.json")).unwrap();
+        let training_result_path = posting_input.join("training-result.json");
+        fs::rename(training_output.join("result.json"), &training_result_path).unwrap();
+        let training_result_bytes = fs::read(&training_result_path).unwrap();
+        let training_result: V24TrainingResult =
+            serde_json::from_slice(&training_result_bytes).unwrap();
+        let construction_digest = training_result.inputs[0].digest.clone();
+        let parent_result_sha256 = format!("{:x}", Sha256::digest(&training_result_bytes));
         let page_rows = posting_input.join("page-rows.parquet");
-        write_evaluation_page_rows(&page_rows, 257);
+        write_evaluation_page_rows(&page_rows, 257, &construction_digest);
         let posting_inputs = vec![
+            file_identity(
+                &training_result_path,
+                "training-result",
+                "s3://borsuk-v24/training-result.json",
+            ),
             file_identity(
                 &posting_input.join("witness-graph.arrow"),
                 "witness-graph",
@@ -1807,7 +1948,13 @@ mod tests {
             ),
         ];
         let posting_manifest = root.join("posting-manifest.json");
-        write_posting_manifest(&posting_manifest, &posting_inputs, 32);
+        write_posting_manifest(
+            &posting_manifest,
+            &posting_inputs,
+            32,
+            &construction_digest,
+            &parent_result_sha256,
+        );
         run_v24_local_request(V24LocalRunRequest {
             manifest: posting_manifest,
             input_dir: posting_input.clone(),

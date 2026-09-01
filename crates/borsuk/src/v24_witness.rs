@@ -66,6 +66,7 @@ fn role_is_registered(role: &str) -> bool {
             | "construction-rows-parquet"
             | "dataset-meta"
             | "training-manifest"
+            | "training-result"
             | "witnesses-arrow"
             | "witness-graph"
             | "posting-manifest"
