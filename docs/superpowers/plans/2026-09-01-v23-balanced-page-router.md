@@ -38,7 +38,8 @@
 - Create `crates/borsuk/examples/v23_balanced_page_falsifier.rs`: strict local-only CLI.
 - Create `scripts/run_v23_balanced_page_falsifier.py` and its test: offline runner/monitor.
 - Create `scripts/launch_v23_balanced_pages_spot.py` and its test: staging/Spot lifecycle.
-- Create `docs/research/v23-balanced-page-router-manifest.json`: frozen one-cell scientific authority, committed before allocation.
+- Create `docs/research/v23-balanced-page-router-manifest.json`: frozen Rust scientific authority, committed before allocation.
+- Create `docs/research/v23-balanced-page-router-spot-authority.json`: canonical seven-object, account, infrastructure, monitor, and Spot authority committed before allocation.
 
 ## Plan Delivery Checkpoint
 
@@ -218,7 +219,7 @@ def test_launcher_terminates_every_terminal(self):
 
 ### Task 8: Reduced preflight, assurance, and one corpus screen
 
-**Files:** Modify only files with focused RED defects; create `docs/research/v23-balanced-page-router-manifest.json` before allocation; update `docs/research/publication-v3-attempt-ledger.md` only after authenticated terminal.
+**Files:** Modify only files with focused RED defects; create both `docs/research/v23-balanced-page-router-manifest.json` and `docs/research/v23-balanced-page-router-spot-authority.json` before allocation; update `docs/research/publication-v3-attempt-ledger.md` only after authenticated terminal.
 
 **Interfaces:** Produces deterministic worker-1/worker-4 preflight, repository assurance, one authenticated result/stop, immediate termination.
 
@@ -233,8 +234,8 @@ python3 scripts/validate_research_docs.py
 git diff --check
 ```
 - [ ] **Step 3:** Commit/push verified slices fast-forward and prove HEAD=origin=ls-remote with clean status.
-- [ ] **Step 4:** Commit a manifest freezing revision, instance/region/Spot, arms, seed/split, S/top96/page384, gates, work/resource stops, scratch names, roles, no restart.
-- [ ] **Step 5:** Launch exactly one cell: `python3 scripts/launch_v23_balanced_pages_spot.py --profile causality --manifest docs/research/v23-balanced-page-router-manifest.json --spot`.
+- [ ] **Step 4:** Commit the Rust manifest and canonical Spot authority freezing revision, exact seven S3 objects, account, instance/region/Spot, arms, seed/split, S/top96/page384, gates, work/resource stops, scratch names, roles, and no restart.
+- [ ] **Step 5:** Launch exactly one cell from an absolute authority path: `python3 scripts/launch_v23_balanced_pages_spot.py --authority /absolute/repo/docs/research/v23-balanced-page-router-spot-authority.json --spot`.
 - [ ] **Step 6:** Monitor only progress/resource/EC2/terminal. Recompute identities, schemas, counts, samples, aggregates, timing, memory, SIMD, classification; launcher exit is not PASS.
 - [ ] **Step 7:** Record exact evidence, validate, commit only ledger, push fast-forward.
 
