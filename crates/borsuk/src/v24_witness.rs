@@ -28,6 +28,12 @@ pub(crate) struct V24ObjectIdentity {
     pub(crate) generation: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V24SourceRow {
+    pub(crate) source_ordinal: u64,
+    pub(crate) vector: [f32; 96],
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct V24Receipt {
     pub(crate) schema: String,
