@@ -1364,3 +1364,64 @@ The amended recall evidence is specific to the 9,990,000-row development
 index: its scan cap is corpus-scaled while its heap cap is the absolute
 production constant. Only the serving-memory projection extends to 100M rows;
 recall does not. No holdout or D3 work is authorized.
+
+## V23 residual RaBitQ development rejection on 2026-09-01
+
+The amended development screen ran once from source commit
+`e0695cc95893d3dc3abfc1efb88344ff988f4517`, source-archive SHA-256
+`8e71a996ea3ae354451b8a9981091ffcaf90a683bdf4e15b7aa0b8be43777a83`,
+and run ID `v23-rabitq-development-20260901T051300Z`. The native Amazon
+Linux 2023 ARM64 falsifier had SHA-256
+`bebbe12ee82e5b9772c7dade24463185a75c96708794c6dae7bb3140c5bba99c`
+and 10,063,056 bytes. The 3,771-byte development manifest has SHA-256
+`ed893378b078df8cb18a2d737af55e9cecf8c495ca9815960acf196ae183064c`.
+Spot instance `i-03b4868961eb70b78` reached both EC2 health checks `ok`,
+completed, and terminated.
+
+The canonical `borsuk-v23-rabitq-screen-v3` result is 117,392 bytes with
+SHA-256
+`ef1b47c1ea1cb62941b5087cad314b4056e13a760bbf11b4b86267a91669fb32`
+at
+`s3://borsuk-bench-453182569524-euc1/research/v23-residual-rabitq/8e71a996ea3ae354451b8a9981091ffcaf90a683bdf4e15b7aa0b8be43777a83/v23-rabitq-development-20260901T051300Z/terminal/screen-result.json`.
+The 408-byte `COMPLETE.json` has SHA-256
+`e16b72c92f7cc995f5d5c1af69f38ec2d442ae0b4d87d6ac4f7ff874ef6709ec`;
+its authenticated 10,053-byte worker log has SHA-256
+`0201536ef981aa1107cbef7a78ec0f336949a5c3db68fead1fde9d694c91046b`.
+The result is evidence-only with `claim_eligible=false`.
+
+Every cell evaluated the same 32 frozen queries, retained exactly 4,096 rows,
+and selected exactly eight strictly ordered pages per query. The registered
+pass boundary is 318/320 hits: 993,750 ppm aggregate recall, at least 900,000
+ppm minimum per-query recall, and 1,000,000 ppm oracle attainment. The cells
+were:
+
+| Control | Leaves | Aggregate ppm | Minimum ppm | Oracle ppm | Hits | Kernel total |
+|---|---:|---:|---:|---:|---:|---:|
+| exact exhaustive | 65,536 | 921,875 | 600,000 | 927,672 | 295/320 | 104.934 s |
+| exact tree | 32 | 746,875 | 200,000 | 751,572 | 239/320 | 0.057 s |
+| exact tree | 64 | 787,500 | 300,000 | 792,452 | 252/320 | 0.114 s |
+| exact tree | 128 | 818,750 | 400,000 | 823,899 | 262/320 | 0.219 s |
+| RaBitQ exhaustive | 65,536 | 753,125 | 100,000 | 757,861 | 241/320 | 40.028 s |
+| RaBitQ tree | 32 | 684,375 | 200,000 | 688,679 | 219/320 | 0.038 s |
+| RaBitQ tree | 64 | 734,375 | 300,000 | 738,993 | 235/320 | 0.064 s |
+| RaBitQ tree | 128 | 762,500 | 300,000 | 767,295 | 244/320 | 0.108 s |
+
+The exact exhaustive cell scanned all 65,536 leaves and all 9,990,000 rows
+for every query. Its SIMD and scalar selected pages were identical, with zero
+reported scalar/SIMD distance error and zero exact fused ULP drift. The RaBitQ
+cells also reproduced scalar page choices exactly within the registered
+one-ppm differential limit, but their quality was materially below the exact
+controls. The projected serving representation for this 9,990,000-row index
+was 400,342,772 bytes. The outer Spot lifecycle took about 390 seconds,
+including artifact download and pinned-environment setup; the result does not
+persist whole-process CPU time or peak RSS, so neither is claimed.
+
+The canonical classification is `authority-stop`. This is a decisive quality
+rejection of the tested residual-RaBitQ page-evidence architecture: even exact
+exhaustive row scoring cannot reach the frozen recall/oracle boundary, so tree
+pruning and estimator approximation are not the causal blocker. Raising beam
+width, improving the RaBitQ kernel, or spending more compute cannot repair the
+missing page evidence. The result does not reject all possible page-routing
+representations. It requires the next falsifier to change the routing evidence
+itself while retaining the exact eight-page and 15 ms serving constraints.
+No holdout, paid follow-on, or D3 work is authorized by this result.
