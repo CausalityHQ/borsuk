@@ -2466,4 +2466,56 @@ mod tests {
         );
         assert_eq!(result.resident_cpu_samples_ns.len(), 10_000);
     }
+
+    #[test]
+    fn v23_balanced_local_construction_is_deterministic_across_worker_counts() {
+        let directory = tempfile::tempdir().unwrap();
+        let corpus = directory.path().join("f16-control.arrow");
+        let rows = (0_u64..64)
+            .map(|source_ordinal| {
+                let cluster = usize::try_from(source_ordinal % 8).unwrap();
+                let mut vector = [f16::ZERO; 96];
+                vector[cluster] = f16::ONE;
+                vector[8 + cluster] = f16::from_f32(0.25 + source_ordinal as f32 * 0.0001);
+                vector
+            })
+            .collect::<Vec<_>>();
+        write_f16_rows(&corpus, "element", &rows);
+        let build = |workers: usize, name: &str| {
+            let output = directory.path().join(name);
+            fs::create_dir(&output).unwrap();
+            build_v23_balanced_local_construction_for_shape(
+                &corpus,
+                &output,
+                &format!("s3://borsuk-v23-eu-west-1/reduced/{name}/"),
+                V23BalancedConstructionShape {
+                    rows: 64,
+                    reservoir_rows: 64,
+                    pseudoquery_rows: 8,
+                    supercells: 2,
+                    primary_rows_per_page: 4,
+                    seed: 0x1234_5678,
+                    workers,
+                    run_rows: 7,
+                },
+            )
+            .unwrap()
+        };
+        let one = build(1, "one");
+        let four = build(4, "four");
+        assert_eq!(
+            one.outputs
+                .iter()
+                .map(|identity| (&identity.role, &identity.digest, identity.encoded_bytes))
+                .collect::<Vec<_>>(),
+            four.outputs
+                .iter()
+                .map(|identity| (&identity.role, &identity.digest, identity.encoded_bytes))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(one.ladder.pairs, four.ladder.pairs);
+        assert_eq!(one.ladder.selected, four.ladder.selected);
+        assert!(!directory.path().join("one/.scratch").exists());
+        assert!(!directory.path().join("four/.scratch").exists());
+    }
 }
