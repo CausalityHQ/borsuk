@@ -10,7 +10,7 @@ Replace the rejected leaf-to-page incidence selector with a row-granularity
 residual RaBitQ scorer. The existing query-independent 65,536-leaf centroid
 tree prunes the row set. Within the probed leaves, the scorer estimates a
 distance for every resident row code, retains a bounded global row ranking,
-and applies the already-validated deterministic eight-page cover over the
+and applies the already-validated deterministic at-most-eight-page cover over the
 primary and replica page assignments.
 
 This is a new prerelease format. It has no compatibility reader, alias,
@@ -166,11 +166,13 @@ measured projection above the total fails closed.
 1. Authenticate the request and resident artifact identities.
 2. Transform the query once with the registered rotation.
 3. Use the centroid tree to return the fixed leaf-probe ladder `32, 64, 128`.
-4. Apply scale-normalized development limits derived only from the authenticated
-   indexed row count. The retained-row limit is
-   `ceil(4,096 * indexed_rows / 100,000,000)` and the scored-row limit is
-   `ceil(262,144 * indexed_rows / 100,000,000)`. At 9,990,000 rows these are
-   exactly 410 and 26,189; at 100M they are exactly 4,096 and 262,144. If a
+4. Apply bounded development limits derived only from the authenticated
+   indexed row count and fixed page geometry. The retained-row limit is the
+   production constant 4,096 because heap capacity and the fixed 384-row page
+   geometry do not scale with corpus cardinality. The scored-row limit remains
+   `ceil(262,144 * indexed_rows / 100,000,000)`, because scanned work does scale
+   with corpus cardinality. At 9,990,000 rows these are exactly 4,096 and
+   26,189; at 100M they are exactly 4,096 and 262,144. If a
    ranked leaf prefix would exceed the scored-row limit, truncate the prefix
    before the first overflowing leaf and record both the requested and actual
    leaf counts. Failing the whole cell instead of applying this deterministic
@@ -190,10 +192,13 @@ measured projection above the total fails closed.
    recorded as scientific evidence and is governed by the recall gates rather
    than an invented dataset-independent cutoff. Ties are deterministic
    `(distance, row_ordinal)`.
-6. Retain only the scale-normalized best-row limit in a bounded heap. Full
+6. Retain only the fixed production best-row limit in a bounded heap. Full
    ranked-row allocation or sort is forbidden.
 7. Apply the existing deterministic reciprocal-rank page cover to the two page
-   assignments, selecting exactly eight unique pages. Ties are
+   assignments, selecting between one and eight unique pages. A saturated
+   cover is recorded at its natural width and is never padded with an
+   unearned page; using less than the eight-page budget can only self-penalize
+   recall. Ties are
    `(gain, reciprocal_rank_sum, page_ordinal)` with the registered directions.
 8. Emit the ordered pages plus complete causal and resource evidence.
 
@@ -253,11 +258,11 @@ A candidate must recover all 318 oracle-reachable hits on the burned 32-query
 cohort: 993,750 ppm aggregate recall, 900,000 ppm minimum-query recall, and
 1,000,000 ppm oracle attainment. It must also satisfy:
 
-- exactly eight selected pages;
+- between one and eight selected pages, with the achieved count recorded by
+  the canonical page list and no padding or duplicate page;
 - at most the scale-normalized scored-row limit (26,189 at 9.99M and 262,144
   at 100M);
-- at most the scale-normalized retained-row limit (410 at 9.99M and 4,096 at
-  100M) and twice that many page assignments;
+- at most the fixed 4,096 retained-row limit and 8,192 page assignments;
 - projected serving bytes at most 2,920,622,772;
 - scalar/optimized selected pages exactly equal;
 - construction receipt and D2 truth bind the same index identity, page
@@ -317,7 +322,8 @@ Implementation follows strict RED/GREEN slices:
 3. twelve-byte query-LUT scorer differential tests, including ties, zeros,
    subnormals, nonfinite values, reversed blocks, every byte mask, and scalar
    oracle agreement;
-4. scale-normalized scored/retained limits, deterministic lowest-ranked-leaf
+4. scale-normalized scored limits, the fixed production retained limit,
+   deterministic lowest-ranked-leaf
    truncation, bounded row heap, and exact page-cover reuse;
 5. streaming constructor with duplicate, order, digest, and interruption
    mutations;

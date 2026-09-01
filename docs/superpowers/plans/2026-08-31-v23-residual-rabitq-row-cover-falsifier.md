@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a bounded, claim-ineligible residual RaBitQ row scorer that can prove or reject exact eight-page near-perfect recall before any production or D3 campaign.
+**Goal:** Build a bounded, claim-ineligible residual RaBitQ row scorer that can prove or reject near-perfect recall within an eight-page budget before any production or D3 campaign.
 
-**Architecture:** A new prerelease Arrow index stores one 96-bit residual sign code, two f32 estimator factors, and two u32 page ordinals per row, ordered by the existing 65,536-leaf tree. Queries probe 32/64/128 leaves, use twelve query-specific byte lookups per row, apply row-count-normalized scan/heap limits, and reuse the deterministic eight-page cover. Paired exact-f16/RaBitQ tree cells make failures causal; the global RaBitQ scan remains diagnostic only.
+**Architecture:** A new prerelease Arrow index stores one 96-bit residual sign code, two f32 estimator factors, and two u32 page ordinals per row, ordered by the existing 65,536-leaf tree. Queries probe 32/64/128 leaves, use twelve query-specific byte lookups per row, apply a row-count-normalized scan limit and fixed 4,096-row production heap, and reuse the deterministic at-most-eight-page cover. Paired exact-f16/RaBitQ tree cells make failures causal; the global RaBitQ scan remains diagnostic only.
 
 **Tech Stack:** Rust 2024, Arrow IPC 58.3, Parquet 58.3, serde/serde_json, blake3/SHA-256, borsuk-fma SIMD, Python 3.12, boto3, stdlib unittest, AWS EC2 Spot.
 
@@ -15,7 +15,7 @@
 - New prerelease format only: no compatibility reader, alias, migration, or fallback.
 - Bulk artifacts use Arrow IPC/Parquet; receipts and results use strict typed canonical newline JSON.
 - Serving projection is at most 2,920,622,772 bytes; hard ceiling is 3,221,225,472 bytes.
-- Exactly eight pages. Limits scale as `ceil(262,144 * indexed_rows / 100,000,000)` scored rows and `ceil(4,096 * indexed_rows / 100,000,000)` retained rows, giving 26,189/410 at 9.99M and 262,144/4,096 at 100M; assignments are at most twice the retained limit.
+- Between one and eight pages, with no padding or duplicate page. The scored-row limit scales as `ceil(262,144 * indexed_rows / 100,000,000)`, giving 26,189 at 9.99M and 262,144 at 100M. The production retained-row and assignment caps stay fixed at 4,096 and 8,192 because heap capacity and 384-row page geometry do not scale with corpus cardinality.
 - Development opens only burned query ordinals 0--31 and must attain all 318 oracle-reachable hits.
 - Sealed holdout, if separately authorized, requires at least 991,000 aggregate ppm, 900,000 minimum-query ppm, 995,000 oracle-attainment ppm, and 15 ms resident CPU p99 over at least 10,000 raw samples.
 - Development has no page-body or holdout capability. D3 remains fenced.
@@ -190,9 +190,9 @@ Cover all 256 masks in each of twelve byte positions, random/ties/zeros/
 subnormals/reversed blocks, invalid query quantization, and the fixed primitive
 forward-error bound against a direct 96-component scalar oracle. Prove exact
 selected-page equality. Mutation-lock the limit formula at rows 1, 9,990,000,
-99,999,999, and 100,000,000; assert exact 9.99M limits 26,189/410. Cover
+99,999,999, and 100,000,000; assert exact 9.99M limits 26,189/4,096. Cover
 deterministic ranked-leaf-prefix truncation before overflow, actual leaf-count
-evidence, heap/assignment bounds, exactly eight unique pages, and permutation-
+evidence, heap/assignment bounds, one to eight unique pages, and permutation-
 independent cover output. A test must fail if scoring expands a row sign code
 to `[f32; 96]` or invokes the scalar oracle from the production row loop.
 
@@ -222,8 +222,8 @@ Run `cargo test -p borsuk --lib v23_rabitq_eval_ -- --nocapture`.
 Store four-bit prepared query codes plus `minimum`, `step`, and twelve
 `[f32; 256]` byte tables. Score a row with twelve table lookups and the two
 registered reconstruction sums; do not expand the row sign code or duplicate
-the scalar computation. Maintain a max-heap sized by
-`ceil(4,096*indexed_rows/100,000,000)`; never allocate or sort all scored rows.
+the scalar computation. Maintain a max-heap of at most 4,096 rows; never
+allocate or sort all scored rows.
 Truncate the lowest-ranked leaves before exceeding
 `ceil(262,144*indexed_rows/100,000,000)`. Make existing tree and page-cover
 helpers `pub(crate)` only.
@@ -292,6 +292,11 @@ selections/hits, aggregates, requested/actual leaves, scan/retain limits,
 kernel elapsed, estimator error, backend, scalar equality, projection,
 authority roles/digests/URIs, source identity, claim flag, and class.
 Serialization independently recomputes every derivable field.
+Add mutation-effective coverage that a saturated reciprocal-rank cover emits a
+strictly ordered `Vec<u32>` of length `1..=8`, never pads with an unearned page,
+and still completes and serializes all eight causal cells. Assert that the
+9.99M and 100M limits both retain at most 4,096 rows and 8,192 assignments while
+their scored-row limits remain 26,189 and 262,144 respectively.
 
 ```rust
 pub(crate) enum V23RaBitQControl { ExactExhaustive, ExactTree, RaBitQExhaustive, RaBitQTree }

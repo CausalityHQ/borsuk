@@ -1299,4 +1299,65 @@ serving constraint is applied. Increasing beam width, posting cap, timeout, or
 paid compute cannot repair this representation. The architecture is rejected;
 no sealed holdout, paid evaluation, or D3 work is authorized. The next
 falsifier must change the page-routing representation itself and must retain
-the exact eight-page and 15 ms serving constraints.
+the at-most-eight-page and 15 ms serving constraints.
+
+## V23 residual RaBitQ construction and preregistration stop on 2026-09-01
+
+The residual RaBitQ construction ran from source commit
+`d63a8e87aafc2c605bae8465201ecdc4342b7016`, source-archive SHA-256
+`6acc91bba5afacd67f4deeb5205ff79e117b0d0c65f23c54aa88fc1c024f59d7`,
+and run ID `v23-rabitq-construction-20260901T032447Z`. The native Amazon
+Linux 2023 ARM64 constructor executable had SHA-256
+`60081aea16dbba7ea7a507675e8222a638a4fb432ce04d02afbaadd2f70c3254`
+and required no glibc version newer than 2.34. One `c7g.16xlarge` Spot
+instance completed and terminated.
+
+The 5,132-byte construction receipt has SHA-256
+`6f9e68b7fca4c6b907aff5cdad9d6fe11fa66ead20f20bf5211707d9f1cb5d4d`.
+It authenticates 9,990,000 unique rows, 18,620,111 source occurrences, all
+28,282 pages, and these Arrow outputs:
+
+- row codes: 286,074,354 bytes, SHA-256
+  `8fd855f27dff97e2e57c8972369726b1a79e59b391ef9e252510ebcedd18a744`;
+- leaf offsets: 532,970 bytes, SHA-256
+  `9212e3913639aeaf239e4c6235d131f4ef4428c264bc1de84e3306d65ab01edf`;
+- centroids: 13,378,138 bytes, SHA-256
+  `3aa2ad9623708a439a86c6097962966c1b91e062b407b8e72459b8841690f5ec`;
+- rotation: 38,682 bytes, SHA-256
+  `ac8bd4db7eef2aeef3d66b5166f6b561368cde24bf59448548e2eec7af5484aa`;
+- development-only f16 control: 2,039,270,138 bytes, SHA-256
+  `e6d647c4b1207b1ca3992012af2f54a79d9f910a2aa6a9fe6c8295a7465c92fb`.
+
+The 408-byte terminal `COMPLETE.json` has SHA-256
+`9f5b45363852644d00336eaa721e47d28db8df2f2c32c24c5c5cc846780df484`.
+Its worker-log SHA-256 is
+`e4c335f71073063ddec34e8b28281e30702ad965cc1ef139c56ce6aee78aeaba`.
+
+The first development attempt used run ID
+`v23-rabitq-development-20260901T042731Z`, native falsifier SHA-256
+`21c43cc689292297a127abf941970eb94f02478415aa7fb70d6c1f96db25ca73`,
+and development-manifest SHA-256
+`831cbacc1ec813a822aa716918a746c9b1dbd3d231ca58d4ca62b25f01ae25cc`.
+Spot instance `i-06e6561d8e9391dad` reached both EC2 health checks `ok`, then
+failed closed and terminated. The 409-byte `FAILED.json` has SHA-256
+`ada2fa60f7d2eba4b4c0e876cc8217b530cd0808d5417553c1e09e7172b54f22`;
+the 9,925-byte worker log has SHA-256
+`e671fb689fa2d5fcf4ddb9aa690a96517ba1680ea6abb84ed62debb04c4e9697`
+and records `V23 RaBitQ control cannot select exactly eight pages`.
+
+No RaBitQ recall, timing, or causal cell was measured. The abort exposed a
+preregistration dimensional error: the development code scaled the fixed
+4,096-row production heap down to 410 rows while leaving the physical
+384-row page geometry unchanged. The retained rows saturated the greedy cover
+before eight evidence-bearing pages existed, so the exact-f16 authority
+control could not reproduce the registered top-4,096 ceiling. This is not a
+RaBitQ quality result and does not authorize rejection or acceptance.
+
+Before any rerun, the frozen design is amended outcome-blindly: the scan cap
+remains corpus-scaled, the heap and assignment caps remain the production
+4,096/8,192 constants, and a saturated cover records its natural strictly
+ordered width between one and eight rather than padding with an unearned page
+or aborting the whole screen. Recall, memory, timing, scalar-differential, and
+causal gates do not change. The immutable construction artifacts may be reused
+after the amended source and native executable are independently authenticated.
+No holdout or D3 work is authorized.
