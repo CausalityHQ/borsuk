@@ -835,7 +835,7 @@ pub(crate) fn evaluate_v23_balanced_pseudoquery_pair(
     )
 }
 
-fn evaluate_v23_balanced_pseudoquery_pair_for_expected_count(
+pub(crate) fn evaluate_v23_balanced_pseudoquery_pair_for_expected_count(
     selected_pair: V23BalancedSelectedPair,
     samples: &[V23BalancedSample],
     geometry: &V23BalancedServingGeometry,

@@ -22,8 +22,11 @@ use crate::{
         V23ReplicaBuildInputs, V23RoutedRow, build_v23_primary_pages, build_v23_replica_arms,
     },
     v23_balanced_pages_eval::{
-        V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryEvidence, V23BalancedSample,
-        build_v23_balanced_sample, prepare_v23_balanced_serving_geometry,
+        V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryEvidence,
+        V23BalancedPseudoqueryPair, V23BalancedSample, V23BalancedSelectedPairEvidence,
+        V23BalancedServingGeometry, build_v23_balanced_sample,
+        evaluate_v23_balanced_pseudoquery_pair_for_expected_count,
+        prepare_v23_balanced_serving_geometry, select_v23_balanced_pair,
     },
     v23_balanced_pages_train::{
         V23BalancedTrainingRow, V23SupercellModel, route_v23_supercell_beam2,
@@ -1029,12 +1032,31 @@ pub(crate) fn build_v23_balanced_pseudoquery_samples(
     assignment_path: &Path,
     page_budget: V23BalancedPageBudget,
 ) -> Result<Vec<V23BalancedSample>> {
-    let selected_arm = match replica.config.name.as_str() {
+    let selected_arm = balanced_replica_arm(replica)?;
+    let truth = read_v23_balanced_pseudoquery_truth(primary, replica, assignment_path)?;
+    let geometry = prepare_v23_balanced_serving_geometry(
+        &primary.primary.supercells,
+        &replica.pages,
+        selected_arm,
+    )?;
+    build_v23_balanced_pseudoquery_samples_from_truth(primary, &truth, &geometry, page_budget)
+}
+
+fn balanced_replica_arm(replica: &V23ReplicaArmBuild) -> Result<V23BalancedArm> {
+    Ok(match replica.config.name.as_str() {
         "amp-1125" if replica.config == expected_arms()[0] => V23BalancedArm::Amp1125,
         "amp-1250" if replica.config == expected_arms()[1] => V23BalancedArm::Amp1250,
         "amp-1500" if replica.config == expected_arms()[2] => V23BalancedArm::Amp1500,
         _ => return Err(invalid("pseudoquery arm authority differs")),
-    };
+    })
+}
+
+fn read_v23_balanced_pseudoquery_truth(
+    primary: &V23BalancedPrimaryConstruction,
+    replica: &V23ReplicaArmBuild,
+    assignment_path: &Path,
+) -> Result<Vec<Vec<Vec<u32>>>> {
+    balanced_replica_arm(replica)?;
     let queries = primary.model.pseudoqueries();
     let evidence = &primary.pseudoquery_evidence;
     if queries.is_empty()
@@ -1073,17 +1095,10 @@ pub(crate) fn build_v23_balanced_pseudoquery_samples(
         page_count,
         &requested,
     )?;
-    let geometry = prepare_v23_balanced_serving_geometry(
-        &primary.primary.supercells,
-        &replica.pages,
-        selected_arm,
-    )?;
-    queries
+    evidence
         .iter()
-        .zip(evidence)
-        .enumerate()
-        .map(|(query_index, (query, sample))| {
-            let truth = sample
+        .map(|sample| {
+            sample
                 .neighbor_source_ordinals
                 .iter()
                 .map(|source_ordinal| {
@@ -1092,16 +1107,111 @@ pub(crate) fn build_v23_balanced_pseudoquery_samples(
                         .map_err(|_| invalid("pseudoquery neighbor assignment is missing"))?;
                     Ok(requested_assignments[index].clone())
                 })
-                .collect::<Result<Vec<_>>>()?;
+                .collect()
+        })
+        .collect()
+}
+
+fn build_v23_balanced_pseudoquery_samples_from_truth(
+    primary: &V23BalancedPrimaryConstruction,
+    truth: &[Vec<Vec<u32>>],
+    geometry: &V23BalancedServingGeometry,
+    page_budget: V23BalancedPageBudget,
+) -> Result<Vec<V23BalancedSample>> {
+    if truth.len() != primary.model.pseudoqueries().len() {
+        return Err(invalid("pseudoquery truth cohort differs"));
+    }
+    primary
+        .model
+        .pseudoqueries()
+        .iter()
+        .zip(truth)
+        .enumerate()
+        .map(|(query_index, (query, assignments))| {
             build_v23_balanced_sample(
                 u32::try_from(query_index).map_err(|_| invalid("pseudoquery index overflows"))?,
                 &query.1,
-                truth,
-                &geometry,
+                assignments.clone(),
+                geometry,
                 page_budget,
             )
         })
         .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V23BalancedPseudoqueryLadder {
+    pub(crate) pairs: Vec<V23BalancedPseudoqueryPair>,
+    pub(crate) selected: Option<V23BalancedSelectedPairEvidence>,
+}
+
+pub(crate) fn evaluate_v23_balanced_pseudoquery_ladder(
+    primary: &V23BalancedPrimaryConstruction,
+    replicas: &[V23ReplicaArmBuild],
+    assignment_paths: &[PathBuf; 3],
+) -> Result<V23BalancedPseudoqueryLadder> {
+    evaluate_v23_balanced_pseudoquery_ladder_for_expected_count(
+        primary,
+        replicas,
+        assignment_paths,
+        1_024,
+    )
+}
+
+pub(crate) fn evaluate_v23_balanced_pseudoquery_ladder_for_expected_count(
+    primary: &V23BalancedPrimaryConstruction,
+    replicas: &[V23ReplicaArmBuild],
+    assignment_paths: &[PathBuf; 3],
+    expected_count: usize,
+) -> Result<V23BalancedPseudoqueryLadder> {
+    if replicas.len() != 3
+        || replicas.iter().enumerate().any(|(index, replica)| {
+            balanced_replica_arm(replica).ok()
+                != Some(
+                    [
+                        V23BalancedArm::Amp1125,
+                        V23BalancedArm::Amp1250,
+                        V23BalancedArm::Amp1500,
+                    ][index],
+                )
+        })
+    {
+        return Err(invalid("pseudoquery ladder arm order differs"));
+    }
+    let mut arms = Vec::with_capacity(3);
+    for (replica, assignment_path) in replicas.iter().zip(assignment_paths) {
+        let selected_arm = balanced_replica_arm(replica)?;
+        let truth = read_v23_balanced_pseudoquery_truth(primary, replica, assignment_path)?;
+        let geometry = prepare_v23_balanced_serving_geometry(
+            &primary.primary.supercells,
+            &replica.pages,
+            selected_arm,
+        )?;
+        arms.push((selected_arm, truth, geometry));
+    }
+    let mut pairs = Vec::with_capacity(9);
+    for page_budget in PAGE_BUDGETS.map(V23BalancedPageBudget::new) {
+        let page_budget = page_budget?;
+        for (selected_arm, truth, geometry) in &arms {
+            let samples = build_v23_balanced_pseudoquery_samples_from_truth(
+                primary,
+                truth,
+                geometry,
+                page_budget,
+            )?;
+            pairs.push(evaluate_v23_balanced_pseudoquery_pair_for_expected_count(
+                V23BalancedSelectedPair {
+                    page_budget,
+                    arm: *selected_arm,
+                },
+                &samples,
+                geometry,
+                expected_count,
+            )?);
+        }
+    }
+    let selected = select_v23_balanced_pair(&pairs).ok();
+    Ok(V23BalancedPseudoqueryLadder { pairs, selected })
 }
 
 #[doc(hidden)]
@@ -1253,7 +1363,8 @@ mod tests {
         V23BalancedPrimaryConstructionRequest, V23BalancedReceipt,
         V23BalancedReplicaConstructionRequest, V23BalancedSelectedPair, V23BalancedStop,
         build_v23_balanced_primary, build_v23_balanced_pseudoquery_samples,
-        build_v23_balanced_replicas, canonical_v23_balanced_receipt_bytes, expected_output_roles,
+        build_v23_balanced_replicas, canonical_v23_balanced_receipt_bytes,
+        evaluate_v23_balanced_pseudoquery_ladder_for_expected_count, expected_output_roles,
         project_v23_balanced_shape, read_v23_balanced_f16_rows, route_v23_balanced_corpus,
         run_v23_balanced_local_request, validate_v23_balanced_manifest,
         write_v23_balanced_construction_outputs,
@@ -1919,5 +2030,37 @@ mod tests {
                 && sample.selected_pages.len() == 8
                 && sample.containment_page_universe.len() >= 8
         }));
+
+        let assignment_paths = [
+            output_directory.join("row-pages-amp-1125.parquet"),
+            output_directory.join("row-pages-amp-1250.parquet"),
+            output_directory.join("row-pages-amp-1500.parquet"),
+        ];
+        let ladder = evaluate_v23_balanced_pseudoquery_ladder_for_expected_count(
+            &primary,
+            &replicas,
+            &assignment_paths,
+            8,
+        )
+        .unwrap();
+        assert_eq!(ladder.pairs.len(), 9);
+        assert_eq!(
+            ladder
+                .pairs
+                .iter()
+                .map(|pair| (pair.selected_pair.page_budget.get(), pair.selected_pair.arm,))
+                .collect::<Vec<_>>(),
+            [8_u8, 12, 16]
+                .into_iter()
+                .flat_map(|budget| {
+                    [
+                        V23BalancedArm::Amp1125,
+                        V23BalancedArm::Amp1250,
+                        V23BalancedArm::Amp1500,
+                    ]
+                    .map(move |arm| (budget, arm))
+                })
+                .collect::<Vec<_>>()
+        );
     }
 }
