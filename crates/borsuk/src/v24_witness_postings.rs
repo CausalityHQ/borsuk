@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     fs::{self, File, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
@@ -19,12 +19,13 @@ use sha2::{Digest, Sha256};
 use crate::{
     BorsukError, Result,
     v24_witness::{V24ObjectIdentity, parse_v24_decimal_source_ordinal, validate_v24_identity},
-    v24_witness_graph::{V24WitnessGraph, V24WitnessSearch},
+    v24_witness_graph::{V24WitnessGraph, V24WitnessSearch, normalize_v24_witness_vector},
 };
 
 const SOURCE_RECORD_BYTES: usize = 208;
 const RUN_PARTITIONS: usize = 256;
 const POSTING_CAP: usize = 64;
+const V24_POSTING_ASSIGNMENT_EF: usize = 128;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -57,17 +58,11 @@ pub(crate) struct V24PostingRecord {
     pub(crate) mass: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct V24PostingPlane {
     postings: Vec<Vec<(u32, u32)>>,
     unique_source_rows: u64,
     physical_source_rows: u64,
-}
-
-impl PartialEq for V24PostingPlane {
-    fn eq(&self, other: &Self) -> bool {
-        self.postings == other.postings
-    }
 }
 
 impl V24PostingPlane {
@@ -99,17 +94,7 @@ struct SourceOccurrence {
 }
 
 fn normalize_row(vector: &[f32; 96]) -> Result<[f16; 96]> {
-    if vector.iter().any(|value| !value.is_finite()) {
-        return Err(invalid("V24 posting row is non-finite"));
-    }
-    let norm = vector
-        .iter()
-        .fold(0.0_f32, |sum, value| value.mul_add(*value, sum))
-        .sqrt();
-    if !norm.is_finite() || norm <= 0.0 {
-        return Err(invalid("V24 posting row norm differs"));
-    }
-    let normalized = vector.map(|value| f16::from_f32(value / norm));
+    let normalized = normalize_v24_witness_vector(vector)?.map(f16::from_f32);
     if normalized.iter().any(|value| !value.is_finite()) {
         return Err(invalid("V24 posting normalized row differs"));
     }
@@ -229,13 +214,18 @@ fn flush_run_writers(writers: &mut [Option<BufWriter<File>>], scratch: &Path) ->
 
 fn build_postings_inner<I>(
     graph: &V24WitnessGraph,
+    source_row_count: u64,
     pages: I,
     scratch: &Path,
 ) -> Result<V24PostingPlane>
 where
     I: IntoIterator<Item = Result<V24PostingPage>>,
 {
+    if source_row_count == 0 {
+        return Err(invalid("V24 posting source row count differs"));
+    }
     let search = V24WitnessSearch::new(graph)?;
+    let source_index = graph.source_index();
     let mut source_writers = (0..RUN_PARTITIONS).map(|_| None).collect::<Vec<_>>();
     let mut page_ordinals = BTreeSet::new();
     let mut physical_source_rows = 0_u64;
@@ -251,6 +241,11 @@ where
             .chain(page.replica_rows.into_iter().map(|row| (true, row)))
         {
             let source_ordinal = parse_v24_decimal_source_ordinal(&row.record_id)?;
+            if source_ordinal >= source_row_count {
+                return Err(invalid(
+                    "V24 posting source ordinal exceeds construction rows",
+                ));
+            }
             append_source(
                 &mut source_writers,
                 scratch,
@@ -300,7 +295,16 @@ where
                 return Err(invalid("V24 posting source occurrence authority differs"));
             }
             let query = primaries[0].vector.map(f32::from);
-            let nearest = search.search(&query, 2, graph.node_count().min(64))?;
+            if let Ok(position) =
+                source_index.binary_search_by_key(&source_ordinal, |(registered, _)| *registered)
+            {
+                let witness = source_index[position].1;
+                if graph.witness_vector(witness) != Some(&primaries[0].vector) {
+                    return Err(invalid("V24 posting witness source vector differs"));
+                }
+            }
+            let nearest =
+                search.search(&query, 2, graph.node_count().min(V24_POSTING_ASSIGNMENT_EF))?;
             for witness in nearest {
                 append_posting(
                     &mut posting_writers,
@@ -376,6 +380,7 @@ where
 
 pub(crate) fn build_v24_witness_postings<I>(
     graph: &V24WitnessGraph,
+    source_row_count: u64,
     pages: I,
     scratch: &Path,
 ) -> Result<V24PostingPlane>
@@ -401,7 +406,7 @@ where
         .flush()
         .map_err(|source| io_error(&owner, source))?;
     drop(owner_file);
-    let result = build_postings_inner(graph, pages, scratch);
+    let result = build_postings_inner(graph, source_row_count, pages, scratch);
     let cleanup = cleanup_runs(scratch);
     let release = fs::remove_file(&owner).map_err(|source| io_error(&owner, source));
     match (result, cleanup, release) {
@@ -430,12 +435,32 @@ fn validate_plane(plane: &V24PostingPlane) -> Result<()> {
     Ok(())
 }
 
-fn posting_schema() -> Schema {
-    Schema::new(vec![
+fn posting_fields() -> Vec<Field> {
+    vec![
         Field::new("witness_ordinal", DataType::UInt32, false),
         Field::new("page_ordinal", DataType::UInt32, false),
         Field::new("mass", DataType::UInt32, false),
-    ])
+    ]
+}
+
+fn posting_schema(plane: &V24PostingPlane) -> Schema {
+    Schema::new_with_metadata(
+        posting_fields(),
+        HashMap::from([
+            (
+                "v24_witness_count".to_owned(),
+                plane.postings.len().to_string(),
+            ),
+            (
+                "v24_unique_source_rows".to_owned(),
+                plane.unique_source_rows.to_string(),
+            ),
+            (
+                "v24_physical_source_rows".to_owned(),
+                plane.physical_source_rows.to_string(),
+            ),
+        ]),
+    )
 }
 
 pub(crate) fn write_v24_witness_postings(plane: &V24PostingPlane) -> Result<Vec<u8>> {
@@ -452,7 +477,7 @@ pub(crate) fn write_v24_witness_postings(plane: &V24PostingPlane) -> Result<Vec<
             })
         })
         .collect::<Vec<_>>();
-    let schema = Arc::new(posting_schema());
+    let schema = Arc::new(posting_schema(plane));
     let columns: Vec<ArrayRef> = vec![
         Arc::new(UInt32Array::from_iter_values(
             records.iter().map(|record| record.witness_ordinal),
@@ -488,10 +513,34 @@ pub(crate) fn read_v24_witness_postings(
     {
         return Err(invalid("V24 posting byte authority differs"));
     }
-    let schema = posting_schema();
     let mut reader = FileReader::try_new(std::io::Cursor::new(bytes), None)?;
-    if reader.schema().as_ref() != &schema {
+    let schema = reader.schema();
+    if schema
+        .fields()
+        .iter()
+        .map(|field| field.as_ref())
+        .collect::<Vec<_>>()
+        != posting_fields().iter().collect::<Vec<_>>()
+        || schema.metadata().len() != 3
+    {
         return Err(invalid("V24 posting Arrow schema differs"));
+    }
+    let metadata_u64 = |key: &str| {
+        schema
+            .metadata()
+            .get(key)
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| invalid("V24 posting Arrow metadata differs"))
+    };
+    let witness_count = metadata_u64("v24_witness_count")?;
+    let unique_source_rows = metadata_u64("v24_unique_source_rows")?;
+    let physical_source_rows = metadata_u64("v24_physical_source_rows")?;
+    if usize::try_from(witness_count).ok() != Some(expected_witnesses)
+        || unique_source_rows == 0
+        || physical_source_rows < unique_source_rows
+        || physical_source_rows > unique_source_rows.saturating_mul(2)
+    {
+        return Err(invalid("V24 posting Arrow count authority differs"));
     }
     let batch = reader
         .next()
@@ -533,8 +582,8 @@ pub(crate) fn read_v24_witness_postings(
     }
     let plane = V24PostingPlane {
         postings,
-        unique_source_rows: 0,
-        physical_source_rows: 0,
+        unique_source_rows,
+        physical_source_rows,
     };
     validate_plane(&plane)?;
     Ok(plane)
@@ -626,7 +675,7 @@ mod tests {
         ];
         let scratch = scratch("identity");
         let plane =
-            build_v24_witness_postings(&graph, pages.into_iter().map(Ok), &scratch).unwrap();
+            build_v24_witness_postings(&graph, 201, pages.into_iter().map(Ok), &scratch).unwrap();
         assert_eq!(plane.unique_source_rows(), 4);
         assert_eq!(plane.physical_source_rows(), 5);
         assert_eq!(plane.records_for(0, 64), &[(3, 3), (7, 2)]);
@@ -650,7 +699,45 @@ mod tests {
             replica_rows: vec![],
         }];
         assert!(
-            build_v24_witness_postings(&graph, malformed.into_iter().map(Ok), &scratch).is_err()
+            build_v24_witness_postings(&graph, 201, malformed.into_iter().map(Ok), &scratch)
+                .is_err()
+        );
+        let out_of_range = vec![V24PostingPage {
+            page_ordinal: 0,
+            primary_rows: vec![row(201, 0)],
+            replica_rows: vec![],
+        }];
+        assert!(
+            build_v24_witness_postings(&graph, 201, out_of_range.into_iter().map(Ok), &scratch)
+                .is_err()
+        );
+        let matching_witness = vec![V24PostingPage {
+            page_ordinal: 0,
+            primary_rows: vec![row(10_000, 0)],
+            replica_rows: vec![],
+        }];
+        assert!(
+            build_v24_witness_postings(
+                &graph,
+                10_001,
+                matching_witness.into_iter().map(Ok),
+                &scratch,
+            )
+            .is_ok()
+        );
+        let mismatched_witness = vec![V24PostingPage {
+            page_ordinal: 0,
+            primary_rows: vec![row(10_000, 1)],
+            replica_rows: vec![],
+        }];
+        assert!(
+            build_v24_witness_postings(
+                &graph,
+                10_001,
+                mismatched_witness.into_iter().map(Ok),
+                &scratch,
+            )
+            .is_err()
         );
         fs::remove_dir(&scratch).unwrap();
     }
@@ -684,7 +771,7 @@ mod tests {
             Ok(page)
         });
         let scratch = scratch("bounds");
-        let plane = build_v24_witness_postings(&graph, stream, &scratch).unwrap();
+        let plane = build_v24_witness_postings(&graph, 10_000, stream, &scratch).unwrap();
         assert_eq!(decoded.load(Ordering::SeqCst), 66);
         let top64 = plane.records_for(0, 64);
         assert_eq!(top64.len(), 64);
@@ -706,7 +793,8 @@ mod tests {
             },
         ];
         assert!(
-            build_v24_witness_postings(&graph, duplicate.into_iter().map(Ok), &scratch).is_err()
+            build_v24_witness_postings(&graph, 10_000, duplicate.into_iter().map(Ok), &scratch,)
+                .is_err()
         );
         let duplicate_replica = vec![
             V24PostingPage {
@@ -726,8 +814,13 @@ mod tests {
             },
         ];
         assert!(
-            build_v24_witness_postings(&graph, duplicate_replica.into_iter().map(Ok), &scratch,)
-                .is_err()
+            build_v24_witness_postings(
+                &graph,
+                10_000,
+                duplicate_replica.into_iter().map(Ok),
+                &scratch,
+            )
+            .is_err()
         );
         assert!(fs::read_dir(&scratch).unwrap().next().is_none());
         fs::remove_dir(&scratch).unwrap();
@@ -742,6 +835,7 @@ mod tests {
         assert!(
             build_v24_witness_postings(
                 &graph,
+                10_000,
                 Vec::<crate::Result<V24PostingPage>>::new(),
                 &scratch,
             )

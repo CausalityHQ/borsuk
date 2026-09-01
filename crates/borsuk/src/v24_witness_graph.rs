@@ -76,12 +76,11 @@ fn splitmix64(mut value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
-fn normalize_row(mut row: V24SourceRow) -> Result<V24SourceRow> {
-    if row.vector.iter().any(|value| !value.is_finite()) {
+pub(crate) fn normalize_v24_witness_vector(vector: &[f32; 96]) -> Result<[f32; 96]> {
+    if vector.iter().any(|value| !value.is_finite()) {
         return Err(invalid("V24 witness source vector is non-finite"));
     }
-    let squared_norm = row
-        .vector
+    let squared_norm = vector
         .iter()
         .map(|value| f64::from(*value) * f64::from(*value))
         .sum::<f64>();
@@ -89,10 +88,7 @@ fn normalize_row(mut row: V24SourceRow) -> Result<V24SourceRow> {
         return Err(invalid("V24 witness source vector norm differs"));
     }
     let inverse = (1.0 / squared_norm.sqrt()) as f32;
-    for value in &mut row.vector {
-        *value *= inverse;
-    }
-    Ok(row)
+    Ok(vector.map(|value| value * inverse))
 }
 
 impl V24WitnessSampler {
@@ -116,7 +112,10 @@ impl V24WitnessSampler {
             return Err(invalid("V24 witness source order differs"));
         }
         self.last_source_ordinal = Some(row.source_ordinal);
-        let row = normalize_row(row)?;
+        let row = V24SourceRow {
+            source_ordinal: row.source_ordinal,
+            vector: normalize_v24_witness_vector(&row.vector)?,
+        };
         self.insert(Candidate {
             key: (
                 splitmix64(row.source_ordinal ^ self.seed),
@@ -359,9 +358,9 @@ fn witness_level(source_ordinal: u64, seed: u64) -> u8 {
 fn graph_distance(query: &[f32; 96], witness: &V24Witness) -> f32 {
     let dot = query
         .iter()
-        .zip(witness.vector)
+        .zip(witness.vector.iter())
         .fold(0.0_f32, |sum, (left, right)| {
-            left.mul_add(f32::from(right), sum)
+            left.mul_add(f32::from(*right), sum)
         });
     1.0 - dot
 }
@@ -369,6 +368,22 @@ fn graph_distance(query: &[f32; 96], witness: &V24Witness) -> f32 {
 impl V24WitnessGraph {
     pub(crate) fn node_count(&self) -> usize {
         self.witnesses.len()
+    }
+
+    pub(crate) fn source_index(&self) -> Vec<(u64, u32)> {
+        let mut index = self
+            .witnesses
+            .iter()
+            .map(|witness| (witness.source_ordinal, witness.witness_ordinal))
+            .collect::<Vec<_>>();
+        index.sort_unstable();
+        index
+    }
+
+    pub(crate) fn witness_vector(&self, ordinal: u32) -> Option<&[f16; 96]> {
+        self.witnesses
+            .get(usize::try_from(ordinal).ok()?)
+            .map(|witness| &witness.vector)
     }
 
     pub(crate) fn maximum_degree(&self) -> usize {
@@ -386,15 +401,19 @@ impl V24WitnessGraph {
 
     pub(crate) fn has_exact_sorted_unique_adjacency(&self) -> bool {
         self.adjacency.chunks_exact(V24_GRAPH_M).all(|neighbors| {
-            let present = neighbors
-                .iter()
-                .take_while(|neighbor| **neighbor != u32::MAX)
-                .copied()
-                .collect::<Vec<_>>();
-            present.windows(2).all(|pair| pair[0] < pair[1])
-                && neighbors[present.len()..]
-                    .iter()
-                    .all(|neighbor| *neighbor == u32::MAX)
+            let mut prior = None;
+            let mut ended = false;
+            neighbors.iter().copied().all(|neighbor| {
+                if neighbor == u32::MAX {
+                    ended = true;
+                    true
+                } else if ended || prior.is_some_and(|prior| neighbor <= prior) {
+                    false
+                } else {
+                    prior = Some(neighbor);
+                    true
+                }
+            })
         })
     }
 
@@ -447,16 +466,43 @@ impl V24WitnessGraph {
         let query = self.witnesses[usize::try_from(node).unwrap()]
             .vector
             .map(f32::from);
-        candidates.sort_by(|left, right| {
-            graph_distance(&query, &self.witnesses[usize::try_from(*left).unwrap()])
-                .total_cmp(&graph_distance(
+        let mut ranked = candidates
+            .into_iter()
+            .map(|ordinal| RankedWitness {
+                distance: graph_distance(
                     &query,
-                    &self.witnesses[usize::try_from(*right).unwrap()],
-                ))
-                .then(left.cmp(right))
-        });
-        candidates.truncate(V24_GRAPH_M);
-        self.set_neighbors(node, level, &candidates)
+                    &self.witnesses[usize::try_from(ordinal).unwrap()],
+                ),
+                ordinal,
+            })
+            .collect::<Vec<_>>();
+        ranked.sort_unstable();
+        let mut selected = if level == 0 {
+            let mut backbone = ranked
+                .iter()
+                .copied()
+                .filter(|candidate| candidate.ordinal.abs_diff(node) == 1)
+                .collect::<Vec<_>>();
+            let remaining = V24_GRAPH_M - backbone.len();
+            backbone.extend(
+                ranked
+                    .into_iter()
+                    .filter(|candidate| candidate.ordinal.abs_diff(node) != 1)
+                    .take(remaining),
+            );
+            backbone
+        } else {
+            ranked.into_iter().take(V24_GRAPH_M).collect()
+        };
+        selected.truncate(V24_GRAPH_M);
+        self.set_neighbors(
+            node,
+            level,
+            &selected
+                .into_iter()
+                .map(|candidate| candidate.ordinal)
+                .collect::<Vec<_>>(),
+        )
     }
 }
 
@@ -590,6 +636,21 @@ fn validate_graph(graph: &V24WitnessGraph) -> Result<()> {
             }
         }
     }
+    let mut reachable = vec![false; rows];
+    let mut pending = vec![graph.entrypoint];
+    reachable[usize::try_from(graph.entrypoint).unwrap()] = true;
+    while let Some(node) = pending.pop() {
+        for neighbor in graph.neighbors(node, 0).iter().copied() {
+            let index = usize::try_from(neighbor).unwrap();
+            if !reachable[index] {
+                reachable[index] = true;
+                pending.push(neighbor);
+            }
+        }
+    }
+    if reachable.iter().any(|value| !value) {
+        return Err(invalid("V24 witness graph is disconnected"));
+    }
     Ok(())
 }
 
@@ -647,11 +708,17 @@ pub(crate) fn build_v24_witness_graph(
                 level,
                 node_index,
             );
-            let selected = found
+            let mut selected = found
                 .iter()
                 .take(V24_GRAPH_M)
                 .map(|ranked| ranked.ordinal)
                 .collect::<Vec<_>>();
+            if level == 0 {
+                let predecessor = node - 1;
+                selected.retain(|neighbor| *neighbor != predecessor);
+                selected.truncate(V24_GRAPH_M - 1);
+                selected.push(predecessor);
+            }
             if let Some(first) = selected.first() {
                 current = *first;
             }
@@ -669,6 +736,7 @@ pub(crate) fn build_v24_witness_graph(
     Ok(graph)
 }
 
+#[cfg(test)]
 pub(crate) fn search_v24_witness_graph(
     graph: &V24WitnessGraph,
     query: &[f32; 96],
@@ -911,7 +979,7 @@ pub(crate) fn read_v24_witness_graph(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::BTreeSet, sync::Arc};
 
     use arrow_array::{
         ArrayRef, FixedSizeListArray, Float16Array, RecordBatch, UInt32Array, UInt64Array,
@@ -1122,7 +1190,7 @@ mod tests {
         changed.digest = "00".repeat(32);
         assert!(read_v24_witness_graph(&first_bytes, &changed, 96).is_err());
         let mut invalid = first;
-        invalid.adjacency[0] = u32::MAX;
+        invalid.adjacency.fill(u32::MAX);
         assert!(write_v24_witness_graph(&invalid).is_err());
     }
 
@@ -1154,6 +1222,14 @@ mod tests {
                 search_v24_witness_graph(&graph, &query, 8, 96).unwrap(),
                 scalar_topk(&witnesses, &query, 8)
             );
+            let traversed = search_v24_witness_graph(&graph, &query, 8, 32).unwrap();
+            assert_eq!(
+                traversed,
+                search_v24_witness_graph(&graph, &query, 8, 32).unwrap()
+            );
+            assert_eq!(traversed.len(), 8);
+            assert_eq!(traversed.iter().copied().collect::<BTreeSet<_>>().len(), 8);
+            assert_eq!(traversed[0], u32::try_from(query_ordinal).unwrap());
         }
         let mut nonfinite = witnesses[0].vector.map(f32::from);
         nonfinite[3] = f32::NAN;

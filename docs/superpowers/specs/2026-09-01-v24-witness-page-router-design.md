@@ -34,18 +34,26 @@ actual f16-normalized corpus vector plus its original `u64` dataset ordinal;
 there are no learned aliases or regenerated positional IDs.
 
 Build one deterministic in-memory HNSW graph over the witnesses. The frozen
-construction arm uses `M=16`; the only preregistered query-time `ef_search`
-ladder is 128, 256, and 512. Graph construction is query-independent and sees
-no benchmark query, neighbor, page-quality, or prior-result bytes.
+construction arm uses `M=16` and `ef_construction=64`. Posting assignment uses
+one HNSW search at fixed `ef_assignment=128`, exact fused-f32 reranking of that
+visited candidate set, and the best two reranked witnesses. It does not claim a
+global exact two-nearest scan over 1,048,576 witnesses. The only preregistered
+query-time `ef_search` ladder is 128, 256, and 512. Graph construction is
+query-independent and sees no benchmark query, neighbor, page-quality, or
+prior-result bytes.
 
 ### Witness-to-page evidence
 
 Posting construction streams the authenticated historical D2 page corpus once.
-Every page record ID must be the canonical decimal dataset ordinal and must
-bind to the matching construction-corpus row identity. Each unique primary row is
-assigned to its two nearest witnesses; its primary and optional replica page
-labels contribute deterministic integer mass to those witnesses. Duplicate
-page occurrences cannot duplicate a row's witness assignment.
+Every page record ID must be the canonical decimal dataset ordinal, be smaller
+than the registered construction row count, and inherit the exact construction
+corpus digest through the page-generation manifest. Each unique primary row is
+assigned to the two best exact-reranked witnesses returned by the registered
+`ef_assignment=128` search; its primary and optional replica page labels
+contribute deterministic integer mass to those witnesses. Duplicate page
+occurrences cannot duplicate a row's witness assignment. Witness rows use the
+same normalization function as construction and a page row that is itself a
+registered witness must match that witness vector exactly.
 
 For every witness, retain the top 64 `(mass, page_ordinal)` postings, ordered by
 descending mass then ascending page ordinal. Prefixes 16, 32, and 64 form the
@@ -87,6 +95,10 @@ The posting schema is exactly:
 - `page_ordinal: UInt32 non-null`;
 - `mass: UInt32 non-null`.
 
+Its Arrow schema metadata additionally binds exact `witness_count`,
+`unique_source_rows`, and `physical_source_rows` decimal values. These are
+authenticated artifact authority, not inferred from truncated top-64 mass.
+
 All tables require exact names, order, physical types, nullability, row counts,
 sortedness, uniqueness, finite nonzero vectors, URI, generation, encoded length,
 and SHA-256. V24 rejects V23 artifacts rather than adapting them.
@@ -118,7 +130,9 @@ At 100 million rows the serving projection is bounded as follows:
   536,870,912 bytes.
 
 The registered maximum is therefore 1,644,167,168 bytes, below the 3 GiB
-serving gate. Construction may use 32 GiB RSS and 500 GiB scratch because it is
+steady-serving gate. A separate load preflight measures the complete graph and
+posting decode transient and must also remain below 3 GiB peak RSS; steady-state
+arithmetic cannot substitute for that measurement. Construction may use 32 GiB RSS and 500 GiB scratch because it is
 offline and query-independent. A scientific process stops on swap growth,
 memory PSI full avg10 above 0.50, RSS above its phase cap, missing progress for
 20 minutes, or two hours wall time.
@@ -140,9 +154,14 @@ as selector latency.
 
 ## Causal controls and kill rules
 
-Reduced fixtures compare graph retrieval with an exact scan of all witnesses.
-If exact witness scan fails quality, the witness/posting representation is
-rejected. If exact passes and graph search fails, graph retrieval is causal.
+Reduced fixtures separately compare the exhaustive control with scalar sorting
+and exercise real graph traversal at `ef < row_count`, including deterministic
+candidate reranking and disconnected-graph rejection. In evaluation, an exact
+witness scan is diagnostic when serving fails: if exact passes and graph search
+fails, graph retrieval is causal; if both tested selectors fail, the tested
+witness/posting reducers are rejected. An observed serving pass takes
+precedence because nearest-witness order is not guaranteed to dominate page
+fusion and the diagnostic cannot veto a passing serving result.
 If routing passes but page-body exact rerank fails, page integration is causal.
 
 One unbiased query-independent pseudoquery split runs before burned

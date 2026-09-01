@@ -78,10 +78,10 @@
 **Interfaces:**
 - Produces: `V24WitnessGraph`, `build_v24_witness_graph`, `search_v24_witness_graph`, `write_v24_witness_graph`, `read_v24_witness_graph`.
 
-- [ ] **Step 1: Write graph REDs.** Add `v24_witness_graph_is_byte_deterministic_and_bounded` and `v24_witness_graph_search_matches_scalar_control_on_reduced_fixture`. Require `M=16`, deterministic levels from witness ordinal and seed, sorted unique adjacency, no self edges, bounded offsets, exact scalar/fused distance ordering, and byte-identical builds at one/four workers.
+- [ ] **Step 1: Write graph REDs.** Add `v24_witness_graph_is_byte_deterministic_and_bounded` and `v24_witness_graph_search_matches_scalar_control_on_reduced_fixture`. Require `M=16`, deterministic levels from witness ordinal and seed, sorted unique adjacency, no self edges, bounded offsets, and exact scalar/fused distance ordering. The build is byte-identical across repeated executions; do not claim worker-count invariance for the sequential insertion authority.
 - [ ] **Step 2: Run focused RED.** Run `cargo test -p borsuk --lib v24_witness_graph_ -- --nocapture`. Expected: missing graph symbols.
 - [ ] **Step 3: Implement a packed graph, not `Vec<Vec<f32>>`.** Store one contiguous f16 vector plane, `u64` offsets, and `u32` neighbors. Use the existing centroid-HNSW algorithm only as a behavioral reference; do not reuse its f32/heap-heavy representation. Construction ties are `(distance_bits, witness_ordinal)` and search returns exact-reranked unique witnesses.
-- [ ] **Step 4: Add reduced exhaustive differential.** For random, ties, subnormals, reversed insertion, and disconnected-mutation fixtures, compare graph results at `ef >= row_count` with full scalar sorting.
+- [ ] **Step 4: Add two non-tautological reduced controls.** Compare the exhaustive branch at `ef >= row_count` with full scalar sorting for random, ties, and subnormals. Separately force `ef < row_count`, prove real traversal is deterministic and exact-reranked within its visited candidate set, and reject disconnected adjacency. Reversed witness order is invalid authority rather than a build mode.
 - [ ] **Step 5: Run GREEN, fmt/diff, and commit.** Commit with message `Add packed V24 witness graph`.
 
 ### Task 4: One-pass witness-to-page postings
@@ -95,7 +95,7 @@
 - Produces: `V24PostingRecord`, `V24PostingPlane`, `build_v24_witness_postings`, `write_v24_postings`, `read_v24_postings`.
 
 - [ ] **Step 1: Write page-identity RED.** Add `v24_postings_bind_decimal_dataset_ids_not_page_or_leaf_position`. Construct pages whose physical row order differs from IDs and prove postings remain keyed by the canonical decimal IDs; positional interpretation must fail.
-- [ ] **Step 2: Write one-pass/bounds RED.** Add `v24_postings_stream_pages_once_and_keep_exact_top64`. Require one decode per page, one primary per ID, at most one replica, exactly two nearest witness assignments per unique row, no replica double-counting, checked `u32` mass, top-64 order `(-mass,page)`, and prefix equivalence for 16/32/64.
+- [ ] **Step 2: Write one-pass/bounds RED.** Add `v24_postings_stream_pages_once_and_keep_exact_top64`. Require one decode per page, one primary per ID, at most one replica, the two best exact-reranked witnesses from fixed `ef_assignment=128` per unique row, no replica double-counting, checked `u32` mass, top-64 order `(-mass,page)`, and prefix equivalence for 16/32/64. Bind source ordinals to the registered construction row count/generation and persist exact witness/unique/physical counts in Arrow schema metadata.
 - [ ] **Step 3: Run focused RED.** Run `cargo test -p borsuk --lib v24_witness_postings_ -- --nocapture`.
 - [ ] **Step 4: Implement bounded external accumulation.** Partition by witness high bits into 256 scratch runs, sort fixed `(witness,page,mass)` records, merge sums, emit canonical Arrow batches, and unlink each consumed run explicitly. Never retain page bodies.
 - [ ] **Step 5: Run GREEN, fmt/diff, and commit.** Commit with message `Build V24 witness page postings`.
