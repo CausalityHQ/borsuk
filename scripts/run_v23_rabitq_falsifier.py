@@ -16,7 +16,6 @@ from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
-PROFILE = "causality"
 REGION = "eu-central-1"
 INPUT_ROLES = (
     "construction-receipt",
@@ -70,7 +69,7 @@ def _default_s3_client() -> Any:
     import boto3
     from botocore.config import Config
 
-    return boto3.Session(profile_name=PROFILE, region_name=REGION).client(
+    return boto3.Session(region_name=REGION).client(
         "s3",
         config=Config(
             connect_timeout=10,

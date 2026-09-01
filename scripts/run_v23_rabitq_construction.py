@@ -23,7 +23,6 @@ import pyarrow as pa
 
 from scripts import v23_clustered_page_prototype_falsifier as historical
 
-PROFILE = "causality"
 REGION = "eu-central-1"
 INPUT_ROLES = ("tree-receipt", "incidence-tree", "page-roster")
 OUTPUT_ROLES = ("row-codes", "leaf-offsets", "centroids", "rotation", "f16-control")
@@ -78,7 +77,7 @@ def _default_s3_client() -> Any:
     import boto3
     from botocore.config import Config
 
-    return boto3.Session(profile_name=PROFILE, region_name=REGION).client(
+    return boto3.Session(region_name=REGION).client(
         "s3",
         config=Config(
             connect_timeout=10,

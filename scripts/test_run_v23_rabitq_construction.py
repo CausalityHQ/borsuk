@@ -167,6 +167,13 @@ def _page(page_ordinal: int) -> tuple[dict[str, object], bytes]:
 
 
 class V23RaBitQConstructionTests(unittest.TestCase):
+    def test_default_client_uses_ambient_instance_role_and_explicit_region(self) -> None:
+        with mock.patch("boto3.Session") as session_factory:
+            client = runner._default_s3_client()
+
+        session_factory.assert_called_once_with(region_name=runner.REGION)
+        self.assertIs(client, session_factory.return_value.client.return_value)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
