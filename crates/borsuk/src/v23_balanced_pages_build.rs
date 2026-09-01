@@ -1412,6 +1412,7 @@ pub(crate) fn build_v23_primary_pages(
                 .map_err(|error| io_error(&assignment_path, error))?;
             let mut assignment_writer =
                 FileWriter::try_new(assignment_file, &v23_row_page_schema())?;
+            let mut assignments = Vec::with_capacity(partition_rows.len());
             let mut offset = 0_usize;
             while offset < partition_rows.len() {
                 let supercell = partition_rows[offset].supercell_ordinal;
@@ -1445,7 +1446,6 @@ pub(crate) fn build_v23_primary_pages(
                         .map_err(|_| invalid("supercell page count overflows"))?,
                 });
                 let groups = partition_pages(group, page_count)?;
-                let mut assignments = Vec::with_capacity(end - offset);
                 for members in groups {
                     let page_ordinal = u32::try_from(pages.len())
                         .map_err(|_| invalid("page ordinal overflows"))?;
@@ -1465,11 +1465,11 @@ pub(crate) fn build_v23_primary_pages(
                         replica_page: u32::MAX,
                     }));
                 }
-                assignments.sort_unstable_by_key(|row| row.source_ordinal);
-                assignment_writer.write(&assignment_batch(&assignments)?)?;
                 expected_supercell += 1;
                 offset = end;
             }
+            assignments.sort_unstable_by_key(|row| row.source_ordinal);
+            assignment_writer.write(&assignment_batch(&assignments)?)?;
             assignment_writer.finish()?;
             let bytes = fs::metadata(&assignment_path)
                 .map_err(|error| io_error(&assignment_path, error))?
@@ -1694,6 +1694,52 @@ mod tests {
             .is_err()
         );
         assert!(gap_scratch.read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn v23_balanced_build_globally_orders_assignments_across_partitioned_supercells() {
+        let root = tempfile::tempdir().unwrap();
+        let scratch = root.path().join("scratch");
+        let output = root.path().join("row-pages.parquet");
+        std::fs::create_dir(&scratch).unwrap();
+        let rows = (0_u64..257).map(|source_ordinal| {
+            let supercell_ordinal = match source_ordinal {
+                0 => 1,
+                1 => 0,
+                ordinal => u32::try_from(ordinal).unwrap(),
+            };
+            Ok(V23RoutedRow {
+                supercell_ordinal,
+                runner_up_supercell_ordinal: (supercell_ordinal + 1) % 257,
+                source_ordinal,
+                vector: vector(source_ordinal, supercell_ordinal % 96),
+            })
+        });
+        let built = build_v23_primary_pages(
+            rows,
+            V23PageBuildShape {
+                supercells: 257,
+                primary_rows_per_page: 1,
+                run_rows: 7,
+            },
+            1,
+            &scratch,
+            &output,
+            "s3://borsuk-v23-eu-west-1/frozen/row-pages-primary-parquet",
+        )
+        .unwrap();
+
+        let assignments =
+            read_v23_row_pages(&output, &built.row_pages, "row-pages-primary-parquet", 257)
+                .unwrap();
+        assert_eq!(
+            assignments
+                .iter()
+                .map(|row| row.source_ordinal)
+                .collect::<Vec<_>>(),
+            (0_u64..257).collect::<Vec<_>>()
+        );
+        assert!(scratch.read_dir().unwrap().next().is_none());
     }
 
     #[test]
