@@ -214,6 +214,10 @@ pub use v22_feasibility::{
     V22StageLReport,
 };
 #[doc(hidden)]
+pub use v23_balanced_pages::{
+    V23BalancedLocalMode, V23BalancedLocalRequest, run_v23_balanced_local_request,
+};
+#[doc(hidden)]
 pub use v23_diagnostic::{
     V23D1Arm, V23D1ArmKey, V23D1QuerySample, V23D1Report, V23D2Arm, V23D2DiagnosticRequest,
     V23D2QuerySample, V23D2Report, V23D3Executor, V23D3WaveResult, V23GlobalAdcEvidenceIdentity,
