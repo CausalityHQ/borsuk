@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     BorsukError, Result,
+    v23_balanced_pages_arrow::{write_v23_pages, write_v23_supercells},
     v23_balanced_pages_build::{
         V23PageBuildShape, V23PrimaryPageBuild, V23ReplicaArmBuild, V23ReplicaArmOutput,
         V23ReplicaBuildInputs, V23RoutedRow, build_v23_primary_pages, build_v23_replica_arms,
@@ -884,6 +885,139 @@ pub(crate) fn build_v23_balanced_replicas(
     )
 }
 
+fn output_identity(path: &Path, uri: String, role: &str) -> Result<V23BalancedIdentity> {
+    regular_file(path)?;
+    let mut file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let encoded_bytes = file
+        .metadata()
+        .map_err(|source| BorsukError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .len();
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|source| BorsukError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    let identity = V23BalancedIdentity {
+        role: role.to_owned(),
+        uri,
+        digest_algorithm: "sha256".to_owned(),
+        digest: format!("{:x}", digest.finalize()),
+        encoded_bytes,
+    };
+    validate_v23_balanced_identity(&identity)?;
+    Ok(identity)
+}
+
+pub(crate) fn write_v23_balanced_construction_outputs(
+    output_directory: &Path,
+    output_uri_prefix: &str,
+    primary: &V23BalancedPrimaryConstruction,
+    replicas: &[V23ReplicaArmBuild],
+) -> Result<Vec<V23BalancedIdentity>> {
+    if !output_uri_prefix.starts_with("s3://")
+        || !output_uri_prefix.ends_with('/')
+        || replicas.len() != 3
+        || replicas
+            .iter()
+            .zip(expected_arms())
+            .any(|(build, expected)| build.config != expected)
+    {
+        return Err(invalid("construction output authority differs"));
+    }
+    let expected_existing = [
+        "row-pages-primary.parquet",
+        "row-pages-amp-1125.parquet",
+        "row-pages-amp-1250.parquet",
+        "row-pages-amp-1500.parquet",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
+    let observed_existing = output_directory
+        .read_dir()
+        .map_err(|source| BorsukError::Io {
+            path: output_directory.to_path_buf(),
+            source,
+        })?
+        .map(|entry| {
+            entry
+                .map_err(|source| BorsukError::Io {
+                    path: output_directory.to_path_buf(),
+                    source,
+                })?
+                .file_name()
+                .into_string()
+                .map_err(|_| invalid("construction output basename differs"))
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    if observed_existing != expected_existing {
+        return Err(invalid("construction output inventory differs"));
+    }
+
+    let tree_path = output_directory.join("balanced-tree.bin");
+    let tree_bytes = primary.model.canonical_tree_bytes()?;
+    fs::write(&tree_path, tree_bytes).map_err(|source| BorsukError::Io {
+        path: tree_path.clone(),
+        source,
+    })?;
+    let supercells_path = output_directory.join("supercells.parquet");
+    write_v23_supercells(&supercells_path, &primary.primary.supercells)?;
+    let primary_pages_path = output_directory.join("pages-primary.parquet");
+    write_v23_pages(&primary_pages_path, &primary.primary.pages, 0)?;
+    for replica in replicas {
+        write_v23_pages(
+            &output_directory.join(format!("pages-{}.parquet", replica.config.name)),
+            &replica.pages,
+            replica.config.replicas_per_page,
+        )?;
+    }
+
+    let artifacts = [
+        ("balanced-tree", "balanced-tree.bin"),
+        ("supercells-parquet", "supercells.parquet"),
+        ("pages-primary-parquet", "pages-primary.parquet"),
+        ("row-pages-primary-parquet", "row-pages-primary.parquet"),
+        ("pages-amp-1125-parquet", "pages-amp-1125.parquet"),
+        ("row-pages-amp-1125-parquet", "row-pages-amp-1125.parquet"),
+        ("pages-amp-1250-parquet", "pages-amp-1250.parquet"),
+        ("row-pages-amp-1250-parquet", "row-pages-amp-1250.parquet"),
+        ("pages-amp-1500-parquet", "pages-amp-1500.parquet"),
+        ("row-pages-amp-1500-parquet", "row-pages-amp-1500.parquet"),
+    ];
+    let identities = artifacts
+        .into_iter()
+        .map(|(role, basename)| {
+            output_identity(
+                &output_directory.join(basename),
+                format!("{output_uri_prefix}{basename}"),
+                role,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if identities[3] != primary.primary.row_pages
+        || replicas
+            .iter()
+            .zip([5_usize, 7, 9])
+            .any(|(replica, index)| replica.row_pages != identities[index])
+    {
+        return Err(invalid("construction assignment identity differs"));
+    }
+    Ok(identities)
+}
+
 #[doc(hidden)]
 pub fn run_v23_balanced_local_request(request: V23BalancedLocalRequest) -> Result<Vec<u8>> {
     if !request.manifest.is_absolute()
@@ -1035,7 +1169,7 @@ mod tests {
         build_v23_balanced_primary, build_v23_balanced_replicas,
         canonical_v23_balanced_receipt_bytes, expected_output_roles, project_v23_balanced_shape,
         read_v23_balanced_f16_rows, route_v23_balanced_corpus, run_v23_balanced_local_request,
-        validate_v23_balanced_manifest,
+        validate_v23_balanced_manifest, write_v23_balanced_construction_outputs,
     };
     use crate::{
         v23_balanced_pages_build::V23ReplicaArmOutput,
@@ -1586,9 +1720,11 @@ mod tests {
         let corpus = directory.path().join("f16-control.arrow");
         let primary_scratch = directory.path().join("primary-scratch");
         let replica_scratch = directory.path().join("replica-scratch");
-        let primary_output = directory.path().join("row-pages-primary.parquet");
+        let output_directory = directory.path().join("output");
+        let primary_output = output_directory.join("row-pages-primary.parquet");
         fs::create_dir(&primary_scratch).unwrap();
         fs::create_dir(&replica_scratch).unwrap();
+        fs::create_dir(&output_directory).unwrap();
         let rows = (0_u64..64)
             .map(|source_ordinal| {
                 let cluster = usize::try_from(source_ordinal % 8).unwrap();
@@ -1626,7 +1762,7 @@ mod tests {
                     amplification_ppm,
                     replicas_per_page,
                 },
-                row_pages_path: directory.path().join(format!("row-pages-{name}.parquet")),
+                row_pages_path: output_directory.join(format!("row-pages-{name}.parquet")),
                 row_pages_uri: format!(
                     "s3://borsuk-v23-eu-west-1/reduced/row-pages-{name}.parquet"
                 ),
@@ -1654,5 +1790,33 @@ mod tests {
         );
         assert!(outputs.iter().all(|output| output.row_pages_path.is_file()));
         assert!(replica_scratch.read_dir().unwrap().next().is_none());
+
+        let identities = write_v23_balanced_construction_outputs(
+            &output_directory,
+            "s3://borsuk-v23-eu-west-1/reduced/",
+            &primary,
+            &replicas,
+        )
+        .unwrap();
+        assert_eq!(
+            identities
+                .iter()
+                .map(|identity| identity.role.as_str())
+                .collect::<Vec<_>>(),
+            expected_output_roles()[..10]
+        );
+        assert_eq!(
+            fs::read(output_directory.join("balanced-tree.bin")).unwrap(),
+            primary.model.canonical_tree_bytes().unwrap()
+        );
+        assert_eq!(
+            output_directory
+                .read_dir()
+                .unwrap()
+                .collect::<std::io::Result<Vec<_>>>()
+                .unwrap()
+                .len(),
+            10
+        );
     }
 }
