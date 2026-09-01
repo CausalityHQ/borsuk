@@ -1018,6 +1018,81 @@ pub(crate) fn assign_two_beam_leaves(
     assign_two_beam_leaves_normalized(tree, &row, source_ordinal)
 }
 
+pub(crate) fn assign_boundary_runner_up_leaves(
+    tree: &V23IncidenceTree,
+    vector: &[f32; 96],
+    source_ordinal: u64,
+) -> Result<BeamSelectedLeaves> {
+    let row = normalize_incidence_row(vector)?;
+    let node_count = tree.nodes.len();
+    let mut index = 0_usize;
+    let mut primary_path = Vec::with_capacity(tree.shape.depth);
+    while index < node_count {
+        let node = tree
+            .nodes
+            .get(index)
+            .ok_or_else(|| invalid("V23 incidence boundary-runner node differs"))?;
+        let score = split_score_simd(node, &row.0)?.0;
+        let boundary = f32::from_bits(node.boundary_score_bits);
+        let margin = (score - boundary).abs();
+        if !score.is_finite() || !boundary.is_finite() || !margin.is_finite() {
+            return Err(invalid("V23 incidence boundary-runner score is non-finite"));
+        }
+        let zero = take_zero(node, score, source_ordinal);
+        primary_path.push((index, zero, margin));
+        index = if zero {
+            node.child_zero_index as usize
+        } else {
+            node.child_one_index as usize
+        };
+    }
+    let primary = u16::try_from(
+        index
+            .checked_sub(node_count)
+            .filter(|leaf| *leaf < tree.leaves.len())
+            .ok_or_else(|| invalid("V23 incidence boundary-runner primary leaf differs"))?,
+    )
+    .map_err(|_| invalid("V23 incidence boundary-runner primary leaf overflows"))?;
+    let (flip_index, flip_zero, _) = primary_path
+        .into_iter()
+        .min_by(|left, right| {
+            left.2
+                .total_cmp(&right.2)
+                .then_with(|| left.0.cmp(&right.0))
+        })
+        .ok_or_else(|| invalid("V23 incidence boundary-runner path is empty"))?;
+
+    index = 0;
+    while index < node_count {
+        let node = tree
+            .nodes
+            .get(index)
+            .ok_or_else(|| invalid("V23 incidence boundary-runner node differs"))?;
+        let zero = if index == flip_index {
+            !flip_zero
+        } else {
+            let score = split_score_simd(node, &row.0)?.0;
+            take_zero(node, score, source_ordinal)
+        };
+        index = if zero {
+            node.child_zero_index as usize
+        } else {
+            node.child_one_index as usize
+        };
+    }
+    let runner_up = u16::try_from(
+        index
+            .checked_sub(node_count)
+            .filter(|leaf| *leaf < tree.leaves.len())
+            .ok_or_else(|| invalid("V23 incidence boundary-runner alternate leaf differs"))?,
+    )
+    .map_err(|_| invalid("V23 incidence boundary-runner alternate leaf overflows"))?;
+    if primary == runner_up {
+        return Err(invalid("V23 incidence boundary-runner leaves duplicate"));
+    }
+    Ok(BeamSelectedLeaves([primary, runner_up]))
+}
+
 #[derive(Debug, Clone, Copy)]
 struct V23TreeBeamCandidate {
     distance: f32,
@@ -1313,8 +1388,18 @@ pub(crate) fn encode_incidence_tree(tree: &V23IncidenceTree) -> Result<Vec<u8>> 
     Ok(bytes)
 }
 
-fn codec_shape_is_allowed(shape: V23IncidenceTrainingShape) -> bool {
+pub(crate) fn production_codec_shape_is_allowed(shape: V23IncidenceTrainingShape) -> bool {
     if shape == V23IncidenceTrainingShape::PRODUCTION {
+        return true;
+    }
+    shape.dimensions == 96
+        && shape.reservoir_rows == 2_096_128
+        && matches!(shape.depth, 10 | 13)
+        && shape.lloyd_iterations == 4
+}
+
+fn codec_shape_is_allowed(shape: V23IncidenceTrainingShape) -> bool {
+    if production_codec_shape_is_allowed(shape) {
         return true;
     }
     #[cfg(test)]

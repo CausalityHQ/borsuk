@@ -5,8 +5,8 @@ use half::f16;
 use crate::{
     BorsukError, Result,
     v23_incidence_tree::{
-        V23IncidenceTrainingShape, V23IncidenceTree, V23ReservoirRow, assign_one_leaf,
-        assign_two_beam_leaves, encode_incidence_tree, normalize_v23_incidence_vector,
+        V23IncidenceTrainingShape, V23IncidenceTree, V23ReservoirRow,
+        assign_boundary_runner_up_leaves, encode_incidence_tree, normalize_v23_incidence_vector,
         train_incidence_tree_from_reservoir,
     },
 };
@@ -185,14 +185,13 @@ pub(crate) fn route_v23_supercell_beam2(
     vector: &[f32; 96],
     source_ordinal: u64,
 ) -> Result<V23BalancedRoutedSupercells> {
-    let primary = u32::from(assign_one_leaf(&model.tree, vector, source_ordinal)?);
-    let beam = assign_two_beam_leaves(&model.tree, vector, source_ordinal)?.0;
+    let beam = assign_boundary_runner_up_leaves(&model.tree, vector, source_ordinal)?.0;
     let beam = beam.map(u32::from);
-    if beam[0] != primary || beam[1] == primary {
+    if beam[1] == beam[0] {
         return Err(invalid("beam-two primary authority differs"));
     }
     Ok(V23BalancedRoutedSupercells {
-        primary_supercell: primary,
+        primary_supercell: beam[0],
         runner_up_supercell: beam[1],
     })
 }
@@ -203,6 +202,11 @@ mod tests {
         V23BalancedTrainingRow, route_v23_supercell_beam2, score_all_v23_supercells_fused,
         score_all_v23_supercells_scalar, train_v23_balanced_tree,
     };
+    use crate::v23_incidence_tree::{
+        V23IncidenceTrainingShape, V23IncidenceTree, V23TrainingWork, V23TreeLeaf, V23TreeNode,
+        production_codec_shape_is_allowed,
+    };
+    use half::f16;
 
     fn rows() -> Vec<V23BalancedTrainingRow> {
         (0_u64..64)
@@ -217,6 +221,28 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn v23_balanced_training_production_shapes_are_serializable() {
+        for depth in [10, 13] {
+            assert!(production_codec_shape_is_allowed(
+                V23IncidenceTrainingShape {
+                    dimensions: 96,
+                    reservoir_rows: 2_096_128,
+                    depth,
+                    lloyd_iterations: 4,
+                }
+            ));
+        }
+        assert!(!production_codec_shape_is_allowed(
+            V23IncidenceTrainingShape {
+                dimensions: 96,
+                reservoir_rows: 2_096_128,
+                depth: 12,
+                lloyd_iterations: 4,
+            }
+        ));
     }
 
     #[test]
@@ -263,5 +289,66 @@ mod tests {
         nonfinite[0] = f32::NAN;
         assert!(route_v23_supercell_beam2(&model, &nonfinite, row.source_ordinal).is_err());
         assert!(train_v23_balanced_tree(rows(), 8, 7, 0x1234_5678, 2, 7).is_err());
+    }
+
+    #[test]
+    fn v23_balanced_training_runner_up_uses_the_primary_boundary_partition() {
+        let mut zero = [f16::ZERO; 96];
+        zero[0] = f16::ONE;
+        let mut one = [f16::ZERO; 96];
+        one[1] = f16::ONE;
+        let model = super::V23SupercellModel {
+            tree: V23IncidenceTree {
+                shape: V23IncidenceTrainingShape {
+                    dimensions: 96,
+                    reservoir_rows: 2,
+                    depth: 1,
+                    lloyd_iterations: 4,
+                },
+                reservoir_seed: 1,
+                work: V23TrainingWork {
+                    farthest_seed_dimensions: 0,
+                    lloyd_dimensions: 0,
+                    repartition_dimensions: 0,
+                    total_distance_dimensions: 0,
+                },
+                nodes: vec![V23TreeNode {
+                    child_zero: zero,
+                    child_one: one,
+                    child_zero_inverse_norm: 1.0,
+                    child_one_inverse_norm: 1.0,
+                    boundary_score_bits: 2.0_f32.to_bits(),
+                    boundary_source_ordinal: u64::MAX,
+                    child_zero_index: 1,
+                    child_one_index: 2,
+                }],
+                leaves: vec![
+                    V23TreeLeaf {
+                        centroid: zero,
+                        inverse_norm: 1.0,
+                        population: 1,
+                        mean_squared_residual: 0.0,
+                    },
+                    V23TreeLeaf {
+                        centroid: one,
+                        inverse_norm: 1.0,
+                        population: 1,
+                        mean_squared_residual: 0.0,
+                    },
+                ],
+            },
+            training_ordinals: [0].into_iter().collect(),
+            pseudoquery_ordinals: [1].into_iter().collect(),
+        };
+        let mut vector = [0.0_f32; 96];
+        vector[1] = 1.0;
+
+        assert_eq!(
+            route_v23_supercell_beam2(&model, &vector, 0).unwrap(),
+            super::V23BalancedRoutedSupercells {
+                primary_supercell: 0,
+                runner_up_supercell: 1,
+            }
+        );
     }
 }
