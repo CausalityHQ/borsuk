@@ -783,7 +783,7 @@ fn train_incidence_tree_internal_with_execution(
     )
 }
 
-fn train_incidence_tree_from_reservoir(
+pub(crate) fn train_incidence_tree_from_reservoir(
     reservoir: Vec<V23ReservoirRow>,
     shape: V23IncidenceTrainingShape,
     seed: u64,

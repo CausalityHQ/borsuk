@@ -96,6 +96,11 @@ mod v23_balanced_pages;
     reason = "V23 balanced-page Arrow contracts are wired incrementally by the committed plan"
 )]
 mod v23_balanced_pages_arrow;
+#[allow(
+    dead_code,
+    reason = "V23 balanced-page geometry is wired incrementally by the committed plan"
+)]
+mod v23_balanced_pages_train;
 mod v23_diagnostic;
 #[allow(
     dead_code,
