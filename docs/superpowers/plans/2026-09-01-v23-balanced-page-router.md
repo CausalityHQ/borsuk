@@ -214,7 +214,7 @@ def test_launcher_terminates_every_terminal(self):
         self.assertEqual(cloud.terminate_calls, [cloud.instance_id])
 ```
 - [ ] **Step 2:** Run `python3 -m unittest scripts.test_run_v23_balanced_page_falsifier scripts.test_launch_v23_balanced_pages_spot`; require missing modules RED.
-- [ ] **Step 3:** Implement credentialed exact staging and offline child without AWS/network. Monitor wall/PGID RSS/PSI/swap/progress/EC2/terminal; parent uploads evidence; unlink named paths after PID clearance; terminate immediately.
+- [ ] **Step 3:** Implement credentialed exact staging and offline child without AWS/network. Monitor wall/PGID RSS/PSI/swap/progress/EC2/terminal; use a 32-GiB construction process-group RSS stop while retaining the separate 3-GiB serving projection gate; parent uploads evidence; unlink named paths after PID clearance; terminate immediately.
 - [ ] **Step 4:** Run GREEN, Ruff 0.15.20, py_compile, diff; commit `feat: orchestrate balanced page falsifier`.
 
 ### Task 8: Reduced preflight, assurance, and one corpus screen

@@ -187,6 +187,7 @@ class BalancedSpotLifecycleTests(unittest.TestCase):
             self.assertIn(artifact.basename, worker)
         self.assertIn("python3 \"$root/run_v23_balanced_page_falsifier.py\"", worker)
         self.assertIn("\"$root/v23-balanced-page-falsifier\"", worker)
+        self.assertIn("--rss-bytes 34359738368", worker)
         self.assertNotIn("pip install", worker)
         self.assertNotIn("ldd", worker)
         self.assertNotIn("mount", worker)

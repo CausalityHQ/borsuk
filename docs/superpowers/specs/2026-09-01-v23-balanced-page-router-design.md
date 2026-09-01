@@ -465,6 +465,12 @@ scientific work, writes progress and terminal evidence to S3, and terminates
 immediately after completion or stop. An interruption invalidates the cell; it
 may be restarted only as a new attempt under the unchanged manifest.
 
+The construction process-group RSS stop is 32 GiB. This is a bounded build
+envelope for transient training, sorting, and output materialization; it is not
+the serving-memory gate. The resulting serving artifacts must still project
+below 3 GiB, and raising the construction envelope cannot turn a serving-memory
+failure into a pass.
+
 No incomplete query metrics may be inspected. Construction health is observed
 only through registered progress, resource pressure, EC2 health, and terminal
 markers.

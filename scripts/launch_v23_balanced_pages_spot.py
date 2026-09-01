@@ -348,6 +348,7 @@ python3 "$root/run_v23_balanced_page_falsifier.py" \
   --manifest-bytes {plan.manifest.encoded_bytes} \
   --input-directory "$input" \
   --output-directory "$output" \
+  --rss-bytes 34359738368 \
   --execute > "$root/receipt.json" 2> "$root/worker.log"
 code=$?
 set -e
