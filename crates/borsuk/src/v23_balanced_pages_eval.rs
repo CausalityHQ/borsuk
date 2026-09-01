@@ -8,38 +8,34 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BorsukError, Result,
+    v23_balanced_pages::{V23BalancedArm, V23BalancedPageBudget, V23BalancedSelectedPair},
     v23_balanced_pages_arrow::{V23PageRow, V23SupercellRow, validate_v23_balanced_page_geometry},
-    v23_diagnostic::best_v23_page_coverage,
+    v23_diagnostic::V23PageCoverage,
     v23_incidence_tree::normalize_v23_incidence_vector,
 };
 
-const RESULT_SCHEMA: &str = "borsuk-v23-balanced-page-result-v1";
+const RESULT_SCHEMA: &str = "borsuk-v23-balanced-page-result-v2";
 const MAX_SCORED_DIMENSIONS: u64 = 4_000_000;
 const MAX_SERVING_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 const MAX_SCALAR_SIMD_DISTANCE_DELTA_PPM: u64 = 10;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum V23BalancedArm {
-    Amp1125,
-    Amp1250,
-    Amp1500,
-}
+const MAX_PROJECTED_PAGE_BYTES: u64 = 1_966_080;
+const MAX_ENCODED_PAGE_BYTES: u64 = 122_880;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V23BalancedPseudoqueryArm {
-    arm: V23BalancedArm,
-    aggregate_recall_ppm: u64,
-    first_percentile_recall_ppm: u64,
-    oracle_attainment_ppm: u64,
-    every_query_has_eight_pages: bool,
-    maximum_scored_dimensions: u64,
-    amplification_and_page_caps_valid: bool,
+pub(crate) struct V23BalancedPseudoqueryPair {
+    pub(crate) selected_pair: V23BalancedSelectedPair,
+    pub(crate) aggregate_recall_ppm: u64,
+    pub(crate) minimum_recall_ppm: u64,
+    pub(crate) oracle_attainment_ppm: u64,
+    pub(crate) every_query_has_budget: bool,
+    pub(crate) projected_page_bytes: u64,
+    pub(crate) maximum_scored_dimensions: u64,
+    pub(crate) amplification_and_page_caps_valid: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct V23BalancedSelectedArm {
-    pub(crate) arm: V23BalancedArm,
+pub(crate) struct V23BalancedSelectedPairEvidence {
+    pub(crate) selected_pair: V23BalancedSelectedPair,
     pub(crate) official_query_reads: u64,
 }
 
@@ -167,6 +163,7 @@ pub(crate) struct V23BalancedResult {
     pub(crate) schema: String,
     pub(crate) claim_eligible: bool,
     pub(crate) selected_arm: V23BalancedArm,
+    pub(crate) selected_page_budget: V23BalancedPageBudget,
     pub(crate) samples: Vec<V23BalancedSample>,
     pub(crate) aggregate_layout_oracle_hits: u64,
     pub(crate) minimum_layout_oracle_hits: u8,
@@ -178,12 +175,84 @@ pub(crate) struct V23BalancedResult {
     pub(crate) resident_cpu_samples_ns: Vec<u64>,
     pub(crate) resident_cpu_p99_ns: u64,
     pub(crate) projected_serving_bytes: u64,
+    pub(crate) projected_page_bytes: u64,
     pub(crate) scalar_simd_pages_equal: bool,
     pub(crate) causal_class: V23BalancedCausalClass,
 }
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(format!("V23 balanced page evaluation {message}"))
+}
+
+fn best_v23_balanced_page_coverage(
+    truth_assignments: &[Vec<u32>],
+    maximum_pages: usize,
+) -> Result<V23PageCoverage> {
+    if truth_assignments.is_empty()
+        || truth_assignments.len() > 10
+        || maximum_pages == 0
+        || maximum_pages > 16
+        || truth_assignments.iter().any(|pages| {
+            pages.is_empty() || pages.len() > 2 || pages.windows(2).any(|pair| pair[0] >= pair[1])
+        })
+    {
+        return Err(invalid("coverage oracle authority differs"));
+    }
+    let candidates = truth_assignments
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let limit = maximum_pages.min(candidates.len());
+    let masks = candidates
+        .iter()
+        .map(|page| {
+            truth_assignments
+                .iter()
+                .enumerate()
+                .fold(0_usize, |mask, (index, assignments)| {
+                    mask | (usize::from(assignments.binary_search(page).is_ok()) << index)
+                })
+        })
+        .collect::<Vec<_>>();
+    let mask_count = 1_usize << truth_assignments.len();
+    let mut choices = vec![vec![None::<Vec<u32>>; mask_count]; limit + 1];
+    choices[0][0] = Some(Vec::new());
+    for (page, page_mask) in candidates.into_iter().zip(masks) {
+        for count in (0..limit).rev() {
+            for mask in 0..mask_count {
+                let Some(existing) = choices[count][mask].clone() else {
+                    continue;
+                };
+                let mut candidate = existing;
+                candidate.push(page);
+                let target = &mut choices[count + 1][mask | page_mask];
+                if target.as_ref().is_none_or(|current| candidate < *current) {
+                    *target = Some(candidate);
+                }
+            }
+        }
+    }
+    let mut best = V23PageCoverage {
+        page_ordinals: Vec::new(),
+        hits: 0,
+    };
+    for by_mask in choices.iter().skip(1) {
+        for (mask, pages) in by_mask.iter().enumerate() {
+            let Some(pages) = pages else { continue };
+            let hits = mask.count_ones() as usize;
+            if hits > best.hits
+                || (hits == best.hits
+                    && (best.page_ordinals.is_empty() || *pages < best.page_ordinals))
+            {
+                best.hits = hits;
+                best.page_ordinals.clone_from(pages);
+            }
+        }
+    }
+    Ok(best)
 }
 
 fn retain_top_ten(
@@ -342,32 +411,44 @@ impl V23BalancedPseudoqueryAccumulator {
     }
 }
 
-pub(crate) fn select_v23_balanced_arm(
-    arms: &[V23BalancedPseudoqueryArm],
-) -> Result<V23BalancedSelectedArm> {
-    if arms.len() != 3
-        || arms.iter().map(|arm| arm.arm).collect::<Vec<_>>()
-            != [
+pub(crate) fn select_v23_balanced_pair(
+    pairs: &[V23BalancedPseudoqueryPair],
+) -> Result<V23BalancedSelectedPairEvidence> {
+    let expected = [8_u8, 12, 16]
+        .into_iter()
+        .flat_map(|budget| {
+            [
                 V23BalancedArm::Amp1125,
                 V23BalancedArm::Amp1250,
                 V23BalancedArm::Amp1500,
             ]
-    {
-        return Err(invalid("pseudoquery arm authority differs"));
-    }
-    let selected = arms
-        .iter()
-        .find(|arm| {
-            arm.aggregate_recall_ppm >= 990_000
-                && arm.first_percentile_recall_ppm >= 900_000
-                && arm.oracle_attainment_ppm >= 995_000
-                && arm.every_query_has_eight_pages
-                && arm.maximum_scored_dimensions <= MAX_SCORED_DIMENSIONS
-                && arm.amplification_and_page_caps_valid
+            .into_iter()
+            .map(move |arm| (budget, arm))
         })
-        .ok_or_else(|| invalid("no pseudoquery arm passes"))?;
-    Ok(V23BalancedSelectedArm {
-        arm: selected.arm,
+        .collect::<Vec<_>>();
+    if pairs.len() != expected.len()
+        || pairs.iter().zip(expected).any(|(pair, expected)| {
+            (pair.selected_pair.page_budget.get(), pair.selected_pair.arm) != expected
+                || pair.projected_page_bytes
+                    != u64::from(pair.selected_pair.page_budget.get()) * MAX_ENCODED_PAGE_BYTES
+        })
+    {
+        return Err(invalid("pseudoquery pair authority differs"));
+    }
+    let selected = pairs
+        .iter()
+        .find(|pair| {
+            pair.aggregate_recall_ppm >= 993_750
+                && pair.minimum_recall_ppm >= 900_000
+                && pair.oracle_attainment_ppm >= 995_000
+                && pair.every_query_has_budget
+                && pair.projected_page_bytes <= MAX_PROJECTED_PAGE_BYTES
+                && pair.maximum_scored_dimensions <= MAX_SCORED_DIMENSIONS
+                && pair.amplification_and_page_caps_valid
+        })
+        .ok_or_else(|| invalid("no pseudoquery pair passes"))?;
+    Ok(V23BalancedSelectedPairEvidence {
+        selected_pair: selected.selected_pair,
         official_query_reads: 0,
     })
 }
@@ -402,6 +483,7 @@ fn adjusted_score(
 fn ranked_pages(
     query: &[f32; 96],
     geometry: &V23BalancedServingGeometry,
+    page_budget: V23BalancedPageBudget,
     fused: bool,
 ) -> Result<(Vec<u32>, u64)> {
     let mut cells = geometry
@@ -435,8 +517,9 @@ fn ranked_pages(
             ));
         }
     }
-    if candidates.len() < 8 {
-        return Err(invalid("selector has fewer than eight pages"));
+    let page_budget = usize::from(page_budget.get());
+    if candidates.len() < page_budget {
+        return Err(invalid("selector has fewer pages than its frozen budget"));
     }
     candidates.sort_unstable_by(|left, right| {
         left.0
@@ -446,7 +529,7 @@ fn ranked_pages(
     let candidate_count = candidates.len();
     let selected = candidates
         .into_iter()
-        .take(8)
+        .take(page_budget)
         .map(|entry| entry.1)
         .collect::<Vec<_>>();
     let dimensions = u64::try_from(geometry.supercells.len())
@@ -521,10 +604,11 @@ pub(crate) fn prepare_v23_balanced_serving_geometry(
 pub(crate) fn select_v23_balanced_pages(
     query: &[f32; 96],
     geometry: &V23BalancedServingGeometry,
+    page_budget: V23BalancedPageBudget,
 ) -> Result<V23BalancedPageSelection> {
     let query = normalize_v23_incidence_vector(query)?;
-    let (pages_fused, scored_dimensions) = ranked_pages(&query, geometry, true)?;
-    let (pages_scalar, scalar_dimensions) = ranked_pages(&query, geometry, false)?;
+    let (pages_fused, scored_dimensions) = ranked_pages(&query, geometry, page_budget, true)?;
+    let (pages_scalar, scalar_dimensions) = ranked_pages(&query, geometry, page_budget, false)?;
     if scored_dimensions != scalar_dimensions
         || scored_dimensions > MAX_SCORED_DIMENSIONS
         || pages_fused != pages_scalar
@@ -541,6 +625,7 @@ pub(crate) fn select_v23_balanced_pages(
 pub(crate) fn measure_v23_balanced_selector(
     queries: &[[f32; 96]],
     geometry: &V23BalancedServingGeometry,
+    page_budget: V23BalancedPageBudget,
 ) -> Result<V23BalancedTimingEvidence> {
     const WARMUPS: u32 = 1_024;
     const SAMPLES: usize = 10_000;
@@ -550,7 +635,7 @@ pub(crate) fn measure_v23_balanced_selector(
     }
     let fused_once = |query: &[f32; 96]| {
         let query = normalize_v23_incidence_vector(std::hint::black_box(query))?;
-        ranked_pages(&query, geometry, true)
+        ranked_pages(&query, geometry, page_budget, true)
     };
     for iteration in 0..WARMUPS {
         let query = &queries[usize::try_from(iteration).unwrap() % queries.len()];
@@ -572,8 +657,8 @@ pub(crate) fn measure_v23_balanced_selector(
     let mut scored_dimensions = None;
     for query in queries {
         let query = normalize_v23_incidence_vector(query)?;
-        let (pages_fused, fused_dimensions) = ranked_pages(&query, geometry, true)?;
-        let (pages_scalar, scalar_dimensions) = ranked_pages(&query, geometry, false)?;
+        let (pages_fused, fused_dimensions) = ranked_pages(&query, geometry, page_budget, true)?;
+        let (pages_scalar, scalar_dimensions) = ranked_pages(&query, geometry, page_budget, false)?;
         if fused_dimensions != scalar_dimensions
             || fused_dimensions > MAX_SCORED_DIMENSIONS
             || pages_fused != pages_scalar
@@ -602,7 +687,9 @@ pub(crate) fn evaluate_v23_balanced_sample(
     containment_page_universe: Vec<u32>,
     selected_pages: Vec<u32>,
     scored_dimensions: u64,
+    page_budget: V23BalancedPageBudget,
 ) -> Result<V23BalancedSample> {
+    let page_budget = usize::from(page_budget.get());
     if ground_truth_page_assignments.len() != 10
         || ground_truth_page_assignments.iter().any(|pages| {
             pages.is_empty() || pages.len() > 2 || pages.windows(2).any(|pair| pair[0] >= pair[1])
@@ -611,13 +698,13 @@ pub(crate) fn evaluate_v23_balanced_sample(
         || containment_page_universe
             .windows(2)
             .any(|pair| pair[0] >= pair[1])
-        || selected_pages.len() != 8
+        || selected_pages.len() != page_budget
         || selected_pages
             .iter()
             .copied()
             .collect::<BTreeSet<_>>()
             .len()
-            != 8
+            != page_budget
         || scored_dimensions > MAX_SCORED_DIMENSIONS
     {
         return Err(invalid("sample selection authority differs"));
@@ -632,7 +719,8 @@ pub(crate) fn evaluate_v23_balanced_sample(
     {
         return Err(invalid("selector escapes containment universe"));
     }
-    let layout_oracle = best_v23_page_coverage(&ground_truth_page_assignments, 8)?;
+    let layout_oracle =
+        best_v23_balanced_page_coverage(&ground_truth_page_assignments, page_budget)?;
     let contained_truth = ground_truth_page_assignments
         .iter()
         .map(|assignments| {
@@ -647,7 +735,10 @@ pub(crate) fn evaluate_v23_balanced_sample(
     let containment_oracle = if contained_truth.is_empty() {
         None
     } else {
-        Some(best_v23_page_coverage(&contained_truth, 8)?)
+        Some(best_v23_balanced_page_coverage(
+            &contained_truth,
+            page_budget,
+        )?)
     };
     let layout_oracle_hits =
         u8::try_from(layout_oracle.hits).map_err(|_| invalid("layout hits overflow"))?;
@@ -696,17 +787,18 @@ fn validate_v23_balanced_sample_page_universe(
     Ok(())
 }
 
-pub(crate) fn evaluate_v23_balanced_pseudoquery_arm(
-    arm: V23BalancedArm,
+pub(crate) fn evaluate_v23_balanced_pseudoquery_pair(
+    selected_pair: V23BalancedSelectedPair,
     samples: &[V23BalancedSample],
     geometry: &V23BalancedServingGeometry,
-) -> Result<V23BalancedPseudoqueryArm> {
-    if samples.len() != 1_024 || geometry.selected_arm != arm {
-        return Err(invalid("pseudoquery cohort cardinality differs"));
+) -> Result<V23BalancedPseudoqueryPair> {
+    let page_budget = V23BalancedPageBudget::new(selected_pair.page_budget.get())?;
+    if samples.len() != 1_024 || geometry.selected_arm != selected_pair.arm {
+        return Err(invalid("pseudoquery pair cohort cardinality differs"));
     }
     let mut selector_hits = 0_u64;
     let mut oracle_hits = 0_u64;
-    let mut hits_per_query = Vec::with_capacity(samples.len());
+    let mut minimum_hits = 10_u8;
     let mut maximum_scored_dimensions = 0_u64;
     for (query_index, sample) in samples.iter().enumerate() {
         validate_v23_balanced_sample_page_universe(sample, geometry)?;
@@ -716,37 +808,37 @@ pub(crate) fn evaluate_v23_balanced_pseudoquery_arm(
             sample.containment_page_universe.clone(),
             sample.selected_pages.clone(),
             sample.scored_dimensions,
+            page_budget,
         )?;
         if *sample != expected {
-            return Err(invalid("pseudoquery sample evidence differs"));
+            return Err(invalid("pseudoquery pair sample evidence differs"));
         }
         selector_hits = selector_hits
             .checked_add(u64::from(sample.selector_hits))
-            .ok_or_else(|| invalid("pseudoquery selector hits overflow"))?;
+            .ok_or_else(|| invalid("pseudoquery pair selector hits overflow"))?;
         oracle_hits = oracle_hits
             .checked_add(u64::from(sample.layout_oracle_hits))
-            .ok_or_else(|| invalid("pseudoquery oracle hits overflow"))?;
-        hits_per_query.push(sample.selector_hits);
+            .ok_or_else(|| invalid("pseudoquery pair oracle hits overflow"))?;
+        minimum_hits = minimum_hits.min(sample.selector_hits);
         maximum_scored_dimensions = maximum_scored_dimensions.max(sample.scored_dimensions);
     }
-    hits_per_query.sort_unstable();
     let aggregate_recall_ppm = selector_hits
         .checked_mul(1_000_000)
-        .ok_or_else(|| invalid("pseudoquery aggregate recall overflows"))?
+        .ok_or_else(|| invalid("pseudoquery pair aggregate recall overflows"))?
         / 10_240;
-    let first_percentile_recall_ppm = u64::from(hits_per_query[10]) * 100_000;
     let oracle_attainment_ppm = selector_hits
         .checked_mul(1_000_000)
-        .ok_or_else(|| invalid("pseudoquery oracle attainment overflows"))?
+        .ok_or_else(|| invalid("pseudoquery pair oracle attainment overflows"))?
         / oracle_hits.max(1);
-    Ok(V23BalancedPseudoqueryArm {
-        arm,
+    Ok(V23BalancedPseudoqueryPair {
+        selected_pair,
         aggregate_recall_ppm,
-        first_percentile_recall_ppm,
+        minimum_recall_ppm: u64::from(minimum_hits) * 100_000,
         oracle_attainment_ppm,
-        every_query_has_eight_pages: samples
+        every_query_has_budget: samples
             .iter()
-            .all(|sample| sample.selected_pages.len() == 8),
+            .all(|sample| sample.selected_pages.len() == usize::from(page_budget.get())),
+        projected_page_bytes: u64::from(page_budget.get()) * MAX_ENCODED_PAGE_BYTES,
         maximum_scored_dimensions,
         amplification_and_page_caps_valid: true,
     })
@@ -772,14 +864,19 @@ fn canonical_json_value(value: serde_json::Value) -> serde_json::Value {
 }
 
 pub(crate) fn evaluate_v23_balanced_development(
-    selected_arm: V23BalancedArm,
+    selected_pair: V23BalancedSelectedPair,
     samples: Vec<V23BalancedSample>,
     geometry: &V23BalancedServingGeometry,
     timing: &V23BalancedTimingEvidence,
     projected_serving_bytes: u64,
 ) -> Result<V23BalancedResult> {
+    let selected_page_budget = V23BalancedPageBudget::new(selected_pair.page_budget.get())?;
+    let selected_arm = selected_pair.arm;
     if samples.len() != 32
         || geometry.selected_arm != selected_arm
+        || samples
+            .iter()
+            .any(|sample| sample.selected_pages.len() != usize::from(selected_page_budget.get()))
         || timing.warmups != 1_024
         || timing.samples_ns.len() != 10_000
         || timing.samples_ns.contains(&0)
@@ -830,7 +927,11 @@ pub(crate) fn evaluate_v23_balanced_development(
         return Err(invalid("development timing percentile differs"));
     }
     let scalar_simd_pages_equal = timing.scalar_simd_pages_equal;
-    let causal_class = if projected_serving_bytes >= MAX_SERVING_BYTES || !scalar_simd_pages_equal {
+    let projected_page_bytes = u64::from(selected_page_budget.get()) * MAX_ENCODED_PAGE_BYTES;
+    let causal_class = if projected_serving_bytes >= MAX_SERVING_BYTES
+        || projected_page_bytes > MAX_PROJECTED_PAGE_BYTES
+        || !scalar_simd_pages_equal
+    {
         V23BalancedCausalClass::AuthorityStop
     } else if aggregate_layout_oracle_hits < 318 || minimum_layout_oracle_hits < 9 {
         V23BalancedCausalClass::BalancedLayoutRejected
@@ -849,6 +950,7 @@ pub(crate) fn evaluate_v23_balanced_development(
         schema: RESULT_SCHEMA.to_owned(),
         claim_eligible: false,
         selected_arm,
+        selected_page_budget,
         samples,
         aggregate_layout_oracle_hits,
         minimum_layout_oracle_hits,
@@ -860,6 +962,7 @@ pub(crate) fn evaluate_v23_balanced_development(
         resident_cpu_samples_ns: timing.samples_ns.clone(),
         resident_cpu_p99_ns,
         projected_serving_bytes,
+        projected_page_bytes,
         scalar_simd_pages_equal,
         causal_class,
     };
@@ -871,6 +974,13 @@ pub(crate) fn canonical_v23_balanced_result_bytes(result: &V23BalancedResult) ->
     if result.schema != RESULT_SCHEMA
         || result.claim_eligible
         || result.samples.len() != 32
+        || V23BalancedPageBudget::new(result.selected_page_budget.get()).is_err()
+        || result.samples.iter().any(|sample| {
+            sample.selected_pages.len() != usize::from(result.selected_page_budget.get())
+        })
+        || result.projected_page_bytes
+            != u64::from(result.selected_page_budget.get()) * MAX_ENCODED_PAGE_BYTES
+        || result.projected_page_bytes > MAX_PROJECTED_PAGE_BYTES
         || result.timing_warmups != 1_024
         || result.resident_cpu_samples_ns.len() != 10_000
         || result.resident_cpu_samples_ns.contains(&0)
@@ -895,6 +1005,7 @@ pub(crate) fn canonical_v23_balanced_result_bytes(result: &V23BalancedResult) ->
             sample.containment_page_universe.clone(),
             sample.selected_pages.clone(),
             sample.scored_dimensions,
+            result.selected_page_budget,
         )?;
         if *sample != expected {
             return Err(invalid("sample evidence differs"));
@@ -946,32 +1057,17 @@ pub(crate) fn canonical_v23_balanced_result_bytes(result: &V23BalancedResult) ->
 mod tests {
     use half::f16;
 
+    use crate::v23_balanced_pages::{V23BalancedPageBudget, V23BalancedSelectedPair};
     use crate::v23_balanced_pages_arrow::{V23PageRow, V23SupercellRow};
 
     use super::{
         MAX_SERVING_BYTES, V23BalancedArm, V23BalancedCausalClass,
-        V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryArm, V23BalancedResult,
+        V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryPair, V23BalancedResult,
         V23BalancedSample, V23BalancedTimingEvidence, canonical_v23_balanced_result_bytes,
-        evaluate_v23_balanced_development, evaluate_v23_balanced_pseudoquery_arm,
+        evaluate_v23_balanced_development, evaluate_v23_balanced_pseudoquery_pair,
         evaluate_v23_balanced_sample, measure_v23_balanced_selector,
-        prepare_v23_balanced_serving_geometry, select_v23_balanced_arm, select_v23_balanced_pages,
+        prepare_v23_balanced_serving_geometry, select_v23_balanced_pages, select_v23_balanced_pair,
     };
-
-    fn pseudo_arm(
-        arm: V23BalancedArm,
-        aggregate_recall_ppm: u64,
-        first_percentile_recall_ppm: u64,
-    ) -> V23BalancedPseudoqueryArm {
-        V23BalancedPseudoqueryArm {
-            arm,
-            aggregate_recall_ppm,
-            first_percentile_recall_ppm,
-            oracle_attainment_ppm: 995_000,
-            every_query_has_eight_pages: true,
-            maximum_scored_dimensions: 1_376_256,
-            amplification_and_page_caps_valid: true,
-        }
-    }
 
     fn valid_geometry() -> super::V23BalancedServingGeometry {
         let mut centroid = [f16::from_f32(0.0); 96];
@@ -1016,16 +1112,63 @@ mod tests {
         }
     }
 
+    fn selected_pair(result: &V23BalancedResult) -> V23BalancedSelectedPair {
+        V23BalancedSelectedPair {
+            page_budget: result.selected_page_budget,
+            arm: result.selected_arm,
+        }
+    }
+
+    fn pseudo_pair(
+        budget: u8,
+        arm: V23BalancedArm,
+        aggregate_recall_ppm: u64,
+        minimum_recall_ppm: u64,
+    ) -> V23BalancedPseudoqueryPair {
+        let page_budget = V23BalancedPageBudget::new(budget).unwrap();
+        V23BalancedPseudoqueryPair {
+            selected_pair: V23BalancedSelectedPair { page_budget, arm },
+            aggregate_recall_ppm,
+            minimum_recall_ppm,
+            oracle_attainment_ppm: 995_000,
+            every_query_has_budget: true,
+            projected_page_bytes: u64::from(budget) * 122_880,
+            maximum_scored_dimensions: 1_376_256,
+            amplification_and_page_caps_valid: true,
+        }
+    }
+
     #[test]
-    fn v23_balanced_eval_selection_freezes_first_pass_without_official_inputs() {
-        let selected = select_v23_balanced_arm(&[
-            pseudo_arm(V23BalancedArm::Amp1125, 989_999, 900_000),
-            pseudo_arm(V23BalancedArm::Amp1250, 990_000, 900_000),
-            pseudo_arm(V23BalancedArm::Amp1500, 1_000_000, 1_000_000),
-        ])
-        .unwrap();
-        assert_eq!(selected.arm, V23BalancedArm::Amp1250);
+    fn v23_balanced_eval_selection_freezes_budget_major_pair_without_official_inputs() {
+        let mut pairs = Vec::new();
+        for budget in [8, 12, 16] {
+            for arm in [
+                V23BalancedArm::Amp1125,
+                V23BalancedArm::Amp1250,
+                V23BalancedArm::Amp1500,
+            ] {
+                pairs.push(pseudo_pair(budget, arm, 993_749, 900_000));
+            }
+        }
+        pairs[4] = pseudo_pair(12, V23BalancedArm::Amp1250, 993_750, 900_000);
+        pairs[6] = pseudo_pair(16, V23BalancedArm::Amp1125, 1_000_000, 1_000_000);
+
+        let selected = select_v23_balanced_pair(&pairs).unwrap();
+        assert_eq!(
+            selected.selected_pair,
+            V23BalancedSelectedPair {
+                page_budget: V23BalancedPageBudget::new(12).unwrap(),
+                arm: V23BalancedArm::Amp1250,
+            }
+        );
         assert_eq!(selected.official_query_reads, 0);
+
+        pairs[4] = pseudo_pair(12, V23BalancedArm::Amp1250, 993_749, 900_000);
+        let selected = select_v23_balanced_pair(&pairs).unwrap();
+        assert_eq!(selected.selected_pair.page_budget.get(), 16);
+
+        pairs.swap(0, 1);
+        assert!(select_v23_balanced_pair(&pairs).is_err());
     }
 
     fn valid_result() -> V23BalancedResult {
@@ -1050,9 +1193,10 @@ mod tests {
             })
             .collect();
         V23BalancedResult {
-            schema: "borsuk-v23-balanced-page-result-v1".to_owned(),
+            schema: "borsuk-v23-balanced-page-result-v2".to_owned(),
             claim_eligible: false,
             selected_arm: V23BalancedArm::Amp1250,
+            selected_page_budget: V23BalancedPageBudget::new(8).unwrap(),
             samples,
             aggregate_layout_oracle_hits: 319,
             minimum_layout_oracle_hits: 9,
@@ -1064,6 +1208,7 @@ mod tests {
             resident_cpu_samples_ns: vec![14_000_000; 10_000],
             resident_cpu_p99_ns: 14_000_000,
             projected_serving_bytes: 1_014_902_784,
+            projected_page_bytes: 8 * 122_880,
             scalar_simd_pages_equal: true,
             causal_class: V23BalancedCausalClass::BalancedPageCandidate,
         }
@@ -1087,6 +1232,14 @@ mod tests {
         let mut class_drift = result;
         class_drift.causal_class = V23BalancedCausalClass::PageSelectorRejected;
         assert!(canonical_v23_balanced_result_bytes(&class_drift).is_err());
+
+        let mut budget_drift = valid_result();
+        budget_drift.selected_page_budget = V23BalancedPageBudget::new(12).unwrap();
+        assert!(canonical_v23_balanced_result_bytes(&budget_drift).is_err());
+
+        let mut bytes_drift = valid_result();
+        bytes_drift.projected_page_bytes += 1;
+        assert!(canonical_v23_balanced_result_bytes(&bytes_drift).is_err());
 
         let mut timing_drift = valid_result();
         timing_drift.resident_cpu_samples_ns[9_899..].fill(16_000_000);
@@ -1112,6 +1265,7 @@ mod tests {
             (0_u32..8).collect(),
             vec![7, 0, 1, 2, 3, 4, 5, 6],
             1_376_256,
+            V23BalancedPageBudget::new(8).unwrap(),
         )
         .unwrap();
         assert_eq!(sample.layout_oracle_pages, (0_u32..8).collect::<Vec<_>>());
@@ -1130,6 +1284,36 @@ mod tests {
                 (0_u32..8).collect(),
                 vec![99, 0, 1, 2, 3, 4, 5, 6],
                 1_376_256,
+                V23BalancedPageBudget::new(8).unwrap(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v23_balanced_eval_sample_uses_the_frozen_page_budget_for_every_control() {
+        let sample = evaluate_v23_balanced_sample(
+            0,
+            (0_u32..10).map(|page| vec![page]).collect(),
+            (0_u32..16).collect(),
+            (0_u32..12).collect(),
+            1_376_256,
+            V23BalancedPageBudget::new(12).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(sample.selected_pages.len(), 12);
+        assert_eq!(sample.layout_oracle_hits, 10);
+        assert_eq!(sample.containment_hits, 10);
+        assert_eq!(sample.selector_hits, 10);
+
+        assert!(
+            evaluate_v23_balanced_sample(
+                0,
+                sample.ground_truth_page_assignments,
+                sample.containment_page_universe,
+                (0_u32..8).collect(),
+                1_376_256,
+                V23BalancedPageBudget::new(12).unwrap(),
             )
             .is_err()
         );
@@ -1141,7 +1325,7 @@ mod tests {
         let geometry = valid_geometry();
         let timing = timing_evidence(&fixture, 14_000_000, true);
         let candidate = evaluate_v23_balanced_development(
-            fixture.selected_arm,
+            selected_pair(&fixture),
             fixture.samples.clone(),
             &geometry,
             &timing,
@@ -1157,7 +1341,7 @@ mod tests {
 
         let slow_timing = timing_evidence(&fixture, 15_000_000, true);
         let slow = evaluate_v23_balanced_development(
-            fixture.selected_arm,
+            selected_pair(&fixture),
             fixture.samples.clone(),
             &geometry,
             &slow_timing,
@@ -1183,7 +1367,7 @@ mod tests {
             ..timing_evidence(&fixture, 14_000_000, false)
         };
         let invalid_simd = evaluate_v23_balanced_development(
-            fixture.selected_arm,
+            selected_pair(&fixture),
             layout_rejected,
             &geometry,
             &invalid_timing,
@@ -1196,7 +1380,7 @@ mod tests {
         );
 
         let invalid_memory = evaluate_v23_balanced_development(
-            fixture.selected_arm,
+            selected_pair(&fixture),
             valid_result().samples,
             &geometry,
             &timing,
@@ -1217,12 +1401,13 @@ mod tests {
             (0_u32..8).collect(),
             (0_u32..8).collect(),
             1_376_256,
+            V23BalancedPageBudget::new(8).unwrap(),
         )
         .unwrap();
         let outside_timing = timing_evidence(&outside, 14_000_000, true);
         assert!(
             evaluate_v23_balanced_development(
-                outside.selected_arm,
+                selected_pair(&outside),
                 outside.samples,
                 &geometry,
                 &outside_timing,
@@ -1233,7 +1418,7 @@ mod tests {
     }
 
     #[test]
-    fn v23_balanced_eval_selector_scores_top_cells_and_returns_exactly_eight_pages() {
+    fn v23_balanced_eval_selector_scores_top_cells_and_respects_frozen_page_budget() {
         let supercells = (0_u32..100)
             .map(|ordinal| {
                 let mut centroid = [f16::from_f32(0.0); 96];
@@ -1264,9 +1449,11 @@ mod tests {
         let geometry =
             prepare_v23_balanced_serving_geometry(&supercells, &pages, V23BalancedArm::Amp1500)
                 .unwrap();
-        let selected = select_v23_balanced_pages(&query, &geometry).unwrap();
-        assert_eq!(selected.pages, [0, 96, 1, 2, 3, 4, 5, 6]);
-        assert_eq!(selected.pages.len(), 8);
+        let selected =
+            select_v23_balanced_pages(&query, &geometry, V23BalancedPageBudget::new(12).unwrap())
+                .unwrap();
+        assert_eq!(selected.pages, [0, 96, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(selected.pages.len(), 12);
         assert_eq!(selected.scored_dimensions, (100 + 96) * 96);
         assert!(selected.scalar_simd_pages_equal);
     }
@@ -1306,7 +1493,12 @@ mod tests {
         let geometry =
             prepare_v23_balanced_serving_geometry(&supercells, &pages, V23BalancedArm::Amp1500)
                 .unwrap();
-        let evidence = measure_v23_balanced_selector(&[query, second_query], &geometry).unwrap();
+        let evidence = measure_v23_balanced_selector(
+            &[query, second_query],
+            &geometry,
+            V23BalancedPageBudget::new(8).unwrap(),
+        )
+        .unwrap();
         assert_eq!(evidence.warmups, 1_024);
         assert_eq!(evidence.samples_ns.len(), 10_000);
         assert!(!evidence.samples_ns.contains(&0));
@@ -1422,18 +1614,18 @@ mod tests {
     }
 
     #[test]
-    fn v23_balanced_eval_pseudoquery_arm_recomputes_burned_cohort_gates() {
+    fn v23_balanced_eval_pseudoquery_pair_recomputes_frozen_budget_gates() {
         let mut centroid = [f16::from_f32(0.0); 96];
         centroid[0] = f16::from_f32(1.0);
         let supercells = vec![V23SupercellRow {
             supercell_ordinal: 0,
             centroid,
             cosine_radius: 0.0,
-            primary_rows: 9,
+            primary_rows: 13,
             first_page: 0,
-            page_count: 9,
+            page_count: 13,
         }];
-        let pages = (0_u32..9)
+        let pages = (0_u32..13)
             .map(|page_ordinal| V23PageRow {
                 page_ordinal,
                 supercell_ordinal: 0,
@@ -1449,37 +1641,35 @@ mod tests {
         let samples = (0_u32..1_024)
             .map(|query_index| {
                 let misses_one = query_index < 11;
-                V23BalancedSample {
+                evaluate_v23_balanced_sample(
                     query_index,
-                    ground_truth_page_assignments: (0_u32..10)
-                        .map(|rank| vec![if misses_one && rank == 9 { 8 } else { rank % 8 }])
+                    (0_u32..10)
+                        .map(|rank| vec![if misses_one && rank == 9 { 12 } else { rank }])
                         .collect(),
-                    layout_oracle_pages: (0_u32..8).collect(),
-                    containment_page_universe: (0_u32..8).collect(),
-                    containment_oracle_pages: (0_u32..8).collect(),
-                    selected_pages: (0_u32..8).collect(),
-                    layout_oracle_hits: if misses_one { 9 } else { 10 },
-                    containment_hits: if misses_one { 9 } else { 10 },
-                    selector_hits: if misses_one { 9 } else { 10 },
-                    scored_dimensions: 1_376_256,
-                }
+                    (0_u32..13).collect(),
+                    (0_u32..12).collect(),
+                    1_376_256,
+                    V23BalancedPageBudget::new(12).unwrap(),
+                )
+                .unwrap()
             })
             .collect::<Vec<_>>();
-        let arm =
-            evaluate_v23_balanced_pseudoquery_arm(V23BalancedArm::Amp1250, &samples, &geometry)
-                .unwrap();
-        assert_eq!(arm.aggregate_recall_ppm, 998_925);
-        assert_eq!(arm.first_percentile_recall_ppm, 900_000);
-        assert_eq!(arm.oracle_attainment_ppm, 1_000_000);
-        assert!(arm.every_query_has_eight_pages);
-        assert_eq!(arm.maximum_scored_dimensions, 1_376_256);
-        assert!(arm.amplification_and_page_caps_valid);
+        let selected_pair = V23BalancedSelectedPair {
+            page_budget: V23BalancedPageBudget::new(12).unwrap(),
+            arm: V23BalancedArm::Amp1250,
+        };
+        let pair =
+            evaluate_v23_balanced_pseudoquery_pair(selected_pair, &samples, &geometry).unwrap();
+        assert_eq!(pair.aggregate_recall_ppm, 998_925);
+        assert_eq!(pair.minimum_recall_ppm, 900_000);
+        assert_eq!(pair.oracle_attainment_ppm, 998_925);
+        assert!(pair.every_query_has_budget);
+        assert_eq!(pair.projected_page_bytes, 12 * 122_880);
+        assert_eq!(pair.maximum_scored_dimensions, 1_376_256);
+        assert!(pair.amplification_and_page_caps_valid);
 
         let mut drift = samples;
         drift[0].selector_hits = 10;
-        assert!(
-            evaluate_v23_balanced_pseudoquery_arm(V23BalancedArm::Amp1250, &drift, &geometry,)
-                .is_err()
-        );
+        assert!(evaluate_v23_balanced_pseudoquery_pair(selected_pair, &drift, &geometry,).is_err());
     }
 }

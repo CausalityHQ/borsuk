@@ -25,13 +25,13 @@ use crate::{
     },
 };
 
-const MANIFEST_SCHEMA: &str = "borsuk-v23-balanced-page-manifest-v2";
-const RECEIPT_SCHEMA: &str = "borsuk-v23-balanced-page-receipt-v1";
+const MANIFEST_SCHEMA: &str = "borsuk-v23-balanced-page-manifest-v3";
+const RECEIPT_SCHEMA: &str = "borsuk-v23-balanced-page-receipt-v2";
 const DIMENSIONS: u64 = 96;
 const SUPERCELL_TARGET_ROWS: u64 = 12_288;
 const PRIMARY_ROWS_PER_PAGE: u64 = 384;
 const TOP_SUPERCELLS: u64 = 96;
-const SELECTED_PAGES: u64 = 8;
+const PAGE_BUDGETS: [u8; 3] = [8, 12, 16];
 const F16_MAX_BATCH_ROWS: usize = 262_144;
 const F16_MAX_FOOTER_BYTES: usize = 1024 * 1024;
 const F16_MAX_BATCH_METADATA_BYTES: usize = 1024 * 1024;
@@ -45,6 +45,37 @@ pub(crate) struct V23BalancedArmConfig {
     pub(crate) name: String,
     pub(crate) amplification_ppm: u64,
     pub(crate) replicas_per_page: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum V23BalancedArm {
+    Amp1125,
+    Amp1250,
+    Amp1500,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct V23BalancedPageBudget(pub(crate) u8);
+
+impl V23BalancedPageBudget {
+    pub(crate) fn new(value: u8) -> Result<Self> {
+        PAGE_BUDGETS
+            .contains(&value)
+            .then_some(Self(value))
+            .ok_or_else(|| invalid("page budget differs"))
+    }
+
+    pub(crate) fn get(self) -> u8 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct V23BalancedSelectedPair {
+    pub(crate) page_budget: V23BalancedPageBudget,
+    pub(crate) arm: V23BalancedArm,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,7 +104,7 @@ pub(crate) struct V23BalancedManifest {
     pub(crate) supercell_target_rows: u64,
     pub(crate) primary_rows_per_page: u16,
     pub(crate) top_supercells: u16,
-    pub(crate) selected_pages: u8,
+    pub(crate) page_budgets: Vec<V23BalancedPageBudget>,
     pub(crate) arms: Vec<V23BalancedArmConfig>,
     pub(crate) ordered_inputs: Vec<V23BalancedIdentity>,
     pub(crate) output_roles: Vec<String>,
@@ -96,6 +127,7 @@ pub(crate) struct V23BalancedReceipt {
     pub(crate) manifest_sha256: String,
     pub(crate) ordered_inputs: Vec<V23BalancedIdentity>,
     pub(crate) outputs: Vec<V23BalancedIdentity>,
+    pub(crate) selected_pair: Option<V23BalancedSelectedPair>,
     pub(crate) stop: Option<V23BalancedStop>,
 }
 
@@ -211,7 +243,11 @@ pub(crate) fn validate_v23_balanced_manifest(manifest: &V23BalancedManifest) -> 
         || manifest.supercell_target_rows != SUPERCELL_TARGET_ROWS
         || u64::from(manifest.primary_rows_per_page) != PRIMARY_ROWS_PER_PAGE
         || u64::from(manifest.top_supercells) != TOP_SUPERCELLS
-        || u64::from(manifest.selected_pages) != SELECTED_PAGES
+        || manifest
+            .page_budgets
+            .iter()
+            .map(|budget| budget.get())
+            .ne(PAGE_BUDGETS)
         || manifest.arms.as_slice() != expected_arms()
         || manifest
             .output_roles
@@ -940,6 +976,7 @@ pub fn run_v23_balanced_local_request(request: V23BalancedLocalRequest) -> Resul
         manifest_sha256: format!("{:x}", Sha256::digest(&manifest_bytes)),
         ordered_inputs: manifest.ordered_inputs,
         outputs: Vec::new(),
+        selected_pair: None,
         stop: None,
     })
 }
@@ -951,7 +988,13 @@ pub(crate) fn canonical_v23_balanced_receipt_bytes(
         || receipt.claim_eligible
         || !valid_lower_hex(&receipt.manifest_sha256, 64)
         || receipt.ordered_inputs.is_empty()
-        || (receipt.stop.is_some() && !receipt.outputs.is_empty())
+        || (receipt.stop.is_some()
+            && (!receipt.outputs.is_empty() || receipt.selected_pair.is_some()))
+        || (receipt.outputs.is_empty() && receipt.selected_pair.is_some())
+        || (!receipt.outputs.is_empty() && receipt.selected_pair.is_none())
+        || receipt
+            .selected_pair
+            .is_some_and(|selected| V23BalancedPageBudget::new(selected.page_budget.get()).is_err())
     {
         return Err(invalid("receipt authority differs"));
     }
@@ -985,12 +1028,14 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        V23BalancedArmConfig, V23BalancedIdentity, V23BalancedLocalMode, V23BalancedLocalRequest,
-        V23BalancedManifest, V23BalancedPrimaryConstructionRequest, V23BalancedReceipt,
-        V23BalancedReplicaConstructionRequest, V23BalancedStop, build_v23_balanced_primary,
-        build_v23_balanced_replicas, canonical_v23_balanced_receipt_bytes, expected_output_roles,
-        project_v23_balanced_shape, read_v23_balanced_f16_rows, route_v23_balanced_corpus,
-        run_v23_balanced_local_request, validate_v23_balanced_manifest,
+        V23BalancedArm, V23BalancedArmConfig, V23BalancedIdentity, V23BalancedLocalMode,
+        V23BalancedLocalRequest, V23BalancedManifest, V23BalancedPageBudget,
+        V23BalancedPrimaryConstructionRequest, V23BalancedReceipt,
+        V23BalancedReplicaConstructionRequest, V23BalancedSelectedPair, V23BalancedStop,
+        build_v23_balanced_primary, build_v23_balanced_replicas,
+        canonical_v23_balanced_receipt_bytes, expected_output_roles, project_v23_balanced_shape,
+        read_v23_balanced_f16_rows, route_v23_balanced_corpus, run_v23_balanced_local_request,
+        validate_v23_balanced_manifest,
     };
     use crate::{
         v23_balanced_pages_build::V23ReplicaArmOutput,
@@ -1046,7 +1091,7 @@ mod tests {
 
     fn manifest_fixture(rows: u64) -> V23BalancedManifest {
         V23BalancedManifest {
-            schema: "borsuk-v23-balanced-page-manifest-v2".to_owned(),
+            schema: "borsuk-v23-balanced-page-manifest-v3".to_owned(),
             claim_eligible: false,
             source_commit: sha256(0x11).chars().take(40).collect(),
             source_archive_sha256: sha256(0x12),
@@ -1061,7 +1106,11 @@ mod tests {
             supercell_target_rows: 12_288,
             primary_rows_per_page: 384,
             top_supercells: 96,
-            selected_pages: 8,
+            page_budgets: vec![
+                V23BalancedPageBudget::new(8).unwrap(),
+                V23BalancedPageBudget::new(12).unwrap(),
+                V23BalancedPageBudget::new(16).unwrap(),
+            ],
             arms: vec![
                 V23BalancedArmConfig {
                     name: "amp-1125".to_owned(),
@@ -1120,6 +1169,12 @@ mod tests {
         changed.arms[0].replicas_per_page = 49;
         mutations.push(changed);
         let mut changed = valid.clone();
+        changed.page_budgets.swap(0, 1);
+        mutations.push(changed);
+        let mut changed = valid.clone();
+        changed.page_budgets[2] = V23BalancedPageBudget(15);
+        mutations.push(changed);
+        let mut changed = valid.clone();
         changed.ordered_inputs[0].digest_algorithm = "blake3".to_owned();
         mutations.push(changed);
         let mut changed = valid.clone();
@@ -1171,7 +1226,7 @@ mod tests {
     #[test]
     fn v23_balanced_authority_receipt_is_claim_ineligible_and_canonical() {
         let receipt = V23BalancedReceipt {
-            schema: "borsuk-v23-balanced-page-receipt-v1".to_owned(),
+            schema: "borsuk-v23-balanced-page-receipt-v2".to_owned(),
             claim_eligible: false,
             manifest_sha256: sha256(0x31),
             ordered_inputs: manifest_fixture(100_000_000).ordered_inputs,
@@ -1180,6 +1235,10 @@ mod tests {
                 .enumerate()
                 .map(|(index, role)| identity(role, 0x32 + u8::try_from(index).unwrap()))
                 .collect(),
+            selected_pair: Some(V23BalancedSelectedPair {
+                page_budget: V23BalancedPageBudget::new(12).unwrap(),
+                arm: V23BalancedArm::Amp1250,
+            }),
             stop: None,
         };
         let bytes = canonical_v23_balanced_receipt_bytes(&receipt).unwrap();
@@ -1194,6 +1253,12 @@ mod tests {
         assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
         let mut changed = receipt.clone();
         changed.outputs.swap(0, 1);
+        assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
+        let mut changed = receipt.clone();
+        changed.selected_pair.as_mut().unwrap().page_budget = V23BalancedPageBudget(9);
+        assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
+        let mut changed = receipt.clone();
+        changed.selected_pair = None;
         assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
         let mut changed = receipt;
         changed.stop = Some(V23BalancedStop::Resource);
