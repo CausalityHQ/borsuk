@@ -23,9 +23,10 @@ use crate::{
     },
     v23_balanced_pages_eval::{
         V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryEvidence,
-        V23BalancedPseudoqueryPair, V23BalancedSample, V23BalancedSelectedPairEvidence,
-        V23BalancedServingGeometry, build_v23_balanced_sample, classify_v23_balanced_pair_ladder,
-        evaluate_v23_balanced_pseudoquery_pair_for_expected_count,
+        V23BalancedPseudoqueryPair, V23BalancedResult, V23BalancedSample,
+        V23BalancedSelectedPairEvidence, V23BalancedServingGeometry, build_v23_balanced_sample,
+        classify_v23_balanced_pair_ladder, evaluate_v23_balanced_development,
+        evaluate_v23_balanced_pseudoquery_pair_for_expected_count, measure_v23_balanced_selector,
         prepare_v23_balanced_serving_geometry,
     },
     v23_balanced_pages_train::{
@@ -1256,6 +1257,82 @@ pub(crate) fn build_v23_balanced_local_construction_for_shape(
     })
 }
 
+pub(crate) fn evaluate_v23_balanced_development_cohort(
+    construction: &V23BalancedLocalConstruction,
+    queries: &[[f32; 96]],
+    neighbors: &[(u32, Vec<u64>)],
+    projected_serving_bytes: u64,
+) -> Result<V23BalancedResult> {
+    if queries.len() != 32
+        || neighbors.len() != queries.len()
+        || neighbors.iter().enumerate().any(|(index, sample)| {
+            sample.0 != u32::try_from(index).unwrap()
+                || sample.1.len() != 10
+                || sample.1.iter().copied().collect::<BTreeSet<_>>().len() != 10
+        })
+    {
+        return Err(invalid("development cohort authority differs"));
+    }
+    let selected = construction
+        .ladder
+        .selected
+        .ok_or_else(|| invalid("development cohort opened without a passing pair"))?
+        .selected_pair;
+    let arm_index = match selected.arm {
+        V23BalancedArm::Amp1125 => 0,
+        V23BalancedArm::Amp1250 => 1,
+        V23BalancedArm::Amp1500 => 2,
+    };
+    let replica = &construction.replicas[arm_index];
+    if balanced_replica_arm(replica)? != selected.arm {
+        return Err(invalid("development arm authority differs"));
+    }
+    let requested = neighbors
+        .iter()
+        .flat_map(|sample| sample.1.iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let assignments = read_v23_row_page_assignments(
+        &construction.assignment_paths[arm_index],
+        &replica.row_pages,
+        &replica.row_pages.role,
+        u32::try_from(replica.pages.len())
+            .map_err(|_| invalid("development page count overflows"))?,
+        &requested,
+    )?;
+    let geometry = prepare_v23_balanced_serving_geometry(
+        &construction.primary.primary.supercells,
+        &replica.pages,
+        selected.arm,
+    )?;
+    let samples = queries
+        .iter()
+        .zip(neighbors)
+        .map(|(query, neighbor)| {
+            let truth = neighbor
+                .1
+                .iter()
+                .map(|source_ordinal| {
+                    let index = requested
+                        .binary_search(source_ordinal)
+                        .map_err(|_| invalid("development neighbor assignment is missing"))?;
+                    Ok(assignments[index].clone())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            build_v23_balanced_sample(neighbor.0, query, truth, &geometry, selected.page_budget)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let timing = measure_v23_balanced_selector(queries, &geometry, selected.page_budget)?;
+    evaluate_v23_balanced_development(
+        selected,
+        samples,
+        &geometry,
+        &timing,
+        projected_serving_bytes,
+    )
+}
+
 pub(crate) fn evaluate_v23_balanced_pseudoquery_ladder(
     primary: &V23BalancedPrimaryConstruction,
     replicas: &[V23ReplicaArmBuild],
@@ -1488,7 +1565,7 @@ mod tests {
         V23BalancedReplicaConstructionRequest, V23BalancedSelectedPair, V23BalancedStop,
         build_v23_balanced_local_construction_for_shape, build_v23_balanced_primary,
         build_v23_balanced_pseudoquery_samples, build_v23_balanced_replicas,
-        canonical_v23_balanced_receipt_bytes,
+        canonical_v23_balanced_receipt_bytes, evaluate_v23_balanced_development_cohort,
         evaluate_v23_balanced_pseudoquery_ladder_for_expected_count, expected_output_roles,
         project_v23_balanced_shape, read_v23_balanced_f16_rows, route_v23_balanced_corpus,
         run_v23_balanced_local_request, validate_v23_balanced_manifest,
@@ -2277,9 +2354,36 @@ mod tests {
         .unwrap();
         assert_eq!(construction.outputs.len(), 10);
         assert_eq!(construction.ladder.pairs.len(), 9);
+        assert!(construction.ladder.selected.is_some());
         assert_eq!(construction.primary.primary.source_rows, 64);
         assert_eq!(construction.replicas.len(), 3);
         assert!(!output.join(".scratch").exists());
         assert_eq!(output.read_dir().unwrap().count(), 10);
+
+        let queries = rows[..32]
+            .iter()
+            .map(|row| row.map(f16::to_f32))
+            .collect::<Vec<_>>();
+        let neighbors = (0_u32..32)
+            .map(|query_index| (query_index, (0_u64..10).collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
+        let result = evaluate_v23_balanced_development_cohort(
+            &construction,
+            &queries,
+            &neighbors,
+            project_v23_balanced_shape(64).unwrap().serving_bytes,
+        )
+        .unwrap();
+        assert_eq!(result.samples.len(), 32);
+        assert_eq!(
+            result.selected_page_budget,
+            construction
+                .ladder
+                .selected
+                .unwrap()
+                .selected_pair
+                .page_budget
+        );
+        assert_eq!(result.resident_cpu_samples_ns.len(), 10_000);
     }
 }
