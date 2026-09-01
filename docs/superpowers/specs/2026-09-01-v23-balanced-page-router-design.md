@@ -9,13 +9,15 @@
 Build the smallest credible falsifier for a production read layout that can
 meet BORSUK's frozen Deep Image constraints at 100 million rows:
 
-- exactly eight page reads per query;
+- the smallest preregistered page budget in `8, 12, 16` that passes every
+  quality and resource gate;
 - at least 99.375% aggregate recall@10 (`318/320`) on the burned development
   cohort;
 - at least 90% recall@10 for every development query;
 - at least 99.5% attainment of the layout oracle;
 - less than 15 ms resident CPU p99;
 - less than 3 GiB projected serving RAM; and
+- at most 16 page GETs and 1,966,080 projected encoded page bytes per query;
 - no benchmark-query-dependent construction or parameter selection.
 
 This is an architectural experiment, not a compatibility extension. BORSUK is
@@ -50,8 +52,8 @@ either violate the CPU gate or preserve the known containment defect.
 
 Construct balanced supercells and balanced pages from normalized corpus
 vectors. At query time, score every supercell centroid, score page centroids
-under the best supercells, and select exactly eight pages. A single
-query-independent margin replica can bridge a page boundary.
+under the best supercells, and select the frozen budget of 8, 12, or 16 pages.
+A single query-independent margin replica can bridge a page boundary.
 
 This makes page membership directly routable, keeps serving state proportional
 to page count rather than row count, and has enough measured SIMD headroom for
@@ -86,7 +88,7 @@ It reuses:
 - the frozen query and neighbor Parquet artifacts;
 - fused 8x12 SIMD scoring and scalar differential controls;
 - bounded Arrow external-sort runs;
-- exact eight-page coverage;
+- exact bounded-page coverage for each preregistered budget;
 - canonical typed JSON manifests and receipts; and
 - existing resource-stop and Spot orchestration patterns.
 
@@ -106,8 +108,9 @@ the registered source shards.
 The construction manifest binds the exact source commit, source archive,
 dataset identity, ordered source-shard identities, f16 control identity, query
 and neighbor identities, deterministic seed, shape, output roles, scratch
-limit, and resource-stop envelope. Query and neighbor bytes are not available
-to construction or pseudoquery selection processes.
+limit, the exact page-budget ladder `[8, 12, 16]`, and resource-stop envelope.
+It does not carry a legacy scalar `selected_pages` field. Query and neighbor
+bytes are not available to construction or pseudoquery selection processes.
 
 ### Deterministic training split
 
@@ -212,9 +215,24 @@ Three fixed arms are constructed from the same sorted margin candidates:
 
 Candidates are accepted in margin order while both the global occurrence cap
 and target-page cap permit them. A cap can reduce but never increase an arm's
-actual amplification. The selected arm is the first arm, in table order, that
-passes the pseudoquery gates. If no arm passes, construction is classified
+actual amplification. Arm and page-budget selection use this fixed order:
+
+```text
+(8, amp-1125), (8, amp-1250), (8, amp-1500),
+(12, amp-1125), (12, amp-1250), (12, amp-1500),
+(16, amp-1125), (16, amp-1250), (16, amp-1500)
+```
+
+The first pair that passes the pseudoquery gates is frozen. This minimizes
+GET count and projected page bytes first and amplification second without
+consulting the burned development cohort. If no pair passes, construction is classified
 `pseudoquery-layout-rejected`; the burned cohort is never opened.
+
+For every arm the selector produces one deterministic ranked page list and
+evaluates its 8-, 12-, and 16-page prefixes. All nine pair metrics are
+materialized before applying the fixed selection order. The selected page
+budget and arm are bound into the construction terminal receipt before the
+official query and neighbor capabilities become available.
 
 After replicas are assigned, the final page centroid and maximum cosine radius
 are recomputed from all primary and replica occurrences. Each page contains at
@@ -273,6 +291,21 @@ use BLAKE3 internally but are never registered outputs. Receipts independently
 recompute schemas, row counts, page counts, amplification, memory projections,
 and every parent/output binding before canonical serialization.
 
+Each future production page body is bounded to 122,880 encoded bytes. The
+selected budget is therefore both the exact GET count and a conservative byte
+projection of `selected_page_budget * 122,880`, capped at 1,966,080 bytes. This
+projection includes up to 576 occurrences of one `uint64` source ordinal plus
+one 96-dimensional f16 vector and bounded page metadata. The falsifier records
+the projection; a later page-body integration must authenticate the actual
+bytes before any production or D3 qualification.
+
+The typed result records `selected_page_budget: uint8` and rejects values
+outside `8, 12, 16`. Every sample must contain exactly that many distinct,
+in-range page ordinals. Serialization independently recomputes the selected
+pair, sample hits, aggregates, oracle attainment, timing evidence, memory
+and page-byte projections, and causal class; changing the budget or any
+dependent field without recomputing all authority is rejected.
+
 ## Pseudoquery arm selection
 
 For each of the 1,024 pseudoqueries, the corpus-routing pass also computes ten
@@ -286,21 +319,23 @@ scored dimensions and uses a bounded top-ten heap; it cannot allocate or sort
 all row-distance pairs. Its work count, backend, scalar differential, and
 leave-self-out evidence are registered before arm selection.
 
-An arm passes pseudoquery selection only if it meets all of:
+An arm/budget pair passes pseudoquery selection only if it meets all of:
 
-- aggregate recall@10 at least 990,000 ppm;
-- first-percentile per-query recall@10 at least 900,000 ppm;
+- aggregate recall@10 at least 993,750 ppm;
+- minimum per-query recall@10 at least 900,000 ppm;
 - oracle attainment at least 995,000 ppm;
-- exactly eight distinct pages for every query;
+- exactly its preregistered 8-, 12-, or 16-page budget for every query;
+- projected encoded page bytes at most 1,966,080;
 - at most 4,000,000 scored dimensions per query; and
 - its registered amplification and per-page occurrence caps.
 
-The first passing arm is frozen before the official query and neighbor objects
+The first passing pair is frozen before the official query and neighbor objects
 become readable. No parameter can be changed after opening the burned cohort.
 
 ## Serving selector
 
-The read selector performs these deterministic steps:
+The read selector performs these deterministic steps using the page budget
+frozen by pseudoquery selection:
 
 1. normalize the query;
 2. fused-SIMD score all supercell centroids by cosine distance;
@@ -310,13 +345,16 @@ The read selector performs these deterministic steps:
 5. fused-SIMD score page centroids;
 6. rank pages by
    `(max(0, centroid_distance - cosine_radius), page_ordinal)`; and
-7. return the first eight distinct page ordinals.
+7. return the first `page_budget` distinct page ordinals.
 
-Fewer than eight candidates, a duplicate, a nonfinite score, backend drift, or
-scalar/SIMD page disagreement is a terminal authority failure. The scientific
+During pseudoquery selection, fewer candidates than a candidate budget fails
+only that pair. After selection, fewer candidates than the frozen budget, a duplicate, a nonfinite score,
+backend drift, or scalar/SIMD page disagreement is a terminal authority
+failure. The scientific
 timing includes normalization, both centroid stages, bounded selection, and
 page ordering. It excludes page GETs and exact reranking, which are separately
-bounded by the existing eight-page wave contract.
+projected for the frozen page budget and require a new production page-body
+integration after this claim-ineligible falsifier passes.
 
 The same geometry supports high-throughput writes without an 8,192-centroid
 scan: writes traverse the balanced construction tree and score only the pages
@@ -325,7 +363,7 @@ performance claim is made by this experiment.
 
 ## Causal development evaluation
 
-Only after the selected arm and its terminal construction receipt are frozen
+Only after the selected pair and its terminal construction receipt are frozen
 may the development process authenticate and open query ordinals 0--31 and
 their neighbor Parquet rows.
 
@@ -335,7 +373,8 @@ For each query it records three controls:
    and replica pages across all pages.
 2. **Supercell containment:** exact optimal cover restricted to pages under the
    selected 96 supercells.
-3. **Serving selector:** the fixed centroid-minus-radius eight-page result.
+3. **Serving selector:** the fixed centroid-minus-radius result at the frozen
+   page budget.
 
 Classification precedence is fixed:
 
@@ -354,17 +393,19 @@ The serving candidate requires:
 - at least `318/320` hits;
 - at least `9/10` hits for every query;
 - at least 995,000 ppm attainment of the new layout oracle;
-- exactly eight distinct pages per query;
+- exactly the frozen 8-, 12-, or 16-page budget per query;
 - less than 15 ms resident CPU p99 over at least 10,000 raw iterations after
   1,024 warmups;
 - identical scalar and fused-SIMD pages;
 - at most 4,000,000 scored dimensions per query;
 - less than 3 GiB projected 100M serving RAM; and
-- the selected arm's amplification cap.
+- at most the frozen budget's 8, 12, or 16 page GETs and at most 1,966,080
+  projected encoded page bytes; and
+- the selected pair's amplification cap.
 
-A failed burned confirmation ends this architecture. It does not authorize a
-new amplification arm, supercell count, top-supercell count, radius rule, or
-threshold on the same 32 queries.
+A failed burned confirmation ends this architecture. It does not authorize
+trying a larger page budget, a new amplification arm, supercell count,
+top-supercell count, radius rule, or threshold on the same 32 queries.
 
 ## 100M projections
 
@@ -434,10 +475,14 @@ classification branches.
 
 If `balanced-page-candidate` passes, the exact source revision and format are
 frozen for a separate production page-body integration and sealed holdout plan.
-Only after those gates may D3 or competitor claims be authorized.
+Budgets 12 and 16 deliberately supersede the historical eight-page-wave
+contract; the old D2/D3 harness cannot qualify them. A new versioned
+page-body/read-wave contract must prove the 122,880-byte page cap, frozen GET
+count, 1,966,080-byte wave cap, transient capacity, and failure behavior before
+any D3 or competitor claim is authorized.
 
 If the layout oracle fails, balanced geometric pages are rejected and witness
 routing is the next architecture. If containment passes but the page selector
 fails narrowly, a separately designed page rescorer may be considered. No
-failed result is repaired by relaxing eight pages, 15 ms, 3 GiB, or the frozen
-quality gates.
+failed result is repaired by changing the frozen page budget, 15 ms, 3 GiB, or
+the frozen quality gates.
