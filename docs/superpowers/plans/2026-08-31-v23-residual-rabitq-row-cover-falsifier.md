@@ -73,7 +73,7 @@ pub(crate) fn canonical_v23_rabitq_receipt_bytes(value: &V23RaBitQReceipt) -> Re
 pub(crate) fn project_v23_rabitq_serving_bytes(rows: u64) -> Result<V23RaBitQServingProjection>;
 ```
 
-Use `#[serde(deny_unknown_fields)]`. Construction input roles are `tree-receipt`, `incidence-tree`, `page-roster`; evaluation input roles are `construction-receipt`, `incidence-tree`, `row-codes`, `leaf-offsets`, `centroids`, `rotation`, `f16-control`, `d2-report`, `query-parquet`. A manifest carries an exact output URI prefix and ordered role names, never pre-execution output digests. Construction output roles are `row-codes`, `leaf-offsets`, `centroids`, `rotation`, `f16-control`, `construction-receipt`; evaluation output role is `screen-result`. Projection is `rows*28 + 65_537*8 + 65_536*96*2 + 40_369_836 + 96*96*4 + 64*1024*1024`.
+Use `#[serde(deny_unknown_fields)]`. Construction input roles are `tree-receipt`, `incidence-tree`, `page-roster`; evaluation input roles are `construction-receipt`, `incidence-tree`, `row-codes`, `leaf-offsets`, `centroids`, `rotation`, `f16-control`, `d2-report`, `query-parquet`. A construction manifest carries an exact page-namespace URI prefix, output URI prefix, and ordered role names, never pre-execution output digests. Construction data-output roles are `row-codes`, `leaf-offsets`, `centroids`, `rotation`, and `f16-control`; the terminal `construction-receipt` separately binds the manifest and those five actual identities. Evaluation output role is `screen-result`. Projection is `rows*28 + 65_537*8 + 65_536*96*2 + 40_369_836 + 96*96*4 + 64*1024*1024`.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -343,7 +343,7 @@ Run the Rust example tests, both Python modules, fmt, Ruff 0.15.20 on the new sc
 
 **Interfaces:**
 - Consumes one authenticated BVP2 page-roster/body pass only in the Python research adapter.
-- Produces a standard Arrow IPC occurrence stream on stdin, six exact construction outputs, a terminal construction receipt, and an exact post-construction development manifest.
+- Produces a standard Arrow IPC occurrence stream on stdin, five exact Arrow construction artifacts, a terminal construction receipt, and an exact post-construction development manifest.
 
 - [ ] **Step 1: Stage authority and stream REDs**
 

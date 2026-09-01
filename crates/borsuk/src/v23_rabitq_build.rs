@@ -46,6 +46,7 @@ where
 {
     pub(crate) tree: &'a V23IncidenceTree,
     pub(crate) source_rows: I,
+    pub(crate) expected_source_occurrences: u64,
     pub(crate) expected_unique_rows: u64,
     pub(crate) rotation_seed: [u8; 32],
     pub(crate) scratch_directory: &'a Path,
@@ -555,6 +556,8 @@ where
 {
     validate_paths(request.scratch_directory, request.output_directory)?;
     if request.expected_unique_rows == 0
+        || request.expected_source_occurrences < request.expected_unique_rows
+        || request.expected_source_occurrences > request.expected_unique_rows.saturating_mul(2)
         || request.maximum_sort_run_bytes == 0
         || request.maximum_sort_run_bytes > MAXIMUM_RUN_BYTES
         || !request.output_uri_prefix.starts_with("s3://")
@@ -629,11 +632,11 @@ where
         source_occurrences = source_occurrences
             .checked_add(1)
             .ok_or_else(|| invalid("V23 RaBitQ source row count overflows"))?;
-        if source_occurrences > request.expected_unique_rows.saturating_mul(2) {
+        if source_occurrences > request.expected_source_occurrences {
             return Err(invalid("V23 RaBitQ source row count differs"));
         }
     }
-    if source_occurrences < request.expected_unique_rows {
+    if source_occurrences != request.expected_source_occurrences {
         return Err(invalid("V23 RaBitQ source row count differs"));
     }
     if !buffer.is_empty() {
@@ -1008,6 +1011,7 @@ mod tests {
         V23RaBitQBuildRequest {
             tree,
             source_rows: rows,
+            expected_source_occurrences: expected_rows,
             expected_unique_rows: expected_rows,
             rotation_seed: [0x42; 32],
             scratch_directory: scratch,
@@ -1195,15 +1199,16 @@ mod tests {
             let tree = tree(32);
             let scratch = tempdir().unwrap();
             let output = tempdir().unwrap();
-            let built = build_v23_rabitq_artifacts(request(
+            let mut request = request(
                 &tree,
                 rows.into_iter().map(Ok),
                 1,
                 scratch.path(),
                 output.path(),
                 8_192,
-            ))
-            .unwrap();
+            );
+            request.expected_source_occurrences = 2;
+            let built = build_v23_rabitq_artifacts(request).unwrap();
             let bytes = fs::read(output.path().join("row-codes.arrow")).unwrap();
             let decoded = read_v23_rabitq_row_planes(&bytes, &built.outputs[0]).unwrap();
             assert_eq!(decoded.primary_pages, vec![3]);

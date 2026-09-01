@@ -208,8 +208,9 @@ pub use v23_incidence::{
 pub use v23_incidence_eval::{V23IncidenceScreenAuthority, V23IncidenceScreenObjectIdentity};
 #[doc(hidden)]
 pub use v23_rabitq_local::{
+    V23RaBitQConstructionLocalPaths, V23RaBitQConstructionLocalRunRequest,
     V23RaBitQLocalArtifactPaths, V23RaBitQLocalObjectIdentity, V23RaBitQLocalRunRequest,
-    run_v23_rabitq_local_request,
+    run_v23_rabitq_construction_local_request, run_v23_rabitq_local_request,
 };
 
 /// Maximum CPU worker threads selected by the automatic small-runtime policy.

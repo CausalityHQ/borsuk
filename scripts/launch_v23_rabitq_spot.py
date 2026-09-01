@@ -45,6 +45,17 @@ class LaunchPlan:
     client_token: str
 
 
+@dataclasses.dataclass(frozen=True)
+class ConstructionLaunchPlan(LaunchPlan):
+    d2_report_uri: str
+    d2_report_sha256: str
+    d2_report_bytes: int
+    query_parquet_uri: str
+    query_parquet_sha256: str
+    query_parquet_bytes: int
+    development_output_prefix: str
+
+
 def _s3(uri: str) -> tuple[str, str]:
     parsed = urlsplit(uri)
     if parsed.scheme != "s3" or not parsed.netloc or not parsed.path.lstrip("/"):
@@ -109,11 +120,114 @@ def build_launch_plan(
     )
 
 
+def build_construction_launch_plan(
+    *,
+    run_id: str,
+    source_commit: str,
+    source_archive_uri: str,
+    source_archive_sha256: str,
+    source_archive_bytes: int,
+    binary_uri: str,
+    binary_sha256: str,
+    binary_bytes: int,
+    manifest_uri: str,
+    manifest_sha256: str,
+    manifest_bytes: int,
+    d2_report_uri: str,
+    d2_report_sha256: str,
+    d2_report_bytes: int,
+    query_parquet_uri: str,
+    query_parquet_sha256: str,
+    query_parquet_bytes: int,
+    development_output_prefix: str,
+    output_prefix: str,
+) -> ConstructionLaunchPlan:
+    base = build_launch_plan(
+        run_id=run_id,
+        source_commit=source_commit,
+        source_archive_uri=source_archive_uri,
+        source_archive_sha256=source_archive_sha256,
+        source_archive_bytes=source_archive_bytes,
+        binary_uri=binary_uri,
+        binary_sha256=binary_sha256,
+        binary_bytes=binary_bytes,
+        manifest_uri=manifest_uri,
+        manifest_sha256=manifest_sha256,
+        manifest_bytes=manifest_bytes,
+        output_prefix=output_prefix,
+    )
+    if (
+        any(
+            LOWER_SHA256.fullmatch(value) is None
+            for value in (d2_report_sha256, query_parquet_sha256)
+        )
+        or any(
+            type(value) is not int or value <= 0
+            for value in (d2_report_bytes, query_parquet_bytes)
+        )
+        or not development_output_prefix.endswith("/")
+    ):
+        raise ValueError("RaBitQ construction launch authority differs")
+    for uri in (d2_report_uri, query_parquet_uri, development_output_prefix):
+        _s3(uri)
+    authority = json.dumps(
+        {
+            "base_token": base.client_token,
+            "d2_report": [d2_report_uri, d2_report_sha256, d2_report_bytes],
+            "development_output_prefix": development_output_prefix,
+            "phase": "construction",
+            "query_parquet": [query_parquet_uri, query_parquet_sha256, query_parquet_bytes],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return ConstructionLaunchPlan(
+        **{
+            field.name: getattr(base, field.name)
+            for field in dataclasses.fields(LaunchPlan)
+            if field.name != "client_token"
+        },
+        client_token="v23-rabitq-construction-"
+        + hashlib.sha256(authority).hexdigest()[:35],
+        d2_report_uri=d2_report_uri,
+        d2_report_sha256=d2_report_sha256,
+        d2_report_bytes=d2_report_bytes,
+        query_parquet_uri=query_parquet_uri,
+        query_parquet_sha256=query_parquet_sha256,
+        query_parquet_bytes=query_parquet_bytes,
+        development_output_prefix=development_output_prefix,
+    )
+
+
 def _worker_script(plan: LaunchPlan) -> str:
     bucket, prefix = _s3(plan.output_prefix)
     complete = f"s3://{bucket}/{prefix}COMPLETE.json"
     failed = f"s3://{bucket}/{prefix}FAILED.json"
     result = f"s3://{bucket}/{prefix}screen-result.json"
+    if isinstance(plan, ConstructionLaunchPlan):
+        phase_command = f"""setsid uv run --offline --python 3.12 --with-requirements scripts/requirements-format-bench.txt python scripts/run_v23_rabitq_construction.py \\
+  --binary "$root/v23-rabitq" \\
+  --manifest-uri {plan.manifest_uri!r} \\
+  --manifest-sha256 {plan.manifest_sha256} \\
+  --manifest-bytes {plan.manifest_bytes} \\
+  --d2-report-uri {plan.d2_report_uri!r} \\
+  --d2-report-sha256 {plan.d2_report_sha256} \\
+  --d2-report-bytes {plan.d2_report_bytes} \\
+  --query-parquet-uri {plan.query_parquet_uri!r} \\
+  --query-parquet-sha256 {plan.query_parquet_sha256} \\
+  --query-parquet-bytes {plan.query_parquet_bytes} \\
+  --development-output-prefix {plan.development_output_prefix!r} \\
+  --execute-construction &"""
+        result_upload = ""
+    else:
+        phase_command = f"""setsid uv run --offline --python 3.12 --with-requirements scripts/requirements-format-bench.txt python scripts/run_v23_rabitq_falsifier.py \\
+  --binary "$root/v23-rabitq" \\
+  --manifest-uri {plan.manifest_uri!r} \\
+  --manifest-sha256 {plan.manifest_sha256!r} \\
+  --manifest-bytes {plan.manifest_bytes} \\
+  --output "$root/work/screen-result.json" \\
+  --execute-development &"""
+        result_upload = f'aws s3 cp "$root/work/screen-result.json" {result!r}'
     return f"""#!/bin/bash
 set -euo pipefail
 root=/mnt/borsuk-v23-rabitq
@@ -140,18 +254,13 @@ test "$(stat -c %s "$root/manifest.json")" = {plan.manifest_bytes}
 test "$(sha256sum "$root/manifest.json" | cut -d' ' -f1)" = {plan.manifest_sha256!r}
 chmod 0555 "$root/v23-rabitq"
 tar --zstd -xf "$root/source.tar.zst" -C "$root/src"
+cd "$root/src"
 baseline_swap_kib=$(awk '/^SwapTotal:/ {{total=$2}} /^SwapFree:/ {{free=$2}} END {{print total-free}}' /proc/meminfo)
 started=$(date +%s)
 last_progress=$started
 last_ticks=0
 stop_reason=
-setsid python3 "$root/src/scripts/run_v23_rabitq_falsifier.py" \
-  --binary "$root/v23-rabitq" \
-  --manifest-uri {plan.manifest_uri!r} \
-  --manifest-sha256 {plan.manifest_sha256!r} \
-  --manifest-bytes {plan.manifest_bytes} \
-  --output "$root/work/screen-result.json" \
-  --execute-development &
+{phase_command}
 pid=$!
 pgid=$(ps -o pgid= -p "$pid" | tr -d ' ')
 while kill -0 "$pid" 2>/dev/null; do
@@ -175,12 +284,17 @@ status=$?
 set -e
 if [ -n "$stop_reason" ]; then echo "$stop_reason" >&2; exit 70; fi
 if [ "$status" -ne 0 ]; then exit "$status"; fi
-aws s3 cp "$root/work/screen-result.json" {result!r}
+{result_upload}
 terminal=complete
 """
 
 
 def build_launch_spec(plan: LaunchPlan) -> dict[str, object]:
+    purpose = (
+        "v23-rabitq-construction"
+        if isinstance(plan, ConstructionLaunchPlan)
+        else "v23-rabitq-development"
+    )
     return {
         "ImageId": AMI_ID,
         "InstanceType": INSTANCE_TYPE,
@@ -216,7 +330,7 @@ def build_launch_spec(plan: LaunchPlan) -> dict[str, object]:
                 "ResourceType": "instance",
                 "Tags": [
                     {"Key": "Name", "Value": plan.run_id},
-                    {"Key": "borsuk-purpose", "Value": "v23-rabitq-development"},
+                    {"Key": "borsuk-purpose", "Value": purpose},
                 ],
             }
         ],
@@ -270,16 +384,74 @@ def parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-archive-bytes", type=int, required=True)
     parser.add_argument("--binary-bytes", type=int, required=True)
     parser.add_argument("--manifest-bytes", type=int, required=True)
-    parser.add_argument("--execute-development", action="store_true")
+    for flag in (
+        "d2-report-uri",
+        "d2-report-sha256",
+        "query-parquet-uri",
+        "query-parquet-sha256",
+        "development-output-prefix",
+    ):
+        parser.add_argument(f"--{flag}")
+    parser.add_argument("--d2-report-bytes", type=int)
+    parser.add_argument("--query-parquet-bytes", type=int)
+    execution = parser.add_mutually_exclusive_group(required=True)
+    execution.add_argument("--execute-construction", action="store_true")
+    execution.add_argument("--execute-development", action="store_true")
     values = parser.parse_args(arguments)
-    if not values.execute_development:
-        parser.error("--execute-development is required")
+    construction_fields = (
+        "d2_report_uri",
+        "d2_report_sha256",
+        "d2_report_bytes",
+        "query_parquet_uri",
+        "query_parquet_sha256",
+        "query_parquet_bytes",
+        "development_output_prefix",
+    )
+    if values.execute_construction and any(
+        getattr(values, field) is None for field in construction_fields
+    ):
+        parser.error("construction authority fields are required")
+    if values.execute_development and any(
+        getattr(values, field) is not None for field in construction_fields
+    ):
+        parser.error("construction authority fields are forbidden in development")
     return values
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
     values = parse_args(arguments)
-    plan = build_launch_plan(**{key.replace("-", "_"): value for key, value in vars(values).items() if key != "execute_development"})
+    common_fields = {
+        key: value
+        for key, value in vars(values).items()
+        if key
+        in {
+            "run_id",
+            "source_commit",
+            "source_archive_uri",
+            "source_archive_sha256",
+            "source_archive_bytes",
+            "binary_uri",
+            "binary_sha256",
+            "binary_bytes",
+            "manifest_uri",
+            "manifest_sha256",
+            "manifest_bytes",
+            "output_prefix",
+        }
+    }
+    if values.execute_construction:
+        plan = build_construction_launch_plan(
+            **common_fields,
+            d2_report_uri=values.d2_report_uri,
+            d2_report_sha256=values.d2_report_sha256,
+            d2_report_bytes=values.d2_report_bytes,
+            query_parquet_uri=values.query_parquet_uri,
+            query_parquet_sha256=values.query_parquet_sha256,
+            query_parquet_bytes=values.query_parquet_bytes,
+            development_output_prefix=values.development_output_prefix,
+        )
+    else:
+        plan = build_launch_plan(**common_fields)
     sts, ec2, s3 = _clients()
     account = sts.get_caller_identity()["Account"]
     if account != EXPECTED_AWS_ACCOUNT:

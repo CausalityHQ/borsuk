@@ -6,6 +6,83 @@ from scripts import launch_v23_rabitq_spot as launcher
 
 
 class V23RaBitQSpotLauncherTests(unittest.TestCase):
+    def test_cli_dispatches_exact_construction_plan(self) -> None:
+        arguments = [
+            "--run-id", "v23-rabitq-construction-fixture",
+            "--source-commit", "1" * 40,
+            "--source-archive-uri", "s3://fixture/source.tar.zst",
+            "--source-archive-sha256", "2" * 64,
+            "--source-archive-bytes", "8192",
+            "--binary-uri", "s3://fixture/constructor",
+            "--binary-sha256", "3" * 64,
+            "--binary-bytes", "4096",
+            "--manifest-uri", "s3://fixture/construction-manifest",
+            "--manifest-sha256", "4" * 64,
+            "--manifest-bytes", "2048",
+            "--d2-report-uri", "s3://fixture/d2-report",
+            "--d2-report-sha256", "5" * 64,
+            "--d2-report-bytes", "1024",
+            "--query-parquet-uri", "s3://fixture/query-parquet",
+            "--query-parquet-sha256", "6" * 64,
+            "--query-parquet-bytes", "8192",
+            "--development-output-prefix", "s3://fixture/development/",
+            "--output-prefix", "s3://fixture/terminal/construction/",
+            "--execute-construction",
+        ]
+        sts = mock.Mock()
+        sts.get_caller_identity.return_value = {"Account": launcher.EXPECTED_AWS_ACCOUNT}
+        with (
+            mock.patch.object(launcher, "_clients", return_value=(sts, mock.Mock(), mock.Mock())),
+            mock.patch.object(launcher, "run_spot", return_value="s3://fixture/terminal") as run,
+            mock.patch("builtins.print"),
+        ):
+            self.assertEqual(launcher.main(arguments), 0)
+        self.assertIsInstance(run.call_args.args[0], launcher.ConstructionLaunchPlan)
+
+    def test_construction_launch_is_phase_separated_and_opens_no_query_object(self) -> None:
+        plan = launcher.build_construction_launch_plan(
+            run_id="v23-rabitq-construction-fixture",
+            source_commit="1" * 40,
+            source_archive_sha256="2" * 64,
+            source_archive_uri="s3://fixture/source.tar.zst",
+            source_archive_bytes=8192,
+            binary_uri="s3://fixture/constructor",
+            binary_sha256="3" * 64,
+            binary_bytes=4096,
+            manifest_uri="s3://fixture/construction-manifest",
+            manifest_sha256="4" * 64,
+            manifest_bytes=2048,
+            d2_report_uri="s3://fixture/d2-report",
+            d2_report_sha256="5" * 64,
+            d2_report_bytes=1024,
+            query_parquet_uri="s3://fixture/query-parquet",
+            query_parquet_sha256="6" * 64,
+            query_parquet_bytes=8192,
+            development_output_prefix="s3://fixture/development/",
+            output_prefix="s3://fixture/terminal/v23-rabitq-construction-fixture/",
+        )
+        spec = launcher.build_launch_spec(plan)
+        user_data = base64.b64decode(spec["UserData"]).decode()
+
+        self.assertEqual(spec["InstanceMarketOptions"]["MarketType"], "spot")
+        self.assertIn("run_v23_rabitq_construction.py", user_data)
+        self.assertIn(
+            "uv run --offline --python 3.12 --with-requirements scripts/requirements-format-bench.txt",
+            user_data,
+        )
+        self.assertIn("--execute-construction", user_data)
+        self.assertIn("--d2-report-sha256 " + "5" * 64, user_data)
+        self.assertIn("--query-parquet-sha256 " + "6" * 64, user_data)
+        self.assertNotIn("aws s3 cp 's3://fixture/d2-report'", user_data)
+        self.assertNotIn("aws s3 cp 's3://fixture/query-parquet'", user_data)
+        self.assertNotIn("--execute-development", user_data)
+        self.assertNotIn("holdout", user_data)
+        self.assertNotIn("d3", user_data.lower())
+        self.assertEqual(
+            spec["TagSpecifications"][0]["Tags"][1]["Value"],
+            "v23-rabitq-construction",
+        )
+
     def test_launch_spec_is_spot_only_and_binds_immutable_execution(self) -> None:
         plan = launcher.build_launch_plan(
             run_id="v23-rabitq-fixture",
@@ -29,6 +106,10 @@ class V23RaBitQSpotLauncherTests(unittest.TestCase):
         )
         user_data = base64.b64decode(spec["UserData"]).decode()
         self.assertIn("--execute-development", user_data)
+        self.assertIn(
+            "uv run --offline --python 3.12 --with-requirements scripts/requirements-format-bench.txt",
+            user_data,
+        )
         self.assertIn(plan.manifest_sha256, user_data)
         self.assertIn(plan.binary_sha256, user_data)
         self.assertIn("/proc/pressure/memory", user_data)

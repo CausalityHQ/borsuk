@@ -8,14 +8,13 @@ use crate::{BorsukError, Result};
 const MANIFEST_SCHEMA: &str = "borsuk-v23-rabitq-manifest-v1";
 const RECEIPT_SCHEMA: &str = "borsuk-v23-rabitq-receipt-v1";
 pub(crate) const V23_RABITQ_MIN_ALIGNMENT: f32 = 0.102_062_07;
-const CONSTRUCTION_INPUT_ROLES: [&str; 3] = ["tree-receipt", "incidence-tree", "source-pages"];
-const CONSTRUCTION_OUTPUT_ROLES: [&str; 6] = [
+const CONSTRUCTION_INPUT_ROLES: [&str; 3] = ["tree-receipt", "incidence-tree", "page-roster"];
+const CONSTRUCTION_OUTPUT_ROLES: [&str; 5] = [
     "row-codes",
     "leaf-offsets",
     "centroids",
     "rotation",
     "f16-control",
-    "construction-receipt",
 ];
 const EVALUATION_INPUT_ROLES: [&str; 9] = [
     "construction-receipt",
@@ -71,10 +70,15 @@ pub(crate) struct V23RaBitQManifest {
     pub(crate) source_archive_sha256: String,
     pub(crate) index_id: String,
     pub(crate) dataset_id: String,
-    pub(crate) rotation_seed_sha256: String,
+    pub(crate) rotation_seed_hex: String,
+    pub(crate) expected_pages: u32,
+    pub(crate) expected_source_occurrences: u64,
+    pub(crate) expected_unique_rows: u64,
+    pub(crate) page_namespace_uri_prefix: Option<String>,
     pub(crate) run_mode: V23RaBitQRunMode,
     pub(crate) registered_inputs: Vec<V23RaBitQObjectIdentity>,
-    pub(crate) registered_outputs: Vec<V23RaBitQObjectIdentity>,
+    pub(crate) output_uri_prefix: String,
+    pub(crate) output_roles: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,7 +108,11 @@ pub(crate) struct V23RaBitQReceipt {
 }
 
 impl V23RaBitQReceipt {
-    pub(crate) fn complete(manifest: &V23RaBitQManifest, manifest_bytes: &[u8]) -> Self {
+    pub(crate) fn complete(
+        manifest: &V23RaBitQManifest,
+        manifest_bytes: &[u8],
+        outputs: Vec<V23RaBitQObjectIdentity>,
+    ) -> Self {
         Self {
             schema: RECEIPT_SCHEMA.to_string(),
             manifest_sha256: format!("{:x}", Sha256::digest(manifest_bytes)),
@@ -115,7 +123,7 @@ impl V23RaBitQReceipt {
             dataset_id: manifest.dataset_id.clone(),
             run_mode: manifest.run_mode,
             inputs: manifest.registered_inputs.clone(),
-            outputs: manifest.registered_outputs.clone(),
+            outputs,
             terminal_status: V23RaBitQTerminalStatus::Complete,
             stop_reason: None,
             claim_eligible: false,
@@ -175,7 +183,11 @@ pub(crate) fn validate_v23_rabitq_manifest(value: &V23RaBitQManifest) -> Result<
     if value.schema != MANIFEST_SCHEMA
         || !is_lower_hex(&value.source_commit, 40)
         || !is_lower_hex(&value.source_archive_sha256, 64)
-        || !is_lower_hex(&value.rotation_seed_sha256, 64)
+        || !is_lower_hex(&value.rotation_seed_hex, 64)
+        || value.expected_pages < 8
+        || value.expected_unique_rows == 0
+        || value.expected_source_occurrences < value.expected_unique_rows
+        || value.expected_source_occurrences > value.expected_unique_rows.saturating_mul(2)
         || value.index_id.is_empty()
         || value.dataset_id.is_empty()
     {
@@ -184,22 +196,65 @@ pub(crate) fn validate_v23_rabitq_manifest(value: &V23RaBitQManifest) -> Result<
         ));
     }
     let (inputs, outputs): (&[&str], &[&str]) = match value.run_mode.phase() {
-        V23RaBitQPhase::Construction => (&CONSTRUCTION_INPUT_ROLES, &CONSTRUCTION_OUTPUT_ROLES),
+        V23RaBitQPhase::Construction => {
+            let Some(prefix) = value.page_namespace_uri_prefix.as_deref() else {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 RaBitQ page namespace authority differs".to_string(),
+                ));
+            };
+            if !prefix.starts_with("s3://") || !prefix.ends_with('/') {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 RaBitQ page namespace authority differs".to_string(),
+                ));
+            }
+            (&CONSTRUCTION_INPUT_ROLES, &CONSTRUCTION_OUTPUT_ROLES)
+        }
         V23RaBitQPhase::Development | V23RaBitQPhase::Holdout => {
+            if value.page_namespace_uri_prefix.is_some() {
+                return Err(BorsukError::InvalidStorage(
+                    "V23 RaBitQ page namespace authority differs".to_string(),
+                ));
+            }
             (&EVALUATION_INPUT_ROLES, &EVALUATION_OUTPUT_ROLES)
         }
     };
     validate_roles(&value.registered_inputs, inputs)?;
-    validate_roles(&value.registered_outputs, outputs)?;
-    let mut uris = BTreeSet::new();
-    if value
-        .registered_inputs
-        .iter()
-        .chain(&value.registered_outputs)
-        .any(|identity| !uris.insert(identity.uri.as_str()))
+    if !value.output_uri_prefix.starts_with("s3://")
+        || !value.output_uri_prefix.ends_with('/')
+        || value.output_roles.len() != outputs.len()
+        || value
+            .output_roles
+            .iter()
+            .zip(outputs)
+            .any(|(value, expected)| value != expected)
     {
         return Err(BorsukError::InvalidStorage(
+            "V23 RaBitQ manifest output authority differs".to_string(),
+        ));
+    }
+    let mut uris = BTreeSet::new();
+    if value.registered_inputs.iter().any(|identity| {
+        !uris.insert(identity.uri.as_str())
+            || identity.uri.starts_with(&value.output_uri_prefix)
+            || value.output_uri_prefix.starts_with(&identity.uri)
+    }) {
+        return Err(BorsukError::InvalidStorage(
             "V23 RaBitQ object URIs overlap".to_string(),
+        ));
+    }
+    if value
+        .page_namespace_uri_prefix
+        .as_deref()
+        .is_some_and(|prefix| {
+            value.output_uri_prefix.starts_with(prefix)
+                || prefix.starts_with(&value.output_uri_prefix)
+                || value.registered_inputs.iter().any(|identity| {
+                    identity.uri.starts_with(prefix) || prefix.starts_with(&identity.uri)
+                })
+        })
+    {
+        return Err(BorsukError::InvalidStorage(
+            "V23 RaBitQ page namespace URI overlaps authority".to_string(),
         ));
     }
     Ok(())
@@ -233,11 +288,27 @@ fn validate_receipt(value: &V23RaBitQReceipt) -> Result<()> {
         || value.dataset_id != value.manifest.dataset_id
         || value.run_mode != value.manifest.run_mode
         || value.inputs != value.manifest.registered_inputs
-        || value.outputs != value.manifest.registered_outputs
         || value.claim_eligible
     {
         return Err(BorsukError::InvalidStorage(
             "V23 RaBitQ receipt binding differs".to_string(),
+        ));
+    }
+    let expected_outputs = value
+        .manifest
+        .output_roles
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    validate_roles(&value.outputs, &expected_outputs)?;
+    if value.outputs.iter().any(|output| {
+        output
+            .uri
+            .strip_prefix(&value.manifest.output_uri_prefix)
+            .is_none_or(|name| name.is_empty() || name.contains('/'))
+    }) {
+        return Err(BorsukError::InvalidStorage(
+            "V23 RaBitQ receipt output URI differs".to_string(),
         ));
     }
     match (value.terminal_status, value.stop_reason.as_deref()) {
@@ -256,6 +327,18 @@ fn validate_receipt(value: &V23RaBitQReceipt) -> Result<()> {
 pub(crate) fn canonical_v23_rabitq_receipt_bytes(value: &V23RaBitQReceipt) -> Result<Vec<u8>> {
     validate_receipt(value)?;
     canonical_json_bytes(value)
+}
+
+pub(crate) fn read_v23_rabitq_receipt(bytes: &[u8]) -> Result<V23RaBitQReceipt> {
+    let value: V23RaBitQReceipt = serde_json::from_slice(bytes).map_err(|error| {
+        BorsukError::InvalidStorage(format!("V23 RaBitQ receipt JSON differs: {error}"))
+    })?;
+    if canonical_v23_rabitq_receipt_bytes(&value)? != bytes {
+        return Err(BorsukError::InvalidStorage(
+            "V23 RaBitQ receipt canonical bytes differ".to_string(),
+        ));
+    }
+    Ok(value)
 }
 
 pub(crate) fn project_v23_rabitq_serving_bytes(rows: u64) -> Result<V23RaBitQServingProjection> {
@@ -304,7 +387,7 @@ mod tests {
         V23RaBitQManifest, V23RaBitQObjectIdentity, V23RaBitQPhase, V23RaBitQReceipt,
         V23RaBitQRunMode, V23RaBitQTerminalStatus, canonical_v23_rabitq_manifest_bytes,
         canonical_v23_rabitq_receipt_bytes, project_v23_rabitq_serving_bytes,
-        validate_v23_rabitq_manifest,
+        read_v23_rabitq_receipt, validate_v23_rabitq_manifest,
     };
 
     fn identity(role: &str, marker: u8) -> V23RaBitQObjectIdentity {
@@ -324,20 +407,26 @@ mod tests {
             source_archive_sha256: "2".repeat(64),
             index_id: "index-bcda7bb66812e162d45077e6".to_string(),
             dataset_id: "deep-image-96".to_string(),
-            rotation_seed_sha256: "3".repeat(64),
+            rotation_seed_hex: "3".repeat(64),
+            expected_pages: 28_282,
+            expected_source_occurrences: 19_980_000,
+            expected_unique_rows: 9_990_000,
+            page_namespace_uri_prefix: Some(
+                "s3://borsuk-v23-rabitq/frozen-attempt/pages/".to_string(),
+            ),
             run_mode: V23RaBitQRunMode::Execute(V23RaBitQPhase::Construction),
             registered_inputs: vec![
                 identity("tree-receipt", 1),
                 identity("incidence-tree", 2),
-                identity("source-pages", 3),
+                identity("page-roster", 3),
             ],
-            registered_outputs: vec![
-                identity("row-codes", 4),
-                identity("leaf-offsets", 5),
-                identity("centroids", 6),
-                identity("rotation", 7),
-                identity("f16-control", 8),
-                identity("construction-receipt", 9),
+            output_uri_prefix: "s3://borsuk-v23-rabitq/construction-fixture/".to_string(),
+            output_roles: vec![
+                "row-codes".to_string(),
+                "leaf-offsets".to_string(),
+                "centroids".to_string(),
+                "rotation".to_string(),
+                "f16-control".to_string(),
             ],
         }
     }
@@ -357,7 +446,7 @@ mod tests {
         value.registered_inputs.pop();
         mutations.push(value);
         let mut value = manifest.clone();
-        value.registered_outputs.push(identity("screen-result", 10));
+        value.output_roles.push("screen-result".to_string());
         mutations.push(value);
         let mut value = manifest.clone();
         value.registered_inputs[0].sha256 = "g".repeat(64);
@@ -370,10 +459,16 @@ mod tests {
         value.registered_inputs[0].encoded_bytes = 0;
         mutations.push(value);
         let mut value = manifest.clone();
-        value.registered_outputs[0].uri = value.registered_inputs[0].uri.clone();
+        value.output_uri_prefix = value.registered_inputs[0].uri.clone();
         mutations.push(value);
         let mut value = manifest.clone();
         value.run_mode = V23RaBitQRunMode::Execute(V23RaBitQPhase::Development);
+        mutations.push(value);
+        let mut value = manifest.clone();
+        value.page_namespace_uri_prefix = None;
+        mutations.push(value);
+        let mut value = manifest.clone();
+        value.page_namespace_uri_prefix = Some(value.registered_inputs[2].uri.clone());
         mutations.push(value);
         for mutation in mutations {
             assert!(validate_v23_rabitq_manifest(&mutation).is_err());
@@ -390,12 +485,25 @@ mod tests {
     fn v23_rabitq_authority_receipt_binds_manifest_inputs_outputs_and_terminal_state() {
         let manifest = construction_manifest();
         let manifest_bytes = canonical_v23_rabitq_manifest_bytes(&manifest).unwrap();
-        let receipt = V23RaBitQReceipt::complete(&manifest, &manifest_bytes);
+        let outputs = manifest
+            .output_roles
+            .iter()
+            .enumerate()
+            .map(|(ordinal, role)| V23RaBitQObjectIdentity {
+                role: role.clone(),
+                uri: format!("{}{role}", manifest.output_uri_prefix),
+                sha256: format!("{:02x}", ordinal + 10).repeat(32),
+                blake3: None,
+                encoded_bytes: ordinal as u64 + 1,
+            })
+            .collect::<Vec<_>>();
+        let receipt = V23RaBitQReceipt::complete(&manifest, &manifest_bytes, outputs);
         let bytes = canonical_v23_rabitq_receipt_bytes(&receipt).unwrap();
         assert_eq!(bytes.last(), Some(&b'\n'));
+        assert_eq!(read_v23_rabitq_receipt(&bytes).unwrap(), receipt);
 
         let mut mutation = receipt.clone();
-        mutation.outputs[0].sha256 = "a".repeat(64);
+        mutation.outputs[0].sha256 = "g".repeat(64);
         assert!(canonical_v23_rabitq_receipt_bytes(&mutation).is_err());
         let mut mutation = receipt.clone();
         mutation.terminal_status = V23RaBitQTerminalStatus::Stopped;

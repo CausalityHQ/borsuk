@@ -44,16 +44,13 @@ class V23RaBitQRunnerTests(unittest.TestCase):
                     "dataset_id": "deep-image-96",
                     "index_id": "index-fixture",
                     "registered_inputs": self.inputs,
-                    "registered_outputs": [
-                        {
-                            "role": "screen-result",
-                            "uri": "s3://fixture/screen-result",
-                            "sha256": "f" * 64,
-                            "blake3": None,
-                            "encoded_bytes": 1,
-                        }
-                    ],
-                    "rotation_seed_sha256": "e" * 64,
+                    "output_roles": ["screen-result"],
+                    "output_uri_prefix": "s3://fixture/output/",
+                    "page_namespace_uri_prefix": None,
+                    "rotation_seed_hex": "e" * 64,
+                    "expected_pages": 28_282,
+                    "expected_source_occurrences": 19_980_000,
+                    "expected_unique_rows": 9_990_000,
                     "run_mode": {"execute": "development"},
                     "schema": "borsuk-v23-rabitq-manifest-v1",
                     "source_archive_sha256": "d" * 64,

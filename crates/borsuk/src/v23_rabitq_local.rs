@@ -1,4 +1,10 @@
-use std::{collections::BTreeSet, fs, path::PathBuf};
+use std::{cell::RefCell, collections::BTreeSet, fs, io::Read, path::PathBuf, rc::Rc, sync::Arc};
+
+use arrow_array::{
+    Array, BinaryArray, BooleanArray, FixedSizeListArray, Float32Array, RecordBatch, UInt32Array,
+};
+use arrow_ipc::reader::StreamReader;
+use arrow_schema::{DataType, Field, Schema};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,14 +16,15 @@ use crate::{
     },
     v23_incidence_tree::{V23IncidenceTrainingShape, decode_incidence_tree},
     v23_rabitq::{
-        V23RaBitQManifest, V23RaBitQObjectIdentity, V23RaBitQPhase, V23RaBitQRunMode,
-        canonical_v23_rabitq_manifest_bytes, validate_v23_rabitq_manifest,
+        V23RaBitQManifest, V23RaBitQObjectIdentity, V23RaBitQPhase, V23RaBitQReceipt,
+        V23RaBitQRunMode, canonical_v23_rabitq_manifest_bytes, canonical_v23_rabitq_receipt_bytes,
+        read_v23_rabitq_receipt, validate_v23_rabitq_manifest,
     },
     v23_rabitq_arrow::{
         V23RaBitQGeometryBytes, V23RaBitQGeometryIdentities, read_v23_rabitq_f16_control,
         read_v23_rabitq_geometry, read_v23_rabitq_row_planes,
     },
-    v23_rabitq_build::read_v23_rabitq_build_receipt,
+    v23_rabitq_build::{V23RaBitQBuildRequest, V23RaBitQSourceRow, build_v23_rabitq_artifacts},
     v23_rabitq_eval::{
         V23RaBitQDevelopmentRequest, canonical_v23_rabitq_screen_result_bytes,
         detected_v23_rabitq_backend, evaluate_v23_rabitq_development,
@@ -79,6 +86,26 @@ pub struct V23RaBitQLocalRunRequest {
     pub manifest_identity: V23RaBitQLocalObjectIdentity,
     pub registered_inputs: Vec<V23RaBitQLocalObjectIdentity>,
     pub execute_development: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V23RaBitQConstructionLocalPaths {
+    pub manifest: PathBuf,
+    pub tree_receipt: PathBuf,
+    pub incidence_tree: PathBuf,
+    pub page_roster: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V23RaBitQConstructionLocalRunRequest {
+    pub paths: V23RaBitQConstructionLocalPaths,
+    pub manifest_identity: V23RaBitQLocalObjectIdentity,
+    pub registered_inputs: Vec<V23RaBitQLocalObjectIdentity>,
+    pub scratch_directory: PathBuf,
+    pub output_directory: PathBuf,
+    pub execute_construction: bool,
 }
 
 impl V23RaBitQLocalObjectIdentity {
@@ -160,6 +187,20 @@ fn read_authenticated(
     Ok(bytes)
 }
 
+fn read_manifest(
+    path: &PathBuf,
+    identity: &V23RaBitQLocalObjectIdentity,
+) -> Result<(V23RaBitQManifest, Vec<u8>)> {
+    let bytes = read_authenticated(path, identity, "manifest")?;
+    let manifest: V23RaBitQManifest = serde_json::from_slice(&bytes)
+        .map_err(|error| invalid(&format!("V23 RaBitQ manifest JSON differs: {error}")))?;
+    validate_v23_rabitq_manifest(&manifest)?;
+    if canonical_v23_rabitq_manifest_bytes(&manifest)? != bytes {
+        return Err(invalid("V23 RaBitQ manifest canonical bytes differ"));
+    }
+    Ok((manifest, bytes))
+}
+
 fn validate_request(request: &V23RaBitQLocalRunRequest) -> Result<Vec<V23RaBitQObjectIdentity>> {
     if !request.execute_development || request.registered_inputs.len() != INPUT_ROLES.len() {
         return Err(invalid("V23 RaBitQ local execution was not authorized"));
@@ -192,16 +233,8 @@ fn validate_request(request: &V23RaBitQLocalRunRequest) -> Result<Vec<V23RaBitQO
 #[doc(hidden)]
 pub fn run_v23_rabitq_local_request(request: V23RaBitQLocalRunRequest) -> Result<Vec<u8>> {
     let inputs = validate_request(&request)?;
-    let manifest_bytes = read_authenticated(
-        &request.paths.manifest,
-        &request.manifest_identity,
-        "manifest",
-    )?;
-    let manifest: V23RaBitQManifest = serde_json::from_slice(&manifest_bytes)
-        .map_err(|error| invalid(&format!("V23 RaBitQ manifest JSON differs: {error}")))?;
-    validate_v23_rabitq_manifest(&manifest)?;
-    if canonical_v23_rabitq_manifest_bytes(&manifest)? != manifest_bytes
-        || manifest.run_mode != V23RaBitQRunMode::Execute(V23RaBitQPhase::Development)
+    let (manifest, _) = read_manifest(&request.paths.manifest, &request.manifest_identity)?;
+    if manifest.run_mode != V23RaBitQRunMode::Execute(V23RaBitQPhase::Development)
         || manifest.registered_inputs != inputs
     {
         return Err(invalid("V23 RaBitQ local manifest binding differs"));
@@ -215,8 +248,10 @@ pub fn run_v23_rabitq_local_request(request: V23RaBitQLocalRunRequest) -> Result
             role,
         )?);
     }
-    let receipt = read_v23_rabitq_build_receipt(&role_bytes[0])?;
-    if receipt.outputs != inputs[2..7] {
+    let receipt = read_v23_rabitq_receipt(&role_bytes[0])?;
+    if receipt.run_mode != V23RaBitQRunMode::Execute(V23RaBitQPhase::Construction)
+        || receipt.outputs != inputs[2..7]
+    {
         return Err(invalid("V23 RaBitQ construction receipt binding differs"));
     }
     let tree = decode_incidence_tree(&role_bytes[1])?;
@@ -235,7 +270,7 @@ pub fn run_v23_rabitq_local_request(request: V23RaBitQLocalRunRequest) -> Result
             centroids: inputs[4].clone(),
             rotation: inputs[5].clone(),
         },
-        receipt.source_rows,
+        receipt.manifest.expected_unique_rows,
     )?;
     let exact_rows =
         read_v23_rabitq_f16_control(&role_bytes[6], &inputs[6], rows.sign_codes.len())?;
@@ -255,4 +290,224 @@ pub fn run_v23_rabitq_local_request(request: V23RaBitQLocalRunRequest) -> Result
         backend: detected_v23_rabitq_backend()?,
     })?;
     canonical_v23_rabitq_screen_result_bytes(&result, &inputs)
+}
+
+fn occurrence_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("canonical_record_id", DataType::Binary, false),
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Float32, false)),
+                96,
+            ),
+            false,
+        ),
+        Field::new("page_ordinal", DataType::UInt32, false),
+        Field::new("is_primary", DataType::Boolean, false),
+    ])
+}
+
+struct OccurrenceState {
+    batch: Option<RecordBatch>,
+    row: usize,
+    page_seen: Vec<bool>,
+    pages_seen: usize,
+}
+
+struct OccurrenceReader<R: Read> {
+    reader: StreamReader<R>,
+    state: Rc<RefCell<OccurrenceState>>,
+}
+
+impl<R: Read> OccurrenceReader<R> {
+    fn new(reader: R, expected_pages: u32) -> Result<(Self, Rc<RefCell<OccurrenceState>>)> {
+        let reader = StreamReader::try_new(reader, None)?;
+        if reader.schema().as_ref() != &occurrence_schema() {
+            return Err(invalid("V23 RaBitQ occurrence Arrow schema differs"));
+        }
+        let state = Rc::new(RefCell::new(OccurrenceState {
+            batch: None,
+            row: 0,
+            page_seen: vec![false; expected_pages as usize],
+            pages_seen: 0,
+        }));
+        Ok((
+            Self {
+                reader,
+                state: Rc::clone(&state),
+            },
+            state,
+        ))
+    }
+
+    fn next_batch(&mut self) -> Result<bool> {
+        let Some(batch) = self.reader.next().transpose()? else {
+            return Ok(false);
+        };
+        if batch.num_rows() == 0
+            || batch.num_columns() != 4
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V23 RaBitQ occurrence Arrow batch differs"));
+        }
+        let mut state = self.state.borrow_mut();
+        state.batch = Some(batch);
+        state.row = 0;
+        Ok(true)
+    }
+}
+
+impl<R: Read> Iterator for OccurrenceReader<R> {
+    type Item = Result<V23RaBitQSourceRow>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let needs_batch = {
+            let state = self.state.borrow();
+            state
+                .batch
+                .as_ref()
+                .is_none_or(|batch| state.row == batch.num_rows())
+        };
+        if needs_batch {
+            match self.next_batch() {
+                Ok(true) => {}
+                Ok(false) => return None,
+                Err(error) => return Some(Err(error)),
+            }
+        }
+        let mut state = self.state.borrow_mut();
+        let row = state.row;
+        let extracted = {
+            let batch = state.batch.as_ref().unwrap();
+            let ids = batch.column(0).as_any().downcast_ref::<BinaryArray>();
+            let vectors = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>();
+            let pages = batch.column(2).as_any().downcast_ref::<UInt32Array>();
+            let primary = batch.column(3).as_any().downcast_ref::<BooleanArray>();
+            let (Some(ids), Some(vectors), Some(pages), Some(primary)) =
+                (ids, vectors, pages, primary)
+            else {
+                return Some(Err(invalid("V23 RaBitQ occurrence Arrow columns differ")));
+            };
+            let values = vectors.values();
+            let Some(values) = values.as_any().downcast_ref::<Float32Array>() else {
+                return Some(Err(invalid("V23 RaBitQ occurrence vector child differs")));
+            };
+            let start = row * 96;
+            (
+                ids.value(row).to_vec(),
+                values.values()[start..start + 96].try_into().unwrap(),
+                pages.value(row),
+                primary.value(row),
+            )
+        };
+        let (canonical_record_id, vector, page, is_primary) = extracted;
+        let Some(seen) = state.page_seen.get_mut(page as usize) else {
+            return Some(Err(invalid("V23 RaBitQ occurrence page ordinal differs")));
+        };
+        if !*seen {
+            *seen = true;
+            state.pages_seen += 1;
+        }
+        state.row += 1;
+        Some(Ok(V23RaBitQSourceRow {
+            canonical_record_id,
+            vector,
+            page_ordinal: page,
+            is_primary,
+        }))
+    }
+}
+
+fn decode_seed(value: &str) -> Result<[u8; 32]> {
+    let mut seed = [0; 32];
+    if value.len() != 64 {
+        return Err(invalid("V23 RaBitQ rotation seed differs"));
+    }
+    for (output, pair) in seed.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+        *output = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16)
+            .map_err(|_| invalid("V23 RaBitQ rotation seed differs"))?;
+    }
+    Ok(seed)
+}
+
+#[doc(hidden)]
+pub fn run_v23_rabitq_construction_local_request<R: Read>(
+    request: V23RaBitQConstructionLocalRunRequest,
+    source: R,
+) -> Result<Vec<u8>> {
+    if !request.execute_construction
+        || request.registered_inputs.len() != 3
+        || !request.scratch_directory.is_absolute()
+        || !request.output_directory.is_absolute()
+    {
+        return Err(invalid(
+            "V23 RaBitQ construction execution was not authorized",
+        ));
+    }
+    let (manifest, _) = read_manifest(&request.paths.manifest, &request.manifest_identity)?;
+    if manifest.run_mode != V23RaBitQRunMode::Execute(V23RaBitQPhase::Construction) {
+        return Err(invalid("V23 RaBitQ construction manifest phase differs"));
+    }
+    let roles = ["tree-receipt", "incidence-tree", "page-roster"];
+    let mut identities = Vec::with_capacity(roles.len());
+    let paths = [
+        &request.paths.tree_receipt,
+        &request.paths.incidence_tree,
+        &request.paths.page_roster,
+    ];
+    let mut bytes = Vec::with_capacity(roles.len());
+    for ((identity, role), path) in request.registered_inputs.iter().zip(roles).zip(paths) {
+        bytes.push(read_authenticated(path, identity, role)?);
+        identities.push(identity.internal());
+    }
+    if manifest.registered_inputs != identities {
+        return Err(invalid("V23 RaBitQ construction input binding differs"));
+    }
+    let tree = decode_incidence_tree(&bytes[1])?;
+    if tree.shape != V23IncidenceTrainingShape::PRODUCTION {
+        return Err(invalid("V23 RaBitQ construction tree shape differs"));
+    }
+    let (occurrences, state) = OccurrenceReader::new(source, manifest.expected_pages)?;
+    let built = build_v23_rabitq_artifacts(V23RaBitQBuildRequest {
+        tree: &tree,
+        source_rows: occurrences,
+        expected_source_occurrences: manifest.expected_source_occurrences,
+        expected_unique_rows: manifest.expected_unique_rows,
+        rotation_seed: decode_seed(&manifest.rotation_seed_hex)?,
+        scratch_directory: &request.scratch_directory,
+        output_directory: &request.output_directory,
+        output_uri_prefix: &manifest.output_uri_prefix,
+        maximum_sort_run_bytes: 256 * 1024 * 1024,
+    })?;
+    if state.borrow().pages_seen != manifest.expected_pages as usize
+        || built.outputs[..5]
+            .iter()
+            .map(|identity| identity.role.as_str())
+            .ne(manifest.output_roles.iter().map(String::as_str))
+    {
+        return Err(invalid("V23 RaBitQ construction output authority differs"));
+    }
+    let receipt = V23RaBitQReceipt::complete(
+        &manifest,
+        &canonical_v23_rabitq_manifest_bytes(&manifest)?,
+        built.outputs[..5].to_vec(),
+    );
+    let receipt_bytes = canonical_v23_rabitq_receipt_bytes(&receipt)?;
+    fs::write(
+        request.output_directory.join("construction-receipt.json"),
+        &receipt_bytes,
+    )
+    .map_err(|error| {
+        invalid(&format!(
+            "V23 RaBitQ construction receipt write failed: {error}"
+        ))
+    })?;
+    Ok(receipt_bytes)
 }

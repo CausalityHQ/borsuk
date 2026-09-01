@@ -110,8 +110,13 @@ def _manifest_inputs(raw: bytes) -> tuple[dict[str, object], tuple[FrozenArtifac
         "dataset_id",
         "index_id",
         "registered_inputs",
-        "registered_outputs",
-        "rotation_seed_sha256",
+        "output_roles",
+        "output_uri_prefix",
+        "page_namespace_uri_prefix",
+        "rotation_seed_hex",
+        "expected_pages",
+        "expected_source_occurrences",
+        "expected_unique_rows",
         "run_mode",
         "schema",
         "source_archive_sha256",
@@ -124,9 +129,21 @@ def _manifest_inputs(raw: bytes) -> tuple[dict[str, object], tuple[FrozenArtifac
         or value["schema"] != "borsuk-v23-rabitq-manifest-v1"
         or value["run_mode"] != {"execute": "development"}
         or type(value["registered_inputs"]) is not list
-        or type(value["registered_outputs"]) is not list
-        or len(value["registered_outputs"]) != 1
-        or value["registered_outputs"][0].get("role") != "screen-result"
+        or value["output_roles"] != ["screen-result"]
+        or value["page_namespace_uri_prefix"] is not None
+        or type(value["output_uri_prefix"]) is not str
+        or not value["output_uri_prefix"].startswith("s3://")
+        or not value["output_uri_prefix"].endswith("/")
+        or type(value["expected_pages"]) is not int
+        or value["expected_pages"] < 8
+        or type(value["expected_unique_rows"]) is not int
+        or value["expected_unique_rows"] <= 0
+        or type(value["expected_source_occurrences"]) is not int
+        or not value["expected_unique_rows"]
+        <= value["expected_source_occurrences"]
+        <= 2 * value["expected_unique_rows"]
+        or type(value["rotation_seed_hex"]) is not str
+        or LOWER_DIGEST.fullmatch(value["rotation_seed_hex"]) is None
     ):
         raise ValueError("manifest authority differs")
     artifacts = []
