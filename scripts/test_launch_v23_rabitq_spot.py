@@ -65,9 +65,9 @@ class V23RaBitQSpotLauncherTests(unittest.TestCase):
         user_data = base64.b64decode(spec["UserData"]).decode()
 
         self.assertEqual(spec["InstanceMarketOptions"]["MarketType"], "spot")
-        self.assertIn("run_v23_rabitq_construction.py", user_data)
+        self.assertIn("scripts.run_v23_rabitq_construction", user_data)
         self.assertIn(
-            "/opt/borsuk-rabitq-venv/bin/python scripts/run_v23_rabitq_construction.py",
+            "/opt/borsuk-rabitq-venv/bin/python -m scripts.run_v23_rabitq_construction",
             user_data,
         )
         self.assertIn("--execute-construction", user_data)
@@ -107,7 +107,7 @@ class V23RaBitQSpotLauncherTests(unittest.TestCase):
         user_data = base64.b64decode(spec["UserData"]).decode()
         self.assertIn("--execute-development", user_data)
         self.assertIn(
-            "/opt/borsuk-rabitq-venv/bin/python scripts/run_v23_rabitq_falsifier.py",
+            "/opt/borsuk-rabitq-venv/bin/python -m scripts.run_v23_rabitq_falsifier",
             user_data,
         )
         self.assertIn(plan.manifest_sha256, user_data)
@@ -222,7 +222,7 @@ class V23RaBitQSpotLauncherTests(unittest.TestCase):
             "--requirement scripts/requirements-format-bench.txt"
         )
         execute = user_data.index(
-            "/opt/borsuk-rabitq-venv/bin/python scripts/run_v23_rabitq_falsifier.py"
+            "/opt/borsuk-rabitq-venv/bin/python -m scripts.run_v23_rabitq_falsifier"
         )
         self.assertLess(install, create)
         self.assertLess(create, dependencies)

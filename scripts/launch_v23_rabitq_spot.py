@@ -206,7 +206,7 @@ def _worker_script(plan: LaunchPlan) -> str:
     worker_log = f"s3://{bucket}/{prefix}worker.log"
     result = f"s3://{bucket}/{prefix}screen-result.json"
     if isinstance(plan, ConstructionLaunchPlan):
-        phase_command = f"""setsid /opt/borsuk-rabitq-venv/bin/python scripts/run_v23_rabitq_construction.py \\
+        phase_command = f"""setsid /opt/borsuk-rabitq-venv/bin/python -m scripts.run_v23_rabitq_construction \\
   --binary "$root/v23-rabitq" \\
   --manifest-uri {plan.manifest_uri!r} \\
   --manifest-sha256 {plan.manifest_sha256} \\
@@ -221,7 +221,7 @@ def _worker_script(plan: LaunchPlan) -> str:
   --execute-construction &"""
         result_upload = ""
     else:
-        phase_command = f"""setsid /opt/borsuk-rabitq-venv/bin/python scripts/run_v23_rabitq_falsifier.py \\
+        phase_command = f"""setsid /opt/borsuk-rabitq-venv/bin/python -m scripts.run_v23_rabitq_falsifier \\
   --binary "$root/v23-rabitq" \\
   --manifest-uri {plan.manifest_uri!r} \\
   --manifest-sha256 {plan.manifest_sha256!r} \\
