@@ -1425,3 +1425,36 @@ missing page evidence. The result does not reject all possible page-routing
 representations. It requires the next falsifier to change the routing evidence
 itself while retaining the exact eight-page and 15 ms serving constraints.
 No holdout, paid follow-on, or D3 work is authorized by this result.
+
+## V23 residual RaBitQ fixed-reducer amendment on 2026-09-01
+
+Before any successor development execution, the page reducer is frozen to the
+quality metric itself: use only the first ten ranked rows and choose the
+lexicographically smallest set of at most eight pages that maximizes coverage
+of those rows. Ranks 11--4,096 may remain in the bounded scoring heap for
+diagnostic evidence but cannot vote for pages. A query with fewer than ten
+scored rows covers only the available prefix and receives no padding or free
+recall. This is a prerelease result-format break to
+`borsuk-v23-rabitq-screen-v4`; v3 is rejected rather than migrated or aliased.
+
+The amendment is evidence-driven but parameter-free. The immutable row-vote
+F0 result at
+`s3://borsuk-bench-453182569524-euc1/research/v23-row-vote-f0/20260829T125701Z-v23-row-vote-f0/`
+already established that exact top-ten rows plus deterministic best eight-page
+coverage recover all 318 oracle-reachable hits. Its result SHA-256 is
+`6c2cdbe6cc251ed950e7c0238c5a7bc5c20884d2b0a6db28f2ea844e1fe3d171`.
+The first RaBitQ screen used reciprocal-rank voting across 4,096 rows and the
+exact exhaustive control retained only 295 of those 318 hits. Therefore the
+next single development run tests one causal question: did out-of-metric
+midrank page mass displace top-ten evidence? There is no cutoff ladder and no
+tuning on the burned 32 queries.
+
+The paired exact/RaBitQ exhaustive and 32/64/128 tree cells, immutable inputs,
+quality gates (318/320 hits, 993,750 ppm aggregate, at least 900,000 ppm
+minimum, and 1,000,000 ppm oracle attainment), memory projection, determinism
+checks, and timing gates remain unchanged. If exact exhaustive still fails,
+the reducer hypothesis is rejected. If exact exhaustive passes but an exact
+tree cell fails, tree/layout containment remains the blocker. If an exact tree
+cell passes but its RaBitQ pair fails, the estimator is rejected. Only a
+passing paired serving cell can authorize a separately preregistered holdout;
+D3 and paid follow-on work remain fenced meanwhile.

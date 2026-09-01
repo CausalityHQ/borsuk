@@ -4,7 +4,7 @@
 
 **Goal:** Build a bounded, claim-ineligible residual RaBitQ row scorer that can prove or reject near-perfect recall within an eight-page budget before any production or D3 campaign.
 
-**Architecture:** A new prerelease Arrow index stores one 96-bit residual sign code, two f32 estimator factors, and two u32 page ordinals per row, ordered by the existing 65,536-leaf tree. Queries probe 32/64/128 leaves, use twelve query-specific byte lookups per row, apply a row-count-normalized scan limit and fixed 4,096-row production heap, and reuse the deterministic at-most-eight-page cover. Paired exact-f16/RaBitQ tree cells make failures causal; the global RaBitQ scan remains diagnostic only.
+**Architecture:** A new prerelease Arrow index stores one 96-bit residual sign code, two f32 estimator factors, and two u32 page ordinals per row, ordered by the existing 65,536-leaf tree. Queries probe 32/64/128 leaves, use twelve query-specific byte lookups per row, apply a row-count-normalized scan limit and fixed 4,096-row production heap, and apply an exact at-most-eight-page cover to only the first ten ranked rows. Paired exact-f16/RaBitQ tree cells make failures causal; the global RaBitQ scan remains diagnostic only.
 
 **Tech Stack:** Rust 2024, Arrow IPC 58.3, Parquet 58.3, serde/serde_json, blake3/SHA-256, borsuk-fma SIMD, Python 3.12, boto3, stdlib unittest, AWS EC2 Spot.
 
@@ -292,9 +292,10 @@ selections/hits, aggregates, requested/actual leaves, scan/retain limits,
 kernel elapsed, estimator error, backend, scalar equality, projection,
 authority roles/digests/URIs, source identity, claim flag, and class.
 Serialization independently recomputes every derivable field.
-Add mutation-effective coverage that a saturated reciprocal-rank cover emits a
-strictly ordered `Vec<u32>` of length `1..=8`, never pads with an unearned page,
-and still completes and serializes all eight causal cells. Assert that the
+Add mutation-effective coverage that the exact recall-at-ten cover ignores
+arbitrary page mass below rank ten, emits a strictly ordered `Vec<u32>` of
+length `1..=8`, never pads with an unearned page, and still completes and
+serializes all eight causal cells. Assert that the
 9.99M and 100M limits both retain at most 4,096 rows and 8,192 assignments while
 their scored-row limits remain 26,189 and 262,144 respectively.
 
@@ -311,7 +312,9 @@ pub(crate) enum V23RaBitQClassification {
 - [ ] **Step 2: Run RED, implement, and run GREEN**
 
 Run `cargo test -p borsuk --lib v23_rabitq_screen_ -- --nocapture`. Implement
-exact precedence from the spec. Route both evaluator and public local runner
+exact precedence from the spec and emit only
+`borsuk-v23-rabitq-screen-v4`; v3 has no prerelease compatibility path. Route
+both evaluator and public local runner
 through `select_v23_rabitq_pages`; a call-counter test must fail if the
 evaluator contains a second serving algorithm. Bind construction receipt and
 D2 truth to the same index identity, page namespace, and exact 28,282-page

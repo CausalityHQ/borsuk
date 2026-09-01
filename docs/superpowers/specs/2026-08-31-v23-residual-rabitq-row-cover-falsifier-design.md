@@ -194,12 +194,15 @@ measured projection above the total fails closed.
    `(distance, row_ordinal)`.
 6. Retain only the fixed production best-row limit in a bounded heap. Full
    ranked-row allocation or sort is forbidden.
-7. Apply the existing deterministic reciprocal-rank page cover to the two page
-   assignments, selecting between one and eight unique pages. A saturated
-   cover is recorded at its natural width and is never padded with an
-   unearned page; using less than the eight-page budget can only self-penalize
-   recall. Ties are
-   `(gain, reciprocal_rank_sum, page_ordinal)` with the registered directions.
+7. Apply an exact deterministic recall-at-ten page cover to only the first ten
+   ranked rows and their two page assignments. Choose at most eight unique
+   pages to maximize the number of those ten rows covered; ties use the
+   lexicographically smallest strictly ordered page vector. Rows below rank ten
+   are forbidden from contributing votes because they are outside the quality
+   metric and can otherwise displace a page containing a top-ten row. If fewer
+   than ten rows were scored, cover every available ranked row under the same
+   rule and let the missing rows self-penalize recall. A saturated cover is
+   recorded at its natural width and is never padded with an unearned page.
 8. Emit the ordered pages plus complete causal and resource evidence.
 
 At 100M rows, 128 balanced leaves contain about 195,313 rows. The hard scan
@@ -246,9 +249,15 @@ has no rejection precedence over a passing tree candidate. This avoids a false
 negative caused by retaining the same number of rows from all 9.99M rows rather
 than from the roughly 4.9K/9.8K/19.5K rows in a `32/64/128` development cell.
 
-No parameter may be added after opening development results. The smallest
-passing probe count wins; ties use the smallest scanned-row count and then the
-lowest leaf ordinal sequence.
+The fixed recall-at-ten reducer is a methodology correction, not a tunable
+parameter: ten is the registered recall depth and eight is the immutable page
+budget. The prior authenticated row-vote F0 evidence independently proves that
+the exact top ten contain 318/318 oracle-reachable hits, while the first
+reciprocal-rank development screen lost 23 of them after allowing ranks
+11--4,096 to vote. No reducer ladder or result-dependent cutoff is permitted.
+After this single amended development screen, the smallest passing probe count
+wins; ties use the smallest scanned-row count and then the lowest leaf ordinal
+sequence.
 
 ## Gates
 

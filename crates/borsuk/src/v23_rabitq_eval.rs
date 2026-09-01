@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BorsukError, Result,
-    v23_diagnostic::v23_reciprocal_rank_page_cover,
+    v23_diagnostic::{V23PageCoverage, best_v23_page_coverage},
     v23_incidence_eval::V23IncidenceQueryTruth,
     v23_incidence_tree::{
         V23IncidenceTree, normalize_v23_incidence_vector, rank_v23_incidence_tree_beam,
@@ -24,6 +24,7 @@ const MAX_SCORED_ROWS: usize = 262_144;
 const MAX_RETAINED_ROWS: usize = 4_096;
 const MAX_PAGE_ASSIGNMENTS: usize = 8_192;
 const TARGET_INDEXED_ROWS: usize = 100_000_000;
+const RECALL_K: usize = 10;
 const SELECTED_PAGES: usize = 8;
 const INVERSE_SQRT_DIMENSIONS: f32 = 0.102_062_07;
 const SCREEN_INPUT_ROLES: [&str; 9] = [
@@ -38,10 +39,36 @@ const SCREEN_INPUT_ROLES: [&str; 9] = [
     "query-parquet",
 ];
 
+fn v23_rabitq_recall_k_page_cover(row_pages: &[(u32, Option<u32>)]) -> Result<V23PageCoverage> {
+    #[cfg(test)]
+    V23_RABITQ_COVER_CALLS.with(|calls| calls.set(calls.get() + 1));
+    if row_pages.is_empty()
+        || row_pages
+            .iter()
+            .take(RECALL_K)
+            .any(|(primary, replica)| *replica == Some(*primary))
+    {
+        return Err(invalid("V23 RaBitQ recall-k page authority differs"));
+    }
+    let assignments = row_pages
+        .iter()
+        .take(RECALL_K)
+        .map(|(primary, replica)| {
+            let mut pages = vec![*primary];
+            pages.extend(*replica);
+            pages.sort_unstable();
+            pages
+        })
+        .collect::<Vec<_>>();
+    best_v23_page_coverage(&assignments, SELECTED_PAGES)
+}
+
 #[cfg(test)]
 thread_local! {
     static V23_RABITQ_SELECT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static V23_RABITQ_SCALAR_SCORE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static V23_RABITQ_COVER_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static V23_RABITQ_COVER_CALLS_AT_ELAPSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -492,7 +519,7 @@ pub(crate) fn canonical_v23_rabitq_screen_result_bytes(
     expected_inputs: &[V23RaBitQObjectIdentity],
     expected_leaf_count: u32,
 ) -> Result<Vec<u8>> {
-    if result.schema != "borsuk-v23-rabitq-screen-v3"
+    if result.schema != "borsuk-v23-rabitq-screen-v4"
         || !valid_lower_hex(&result.source_commit, 40)
         || !valid_lower_hex(&result.source_archive_sha256, 64)
         || result.index_id.is_empty()
@@ -855,14 +882,18 @@ pub(crate) fn select_v23_rabitq_pages(
             maximum_rows: limits.scored_rows,
         },
     )?;
-    let kernel_elapsed_ns = u64::try_from(started.elapsed().as_nanos())
-        .unwrap_or(u64::MAX)
-        .max(1);
     let assignments = ranked_page_assignments(&production.ranked, request.rows)?;
-    let pages = v23_reciprocal_rank_page_cover(&assignments, SELECTED_PAGES)?;
+    let pages = v23_rabitq_recall_k_page_cover(&assignments)?.page_ordinals;
     if pages.is_empty() || pages.len() > SELECTED_PAGES {
         return Err(invalid("V23 RaBitQ selected-page width differs"));
     }
+    let kernel_elapsed_ns = u64::try_from(started.elapsed().as_nanos())
+        .unwrap_or(u64::MAX)
+        .max(1);
+    #[cfg(test)]
+    V23_RABITQ_COVER_CALLS_AT_ELAPSED.with(|captured| {
+        V23_RABITQ_COVER_CALLS.with(|calls| captured.set(calls.get()));
+    });
 
     let assignment_count = assignments
         .iter()
@@ -995,7 +1026,7 @@ fn pages_from_ranked(
         .iter()
         .map(|(_, replica)| 1 + usize::from(replica.is_some()))
         .sum();
-    let pages = v23_reciprocal_rank_page_cover(&assignments, SELECTED_PAGES)?;
+    let pages = v23_rabitq_recall_k_page_cover(&assignments)?.page_ordinals;
     if pages.is_empty() || pages.len() > SELECTED_PAGES {
         return Err(invalid("V23 RaBitQ control page width differs"));
     }
@@ -1336,7 +1367,7 @@ pub(crate) fn evaluate_v23_rabitq_development(
     let leaf_count = u32::try_from(request.geometry.centroids.len()).unwrap();
     let classification = classify_v23_rabitq_controls(&cells, leaf_count)?;
     let result = V23RaBitQScreenResult {
-        schema: "borsuk-v23-rabitq-screen-v3".to_string(),
+        schema: "borsuk-v23-rabitq-screen-v4".to_string(),
         source_commit: request.source_commit,
         source_archive_sha256: request.source_archive_sha256,
         index_id: request.index_id,
@@ -1361,13 +1392,15 @@ mod tests {
     use half::f16;
 
     use super::{
-        SELECTED_PAGES, V23_RABITQ_SCALAR_SCORE_CALLS, V23_RABITQ_SELECT_CALLS, V23RaBitQBackend,
+        SELECTED_PAGES, V23_RABITQ_COVER_CALLS, V23_RABITQ_COVER_CALLS_AT_ELAPSED,
+        V23_RABITQ_SCALAR_SCORE_CALLS, V23_RABITQ_SELECT_CALLS, V23RaBitQBackend,
         V23RaBitQCellResult, V23RaBitQClassification, V23RaBitQControl,
         V23RaBitQDevelopmentRequest, V23RaBitQEvalRequest, V23RaBitQQuerySample,
         V23RaBitQScreenResult, canonical_v23_rabitq_screen_result_bytes,
         classify_v23_rabitq_controls, detected_v23_rabitq_backend, evaluate_rabitq_tree_sample,
-        evaluate_v23_rabitq_development, rank_v23_rabitq_rows, score_v23_rabitq_code,
-        select_v23_rabitq_pages, v23_rabitq_query_limits, v23_rabitq_ranked_leaf_prefix,
+        evaluate_v23_rabitq_development, pages_from_ranked, rank_v23_rabitq_rows,
+        score_v23_rabitq_code, select_v23_rabitq_pages, v23_rabitq_query_limits,
+        v23_rabitq_ranked_leaf_prefix, v23_rabitq_recall_k_page_cover,
     };
     use crate::{
         v23_incidence_eval::V23IncidenceQueryTruth,
@@ -1564,7 +1597,7 @@ mod tests {
             cell(V23RaBitQControl::RaBitQTree, 128, true),
         ];
         V23RaBitQScreenResult {
-            schema: "borsuk-v23-rabitq-screen-v3".to_string(),
+            schema: "borsuk-v23-rabitq-screen-v4".to_string(),
             source_commit: "1".repeat(40),
             source_archive_sha256: "2".repeat(64),
             index_id: "deep-image-96-v23-rabitq".to_string(),
@@ -1837,6 +1870,28 @@ mod tests {
     }
 
     #[test]
+    fn v23_rabitq_eval_times_page_reducer_inside_kernel() {
+        let (mut geometry, rows) = fixture(512, 512);
+        geometry.centroids.push([f16::ZERO; 96]);
+        geometry.leaf_offsets = vec![0, 1, 512];
+        let query = std::array::from_fn(|ordinal| (ordinal as f32 + 1.0) / 101.0);
+        V23_RABITQ_COVER_CALLS.with(|calls| calls.set(0));
+        V23_RABITQ_COVER_CALLS_AT_ELAPSED.with(|captured| captured.set(usize::MAX));
+
+        select_v23_rabitq_pages(V23RaBitQEvalRequest {
+            query_ordinal: 0,
+            query: &query,
+            ranked_leaf_ordinals: &[0],
+            geometry: &geometry,
+            rows: &rows,
+            backend: detected_v23_rabitq_backend().unwrap(),
+        })
+        .unwrap();
+
+        V23_RABITQ_COVER_CALLS_AT_ELAPSED.with(|captured| assert_eq!(captured.get(), 1));
+    }
+
+    #[test]
     fn v23_rabitq_eval_rejects_nonfinite_queries_and_shape_drift() {
         let (mut geometry, rows, ranked_leaves) = scaled_limit_fixture();
         let query = std::array::from_fn(|ordinal| (ordinal as f32 + 1.0) / 101.0);
@@ -2094,5 +2149,48 @@ mod tests {
                             .all(|pair| pair[0] < pair[1])
                 })
         );
+    }
+
+    #[test]
+    fn v23_rabitq_recall_k_cover_ignores_midrank_page_mass() {
+        let ranked_pages = vec![
+            (10, None),
+            (20, None),
+            (30, None),
+            (40, None),
+            (50, None),
+            (60, None),
+            (70, None),
+            (80, None),
+            (90, None),
+            (10, None),
+            (999, None),
+            (999, None),
+            (999, None),
+        ];
+        let cover = v23_rabitq_recall_k_page_cover(&ranked_pages).unwrap();
+        assert_eq!(cover.page_ordinals, vec![10, 20, 30, 40, 50, 60, 70, 80]);
+        assert_eq!(cover.hits, 9);
+    }
+
+    #[test]
+    fn v23_rabitq_ranked_rows_route_only_recall_k_evidence() {
+        let mut ranked_pages = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 10];
+        ranked_pages.resize(4_096, 999);
+        let (geometry, mut rows) = fixture(4_096, 1_000);
+        rows.primary_pages.copy_from_slice(&ranked_pages);
+        rows.replica_pages.fill(u32::MAX);
+        let ranked = (0..4_096_u32)
+            .map(|row_ordinal| super::V23RaBitQRankedRow {
+                distance: row_ordinal as f32,
+                row_ordinal,
+                absolute_error_bound: 0.0,
+            })
+            .collect::<Vec<_>>();
+
+        let (pages, assignments) = pages_from_ranked(&ranked, &rows).unwrap();
+        assert_eq!(pages, vec![10, 20, 30, 40, 50, 60, 70, 80]);
+        assert_eq!(assignments, 4_096);
+        assert_eq!(geometry.leaf_offsets, vec![0, 4_096]);
     }
 }
