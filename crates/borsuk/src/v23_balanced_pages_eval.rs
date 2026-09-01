@@ -42,6 +42,7 @@ pub(crate) struct V23BalancedSelectedPairEvidence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct V23BalancedPageSelection {
     pub(crate) pages: Vec<u32>,
+    pub(crate) containment_page_universe: Vec<u32>,
     pub(crate) scored_dimensions: u64,
     pub(crate) scalar_simd_pages_equal: bool,
 }
@@ -485,7 +486,7 @@ fn ranked_pages(
     geometry: &V23BalancedServingGeometry,
     page_budget: V23BalancedPageBudget,
     fused: bool,
-) -> Result<(Vec<u32>, u64)> {
+) -> Result<(Vec<u32>, Vec<u32>, u64)> {
     let mut cells = geometry
         .supercells
         .iter()
@@ -521,6 +522,15 @@ fn ranked_pages(
     if candidates.len() < page_budget {
         return Err(invalid("selector has fewer pages than its frozen budget"));
     }
+    let mut containment_page_universe = candidates
+        .iter()
+        .map(|candidate| candidate.1)
+        .collect::<Vec<_>>();
+    containment_page_universe.sort_unstable();
+    containment_page_universe.dedup();
+    if containment_page_universe.len() != candidates.len() {
+        return Err(invalid("selector containment page duplicates"));
+    }
     candidates.sort_unstable_by(|left, right| {
         left.0
             .total_cmp(&right.0)
@@ -537,7 +547,7 @@ fn ranked_pages(
         .and_then(|cells| cells.checked_add(u64::try_from(candidate_count).ok()?))
         .and_then(|vectors| vectors.checked_mul(96))
         .ok_or_else(|| invalid("selector work count overflows"))?;
-    Ok((selected, dimensions))
+    Ok((selected, containment_page_universe, dimensions))
 }
 
 pub(crate) fn prepare_v23_balanced_serving_geometry(
@@ -607,16 +617,20 @@ pub(crate) fn select_v23_balanced_pages(
     page_budget: V23BalancedPageBudget,
 ) -> Result<V23BalancedPageSelection> {
     let query = normalize_v23_incidence_vector(query)?;
-    let (pages_fused, scored_dimensions) = ranked_pages(&query, geometry, page_budget, true)?;
-    let (pages_scalar, scalar_dimensions) = ranked_pages(&query, geometry, page_budget, false)?;
+    let (pages_fused, fused_universe, scored_dimensions) =
+        ranked_pages(&query, geometry, page_budget, true)?;
+    let (pages_scalar, scalar_universe, scalar_dimensions) =
+        ranked_pages(&query, geometry, page_budget, false)?;
     if scored_dimensions != scalar_dimensions
         || scored_dimensions > MAX_SCORED_DIMENSIONS
         || pages_fused != pages_scalar
+        || fused_universe != scalar_universe
     {
         return Err(invalid("selector scalar/SIMD evidence differs"));
     }
     Ok(V23BalancedPageSelection {
         pages: pages_fused,
+        containment_page_universe: fused_universe,
         scored_dimensions,
         scalar_simd_pages_equal: true,
     })
@@ -635,7 +649,7 @@ pub(crate) fn measure_v23_balanced_selector(
     }
     let fused_once = |query: &[f32; 96]| {
         let query = normalize_v23_incidence_vector(std::hint::black_box(query))?;
-        ranked_pages(&query, geometry, page_budget, true)
+        ranked_pages(&query, geometry, page_budget, true).map(|result| (result.0, result.2))
     };
     for iteration in 0..WARMUPS {
         let query = &queries[usize::try_from(iteration).unwrap() % queries.len()];
@@ -657,11 +671,14 @@ pub(crate) fn measure_v23_balanced_selector(
     let mut scored_dimensions = None;
     for query in queries {
         let query = normalize_v23_incidence_vector(query)?;
-        let (pages_fused, fused_dimensions) = ranked_pages(&query, geometry, page_budget, true)?;
-        let (pages_scalar, scalar_dimensions) = ranked_pages(&query, geometry, page_budget, false)?;
+        let (pages_fused, fused_universe, fused_dimensions) =
+            ranked_pages(&query, geometry, page_budget, true)?;
+        let (pages_scalar, scalar_universe, scalar_dimensions) =
+            ranked_pages(&query, geometry, page_budget, false)?;
         if fused_dimensions != scalar_dimensions
             || fused_dimensions > MAX_SCORED_DIMENSIONS
             || pages_fused != pages_scalar
+            || fused_universe != scalar_universe
             || scored_dimensions.is_some_and(|expected| expected != fused_dimensions)
         {
             return Err(invalid("selector scalar/SIMD evidence differs"));
@@ -679,6 +696,24 @@ pub(crate) fn measure_v23_balanced_selector(
         scored_dimensions: scored_dimensions.unwrap(),
         scalar_simd_pages_equal: true,
     })
+}
+
+pub(crate) fn build_v23_balanced_sample(
+    query_index: u32,
+    query: &[f32; 96],
+    ground_truth_page_assignments: Vec<Vec<u32>>,
+    geometry: &V23BalancedServingGeometry,
+    page_budget: V23BalancedPageBudget,
+) -> Result<V23BalancedSample> {
+    let selection = select_v23_balanced_pages(query, geometry, page_budget)?;
+    evaluate_v23_balanced_sample(
+        query_index,
+        ground_truth_page_assignments,
+        selection.containment_page_universe,
+        selection.pages,
+        selection.scored_dimensions,
+        page_budget,
+    )
 }
 
 pub(crate) fn evaluate_v23_balanced_sample(
@@ -1063,10 +1098,11 @@ mod tests {
     use super::{
         MAX_SERVING_BYTES, V23BalancedArm, V23BalancedCausalClass,
         V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryPair, V23BalancedResult,
-        V23BalancedSample, V23BalancedTimingEvidence, canonical_v23_balanced_result_bytes,
-        evaluate_v23_balanced_development, evaluate_v23_balanced_pseudoquery_pair,
-        evaluate_v23_balanced_sample, measure_v23_balanced_selector,
-        prepare_v23_balanced_serving_geometry, select_v23_balanced_pages, select_v23_balanced_pair,
+        V23BalancedSample, V23BalancedTimingEvidence, build_v23_balanced_sample,
+        canonical_v23_balanced_result_bytes, evaluate_v23_balanced_development,
+        evaluate_v23_balanced_pseudoquery_pair, evaluate_v23_balanced_sample,
+        measure_v23_balanced_selector, prepare_v23_balanced_serving_geometry,
+        select_v23_balanced_pages, select_v23_balanced_pair,
     };
 
     fn valid_geometry() -> super::V23BalancedServingGeometry {
@@ -1288,6 +1324,29 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn v23_balanced_eval_builds_sample_from_query_and_serving_geometry() {
+        let geometry = valid_geometry();
+        let mut query = [0.0_f32; 96];
+        query[0] = 1.0;
+        let sample = build_v23_balanced_sample(
+            0,
+            &query,
+            (0_u32..10).map(|rank| vec![rank % 9]).collect(),
+            &geometry,
+            V23BalancedPageBudget::new(8).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            sample.containment_page_universe,
+            (0_u32..9).collect::<Vec<_>>()
+        );
+        assert_eq!(sample.selected_pages, (0_u32..8).collect::<Vec<_>>());
+        assert_eq!(sample.layout_oracle_hits, 9);
+        assert_eq!(sample.containment_hits, 9);
+        assert_eq!(sample.selector_hits, 9);
     }
 
     #[test]
