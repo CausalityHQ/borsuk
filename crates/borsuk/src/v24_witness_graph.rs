@@ -17,6 +17,7 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use half::f16;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -356,14 +357,78 @@ fn witness_level(source_ordinal: u64, seed: u64) -> u8 {
     u8::try_from((splitmix64(source_ordinal ^ seed).trailing_zeros() / 4).min(15)).unwrap()
 }
 
-fn graph_distance(query: &[f32; 96], witness: &[f16; 96]) -> f32 {
+/// Exact distance backend recorded by V24 scientific evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum V24DistanceBackend {
+    Aarch64NeonFma,
+    X86AvxFma,
+    ScalarControl,
+}
+
+pub(crate) fn v24_scientific_distance_backend() -> Result<V24DistanceBackend> {
+    let zeros = [0.0_f32; 96];
+    let (_, backend) = borsuk_fma::fused_dot_8x12(&zeros, &zeros)
+        .map_err(|_| invalid("V24 fused distance backend is unavailable"))?;
+    Ok(match backend {
+        borsuk_fma::FmaBackend::Aarch64NeonFma => V24DistanceBackend::Aarch64NeonFma,
+        borsuk_fma::FmaBackend::X86AvxFma => V24DistanceBackend::X86AvxFma,
+    })
+}
+
+fn scalar_control_distance(query: &[f32; 96], witness: &[f16; 96]) -> f32 {
     let dot = query
         .iter()
-        .zip(witness.iter())
-        .fold(0.0_f32, |sum, (left, right)| {
-            left.mul_add(f32::from(*right), sum)
-        });
-    1.0 - dot
+        .zip(witness)
+        .map(|(left, right)| f64::from(*left) * f64::from(f32::from(*right)))
+        .sum::<f64>();
+    (1.0_f64 - dot) as f32
+}
+
+fn unchecked_distance(query: &[f32; 96], witness: &[f16; 96], backend: V24DistanceBackend) -> f32 {
+    match backend {
+        V24DistanceBackend::ScalarControl => scalar_control_distance(query, witness),
+        V24DistanceBackend::Aarch64NeonFma | V24DistanceBackend::X86AvxFma => {
+            let converted = witness.map(f32::from);
+            let Ok((dot, observed)) = borsuk_fma::fused_dot_8x12(query, &converted) else {
+                return f32::NAN;
+            };
+            let observed = match observed {
+                borsuk_fma::FmaBackend::Aarch64NeonFma => V24DistanceBackend::Aarch64NeonFma,
+                borsuk_fma::FmaBackend::X86AvxFma => V24DistanceBackend::X86AvxFma,
+            };
+            if observed == backend {
+                1.0 - dot
+            } else {
+                f32::NAN
+            }
+        }
+    }
+}
+
+pub(crate) fn v24_witness_distance(
+    query: &[f32; 96],
+    witness: &[f16; 96],
+    backend: V24DistanceBackend,
+) -> Result<f32> {
+    if query.iter().any(|value| !value.is_finite())
+        || witness.iter().any(|value| !value.is_finite())
+        || backend != V24DistanceBackend::ScalarControl
+            && v24_scientific_distance_backend()? != backend
+    {
+        return Err(invalid("V24 witness distance authority differs"));
+    }
+    let distance = unchecked_distance(query, witness, backend);
+    if !distance.is_finite() {
+        return Err(invalid("V24 witness distance is non-finite"));
+    }
+    Ok(distance)
+}
+
+fn graph_distance(query: &[f32; 96], witness: &[f16; 96]) -> f32 {
+    let backend = v24_scientific_distance_backend()
+        .expect("V24 graph build/search requires a fused SIMD backend");
+    unchecked_distance(query, witness, backend)
 }
 
 impl V24WitnessGraph {
@@ -389,6 +454,15 @@ impl V24WitnessGraph {
 
     fn distance(&self, query: &[f32; 96], ordinal: u32) -> f32 {
         graph_distance(query, self.vector(ordinal).unwrap())
+    }
+
+    fn distance_with_backend(
+        &self,
+        query: &[f32; 96],
+        ordinal: u32,
+        backend: V24DistanceBackend,
+    ) -> f32 {
+        unchecked_distance(query, self.vector(ordinal).unwrap(), backend)
     }
 
     pub(crate) fn source_index(&self) -> Vec<(u64, u32)> {
@@ -528,10 +602,11 @@ fn greedy_descend(
     mut current: u32,
     level: u8,
     node_limit: usize,
+    backend: V24DistanceBackend,
 ) -> u32 {
     loop {
         let mut best = RankedWitness {
-            distance: graph.distance(query, current),
+            distance: graph.distance_with_backend(query, current, backend),
             ordinal: current,
         };
         for neighbor in graph.neighbors(current, level).iter().copied() {
@@ -539,7 +614,7 @@ fn greedy_descend(
                 continue;
             }
             let candidate = RankedWitness {
-                distance: graph.distance(query, neighbor),
+                distance: graph.distance_with_backend(query, neighbor, backend),
                 ordinal: neighbor,
             };
             if candidate < best {
@@ -560,6 +635,7 @@ fn search_layer(
     ef: usize,
     level: u8,
     node_limit: usize,
+    backend: V24DistanceBackend,
 ) -> Vec<RankedWitness> {
     let mut visited = BTreeSet::new();
     let mut candidates = BinaryHeap::<std::cmp::Reverse<RankedWitness>>::new();
@@ -571,7 +647,7 @@ fn search_layer(
             continue;
         }
         let ranked = RankedWitness {
-            distance: graph.distance(query, entry),
+            distance: graph.distance_with_backend(query, entry, backend),
             ordinal: entry,
         };
         candidates.push(std::cmp::Reverse(ranked));
@@ -586,7 +662,7 @@ fn search_layer(
                 continue;
             }
             let ranked = RankedWitness {
-                distance: graph.distance(query, neighbor),
+                distance: graph.distance_with_backend(query, neighbor, backend),
                 ordinal: neighbor,
             };
             if best.len() < ef || best.peek().is_some_and(|worst| ranked < *worst) {
@@ -690,6 +766,7 @@ pub(crate) fn build_v24_witness_graph(
     witnesses: &[V24Witness],
     seed: u64,
 ) -> Result<V24WitnessGraph> {
+    let backend = v24_scientific_distance_backend()?;
     validate_witnesses(witnesses)?;
     if witnesses.len() < 2 {
         return Err(invalid("V24 witness graph row count differs"));
@@ -735,7 +812,7 @@ pub(crate) fn build_v24_witness_graph(
         let mut current = graph.entrypoint;
         if maximum_level > node_level {
             for level in ((node_level + 1)..=maximum_level).rev() {
-                current = greedy_descend(&graph, &query, current, level, node_index);
+                current = greedy_descend(&graph, &query, current, level, node_index, backend);
             }
         }
         for level in (0..=node_level.min(maximum_level)).rev() {
@@ -746,6 +823,7 @@ pub(crate) fn build_v24_witness_graph(
                 V24_GRAPH_EF_CONSTRUCTION.min(node_index),
                 level,
                 node_index,
+                backend,
             );
             let mut selected = found
                 .iter()
@@ -791,11 +869,31 @@ pub(crate) struct V24WitnessSearch<'a> {
 
 impl<'a> V24WitnessSearch<'a> {
     pub(crate) fn new(graph: &'a V24WitnessGraph) -> Result<Self> {
+        v24_scientific_distance_backend()?;
         validate_graph(graph)?;
         Ok(Self { graph })
     }
 
     pub(crate) fn search(&self, query: &[f32; 96], k: usize, ef: usize) -> Result<Vec<u32>> {
+        self.search_with_backend(query, k, ef, v24_scientific_distance_backend()?)
+    }
+
+    pub(crate) fn search_scalar_control(
+        &self,
+        query: &[f32; 96],
+        k: usize,
+        ef: usize,
+    ) -> Result<Vec<u32>> {
+        self.search_with_backend(query, k, ef, V24DistanceBackend::ScalarControl)
+    }
+
+    fn search_with_backend(
+        &self,
+        query: &[f32; 96],
+        k: usize,
+        ef: usize,
+        backend: V24DistanceBackend,
+    ) -> Result<Vec<u32>> {
         let graph = self.graph;
         if query.iter().any(|value| !value.is_finite())
             || k == 0
@@ -809,7 +907,7 @@ impl<'a> V24WitnessSearch<'a> {
                 .map(|ordinal| {
                     let ordinal = u32::try_from(ordinal).unwrap();
                     RankedWitness {
-                        distance: graph.distance(query, ordinal),
+                        distance: graph.distance_with_backend(query, ordinal, backend),
                         ordinal,
                     }
                 })
@@ -824,10 +922,10 @@ impl<'a> V24WitnessSearch<'a> {
         let maximum_level = graph.levels[usize::try_from(graph.entrypoint).unwrap()];
         let mut current = graph.entrypoint;
         for level in (1..=maximum_level).rev() {
-            current = greedy_descend(graph, query, current, level, graph.node_count());
+            current = greedy_descend(graph, query, current, level, graph.node_count(), backend);
         }
         Ok(
-            search_layer(graph, query, &[current], ef, 0, graph.node_count())
+            search_layer(graph, query, &[current], ef, 0, graph.node_count(), backend)
                 .into_iter()
                 .take(k)
                 .map(|value| value.ordinal)
@@ -1026,8 +1124,10 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        V24Witness, V24WitnessSampler, build_v24_witness_graph, read_v24_witness_graph,
-        read_v24_witnesses, search_v24_witness_graph, write_v24_witness_graph, write_v24_witnesses,
+        V24DistanceBackend, V24Witness, V24WitnessSampler, V24WitnessSearch,
+        build_v24_witness_graph, read_v24_witness_graph, read_v24_witnesses,
+        search_v24_witness_graph, v24_scientific_distance_backend, v24_witness_distance,
+        write_v24_witness_graph, write_v24_witnesses,
     };
     use crate::v24_witness::{V24ObjectIdentity, V24SourceRow};
 
@@ -1272,5 +1372,38 @@ mod tests {
         assert!(
             search_v24_witness_graph(&graph, &witnesses[0].vector.map(f32::from), 0, 96).is_err()
         );
+    }
+
+    #[test]
+    fn v24_witness_graph_explicit_simd_backend_matches_independent_scalar_control() {
+        let backend = v24_scientific_distance_backend().unwrap();
+        assert!(matches!(
+            backend,
+            V24DistanceBackend::Aarch64NeonFma | V24DistanceBackend::X86AvxFma
+        ));
+        let witnesses = graph_witnesses(96);
+        let graph = build_v24_witness_graph(&witnesses, SEED).unwrap();
+        let search = V24WitnessSearch::new(&graph).unwrap();
+        for query_ordinal in [0_usize, 1, 17, 63, 95] {
+            let query = witnesses[query_ordinal].vector.map(f32::from);
+            for witness in &witnesses {
+                let fused = v24_witness_distance(&query, &witness.vector, backend).unwrap();
+                let scalar = v24_witness_distance(
+                    &query,
+                    &witness.vector,
+                    V24DistanceBackend::ScalarControl,
+                )
+                .unwrap();
+                assert!((fused - scalar).abs() <= 2.0e-6);
+            }
+            assert_eq!(
+                search.search(&query, 8, 32).unwrap(),
+                search.search_scalar_control(&query, 8, 32).unwrap()
+            );
+        }
+
+        let mut nonfinite = witnesses[0].vector.map(f32::from);
+        nonfinite[4] = f32::INFINITY;
+        assert!(v24_witness_distance(&nonfinite, &witnesses[0].vector, backend).is_err());
     }
 }
