@@ -16,6 +16,29 @@ from scripts import build_v24_reduced_fixture as subject
 
 
 class V24ReducedFixtureTests(unittest.TestCase):
+    def assert_progress(
+        self,
+        path: pathlib.Path,
+        *,
+        phase: str,
+        completed_units: int | None = None,
+        total_units: int | None = None,
+    ) -> None:
+        raw = path.read_bytes()
+        value = json.loads(raw)
+        self.assertEqual(
+            raw,
+            json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n",
+        )
+        self.assertEqual(value["phase"], phase)
+        self.assertGreater(value["sequence"], 0)
+        self.assertGreater(value["completed_units"], 0)
+        self.assertLessEqual(value["completed_units"], value["total_units"])
+        if completed_units is not None:
+            self.assertEqual(value["completed_units"], completed_units)
+        if total_units is not None:
+            self.assertEqual(value["total_units"], total_units)
+
     def test_reduced_fixture_is_deterministic_parquet_with_original_ordinals(self) -> None:
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
             first_root = pathlib.Path(first)
@@ -69,6 +92,8 @@ class V24ReducedFixtureTests(unittest.TestCase):
                 ),
             )
             self.assertEqual(construction.column("source_ordinal").to_pylist(), list(range(257)))
+            source_vectors = construction.column("vector").to_pylist()
+            self.assertEqual(len({tuple(vector) for vector in source_vectors}), 257)
 
             pages = pq.read_table(first_root / "page-rows.parquet")
             self.assertEqual(pages.num_rows, 257)
@@ -235,6 +260,12 @@ class V24ReducedFixtureTests(unittest.TestCase):
                 check=True,
                 capture_output=True,
             )
+            self.assert_progress(
+                training_output / "progress.json",
+                phase="witness-training",
+                completed_units=289,
+                total_units=289,
+            )
             posting_manifest = subject.prepare_posting_phase(root, training_output)
             posting_output = root / "posting-output"
             posting_output.mkdir()
@@ -252,6 +283,12 @@ class V24ReducedFixtureTests(unittest.TestCase):
                 ],
                 check=True,
                 capture_output=True,
+            )
+            self.assert_progress(
+                posting_output / "progress.json",
+                phase="posting-construction",
+                completed_units=545,
+                total_units=545,
             )
             development_manifest = subject.prepare_development_phase(
                 root, training_output, posting_output
@@ -272,6 +309,10 @@ class V24ReducedFixtureTests(unittest.TestCase):
                 ],
                 check=True,
                 capture_output=True,
+            )
+            self.assert_progress(
+                development_output / "progress.json",
+                phase="development-evaluation",
             )
             self.assertEqual(
                 completed.stdout,

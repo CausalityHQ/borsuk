@@ -26,13 +26,14 @@ use crate::{
     },
     v24_witness_graph::{
         V24DistanceBackend, V24WitnessGraph, V24WitnessSampler, V24WitnessSearch,
-        build_v24_witness_graph, normalize_v24_witness_vector, read_v24_witness_graph,
-        read_v24_witnesses, v24_scientific_distance_backend, write_v24_witness_graph,
-        write_v24_witnesses,
+        build_v24_witness_graph_with_progress, normalize_v24_witness_vector,
+        read_v24_witness_graph, read_v24_witnesses, v24_scientific_distance_backend,
+        write_v24_witness_graph, write_v24_witnesses,
     },
     v24_witness_postings::{
-        V24PostingPage, V24PostingPageRow, V24PostingPlane, build_v24_witness_postings,
-        read_v24_witness_postings, write_v24_witness_postings,
+        V24PostingPage, V24PostingPageRow, V24PostingPlane,
+        build_v24_witness_postings_with_progress, read_v24_witness_postings,
+        v24_posting_total_work_units, write_v24_witness_postings,
     },
 };
 
@@ -51,7 +52,11 @@ const QUERIES_FILE: &str = "queries.parquet";
 const NEIGHBORS_FILE: &str = "neighbors.parquet";
 const DEVELOPMENT_RESULT_FILE: &str = "development-result.json";
 const HOLDOUT_BINDING_FILE: &str = "holdout-binding.json";
+const PROGRESS_FILE: &str = "progress.json";
 const V24_SERVING_BYTES: u64 = 1_644_167_168;
+const V24_SOURCE_PROGRESS_ROWS: u64 = 1_048_576;
+const V24_DEVELOPMENT_LATENCY_SAMPLES: u64 = 10_000;
+const V24_DEVELOPMENT_PROGRESS_SAMPLES: u64 = 1_024;
 
 /// One offline V24 scientific phase.
 #[doc(hidden)]
@@ -222,6 +227,109 @@ fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>> {
         .map_err(|error| invalid(&format!("V24 local JSON serialization failed: {error}")))?;
     bytes.push(b'\n');
     Ok(bytes)
+}
+
+#[derive(Debug, Serialize)]
+struct V24ProgressSnapshot<'a> {
+    completed_units: u64,
+    phase: &'a str,
+    sequence: u64,
+    total_units: u64,
+}
+
+struct V24ProgressWriter {
+    output_dir: PathBuf,
+    phase: &'static str,
+    sequence: u64,
+    completed_units: u64,
+    total_units: u64,
+    committed: bool,
+}
+
+impl V24ProgressWriter {
+    fn start(output_dir: &Path, phase: &'static str, total_units: u64) -> Result<Self> {
+        if total_units == 0 {
+            return Err(invalid("V24 progress total differs"));
+        }
+        let writer = Self {
+            output_dir: output_dir.to_owned(),
+            phase,
+            sequence: 0,
+            completed_units: 0,
+            total_units,
+            committed: false,
+        };
+        writer.write()?;
+        Ok(writer)
+    }
+
+    fn advance(&mut self, completed_units: u64) -> Result<()> {
+        if completed_units <= self.completed_units || completed_units > self.total_units {
+            return Err(invalid("V24 progress completed work differs"));
+        }
+        self.sequence = self
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| invalid("V24 progress sequence overflows"))?;
+        self.completed_units = completed_units;
+        self.write()
+    }
+
+    fn write(&self) -> Result<()> {
+        let bytes = canonical_json_bytes(&V24ProgressSnapshot {
+            completed_units: self.completed_units,
+            phase: self.phase,
+            sequence: self.sequence,
+            total_units: self.total_units,
+        })?;
+        let temporary = self.output_dir.join(format!(".{PROGRESS_FILE}.tmp"));
+        let final_path = self.output_dir.join(PROGRESS_FILE);
+        let result = (|| -> Result<()> {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .map_err(|source| BorsukError::Io {
+                    path: temporary.clone(),
+                    source,
+                })?;
+            file.write_all(&bytes).map_err(|source| BorsukError::Io {
+                path: temporary.clone(),
+                source,
+            })?;
+            file.sync_all().map_err(|source| BorsukError::Io {
+                path: temporary.clone(),
+                source,
+            })?;
+            fs::rename(&temporary, &final_path).map_err(|source| BorsukError::Io {
+                path: final_path.clone(),
+                source,
+            })?;
+            fs::File::open(&self.output_dir)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|source| BorsukError::Io {
+                    path: self.output_dir.clone(),
+                    source,
+                })
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result
+    }
+
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for V24ProgressWriter {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = fs::remove_file(self.output_dir.join(PROGRESS_FILE));
+            let _ = fs::remove_file(self.output_dir.join(format!(".{PROGRESS_FILE}.tmp")));
+        }
+    }
 }
 
 fn sha256_identity(role: &str, uri: &str, generation: &str, bytes: &[u8]) -> V24ObjectIdentity {
@@ -667,6 +775,7 @@ fn sample_training_rows(
     expected_rows: u64,
     witness_count: usize,
     seed: u64,
+    mut progress: impl FnMut(u64) -> Result<()>,
 ) -> Result<Vec<crate::v24_witness_graph::V24Witness>> {
     let file = fs::File::open(path).map_err(|source| BorsukError::Io {
         path: path.to_owned(),
@@ -715,10 +824,16 @@ fn sample_training_rows(
                 vector,
             })?;
             next_ordinal += 1;
+            if next_ordinal.is_multiple_of(V24_SOURCE_PROGRESS_ROWS) {
+                progress(next_ordinal)?;
+            }
         }
     }
     if next_ordinal != expected_rows {
         return Err(invalid("V24 construction row count differs"));
+    }
+    if !next_ordinal.is_multiple_of(V24_SOURCE_PROGRESS_ROWS) {
+        progress(next_ordinal)?;
     }
     sampler.finish()
 }
@@ -756,7 +871,12 @@ fn write_owned_file(output_dir: &Path, name: &str, bytes: &[u8]) -> Result<()> {
 }
 
 fn cleanup_training_outputs(output_dir: &Path) {
-    for name in [WITNESSES_FILE, WITNESS_GRAPH_FILE, RESULT_FILE] {
+    for name in [
+        WITNESSES_FILE,
+        WITNESS_GRAPH_FILE,
+        RESULT_FILE,
+        PROGRESS_FILE,
+    ] {
         let _ = fs::remove_file(output_dir.join(name));
         let _ = fs::remove_file(output_dir.join(format!(".{name}.tmp")));
     }
@@ -799,14 +919,24 @@ fn run_training(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
     )?;
     validate_v24_identity(&observed_input, registered_input)?;
 
+    let total_units = manifest
+        .source_row_count
+        .checked_add(manifest.witness_count)
+        .ok_or_else(|| invalid("V24 training progress total overflows"))?;
+    let mut progress =
+        V24ProgressWriter::start(&request.output_dir, "witness-training", total_units)?;
     let witnesses = sample_training_rows(
         &path,
         manifest.source_row_count,
         usize::try_from(manifest.witness_count).unwrap(),
         manifest.seed,
+        |completed_rows| progress.advance(completed_rows),
     )?;
     let witness_bytes = write_v24_witnesses(&witnesses)?;
-    let graph = build_v24_witness_graph(&witnesses, manifest.seed)?;
+    let graph =
+        build_v24_witness_graph_with_progress(&witnesses, manifest.seed, |completed_nodes| {
+            progress.advance(manifest.source_row_count + completed_nodes)
+        })?;
     let graph_bytes = write_v24_witness_graph(&graph)?;
     let outputs = vec![
         sha256_identity(
@@ -848,6 +978,7 @@ fn run_training(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         cleanup_training_outputs(&request.output_dir);
         return Err(error);
     }
+    progress.commit();
     Ok(result_bytes)
 }
 
@@ -998,13 +1129,22 @@ fn run_posting_construction(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         &manifest.construction_rows_digest,
         &manifest.generation,
     )?;
+    let total_units =
+        v24_posting_total_work_units(manifest.source_row_count, manifest.witness_count)?;
+    let mut progress =
+        V24ProgressWriter::start(&request.output_dir, "posting-construction", total_units)?;
     let scratch = request.output_dir.join(POSTING_SCRATCH_DIR);
     fs::create_dir(&scratch).map_err(|source| BorsukError::Io {
         path: scratch.clone(),
         source,
     })?;
-    let plane_result =
-        build_v24_witness_postings(&graph, manifest.source_row_count, pages, &scratch);
+    let plane_result = build_v24_witness_postings_with_progress(
+        &graph,
+        manifest.source_row_count,
+        pages,
+        &scratch,
+        |completed_units| progress.advance(completed_units),
+    );
     let cleanup_result = fs::remove_dir(&scratch).map_err(|source| BorsukError::Io {
         path: scratch.clone(),
         source,
@@ -1053,6 +1193,7 @@ fn run_posting_construction(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         }
         return Err(error);
     }
+    progress.commit();
     Ok(result_bytes)
 }
 
@@ -1124,24 +1265,36 @@ fn evaluate_development_cell(
     truth: &[V24QueryTruth],
     cell: V24Cell,
     page_count: usize,
+    mut progress: impl FnMut(u64) -> Result<()>,
 ) -> Result<V24Evaluation> {
     let pages = queries
         .iter()
         .map(|query| select_development_pages(search, plane, query, cell, page_count, false, false))
         .collect::<Result<Vec<_>>>()?;
+    let query_units = u64::try_from(queries.len()).unwrap();
+    progress(query_units)?;
     let scalar_pages = queries
         .iter()
         .map(|query| select_development_pages(search, plane, query, cell, page_count, true, false))
         .collect::<Result<Vec<_>>>()?;
+    progress(query_units * 2)?;
     let samples = development_samples(&pages, truth)?;
-    let mut latency_ns = Vec::with_capacity(10_000);
-    for iteration in 0..10_000 {
+    let mut latency_ns =
+        Vec::with_capacity(usize::try_from(V24_DEVELOPMENT_LATENCY_SAMPLES).unwrap());
+    for iteration in 0..V24_DEVELOPMENT_LATENCY_SAMPLES {
+        let iteration = usize::try_from(iteration).unwrap();
         let query = &queries[iteration % queries.len()];
         let start = Instant::now();
         let selected =
             select_development_pages(search, plane, query, cell, page_count, false, false)?;
         std::hint::black_box(selected);
         latency_ns.push(u64::try_from(start.elapsed().as_nanos().max(1)).unwrap_or(u64::MAX));
+        let completed_samples = u64::try_from(iteration + 1).unwrap();
+        if completed_samples.is_multiple_of(V24_DEVELOPMENT_PROGRESS_SAMPLES)
+            || completed_samples == V24_DEVELOPMENT_LATENCY_SAMPLES
+        {
+            progress(query_units * 2 + completed_samples)?;
+        }
     }
     evaluate_v24_cell(
         cell,
@@ -1161,15 +1314,19 @@ fn evaluate_exact_control(
     truth: &[V24QueryTruth],
     cell: V24Cell,
     page_count: usize,
+    mut progress: impl FnMut(u64) -> Result<()>,
 ) -> Result<crate::v24_witness_eval::V24ExactControl> {
     let pages = queries
         .iter()
         .map(|query| select_development_pages(search, plane, query, cell, page_count, false, true))
         .collect::<Result<Vec<_>>>()?;
+    let query_units = u64::try_from(queries.len()).unwrap();
+    progress(query_units)?;
     let scalar_pages = queries
         .iter()
         .map(|query| select_development_pages(search, plane, query, cell, page_count, true, true))
         .collect::<Result<Vec<_>>>()?;
+    progress(query_units * 2)?;
     evaluate_v24_exact_control(
         cell,
         development_samples(&pages, truth)?,
@@ -1177,6 +1334,13 @@ fn evaluate_exact_control(
         page_count,
         scalar_pages,
     )
+}
+
+fn development_cell_work_units(query_count: u64) -> Result<u64> {
+    query_count
+        .checked_mul(2)
+        .and_then(|units| units.checked_add(V24_DEVELOPMENT_LATENCY_SAMPLES))
+        .ok_or_else(|| invalid("V24 development progress total overflows"))
 }
 
 fn run_development_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
@@ -1296,10 +1460,27 @@ fn run_development_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         .into_iter()
         .filter(|cell| usize::try_from(cell.page_budget).unwrap() <= page_count)
         .collect::<Vec<_>>();
+    let query_units = u64::try_from(query_count).unwrap();
+    let cell_units = development_cell_work_units(query_units)?;
+    let total_units = u64::try_from(registered_cells.len())
+        .unwrap()
+        .checked_mul(cell_units)
+        .and_then(|units| units.checked_add(query_units * 2))
+        .ok_or_else(|| invalid("V24 development progress total overflows"))?;
+    let mut progress =
+        V24ProgressWriter::start(&request.output_dir, "development-evaluation", total_units)?;
     let mut evaluated_cells = Vec::new();
-    for cell in registered_cells {
-        let evaluation =
-            evaluate_development_cell(&search, &plane, &queries, &truth, cell, page_count)?;
+    for (cell_index, cell) in registered_cells.into_iter().enumerate() {
+        let offset = u64::try_from(cell_index).unwrap() * cell_units;
+        let evaluation = evaluate_development_cell(
+            &search,
+            &plane,
+            &queries,
+            &truth,
+            cell,
+            page_count,
+            |completed_units| progress.advance(offset + completed_units),
+        )?;
         let passed = evaluation.passed;
         evaluated_cells.push(evaluation);
         if passed {
@@ -1313,6 +1494,7 @@ fn run_development_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
     let exact_control = if serving.passed {
         None
     } else {
+        let offset = u64::try_from(evaluated_cells.len()).unwrap() * cell_units;
         Some(evaluate_exact_control(
             &search,
             &plane,
@@ -1320,6 +1502,7 @@ fn run_development_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
             &truth,
             serving.cell,
             page_count,
+            |completed_units| progress.advance(offset + completed_units),
         )?)
     };
     let disposition = classify_v24_ladder(
@@ -1344,6 +1527,7 @@ fn run_development_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
     };
     let result_bytes = canonical_v24_result_bytes(&result, &result.identities, &truth, page_count)?;
     write_owned_file(&request.output_dir, RESULT_FILE, &result_bytes)?;
+    progress.commit();
     Ok(result_bytes)
 }
 
@@ -1417,6 +1601,11 @@ fn run_holdout_binding(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
     }
     let query_count = usize::try_from(manifest.query_count).unwrap();
     let page_count = usize::try_from(manifest.page_count).unwrap();
+    let mut progress = V24ProgressWriter::start(
+        &request.output_dir,
+        "holdout-binding",
+        u64::try_from(query_count).unwrap(),
+    )?;
     let queries = read_development_queries(&request.input_dir.join(QUERIES_FILE), query_count)?;
     let truth = read_development_truth(
         &request.input_dir.join(NEIGHBORS_FILE),
@@ -1460,7 +1649,9 @@ fn run_holdout_binding(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         identities: manifest.inputs,
     };
     let bytes = canonical_json_bytes(&binding)?;
+    progress.advance(u64::try_from(query_count).unwrap())?;
     write_owned_file(&request.output_dir, HOLDOUT_BINDING_FILE, &bytes)?;
+    progress.commit();
     Ok(bytes)
 }
 
@@ -1608,6 +1799,13 @@ fn run_holdout_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         page_count,
     )?;
     let search = V24WitnessSearch::new(&graph)?;
+    let query_units = u64::try_from(query_count).unwrap();
+    let cell_units = development_cell_work_units(query_units)?;
+    let total_units = cell_units
+        .checked_add(query_units * 2)
+        .ok_or_else(|| invalid("V24 holdout progress total overflows"))?;
+    let mut progress =
+        V24ProgressWriter::start(&request.output_dir, "holdout-evaluation", total_units)?;
     let serving = evaluate_development_cell(
         &search,
         &plane,
@@ -1615,6 +1813,7 @@ fn run_holdout_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         &truth,
         binding.selected_cell,
         page_count,
+        |completed_units| progress.advance(completed_units),
     )?;
     let exact_control = if serving.passed {
         None
@@ -1626,6 +1825,7 @@ fn run_holdout_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
             &truth,
             binding.selected_cell,
             page_count,
+            |completed_units| progress.advance(cell_units + completed_units),
         )?)
     };
     let disposition = classify_v24_ladder(
@@ -1650,6 +1850,7 @@ fn run_holdout_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
     };
     let bytes = canonical_v24_result_bytes(&result, &result.identities, &truth, page_count)?;
     write_owned_file(&request.output_dir, RESULT_FILE, &bytes)?;
+    progress.commit();
     Ok(bytes)
 }
 
@@ -2131,6 +2332,49 @@ mod tests {
     }
 
     #[test]
+    fn v24_witness_local_progress_reports_training_source_and_graph_work() {
+        let root = std::env::temp_dir().join(format!(
+            "borsuk-v24-local-training-progress-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let input_dir = root.join("input");
+        let output_dir = root.join("output");
+        fs::create_dir_all(&input_dir).unwrap();
+        fs::create_dir_all(&output_dir).unwrap();
+        let construction = input_dir.join("construction-rows.parquet");
+        write_construction_rows(&construction, 257);
+        let manifest = root.join("manifest.json");
+        write_manifest(&manifest, &input_identity(&construction));
+
+        run_v24_local_request(V24LocalRunRequest {
+            manifest,
+            input_dir,
+            output_dir: output_dir.clone(),
+            phase: V24LocalPhase::TrainWitnesses,
+        })
+        .unwrap();
+        let progress_bytes = fs::read(output_dir.join("progress.json")).unwrap();
+        let progress: serde_json::Value = serde_json::from_slice(&progress_bytes).unwrap();
+        assert_eq!(
+            progress_bytes,
+            super::canonical_json_bytes(&progress).unwrap(),
+            "progress must be canonical newline JSON"
+        );
+        assert_eq!(
+            progress,
+            json!({
+                "completed_units": 274,
+                "phase": "witness-training",
+                "sequence": 2,
+                "total_units": 274
+            })
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn v24_witness_local_postings_authenticate_parquet_and_emit_arrow_result() {
         let root =
             std::env::temp_dir().join(format!("borsuk-v24-local-postings-{}", std::process::id()));
@@ -2223,6 +2467,21 @@ mod tests {
         assert_eq!(
             fs::read(posting_output.join("result.json")).unwrap(),
             result_bytes
+        );
+        let progress_bytes = fs::read(posting_output.join("progress.json")).unwrap();
+        let progress: serde_json::Value = serde_json::from_slice(&progress_bytes).unwrap();
+        assert_eq!(
+            progress_bytes,
+            super::canonical_json_bytes(&progress).unwrap()
+        );
+        assert_eq!(
+            progress,
+            json!({
+                "completed_units": 530,
+                "phase": "posting-construction",
+                "sequence": 3,
+                "total_units": 530
+            })
         );
 
         fs::remove_dir_all(root).unwrap();
@@ -2377,6 +2636,21 @@ mod tests {
             fs::read(development_output.join("result.json")).unwrap(),
             result_bytes
         );
+        let progress_bytes = fs::read(development_output.join("progress.json")).unwrap();
+        let progress: serde_json::Value = serde_json::from_slice(&progress_bytes).unwrap();
+        assert_eq!(
+            progress_bytes,
+            super::canonical_json_bytes(&progress).unwrap()
+        );
+        assert_eq!(
+            progress,
+            json!({
+                "completed_units": 10_064,
+                "phase": "development-evaluation",
+                "sequence": 12,
+                "total_units": 543_520
+            })
+        );
 
         fs::copy(
             development_output.join("result.json"),
@@ -2427,6 +2701,18 @@ mod tests {
         assert_eq!(
             fs::read(holdout_bind_output.join("holdout-binding.json")).unwrap(),
             binding_bytes
+        );
+        let bind_progress_bytes = fs::read(holdout_bind_output.join("progress.json")).unwrap();
+        let bind_progress: serde_json::Value =
+            serde_json::from_slice(&bind_progress_bytes).unwrap();
+        assert_eq!(
+            bind_progress,
+            json!({
+                "completed_units": 32,
+                "phase": "holdout-binding",
+                "sequence": 1,
+                "total_units": 32
+            })
         );
 
         for name in ["witness-graph.arrow", "witness-postings.arrow"] {
@@ -2488,6 +2774,18 @@ mod tests {
         assert_eq!(
             fs::read(holdout_eval_output.join("result.json")).unwrap(),
             holdout_bytes
+        );
+        let holdout_progress_bytes = fs::read(holdout_eval_output.join("progress.json")).unwrap();
+        let holdout_progress: serde_json::Value =
+            serde_json::from_slice(&holdout_progress_bytes).unwrap();
+        assert_eq!(
+            holdout_progress,
+            json!({
+                "completed_units": 10_064,
+                "phase": "holdout-evaluation",
+                "sequence": 12,
+                "total_units": 10_128
+            })
         );
 
         fs::remove_dir_all(root).unwrap();

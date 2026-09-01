@@ -841,6 +841,14 @@ pub(crate) fn build_v24_witness_graph(
     witnesses: &[V24Witness],
     seed: u64,
 ) -> Result<V24WitnessGraph> {
+    build_v24_witness_graph_with_progress(witnesses, seed, |_| Ok(()))
+}
+
+pub(crate) fn build_v24_witness_graph_with_progress(
+    witnesses: &[V24Witness],
+    seed: u64,
+    mut progress: impl FnMut(u64) -> Result<()>,
+) -> Result<V24WitnessGraph> {
     let backend = v24_scientific_distance_backend()?;
     validate_witnesses(witnesses)?;
     if witnesses.len() < 2 {
@@ -926,6 +934,10 @@ pub(crate) fn build_v24_witness_graph(
         if node_level > maximum_level {
             graph.entrypoint = node;
             maximum_level = node_level;
+        }
+        let completed_nodes = u64::try_from(node_index + 1).unwrap();
+        if completed_nodes.is_multiple_of(16_384) || node_index + 1 == graph.node_count() {
+            progress(completed_nodes)?;
         }
     }
     validate_graph(&graph)?;

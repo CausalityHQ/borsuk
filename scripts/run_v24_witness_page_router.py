@@ -118,11 +118,11 @@ class AuthenticatedProgressMonitor:
         ):
             raise ValueError("V24 progress authority differs")
         if self._sequence is None:
-            if sequence != 0 or completed != 0:
+            if sequence == 0 and completed != 0:
                 raise ValueError("V24 progress root differs")
             self._total_units = total
         elif (
-            sequence != self._sequence + 1
+            sequence <= self._sequence
             or completed <= self._completed_units
             or total != self._total_units
         ):
@@ -379,22 +379,38 @@ def monitor_process_group(
         else AuthenticatedProgressMonitor(progress_phase)
     )
     progress_digest: str | None = None
+
+    def observe_progress() -> bool:
+        nonlocal last_progress, progress_digest
+        if progress_path is None:
+            return True
+        if not progress_path.exists():
+            return False
+        if progress_path.is_symlink() or not progress_path.is_file():
+            raise ValueError("V24 progress file authority differs")
+        raw = progress_path.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != progress_digest:
+            assert progress_monitor is not None
+            progress_monitor.observe(raw)
+            progress_digest = digest
+            last_progress = time.monotonic()
+        return True
+
     try:
         while True:
             completed, status = os.waitpid(pid, os.WNOHANG)
             if completed == pid:
+                if progress_path is not None:
+                    try:
+                        if not observe_progress():
+                            return os.waitstatus_to_exitcode(status), "progress-authority"
+                    except (OSError, ValueError):
+                        return os.waitstatus_to_exitcode(status), "progress-authority"
                 return os.waitstatus_to_exitcode(status), None
             if progress_path is not None and progress_path.exists():
                 try:
-                    if progress_path.is_symlink() or not progress_path.is_file():
-                        raise ValueError("V24 progress file authority differs")
-                    raw = progress_path.read_bytes()
-                    digest = hashlib.sha256(raw).hexdigest()
-                    if digest != progress_digest:
-                        assert progress_monitor is not None
-                        progress_monitor.observe(raw)
-                        progress_digest = digest
-                        last_progress = time.monotonic()
+                    observe_progress()
                 except (OSError, ValueError):
                     stopped = _terminate_process_group(pid, term_grace_seconds)
                     return os.waitstatus_to_exitcode(stopped), "progress-authority"

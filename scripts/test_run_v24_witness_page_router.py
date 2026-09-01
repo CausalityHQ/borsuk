@@ -163,16 +163,23 @@ class V24RunnerTests(unittest.TestCase):
         )
         self.assertEqual(monitor.observe(encode(first)), (0, 0, 100))
         self.assertEqual(monitor.observe(encode(second)), (1, 17, 100))
+        skipped = second | {"completed_units": 71, "sequence": 3}
+        self.assertEqual(monitor.observe(encode(skipped)), (3, 71, 100))
+        late_monitor = subject.AuthenticatedProgressMonitor("witness-training")
+        self.assertEqual(late_monitor.observe(encode(skipped)), (3, 71, 100))
         for mutation in (
-            second | {"sequence": 3},
-            second | {"completed_units": 16, "sequence": 2},
-            second | {"phase": "holdout-evaluation", "sequence": 2},
+            skipped | {"sequence": 1, "completed_units": 72},
+            skipped | {"sequence": 4, "completed_units": 70},
+            skipped | {"phase": "holdout-evaluation", "sequence": 4},
+            skipped | {"total_units": 101, "sequence": 4},
         ):
             with self.subTest(mutation=mutation), self.assertRaisesRegex(
                 ValueError, "progress"
             ):
                 changed = subject.AuthenticatedProgressMonitor("witness-training")
                 changed.observe(encode(first))
+                changed.observe(encode(second))
+                changed.observe(encode(skipped))
                 changed.observe(encode(mutation))
 
     def test_phase_command_is_direct_static_binary_with_one_explicit_phase(self) -> None:
@@ -386,6 +393,58 @@ class V24RunnerTests(unittest.TestCase):
             self.assertEqual((status, stop), (-signal.SIGKILL, "wall-cap"))
             with self.assertRaises(ProcessLookupError):
                 os.killpg(pid, 0)
+
+    def test_monitor_requires_authenticated_progress_at_process_terminal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            progress = pathlib.Path(temporary) / "progress.json"
+            payload = json.dumps(
+                {
+                    "completed_units": 17,
+                    "phase": "witness-training",
+                    "sequence": 2,
+                    "total_units": 17,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ) + "\n"
+            pid = os.posix_spawn(
+                sys.executable,
+                [
+                    sys.executable,
+                    "-c",
+                    f"import pathlib; pathlib.Path({str(progress)!r}).write_text({payload!r})",
+                ],
+                os.environ.copy(),
+                setsid=True,
+            )
+            status, stop = subject.monitor_process_group(
+                pid,
+                dataclasses.replace(
+                    subject.MonitorLimits(), psi_full_avg10=float("inf")
+                ),
+                sample_interval_seconds=0.001,
+                progress_path=progress,
+                progress_phase="witness-training",
+            )
+            self.assertEqual((status, stop), (0, None))
+
+            progress.unlink()
+            pid = os.posix_spawn(
+                sys.executable,
+                [sys.executable, "-c", "pass"],
+                os.environ.copy(),
+                setsid=True,
+            )
+            status, stop = subject.monitor_process_group(
+                pid,
+                dataclasses.replace(
+                    subject.MonitorLimits(), psi_full_avg10=float("inf")
+                ),
+                sample_interval_seconds=0.001,
+                progress_path=progress,
+                progress_phase="witness-training",
+            )
+            self.assertEqual((status, stop), (0, "progress-authority"))
 
     def test_cleanup_unlinks_only_explicit_regular_files_and_rejects_surprises(self) -> None:
         root = pathlib.Path(tempfile.mkdtemp())

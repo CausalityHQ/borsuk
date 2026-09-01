@@ -28,6 +28,7 @@ const RUN_PARTITIONS: usize = 256;
 const POSTING_CAP: usize = 64;
 const V24_POSTING_ASSIGNMENT_EF: usize = 128;
 const V24_POSTING_MAX_WORKERS: usize = 64;
+const V24_POSTING_PROGRESS_ROWS: u64 = 1_048_576;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -280,6 +281,7 @@ fn build_postings_inner<I>(
     pages: I,
     scratch: &Path,
     worker_threads: usize,
+    mut progress: impl FnMut(u64) -> Result<()>,
 ) -> Result<V24PostingPlane>
 where
     I: IntoIterator<Item = Result<V24PostingPage>>,
@@ -291,6 +293,7 @@ where
     let mut source_writers = (0..RUN_PARTITIONS).map(|_| None).collect::<Vec<_>>();
     let mut page_ordinals = BTreeSet::new();
     let mut physical_source_rows = 0_u64;
+    let mut primary_source_rows = 0_u64;
     for page in pages {
         let page = page?;
         if !page_ordinals.insert(page.page_ordinal) {
@@ -321,7 +324,18 @@ where
             physical_source_rows = physical_source_rows
                 .checked_add(1)
                 .ok_or_else(|| invalid("V24 posting physical row count overflows"))?;
+            if !replica {
+                primary_source_rows = primary_source_rows
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("V24 posting primary row count overflows"))?;
+                if primary_source_rows.is_multiple_of(V24_POSTING_PROGRESS_ROWS) {
+                    progress(primary_source_rows)?;
+                }
+            }
         }
+    }
+    if !primary_source_rows.is_multiple_of(V24_POSTING_PROGRESS_ROWS) {
+        progress(primary_source_rows)?;
     }
     flush_run_writers(&mut source_writers, scratch)?;
     drop(source_writers);
@@ -340,6 +354,11 @@ where
         sum.checked_add(count)
             .ok_or_else(|| invalid("V24 posting unique row count overflows"))
     })?;
+    progress(
+        unique_source_rows
+            .checked_add(u64::try_from(RUN_PARTITIONS).unwrap())
+            .ok_or_else(|| invalid("V24 posting progress overflows"))?,
+    )?;
 
     let mut posting_pages = vec![Vec::<u32>::new(); graph.node_count()];
     for partition in 0..RUN_PARTITIONS {
@@ -392,7 +411,21 @@ where
         physical_source_rows,
     };
     validate_plane(&plane)?;
+    progress(v24_posting_total_work_units(
+        unique_source_rows,
+        u64::try_from(graph.node_count()).unwrap(),
+    )?)?;
     Ok(plane)
+}
+
+pub(crate) fn v24_posting_total_work_units(
+    source_row_count: u64,
+    witness_count: u64,
+) -> Result<u64> {
+    source_row_count
+        .checked_add(u64::try_from(RUN_PARTITIONS).unwrap())
+        .and_then(|units| units.checked_add(witness_count))
+        .ok_or_else(|| invalid("V24 posting progress total overflows"))
 }
 
 pub(crate) fn build_v24_witness_postings<I>(
@@ -404,11 +437,31 @@ pub(crate) fn build_v24_witness_postings<I>(
 where
     I: IntoIterator<Item = Result<V24PostingPage>>,
 {
+    build_v24_witness_postings_with_progress(graph, source_row_count, pages, scratch, |_| Ok(()))
+}
+
+pub(crate) fn build_v24_witness_postings_with_progress<I>(
+    graph: &V24WitnessGraph,
+    source_row_count: u64,
+    pages: I,
+    scratch: &Path,
+    progress: impl FnMut(u64) -> Result<()>,
+) -> Result<V24PostingPlane>
+where
+    I: IntoIterator<Item = Result<V24PostingPage>>,
+{
     let worker_threads = std::thread::available_parallelism()
         .map(|threads| threads.get())
         .unwrap_or(1)
         .min(V24_POSTING_MAX_WORKERS);
-    build_v24_witness_postings_with_workers(graph, source_row_count, pages, scratch, worker_threads)
+    build_v24_witness_postings_with_workers_and_progress(
+        graph,
+        source_row_count,
+        pages,
+        scratch,
+        worker_threads,
+        progress,
+    )
 }
 
 fn build_v24_witness_postings_with_workers<I>(
@@ -417,6 +470,27 @@ fn build_v24_witness_postings_with_workers<I>(
     pages: I,
     scratch: &Path,
     worker_threads: usize,
+) -> Result<V24PostingPlane>
+where
+    I: IntoIterator<Item = Result<V24PostingPage>>,
+{
+    build_v24_witness_postings_with_workers_and_progress(
+        graph,
+        source_row_count,
+        pages,
+        scratch,
+        worker_threads,
+        |_| Ok(()),
+    )
+}
+
+fn build_v24_witness_postings_with_workers_and_progress<I>(
+    graph: &V24WitnessGraph,
+    source_row_count: u64,
+    pages: I,
+    scratch: &Path,
+    worker_threads: usize,
+    progress: impl FnMut(u64) -> Result<()>,
 ) -> Result<V24PostingPlane>
 where
     I: IntoIterator<Item = Result<V24PostingPage>>,
@@ -440,7 +514,14 @@ where
         .flush()
         .map_err(|source| io_error(&owner, source))?;
     drop(owner_file);
-    let result = build_postings_inner(graph, source_row_count, pages, scratch, worker_threads);
+    let result = build_postings_inner(
+        graph,
+        source_row_count,
+        pages,
+        scratch,
+        worker_threads,
+        progress,
+    );
     let cleanup = cleanup_runs(scratch);
     let release = fs::remove_file(&owner).map_err(|source| io_error(&owner, source));
     match (result, cleanup, release) {

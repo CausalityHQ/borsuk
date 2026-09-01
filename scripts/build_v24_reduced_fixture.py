@@ -22,9 +22,25 @@ def _canonical_json_bytes(value: object) -> bytes:
 
 
 def _vectors(ordinals: np.ndarray) -> np.ndarray:
-    values = np.zeros((len(ordinals), _DIMENSIONS), dtype=np.float32)
-    values[np.arange(len(ordinals)), ordinals % _DIMENSIONS] = np.float32(1.0)
-    return values
+    ordinal_words = np.asarray(ordinals, dtype=np.uint64).reshape(-1, 1)
+    dimension_words = np.arange(1, _DIMENSIONS + 1, dtype=np.uint64).reshape(1, -1)
+    with np.errstate(over="ignore"):
+        words = (
+            ordinal_words * np.uint64(0x9E3779B97F4A7C15)
+            + dimension_words * np.uint64(0xBF58476D1CE4E5B9)
+            + np.uint64(_SEED)
+        )
+        words ^= words >> np.uint64(30)
+        words *= np.uint64(0xBF58476D1CE4E5B9)
+        words ^= words >> np.uint64(27)
+        words *= np.uint64(0x94D049BB133111EB)
+        words ^= words >> np.uint64(31)
+    mantissas = (words >> np.uint64(40)).astype(np.uint32)
+    values = mantissas.astype(np.float32) / np.float32(1 << 23) - np.float32(1.0)
+    norms = np.sqrt(np.sum(values.astype(np.float64) ** 2, axis=1)).astype(
+        np.float32
+    )
+    return values / norms.reshape(-1, 1)
 
 
 def _fixed_f32(values: np.ndarray) -> pa.FixedSizeListArray:
