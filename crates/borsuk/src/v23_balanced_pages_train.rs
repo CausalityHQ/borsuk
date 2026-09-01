@@ -1,4 +1,7 @@
-use std::collections::BTreeSet;
+use std::{
+    cmp::Ordering,
+    collections::{BTreeSet, BinaryHeap},
+};
 
 use half::f16;
 
@@ -53,6 +56,73 @@ fn splitmix64(mut value: u64) -> u64 {
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     value ^ (value >> 31)
+}
+
+#[derive(Debug, Clone)]
+struct V23BalancedReservoirCandidate {
+    rank: u64,
+    row: V23BalancedTrainingRow,
+}
+
+impl PartialEq for V23BalancedReservoirCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.rank == other.rank && self.row.source_ordinal == other.row.source_ordinal
+    }
+}
+
+impl Eq for V23BalancedReservoirCandidate {}
+
+impl PartialOrd for V23BalancedReservoirCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for V23BalancedReservoirCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.rank
+            .cmp(&other.rank)
+            .then_with(|| self.row.source_ordinal.cmp(&other.row.source_ordinal))
+    }
+}
+
+pub(crate) fn sample_v23_balanced_reservoir(
+    rows: impl IntoIterator<Item = Result<V23BalancedTrainingRow>>,
+    reservoir_rows: usize,
+    seed: u64,
+) -> Result<Vec<V23BalancedTrainingRow>> {
+    if reservoir_rows == 0 {
+        return Err(invalid("reservoir shape differs"));
+    }
+    let mut selected = BinaryHeap::with_capacity(reservoir_rows);
+    let mut previous = None;
+    for row in rows {
+        let row = row?;
+        if previous.is_some_and(|ordinal| row.source_ordinal <= ordinal) {
+            return Err(invalid("reservoir source order differs"));
+        }
+        previous = Some(row.source_ordinal);
+        let candidate = V23BalancedReservoirCandidate {
+            rank: splitmix64(row.source_ordinal ^ seed),
+            row,
+        };
+        if selected.len() < reservoir_rows {
+            selected.push(candidate);
+        } else if candidate < *selected.peek().unwrap() {
+            selected.pop();
+            selected.push(candidate);
+        }
+    }
+    if selected.len() != reservoir_rows {
+        return Err(invalid("reservoir input is truncated"));
+    }
+    let mut rows = selected
+        .into_vec()
+        .into_iter()
+        .map(|candidate| candidate.row)
+        .collect::<Vec<_>>();
+    rows.sort_unstable_by_key(|row| row.source_ordinal);
+    Ok(rows)
 }
 
 pub(crate) fn train_v23_balanced_tree(
@@ -208,8 +278,9 @@ pub(crate) fn route_v23_supercell_beam2(
 #[cfg(test)]
 mod tests {
     use super::{
-        V23BalancedTrainingRow, route_v23_supercell_beam2, score_all_v23_supercells_f64_reference,
-        score_all_v23_supercells_fused, train_v23_balanced_tree,
+        V23BalancedTrainingRow, route_v23_supercell_beam2, sample_v23_balanced_reservoir,
+        score_all_v23_supercells_f64_reference, score_all_v23_supercells_fused,
+        train_v23_balanced_tree,
     };
     use crate::v23_incidence_tree::{
         V23IncidenceTrainingShape, V23IncidenceTree, V23TrainingWork, V23TreeLeaf, V23TreeNode,
@@ -230,6 +301,27 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn v23_balanced_training_reservoir_is_bounded_hash_min_and_source_ordered() {
+        let selected = sample_v23_balanced_reservoir(
+            rows()[..32].iter().cloned().map(Ok),
+            8,
+            0x6a09_e667_f3bc_c909,
+        )
+        .unwrap();
+        assert_eq!(
+            selected
+                .iter()
+                .map(|row| row.source_ordinal)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 5, 8, 12, 18, 23]
+        );
+        assert!(sample_v23_balanced_reservoir(rows()[..7].iter().cloned().map(Ok), 8, 1).is_err());
+        let mut duplicate = rows()[..9].to_vec();
+        duplicate[8].source_ordinal = 7;
+        assert!(sample_v23_balanced_reservoir(duplicate.into_iter().map(Ok), 8, 1).is_err());
     }
 
     #[test]

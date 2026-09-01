@@ -1,22 +1,30 @@
 use std::{
     collections::BTreeSet,
     fs::{self, File},
-    io::Read,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
+use arrow_array::{Array, FixedSizeListArray, Float16Array};
+use arrow_ipc::reader::FileReader;
+use arrow_schema::{DataType, Field, Schema};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{BorsukError, Result};
+use crate::{BorsukError, Result, v23_balanced_pages_train::V23BalancedTrainingRow};
 
-const MANIFEST_SCHEMA: &str = "borsuk-v23-balanced-page-manifest-v1";
+const MANIFEST_SCHEMA: &str = "borsuk-v23-balanced-page-manifest-v2";
 const RECEIPT_SCHEMA: &str = "borsuk-v23-balanced-page-receipt-v1";
 const DIMENSIONS: u64 = 96;
 const SUPERCELL_TARGET_ROWS: u64 = 12_288;
 const PRIMARY_ROWS_PER_PAGE: u64 = 384;
 const TOP_SUPERCELLS: u64 = 96;
 const SELECTED_PAGES: u64 = 8;
+const F16_MAX_BATCH_ROWS: usize = 262_144;
+const F16_MAX_FOOTER_BYTES: usize = 1024 * 1024;
+const F16_MAX_BATCH_METADATA_BYTES: usize = 1024 * 1024;
+const ARROW_CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 const MAX_SUPERCELLS: u64 = 8_192;
 const MAX_PAGES_PER_SUPERCELL: u64 = 64;
 const RUNTIME_RESERVE_BYTES: u64 = 850 * 1024 * 1024;
@@ -44,6 +52,11 @@ pub(crate) struct V23BalancedManifest {
     pub(crate) source_commit: String,
     pub(crate) source_archive_sha256: String,
     pub(crate) dataset_id: String,
+    pub(crate) deterministic_seed: u64,
+    pub(crate) worker_threads: u16,
+    pub(crate) sort_run_rows: u32,
+    pub(crate) scratch_bytes_limit: u64,
+    pub(crate) output_uri_prefix: String,
     pub(crate) rows: u64,
     pub(crate) dimensions: u32,
     pub(crate) supercell_target_rows: u64,
@@ -52,6 +65,7 @@ pub(crate) struct V23BalancedManifest {
     pub(crate) selected_pages: u8,
     pub(crate) arms: Vec<V23BalancedArmConfig>,
     pub(crate) ordered_inputs: Vec<V23BalancedIdentity>,
+    pub(crate) output_roles: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,12 +167,34 @@ fn expected_arms() -> [V23BalancedArmConfig; 3] {
     ]
 }
 
+fn expected_output_roles() -> [&'static str; 11] {
+    [
+        "balanced-tree",
+        "supercells-parquet",
+        "pages-primary-parquet",
+        "row-pages-primary-parquet",
+        "pages-amp-1125-parquet",
+        "row-pages-amp-1125-parquet",
+        "pages-amp-1250-parquet",
+        "row-pages-amp-1250-parquet",
+        "pages-amp-1500-parquet",
+        "row-pages-amp-1500-parquet",
+        "development-result",
+    ]
+}
+
 pub(crate) fn validate_v23_balanced_manifest(manifest: &V23BalancedManifest) -> Result<()> {
     if manifest.schema != MANIFEST_SCHEMA
         || manifest.claim_eligible
         || !valid_lower_hex(&manifest.source_commit, 40)
         || !valid_lower_hex(&manifest.source_archive_sha256, 64)
         || manifest.dataset_id != "deep-image-96"
+        || manifest.deterministic_seed != 0x6a09_e667_f3bc_c909
+        || manifest.worker_threads != 4
+        || manifest.sort_run_rows != 262_144
+        || manifest.scratch_bytes_limit != 64 * 1024 * 1024 * 1024
+        || !manifest.output_uri_prefix.starts_with("s3://")
+        || !manifest.output_uri_prefix.ends_with('/')
         || manifest.rows == 0
         || u64::from(manifest.dimensions) != DIMENSIONS
         || manifest.supercell_target_rows != SUPERCELL_TARGET_ROWS
@@ -166,6 +202,11 @@ pub(crate) fn validate_v23_balanced_manifest(manifest: &V23BalancedManifest) -> 
         || u64::from(manifest.top_supercells) != TOP_SUPERCELLS
         || u64::from(manifest.selected_pages) != SELECTED_PAGES
         || manifest.arms.as_slice() != expected_arms()
+        || manifest
+            .output_roles
+            .iter()
+            .map(String::as_str)
+            .ne(expected_output_roles())
     {
         return Err(invalid("manifest constants differ"));
     }
@@ -174,7 +215,12 @@ pub(crate) fn validate_v23_balanced_manifest(manifest: &V23BalancedManifest) -> 
         .iter()
         .map(|identity| identity.role.as_str())
         .collect::<Vec<_>>()
-        != ["source-shard-manifest", "f16-control"]
+        != [
+            "source-shard-manifest",
+            "f16-control",
+            "query-parquet",
+            "neighbors-parquet",
+        ]
     {
         return Err(invalid("construction input roles differ"));
     }
@@ -273,6 +319,8 @@ fn input_basename(role: &str) -> Result<&'static str> {
     match role {
         "source-shard-manifest" => Ok("source-shard-manifest.json"),
         "f16-control" => Ok("f16-control.arrow"),
+        "query-parquet" => Ok("query.parquet"),
+        "neighbors-parquet" => Ok("neighbors.parquet"),
         _ => Err(invalid("local input role differs")),
     }
 }
@@ -308,6 +356,289 @@ fn authenticate_local_input(directory: &Path, identity: &V23BalancedIdentity) ->
         return Err(invalid("local input bytes differ"));
     }
     Ok(())
+}
+
+pub(crate) struct V23BalancedF16RowStream {
+    reader: FileReader<File>,
+    pending: std::vec::IntoIter<V23BalancedTrainingRow>,
+    next_source_ordinal: u64,
+    expected_rows: u64,
+    failed: bool,
+}
+
+impl Iterator for V23BalancedF16RowStream {
+    type Item = Result<V23BalancedTrainingRow>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.failed {
+            return None;
+        }
+        if let Some(row) = self.pending.next() {
+            return Some(Ok(row));
+        }
+        loop {
+            let batch = match self.reader.next() {
+                Some(Ok(batch)) => batch,
+                Some(Err(error)) => {
+                    self.failed = true;
+                    return Some(Err(error.into()));
+                }
+                None if self.next_source_ordinal == self.expected_rows => return None,
+                None => {
+                    self.failed = true;
+                    return Some(Err(invalid("f16 corpus row count differs")));
+                }
+            };
+            if batch.num_rows() == 0
+                || batch.num_columns() != 1
+                || batch.column(0).null_count() != 0
+            {
+                self.failed = true;
+                return Some(Err(invalid("f16 corpus batch differs")));
+            }
+            let Some(vectors) = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+            else {
+                self.failed = true;
+                return Some(Err(invalid("f16 corpus vectors differ")));
+            };
+            let mut rows = Vec::with_capacity(vectors.len());
+            for index in 0..vectors.len() {
+                if self.next_source_ordinal >= self.expected_rows || vectors.is_null(index) {
+                    self.failed = true;
+                    return Some(Err(invalid("f16 corpus row count differs")));
+                }
+                let values = vectors.value(index);
+                let Some(values) = values.as_any().downcast_ref::<Float16Array>() else {
+                    self.failed = true;
+                    return Some(Err(invalid("f16 corpus child differs")));
+                };
+                if values.len() != 96 || values.null_count() != 0 {
+                    self.failed = true;
+                    return Some(Err(invalid("f16 corpus row width differs")));
+                }
+                let vector = std::array::from_fn(|dimension| values.values()[dimension].to_f32());
+                let squared_norm = vector.iter().try_fold(0.0_f64, |sum, value| {
+                    value
+                        .is_finite()
+                        .then_some(sum + f64::from(*value) * f64::from(*value))
+                });
+                if squared_norm.is_none_or(|norm| !norm.is_finite() || norm == 0.0) {
+                    self.failed = true;
+                    return Some(Err(invalid("f16 corpus vector differs")));
+                }
+                rows.push(V23BalancedTrainingRow {
+                    source_ordinal: self.next_source_ordinal,
+                    vector,
+                });
+                self.next_source_ordinal += 1;
+            }
+            self.pending = rows.into_iter();
+            if let Some(row) = self.pending.next() {
+                return Some(Ok(row));
+            }
+        }
+    }
+}
+
+fn validate_v23_balanced_f16_ipc_layout(file: &mut File, expected_rows: u64) -> Result<()> {
+    let file_bytes = file
+        .metadata()
+        .map_err(|source| BorsukError::Io {
+            path: PathBuf::from("f16-control.arrow"),
+            source,
+        })?
+        .len();
+    if file_bytes < 10 {
+        return Err(invalid("f16 corpus IPC footer differs"));
+    }
+    file.seek(SeekFrom::End(-10))
+        .map_err(|_| invalid("f16 corpus IPC footer differs"))?;
+    let mut trailer = [0_u8; 10];
+    file.read_exact(&mut trailer)
+        .map_err(|_| invalid("f16 corpus IPC footer differs"))?;
+    let footer_bytes = arrow_ipc::reader::read_footer_length(trailer)?;
+    let footer_bytes_u64 =
+        u64::try_from(footer_bytes).map_err(|_| invalid("f16 corpus IPC footer differs"))?;
+    if footer_bytes == 0
+        || footer_bytes > F16_MAX_FOOTER_BYTES
+        || footer_bytes_u64 > file_bytes - 10
+    {
+        return Err(invalid("f16 corpus IPC footer differs"));
+    }
+    file.seek(SeekFrom::End(
+        -10 - i64::try_from(footer_bytes).map_err(|_| invalid("f16 corpus IPC footer differs"))?,
+    ))
+    .map_err(|_| invalid("f16 corpus IPC footer differs"))?;
+    let mut encoded_footer = vec![0_u8; footer_bytes];
+    file.read_exact(&mut encoded_footer)
+        .map_err(|_| invalid("f16 corpus IPC footer differs"))?;
+    let footer = arrow_ipc::root_as_footer(&encoded_footer)
+        .map_err(|_| invalid("f16 corpus IPC footer differs"))?;
+    if footer
+        .dictionaries()
+        .is_some_and(|blocks| !blocks.is_empty())
+    {
+        return Err(invalid("f16 corpus IPC dictionaries differ"));
+    }
+    let blocks = footer
+        .recordBatches()
+        .ok_or_else(|| invalid("f16 corpus IPC batches differ"))?;
+    if blocks.is_empty() {
+        return Err(invalid("f16 corpus IPC batches differ"));
+    }
+    let data_end = file_bytes - 10 - footer_bytes_u64;
+    let mut total_rows = 0_u64;
+    for block in blocks {
+        let offset =
+            u64::try_from(block.offset()).map_err(|_| invalid("f16 corpus IPC block differs"))?;
+        let metadata_bytes = usize::try_from(block.metaDataLength())
+            .map_err(|_| invalid("f16 corpus IPC block differs"))?;
+        let body_bytes = u64::try_from(block.bodyLength())
+            .map_err(|_| invalid("f16 corpus IPC block differs"))?;
+        let block_end = offset
+            .checked_add(
+                u64::try_from(metadata_bytes)
+                    .map_err(|_| invalid("f16 corpus IPC block differs"))?,
+            )
+            .and_then(|end| end.checked_add(body_bytes))
+            .ok_or_else(|| invalid("f16 corpus IPC block differs"))?;
+        if !(4..=F16_MAX_BATCH_METADATA_BYTES).contains(&metadata_bytes) || block_end > data_end {
+            return Err(invalid("f16 corpus IPC block differs"));
+        }
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|_| invalid("f16 corpus IPC block differs"))?;
+        let mut metadata = vec![0_u8; metadata_bytes];
+        file.read_exact(&mut metadata)
+            .map_err(|_| invalid("f16 corpus IPC block differs"))?;
+        let flatbuffer = if metadata.starts_with(&ARROW_CONTINUATION_MARKER) {
+            metadata
+                .get(8..)
+                .ok_or_else(|| invalid("f16 corpus IPC message differs"))?
+        } else {
+            metadata
+                .get(4..)
+                .ok_or_else(|| invalid("f16 corpus IPC message differs"))?
+        };
+        let message = arrow_ipc::root_as_message(flatbuffer)
+            .map_err(|_| invalid("f16 corpus IPC message differs"))?;
+        let record = message
+            .header_as_record_batch()
+            .ok_or_else(|| invalid("f16 corpus IPC message differs"))?;
+        let rows = usize::try_from(record.length())
+            .map_err(|_| invalid("f16 corpus IPC batch rows differ"))?;
+        if rows == 0
+            || rows > F16_MAX_BATCH_ROWS
+            || record.compression().is_some()
+            || u64::try_from(message.bodyLength()).ok() != Some(body_bytes)
+        {
+            return Err(invalid("f16 corpus IPC batch rows differ"));
+        }
+        let child_rows = rows
+            .checked_mul(96)
+            .ok_or_else(|| invalid("f16 corpus IPC batch rows differ"))?;
+        let nodes = record
+            .nodes()
+            .ok_or_else(|| invalid("f16 corpus IPC nodes differ"))?;
+        if nodes.len() != 2
+            || nodes.get(0).length() != i64::try_from(rows).unwrap()
+            || nodes.get(0).null_count() != 0
+            || nodes.get(1).length() != i64::try_from(child_rows).unwrap()
+            || nodes.get(1).null_count() != 0
+        {
+            return Err(invalid("f16 corpus IPC nodes differ"));
+        }
+        let buffers = record
+            .buffers()
+            .ok_or_else(|| invalid("f16 corpus IPC buffers differ"))?;
+        let expected_value_bytes = child_rows
+            .checked_mul(std::mem::size_of::<half::f16>())
+            .ok_or_else(|| invalid("f16 corpus IPC buffers differ"))?;
+        let outer_validity_bytes = rows.div_ceil(8);
+        let child_validity_bytes = child_rows.div_ceil(8);
+        let maximum_body_bytes = expected_value_bytes
+            .checked_add(outer_validity_bytes)
+            .and_then(|bytes| bytes.checked_add(child_validity_bytes))
+            .and_then(|bytes| bytes.checked_add(3 * 63))
+            .ok_or_else(|| invalid("f16 corpus IPC buffers differ"))?;
+        if buffers.len() != 3
+            || body_bytes
+                > u64::try_from(maximum_body_bytes)
+                    .map_err(|_| invalid("f16 corpus IPC buffers differ"))?
+            || ![0, outer_validity_bytes].contains(
+                &usize::try_from(buffers.get(0).length())
+                    .map_err(|_| invalid("f16 corpus IPC buffers differ"))?,
+            )
+            || ![0, child_validity_bytes].contains(
+                &usize::try_from(buffers.get(1).length())
+                    .map_err(|_| invalid("f16 corpus IPC buffers differ"))?,
+            )
+            || usize::try_from(buffers.get(2).length()).ok() != Some(expected_value_bytes)
+        {
+            return Err(invalid("f16 corpus IPC buffers differ"));
+        }
+        for buffer in buffers {
+            let start = u64::try_from(buffer.offset())
+                .map_err(|_| invalid("f16 corpus IPC buffer differs"))?;
+            let length = u64::try_from(buffer.length())
+                .map_err(|_| invalid("f16 corpus IPC buffer differs"))?;
+            if start.checked_add(length).is_none_or(|end| end > body_bytes) {
+                return Err(invalid("f16 corpus IPC buffer differs"));
+            }
+        }
+        total_rows = total_rows
+            .checked_add(u64::try_from(rows).unwrap())
+            .ok_or_else(|| invalid("f16 corpus row count differs"))?;
+        if total_rows > expected_rows {
+            return Err(invalid("f16 corpus row count differs"));
+        }
+    }
+    if total_rows != expected_rows {
+        return Err(invalid("f16 corpus row count differs"));
+    }
+    Ok(())
+}
+
+pub(crate) fn read_v23_balanced_f16_rows(
+    path: &Path,
+    expected_rows: u64,
+) -> Result<V23BalancedF16RowStream> {
+    if expected_rows == 0 {
+        return Err(invalid("f16 corpus expected rows is zero"));
+    }
+    regular_file(path)?;
+    let mut file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    validate_v23_balanced_f16_ipc_layout(&mut file, expected_rows)?;
+    let reader = FileReader::try_new(
+        File::open(path).map_err(|source| BorsukError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?,
+        None,
+    )?;
+    let schema = Schema::new(vec![Field::new(
+        "row",
+        DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::Float16, false)),
+            96,
+        ),
+        false,
+    )]);
+    if reader.schema().as_ref() != &schema {
+        return Err(invalid("f16 corpus schema differs"));
+    }
+    Ok(V23BalancedF16RowStream {
+        reader,
+        pending: Vec::new().into_iter(),
+        next_source_ordinal: 0,
+        expected_rows,
+        failed: false,
+    })
 }
 
 #[doc(hidden)]
@@ -419,6 +750,15 @@ pub(crate) fn canonical_v23_balanced_receipt_bytes(
     }
     validate_identity_list(&receipt.ordered_inputs)?;
     validate_identity_list(&receipt.outputs)?;
+    if !receipt.outputs.is_empty()
+        && receipt
+            .outputs
+            .iter()
+            .map(|identity| identity.role.as_str())
+            .ne(expected_output_roles())
+    {
+        return Err(invalid("receipt output roles differ"));
+    }
     let value = serde_json::to_value(receipt)
         .map_err(|error| invalid(&format!("receipt serialization failed: {error}")))?;
     let mut bytes = serde_json::to_vec(&canonical_json_value(value))
@@ -429,15 +769,19 @@ pub(crate) fn canonical_v23_balanced_receipt_bytes(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, fs::File, path::Path, sync::Arc};
 
+    use arrow_array::{FixedSizeListArray, Float16Array, RecordBatch};
+    use arrow_ipc::writer::FileWriter;
+    use arrow_schema::{DataType, Field, Schema};
+    use half::f16;
     use sha2::{Digest, Sha256};
 
     use super::{
         V23BalancedArmConfig, V23BalancedIdentity, V23BalancedLocalMode, V23BalancedLocalRequest,
         V23BalancedManifest, V23BalancedReceipt, V23BalancedStop,
-        canonical_v23_balanced_receipt_bytes, project_v23_balanced_shape,
-        run_v23_balanced_local_request, validate_v23_balanced_manifest,
+        canonical_v23_balanced_receipt_bytes, expected_output_roles, project_v23_balanced_shape,
+        read_v23_balanced_f16_rows, run_v23_balanced_local_request, validate_v23_balanced_manifest,
     };
 
     fn sha256(byte: u8) -> String {
@@ -471,13 +815,33 @@ mod tests {
         bytes
     }
 
+    fn write_f16_rows(path: &Path, child_name: &str, rows: &[[f16; 96]]) {
+        let child = Arc::new(Field::new(child_name, DataType::Float16, false));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "row",
+            DataType::FixedSizeList(child.clone(), 96),
+            false,
+        )]));
+        let values = Float16Array::from_iter_values(rows.iter().flatten().copied());
+        let vectors = FixedSizeListArray::try_new(child, 96, Arc::new(values), None).unwrap();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(vectors)]).unwrap();
+        let mut writer = FileWriter::try_new(File::create(path).unwrap(), &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+    }
+
     fn manifest_fixture(rows: u64) -> V23BalancedManifest {
         V23BalancedManifest {
-            schema: "borsuk-v23-balanced-page-manifest-v1".to_owned(),
+            schema: "borsuk-v23-balanced-page-manifest-v2".to_owned(),
             claim_eligible: false,
             source_commit: sha256(0x11).chars().take(40).collect(),
             source_archive_sha256: sha256(0x12),
             dataset_id: "deep-image-96".to_owned(),
+            deterministic_seed: 0x6a09_e667_f3bc_c909,
+            worker_threads: 4,
+            sort_run_rows: 262_144,
+            scratch_bytes_limit: 64 * 1024 * 1024 * 1024,
+            output_uri_prefix: "s3://borsuk-v23-eu-west-1/balanced/attempt-0001/".to_owned(),
             rows,
             dimensions: 96,
             supercell_target_rows: 12_288,
@@ -504,7 +868,25 @@ mod tests {
             ordered_inputs: vec![
                 identity("source-shard-manifest", 0x21),
                 identity("f16-control", 0x22),
+                identity("query-parquet", 0x23),
+                identity("neighbors-parquet", 0x24),
             ],
+            output_roles: [
+                "balanced-tree",
+                "supercells-parquet",
+                "pages-primary-parquet",
+                "row-pages-primary-parquet",
+                "pages-amp-1125-parquet",
+                "row-pages-amp-1125-parquet",
+                "pages-amp-1250-parquet",
+                "row-pages-amp-1250-parquet",
+                "pages-amp-1500-parquet",
+                "row-pages-amp-1500-parquet",
+                "development-result",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
         }
     }
 
@@ -527,9 +909,33 @@ mod tests {
         changed.ordered_inputs[0].digest_algorithm = "blake3".to_owned();
         mutations.push(changed);
         let mut changed = valid.clone();
+        changed.deterministic_seed ^= 1;
+        mutations.push(changed);
+        let mut changed = valid.clone();
+        changed.worker_threads += 1;
+        mutations.push(changed);
+        let mut changed = valid.clone();
+        changed.sort_run_rows -= 1;
+        mutations.push(changed);
+        let mut changed = valid.clone();
+        changed.scratch_bytes_limit -= 1;
+        mutations.push(changed);
+        let mut changed = valid.clone();
+        changed.output_uri_prefix = "file:///tmp/balanced/".to_owned();
+        mutations.push(changed);
+        let mut changed = valid.clone();
+        changed.output_uri_prefix.pop();
+        mutations.push(changed);
+        let mut changed = valid.clone();
+        changed.output_roles.swap(0, 1);
+        mutations.push(changed);
+        let mut changed = valid.clone();
+        changed.output_roles.pop();
+        mutations.push(changed);
+        let mut changed = valid.clone();
         changed
             .ordered_inputs
-            .push(identity("official-query-parquet", 0x23));
+            .push(identity("unexpected-construction-input", 0x25));
         mutations.push(changed);
 
         for mutation in mutations {
@@ -555,7 +961,11 @@ mod tests {
             claim_eligible: false,
             manifest_sha256: sha256(0x31),
             ordered_inputs: manifest_fixture(100_000_000).ordered_inputs,
-            outputs: vec![identity("supercells-parquet", 0x32)],
+            outputs: expected_output_roles()
+                .into_iter()
+                .enumerate()
+                .map(|(index, role)| identity(role, 0x32 + u8::try_from(index).unwrap()))
+                .collect(),
             stop: None,
         };
         let bytes = canonical_v23_balanced_receipt_bytes(&receipt).unwrap();
@@ -565,11 +975,14 @@ mod tests {
         let mut changed = receipt.clone();
         changed.claim_eligible = true;
         assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
+        let mut changed = receipt.clone();
+        changed.outputs.pop();
+        assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
+        let mut changed = receipt.clone();
+        changed.outputs.swap(0, 1);
+        assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
         let mut changed = receipt;
         changed.stop = Some(V23BalancedStop::Resource);
-        changed
-            .outputs
-            .push(identity("partial-scientific-output", 0x33));
         assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
     }
 
@@ -582,12 +995,18 @@ mod tests {
         fs::create_dir(&output).unwrap();
         let source_manifest = b"source-shards\n";
         let f16_control = b"f16-control\n";
+        let query = b"query\n";
+        let neighbors = b"neighbors\n";
         fs::write(input.join("source-shard-manifest.json"), source_manifest).unwrap();
         fs::write(input.join("f16-control.arrow"), f16_control).unwrap();
+        fs::write(input.join("query.parquet"), query).unwrap();
+        fs::write(input.join("neighbors.parquet"), neighbors).unwrap();
         let mut manifest = manifest_fixture(100_000_000);
         manifest.ordered_inputs = vec![
             identity_for_bytes("source-shard-manifest", source_manifest),
             identity_for_bytes("f16-control", f16_control),
+            identity_for_bytes("query-parquet", query),
+            identity_for_bytes("neighbors-parquet", neighbors),
         ];
         let manifest_path = directory.path().join("manifest.json");
         let manifest_bytes = canonical_manifest_bytes(&manifest);
@@ -689,12 +1108,18 @@ mod tests {
         fs::create_dir(&output).unwrap();
         let source_manifest = b"source-shards\n";
         let f16_control = b"f16-control\n";
+        let query = b"query\n";
+        let neighbors = b"neighbors\n";
         fs::write(input.join("source-shard-manifest.json"), source_manifest).unwrap();
         fs::write(input.join("f16-control.arrow"), f16_control).unwrap();
+        fs::write(input.join("query.parquet"), query).unwrap();
+        fs::write(input.join("neighbors.parquet"), neighbors).unwrap();
         let mut manifest = manifest_fixture(100_000_000);
         manifest.ordered_inputs = vec![
             identity_for_bytes("source-shard-manifest", source_manifest),
             identity_for_bytes("f16-control", f16_control),
+            identity_for_bytes("query-parquet", query),
+            identity_for_bytes("neighbors-parquet", neighbors),
         ];
         let manifest_path = directory.path().join("manifest.json");
         fs::write(&manifest_path, canonical_manifest_bytes(&manifest)).unwrap();
@@ -723,6 +1148,8 @@ mod tests {
         fs::write(output.join("stale.json"), b"stale").unwrap();
         fs::write(input.join("source-shard-manifest.json"), b"source-shards\n").unwrap();
         fs::write(input.join("f16-control.arrow"), b"f16-control\n").unwrap();
+        fs::write(input.join("query.parquet"), b"query\n").unwrap();
+        fs::write(input.join("neighbors.parquet"), b"neighbors\n").unwrap();
         let manifest_path = directory.path().join("manifest.json");
         fs::write(
             &manifest_path,
@@ -738,5 +1165,56 @@ mod tests {
         })
         .unwrap_err();
         assert!(error.to_string().contains("output directory differs"));
+    }
+
+    #[test]
+    fn v23_balanced_local_f16_stream_rejects_schema_values_and_row_count_drift() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("f16-control.arrow");
+        let rows = [
+            std::array::from_fn(|dimension| f16::from_f32((dimension + 1) as f32)),
+            std::array::from_fn(|dimension| f16::from_f32((dimension + 2) as f32)),
+        ];
+        write_f16_rows(&path, "element", &rows);
+        let decoded = read_v23_balanced_f16_rows(&path, 2)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            decoded
+                .iter()
+                .map(|row| row.source_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_eq!(decoded[0].vector[0], 1.0);
+        assert_eq!(decoded[1].vector[95], 97.0);
+
+        write_f16_rows(&path, "item", &rows);
+        assert!(read_v23_balanced_f16_rows(&path, 2).is_err());
+        let mut invalid = rows;
+        invalid[1][17] = f16::NAN;
+        write_f16_rows(&path, "element", &invalid);
+        assert!(
+            read_v23_balanced_f16_rows(&path, 2)
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .is_err()
+        );
+        write_f16_rows(&path, "element", &rows);
+        assert!(read_v23_balanced_f16_rows(&path, 0).is_err());
+        assert!(read_v23_balanced_f16_rows(&path, 3).is_err());
+        assert!(read_v23_balanced_f16_rows(&path, 1).is_err());
+    }
+
+    #[test]
+    fn v23_balanced_local_f16_stream_rejects_oversized_batch_before_iteration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("f16-control.arrow");
+        let row = std::array::from_fn(|dimension| f16::from_f32((dimension + 1) as f32));
+        let rows = vec![row; 262_145];
+        write_f16_rows(&path, "element", &rows);
+
+        assert!(read_v23_balanced_f16_rows(&path, 262_145).is_err());
     }
 }
