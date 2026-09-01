@@ -334,7 +334,12 @@ pub fn run_v23_rabitq_local_request(request: V23RaBitQLocalRunRequest) -> Result
         truth: &d2_authority.truth,
         backend: detected_v23_rabitq_backend()?,
     })?;
-    canonical_v23_rabitq_screen_result_bytes(&result, &inputs)
+    canonical_v23_rabitq_screen_result_bytes(
+        &result,
+        &inputs,
+        u32::try_from(geometry.centroids.len())
+            .map_err(|_| invalid("V23 RaBitQ leaf count exceeds u32"))?,
+    )
 }
 
 fn occurrence_schema() -> Schema {

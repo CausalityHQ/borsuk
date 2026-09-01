@@ -1299,7 +1299,7 @@ serving constraint is applied. Increasing beam width, posting cap, timeout, or
 paid compute cannot repair this representation. The architecture is rejected;
 no sealed holdout, paid evaluation, or D3 work is authorized. The next
 falsifier must change the page-routing representation itself and must retain
-the at-most-eight-page and 15 ms serving constraints.
+the exact eight-page and 15 ms serving constraints.
 
 ## V23 residual RaBitQ construction and preregistration stop on 2026-09-01
 
@@ -1360,4 +1360,7 @@ ordered width between one and eight rather than padding with an unearned page
 or aborting the whole screen. Recall, memory, timing, scalar-differential, and
 causal gates do not change. The immutable construction artifacts may be reused
 after the amended source and native executable are independently authenticated.
-No holdout or D3 work is authorized.
+The amended recall evidence is specific to the 9,990,000-row development
+index: its scan cap is corpus-scaled while its heap cap is the absolute
+production constant. Only the serving-memory projection extends to 100M rows;
+recall does not. No holdout or D3 work is authorized.
