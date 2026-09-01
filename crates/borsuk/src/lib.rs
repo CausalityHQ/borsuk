@@ -158,6 +158,11 @@ mod v23_rabitq_local;
     reason = "V23 residual RaBitQ quantization is wired incrementally by the committed plan"
 )]
 mod v23_rabitq_quantizer;
+#[allow(
+    dead_code,
+    reason = "V24 witness components are wired incrementally by the committed plan"
+)]
+mod v24_witness;
 
 /// Print and reset the env-gated (`BORSUK_BUILD_TIMING=1`) per-phase build timing
 /// breakdown accumulated since the last call. When
