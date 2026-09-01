@@ -232,7 +232,13 @@ For every arm the selector produces one deterministic ranked page list and
 evaluates its 8-, 12-, and 16-page prefixes. All nine pair metrics are
 materialized before applying the fixed selection order. The selected page
 budget and arm are bound into the construction terminal receipt before the
-official query and neighbor capabilities become available.
+official query and neighbor Parquet is parsed or supplied to evaluation code.
+The offline runner may authenticate their registered byte digests before this
+boundary; digest authentication is not a semantic query read and cannot affect
+pair selection. Receipt schema v3 always carries all nine pair metrics. A
+passing ladder carries all eleven output identities and the frozen pair; a
+rejected ladder carries the ten construction identities, no selected pair, and
+the typed `quality` stop. No v2 receipt reader is retained.
 
 After replicas are assigned, the final page centroid and maximum cosine radius
 are recomputed from all primary and replica occurrences. Each page contains at

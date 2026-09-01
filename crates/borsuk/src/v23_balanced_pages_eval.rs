@@ -21,7 +21,7 @@ const MAX_SCALAR_SIMD_DISTANCE_DELTA_PPM: u64 = 10;
 const MAX_PROJECTED_PAGE_BYTES: u64 = 1_966_080;
 const MAX_ENCODED_PAGE_BYTES: u64 = 122_880;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct V23BalancedPseudoqueryPair {
     pub(crate) selected_pair: V23BalancedSelectedPair,
     pub(crate) aggregate_recall_ppm: u64,

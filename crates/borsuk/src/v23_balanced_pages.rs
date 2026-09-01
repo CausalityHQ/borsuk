@@ -35,7 +35,7 @@ use crate::{
 };
 
 const MANIFEST_SCHEMA: &str = "borsuk-v23-balanced-page-manifest-v3";
-const RECEIPT_SCHEMA: &str = "borsuk-v23-balanced-page-receipt-v2";
+const RECEIPT_SCHEMA: &str = "borsuk-v23-balanced-page-receipt-v3";
 const DIMENSIONS: u64 = 96;
 const SUPERCELL_TARGET_ROWS: u64 = 12_288;
 const PRIMARY_ROWS_PER_PAGE: u64 = 384;
@@ -125,6 +125,7 @@ pub(crate) enum V23BalancedStop {
     Authority,
     Resource,
     Determinism,
+    Quality,
     Progress,
     Timeout,
 }
@@ -136,6 +137,7 @@ pub(crate) struct V23BalancedReceipt {
     pub(crate) manifest_sha256: String,
     pub(crate) ordered_inputs: Vec<V23BalancedIdentity>,
     pub(crate) outputs: Vec<V23BalancedIdentity>,
+    pub(crate) pseudoquery_pairs: Vec<V23BalancedPseudoqueryPair>,
     pub(crate) selected_pair: Option<V23BalancedSelectedPair>,
     pub(crate) stop: Option<V23BalancedStop>,
 }
@@ -1306,6 +1308,7 @@ pub fn run_v23_balanced_local_request(request: V23BalancedLocalRequest) -> Resul
         manifest_sha256: format!("{:x}", Sha256::digest(&manifest_bytes)),
         ordered_inputs: manifest.ordered_inputs,
         outputs: Vec::new(),
+        pseudoquery_pairs: Vec::new(),
         selected_pair: None,
         stop: None,
     })
@@ -1318,26 +1321,38 @@ pub(crate) fn canonical_v23_balanced_receipt_bytes(
         || receipt.claim_eligible
         || !valid_lower_hex(&receipt.manifest_sha256, 64)
         || receipt.ordered_inputs.is_empty()
-        || (receipt.stop.is_some()
-            && (!receipt.outputs.is_empty() || receipt.selected_pair.is_some()))
-        || (receipt.outputs.is_empty() && receipt.selected_pair.is_some())
-        || (!receipt.outputs.is_empty() && receipt.selected_pair.is_none())
-        || receipt
-            .selected_pair
-            .is_some_and(|selected| V23BalancedPageBudget::new(selected.page_budget.get()).is_err())
     {
         return Err(invalid("receipt authority differs"));
     }
     validate_identity_list(&receipt.ordered_inputs)?;
     validate_identity_list(&receipt.outputs)?;
-    if !receipt.outputs.is_empty()
-        && receipt
-            .outputs
-            .iter()
-            .map(|identity| identity.role.as_str())
-            .ne(expected_output_roles())
-    {
-        return Err(invalid("receipt output roles differ"));
+    if receipt.pseudoquery_pairs.is_empty() {
+        if !receipt.outputs.is_empty()
+            || receipt.selected_pair.is_some()
+            || receipt.stop == Some(V23BalancedStop::Quality)
+        {
+            return Err(invalid("receipt preflight authority differs"));
+        }
+    } else {
+        let classified = classify_v23_balanced_pair_ladder(&receipt.pseudoquery_pairs)?;
+        match classified {
+            Some(selected)
+                if receipt.selected_pair == Some(selected.selected_pair)
+                    && receipt.stop.is_none()
+                    && receipt
+                        .outputs
+                        .iter()
+                        .map(|identity| identity.role.as_str())
+                        .eq(expected_output_roles()) => {}
+            None if receipt.selected_pair.is_none()
+                && receipt.stop == Some(V23BalancedStop::Quality)
+                && receipt
+                    .outputs
+                    .iter()
+                    .map(|identity| identity.role.as_str())
+                    .eq(expected_output_roles()[..10].iter().copied()) => {}
+            _ => return Err(invalid("receipt pseudoquery disposition differs")),
+        }
     }
     let value = serde_json::to_value(receipt)
         .map_err(|error| invalid(&format!("receipt serialization failed: {error}")))?;
@@ -1371,7 +1386,7 @@ mod tests {
     };
     use crate::{
         v23_balanced_pages_build::V23ReplicaArmOutput,
-        v23_balanced_pages_eval::V23BalancedPseudoqueryAccumulator,
+        v23_balanced_pages_eval::{V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryPair},
         v23_balanced_pages_train::{V23BalancedTrainingRow, train_v23_balanced_tree},
     };
 
@@ -1404,6 +1419,39 @@ mod tests {
         let mut bytes = serde_json::to_vec(&super::canonical_json_value(value)).unwrap();
         bytes.push(b'\n');
         bytes
+    }
+
+    fn receipt_pairs(passing: bool) -> Vec<V23BalancedPseudoqueryPair> {
+        [8_u8, 12, 16]
+            .into_iter()
+            .flat_map(|budget| {
+                [
+                    V23BalancedArm::Amp1125,
+                    V23BalancedArm::Amp1250,
+                    V23BalancedArm::Amp1500,
+                ]
+                .map(move |arm| V23BalancedPseudoqueryPair {
+                    selected_pair: V23BalancedSelectedPair {
+                        page_budget: V23BalancedPageBudget::new(budget).unwrap(),
+                        arm,
+                    },
+                    aggregate_recall_ppm: if passing
+                        && budget == 8
+                        && arm == V23BalancedArm::Amp1125
+                    {
+                        993_750
+                    } else {
+                        900_000
+                    },
+                    minimum_recall_ppm: 900_000,
+                    oracle_attainment_ppm: 995_000,
+                    every_query_has_budget: true,
+                    projected_page_bytes: u64::from(budget) * 122_880,
+                    maximum_scored_dimensions: 1_376_256,
+                    amplification_and_page_caps_valid: true,
+                })
+            })
+            .collect()
     }
 
     fn write_f16_rows(path: &Path, child_name: &str, rows: &[[f16; 96]]) {
@@ -1558,7 +1606,7 @@ mod tests {
     #[test]
     fn v23_balanced_authority_receipt_is_claim_ineligible_and_canonical() {
         let receipt = V23BalancedReceipt {
-            schema: "borsuk-v23-balanced-page-receipt-v2".to_owned(),
+            schema: "borsuk-v23-balanced-page-receipt-v3".to_owned(),
             claim_eligible: false,
             manifest_sha256: sha256(0x31),
             ordered_inputs: manifest_fixture(100_000_000).ordered_inputs,
@@ -1567,9 +1615,10 @@ mod tests {
                 .enumerate()
                 .map(|(index, role)| identity(role, 0x32 + u8::try_from(index).unwrap()))
                 .collect(),
+            pseudoquery_pairs: receipt_pairs(true),
             selected_pair: Some(V23BalancedSelectedPair {
-                page_budget: V23BalancedPageBudget::new(12).unwrap(),
-                arm: V23BalancedArm::Amp1250,
+                page_budget: V23BalancedPageBudget::new(8).unwrap(),
+                arm: V23BalancedArm::Amp1125,
             }),
             stop: None,
         };
@@ -1587,6 +1636,9 @@ mod tests {
         changed.outputs.swap(0, 1);
         assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
         let mut changed = receipt.clone();
+        changed.pseudoquery_pairs[0].aggregate_recall_ppm = 1_000_001;
+        assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
+        let mut changed = receipt.clone();
         changed.selected_pair.as_mut().unwrap().page_budget = V23BalancedPageBudget(9);
         assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
         let mut changed = receipt.clone();
@@ -1595,6 +1647,22 @@ mod tests {
         let mut changed = receipt;
         changed.stop = Some(V23BalancedStop::Resource);
         assert!(canonical_v23_balanced_receipt_bytes(&changed).is_err());
+
+        let rejected = V23BalancedReceipt {
+            schema: "borsuk-v23-balanced-page-receipt-v3".to_owned(),
+            claim_eligible: false,
+            manifest_sha256: sha256(0x31),
+            ordered_inputs: manifest_fixture(100_000_000).ordered_inputs,
+            outputs: expected_output_roles()[..10]
+                .iter()
+                .enumerate()
+                .map(|(index, role)| identity(role, 0x42 + u8::try_from(index).unwrap()))
+                .collect(),
+            pseudoquery_pairs: receipt_pairs(false),
+            selected_pair: None,
+            stop: Some(V23BalancedStop::Quality),
+        };
+        canonical_v23_balanced_receipt_bytes(&rejected).unwrap();
     }
 
     #[test]
