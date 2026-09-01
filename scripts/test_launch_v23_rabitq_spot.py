@@ -67,7 +67,7 @@ class V23RaBitQSpotLauncherTests(unittest.TestCase):
         self.assertEqual(spec["InstanceMarketOptions"]["MarketType"], "spot")
         self.assertIn("run_v23_rabitq_construction.py", user_data)
         self.assertIn(
-            "uv run --offline --python 3.12 --with-requirements scripts/requirements-format-bench.txt",
+            "/opt/borsuk-rabitq-venv/bin/python scripts/run_v23_rabitq_construction.py",
             user_data,
         )
         self.assertIn("--execute-construction", user_data)
@@ -107,7 +107,7 @@ class V23RaBitQSpotLauncherTests(unittest.TestCase):
         user_data = base64.b64decode(spec["UserData"]).decode()
         self.assertIn("--execute-development", user_data)
         self.assertIn(
-            "uv run --offline --python 3.12 --with-requirements scripts/requirements-format-bench.txt",
+            "/opt/borsuk-rabitq-venv/bin/python scripts/run_v23_rabitq_falsifier.py",
             user_data,
         )
         self.assertIn(plan.manifest_sha256, user_data)
@@ -197,6 +197,37 @@ class V23RaBitQSpotLauncherTests(unittest.TestCase):
         complete_upload = user_data.index("s3://fixture/terminal/v23-rabitq-fixture/COMPLETE.json")
         self.assertLess(log_upload, failed_upload)
         self.assertLess(log_upload, complete_upload)
+
+    def test_worker_provisions_pinned_python_before_direct_phase_execution(self) -> None:
+        plan = launcher.build_launch_plan(
+            run_id="v23-rabitq-fixture",
+            source_commit="1" * 40,
+            source_archive_sha256="2" * 64,
+            source_archive_uri="s3://fixture/source.tar.zst",
+            source_archive_bytes=8192,
+            binary_uri="s3://fixture/binary",
+            binary_sha256="3" * 64,
+            binary_bytes=4096,
+            manifest_uri="s3://fixture/manifest",
+            manifest_sha256="4" * 64,
+            manifest_bytes=2048,
+            output_prefix="s3://fixture/terminal/v23-rabitq-fixture/",
+        )
+        user_data = base64.b64decode(launcher.build_launch_spec(plan)["UserData"]).decode()
+
+        install = user_data.index("python3 -m pip install uv==0.8.17")
+        create = user_data.index("uv venv --python 3.12 /opt/borsuk-rabitq-venv")
+        dependencies = user_data.index(
+            "uv pip install --python /opt/borsuk-rabitq-venv/bin/python "
+            "--requirement scripts/requirements-format-bench.txt"
+        )
+        execute = user_data.index(
+            "/opt/borsuk-rabitq-venv/bin/python scripts/run_v23_rabitq_falsifier.py"
+        )
+        self.assertLess(install, create)
+        self.assertLess(create, dependencies)
+        self.assertLess(dependencies, execute)
+        self.assertNotIn("uv run --offline", user_data)
 
 
 if __name__ == "__main__":

@@ -206,7 +206,7 @@ def _worker_script(plan: LaunchPlan) -> str:
     worker_log = f"s3://{bucket}/{prefix}worker.log"
     result = f"s3://{bucket}/{prefix}screen-result.json"
     if isinstance(plan, ConstructionLaunchPlan):
-        phase_command = f"""setsid uv run --offline --python 3.12 --with-requirements scripts/requirements-format-bench.txt python scripts/run_v23_rabitq_construction.py \\
+        phase_command = f"""setsid /opt/borsuk-rabitq-venv/bin/python scripts/run_v23_rabitq_construction.py \\
   --binary "$root/v23-rabitq" \\
   --manifest-uri {plan.manifest_uri!r} \\
   --manifest-sha256 {plan.manifest_sha256} \\
@@ -221,7 +221,7 @@ def _worker_script(plan: LaunchPlan) -> str:
   --execute-construction &"""
         result_upload = ""
     else:
-        phase_command = f"""setsid uv run --offline --python 3.12 --with-requirements scripts/requirements-format-bench.txt python scripts/run_v23_rabitq_falsifier.py \\
+        phase_command = f"""setsid /opt/borsuk-rabitq-venv/bin/python scripts/run_v23_rabitq_falsifier.py \\
   --binary "$root/v23-rabitq" \\
   --manifest-uri {plan.manifest_uri!r} \\
   --manifest-sha256 {plan.manifest_sha256!r} \\
@@ -271,6 +271,10 @@ test "$(sha256sum "$root/manifest.json" | cut -d' ' -f1)" = {plan.manifest_sha25
 chmod 0555 "$root/v23-rabitq"
 tar --zstd -xf "$root/source.tar.zst" -C "$root/src"
 cd "$root/src"
+dnf install -y python3 python3-pip
+python3 -m pip install uv==0.8.17
+uv venv --python 3.12 /opt/borsuk-rabitq-venv
+uv pip install --python /opt/borsuk-rabitq-venv/bin/python --requirement scripts/requirements-format-bench.txt
 baseline_swap_kib=$(awk '/^SwapTotal:/ {{total=$2}} /^SwapFree:/ {{free=$2}} END {{print total-free}}' /proc/meminfo)
 started=$(date +%s)
 last_progress=$started
