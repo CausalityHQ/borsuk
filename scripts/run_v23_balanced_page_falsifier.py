@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import hashlib
 import json
@@ -11,6 +12,7 @@ import pathlib
 import signal
 import stat
 import subprocess
+import sys
 import time
 from collections.abc import Sequence
 
@@ -372,3 +374,73 @@ def run_balanced_cell(
         peak_psi_full_avg10=peak_psi,
         swap_delta_bytes=max(0, _swap_used_bytes() - swap_start),
     )
+
+
+def parse_args(
+    arguments: Sequence[str] | None = None,
+) -> tuple[BalancedRunPolicy, MonitorLimits]:
+    """Parse the strict local-only supervisor boundary."""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--executable", type=pathlib.Path, required=True)
+    parser.add_argument("--executable-sha256", required=True)
+    parser.add_argument("--executable-bytes", type=int, required=True)
+    parser.add_argument("--manifest", type=pathlib.Path, required=True)
+    parser.add_argument("--manifest-sha256", required=True)
+    parser.add_argument("--manifest-bytes", type=int, required=True)
+    parser.add_argument("--input-directory", type=pathlib.Path, required=True)
+    parser.add_argument("--output-directory", type=pathlib.Path, required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--preflight", action="store_true")
+    mode.add_argument("--execute", action="store_true")
+    parser.add_argument("--rss-bytes", type=int, default=3 * 1024 * 1024 * 1024)
+    parser.add_argument("--psi-full-avg10", type=float, default=0.79)
+    parser.add_argument("--swap-delta-bytes", type=int, default=256 * 1024 * 1024)
+    parser.add_argument("--wall-seconds", type=int, default=7200)
+    values = parser.parse_args(arguments)
+    policy = BalancedRunPolicy(
+        executable=values.executable,
+        executable_sha256=values.executable_sha256,
+        executable_bytes=values.executable_bytes,
+        manifest=values.manifest,
+        manifest_sha256=values.manifest_sha256,
+        manifest_bytes=values.manifest_bytes,
+        input_directory=values.input_directory,
+        output_directory=values.output_directory,
+        mode="preflight" if values.preflight else "execute",
+        cleanup_paths=(),
+    )
+    limits = MonitorLimits(
+        rss_bytes=values.rss_bytes,
+        psi_full_avg10=values.psi_full_avg10,
+        swap_delta_bytes=values.swap_delta_bytes,
+        wall_seconds=values.wall_seconds,
+    )
+    if (
+        limits.rss_bytes <= 0
+        or not 0.0 <= limits.psi_full_avg10 <= 100.0
+        or limits.swap_delta_bytes < 0
+        or limits.wall_seconds <= 0
+    ):
+        parser.error("resource limit differs")
+    return policy, limits
+
+
+def main(arguments: Sequence[str] | None = None) -> int:
+    """Run one authenticated child and forward its preserved terminal bytes."""
+
+    policy, limits = parse_args(arguments)
+    outcome = run_balanced_cell(policy, limits)
+    if outcome.stderr:
+        sys.stderr.buffer.write(outcome.stderr)
+    if outcome.stop is not None:
+        print(outcome.stop, file=sys.stderr)
+        return 70
+    if outcome.returncode != 0:
+        return outcome.returncode
+    sys.stdout.buffer.write(outcome.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

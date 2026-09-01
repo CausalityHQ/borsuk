@@ -7,6 +7,7 @@ import json
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts import run_v23_balanced_page_falsifier as subject
 
@@ -35,6 +36,35 @@ def _policy(root: pathlib.Path) -> subject.BalancedRunPolicy:
 
 
 class BalancedOfflineWorkerTests(unittest.TestCase):
+    def test_cli_builds_one_direct_policy_and_refuses_storage_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = _policy(pathlib.Path(directory))
+            arguments = [
+                "--executable",
+                str(policy.executable),
+                "--executable-sha256",
+                policy.executable_sha256,
+                "--executable-bytes",
+                str(policy.executable_bytes),
+                "--manifest",
+                str(policy.manifest),
+                "--manifest-sha256",
+                policy.manifest_sha256,
+                "--manifest-bytes",
+                str(policy.manifest_bytes),
+                "--input-directory",
+                str(policy.input_directory),
+                "--output-directory",
+                str(policy.output_directory),
+                "--execute",
+            ]
+            parsed_policy, limits = subject.parse_args(arguments)
+            self.assertEqual(parsed_policy, dataclasses.replace(policy, cleanup_paths=()))
+            self.assertEqual(limits, subject.MonitorLimits())
+            with mock.patch("sys.stderr"):
+                with self.assertRaises(SystemExit):
+                    subject.parse_args([*arguments, "--bucket", "forbidden"])
+
     def test_direct_command_has_no_loader_mount_network_or_aws_surface(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             policy = _policy(pathlib.Path(directory))
