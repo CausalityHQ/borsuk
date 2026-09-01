@@ -1516,3 +1516,73 @@ exact tree control can preserve the authenticated exhaustive top-ten evidence
 within eight pages. It must not tune on these burned 32 queries. The current
 RaBitQ estimator may only be reconsidered after the exact tree/layout control
 passes. No holdout, D3, or paid campaign is authorized by this result.
+
+## V23 balanced-page router pseudoquery rejection on 2026-09-01
+
+The single preregistered balanced-page screen ran from source commit
+`594ec92f81fb972bd03bbd5e6feab1e02042dbf1`, source-archive SHA-256
+`55bad7799890e5794abc36cd8454433add39bb1a36144e46a9479985859df237`,
+and run ID `v23-balanced-pages-20260901T170154Z`. The 12,537,472-byte
+statically linked ARM64 executable had SHA-256
+`e640cf82a887ecff50d55cebeae89c54388bb7c1c7ce9cfa3bd39c32f4f99ccd`.
+The 2,538-byte canonical manifest had SHA-256
+`757f47992ebb0294ab52dd62468e79aecccd1bb558e12b1c188f1f5594060fed`.
+Spot instance `i-077916d30e16cfd16` was an `r8g.2xlarge` in
+`eu-central-1c`; both EC2 health checks remained `ok`, the run emitted its
+terminal evidence in about 20 minutes, and the instance terminated.
+
+The 8,471-byte canonical `borsuk-v23-balanced-page-receipt-v4` receipt has
+SHA-256
+`3c251879a52f660b61c904777c5513d1c3aec6fa62e77d4e8a8ef31d23a9bf75`.
+The 80-byte `QUALITY.json` has SHA-256
+`a0e54c2f4d8e3d778310eca9849f9c9a1fbd1d3a53fde7553b89123f3e4fcc0c`
+and records `claim_eligible=false`, the exact instance ID, and terminal status
+`quality`. The receipt authenticates the balanced tree, supercell table, and
+all four page and row-page planes. Their SHA-256 identities are:
+
+- balanced tree: `1357741b28110a0bf2d6c615e8f7fbbafe48b24e97cf5bab3685d34f56ff9284`;
+- supercells: `2269787cae4e13dc2f157d7536453c67127b4d5de744b9909cc45ba43352f9c3`;
+- primary pages / row pages:
+  `0ce94a4d39a938bb5dd4d0be2dc878f92f3eb0a86ae1c868b9357931b2b1e65a` /
+  `312e4b5490fa3ace1dca0fd65917daf237471bb2169fbee3c63c1c763dc511d0`;
+- 1.125x pages / row pages:
+  `c1cd10d3e52a8d0d498ab653fc1e8db7dae0b312ee9d7e5e1f45ada791f82568` /
+  `4144e4e9cffe8b76e47baee1bb7db753f0dab538bb8fca90f668bf8810a131fa`;
+- 1.25x pages / row pages:
+  `9798528a685aec493e2922e8c7c1d1a93c8e1bf4b1d6d7a0fb267c4e67199efa` /
+  `10ffda9a255e8e6530976a9a16ccc641b75f8d3d1b82760d9596854d7d3ae996`;
+- 1.5x pages / row pages:
+  `8e0d738ec31fd100a0f2a8b7619da89e7a6a4c68cf1007fa62764beea4fa230f` /
+  `cb5e986fd8f66297ad9ef7adf92663dba5a81155b341d395adea59b34ce836ca`.
+
+All twelve amplification/page-budget pairs passed their registered structural,
+page-byte, and amplification caps. None approached the quality gates of
+993,750 ppm aggregate recall, 900,000 ppm minimum-query recall, and 995,000
+ppm oracle attainment:
+
+| Amplification | Pages | Aggregate ppm | Minimum ppm | Oracle ppm | Projected page bytes |
+|---:|---:|---:|---:|---:|---:|
+| 1.125x | 8 | 1,464 | 0 | 1,540 | 983,040 |
+| 1.25x | 8 | 1,855 | 0 | 1,933 | 983,040 |
+| 1.5x | 8 | 1,855 | 0 | 1,909 | 983,040 |
+| 1.125x | 16 | 5,273 | 0 | 5,273 | 1,966,080 |
+| 1.25x | 16 | 5,371 | 0 | 5,371 | 1,966,080 |
+| 1.5x | 16 | 5,566 | 0 | 5,566 | 1,966,080 |
+| 1.125x | 32 | 13,671 | 0 | 13,671 | 3,932,160 |
+| 1.25x | 32 | 14,160 | 0 | 14,160 | 3,932,160 |
+| 1.5x | 32 | 14,746 | 0 | 14,746 | 3,932,160 |
+| 1.125x | 64 | 29,882 | 0 | 29,882 | 7,864,320 |
+| 1.25x | 64 | 31,347 | 0 | 31,347 | 7,864,320 |
+| 1.5x | 64 | 31,738 | 0 | 31,738 | 7,864,320 |
+
+No pair was selected, so the official development-query and holdout phases
+were never opened. The classification is a decisive query-independent
+`balanced-page-quality-rejected`: even the largest allowed page and replica
+budgets recover only 3.1738% aggregate pseudoquery recall and some queries
+recover no neighbor. Amplification improves recall monotonically but is far
+too weak to be causal. Increasing the same page ladder, replica cap, timeout,
+or construction memory cannot credibly close the gap while retaining the
+15-ms and bounded-I/O product. The coupled centroid/radius page geometry is
+rejected. The next architecture must use query-dependent row or witness
+evidence rather than another fixed page summary. No holdout, D3, or further
+paid balanced-page campaign is authorized.
