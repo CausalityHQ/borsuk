@@ -143,7 +143,7 @@ def build_offline_environment() -> dict[str, str]:
     }
 
 
-def validate_terminal(raw: bytes) -> dict[str, object]:
+def validate_terminal(raw: bytes, *, mode: str | None = None) -> dict[str, object]:
     """Validate the canonical top-level receipt envelope emitted on stdout."""
 
     if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
@@ -174,10 +174,78 @@ def validate_terminal(raw: bytes) -> dict[str, object]:
         or type(value["pseudoquery_pairs"]) is not list  # noqa: E721
     ):
         raise ValueError("terminal authority differs")
+    if mode is not None:
+        expected_pairs = 0 if mode == "preflight" else 12 if mode == "execute" else None
+        if expected_pairs is None:
+            raise ValueError("run mode differs")
+        if len(value["pseudoquery_pairs"]) != expected_pairs:
+            raise ValueError("terminal pair inventory differs")
     canonical = json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
     if raw != canonical:
         raise ValueError("terminal canonical bytes differ")
     return value
+
+
+def authenticate_receipt_outputs(
+    receipt: dict[str, object], output_directory: pathlib.Path
+) -> tuple[pathlib.Path, ...]:
+    """Reauthenticate every reported output against the exact local inventory."""
+
+    outputs = receipt.get("outputs")
+    if type(outputs) is not list:  # noqa: E721
+        raise ValueError("output authority differs")
+    paths: list[pathlib.Path] = []
+    roles: set[str] = set()
+    basenames: set[str] = set()
+    for output in outputs:
+        if type(output) is not dict:  # noqa: E721
+            raise ValueError("output authority differs")
+        if set(output) != {
+            "digest",
+            "digest_algorithm",
+            "encoded_bytes",
+            "role",
+            "uri",
+        }:
+            raise ValueError("output authority differs")
+        role = output["role"]
+        uri = output["uri"]
+        digest = output["digest"]
+        encoded_bytes = output["encoded_bytes"]
+        if (
+            type(role) is not str  # noqa: E721
+            or not role
+            or type(uri) is not str  # noqa: E721
+            or not uri.startswith("s3://")
+            or output["digest_algorithm"] != "sha256"
+            or type(digest) is not str  # noqa: E721
+            or not _valid_sha256(digest)
+            or type(encoded_bytes) is not int  # noqa: E721
+            or encoded_bytes <= 0
+        ):
+            raise ValueError("output authority differs")
+        basename = uri.rsplit("/", 1)[-1]
+        if (
+            pathlib.PurePosixPath(basename).name != basename
+            or basename in {"", ".", ".."}
+            or role in roles
+            or basename in basenames
+        ):
+            raise ValueError("output authority differs")
+        path = output_directory / basename
+        if (
+            not _regular_file(path)
+            or path.stat().st_size != encoded_bytes
+            or _sha256(path) != digest
+        ):
+            raise ValueError("output authority differs")
+        roles.add(role)
+        basenames.add(basename)
+        paths.append(path)
+    inventory = {path.name for path in output_directory.iterdir() if _regular_file(path)}
+    if inventory != basenames or len(tuple(output_directory.iterdir())) != len(paths):
+        raise ValueError("output inventory differs")
+    return tuple(paths)
 
 
 def cleanup_explicit_files(
@@ -282,11 +350,18 @@ def run_balanced_cell(
             break
         time.sleep(0.1)
     stdout, stderr = process.communicate()
+    terminal_error: BaseException | None = None
     if process.returncode == 0 and stop is None:
-        validate_terminal(stdout)
+        try:
+            receipt = validate_terminal(stdout, mode=policy.mode)
+            authenticate_receipt_outputs(receipt, policy.output_directory)
+        except BaseException as error:
+            terminal_error = error
     group_alive = _process_group_rss(process.pid) != 0
     if policy.cleanup_paths:
         cleanup_explicit_files(policy.cleanup_paths, process_group_alive=group_alive)
+    if terminal_error is not None:
+        raise terminal_error
     return RunOutcome(
         returncode=process.returncode,
         stdout=stdout,

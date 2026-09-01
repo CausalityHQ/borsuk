@@ -91,7 +91,7 @@ class BalancedOfflineWorkerTests(unittest.TestCase):
             "stop": None,
         }
         terminal = json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
-        self.assertEqual(subject.validate_terminal(terminal), value)
+        self.assertEqual(subject.validate_terminal(terminal, mode="execute"), value)
         with self.assertRaisesRegex(ValueError, "canonical"):
             subject.validate_terminal(json.dumps(value, indent=2).encode())
         changed = dict(value, claim_eligible=True)
@@ -106,6 +106,14 @@ class BalancedOfflineWorkerTests(unittest.TestCase):
             subject.validate_terminal(
                 json.dumps(old, separators=(",", ":"), sort_keys=True).encode()
                 + b"\n"
+            )
+
+        incomplete = dict(value, pseudoquery_pairs=value["pseudoquery_pairs"][:-1])
+        with self.assertRaisesRegex(ValueError, "pair inventory"):
+            subject.validate_terminal(
+                json.dumps(incomplete, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n",
+                mode="execute",
             )
 
     def test_cleanup_unlinks_only_explicit_regular_files_after_pid_clearance(self) -> None:
@@ -124,6 +132,37 @@ class BalancedOfflineWorkerTests(unittest.TestCase):
                 subject.cleanup_explicit_files((nested,), process_group_alive=False)
             with self.assertRaisesRegex(ValueError, "process group"):
                 subject.cleanup_explicit_files((), process_group_alive=True)
+
+    def test_receipt_outputs_are_reauthenticated_against_exact_local_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory)
+            artifact = output / "balanced-tree.bin"
+            artifact.write_bytes(b"tree\n")
+            receipt = {
+                "outputs": [
+                    {
+                        "role": "balanced-tree",
+                        "uri": "s3://borsuk-v23-eu-west-1/attempt/balanced-tree.bin",
+                        "digest_algorithm": "sha256",
+                        "digest": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                        "encoded_bytes": artifact.stat().st_size,
+                    }
+                ]
+            }
+            self.assertEqual(
+                subject.authenticate_receipt_outputs(receipt, output), (artifact,)
+            )
+
+            changed = {
+                "outputs": [dict(receipt["outputs"][0], digest="00" * 32)]
+            }
+            with self.assertRaisesRegex(ValueError, "output authority"):
+                subject.authenticate_receipt_outputs(changed, output)
+
+            rogue = output / "rogue.bin"
+            rogue.write_bytes(b"rogue")
+            with self.assertRaisesRegex(ValueError, "output inventory"):
+                subject.authenticate_receipt_outputs(receipt, output)
 
 
 if __name__ == "__main__":
