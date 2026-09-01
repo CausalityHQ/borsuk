@@ -45,6 +45,16 @@ class V24ReducedPreflightTests(unittest.TestCase):
             self.assertNotEqual(
                 value["runs"][0]["development_result_sha256"], ""
             )
+            for run in value["runs"]:
+                cpu = run["cpu_preflight"]
+                self.assertEqual(cpu["warmup_samples"], 1_024)
+                self.assertEqual(cpu["timed_samples"], 10_000)
+                self.assertEqual(len(cpu["selector_latency_ns"]), 10_000)
+                self.assertEqual(
+                    cpu["selector_p99_ns"],
+                    sorted(cpu["selector_latency_ns"])[9_899],
+                )
+                self.assertTrue(cpu["scalar_simd_pages_equal"])
             self.assertEqual(
                 {entry.name for entry in root.iterdir()},
                 {"preflight-receipt.json", "worker-1", "worker-4"},

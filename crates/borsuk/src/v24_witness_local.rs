@@ -20,9 +20,9 @@ use crate::{
     BorsukError, Result,
     v24_witness::{V24ObjectIdentity, V24SourceRow, validate_v24_identity},
     v24_witness_eval::{
-        V24Cell, V24Disposition, V24Evaluation, V24EvaluationScope, V24QuerySample, V24QueryTruth,
-        V24Result, canonical_v24_result_bytes, classify_v24_ladder, evaluate_v24_cell,
-        evaluate_v24_exact_control, fuse_v24_posting_plane,
+        V24_SELECTOR_WARMUP_SAMPLES, V24Cell, V24Disposition, V24Evaluation, V24EvaluationScope,
+        V24QuerySample, V24QueryTruth, V24Result, canonical_v24_result_bytes, classify_v24_ladder,
+        evaluate_v24_cell, evaluate_v24_exact_control, fuse_v24_posting_plane,
     },
     v24_witness_graph::{
         V24DistanceBackend, V24WitnessGraph, V24WitnessSampler, V24WitnessSearch,
@@ -1279,6 +1279,13 @@ fn evaluate_development_cell(
         .collect::<Result<Vec<_>>>()?;
     progress(query_units * 2)?;
     let samples = development_samples(&pages, truth)?;
+    for iteration in 0..V24_SELECTOR_WARMUP_SAMPLES {
+        let query = &queries[usize::try_from(iteration).unwrap() % queries.len()];
+        let selected =
+            select_development_pages(search, plane, query, cell, page_count, false, false)?;
+        std::hint::black_box(selected);
+    }
+    progress(query_units * 2 + V24_SELECTOR_WARMUP_SAMPLES)?;
     let mut latency_ns =
         Vec::with_capacity(usize::try_from(V24_DEVELOPMENT_LATENCY_SAMPLES).unwrap());
     for iteration in 0..V24_DEVELOPMENT_LATENCY_SAMPLES {
@@ -1293,7 +1300,7 @@ fn evaluate_development_cell(
         if completed_samples.is_multiple_of(V24_DEVELOPMENT_PROGRESS_SAMPLES)
             || completed_samples == V24_DEVELOPMENT_LATENCY_SAMPLES
         {
-            progress(query_units * 2 + completed_samples)?;
+            progress(query_units * 2 + V24_SELECTOR_WARMUP_SAMPLES + completed_samples)?;
         }
     }
     evaluate_v24_cell(
@@ -1339,6 +1346,7 @@ fn evaluate_exact_control(
 fn development_cell_work_units(query_count: u64) -> Result<u64> {
     query_count
         .checked_mul(2)
+        .and_then(|units| units.checked_add(V24_SELECTOR_WARMUP_SAMPLES))
         .and_then(|units| units.checked_add(V24_DEVELOPMENT_LATENCY_SAMPLES))
         .ok_or_else(|| invalid("V24 development progress total overflows"))
 }
@@ -2645,10 +2653,10 @@ mod tests {
         assert_eq!(
             progress,
             json!({
-                "completed_units": 10_064,
+                "completed_units": 11_088,
                 "phase": "development-evaluation",
-                "sequence": 12,
-                "total_units": 543_520
+                "sequence": 13,
+                "total_units": 598_816
             })
         );
 
@@ -2781,10 +2789,10 @@ mod tests {
         assert_eq!(
             holdout_progress,
             json!({
-                "completed_units": 10_064,
+                "completed_units": 11_088,
                 "phase": "holdout-evaluation",
-                "sequence": 12,
-                "total_units": 10_128
+                "sequence": 13,
+                "total_units": 11_152
             })
         );
 

@@ -12,6 +12,7 @@ use crate::{
 const V24_RESULT_SCHEMA: &str = "borsuk-v24-witness-result-v1";
 const V24_MAX_SERVING_BYTES: u64 = 1_644_167_168;
 const V24_MAX_SELECTOR_P99_NS: u64 = 15_000_000;
+pub(crate) const V24_SELECTOR_WARMUP_SAMPLES: u64 = 1_024;
 const V24_AGGREGATE_RECALL_GATE_PPM: u64 = 975_000;
 const V24_MINIMUM_RECALL_GATE_PPM: u64 = 800_000;
 const V24_ORACLE_ATTAINMENT_GATE_PPM: u64 = 995_000;
@@ -96,6 +97,7 @@ pub(crate) struct V24Evaluation {
     pub(crate) quality: V24Quality,
     pub(crate) selector_latency_ns: Vec<u64>,
     pub(crate) selector_p99_ns: u64,
+    pub(crate) selector_warmup_samples: u64,
     pub(crate) serving_bytes: u64,
     pub(crate) scalar_page_ordinals: Vec<Vec<u32>>,
     pub(crate) scalar_simd_pages_equal: bool,
@@ -431,6 +433,7 @@ pub(crate) fn evaluate_v24_cell(
         quality,
         selector_latency_ns,
         selector_p99_ns,
+        selector_warmup_samples: V24_SELECTOR_WARMUP_SAMPLES,
         serving_bytes,
         scalar_page_ordinals,
         scalar_simd_pages_equal,
@@ -825,6 +828,7 @@ mod tests {
             Box::new(|value| value.serving.quality.minimum_query_recall_ppm -= 1),
             Box::new(|value| value.serving.quality.oracle_attainment_ppm -= 1),
             Box::new(|value| value.serving.selector_p99_ns += 15_000_000),
+            Box::new(|value| value.serving.selector_warmup_samples -= 1),
             Box::new(|value| value.serving.serving_bytes = 3 * 1024 * 1024 * 1024),
             Box::new(|value| value.serving.scalar_page_ordinals[0].swap(0, 1)),
             Box::new(|value| value.serving.scalar_simd_pages_equal = false),

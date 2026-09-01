@@ -23,6 +23,8 @@ from scripts.run_v24_witness_page_router import (
 
 _GENERATION = "generation-v24-reduced-preflight"
 _SERVING_BYTES = 1_644_167_168
+_SELECTOR_WARMUP_SAMPLES = 1_024
+_SELECTOR_TIMED_SAMPLES = 10_000
 _LOWER_HEX = frozenset("0123456789abcdef")
 
 
@@ -173,6 +175,45 @@ def _evaluation_evidence(raw: bytes) -> str:
     return hashlib.sha256(canonical_json_bytes(evidence)).hexdigest()
 
 
+def _cpu_preflight(raw: bytes) -> dict[str, object]:
+    value = json.loads(raw)
+    if raw != canonical_json_bytes(value) or type(value) is not dict:  # noqa: E721
+        raise ValueError("V24 reduced CPU preflight result differs")
+    serving = value.get("serving")
+    if type(serving) is not dict:  # noqa: E721
+        raise ValueError("V24 reduced CPU preflight serving evidence differs")
+    latency = serving.get("selector_latency_ns")
+    p99 = serving.get("selector_p99_ns")
+    scalar_equal = serving.get("scalar_simd_pages_equal")
+    warmup_samples = serving.get("selector_warmup_samples")
+    if (
+        type(latency) is not list  # noqa: E721
+        or len(latency) != _SELECTOR_TIMED_SAMPLES
+        or any(type(sample) is not int or sample <= 0 for sample in latency)  # noqa: E721
+        or type(p99) is not int  # noqa: E721
+        or p99 != sorted(latency)[9_899]
+        or type(scalar_equal) is not bool  # noqa: E721
+        or type(warmup_samples) is not int  # noqa: E721
+        or warmup_samples != _SELECTOR_WARMUP_SAMPLES
+    ):
+        raise ValueError("V24 reduced CPU preflight timing evidence differs")
+    evidence = {
+        key: serving[key]
+        for key in (
+            "cell",
+            "passed",
+            "quality",
+            "scalar_simd_pages_equal",
+            "selector_latency_ns",
+            "selector_p99_ns",
+            "serving_bytes",
+        )
+    }
+    evidence["timed_samples"] = len(latency)
+    evidence["warmup_samples"] = warmup_samples
+    return evidence
+
+
 def _run_once(request: ReducedPreflightRequest, workers: int) -> dict[str, object]:
     root = request.root / f"worker-{workers}"
     root.mkdir(mode=0o700)
@@ -239,6 +280,7 @@ def _run_once(request: ReducedPreflightRequest, workers: int) -> dict[str, objec
         "artifact_sha256": {
             role: sha256_file(path) for role, path in sorted(deterministic_paths.items())
         },
+        "cpu_preflight": _cpu_preflight(development_result),
         "development_result_sha256": hashlib.sha256(development_result).hexdigest(),
         "evaluation_evidence_sha256": _evaluation_evidence(development_result),
         "posting_result_sha256": hashlib.sha256(posting_result).hexdigest(),
