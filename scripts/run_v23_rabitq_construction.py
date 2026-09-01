@@ -7,10 +7,8 @@ import argparse
 import dataclasses
 import hashlib
 import json
-import os
 import pathlib
 import re
-import signal
 import struct
 import subprocess
 import tempfile
@@ -492,7 +490,6 @@ def run_construction(
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            start_new_session=True,
         )
         if process.stdin is None:
             raise RuntimeError("construction stdin is absent")
@@ -510,7 +507,7 @@ def run_construction(
             try:
                 _, stderr = process.communicate(timeout=30)
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGTERM)
+                process.terminate()
                 process.wait(timeout=30)
                 _, stderr = process.communicate()
                 raise RuntimeError(
@@ -525,7 +522,7 @@ def run_construction(
         try:
             stdout, stderr = process.communicate(timeout=7_200)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGTERM)
+            process.terminate()
             process.wait(timeout=30)
             raise TimeoutError("RaBitQ construction exceeded wall stop") from None
         if process.returncode != 0:
@@ -563,7 +560,7 @@ def run_construction(
         return receipt
     finally:
         if process is not None and process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
+            process.terminate()
             process.wait(timeout=30)
         for basename in (*OUTPUT_BASENAMES.values(), "construction-receipt.json", "progress.json"):
             (output_directory / basename).unlink(missing_ok=True)

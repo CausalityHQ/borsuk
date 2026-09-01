@@ -67,6 +67,7 @@ class FakeProcess:
         self.stdin = self._input
         self.command: list[str] | None = None
         self.returncode = 0
+        self.terminate_calls = 0
 
     def bind(self, command: list[str]) -> FakeProcess:
         self.command = command
@@ -113,6 +114,9 @@ class FakeProcess:
 
     def poll(self) -> int:
         return self.returncode
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
 
 
 class BrokenPipeProcess(FakeProcess):
@@ -368,6 +372,7 @@ class V23RaBitQConstructionTests(unittest.TestCase):
         self.assertEqual(len(client.gets), 8)
         self.assertEqual(process.input_table().num_rows, 16)
         self.assertEqual(popen.call_count, 1)
+        self.assertNotIn("start_new_session", popen.call_args.kwargs)
         command = popen.call_args.args[0]
         self.assertIn("--execute-construction", command)
         self.assertNotIn("--query-parquet", command)
@@ -422,13 +427,10 @@ class V23RaBitQConstructionTests(unittest.TestCase):
     def test_wedged_child_stderr_survives_termination_and_cleanup(self) -> None:
         client = FakeS3(self.payloads)
         process = WedgedBrokenPipeProcess()
-        with (
-            mock.patch.object(
-                runner.subprocess,
-                "Popen",
-                side_effect=lambda command, **_: process.bind(command),
-            ),
-            mock.patch.object(runner.os, "killpg") as killpg,
+        with mock.patch.object(
+            runner.subprocess,
+            "Popen",
+            side_effect=lambda command, **_: process.bind(command),
         ):
             with self.assertRaisesRegex(RuntimeError, "buffered child panic"):
                 runner.run_construction(
@@ -441,7 +443,7 @@ class V23RaBitQConstructionTests(unittest.TestCase):
                     scratch_parent=self.root,
                 )
 
-        killpg.assert_called_once_with(process.pid, signal.SIGTERM)
+        self.assertEqual(process.terminate_calls, 1)
         self.assertEqual(process.communicate_calls, 2)
         self.assertEqual(list(self.root.glob("v23-rabitq-construction-*")), [])
 
