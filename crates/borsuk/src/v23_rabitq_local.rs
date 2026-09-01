@@ -12,7 +12,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     BorsukError, Result,
     v23_incidence_eval::{
-        read_v23_incidence_development_queries, read_v23_incidence_development_truth,
+        V23IncidenceD2Authority, read_v23_incidence_d2_authority,
+        read_v23_incidence_development_queries,
     },
     v23_incidence_tree::{V23IncidenceTrainingShape, decode_incidence_tree},
     v23_rabitq::{
@@ -21,8 +22,8 @@ use crate::{
         read_v23_rabitq_receipt, validate_v23_rabitq_manifest,
     },
     v23_rabitq_arrow::{
-        V23RaBitQGeometryBytes, V23RaBitQGeometryIdentities, read_v23_rabitq_f16_control,
-        read_v23_rabitq_geometry, read_v23_rabitq_row_planes,
+        V23RaBitQGeometryBytes, V23RaBitQGeometryIdentities, V23RaBitQRowPlanes,
+        read_v23_rabitq_f16_control, read_v23_rabitq_geometry, read_v23_rabitq_row_planes,
     },
     v23_rabitq_build::{V23RaBitQBuildRequest, V23RaBitQSourceRow, build_v23_rabitq_artifacts},
     v23_rabitq_eval::{
@@ -230,6 +231,33 @@ fn validate_request(request: &V23RaBitQLocalRunRequest) -> Result<Vec<V23RaBitQO
     Ok(internal)
 }
 
+fn validate_v23_rabitq_d2_page_authority(
+    development_index_id: &str,
+    construction_index_id: &str,
+    construction_page_count: u32,
+    construction_page_namespace_uri_prefix: Option<&String>,
+    authority: &V23IncidenceD2Authority,
+    rows: &V23RaBitQRowPlanes,
+) -> Result<()> {
+    if development_index_id != authority.index_id
+        || construction_index_id != authority.index_id
+        || construction_page_count != authority.page_count
+        || construction_page_namespace_uri_prefix.and_then(|prefix| prefix.strip_suffix('/'))
+            != Some(authority.page_uri.as_str())
+        || rows
+            .primary_pages
+            .iter()
+            .any(|page| *page >= authority.page_count)
+        || rows
+            .replica_pages
+            .iter()
+            .any(|page| *page != u32::MAX && *page >= authority.page_count)
+    {
+        return Err(invalid("V23 RaBitQ D2 page authority differs"));
+    }
+    Ok(())
+}
+
 #[doc(hidden)]
 pub fn run_v23_rabitq_local_request(request: V23RaBitQLocalRunRequest) -> Result<Vec<u8>> {
     let inputs = validate_request(&request)?;
@@ -258,7 +286,9 @@ pub fn run_v23_rabitq_local_request(request: V23RaBitQLocalRunRequest) -> Result
     if tree.shape != V23IncidenceTrainingShape::PRODUCTION {
         return Err(invalid("V23 RaBitQ incidence tree shape differs"));
     }
-    let rows = read_v23_rabitq_row_planes(&role_bytes[2], &inputs[2])?;
+    let row_code_bytes = std::mem::take(&mut role_bytes[2]);
+    let rows = read_v23_rabitq_row_planes(&row_code_bytes, &inputs[2])?;
+    drop(row_code_bytes);
     let geometry = read_v23_rabitq_geometry(
         &V23RaBitQGeometryBytes {
             leaf_offsets: std::mem::take(&mut role_bytes[3]),
@@ -272,10 +302,25 @@ pub fn run_v23_rabitq_local_request(request: V23RaBitQLocalRunRequest) -> Result
         },
         receipt.manifest.expected_unique_rows,
     )?;
+    let f16_control_bytes = std::mem::take(&mut role_bytes[6]);
     let exact_rows =
-        read_v23_rabitq_f16_control(&role_bytes[6], &inputs[6], rows.sign_codes.len())?;
-    let truth = read_v23_incidence_development_truth(&role_bytes[7])?;
-    let queries = read_v23_incidence_development_queries(&role_bytes[8])?;
+        read_v23_rabitq_f16_control(&f16_control_bytes, &inputs[6], rows.sign_codes.len())?;
+    drop(f16_control_bytes);
+    let d2_report_bytes = std::mem::take(&mut role_bytes[7]);
+    let d2_authority = read_v23_incidence_d2_authority(&d2_report_bytes)?;
+    drop(d2_report_bytes);
+    validate_v23_rabitq_d2_page_authority(
+        &manifest.index_id,
+        &receipt.manifest.index_id,
+        receipt.manifest.expected_pages,
+        receipt.manifest.page_namespace_uri_prefix.as_ref(),
+        &d2_authority,
+        &rows,
+    )?;
+    let query_bytes = std::mem::take(&mut role_bytes[8]);
+    let queries = read_v23_incidence_development_queries(&query_bytes)?;
+    drop(query_bytes);
+    drop(role_bytes);
     let result = evaluate_v23_rabitq_development(V23RaBitQDevelopmentRequest {
         source_commit: manifest.source_commit,
         source_archive_sha256: manifest.source_archive_sha256,
@@ -286,7 +331,7 @@ pub fn run_v23_rabitq_local_request(request: V23RaBitQLocalRunRequest) -> Result
         rows: &rows,
         exact_rows: &exact_rows,
         queries: &queries,
-        truth: &truth,
+        truth: &d2_authority.truth,
         backend: detected_v23_rabitq_backend()?,
     })?;
     canonical_v23_rabitq_screen_result_bytes(&result, &inputs)
@@ -510,4 +555,122 @@ pub fn run_v23_rabitq_construction_local_request<R: Read>(
         ))
     })?;
     Ok(receipt_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_v23_rabitq_d2_page_authority;
+    use crate::{
+        v23_incidence_eval::V23IncidenceD2Authority, v23_rabitq_arrow::V23RaBitQRowPlanes,
+    };
+
+    fn rows() -> V23RaBitQRowPlanes {
+        V23RaBitQRowPlanes {
+            sign_codes: vec![[0; 12]; 2],
+            residual_norms: vec![1.0; 2],
+            alignments: vec![0.5; 2],
+            primary_pages: vec![0, 28_281],
+            replica_pages: vec![1, u32::MAX],
+        }
+    }
+
+    fn authority() -> V23IncidenceD2Authority {
+        V23IncidenceD2Authority {
+            index_id: "index-bcda7bb66812e162d45077e6".to_string(),
+            page_uri: "s3://borsuk-v23/pages".to_string(),
+            page_count: 28_282,
+            truth: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn v23_rabitq_local_binds_d2_index_page_namespace_count_and_all_row_ordinals() {
+        let expected = authority();
+        let page_namespace_uri_prefix = format!("{}/", expected.page_uri);
+        assert!(
+            validate_v23_rabitq_d2_page_authority(
+                &expected.index_id,
+                &expected.index_id,
+                28_282,
+                Some(&page_namespace_uri_prefix),
+                &expected,
+                &rows(),
+            )
+            .is_ok()
+        );
+
+        let mut changed = authority();
+        changed.index_id.push_str("-other");
+        assert!(
+            validate_v23_rabitq_d2_page_authority(
+                &expected.index_id,
+                &expected.index_id,
+                28_282,
+                Some(&page_namespace_uri_prefix),
+                &changed,
+                &rows(),
+            )
+            .is_err()
+        );
+        assert!(
+            validate_v23_rabitq_d2_page_authority(
+                &expected.index_id,
+                "index-other",
+                28_282,
+                Some(&page_namespace_uri_prefix),
+                &expected,
+                &rows(),
+            )
+            .is_err()
+        );
+        assert!(
+            validate_v23_rabitq_d2_page_authority(
+                &expected.index_id,
+                &expected.index_id,
+                28_281,
+                Some(&page_namespace_uri_prefix),
+                &expected,
+                &rows(),
+            )
+            .is_err()
+        );
+        let other_prefix = "s3://borsuk-v23/other-pages/".to_string();
+        assert!(
+            validate_v23_rabitq_d2_page_authority(
+                &expected.index_id,
+                &expected.index_id,
+                28_282,
+                Some(&other_prefix),
+                &expected,
+                &rows(),
+            )
+            .is_err()
+        );
+        let mut changed_rows = rows();
+        changed_rows.primary_pages[0] = 28_282;
+        assert!(
+            validate_v23_rabitq_d2_page_authority(
+                &expected.index_id,
+                &expected.index_id,
+                28_282,
+                Some(&page_namespace_uri_prefix),
+                &expected,
+                &changed_rows,
+            )
+            .is_err()
+        );
+        changed_rows = rows();
+        changed_rows.replica_pages[0] = 28_282;
+        assert!(
+            validate_v23_rabitq_d2_page_authority(
+                &expected.index_id,
+                &expected.index_id,
+                28_282,
+                Some(&page_namespace_uri_prefix),
+                &expected,
+                &changed_rows,
+            )
+            .is_err()
+        );
+    }
 }

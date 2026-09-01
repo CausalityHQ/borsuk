@@ -101,6 +101,18 @@ struct V23IncidenceD2ReportEnvelope {
 pub(crate) fn read_v23_incidence_development_truth(
     bytes: &[u8],
 ) -> Result<Vec<V23IncidenceQueryTruth>> {
+    Ok(read_v23_incidence_d2_authority(bytes)?.truth)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V23IncidenceD2Authority {
+    pub(crate) index_id: String,
+    pub(crate) page_uri: String,
+    pub(crate) page_count: u32,
+    pub(crate) truth: Vec<V23IncidenceQueryTruth>,
+}
+
+pub(crate) fn read_v23_incidence_d2_authority(bytes: &[u8]) -> Result<V23IncidenceD2Authority> {
     let envelope: V23IncidenceD2ReportEnvelope =
         serde_json::from_slice(bytes).map_err(|error| {
             BorsukError::InvalidStorage(format!("V23 incidence D2 report JSON differs: {error}"))
@@ -114,7 +126,8 @@ pub(crate) fn read_v23_incidence_development_truth(
         || envelope.source_archive_sha256
             != "77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d"
         || !exact_lower_hex(&envelope.d1_report_sha256, 64)
-        || envelope.page_uri.is_empty()
+        || !envelope.page_uri.starts_with("s3://")
+        || envelope.page_uri.ends_with('/')
     {
         return Err(invalid("V23 incidence D2 report outer authority differs"));
     }
@@ -135,7 +148,8 @@ pub(crate) fn read_v23_incidence_development_truth(
     if arm.pages.len() != 28_282 || arm.query_samples.len() != 32 {
         return Err(invalid("V23 incidence development truth shape differs"));
     }
-    arm.query_samples
+    let truth = arm
+        .query_samples
         .iter()
         .zip(&envelope.report.query_ordinals)
         .map(|(sample, query_ordinal)| {
@@ -160,7 +174,13 @@ pub(crate) fn read_v23_incidence_development_truth(
             }
             Ok(truth)
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok(V23IncidenceD2Authority {
+        index_id: envelope.index_id,
+        page_uri: envelope.page_uri,
+        page_count: u32::try_from(arm.pages.len()).unwrap(),
+        truth,
+    })
 }
 
 pub(crate) fn read_v23_incidence_holdout_neighbors(bytes: &[u8]) -> Result<Vec<(u32, Vec<u64>)>> {

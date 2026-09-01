@@ -35,6 +35,10 @@ pub(crate) struct V23RaBitQEstimate {
 pub(crate) struct V23RaBitQPreparedQuery {
     pub(crate) query_norm: f32,
     pub(crate) reconstructed: [f32; DIMENSIONS],
+    pub(crate) query_codes: [u8; DIMENSIONS],
+    pub(crate) query_minimum: f32,
+    pub(crate) query_code_sum: u16,
+    pub(crate) query_byte_sums: [[u16; 256]; 12],
     pub(crate) quantization_step: f32,
     pub(crate) code_max: u8,
 }
@@ -255,6 +259,10 @@ pub(crate) fn prepare_v23_rabitq_query_with_validated_rotation(
         return Ok(V23RaBitQPreparedQuery {
             query_norm: 0.0,
             reconstructed: [0.0; DIMENSIONS],
+            query_codes: [0; DIMENSIONS],
+            query_minimum: 0.0,
+            query_code_sum: 0,
+            query_byte_sums: [[0; 256]; 12],
             quantization_step: 0.0,
             code_max: 0,
         });
@@ -267,7 +275,7 @@ pub(crate) fn prepare_v23_rabitq_query_with_validated_rotation(
         .fold(f64::NEG_INFINITY, f64::max);
     let step = (maximum - minimum) / 15.0;
     let mut query_codes = [0u8; DIMENSIONS];
-    let mut reconstructed = [minimum as f32; DIMENSIONS];
+    let mut reconstructed = [0.0; DIMENSIONS];
     if step > 0.0 {
         for ordinal in 0..DIMENSIONS {
             let scaled = (rotated_query[ordinal] - minimum) / step;
@@ -275,15 +283,52 @@ pub(crate) fn prepare_v23_rabitq_query_with_validated_rotation(
             let fraction = scaled - lower;
             let upper = u8::from(rounding_uniform(ordinal) < fraction);
             query_codes[ordinal] = (lower as u8).saturating_add(upper).min(15);
-            reconstructed[ordinal] = (minimum + step * f64::from(query_codes[ordinal])) as f32;
+        }
+    }
+    let query_minimum = minimum as f32;
+    let quantization_step = step as f32;
+    for (ordinal, value) in reconstructed.iter_mut().enumerate() {
+        *value = quantization_step.mul_add(f32::from(query_codes[ordinal]), query_minimum);
+    }
+    let query_code_sum = query_codes.iter().map(|value| u16::from(*value)).sum();
+    let mut query_byte_sums = [[0u16; 256]; 12];
+    for (byte_ordinal, table) in query_byte_sums.iter_mut().enumerate() {
+        for mask in 1usize..256 {
+            let prior = mask & (mask - 1);
+            let bit = mask.trailing_zeros() as usize;
+            table[mask] = table[prior] + u16::from(query_codes[byte_ordinal * 8 + bit]);
         }
     }
     Ok(V23RaBitQPreparedQuery {
         query_norm: query_norm as f32,
         reconstructed,
-        quantization_step: step as f32,
+        query_codes,
+        query_minimum,
+        query_code_sum,
+        query_byte_sums,
+        quantization_step,
         code_max: query_codes.into_iter().max().unwrap_or(0),
     })
+}
+
+pub(crate) fn v23_rabitq_sign_dot_lut(
+    prepared: &V23RaBitQPreparedQuery,
+    code: &V23RaBitQCode,
+) -> f32 {
+    let mut positive_count = 0u32;
+    let mut positive_code_sum = 0u32;
+    for (byte_ordinal, mask) in code.sign_code.iter().copied().enumerate() {
+        positive_count += mask.count_ones();
+        positive_code_sum += u32::from(prepared.query_byte_sums[byte_ordinal][usize::from(mask)]);
+    }
+    let sign_sum = i32::try_from(2 * positive_count).unwrap() - DIMENSIONS as i32;
+    let signed_code_sum =
+        i32::try_from(2 * positive_code_sum).unwrap() - i32::from(prepared.query_code_sum);
+    (INVERSE_SQRT_DIMENSIONS as f32)
+        * prepared.query_minimum.mul_add(
+            sign_sum as f32,
+            prepared.quantization_step * signed_code_sum as f32,
+        )
 }
 
 pub(crate) fn scalar_v23_rabitq_sign_dot(
@@ -378,7 +423,8 @@ pub(crate) fn score_v23_rabitq_scalar(
 mod tests {
     use super::{
         V23RaBitQCode, build_v23_rabitq_rotation, encode_v23_rabitq_residual,
-        score_v23_rabitq_f64_reference, score_v23_rabitq_scalar,
+        prepare_v23_rabitq_query, scalar_v23_rabitq_sign_dot, score_v23_rabitq_f64_reference,
+        score_v23_rabitq_scalar, v23_rabitq_sign_dot_lut,
     };
 
     fn identity_rotation() -> [[f32; 96]; 96] {
@@ -480,5 +526,33 @@ mod tests {
             alignment: 0.01,
         };
         assert!(score_v23_rabitq_scalar(&[1.0; 96], &invalid, &rotation).is_err());
+    }
+
+    #[test]
+    fn v23_rabitq_quantizer_query_lut_matches_direct_scalar_for_every_byte_mask() {
+        let rotation = identity_rotation();
+        let query =
+            std::array::from_fn(|ordinal| (((ordinal * 37 + 11) % 193) as f32 - 96.0) / 97.0);
+        let prepared = prepare_v23_rabitq_query(&query, &rotation).unwrap();
+        let scale = 96.0f32.sqrt().recip()
+            * prepared
+                .reconstructed
+                .iter()
+                .map(|value| value.abs())
+                .sum::<f32>();
+        let permitted = 8.0 * f32::EPSILON * scale.max(f32::MIN_POSITIVE);
+        for byte_ordinal in 0..12 {
+            for mask in 0..=u8::MAX {
+                let mut code = V23RaBitQCode {
+                    sign_code: [0; 12],
+                    residual_norm: 1.0,
+                    alignment: 0.8,
+                };
+                code.sign_code[byte_ordinal] = mask;
+                let direct = scalar_v23_rabitq_sign_dot(&prepared, &code);
+                let lookup = v23_rabitq_sign_dot_lut(&prepared, &code);
+                assert!((lookup - direct).abs() <= permitted);
+            }
+        }
     }
 }
