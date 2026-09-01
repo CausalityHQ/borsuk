@@ -1458,3 +1458,61 @@ tree cell fails, tree/layout containment remains the blocker. If an exact tree
 cell passes but its RaBitQ pair fails, the estimator is rejected. Only a
 passing paired serving cell can authorize a separately preregistered holdout;
 D3 and paid follow-on work remain fenced meanwhile.
+
+## V23 residual RaBitQ fixed-reducer result on 2026-09-01
+
+The single preregistered fixed-reducer screen ran from source commit
+`c14f9305c07b2b8b602361275356a3530dfb1f8b`, source-archive SHA-256
+`bb5d45ef80d4dc80481a665b65b0f196b57dc6a60b065048bbe9be20086fb477`,
+and run ID `v23-rabitq-development-20260901T072128Z-recall-k`. The 7,345,264-
+byte stripped ARM64 falsifier has SHA-256
+`120f3b8c4913e3a9ba3e454bfe0894c884cb40a9ab853a826d4edd6b59ca3f01`.
+The canonical 3,780-byte manifest has SHA-256
+`f6bfc6d0932fd0ffe2fac557a05ece56c3f94db5a40c9a92fe0034eaca2c0241`
+and reuses the nine immutable construction, tree, Arrow, D2, and query inputs
+from the first screen. Spot instance `i-00798cf43c404552d` completed with both
+EC2 system checks healthy and terminated.
+
+The 116,061-byte canonical `borsuk-v23-rabitq-screen-v4` result has SHA-256
+`6576ad212c36a40a7e1ff962aeda3c3ad3271fb6c2a369fa45a286e460c6e335`
+at
+`s3://borsuk-bench-453182569524-euc1/research/v23-residual-rabitq/bb5d45ef80d4dc80481a665b65b0f196b57dc6a60b065048bbe9be20086fb477/v23-rabitq-development-20260901T072128Z-recall-k/screen-result.json`.
+The 407-byte `COMPLETE.json` has SHA-256
+`9e2fe61c470c866ef5742841a85c689d3728985dfbc4f2f95b77107ca94c3dc6`;
+its authenticated 9,282-byte worker log has SHA-256
+`ab99f06c893d33a2425fd4943e4dab05278bec0f3331c330e9d09f80a70db0d6`.
+The result is evidence-only with `claim_eligible=false`.
+
+| Control | Leaves | Aggregate ppm | Minimum ppm | Oracle ppm | Hits | p99 kernel |
+|---|---:|---:|---:|---:|---:|---:|
+| exact exhaustive | 65,536 | 993,750 | 900,000 | 1,000,000 | 318/320 | 3.263 s |
+| exact tree | 32 | 728,125 | 100,000 | 732,704 | 233/320 | 1.991 ms |
+| exact tree | 64 | 756,250 | 300,000 | 761,006 | 242/320 | 3.783 ms |
+| exact tree | 128 | 809,375 | 400,000 | 814,465 | 259/320 | 7.139 ms |
+| RaBitQ exhaustive | 65,536 | 625,000 | 100,000 | 628,930 | 200/320 | 1.290 s |
+| RaBitQ tree | 32 | 640,625 | 100,000 | 644,654 | 205/320 | 12.046 ms |
+| RaBitQ tree | 64 | 653,125 | 0 | 657,232 | 209/320 | 13.379 ms |
+| RaBitQ tree | 128 | 681,250 | 100,000 | 685,534 | 218/320 | 20.359 ms |
+
+The exact exhaustive control now reproduces every one of the 318
+oracle-reachable hits. This validates the fixed recall-at-ten reducer and
+proves that the prior 295-hit ceiling was caused by ranks 11--4,096 displacing
+top-ten page evidence. It does not validate the serving architecture: all
+three exact tree cells remain far below the quality boundary, so current tree
+containment and page layout are the first causal blocker. RaBitQ loses another
+41 hits versus the paired exact 128-leaf cell, so its estimator is also
+insufficient in the tested form. The recorded classification is
+`tree-pruning-rejected`.
+
+All scalar and fused/LUT paths selected identical pages. Exact controls had
+zero fused ULP drift; RaBitQ controls stayed within one ppm scalar/LUT
+differential. The production RaBitQ tree timing includes row ranking and the
+fixed reducer: 32 and 64 leaves remain below the 15-ms p99 boundary, while 128
+leaves exceeds it. Exact and exhaustive timings remain diagnostic. The serving
+projection remains 400,342,772 bytes for the 9,990,000-row development index.
+
+The next falsifier must change the query-independent routing/layout so the
+exact tree control can preserve the authenticated exhaustive top-ten evidence
+within eight pages. It must not tune on these burned 32 queries. The current
+RaBitQ estimator may only be reconsidered after the exact tree/layout control
+passes. No holdout, D3, or paid campaign is authorized by this result.
