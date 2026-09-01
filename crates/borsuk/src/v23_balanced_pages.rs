@@ -24,9 +24,9 @@ use crate::{
     v23_balanced_pages_eval::{
         V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryEvidence,
         V23BalancedPseudoqueryPair, V23BalancedSample, V23BalancedSelectedPairEvidence,
-        V23BalancedServingGeometry, build_v23_balanced_sample,
+        V23BalancedServingGeometry, build_v23_balanced_sample, classify_v23_balanced_pair_ladder,
         evaluate_v23_balanced_pseudoquery_pair_for_expected_count,
-        prepare_v23_balanced_serving_geometry, select_v23_balanced_pair,
+        prepare_v23_balanced_serving_geometry,
     },
     v23_balanced_pages_train::{
         V23BalancedTrainingRow, V23SupercellModel, route_v23_supercell_beam2,
@@ -1210,7 +1210,7 @@ pub(crate) fn evaluate_v23_balanced_pseudoquery_ladder_for_expected_count(
             )?);
         }
     }
-    let selected = select_v23_balanced_pair(&pairs).ok();
+    let selected = classify_v23_balanced_pair_ladder(&pairs)?;
     Ok(V23BalancedPseudoqueryLadder { pairs, selected })
 }
 

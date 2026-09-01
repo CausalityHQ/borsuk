@@ -415,6 +415,12 @@ impl V23BalancedPseudoqueryAccumulator {
 pub(crate) fn select_v23_balanced_pair(
     pairs: &[V23BalancedPseudoqueryPair],
 ) -> Result<V23BalancedSelectedPairEvidence> {
+    classify_v23_balanced_pair_ladder(pairs)?.ok_or_else(|| invalid("no pseudoquery pair passes"))
+}
+
+pub(crate) fn classify_v23_balanced_pair_ladder(
+    pairs: &[V23BalancedPseudoqueryPair],
+) -> Result<Option<V23BalancedSelectedPairEvidence>> {
     let expected = [8_u8, 12, 16]
         .into_iter()
         .flat_map(|budget| {
@@ -432,11 +438,15 @@ pub(crate) fn select_v23_balanced_pair(
             (pair.selected_pair.page_budget.get(), pair.selected_pair.arm) != expected
                 || pair.projected_page_bytes
                     != u64::from(pair.selected_pair.page_budget.get()) * MAX_ENCODED_PAGE_BYTES
+                || pair.aggregate_recall_ppm > 1_000_000
+                || pair.minimum_recall_ppm > pair.aggregate_recall_ppm
+                || pair.oracle_attainment_ppm > 1_000_000
+                || pair.maximum_scored_dimensions == 0
         })
     {
         return Err(invalid("pseudoquery pair authority differs"));
     }
-    let selected = pairs
+    Ok(pairs
         .iter()
         .find(|pair| {
             pair.aggregate_recall_ppm >= 993_750
@@ -447,11 +457,10 @@ pub(crate) fn select_v23_balanced_pair(
                 && pair.maximum_scored_dimensions <= MAX_SCORED_DIMENSIONS
                 && pair.amplification_and_page_caps_valid
         })
-        .ok_or_else(|| invalid("no pseudoquery pair passes"))?;
-    Ok(V23BalancedSelectedPairEvidence {
-        selected_pair: selected.selected_pair,
-        official_query_reads: 0,
-    })
+        .map(|selected| V23BalancedSelectedPairEvidence {
+            selected_pair: selected.selected_pair,
+            official_query_reads: 0,
+        }))
 }
 
 fn adjusted_score(
@@ -1120,8 +1129,8 @@ mod tests {
         MAX_SERVING_BYTES, V23BalancedArm, V23BalancedCausalClass,
         V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryPair, V23BalancedResult,
         V23BalancedSample, V23BalancedTimingEvidence, build_v23_balanced_sample,
-        canonical_v23_balanced_result_bytes, evaluate_v23_balanced_development,
-        evaluate_v23_balanced_pseudoquery_pair,
+        canonical_v23_balanced_result_bytes, classify_v23_balanced_pair_ladder,
+        evaluate_v23_balanced_development, evaluate_v23_balanced_pseudoquery_pair,
         evaluate_v23_balanced_pseudoquery_pair_for_expected_count, evaluate_v23_balanced_sample,
         measure_v23_balanced_selector, prepare_v23_balanced_serving_geometry,
         select_v23_balanced_pages, select_v23_balanced_pair,
@@ -1224,6 +1233,12 @@ mod tests {
         pairs[4] = pseudo_pair(12, V23BalancedArm::Amp1250, 993_749, 900_000);
         let selected = select_v23_balanced_pair(&pairs).unwrap();
         assert_eq!(selected.selected_pair.page_budget.get(), 16);
+
+        pairs[6] = pseudo_pair(16, V23BalancedArm::Amp1125, 993_749, 900_000);
+        assert_eq!(classify_v23_balanced_pair_ladder(&pairs).unwrap(), None);
+
+        pairs[0].aggregate_recall_ppm = 1_000_001;
+        assert!(classify_v23_balanced_pair_ladder(&pairs).is_err());
 
         pairs.swap(0, 1);
         assert!(select_v23_balanced_pair(&pairs).is_err());
