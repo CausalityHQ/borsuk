@@ -216,7 +216,10 @@ def _read_roster(
         or value["stage"] != "d2"
         or value["dataset_id"] != manifest["dataset_id"]
         or value["index_id"] != manifest["index_id"]
-        or value["source_archive_sha256"] != manifest["source_archive_sha256"]
+        or type(value["source_archive_sha256"]) is not str
+        or LOWER_DIGEST.fullmatch(value["source_archive_sha256"]) is None
+        or type(value["d1_report_sha256"]) is not str
+        or LOWER_DIGEST.fullmatch(value["d1_report_sha256"]) is None
         or value["page_uri"] + "/" != manifest["page_namespace_uri_prefix"]
         or type(value["pages"]) is not list
         or len(value["pages"]) != manifest["expected_pages"]

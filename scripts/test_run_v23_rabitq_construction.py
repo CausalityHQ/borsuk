@@ -280,6 +280,23 @@ class V23RaBitQConstructionTests(unittest.TestCase):
         )
         self.assertEqual(stream.read_all().num_rows, 2)
 
+    def test_authenticated_historical_roster_keeps_its_distinct_source_archive(self) -> None:
+        manifest, _ = runner._manifest_inputs(self.manifest_bytes)
+        roster_uri = next(
+            item["uri"]
+            for item in manifest["registered_inputs"]
+            if item["role"] == "page-roster"
+        )
+        roster = json.loads(self.payloads[roster_uri])
+        roster["source_archive_sha256"] = "9" * 64
+
+        pages = runner._read_roster(_canonical(roster), manifest)
+
+        self.assertEqual(len(pages), 8)
+        self.assertNotEqual(
+            roster["source_archive_sha256"], manifest["source_archive_sha256"]
+        )
+
     def test_exact_roster_pages_feed_one_binary_and_publish_receipt_and_manifest(self) -> None:
         client = FakeS3(self.payloads)
         process = FakeProcess()
