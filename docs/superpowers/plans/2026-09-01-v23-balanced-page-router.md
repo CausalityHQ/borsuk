@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build and qualify a claim-ineligible balanced two-level page layout whose selector freezes the smallest passing page budget in `8, 12, 16` while meeting frozen Deep Image recall, latency, and memory gates.
+**Goal:** Build and qualify a claim-ineligible balanced two-level page layout whose selector freezes the smallest passing page budget in `8, 16, 32, 64` while meeting frozen Deep Image recall, latency, and memory gates.
 
-**Architecture:** Rust constructs query-independent balanced spherical supercells/pages, evaluates the nine fixed `(page budget, replica arm)` pairs on corpus pseudoqueries, then freezes the first passing pair before opening the burned cohort. Persistent bulk vectors and assignments use strict Parquet; typed canonical JSON carries only manifests, receipts, progress, and results. Python stages immutable inputs and runs one offline executable on disposable Spot compute.
+**Architecture:** Rust constructs query-independent balanced spherical supercells/pages, evaluates the twelve fixed `(page budget, replica arm)` pairs on corpus pseudoqueries, then freezes the first passing pair before opening the burned cohort. Persistent bulk vectors and assignments use strict Parquet; typed canonical JSON carries only manifests, receipts, progress, and results. Python stages immutable inputs and runs one offline executable on disposable Spot compute.
 
 **Tech Stack:** Rust 2024, Arrow/Parquet 58.3, `half`, `rayon`, fused-f32 SIMD, `serde`, `sha2`, `blake3`, Python 3.12, boto3, EC2 Spot.
 
@@ -13,12 +13,12 @@
 ## Global Constraints
 
 - Every result is `claim_eligible=false`; D3 and sealed holdout stay fenced.
-- Production uses `S=min(8192,next_power_of_two(ceil(N/12288)))`, 12,288 rows/supercell, 384 primary rows/page, top 96 supercells, and a page budget frozen from `8, 12, 16` on pseudoqueries.
+- Production uses `S=min(8192,next_power_of_two(ceil(N/12288)))`, 12,288 rows/supercell, 384 primary rows/page, top 96 supercells, and a page budget frozen from `8, 16, 32, 64` on pseudoqueries.
 - Supercell populations are 6,144--24,576; page primary counts differ by at most one and never exceed 384.
 - Arms are exactly `(amp-1125,48)`, `(amp-1250,96)`, `(amp-1500,192)` in order; one replica/row and at most 576 occurrences/page.
-- Pseudoquery gates: 993,750 aggregate ppm, 900,000 minimum-query ppm, 995,000 oracle attainment ppm, exactly the candidate budget, at most 1,966,080 projected page bytes, and at most 4,000,000 dimensions/query. Candidate order is budget-major `8,12,16`, then arm order `1125,1250,1500`.
-- Development gates: 318/320 hits, 9/10 minimum/query, 995,000 oracle attainment ppm, exactly the frozen page budget, p99 below 15,000,000 ns, under 3 GiB RAM, at most 1,966,080 projected page bytes, and identical scalar/fused pages. A failure cannot try another budget on the burned cohort.
-- Manifest schema v3 binds `page_budgets=[8,12,16]` and removes scalar `selected_pages`. Receipt schema v3 preserves all nine pair metrics, binds the selected budget and arm before official query/neighbor Parquet is parsed, and preserves the ten construction identities plus typed `quality` stop when no pair passes. Registered query/neighbor bytes may be hash-authenticated before that boundary but cannot be parsed or supplied to selection. No v2 receipt reader is retained.
+- Pseudoquery gates: 993,750 aggregate ppm, 900,000 minimum-query ppm, 995,000 oracle attainment ppm, exactly the candidate budget, at most 7,864,320 projected page bytes, and at most 4,000,000 dimensions/query. Candidate order is budget-major `8,16,32,64`, then arm order `1125,1250,1500`.
+- Development gates: 318/320 hits, 9/10 minimum/query, 995,000 oracle attainment ppm, exactly the frozen page budget, p99 below 15,000,000 ns for metadata selection, under 3 GiB RAM, at most 7,864,320 projected page bytes, and identical scalar/fused pages. A failure cannot try another budget on the burned cohort.
+- Manifest schema v4 binds `page_budgets=[8,16,32,64]` and removes scalar `selected_pages`. Receipt schema v4 preserves all twelve pair metrics, binds the selected budget and arm before official query/neighbor Parquet is parsed, and preserves the ten construction identities plus typed `quality` stop when no pair passes. Registered query/neighbor bytes may be hash-authenticated before that boundary but cannot be parsed or supplied to selection. No compatibility reader is retained.
 - Persistent bulk interchange is exact Parquet. Bounded scratch uses Arrow IPC and is deleted after terminal/PID clearance. JSON is only small authority/evidence.
 - Construction cannot read official queries/neighbors. Pseudoqueries are excluded from fitting. No tuning occurs after opening the burned cohort.
 - Reduced shapes cannot serialize production receipts. Add no compatibility reader, alias, migration, page body, production search, storage, or D3 API.
@@ -162,7 +162,7 @@ fn v23_balanced_replica_arms_apply_exact_caps() {
 #[test]
 fn v23_balanced_selection_freezes_first_pass_without_official_inputs() {
     let s = select_v23_balanced_pair(pseudo_fixture(), arm_fixtures()).unwrap();
-    assert_eq!((s.page_budget, s.arm), (12, V23BalancedArm::Amp1250));
+    assert_eq!((s.page_budget, s.arm), (16, V23BalancedArm::Amp1250));
     assert_eq!(s.official_query_reads, 0);
 }
 #[test]
@@ -171,10 +171,10 @@ fn v23_balanced_result_recomputes_samples_gates_and_class() {
 }
 ```
 - [ ] **Step 2:** Run `cargo test -p borsuk --lib v23_balanced_eval_ -- --nocapture`; require missing evaluator RED.
-- [ ] **Step 3:** During the full-corpus routing pass compute bounded leave-self-out pseudoquery top-ten heaps; implement supercell-radius top-96 cells, all child pages, page centroid-minus-radius order, budget-major `8,12,16` outcome-blind selection followed by fixed arm order, pseudoquery and development containment gates, set-cover controls at the candidate/frozen budget, 1,024 warmups, 10,000 resident timings, fixed percentile, classification precedence, and independent serialization recomputation. Insufficient candidates fail only the affected unfrozen pair. Materialize all nine metrics in receipt v3; bind `selected_page_budget` and selected arm before official inputs are parsed and into the typed canonical result. If none passes, preserve the ten construction outputs and typed `quality` stop without opening the burned cohort. Reject all other sample lengths and recompute the exact GET/byte projection.
+- [ ] **Step 3:** During the full-corpus routing pass compute bounded leave-self-out pseudoquery top-ten heaps; implement supercell-radius top-96 cells, all child pages, page centroid-minus-radius order, budget-major `8,16,32,64` outcome-blind selection followed by fixed arm order, pseudoquery and development containment gates, set-cover controls at the candidate/frozen budget, 1,024 warmups, 10,000 resident timings, fixed percentile, classification precedence, and independent serialization recomputation. Insufficient candidates fail only the affected unfrozen pair. Materialize all twelve metrics in receipt v4; bind `selected_page_budget` and selected arm before official inputs are parsed and into the typed canonical result. If none passes, preserve the ten construction outputs and typed `quality` stop without opening the burned cohort. Reject all other sample lengths and recompute the exact GET/byte projection.
 - [ ] **Step 4:** Run GREEN/fmt/diff-check; commit `feat: evaluate balanced page routing`.
 
-- [ ] **Step 5:** Before page-body integration, replace rather than reuse the historical eight-page D2/D3 wave contract. The new version must prove at most 122,880 bytes/page, the frozen 8/12/16 GET count, at most 1,966,080 bytes/query, transient-capacity safety, and typed failures. D3 stays fenced until this separate contract passes.
+- [ ] **Step 5:** Before page-body integration, replace rather than reuse the historical eight-page D2/D3 wave contract. The new version must prove at most 122,880 bytes/page, the frozen 8/16/32/64 GET count, at most 7,864,320 bytes/query, transient-capacity safety, and typed failures. D3 stays fenced until this separate contract passes.
 
 ### Task 6: Thin local executable
 
