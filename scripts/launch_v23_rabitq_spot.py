@@ -203,6 +203,7 @@ def _worker_script(plan: LaunchPlan) -> str:
     bucket, prefix = _s3(plan.output_prefix)
     complete = f"s3://{bucket}/{prefix}COMPLETE.json"
     failed = f"s3://{bucket}/{prefix}FAILED.json"
+    worker_log = f"s3://{bucket}/{prefix}worker.log"
     result = f"s3://{bucket}/{prefix}screen-result.json"
     if isinstance(plan, ConstructionLaunchPlan):
         phase_command = f"""setsid uv run --offline --python 3.12 --with-requirements scripts/requirements-format-bench.txt python scripts/run_v23_rabitq_construction.py \\
@@ -232,14 +233,29 @@ def _worker_script(plan: LaunchPlan) -> str:
 set -euo pipefail
 root=/mnt/borsuk-v23-rabitq
 mkdir -p "$root/src" "$root/work"
+: > "$root/worker.log"
+exec >> "$root/worker.log" 2>&1
 terminal=failed
 finish() {{
   code=$?
-  python3 - "$terminal" "$code" <<'PY' > "$root/terminal.json"
+  set +e
+  worker_log_sha256=$(sha256sum "$root/worker.log" | cut -d' ' -f1)
+  worker_log_bytes=$(stat -c %s "$root/worker.log")
+  aws s3 cp "$root/worker.log" {worker_log!r} --only-show-errors >/dev/null 2>&1
+  worker_log_publish_status=$?
+  python3 - "$terminal" "$code" "$worker_log_sha256" "$worker_log_bytes" {worker_log!r} "$worker_log_publish_status" <<'PY' > "$root/terminal.json"
 import json,sys
-print(json.dumps({{"claim_eligible":False,"exit_code":int(sys.argv[2]),"status":sys.argv[1]}},sort_keys=True,separators=(",", ":")))
+print(json.dumps({{
+    "claim_eligible":False,
+    "exit_code":int(sys.argv[2]),
+    "status":sys.argv[1],
+    "worker_log_bytes":int(sys.argv[4]),
+    "worker_log_published":int(sys.argv[6]) == 0,
+    "worker_log_sha256":sys.argv[3],
+    "worker_log_uri":sys.argv[5],
+}},sort_keys=True,separators=(",", ":")))
 PY
-  if [ "$terminal" = complete ]; then aws s3 cp "$root/terminal.json" {complete!r}; else aws s3 cp "$root/terminal.json" {failed!r}; fi
+  if [ "$terminal" = complete ]; then aws s3 cp "$root/terminal.json" {complete!r} --only-show-errors; else aws s3 cp "$root/terminal.json" {failed!r} --only-show-errors; fi
   exit "$code"
 }}
 trap finish EXIT

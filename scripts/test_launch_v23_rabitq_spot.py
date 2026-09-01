@@ -169,6 +169,35 @@ class V23RaBitQSpotLauncherTests(unittest.TestCase):
         self.assertEqual(terminal, "s3://fixture/terminal/v23-rabitq-fixture/COMPLETE.json")
         ec2.terminate_instances.assert_called_once_with(InstanceIds=["i-fixture"])
 
+    def test_worker_publishes_authenticated_log_before_terminal_marker(self) -> None:
+        plan = launcher.build_launch_plan(
+            run_id="v23-rabitq-fixture",
+            source_commit="1" * 40,
+            source_archive_sha256="2" * 64,
+            source_archive_uri="s3://fixture/source.tar.zst",
+            source_archive_bytes=8192,
+            binary_uri="s3://fixture/binary",
+            binary_sha256="3" * 64,
+            binary_bytes=4096,
+            manifest_uri="s3://fixture/manifest",
+            manifest_sha256="4" * 64,
+            manifest_bytes=2048,
+            output_prefix="s3://fixture/terminal/v23-rabitq-fixture/",
+        )
+        user_data = base64.b64decode(launcher.build_launch_spec(plan)["UserData"]).decode()
+
+        self.assertIn('exec >> "$root/worker.log" 2>&1', user_data)
+        self.assertIn('worker_log_sha256=$(sha256sum "$root/worker.log"', user_data)
+        self.assertIn('worker_log_bytes=$(stat -c %s "$root/worker.log")', user_data)
+        self.assertIn('"worker_log_sha256"', user_data)
+        self.assertIn('"worker_log_bytes"', user_data)
+        self.assertIn('"worker_log_uri"', user_data)
+        log_upload = user_data.index('worker.log" \'s3://fixture/terminal/v23-rabitq-fixture/worker.log\'')
+        failed_upload = user_data.index("s3://fixture/terminal/v23-rabitq-fixture/FAILED.json")
+        complete_upload = user_data.index("s3://fixture/terminal/v23-rabitq-fixture/COMPLETE.json")
+        self.assertLess(log_upload, failed_upload)
+        self.assertLess(log_upload, complete_upload)
+
 
 if __name__ == "__main__":
     unittest.main()
