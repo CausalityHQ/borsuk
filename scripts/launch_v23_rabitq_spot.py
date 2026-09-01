@@ -288,7 +288,7 @@ while kill -0 "$pid" 2>/dev/null; do
   rss_kib=$(ps -eo pgid=,rss= | awk -v target="$pgid" '$1==target {{sum+=$2}} END {{print sum+0}}')
   psi_full=$(awk '/^full / {{for(i=1;i<=NF;i++) if($i ~ /^avg10=/) {{split($i,a,"="); print a[2]}}}}' /proc/pressure/memory)
   swap_kib=$(awk '/^SwapTotal:/ {{total=$2}} /^SwapFree:/ {{free=$2}} END {{print total-free}}' /proc/meminfo)
-  ticks=$(awk '{{print $14+$15}}' "/proc/$pid/stat" 2>/dev/null || printf '%s' "$last_ticks")
+  ticks=$(ps -eo pgid=,cputimes= | awk -v target="$pgid" '$1==target {{sum+=$2}} END {{print sum+0}}')
   if [ "$ticks" != "$last_ticks" ]; then last_ticks=$ticks; last_progress=$now; fi
   if [ $((now-started)) -ge 7200 ]; then stop_reason=wall-limit; fi
   if [ "$rss_kib" -ge 100663296 ]; then stop_reason=rss-limit; fi

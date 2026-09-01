@@ -118,6 +118,8 @@ class V23RaBitQSpotLauncherTests(unittest.TestCase):
         self.assertIn("psi-limit", user_data)
         self.assertIn("swap-growth-limit", user_data)
         self.assertIn("progress-limit", user_data)
+        self.assertIn("ps -eo pgid=,cputimes=", user_data)
+        self.assertNotIn('"/proc/$pid/stat"', user_data)
         self.assertIn("wall-limit", user_data)
         self.assertIn("kill -TERM -- -$pgid", user_data)
         self.assertNotIn("holdout", user_data)
