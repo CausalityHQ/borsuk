@@ -675,39 +675,57 @@ pub(crate) fn search_v24_witness_graph(
     k: usize,
     ef: usize,
 ) -> Result<Vec<u32>> {
-    validate_graph(graph)?;
-    if query.iter().any(|value| !value.is_finite()) || k == 0 || k > graph.witnesses.len() || ef < k
-    {
-        return Err(invalid("V24 witness graph query differs"));
+    V24WitnessSearch::new(graph)?.search(query, k, ef)
+}
+
+pub(crate) struct V24WitnessSearch<'a> {
+    graph: &'a V24WitnessGraph,
+}
+
+impl<'a> V24WitnessSearch<'a> {
+    pub(crate) fn new(graph: &'a V24WitnessGraph) -> Result<Self> {
+        validate_graph(graph)?;
+        Ok(Self { graph })
     }
-    if ef >= graph.witnesses.len() {
-        let mut ranked = graph
-            .witnesses
-            .iter()
-            .map(|witness| RankedWitness {
-                distance: graph_distance(query, witness),
-                ordinal: witness.witness_ordinal,
-            })
-            .collect::<Vec<_>>();
-        ranked.sort_unstable();
-        return Ok(ranked
-            .into_iter()
-            .take(k)
-            .map(|value| value.ordinal)
-            .collect());
+
+    pub(crate) fn search(&self, query: &[f32; 96], k: usize, ef: usize) -> Result<Vec<u32>> {
+        let graph = self.graph;
+        if query.iter().any(|value| !value.is_finite())
+            || k == 0
+            || k > graph.witnesses.len()
+            || ef < k
+        {
+            return Err(invalid("V24 witness graph query differs"));
+        }
+        if ef >= graph.witnesses.len() {
+            let mut ranked = graph
+                .witnesses
+                .iter()
+                .map(|witness| RankedWitness {
+                    distance: graph_distance(query, witness),
+                    ordinal: witness.witness_ordinal,
+                })
+                .collect::<Vec<_>>();
+            ranked.sort_unstable();
+            return Ok(ranked
+                .into_iter()
+                .take(k)
+                .map(|value| value.ordinal)
+                .collect());
+        }
+        let maximum_level = graph.levels[usize::try_from(graph.entrypoint).unwrap()];
+        let mut current = graph.entrypoint;
+        for level in (1..=maximum_level).rev() {
+            current = greedy_descend(graph, query, current, level, graph.witnesses.len());
+        }
+        Ok(
+            search_layer(graph, query, &[current], ef, 0, graph.witnesses.len())
+                .into_iter()
+                .take(k)
+                .map(|value| value.ordinal)
+                .collect(),
+        )
     }
-    let maximum_level = graph.levels[usize::try_from(graph.entrypoint).unwrap()];
-    let mut current = graph.entrypoint;
-    for level in (1..=maximum_level).rev() {
-        current = greedy_descend(graph, query, current, level, graph.witnesses.len());
-    }
-    Ok(
-        search_layer(graph, query, &[current], ef, 0, graph.witnesses.len())
-            .into_iter()
-            .take(k)
-            .map(|value| value.ordinal)
-            .collect(),
-    )
 }
 
 fn graph_schema() -> Schema {
