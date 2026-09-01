@@ -221,10 +221,8 @@ put_once() {{
 }}
 finish() {{
   status=$?
-  if [[ "$log_published" -eq 0 ]]; then
-    sync "$root/worker.log" || true
-    put_once "$root/worker.log" worker.log || true
-  fi
+  trap - EXIT
+  set +e
   if [[ "$terminal" != complete ]]; then
     python3 - "$root/FAILED.json" "$run_id" "$source_commit" "$binary_sha256" "$instance_id" "$status" <<'PY'
 import json,sys
@@ -232,7 +230,15 @@ path,run_id,commit,binary_sha256,instance_id,status=sys.argv[1:]
 value={{"binary_sha256":binary_sha256,"claim_eligible":False,"instance_id":instance_id,"run_id":run_id,"schema":"borsuk-v24-reduced-spot-terminal-v1","source_commit":commit,"status":"failed","worker_counts":[1,4],"worker_status":int(status)}}
 open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\n")
 PY
+    sync "$root/worker.log"
+    if [[ "$log_published" -eq 0 ]]; then
+      put_once "$root/worker.log" worker.log
+      log_published=1
+    fi
     put_once "$root/FAILED.json" FAILED.json || true
+  elif [[ "$log_published" -eq 0 ]]; then
+    sync "$root/worker.log"
+    put_once "$root/worker.log" worker.log || true
   fi
   shutdown -h now
 }}

@@ -216,16 +216,39 @@ pub(crate) fn fuse_v24_pages(
                 .ok_or_else(|| invalid("V24 fusion score overflows"))?;
         }
     }
-    if scores.len() < usize::try_from(cell.page_budget).unwrap() {
-        return Err(invalid("V24 fusion selected page count differs"));
-    }
+    rank_and_backfill_v24_pages(scores, cell, page_count)
+}
+
+fn rank_and_backfill_v24_pages(
+    scores: BTreeMap<u32, u128>,
+    cell: V24Cell,
+    page_count: usize,
+) -> Result<Vec<u32>> {
+    let page_budget = usize::try_from(cell.page_budget).unwrap();
     let mut ranked = scores.into_iter().collect::<Vec<_>>();
     ranked.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
-    Ok(ranked
+    let mut selected = ranked
         .into_iter()
-        .take(usize::try_from(cell.page_budget).unwrap())
+        .take(page_budget)
         .map(|(page, _)| page)
-        .collect())
+        .collect::<Vec<_>>();
+    if selected.len() < page_budget {
+        let mut present = selected.iter().copied().collect::<BTreeSet<_>>();
+        for page in
+            0..u32::try_from(page_count).map_err(|_| invalid("V24 page count exceeds u32"))?
+        {
+            if present.insert(page) {
+                selected.push(page);
+                if selected.len() == page_budget {
+                    break;
+                }
+            }
+        }
+    }
+    if selected.len() != page_budget {
+        return Err(invalid("V24 fusion selected page count differs"));
+    }
+    Ok(selected)
 }
 
 pub(crate) fn fuse_v24_posting_plane(
@@ -265,16 +288,7 @@ pub(crate) fn fuse_v24_posting_plane(
                 .ok_or_else(|| invalid("V24 fusion score overflows"))?;
         }
     }
-    if scores.len() < usize::try_from(cell.page_budget).unwrap() {
-        return Err(invalid("V24 fusion selected page count differs"));
-    }
-    let mut ranked = scores.into_iter().collect::<Vec<_>>();
-    ranked.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
-    Ok(ranked
-        .into_iter()
-        .take(usize::try_from(cell.page_budget).unwrap())
-        .map(|(page, _)| page)
-        .collect())
+    rank_and_backfill_v24_pages(scores, cell, page_count)
 }
 
 fn recompute_quality(
@@ -690,6 +704,11 @@ mod tests {
         assert_eq!(
             fuse_v24_pages(&[0, 1, 2, 3, 4, 5, 6, 7], &records, cell(), 32).unwrap(),
             vec![5, 7, 3, 12, 13, 14, 15, 16]
+        );
+        assert_eq!(
+            fuse_v24_pages(&[0, 1, 2, 3, 4, 5, 6, 7], &records[..4], cell(), 32).unwrap(),
+            vec![5, 7, 3, 0, 1, 2, 4, 6],
+            "zero-score pages must backfill a sparse valid cell deterministically"
         );
 
         let mut changed = records.clone();
