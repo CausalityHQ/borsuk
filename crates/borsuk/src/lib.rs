@@ -103,6 +103,11 @@ mod v23_balanced_pages_arrow;
 mod v23_balanced_pages_build;
 #[allow(
     dead_code,
+    reason = "V23 balanced-page evaluation is wired incrementally by the committed plan"
+)]
+mod v23_balanced_pages_eval;
+#[allow(
+    dead_code,
     reason = "V23 balanced-page geometry is wired incrementally by the committed plan"
 )]
 mod v23_balanced_pages_train;
