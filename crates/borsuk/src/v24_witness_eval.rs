@@ -301,7 +301,7 @@ fn recompute_quality(
 }
 
 fn p99_ns(samples: &[u64]) -> Result<u64> {
-    if samples.len() < 10_000 || samples.iter().any(|sample| *sample == 0) {
+    if samples.len() < 10_000 || samples.contains(&0) {
         return Err(invalid("V24 selector latency samples differ"));
     }
     let mut sorted = samples.to_vec();

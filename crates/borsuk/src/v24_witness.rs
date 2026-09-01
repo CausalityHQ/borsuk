@@ -63,11 +63,13 @@ fn role_is_registered(role: &str) -> bool {
     matches!(
         role,
         "construction-manifest"
+            | "construction-rows-parquet"
             | "dataset-meta"
             | "training-manifest"
             | "witnesses-arrow"
             | "witness-graph"
             | "posting-manifest"
+            | "page-rows-parquet"
             | "page-roster"
             | "witness-postings"
             | "query-parquet"

@@ -606,7 +606,7 @@ fn search_layer(
 fn validate_graph(graph: &V24WitnessGraph) -> Result<()> {
     let rows = graph.node_count();
     if rows < 2
-        || graph.vectors.len() != rows.checked_mul(96).unwrap_or(usize::MAX)
+        || graph.vectors.len() != rows.saturating_mul(96)
         || graph
             .source_ordinals
             .iter()

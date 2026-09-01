@@ -173,6 +173,7 @@ mod v24_witness_eval;
     reason = "V24 witness graph is wired incrementally by the committed plan"
 )]
 mod v24_witness_graph;
+mod v24_witness_local;
 #[allow(
     dead_code,
     reason = "V24 witness postings are wired incrementally by the committed plan"
@@ -458,6 +459,8 @@ pub use storage_trace::{
     physical_object_role_for_path,
 };
 pub use text::{CharNgram, Tokenizer, UnicodeWordLowercase, Whitespace, term_frequencies, term_id};
+#[doc(hidden)]
+pub use v24_witness_local::{V24LocalPhase, V24LocalRunRequest, run_v24_local_request};
 
 #[cfg(test)]
 mod configuration_tests {
