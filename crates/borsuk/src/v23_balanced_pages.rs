@@ -87,7 +87,7 @@ fn valid_lower_hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn validate_identity(identity: &V23BalancedIdentity) -> Result<()> {
+pub(crate) fn validate_v23_balanced_identity(identity: &V23BalancedIdentity) -> Result<()> {
     if identity.role.is_empty()
         || !identity.uri.starts_with("s3://")
         || identity.digest_algorithm != "sha256"
@@ -103,7 +103,7 @@ fn validate_identity_list(identities: &[V23BalancedIdentity]) -> Result<()> {
     let mut roles = BTreeSet::new();
     let mut uris = BTreeSet::new();
     for identity in identities {
-        validate_identity(identity)?;
+        validate_v23_balanced_identity(identity)?;
         if !roles.insert(identity.role.as_str()) || !uris.insert(identity.uri.as_str()) {
             return Err(invalid("object identity duplicates"));
         }
