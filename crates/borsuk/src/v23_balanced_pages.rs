@@ -25,13 +25,17 @@ use crate::{
         V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryEvidence,
         V23BalancedPseudoqueryPair, V23BalancedResult, V23BalancedSample,
         V23BalancedSelectedPairEvidence, V23BalancedServingGeometry, build_v23_balanced_sample,
-        classify_v23_balanced_pair_ladder, evaluate_v23_balanced_development,
+        canonical_v23_balanced_result_bytes, classify_v23_balanced_pair_ladder,
+        evaluate_v23_balanced_development,
         evaluate_v23_balanced_pseudoquery_pair_for_expected_count, measure_v23_balanced_selector,
         prepare_v23_balanced_serving_geometry,
     },
     v23_balanced_pages_train::{
         V23BalancedTrainingRow, V23SupercellModel, route_v23_supercell_beam2,
         sample_v23_balanced_reservoir, train_v23_balanced_tree,
+    },
+    v23_incidence_eval::{
+        read_v23_incidence_development_neighbors, read_v23_incidence_development_queries,
     },
 };
 
@@ -1485,17 +1489,92 @@ pub fn run_v23_balanced_local_request(request: V23BalancedLocalRequest) -> Resul
     for identity in &manifest.ordered_inputs {
         authenticate_local_input(&request.input_directory, identity)?;
     }
-    if request.mode == V23BalancedLocalMode::Execute {
-        return Err(invalid("local execution pipeline is not authorized"));
+    let manifest_sha256 = format!("{:x}", Sha256::digest(&manifest_bytes));
+    if request.mode == V23BalancedLocalMode::Preflight {
+        return canonical_v23_balanced_receipt_bytes(&V23BalancedReceipt {
+            schema: RECEIPT_SCHEMA.to_owned(),
+            claim_eligible: false,
+            manifest_sha256,
+            ordered_inputs: manifest.ordered_inputs,
+            outputs: Vec::new(),
+            pseudoquery_pairs: Vec::new(),
+            selected_pair: None,
+            stop: None,
+        });
     }
+
+    let projection = project_v23_balanced_shape(manifest.rows)?;
+    let construction = build_v23_balanced_local_construction_for_shape(
+        &request.input_directory.join("f16-control.arrow"),
+        &request.output_directory,
+        &manifest.output_uri_prefix,
+        V23BalancedConstructionShape {
+            rows: manifest.rows,
+            reservoir_rows: 2_097_152,
+            pseudoquery_rows: 1_024,
+            supercells: u32::try_from(projection.supercells)
+                .map_err(|_| invalid("local supercell count overflows"))?,
+            primary_rows_per_page: manifest.primary_rows_per_page,
+            seed: manifest.deterministic_seed,
+            workers: usize::from(manifest.worker_threads),
+            run_rows: usize::try_from(manifest.sort_run_rows)
+                .map_err(|_| invalid("local sort run rows overflow"))?,
+        },
+    )?;
+    let Some(selected) = construction.ladder.selected else {
+        return canonical_v23_balanced_receipt_bytes(&V23BalancedReceipt {
+            schema: RECEIPT_SCHEMA.to_owned(),
+            claim_eligible: false,
+            manifest_sha256,
+            ordered_inputs: manifest.ordered_inputs,
+            outputs: construction.outputs,
+            pseudoquery_pairs: construction.ladder.pairs,
+            selected_pair: None,
+            stop: Some(V23BalancedStop::Quality),
+        });
+    };
+    let query_bytes =
+        fs::read(request.input_directory.join("query.parquet")).map_err(|source| {
+            BorsukError::Io {
+                path: request.input_directory.join("query.parquet"),
+                source,
+            }
+        })?;
+    let neighbor_bytes =
+        fs::read(request.input_directory.join("neighbors.parquet")).map_err(|source| {
+            BorsukError::Io {
+                path: request.input_directory.join("neighbors.parquet"),
+                source,
+            }
+        })?;
+    let queries = read_v23_incidence_development_queries(&query_bytes)?;
+    let neighbors = read_v23_incidence_development_neighbors(&neighbor_bytes)?;
+    let result = evaluate_v23_balanced_development_cohort(
+        &construction,
+        &queries,
+        &neighbors,
+        projection.serving_bytes,
+    )?;
+    let result_bytes = canonical_v23_balanced_result_bytes(&result)?;
+    let result_path = request.output_directory.join("development-result.json");
+    fs::write(&result_path, result_bytes).map_err(|source| BorsukError::Io {
+        path: result_path.clone(),
+        source,
+    })?;
+    let mut outputs = construction.outputs;
+    outputs.push(output_identity(
+        &result_path,
+        format!("{}development-result.json", manifest.output_uri_prefix),
+        "development-result",
+    )?);
     canonical_v23_balanced_receipt_bytes(&V23BalancedReceipt {
         schema: RECEIPT_SCHEMA.to_owned(),
         claim_eligible: false,
-        manifest_sha256: format!("{:x}", Sha256::digest(&manifest_bytes)),
+        manifest_sha256,
         ordered_inputs: manifest.ordered_inputs,
-        outputs: Vec::new(),
-        pseudoquery_pairs: Vec::new(),
-        selected_pair: None,
+        outputs,
+        pseudoquery_pairs: construction.ladder.pairs,
+        selected_pair: Some(selected.selected_pair),
         stop: None,
     })
 }
@@ -1966,7 +2045,7 @@ mod tests {
     }
 
     #[test]
-    fn v23_balanced_local_execute_is_fail_closed_after_complete_authentication() {
+    fn v23_balanced_local_execute_enters_authenticated_construction_without_legacy_gate() {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("input");
         let output = directory.path().join("output");
@@ -1993,15 +2072,16 @@ mod tests {
         let error = run_v23_balanced_local_request(V23BalancedLocalRequest {
             manifest: manifest_path,
             input_directory: input,
-            output_directory: output,
+            output_directory: output.clone(),
             mode: V23BalancedLocalMode::Execute,
         })
         .unwrap_err();
         assert!(
-            error
+            !error
                 .to_string()
                 .contains("execution pipeline is not authorized")
         );
+        assert!(output.join(".scratch").is_dir());
     }
 
     #[test]
