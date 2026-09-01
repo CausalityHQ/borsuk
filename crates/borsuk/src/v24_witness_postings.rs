@@ -220,6 +220,13 @@ fn append_posting(
         .map_err(|source| io_error(scratch, source))
 }
 
+fn flush_run_writers(writers: &mut [Option<BufWriter<File>>], scratch: &Path) -> Result<()> {
+    for writer in writers.iter_mut().flatten() {
+        writer.flush().map_err(|source| io_error(scratch, source))?;
+    }
+    Ok(())
+}
+
 fn build_postings_inner<I>(
     graph: &V24WitnessGraph,
     pages: I,
@@ -228,14 +235,6 @@ fn build_postings_inner<I>(
 where
     I: IntoIterator<Item = Result<V24PostingPage>>,
 {
-    if !scratch.is_dir()
-        || fs::read_dir(scratch)
-            .map_err(|source| io_error(scratch, source))?
-            .next()
-            .is_some()
-    {
-        return Err(invalid("V24 posting scratch authority differs"));
-    }
     let search = V24WitnessSearch::new(graph)?;
     let mut source_writers = (0..RUN_PARTITIONS).map(|_| None).collect::<Vec<_>>();
     let mut page_ordinals = BTreeSet::new();
@@ -267,6 +266,7 @@ where
                 .ok_or_else(|| invalid("V24 posting physical row count overflows"))?;
         }
     }
+    flush_run_writers(&mut source_writers, scratch)?;
     drop(source_writers);
 
     let mut posting_writers = (0..RUN_PARTITIONS).map(|_| None).collect::<Vec<_>>();
@@ -319,6 +319,7 @@ where
         }
         fs::remove_file(&path).map_err(|source| io_error(&path, source))?;
     }
+    flush_run_writers(&mut posting_writers, scratch)?;
     drop(posting_writers);
 
     let mut postings = vec![Vec::new(); graph.node_count()];
@@ -381,12 +382,32 @@ pub(crate) fn build_v24_witness_postings<I>(
 where
     I: IntoIterator<Item = Result<V24PostingPage>>,
 {
+    if !scratch.is_dir()
+        || fs::read_dir(scratch)
+            .map_err(|source| io_error(scratch, source))?
+            .next()
+            .is_some()
+    {
+        return Err(invalid("V24 posting scratch authority differs"));
+    }
+    let owner = scratch.join(".v24-posting-owner");
+    let mut owner_file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&owner)
+        .map_err(|source| io_error(&owner, source))?;
+    writeln!(owner_file, "{}", std::process::id()).map_err(|source| io_error(&owner, source))?;
+    owner_file
+        .flush()
+        .map_err(|source| io_error(&owner, source))?;
+    drop(owner_file);
     let result = build_postings_inner(graph, pages, scratch);
     let cleanup = cleanup_runs(scratch);
-    match (result, cleanup) {
-        (Ok(plane), Ok(())) => Ok(plane),
-        (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(error),
+    let release = fs::remove_file(&owner).map_err(|source| io_error(&owner, source));
+    match (result, cleanup, release) {
+        (Ok(plane), Ok(()), Ok(())) => Ok(plane),
+        (Err(error), _, _) => Err(error),
+        (Ok(_), Err(error), _) | (Ok(_), Ok(()), Err(error)) => Err(error),
     }
 }
 
@@ -710,5 +731,24 @@ mod tests {
         );
         assert!(fs::read_dir(&scratch).unwrap().next().is_none());
         fs::remove_dir(&scratch).unwrap();
+    }
+
+    #[test]
+    fn v24_witness_postings_reject_occupied_scratch_without_deleting_its_owner_files() {
+        let graph = build_v24_witness_graph(&witnesses(), SEED).unwrap();
+        let scratch = scratch("occupied");
+        let owner_file = scratch.join("source-000.run");
+        fs::write(&owner_file, b"other-process-owned").unwrap();
+        assert!(
+            build_v24_witness_postings(
+                &graph,
+                Vec::<crate::Result<V24PostingPage>>::new(),
+                &scratch,
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&owner_file).unwrap(), b"other-process-owned");
+        fs::remove_file(owner_file).unwrap();
+        fs::remove_dir(scratch).unwrap();
     }
 }
