@@ -147,7 +147,7 @@ fn v23_balanced_replica_arms_apply_exact_caps() {
 ```
 - [ ] **Step 2:** Run `cargo test -p borsuk --lib v23_balanced_build_ -- --nocapture`; require missing builder RED.
 - [ ] **Step 3:** Implement bounded Arrow IPC runs sorted `(supercell,source)`, bounded-fan-in merge, exact `ceil(n/384)` spherical partitions, and loss/duplicate/empty/imbalance rejection.
-- [ ] **Step 4:** Implement beam-zero=primary validation, both-cell page scoring, closest=primary, `(ratio,source)` candidates, one replica/row, global/page caps, final centroids/radii, max 576.
+- [ ] **Step 4:** Implement authoritative primary plus boundary-runner page scoring, closest-distinct `(ratio,source)` candidates, bounded fan-in-64 external merge, fixed 16-byte/source primary-plus-three-arm decisions, one replica/row, cap-limited global/page acceptance, digest-bound three-pass replay, final occurrence-weighted arm centroids/radii, and max 576 rows/page.
 - [ ] **Step 5:** Run GREEN/fmt/diff-check; commit `feat: build balanced pages and replicas`.
 
 ### Task 5: Pseudoquery selection and evaluator

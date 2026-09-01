@@ -171,18 +171,36 @@ centroid, primary population, and its contiguous supercell range.
 ### Margin replicas
 
 Each row is routed through the construction tree with a fixed beam of two final
-supercells. The first result must equal its primary supercell; otherwise
-construction stops. The second result is its runner-up supercell. The row then
-scores every page centroid in those two supercells. Its closest page must equal
-its primary page. The closest distinct page, ordered by `(distance,
-page_ordinal)`, is its replica candidate. The margin key is
+supercells. The first result is its authoritative primary supercell and the
+second result is its boundary-consistent runner-up supercell. The row then
+scores every page centroid in those two supercells. Its assigned balanced
+primary page remains authoritative even when duplicate vectors create tied
+centroids. The closest distinct page, ordered by `(distance, page_ordinal)`, is
+its replica candidate. The margin key is
 
 ```text
 (second_distance / max(primary_distance, f32::MIN_POSITIVE), source_ordinal)
 ```
 
-Nonfinite or negative distances are rejected. A row can receive at most one
-replica and never replicates into its primary page.
+Nonfinite distances and negative distances below `-16 * f32::EPSILON` are
+rejected. Smaller negative roundoff is clamped to zero. A row can receive at
+most one replica and never replicates into its primary page.
+
+Replica candidates are sorted in bounded Arrow IPC runs and merged with fan-in
+at most 64. The primary page plus three replica decisions use one fixed
+`[uint32; 4]` table indexed by authenticated source ordinal: exactly 16 bytes
+per corpus row, or 1.6 GB at 100 million rows. This construction-only
+allocation is preregistered separately from serving RAM and cannot grow with
+candidate count. Every replay of routed rows is digest-bound to the first pass.
+At the registered production shape of 384 primary rows/page and at most 268,608
+pages, the concurrent selection table, three f64 centroid sum tables, arm page
+tables, and primary centroid tables project below 2.6 GB (2.43 GiB) before
+allocator overhead. The bounded candidate run buffer is dropped before those
+tables are allocated. Every construction-sized allocation is fallible; the
+external pressure monitor remains authoritative for stopping construction
+before host exhaustion. This construction peak is not serving state and is
+separate from the 3 GiB serving gate. Reduced deterministic test shapes may use
+smaller pages but do not define the production memory projection.
 
 Three fixed arms are constructed from the same sorted margin candidates:
 

@@ -474,60 +474,64 @@ impl Iterator for V23RowPageStream {
         if self.failed {
             return None;
         }
-        loop {
-            if self.batch.is_none() || self.row == self.batch.as_ref().unwrap().num_rows() {
-                match self.read_batch() {
-                    Ok(true) => {}
-                    Ok(false) => return None,
-                    Err(error) => {
-                        self.failed = true;
-                        return Some(Err(error));
-                    }
-                }
-            }
-            let batch = self.batch.as_ref().unwrap();
-            let decoded = (|| {
-                let source = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
-                    .ok_or_else(|| invalid("source ordinal differs"))?
-                    .value(self.row);
-                let primary = batch
-                    .column(1)
-                    .as_any()
-                    .downcast_ref::<UInt32Array>()
-                    .ok_or_else(|| invalid("primary page differs"))?
-                    .value(self.row);
-                let replica = batch
-                    .column(2)
-                    .as_any()
-                    .downcast_ref::<UInt32Array>()
-                    .ok_or_else(|| invalid("replica page differs"))?
-                    .value(self.row);
-                if source != self.next_source_ordinal
-                    || primary >= self.page_count
-                    || (replica != u32::MAX && replica >= self.page_count)
-                    || replica == primary
-                {
-                    return Err(invalid("row assignment stream differs"));
-                }
-                Ok(V23RowPage {
-                    source_ordinal: source,
-                    primary_page: primary,
-                    replica_page: replica,
-                })
-            })();
-            self.row += 1;
-            match decoded {
-                Ok(row) => {
-                    self.next_source_ordinal += 1;
-                    return Some(Ok(row));
-                }
+        if self.batch.is_none() || self.row == self.batch.as_ref().unwrap().num_rows() {
+            match self.read_batch() {
+                Ok(true) => {}
+                Ok(false) => return None,
                 Err(error) => {
                     self.failed = true;
                     return Some(Err(error));
                 }
+            }
+        }
+        let batch = self.batch.as_ref().unwrap();
+        let decoded = (|| {
+            let source = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| invalid("source ordinal differs"))?
+                .value(self.row);
+            let primary = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .ok_or_else(|| invalid("primary page differs"))?
+                .value(self.row);
+            let replica = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .ok_or_else(|| invalid("replica page differs"))?
+                .value(self.row);
+            if source != self.next_source_ordinal
+                || primary >= self.page_count
+                || (replica != u32::MAX && replica >= self.page_count)
+                || replica == primary
+            {
+                return Err(invalid("row assignment stream differs"));
+            }
+            Ok(V23RowPage {
+                source_ordinal: source,
+                primary_page: primary,
+                replica_page: replica,
+            })
+        })();
+        self.row += 1;
+        match decoded {
+            Ok(row) => match self.next_source_ordinal.checked_add(1) {
+                Some(next) => {
+                    self.next_source_ordinal = next;
+                    Some(Ok(row))
+                }
+                None => {
+                    self.failed = true;
+                    Some(Err(invalid("row assignment source ordinal overflows")))
+                }
+            },
+            Err(error) => {
+                self.failed = true;
+                Some(Err(error))
             }
         }
     }
@@ -568,8 +572,7 @@ pub(crate) fn reconcile_v23_balanced_arm(
     assignments: &[V23RowPage],
     maximum_replica_rows: u16,
 ) -> Result<()> {
-    validate_supercells(supercells)?;
-    validate_pages(pages, maximum_replica_rows)?;
+    validate_v23_balanced_page_geometry(supercells, pages, maximum_replica_rows)?;
     let page_count = u32::try_from(pages.len()).map_err(|_| invalid("page count overflows"))?;
     validate_row_pages(assignments, page_count)?;
     let mut primary_counts = vec![0_u64; pages.len()];
@@ -581,6 +584,23 @@ pub(crate) fn reconcile_v23_balanced_arm(
         }
     }
     for (ordinal, page) in pages.iter().enumerate() {
+        if primary_counts[ordinal] != u64::from(page.primary_rows)
+            || replica_counts[ordinal] != u64::from(page.replica_rows)
+        {
+            return Err(invalid("page assignment reconciliation differs"));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_v23_balanced_page_geometry(
+    supercells: &[V23SupercellRow],
+    pages: &[V23PageRow],
+    maximum_replica_rows: u16,
+) -> Result<()> {
+    validate_supercells(supercells)?;
+    validate_pages(pages, maximum_replica_rows)?;
+    for (ordinal, page) in pages.iter().enumerate() {
         let supercell = supercells
             .get(usize::try_from(page.supercell_ordinal).unwrap())
             .ok_or_else(|| invalid("page supercell is out of range"))?;
@@ -589,12 +609,8 @@ pub(crate) fn reconcile_v23_balanced_arm(
             .first_page
             .checked_add(supercell.page_count)
             .ok_or_else(|| invalid("supercell page range overflows"))?;
-        if page_ordinal < supercell.first_page
-            || page_ordinal >= end
-            || primary_counts[ordinal] != u64::from(page.primary_rows)
-            || replica_counts[ordinal] != u64::from(page.replica_rows)
-        {
-            return Err(invalid("page assignment reconciliation differs"));
+        if page_ordinal < supercell.first_page || page_ordinal >= end {
+            return Err(invalid("page geometry reconciliation differs"));
         }
     }
     for supercell in supercells {
