@@ -315,7 +315,8 @@ const V24_GRAPH_EF_CONSTRUCTION: usize = 64;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct V24WitnessGraph {
-    witnesses: Vec<V24Witness>,
+    source_ordinals: Vec<u64>,
+    vectors: Vec<f16>,
     levels: Vec<u8>,
     node_bases: Vec<u64>,
     adjacency: Vec<u32>,
@@ -355,10 +356,10 @@ fn witness_level(source_ordinal: u64, seed: u64) -> u8 {
     u8::try_from((splitmix64(source_ordinal ^ seed).trailing_zeros() / 4).min(15)).unwrap()
 }
 
-fn graph_distance(query: &[f32; 96], witness: &V24Witness) -> f32 {
+fn graph_distance(query: &[f32; 96], witness: &[f16; 96]) -> f32 {
     let dot = query
         .iter()
-        .zip(witness.vector.iter())
+        .zip(witness.iter())
         .fold(0.0_f32, |sum, (left, right)| {
             left.mul_add(f32::from(*right), sum)
         });
@@ -367,23 +368,43 @@ fn graph_distance(query: &[f32; 96], witness: &V24Witness) -> f32 {
 
 impl V24WitnessGraph {
     pub(crate) fn node_count(&self) -> usize {
-        self.witnesses.len()
+        self.source_ordinals.len()
+    }
+
+    pub(crate) fn packed_vector_bytes(&self) -> usize {
+        self.vectors.len() * std::mem::size_of::<f16>()
+    }
+
+    pub(crate) fn source_ordinal_bytes(&self) -> usize {
+        self.source_ordinals.len() * std::mem::size_of::<u64>()
+    }
+
+    fn vector(&self, ordinal: u32) -> Option<&[f16; 96]> {
+        let ordinal = usize::try_from(ordinal).ok()?;
+        self.vectors
+            .get(ordinal.checked_mul(96)?..ordinal.checked_add(1)?.checked_mul(96)?)?
+            .try_into()
+            .ok()
+    }
+
+    fn distance(&self, query: &[f32; 96], ordinal: u32) -> f32 {
+        graph_distance(query, self.vector(ordinal).unwrap())
     }
 
     pub(crate) fn source_index(&self) -> Vec<(u64, u32)> {
         let mut index = self
-            .witnesses
+            .source_ordinals
             .iter()
-            .map(|witness| (witness.source_ordinal, witness.witness_ordinal))
+            .copied()
+            .enumerate()
+            .map(|(ordinal, source)| (source, u32::try_from(ordinal).unwrap()))
             .collect::<Vec<_>>();
         index.sort_unstable();
         index
     }
 
     pub(crate) fn witness_vector(&self, ordinal: u32) -> Option<&[f16; 96]> {
-        self.witnesses
-            .get(usize::try_from(ordinal).ok()?)
-            .map(|witness| &witness.vector)
+        self.vector(ordinal)
     }
 
     pub(crate) fn maximum_degree(&self) -> usize {
@@ -419,7 +440,7 @@ impl V24WitnessGraph {
 
     fn block_start(&self, node: u32, level: u8) -> Option<usize> {
         let node_index = usize::try_from(node).ok()?;
-        if node_index >= self.witnesses.len() || level > self.levels[node_index] {
+        if node_index >= self.node_count() || level > self.levels[node_index] {
             return None;
         }
         let base = *self.node_bases.get(node_index)?;
@@ -447,7 +468,7 @@ impl V24WitnessGraph {
         unique.dedup();
         if unique.len() > V24_GRAPH_M
             || unique.iter().any(|neighbor| {
-                usize::try_from(*neighbor).map_or(true, |value| value >= self.witnesses.len())
+                usize::try_from(*neighbor).map_or(true, |value| value >= self.node_count())
                     || *neighbor == node
             })
         {
@@ -463,16 +484,11 @@ impl V24WitnessGraph {
         candidates.push(added);
         candidates.sort_unstable();
         candidates.dedup();
-        let query = self.witnesses[usize::try_from(node).unwrap()]
-            .vector
-            .map(f32::from);
+        let query = self.vector(node).unwrap().map(f32::from);
         let mut ranked = candidates
             .into_iter()
             .map(|ordinal| RankedWitness {
-                distance: graph_distance(
-                    &query,
-                    &self.witnesses[usize::try_from(ordinal).unwrap()],
-                ),
+                distance: self.distance(&query, ordinal),
                 ordinal,
             })
             .collect::<Vec<_>>();
@@ -515,7 +531,7 @@ fn greedy_descend(
 ) -> u32 {
     loop {
         let mut best = RankedWitness {
-            distance: graph_distance(query, &graph.witnesses[usize::try_from(current).unwrap()]),
+            distance: graph.distance(query, current),
             ordinal: current,
         };
         for neighbor in graph.neighbors(current, level).iter().copied() {
@@ -523,10 +539,7 @@ fn greedy_descend(
                 continue;
             }
             let candidate = RankedWitness {
-                distance: graph_distance(
-                    query,
-                    &graph.witnesses[usize::try_from(neighbor).unwrap()],
-                ),
+                distance: graph.distance(query, neighbor),
                 ordinal: neighbor,
             };
             if candidate < best {
@@ -558,7 +571,7 @@ fn search_layer(
             continue;
         }
         let ranked = RankedWitness {
-            distance: graph_distance(query, &graph.witnesses[usize::try_from(entry).unwrap()]),
+            distance: graph.distance(query, entry),
             ordinal: entry,
         };
         candidates.push(std::cmp::Reverse(ranked));
@@ -573,10 +586,7 @@ fn search_layer(
                 continue;
             }
             let ranked = RankedWitness {
-                distance: graph_distance(
-                    query,
-                    &graph.witnesses[usize::try_from(neighbor).unwrap()],
-                ),
+                distance: graph.distance(query, neighbor),
                 ordinal: neighbor,
             };
             if best.len() < ef || best.peek().is_some_and(|worst| ranked < *worst) {
@@ -594,9 +604,16 @@ fn search_layer(
 }
 
 fn validate_graph(graph: &V24WitnessGraph) -> Result<()> {
-    validate_witnesses(&graph.witnesses)?;
-    let rows = graph.witnesses.len();
+    let rows = graph.node_count();
     if rows < 2
+        || graph.vectors.len() != rows.checked_mul(96).unwrap_or(usize::MAX)
+        || graph
+            .source_ordinals
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != rows
         || graph.levels.len() != rows
         || graph.node_bases.len() != rows + 1
         || usize::try_from(graph.entrypoint).map_or(true, |entry| entry >= rows)
@@ -605,6 +622,21 @@ fn validate_graph(graph: &V24WitnessGraph) -> Result<()> {
         || graph.node_bases.first() != Some(&0)
     {
         return Err(invalid("V24 witness graph authority differs"));
+    }
+    for ordinal in 0..rows {
+        let vector = graph.vector(u32::try_from(ordinal).unwrap()).unwrap();
+        let squared_norm = vector
+            .iter()
+            .map(|value| {
+                let value = f32::from(*value);
+                value * value
+            })
+            .sum::<f32>();
+        if vector.iter().any(|value| !f32::from(*value).is_finite())
+            || !(0.998..=1.002).contains(&squared_norm.sqrt())
+        {
+            return Err(invalid("V24 witness graph vector authority differs"));
+        }
     }
     let mut expected = 0_u64;
     for (node, level) in graph.levels.iter().copied().enumerate() {
@@ -676,7 +708,14 @@ pub(crate) fn build_v24_witness_graph(
     }
     node_bases.push(adjacency_len);
     let mut graph = V24WitnessGraph {
-        witnesses: witnesses.to_vec(),
+        source_ordinals: witnesses
+            .iter()
+            .map(|witness| witness.source_ordinal)
+            .collect(),
+        vectors: witnesses
+            .iter()
+            .flat_map(|witness| witness.vector)
+            .collect(),
         levels,
         node_bases,
         adjacency: vec![
@@ -689,10 +728,10 @@ pub(crate) fn build_v24_witness_graph(
         seed,
     };
     let mut maximum_level = graph.levels[0];
-    for node_index in 1..graph.witnesses.len() {
+    for node_index in 1..graph.node_count() {
         let node = u32::try_from(node_index).unwrap();
         let node_level = graph.levels[node_index];
-        let query = graph.witnesses[node_index].vector.map(f32::from);
+        let query = graph.vector(node).unwrap().map(f32::from);
         let mut current = graph.entrypoint;
         if maximum_level > node_level {
             for level in ((node_level + 1)..=maximum_level).rev() {
@@ -760,18 +799,19 @@ impl<'a> V24WitnessSearch<'a> {
         let graph = self.graph;
         if query.iter().any(|value| !value.is_finite())
             || k == 0
-            || k > graph.witnesses.len()
+            || k > graph.node_count()
             || ef < k
         {
             return Err(invalid("V24 witness graph query differs"));
         }
-        if ef >= graph.witnesses.len() {
-            let mut ranked = graph
-                .witnesses
-                .iter()
-                .map(|witness| RankedWitness {
-                    distance: graph_distance(query, witness),
-                    ordinal: witness.witness_ordinal,
+        if ef >= graph.node_count() {
+            let mut ranked = (0..graph.node_count())
+                .map(|ordinal| {
+                    let ordinal = u32::try_from(ordinal).unwrap();
+                    RankedWitness {
+                        distance: graph.distance(query, ordinal),
+                        ordinal,
+                    }
                 })
                 .collect::<Vec<_>>();
             ranked.sort_unstable();
@@ -784,10 +824,10 @@ impl<'a> V24WitnessSearch<'a> {
         let maximum_level = graph.levels[usize::try_from(graph.entrypoint).unwrap()];
         let mut current = graph.entrypoint;
         for level in (1..=maximum_level).rev() {
-            current = greedy_descend(graph, query, current, level, graph.witnesses.len());
+            current = greedy_descend(graph, query, current, level, graph.node_count());
         }
         Ok(
-            search_layer(graph, query, &[current], ef, 0, graph.witnesses.len())
+            search_layer(graph, query, &[current], ef, 0, graph.node_count())
                 .into_iter()
                 .take(k)
                 .map(|value| value.ordinal)
@@ -825,14 +865,12 @@ pub(crate) fn write_v24_witness_graph(graph: &V24WitnessGraph) -> Result<Vec<u8>
     let vectors = FixedSizeListArray::try_new(
         child,
         96,
-        Arc::new(Float16Array::from_iter_values(
-            graph.witnesses.iter().flat_map(|witness| witness.vector),
-        )),
+        Arc::new(Float16Array::from(graph.vectors.clone())),
         None,
     )?;
     let adjacency = ListArray::try_new(
         Arc::new(Field::new("neighbor", DataType::UInt32, false)),
-        OffsetBuffer::from_lengths((0..graph.witnesses.len()).map(|node| {
+        OffsetBuffer::from_lengths((0..graph.node_count()).map(|node| {
             usize::try_from(graph.node_bases[node + 1] - graph.node_bases[node]).unwrap()
         })),
         Arc::new(UInt32Array::from(graph.adjacency.clone())),
@@ -840,24 +878,19 @@ pub(crate) fn write_v24_witness_graph(graph: &V24WitnessGraph) -> Result<Vec<u8>
     )?;
     let columns: Vec<ArrayRef> = vec![
         Arc::new(UInt32Array::from_iter_values(
-            graph
-                .witnesses
-                .iter()
-                .map(|witness| witness.witness_ordinal),
+            (0..graph.node_count()).map(|ordinal| u32::try_from(ordinal).unwrap()),
         )),
-        Arc::new(UInt64Array::from_iter_values(
-            graph.witnesses.iter().map(|witness| witness.source_ordinal),
-        )),
+        Arc::new(UInt64Array::from(graph.source_ordinals.clone())),
         Arc::new(UInt8Array::from(graph.levels.clone())),
         Arc::new(vectors),
         Arc::new(adjacency),
         Arc::new(UInt32Array::from_iter_values(std::iter::repeat_n(
             graph.entrypoint,
-            graph.witnesses.len(),
+            graph.node_count(),
         ))),
         Arc::new(UInt64Array::from_iter_values(std::iter::repeat_n(
             graph.seed,
-            graph.witnesses.len(),
+            graph.node_count(),
         ))),
     ];
     let schema = Arc::new(graph_schema());
@@ -943,18 +976,17 @@ pub(crate) fn read_v24_witness_graph(
     {
         return Err(invalid("V24 witness graph repeated authority differs"));
     }
-    let mut witnesses = Vec::with_capacity(expected_rows);
+    let mut source_ordinals = Vec::with_capacity(expected_rows);
+    let mut packed_vectors = Vec::with_capacity(expected_rows * 96);
     let mut graph_levels = Vec::with_capacity(expected_rows);
     let mut node_bases = Vec::with_capacity(expected_rows + 1);
     let mut adjacency = Vec::new();
     for row in 0..expected_rows {
-        witnesses.push(V24Witness {
-            witness_ordinal: ordinals.value(row),
-            source_ordinal: sources.value(row),
-            vector: vector_values.values()[row * 96..(row + 1) * 96]
-                .try_into()
-                .unwrap(),
-        });
+        if ordinals.value(row) != u32::try_from(row).unwrap() {
+            return Err(invalid("V24 witness graph ordinal differs"));
+        }
+        source_ordinals.push(sources.value(row));
+        packed_vectors.extend_from_slice(&vector_values.values()[row * 96..(row + 1) * 96]);
         graph_levels.push(levels.value(row));
         node_bases.push(u64::try_from(adjacency.len()).unwrap());
         let list = lists.value(row);
@@ -966,7 +998,8 @@ pub(crate) fn read_v24_witness_graph(
     }
     node_bases.push(u64::try_from(adjacency.len()).unwrap());
     let graph = V24WitnessGraph {
-        witnesses,
+        source_ordinals,
+        vectors: packed_vectors,
         levels: graph_levels,
         node_bases,
         adjacency,
@@ -1174,6 +1207,8 @@ mod tests {
         let second = build_v24_witness_graph(&witnesses, SEED).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.node_count(), 96);
+        assert_eq!(first.packed_vector_bytes(), 96 * 96 * 2);
+        assert_eq!(first.source_ordinal_bytes(), 96 * 8);
         assert!(first.maximum_degree() <= 16);
         assert!(first.has_exact_sorted_unique_adjacency());
 
