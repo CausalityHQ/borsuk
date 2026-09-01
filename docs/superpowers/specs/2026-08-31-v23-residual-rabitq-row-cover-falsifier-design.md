@@ -166,21 +166,32 @@ measured projection above the total fails closed.
 1. Authenticate the request and resident artifact identities.
 2. Transform the query once with the registered rotation.
 3. Use the centroid tree to return the fixed leaf-probe ladder `32, 64, 128`.
-4. Reject a cell before scoring if its leaf ranges contain more than 262,144
-   rows at the 100M projection.
+4. Apply scale-normalized development limits derived only from the authenticated
+   indexed row count. The retained-row limit is
+   `ceil(4,096 * indexed_rows / 100,000,000)` and the scored-row limit is
+   `ceil(262,144 * indexed_rows / 100,000,000)`. At 9,990,000 rows these are
+   exactly 410 and 26,189; at 100M they are exactly 4,096 and 262,144. If a
+   ranked leaf prefix would exceed the scored-row limit, truncate the prefix
+   before the first overflowing leaf and record both the requested and actual
+   leaf counts. Failing the whole cell instead of applying this deterministic
+   prefix is forbidden.
 5. For each probed leaf, form the rotated query residual and quantize its 96
-   components with the fixed four-bit query quantizer described by RaBitQ.
-   Estimate every candidate residual distance with the registered SIMD
-   estimator. Raw ULP counts are unstable when a dot or distance cancels near
-   zero, so the optimized primitive dot must satisfy the fixed forward-error
-   bound `abs(simd - scalar) <= 8 * f32::EPSILON * sum(abs(products))`; the two
-   paths must still select identical pages exactly. Error against the
-   unquantized scalar f64 distance is
+   components into codes `q_i in 0..=15` with registered `minimum` and `step`.
+   Build twelve query-specific 256-entry tables, where table `j` maps an eight-
+   bit row sign mask to the sum of the corresponding eight `q_i` values. For a
+   row sign code, compute `sum_sign = 2*popcount(sign)-96` and
+   `sum_sign_code = 2*sum(q_i where sign_i=1)-sum(q_i)`, then reconstruct the
+   dot as `invsqrt96 * (minimum*sum_sign + step*sum_sign_code)`. This is twelve
+   byte-table lookups per row; expanding a sign code to `[f32; 96]`, performing
+   96 floating operations, or recomputing a duplicate scalar score in the
+   serving loop is forbidden. A direct 96-component scalar oracle must agree
+   within the fixed primitive forward-error bound, and both paths must select
+   identical pages exactly. Error against the unquantized scalar f64 distance is
    recorded as scientific evidence and is governed by the recall gates rather
    than an invented dataset-independent cutoff. Ties are deterministic
    `(distance, row_ordinal)`.
-6. Retain only the best 4,096 rows in a bounded heap. Full ranked-row
-   allocation or sort is forbidden.
+6. Retain only the scale-normalized best-row limit in a bounded heap. Full
+   ranked-row allocation or sort is forbidden.
 7. Apply the existing deterministic reciprocal-rank page cover to the two page
    assignments, selecting exactly eight unique pages. Ties are
    `(gain, reciprocal_rank_sum, page_ordinal)` with the registered directions.
@@ -189,23 +200,25 @@ measured projection above the total fails closed.
 At 100M rows, 128 balanced leaves contain about 195,313 rows. The hard scan
 cap is 262,144 rows. A maximal query reads at most 7,340,032 row bytes, performs
 one 96-component four-bit query quantization per probed leaf and at most
-262,144 fixed 96-component bitwise/SIMD estimations, and considers at most
-8,192 page assignments in the cover. The preflight measures this complete
-kernel; no operation-count estimate substitutes for the 15-ms p99 gate. Tree
-work remains the already-measured bounded centroid subset rather than a
+3,145,728 byte-table lookups across 262,144 rows, and considers at most 8,192
+page assignments in the cover. The preflight measures this complete kernel;
+no operation-count estimate substitutes for the 15-ms p99 gate. Tree work
+remains the already-measured bounded centroid subset rather than a
 65,536-centroid scan.
 
 ## Causal falsifier
 
 One query-independent corpus stream constructs all codes. The same immutable
-code artifact then evaluates four strictly ordered controls on only burned
-development ordinals 0--31:
+code artifact then evaluates paired controls on only burned development
+ordinals 0--31:
 
 1. **exact-f16 exhaustive control**: known ceiling; must reproduce 318 oracle
    hits;
-2. **exact-f16 tree control**: isolates loss from the `32/64/128` leaf probes;
-3. **RaBitQ exhaustive control**: isolates quantization error from tree
-   pruning;
+2. **exact-f16 tree controls**: score the identical `32/64/128` ranked-leaf
+   prefixes and identical scale-normalized row heaps used by RaBitQ;
+3. **RaBitQ exhaustive diagnostic**: records the global-code ceiling but is
+   not allowed to reject a passing serving cell because a fixed global heap is
+   a much harder selection problem than a tree cell;
 4. **RaBitQ tree candidate**: the only serving candidate.
 
 Construction also emits a development-only Arrow fixed-size-list f16[96] row
@@ -214,16 +227,19 @@ and is explicitly excluded from the serving projection and production index.
 The execution process authenticates it but never exposes it to the RaBitQ
 candidate scorer.
 
-The classification is outcome-blind:
+The classification is outcome-blind and cell-paired:
 
 - exact exhaustive differs from 318: `authority-stop`;
-- exact tree fails while exact exhaustive passes: `tree-pruning-rejected`;
-- exhaustive RaBitQ fails while exact exhaustive passes:
-  `rabitq-representation-rejected`;
-- exhaustive RaBitQ passes but every tree cell fails:
-  `tree-rabitq-composition-rejected`;
-- a tree RaBitQ cell reaches the development ceiling:
+- for a probe cell, exact tree fails: `tree-pruning-rejected` for that cell;
+- exact tree passes but the paired RaBitQ tree cell fails:
+  `rabitq-estimator-rejected` for that cell;
+- any tree RaBitQ cell reaches the development ceiling:
   `development-candidate-accepted`.
+
+The exhaustive RaBitQ diagnostic is always serialized with its metrics, but it
+has no rejection precedence over a passing tree candidate. This avoids a false
+negative caused by retaining the same number of rows from all 9.99M rows rather
+than from the roughly 4.9K/9.8K/19.5K rows in a `32/64/128` development cell.
 
 No parameter may be added after opening development results. The smallest
 passing probe count wins; ties use the smallest scanned-row count and then the
@@ -238,10 +254,18 @@ cohort: 993,750 ppm aggregate recall, 900,000 ppm minimum-query recall, and
 1,000,000 ppm oracle attainment. It must also satisfy:
 
 - exactly eight selected pages;
-- at most 262,144 scored rows;
-- at most 4,096 retained rows and 8,192 page assignments;
+- at most the scale-normalized scored-row limit (26,189 at 9.99M and 262,144
+  at 100M);
+- at most the scale-normalized retained-row limit (410 at 9.99M and 4,096 at
+  100M) and twice that many page assignments;
 - projected serving bytes at most 2,920,622,772;
 - scalar/optimized selected pages exactly equal;
+- construction receipt and D2 truth bind the same index identity, page
+  namespace, and exact page count 28,282; every stored page ordinal is below
+  that count;
+- per-query requested/actual leaf counts, scored/retained rows, estimator
+  error, kernel elapsed nanoseconds, and selected pages are present and
+  independently recomputed by result validation;
 - no page-body or holdout read;
 - no nonfinite input, estimator, or score;
 - `claim_eligible=false`.
@@ -290,12 +314,16 @@ Implementation follows strict RED/GREEN slices:
 
 1. typed authority, Arrow schemas, receipts, and canonical result;
 2. deterministic rotation and RaBitQ scalar estimator;
-3. optimized scorer differential tests, including ties, zeros, subnormals,
-   nonfinite values, reversed blocks, and scan-cap rejection;
-4. bounded top-4,096 row heap and exact page-cover reuse;
+3. twelve-byte query-LUT scorer differential tests, including ties, zeros,
+   subnormals, nonfinite values, reversed blocks, every byte mask, and scalar
+   oracle agreement;
+4. scale-normalized scored/retained limits, deterministic lowest-ranked-leaf
+   truncation, bounded row heap, and exact page-cover reuse;
 5. streaming constructor with duplicate, order, digest, and interruption
    mutations;
-6. causal four-control evaluator and classification mutations;
+6. paired exact/RaBitQ tree evaluator, diagnostic exhaustive evidence,
+   classification-precedence mutations, shared serving-call-path proof,
+   per-query timing/error evidence, and D2 page/index authority mutations;
 7. phase-separated controller, cleanup, terminal, and no-holdout/no-page
    capability tests;
 8. focused gates, strict workspace Clippy, full locked workspace/all-targets,

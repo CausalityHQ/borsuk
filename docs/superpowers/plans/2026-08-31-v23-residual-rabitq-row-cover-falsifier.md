@@ -4,7 +4,7 @@
 
 **Goal:** Build a bounded, claim-ineligible residual RaBitQ row scorer that can prove or reject exact eight-page near-perfect recall before any production or D3 campaign.
 
-**Architecture:** A new prerelease Arrow index stores one 96-bit residual sign code, two f32 estimator factors, and two u32 page ordinals per row, ordered by the existing 65,536-leaf tree. Queries probe 32/64/128 leaves, score at most 262,144 rows with differential scalar/SIMD implementations, retain top 4,096 rows, and reuse the deterministic eight-page cover. Separate exact-f16 and exhaustive controls make failures causal.
+**Architecture:** A new prerelease Arrow index stores one 96-bit residual sign code, two f32 estimator factors, and two u32 page ordinals per row, ordered by the existing 65,536-leaf tree. Queries probe 32/64/128 leaves, use twelve query-specific byte lookups per row, apply row-count-normalized scan/heap limits, and reuse the deterministic eight-page cover. Paired exact-f16/RaBitQ tree cells make failures causal; the global RaBitQ scan remains diagnostic only.
 
 **Tech Stack:** Rust 2024, Arrow IPC 58.3, Parquet 58.3, serde/serde_json, blake3/SHA-256, borsuk-fma SIMD, Python 3.12, boto3, stdlib unittest, AWS EC2 Spot.
 
@@ -15,12 +15,12 @@
 - New prerelease format only: no compatibility reader, alias, migration, or fallback.
 - Bulk artifacts use Arrow IPC/Parquet; receipts and results use strict typed canonical newline JSON.
 - Serving projection is at most 2,920,622,772 bytes; hard ceiling is 3,221,225,472 bytes.
-- Exactly eight pages, at most 262,144 scored rows, 4,096 retained rows, and 8,192 page assignments.
+- Exactly eight pages. Limits scale as `ceil(262,144 * indexed_rows / 100,000,000)` scored rows and `ceil(4,096 * indexed_rows / 100,000,000)` retained rows, giving 26,189/410 at 9.99M and 262,144/4,096 at 100M; assignments are at most twice the retained limit.
 - Development opens only burned query ordinals 0--31 and must attain all 318 oracle-reachable hits.
 - Sealed holdout, if separately authorized, requires at least 991,000 aggregate ppm, 900,000 minimum-query ppm, 995,000 oracle-attainment ppm, and 15 ms resident CPU p99 over at least 10,000 raw samples.
 - Development has no page-body or holdout capability. D3 remains fenced.
 - AWS uses profile `causality`, `eu-central-1`, Spot, and immediate termination after terminal evidence.
-- SIMD is production authority; scalar is a differential oracle, never a silent serving fallback.
+- The twelve-byte query-LUT kernel is production authority; the direct 96-component scalar path is a differential oracle, never invoked as a serving fallback.
 - Preserve configured Git identity and add no AI attribution.
 
 ---
@@ -172,7 +172,7 @@ Run focused tests, fmt, and diff-check. Commit as `feat: add scalar RaBitQ quant
 
 ---
 
-### Task 4: SIMD scoring, bounded heap, and page cover
+### Task 4: Query-LUT scoring, scale-normalized heap, and page cover
 
 **Files:**
 - Create: `crates/borsuk/src/v23_rabitq_eval.rs`
@@ -182,23 +182,26 @@ Run focused tests, fmt, and diff-check. Commit as `feat: add scalar RaBitQ quant
 
 **Interfaces:**
 - Consumes tree beam ranking and `best_v23_page_coverage` without duplicating them.
-- Produces `V23RaBitQBackend`, `rank_v23_rabitq_rows`, `select_v23_rabitq_pages`, and `V23RaBitQQueryEvidence`.
+- Produces `V23RaBitQQueryTables`, `V23RaBitQBackend`, `v23_rabitq_query_limits`, `rank_v23_rabitq_rows`, `select_v23_rabitq_pages`, and `V23RaBitQQueryEvidence`.
 
-- [ ] **Step 1: Add SIMD and bound REDs**
+- [ ] **Step 1: Add LUT, differential, and scale-bound REDs**
 
-Cover x86 AVX2/FMA and aarch64 NEON fused backends, unavailable-backend stop,
-the fixed primitive-dot forward-error bound `abs(simd - scalar) <= 8 *
-f32::EPSILON * sum(abs(products))`, and exact selected-page equality on
-random/ties/zeros/subnormals/reversed blocks. Also cover nonfinite rejection,
-scan cap 262,144, heap cap 4,096, page-assignment cap 8,192, exactly eight
-unique pages, and permutation-independent cover output. Do not use raw
-distance ULP as authority because cancellation near zero makes it unstable.
+Cover all 256 masks in each of twelve byte positions, random/ties/zeros/
+subnormals/reversed blocks, invalid query quantization, and the fixed primitive
+forward-error bound against a direct 96-component scalar oracle. Prove exact
+selected-page equality. Mutation-lock the limit formula at rows 1, 9,990,000,
+99,999,999, and 100,000,000; assert exact 9.99M limits 26,189/410. Cover
+deterministic ranked-leaf-prefix truncation before overflow, actual leaf-count
+evidence, heap/assignment bounds, exactly eight unique pages, and permutation-
+independent cover output. A test must fail if scoring expands a row sign code
+to `[f32; 96]` or invokes the scalar oracle from the production row loop.
 
 ```rust
-pub(crate) enum V23RaBitQBackend { Aarch64Neon, X86Avx2Fma, ScalarControl }
+pub(crate) enum V23RaBitQBackend { QueryLut, ScalarControl }
 pub(crate) struct V23RaBitQQueryEvidence {
     pub query_ordinal: u32,
-    pub probe_count: u16,
+    pub requested_leaf_count: u16,
+    pub scanned_leaf_count: u16,
     pub scored_rows: u32,
     pub retained_rows: u16,
     pub page_assignments: u16,
@@ -206,6 +209,7 @@ pub(crate) struct V23RaBitQQueryEvidence {
     pub max_estimator_error_ppm: u64,
     pub scalar_pages_equal: bool,
     pub backend: V23RaBitQBackend,
+    pub kernel_elapsed_ns: u64,
 }
 ```
 
@@ -215,7 +219,14 @@ Run `cargo test -p borsuk --lib v23_rabitq_eval_ -- --nocapture`.
 
 - [ ] **Step 3: Implement bounded production scoring**
 
-Runtime-detect target features before entering target-feature functions. Production rejects `ScalarControl`. Maintain a max-heap of 4,096 `(distance,row_ordinal)` entries; never allocate or sort all scored rows. Make existing tree and page-cover helpers `pub(crate)` only.
+Store four-bit prepared query codes plus `minimum`, `step`, and twelve
+`[f32; 256]` byte tables. Score a row with twelve table lookups and the two
+registered reconstruction sums; do not expand the row sign code or duplicate
+the scalar computation. Maintain a max-heap sized by
+`ceil(4,096*indexed_rows/100,000,000)`; never allocate or sort all scored rows.
+Truncate the lowest-ranked leaves before exceeding
+`ceil(262,144*indexed_rows/100,000,000)`. Make existing tree and page-cover
+helpers `pub(crate)` only.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -262,7 +273,7 @@ Run focused tests, fmt, and diff-check. Commit as `feat: build RaBitQ row artifa
 
 ---
 
-### Task 6: Four-control causal evaluator and canonical result
+### Task 6: Paired causal evaluator and canonical result
 
 **Files:**
 - Modify: `crates/borsuk/src/v23_rabitq_eval.rs`
@@ -271,24 +282,38 @@ Run focused tests, fmt, and diff-check. Commit as `feat: build RaBitQ row artifa
 **Interfaces:**
 - Produces `V23RaBitQControl`, `V23RaBitQClassification`, `V23RaBitQCellResult`, `V23RaBitQScreenResult`, `evaluate_v23_rabitq_development`, and the canonical result serializer.
 
-- [ ] **Step 1: Add classification and result REDs**
+- [ ] **Step 1: Add paired classification, authority, and result REDs**
 
-Test all five classes and every `3 probe counts x 2 row scorers` serving cell. Mutate per-query selections/hits, all aggregates, scan/retain counts, backend, scalar equality, projection, authority roles/digests/URIs, source identity, claim flag, and class. Serialization independently recomputes every derivable field.
+Test `authority-stop`, per-cell `tree-pruning-rejected`, per-cell
+`rabitq-estimator-rejected`, and `development-candidate-accepted` across every
+paired exact/RaBitQ `32/64/128` cell. Explicitly prove that a failing global
+RaBitQ diagnostic cannot reject a passing tree cell. Mutate per-query
+selections/hits, aggregates, requested/actual leaves, scan/retain limits,
+kernel elapsed, estimator error, backend, scalar equality, projection,
+authority roles/digests/URIs, source identity, claim flag, and class.
+Serialization independently recomputes every derivable field.
 
 ```rust
 pub(crate) enum V23RaBitQControl { ExactExhaustive, ExactTree, RaBitQExhaustive, RaBitQTree }
 pub(crate) enum V23RaBitQClassification {
     AuthorityStop,
     TreePruningRejected,
-    RaBitQRepresentationRejected,
-    TreeRaBitQCompositionRejected,
+    RaBitQEstimatorRejected,
     DevelopmentCandidateAccepted,
 }
 ```
 
 - [ ] **Step 2: Run RED, implement, and run GREEN**
 
-Run `cargo test -p borsuk --lib v23_rabitq_screen_ -- --nocapture`. Implement exact precedence from the spec. Acceptance is exactly 318 oracle hits, 993,750 aggregate ppm, 900,000 minimum ppm, 1,000,000 oracle attainment, plus all resource and determinism gates.
+Run `cargo test -p borsuk --lib v23_rabitq_screen_ -- --nocapture`. Implement
+exact precedence from the spec. Route both evaluator and public local runner
+through `select_v23_rabitq_pages`; a call-counter test must fail if the
+evaluator contains a second serving algorithm. Bind construction receipt and
+D2 truth to the same index identity, page namespace, and exact 28,282-page
+count, reject every out-of-range stored ordinal, and release authenticated
+encoded byte buffers before timing. Acceptance is exactly 318 oracle hits,
+993,750 aggregate ppm, 900,000 minimum ppm, 1,000,000 oracle attainment, plus
+all resource and determinism gates.
 
 - [ ] **Step 3: Verify and commit**
 
@@ -371,6 +396,12 @@ Run the three focused gates, grouped `v23_rabitq_`, fmt, pinned Ruff 0.15.20, py
 - [ ] **Step 1: Run focused affected gates**
 
 Run `cargo test -p borsuk --lib v23_rabitq_ -- --nocapture`, the example selector, and both Python modules. Keep heavy processes strictly serial.
+
+Before this grouped gate, require focused tests for exact 9.99M scale limits,
+ranked-leaf truncation, all twelve LUT byte positions, scalar differential
+agreement, global-diagnostic precedence, shared serving-call-path use, D2
+page/index binding, encoded-buffer release, and complete per-query timing/error
+serialization.
 
 - [ ] **Step 2: Run full assurance once**
 
