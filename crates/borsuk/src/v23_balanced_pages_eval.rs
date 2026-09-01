@@ -827,8 +827,25 @@ pub(crate) fn evaluate_v23_balanced_pseudoquery_pair(
     samples: &[V23BalancedSample],
     geometry: &V23BalancedServingGeometry,
 ) -> Result<V23BalancedPseudoqueryPair> {
+    evaluate_v23_balanced_pseudoquery_pair_for_expected_count(
+        selected_pair,
+        samples,
+        geometry,
+        1_024,
+    )
+}
+
+fn evaluate_v23_balanced_pseudoquery_pair_for_expected_count(
+    selected_pair: V23BalancedSelectedPair,
+    samples: &[V23BalancedSample],
+    geometry: &V23BalancedServingGeometry,
+    expected_count: usize,
+) -> Result<V23BalancedPseudoqueryPair> {
     let page_budget = V23BalancedPageBudget::new(selected_pair.page_budget.get())?;
-    if samples.len() != 1_024 || geometry.selected_arm != selected_pair.arm {
+    if expected_count == 0
+        || samples.len() != expected_count
+        || geometry.selected_arm != selected_pair.arm
+    {
         return Err(invalid("pseudoquery pair cohort cardinality differs"));
     }
     let mut selector_hits = 0_u64;
@@ -857,10 +874,14 @@ pub(crate) fn evaluate_v23_balanced_pseudoquery_pair(
         minimum_hits = minimum_hits.min(sample.selector_hits);
         maximum_scored_dimensions = maximum_scored_dimensions.max(sample.scored_dimensions);
     }
+    let possible_hits = u64::try_from(expected_count)
+        .ok()
+        .and_then(|count| count.checked_mul(10))
+        .ok_or_else(|| invalid("pseudoquery pair cohort cardinality overflows"))?;
     let aggregate_recall_ppm = selector_hits
         .checked_mul(1_000_000)
         .ok_or_else(|| invalid("pseudoquery pair aggregate recall overflows"))?
-        / 10_240;
+        / possible_hits;
     let oracle_attainment_ppm = selector_hits
         .checked_mul(1_000_000)
         .ok_or_else(|| invalid("pseudoquery pair oracle attainment overflows"))?
@@ -1100,7 +1121,8 @@ mod tests {
         V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryPair, V23BalancedResult,
         V23BalancedSample, V23BalancedTimingEvidence, build_v23_balanced_sample,
         canonical_v23_balanced_result_bytes, evaluate_v23_balanced_development,
-        evaluate_v23_balanced_pseudoquery_pair, evaluate_v23_balanced_sample,
+        evaluate_v23_balanced_pseudoquery_pair,
+        evaluate_v23_balanced_pseudoquery_pair_for_expected_count, evaluate_v23_balanced_sample,
         measure_v23_balanced_selector, prepare_v23_balanced_serving_geometry,
         select_v23_balanced_pages, select_v23_balanced_pair,
     };
@@ -1376,6 +1398,40 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn v23_balanced_eval_pair_recomputes_reduced_cohort_for_ladder_integration() {
+        let geometry = valid_geometry();
+        let mut query = [0.0_f32; 96];
+        query[0] = 1.0;
+        let budget = V23BalancedPageBudget::new(8).unwrap();
+        let samples = (0_u32..8)
+            .map(|query_index| {
+                build_v23_balanced_sample(
+                    query_index,
+                    &query,
+                    (0_u32..10).map(|rank| vec![rank % 9]).collect(),
+                    &geometry,
+                    budget,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let pair = evaluate_v23_balanced_pseudoquery_pair_for_expected_count(
+            V23BalancedSelectedPair {
+                page_budget: budget,
+                arm: V23BalancedArm::Amp1250,
+            },
+            &samples,
+            &geometry,
+            8,
+        )
+        .unwrap();
+        assert_eq!(pair.aggregate_recall_ppm, 900_000);
+        assert_eq!(pair.minimum_recall_ppm, 900_000);
+        assert_eq!(pair.oracle_attainment_ppm, 1_000_000);
+        assert_eq!(pair.projected_page_bytes, 8 * 122_880);
     }
 
     #[test]
