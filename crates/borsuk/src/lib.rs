@@ -165,6 +165,11 @@ mod v23_rabitq_quantizer;
 mod v24_witness;
 #[allow(
     dead_code,
+    reason = "V24 witness evaluation is wired incrementally by the committed plan"
+)]
+mod v24_witness_eval;
+#[allow(
+    dead_code,
     reason = "V24 witness graph is wired incrementally by the committed plan"
 )]
 mod v24_witness_graph;
