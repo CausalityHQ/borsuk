@@ -183,9 +183,21 @@ pub(crate) fn read_v23_incidence_d2_authority(bytes: &[u8]) -> Result<V23Inciden
     })
 }
 
-pub(crate) fn read_v23_incidence_holdout_neighbors(bytes: &[u8]) -> Result<Vec<(u32, Vec<u64>)>> {
+fn read_v23_incidence_neighbor_cohort(
+    bytes: &[u8],
+    first_ordinal: u32,
+    count: usize,
+) -> Result<Vec<(u32, Vec<u64>)>> {
     const PHYSICAL_ROWS: i64 = 10_000;
     const TRAIN_ROWS: i32 = 9_990_000;
+    let end_ordinal = first_ordinal
+        .checked_add(
+            u32::try_from(count).map_err(|_| invalid("V23 incidence neighbor cohort differs"))?,
+        )
+        .ok_or_else(|| invalid("V23 incidence neighbor cohort differs"))?;
+    if count == 0 || end_ordinal > u32::try_from(PHYSICAL_ROWS).unwrap() {
+        return Err(invalid("V23 incidence neighbor cohort differs"));
+    }
     let expected_schema = Schema::new(vec![Field::new(
         "neighbors_id",
         DataType::FixedSizeList(Arc::new(Field::new("element", DataType::Int32, false)), 100),
@@ -197,7 +209,7 @@ pub(crate) fn read_v23_incidence_holdout_neighbors(bytes: &[u8]) -> Result<Vec<(
     {
         return Err(invalid("V23 incidence neighbor Parquet schema differs"));
     }
-    let mut selected = Vec::with_capacity(128);
+    let mut selected = Vec::with_capacity(count);
     let mut physical_row = 0_u32;
     for batch in builder.build()? {
         let batch = batch?;
@@ -235,7 +247,7 @@ pub(crate) fn read_v23_incidence_holdout_neighbors(bytes: &[u8]) -> Result<Vec<(
             if ids.iter().copied().collect::<BTreeSet<_>>().len() != 100 {
                 return Err(invalid("V23 incidence neighbor IDs are not unique"));
             }
-            if (32..160).contains(&physical_row) {
+            if (first_ordinal..end_ordinal).contains(&physical_row) {
                 selected.push((physical_row, ids));
             }
             physical_row = physical_row
@@ -243,10 +255,20 @@ pub(crate) fn read_v23_incidence_holdout_neighbors(bytes: &[u8]) -> Result<Vec<(
                 .ok_or_else(|| invalid("V23 incidence neighbor row count overflows"))?;
         }
     }
-    if physical_row != PHYSICAL_ROWS as u32 || selected.len() != 128 {
+    if physical_row != PHYSICAL_ROWS as u32 || selected.len() != count {
         return Err(invalid("V23 incidence neighbor row count differs"));
     }
     Ok(selected)
+}
+
+pub(crate) fn read_v23_incidence_development_neighbors(
+    bytes: &[u8],
+) -> Result<Vec<(u32, Vec<u64>)>> {
+    read_v23_incidence_neighbor_cohort(bytes, 0, 32)
+}
+
+pub(crate) fn read_v23_incidence_holdout_neighbors(bytes: &[u8]) -> Result<Vec<(u32, Vec<u64>)>> {
+    read_v23_incidence_neighbor_cohort(bytes, 32, 128)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2495,10 +2517,11 @@ mod tests {
         evaluate_v23_incidence_development_screen_test_shape,
         measure_v23_incidence_evaluation_preflight, measure_v23_incidence_latency,
         project_v23_incidence_serving_bytes, rank_incidence_leaves, rank_incidence_leaves_scalar,
-        read_v23_incidence_development_queries, read_v23_incidence_development_truth,
-        read_v23_incidence_holdout_neighbors, read_v23_incidence_holdout_queries,
-        recompute_v23_incidence_layout_quality, recompute_v23_incidence_quality,
-        score_incidence_query, score_incidence_query_native, v23_incidence_latency_p99_ns,
+        read_v23_incidence_development_neighbors, read_v23_incidence_development_queries,
+        read_v23_incidence_development_truth, read_v23_incidence_holdout_neighbors,
+        read_v23_incidence_holdout_queries, recompute_v23_incidence_layout_quality,
+        recompute_v23_incidence_quality, score_incidence_query, score_incidence_query_native,
+        v23_incidence_latency_p99_ns,
     };
     use crate::{
         v23_incidence_postings::{
@@ -3022,6 +3045,21 @@ mod tests {
         assert_eq!(neighbors[127].1, (15_900..16_000).collect::<Vec<_>>());
         assert!(read_v23_incidence_holdout_neighbors(&neighbor_parquet("item", 100)).is_err());
         assert!(read_v23_incidence_holdout_neighbors(&neighbor_parquet("element", 99)).is_err());
+    }
+
+    #[test]
+    fn v23_incidence_eval_reads_exact_development_neighbor_rows_and_physical_schema() {
+        let bytes = neighbor_parquet("element", 100);
+        let neighbors = read_v23_incidence_development_neighbors(&bytes).unwrap();
+        assert_eq!(neighbors.len(), 32);
+        assert_eq!(neighbors[0].0, 0);
+        assert_eq!(neighbors[0].1, (0..100).collect::<Vec<_>>());
+        assert_eq!(neighbors[31].0, 31);
+        assert_eq!(neighbors[31].1, (3_100..3_200).collect::<Vec<_>>());
+        assert!(read_v23_incidence_development_neighbors(&neighbor_parquet("item", 100)).is_err());
+        assert!(
+            read_v23_incidence_development_neighbors(&neighbor_parquet("element", 99)).is_err()
+        );
     }
 
     #[test]
