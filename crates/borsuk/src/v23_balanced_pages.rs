@@ -14,12 +14,17 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     BorsukError, Result,
-    v23_balanced_pages_arrow::{write_v23_pages, write_v23_supercells},
+    v23_balanced_pages_arrow::{
+        read_v23_row_page_assignments, write_v23_pages, write_v23_supercells,
+    },
     v23_balanced_pages_build::{
         V23PageBuildShape, V23PrimaryPageBuild, V23ReplicaArmBuild, V23ReplicaArmOutput,
         V23ReplicaBuildInputs, V23RoutedRow, build_v23_primary_pages, build_v23_replica_arms,
     },
-    v23_balanced_pages_eval::{V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryEvidence},
+    v23_balanced_pages_eval::{
+        V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryEvidence, V23BalancedSample,
+        build_v23_balanced_sample, prepare_v23_balanced_serving_geometry,
+    },
     v23_balanced_pages_train::{
         V23BalancedTrainingRow, V23SupercellModel, route_v23_supercell_beam2,
         sample_v23_balanced_reservoir, train_v23_balanced_tree,
@@ -1018,6 +1023,87 @@ pub(crate) fn write_v23_balanced_construction_outputs(
     Ok(identities)
 }
 
+pub(crate) fn build_v23_balanced_pseudoquery_samples(
+    primary: &V23BalancedPrimaryConstruction,
+    replica: &V23ReplicaArmBuild,
+    assignment_path: &Path,
+    page_budget: V23BalancedPageBudget,
+) -> Result<Vec<V23BalancedSample>> {
+    let selected_arm = match replica.config.name.as_str() {
+        "amp-1125" if replica.config == expected_arms()[0] => V23BalancedArm::Amp1125,
+        "amp-1250" if replica.config == expected_arms()[1] => V23BalancedArm::Amp1250,
+        "amp-1500" if replica.config == expected_arms()[2] => V23BalancedArm::Amp1500,
+        _ => return Err(invalid("pseudoquery arm authority differs")),
+    };
+    let queries = primary.model.pseudoqueries();
+    let evidence = &primary.pseudoquery_evidence;
+    if queries.is_empty()
+        || queries.len() != evidence.len()
+        || queries.iter().zip(evidence).any(|(query, sample)| {
+            query.0 != sample.query_source_ordinal
+                || sample.scored_dimensions == 0
+                || sample.scalar_control_dimensions != 10 * DIMENSIONS
+                || !sample.scalar_simd_equal
+                || sample
+                    .neighbor_source_ordinals
+                    .contains(&sample.query_source_ordinal)
+                || sample
+                    .neighbor_source_ordinals
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    != 10
+        })
+    {
+        return Err(invalid("pseudoquery evidence authority differs"));
+    }
+    let requested = evidence
+        .iter()
+        .flat_map(|sample| sample.neighbor_source_ordinals)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let page_count = u32::try_from(replica.pages.len())
+        .map_err(|_| invalid("pseudoquery page count overflows"))?;
+    let requested_assignments = read_v23_row_page_assignments(
+        assignment_path,
+        &replica.row_pages,
+        &replica.row_pages.role,
+        page_count,
+        &requested,
+    )?;
+    let geometry = prepare_v23_balanced_serving_geometry(
+        &primary.primary.supercells,
+        &replica.pages,
+        selected_arm,
+    )?;
+    queries
+        .iter()
+        .zip(evidence)
+        .enumerate()
+        .map(|(query_index, (query, sample))| {
+            let truth = sample
+                .neighbor_source_ordinals
+                .iter()
+                .map(|source_ordinal| {
+                    let index = requested
+                        .binary_search(source_ordinal)
+                        .map_err(|_| invalid("pseudoquery neighbor assignment is missing"))?;
+                    Ok(requested_assignments[index].clone())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            build_v23_balanced_sample(
+                u32::try_from(query_index).map_err(|_| invalid("pseudoquery index overflows"))?,
+                &query.1,
+                truth,
+                &geometry,
+                page_budget,
+            )
+        })
+        .collect()
+}
+
 #[doc(hidden)]
 pub fn run_v23_balanced_local_request(request: V23BalancedLocalRequest) -> Result<Vec<u8>> {
     if !request.manifest.is_absolute()
@@ -1166,10 +1252,11 @@ mod tests {
         V23BalancedLocalRequest, V23BalancedManifest, V23BalancedPageBudget,
         V23BalancedPrimaryConstructionRequest, V23BalancedReceipt,
         V23BalancedReplicaConstructionRequest, V23BalancedSelectedPair, V23BalancedStop,
-        build_v23_balanced_primary, build_v23_balanced_replicas,
-        canonical_v23_balanced_receipt_bytes, expected_output_roles, project_v23_balanced_shape,
-        read_v23_balanced_f16_rows, route_v23_balanced_corpus, run_v23_balanced_local_request,
-        validate_v23_balanced_manifest, write_v23_balanced_construction_outputs,
+        build_v23_balanced_primary, build_v23_balanced_pseudoquery_samples,
+        build_v23_balanced_replicas, canonical_v23_balanced_receipt_bytes, expected_output_roles,
+        project_v23_balanced_shape, read_v23_balanced_f16_rows, route_v23_balanced_corpus,
+        run_v23_balanced_local_request, validate_v23_balanced_manifest,
+        write_v23_balanced_construction_outputs,
     };
     use crate::{
         v23_balanced_pages_build::V23ReplicaArmOutput,
@@ -1818,5 +1905,19 @@ mod tests {
                 .len(),
             10
         );
+
+        let samples = build_v23_balanced_pseudoquery_samples(
+            &primary,
+            &replicas[0],
+            &output_directory.join("row-pages-amp-1125.parquet"),
+            V23BalancedPageBudget::new(8).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(samples.len(), 8);
+        assert!(samples.iter().all(|sample| {
+            sample.ground_truth_page_assignments.len() == 10
+                && sample.selected_pages.len() == 8
+                && sample.containment_page_universe.len() >= 8
+        }));
     }
 }
