@@ -58,6 +58,7 @@ class V24ReducedSpotTests(unittest.TestCase):
         self.assertLess(script.index("worker.log\nlog_published=1"), script.index("COMPLETE.json"))
         self.assertIn("shutdown --poweroff +150", script)
         self.assertIn("trap - EXIT\n  set +e", script)
+        self.assertEqual(script.count('encode()+b"\\n")'), 2)
         self.assertIn("RAYON_NUM_THREADS", script)
         self.assertNotIn("ldd", script)
         self.assertNotIn("mount ", script)

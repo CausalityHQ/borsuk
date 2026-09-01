@@ -228,7 +228,7 @@ finish() {{
 import json,sys
 path,run_id,commit,binary_sha256,instance_id,status=sys.argv[1:]
 value={{"binary_sha256":binary_sha256,"claim_eligible":False,"instance_id":instance_id,"run_id":run_id,"schema":"borsuk-v24-reduced-spot-terminal-v1","source_commit":commit,"status":"failed","worker_counts":[1,4],"worker_status":int(status)}}
-open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\n")
+open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\\n")
 PY
     sync "$root/worker.log"
     if [[ "$log_published" -eq 0 ]]; then
@@ -274,7 +274,7 @@ python3 - "$root/COMPLETE.json" "$run_id" "$source_commit" "$binary_sha256" "$in
 import json,sys
 path,run_id,commit,binary_sha256,instance_id,digest,length=sys.argv[1:]
 value={{"binary_sha256":binary_sha256,"claim_eligible":False,"instance_id":instance_id,"preflight_receipt_bytes":int(length),"preflight_receipt_sha256":digest,"run_id":run_id,"schema":"borsuk-v24-reduced-spot-terminal-v1","source_commit":commit,"status":"complete","worker_counts":[1,4]}}
-open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\n")
+open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\\n")
 PY
 put_once "$root/COMPLETE.json" COMPLETE.json
 terminal=complete
