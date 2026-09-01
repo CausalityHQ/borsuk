@@ -15,7 +15,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     BorsukError, Result,
     v23_balanced_pages_build::{
-        V23PageBuildShape, V23PrimaryPageBuild, V23RoutedRow, build_v23_primary_pages,
+        V23PageBuildShape, V23PrimaryPageBuild, V23ReplicaArmBuild, V23ReplicaArmOutput,
+        V23ReplicaBuildInputs, V23RoutedRow, build_v23_primary_pages, build_v23_replica_arms,
     },
     v23_balanced_pages_eval::{V23BalancedPseudoqueryAccumulator, V23BalancedPseudoqueryEvidence},
     v23_balanced_pages_train::{
@@ -699,6 +700,48 @@ where
     }
 }
 
+pub(crate) struct V23BalancedRoutePass<'a, I> {
+    rows: I,
+    model: &'a V23SupercellModel,
+}
+
+impl<I> Iterator for V23BalancedRoutePass<'_, I>
+where
+    I: Iterator<Item = Result<V23BalancedTrainingRow>>,
+{
+    type Item = Result<V23RoutedRow>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let row = match self.rows.next()? {
+            Ok(row) => row,
+            Err(error) => return Some(Err(error)),
+        };
+        Some(
+            route_v23_supercell_beam2(self.model, &row.vector, row.source_ordinal).map(|routed| {
+                V23RoutedRow {
+                    supercell_ordinal: routed.primary_supercell,
+                    runner_up_supercell_ordinal: routed.runner_up_supercell,
+                    source_ordinal: row.source_ordinal,
+                    vector: row.vector,
+                }
+            }),
+        )
+    }
+}
+
+pub(crate) fn route_v23_balanced_rows<'a, R>(
+    rows: R,
+    model: &'a V23SupercellModel,
+) -> V23BalancedRoutePass<'a, R::IntoIter>
+where
+    R: IntoIterator<Item = Result<V23BalancedTrainingRow>>,
+{
+    V23BalancedRoutePass {
+        rows: rows.into_iter(),
+        model,
+    }
+}
+
 pub(crate) struct V23BalancedPrimaryConstructionRequest<'a> {
     pub(crate) corpus: &'a Path,
     pub(crate) rows: u64,
@@ -718,6 +761,17 @@ pub(crate) struct V23BalancedPrimaryConstruction {
     pub(crate) model: V23SupercellModel,
     pub(crate) primary: V23PrimaryPageBuild,
     pub(crate) pseudoquery_evidence: Vec<V23BalancedPseudoqueryEvidence>,
+}
+
+pub(crate) struct V23BalancedReplicaConstructionRequest<'a> {
+    pub(crate) corpus: &'a Path,
+    pub(crate) rows: u64,
+    pub(crate) model: &'a V23SupercellModel,
+    pub(crate) primary_path: &'a Path,
+    pub(crate) primary: &'a V23PrimaryPageBuild,
+    pub(crate) outputs: &'a [V23ReplicaArmOutput],
+    pub(crate) scratch: &'a Path,
+    pub(crate) run_rows: usize,
 }
 
 pub(crate) fn build_v23_balanced_primary(
@@ -770,6 +824,28 @@ pub(crate) fn build_v23_balanced_primary(
         primary,
         pseudoquery_evidence,
     })
+}
+
+pub(crate) fn build_v23_balanced_replicas(
+    request: V23BalancedReplicaConstructionRequest<'_>,
+) -> Result<Vec<V23ReplicaArmBuild>> {
+    build_v23_replica_arms(
+        || {
+            Ok(route_v23_balanced_rows(
+                read_v23_balanced_f16_rows(request.corpus, request.rows)?,
+                request.model,
+            ))
+        },
+        V23ReplicaBuildInputs {
+            primary_path: request.primary_path,
+            primary_identity: &request.primary.row_pages,
+            supercells: &request.primary.supercells,
+            pages: &request.primary.pages,
+        },
+        request.outputs,
+        request.scratch,
+        request.run_rows,
+    )
 }
 
 #[doc(hidden)]
@@ -911,11 +987,13 @@ mod tests {
     use super::{
         V23BalancedArmConfig, V23BalancedIdentity, V23BalancedLocalMode, V23BalancedLocalRequest,
         V23BalancedManifest, V23BalancedPrimaryConstructionRequest, V23BalancedReceipt,
-        V23BalancedStop, build_v23_balanced_primary, canonical_v23_balanced_receipt_bytes,
-        expected_output_roles, project_v23_balanced_shape, read_v23_balanced_f16_rows,
-        route_v23_balanced_corpus, run_v23_balanced_local_request, validate_v23_balanced_manifest,
+        V23BalancedReplicaConstructionRequest, V23BalancedStop, build_v23_balanced_primary,
+        build_v23_balanced_replicas, canonical_v23_balanced_receipt_bytes, expected_output_roles,
+        project_v23_balanced_shape, read_v23_balanced_f16_rows, route_v23_balanced_corpus,
+        run_v23_balanced_local_request, validate_v23_balanced_manifest,
     };
     use crate::{
+        v23_balanced_pages_build::V23ReplicaArmOutput,
         v23_balanced_pages_eval::V23BalancedPseudoqueryAccumulator,
         v23_balanced_pages_train::{V23BalancedTrainingRow, train_v23_balanced_tree},
     };
@@ -1435,5 +1513,81 @@ mod tests {
         assert_eq!(built.model.pseudoqueries().len(), 8);
         assert!(output.is_file());
         assert!(scratch.read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn v23_balanced_local_replica_pipeline_replays_corpus_for_all_exact_arms() {
+        let directory = tempfile::tempdir().unwrap();
+        let corpus = directory.path().join("f16-control.arrow");
+        let primary_scratch = directory.path().join("primary-scratch");
+        let replica_scratch = directory.path().join("replica-scratch");
+        let primary_output = directory.path().join("row-pages-primary.parquet");
+        fs::create_dir(&primary_scratch).unwrap();
+        fs::create_dir(&replica_scratch).unwrap();
+        let rows = (0_u64..64)
+            .map(|source_ordinal| {
+                let cluster = usize::try_from(source_ordinal % 8).unwrap();
+                let mut vector = [f16::ZERO; 96];
+                vector[cluster] = f16::ONE;
+                vector[8 + cluster] = f16::from_f32(0.25 + source_ordinal as f32 * 0.0001);
+                vector
+            })
+            .collect::<Vec<_>>();
+        write_f16_rows(&corpus, "element", &rows);
+        let primary = build_v23_balanced_primary(V23BalancedPrimaryConstructionRequest {
+            corpus: &corpus,
+            rows: 64,
+            reservoir_rows: 64,
+            pseudoquery_rows: 8,
+            supercells: 2,
+            primary_rows_per_page: 4,
+            seed: 0x1234_5678,
+            workers: 2,
+            run_rows: 7,
+            scratch: &primary_scratch,
+            row_pages_output: &primary_output,
+            row_pages_uri: "s3://borsuk-v23-eu-west-1/reduced/row-pages-primary.parquet",
+        })
+        .unwrap();
+        let outputs = [
+            ("amp-1125", 1_125_000, 48_u16),
+            ("amp-1250", 1_250_000, 96_u16),
+            ("amp-1500", 1_500_000, 192_u16),
+        ]
+        .map(
+            |(name, amplification_ppm, replicas_per_page)| V23ReplicaArmOutput {
+                config: V23BalancedArmConfig {
+                    name: name.to_owned(),
+                    amplification_ppm,
+                    replicas_per_page,
+                },
+                row_pages_path: directory.path().join(format!("row-pages-{name}.parquet")),
+                row_pages_uri: format!(
+                    "s3://borsuk-v23-eu-west-1/reduced/row-pages-{name}.parquet"
+                ),
+            },
+        );
+
+        let replicas = build_v23_balanced_replicas(V23BalancedReplicaConstructionRequest {
+            corpus: &corpus,
+            rows: 64,
+            model: &primary.model,
+            primary_path: &primary_output,
+            primary: &primary.primary,
+            outputs: &outputs,
+            scratch: &replica_scratch,
+            run_rows: 7,
+        })
+        .unwrap();
+
+        assert_eq!(
+            replicas
+                .iter()
+                .map(|arm| arm.replica_rows)
+                .collect::<Vec<_>>(),
+            [8, 16, 32]
+        );
+        assert!(outputs.iter().all(|output| output.row_pages_path.is_file()));
+        assert!(replica_scratch.read_dir().unwrap().next().is_none());
     }
 }
