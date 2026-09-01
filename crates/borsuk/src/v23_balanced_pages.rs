@@ -1147,6 +1147,115 @@ pub(crate) struct V23BalancedPseudoqueryLadder {
     pub(crate) selected: Option<V23BalancedSelectedPairEvidence>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V23BalancedConstructionShape {
+    pub(crate) rows: u64,
+    pub(crate) reservoir_rows: usize,
+    pub(crate) pseudoquery_rows: usize,
+    pub(crate) supercells: u32,
+    pub(crate) primary_rows_per_page: u16,
+    pub(crate) seed: u64,
+    pub(crate) workers: usize,
+    pub(crate) run_rows: usize,
+}
+
+pub(crate) struct V23BalancedLocalConstruction {
+    pub(crate) primary: V23BalancedPrimaryConstruction,
+    pub(crate) replicas: Vec<V23ReplicaArmBuild>,
+    pub(crate) assignment_paths: [PathBuf; 3],
+    pub(crate) outputs: Vec<V23BalancedIdentity>,
+    pub(crate) ladder: V23BalancedPseudoqueryLadder,
+}
+
+pub(crate) fn build_v23_balanced_local_construction_for_shape(
+    corpus: &Path,
+    output_directory: &Path,
+    output_uri_prefix: &str,
+    shape: V23BalancedConstructionShape,
+) -> Result<V23BalancedLocalConstruction> {
+    empty_directory(output_directory, "construction output")?;
+    let scratch = output_directory.join(".scratch");
+    let primary_scratch = scratch.join("primary");
+    let replica_scratch = scratch.join("replica");
+    fs::create_dir(&scratch).map_err(|source| BorsukError::Io {
+        path: scratch.clone(),
+        source,
+    })?;
+    fs::create_dir(&primary_scratch).map_err(|source| BorsukError::Io {
+        path: primary_scratch.clone(),
+        source,
+    })?;
+    fs::create_dir(&replica_scratch).map_err(|source| BorsukError::Io {
+        path: replica_scratch.clone(),
+        source,
+    })?;
+    let primary_assignment = output_directory.join("row-pages-primary.parquet");
+    let primary = build_v23_balanced_primary(V23BalancedPrimaryConstructionRequest {
+        corpus,
+        rows: shape.rows,
+        reservoir_rows: shape.reservoir_rows,
+        pseudoquery_rows: shape.pseudoquery_rows,
+        supercells: shape.supercells,
+        primary_rows_per_page: shape.primary_rows_per_page,
+        seed: shape.seed,
+        workers: shape.workers,
+        run_rows: shape.run_rows,
+        scratch: &primary_scratch,
+        row_pages_output: &primary_assignment,
+        row_pages_uri: &format!("{output_uri_prefix}row-pages-primary.parquet"),
+    })?;
+    let arm_outputs = expected_arms().map(|config| {
+        let basename = format!("row-pages-{}.parquet", config.name);
+        V23ReplicaArmOutput {
+            config,
+            row_pages_path: output_directory.join(&basename),
+            row_pages_uri: format!("{output_uri_prefix}{basename}"),
+        }
+    });
+    let replicas = build_v23_balanced_replicas(V23BalancedReplicaConstructionRequest {
+        corpus,
+        rows: shape.rows,
+        model: &primary.model,
+        primary_path: &primary_assignment,
+        primary: &primary.primary,
+        outputs: &arm_outputs,
+        scratch: &replica_scratch,
+        run_rows: shape.run_rows,
+    })?;
+    fs::remove_dir(&primary_scratch).map_err(|source| BorsukError::Io {
+        path: primary_scratch,
+        source,
+    })?;
+    fs::remove_dir(&replica_scratch).map_err(|source| BorsukError::Io {
+        path: replica_scratch,
+        source,
+    })?;
+    fs::remove_dir(&scratch).map_err(|source| BorsukError::Io {
+        path: scratch,
+        source,
+    })?;
+    let outputs = write_v23_balanced_construction_outputs(
+        output_directory,
+        output_uri_prefix,
+        &primary,
+        &replicas,
+    )?;
+    let assignment_paths = arm_outputs.map(|output| output.row_pages_path);
+    let ladder = evaluate_v23_balanced_pseudoquery_ladder_for_expected_count(
+        &primary,
+        &replicas,
+        &assignment_paths,
+        shape.pseudoquery_rows,
+    )?;
+    Ok(V23BalancedLocalConstruction {
+        primary,
+        replicas,
+        assignment_paths,
+        outputs,
+        ladder,
+    })
+}
+
 pub(crate) fn evaluate_v23_balanced_pseudoquery_ladder(
     primary: &V23BalancedPrimaryConstruction,
     replicas: &[V23ReplicaArmBuild],
@@ -1373,12 +1482,13 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        V23BalancedArm, V23BalancedArmConfig, V23BalancedIdentity, V23BalancedLocalMode,
-        V23BalancedLocalRequest, V23BalancedManifest, V23BalancedPageBudget,
+        V23BalancedArm, V23BalancedArmConfig, V23BalancedConstructionShape, V23BalancedIdentity,
+        V23BalancedLocalMode, V23BalancedLocalRequest, V23BalancedManifest, V23BalancedPageBudget,
         V23BalancedPrimaryConstructionRequest, V23BalancedReceipt,
         V23BalancedReplicaConstructionRequest, V23BalancedSelectedPair, V23BalancedStop,
-        build_v23_balanced_primary, build_v23_balanced_pseudoquery_samples,
-        build_v23_balanced_replicas, canonical_v23_balanced_receipt_bytes,
+        build_v23_balanced_local_construction_for_shape, build_v23_balanced_primary,
+        build_v23_balanced_pseudoquery_samples, build_v23_balanced_replicas,
+        canonical_v23_balanced_receipt_bytes,
         evaluate_v23_balanced_pseudoquery_ladder_for_expected_count, expected_output_roles,
         project_v23_balanced_shape, read_v23_balanced_f16_rows, route_v23_balanced_corpus,
         run_v23_balanced_local_request, validate_v23_balanced_manifest,
@@ -2130,5 +2240,46 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn v23_balanced_local_construction_runs_once_and_preserves_complete_ladder() {
+        let directory = tempfile::tempdir().unwrap();
+        let corpus = directory.path().join("f16-control.arrow");
+        let output = directory.path().join("output");
+        fs::create_dir(&output).unwrap();
+        let rows = (0_u64..64)
+            .map(|source_ordinal| {
+                let cluster = usize::try_from(source_ordinal % 8).unwrap();
+                let mut vector = [f16::ZERO; 96];
+                vector[cluster] = f16::ONE;
+                vector[8 + cluster] = f16::from_f32(0.25 + source_ordinal as f32 * 0.0001);
+                vector
+            })
+            .collect::<Vec<_>>();
+        write_f16_rows(&corpus, "element", &rows);
+
+        let construction = build_v23_balanced_local_construction_for_shape(
+            &corpus,
+            &output,
+            "s3://borsuk-v23-eu-west-1/reduced/",
+            V23BalancedConstructionShape {
+                rows: 64,
+                reservoir_rows: 64,
+                pseudoquery_rows: 8,
+                supercells: 2,
+                primary_rows_per_page: 4,
+                seed: 0x1234_5678,
+                workers: 2,
+                run_rows: 7,
+            },
+        )
+        .unwrap();
+        assert_eq!(construction.outputs.len(), 10);
+        assert_eq!(construction.ladder.pairs.len(), 9);
+        assert_eq!(construction.primary.primary.source_rows, 64);
+        assert_eq!(construction.replicas.len(), 3);
+        assert!(!output.join(".scratch").exists());
+        assert_eq!(output.read_dir().unwrap().count(), 10);
     }
 }
