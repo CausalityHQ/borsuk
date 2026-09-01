@@ -86,6 +86,11 @@ mod v21_feasibility;
     reason = "V22 feasibility components are wired incrementally by the committed plan"
 )]
 mod v22_feasibility;
+#[allow(
+    dead_code,
+    reason = "V23 balanced-page components are wired incrementally by the committed plan"
+)]
+mod v23_balanced_pages;
 mod v23_diagnostic;
 #[allow(
     dead_code,
