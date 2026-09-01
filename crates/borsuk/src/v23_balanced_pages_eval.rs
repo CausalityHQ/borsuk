@@ -210,7 +210,7 @@ fn best_v23_balanced_page_coverage(
     if truth_assignments.is_empty()
         || truth_assignments.len() > 10
         || maximum_pages == 0
-        || maximum_pages > 16
+        || maximum_pages > 64
         || truth_assignments.iter().any(|pages| {
             pages.is_empty() || pages.len() > 2 || pages.windows(2).any(|pair| pair[0] >= pair[1])
         })
@@ -1405,17 +1405,17 @@ mod tests {
     }
 
     #[test]
-    fn v23_balanced_eval_sample_uses_the_frozen_page_budget_for_every_control() {
+    fn v23_balanced_eval_sample_supports_the_registered_max_page_budget() {
         let sample = evaluate_v23_balanced_sample(
             0,
             (0_u32..10).map(|page| vec![page]).collect(),
-            (0_u32..16).collect(),
-            (0_u32..16).collect(),
+            (0_u32..64).collect(),
+            (0_u32..64).collect(),
             1_376_256,
-            V23BalancedPageBudget::new(16).unwrap(),
+            V23BalancedPageBudget::new(64).unwrap(),
         )
         .unwrap();
-        assert_eq!(sample.selected_pages.len(), 16);
+        assert_eq!(sample.selected_pages.len(), 64);
         assert_eq!(sample.layout_oracle_hits, 10);
         assert_eq!(sample.containment_hits, 10);
         assert_eq!(sample.selector_hits, 10);
@@ -1427,7 +1427,7 @@ mod tests {
                 sample.containment_page_universe,
                 (0_u32..8).collect(),
                 1_376_256,
-                V23BalancedPageBudget::new(16).unwrap(),
+                V23BalancedPageBudget::new(64).unwrap(),
             )
             .is_err()
         );
