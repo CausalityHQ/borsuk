@@ -4,6 +4,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Instant,
 };
 
 use arrow_array::{
@@ -18,12 +19,19 @@ use sha2::{Digest, Sha256};
 use crate::{
     BorsukError, Result,
     v24_witness::{V24ObjectIdentity, V24SourceRow, validate_v24_identity},
+    v24_witness_eval::{
+        V24Cell, V24Evaluation, V24QuerySample, V24QueryTruth, V24Result,
+        canonical_v24_result_bytes, classify_v24_ladder, evaluate_v24_cell,
+        evaluate_v24_exact_control, fuse_v24_posting_plane,
+    },
     v24_witness_graph::{
-        V24WitnessGraph, V24WitnessSampler, build_v24_witness_graph, read_v24_witness_graph,
-        read_v24_witnesses, write_v24_witness_graph, write_v24_witnesses,
+        V24WitnessGraph, V24WitnessSampler, V24WitnessSearch, build_v24_witness_graph,
+        normalize_v24_witness_vector, read_v24_witness_graph, read_v24_witnesses,
+        v24_scientific_distance_backend, write_v24_witness_graph, write_v24_witnesses,
     },
     v24_witness_postings::{
-        V24PostingPage, V24PostingPageRow, build_v24_witness_postings, write_v24_witness_postings,
+        V24PostingPage, V24PostingPageRow, V24PostingPlane, build_v24_witness_postings,
+        read_v24_witness_postings, write_v24_witness_postings,
     },
 };
 
@@ -36,6 +44,9 @@ const RESULT_FILE: &str = "result.json";
 const PAGE_ROWS_FILE: &str = "page-rows.parquet";
 const POSTINGS_FILE: &str = "witness-postings.arrow";
 const POSTING_SCRATCH_DIR: &str = ".posting-scratch";
+const QUERIES_FILE: &str = "queries.parquet";
+const NEIGHBORS_FILE: &str = "neighbors.parquet";
+const V24_SERVING_BYTES: u64 = 1_644_167_168;
 
 /// One offline V24 scientific phase.
 #[doc(hidden)]
@@ -90,6 +101,21 @@ struct V24PostingManifest {
     phase: String,
     source_row_count: u64,
     witness_count: u64,
+    inputs: Vec<V24ObjectIdentity>,
+    output_uris: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V24DevelopmentManifest {
+    schema: String,
+    claim_eligible: bool,
+    generation: String,
+    phase: String,
+    page_count: u32,
+    query_count: u32,
+    witness_count: u64,
+    serving_bytes: u64,
     inputs: Vec<V24ObjectIdentity>,
     output_uris: BTreeMap<String, String>,
 }
@@ -271,6 +297,188 @@ fn page_rows_schema() -> Schema {
             false,
         ),
     ])
+}
+
+fn query_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Float32, false)),
+                96,
+            ),
+            false,
+        ),
+    ])
+}
+
+fn truth_schema() -> Schema {
+    let child = Arc::new(Field::new("element", DataType::UInt32, false));
+    Schema::new(vec![
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new(
+            "primary_pages",
+            DataType::FixedSizeList(Arc::clone(&child), 10),
+            false,
+        ),
+        Field::new(
+            "replica_pages",
+            DataType::FixedSizeList(Arc::clone(&child), 10),
+            false,
+        ),
+        Field::new("oracle_pages", DataType::FixedSizeList(child, 8), false),
+    ])
+}
+
+fn read_development_queries(path: &Path, query_count: usize) -> Result<Vec<[f32; 96]>> {
+    let file = fs::File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    if builder.schema().as_ref() != &query_schema()
+        || usize::try_from(builder.metadata().file_metadata().num_rows()).ok() != Some(query_count)
+    {
+        return Err(invalid("V24 development query Parquet authority differs"));
+    }
+    let mut queries = Vec::with_capacity(query_count);
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.num_columns() != 2
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V24 development query batch differs"));
+        }
+        let ordinals = batch.columns()[0]
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V24 development query ordinal differs"))?;
+        let vectors = batch.columns()[1]
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V24 development query vector differs"))?;
+        let values = vectors
+            .values()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("V24 development query vector child differs"))?;
+        for row in 0..batch.num_rows() {
+            if usize::try_from(ordinals.value(row)).ok() != Some(queries.len()) {
+                return Err(invalid("V24 development query order differs"));
+            }
+            let vector = values.values()[row * 96..(row + 1) * 96]
+                .try_into()
+                .unwrap();
+            queries.push(normalize_v24_witness_vector(&vector)?);
+        }
+    }
+    if queries.len() != query_count {
+        return Err(invalid("V24 development query count differs"));
+    }
+    Ok(queries)
+}
+
+fn read_development_truth(
+    path: &Path,
+    query_count: usize,
+    page_count: usize,
+) -> Result<Vec<V24QueryTruth>> {
+    let file = fs::File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    if builder.schema().as_ref() != &truth_schema()
+        || usize::try_from(builder.metadata().file_metadata().num_rows()).ok() != Some(query_count)
+    {
+        return Err(invalid("V24 development truth Parquet authority differs"));
+    }
+    let mut truth = Vec::with_capacity(query_count);
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.num_columns() != 4
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V24 development truth batch differs"));
+        }
+        let ordinals = batch.columns()[0]
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V24 development truth ordinal differs"))?;
+        let lists = [1_usize, 2, 3]
+            .map(|column| {
+                batch.columns()[column]
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .ok_or_else(|| invalid("V24 development truth list differs"))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let values = lists
+            .iter()
+            .map(|list| {
+                list.values()
+                    .as_any()
+                    .downcast_ref::<UInt32Array>()
+                    .ok_or_else(|| invalid("V24 development truth child differs"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for row in 0..batch.num_rows() {
+            if usize::try_from(ordinals.value(row)).ok() != Some(truth.len()) {
+                return Err(invalid("V24 development truth order differs"));
+            }
+            let primary = &values[0].values()[row * 10..(row + 1) * 10];
+            let replica = &values[1].values()[row * 10..(row + 1) * 10];
+            let mut assignments = Vec::with_capacity(10);
+            for (&primary, &replica) in primary.iter().zip(replica) {
+                if usize::try_from(primary).map_or(true, |page| page >= page_count)
+                    || replica != u32::MAX
+                        && (usize::try_from(replica).map_or(true, |page| page >= page_count)
+                            || replica == primary)
+                {
+                    return Err(invalid("V24 development neighbor page differs"));
+                }
+                let mut pages = vec![primary];
+                if replica != u32::MAX {
+                    pages.push(replica);
+                }
+                assignments.push(pages);
+            }
+            let padded_oracle = &values[2].values()[row * 8..(row + 1) * 8];
+            let oracle_len = padded_oracle
+                .iter()
+                .position(|page| *page == u32::MAX)
+                .unwrap_or(8);
+            let oracle_pages = padded_oracle[..oracle_len].to_vec();
+            if oracle_pages.is_empty()
+                || padded_oracle[oracle_len..]
+                    .iter()
+                    .any(|page| *page != u32::MAX)
+                || oracle_pages.windows(2).any(|pair| pair[0] >= pair[1])
+                || oracle_pages
+                    .iter()
+                    .any(|page| usize::try_from(*page).map_or(true, |page| page >= page_count))
+            {
+                return Err(invalid("V24 development oracle pages differ"));
+            }
+            truth.push(V24QueryTruth {
+                query_ordinal: ordinals.value(row),
+                ground_truth_page_assignments: assignments,
+                oracle_pages,
+            });
+        }
+    }
+    if truth.len() != query_count {
+        return Err(invalid("V24 development truth count differs"));
+    }
+    Ok(truth)
 }
 
 struct V24PageRows {
@@ -752,6 +960,296 @@ fn run_posting_construction(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
     Ok(result_bytes)
 }
 
+fn select_development_pages(
+    search: &V24WitnessSearch<'_>,
+    plane: &V24PostingPlane,
+    query: &[f32; 96],
+    cell: V24Cell,
+    page_count: usize,
+    scalar_control: bool,
+    exact_control: bool,
+) -> Result<Vec<u32>> {
+    let selected = usize::try_from(cell.selected_witnesses).unwrap();
+    let ef = if exact_control {
+        plane.witness_count()
+    } else {
+        usize::try_from(cell.ef_search).unwrap()
+    };
+    let ranked = if scalar_control {
+        search.search_scalar_control(query, selected, ef)?
+    } else {
+        search.search(query, selected, ef)?
+    };
+    let mut pages = fuse_v24_posting_plane(&ranked, plane, cell, page_count)?;
+    pages.sort_unstable();
+    Ok(pages)
+}
+
+fn development_samples(pages: &[Vec<u32>], truth: &[V24QueryTruth]) -> Result<Vec<V24QuerySample>> {
+    pages
+        .iter()
+        .zip(truth)
+        .map(|(pages, truth)| {
+            let selected = pages
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>();
+            let oracle = truth
+                .oracle_pages
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>();
+            let hits = truth
+                .ground_truth_page_assignments
+                .iter()
+                .filter(|assignments| assignments.iter().any(|page| selected.contains(page)))
+                .count();
+            let oracle_hits = truth
+                .ground_truth_page_assignments
+                .iter()
+                .filter(|assignments| assignments.iter().any(|page| oracle.contains(page)))
+                .count();
+            Ok(V24QuerySample {
+                query_ordinal: truth.query_ordinal,
+                page_ordinals: pages.clone(),
+                hits: u32::try_from(hits).map_err(|_| invalid("V24 development hits overflow"))?,
+                oracle_hits: u32::try_from(oracle_hits)
+                    .map_err(|_| invalid("V24 development oracle hits overflow"))?,
+                recall_ppm: u64::try_from(hits).unwrap() * 100_000,
+            })
+        })
+        .collect()
+}
+
+fn evaluate_development_cell(
+    search: &V24WitnessSearch<'_>,
+    plane: &V24PostingPlane,
+    queries: &[[f32; 96]],
+    truth: &[V24QueryTruth],
+    cell: V24Cell,
+    page_count: usize,
+) -> Result<V24Evaluation> {
+    let pages = queries
+        .iter()
+        .map(|query| select_development_pages(search, plane, query, cell, page_count, false, false))
+        .collect::<Result<Vec<_>>>()?;
+    let scalar_pages = queries
+        .iter()
+        .map(|query| select_development_pages(search, plane, query, cell, page_count, true, false))
+        .collect::<Result<Vec<_>>>()?;
+    let samples = development_samples(&pages, truth)?;
+    let mut latency_ns = Vec::with_capacity(10_000);
+    for iteration in 0..10_000 {
+        let query = &queries[iteration % queries.len()];
+        let start = Instant::now();
+        let selected =
+            select_development_pages(search, plane, query, cell, page_count, false, false)?;
+        std::hint::black_box(selected);
+        latency_ns.push(u64::try_from(start.elapsed().as_nanos().max(1)).unwrap_or(u64::MAX));
+    }
+    evaluate_v24_cell(
+        cell,
+        samples,
+        truth,
+        page_count,
+        latency_ns,
+        V24_SERVING_BYTES,
+        scalar_pages,
+    )
+}
+
+fn evaluate_exact_control(
+    search: &V24WitnessSearch<'_>,
+    plane: &V24PostingPlane,
+    queries: &[[f32; 96]],
+    truth: &[V24QueryTruth],
+    cell: V24Cell,
+    page_count: usize,
+) -> Result<crate::v24_witness_eval::V24ExactControl> {
+    let pages = queries
+        .iter()
+        .map(|query| select_development_pages(search, plane, query, cell, page_count, false, true))
+        .collect::<Result<Vec<_>>>()?;
+    let scalar_pages = queries
+        .iter()
+        .map(|query| select_development_pages(search, plane, query, cell, page_count, true, true))
+        .collect::<Result<Vec<_>>>()?;
+    evaluate_v24_exact_control(
+        cell,
+        development_samples(&pages, truth)?,
+        truth,
+        page_count,
+        scalar_pages,
+    )
+}
+
+fn run_development_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
+    let manifest_bytes = fs::read(&request.manifest).map_err(|source| BorsukError::Io {
+        path: request.manifest.clone(),
+        source,
+    })?;
+    let manifest: V24DevelopmentManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| invalid(&format!("V24 development manifest differs: {error}")))?;
+    let roles = manifest
+        .inputs
+        .iter()
+        .map(|identity| identity.role.as_str())
+        .collect::<Vec<_>>();
+    if canonical_json_bytes(&manifest)? != manifest_bytes
+        || manifest.schema != V24_LOCAL_MANIFEST_SCHEMA
+        || manifest.claim_eligible
+        || manifest.phase != "development-evaluation"
+        || manifest.generation.is_empty()
+        || manifest.page_count < 8
+        || manifest.query_count != 32
+        || manifest.witness_count < 32
+        || manifest.serving_bytes != V24_SERVING_BYTES
+        || roles
+            != [
+                "witness-graph",
+                "witness-postings",
+                "query-parquet",
+                "neighbors-parquet",
+            ]
+        || manifest.output_uris.len() != 1
+        || manifest
+            .output_uris
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            != ["development-result"]
+        || !manifest.output_uris["development-result"].starts_with("s3://")
+    {
+        return Err(invalid("V24 development manifest authority differs"));
+    }
+    let mut names = fs::read_dir(&request.input_dir)
+        .map_err(|source| BorsukError::Io {
+            path: request.input_dir.clone(),
+            source,
+        })?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|source| BorsukError::Io {
+            path: request.input_dir.clone(),
+            source,
+        })?;
+    names.sort();
+    if names
+        != [
+            NEIGHBORS_FILE,
+            QUERIES_FILE,
+            WITNESS_GRAPH_FILE,
+            POSTINGS_FILE,
+        ]
+    {
+        return Err(invalid("V24 local input inventory differs"));
+    }
+    let registered = |role: &str| {
+        manifest
+            .inputs
+            .iter()
+            .find(|identity| identity.role == role)
+            .unwrap()
+    };
+    for (role, name) in [
+        ("witness-graph", WITNESS_GRAPH_FILE),
+        ("witness-postings", POSTINGS_FILE),
+        ("query-parquet", QUERIES_FILE),
+        ("neighbors-parquet", NEIGHBORS_FILE),
+    ] {
+        let authority = registered(role);
+        let observed = sha256_file_identity(
+            &request.input_dir.join(name),
+            role,
+            &authority.uri,
+            &manifest.generation,
+        )?;
+        validate_v24_identity(&observed, authority)?;
+    }
+    let expected_witnesses = usize::try_from(manifest.witness_count).unwrap();
+    let graph_path = request.input_dir.join(WITNESS_GRAPH_FILE);
+    let graph_bytes = fs::read(&graph_path).map_err(|source| BorsukError::Io {
+        path: graph_path,
+        source,
+    })?;
+    let graph = read_v24_witness_graph(
+        &graph_bytes,
+        registered("witness-graph"),
+        expected_witnesses,
+    )?;
+    let posting_path = request.input_dir.join(POSTINGS_FILE);
+    let posting_bytes = fs::read(&posting_path).map_err(|source| BorsukError::Io {
+        path: posting_path,
+        source,
+    })?;
+    let plane = read_v24_witness_postings(
+        &posting_bytes,
+        registered("witness-postings"),
+        expected_witnesses,
+    )?;
+    let query_count = usize::try_from(manifest.query_count).unwrap();
+    let page_count = usize::try_from(manifest.page_count).unwrap();
+    let queries = read_development_queries(&request.input_dir.join(QUERIES_FILE), query_count)?;
+    let truth = read_development_truth(
+        &request.input_dir.join(NEIGHBORS_FILE),
+        query_count,
+        page_count,
+    )?;
+    let search = V24WitnessSearch::new(&graph)?;
+    let registered_cells = V24Cell::registered_ladder()
+        .into_iter()
+        .filter(|cell| usize::try_from(cell.page_budget).unwrap() <= page_count)
+        .collect::<Vec<_>>();
+    let mut evaluated_cells = Vec::new();
+    for cell in registered_cells {
+        let evaluation =
+            evaluate_development_cell(&search, &plane, &queries, &truth, cell, page_count)?;
+        let passed = evaluation.passed;
+        evaluated_cells.push(evaluation);
+        if passed {
+            break;
+        }
+    }
+    let serving = evaluated_cells
+        .last()
+        .cloned()
+        .ok_or_else(|| invalid("V24 development ladder is empty"))?;
+    let exact_control = if serving.passed {
+        None
+    } else {
+        Some(evaluate_exact_control(
+            &search,
+            &plane,
+            &queries,
+            &truth,
+            serving.cell,
+            page_count,
+        )?)
+    };
+    let disposition = classify_v24_ladder(
+        serving.passed,
+        exact_control
+            .as_ref()
+            .is_some_and(|control| control.quality.passed),
+        false,
+    );
+    let result = V24Result {
+        schema: "borsuk-v24-witness-result-v1".to_owned(),
+        claim_eligible: false,
+        distance_backend: v24_scientific_distance_backend()?,
+        identities: manifest.inputs,
+        evaluated_cells,
+        serving,
+        exact_control,
+        disposition,
+        page_integration_passed: false,
+        page_body_reads: 0,
+    };
+    let result_bytes = canonical_v24_result_bytes(&result, &result.identities, &truth, page_count)?;
+    write_owned_file(&request.output_dir, RESULT_FILE, &result_bytes)?;
+    Ok(result_bytes)
+}
+
 /// Execute one offline V24 phase after validating its complete local boundary.
 ///
 #[doc(hidden)]
@@ -760,9 +1258,8 @@ pub fn run_v24_local_request(request: V24LocalRunRequest) -> Result<Vec<u8>> {
     match request.phase {
         V24LocalPhase::TrainWitnesses => run_training(&request),
         V24LocalPhase::BuildPostings => run_posting_construction(&request),
-        V24LocalPhase::EvaluateDevelopment
-        | V24LocalPhase::BindHoldout
-        | V24LocalPhase::EvaluateHoldout => {
+        V24LocalPhase::EvaluateDevelopment => run_development_evaluation(&request),
+        V24LocalPhase::BindHoldout | V24LocalPhase::EvaluateHoldout => {
             Err(invalid("V24 local phase execution is not yet wired"))
         }
     }
@@ -787,7 +1284,10 @@ mod tests {
     };
     use crate::{
         v24_witness::V24ObjectIdentity,
-        v24_witness_graph::{read_v24_witness_graph, read_v24_witnesses},
+        v24_witness_eval::{V24Disposition, V24Result},
+        v24_witness_graph::{
+            read_v24_witness_graph, read_v24_witnesses, v24_scientific_distance_backend,
+        },
         v24_witness_postings::read_v24_witness_postings,
     };
 
@@ -889,7 +1389,11 @@ mod tests {
         writer.close().unwrap();
     }
 
-    fn write_posting_manifest(path: &std::path::Path, inputs: &[V24ObjectIdentity]) {
+    fn write_posting_manifest(
+        path: &std::path::Path,
+        inputs: &[V24ObjectIdentity],
+        witness_count: u64,
+    ) {
         let manifest = json!({
             "claim_eligible": false,
             "generation": "generation-v24-training-fixture",
@@ -900,7 +1404,166 @@ mod tests {
             "phase": "posting-construction",
             "schema": "borsuk-v24-local-manifest-v1",
             "source_row_count": 257,
-            "witness_count": 17
+            "witness_count": witness_count
+        });
+        let mut bytes = serde_json::to_vec(&manifest).unwrap();
+        bytes.push(b'\n');
+        fs::write(path, bytes).unwrap();
+    }
+
+    fn write_evaluation_page_rows(path: &std::path::Path, rows: u64) {
+        let child = Arc::new(Field::new("element", DataType::Float32, false));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("page_ordinal", DataType::UInt32, false),
+            Field::new("replica", DataType::Boolean, false),
+            Field::new("record_id", DataType::Utf8, false),
+            Field::new(
+                "vector",
+                DataType::FixedSizeList(Arc::clone(&child), 96),
+                false,
+            ),
+        ]));
+        let order = (0..rows)
+            .map(|source| (0_u32, false, source))
+            .chain((1_u32..16).flat_map(|page| {
+                (0..rows)
+                    .filter(move |source| 1 + source % 15 == u64::from(page))
+                    .map(move |source| (page, true, source))
+            }))
+            .collect::<Vec<_>>();
+        let mut values = Vec::with_capacity(order.len() * 96);
+        for (_, _, source) in &order {
+            let mut vector = [0.0_f32; 96];
+            vector[usize::try_from(source % 96).unwrap()] = 1.0;
+            vector[usize::try_from((source * 17 + 3) % 96).unwrap()] += 0.125;
+            values.extend_from_slice(&vector);
+        }
+        let vectors =
+            FixedSizeListArray::try_new(child, 96, Arc::new(Float32Array::from(values)), None)
+                .unwrap();
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(UInt32Array::from_iter_values(
+                order.iter().map(|(page, _, _)| *page),
+            )),
+            Arc::new(BooleanArray::from(
+                order
+                    .iter()
+                    .map(|(_, replica, _)| *replica)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                order.iter().map(|(_, _, source)| source.to_string()),
+            )),
+            Arc::new(vectors),
+        ];
+        let batch = RecordBatch::try_new(Arc::clone(&schema), columns).unwrap();
+        let file = fs::File::create(path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    fn write_development_queries(path: &std::path::Path) {
+        let child = Arc::new(Field::new("element", DataType::Float32, false));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("query_ordinal", DataType::UInt32, false),
+            Field::new(
+                "vector",
+                DataType::FixedSizeList(Arc::clone(&child), 96),
+                false,
+            ),
+        ]));
+        let mut values = Vec::with_capacity(32 * 96);
+        for query in 0_u32..32 {
+            let mut vector = [0.0_f32; 96];
+            vector[usize::try_from(query % 96).unwrap()] = 1.0;
+            vector[usize::try_from((query * 17 + 3) % 96).unwrap()] += 0.125;
+            values.extend_from_slice(&vector);
+        }
+        let vectors =
+            FixedSizeListArray::try_new(child, 96, Arc::new(Float32Array::from(values)), None)
+                .unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from_iter_values(0_u32..32)) as ArrayRef,
+                Arc::new(vectors),
+            ],
+        )
+        .unwrap();
+        let file = fs::File::create(path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    fn write_development_truth(path: &std::path::Path) {
+        let child = Arc::new(Field::new("element", DataType::UInt32, false));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("query_ordinal", DataType::UInt32, false),
+            Field::new(
+                "primary_pages",
+                DataType::FixedSizeList(Arc::clone(&child), 10),
+                false,
+            ),
+            Field::new(
+                "replica_pages",
+                DataType::FixedSizeList(Arc::clone(&child), 10),
+                false,
+            ),
+            Field::new(
+                "oracle_pages",
+                DataType::FixedSizeList(Arc::clone(&child), 8),
+                false,
+            ),
+        ]));
+        let fixed = |width: i32, values: Vec<u32>| {
+            FixedSizeListArray::try_new(
+                Arc::clone(&child),
+                width,
+                Arc::new(UInt32Array::from(values)),
+                None,
+            )
+            .unwrap()
+        };
+        let primary = fixed(10, vec![0_u32; 32 * 10]);
+        let replica = fixed(10, vec![u32::MAX; 32 * 10]);
+        let oracle = fixed(
+            8,
+            (0..32)
+                .flat_map(|_| std::iter::once(0_u32).chain([u32::MAX; 7]))
+                .collect(),
+        );
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from_iter_values(0_u32..32)) as ArrayRef,
+                Arc::new(primary),
+                Arc::new(replica),
+                Arc::new(oracle),
+            ],
+        )
+        .unwrap();
+        let file = fs::File::create(path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    fn write_development_manifest(path: &std::path::Path, inputs: &[V24ObjectIdentity]) {
+        let manifest = json!({
+            "claim_eligible": false,
+            "generation": "generation-v24-training-fixture",
+            "inputs": inputs,
+            "output_uris": {
+                "development-result": "s3://borsuk-v24/development-result.json"
+            },
+            "page_count": 16,
+            "phase": "development-evaluation",
+            "query_count": 32,
+            "schema": "borsuk-v24-local-manifest-v1",
+            "serving_bytes": 1_644_167_168_u64,
+            "witness_count": 32
         });
         let mut bytes = serde_json::to_vec(&manifest).unwrap();
         bytes.push(b'\n');
@@ -908,6 +1571,14 @@ mod tests {
     }
 
     fn write_manifest(path: &std::path::Path, input: &V24ObjectIdentity) {
+        write_training_manifest(path, input, 17);
+    }
+
+    fn write_training_manifest(
+        path: &std::path::Path,
+        input: &V24ObjectIdentity,
+        witness_count: u64,
+    ) {
         let manifest = json!({
             "claim_eligible": false,
             "generation": "generation-v24-training-fixture",
@@ -920,7 +1591,7 @@ mod tests {
             "schema": "borsuk-v24-local-manifest-v1",
             "seed": 1311768467463790320_u64,
             "source_row_count": 257,
-            "witness_count": 17
+            "witness_count": witness_count
         });
         let mut bytes = serde_json::to_vec(&manifest).unwrap();
         bytes.push(b'\n');
@@ -1053,7 +1724,7 @@ mod tests {
             ),
         ];
         let posting_manifest = root.join("posting-manifest.json");
-        write_posting_manifest(&posting_manifest, &inputs);
+        write_posting_manifest(&posting_manifest, &inputs, 17);
         let result_bytes = run_v24_local_request(V24LocalRunRequest {
             manifest: posting_manifest,
             input_dir: posting_input,
@@ -1072,6 +1743,134 @@ mod tests {
         assert_eq!(plane.physical_source_rows(), 257);
         assert_eq!(
             fs::read(posting_output.join("result.json")).unwrap(),
+            result_bytes
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn v24_witness_local_development_evaluates_first_passing_cell_without_page_reads() {
+        let root = std::env::temp_dir().join(format!(
+            "borsuk-v24-local-development-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let training_input = root.join("training-input");
+        let training_output = root.join("training-output");
+        let posting_input = root.join("posting-input");
+        let posting_output = root.join("posting-output");
+        let development_input = root.join("development-input");
+        let development_output = root.join("development-output");
+        for directory in [
+            &training_input,
+            &training_output,
+            &posting_input,
+            &posting_output,
+            &development_input,
+            &development_output,
+        ] {
+            fs::create_dir_all(directory).unwrap();
+        }
+        let construction = training_input.join("construction-rows.parquet");
+        write_construction_rows(&construction, 257);
+        let training_manifest = root.join("training-manifest.json");
+        write_training_manifest(&training_manifest, &input_identity(&construction), 32);
+        run_v24_local_request(V24LocalRunRequest {
+            manifest: training_manifest,
+            input_dir: training_input,
+            output_dir: training_output.clone(),
+            phase: V24LocalPhase::TrainWitnesses,
+        })
+        .unwrap();
+        for name in ["witnesses.arrow", "witness-graph.arrow"] {
+            fs::rename(training_output.join(name), posting_input.join(name)).unwrap();
+        }
+        fs::remove_file(training_output.join("result.json")).unwrap();
+        let page_rows = posting_input.join("page-rows.parquet");
+        write_evaluation_page_rows(&page_rows, 257);
+        let posting_inputs = vec![
+            file_identity(
+                &posting_input.join("witness-graph.arrow"),
+                "witness-graph",
+                "s3://borsuk-v24/witness-graph.arrow",
+            ),
+            file_identity(
+                &posting_input.join("witnesses.arrow"),
+                "witnesses-arrow",
+                "s3://borsuk-v24/witnesses.arrow",
+            ),
+            file_identity(
+                &page_rows,
+                "page-rows-parquet",
+                "s3://borsuk-v24/page-rows.parquet",
+            ),
+        ];
+        let posting_manifest = root.join("posting-manifest.json");
+        write_posting_manifest(&posting_manifest, &posting_inputs, 32);
+        run_v24_local_request(V24LocalRunRequest {
+            manifest: posting_manifest,
+            input_dir: posting_input.clone(),
+            output_dir: posting_output.clone(),
+            phase: V24LocalPhase::BuildPostings,
+        })
+        .unwrap();
+
+        fs::copy(
+            posting_input.join("witness-graph.arrow"),
+            development_input.join("witness-graph.arrow"),
+        )
+        .unwrap();
+        fs::rename(
+            posting_output.join("witness-postings.arrow"),
+            development_input.join("witness-postings.arrow"),
+        )
+        .unwrap();
+        let queries = development_input.join("queries.parquet");
+        let truth = development_input.join("neighbors.parquet");
+        write_development_queries(&queries);
+        write_development_truth(&truth);
+        let inputs = vec![
+            file_identity(
+                &development_input.join("witness-graph.arrow"),
+                "witness-graph",
+                "s3://borsuk-v24/witness-graph.arrow",
+            ),
+            file_identity(
+                &development_input.join("witness-postings.arrow"),
+                "witness-postings",
+                "s3://borsuk-v24/witness-postings.arrow",
+            ),
+            file_identity(&queries, "query-parquet", "s3://borsuk-v24/queries.parquet"),
+            file_identity(
+                &truth,
+                "neighbors-parquet",
+                "s3://borsuk-v24/neighbors.parquet",
+            ),
+        ];
+        let development_manifest = root.join("development-manifest.json");
+        write_development_manifest(&development_manifest, &inputs);
+        let result_bytes = run_v24_local_request(V24LocalRunRequest {
+            manifest: development_manifest,
+            input_dir: development_input,
+            output_dir: development_output.clone(),
+            phase: V24LocalPhase::EvaluateDevelopment,
+        })
+        .unwrap();
+        let result: V24Result = serde_json::from_slice(&result_bytes).unwrap();
+        assert_eq!(result.identities, inputs);
+        assert_eq!(
+            result.distance_backend,
+            v24_scientific_distance_backend().unwrap()
+        );
+        assert_eq!(result.serving.cell.page_budget, 8);
+        assert!(result.serving.passed);
+        assert!(result.exact_control.is_none());
+        assert!(result.serving.scalar_simd_pages_equal);
+        assert_eq!(result.disposition, V24Disposition::PageIntegrationRejected);
+        assert_eq!(result.page_body_reads, 0);
+        assert_eq!(
+            fs::read(development_output.join("result.json")).unwrap(),
             result_bytes
         );
 

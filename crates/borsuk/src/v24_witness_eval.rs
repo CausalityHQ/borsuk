@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BorsukError, Result,
     v24_witness::{V24ObjectIdentity, validate_v24_identity},
-    v24_witness_postings::V24PostingRecord,
+    v24_witness_graph::{V24DistanceBackend, v24_scientific_distance_backend},
+    v24_witness_postings::{V24PostingPlane, V24PostingRecord},
 };
 
 const V24_RESULT_SCHEMA: &str = "borsuk-v24-witness-result-v1";
@@ -101,6 +102,17 @@ pub(crate) struct V24Evaluation {
     pub(crate) passed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V24ExactControl {
+    pub(crate) cell: V24Cell,
+    pub(crate) samples: Vec<V24QuerySample>,
+    pub(crate) quality: V24Quality,
+    pub(crate) scalar_page_ordinals: Vec<Vec<u32>>,
+    pub(crate) scalar_simd_pages_equal: bool,
+    pub(crate) passed: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum V24Disposition {
@@ -115,9 +127,11 @@ pub(crate) enum V24Disposition {
 pub(crate) struct V24Result {
     pub(crate) schema: String,
     pub(crate) claim_eligible: bool,
+    pub(crate) distance_backend: V24DistanceBackend,
     pub(crate) identities: Vec<V24ObjectIdentity>,
+    pub(crate) evaluated_cells: Vec<V24Evaluation>,
     pub(crate) serving: V24Evaluation,
-    pub(crate) exact_control: V24Evaluation,
+    pub(crate) exact_control: Option<V24ExactControl>,
     pub(crate) disposition: V24Disposition,
     pub(crate) page_integration_passed: bool,
     pub(crate) page_body_reads: u64,
@@ -189,6 +203,55 @@ pub(crate) fn fuse_v24_pages(
                 .checked_mul(u128::from(record.mass))
                 .ok_or_else(|| invalid("V24 fusion contribution overflows"))?;
             let score = scores.entry(record.page_ordinal).or_default();
+            *score = score
+                .checked_add(contribution)
+                .ok_or_else(|| invalid("V24 fusion score overflows"))?;
+        }
+    }
+    if scores.len() < usize::try_from(cell.page_budget).unwrap() {
+        return Err(invalid("V24 fusion selected page count differs"));
+    }
+    let mut ranked = scores.into_iter().collect::<Vec<_>>();
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+    Ok(ranked
+        .into_iter()
+        .take(usize::try_from(cell.page_budget).unwrap())
+        .map(|(page, _)| page)
+        .collect())
+}
+
+pub(crate) fn fuse_v24_posting_plane(
+    ranked_witnesses: &[u32],
+    plane: &V24PostingPlane,
+    cell: V24Cell,
+    page_count: usize,
+) -> Result<Vec<u32>> {
+    if !cell.is_registered()
+        || usize::try_from(cell.page_budget).map_or(true, |budget| page_count < budget)
+        || ranked_witnesses.len() != usize::try_from(cell.selected_witnesses).unwrap()
+        || ranked_witnesses
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != ranked_witnesses.len()
+        || ranked_witnesses
+            .iter()
+            .any(|witness| usize::try_from(*witness).map_or(true, |w| w >= plane.witness_count()))
+    {
+        return Err(invalid("V24 fusion cell authority differs"));
+    }
+    let mut scores = BTreeMap::<u32, u128>::new();
+    for (rank, witness) in ranked_witnesses.iter().copied().enumerate() {
+        let weight = (1_u128 << 32) / u128::try_from(rank + 1).unwrap();
+        for (page, mass) in plane.records_for(witness, usize::try_from(cell.posting_cap).unwrap()) {
+            if usize::try_from(*page).map_or(true, |page| page >= page_count) || *mass == 0 {
+                return Err(invalid("V24 fusion posting authority differs"));
+            }
+            let contribution = weight
+                .checked_mul(u128::from(*mass))
+                .ok_or_else(|| invalid("V24 fusion contribution overflows"))?;
+            let score = scores.entry(*page).or_default();
             *score = score
                 .checked_add(contribution)
                 .ok_or_else(|| invalid("V24 fusion score overflows"))?;
@@ -353,6 +416,39 @@ pub(crate) fn evaluate_v24_cell(
     })
 }
 
+pub(crate) fn evaluate_v24_exact_control(
+    cell: V24Cell,
+    samples: Vec<V24QuerySample>,
+    truth: &[V24QueryTruth],
+    page_count: usize,
+    scalar_page_ordinals: Vec<Vec<u32>>,
+) -> Result<V24ExactControl> {
+    if !cell.is_registered() {
+        return Err(invalid("V24 exact-control cell authority differs"));
+    }
+    let quality = recompute_quality(cell, &samples, truth, page_count)?;
+    if scalar_page_ordinals.len() != samples.len()
+        || scalar_page_ordinals.iter().any(|pages| {
+            pages.len() != usize::try_from(cell.page_budget).unwrap()
+                || pages.iter().copied().collect::<BTreeSet<_>>().len() != pages.len()
+        })
+    {
+        return Err(invalid("V24 exact-control scalar evidence differs"));
+    }
+    let scalar_simd_pages_equal = scalar_page_ordinals
+        .iter()
+        .zip(&samples)
+        .all(|(scalar, sample)| scalar == &sample.page_ordinals);
+    Ok(V24ExactControl {
+        cell,
+        samples,
+        quality,
+        scalar_page_ordinals,
+        scalar_simd_pages_equal,
+        passed: quality.passed && scalar_simd_pages_equal,
+    })
+}
+
 pub(crate) fn classify_v24_ladder(
     serving_passed: bool,
     exact_control_passed: bool,
@@ -406,6 +502,24 @@ fn validate_evaluation(
     Ok(())
 }
 
+fn validate_exact_control(
+    control: &V24ExactControl,
+    truth: &[V24QueryTruth],
+    page_count: usize,
+) -> Result<()> {
+    let recomputed = evaluate_v24_exact_control(
+        control.cell,
+        control.samples.clone(),
+        truth,
+        page_count,
+        control.scalar_page_ordinals.clone(),
+    )?;
+    if &recomputed != control {
+        return Err(invalid("V24 exact-control evidence differs"));
+    }
+    Ok(())
+}
+
 pub(crate) fn canonical_v24_result_bytes(
     result: &V24Result,
     expected_identities: &[V24ObjectIdentity],
@@ -414,6 +528,7 @@ pub(crate) fn canonical_v24_result_bytes(
 ) -> Result<Vec<u8>> {
     if result.schema != V24_RESULT_SCHEMA
         || result.claim_eligible
+        || result.distance_backend != v24_scientific_distance_backend()?
         || result.page_body_reads != 0
         || result.identities.len() != expected_identities.len()
         || result.identities.is_empty()
@@ -428,11 +543,51 @@ pub(crate) fn canonical_v24_result_bytes(
             return Err(invalid("V24 result identity inventory differs"));
         }
     }
+    let registered_cells = V24Cell::registered_ladder()
+        .into_iter()
+        .filter(|cell| usize::try_from(cell.page_budget).unwrap() <= page_count)
+        .collect::<Vec<_>>();
+    if result.evaluated_cells.is_empty()
+        || result.evaluated_cells.len() > registered_cells.len()
+        || result.evaluated_cells.last() != Some(&result.serving)
+        || result
+            .evaluated_cells
+            .iter()
+            .zip(&registered_cells)
+            .any(|(evaluation, cell)| evaluation.cell != *cell)
+        || result
+            .evaluated_cells
+            .iter()
+            .take(result.evaluated_cells.len() - 1)
+            .any(|evaluation| evaluation.passed)
+        || !result.serving.passed && result.evaluated_cells.len() != registered_cells.len()
+    {
+        return Err(invalid("V24 evaluated ladder authority differs"));
+    }
+    for evaluation in &result.evaluated_cells {
+        validate_evaluation(evaluation, truth, page_count)?;
+    }
     validate_evaluation(&result.serving, truth, page_count)?;
-    validate_evaluation(&result.exact_control, truth, page_count)?;
+    if result.serving.passed {
+        if result.exact_control.is_some() {
+            return Err(invalid("V24 passing result cannot carry exact control"));
+        }
+    } else {
+        validate_exact_control(
+            result
+                .exact_control
+                .as_ref()
+                .ok_or_else(|| invalid("V24 failing result lacks exact control"))?,
+            truth,
+            page_count,
+        )?;
+    }
     let disposition = classify_v24_ladder(
         result.serving.passed,
-        result.exact_control.quality.passed,
+        result
+            .exact_control
+            .as_ref()
+            .is_some_and(|control| control.quality.passed),
         result.page_integration_passed,
     );
     if disposition != result.disposition {
@@ -452,9 +607,14 @@ mod tests {
 
     use super::{
         V24Cell, V24Disposition, V24Evaluation, V24QuerySample, V24QueryTruth, V24Result,
-        canonical_v24_result_bytes, classify_v24_ladder, evaluate_v24_cell, fuse_v24_pages,
+        canonical_v24_result_bytes, classify_v24_ladder, evaluate_v24_cell,
+        evaluate_v24_exact_control, fuse_v24_pages,
     };
-    use crate::{v24_witness::V24ObjectIdentity, v24_witness_postings::V24PostingRecord};
+    use crate::{
+        v24_witness::V24ObjectIdentity,
+        v24_witness_graph::{V24DistanceBackend, v24_scientific_distance_backend},
+        v24_witness_postings::V24PostingRecord,
+    };
 
     const SERVING_BYTES: u64 = 1_644_167_168;
 
@@ -587,16 +747,6 @@ mod tests {
             scalar_pages.clone(),
         )
         .unwrap();
-        let exact = evaluate_v24_cell(
-            cell(),
-            samples(),
-            &truth,
-            32,
-            vec![1_u64; 10_000],
-            SERVING_BYTES,
-            scalar_pages,
-        )
-        .unwrap();
         let identities = vec![
             identity("witness-graph", 1),
             identity("witness-postings", 2),
@@ -606,9 +756,11 @@ mod tests {
             V24Result {
                 schema: "borsuk-v24-witness-result-v1".to_owned(),
                 claim_eligible: false,
+                distance_backend: v24_scientific_distance_backend().unwrap(),
                 identities: identities.clone(),
+                evaluated_cells: vec![serving.clone()],
                 serving,
-                exact_control: exact,
+                exact_control: None,
                 disposition: V24Disposition::WitnessRouterCandidate,
                 page_integration_passed: true,
                 page_body_reads: 0,
@@ -627,6 +779,9 @@ mod tests {
 
         let mut mutations: Vec<Box<dyn Fn(&mut V24Result)>> = vec![
             Box::new(|value| value.claim_eligible = true),
+            Box::new(|value| value.evaluated_cells.clear()),
+            Box::new(|value| value.evaluated_cells.push(value.serving.clone())),
+            Box::new(|value| value.distance_backend = V24DistanceBackend::ScalarControl),
             Box::new(|value| value.page_body_reads = 1),
             Box::new(|value| value.serving.samples[0].hits = 9),
             Box::new(|value| value.serving.samples[0].page_ordinals.swap(0, 1)),
@@ -638,6 +793,15 @@ mod tests {
             Box::new(|value| value.serving.scalar_page_ordinals[0].swap(0, 1)),
             Box::new(|value| value.serving.scalar_simd_pages_equal = false),
             Box::new(|value| value.serving.passed = false),
+            Box::new(|value| {
+                let truth = truths();
+                let pages = samples()
+                    .iter()
+                    .map(|sample| sample.page_ordinals.clone())
+                    .collect::<Vec<_>>();
+                value.exact_control =
+                    Some(evaluate_v24_exact_control(cell(), samples(), &truth, 32, pages).unwrap());
+            }),
             Box::new(|value| value.disposition = V24Disposition::GraphRetrievalRejected),
             Box::new(|value| value.page_integration_passed = false),
             Box::new(|value| value.identities[0].digest = "00".repeat(32)),
@@ -657,6 +821,15 @@ mod tests {
 
     #[test]
     fn v24_witness_exact_control_separates_graph_from_posting_failure() {
+        let truth = truths();
+        let pages = samples()
+            .iter()
+            .map(|sample| sample.page_ordinals.clone())
+            .collect::<Vec<_>>();
+        let exact = evaluate_v24_exact_control(cell(), samples(), &truth, 32, pages).unwrap();
+        assert!(exact.quality.passed);
+        assert!(exact.scalar_simd_pages_equal);
+        assert!(exact.passed);
         assert_eq!(
             classify_v24_ladder(false, false, false),
             V24Disposition::WitnessPostingsRejected

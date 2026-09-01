@@ -83,6 +83,10 @@ impl V24PostingPlane {
         };
         &records[..records.len().min(cap)]
     }
+
+    pub(crate) fn witness_count(&self) -> usize {
+        self.postings.len()
+    }
 }
 
 #[derive(Debug, Clone)]
