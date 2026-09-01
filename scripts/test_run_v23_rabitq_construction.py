@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import signal
 import struct
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -51,6 +53,12 @@ class FakeS3:
 class _OpenBytesIO(io.BytesIO):
     def close(self) -> None:
         pass
+
+
+class _BrokenPipeSink(_OpenBytesIO):
+    def write(self, payload: bytes) -> int:
+        del payload
+        raise BrokenPipeError("fixture child closed stdin")
 
 
 class FakeProcess:
@@ -104,6 +112,46 @@ class FakeProcess:
         return pa.ipc.open_stream(self._input.getvalue()).read_all()
 
     def poll(self) -> int:
+        return self.returncode
+
+
+class BrokenPipeProcess(FakeProcess):
+    def __init__(self) -> None:
+        super().__init__()
+        self.stdin = _BrokenPipeSink()
+        self.returncode = 2
+
+    def communicate(self, timeout: int) -> tuple[bytes, bytes]:
+        assert self.command is not None
+        scratch = Path(
+            self.command[self.command.index("--scratch-directory") + 1]
+        )
+        (scratch / "rabitq-id-run-00000000.arrow").write_bytes(b"partial spill")
+        self.stdin = None
+        self.returncode = 2
+        return b"", b"child authority root cause\n"
+
+
+class WedgedBrokenPipeProcess(BrokenPipeProcess):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pid = 4242
+        self.communicate_calls = 0
+
+    def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
+        self.communicate_calls += 1
+        if self.communicate_calls == 1:
+            assert timeout == 30
+            raise subprocess.TimeoutExpired(
+                self.command or [], timeout, stderr=b"buffered child panic\n"
+            )
+        assert timeout is None
+        self.returncode = -signal.SIGTERM
+        return b"", b"buffered child panic\n"
+
+    def wait(self, timeout: int) -> int:
+        assert timeout == 30
+        self.returncode = -signal.SIGTERM
         return self.returncode
 
 
@@ -348,6 +396,53 @@ class V23RaBitQConstructionTests(unittest.TestCase):
                 )
         popen.assert_not_called()
         self.assertEqual(client.gets, [])
+        self.assertEqual(list(self.root.glob("v23-rabitq-construction-*")), [])
+
+    def test_child_stderr_survives_arrow_broken_pipe_and_cleanup(self) -> None:
+        client = FakeS3(self.payloads)
+        process = BrokenPipeProcess()
+        with mock.patch.object(
+            runner.subprocess,
+            "Popen",
+            side_effect=lambda command, **_: process.bind(command),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "child authority root cause"):
+                runner.run_construction(
+                    binary=self.binary,
+                    manifest=self.manifest,
+                    d2_report=self.d2,
+                    query_parquet=self.query,
+                    development_output_prefix="s3://fixture/output/development/",
+                    s3_client=client,
+                    scratch_parent=self.root,
+                )
+
+        self.assertEqual(list(self.root.glob("v23-rabitq-construction-*")), [])
+
+    def test_wedged_child_stderr_survives_termination_and_cleanup(self) -> None:
+        client = FakeS3(self.payloads)
+        process = WedgedBrokenPipeProcess()
+        with (
+            mock.patch.object(
+                runner.subprocess,
+                "Popen",
+                side_effect=lambda command, **_: process.bind(command),
+            ),
+            mock.patch.object(runner.os, "killpg") as killpg,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "buffered child panic"):
+                runner.run_construction(
+                    binary=self.binary,
+                    manifest=self.manifest,
+                    d2_report=self.d2,
+                    query_parquet=self.query,
+                    development_output_prefix="s3://fixture/output/development/",
+                    s3_client=client,
+                    scratch_parent=self.root,
+                )
+
+        killpg.assert_called_once_with(process.pid, signal.SIGTERM)
+        self.assertEqual(process.communicate_calls, 2)
         self.assertEqual(list(self.root.glob("v23-rabitq-construction-*")), [])
 
 

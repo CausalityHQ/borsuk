@@ -503,7 +503,24 @@ def run_construction(
                 client, page_bucket, page_prefix, pages, max_inflight=4
             )
         )
-        write_occurrence_stream(process.stdin, batches)
+        try:
+            write_occurrence_stream(process.stdin, batches)
+        except BrokenPipeError as error:
+            process.stdin = None
+            try:
+                _, stderr = process.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=30)
+                _, stderr = process.communicate()
+                raise RuntimeError(
+                    stderr.decode(errors="replace").strip()
+                    or "RaBitQ construction closed input and wedged"
+                ) from error
+            raise RuntimeError(
+                stderr.decode(errors="replace").strip()
+                or f"RaBitQ construction exited {process.returncode} while receiving input"
+            ) from error
         process.stdin = None
         try:
             stdout, stderr = process.communicate(timeout=7_200)
@@ -555,6 +572,9 @@ def run_construction(
             path.unlink(missing_ok=True)
         manifest_path.unlink(missing_ok=True)
         output_directory.rmdir()
+        for pattern in ("rabitq-id-run-*.arrow", "rabitq-leaf-run-*.arrow"):
+            for path in rust_scratch.glob(pattern):
+                path.unlink()
         rust_scratch.rmdir()
         scratch.rmdir()
 
