@@ -11,7 +11,10 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use half::f16;
-use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
+use parquet::arrow::{
+    ArrowWriter,
+    arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder},
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -429,34 +432,134 @@ pub(crate) fn read_v23_row_pages(
     expected_role: &str,
     page_count: u32,
 ) -> Result<Vec<V23RowPage>> {
-    authenticate_path(path, identity, expected_role)?;
-    let mut rows = Vec::new();
-    for batch in read_batches(path, &v23_row_page_schema())? {
-        let source = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| invalid("source ordinal differs"))?;
-        let primary = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .ok_or_else(|| invalid("primary page differs"))?;
-        let replica = batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .ok_or_else(|| invalid("replica page differs"))?;
-        for row in 0..batch.num_rows() {
-            rows.push(V23RowPage {
-                source_ordinal: source.value(row),
-                primary_page: primary.value(row),
-                replica_page: replica.value(row),
-            });
-        }
-    }
+    let rows = open_v23_row_pages(path, identity, expected_role, page_count)?
+        .collect::<Result<Vec<_>>>()?;
     validate_row_pages(&rows, page_count)?;
     Ok(rows)
+}
+
+pub(crate) struct V23RowPageStream {
+    reader: ParquetRecordBatchReader,
+    batch: Option<RecordBatch>,
+    row: usize,
+    next_source_ordinal: u64,
+    page_count: u32,
+    failed: bool,
+}
+
+impl V23RowPageStream {
+    fn read_batch(&mut self) -> Result<bool> {
+        self.batch = self.reader.next().transpose()?;
+        self.row = 0;
+        let Some(batch) = &self.batch else {
+            return Ok(false);
+        };
+        if batch.num_rows() == 0
+            || batch.num_columns() != 3
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("row assignment batch shape differs"));
+        }
+        Ok(true)
+    }
+}
+
+impl Iterator for V23RowPageStream {
+    type Item = Result<V23RowPage>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.failed {
+            return None;
+        }
+        loop {
+            if self.batch.is_none() || self.row == self.batch.as_ref().unwrap().num_rows() {
+                match self.read_batch() {
+                    Ok(true) => {}
+                    Ok(false) => return None,
+                    Err(error) => {
+                        self.failed = true;
+                        return Some(Err(error));
+                    }
+                }
+            }
+            let batch = self.batch.as_ref().unwrap();
+            let decoded = (|| {
+                let source = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| invalid("source ordinal differs"))?
+                    .value(self.row);
+                let primary = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<UInt32Array>()
+                    .ok_or_else(|| invalid("primary page differs"))?
+                    .value(self.row);
+                let replica = batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<UInt32Array>()
+                    .ok_or_else(|| invalid("replica page differs"))?
+                    .value(self.row);
+                if source != self.next_source_ordinal
+                    || primary >= self.page_count
+                    || (replica != u32::MAX && replica >= self.page_count)
+                    || replica == primary
+                {
+                    return Err(invalid("row assignment stream differs"));
+                }
+                Ok(V23RowPage {
+                    source_ordinal: source,
+                    primary_page: primary,
+                    replica_page: replica,
+                })
+            })();
+            self.row += 1;
+            match decoded {
+                Ok(row) => {
+                    self.next_source_ordinal += 1;
+                    return Some(Ok(row));
+                }
+                Err(error) => {
+                    self.failed = true;
+                    return Some(Err(error));
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn open_v23_row_pages(
+    path: &Path,
+    identity: &V23BalancedIdentity,
+    expected_role: &str,
+    page_count: u32,
+) -> Result<V23RowPageStream> {
+    authenticate_path(path, identity, expected_role)?;
+    if page_count == 0 || page_count == u32::MAX {
+        return Err(invalid("row assignment page count differs"));
+    }
+    let file = File::open(path).map_err(|error| invalid(&format!("input open failed: {error}")))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    if builder.schema().as_ref() != &v23_row_page_schema() {
+        return Err(invalid("physical schema differs"));
+    }
+    let mut stream = V23RowPageStream {
+        reader: builder.build()?,
+        batch: None,
+        row: 0,
+        next_source_ordinal: 0,
+        page_count,
+        failed: false,
+    };
+    if !stream.read_batch()? {
+        return Err(invalid("artifact is empty"));
+    }
+    Ok(stream)
 }
 
 pub(crate) fn reconcile_v23_balanced_arm(
@@ -524,9 +627,9 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        V23PageRow, V23RowPage, V23SupercellRow, read_v23_pages, read_v23_row_pages,
-        read_v23_supercells, reconcile_v23_balanced_arm, write_v23_pages, write_v23_row_pages,
-        write_v23_supercells,
+        V23PageRow, V23RowPage, V23SupercellRow, open_v23_row_pages, read_v23_pages,
+        read_v23_row_pages, read_v23_supercells, reconcile_v23_balanced_arm, write_v23_pages,
+        write_v23_row_pages, write_v23_supercells,
     };
     use crate::v23_balanced_pages::V23BalancedIdentity;
 
@@ -609,6 +712,18 @@ mod tests {
                 "row-pages-amp-1125-parquet",
                 1,
             )
+            .unwrap(),
+            row_pages
+        );
+        assert_eq!(
+            open_v23_row_pages(
+                &row_page_path,
+                &identity(&row_page_path, "row-pages-amp-1125-parquet"),
+                "row-pages-amp-1125-parquet",
+                1,
+            )
+            .unwrap()
+            .collect::<crate::Result<Vec<_>>>()
             .unwrap(),
             row_pages
         );
