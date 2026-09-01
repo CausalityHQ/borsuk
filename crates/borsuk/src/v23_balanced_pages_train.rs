@@ -31,6 +31,7 @@ pub(crate) struct V23SupercellModel {
     tree: V23IncidenceTree,
     training_ordinals: BTreeSet<u64>,
     pseudoquery_ordinals: BTreeSet<u64>,
+    pseudoqueries: Vec<(u64, [f32; 96])>,
 }
 
 impl V23SupercellModel {
@@ -44,6 +45,10 @@ impl V23SupercellModel {
 
     pub(crate) fn pseudoquery_ordinals(&self) -> &BTreeSet<u64> {
         &self.pseudoquery_ordinals
+    }
+
+    pub(crate) fn pseudoqueries(&self) -> &[(u64, [f32; 96])] {
+        &self.pseudoqueries
     }
 }
 
@@ -160,6 +165,11 @@ pub(crate) fn train_v23_balanced_tree(
         .iter()
         .map(|entry| entry.1)
         .collect::<BTreeSet<_>>();
+    let mut pseudoqueries = ranked[pseudo_start..]
+        .iter()
+        .map(|entry| (entry.1, entry.2))
+        .collect::<Vec<_>>();
+    pseudoqueries.sort_unstable_by_key(|entry| entry.0);
     let mut training = ranked[..pseudo_start]
         .iter()
         .map(|entry| V23ReservoirRow {
@@ -187,6 +197,7 @@ pub(crate) fn train_v23_balanced_tree(
         tree,
         training_ordinals,
         pseudoquery_ordinals,
+        pseudoqueries,
     })
 }
 
@@ -361,6 +372,28 @@ mod tests {
                 .is_disjoint(one.pseudoquery_ordinals())
         );
         assert_eq!(one.pseudoquery_ordinals(), four.pseudoquery_ordinals());
+        assert_eq!(
+            one.pseudoqueries()
+                .iter()
+                .map(|(source_ordinal, _)| *source_ordinal)
+                .collect::<Vec<_>>(),
+            one.pseudoquery_ordinals()
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+        );
+        for (source_ordinal, vector) in one.pseudoqueries() {
+            let cluster = usize::try_from(source_ordinal % 8).unwrap();
+            let second: f32 = 0.25 + *source_ordinal as f32 * 0.0001;
+            let inverse_norm = (1.0_f64 + f64::from(second) * f64::from(second))
+                .sqrt()
+                .recip() as f32;
+            assert_eq!(vector[cluster].to_bits(), inverse_norm.to_bits());
+            assert_eq!(
+                vector[8 + cluster].to_bits(),
+                (second * inverse_norm).to_bits()
+            );
+        }
     }
 
     #[test]
@@ -456,6 +489,7 @@ mod tests {
             },
             training_ordinals: [0].into_iter().collect(),
             pseudoquery_ordinals: [1].into_iter().collect(),
+            pseudoqueries: vec![(1, one.map(f16::to_f32))],
         };
         let mut vector = [0.0_f32; 96];
         vector[1] = 1.0;
