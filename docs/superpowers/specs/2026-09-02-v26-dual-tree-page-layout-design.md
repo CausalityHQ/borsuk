@@ -170,15 +170,14 @@ remains Parquet; JSON is used only for small authority and terminal records.
    between the floor and target is useful evidence, not authority to build the
    router.
 5. **Exact-global screen:** only after layout passes, exact f32 scoring evaluates
-   rank limits `10, 32, 128, 512, 2,048, 4,096`. The rejected rank-sharp
-   nearest-row-per-page result is retained as immutable evidence. Its one
-   permitted successor is a cumulative reciprocal-rank reducer: the row at
-   one-based rank `r` contributes exactly `floor(2^32 / r)` integer units to
-   each of its distinct primary and replica pages; page scores use checked
-   `u64` addition; select the eight pages by descending score and then ascending
-   page ordinal. No distance scale, query outcome, learned weight, or tunable
-   cutoff enters this reducer. Stop unless aggregate recall is at least 975,000
-   ppm and oracle attainment at least 995,000 ppm.
+   rank limits `10, 32, 128, 512, 2,048, 4,096`. The rank-sharp and cumulative
+   reciprocal-rank reducers are immutable rejected diagnostics. The promotion
+   control requires the exact first-ten ranked row ordinals to equal the
+   independently authenticated truth ordinals for every query, then applies
+   the same exact maximum-cover rule used by the layout oracle to those rows'
+   two page assignments. This target has no weights, fitted cutoff, or distance
+   scale. Stop unless aggregate recall is at least 975,000 ppm and oracle
+   attainment at least 995,000 ppm.
 6. **Tree-router screen:** only after exact global passes, route each query with
    a fixed best-first margin heap and select exactly eight leaves across both
    trees. No outcome-dependent widening or exhaustive fallback is allowed.
@@ -188,11 +187,10 @@ The first failing class has strict precedence: `authority-stop`,
 `bounded-layout-candidate`. Every result is claim-ineligible.
 
 The exact-global evidence persists the first ten ranked source ordinals,
-distance bits, and page assignments for diagnosis. A truth-rank injection
-control must independently prove reducer bindings. Serialization reruns exact
-row scoring and the integer reducer from authenticated construction, query,
-truth, and assignment inputs, then requires byte-for-byte sample equality
-rather than treating emitted selections as authority.
+distance bits, and page assignments for diagnosis. The promotion control
+requires exact ordered equality with truth, recomputes maximum cover from the
+authenticated assignments, and requires byte-for-byte sample equality rather
+than treating emitted selections as authority.
 External queries have no construction row or page identity, so adding an
 own-row or own-page exclusion is an authority failure rather than a tunable
 option.

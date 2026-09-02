@@ -1832,3 +1832,28 @@ against exact global row ranking or the already-passing physical layout. Router
 construction, D3, and release claims remain fenced. The next bounded falsifier
 must freeze and test a genuinely different cumulative page-evidence reducer
 before any router is built.
+
+Source commit `36f8bf0aacc6725c8450f38f21e4695fc8ed3c94` tested exactly one
+such successor: fixed integer reciprocal-rank accumulation with no learned
+weight or distance-scale parameter. Spot instance `i-00aaf603ab76e5381`
+completed in 2.212211318 seconds and 22.83 CPU-seconds with 157,556,736 bytes
+peak RSS, zero PSI, zero swap, and zero page reads. Rank 32 was best at 884,765
+ppm aggregate recall, 500,000 ppm minimum recall, and 886,150 ppm oracle
+attainment; deeper prefixes degraded monotonically after rank 32. The
+3,421,449-byte canonical result has SHA-256
+`c92b87efe7b56ab07afbe790af2795e626dbb1c8eddd7ba76d342cd9e6482554`;
+the 1,331-byte terminal has SHA-256
+`c8112296485f892f3ee51ef1aba3ed09c1164435a15eab3d83409ff05866428e`.
+They are rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/open/36f8bf0aacc6725c8450f38f21e4695fc8ed3c94/v26-cumulative-exact-global-36f8bf0/exact-a0001/`.
+
+A bounded post-terminal identity check then compared the first-ten row
+ordinals retained by exact-global scoring with the independently authenticated
+external-truth Parquet. All 512 ordered lists matched exactly. Consequently,
+applying the already-registered exact maximum-cover rule to those ten rows is
+algebraically the layout oracle: 998,828 ppm aggregate, 900,000 ppm minimum,
+and at most eight pages. This is not a third fitted reducer and requires no new
+scientific run. It proves that exact row retrieval plus exact maximum cover can
+map the external queries to the passing layout, while both lossy weighted page
+summaries are rejected. The bounded router may now be falsified against this
+fixed top-ten/maximum-cover target. D3 and release claims remain fenced.
