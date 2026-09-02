@@ -1668,6 +1668,18 @@ and 995,000 ppm oracle attainment:
 | 32 | 857,226 | 0 | 857,226 | 512, 32, 64 |
 | 64 | 913,281 | 300,000 | 913,281 | 512, 32, 64 |
 
+The exact eight-page layout oracle itself recovered 10,134 of 10,240 hits:
+936 queries fit all ten neighbors in eight pages, 70 fit nine, and 18 fit
+eight. Perfect recall is therefore impossible with the current layout and
+exact-eight-page contract, although the 98.9648% layout ceiling remains above
+the registered aggregate gate. The best eight-page router matched that oracle
+on only 184 queries and fell below it on 840. It selected the pseudoquery's own
+page for 938 queries; the registered own-page-removal sensitivity drops its
+aggregate recall from 652,636 to 452,929 ppm. At 64 pages the corresponding
+own-page-removed recall is 789,550 ppm. Because production queries do not have
+an indexed self row, this sensitivity makes the already-failing corpus-row
+screen optimistic rather than pessimistic.
+
 The result records `passed=false`, `selected_cell=null`, and
 `claim_eligible=false`; consequently no pseudoquery pass receipt exists. The
 failure is scientific rather than operational: increasing every registered
