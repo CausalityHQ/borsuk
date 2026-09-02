@@ -5,11 +5,12 @@ use std::{collections::BTreeMap, io::Write, path::PathBuf};
 use borsuk_v26::{
     V26CandidateCoverRequest, V26CentroidRouterRequest, V26ExactGlobalRequest,
     V26LayoutEvaluationRequest, V26LocalObjectPath, V26ObjectIdentity, V26PageModeRouterRequest,
-    V26TreeRouterRequest, V26TruthBuildRequest, canonical_v26_layout_build_output_bytes,
-    canonical_v26_layout_result_bytes, canonical_v26_object_identity_bytes,
-    evaluate_v26_layout_oracle, run_v26_candidate_row_cover, run_v26_centroid_router,
-    run_v26_exact_global, run_v26_layout_build_directory, run_v26_page_mode_router,
-    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
+    V26Pq8CoverRequest, V26TreeRouterRequest, V26TruthBuildRequest,
+    canonical_v26_layout_build_output_bytes, canonical_v26_layout_result_bytes,
+    canonical_v26_object_identity_bytes, evaluate_v26_layout_oracle, run_v26_candidate_row_cover,
+    run_v26_centroid_router, run_v26_exact_global, run_v26_layout_build_directory,
+    run_v26_page_mode_router, run_v26_pq8_candidate_cover, run_v26_tree_router,
+    run_v26_tree_router_diagnostic, run_v26_truth_build,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +102,7 @@ enum V26CliMode {
     CentroidRouter(CentroidRouterRequest),
     PageModeRouter(PageModeRouterRequest),
     CandidateCover(CandidateCoverRequest),
+    Pq8Cover(CandidateCoverRequest),
 }
 
 fn take(values: &mut BTreeMap<String, String>, key: &str) -> Result<String, String> {
@@ -163,6 +165,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
     let mut centroid_router = false;
     let mut page_mode_router = false;
     let mut candidate_cover = false;
+    let mut pq8_cover = false;
     let mut execute = false;
     let mut values = BTreeMap::new();
     while let Some(flag) = arguments.next() {
@@ -220,6 +223,12 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     return Err("duplicate --scan-candidate-rows".to_owned());
                 }
                 candidate_cover = true;
+            }
+            "--route-pq8-cover" => {
+                if pq8_cover {
+                    return Err("duplicate --route-pq8-cover".to_owned());
+                }
+                pq8_cover = true;
             }
             "--execute" => {
                 if execute {
@@ -305,6 +314,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             + u8::from(centroid_router)
             + u8::from(page_mode_router)
             + u8::from(candidate_cover)
+            + u8::from(pq8_cover)
             != 1
     {
         return Err("exactly one executable phase is required".to_owned());
@@ -405,7 +415,13 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         }
         return Ok(V26CliMode::Evaluate(layout));
     }
-    if router || router_diagnostic || centroid_router || page_mode_router || candidate_cover {
+    if router
+        || router_diagnostic
+        || centroid_router
+        || page_mode_router
+        || candidate_cover
+        || pq8_cover
+    {
         let primary_tree = take_registered(&mut values, "primary-tree")?;
         let replica_tree = take_registered(&mut values, "replica-tree")?;
         let page_budget = take(&mut values, "--page-budget")?
@@ -460,8 +476,15 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     evidence_output_path,
                     evidence_output_uri,
                 })
-            } else {
+            } else if candidate_cover {
                 V26CliMode::CandidateCover(CandidateCoverRequest {
+                    construction,
+                    router: request,
+                    evidence_output_path,
+                    evidence_output_uri,
+                })
+            } else {
+                V26CliMode::Pq8Cover(CandidateCoverRequest {
                     construction,
                     router: request,
                     evidence_output_path,
@@ -685,6 +708,33 @@ fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
             })
             .map_err(|error| error.to_string())
         }
+        V26CliMode::Pq8Cover(request) => {
+            let generation = request.router.generation.clone();
+            run_v26_pq8_candidate_cover(&V26Pq8CoverRequest {
+                construction_rows: local_object(
+                    "construction-parquet",
+                    &generation,
+                    request.construction,
+                ),
+                router: V26TreeRouterRequest {
+                    primary_tree: local_object(
+                        "primary-tree-parquet",
+                        &generation,
+                        request.router.primary_tree,
+                    ),
+                    replica_tree: local_object(
+                        "replica-tree-parquet",
+                        &generation,
+                        request.router.replica_tree,
+                    ),
+                    layout: evaluation_request(request.router.layout),
+                    page_budget: request.router.page_budget,
+                },
+                evidence_output_path: request.evidence_output_path,
+                evidence_output_uri: request.evidence_output_uri,
+            })
+            .map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -867,6 +917,19 @@ mod tests {
             .find(|argument| argument.as_str() == "s3://bucket/page-mode-evidence.parquet")
             .unwrap();
         *evidence_uri = "s3://bucket/candidate-cover-evidence.parquet".to_owned();
+        args
+    }
+
+    fn pq8_cover_args() -> Vec<String> {
+        let mut args = candidate_cover_args();
+        let mode = args
+            .iter_mut()
+            .find(|argument| argument.as_str() == "--scan-candidate-rows")
+            .unwrap();
+        *mode = "--route-pq8-cover".to_owned();
+        for argument in &mut args {
+            *argument = argument.replace("candidate-cover-evidence", "pq8-cover-evidence");
+        }
         args
     }
 
@@ -1180,6 +1243,34 @@ mod tests {
             vec!["--d3", "forbidden"],
         ] {
             let mut args = candidate_cover_args();
+            args.extend(mutation.into_iter().map(str::to_owned));
+            assert!(parse_v26_args(args).is_err());
+        }
+    }
+
+    #[test]
+    fn v26_pq8_cover_cli_is_fixed_offline_and_emits_only_parquet_evidence() {
+        // Break caught: PQ width/training/frontier becomes tunable, bulk evidence becomes JSON,
+        // or the diagnostic gains page, storage, endpoint, or D3 capabilities.
+        let parsed = parse_v26_args(pq8_cover_args()).unwrap();
+        let V26CliMode::Pq8Cover(request) = parsed else {
+            panic!("PQ8 cover mode differs");
+        };
+        assert_eq!(
+            request.evidence_output_path,
+            std::path::PathBuf::from("/output/pq8-cover-evidence.parquet")
+        );
+        for mutation in [
+            vec!["--pq-width", "12"],
+            vec!["--training-rows", "4096"],
+            vec!["--candidate-page-limit", "64"],
+            vec!["--ranked-row-limits", "10"],
+            vec!["--bucket", "forbidden"],
+            vec!["--endpoint", "https://forbidden"],
+            vec!["--page-prefix", "forbidden"],
+            vec!["--d3", "forbidden"],
+        ] {
+            let mut args = pq8_cover_args();
             args.extend(mutation.into_iter().map(str::to_owned));
             assert!(parse_v26_args(args).is_err());
         }
