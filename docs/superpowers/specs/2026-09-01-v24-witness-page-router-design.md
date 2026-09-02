@@ -237,17 +237,16 @@ does not measure or gate selector p99 because corpus pseudoqueries are not
 benchmark latency authority, and it does not charge the streaming corpus row
 group against the separately authenticated steady-serving projection.
 
-The exact page-cover computation is total for valid assignments and returns
-both pages and hits. An eight-page cover below eight hits is a recorded
-structural exclusion, not an authority error. The screen rejects unless the
-best complete registered cell has aggregate recall at least 975,000 ppm and
-oracle attainment at least 995,000 ppm, and the cohort-wide eight-page
-structural-exclusion fraction is at most 50,000 ppm. Five percent is below the
-8.333% mathematical ceiling at which all other queries scoring ten hits and
-excluded queries scoring seven could still average 975,000 ppm. This is the
-only pseudoquery decision rule. Exact selected-page cardinality remains a
-schema invariant. Serving memory and latency remain separate preflight and
-development gates.
+The exact page-cover computation returns both pages and hits. For ten valid
+nonempty primary/optional-replica assignments, an eight-page cover of at least
+eight neighbors always exists: choose one page from each of any eight
+neighbors, then remove duplicates. Therefore an eight-page result below eight
+hits is an authority failure, not a tolerated cohort exclusion. The screen
+rejects unless at least one complete registered cell has aggregate recall at
+least 975,000 ppm and oracle attainment at least 995,000 ppm. This is the only
+pseudoquery decision rule. Exact selected-page cardinality remains a schema
+invariant. Serving memory and latency remain separate preflight and development
+gates.
 
 The phase emits every cell and cannot select, prune, reorder, or seal one:
 `selected_cell` is always null. If the screen rejects, the architecture stops
@@ -269,11 +268,10 @@ Per-query/per-cell evidence uses deterministic Parquet with exact columns
 `rank_one_distance: Float32`. These columns quantify the corpus-row own-page
 shortcut and near-duplicate sensitivity but do not become extra tunable gates.
 Rows are ordered by `(cell_ordinal, pseudoquery_ordinal)` and both selected-page
-lists are unique ascending with the registered budget unless fewer non-own
-candidate pages exist, which is recorded as a structural exclusion. A small
+lists are unique ascending with the registered budget. A small
 screen-specific canonical JSON result binds all inputs, the evidence
 SHA-256/length/URI, the exact split and source-ordinal-list SHA-256, distance
-backend, every recomputed cell aggregate and structural-exclusion count,
+backend and every recomputed cell aggregate,
 `selected_cell: null`, pass/reject, zero benchmark-query reads, and zero
 page-body reads. It contains no per-query arrays, scalar page arrays, or timing
 samples. Serialization streams or rereads the Parquet evidence to independently
