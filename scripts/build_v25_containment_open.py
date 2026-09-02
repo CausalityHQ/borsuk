@@ -377,14 +377,13 @@ def _exact_oracle_pages(assignments: Iterable[tuple[int, ...]], budget: int) -> 
             candidate = (*pages, page)
             if key not in states or candidate < states[key]:
                 states[key] = candidate
+    maximum_hits = max(covered.bit_count() for covered, _count in states)
     return list(
-        max(
-            states.items(),
-            key=lambda item: (
-                item[0][0].bit_count(),
-                tuple(-page for page in item[1]),
-            ),
-        )[1]
+        min(
+            pages
+            for (covered, _count), pages in states.items()
+            if covered.bit_count() == maximum_hits
+        )
     )
 
 

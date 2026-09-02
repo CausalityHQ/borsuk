@@ -203,6 +203,12 @@ class V25OpenSelectionTests(unittest.TestCase):
 
 
 class V25OpenConversionTests(unittest.TestCase):
+    def test_v25_open_oracle_prefers_shorter_lexicographic_cover(self) -> None:
+        """Adding redundant pages must not replace a shorter complete cover."""
+        assignments = [(0, page) for page in range(1, 11)]
+
+        self.assertEqual(subject._exact_oracle_pages(assignments, 8), [0])
+
     def test_v25_open_conversion_remaps_physical_pages_and_builds_exact_truth(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
