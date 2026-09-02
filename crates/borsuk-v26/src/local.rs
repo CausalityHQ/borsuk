@@ -508,6 +508,11 @@ fn read_inputs(
     request: &V26LayoutBuildRequest,
     authority: &V26LayoutAuthority,
 ) -> Result<Vec<V26ConstructionRow>> {
+    if request.construction_rows.identity != authority.construction_rows
+        || request.source_map.identity != authority.source_map
+    {
+        return Err(invalid("V26 construction input authority differs"));
+    }
     authenticate(&request.construction_rows, "construction-parquet")?;
     authenticate(&request.source_map, "source-map-parquet")?;
     if request.construction_rows.identity.generation != authority.generation
@@ -1079,27 +1084,10 @@ mod tests {
         V26LocalObjectPath,
     ) {
         let temp = TempDir::new().unwrap();
-        let authority = V26LayoutAuthority {
-            schema: "borsuk-v26-dual-tree-layout-v1".to_owned(),
-            generation: "v26-local-test".to_owned(),
-            source_commit: "1".repeat(40),
-            source_archive_sha256: "2".repeat(64),
-            primary_seed: 0x5632_362d_5452_4545,
-            replica_seed: 0x5632_362d_5245_504c,
-            page_capacity: 704,
-            expected_rows: 1_409,
-        };
-        let manifest_path = temp.path().join("manifest.json");
-        let mut manifest_bytes = serde_json::to_vec(&canonical_json_value(
-            serde_json::to_value(&authority).unwrap(),
-        ))
-        .unwrap();
-        manifest_bytes.push(b'\n');
-        fs::write(&manifest_path, manifest_bytes).unwrap();
-
-        let ordinals = UInt64Array::from_iter_values(0..authority.expected_rows);
-        let mut flat = Vec::with_capacity(authority.expected_rows as usize * 96);
-        for ordinal in 0..authority.expected_rows as usize {
+        let expected_rows = 1_409_u64;
+        let ordinals = UInt64Array::from_iter_values(0..expected_rows);
+        let mut flat = Vec::with_capacity(expected_rows as usize * 96);
+        for ordinal in 0..expected_rows as usize {
             for dimension in 0..96 {
                 flat.push(if dimension == ordinal % 96 { 1.0 } else { 0.0 });
             }
@@ -1124,18 +1112,39 @@ mod tests {
             vec![
                 Arc::new(ordinals) as ArrayRef,
                 Arc::new(UInt64Array::from_iter_values(
-                    10_000..10_000 + authority.expected_rows,
+                    10_000..10_000 + expected_rows,
                 )),
             ],
         )
         .unwrap();
         let source_map_path = temp.path().join("source-map.parquet");
         write_parquet(&source_map_path, &source_map);
+        let construction = identity("construction-parquet", &construction_path);
+        let source_map = identity("source-map-parquet", &source_map_path);
+        let authority = V26LayoutAuthority {
+            schema: "borsuk-v26-dual-tree-layout-v1".to_owned(),
+            generation: "v26-local-test".to_owned(),
+            source_commit: "1".repeat(40),
+            source_archive_sha256: "2".repeat(64),
+            construction_rows: construction.identity.clone(),
+            source_map: source_map.identity.clone(),
+            primary_seed: 0x5632_362d_5452_4545,
+            replica_seed: 0x5632_362d_5245_504c,
+            page_capacity: 704,
+            expected_rows,
+        };
+        let manifest_path = temp.path().join("manifest.json");
+        let mut manifest_bytes = serde_json::to_vec(&canonical_json_value(
+            serde_json::to_value(&authority).unwrap(),
+        ))
+        .unwrap();
+        manifest_bytes.push(b'\n');
+        fs::write(&manifest_path, manifest_bytes).unwrap();
         (
             temp,
             identity("layout-manifest", &manifest_path),
-            identity("construction-parquet", &construction_path),
-            identity("source-map-parquet", &source_map_path),
+            construction,
+            source_map,
         )
     }
 
@@ -1366,6 +1375,28 @@ mod tests {
             run_v26_layout_build(&request(
                 manifest,
                 construction,
+                source_map,
+                output_dir.clone(),
+                1,
+            ))
+            .is_err()
+        );
+        assert!(!output_dir.exists());
+    }
+
+    #[test]
+    fn v26_layout_local_manifest_rejects_coherent_input_substitution() {
+        // Break caught: a different URI with identical valid bytes replaces a frozen input.
+        let (temp, manifest, construction, source_map) = fixture();
+        let alternate_path = temp.path().join("alternate-construction.parquet");
+        fs::copy(&construction.path, &alternate_path).unwrap();
+        let mut alternate = identity("construction-parquet", &alternate_path);
+        alternate.identity.uri = "s3://v26-input/alternate-construction-parquet".to_owned();
+        let output_dir = temp.path().join("substituted-output");
+        assert!(
+            run_v26_layout_build(&request(
+                manifest,
+                alternate,
                 source_map,
                 output_dir.clone(),
                 1,

@@ -48,7 +48,9 @@ can later serve within eight page reads.
 ## Leakage and phase capabilities
 
 The layout builder receives only the authenticated construction Parquet,
-source-map Parquet, layout manifest, and an empty output directory. It cannot
+source-map Parquet, layout manifest, and an empty output directory. The manifest
+binds the exact URI, SHA-256, byte length, role, and generation of both Parquets;
+coherent substitution of another valid input is rejected before parsing. It cannot
 open pseudoqueries, truth, evidence, prior results, benchmark queries, neighbors,
 or page-quality metrics. File roles, exact path inventory, and byte identities
 are authenticated before vectors are parsed. The query and truth Parquets are

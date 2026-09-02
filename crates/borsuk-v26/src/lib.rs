@@ -150,6 +150,8 @@ pub struct V26LayoutAuthority {
     pub generation: String,
     pub source_commit: String,
     pub source_archive_sha256: String,
+    pub construction_rows: V26ObjectIdentity,
+    pub source_map: V26ObjectIdentity,
     pub primary_seed: u64,
     pub replica_seed: u64,
     pub page_capacity: u32,
@@ -270,6 +272,16 @@ fn validate_receipt(receipt: &V26LayoutReceipt) -> Result<()> {
     {
         return Err(invalid("V26 layout authority differs"));
     }
+    validate_identity(
+        &authority.construction_rows,
+        "construction-parquet",
+        &authority.generation,
+    )?;
+    validate_identity(
+        &authority.source_map,
+        "source-map-parquet",
+        &authority.generation,
+    )?;
     let leaves = receipt.row_count.div_ceil(u64::from(V26_PAGE_CAPACITY));
     let leaves_u32 = u32::try_from(leaves).map_err(|_| invalid("V26 page count overflows"))?;
     if receipt.leaves_per_tree != leaves_u32
@@ -306,6 +318,10 @@ fn validate_receipt(receipt: &V26LayoutReceipt) -> Result<()> {
     ];
     if receipt.inputs.len() != input_roles.len() || receipt.outputs.len() != output_roles.len() {
         return Err(invalid("V26 object inventory differs"));
+    }
+    if receipt.inputs[0] != authority.construction_rows || receipt.inputs[2] != authority.source_map
+    {
+        return Err(invalid("V26 construction input authority differs"));
     }
     for (identity, role) in receipt.inputs.iter().zip(input_roles) {
         validate_identity(identity, role, &authority.generation)?;
@@ -443,6 +459,8 @@ mod tests {
             generation: "v26-test-generation".to_owned(),
             source_commit: "1".repeat(40),
             source_archive_sha256: "2".repeat(64),
+            construction_rows: identity("construction-parquet", '3', 1024),
+            source_map: identity("source-map-parquet", '4', 512),
             primary_seed: PRIMARY_SEED,
             replica_seed: REPLICA_SEED,
             page_capacity: 704,
@@ -537,13 +555,14 @@ mod tests {
     }
 
     fn receipt() -> V26LayoutReceipt {
+        let authority = authority(1_409);
         V26LayoutReceipt {
-            authority: authority(1_409),
             inputs: vec![
-                identity("construction-parquet", '3', 540_000),
-                identity("layout-manifest", '4', 900),
-                identity("source-map-parquet", '5', 20_000),
+                authority.construction_rows.clone(),
+                identity("layout-manifest", '5', 900),
+                authority.source_map.clone(),
             ],
+            authority,
             outputs: vec![
                 identity("page-assignments-parquet", '6', 30_000),
                 identity("primary-tree-parquet", '7', 4_000),
