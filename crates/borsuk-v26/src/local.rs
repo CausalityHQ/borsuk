@@ -21,10 +21,11 @@ use sha2::{Digest, Sha256};
 
 use crate::tree::build_v26_dual_tree_layout_with_workers;
 use crate::{
-    Result, V26ConstructionRow, V26Disposition, V26LayoutAuthority, V26LayoutReceipt,
-    V26LayoutResult, V26LayoutSample, V26Node, V26ObjectIdentity, V26QueryTruth, V26RowPages,
-    V26Tree, canonical_json_value, canonical_v26_layout_receipt_bytes,
-    canonical_v26_layout_result_bytes, exact_lower_hex, exact_v26_layout_oracle_pages, invalid,
+    Result, V26ConstructionRow, V26Disposition, V26ExactGlobalQuery, V26ExactGlobalSample,
+    V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult, V26LayoutSample, V26Node,
+    V26ObjectIdentity, V26QueryTruth, V26RowPages, V26Tree, canonical_json_value,
+    canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
+    evaluate_v26_exact_global_rows, exact_lower_hex, exact_v26_layout_oracle_pages, invalid,
     projected_steps, validate_layout_authority, validate_v26_dual_tree_layout,
 };
 
@@ -120,6 +121,13 @@ pub struct V26LayoutEvaluationRequest {
     pub pseudoqueries: V26LocalObjectPath,
     pub truth: V26LocalObjectPath,
     pub expected_queries: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26ExactGlobalRequest {
+    pub construction_rows: V26LocalObjectPath,
+    pub layout: V26LayoutEvaluationRequest,
+    pub ranked_row_limits: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,7 +318,7 @@ fn read_evaluation_queries(
     path: &Path,
     expected_queries: u32,
     source_rows: u64,
-) -> Result<Vec<(u32, u64)>> {
+) -> Result<Vec<V26ExactGlobalQuery>> {
     let reader = open_reader(path)?;
     if reader.schema().as_ref() != &v26_query_schema()
         || u32::try_from(reader.metadata().file_metadata().num_rows()).ok()
@@ -371,7 +379,16 @@ fn read_evaluation_queries(
             {
                 return Err(invalid("V26 query authority differs"));
             }
-            queries.push((query_ordinal, source_ordinal));
+            let vector: [f32; 96] = values
+                .values()
+                .as_ref()
+                .try_into()
+                .map_err(|_| invalid("V26 query vector width differs"))?;
+            queries.push(V26ExactGlobalQuery {
+                query_ordinal,
+                source_ordinal,
+                vector,
+            });
         }
     }
     if queries.len() != expected_queries as usize {
@@ -395,7 +412,7 @@ fn fixed_u32_row(list: &FixedSizeListArray, row: usize, width: usize) -> Result<
 fn read_evaluation_truth(
     path: &Path,
     expected_queries: u32,
-    queries: &[(u32, u64)],
+    queries: &[V26ExactGlobalQuery],
     assignments: &[V26RowPages],
 ) -> Result<Vec<V26QueryTruth>> {
     let reader = open_reader(path)?;
@@ -478,7 +495,8 @@ fn read_evaluation_truth(
                 neighbor_source_ordinals: neighbor_values.values().to_vec(),
                 ground_truth_page_assignments,
             };
-            if queries.get(query_index).map(|query| query.0) != Some(truth.query_ordinal)
+            if queries.get(query_index).map(|query| query.query_ordinal)
+                != Some(truth.query_ordinal)
                 || stored_oracle[..oracle_length]
                     .windows(2)
                     .any(|pair| pair[0] >= pair[1])
@@ -492,6 +510,122 @@ fn read_evaluation_truth(
         return Err(invalid("V26 truth inventory differs"));
     }
     Ok(truths)
+}
+
+fn read_exact_global_construction(
+    path: &Path,
+    expected_rows: u64,
+) -> Result<Vec<V26ConstructionRow>> {
+    let reader = open_reader(path)?;
+    if reader.schema().as_ref() != &v26_construction_schema()
+        || u64::try_from(reader.metadata().file_metadata().num_rows()).ok() != Some(expected_rows)
+    {
+        return Err(invalid(
+            "V26 exact-global construction Parquet authority differs",
+        ));
+    }
+    let mut rows = Vec::with_capacity(
+        usize::try_from(expected_rows)
+            .map_err(|_| invalid("V26 exact-global construction row count overflows"))?,
+    );
+    for batch in reader
+        .build()
+        .map_err(|error| invalid(&format!("V26 exact-global reader failed: {error}")))?
+    {
+        let batch =
+            batch.map_err(|error| invalid(&format!("V26 exact-global batch failed: {error}")))?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V26 exact-global construction nullability differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V26 exact-global source ordinal differs"))?;
+        let vectors = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V26 exact-global vector differs"))?;
+        for index in 0..batch.num_rows() {
+            let vector = vectors.value(index);
+            let values = vector
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| invalid("V26 exact-global vector child differs"))?;
+            if values.len() != 96 || values.null_count() != 0 {
+                return Err(invalid("V26 exact-global vector width differs"));
+            }
+            let source_ordinal = ordinals.value(index);
+            if usize::try_from(source_ordinal).ok() != Some(rows.len()) {
+                return Err(invalid("V26 exact-global source inventory differs"));
+            }
+            rows.push(V26ConstructionRow {
+                source_ordinal,
+                vector: values
+                    .values()
+                    .as_ref()
+                    .try_into()
+                    .map_err(|_| invalid("V26 exact-global vector width differs"))?,
+            });
+        }
+    }
+    if u64::try_from(rows.len()).ok() != Some(expected_rows) {
+        return Err(invalid("V26 exact-global construction inventory differs"));
+    }
+    Ok(rows)
+}
+
+pub fn evaluate_v26_exact_global(
+    request: &V26ExactGlobalRequest,
+) -> Result<Vec<V26ExactGlobalSample>> {
+    let (_, _, layout_result) = evaluate_v26_layout_oracle(&request.layout)?;
+    if layout_result.disposition != V26Disposition::BoundedLayoutCandidate {
+        return Err(invalid("V26 exact-global layout gate is closed"));
+    }
+    let terminal = read_layout_terminal(&request.layout.layout_terminal)?;
+    if request.construction_rows.identity != terminal.authority.construction_rows
+        || !terminal
+            .outputs
+            .iter()
+            .any(|identity| identity == &request.layout.page_assignments.identity)
+    {
+        return Err(invalid("V26 exact-global input authority differs"));
+    }
+    authenticate(&request.construction_rows, "construction-parquet")?;
+    authenticate(&request.layout.page_assignments, "page-assignments-parquet")?;
+    authenticate(&request.layout.pseudoqueries, "pseudoqueries-parquet")?;
+    authenticate(&request.layout.truth, "truth-parquet")?;
+    let expected_rows = terminal.authority.expected_rows;
+    let rows = read_exact_global_construction(&request.construction_rows.path, expected_rows)?;
+    let assignments = read_assignments(
+        &request.layout.page_assignments.path,
+        i64::try_from(expected_rows)
+            .map_err(|_| invalid("V26 exact-global row count overflows"))?,
+    )?;
+    let queries = read_evaluation_queries(
+        &request.layout.pseudoqueries.path,
+        request.layout.expected_queries,
+        expected_rows,
+    )?;
+    let truths = read_evaluation_truth(
+        &request.layout.truth.path,
+        request.layout.expected_queries,
+        &queries,
+        &assignments,
+    )?;
+    evaluate_v26_exact_global_rows(
+        &rows,
+        &assignments,
+        &queries,
+        &truths,
+        &request.ranked_row_limits,
+        8,
+    )
 }
 
 fn open_reader(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<fs::File>> {
@@ -1088,7 +1222,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        V26LayoutBuildRequest, V26LayoutEvaluationRequest, V26LocalObjectPath, assignments_batch,
+        V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
+        V26LocalObjectPath, assignments_batch, evaluate_v26_exact_global,
         evaluate_v26_layout_oracle, output_identity, read_assignments, run_v26_layout_build,
         v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
         v26_source_map_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
@@ -1294,7 +1429,7 @@ mod tests {
             i64::from(build.row_count as u32),
         )
         .unwrap();
-        let neighbors = (0_u64..10).collect::<Vec<_>>();
+        let neighbors = (512_u64..522).collect::<Vec<_>>();
         let neighbor_pages = neighbors
             .iter()
             .map(|neighbor| {
@@ -1585,5 +1720,29 @@ mod tests {
         assert_eq!(result.disposition, V26Disposition::BoundedLayoutCandidate);
         assert_eq!(result.page_body_reads, 0);
         canonical_v26_layout_result_bytes(&result, &truths, &samples).unwrap();
+    }
+
+    #[test]
+    fn v26_exact_global_local_authenticates_parquet_and_keeps_only_ranked_heads() {
+        // Break caught: exact-global bypasses the closed layout authority or materializes the
+        // full query-by-construction distance matrix instead of bounded ranked heads.
+        let (temp, layout) = evaluation_fixture();
+        let request = V26ExactGlobalRequest {
+            construction_rows: identity(
+                "construction-parquet",
+                &temp.path().join("construction.parquet"),
+            ),
+            layout,
+            ranked_row_limits: vec![10, 32, 128, 512, 2_048, 4_096],
+        };
+
+        let samples = evaluate_v26_exact_global(&request).unwrap();
+
+        assert_eq!(samples.len(), 512 * 6);
+        assert!(samples.iter().all(|sample| {
+            sample.candidate_rows < 1_409
+                && sample.first_ten_ranked_rows.len() == 10
+                && sample.selected_pages.len() <= 8
+        }));
     }
 }
