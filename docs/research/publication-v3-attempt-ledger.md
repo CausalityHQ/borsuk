@@ -2079,3 +2079,46 @@ maximum cover: the exact float32 control on the identical frontier passed at
 diagnostic is a single preregistered 8/16/24/32-byte fidelity curve; it will
 identify the minimum code width that recovers the control before any serving
 RAM gate is revised. D3 and release claims remain fenced.
+
+### Fixed PQ fidelity ladder rejects naive widening
+
+Source commit `c7097101dacddad9cc2f8b5cc9e9714b72c952a9` evaluated the
+fixed 8/16/24/32-byte PQ ladder once on Spot instance
+`i-0aeaca990bb5c9098` (`c7g.4xlarge`, `eu-central-1a`). All four arms used
+the same immutable construction, trees, assignments, 512 external queries,
+truth, first-128-page frontier, bounded top-ten heap, and exact eight-page
+maximum-cover reducer. Bulk evidence was emitted as Parquet. Width, training
+inventory, frontier, and rank depth were not caller tunable, truth was joined
+only after selection, and the run read zero page bodies.
+
+The aggregate/minimum/oracle-attainment ppm triples for widths 8, 16, 24, and
+32 were respectively 720,898/0/722,026; 815,039/300,000/816,314;
+867,382/400,000/868,740; and 907,226/600,000/908,646. Every arm failed the
+literal 975,000 aggregate, 800,000 minimum-query, and 995,000 oracle-attainment
+gates. Their complete 100M-row resident projections were respectively
+2,937,537,416; 4,537,537,416; 6,137,537,416; and 7,737,537,416 bytes, so only
+the already-rejected eight-byte arm also fit the 3 GiB gate.
+
+The 11,841,456-byte executable had SHA-256
+`3280ad884625b7386483ab8e7dbab0d8ea79bcefa37f23e22422c27df9842fbc`;
+the 8,442,802-byte source archive had SHA-256
+`acfe7e00745bea54588560953d86910eb5f4187f4240dfd3e468baa4b76df3ef`.
+Scientific execution took 30.717411154 seconds and 69.85 CPU-seconds, peaked
+at 265,318,400 bytes RSS, and observed zero memory PSI and zero swap growth.
+The 1,838-byte canonical result has SHA-256
+`2f1719848eab742931ff4201fa339fa71b96552353531cdfde7c20e080ff53f1`;
+the 28,700-byte Parquet evidence has SHA-256
+`02f130b549fcac090a112ab05f3d5958e4c0295e783b41cd4fd1f0e918bd3c65`;
+the 2,089-byte terminal has SHA-256
+`b1e72e6d63739f72e4f1d7050bb2015aff982d96ab06408b55f39012a515fd9e`.
+Artifacts are rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/open/c7097101dacddad9cc2f8b5cc9e9714b72c952a9/v26-pq-width-c709710/width-a0001/`.
+The instance published its terminal, shut down, and is terminated.
+
+This rejects naive identity-PQ widening as the complete serving answer. The
+monotonic quality gain shows quantization fidelity is causal, but 32 bytes per
+row still misses the quality gates while exceeding the memory gate by more
+than 4.5 GiB. The next bounded falsifier deduplicates one 16-byte code per row
+plus two page identifiers within the 3 GiB resident gate, retrieves a fixed
+top-L ladder, and exact-reranks only that bounded set from local cold vector
+storage. Recall gates, D3, and release claims remain fenced.
