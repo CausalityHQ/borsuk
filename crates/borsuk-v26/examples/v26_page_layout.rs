@@ -4,8 +4,10 @@ use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
 use borsuk_v26::{
     V26ExactGlobalRequest, V26LayoutEvaluationRequest, V26LocalObjectPath, V26ObjectIdentity,
-    canonical_v26_layout_build_output_bytes, canonical_v26_layout_result_bytes,
+    V26TruthBuildRequest, canonical_v26_layout_build_output_bytes,
+    canonical_v26_layout_result_bytes, canonical_v26_object_identity_bytes,
     evaluate_v26_layout_oracle, run_v26_exact_global, run_v26_layout_build_directory,
+    run_v26_truth_build,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,8 +47,20 @@ struct ExactGlobalRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct TruthRequest {
+    generation: String,
+    construction: RegisteredFile,
+    external_queries: RegisteredFile,
+    expected_rows: u64,
+    expected_queries: u32,
+    output_path: PathBuf,
+    output_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum V26CliMode {
     Build(BuildRequest),
+    Truth(TruthRequest),
     Evaluate(EvaluationRequest),
     ExactGlobal(ExactGlobalRequest),
 }
@@ -103,6 +117,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         .next()
         .ok_or_else(|| "program is absent".to_owned())?;
     let mut build = false;
+    let mut truth_build = false;
     let mut evaluate = false;
     let mut exact_global = false;
     let mut execute = false;
@@ -114,6 +129,12 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     return Err("duplicate --build-layout".to_owned());
                 }
                 build = true;
+            }
+            "--build-truth" => {
+                if truth_build {
+                    return Err("duplicate --build-truth".to_owned());
+                }
+                truth_build = true;
             }
             "--evaluate-layout" => {
                 if evaluate {
@@ -158,6 +179,13 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             | "--truth-uri"
             | "--truth-sha256"
             | "--truth-bytes"
+            | "--external-queries-path"
+            | "--external-queries-uri"
+            | "--external-queries-sha256"
+            | "--external-queries-bytes"
+            | "--truth-output-path"
+            | "--truth-output-uri"
+            | "--expected-rows"
             | "--expected-queries" => {
                 let value = arguments
                     .next()
@@ -181,7 +209,10 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             _ => return Err(format!("unknown or forbidden flag {flag}")),
         }
     }
-    if !execute || u8::from(build) + u8::from(evaluate) + u8::from(exact_global) != 1 {
+    if !execute
+        || u8::from(build) + u8::from(truth_build) + u8::from(evaluate) + u8::from(exact_global)
+            != 1
+    {
         return Err("exactly one executable phase is required".to_owned());
     }
     let generation = take(&mut values, "--generation")?;
@@ -213,6 +244,37 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             output_dir,
             output_uri_prefix,
             worker_count,
+        }));
+    }
+    if truth_build {
+        let construction = take_registered(&mut values, "construction")?;
+        let external_queries = take_registered(&mut values, "external-queries")?;
+        let expected_rows = take(&mut values, "--expected-rows")?
+            .parse()
+            .map_err(|_| "invalid --expected-rows".to_owned())?;
+        let expected_queries = take(&mut values, "--expected-queries")?
+            .parse()
+            .map_err(|_| "invalid --expected-queries".to_owned())?;
+        let output_path = PathBuf::from(take(&mut values, "--truth-output-path")?);
+        let output_uri = take(&mut values, "--truth-output-uri")?;
+        if !values.is_empty()
+            || !valid_registered(&construction)
+            || !valid_registered(&external_queries)
+            || expected_rows < 10
+            || expected_queries != 512
+            || output_path.as_os_str().is_empty()
+            || !output_uri.starts_with("s3://")
+        {
+            return Err("V26 truth arguments differ".to_owned());
+        }
+        return Ok(V26CliMode::Truth(TruthRequest {
+            generation,
+            construction,
+            external_queries,
+            expected_rows,
+            expected_queries,
+            output_path,
+            output_uri,
         }));
     }
     let layout_terminal = take_registered(&mut values, "layout-terminal")?;
@@ -306,6 +368,26 @@ fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
             .map_err(|error| error.to_string())?;
             canonical_v26_layout_build_output_bytes(&build_request, &output)
                 .map_err(|error| error.to_string())
+        }
+        V26CliMode::Truth(request) => {
+            let output = run_v26_truth_build(&V26TruthBuildRequest {
+                construction_rows: local_object(
+                    "construction-parquet",
+                    &request.generation,
+                    request.construction,
+                ),
+                external_queries: local_object(
+                    "external-queries-parquet",
+                    &request.generation,
+                    request.external_queries,
+                ),
+                expected_rows: request.expected_rows,
+                expected_queries: request.expected_queries,
+                output_path: request.output_path,
+                output_uri: request.output_uri,
+            })
+            .map_err(|error| error.to_string())?;
+            canonical_v26_object_identity_bytes(&output.identity).map_err(|error| error.to_string())
         }
         V26CliMode::Evaluate(request) => {
             let evaluation = evaluation_request(request);
@@ -421,6 +503,69 @@ mod tests {
             "10,32,128,512,2048,4096".to_owned(),
         ]);
         args
+    }
+
+    fn truth_args() -> Vec<String> {
+        let mut args = vec![
+            "v26_page_layout".to_owned(),
+            "--build-truth".to_owned(),
+            "--execute".to_owned(),
+            "--generation".to_owned(),
+            "v26-generation".to_owned(),
+        ];
+        for (role, byte) in [("construction", '5'), ("external-queries", '6')] {
+            args.extend([
+                format!("--{role}-path"),
+                format!("/input/{role}.parquet"),
+                format!("--{role}-uri"),
+                format!("s3://bucket/{role}.parquet"),
+                format!("--{role}-sha256"),
+                byte.to_string().repeat(64),
+                format!("--{role}-bytes"),
+                "4096".to_owned(),
+            ]);
+        }
+        args.extend([
+            "--expected-rows".to_owned(),
+            "1409".to_owned(),
+            "--expected-queries".to_owned(),
+            "512".to_owned(),
+            "--truth-output-path".to_owned(),
+            "/output/external-truth.parquet".to_owned(),
+            "--truth-output-uri".to_owned(),
+            "s3://bucket/output/external-truth.parquet".to_owned(),
+        ]);
+        args
+    }
+
+    #[test]
+    fn v26_external_query_truth_cli_has_only_explicit_local_parquet_roles() {
+        // Break caught: truth construction discovers data or receives layout/page/network access.
+        let parsed = parse_v26_args(truth_args()).unwrap();
+        let V26CliMode::Truth(request) = parsed else {
+            panic!("truth mode differs");
+        };
+        assert_eq!(request.generation, "v26-generation");
+        assert_eq!(request.expected_rows, 1_409);
+        assert_eq!(request.expected_queries, 512);
+        assert_eq!(request.construction.sha256, "5".repeat(64));
+        assert_eq!(request.external_queries.sha256, "6".repeat(64));
+        assert_eq!(
+            request.output_path,
+            std::path::Path::new("/output/external-truth.parquet")
+        );
+        let error = execute_v26_mode(V26CliMode::Truth(request)).unwrap_err();
+        assert!(error.contains("local object open failed"));
+        for forbidden in [
+            "--layout-terminal-path",
+            "--page-assignments-path",
+            "--bucket",
+            "--d3",
+        ] {
+            let mut args = truth_args();
+            args.extend([forbidden.to_owned(), "forbidden".to_owned()]);
+            assert!(parse_v26_args(args).is_err());
+        }
     }
 
     #[test]

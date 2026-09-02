@@ -769,6 +769,16 @@ pub fn canonical_v26_layout_receipt_bytes(receipt: &V26LayoutReceipt) -> Result<
     Ok(bytes)
 }
 
+pub fn canonical_v26_object_identity_bytes(identity: &V26ObjectIdentity) -> Result<Vec<u8>> {
+    validate_identity(identity, &identity.role, &identity.generation)?;
+    let value = serde_json::to_value(identity)
+        .map_err(|error| invalid(&format!("V26 identity serialization failed: {error}")))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V26 identity serialization failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 pub fn canonical_v26_layout_result_bytes(
     result: &V26LayoutResult,
     truths: &[V26QueryTruth],
