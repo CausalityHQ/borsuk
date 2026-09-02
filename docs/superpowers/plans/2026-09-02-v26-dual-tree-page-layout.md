@@ -169,6 +169,10 @@ pub struct V26LayoutSample {
     pub query_ordinal: u32, pub selected_pages: Vec<u32>,
     pub hits: u32, pub recall_ppm: u64,
 }
+pub struct V26QueryTruth {
+    pub query_ordinal: u32, pub neighbor_source_ordinals: Vec<u64>,
+    pub ground_truth_page_assignments: Vec<Vec<u32>>,
+}
 pub struct V26LayoutResult {
     pub schema: String, pub query_count: u32, pub aggregate_recall_ppm: u64,
     pub minimum_query_recall_ppm: u64, pub disposition: V26Disposition,
@@ -176,9 +180,10 @@ pub struct V26LayoutResult {
 }
 pub fn evaluate_v26_layout_oracle(
     request: &V26LayoutEvaluationRequest,
-) -> Result<(Vec<V26LayoutSample>, V26LayoutResult)>;
+) -> Result<(Vec<V26QueryTruth>, Vec<V26LayoutSample>, V26LayoutResult)>;
 pub fn canonical_v26_layout_result_bytes(
     result: &V26LayoutResult,
+    truths: &[V26QueryTruth],
     samples: &[V26LayoutSample],
 ) -> Result<Vec<u8>>;
 ```

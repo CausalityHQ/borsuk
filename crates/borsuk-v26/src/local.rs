@@ -21,9 +21,11 @@ use sha2::{Digest, Sha256};
 
 use crate::tree::build_v26_dual_tree_layout_with_workers;
 use crate::{
-    Result, V26ConstructionRow, V26LayoutAuthority, V26Node, V26ObjectIdentity, V26RowPages,
-    V26Tree, canonical_json_value, exact_lower_hex, invalid, projected_steps,
-    validate_v26_dual_tree_layout,
+    Result, V26ConstructionRow, V26Disposition, V26LayoutAuthority, V26LayoutReceipt,
+    V26LayoutResult, V26LayoutSample, V26Node, V26ObjectIdentity, V26QueryTruth, V26RowPages,
+    V26Tree, canonical_json_value, canonical_v26_layout_receipt_bytes,
+    canonical_v26_layout_result_bytes, exact_lower_hex, exact_v26_layout_oracle_pages, invalid,
+    projected_steps, validate_v26_dual_tree_layout,
 };
 
 fn vector_type() -> DataType {
@@ -44,6 +46,34 @@ pub fn v26_source_map_schema() -> Schema {
     Schema::new(vec![
         Field::new("source_ordinal", DataType::UInt64, false),
         Field::new("dataset_ordinal", DataType::UInt64, false),
+    ])
+}
+
+pub fn v26_query_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new("source_ordinal", DataType::UInt64, false),
+        Field::new("vector", vector_type(), false),
+    ])
+}
+
+pub fn v26_truth_schema() -> Schema {
+    let u32_list = |width| {
+        DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::UInt32, false)),
+            width,
+        )
+    };
+    Schema::new(vec![
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new(
+            "neighbor_source_ordinals",
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt64, false)), 10),
+            false,
+        ),
+        Field::new("primary_pages", u32_list(10), false),
+        Field::new("replica_pages", u32_list(10), false),
+        Field::new("oracle_pages", u32_list(8), false),
     ])
 }
 
@@ -81,6 +111,15 @@ pub struct V26LayoutBuildRequest {
     pub output_dir: PathBuf,
     pub output_uri_prefix: String,
     pub worker_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26LayoutEvaluationRequest {
+    pub layout_terminal: V26LocalObjectPath,
+    pub page_assignments: V26LocalObjectPath,
+    pub pseudoqueries: V26LocalObjectPath,
+    pub truth: V26LocalObjectPath,
+    pub expected_queries: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,6 +191,310 @@ fn read_manifest(object: &V26LocalObjectPath) -> Result<V26LayoutAuthority> {
         return Err(invalid("V26 layout manifest authority differs"));
     }
     Ok(authority)
+}
+
+fn read_layout_terminal(object: &V26LocalObjectPath) -> Result<V26LayoutReceipt> {
+    authenticate(object, "layout-terminal")?;
+    let bytes = fs::read(&object.path)
+        .map_err(|error| invalid(&format!("V26 layout terminal read failed: {error}")))?;
+    let receipt: V26LayoutReceipt = serde_json::from_slice(&bytes)
+        .map_err(|error| invalid(&format!("V26 layout terminal parse failed: {error}")))?;
+    if canonical_v26_layout_receipt_bytes(&receipt)? != bytes
+        || object.identity.generation != receipt.authority.generation
+    {
+        return Err(invalid("V26 layout terminal authority differs"));
+    }
+    Ok(receipt)
+}
+
+pub fn evaluate_v26_layout_oracle(
+    request: &V26LayoutEvaluationRequest,
+) -> Result<(Vec<V26QueryTruth>, Vec<V26LayoutSample>, V26LayoutResult)> {
+    let terminal = read_layout_terminal(&request.layout_terminal)?;
+    if request.expected_queries != 512
+        || !terminal
+            .outputs
+            .iter()
+            .any(|identity| identity == &request.page_assignments.identity)
+    {
+        return Err(invalid("V26 layout evaluation authority differs"));
+    }
+    authenticate(&request.page_assignments, "page-assignments-parquet")?;
+    authenticate(&request.pseudoqueries, "pseudoqueries-parquet")?;
+    authenticate(&request.truth, "truth-parquet")?;
+    if [
+        &request.page_assignments.identity,
+        &request.pseudoqueries.identity,
+        &request.truth.identity,
+    ]
+    .iter()
+    .any(|identity| identity.generation != terminal.authority.generation)
+    {
+        return Err(invalid("V26 layout evaluation generation differs"));
+    }
+    let assignment_rows = i64::try_from(terminal.row_count)
+        .map_err(|_| invalid("V26 assignment row count overflows"))?;
+    let assignments = read_assignments(&request.page_assignments.path, assignment_rows)?;
+    if assignments
+        .iter()
+        .enumerate()
+        .any(|(ordinal, row)| usize::try_from(row.source_ordinal).ok() != Some(ordinal))
+    {
+        return Err(invalid("V26 assignment inventory differs"));
+    }
+    let queries = read_evaluation_queries(
+        &request.pseudoqueries.path,
+        request.expected_queries,
+        terminal.row_count,
+    )?;
+    let truths = read_evaluation_truth(
+        &request.truth.path,
+        request.expected_queries,
+        &queries,
+        &assignments,
+    )?;
+    let samples = truths
+        .iter()
+        .map(|truth| {
+            let selected_pages =
+                exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?;
+            let hits = truth
+                .ground_truth_page_assignments
+                .iter()
+                .filter(|pages| {
+                    pages
+                        .iter()
+                        .any(|page| selected_pages.binary_search(page).is_ok())
+                })
+                .count() as u32;
+            Ok(V26LayoutSample {
+                query_ordinal: truth.query_ordinal,
+                selected_pages,
+                hits,
+                recall_ppm: u64::from(hits) * 100_000,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let total_hits = samples
+        .iter()
+        .try_fold(0_u64, |sum, sample| sum.checked_add(u64::from(sample.hits)))
+        .ok_or_else(|| invalid("V26 metric arithmetic differs"))?;
+    let aggregate_recall_ppm = total_hits
+        .checked_mul(1_000_000)
+        .and_then(|value| value.checked_div(u64::from(request.expected_queries) * 10))
+        .ok_or_else(|| invalid("V26 metric arithmetic differs"))?;
+    let minimum_query_recall_ppm = samples
+        .iter()
+        .map(|sample| sample.recall_ppm)
+        .min()
+        .ok_or_else(|| invalid("V26 layout samples are absent"))?;
+    let result = V26LayoutResult {
+        schema: "borsuk-v26-layout-result-v1".to_owned(),
+        query_count: request.expected_queries,
+        aggregate_recall_ppm,
+        minimum_query_recall_ppm,
+        disposition: if aggregate_recall_ppm >= 995_000 && minimum_query_recall_ppm >= 800_000 {
+            V26Disposition::BoundedLayoutCandidate
+        } else {
+            V26Disposition::LayoutRejected
+        },
+        page_body_reads: 0,
+        claim_eligible: false,
+    };
+    canonical_v26_layout_result_bytes(&result, &truths, &samples)?;
+    Ok((truths, samples, result))
+}
+
+fn read_evaluation_queries(
+    path: &Path,
+    expected_queries: u32,
+    source_rows: u64,
+) -> Result<Vec<(u32, u64)>> {
+    let reader = open_reader(path)?;
+    if reader.schema().as_ref() != &v26_query_schema()
+        || u32::try_from(reader.metadata().file_metadata().num_rows()).ok()
+            != Some(expected_queries)
+    {
+        return Err(invalid("V26 query Parquet authority differs"));
+    }
+    let mut queries = Vec::with_capacity(expected_queries as usize);
+    let mut sources = BTreeSet::new();
+    for batch in reader
+        .build()
+        .map_err(|error| invalid(&format!("V26 query reader failed: {error}")))?
+    {
+        let batch = batch.map_err(|error| invalid(&format!("V26 query batch failed: {error}")))?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V26 query nullability differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V26 query ordinal differs"))?;
+        let source_ordinals = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V26 query source differs"))?;
+        let vectors = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V26 query vector differs"))?;
+        for row in 0..batch.num_rows() {
+            let vector = vectors.value(row);
+            let values = vector
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| invalid("V26 query vector child differs"))?;
+            let norm = values
+                .values()
+                .iter()
+                .map(|value| value * value)
+                .sum::<f32>();
+            let query_ordinal = ordinals.value(row);
+            let source_ordinal = source_ordinals.value(row);
+            if usize::try_from(query_ordinal).ok() != Some(queries.len())
+                || source_ordinal >= source_rows
+                || !sources.insert(source_ordinal)
+                || values.len() != 96
+                || values.null_count() != 0
+                || values.values().iter().any(|value| !value.is_finite())
+                || !norm.is_finite()
+                || (norm - 1.0).abs() > 1.0e-4
+            {
+                return Err(invalid("V26 query authority differs"));
+            }
+            queries.push((query_ordinal, source_ordinal));
+        }
+    }
+    if queries.len() != expected_queries as usize {
+        return Err(invalid("V26 query inventory differs"));
+    }
+    Ok(queries)
+}
+
+fn fixed_u32_row(list: &FixedSizeListArray, row: usize, width: usize) -> Result<Vec<u32>> {
+    let value = list.value(row);
+    let values = value
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| invalid("V26 truth page child differs"))?;
+    if values.len() != width || values.null_count() != 0 {
+        return Err(invalid("V26 truth page width differs"));
+    }
+    Ok(values.values().to_vec())
+}
+
+fn read_evaluation_truth(
+    path: &Path,
+    expected_queries: u32,
+    queries: &[(u32, u64)],
+    assignments: &[V26RowPages],
+) -> Result<Vec<V26QueryTruth>> {
+    let reader = open_reader(path)?;
+    if reader.schema().as_ref() != &v26_truth_schema()
+        || u32::try_from(reader.metadata().file_metadata().num_rows()).ok()
+            != Some(expected_queries)
+    {
+        return Err(invalid("V26 truth Parquet authority differs"));
+    }
+    let mut truths = Vec::with_capacity(expected_queries as usize);
+    for batch in reader
+        .build()
+        .map_err(|error| invalid(&format!("V26 truth reader failed: {error}")))?
+    {
+        let batch = batch.map_err(|error| invalid(&format!("V26 truth batch failed: {error}")))?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V26 truth nullability differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V26 truth ordinal differs"))?;
+        let neighbors = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V26 truth neighbors differ"))?;
+        let lists = [2_usize, 3, 4]
+            .map(|column| {
+                batch
+                    .column(column)
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .ok_or_else(|| invalid("V26 truth pages differ"))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        for row in 0..batch.num_rows() {
+            let query_index = truths.len();
+            let neighbor_value = neighbors.value(row);
+            let neighbor_values = neighbor_value
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| invalid("V26 truth neighbor child differs"))?;
+            let primary = fixed_u32_row(lists[0], row, 10)?;
+            let replica = fixed_u32_row(lists[1], row, 10)?;
+            let mut ground_truth_page_assignments = Vec::with_capacity(10);
+            if neighbor_values.len() != 10 || neighbor_values.null_count() != 0 {
+                return Err(invalid("V26 truth neighbor width differs"));
+            }
+            for ((neighbor, primary), replica) in
+                neighbor_values.values().iter().zip(primary).zip(replica)
+            {
+                let assignment = assignments
+                    .get(
+                        usize::try_from(*neighbor)
+                            .map_err(|_| invalid("V26 truth source differs"))?,
+                    )
+                    .ok_or_else(|| invalid("V26 truth source differs"))?;
+                if assignment.primary_page != primary || assignment.replica_page != replica {
+                    return Err(invalid("V26 truth assignment binding differs"));
+                }
+                let mut pages = vec![primary, replica];
+                pages.sort_unstable();
+                ground_truth_page_assignments.push(pages);
+            }
+            let stored_oracle = fixed_u32_row(lists[2], row, 8)?;
+            let oracle_length = stored_oracle
+                .iter()
+                .position(|page| *page == u32::MAX)
+                .unwrap_or(8);
+            if stored_oracle[oracle_length..]
+                .iter()
+                .any(|page| *page != u32::MAX)
+            {
+                return Err(invalid("V26 truth oracle padding differs"));
+            }
+            let truth = V26QueryTruth {
+                query_ordinal: ordinals.value(row),
+                neighbor_source_ordinals: neighbor_values.values().to_vec(),
+                ground_truth_page_assignments,
+            };
+            if queries.get(query_index).map(|query| query.0) != Some(truth.query_ordinal)
+                || exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?
+                    != stored_oracle[..oracle_length]
+            {
+                return Err(invalid("V26 truth oracle authority differs"));
+            }
+            truths.push(truth);
+        }
+    }
+    if truths.len() != expected_queries as usize {
+        return Err(invalid("V26 truth inventory differs"));
+    }
+    Ok(truths)
 }
 
 fn open_reader(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<fs::File>> {
@@ -679,7 +1022,9 @@ pub fn validate_v26_layout_build_output(
 mod tests {
     use std::{fs, io::Write, sync::Arc};
 
-    use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt64Array};
+    use arrow_array::{
+        ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt32Array, UInt64Array,
+    };
     use arrow_schema::{DataType, Field};
     use parquet::{
         arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
@@ -690,12 +1035,16 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        V26LayoutBuildRequest, V26LocalObjectPath, assignments_batch, output_identity,
-        read_assignments, run_v26_layout_build, v26_construction_schema,
-        v26_page_assignments_schema, v26_source_map_schema, v26_tree_schema,
-        validate_v26_layout_build_output,
+        V26LayoutBuildRequest, V26LayoutEvaluationRequest, V26LocalObjectPath, assignments_batch,
+        evaluate_v26_layout_oracle, output_identity, read_assignments, run_v26_layout_build,
+        v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
+        v26_source_map_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
     };
-    use crate::{V26LayoutAuthority, V26ObjectIdentity, canonical_json_value};
+    use crate::{
+        V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
+        canonical_json_value, canonical_v26_layout_receipt_bytes,
+        canonical_v26_layout_result_bytes, exact_v26_layout_oracle_pages,
+    };
 
     fn write_parquet(path: &std::path::Path, batch: &RecordBatch) {
         let properties = WriterProperties::builder()
@@ -805,6 +1154,140 @@ mod tests {
             output_uri_prefix: "s3://v26-output/layout-a/".to_owned(),
             worker_count,
         }
+    }
+
+    fn fixed_u32(values: Vec<u32>, width: i32) -> FixedSizeListArray {
+        FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::UInt32, false)),
+            width,
+            Arc::new(UInt32Array::from(values)),
+            None,
+        )
+        .unwrap()
+    }
+
+    fn evaluation_fixture() -> (TempDir, V26LayoutEvaluationRequest) {
+        let (temp, manifest, construction, source_map) = fixture();
+        let output_dir = temp.path().join("layout");
+        let build_request = request(manifest, construction, source_map, output_dir.clone(), 2);
+        let build = run_v26_layout_build(&build_request).unwrap();
+        let receipt = V26LayoutReceipt {
+            authority: build.authority.clone(),
+            inputs: build.inputs.clone(),
+            outputs: build.outputs.clone(),
+            row_count: build.row_count,
+            leaves_per_tree: build.leaves_per_tree,
+            page_count: build.page_count,
+            projection_steps: build.projection_steps,
+            worker_count: build.worker_count,
+            elapsed_ns: 1,
+            cpu_ns: 1,
+            peak_rss_bytes: 1,
+            peak_psi_full_avg10_milli_percent: 0,
+            swap_start_bytes: 0,
+            swap_end_bytes: 0,
+            query_role_opens: 0,
+            page_body_reads: 0,
+            claim_eligible: false,
+        };
+        let terminal_path = temp.path().join("layout-terminal.json");
+        fs::write(
+            &terminal_path,
+            canonical_v26_layout_receipt_bytes(&receipt).unwrap(),
+        )
+        .unwrap();
+
+        let query_ordinals = UInt32Array::from_iter_values(0..512_u32);
+        let query_sources = UInt64Array::from_iter_values(0..512_u64);
+        let mut query_values = Vec::with_capacity(512 * 96);
+        for query in 0..512 {
+            for dimension in 0..96 {
+                query_values.push(if dimension == query % 96 { 1.0 } else { 0.0 });
+            }
+        }
+        let query_vectors = FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            96,
+            Arc::new(Float32Array::from(query_values)),
+            None,
+        )
+        .unwrap();
+        let query_batch = RecordBatch::try_new(
+            Arc::new(v26_query_schema()),
+            vec![
+                Arc::new(query_ordinals.clone()),
+                Arc::new(query_sources),
+                Arc::new(query_vectors),
+            ],
+        )
+        .unwrap();
+        let query_path = temp.path().join("queries.parquet");
+        write_parquet(&query_path, &query_batch);
+
+        let assignments = read_assignments(
+            &output_dir.join("page-assignments.parquet"),
+            i64::from(build.row_count as u32),
+        )
+        .unwrap();
+        let neighbors = (0_u64..10).collect::<Vec<_>>();
+        let neighbor_pages = neighbors
+            .iter()
+            .map(|neighbor| {
+                let row = assignments[usize::try_from(*neighbor).unwrap()];
+                let mut pages = vec![row.primary_page, row.replica_page];
+                pages.sort_unstable();
+                pages
+            })
+            .collect::<Vec<_>>();
+        let oracle = exact_v26_layout_oracle_pages(&neighbor_pages, 8).unwrap();
+        let mut neighbor_values = Vec::with_capacity(512 * 10);
+        let mut primary_values = Vec::with_capacity(512 * 10);
+        let mut replica_values = Vec::with_capacity(512 * 10);
+        let mut oracle_values = Vec::with_capacity(512 * 8);
+        for _ in 0..512 {
+            neighbor_values.extend_from_slice(&neighbors);
+            for neighbor in &neighbors {
+                let row = assignments[usize::try_from(*neighbor).unwrap()];
+                primary_values.push(row.primary_page);
+                replica_values.push(row.replica_page);
+            }
+            oracle_values.extend_from_slice(&oracle);
+            oracle_values.resize(oracle_values.len() + 8 - oracle.len(), u32::MAX);
+        }
+        let truth_batch = RecordBatch::try_new(
+            Arc::new(v26_truth_schema()),
+            vec![
+                Arc::new(query_ordinals),
+                Arc::new(
+                    FixedSizeListArray::try_new(
+                        Arc::new(Field::new("element", DataType::UInt64, false)),
+                        10,
+                        Arc::new(UInt64Array::from(neighbor_values)),
+                        None,
+                    )
+                    .unwrap(),
+                ),
+                Arc::new(fixed_u32(primary_values, 10)),
+                Arc::new(fixed_u32(replica_values, 10)),
+                Arc::new(fixed_u32(oracle_values, 8)),
+            ],
+        )
+        .unwrap();
+        let truth_path = temp.path().join("truth.parquet");
+        write_parquet(&truth_path, &truth_batch);
+
+        let page_assignments = V26LocalObjectPath {
+            identity: build.outputs[0].clone(),
+            path: output_dir.join("page-assignments.parquet"),
+        };
+        let request = V26LayoutEvaluationRequest {
+            layout_terminal: identity("layout-terminal", &terminal_path),
+            page_assignments,
+            pseudoqueries: identity("pseudoqueries-parquet", &query_path),
+            truth: identity("truth-parquet", &truth_path),
+            expected_queries: 512,
+        };
+        (temp, request)
     }
 
     #[test]
@@ -945,5 +1428,48 @@ mod tests {
         )
         .unwrap();
         assert!(validate_v26_layout_build_output(&request, &output).is_err());
+    }
+
+    #[test]
+    fn v26_layout_oracle_evaluation_opens_truth_only_after_layout_terminal() {
+        // Break caught: evaluation inputs are opened before the construction terminal closes.
+        let temp = TempDir::new().unwrap();
+        let terminal_path = temp.path().join("layout-terminal.json");
+        fs::write(&terminal_path, b"{}\n").unwrap();
+        let terminal = identity("layout-terminal", &terminal_path);
+        let missing = |role: &str| V26LocalObjectPath {
+            identity: V26ObjectIdentity {
+                role: role.to_owned(),
+                uri: format!("s3://v26-evaluation/{role}"),
+                digest_algorithm: "sha256".to_owned(),
+                digest: "0".repeat(64),
+                encoded_bytes: 1,
+                generation: "v26-local-test".to_owned(),
+            },
+            path: temp.path().join(format!("missing-{role}")),
+        };
+        let request = V26LayoutEvaluationRequest {
+            layout_terminal: terminal,
+            page_assignments: missing("page-assignments-parquet"),
+            pseudoqueries: missing("pseudoqueries-parquet"),
+            truth: missing("truth-parquet"),
+            expected_queries: 512,
+        };
+        let error = evaluate_v26_layout_oracle(&request).unwrap_err();
+        assert!(error.to_string().contains("layout terminal"));
+    }
+
+    #[test]
+    fn v26_layout_oracle_evaluates_closed_parquet_without_page_reads() {
+        // Break caught: layout evaluation scores vectors or trusts stored oracle metrics.
+        let (_temp, request) = evaluation_fixture();
+        let (truths, samples, result) = evaluate_v26_layout_oracle(&request).unwrap();
+        assert_eq!(truths.len(), 512);
+        assert_eq!(samples.len(), 512);
+        assert_eq!(result.aggregate_recall_ppm, 1_000_000);
+        assert_eq!(result.minimum_query_recall_ppm, 1_000_000);
+        assert_eq!(result.disposition, V26Disposition::BoundedLayoutCandidate);
+        assert_eq!(result.page_body_reads, 0);
+        canonical_v26_layout_result_bytes(&result, &truths, &samples).unwrap();
     }
 }
