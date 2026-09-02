@@ -7,7 +7,7 @@ use borsuk_v26::{
     V26TreeRouterRequest, V26TruthBuildRequest, canonical_v26_layout_build_output_bytes,
     canonical_v26_layout_result_bytes, canonical_v26_object_identity_bytes,
     evaluate_v26_layout_oracle, run_v26_exact_global, run_v26_layout_build_directory,
-    run_v26_tree_router, run_v26_truth_build,
+    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +73,7 @@ enum V26CliMode {
     Evaluate(EvaluationRequest),
     ExactGlobal(ExactGlobalRequest),
     Router(TreeRouterRequest),
+    RouterDiagnostic(TreeRouterRequest),
 }
 
 fn take(values: &mut BTreeMap<String, String>, key: &str) -> Result<String, String> {
@@ -131,6 +132,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
     let mut evaluate = false;
     let mut exact_global = false;
     let mut router = false;
+    let mut router_diagnostic = false;
     let mut execute = false;
     let mut values = BTreeMap::new();
     while let Some(flag) = arguments.next() {
@@ -164,6 +166,12 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     return Err("duplicate --route-trees".to_owned());
                 }
                 router = true;
+            }
+            "--diagnose-tree-router" => {
+                if router_diagnostic {
+                    return Err("duplicate --diagnose-tree-router".to_owned());
+                }
+                router_diagnostic = true;
             }
             "--execute" => {
                 if execute {
@@ -237,6 +245,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             + u8::from(evaluate)
             + u8::from(exact_global)
             + u8::from(router)
+            + u8::from(router_diagnostic)
             != 1
     {
         return Err("exactly one executable phase is required".to_owned());
@@ -337,7 +346,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         }
         return Ok(V26CliMode::Evaluate(layout));
     }
-    if router {
+    if router || router_diagnostic {
         let primary_tree = take_registered(&mut values, "primary-tree")?;
         let replica_tree = take_registered(&mut values, "replica-tree")?;
         let page_budget = take(&mut values, "--page-budget")?
@@ -350,13 +359,18 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         {
             return Err("V26 tree router arguments differ".to_owned());
         }
-        return Ok(V26CliMode::Router(TreeRouterRequest {
+        let request = TreeRouterRequest {
             generation: layout.generation.clone(),
             primary_tree,
             replica_tree,
             layout,
             page_budget,
-        }));
+        };
+        return Ok(if router {
+            V26CliMode::Router(request)
+        } else {
+            V26CliMode::RouterDiagnostic(request)
+        });
     }
     let construction = take_registered(&mut values, "construction")?;
     let ranked_row_limits = take(&mut values, "--ranked-row-limits")?
@@ -477,6 +491,23 @@ fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
             page_budget: request.page_budget,
         })
         .map_err(|error| error.to_string()),
+        V26CliMode::RouterDiagnostic(request) => {
+            run_v26_tree_router_diagnostic(&V26TreeRouterRequest {
+                primary_tree: local_object(
+                    "primary-tree-parquet",
+                    &request.generation,
+                    request.primary_tree,
+                ),
+                replica_tree: local_object(
+                    "replica-tree-parquet",
+                    &request.generation,
+                    request.replica_tree,
+                ),
+                layout: evaluation_request(request.layout),
+                page_budget: request.page_budget,
+            })
+            .map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -593,6 +624,16 @@ mod tests {
             ]);
         }
         args.extend(["--page-budget".to_owned(), "8".to_owned()]);
+        args
+    }
+
+    fn tree_router_diagnostic_args() -> Vec<String> {
+        let mut args = tree_router_args();
+        let mode = args
+            .iter_mut()
+            .find(|argument| argument.as_str() == "--route-trees")
+            .unwrap();
+        *mode = "--diagnose-tree-router".to_owned();
         args
     }
 
@@ -791,6 +832,32 @@ mod tests {
             vec!["--page-budget", "16"],
         ] {
             let mut args = tree_router_args();
+            args.extend(mutation.into_iter().map(str::to_owned));
+            assert!(parse_v26_args(args).is_err());
+        }
+    }
+
+    #[test]
+    fn v26_tree_router_diagnostic_cli_is_offline_and_has_no_page_surface() {
+        // Break caught: the width diagnostic discovers artifacts, accepts page/storage access,
+        // or accidentally executes the serving router instead of the diagnostic boundary.
+        let parsed = parse_v26_args(tree_router_diagnostic_args()).unwrap();
+        let V26CliMode::RouterDiagnostic(request) = parsed else {
+            panic!("tree router diagnostic mode differs");
+        };
+        assert_eq!(request.page_budget, 8);
+        let error = execute_v26_mode(V26CliMode::RouterDiagnostic(request)).unwrap_err();
+        assert!(error.contains("local object open failed"));
+
+        for mutation in [
+            vec!["--bucket", "forbidden"],
+            vec!["--endpoint", "https://forbidden"],
+            vec!["--page-prefix", "forbidden"],
+            vec!["--construction-path", "/forbidden"],
+            vec!["--d3", "forbidden"],
+            vec!["--page-budget", "16"],
+        ] {
+            let mut args = tree_router_diagnostic_args();
             args.extend(mutation.into_iter().map(str::to_owned));
             assert!(parse_v26_args(args).is_err());
         }

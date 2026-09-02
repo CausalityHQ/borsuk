@@ -21,14 +21,14 @@ pub use local::{
     V26LocalObjectPath, V26TreeRouterRequest, V26TruthBuildRequest,
     canonical_v26_layout_build_output_bytes, evaluate_v26_exact_global, evaluate_v26_layout_oracle,
     run_v26_exact_global, run_v26_layout_build, run_v26_layout_build_directory,
-    run_v26_tree_router, run_v26_truth_build, v26_construction_schema, v26_page_assignments_schema,
-    v26_query_schema, v26_source_map_schema, v26_tree_schema, v26_truth_schema,
-    validate_v26_layout_build_output,
+    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
+    v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_source_map_schema,
+    v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
 };
 
 pub use tree::{
-    V26ConstructionRow, V26Node, V26RowPages, V26Tree, build_v26_dual_tree_layout, route_v26_pages,
-    validate_v26_dual_tree_layout,
+    V26ConstructionRow, V26Node, V26RowPages, V26Tree, build_v26_dual_tree_layout,
+    rank_v26_tree_pages, route_v26_pages, validate_v26_dual_tree_layout,
 };
 
 const V26_LAYOUT_SCHEMA: &str = "borsuk-v26-dual-tree-layout-v1";
@@ -113,6 +113,70 @@ pub fn exact_v26_layout_oracle_pages(
         .map(|(_, (pages, count))| pages[..count].to_vec())
         .filter(|pages| !pages.is_empty())
         .ok_or_else(|| invalid("V26 layout oracle differs"))
+}
+
+fn exact_v26_candidate_cover_pages(
+    assignments: &[Vec<u32>],
+    candidate_pages: &[u32],
+    page_budget: usize,
+) -> Result<Vec<u32>> {
+    if assignments.len() != 10
+        || page_budget != 8
+        || candidate_pages.is_empty()
+        || candidate_pages.windows(2).any(|pair| pair[0] >= pair[1])
+        || assignments.iter().any(|pages| {
+            pages.is_empty() || pages.len() > 2 || pages.windows(2).any(|pair| pair[0] >= pair[1])
+        })
+    {
+        return Err(invalid("V26 tree router diagnostic candidates differ"));
+    }
+    let candidates = candidate_pages.iter().copied().collect::<BTreeSet<_>>();
+    let mut page_masks = BTreeMap::<u32, u16>::new();
+    for (neighbor, pages) in assignments.iter().enumerate() {
+        for page in pages.iter().filter(|page| candidates.contains(page)) {
+            *page_masks.entry(*page).or_default() |= 1_u16 << neighbor;
+        }
+    }
+    let maximum_pages = page_budget.min(page_masks.len());
+    let mut states = vec![None::<([u32; 8], usize)>; 1 << assignments.len()];
+    states[0] = Some(([0; 8], 0));
+    for (page, mask) in page_masks {
+        for covered in (0..states.len()).rev() {
+            let Some((mut pages, count)) = states[covered] else {
+                continue;
+            };
+            if count == maximum_pages {
+                continue;
+            }
+            let combined = covered | usize::from(mask);
+            pages[count] = page;
+            let next_count = count + 1;
+            if states[combined]
+                .as_ref()
+                .is_none_or(|(prior, prior_count)| {
+                    next_count < *prior_count
+                        || (next_count == *prior_count
+                            && pages[..next_count] < prior[..*prior_count])
+                })
+            {
+                states[combined] = Some((pages, next_count));
+            }
+        }
+    }
+    states
+        .into_iter()
+        .enumerate()
+        .filter_map(|(mask, pages)| pages.map(|pages| (mask.count_ones(), pages)))
+        .max_by(
+            |(left_hits, (left_pages, left_count)), (right_hits, (right_pages, right_count))| {
+                left_hits
+                    .cmp(right_hits)
+                    .then_with(|| right_count.cmp(left_count))
+                    .then_with(|| right_pages[..*right_count].cmp(&left_pages[..*left_count]))
+            },
+        )
+        .map(|(_, (pages, count))| pages[..count].to_vec())
+        .ok_or_else(|| invalid("V26 tree router diagnostic cover differs"))
 }
 
 fn v26_layout_hits(assignments: &[Vec<u32>], selected_pages: &[u32]) -> u32 {
@@ -286,6 +350,28 @@ pub struct V26TreeRouterResult {
     pub disposition: V26Disposition,
     pub page_body_reads: u64,
     pub claim_eligible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26TreeRouterWidthSample {
+    pub query_ordinal: u32,
+    pub candidate_page_limit: u32,
+    pub selected_pages: Vec<u32>,
+    pub hits: u32,
+    pub oracle_hits: u32,
+    pub recall_ppm: u64,
+    pub oracle_attainment_ppm: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26TreeRouterWidthResult {
+    pub candidate_page_limit: u32,
+    pub aggregate_recall_ppm: u64,
+    pub minimum_query_recall_ppm: u64,
+    pub oracle_attainment_ppm: u64,
+    pub passed: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -667,6 +753,115 @@ pub fn evaluate_v26_tree_router(
         claim_eligible: false,
     };
     Ok((samples, result))
+}
+
+pub fn diagnose_v26_tree_router_candidate_widths(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    queries: &[V26ExternalQuery],
+    truths: &[V26QueryTruth],
+) -> Result<(Vec<V26TreeRouterWidthSample>, Vec<V26TreeRouterWidthResult>)> {
+    if queries.len() != 512 || truths.len() != queries.len() {
+        return Err(invalid("V26 tree router diagnostic request differs"));
+    }
+    let first_ranking = rank_v26_tree_pages(primary, replica, &queries[0].vector)?;
+    if first_ranking.len() < 8 {
+        return Err(invalid("V26 tree router diagnostic inventory differs"));
+    }
+    let total_pages = first_ranking.len();
+    let mut widths = [8_usize, 16, 32, 64, 128]
+        .into_iter()
+        .filter(|width| *width < total_pages)
+        .collect::<Vec<_>>();
+    widths.push(total_pages);
+
+    let per_query = queries
+        .par_iter()
+        .zip(truths.par_iter())
+        .enumerate()
+        .map(|(query_index, (query, truth))| {
+            if usize::try_from(query.query_ordinal).ok() != Some(query_index)
+                || truth.query_ordinal != query.query_ordinal
+                || truth.neighbor_source_ordinals.len() != 10
+                || truth.ground_truth_page_assignments.len() != 10
+            {
+                return Err(invalid(
+                    "V26 tree router diagnostic query authority differs",
+                ));
+            }
+            let ranked = rank_v26_tree_pages(primary, replica, &query.vector)?;
+            if ranked.len() != total_pages {
+                return Err(invalid("V26 tree router diagnostic inventory differs"));
+            }
+            let oracle_pages =
+                exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?;
+            let oracle_hits = v26_layout_hits(&truth.ground_truth_page_assignments, &oracle_pages);
+            widths
+                .iter()
+                .map(|width| {
+                    let mut candidates = ranked[..*width].to_vec();
+                    candidates.sort_unstable();
+                    let selected_pages = exact_v26_candidate_cover_pages(
+                        &truth.ground_truth_page_assignments,
+                        &candidates,
+                        8,
+                    )?;
+                    let hits =
+                        v26_layout_hits(&truth.ground_truth_page_assignments, &selected_pages);
+                    Ok(V26TreeRouterWidthSample {
+                        query_ordinal: query.query_ordinal,
+                        candidate_page_limit: u32::try_from(*width)
+                            .map_err(|_| invalid("V26 tree router diagnostic width overflows"))?,
+                        selected_pages,
+                        hits,
+                        oracle_hits,
+                        recall_ppm: v26_ppm(u64::from(hits), 10)?,
+                        oracle_attainment_ppm: v26_ppm(u64::from(hits), u64::from(oracle_hits))?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let samples = per_query.into_iter().flatten().collect::<Vec<_>>();
+    let results = widths
+        .iter()
+        .map(|width| {
+            let width = u32::try_from(*width)
+                .map_err(|_| invalid("V26 tree router diagnostic width overflows"))?;
+            let width_samples = samples
+                .iter()
+                .filter(|sample| sample.candidate_page_limit == width)
+                .collect::<Vec<_>>();
+            if width_samples.len() != queries.len() {
+                return Err(invalid("V26 tree router diagnostic sample count differs"));
+            }
+            let total_hits = width_samples.iter().try_fold(0_u64, |sum, sample| {
+                sum.checked_add(u64::from(sample.hits))
+                    .ok_or_else(|| invalid("V26 tree router diagnostic metric overflows"))
+            })?;
+            let total_oracle_hits = width_samples.iter().try_fold(0_u64, |sum, sample| {
+                sum.checked_add(u64::from(sample.oracle_hits))
+                    .ok_or_else(|| invalid("V26 tree router diagnostic metric overflows"))
+            })?;
+            let aggregate_recall_ppm = v26_ppm(total_hits, queries.len() as u64 * 10)?;
+            let minimum_query_recall_ppm = width_samples
+                .iter()
+                .map(|sample| sample.recall_ppm)
+                .min()
+                .ok_or_else(|| invalid("V26 tree router diagnostic samples are absent"))?;
+            let oracle_attainment_ppm = v26_ppm(total_hits, total_oracle_hits)?;
+            Ok(V26TreeRouterWidthResult {
+                candidate_page_limit: width,
+                aggregate_recall_ppm,
+                minimum_query_recall_ppm,
+                oracle_attainment_ppm,
+                passed: aggregate_recall_ppm >= 975_000
+                    && minimum_query_recall_ppm >= 800_000
+                    && oracle_attainment_ppm >= 995_000,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((samples, results))
 }
 
 pub fn canonical_v26_tree_router_result_bytes(
@@ -1106,9 +1301,9 @@ mod tests {
         V26Tree, build_v26_dual_tree_layout, build_v26_external_truth_rows,
         canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
         canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
-        evaluate_v26_exact_global_external_rows, evaluate_v26_tree_router,
-        exact_v26_layout_oracle_pages, route_v26_pages, select_v26_ranked_pages,
-        validate_v26_dual_tree_layout,
+        diagnose_v26_tree_router_candidate_widths, evaluate_v26_exact_global_external_rows,
+        evaluate_v26_tree_router, exact_v26_layout_oracle_pages, rank_v26_tree_pages,
+        route_v26_pages, select_v26_ranked_pages, validate_v26_dual_tree_layout,
     };
 
     const PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
@@ -1276,6 +1471,89 @@ mod tests {
                 &samples,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn v26_tree_router_diagnostic_ranks_every_leaf_without_page_reads() {
+        // Break caught: the diagnostic reuses the eight-page serving cutoff, drops a leaf, or
+        // orders independent-tree frontier ties nondeterministically.
+        let primary = v26_router_test_tree(PRIMARY_SEED, 0, [100.0, 10.0, 1.0, 2.0, 5.0, 1.0, 2.0]);
+        let replica = v26_router_test_tree(REPLICA_SEED, 8, [200.0, 20.0, 3.0, 4.0, 5.0, 1.0, 2.0]);
+        let mut query = [0.0_f32; 96];
+        query[0] = 1.0;
+
+        let ranked = rank_v26_tree_pages(&primary, &replica, &query).unwrap();
+
+        assert_eq!(
+            ranked,
+            vec![0, 8, 1, 9, 2, 3, 10, 11, 4, 5, 6, 7, 12, 13, 14, 15]
+        );
+        assert_eq!(ranked[..8].iter().copied().collect::<BTreeSet<_>>(), {
+            let mut served = route_v26_pages(&primary, &replica, &query, 8).unwrap();
+            served.sort_unstable();
+            served.into_iter().collect()
+        });
+    }
+
+    #[test]
+    fn v26_tree_router_diagnostic_locates_the_smallest_repairable_candidate_width() {
+        // Break caught: the diagnostic scores the unrestricted oracle instead of restricting it
+        // to the ranked candidate prefix, or silently changes the exact eight-page read budget.
+        let primary = v26_router_test_tree(PRIMARY_SEED, 0, [100.0, 10.0, 1.0, 2.0, 5.0, 1.0, 2.0]);
+        let replica = v26_router_test_tree(REPLICA_SEED, 8, [200.0, 20.0, 3.0, 4.0, 5.0, 1.0, 2.0]);
+        let mut vector = [0.0_f32; 96];
+        vector[0] = 1.0;
+        let queries = (0_u32..512)
+            .map(|query_ordinal| V26ExternalQuery {
+                query_ordinal,
+                vector,
+            })
+            .collect::<Vec<_>>();
+        let bound_pages = [
+            vec![0, 6],
+            vec![6, 8],
+            vec![1, 7],
+            vec![7, 9],
+            vec![2],
+            vec![10],
+            vec![3],
+            vec![11],
+            vec![6],
+            vec![7],
+        ];
+        let truths = (0_u32..512)
+            .map(|query_ordinal| V26QueryTruth {
+                query_ordinal,
+                neighbor_source_ordinals: (0_u64..10).collect(),
+                ground_truth_page_assignments: bound_pages.to_vec(),
+            })
+            .collect::<Vec<_>>();
+
+        let (samples, widths) =
+            diagnose_v26_tree_router_candidate_widths(&primary, &replica, &queries, &truths)
+                .unwrap();
+
+        assert_eq!(widths.len(), 2);
+        assert_eq!(widths[0].candidate_page_limit, 8);
+        assert_eq!(widths[0].aggregate_recall_ppm, 800_000);
+        assert_eq!(widths[0].minimum_query_recall_ppm, 800_000);
+        assert_eq!(widths[0].oracle_attainment_ppm, 800_000);
+        assert!(!widths[0].passed);
+        assert_eq!(widths[1].candidate_page_limit, 16);
+        assert_eq!(widths[1].aggregate_recall_ppm, 1_000_000);
+        assert_eq!(widths[1].minimum_query_recall_ppm, 1_000_000);
+        assert_eq!(widths[1].oracle_attainment_ppm, 1_000_000);
+        assert!(widths[1].passed);
+        assert_eq!(samples.len(), 1_024);
+        assert_eq!(samples[0].candidate_page_limit, 8);
+        assert_eq!(samples[0].hits, 8);
+        assert_eq!(samples[1].candidate_page_limit, 16);
+        assert_eq!(samples[1].hits, 10);
+        assert!(
+            samples
+                .iter()
+                .all(|sample| sample.selected_pages.len() <= 8)
         );
     }
 

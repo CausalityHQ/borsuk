@@ -27,9 +27,9 @@ use crate::{
     V26Tree, build_v26_external_truth_rows, canonical_json_value,
     canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
     canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
-    evaluate_v26_exact_global_external_rows, evaluate_v26_tree_router, exact_lower_hex,
-    exact_v26_layout_oracle_pages, invalid, projected_steps, validate_layout_authority,
-    validate_v26_dual_tree_layout,
+    diagnose_v26_tree_router_candidate_widths, evaluate_v26_exact_global_external_rows,
+    evaluate_v26_tree_router, exact_lower_hex, exact_v26_layout_oracle_pages, invalid,
+    projected_steps, validate_layout_authority, validate_v26_dual_tree_layout,
 };
 
 fn vector_type() -> DataType {
@@ -798,7 +798,9 @@ pub fn run_v26_exact_global(request: &V26ExactGlobalRequest) -> Result<Vec<u8>> 
     )
 }
 
-pub fn run_v26_tree_router(request: &V26TreeRouterRequest) -> Result<Vec<u8>> {
+fn load_v26_tree_router(
+    request: &V26TreeRouterRequest,
+) -> Result<(V26Tree, V26Tree, Vec<V26ExternalQuery>, Vec<V26QueryTruth>)> {
     let (truths, _, layout_result) = evaluate_v26_layout_oracle(&request.layout)?;
     if request.page_budget != 8
         || layout_result.disposition != V26Disposition::BoundedLayoutCandidate
@@ -841,6 +843,11 @@ pub fn run_v26_tree_router(request: &V26TreeRouterRequest) -> Result<Vec<u8>> {
         &request.layout.external_queries.path,
         request.layout.expected_queries,
     )?;
+    Ok((primary, replica, queries, truths))
+}
+
+pub fn run_v26_tree_router(request: &V26TreeRouterRequest) -> Result<Vec<u8>> {
+    let (primary, replica, queries, truths) = load_v26_tree_router(request)?;
     let (samples, result) = evaluate_v26_tree_router(
         &primary,
         &replica,
@@ -850,6 +857,26 @@ pub fn run_v26_tree_router(request: &V26TreeRouterRequest) -> Result<Vec<u8>> {
             .map_err(|_| invalid("V26 tree router page budget overflows"))?,
     )?;
     canonical_v26_tree_router_result_bytes(&result, &primary, &replica, &queries, &truths, &samples)
+}
+
+pub fn run_v26_tree_router_diagnostic(request: &V26TreeRouterRequest) -> Result<Vec<u8>> {
+    let (primary, replica, queries, truths) = load_v26_tree_router(request)?;
+    let (samples, widths) =
+        diagnose_v26_tree_router_candidate_widths(&primary, &replica, &queries, &truths)?;
+    let value = serde_json::json!({
+        "schema": "borsuk-v26-tree-router-diagnostic-result-v1",
+        "samples": samples,
+        "widths": widths,
+        "page_body_reads": 0,
+        "claim_eligible": false,
+    });
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value)).map_err(|error| {
+        invalid(&format!(
+            "V26 tree router diagnostic serialization failed: {error}"
+        ))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 fn open_reader(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<fs::File>> {
@@ -1449,9 +1476,10 @@ mod tests {
         V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
         V26LocalObjectPath, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
         evaluate_v26_exact_global, evaluate_v26_layout_oracle, output_identity, read_assignments,
-        read_layout_terminal, run_v26_layout_build, run_v26_tree_router, run_v26_truth_build,
-        v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
-        v26_source_map_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
+        read_layout_terminal, run_v26_layout_build, run_v26_tree_router,
+        run_v26_tree_router_diagnostic, run_v26_truth_build, v26_construction_schema,
+        v26_page_assignments_schema, v26_query_schema, v26_source_map_schema, v26_tree_schema,
+        v26_truth_schema, validate_v26_layout_build_output,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -2017,6 +2045,42 @@ mod tests {
         );
         assert_eq!(value["result"]["page_body_reads"], 0);
         assert_eq!(value["result"]["claim_eligible"], false);
+        assert_eq!(value["samples"].as_array().unwrap().len(), 512);
+    }
+
+    #[test]
+    fn v26_tree_router_diagnostic_local_reuses_closed_authority_without_page_reads() {
+        // Break caught: the diagnostic bypasses the authenticated layout/tree inputs or opens
+        // construction/page bodies instead of reusing the closed router boundary.
+        let (temp, layout) = evaluation_fixture_with_rows(2_113);
+        let terminal = read_layout_terminal(&layout.layout_terminal).unwrap();
+        let tree = |role: &str, name: &str| V26LocalObjectPath {
+            identity: terminal
+                .outputs
+                .iter()
+                .find(|identity| identity.role == role)
+                .unwrap()
+                .clone(),
+            path: temp.path().join("layout").join(name),
+        };
+        let request = V26TreeRouterRequest {
+            primary_tree: tree("primary-tree-parquet", "primary-tree.parquet"),
+            replica_tree: tree("replica-tree-parquet", "replica-tree.parquet"),
+            layout,
+            page_budget: 8,
+        };
+
+        let bytes = run_v26_tree_router_diagnostic(&request).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert_eq!(
+            value["schema"],
+            "borsuk-v26-tree-router-diagnostic-result-v1"
+        );
+        assert_eq!(value["page_body_reads"], 0);
+        assert_eq!(value["claim_eligible"], false);
+        assert_eq!(value["widths"][0]["candidate_page_limit"], 8);
         assert_eq!(value["samples"].as_array().unwrap().len(), 512);
     }
 }

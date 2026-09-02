@@ -163,21 +163,24 @@ fn descend_router_branch(
     }
 }
 
-pub fn route_v26_pages(
+fn rank_v26_tree_pages_to_limit(
     primary: &V26Tree,
     replica: &V26Tree,
     query: &[f32; 96],
-    page_budget: usize,
+    limit: Option<usize>,
 ) -> Result<Vec<u32>> {
-    if page_budget != 8 {
-        return Err(invalid("V26 router page budget differs"));
-    }
     validate_v26_vector(query)?;
     let primary_pages = validate_router_tree(primary, 0x5632_362d_5452_4545)?;
     let replica_pages = validate_router_tree(replica, 0x5632_362d_5245_504c)?;
-    if !primary_pages.is_disjoint(&replica_pages)
-        || primary_pages.len() + replica_pages.len() < page_budget
-    {
+    if !primary_pages.is_disjoint(&replica_pages) {
+        return Err(invalid("V26 router page inventory differs"));
+    }
+    let page_count = primary_pages
+        .len()
+        .checked_add(replica_pages.len())
+        .ok_or_else(|| invalid("V26 router page inventory overflows"))?;
+    let target = limit.unwrap_or(page_count);
+    if target == 0 || target > page_count {
         return Err(invalid("V26 router page inventory differs"));
     }
     let mut frontier = vec![
@@ -192,8 +195,8 @@ pub fn route_v26_pages(
             node_ordinal: replica.root,
         },
     ];
-    let mut selected = BTreeSet::new();
-    while selected.len() < page_budget {
+    let mut ranked = Vec::with_capacity(page_count);
+    while ranked.len() < target {
         let next = frontier
             .iter()
             .enumerate()
@@ -219,9 +222,34 @@ pub fn route_v26_pages(
             query,
             &mut frontier,
         )?;
-        selected.insert(page);
+        ranked.push(page);
     }
-    Ok(selected.into_iter().collect())
+    if ranked.len() != target || ranked.iter().copied().collect::<BTreeSet<_>>().len() != target {
+        return Err(invalid("V26 router ranked page inventory differs"));
+    }
+    Ok(ranked)
+}
+
+pub fn rank_v26_tree_pages(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    query: &[f32; 96],
+) -> Result<Vec<u32>> {
+    rank_v26_tree_pages_to_limit(primary, replica, query, None)
+}
+
+pub fn route_v26_pages(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    query: &[f32; 96],
+    page_budget: usize,
+) -> Result<Vec<u32>> {
+    if page_budget != 8 {
+        return Err(invalid("V26 router page budget differs"));
+    }
+    let mut selected = rank_v26_tree_pages_to_limit(primary, replica, query, Some(page_budget))?;
+    selected.sort_unstable();
+    Ok(selected)
 }
 
 fn compare_ranked(left: &RankedRow, right: &RankedRow) -> std::cmp::Ordering {
