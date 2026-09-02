@@ -1691,3 +1691,53 @@ perfect reduced fixture. Burned development, sealed holdout, page-body
 integration, D3, and release claims remain fenced. The next falsifier must
 change the query-dependent routing/layout representation rather than tune this
 terminal ladder or loosen the registered quality boundary.
+
+## V25 open rank-sharp containment rejection on 2026-09-02
+
+The fail-fast V25 screen reused the immutable V24 construction and page-row
+artifacts but converted them into a clean V25-only Parquet cohort. The final
+converter source was commit `e4edd5095c4e1fc6778e6a007e4f402b0551a5f5`
+with source-archive SHA-256
+`abe86bce936ba443efbe240c42aaf04c70419823b40d50d079faa1fd7d2e8da1`.
+Spot instance `i-0c3be3090d152c3fc` converted exactly 262,144 SplitMix-ranked
+rows and 512 independently ranked leave-self-out pseudoqueries in 162.440
+seconds. Peak RSS was 1,379,975,168 bytes with zero memory PSI and zero swap.
+The canonical 3,074-byte conversion receipt has SHA-256
+`eba6b07ee0273828e46cc54c00102cb88e53255f2608e8b7cf237b104ae472af`.
+Its selected dataset-ordinal digest is
+`cf23fddc00723642c703d04076a8aec1122bac4cb552644cca3ad0ae37bb0e4c`.
+
+The authenticated open-screen manifest has SHA-256
+`01d801038731787eb26a9f581537669ad941bdfd8a47fd7235ea671c74d5cdb6`.
+The 11,062,640-byte ARM64 binary has SHA-256
+`3b66c6fb1ea627bc1f3c1468d64eb9951875bef5a25fd80cbca2224e0c630bc0`.
+Spot instance `i-0357a0dcfafed2c2d` authenticated every input, scanned all
+262,144 construction rows for all 512 queries, retained at most 4,096 ranked
+rows per query, and read zero page bodies. Scientific execution took 14.782
+seconds with peak RSS 179,372,032 bytes, zero memory PSI, and zero swap. The
+856-byte result has SHA-256
+`c4b8a71e3c4dd5280fb5a71d07adc80cb0d56d248eba7b74d707e0f1a0d5e06a`;
+the 43,667-byte Parquet evidence has SHA-256
+`c623ae401047f3cfe6b1475f170f7f8d27bee2bb4d47531cc65e466a99d115e7`;
+the 668-byte terminal has SHA-256
+`a44abd614755ec08f421b361c2994d3610594e5595ca38fe4ce3fdf12d3e45a3`.
+The instance terminated after publishing the terminal.
+
+The exact eight-page layout oracle recovered 4,880 of 5,120 ground-truth
+hits: 335 queries recovered ten, 114 recovered nine, and 63 recovered eight.
+Its aggregate ceiling was therefore 953,125 ppm and its minimum-query recall
+was 800,000 ppm, below the registered 975,000 ppm layout gate. Exact global
+f32 row scoring followed by the rank-sharp best-row-per-page reducer achieved
+3,302 of 5,120 hits: 644,921 ppm aggregate recall, 400,000 ppm minimum-query
+recall, and 676,639 ppm oracle attainment. The result was identical at every
+registered ranked-row limit from 10 through 4,096; candidate inventories ranged
+from 262,091 to 262,138 after self and own-page exclusion.
+
+This is a scientific `layout-rejected` result. The inherited V24 physical page
+layout cannot reach the V25 exact-eight-page gate even under an exact oracle,
+and the tested rank-sharp reducer loses substantial additional attainable
+recall. No hierarchy, residual codebook, bounded router, sealed sentry, D3, or
+release claim is authorized. The next falsifier must create a query-independent
+neighborhood-preserving page layout and test its exact eight-page oracle before
+any serving router is trained. Lowering the quality gate would conceal the
+causal defect and is not an accepted repair.
