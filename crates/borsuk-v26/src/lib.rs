@@ -64,44 +64,64 @@ pub fn exact_v26_layout_oracle_pages(
         }
     }
     let maximum_pages = page_budget.min(page_masks.len());
-    let mut states = BTreeMap::<(u16, usize), Vec<u32>>::new();
-    states.insert((0, 0), Vec::new());
+    let mut states = vec![None::<([u32; 8], usize)>; 1 << assignments.len()];
+    states[0] = Some(([0; 8], 0));
     for (page, mask) in page_masks {
-        let prior = states
-            .iter()
-            .map(|(state, pages)| (*state, pages.clone()))
-            .collect::<Vec<_>>();
-        for ((covered, count), mut pages) in prior {
+        for covered in (0..states.len()).rev() {
+            let Some((mut pages, count)) = states[covered] else {
+                continue;
+            };
             if count == maximum_pages {
                 continue;
             }
-            pages.push(page);
-            let key = (covered | mask, count + 1);
-            match states.entry(key) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(pages);
-                }
-                std::collections::btree_map::Entry::Occupied(mut entry) if pages < *entry.get() => {
-                    entry.insert(pages);
-                }
-                std::collections::btree_map::Entry::Occupied(_) => {}
+            let combined = covered | usize::from(mask);
+            pages[count] = page;
+            let next_count = count + 1;
+            if states[combined]
+                .as_ref()
+                .is_none_or(|(prior, prior_count)| {
+                    next_count < *prior_count
+                        || (next_count == *prior_count
+                            && pages[..next_count] < prior[..*prior_count])
+                })
+            {
+                states[combined] = Some((pages, next_count));
             }
         }
     }
     states
         .into_iter()
+        .enumerate()
+        .filter_map(|(mask, pages)| pages.map(|pages| (mask.count_ones(), pages)))
         .max_by(
-            |((left_mask, left_count), left_pages), ((right_mask, right_count), right_pages)| {
-                left_mask
-                    .count_ones()
-                    .cmp(&right_mask.count_ones())
+            |(left_hits, (left_pages, left_count)), (right_hits, (right_pages, right_count))| {
+                left_hits
+                    .cmp(right_hits)
                     .then_with(|| right_count.cmp(left_count))
-                    .then_with(|| right_pages.cmp(left_pages))
+                    .then_with(|| right_pages[..*right_count].cmp(&left_pages[..*left_count]))
             },
         )
-        .map(|(_, pages)| pages)
+        .map(|(_, (pages, count))| pages[..count].to_vec())
         .filter(|pages| !pages.is_empty())
         .ok_or_else(|| invalid("V26 layout oracle differs"))
+}
+
+fn v26_layout_hits(assignments: &[Vec<u32>], selected_pages: &[u32]) -> u32 {
+    assignments
+        .iter()
+        .filter(|pages| {
+            pages
+                .iter()
+                .any(|page| selected_pages.binary_search(page).is_ok())
+        })
+        .count() as u32
+}
+
+fn v26_ppm(numerator: u64, denominator: u64) -> Result<u64> {
+    numerator
+        .checked_mul(1_000_000)
+        .and_then(|value| value.checked_div(denominator))
+        .ok_or_else(|| invalid("V26 metric arithmetic differs"))
 }
 
 fn exact_lower_hex(value: &str, length: usize) -> bool {
@@ -153,6 +173,45 @@ pub struct V26LayoutReceipt {
     pub swap_start_bytes: u64,
     pub swap_end_bytes: u64,
     pub query_role_opens: u64,
+    pub page_body_reads: u64,
+    pub claim_eligible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26QueryTruth {
+    pub query_ordinal: u32,
+    pub neighbor_source_ordinals: Vec<u64>,
+    pub ground_truth_page_assignments: Vec<Vec<u32>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26LayoutSample {
+    pub query_ordinal: u32,
+    pub selected_pages: Vec<u32>,
+    pub hits: u32,
+    pub recall_ppm: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum V26Disposition {
+    AuthorityStop,
+    LayoutRejected,
+    RankReducerRejected,
+    TreeRouterRejected,
+    BoundedLayoutCandidate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26LayoutResult {
+    pub schema: String,
+    pub query_count: u32,
+    pub aggregate_recall_ppm: u64,
+    pub minimum_query_recall_ppm: u64,
+    pub disposition: V26Disposition,
     pub page_body_reads: u64,
     pub claim_eligible: bool,
 }
@@ -290,13 +349,75 @@ pub fn canonical_v26_layout_receipt_bytes(receipt: &V26LayoutReceipt) -> Result<
     Ok(bytes)
 }
 
+pub fn canonical_v26_layout_result_bytes(
+    result: &V26LayoutResult,
+    truths: &[V26QueryTruth],
+    samples: &[V26LayoutSample],
+) -> Result<Vec<u8>> {
+    if result.schema != "borsuk-v26-layout-result-v1"
+        || result.query_count != 512
+        || truths.len() != 512
+        || samples.len() != truths.len()
+        || result.page_body_reads != 0
+        || result.claim_eligible
+    {
+        return Err(invalid("V26 layout result authority differs"));
+    }
+    let mut total_hits = 0_u64;
+    let mut minimum_recall = 1_000_000_u64;
+    for (query_index, (truth, sample)) in truths.iter().zip(samples).enumerate() {
+        if usize::try_from(truth.query_ordinal).ok() != Some(query_index)
+            || sample.query_ordinal != truth.query_ordinal
+            || truth.neighbor_source_ordinals.len() != 10
+            || truth
+                .neighbor_source_ordinals
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != 10
+            || truth.ground_truth_page_assignments.len() != 10
+        {
+            return Err(invalid("V26 layout truth authority differs"));
+        }
+        let selected = exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?;
+        let hits = v26_layout_hits(&truth.ground_truth_page_assignments, &selected);
+        let recall = v26_ppm(u64::from(hits), 10)?;
+        if sample.selected_pages != selected || sample.hits != hits || sample.recall_ppm != recall {
+            return Err(invalid("V26 layout sample differs"));
+        }
+        total_hits = total_hits
+            .checked_add(u64::from(hits))
+            .ok_or_else(|| invalid("V26 metric arithmetic differs"))?;
+        minimum_recall = minimum_recall.min(recall);
+    }
+    let aggregate = v26_ppm(total_hits, truths.len() as u64 * 10)?;
+    let expected_disposition = if aggregate >= 995_000 && minimum_recall >= 800_000 {
+        V26Disposition::BoundedLayoutCandidate
+    } else {
+        V26Disposition::LayoutRejected
+    };
+    if result.aggregate_recall_ppm != aggregate
+        || result.minimum_query_recall_ppm != minimum_recall
+        || result.disposition != expected_disposition
+    {
+        return Err(invalid("V26 layout result metrics differ"));
+    }
+    let value = serde_json::json!({"result": result, "samples": samples});
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| V26Error(format!("V26 layout result serialization failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        V26ConstructionRow, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
-        build_v26_dual_tree_layout, canonical_v26_layout_receipt_bytes,
+        V26ConstructionRow, V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult,
+        V26LayoutSample, V26ObjectIdentity, V26QueryTruth, build_v26_dual_tree_layout,
+        canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
         exact_v26_layout_oracle_pages, validate_v26_dual_tree_layout,
     };
 
@@ -512,6 +633,75 @@ mod tests {
             exact_v26_layout_oracle_pages(&assignments, 8).unwrap(),
             vec![8, 9, 10, 11, 12, 14]
         );
+    }
+
+    #[test]
+    fn v26_layout_oracle_result_recomputes_samples_gates_and_disposition() {
+        // Break caught: a claimed layout result drifts from its per-query truth authority.
+        let truths = (0_u32..512)
+            .map(|query_ordinal| {
+                let ground_truth_page_assignments = if query_ordinal < 13 {
+                    (0_u32..10).map(|page| vec![page]).collect::<Vec<_>>()
+                } else {
+                    (0_u32..10)
+                        .map(|page| vec![0, page + 1])
+                        .collect::<Vec<_>>()
+                };
+                V26QueryTruth {
+                    query_ordinal,
+                    neighbor_source_ordinals: (0_u64..10)
+                        .map(|neighbor| u64::from(query_ordinal) * 10 + neighbor)
+                        .collect(),
+                    ground_truth_page_assignments,
+                }
+            })
+            .collect::<Vec<_>>();
+        let samples = truths
+            .iter()
+            .map(|truth| {
+                let selected_pages =
+                    exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8).unwrap();
+                let hits = if truth.query_ordinal < 13 { 8 } else { 10 };
+                V26LayoutSample {
+                    query_ordinal: truth.query_ordinal,
+                    selected_pages,
+                    hits,
+                    recall_ppm: u64::from(hits) * 100_000,
+                }
+            })
+            .collect::<Vec<_>>();
+        let valid = V26LayoutResult {
+            schema: "borsuk-v26-layout-result-v1".to_owned(),
+            query_count: 512,
+            aggregate_recall_ppm: 994_921,
+            minimum_query_recall_ppm: 800_000,
+            disposition: V26Disposition::LayoutRejected,
+            page_body_reads: 0,
+            claim_eligible: false,
+        };
+        let bytes = canonical_v26_layout_result_bytes(&valid, &truths, &samples).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);
+
+        type ResultMutation = Box<dyn Fn(&mut V26LayoutResult, &mut Vec<V26LayoutSample>)>;
+        let mut mutations: Vec<ResultMutation> = vec![
+            Box::new(|result, _| result.query_count = 511),
+            Box::new(|result, _| result.aggregate_recall_ppm += 1),
+            Box::new(|result, _| result.minimum_query_recall_ppm += 1),
+            Box::new(|result, _| result.disposition = V26Disposition::BoundedLayoutCandidate),
+            Box::new(|result, _| result.page_body_reads = 1),
+            Box::new(|result, _| result.claim_eligible = true),
+            Box::new(|_, rows| rows[0].query_ordinal = 1),
+            Box::new(|_, rows| rows[0].selected_pages.swap(0, 1)),
+            Box::new(|_, rows| rows[0].hits += 1),
+            Box::new(|_, rows| rows[0].recall_ppm += 1),
+        ];
+        for mutation in mutations.drain(..) {
+            let mut result = valid.clone();
+            let mut rows = samples.clone();
+            mutation(&mut result, &mut rows);
+            assert!(canonical_v26_layout_result_bytes(&result, &truths, &rows).is_err());
+        }
     }
 }
 
