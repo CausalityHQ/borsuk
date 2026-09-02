@@ -4,7 +4,7 @@
 
 **Goal:** Replace the rejected inherited page layout with a deterministic query-independent dual-tree layout and reject it cheaply unless its exact eight-page oracle clears 975,000 ppm.
 
-**Architecture:** A small V26 crate builds two balanced projection trees from construction vectors only and emits disjoint primary/replica pages using the smallest passing member of the preregistered `704, 768, 896, 1,024, 1,408, 2,048, 2,816, 4,096, 8,192` development ladder. A phase-separated evaluator joins frozen truth only after construction closes, runs the layout oracle first, and permits exact-global scoring and tree routing only after their preceding gates pass.
+**Architecture:** A small V26 crate builds two balanced projection trees from construction vectors only and emits disjoint primary/replica pages using the smallest passing member of the preregistered `704, 768, 896, 1,024, 1,408, 2,048, 2,816, 4,096, 8,192` development ladder. A phase-separated truth builder exact-scores 512 immutable external test queries against the closed construction. A separate evaluator joins that truth only after construction closes, runs the layout oracle first, and permits exact-global scoring and tree routing only after their preceding gates pass.
 
 **Tech Stack:** Rust 2024, Arrow/Parquet 58.3, Rayon, SHA-256, Python 3.12 standard library, pinned Ruff 0.15.20, AWS EC2 Spot through profile `causality`.
 
@@ -147,14 +147,14 @@ pub fn validate_v26_layout_build_output(
 - [ ] **Step 5: Implement streaming input and bounded output.** Decode construction in registered batches, build the two trees, write fixed schemas with Parquet 2.0 and zstd, sync files, compute identities, reopen and validate before returning the receipt.
 - [ ] **Step 6: Run GREEN and commit.** Run the same selector and fmt/diff. Commit `Build authenticated V26 page layouts`.
 
-### Task 3: Layout-only oracle gate
+### Task 3: External-query truth and layout-only oracle gate
 
 **Files:**
 - Modify: `crates/borsuk-v26/src/local.rs`
 - Modify: `crates/borsuk-v26/src/lib.rs`
 
 **Interfaces:**
-- Produces: `V26LayoutEvaluationRequest`, `V26LayoutSample`, `V26LayoutResult`, `evaluate_v26_layout_oracle`, `canonical_v26_layout_result_bytes`.
+- Produces: clean external-query schema, `V26TruthBuildRequest`, exact top-ten truth Parquet/terminal, `V26LayoutEvaluationRequest`, `V26LayoutSample`, `V26LayoutResult`, `evaluate_v26_layout_oracle`, `canonical_v26_layout_result_bytes`.
 
 ```rust
 pub enum V26Disposition {
@@ -164,10 +164,11 @@ pub enum V26Disposition {
 pub struct V26LayoutEvaluationRequest {
     pub layout_terminal: V26LocalObjectPath,
     pub page_assignments: V26LocalObjectPath,
-    pub pseudoqueries: V26LocalObjectPath,
+    pub external_queries: V26LocalObjectPath,
     pub truth: V26LocalObjectPath,
     pub expected_queries: u32,
 }
+pub struct V26ExternalQuery { pub query_ordinal: u32, pub vector: [f32; 96] }
 pub struct V26LayoutSample {
     pub query_ordinal: u32, pub selected_pages: Vec<u32>,
     pub hits: u32, pub recall_ppm: u64,
@@ -191,12 +192,12 @@ pub fn canonical_v26_layout_result_bytes(
 ) -> Result<Vec<u8>>;
 ```
 
-- [ ] **Step 1: Write exact-oracle RED.** Add `v26_layout_oracle_uses_both_pages_and_prefers_shorter_lexicographic_cover`. Use ten literal neighbor assignments including a redundant longer full cover; require maximum hits then lexicographically smallest page vector.
-- [ ] **Step 2: Write phase-boundary RED.** Add `v26_layout_oracle_evaluation_opens_truth_only_after_layout_terminal`. Require exact layout terminal and assignment identities; reject missing/failed terminal and construction directories containing evaluation roles.
-- [ ] **Step 3: Write metric/result RED.** Add `v26_layout_oracle_result_recomputes_samples_gates_and_disposition`. Mutation-lock 512 ordered queries, ten unique neighbors, assignment bindings, page lists, hits, aggregate/minimum recall, 975,000/800,000/995,000 gates, causal disposition, zero page reads, and claim eligibility false.
-- [ ] **Step 4: Run focused RED.** Run `cargo test -p borsuk-v26 v26_layout_oracle_ -- --nocapture`.
-- [ ] **Step 5: Implement the smallest evaluator.** Read only page assignments and truth after authenticating the closed layout; do not open construction vectors or run distance scoring. Recompute each exact cover and aggregate independently during serialization.
-- [ ] **Step 6: Run GREEN and commit.** Run the same selector and fmt/diff. Commit `Fail fast on V26 layout containment`.
+- [ ] **Step 1: Write external-query RED.** Require `query_ordinal` plus nonnullable f32[96] only; reject `source_ordinal`, nulls, nonfinite/zero vectors, schema drift, unordered ordinals, and any own-row/page exclusion input.
+- [ ] **Step 2: Write truth-builder RED.** On a literal 4,096-row fixture, exact-score external queries, persist deterministic top-ten `(distance_bits, source_ordinal)` pairs, bind construction/query identities, and prove truth capability cannot open layouts, assignments, results, or routers.
+- [ ] **Step 3: Write exact-oracle RED.** Add `v26_layout_oracle_uses_both_pages_and_prefers_shorter_lexicographic_cover`. Use ten literal neighbor assignments including a redundant longer full cover; require maximum hits then lexicographically smallest page vector.
+- [ ] **Step 4: Write phase and metric REDs.** Require exact layout/truth terminals and identities; mutation-lock 512 ordered queries, ten unique neighbors, assignment bindings, page lists, hits, aggregate/minimum recall, 975,000/800,000/995,000 gates, causal disposition, zero page reads, and claim eligibility false.
+- [ ] **Step 5: Run focused RED.** Run `cargo test -p borsuk-v26 --lib v26_external_query_ -- --nocapture`, then `cargo test -p borsuk-v26 --lib v26_layout_oracle_ -- --nocapture` only if GREEN.
+- [ ] **Step 6: Implement and verify the smallest boundaries.** The truth builder reads construction plus external queries only. The evaluator reads page assignments and closed truth only; it does not open construction vectors or rerun distance scoring. Recompute each exact cover and aggregate independently during serialization. Run the same selectors and fmt/diff. Commit `Use external truth for V26 containment`.
 
 ### Task 4: Offline executable and monitored Spot boundary
 
@@ -231,14 +232,15 @@ v26_page_layout --build-layout --execute --generation <id> \
 - Update after terminal: `docs/research/publication-v3-attempt-ledger.md`
 
 **Interfaces:**
-- Consumes exact V25 construction/source-map/pseudoquery/truth identities from the terminal V25 screen.
+- Consumes exact V25 construction/source-map identities plus immutable Deep Image `test.parquet`; produces a new external-query/top-ten-truth authority before layout evaluation.
 - Produces one authenticated `layout-rejected` or `layout-candidate` result.
 
-- [ ] **Step 1: Freeze the manifest.** Bind source commit/archive, binary, exact four Parquets, seeds, the ascending capacity ladder, expected 262,144 rows, 512 queries, gates, 1 GiB RSS, 0.5 PSI, zero swap growth, 300-second wall/progress, outputs, smallest-pass selection, and no-restart semantics.
+- [ ] **Step 1: Freeze the manifest.** Bind source commit/archive, binary, construction/source-map Parquets, immutable test-query Parquet, new exact-truth output, seeds, the ascending capacity ladder, expected 262,144 rows, query ordinals `0..512`, gates, 1 GiB RSS, 0.5 PSI, zero swap growth, 300-second wall/progress, outputs, smallest-pass selection, and no-restart semantics.
 - [ ] **Step 2: Run authentic 4,096-row structural smoke.** Use one Spot process and `expected_rows=4096` to select the exact leading source-ordinal range from the authenticated full construction/source-map Parquets; do not materialize a derivative corpus. Require matching full-file row counts, exact prefix inventory, two-copy assignments, maximum capacity, byte-identical repeated validation, zero query/truth-role opens, zero page reads, RSS below 512 MiB, and wall below 30 seconds. Do not compute or report recall from this smoke.
-- [ ] **Step 3: Run the construction ladder once.** Stage only construction/source-map roles; for each preregistered capacity build both trees and assignments, close its terminal, and stop after the smallest capacity whose later evaluation passes.
-- [ ] **Step 4: Run layout-only evaluation after each closed build.** Stage the closed layout plus truth/pseudoquery roles, compute 512 exact covers, report the 975,000 lower floor, and stop the ladder at the first result where both the 995,000 aggregate promotion target and 800,000 minimum pass.
-- [ ] **Step 5: Authenticate and record.** Recompute every sample from Parquet, verify terminal/resource/cleanup evidence, terminate compute, and commit only the manifest and ledger with `Record V26 layout causal screen`.
+- [ ] **Step 3: Build external truth once.** On one `causality` Spot worker, exact-score the 512 frozen external queries against all 262,144 rows, persist top-ten distances/source ordinals to Parquet, authenticate it independently, and terminate the worker. No layout or page artifact is available to this phase.
+- [ ] **Step 4: Run the construction ladder once.** Stage only construction/source-map roles; for each preregistered capacity build both trees and assignments, close its terminal, and stop after the smallest capacity whose later evaluation passes.
+- [ ] **Step 5: Run layout-only evaluation after each closed build.** Stage the closed layout plus closed external truth, compute 512 exact covers, report the 975,000 lower floor, and stop the ladder at the first result where both the 995,000 aggregate promotion target and 800,000 minimum pass.
+- [ ] **Step 6: Authenticate and record.** Recompute every sample from Parquet, verify terminal/resource/cleanup evidence, terminate compute, and commit only the manifest and ledger with `Record V26 external-query layout screen`.
 
 ### Task 6: Conditional exact-global and router gates
 
@@ -276,7 +278,7 @@ pub fn route_v26_pages(
 ) -> Result<Vec<u32>>;
 ```
 
-- [ ] **Step 1: Reuse and strengthen the V25 exact-global scorer contract.** Test rank limits 10 through 4,096, own-page exclusion, best-row-per-page ties, and independent sample/aggregate recomputation against the new assignments. Persist the first ten ranked source ordinals and their pages; a literal truth-rank injection must reproduce the reducer's expected hit count so f32/f64 head drift cannot masquerade as an authority defect.
+- [ ] **Step 1: Strengthen the exact-global scorer contract for external queries.** Test rank limits 10 through 4,096, best-row-per-page ties, and independent sample/aggregate recomputation against the new assignments. Persist the first ten ranked source ordinals, distance bits, and pages; a literal truth-rank injection must reproduce the reducer's expected hit count. Reject any own-row/page exclusion surface because external queries have no construction identity.
 - [ ] **Step 2: Run exact-global open gate.** Stop below 975,000 aggregate or 995,000 oracle attainment; do not train or tune a router.
 - [ ] **Step 3: Test fixed tree routing.** Best-first expand sibling margins from both roots, emit exactly eight unique leaves, prohibit outcome-dependent widening and exhaustive fallback, and require scalar/parallel page equality.
 - [ ] **Step 4: Run routing open gate.** Require 975,000 aggregate, 995,000 oracle attainment, projected memory below 3 GiB, warm p99 below 12 ms, and no more than eight page reads.

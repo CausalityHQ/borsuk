@@ -1741,3 +1741,52 @@ release claim is authorized. The next falsifier must create a query-independent
 neighborhood-preserving page layout and test its exact eight-page oracle before
 any serving router is trained. Lowering the quality gate would conceal the
 causal defect and is not an accepted repair.
+
+## V26 exact-global reducer rejection and cohort invalidation on 2026-09-02
+
+The V26 dual-tree layout selected the first passing registered capacity,
+2,816 rows per page. Its layout-only oracle reported 998,828 ppm aggregate
+recall, 900,000 ppm minimum-query recall, 188 pages, 2.16 seconds build time,
+and 0.071 seconds evaluation time. This established that the new physical
+packing can hold the pseudoquery truth neighborhoods, but it did not establish
+that the serving reducer can find them.
+
+Source commit `a7379228ff239cc1c963403df157a69c05f3f5f7` then ran one
+authenticated exact-global screen on Spot instance `i-03bfff5a0efe79cfd`
+(`c7g.4xlarge`, `eu-central-1c`). The 11,154,592-byte executable had SHA-256
+`eacd3966406c6c8bb03ff1e7e250bea14a94d897bcead7c05fd0ea96c1bbb50f`.
+It exact-scanned all 262,144 rows for all 512 queries, retained at most 4,096
+rows per query, read zero page bodies, and remained claim-ineligible. Scientific
+wall time was 1.940685863 seconds, CPU was 21.18 seconds, and peak RSS was
+153,567,232 bytes with zero memory PSI and zero swap.
+
+The 3,418,327-byte result has SHA-256
+`3503cd93c4d874ad51a3a4393279242073cd6ec54d7e58e8cee513571ac67d5a`;
+the 1,315-byte terminal has SHA-256
+`ace22dc7b8a36d183d6b435e3bf65009956459aefb8758863537c70943256462`.
+Both are under
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/open/a7379228ff239cc1c963403df157a69c05f3f5f7/v26-exact-global-a737922/exact-a0001/`.
+Rank 10 achieved 680,468 ppm aggregate recall and 681,267 ppm oracle
+attainment. Every registered limit from 32 through 4,096 converged at 681,054
+ppm aggregate, zero minimum-query recall, and 681,853 ppm oracle attainment.
+The terminal disposition is `rank-reducer-rejected`; no router, D3, or release
+claim is authorized.
+
+A subsequent no-spend authority replay exposed a stronger protocol defect.
+The exact-global scorer inherited V25's corpus-pseudoquery rule: exclude the
+query's own row and every row sharing either of its pages. The V26 layout oracle
+that produced 998,828 ppm did not apply that exclusion. At capacity 2,816,
+443 of 512 queries have a ground-truth neighbor on a forbidden own page, so the
+maximum leakage-safe exact-eight-page oracle is only 951,562 ppm with a
+zero-recall worst query. Replaying every preserved capacity assignment gives
+aggregate ceilings of 958,984 (704), 955,468 (768), 955,664 (896), 964,453
+(1,024), 958,007 (1,408), 967,578 (2,048), and 951,562 ppm (2,816). Every
+ceiling is below the registered 975,000 ppm gate; capacity tuning cannot repair
+the contradiction.
+
+Accordingly, the corpus-row cohort is invalid for V26 promotion rather than a
+reason to lower the quality threshold. V26 will replace it, without a legacy
+reader, with 512 immutable external test queries and a separately authenticated
+exact top-ten truth Parquet against the frozen construction. External queries
+have no construction source or own page. The fast gate remains the iteration
+boundary; full workspace assurance remains deferred to a coherent milestone.

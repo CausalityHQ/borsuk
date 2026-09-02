@@ -64,12 +64,29 @@ For the structural smoke only, `expected_rows` selects the exact leading source
 ordinal range from those same authenticated construction and source-map files;
 the two full-file row counts must match and both must cover that prefix.
 
-The 512 open pseudoqueries remain a fixed reporting cohort. Their vectors may
-exist as ordinary corpus rows, as they do in production construction, but the
-builder cannot know their role. The evaluator excludes the query row and every
-row sharing either of its pages. Seeds and algorithms are fixed. Page capacity
-is selected only by the preregistered ascending ladder on this burned open
-development cohort; all later parameters are frozen before a disjoint sentry.
+The original 512 corpus-row pseudoqueries are retired from V26 evaluation.
+They make the registered 975,000 ppm gate impossible after their own rows and
+pages are excluded: at the selected 2,816-row capacity, 443 of 512 queries have
+at least one exact neighbor on a forbidden page and the resulting exact
+eight-page ceiling is only 951,562 ppm. Lowering the gate or retaining two
+incompatible exclusion rules would conceal the protocol defect.
+
+The replacement open cohort is query ordinals `0..512` from the immutable
+Deep Image `test.parquet` (SHA-256
+`296d45828020c1c0b88c6a1d5c822f6283280513b8c58d01cfa961f3a139a5d4`,
+3,843,448 bytes). It is external to the 262,144-row construction and therefore
+has no construction `source_ordinal` and no own-page exclusion. After a layout
+terminal closes, a separate truth phase exact-scans the frozen construction
+for each external query and writes deterministic top-ten
+`(distance_bits, source_ordinal)` pairs to Parquet. Distance ties break by
+source ordinal. The query cohort, construction identity, metric, f32 kernel,
+and truth serializer are fixed before any page-quality result is opened.
+
+The builder has no query or truth capability. The truth phase has construction
+and query capability but no page assignment, layout result, or router
+capability. The evaluator receives the closed truth and layout only. Page
+capacity is selected solely by the preregistered ascending ladder on this
+burned open cohort; all later parameters are frozen before a disjoint sentry.
 The sentry uses a preregistered SplitMix selection and permits no retry.
 
 ## Deterministic layout algorithm
@@ -123,8 +140,10 @@ than hiding it.
 
 ## Fail-fast evaluation
 
-The same frozen 262,144-row construction, source map, 512 pseudoqueries, and
-truth from V25 are reused by exact identity. Only the layout is new.
+The same frozen 262,144-row construction and source map are reused by exact
+identity. Evaluation uses the first 512 immutable external test queries and a
+new exact-truth Parquet bound to those queries and that construction. Bulk data
+remains Parquet; JSON is used only for small authority and terminal records.
 
 1. **Named contract gate:** synthetic reducer/tree/codec tests run in the small
    V26 crate and must rerun warm in under one second.
@@ -133,9 +152,12 @@ truth from V25 are reused by exact identity. Only the layout is new.
    verify every assignment and output identity. This is a structural boundary,
    not a recall claim: it opens no pseudoquery or truth role. Wall time is below
    30 seconds, RSS below 512 MiB, and page reads are zero.
-3. **Layout-only 262,144-row screen:** build the dual-tree layout without query
-   capability, close its terminal, then join only the ten frozen ground-truth
-   neighbors to its page assignment. Starting at 704, advance through the exact
+3. **External truth screen:** after construction closes, exact-score all
+   262,144 construction rows for each of the 512 external queries with the same
+   registered f32 distance kernel. Persist the exact top ten distance bits and
+   source ordinals. This phase opens no layout or page artifact.
+4. **Layout-only 262,144-row screen:** join only the closed external truth to
+   each closed page assignment. Starting at 704, advance through the exact
    capacity ladder and stop at its smallest passing member. The oracle may
    select at most eight unique pages; among equal-hit covers it prefers fewer
    pages and then the lexicographically smaller vector. Report the 975,000 ppm
@@ -143,10 +165,10 @@ truth from V25 are reused by exact identity. Only the layout is new.
    promotion target and minimum-query recall reaches 800,000 ppm. A result
    between the floor and target is useful evidence, not authority to build the
    router.
-4. **Exact-global screen:** only after layout passes, exact f32 scoring evaluates
+5. **Exact-global screen:** only after layout passes, exact f32 scoring evaluates
    rank limits `10, 32, 128, 512, 2,048, 4,096`. Stop unless aggregate recall is
    at least 975,000 ppm and oracle attainment at least 995,000 ppm.
-5. **Tree-router screen:** only after exact global passes, route each query with
+6. **Tree-router screen:** only after exact global passes, route each query with
    a fixed best-first margin heap and select exactly eight leaves across both
    trees. No outcome-dependent widening or exhaustive fallback is allowed.
 
@@ -154,12 +176,11 @@ The first failing class has strict precedence: `authority-stop`,
 `layout-rejected`, `rank-reducer-rejected`, `tree-router-rejected`, or
 `bounded-layout-candidate`. Every result is claim-ineligible.
 
-The V25 evidence does not persist the exact-global ranked row ordinals. Its
-644,921 ppm result therefore cannot, by itself, distinguish f32/f64 head-rank
-drift from an authority defect. Before an exact-global V26 result is used, its
-Parquet evidence must persist the first ten ranked source ordinals and their
-page assignments so that a truth-rank injection control independently proves
-the reducer and exclusion bindings.
+The exact-global evidence persists the first ten ranked source ordinals,
+distance bits, and page assignments. A truth-rank injection control must
+independently prove reducer bindings. External queries have no construction
+row or page identity, so adding an own-row or own-page exclusion is an authority
+failure rather than a tunable option.
 
 ## Serving projection
 
@@ -199,10 +220,13 @@ default, page-body read, or devbox corpus persistence is allowed.
 The construction terminal binds source commit/archive, binary, manifest, input
 Parquets, seeds, page capacity, tree/assignment Parquets, row/page counts,
 actual projection work, elapsed/CPU/RSS/PSI/swap, and zero query-role opens. The
-evaluation terminal binds that construction terminal plus pseudoquery/truth
-identities, every per-query oracle and reducer row, aggregates, minima, gates,
-and causal disposition. Serializers independently recompute all derivable
-values and emit sorted compact JSON with one trailing newline.
+truth terminal binds the construction terminal, external-query identity, all
+512 ordered query ordinals, every top-ten source ordinal and distance bit, the
+exact scoring kernel, runtime evidence, and truth Parquet identity. The
+evaluation terminal binds the construction and truth terminals, every
+per-query oracle and reducer row, aggregates, minima, gates, and causal
+disposition. Serializers independently recompute all derivable values and emit
+sorted compact JSON with one trailing newline.
 
 Promotion authorizes only the next V26 router task. It does not authorize a
 sealed sentry, D3, full-scale construction, or a competitor claim. Strict Clippy
