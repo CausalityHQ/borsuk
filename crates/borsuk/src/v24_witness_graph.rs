@@ -498,7 +498,9 @@ impl V24WitnessGraph {
 
     pub(crate) fn maximum_degree(&self) -> usize {
         self.adjacency
-            .chunks_exact(V24_GRAPH_M)
+            .as_chunks::<V24_GRAPH_M>()
+            .0
+            .iter()
             .map(|neighbors| {
                 neighbors
                     .iter()
@@ -510,21 +512,25 @@ impl V24WitnessGraph {
     }
 
     pub(crate) fn has_exact_sorted_unique_adjacency(&self) -> bool {
-        self.adjacency.chunks_exact(V24_GRAPH_M).all(|neighbors| {
-            let mut prior = None;
-            let mut ended = false;
-            neighbors.iter().copied().all(|neighbor| {
-                if neighbor == u32::MAX {
-                    ended = true;
-                    true
-                } else if ended || prior.is_some_and(|prior| neighbor <= prior) {
-                    false
-                } else {
-                    prior = Some(neighbor);
-                    true
-                }
+        self.adjacency
+            .as_chunks::<V24_GRAPH_M>()
+            .0
+            .iter()
+            .all(|neighbors| {
+                let mut prior = None;
+                let mut ended = false;
+                neighbors.iter().copied().all(|neighbor| {
+                    if neighbor == u32::MAX {
+                        ended = true;
+                        true
+                    } else if ended || prior.is_some_and(|prior| neighbor <= prior) {
+                        false
+                    } else {
+                        prior = Some(neighbor);
+                        true
+                    }
+                })
             })
-        })
     }
 
     fn block_start(&self, node: u32, level: u8) -> Option<usize> {

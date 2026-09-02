@@ -603,7 +603,7 @@ fn prepare_v24_construction_rows_with_progress(
                 if vectors.offset() != 0
                     || vectors.null_count() != 0
                     || values.null_count() != 0
-                    || values.values().chunks_exact(96).any(|vector| {
+                    || values.values().as_chunks::<96>().0.iter().any(|vector| {
                         vector.iter().any(|value| !value.is_finite())
                             || vector.iter().all(|value| *value == 0.0)
                     })
@@ -743,11 +743,12 @@ fn validate_v24_page_validation_run(path: &Path, expected_source_ordinal: &mut u
         path: path.to_owned(),
         source,
     })?;
-    let chunks = bytes.chunks_exact(V24_PAGE_VALIDATION_RECORD_BYTES);
-    if !chunks.remainder().is_empty() {
+    let (chunks, remainder) = bytes.as_chunks::<V24_PAGE_VALIDATION_RECORD_BYTES>();
+    if !remainder.is_empty() {
         return Err(invalid("V24 page validation run length differs"));
     }
     let mut records = chunks
+        .iter()
         .map(|record| {
             let source_ordinal = u64::from_le_bytes(record[..8].try_into().unwrap());
             let page_ordinal = u32::from_le_bytes(record[8..12].try_into().unwrap());

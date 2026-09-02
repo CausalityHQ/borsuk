@@ -480,7 +480,7 @@ fn decode_seed(value: &str) -> Result<[u8; 32]> {
     if value.len() != 64 {
         return Err(invalid("V23 RaBitQ rotation seed differs"));
     }
-    for (output, pair) in seed.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+    for (output, pair) in seed.iter_mut().zip(value.as_bytes().as_chunks::<2>().0) {
         *output = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16)
             .map_err(|_| invalid("V23 RaBitQ rotation seed differs"))?;
     }

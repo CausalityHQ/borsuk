@@ -170,13 +170,15 @@ fn decode_source_records(bytes: &[u8]) -> Result<Vec<SourceOccurrence>> {
         return Err(invalid("V24 posting source run is truncated"));
     }
     bytes
-        .chunks_exact(SOURCE_RECORD_BYTES)
+        .as_chunks::<SOURCE_RECORD_BYTES>()
+        .0
+        .iter()
         .map(|record| {
             if record[13..16] != [0, 0, 0] || record[12] > 1 {
                 return Err(invalid("V24 posting source run flags differ"));
             }
             let mut vector = [f16::ZERO; 96];
-            for (output, encoded) in vector.iter_mut().zip(record[16..].chunks_exact(2)) {
+            for (output, encoded) in vector.iter_mut().zip(record[16..].as_chunks::<2>().0) {
                 *output = f16::from_bits(u16::from_le_bytes([encoded[0], encoded[1]]));
             }
             Ok(SourceOccurrence {
@@ -371,7 +373,7 @@ where
         if !bytes.len().is_multiple_of(8) {
             return Err(invalid("V24 posting accumulation run is truncated"));
         }
-        for record in bytes.chunks_exact(8) {
+        for record in bytes.as_chunks::<8>().0 {
             let witness =
                 usize::try_from(u32::from_le_bytes(record[0..4].try_into().unwrap())).unwrap();
             if witness >= posting_pages.len() {

@@ -338,11 +338,10 @@ fn read_f16_rows(bytes: &[u8]) -> Result<Vec<[f16; 96]>> {
         .ok_or_else(|| invalid("V23 RaBitQ centroid child differs"))?;
     values
         .values()
-        .chunks_exact(96)
-        .map(|row| {
-            row.try_into()
-                .map_err(|_| invalid("V23 RaBitQ centroid width differs"))
-        })
+        .as_chunks::<96>()
+        .0
+        .iter()
+        .map(|row| Ok(*row))
         .collect()
 }
 
@@ -359,11 +358,10 @@ fn read_f32_rows(bytes: &[u8], name: &str) -> Result<Vec<[f32; 96]>> {
         .ok_or_else(|| invalid("V23 RaBitQ rotation child differs"))?;
     values
         .values()
-        .chunks_exact(96)
-        .map(|row| {
-            row.try_into()
-                .map_err(|_| invalid("V23 RaBitQ rotation width differs"))
-        })
+        .as_chunks::<96>()
+        .0
+        .iter()
+        .map(|row| Ok(*row))
         .collect()
 }
 
@@ -421,11 +419,8 @@ pub(crate) fn read_v23_rabitq_f16_control(
         if values.null_count() != 0 {
             return Err(invalid("V23 RaBitQ f16-control nullability differs"));
         }
-        for row in values.values().chunks_exact(96) {
-            let row: [f16; 96] = row
-                .try_into()
-                .map_err(|_| invalid("V23 RaBitQ f16-control width differs"))?;
-            rows.push(row);
+        for row in values.values().as_chunks::<96>().0 {
+            rows.push(*row);
         }
     }
     if rows.len() != expected_rows
