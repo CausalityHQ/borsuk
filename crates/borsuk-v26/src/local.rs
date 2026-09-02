@@ -25,7 +25,7 @@ use crate::{
     V26LayoutResult, V26LayoutSample, V26Node, V26ObjectIdentity, V26QueryTruth, V26RowPages,
     V26Tree, canonical_json_value, canonical_v26_layout_receipt_bytes,
     canonical_v26_layout_result_bytes, exact_lower_hex, exact_v26_layout_oracle_pages, invalid,
-    projected_steps, validate_v26_dual_tree_layout,
+    projected_steps, validate_layout_authority, validate_v26_dual_tree_layout,
 };
 
 fn vector_type() -> DataType {
@@ -190,6 +190,7 @@ fn read_manifest(object: &V26LocalObjectPath) -> Result<V26LayoutAuthority> {
     if bytes != expected || object.identity.generation != authority.generation {
         return Err(invalid("V26 layout manifest authority differs"));
     }
+    validate_layout_authority(&authority)?;
     Ok(authority)
 }
 
@@ -1173,6 +1174,14 @@ mod tests {
             generation: "v26-local-test".to_owned(),
             source_commit: "1".repeat(40),
             source_archive_sha256: "2".repeat(64),
+            binary: V26ObjectIdentity {
+                role: "v26-layout-binary".to_owned(),
+                uri: "s3://v26-input/v26-layout-binary".to_owned(),
+                digest_algorithm: "sha256".to_owned(),
+                digest: "9".repeat(64),
+                encoded_bytes: 4096,
+                generation: "v26-local-test".to_owned(),
+            },
             construction_rows: construction.identity.clone(),
             source_map: source_map.identity.clone(),
             primary_seed: 0x5632_362d_5452_4545,

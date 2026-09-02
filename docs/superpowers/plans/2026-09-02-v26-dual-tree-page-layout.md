@@ -58,6 +58,7 @@ pub struct V26ObjectIdentity {
 pub struct V26LayoutAuthority {
     pub schema: String, pub generation: String, pub source_commit: String,
     pub source_archive_sha256: String,
+    pub binary: V26ObjectIdentity,
     pub construction_rows: V26ObjectIdentity, pub source_map: V26ObjectIdentity,
     pub primary_seed: u64,
     pub replica_seed: u64, pub page_capacity: u32, pub expected_rows: u64,

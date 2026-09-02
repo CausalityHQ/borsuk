@@ -151,6 +151,7 @@ pub struct V26LayoutAuthority {
     pub generation: String,
     pub source_commit: String,
     pub source_archive_sha256: String,
+    pub binary: V26ObjectIdentity,
     pub construction_rows: V26ObjectIdentity,
     pub source_map: V26ObjectIdentity,
     pub primary_seed: u64,
@@ -259,8 +260,7 @@ fn validate_identity(
     Ok(())
 }
 
-fn validate_receipt(receipt: &V26LayoutReceipt) -> Result<()> {
-    let authority = &receipt.authority;
+pub(crate) fn validate_layout_authority(authority: &V26LayoutAuthority) -> Result<()> {
     if authority.schema != V26_LAYOUT_SCHEMA
         || authority.generation.is_empty()
         || !exact_lower_hex(&authority.source_commit, 40)
@@ -269,10 +269,14 @@ fn validate_receipt(receipt: &V26LayoutReceipt) -> Result<()> {
         || authority.replica_seed != V26_REPLICA_SEED
         || authority.page_capacity != V26_PAGE_CAPACITY
         || authority.expected_rows == 0
-        || receipt.row_count != authority.expected_rows
     {
         return Err(invalid("V26 layout authority differs"));
     }
+    validate_identity(
+        &authority.binary,
+        "v26-layout-binary",
+        &authority.generation,
+    )?;
     validate_identity(
         &authority.construction_rows,
         "construction-parquet",
@@ -283,6 +287,26 @@ fn validate_receipt(receipt: &V26LayoutReceipt) -> Result<()> {
         "source-map-parquet",
         &authority.generation,
     )?;
+    let mut uris = BTreeSet::new();
+    if [
+        &authority.binary,
+        &authority.construction_rows,
+        &authority.source_map,
+    ]
+    .into_iter()
+    .any(|identity| !uris.insert(identity.uri.as_str()))
+    {
+        return Err(invalid("V26 authority URI roles overlap"));
+    }
+    Ok(())
+}
+
+fn validate_receipt(receipt: &V26LayoutReceipt) -> Result<()> {
+    let authority = &receipt.authority;
+    validate_layout_authority(authority)?;
+    if receipt.row_count != authority.expected_rows {
+        return Err(invalid("V26 layout authority differs"));
+    }
     let leaves = receipt.row_count.div_ceil(u64::from(V26_PAGE_CAPACITY));
     let leaves_u32 = u32::try_from(leaves).map_err(|_| invalid("V26 page count overflows"))?;
     if receipt.leaves_per_tree != leaves_u32
@@ -460,6 +484,7 @@ mod tests {
             generation: "v26-test-generation".to_owned(),
             source_commit: "1".repeat(40),
             source_archive_sha256: "2".repeat(64),
+            binary: identity("v26-layout-binary", '9', 4096),
             construction_rows: identity("construction-parquet", '3', 1024),
             source_map: identity("source-map-parquet", '4', 512),
             primary_seed: PRIMARY_SEED,
@@ -596,6 +621,7 @@ mod tests {
 
         type ReceiptMutation = Box<dyn Fn(&mut V26LayoutReceipt)>;
         let mut mutations: Vec<ReceiptMutation> = vec![
+            Box::new(|value| value.authority.binary.digest_algorithm = "blake3".to_owned()),
             Box::new(|value| value.authority.schema.push_str("-drift")),
             Box::new(|value| value.authority.source_commit = "a".repeat(39)),
             Box::new(|value| value.authority.source_archive_sha256 = "g".repeat(64)),
