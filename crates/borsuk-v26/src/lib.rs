@@ -5,7 +5,7 @@
     reason = "unpublished internal prerelease contract crate; not a compatibility surface"
 )]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +43,65 @@ pub type Result<T> = std::result::Result<T, V26Error>;
 
 fn invalid(message: &str) -> V26Error {
     V26Error(message.to_owned())
+}
+
+pub fn exact_v26_layout_oracle_pages(
+    assignments: &[Vec<u32>],
+    page_budget: usize,
+) -> Result<Vec<u32>> {
+    if assignments.len() != 10
+        || page_budget != 8
+        || assignments.iter().any(|pages| {
+            pages.is_empty() || pages.len() > 2 || pages.windows(2).any(|pair| pair[0] >= pair[1])
+        })
+    {
+        return Err(invalid("V26 truth assignments differ"));
+    }
+    let mut page_masks = BTreeMap::<u32, u16>::new();
+    for (neighbor, pages) in assignments.iter().enumerate() {
+        for page in pages {
+            *page_masks.entry(*page).or_default() |= 1_u16 << neighbor;
+        }
+    }
+    let maximum_pages = page_budget.min(page_masks.len());
+    let mut states = BTreeMap::<(u16, usize), Vec<u32>>::new();
+    states.insert((0, 0), Vec::new());
+    for (page, mask) in page_masks {
+        let prior = states
+            .iter()
+            .map(|(state, pages)| (*state, pages.clone()))
+            .collect::<Vec<_>>();
+        for ((covered, count), mut pages) in prior {
+            if count == maximum_pages {
+                continue;
+            }
+            pages.push(page);
+            let key = (covered | mask, count + 1);
+            match states.entry(key) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(pages);
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) if pages < *entry.get() => {
+                    entry.insert(pages);
+                }
+                std::collections::btree_map::Entry::Occupied(_) => {}
+            }
+        }
+    }
+    states
+        .into_iter()
+        .max_by(
+            |((left_mask, left_count), left_pages), ((right_mask, right_count), right_pages)| {
+                left_mask
+                    .count_ones()
+                    .cmp(&right_mask.count_ones())
+                    .then_with(|| right_count.cmp(left_count))
+                    .then_with(|| right_pages.cmp(left_pages))
+            },
+        )
+        .map(|(_, pages)| pages)
+        .filter(|pages| !pages.is_empty())
+        .ok_or_else(|| invalid("V26 layout oracle differs"))
 }
 
 fn exact_lower_hex(value: &str, length: usize) -> bool {
@@ -238,7 +297,7 @@ mod tests {
     use super::{
         V26ConstructionRow, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
         build_v26_dual_tree_layout, canonical_v26_layout_receipt_bytes,
-        validate_v26_dual_tree_layout,
+        exact_v26_layout_oracle_pages, validate_v26_dual_tree_layout,
     };
 
     const PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
@@ -426,6 +485,33 @@ mod tests {
             mutate(&mut candidate);
             assert!(canonical_v26_layout_receipt_bytes(&candidate).is_err());
         }
+    }
+
+    #[test]
+    fn v26_layout_oracle_uses_both_pages_and_prefers_shorter_lexicographic_cover() {
+        // Break caught: redundant pages displace the shortest complete two-copy cover.
+        let assignments = (1_u32..=10).map(|page| vec![0, page]).collect::<Vec<_>>();
+        assert_eq!(
+            exact_v26_layout_oracle_pages(&assignments, 8).unwrap(),
+            vec![0]
+        );
+
+        let assignments = vec![
+            vec![0, 8],
+            vec![1, 8],
+            vec![2, 9],
+            vec![3, 9],
+            vec![4, 10],
+            vec![5, 10],
+            vec![6, 11],
+            vec![7, 11],
+            vec![12, 13],
+            vec![14, 15],
+        ];
+        assert_eq!(
+            exact_v26_layout_oracle_pages(&assignments, 8).unwrap(),
+            vec![8, 9, 10, 11, 12, 14]
+        );
     }
 }
 
