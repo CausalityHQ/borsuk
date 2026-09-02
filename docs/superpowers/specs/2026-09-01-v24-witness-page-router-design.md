@@ -198,7 +198,7 @@ Holdout binding independently maps all neighbor IDs for queries 32--159 through
 canonical decimal page record IDs, and holdout evaluation runs once after a
 cell is sealed. Repeated-query or prior-result data never enters construction.
 
-### Unbiased pseudoquery screen
+### Query-independent corpus-uniform pseudoquery screen
 
 Before burned development, reserve exactly 1,024 corpus rows ranked immediately
 after the 1,048,576 witnesses by the same total order
@@ -208,7 +208,12 @@ first 1,048,576 ranked construction rows, excludes those ordinals, and retains
 only the smallest 1,024 remaining candidates. This is equivalent to ranks
 `[1,048,576, 1,049,600)` without retaining 1,049,600 f32 vectors. The split,
 seed, counts, and ordered source ordinals are authority; development or holdout
-bytes cannot change them.
+bytes cannot change them. The result binds SHA-256 over the 1,024 source
+ordinals encoded in cohort-rank order as little-endian `u64` values. The
+published witness prefix is proven without a corpus-sized retained sample: all
+published witness ordinals and f16-normalized vectors must match their source
+rows, their SplitMix keys must be strictly rank ordered, and every non-witness
+key must be greater than the final witness key.
 
 For each normalized pseudoquery, stream all 9,990,000 construction rows and
 compute exact fused-f32 cosine distance. Exclude the query's own source row and
@@ -223,27 +228,72 @@ table schema, order, counts, construction digest, generation, and source-ID
 relations. No page body is read.
 
 Evaluate all 108 registered cells in their original lexicographic order for all
-1,024 pseudoqueries. The phase applies the registered aggregate recall,
-minimum-query recall, oracle-attainment, serving-memory, and exact-page-count
-gates; it does not use selector p99 as corpus pseudoqueries are not benchmark
-latency authority. It emits every cell and cannot select, prune, reorder, or
-seal one: `selected_cell` is always null. If no cell passes, the architecture
-is rejected before burned development. If at least one cell passes, burned
-development still evaluates the complete 108-cell ladder and independently
-seals its first passing cell. Thus the screen is a one-way rejection boundary,
-not an extra tuning cohort.
+1,024 pseudoqueries. This cohort is uniform over corpus rows, not representative
+of the out-of-sample Deep Image query distribution, and can only falsify
+catastrophic routing failure; it cannot certify the router. The screen records
+minimum-query recall but does not gate on it because a minimum over 1,024 rows
+is not comparable to the registered 32-query development order statistic. It
+does not measure or gate selector p99 because corpus pseudoqueries are not
+benchmark latency authority, and it does not charge the streaming corpus row
+group against the separately authenticated steady-serving projection.
+
+The exact page-cover computation is total for valid assignments and returns
+both pages and hits. An eight-page cover below eight hits is a recorded
+structural exclusion, not an authority error. The screen rejects unless the
+best complete registered cell has aggregate recall at least 975,000 ppm and
+oracle attainment at least 995,000 ppm, and the cohort-wide eight-page
+structural-exclusion fraction is at most 50,000 ppm. Five percent is below the
+8.333% mathematical ceiling at which all other queries scoring ten hits and
+excluded queries scoring seven could still average 975,000 ppm. This is the
+only pseudoquery decision rule. Exact selected-page cardinality remains a
+schema invariant. Serving memory and latency remain separate preflight and
+development gates.
+
+The phase emits every cell and cannot select, prune, reorder, or seal one:
+`selected_cell` is always null. If the screen rejects, the architecture stops
+before burned development. If it passes, burned development still evaluates
+the complete 108-cell ladder and independently seals its first passing cell.
+The development worker receives only a pass receipt binding the exact router,
+split, evidence, and result digests; it receives no per-cell pseudoquery
+metric. Thus the screen is a one-way rejection boundary, not an extra tuning
+cohort.
 
 Per-query/per-cell evidence uses deterministic Parquet with exact columns
 `pseudoquery_ordinal: UInt32`, `source_ordinal: UInt64`, `cell_ordinal: UInt32`,
 `selected_pages: List<element: UInt32 non-null>`, `hits: UInt32`,
 `oracle_hits: UInt32`, `recall_ppm: UInt32`, and
-`oracle_attainment_ppm: UInt32`, all non-null. Rows are ordered by
-`(cell_ordinal, pseudoquery_ordinal)` and selected pages are unique ascending
-with length equal to the cell budget. A small canonical JSON result binds all
-inputs, the evidence SHA-256/length/URI, the exact split, distance backend,
-every recomputed cell aggregate, `selected_cell: null`, pass/reject, zero
-benchmark-query reads, and zero page-body reads. Serialization independently
-recomputes samples, aggregates, gates, and the one-way disposition.
+`oracle_attainment_ppm: UInt32`, all non-null. It additionally carries
+`query_pages: List<element: UInt32 non-null>`, `own_page_selected: Boolean`,
+`selected_pages_without_own: List<element: UInt32 non-null>`,
+`hits_without_own_pages: UInt32`, `recall_without_own_pages_ppm: UInt32`, and
+`rank_one_distance: Float32`. These columns quantify the corpus-row own-page
+shortcut and near-duplicate sensitivity but do not become extra tunable gates.
+Rows are ordered by `(cell_ordinal, pseudoquery_ordinal)` and both selected-page
+lists are unique ascending with the registered budget unless fewer non-own
+candidate pages exist, which is recorded as a structural exclusion. A small
+screen-specific canonical JSON result binds all inputs, the evidence
+SHA-256/length/URI, the exact split and source-ordinal-list SHA-256, distance
+backend, every recomputed cell aggregate and structural-exclusion count,
+`selected_cell: null`, pass/reject, zero benchmark-query reads, and zero
+page-body reads. It contains no per-query arrays, scalar page arrays, or timing
+samples. Serialization streams or rereads the Parquet evidence to independently
+recompute samples, aggregates, gates, and the one-way disposition.
+
+The pseudoquery worker remains under the 3 GiB RSS cap. It holds the router,
+1,024 query vectors, 1,024 ten-neighbor heaps, and one 4,096-row normalized
+block; it never retains the 3.83 GiB construction vector plane. Oracle pages are
+memoized only by `(source_ordinal, page_budget)` after one independent equality
+check, reducing 108-cell duplication without changing authority.
+
+Receipt validation uses a phase-specific role allowlist. Pseudoquery input may
+contain only `posting-result`, `witness-graph`, `witness-postings`,
+`construction-rows-parquet`, and `page-rows-parquet`; it rejects query,
+neighbor, development, holdout, and page-body roles. Development accepts only
+the digest-bound `pseudoquery-pass-receipt` in addition to its registered
+router/query/truth roles and rejects pseudoquery result/evidence roles. A
+terminal screen burns this exact 1,024-row cohort for every successor
+architecture, and a pass freezes the graph/posting digests; neither the screen
+nor a terminal architecture attempt may be rerun.
 
 ## Resource arithmetic and gates
 
@@ -291,9 +341,9 @@ precedence because nearest-witness order is not guaranteed to dominate page
 fusion and the diagnostic cannot veto a passing serving result.
 If routing passes but page-body exact rerank fails, page integration is causal.
 
-One unbiased query-independent pseudoquery split runs before burned
-development. It rejects the architecture only when all 108 cells fail and can
-never select among them. Development always receives the full original ladder,
+One query-independent corpus-uniform pseudoquery split runs before burned
+development. It applies only the preregistered catastrophe rule above and can
+never select among cells. Development always receives the full original ladder,
 selects one preregistered cell, and only that cell reaches the sealed holdout.
 Incomplete pseudoquery metrics are never inspected.
 
