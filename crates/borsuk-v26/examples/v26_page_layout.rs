@@ -3,9 +3,9 @@
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
 use borsuk_v26::{
-    V26LayoutEvaluationRequest, V26LocalObjectPath, V26ObjectIdentity,
+    V26ExactGlobalRequest, V26LayoutEvaluationRequest, V26LocalObjectPath, V26ObjectIdentity,
     canonical_v26_layout_build_output_bytes, canonical_v26_layout_result_bytes,
-    evaluate_v26_layout_oracle, run_v26_layout_build_directory,
+    evaluate_v26_layout_oracle, run_v26_exact_global, run_v26_layout_build_directory,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,9 +37,18 @@ struct EvaluationRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct ExactGlobalRequest {
+    generation: String,
+    construction: RegisteredFile,
+    layout: EvaluationRequest,
+    ranked_row_limits: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum V26CliMode {
     Build(BuildRequest),
     Evaluate(EvaluationRequest),
+    ExactGlobal(ExactGlobalRequest),
 }
 
 fn take(values: &mut BTreeMap<String, String>, key: &str) -> Result<String, String> {
@@ -95,6 +104,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         .ok_or_else(|| "program is absent".to_owned())?;
     let mut build = false;
     let mut evaluate = false;
+    let mut exact_global = false;
     let mut execute = false;
     let mut values = BTreeMap::new();
     while let Some(flag) = arguments.next() {
@@ -110,6 +120,12 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     return Err("duplicate --evaluate-layout".to_owned());
                 }
                 evaluate = true;
+            }
+            "--exact-global" => {
+                if exact_global {
+                    return Err("duplicate --exact-global".to_owned());
+                }
+                exact_global = true;
             }
             "--execute" => {
                 if execute {
@@ -150,10 +166,22 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     return Err(format!("invalid or duplicate {flag}"));
                 }
             }
+            "--construction-path"
+            | "--construction-uri"
+            | "--construction-sha256"
+            | "--construction-bytes"
+            | "--ranked-row-limits" => {
+                let value = arguments
+                    .next()
+                    .ok_or_else(|| format!("missing value for {flag}"))?;
+                if value.starts_with("--") || values.insert(flag.clone(), value).is_some() {
+                    return Err(format!("invalid or duplicate {flag}"));
+                }
+            }
             _ => return Err(format!("unknown or forbidden flag {flag}")),
         }
     }
-    if !execute || build == evaluate {
+    if !execute || u8::from(build) + u8::from(evaluate) + u8::from(exact_global) != 1 {
         return Err("exactly one executable phase is required".to_owned());
     }
     let generation = take(&mut values, "--generation")?;
@@ -194,7 +222,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
     let expected_queries = take(&mut values, "--expected-queries")?
         .parse()
         .map_err(|_| "invalid --expected-queries".to_owned())?;
-    if !values.is_empty()
+    if evaluate && !values.is_empty()
         || [&layout_terminal, &page_assignments, &pseudoqueries, &truth]
             .into_iter()
             .any(|file| !valid_registered(file))
@@ -202,14 +230,56 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
     {
         return Err("V26 evaluation arguments differ".to_owned());
     }
-    Ok(V26CliMode::Evaluate(EvaluationRequest {
+    let layout = EvaluationRequest {
         generation,
         layout_terminal,
         page_assignments,
         pseudoqueries,
         truth,
         expected_queries,
+    };
+    if evaluate {
+        if !values.is_empty() {
+            return Err("V26 evaluation arguments differ".to_owned());
+        }
+        return Ok(V26CliMode::Evaluate(layout));
+    }
+    let construction = take_registered(&mut values, "construction")?;
+    let ranked_row_limits = take(&mut values, "--ranked-row-limits")?
+        .split(',')
+        .map(|value| {
+            value
+                .parse::<u32>()
+                .map_err(|_| "invalid --ranked-row-limits".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if !values.is_empty()
+        || !valid_registered(&construction)
+        || ranked_row_limits != [10, 32, 128, 512, 2_048, 4_096]
+    {
+        return Err("V26 exact-global arguments differ".to_owned());
+    }
+    Ok(V26CliMode::ExactGlobal(ExactGlobalRequest {
+        generation: layout.generation.clone(),
+        construction,
+        layout,
+        ranked_row_limits,
     }))
+}
+
+fn evaluation_request(request: EvaluationRequest) -> V26LayoutEvaluationRequest {
+    let generation = request.generation;
+    V26LayoutEvaluationRequest {
+        layout_terminal: local_object("layout-terminal", &generation, request.layout_terminal),
+        page_assignments: local_object(
+            "page-assignments-parquet",
+            &generation,
+            request.page_assignments,
+        ),
+        pseudoqueries: local_object("pseudoqueries-parquet", &generation, request.pseudoqueries),
+        truth: local_object("truth-parquet", &generation, request.truth),
+        expected_queries: request.expected_queries,
+    }
 }
 
 fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
@@ -238,31 +308,22 @@ fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
                 .map_err(|error| error.to_string())
         }
         V26CliMode::Evaluate(request) => {
-            let generation = request.generation;
-            let evaluation = V26LayoutEvaluationRequest {
-                layout_terminal: local_object(
-                    "layout-terminal",
-                    &generation,
-                    request.layout_terminal,
-                ),
-                page_assignments: local_object(
-                    "page-assignments-parquet",
-                    &generation,
-                    request.page_assignments,
-                ),
-                pseudoqueries: local_object(
-                    "pseudoqueries-parquet",
-                    &generation,
-                    request.pseudoqueries,
-                ),
-                truth: local_object("truth-parquet", &generation, request.truth),
-                expected_queries: request.expected_queries,
-            };
+            let evaluation = evaluation_request(request);
             let (truths, samples, result) =
                 evaluate_v26_layout_oracle(&evaluation).map_err(|error| error.to_string())?;
             canonical_v26_layout_result_bytes(&result, &truths, &samples)
                 .map_err(|error| error.to_string())
         }
+        V26CliMode::ExactGlobal(request) => run_v26_exact_global(&V26ExactGlobalRequest {
+            construction_rows: local_object(
+                "construction-parquet",
+                &request.generation,
+                request.construction,
+            ),
+            layout: evaluation_request(request.layout),
+            ranked_row_limits: request.ranked_row_limits,
+        })
+        .map_err(|error| error.to_string()),
     }
 }
 
@@ -340,6 +401,25 @@ mod tests {
             ]);
         }
         args.extend(["--expected-queries".to_owned(), "512".to_owned()]);
+        args
+    }
+
+    fn exact_global_args() -> Vec<String> {
+        let mut args = evaluation_args();
+        args.retain(|argument| argument != "--evaluate-layout");
+        args.insert(1, "--exact-global".to_owned());
+        args.extend([
+            "--construction-path".to_owned(),
+            "/input/construction.parquet".to_owned(),
+            "--construction-uri".to_owned(),
+            "s3://bucket/construction.parquet".to_owned(),
+            "--construction-sha256".to_owned(),
+            "5".repeat(64),
+            "--construction-bytes".to_owned(),
+            "4096".to_owned(),
+            "--ranked-row-limits".to_owned(),
+            "10,32,128,512,2048,4096".to_owned(),
+        ]);
         args
     }
 
@@ -423,5 +503,30 @@ mod tests {
             .unwrap();
         missing.drain(index..=index + 1);
         assert!(parse_v26_args(missing).is_err());
+    }
+
+    #[test]
+    fn v26_exact_global_cli_requires_explicit_offline_authority_and_fixed_limits() {
+        // Break caught: exact-global discovers an input, accepts a tunable rank ladder, or gains
+        // network/page access inside the scientific process.
+        let parsed = parse_v26_args(exact_global_args()).unwrap();
+        let V26CliMode::ExactGlobal(request) = parsed else {
+            panic!("exact-global mode differs");
+        };
+        assert_eq!(request.generation, "v26-generation");
+        assert_eq!(request.construction.sha256, "5".repeat(64));
+        assert_eq!(request.ranked_row_limits, [10, 32, 128, 512, 2_048, 4_096]);
+
+        for mutation in [
+            vec!["--bucket", "forbidden"],
+            vec!["--endpoint", "https://forbidden"],
+            vec!["--page-prefix", "forbidden"],
+            vec!["--d3"],
+            vec!["--ranked-row-limits", "10,32"],
+        ] {
+            let mut args = exact_global_args();
+            args.extend(mutation.into_iter().map(str::to_owned));
+            assert!(parse_v26_args(args).is_err());
+        }
     }
 }

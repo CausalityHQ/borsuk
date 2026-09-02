@@ -21,9 +21,10 @@ use sha2::{Digest, Sha256};
 
 use crate::tree::build_v26_dual_tree_layout_with_workers;
 use crate::{
-    Result, V26ConstructionRow, V26Disposition, V26ExactGlobalQuery, V26ExactGlobalSample,
-    V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult, V26LayoutSample, V26Node,
-    V26ObjectIdentity, V26QueryTruth, V26RowPages, V26Tree, canonical_json_value,
+    Result, V26ConstructionRow, V26Disposition, V26ExactGlobalQuery, V26ExactGlobalRankResult,
+    V26ExactGlobalResult, V26ExactGlobalSample, V26LayoutAuthority, V26LayoutReceipt,
+    V26LayoutResult, V26LayoutSample, V26Node, V26ObjectIdentity, V26QueryTruth, V26RowPages,
+    V26Tree, canonical_json_value, canonical_v26_exact_global_result_bytes,
     canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
     evaluate_v26_exact_global_rows, exact_lower_hex, exact_v26_layout_oracle_pages, invalid,
     projected_steps, validate_layout_authority, validate_v26_dual_tree_layout,
@@ -580,9 +581,14 @@ fn read_exact_global_construction(
     Ok(rows)
 }
 
-pub fn evaluate_v26_exact_global(
-    request: &V26ExactGlobalRequest,
-) -> Result<Vec<V26ExactGlobalSample>> {
+struct V26LoadedExactGlobal {
+    rows: Vec<V26ConstructionRow>,
+    assignments: Vec<V26RowPages>,
+    queries: Vec<V26ExactGlobalQuery>,
+    truths: Vec<V26QueryTruth>,
+}
+
+fn load_v26_exact_global(request: &V26ExactGlobalRequest) -> Result<V26LoadedExactGlobal> {
     let (_, _, layout_result) = evaluate_v26_layout_oracle(&request.layout)?;
     if layout_result.disposition != V26Disposition::BoundedLayoutCandidate {
         return Err(invalid("V26 exact-global layout gate is closed"));
@@ -618,13 +624,107 @@ pub fn evaluate_v26_exact_global(
         &queries,
         &assignments,
     )?;
+    Ok(V26LoadedExactGlobal {
+        rows,
+        assignments,
+        queries,
+        truths,
+    })
+}
+
+pub fn evaluate_v26_exact_global(
+    request: &V26ExactGlobalRequest,
+) -> Result<Vec<V26ExactGlobalSample>> {
+    let loaded = load_v26_exact_global(request)?;
     evaluate_v26_exact_global_rows(
-        &rows,
-        &assignments,
-        &queries,
-        &truths,
+        &loaded.rows,
+        &loaded.assignments,
+        &loaded.queries,
+        &loaded.truths,
         &request.ranked_row_limits,
         8,
+    )
+}
+
+fn summarize_v26_exact_global(
+    samples: &[V26ExactGlobalSample],
+    query_count: u32,
+    ranked_row_limits: &[u32],
+) -> Result<V26ExactGlobalResult> {
+    let query_count_usize = usize::try_from(query_count)
+        .map_err(|_| invalid("V26 exact-global query count overflows"))?;
+    if query_count != 512
+        || ranked_row_limits != [10, 32, 128, 512, 2_048, 4_096]
+        || samples.len() != query_count_usize * ranked_row_limits.len()
+    {
+        return Err(invalid("V26 exact-global summary authority differs"));
+    }
+    let mut rank_results = Vec::with_capacity(ranked_row_limits.len());
+    for (limit_index, limit) in ranked_row_limits.iter().enumerate() {
+        let mut total_hits = 0_u64;
+        let mut total_oracle_hits = 0_u64;
+        let mut minimum_query_recall_ppm = 1_000_000_u64;
+        for query_index in 0..query_count_usize {
+            let sample = &samples[query_index * ranked_row_limits.len() + limit_index];
+            if sample.query_ordinal != u32::try_from(query_index).unwrap()
+                || sample.ranked_row_limit != *limit
+            {
+                return Err(invalid("V26 exact-global summary sample order differs"));
+            }
+            total_hits = total_hits
+                .checked_add(u64::from(sample.hits))
+                .ok_or_else(|| invalid("V26 exact-global summary overflows"))?;
+            total_oracle_hits = total_oracle_hits
+                .checked_add(u64::from(sample.oracle_hits))
+                .ok_or_else(|| invalid("V26 exact-global summary overflows"))?;
+            minimum_query_recall_ppm = minimum_query_recall_ppm.min(sample.recall_ppm);
+        }
+        let aggregate_recall_ppm = total_hits * 1_000_000 / (u64::from(query_count) * 10);
+        let oracle_attainment_ppm = total_hits * 1_000_000 / total_oracle_hits;
+        rank_results.push(V26ExactGlobalRankResult {
+            ranked_row_limit: *limit,
+            aggregate_recall_ppm,
+            minimum_query_recall_ppm,
+            oracle_attainment_ppm,
+            passed: aggregate_recall_ppm >= 975_000 && oracle_attainment_ppm >= 995_000,
+        });
+    }
+    let disposition = if rank_results.iter().any(|result| result.passed) {
+        V26Disposition::BoundedLayoutCandidate
+    } else {
+        V26Disposition::RankReducerRejected
+    };
+    Ok(V26ExactGlobalResult {
+        schema: "borsuk-v26-exact-global-result-v1".to_owned(),
+        query_count,
+        rank_results,
+        disposition,
+        page_body_reads: 0,
+        claim_eligible: false,
+    })
+}
+
+pub fn run_v26_exact_global(request: &V26ExactGlobalRequest) -> Result<Vec<u8>> {
+    let loaded = load_v26_exact_global(request)?;
+    let samples = evaluate_v26_exact_global_rows(
+        &loaded.rows,
+        &loaded.assignments,
+        &loaded.queries,
+        &loaded.truths,
+        &request.ranked_row_limits,
+        8,
+    )?;
+    let result = summarize_v26_exact_global(
+        &samples,
+        request.layout.expected_queries,
+        &request.ranked_row_limits,
+    )?;
+    canonical_v26_exact_global_result_bytes(
+        &result,
+        &loaded.assignments,
+        &loaded.queries,
+        &loaded.truths,
+        &samples,
     )
 }
 
