@@ -1890,3 +1890,39 @@ thresholds are unchanged. Milestone assurance, the sealed sentry, D3, and
 release progression remain fenced for this router. The next work is a bounded
 local causal diagnostic of traversal versus representation; no further paid
 run is authorized by this terminal.
+
+### Fixed-router candidate-width diagnosis
+
+Source commit `ccd267d1780a980886ea66849542fbcec856a8d3` ran one
+claim-ineligible, page-free candidate-width diagnosis on Spot instance
+`i-017f002ee0e81cfbe` (`c7g.4xlarge`, `eu-central-1c`). The
+11,346,288-byte executable had SHA-256
+`e07f2bf6d3a7c925ed7709df570a5c19041387d45d957caf83746f1254be34dd`;
+the source archive had SHA-256
+`70a011f822dde9e121c2069a226187955dfb19765b2f21003a73548f26f8b0ca`.
+The diagnostic ranked all 188 leaves under the frozen tree-margin rule, then
+used truth only to compute the exact best eight-page cover inside fixed prefixes
+of 8, 16, 32, 64, 128, and 188 candidate pages. It did not read page bodies or
+alter serving behavior.
+
+The aggregate/minimum/oracle-attainment ppm triples were respectively
+641,406/0/642,410; 800,976/0/802,230; 915,039/300,000/916,471;
+979,882/500,000/981,416; 997,265/800,000/998,826; and
+998,437/800,000/1,000,000. Width 128 is the smallest registered prefix that
+passes the 975,000 aggregate, 800,000 minimum-query, and 995,000 attainment
+gates. The diagnostic completed in 0.105580768 seconds and 0.19 CPU-seconds,
+peaked at 14,479,360 bytes RSS, and observed zero PSI and zero swap growth. The
+instance terminated after its terminal.
+
+The 493,988-byte canonical result has SHA-256
+`e3cb66c69bdd98bb235af9ea0eb9519b9f13fbd2e488dd24858f46e741b2fb54`;
+the 698-byte terminal has SHA-256
+`42eba63ea8819958a12269718f2086f877e0404482297e3abece92389a790878`.
+Artifacts are rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/open/ccd267d1780a980886ea66849542fbcec856a8d3/v26-tree-router-diagnostic-ccd267d/diagnostic-a0001/`.
+
+This isolates the failure to eight-page selection from a bounded tree
+frontier, rather than absence of the relevant pages from every bounded prefix.
+The next falsifier is therefore a query-independent page-summary reranker over
+exactly the first 128 tree candidates. It must still choose exactly eight pages
+without truth or page-body access. D3 and release claims remain fenced.
