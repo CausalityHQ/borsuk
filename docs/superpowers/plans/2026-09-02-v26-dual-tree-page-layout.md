@@ -192,7 +192,7 @@ pub fn canonical_v26_layout_result_bytes(
 ) -> Result<Vec<u8>>;
 ```
 
-- [ ] **Step 1: Write external-query RED.** Require `query_ordinal` plus nonnullable f32[96] only; reject `source_ordinal`, nulls, nonfinite/zero vectors, schema drift, unordered ordinals, and any own-row/page exclusion input.
+- [ ] **Step 1: Write external-query RED.** Consume the exact authenticated 10,000-row Deep Image `test.parquet` directly, require its sole `emb` field to be nonnullable fixed-size-list `element:f32[96]`, and derive query ordinals `0..512` from physical row positions. Reject `source_ordinal`, nulls, nonfinite/zero vectors, schema/row-count drift, and any own-row/page exclusion input. Do not materialize a derivative query file.
 - [ ] **Step 2: Write truth-builder RED.** On a literal 4,096-row fixture, exact-score external queries, persist deterministic top-ten `(distance_bits, source_ordinal)` pairs, bind construction/query identities, and prove truth capability cannot open layouts, assignments, results, or routers.
 - [ ] **Step 3: Write exact-oracle RED.** Add `v26_layout_oracle_uses_both_pages_and_prefers_shorter_lexicographic_cover`. Use ten literal neighbor assignments including a redundant longer full cover; require maximum hits then lexicographically smallest page vector.
 - [ ] **Step 4: Write phase and metric REDs.** Require exact layout/truth terminals and identities; mutation-lock 512 ordered queries, ten unique neighbors, assignment bindings, page lists, hits, aggregate/minimum recall, 975,000/800,000/995,000 gates, causal disposition, zero page reads, and claim eligibility false.

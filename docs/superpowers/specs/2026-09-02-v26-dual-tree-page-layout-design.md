@@ -81,6 +81,10 @@ for each external query and writes deterministic top-ten
 `(distance_bits, source_ordinal)` pairs to Parquet. Distance ties break by
 source ordinal. The query cohort, construction identity, metric, f32 kernel,
 and truth serializer are fixed before any page-quality result is opened.
+The Rust truth/evaluation boundary consumes that authenticated 10,000-row
+Parquet directly: its sole `emb` field is nonnullable fixed-size-list
+`element:f32[96]`, and physical row position is the query ordinal. No derived
+query file, loader shim, or JSON vector payload is created.
 
 The builder has no query or truth capability. The truth phase has construction
 and query capability but no page assignment, layout result, or router

@@ -53,10 +53,7 @@ pub fn v26_source_map_schema() -> Schema {
 }
 
 pub fn v26_query_schema() -> Schema {
-    Schema::new(vec![
-        Field::new("query_ordinal", DataType::UInt32, false),
-        Field::new("vector", vector_type(), false),
-    ])
+    Schema::new(vec![Field::new("emb", vector_type(), false)])
 }
 
 pub fn v26_truth_schema() -> Schema {
@@ -115,7 +112,7 @@ pub struct V26LayoutBuildRequest {
 pub struct V26LayoutEvaluationRequest {
     pub layout_terminal: V26LocalObjectPath,
     pub page_assignments: V26LocalObjectPath,
-    pub pseudoqueries: V26LocalObjectPath,
+    pub external_queries: V26LocalObjectPath,
     pub truth: V26LocalObjectPath,
     pub expected_queries: u32,
 }
@@ -236,11 +233,11 @@ pub fn evaluate_v26_layout_oracle(
         return Err(invalid("V26 layout evaluation authority differs"));
     }
     authenticate(&request.page_assignments, "page-assignments-parquet")?;
-    authenticate(&request.pseudoqueries, "pseudoqueries-parquet")?;
+    authenticate(&request.external_queries, "external-queries-parquet")?;
     authenticate(&request.truth, "truth-parquet")?;
     if [
         &request.page_assignments.identity,
-        &request.pseudoqueries.identity,
+        &request.external_queries.identity,
         &request.truth.identity,
     ]
     .iter()
@@ -258,7 +255,8 @@ pub fn evaluate_v26_layout_oracle(
     {
         return Err(invalid("V26 assignment inventory differs"));
     }
-    let queries = read_evaluation_queries(&request.pseudoqueries.path, request.expected_queries)?;
+    let queries =
+        read_evaluation_queries(&request.external_queries.path, request.expected_queries)?;
     let truths = read_evaluation_truth(
         &request.truth.path,
         request.expected_queries,
@@ -320,8 +318,8 @@ pub fn evaluate_v26_layout_oracle(
 fn read_evaluation_queries(path: &Path, expected_queries: u32) -> Result<Vec<V26ExternalQuery>> {
     let reader = open_reader(path)?;
     if reader.schema().as_ref() != &v26_query_schema()
-        || u32::try_from(reader.metadata().file_metadata().num_rows()).ok()
-            != Some(expected_queries)
+        || reader.metadata().file_metadata().num_rows() != 10_000
+        || expected_queries != 512
     {
         return Err(invalid("V26 query Parquet authority differs"));
     }
@@ -338,17 +336,15 @@ fn read_evaluation_queries(path: &Path, expected_queries: u32) -> Result<Vec<V26
         {
             return Err(invalid("V26 query nullability differs"));
         }
-        let ordinals = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .ok_or_else(|| invalid("V26 query ordinal differs"))?;
         let vectors = batch
-            .column(1)
+            .column(0)
             .as_any()
             .downcast_ref::<FixedSizeListArray>()
             .ok_or_else(|| invalid("V26 query vector differs"))?;
         for row in 0..batch.num_rows() {
+            if queries.len() == expected_queries as usize {
+                break;
+            }
             let vector = vectors.value(row);
             let values = vector
                 .as_any()
@@ -359,7 +355,8 @@ fn read_evaluation_queries(path: &Path, expected_queries: u32) -> Result<Vec<V26
                 .iter()
                 .map(|value| value * value)
                 .sum::<f32>();
-            let query_ordinal = ordinals.value(row);
+            let query_ordinal =
+                u32::try_from(queries.len()).map_err(|_| invalid("V26 query ordinal overflows"))?;
             if usize::try_from(query_ordinal).ok() != Some(queries.len())
                 || values.len() != 96
                 || values.null_count() != 0
@@ -668,7 +665,7 @@ fn load_v26_exact_global(request: &V26ExactGlobalRequest) -> Result<V26LoadedExa
     }
     authenticate(&request.construction_rows, "construction-parquet")?;
     authenticate(&request.layout.page_assignments, "page-assignments-parquet")?;
-    authenticate(&request.layout.pseudoqueries, "pseudoqueries-parquet")?;
+    authenticate(&request.layout.external_queries, "external-queries-parquet")?;
     authenticate(&request.layout.truth, "truth-parquet")?;
     let expected_rows = terminal.authority.expected_rows;
     let rows = read_exact_global_construction(&request.construction_rows.path, expected_rows)?;
@@ -678,7 +675,7 @@ fn load_v26_exact_global(request: &V26ExactGlobalRequest) -> Result<V26LoadedExa
             .map_err(|_| invalid("V26 exact-global row count overflows"))?,
     )?;
     let queries = read_evaluation_queries(
-        &request.layout.pseudoqueries.path,
+        &request.layout.external_queries.path,
         request.layout.expected_queries,
     )?;
     let truths = read_evaluation_truth(
@@ -1562,8 +1559,8 @@ mod tests {
         .unwrap();
 
         let query_ordinals = UInt32Array::from_iter_values(0..512_u32);
-        let mut query_values = Vec::with_capacity(512 * 96);
-        for query in 0..512 {
+        let mut query_values = Vec::with_capacity(10_000 * 96);
+        for query in 0..10_000 {
             for dimension in 0..96 {
                 query_values.push(if dimension == query % 96 { 1.0 } else { 0.0 });
             }
@@ -1575,11 +1572,9 @@ mod tests {
             None,
         )
         .unwrap();
-        let query_batch = RecordBatch::try_new(
-            Arc::new(v26_query_schema()),
-            vec![Arc::new(query_ordinals.clone()), Arc::new(query_vectors)],
-        )
-        .unwrap();
+        let query_batch =
+            RecordBatch::try_new(Arc::new(v26_query_schema()), vec![Arc::new(query_vectors)])
+                .unwrap();
         let query_path = temp.path().join("queries.parquet");
         write_parquet(&query_path, &query_batch);
 
@@ -1619,7 +1614,7 @@ mod tests {
         let request = V26LayoutEvaluationRequest {
             layout_terminal: identity("layout-terminal", &terminal_path),
             page_assignments,
-            pseudoqueries: identity("pseudoqueries-parquet", &query_path),
+            external_queries: identity("external-queries-parquet", &query_path),
             truth: identity("truth-parquet", &truth_path),
             expected_queries: 512,
         };
@@ -1676,8 +1671,7 @@ mod tests {
         // Break caught: the truth phase requires a layout/page role or emits JSON bulk data.
         let (temp, evaluation) = evaluation_fixture();
         let output_path = temp.path().join("external-truth.parquet");
-        let mut external_queries = evaluation.pseudoqueries;
-        external_queries.identity.role = "external-queries-parquet".to_owned();
+        let external_queries = evaluation.external_queries;
         let request = V26TruthBuildRequest {
             construction_rows: identity(
                 "construction-parquet",
@@ -1705,7 +1699,7 @@ mod tests {
     #[test]
     fn v26_layout_local_rejects_query_truth_and_result_roles() {
         // Break caught: construction gains a query/evaluation capability.
-        for forbidden in ["pseudoqueries-parquet", "truth-parquet", "prior-result"] {
+        for forbidden in ["external-queries-parquet", "truth-parquet", "prior-result"] {
             let (temp, manifest, mut construction, source_map) = fixture();
             construction.identity.role = forbidden.to_owned();
             let output = temp.path().join("forbidden-output");
@@ -1867,7 +1861,7 @@ mod tests {
         let request = V26LayoutEvaluationRequest {
             layout_terminal: terminal,
             page_assignments: missing("page-assignments-parquet"),
-            pseudoqueries: missing("pseudoqueries-parquet"),
+            external_queries: missing("external-queries-parquet"),
             truth: missing("truth-parquet"),
             expected_queries: 512,
         };

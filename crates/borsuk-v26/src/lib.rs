@@ -1281,7 +1281,7 @@ mod tests {
             Box::new(|value| value.query_role_opens = 1),
             Box::new(|value| value.page_body_reads = 1),
             Box::new(|value| value.claim_eligible = true),
-            Box::new(|value| value.inputs[0].role = "pseudoqueries-parquet".to_owned()),
+            Box::new(|value| value.inputs[0].role = "external-queries-parquet".to_owned()),
             Box::new(|value| value.inputs[0].digest_algorithm = "blake3".to_owned()),
             Box::new(|value| value.inputs[0].digest = "A".repeat(64)),
             Box::new(|value| value.inputs[0].encoded_bytes = 0),
@@ -1562,17 +1562,14 @@ mod local_schema_tests {
         );
         assert_eq!(
             v26_query_schema(),
-            Schema::new(vec![
-                Field::new("query_ordinal", DataType::UInt32, false),
-                Field::new(
-                    "vector",
-                    DataType::FixedSizeList(
-                        Arc::new(Field::new("element", DataType::Float32, false)),
-                        96,
-                    ),
-                    false,
+            Schema::new(vec![Field::new(
+                "emb",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    96,
                 ),
-            ])
+                false,
+            )])
         );
         assert_eq!(
             v26_truth_schema(),

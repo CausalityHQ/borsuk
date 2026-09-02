@@ -33,7 +33,7 @@ struct EvaluationRequest {
     generation: String,
     layout_terminal: RegisteredFile,
     page_assignments: RegisteredFile,
-    pseudoqueries: RegisteredFile,
+    external_queries: RegisteredFile,
     truth: RegisteredFile,
     expected_queries: u32,
 }
@@ -171,18 +171,14 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             | "--page-assignments-uri"
             | "--page-assignments-sha256"
             | "--page-assignments-bytes"
-            | "--pseudoqueries-path"
-            | "--pseudoqueries-uri"
-            | "--pseudoqueries-sha256"
-            | "--pseudoqueries-bytes"
-            | "--truth-path"
-            | "--truth-uri"
-            | "--truth-sha256"
-            | "--truth-bytes"
             | "--external-queries-path"
             | "--external-queries-uri"
             | "--external-queries-sha256"
             | "--external-queries-bytes"
+            | "--truth-path"
+            | "--truth-uri"
+            | "--truth-sha256"
+            | "--truth-bytes"
             | "--truth-output-path"
             | "--truth-output-uri"
             | "--expected-rows"
@@ -279,15 +275,20 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
     }
     let layout_terminal = take_registered(&mut values, "layout-terminal")?;
     let page_assignments = take_registered(&mut values, "page-assignments")?;
-    let pseudoqueries = take_registered(&mut values, "pseudoqueries")?;
+    let external_queries = take_registered(&mut values, "external-queries")?;
     let truth = take_registered(&mut values, "truth")?;
     let expected_queries = take(&mut values, "--expected-queries")?
         .parse()
         .map_err(|_| "invalid --expected-queries".to_owned())?;
     if evaluate && !values.is_empty()
-        || [&layout_terminal, &page_assignments, &pseudoqueries, &truth]
-            .into_iter()
-            .any(|file| !valid_registered(file))
+        || [
+            &layout_terminal,
+            &page_assignments,
+            &external_queries,
+            &truth,
+        ]
+        .into_iter()
+        .any(|file| !valid_registered(file))
         || expected_queries != 512
     {
         return Err("V26 evaluation arguments differ".to_owned());
@@ -296,7 +297,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         generation,
         layout_terminal,
         page_assignments,
-        pseudoqueries,
+        external_queries,
         truth,
         expected_queries,
     };
@@ -338,7 +339,11 @@ fn evaluation_request(request: EvaluationRequest) -> V26LayoutEvaluationRequest 
             &generation,
             request.page_assignments,
         ),
-        pseudoqueries: local_object("pseudoqueries-parquet", &generation, request.pseudoqueries),
+        external_queries: local_object(
+            "external-queries-parquet",
+            &generation,
+            request.external_queries,
+        ),
         truth: local_object("truth-parquet", &generation, request.truth),
         expected_queries: request.expected_queries,
     }
@@ -468,7 +473,7 @@ mod tests {
         for (role, byte) in [
             ("layout-terminal", '1'),
             ("page-assignments", '2'),
-            ("pseudoqueries", '3'),
+            ("external-queries", '3'),
             ("truth", '4'),
         ] {
             args.extend([
@@ -620,7 +625,10 @@ mod tests {
         assert_eq!(request.generation, "v26-generation");
         assert_eq!(request.layout_terminal.encoded_bytes, 1024);
         assert_eq!(request.page_assignments.sha256, "2".repeat(64));
-        assert_eq!(request.pseudoqueries.uri, "s3://bucket/pseudoqueries.bin");
+        assert_eq!(
+            request.external_queries.uri,
+            "s3://bucket/external-queries.bin"
+        );
         assert_eq!(request.truth.path, std::path::Path::new("/input/truth.bin"));
         assert_eq!(request.expected_queries, 512);
 
