@@ -20,7 +20,10 @@ gate.
 The next falsifier builds two independent, deterministic balanced projection
 trees from construction vectors only. One tree assigns each row's primary page;
 the other assigns its replica page. Pages from the two trees occupy disjoint
-ordinal ranges and contain at most 704 rows. Every row therefore has exactly two
+ordinal ranges and contain at most the registered page capacity. The open
+development screen tests the ascending capacity ladder
+`704, 768, 896, 1,024, 1,408, 2,048` and stops at its smallest passing member.
+Every row therefore has exactly two
 page choices without exceeding the existing approximately 1.86-copy storage
 shape by more than the explicitly reported delta.
 
@@ -63,13 +66,15 @@ the two full-file row counts must match and both must cover that prefix.
 The 512 open pseudoqueries remain a fixed reporting cohort. Their vectors may
 exist as ordinary corpus rows, as they do in production construction, but the
 builder cannot know their role. The evaluator excludes the query row and every
-row sharing either of its pages. No page option, seed, capacity, or parameter is
-selected from reporting outcomes. A later sealed sentry uses a disjoint
-preregistered SplitMix selection and permits no retry.
+row sharing either of its pages. Seeds and algorithms are fixed. Page capacity
+is selected only by the preregistered ascending ladder on this burned open
+development cohort; all later parameters are frozen before a disjoint sentry.
+The sentry uses a preregistered SplitMix selection and permits no retry.
 
 ## Deterministic layout algorithm
 
-Let `C = 704` rows per physical page and
+Let `C` be one member of the exact registered ladder
+`[704, 768, 896, 1024, 1408, 2048]` rows per physical page and
 `L = ceil(row_count / C)` leaves per tree. Tree A uses seed
 `0x5632362d54524545`; tree B uses `0x5632362d5245504c`. Each node owns a stable
 ascending list of source ordinals and a registered number of descendant leaves.
@@ -107,10 +112,11 @@ duplicate/missing ordinals, capacity overflow, nondeterministic bytes, and
 primary/replica overlap are authority failures. A one-worker and four-worker
 reduced harness must produce byte-identical trees and assignments.
 
-The open cohort has `L = ceil(262144 / 704) = 373` leaves per tree and 746
-physical pages. At 100 million rows the projection is 142,046 leaves per tree
-and 284,092 pages, close to the current 283,104-page storage scale. Two copies
-store exactly 200 million row occurrences; the manifest reports this 7.303%
+At the original `C=704`, the open cohort has 373 leaves per tree and 746
+physical pages. Across the registered ladder, 100 million rows project from
+284,092 pages at `C=704` down to 97,658 pages at `C=2,048`; the largest page is
+786,432 raw vector bytes and eight such pages are 6 MiB. Two copies store
+exactly 200 million row occurrences; the manifest reports this 7.303%
 increase over V24's 186,387,497.497-row 100-million-scale projection rather
 than hiding it.
 
@@ -128,12 +134,14 @@ truth from V25 are reused by exact identity. Only the layout is new.
    30 seconds, RSS below 512 MiB, and page reads are zero.
 3. **Layout-only 262,144-row screen:** build the dual-tree layout without query
    capability, close its terminal, then join only the ten frozen ground-truth
-   neighbors to its page assignment. The oracle may select at most eight unique pages;
-   among equal-hit covers it prefers fewer pages and then the lexicographically
-   smaller vector. Report the 975,000 ppm lower floor, but stop unless aggregate
-   oracle recall reaches the 995,000 ppm promotion target and minimum-query
-   recall reaches 800,000 ppm. A result between the floor and target is useful
-   evidence, not authority to build the router.
+   neighbors to its page assignment. Starting at 704, advance through the exact
+   capacity ladder and stop at its smallest passing member. The oracle may
+   select at most eight unique pages; among equal-hit covers it prefers fewer
+   pages and then the lexicographically smaller vector. Report the 975,000 ppm
+   lower floor, but stop unless aggregate oracle recall reaches the 995,000 ppm
+   promotion target and minimum-query recall reaches 800,000 ppm. A result
+   between the floor and target is useful evidence, not authority to build the
+   router.
 4. **Exact-global screen:** only after layout passes, exact f32 scoring evaluates
    rank limits `10, 32, 128, 512, 2,048, 4,096`. Stop unless aggregate recall is
    at least 975,000 ppm and oracle attainment at least 995,000 ppm.

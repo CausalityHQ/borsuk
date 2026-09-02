@@ -248,7 +248,7 @@ fn build_v26_dual_tree_layout_inner(
     if authority.schema != "borsuk-v26-dual-tree-layout-v1"
         || authority.primary_seed != 0x5632_362d_5452_4545
         || authority.replica_seed != 0x5632_362d_5245_504c
-        || authority.page_capacity != 704
+        || !crate::V26_PAGE_CAPACITY_LADDER.contains(&authority.page_capacity)
         || authority.expected_rows != rows.len() as u64
         || rows.is_empty()
     {

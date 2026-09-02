@@ -28,7 +28,7 @@ pub use tree::{
 const V26_LAYOUT_SCHEMA: &str = "borsuk-v26-dual-tree-layout-v1";
 const V26_PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
 const V26_REPLICA_SEED: u64 = 0x5632_362d_5245_504c;
-const V26_PAGE_CAPACITY: u32 = 704;
+pub(crate) const V26_PAGE_CAPACITY_LADDER: [u32; 6] = [704, 768, 896, 1_024, 1_408, 2_048];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V26Error(String);
@@ -221,7 +221,7 @@ pub struct V26LayoutResult {
     pub claim_eligible: bool,
 }
 
-pub(crate) fn projected_steps(rows: u64, leaves: u64) -> Result<u64> {
+pub(crate) fn projected_steps(rows: u64, leaves: u64, page_capacity: u32) -> Result<u64> {
     if leaves <= 1 {
         return Ok(0);
     }
@@ -229,15 +229,15 @@ pub(crate) fn projected_steps(rows: u64, leaves: u64) -> Result<u64> {
     let right_leaves = leaves - left_leaves;
     let left_rows = (rows - right_leaves).min(
         left_leaves
-            .checked_mul(u64::from(V26_PAGE_CAPACITY))
+            .checked_mul(u64::from(page_capacity))
             .ok_or_else(|| invalid("V26 projection work overflows"))?,
     );
     let right_rows = rows - left_rows;
     let own = rows
         .checked_mul(16 * 96)
         .ok_or_else(|| invalid("V26 projection work overflows"))?;
-    let left = projected_steps(left_rows, left_leaves)?;
-    let right = projected_steps(right_rows, right_leaves)?;
+    let left = projected_steps(left_rows, left_leaves, page_capacity)?;
+    let right = projected_steps(right_rows, right_leaves, page_capacity)?;
     own.checked_add(left)
         .and_then(|partial| partial.checked_add(right))
         .ok_or_else(|| invalid("V26 projection work overflows"))
@@ -267,7 +267,7 @@ pub(crate) fn validate_layout_authority(authority: &V26LayoutAuthority) -> Resul
         || !exact_lower_hex(&authority.source_archive_sha256, 64)
         || authority.primary_seed != V26_PRIMARY_SEED
         || authority.replica_seed != V26_REPLICA_SEED
-        || authority.page_capacity != V26_PAGE_CAPACITY
+        || !V26_PAGE_CAPACITY_LADDER.contains(&authority.page_capacity)
         || authority.expected_rows == 0
     {
         return Err(invalid("V26 layout authority differs"));
@@ -307,7 +307,9 @@ fn validate_receipt(receipt: &V26LayoutReceipt) -> Result<()> {
     if receipt.row_count != authority.expected_rows {
         return Err(invalid("V26 layout authority differs"));
     }
-    let leaves = receipt.row_count.div_ceil(u64::from(V26_PAGE_CAPACITY));
+    let leaves = receipt
+        .row_count
+        .div_ceil(u64::from(authority.page_capacity));
     let leaves_u32 = u32::try_from(leaves).map_err(|_| invalid("V26 page count overflows"))?;
     if receipt.leaves_per_tree != leaves_u32
         || receipt.page_count
@@ -315,7 +317,7 @@ fn validate_receipt(receipt: &V26LayoutReceipt) -> Result<()> {
                 .checked_mul(2)
                 .ok_or_else(|| invalid("V26 page count overflows"))?
         || receipt.projection_steps
-            != projected_steps(receipt.row_count, leaves)?
+            != projected_steps(receipt.row_count, leaves, authority.page_capacity)?
                 .checked_mul(2)
                 .ok_or_else(|| invalid("V26 projection work overflows"))?
         || receipt.worker_count == 0
@@ -578,6 +580,25 @@ mod tests {
         assert_eq!(replica.nodes[0].split_gap, 0.0);
         assert_eq!(assignments.len(), 705);
         validate_v26_dual_tree_layout(&authority, &primary, &replica, &assignments).unwrap();
+    }
+
+    #[test]
+    fn v26_tree_accepts_only_the_preregistered_page_capacity_ladder() {
+        // Break caught: the open-screen capacity ladder is hard-coded away or widened ad hoc.
+        let rows = (0..705).map(row).collect::<Vec<_>>();
+        for page_capacity in [704, 768, 896, 1_024, 1_408, 2_048] {
+            let mut candidate = authority(rows.len() as u64);
+            candidate.page_capacity = page_capacity;
+            let (primary, replica, assignments) =
+                build_v26_dual_tree_layout(&candidate, &rows).unwrap();
+            validate_v26_dual_tree_layout(&candidate, &primary, &replica, &assignments).unwrap();
+        }
+        for page_capacity in [0, 512, 2_049, 4_096] {
+            let mut candidate = authority(rows.len() as u64);
+            candidate.page_capacity = page_capacity;
+            assert!(build_v26_dual_tree_layout(&candidate, &rows).is_err());
+        }
+        assert_eq!(super::projected_steps(1_409, 2, 768).unwrap(), 2_164_224);
     }
 
     fn receipt() -> V26LayoutReceipt {

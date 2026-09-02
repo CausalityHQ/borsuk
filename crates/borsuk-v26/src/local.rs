@@ -822,9 +822,13 @@ pub fn run_v26_layout_build(request: &V26LayoutBuildRequest) -> Result<V26Layout
                     .ok_or_else(|| invalid("V26 page count overflows"))?,
             )
             .map_err(|_| invalid("V26 page count overflows"))?,
-            projection_steps: projected_steps(authority.expected_rows, leaves)?
-                .checked_mul(2)
-                .ok_or_else(|| invalid("V26 projection work overflows"))?,
+            projection_steps: projected_steps(
+                authority.expected_rows,
+                leaves,
+                authority.page_capacity,
+            )?
+            .checked_mul(2)
+            .ok_or_else(|| invalid("V26 projection work overflows"))?,
             worker_count: u32::try_from(request.worker_count)
                 .map_err(|_| invalid("V26 worker count overflows"))?,
         };
@@ -1058,7 +1062,7 @@ pub fn validate_v26_layout_build_output(
     if output.leaves_per_tree as u64 != leaves
         || output.page_count as u64 != leaves * 2
         || output.projection_steps
-            != projected_steps(output.row_count, leaves)?
+            != projected_steps(output.row_count, leaves, output.authority.page_capacity)?
                 .checked_mul(2)
                 .ok_or_else(|| invalid("V26 projection work overflows"))?
     {

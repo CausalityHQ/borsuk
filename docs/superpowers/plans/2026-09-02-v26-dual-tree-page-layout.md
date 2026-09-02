@@ -4,7 +4,7 @@
 
 **Goal:** Replace the rejected inherited page layout with a deterministic query-independent dual-tree layout and reject it cheaply unless its exact eight-page oracle clears 975,000 ppm.
 
-**Architecture:** A small V26 crate builds two balanced projection trees from construction vectors only and emits disjoint primary/replica pages of at most 704 rows. A phase-separated evaluator joins frozen truth only after construction closes, runs the layout oracle first, and permits exact-global scoring and tree routing only after their preceding gates pass.
+**Architecture:** A small V26 crate builds two balanced projection trees from construction vectors only and emits disjoint primary/replica pages using the smallest passing member of the preregistered `704, 768, 896, 1,024, 1,408, 2,048` development ladder. A phase-separated evaluator joins frozen truth only after construction closes, runs the layout oracle first, and permits exact-global scoring and tree routing only after their preceding gates pass.
 
 **Tech Stack:** Rust 2024, Arrow/Parquet 58.3, Rayon, SHA-256, Python 3.12 standard library, pinned Ruff 0.15.20, AWS EC2 Spot through profile `causality`.
 
@@ -15,7 +15,7 @@
 - V26 is a clean format; do not add V24/V25 readers, aliases, migrations, or version dispatch.
 - Use Parquet/Arrow IPC for bulk cross-language data and canonical JSON only for small authority/evidence objects.
 - The construction process cannot open pseudoquery, truth, prior-result, benchmark-query, or page-quality roles.
-- Page capacity is exactly 704, every row has one primary and one replica page, and tree page ranges are disjoint.
+- Page capacity is selected only from the exact ascending development ladder `704, 768, 896, 1,024, 1,408, 2,048`; every row has one primary and one replica page, and tree page ranges are disjoint.
 - Run one named RED/GREEN while iterating, one affected crate gate per coherent slice, and strict Clippy/full workspace only at the milestone.
 - The warm named gate must complete in under one second. A cold dependency build
   is paid once and reported separately; it is never repeated after a logic
@@ -234,10 +234,10 @@ v26_page_layout --build-layout --execute --generation <id> \
 - Consumes exact V25 construction/source-map/pseudoquery/truth identities from the terminal V25 screen.
 - Produces one authenticated `layout-rejected` or `layout-candidate` result.
 
-- [ ] **Step 1: Freeze the manifest.** Bind source commit/archive, binary, exact four Parquets, seeds, capacity 704, expected 262,144 rows, 373 leaves/tree, 746 pages, 512 queries, gates, 1 GiB RSS, 0.5 PSI, zero swap growth, 300-second wall/progress, outputs, and no-restart semantics.
+- [ ] **Step 1: Freeze the manifest.** Bind source commit/archive, binary, exact four Parquets, seeds, the ascending capacity ladder, expected 262,144 rows, 512 queries, gates, 1 GiB RSS, 0.5 PSI, zero swap growth, 300-second wall/progress, outputs, smallest-pass selection, and no-restart semantics.
 - [ ] **Step 2: Run authentic 4,096-row structural smoke.** Use one Spot process and `expected_rows=4096` to select the exact leading source-ordinal range from the authenticated full construction/source-map Parquets; do not materialize a derivative corpus. Require matching full-file row counts, exact prefix inventory, two-copy assignments, maximum capacity, byte-identical repeated validation, zero query/truth-role opens, zero page reads, RSS below 512 MiB, and wall below 30 seconds. Do not compute or report recall from this smoke.
-- [ ] **Step 3: Run construction once.** Stage only construction/source-map roles, build both trees and assignments, upload terminal, and terminate the builder.
-- [ ] **Step 4: Run layout-only evaluation once.** Stage the closed layout plus truth/pseudoquery roles, compute 512 exact covers, report the 975,000 lower floor, and stop unless both the 995,000 aggregate promotion target and 800,000 minimum pass.
+- [ ] **Step 3: Run the construction ladder once.** Stage only construction/source-map roles; for each preregistered capacity build both trees and assignments, close its terminal, and stop after the smallest capacity whose later evaluation passes.
+- [ ] **Step 4: Run layout-only evaluation after each closed build.** Stage the closed layout plus truth/pseudoquery roles, compute 512 exact covers, report the 975,000 lower floor, and stop the ladder at the first result where both the 995,000 aggregate promotion target and 800,000 minimum pass.
 - [ ] **Step 5: Authenticate and record.** Recompute every sample from Parquet, verify terminal/resource/cleanup evidence, terminate compute, and commit only the manifest and ledger with `Record V26 layout causal screen`.
 
 ### Task 6: Conditional exact-global and router gates
