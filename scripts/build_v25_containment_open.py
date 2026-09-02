@@ -339,8 +339,9 @@ def _read_selected_pages(
     replicated = replica != np.iinfo(np.uint32).max
     if not np.array_equal(primary_vectors[replicated], replica_vectors[replicated]):
         raise ValueError("V25 open replica vector differs")
-    if not np.array_equal(primary_vectors, construction_vectors) or not np.array_equal(
-        replica_vectors[replicated], construction_vectors[replicated]
+    projected_vectors = construction_vectors.astype(np.float16).astype(np.float32)
+    if not np.array_equal(primary_vectors, projected_vectors) or not np.array_equal(
+        replica_vectors[replicated], projected_vectors[replicated]
     ):
         raise ValueError("V25 open page construction vector differs")
     return primary, replica

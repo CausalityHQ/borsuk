@@ -52,6 +52,7 @@ def _write_v24_fixture(
     with_replica: bool = False,
     replica_vector_drift: bool = False,
     page_modulo: int | None = None,
+    f16_projection_probe: bool = False,
 ) -> tuple[RegisteredV24Input, RegisteredV24Input]:
     generation = "v24-full-fixture"
     construction_path = root / "construction-rows.parquet"
@@ -65,9 +66,16 @@ def _write_v24_fixture(
             ),
         ]
     )
+    construction_values = np.zeros((rows, 96), dtype=np.float32)
+    construction_values[:, 0] = 1.0
+    if f16_projection_probe:
+        construction_values[0, :2] = [1.0, 0.1]
     pq.write_table(
         pa.Table.from_arrays(
-            [pa.array(range(rows), type=pa.uint64()), _vectors(rows)],
+            [
+                pa.array(range(rows), type=pa.uint64()),
+                _vector_array(construction_values),
+            ],
             schema=construction_schema,
         ),
         construction_path,
@@ -101,8 +109,7 @@ def _write_v24_fixture(
     ]
     replicas = [False] * rows
     record_ids = [str(value) for value in range(rows)]
-    page_values = np.zeros((rows, 96), dtype=np.float32)
-    page_values[:, 0] = 1.0
+    page_values = construction_values.astype(np.float16).astype(np.float32)
     if with_replica or replica_vector_drift:
         page_ordinals.append(1)
         replicas.append(True)
@@ -312,6 +319,16 @@ class V25OpenConversionTests(unittest.TestCase):
                 ValueError, "V25 open page construction vector differs"
             ):
                 build_v25_open_inputs(_request(construction, changed, root / "output"))
+
+    def test_v25_open_conversion_accepts_exact_f16_page_projection(self) -> None:
+        """Requiring raw f32 equality must fail this authentic V24 writer contract."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            construction, page_rows = _write_v24_fixture(
+                root, 16, f16_projection_probe=True
+            )
+
+            build_v25_open_inputs(_request(construction, page_rows, root / "output"))
 
     def test_v25_open_conversion_pads_short_oracle_without_losing_cardinality(self) -> None:
         """A valid sub-eight oracle must serialize with explicit sentinel padding."""
