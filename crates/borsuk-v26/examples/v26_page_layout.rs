@@ -3,8 +3,9 @@
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
 use borsuk_v26::{
-    V26LocalObjectPath, V26ObjectIdentity, canonical_v26_layout_build_output_bytes,
-    run_v26_layout_build_directory,
+    V26LayoutEvaluationRequest, V26LocalObjectPath, V26ObjectIdentity,
+    canonical_v26_layout_build_output_bytes, canonical_v26_layout_result_bytes,
+    evaluate_v26_layout_oracle, run_v26_layout_build_directory,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,12 +27,58 @@ struct BuildRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct EvaluationRequest {
+    generation: String,
+    layout_terminal: RegisteredFile,
+    page_assignments: RegisteredFile,
+    pseudoqueries: RegisteredFile,
+    truth: RegisteredFile,
+    expected_queries: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum V26CliMode {
     Build(BuildRequest),
+    Evaluate(EvaluationRequest),
 }
 
 fn take(values: &mut BTreeMap<String, String>, key: &str) -> Result<String, String> {
     values.remove(key).ok_or_else(|| format!("missing {key}"))
+}
+
+fn take_registered(
+    values: &mut BTreeMap<String, String>,
+    prefix: &str,
+) -> Result<RegisteredFile, String> {
+    Ok(RegisteredFile {
+        path: PathBuf::from(take(values, &format!("--{prefix}-path"))?),
+        uri: take(values, &format!("--{prefix}-uri"))?,
+        sha256: take(values, &format!("--{prefix}-sha256"))?,
+        encoded_bytes: take(values, &format!("--{prefix}-bytes"))?
+            .parse()
+            .map_err(|_| format!("invalid --{prefix}-bytes"))?,
+    })
+}
+
+fn valid_registered(file: &RegisteredFile) -> bool {
+    !file.path.as_os_str().is_empty()
+        && file.uri.starts_with("s3://")
+        && exact_lower_hex(&file.sha256)
+        && file.encoded_bytes > 0
+}
+
+fn local_object(role: &str, generation: &str, file: RegisteredFile) -> V26LocalObjectPath {
+    V26LocalObjectPath {
+        identity: V26ObjectIdentity {
+            role: role.to_owned(),
+            uri: file.uri,
+            digest_algorithm: "sha256".to_owned(),
+            digest: file.sha256,
+            encoded_bytes: file.encoded_bytes,
+            generation: generation.to_owned(),
+        },
+        path: file.path,
+    }
 }
 
 fn exact_lower_hex(value: &str) -> bool {
@@ -78,7 +125,24 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             | "--input-dir"
             | "--output-dir"
             | "--output-uri-prefix"
-            | "--workers" => {
+            | "--workers"
+            | "--layout-terminal-path"
+            | "--layout-terminal-uri"
+            | "--layout-terminal-sha256"
+            | "--layout-terminal-bytes"
+            | "--page-assignments-path"
+            | "--page-assignments-uri"
+            | "--page-assignments-sha256"
+            | "--page-assignments-bytes"
+            | "--pseudoqueries-path"
+            | "--pseudoqueries-uri"
+            | "--pseudoqueries-sha256"
+            | "--pseudoqueries-bytes"
+            | "--truth-path"
+            | "--truth-uri"
+            | "--truth-sha256"
+            | "--truth-bytes"
+            | "--expected-queries" => {
                 let value = arguments
                     .next()
                     .ok_or_else(|| format!("missing value for {flag}"))?;
@@ -89,44 +153,62 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             _ => return Err(format!("unknown or forbidden flag {flag}")),
         }
     }
-    if !execute || build == evaluate || !build {
+    if !execute || build == evaluate {
         return Err("exactly one executable phase is required".to_owned());
     }
     let generation = take(&mut values, "--generation")?;
-    let manifest = RegisteredFile {
-        path: PathBuf::from(take(&mut values, "--manifest-path")?),
-        uri: take(&mut values, "--manifest-uri")?,
-        sha256: take(&mut values, "--manifest-sha256")?,
-        encoded_bytes: take(&mut values, "--manifest-bytes")?
-            .parse()
-            .map_err(|_| "invalid --manifest-bytes".to_owned())?,
-    };
-    let input_dir = PathBuf::from(take(&mut values, "--input-dir")?);
-    let output_dir = PathBuf::from(take(&mut values, "--output-dir")?);
-    let output_uri_prefix = take(&mut values, "--output-uri-prefix")?;
-    let worker_count = take(&mut values, "--workers")?
-        .parse()
-        .map_err(|_| "invalid --workers".to_owned())?;
-    if !values.is_empty()
-        || generation.is_empty()
-        || manifest.encoded_bytes == 0
-        || !manifest.uri.starts_with("s3://")
-        || !exact_lower_hex(&manifest.sha256)
-        || input_dir.as_os_str().is_empty()
-        || output_dir.as_os_str().is_empty()
-        || !output_uri_prefix.starts_with("s3://")
-        || !output_uri_prefix.ends_with('/')
-        || worker_count == 0
-    {
-        return Err("V26 build arguments differ".to_owned());
+    if generation.is_empty() {
+        return Err("V26 generation differs".to_owned());
     }
-    Ok(V26CliMode::Build(BuildRequest {
+    if build {
+        let manifest = take_registered(&mut values, "manifest")?;
+        let input_dir = PathBuf::from(take(&mut values, "--input-dir")?);
+        let output_dir = PathBuf::from(take(&mut values, "--output-dir")?);
+        let output_uri_prefix = take(&mut values, "--output-uri-prefix")?;
+        let worker_count = take(&mut values, "--workers")?
+            .parse()
+            .map_err(|_| "invalid --workers".to_owned())?;
+        if !values.is_empty()
+            || !valid_registered(&manifest)
+            || input_dir.as_os_str().is_empty()
+            || output_dir.as_os_str().is_empty()
+            || !output_uri_prefix.starts_with("s3://")
+            || !output_uri_prefix.ends_with('/')
+            || worker_count == 0
+        {
+            return Err("V26 build arguments differ".to_owned());
+        }
+        return Ok(V26CliMode::Build(BuildRequest {
+            generation,
+            manifest,
+            input_dir,
+            output_dir,
+            output_uri_prefix,
+            worker_count,
+        }));
+    }
+    let layout_terminal = take_registered(&mut values, "layout-terminal")?;
+    let page_assignments = take_registered(&mut values, "page-assignments")?;
+    let pseudoqueries = take_registered(&mut values, "pseudoqueries")?;
+    let truth = take_registered(&mut values, "truth")?;
+    let expected_queries = take(&mut values, "--expected-queries")?
+        .parse()
+        .map_err(|_| "invalid --expected-queries".to_owned())?;
+    if !values.is_empty()
+        || [&layout_terminal, &page_assignments, &pseudoqueries, &truth]
+            .into_iter()
+            .any(|file| !valid_registered(file))
+        || expected_queries != 512
+    {
+        return Err("V26 evaluation arguments differ".to_owned());
+    }
+    Ok(V26CliMode::Evaluate(EvaluationRequest {
         generation,
-        manifest,
-        input_dir,
-        output_dir,
-        output_uri_prefix,
-        worker_count,
+        layout_terminal,
+        page_assignments,
+        pseudoqueries,
+        truth,
+        expected_queries,
     }))
 }
 
@@ -153,6 +235,32 @@ fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
             )
             .map_err(|error| error.to_string())?;
             canonical_v26_layout_build_output_bytes(&build_request, &output)
+                .map_err(|error| error.to_string())
+        }
+        V26CliMode::Evaluate(request) => {
+            let generation = request.generation;
+            let evaluation = V26LayoutEvaluationRequest {
+                layout_terminal: local_object(
+                    "layout-terminal",
+                    &generation,
+                    request.layout_terminal,
+                ),
+                page_assignments: local_object(
+                    "page-assignments-parquet",
+                    &generation,
+                    request.page_assignments,
+                ),
+                pseudoqueries: local_object(
+                    "pseudoqueries-parquet",
+                    &generation,
+                    request.pseudoqueries,
+                ),
+                truth: local_object("truth-parquet", &generation, request.truth),
+                expected_queries: request.expected_queries,
+            };
+            let (truths, samples, result) =
+                evaluate_v26_layout_oracle(&evaluation).map_err(|error| error.to_string())?;
+            canonical_v26_layout_result_bytes(&result, &truths, &samples)
                 .map_err(|error| error.to_string())
         }
     }
@@ -206,11 +314,42 @@ mod tests {
         .collect()
     }
 
+    fn evaluation_args() -> Vec<String> {
+        let mut args = vec![
+            "v26_page_layout".to_owned(),
+            "--evaluate-layout".to_owned(),
+            "--execute".to_owned(),
+            "--generation".to_owned(),
+            "v26-generation".to_owned(),
+        ];
+        for (role, byte) in [
+            ("layout-terminal", '1'),
+            ("page-assignments", '2'),
+            ("pseudoqueries", '3'),
+            ("truth", '4'),
+        ] {
+            args.extend([
+                format!("--{role}-path"),
+                format!("/input/{role}.bin"),
+                format!("--{role}-uri"),
+                format!("s3://bucket/{role}.bin"),
+                format!("--{role}-sha256"),
+                byte.to_string().repeat(64),
+                format!("--{role}-bytes"),
+                "1024".to_owned(),
+            ]);
+        }
+        args.extend(["--expected-queries".to_owned(), "512".to_owned()]);
+        args
+    }
+
     #[test]
     fn v26_page_layout_cli_parses_explicit_build_authority() {
         // Break caught: a hidden loader or implicit identity enters the scientific process.
         let parsed = parse_v26_args(build_args()).unwrap();
-        let V26CliMode::Build(request) = parsed;
+        let V26CliMode::Build(request) = parsed else {
+            panic!("build mode differs");
+        };
         assert_eq!(request.generation, "v26-generation");
         assert_eq!(request.manifest.encoded_bytes, 1024);
         assert_eq!(request.worker_count, 4);
@@ -244,5 +383,45 @@ mod tests {
         let mode = parse_v26_args(build_args()).unwrap();
         let error = execute_v26_mode(mode).unwrap_err();
         assert!(error.contains("local object open failed"));
+    }
+
+    #[test]
+    fn v26_page_layout_cli_parses_explicit_evaluation_authority() {
+        // Break caught: layout evaluation silently discovers roles or accepts storage access.
+        let parsed = parse_v26_args(evaluation_args()).unwrap();
+        let V26CliMode::Evaluate(request) = parsed else {
+            panic!("evaluation mode differs");
+        };
+        assert_eq!(request.generation, "v26-generation");
+        assert_eq!(request.layout_terminal.encoded_bytes, 1024);
+        assert_eq!(request.page_assignments.sha256, "2".repeat(64));
+        assert_eq!(request.pseudoqueries.uri, "s3://bucket/pseudoqueries.bin");
+        assert_eq!(request.truth.path, std::path::Path::new("/input/truth.bin"));
+        assert_eq!(request.expected_queries, 512);
+
+        let error = execute_v26_mode(V26CliMode::Evaluate(request)).unwrap_err();
+        assert!(error.contains("local object open failed"));
+    }
+
+    #[test]
+    fn v26_page_layout_cli_rejects_incomplete_or_storage_evaluation_authority() {
+        // Break caught: an incomplete evaluation or hidden network flag reaches science.
+        for mutation in [
+            vec!["--bucket".to_owned(), "forbidden".to_owned()],
+            vec!["--page-prefix".to_owned(), "forbidden".to_owned()],
+            vec!["--workers".to_owned(), "4".to_owned()],
+            vec!["--build-layout".to_owned()],
+        ] {
+            let mut args = evaluation_args();
+            args.extend(mutation);
+            assert!(parse_v26_args(args).is_err());
+        }
+        let mut missing = evaluation_args();
+        let index = missing
+            .iter()
+            .position(|value| value == "--truth-sha256")
+            .unwrap();
+        missing.drain(index..=index + 1);
+        assert!(parse_v26_args(missing).is_err());
     }
 }
