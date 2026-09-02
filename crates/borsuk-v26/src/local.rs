@@ -526,15 +526,17 @@ fn read_inputs(
         .map_err(|_| invalid("V26 input row count overflows"))?;
     let construction = open_reader(&request.construction_rows.path)?;
     let source = open_reader(&request.source_map.path)?;
+    let construction_rows = construction.metadata().file_metadata().num_rows();
+    let source_rows = source.metadata().file_metadata().num_rows();
     if construction.schema().as_ref() != &v26_construction_schema()
         || source.schema().as_ref() != &v26_source_map_schema()
-        || construction.metadata().file_metadata().num_rows() != expected_rows_i64
-        || source.metadata().file_metadata().num_rows() != expected_rows_i64
+        || construction_rows != source_rows
+        || construction_rows < expected_rows_i64
     {
         return Err(invalid("V26 input Parquet authority differs"));
     }
     let mut rows = Vec::with_capacity(expected_rows_usize);
-    for batch in construction
+    'construction: for batch in construction
         .build()
         .map_err(|error| invalid(&format!("V26 construction reader failed: {error}")))?
     {
@@ -568,6 +570,9 @@ fn read_inputs(
             .checked_mul(96)
             .ok_or_else(|| invalid("V26 construction vector offset overflows"))?;
         for index in 0..batch.num_rows() {
+            if rows.len() == expected_rows_usize {
+                break 'construction;
+            }
             let source_ordinal = ordinals.value(index);
             if source_ordinal != rows.len() as u64 {
                 return Err(invalid("V26 construction inventory differs"));
@@ -595,7 +600,7 @@ fn read_inputs(
     }
     let mut observed_source = Vec::with_capacity(rows.len());
     let mut datasets = BTreeSet::new();
-    for batch in source
+    'source: for batch in source
         .build()
         .map_err(|error| invalid(&format!("V26 source-map reader failed: {error}")))?
     {
@@ -619,6 +624,9 @@ fn read_inputs(
             return Err(invalid("V26 source-map nullability differs"));
         }
         for index in 0..batch.num_rows() {
+            if observed_source.len() == expected_rows_usize {
+                break 'source;
+            }
             let source_ordinal = sources.value(index);
             if source_ordinal != observed_source.len() as u64
                 || !datasets.insert(dataset.value(index))
@@ -1443,6 +1451,33 @@ mod tests {
             .is_err()
         );
         assert!(!output_dir.exists());
+    }
+
+    #[test]
+    fn v26_layout_local_smoke_uses_exact_registered_prefix_without_conversion() {
+        // Break caught: the structural smoke requires a separately materialized corpus.
+        let (temp, manifest, construction, source_map) = fixture();
+        let mut authority: V26LayoutAuthority =
+            serde_json::from_slice(&fs::read(&manifest.path).unwrap()).unwrap();
+        authority.expected_rows = 705;
+        let mut bytes = serde_json::to_vec(&canonical_json_value(
+            serde_json::to_value(&authority).unwrap(),
+        ))
+        .unwrap();
+        bytes.push(b'\n');
+        fs::write(&manifest.path, bytes).unwrap();
+        let manifest = identity("layout-manifest", &manifest.path);
+        let output = run_v26_layout_build(&request(
+            manifest,
+            construction,
+            source_map,
+            temp.path().join("prefix-output"),
+            2,
+        ))
+        .unwrap();
+        assert_eq!(output.row_count, 705);
+        assert_eq!(output.leaves_per_tree, 2);
+        assert_eq!(output.page_count, 4);
     }
 
     #[test]

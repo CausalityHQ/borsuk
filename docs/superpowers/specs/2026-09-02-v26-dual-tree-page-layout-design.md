@@ -55,6 +55,9 @@ open pseudoqueries, truth, evidence, prior results, benchmark queries, neighbors
 or page-quality metrics. File roles, exact path inventory, and byte identities
 are authenticated before vectors are parsed. The query and truth Parquets are
 made available only to a separate evaluator after the layout terminal exists.
+For the structural smoke only, `expected_rows` selects the exact leading source
+ordinal range from those same authenticated construction and source-map files;
+the two full-file row counts must match and both must cover that prefix.
 
 The 512 open pseudoqueries remain a fixed reporting cohort. Their vectors may
 exist as ordinary corpus rows, as they do in production construction, but the
