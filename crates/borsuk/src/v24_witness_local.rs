@@ -22,7 +22,8 @@ use crate::{
     v24_witness_eval::{
         V24_SELECTOR_WARMUP_SAMPLES, V24Cell, V24Disposition, V24Evaluation, V24EvaluationScope,
         V24QuerySample, V24QueryTruth, V24Result, canonical_v24_result_bytes, classify_v24_ladder,
-        evaluate_v24_cell, evaluate_v24_exact_control, fuse_v24_posting_plane,
+        evaluate_v24_cell, evaluate_v24_exact_control, exact_v24_oracle_pages,
+        fuse_v24_posting_plane,
     },
     v24_witness_graph::{
         V24DistanceBackend, V24WitnessGraph, V24WitnessSampler, V24WitnessSearch,
@@ -592,6 +593,7 @@ fn read_development_truth(
                 if replica != u32::MAX {
                     pages.push(replica);
                 }
+                pages.sort_unstable();
                 assignments.push(pages);
             }
             let padded_oracle = &values[2].values()[row * 8..(row + 1) * 8];
@@ -611,10 +613,11 @@ fn read_development_truth(
             {
                 return Err(invalid("V24 development oracle pages differ"));
             }
+            let exact_oracle = exact_v24_oracle_pages(&assignments, 8)?;
             truth.push(V24QueryTruth {
                 query_ordinal: ordinals.value(row),
                 ground_truth_page_assignments: assignments,
-                oracle_pages,
+                oracle_pages: exact_oracle,
             });
         }
     }
@@ -1222,7 +1225,11 @@ fn select_development_pages(
     Ok(pages)
 }
 
-fn development_samples(pages: &[Vec<u32>], truth: &[V24QueryTruth]) -> Result<Vec<V24QuerySample>> {
+fn development_samples(
+    pages: &[Vec<u32>],
+    truth: &[V24QueryTruth],
+    cell: V24Cell,
+) -> Result<Vec<V24QuerySample>> {
     pages
         .iter()
         .zip(truth)
@@ -1231,8 +1238,11 @@ fn development_samples(pages: &[Vec<u32>], truth: &[V24QueryTruth]) -> Result<Ve
                 .iter()
                 .copied()
                 .collect::<std::collections::BTreeSet<_>>();
-            let oracle = truth
-                .oracle_pages
+            let oracle_pages = exact_v24_oracle_pages(
+                &truth.ground_truth_page_assignments,
+                usize::try_from(cell.page_budget).unwrap(),
+            )?;
+            let oracle = oracle_pages
                 .iter()
                 .copied()
                 .collect::<std::collections::BTreeSet<_>>();
@@ -1278,7 +1288,7 @@ fn evaluate_development_cell(
         .map(|query| select_development_pages(search, plane, query, cell, page_count, true, false))
         .collect::<Result<Vec<_>>>()?;
     progress(query_units * 2)?;
-    let samples = development_samples(&pages, truth)?;
+    let samples = development_samples(&pages, truth, cell)?;
     for iteration in 0..V24_SELECTOR_WARMUP_SAMPLES {
         let query = &queries[usize::try_from(iteration).unwrap() % queries.len()];
         let selected =
@@ -1336,7 +1346,7 @@ fn evaluate_exact_control(
     progress(query_units * 2)?;
     evaluate_v24_exact_control(
         cell,
-        development_samples(&pages, truth)?,
+        development_samples(&pages, truth, cell)?,
         truth,
         page_count,
         scalar_pages,
@@ -1891,8 +1901,37 @@ mod tests {
 
     use super::{
         V24LocalPhase, V24LocalRunRequest, V24PostingResult, V24TrainingResult,
-        run_v24_local_request,
+        exact_v24_oracle_pages, run_v24_local_request,
     };
+
+    #[test]
+    fn v24_exact_truth_recomputes_eight_page_cover_with_lexicographic_ties() {
+        let assignments = (0_u32..10)
+            .map(|neighbor| vec![neighbor * 2, neighbor * 2 + 1])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            exact_v24_oracle_pages(&assignments, 8).unwrap(),
+            vec![0, 2, 4, 6, 8, 10, 12, 14]
+        );
+
+        let shared = (0_u32..10)
+            .map(|neighbor| vec![neighbor / 2, 10 + neighbor / 2])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            exact_v24_oracle_pages(&shared, 8).unwrap(),
+            vec![0, 1, 2, 3, 4]
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "borsuk-v24-input-oracle-is-not-authority-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&root);
+        write_development_truth_with_oracle(&root, 15);
+        let truth = super::read_development_truth(&root, 32, 16).unwrap();
+        assert!(truth.iter().all(|query| query.oracle_pages == [0]));
+        fs::remove_file(root).unwrap();
+    }
     use crate::{
         v24_witness::V24ObjectIdentity,
         v24_witness_eval::{V24Disposition, V24Result},
@@ -2136,7 +2175,7 @@ mod tests {
         writer.close().unwrap();
     }
 
-    fn write_development_truth(path: &std::path::Path) {
+    fn write_development_truth_with_oracle(path: &std::path::Path, oracle_page: u32) {
         let child = Arc::new(Field::new("element", DataType::UInt32, false));
         let schema = Arc::new(Schema::new(vec![
             Field::new("query_ordinal", DataType::UInt32, false),
@@ -2170,7 +2209,7 @@ mod tests {
         let oracle = fixed(
             8,
             (0..32)
-                .flat_map(|_| std::iter::once(0_u32).chain([u32::MAX; 7]))
+                .flat_map(|_| std::iter::once(oracle_page).chain([u32::MAX; 7]))
                 .collect(),
         );
         let batch = RecordBatch::try_new(
@@ -2187,6 +2226,10 @@ mod tests {
         let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
+    }
+
+    fn write_development_truth(path: &std::path::Path) {
+        write_development_truth_with_oracle(path, 0);
     }
 
     fn write_development_manifest(path: &std::path::Path, inputs: &[V24ObjectIdentity]) {

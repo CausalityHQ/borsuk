@@ -58,6 +58,68 @@ impl V24Cell {
     }
 }
 
+pub(crate) fn exact_v24_oracle_pages(
+    assignments: &[Vec<u32>],
+    page_budget: usize,
+) -> Result<Vec<u32>> {
+    if assignments.len() != 10
+        || page_budget == 0
+        || page_budget > 64
+        || assignments.iter().any(|pages| {
+            pages.is_empty() || pages.len() > 2 || pages.windows(2).any(|pair| pair[0] >= pair[1])
+        })
+    {
+        return Err(invalid("V24 exact page-cover assignments differ"));
+    }
+    let mut masks = BTreeMap::<u32, u16>::new();
+    for (neighbor, pages) in assignments.iter().enumerate() {
+        for page in pages {
+            *masks.entry(*page).or_default() |= 1_u16 << neighbor;
+        }
+    }
+    let maximum_pages = page_budget.min(masks.len());
+    let mut states = BTreeMap::<(u16, usize), Vec<u32>>::new();
+    states.insert((0, 0), Vec::new());
+    for (page, page_mask) in masks {
+        let prior = states
+            .iter()
+            .map(|(key, pages)| (*key, pages.clone()))
+            .collect::<Vec<_>>();
+        for ((covered, count), pages) in prior {
+            if count == maximum_pages {
+                continue;
+            }
+            let mut candidate = pages;
+            candidate.push(page);
+            let key = (covered | page_mask, count + 1);
+            match states.entry(key) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(candidate);
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry)
+                    if candidate < *entry.get() =>
+                {
+                    entry.insert(candidate);
+                }
+                std::collections::btree_map::Entry::Occupied(_) => {}
+            }
+        }
+    }
+    let mut best = Vec::new();
+    let mut best_hits = 0_u32;
+    for ((covered, _), candidate) in states {
+        let hits = covered.count_ones();
+        if hits > best_hits || hits == best_hits && candidate.as_slice() < best.as_slice() {
+            best_hits = hits;
+            best = candidate;
+        }
+    }
+    if best.is_empty() || best.len() > page_budget || best_hits < page_budget.min(8) as u32 {
+        return Err(invalid("V24 exact page cover structurally rejects layout"));
+    }
+    Ok(best)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct V24QueryTruth {
@@ -307,16 +369,16 @@ fn recompute_quality(
     let mut minimum_hits = 10_u64;
     let mut prior_query = None;
     for (sample, expected) in samples.iter().zip(truth) {
+        let oracle_pages = exact_v24_oracle_pages(
+            &expected.ground_truth_page_assignments,
+            usize::try_from(cell.page_budget).unwrap(),
+        )?;
         let selected = sample
             .page_ordinals
             .iter()
             .copied()
             .collect::<BTreeSet<_>>();
-        let oracle = expected
-            .oracle_pages
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
+        let oracle = oracle_pages.iter().copied().collect::<BTreeSet<_>>();
         if sample.query_ordinal != expected.query_ordinal
             || prior_query.is_some_and(|prior| sample.query_ordinal <= prior)
             || sample.page_ordinals.len() != usize::try_from(cell.page_budget).unwrap()
@@ -326,13 +388,13 @@ fn recompute_quality(
                 .windows(2)
                 .any(|pair| pair[0] >= pair[1])
             || expected.ground_truth_page_assignments.len() != 10
-            || expected.oracle_pages.is_empty()
-            || expected.oracle_pages.len() > usize::try_from(cell.page_budget).unwrap()
-            || oracle.len() != expected.oracle_pages.len()
+            || expected.oracle_pages
+                != exact_v24_oracle_pages(&expected.ground_truth_page_assignments, 8)?
+            || oracle.len() != oracle_pages.len()
             || sample
                 .page_ordinals
                 .iter()
-                .chain(&expected.oracle_pages)
+                .chain(&oracle_pages)
                 .any(|page| usize::try_from(*page).map_or(true, |page| page >= page_count))
         {
             return Err(invalid("V24 query sample authority differs"));
@@ -880,6 +942,39 @@ mod tests {
         assert!(canonical_v24_result_bytes(&holdout, &holdout.identities, &truth, 32).is_ok());
         holdout.evaluation_scope = V24EvaluationScope::Development;
         assert!(canonical_v24_result_bytes(&holdout, &holdout.identities, &truth, 32).is_err());
+    }
+
+    #[test]
+    fn v24_quality_recomputes_the_exact_oracle_for_the_registered_page_budget() {
+        let large_cell = V24Cell {
+            page_budget: 16,
+            ..cell()
+        };
+        let truth = vec![V24QueryTruth {
+            query_ordinal: 0,
+            ground_truth_page_assignments: (0_u32..10).map(|page| vec![page]).collect(),
+            oracle_pages: (0_u32..8).collect(),
+        }];
+        let sample = V24QuerySample {
+            query_ordinal: 0,
+            page_ordinals: (0_u32..16).collect(),
+            hits: 10,
+            oracle_hits: 10,
+            recall_ppm: 1_000_000,
+        };
+        let evaluation = evaluate_v24_cell(
+            large_cell,
+            vec![sample.clone()],
+            &truth,
+            32,
+            vec![1_000_000_u64; 10_000],
+            SERVING_BYTES,
+            vec![sample.page_ordinals],
+        )
+        .unwrap();
+        assert_eq!(evaluation.quality.oracle_hits, 10);
+        assert_eq!(evaluation.quality.oracle_attainment_ppm, 1_000_000);
+        assert!(evaluation.quality.passed);
     }
 
     #[test]

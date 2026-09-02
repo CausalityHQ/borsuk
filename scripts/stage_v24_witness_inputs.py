@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 _MANIFEST_SCHEMA = "borsuk-v24-local-manifest-v1"
+_PREPARATION_MANIFEST_SCHEMA = "borsuk-v24-preparation-manifest-v1"
 _RECEIPT_SCHEMA = "borsuk-v24-staging-receipt-v1"
 _PHASES = {
     "witness-training",
@@ -130,9 +131,10 @@ def _relative_path(role: str) -> str:
     }
     if role in fixed:
         return fixed[role]
-    for prefix in ("training-shard-", "page-body-"):
-        if role.startswith(prefix):
-            return f"{role}.parquet"
+    if role.startswith("training-shard-"):
+        return f"{role}.parquet"
+    if role.startswith("page-body-"):
+        return f"{role}.page"
     raise ValueError("manifest identity role differs")
 
 
@@ -155,19 +157,108 @@ def _read_manifest(
         raise ValueError("manifest JSON differs") from error
     if raw != _canonical_json_bytes(value):
         raise ValueError("manifest canonical bytes differ")
-    if (
-        type(value) is not dict  # noqa: E721
-        or value.get("schema") != _MANIFEST_SCHEMA
-        or value.get("claim_eligible") is not False
-        or value.get("phase") not in _PHASES
-        or type(value.get("inputs")) is not list
-        or not value["inputs"]
-    ):
+    if type(value) is not dict or value.get("claim_eligible") is not False:  # noqa: E721
         raise ValueError("manifest authority differs")
+    generation = value.get("generation")
+    if type(generation) is not str or not generation:  # noqa: E721
+        raise ValueError("manifest generation differs")
+    schema = value.get("schema")
+    if schema == _MANIFEST_SCHEMA:
+        if value.get("phase") not in _PHASES or type(value.get("inputs")) is not list or not value["inputs"]:  # noqa: E721
+            raise ValueError("manifest authority differs")
+        registered = [
+            (identity, None, None)
+            for identity in value["inputs"]
+        ]
+    elif schema == _PREPARATION_MANIFEST_SCHEMA:
+        expected_keys = {
+            "claim_eligible",
+            "d1_report_sha256",
+            "dataset_id",
+            "generation",
+            "index_id",
+            "page_uri",
+            "pages",
+            "physical_row_count",
+            "roster",
+            "schema",
+            "shards",
+            "source_archive_sha256",
+            "source_row_count",
+        }
+        if (
+            set(value) != expected_keys
+            or value["dataset_id"] != "deep-image-96"
+            or type(value["index_id"]) is not str
+            or not value["index_id"]
+            or not _valid_digest(value["source_archive_sha256"])
+            or not _valid_digest(value["d1_report_sha256"])
+            or type(value["source_row_count"]) is not int
+            or value["source_row_count"] <= 0
+            or type(value["physical_row_count"]) is not int
+            or value["physical_row_count"] < value["source_row_count"]
+            or type(value["shards"]) is not list
+            or not value["shards"]
+            or type(value["pages"]) is not list
+            or not value["pages"]
+            or type(value["roster"]) is not dict
+            or type(value["page_uri"]) is not str
+            or not value["page_uri"].endswith("/")
+        ):
+            raise ValueError("preparation manifest authority differs")
+        registered = []
+        next_ordinal = 0
+        for index, shard in enumerate(value["shards"]):
+            if (
+                type(shard) is not dict
+                or set(shard) != {"identity", "ordinal_end", "ordinal_start", "rows"}
+                or shard["ordinal_start"] != next_ordinal
+                or type(shard["ordinal_end"]) is not int
+                or type(shard["rows"]) is not int
+                or shard["rows"] <= 0
+                or shard["ordinal_end"] - next_ordinal != shard["rows"]
+            ):
+                raise ValueError("preparation shard authority differs")
+            registered.append((shard["identity"], f"training-shard-{index:05}", "sha256"))
+            next_ordinal = shard["ordinal_end"]
+        if next_ordinal != value["source_row_count"]:
+            raise ValueError("preparation source count differs")
+        registered.append((value["roster"], "page-roster", "sha256"))
+        primary_rows = 0
+        physical_rows = 0
+        for index, page in enumerate(value["pages"]):
+            if (
+                type(page) is not dict
+                or set(page)
+                != {
+                    "generation_checksum",
+                    "identity",
+                    "page_ordinal",
+                    "primary_rows",
+                    "replica_rows",
+                }
+                or page["page_ordinal"] != index
+                or type(page["primary_rows"]) is not int
+                or page["primary_rows"] <= 0
+                or type(page["replica_rows"]) is not int
+                or page["replica_rows"] < 0
+                or type(page["generation_checksum"]) is not list
+                or len(page["generation_checksum"]) != 32
+                or any(type(byte) is not int or byte < 0 or byte > 255 for byte in page["generation_checksum"])
+                or not any(page["generation_checksum"])
+            ):
+                raise ValueError("preparation page authority differs")
+            registered.append((page["identity"], f"page-body-{index:05}", "blake3"))
+            primary_rows += page["primary_rows"]
+            physical_rows += page["primary_rows"] + page["replica_rows"]
+        if primary_rows != value["source_row_count"] or physical_rows != value["physical_row_count"]:
+            raise ValueError("preparation page counts differ")
+    else:
+        raise ValueError("manifest schema differs")
     identities: list[dict[str, object]] = []
     roles: set[str] = set()
     uris: set[str] = set()
-    for identity in value["inputs"]:
+    for identity, expected_role, expected_algorithm in registered:
         if type(identity) is not dict or set(identity) != _IDENTITY_KEYS:  # noqa: E721
             raise ValueError("manifest identity schema differs")
         role = identity["role"]
@@ -178,21 +269,32 @@ def _read_manifest(
             or not _registered_role(role)
             or type(uri) is not str
             or not uri
-            or identity["digest_algorithm"] != "sha256"
+            or identity["digest_algorithm"]
+            != ("sha256" if expected_algorithm is None else expected_algorithm)
+            or expected_role is not None
+            and role != expected_role
             or not _valid_digest(identity["digest"])
             or type(identity["encoded_bytes"]) is not int
             or identity["encoded_bytes"] <= 0
             or type(identity["generation"]) is not str
-            or not identity["generation"]
+            or identity["generation"] != value["generation"]
         ):
-            raise ValueError("manifest identity role or authority differs")
+            raise ValueError("manifest identity role, generation, or authority differs")
         if role in roles or uri in uris:
             raise ValueError("manifest duplicate role or URI")
         roles.add(role)
         uris.add(uri)
         identities.append(identity)
-    if tuple(identity["role"] for identity in identities) != _PHASE_ROLES[value["phase"]]:
+    if schema == _MANIFEST_SCHEMA and tuple(
+        identity["role"] for identity in identities
+    ) != _PHASE_ROLES[value["phase"]]:
         raise ValueError("manifest phase roles differ")
+    if schema == _PREPARATION_MANIFEST_SCHEMA:
+        for identity in identities:
+            if identity["role"].startswith("page-body-") and identity["uri"] != (
+                value["page_uri"] + "pages/" + identity["digest"]
+            ):
+                raise ValueError("preparation page URI differs")
     return raw, tuple(identities)
 
 
@@ -200,7 +302,12 @@ def manifest_phase(path: pathlib.Path, expected_sha256: str) -> str:
     """Return the authenticated V24 phase name after complete role validation."""
 
     raw, _ = _read_manifest(path, expected_sha256)
-    return str(json.loads(raw)["phase"])
+    value = json.loads(raw)
+    return (
+        "input-preparation"
+        if value["schema"] == _PREPARATION_MANIFEST_SCHEMA
+        else str(value["phase"])
+    )
 
 
 def _s3_request(identity: Mapping[str, object]) -> dict[str, str]:
@@ -220,18 +327,19 @@ def _s3_request(identity: Mapping[str, object]) -> dict[str, str]:
         "ChecksumMode": "ENABLED",
         "Key": parsed.path[1:],
     }
-    generation = str(identity["generation"])
-    if generation.startswith("s3-version:") and generation != "s3-version:":
-        request["VersionId"] = generation.removeprefix("s3-version:")
-    else:
-        raise ValueError("object generation authority differs")
     return request
 
 
 def _new_digest(algorithm: str) -> Any:
-    if algorithm != "sha256":
-        raise ValueError("V24 digest algorithm differs")
-    return hashlib.sha256()
+    if algorithm == "sha256":
+        return hashlib.sha256()
+    if algorithm == "blake3":
+        try:
+            import blake3
+        except ImportError as error:
+            raise RuntimeError("blake3 is required for V24 page staging") from error
+        return blake3.blake3()
+    raise ValueError("V24 digest algorithm differs")
 
 
 def _digest_file(path: pathlib.Path, algorithm: str) -> str:
@@ -301,18 +409,44 @@ def validate_inventory(
         receipt = json.loads(receipt_raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("staged inventory receipt differs") from error
-    expected_objects = [
-        {**identity, "relative_path": _relative_path(str(identity["role"]))}
-        for identity in identities
-    ]
-    expected_receipt = {
-        "claim_eligible": False,
-        "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
-        "ordered_objects": expected_objects,
-        "schema": _RECEIPT_SCHEMA,
-    }
-    if receipt_raw != _canonical_json_bytes(receipt) or receipt != expected_receipt:
+    if (
+        receipt_raw != _canonical_json_bytes(receipt)
+        or type(receipt) is not dict  # noqa: E721
+        or set(receipt) != {
+            "claim_eligible",
+            "manifest_sha256",
+            "ordered_objects",
+            "schema",
+        }
+        or receipt["claim_eligible"] is not False
+        or receipt["manifest_sha256"] != hashlib.sha256(manifest_raw).hexdigest()
+        or receipt["schema"] != _RECEIPT_SCHEMA
+        or type(receipt["ordered_objects"]) is not list
+        or len(receipt["ordered_objects"]) != len(identities)
+    ):
         raise ValueError("staged inventory receipt differs")
+    for identity, observed in zip(identities, receipt["ordered_objects"], strict=True):
+        expected = {
+            **identity,
+            "relative_path": _relative_path(str(identity["role"])),
+        }
+        if type(observed) is not dict:  # noqa: E721
+            raise ValueError("staged inventory receipt differs")
+        transport_version = observed.get("transport_version_id")
+        if transport_version is not None and (
+            type(transport_version) is not str or not transport_version
+        ):
+            raise ValueError("staged inventory transport version differs")
+        without_transport = {
+            key: value
+            for key, value in observed.items()
+            if key != "transport_version_id"
+        }
+        if without_transport != expected or set(observed) - set(expected) not in (
+            set(),
+            {"transport_version_id"},
+        ):
+            raise ValueError("staged inventory receipt differs")
     expected_names = tuple(
         _relative_path(str(identity["role"])) for identity in identities
     )
@@ -345,6 +479,7 @@ def stage_manifest(
         raise FileExistsError("staging output already exists")
     manifest_raw, identities = _read_manifest(manifest_path, manifest_sha256)
     staging_directory.mkdir(mode=0o700)
+    staged_objects: list[dict[str, object]] = []
     names = tuple(
         name
         for identity in identities
@@ -357,8 +492,11 @@ def stage_manifest(
             response = client.get_object(**request)
             if response.get("ContentLength") != identity["encoded_bytes"]:
                 raise ValueError("object length differs")
-            if response.get("VersionId") != request.get("VersionId"):
-                raise ValueError("object generation differs")
+            transport_version = response.get("VersionId")
+            if transport_version is not None and (
+                type(transport_version) is not str or not transport_version
+            ):
+                raise ValueError("object transport version differs")
             checksum = response.get("ChecksumSHA256")
             if identity["digest_algorithm"] == "sha256" and checksum is not None:
                 try:
@@ -406,16 +544,17 @@ def stage_manifest(
             if digest.hexdigest() != identity["digest"]:
                 raise ValueError("object digest differs")
             os.rename(partial, final)
+            staged_object = {
+                **identity,
+                "relative_path": relative_path,
+            }
+            if transport_version is not None:
+                staged_object["transport_version_id"] = transport_version
+            staged_objects.append(staged_object)
         receipt_value = {
             "claim_eligible": False,
             "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
-            "ordered_objects": [
-                {
-                    **identity,
-                    "relative_path": _relative_path(str(identity["role"])),
-                }
-                for identity in identities
-            ],
+            "ordered_objects": staged_objects,
             "schema": _RECEIPT_SCHEMA,
         }
         receipt_bytes = _canonical_json_bytes(receipt_value)

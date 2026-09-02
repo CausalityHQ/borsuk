@@ -33,7 +33,7 @@ def _request(root: pathlib.Path) -> subject.PhaseRequest:
                         "digest": "11" * 32,
                         "digest_algorithm": "sha256",
                         "encoded_bytes": 7,
-                        "generation": "s3-version:input-version",
+                        "generation": "generation-v24-fixture",
                         "role": "construction-rows-parquet",
                         "uri": "s3://registered/v24/construction-rows.parquet",
                     }
@@ -88,7 +88,7 @@ def _with_manifest_phase(
             "digest": f"{index + 1:02x}" * 32,
             "digest_algorithm": "sha256",
             "encoded_bytes": 7,
-            "generation": f"s3-version:version-{index}",
+            "generation": "generation-v24-fixture",
             "role": role,
             "uri": f"s3://registered/v24/{role}",
         }
@@ -336,7 +336,7 @@ class V24RunnerTests(unittest.TestCase):
         )
 
     def test_monitor_limits_bind_construction_and_serving_phase_rss(self) -> None:
-        for phase in ("train-witnesses", "build-postings"):
+        for phase in ("prepare-inputs", "train-witnesses", "build-postings"):
             self.assertEqual(subject.MonitorLimits.for_phase(phase).rss_bytes, 32 << 30)
         for phase in (
             "evaluate-development",
@@ -344,6 +344,12 @@ class V24RunnerTests(unittest.TestCase):
             "evaluate-holdout",
         ):
             self.assertEqual(subject.MonitorLimits.for_phase(phase).rss_bytes, 3 << 30)
+        self.assertEqual(
+            subject.AuthenticatedProgressMonitor("input-preparation").observe(
+                b'{"completed_units":0,"phase":"input-preparation","sequence":0,"total_units":1}\n'
+            ),
+            (0, 0, 1),
+        )
 
     def test_monitor_preserves_original_exit_and_terms_then_kills_one_group(self) -> None:
         pid = os.posix_spawn(

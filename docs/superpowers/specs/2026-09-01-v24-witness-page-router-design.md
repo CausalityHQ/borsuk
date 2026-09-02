@@ -75,15 +75,17 @@ parameter change is permitted.
 
 Quality is recall@10 over the registered top ten neighbor ordinals, matching
 the 320-row Revision-4 evidence used by this design. Each cohort's isolated
-truth-binding boundary computes the exact optimal eight-page cover over each
-query's primary and optional replica page assignments. It enumerates the at
-most twenty candidate pages, maximizes covered neighbors, and breaks equal-hit
-ties by the lexicographically smallest sorted page list. The resulting oracle
-may contain fewer than eight pages. A query whose exact oracle covers fewer
-than eight of ten neighbors structurally rejects the page layout before that
-cohort is evaluated; it is evidence, not an authority error and not a reason
-to weaken the recall gate. Evaluation requires every selected hit count to be
-at most this independently recomputed oracle hit count.
+truth-binding boundary first computes the exact optimal eight-page cover over
+each query's primary and optional replica page assignments as the fixed layout
+viability gate. A query whose eight-page oracle covers fewer than eight of ten
+neighbors structurally rejects the page layout before that cohort is evaluated;
+it is evidence, not an authority error and not a reason to weaken the recall
+gate. Each evaluated cell then independently recomputes the exact optimal cover
+for that cell's registered page budget. The exact 10-bit dynamic program
+considers all at most twenty candidate pages, maximizes covered neighbors, and
+breaks equal-hit ties by the lexicographically smallest sorted page list. The
+resulting oracle may contain fewer pages than the budget. Evaluation requires
+every selected hit count to be at most its budget-matched oracle hit count.
 
 ## Formats and identity
 

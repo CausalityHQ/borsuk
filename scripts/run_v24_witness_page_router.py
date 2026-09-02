@@ -32,6 +32,8 @@ _MANIFEST_PHASES = {
     "bind-holdout": "holdout-binding",
     "evaluate-holdout": "holdout-evaluation",
 }
+_MONITOR_PHASES = frozenset((*_PHASE_FLAGS, "prepare-inputs"))
+_PROGRESS_PHASES = frozenset((*_MANIFEST_PHASES.values(), "input-preparation"))
 _LOWER_HEX = frozenset("0123456789abcdef")
 
 
@@ -66,11 +68,11 @@ class MonitorLimits:
     def for_phase(cls, phase: str) -> MonitorLimits:
         """Return the registered RSS cap for one exact phase."""
 
-        if phase not in _PHASE_FLAGS:
+        if phase not in _MONITOR_PHASES:
             raise ValueError("V24 monitor phase differs")
         rss_bytes = (
             32 << 30
-            if phase in {"train-witnesses", "build-postings"}
+            if phase in {"prepare-inputs", "train-witnesses", "build-postings"}
             else 3 << 30
         )
         return cls(rss_bytes=rss_bytes)
@@ -80,7 +82,7 @@ class AuthenticatedProgressMonitor:
     """Validate canonical monotonic completed-work snapshots for one phase."""
 
     def __init__(self, phase: str) -> None:
-        if phase not in _MANIFEST_PHASES.values():
+        if phase not in _PROGRESS_PHASES:
             raise ValueError("V24 progress phase differs")
         self._phase = phase
         self._sequence: int | None = None
