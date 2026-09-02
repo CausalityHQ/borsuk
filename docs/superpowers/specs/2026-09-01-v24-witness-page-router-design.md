@@ -189,11 +189,61 @@ the offline scientific manifest remains independent of S3 versioning.
 
 Preparation sees only corpus shards, the page roster, and page bodies. Training
 sees only the prepared construction rows. Posting sees only witnesses/graph and
-the prepared page rows. Development sees only the sealed router and burned
-queries 0--31.
+the prepared page rows. A fresh pseudoquery worker then sees only the posting
+result, witness graph, witness postings, construction rows, and page rows. It
+receives no benchmark query, neighbor, development, holdout, prior-result, or
+page-body object. Development sees only the sealed router and burned queries
+0--31.
 Holdout binding independently maps all neighbor IDs for queries 32--159 through
 canonical decimal page record IDs, and holdout evaluation runs once after a
 cell is sealed. Repeated-query or prior-result data never enters construction.
+
+### Unbiased pseudoquery screen
+
+Before burned development, reserve exactly 1,024 corpus rows ranked immediately
+after the 1,048,576 witnesses by the same total order
+`(SplitMix64(source_ordinal xor seed), source_ordinal)`. The pseudoquery worker
+authenticates that the graph's witness source ordinals and vectors equal the
+first 1,048,576 ranked construction rows, excludes those ordinals, and retains
+only the smallest 1,024 remaining candidates. This is equivalent to ranks
+`[1,048,576, 1,049,600)` without retaining 1,049,600 f32 vectors. The split,
+seed, counts, and ordered source ordinals are authority; development or holdout
+bytes cannot change them.
+
+For each normalized pseudoquery, stream all 9,990,000 construction rows and
+compute exact fused-f32 cosine distance. Exclude the query's own source row and
+retain the ten smallest pairs by `f32::total_cmp(distance)` then ascending
+`source_ordinal`. Processing is
+fixed-block and bounded: it retains 1,024 queries, ten neighbors per query, and
+one Parquet row group, never all query-row pairs. A scalar reduced control must
+match fused SIMD exactly in neighbor order. Then stream the complete
+18,620,111-row page table once and resolve primary plus optional replica pages
+for only those authenticated neighbor ordinals while still validating the full
+table schema, order, counts, construction digest, generation, and source-ID
+relations. No page body is read.
+
+Evaluate all 108 registered cells in their original lexicographic order for all
+1,024 pseudoqueries. The phase applies the registered aggregate recall,
+minimum-query recall, oracle-attainment, serving-memory, and exact-page-count
+gates; it does not use selector p99 as corpus pseudoqueries are not benchmark
+latency authority. It emits every cell and cannot select, prune, reorder, or
+seal one: `selected_cell` is always null. If no cell passes, the architecture
+is rejected before burned development. If at least one cell passes, burned
+development still evaluates the complete 108-cell ladder and independently
+seals its first passing cell. Thus the screen is a one-way rejection boundary,
+not an extra tuning cohort.
+
+Per-query/per-cell evidence uses deterministic Parquet with exact columns
+`pseudoquery_ordinal: UInt32`, `source_ordinal: UInt64`, `cell_ordinal: UInt32`,
+`selected_pages: List<element: UInt32 non-null>`, `hits: UInt32`,
+`oracle_hits: UInt32`, `recall_ppm: UInt32`, and
+`oracle_attainment_ppm: UInt32`, all non-null. Rows are ordered by
+`(cell_ordinal, pseudoquery_ordinal)` and selected pages are unique ascending
+with length equal to the cell budget. A small canonical JSON result binds all
+inputs, the evidence SHA-256/length/URI, the exact split, distance backend,
+every recomputed cell aggregate, `selected_cell: null`, pass/reject, zero
+benchmark-query reads, and zero page-body reads. Serialization independently
+recomputes samples, aggregates, gates, and the one-way disposition.
 
 ## Resource arithmetic and gates
 
@@ -242,9 +292,10 @@ fusion and the diagnostic cannot veto a passing serving result.
 If routing passes but page-body exact rerank fails, page integration is causal.
 
 One unbiased query-independent pseudoquery split runs before burned
-development. It can reject an arm but cannot select among arms. Development
-selects one preregistered cell; only that cell reaches the sealed holdout.
-Incomplete metrics are never inspected.
+development. It rejects the architecture only when all 108 cells fail and can
+never select among them. Development always receives the full original ladder,
+selects one preregistered cell, and only that cell reaches the sealed holdout.
+Incomplete pseudoquery metrics are never inspected.
 
 No result authorizes D3, product integration, or a release claim unless the
 sealed holdout and the separate end-to-end page-body latency gate both pass.

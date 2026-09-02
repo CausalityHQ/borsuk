@@ -16,6 +16,7 @@
 - Preserve original `u64` dataset row ordinals in every construction and posting boundary.
 - Bulk cross-language data is Parquet or Arrow IPC; JSON is only small authority/evidence.
 - Training sees no queries, neighbors, page labels, or prior results; posting sees no queries or neighbors.
+- The pseudoquery phase uses exactly SplitMix ranks `[1,048,576, 1,049,600)`, scans all 9,990,000 construction rows for self-excluded exact top-10 truth, and may reject only when every registered cell fails; it cannot select, prune, reorder, or seal a cell.
 - One query-independent preparation worker converts exactly 58 authenticated corpus shards and 28,282 authenticated historical pages into deterministic V24 Parquet; no historical reader enters the V24 scientific binary.
 - Recall is recall@10. Each development or holdout truth boundary computes the exact optimal eight-page cover as a structural layout gate, then independently recomputes the exact cover for each registered cell's page budget with lexicographic page-list ties; an eight-page oracle below eight hits is a structural rejection, not an exception.
 - `V24ObjectIdentity.generation` is logical campaign authority. S3 version IDs are optional staging metadata and never replace that value.
@@ -34,6 +35,7 @@
 - Create `crates/borsuk/src/v24_witness_graph.rs`: deterministic sampling, packed f16 witnesses, graph codec, build, and search.
 - Create `crates/borsuk/src/v24_witness_postings.rs`: canonical page-record IDs, one-pass row assignment, bounded posting accumulation, and Arrow codec.
 - Create `crates/borsuk/src/v24_witness_eval.rs`: query/neighbor truth, page fusion, exact control, timing, gates, and causal classification.
+- Create `crates/borsuk/src/v24_witness_pseudoquery.rs`: deterministic disjoint corpus split, bounded exact top-10 scan, page-assignment binding, bulk evidence Parquet, and one-way screen result.
 - Modify `crates/borsuk/src/lib.rs`: private modules plus one doc-hidden local run boundary.
 - Create `crates/borsuk/examples/v24_witness_page_router.rs`: strict local phase CLI.
 - Create `scripts/run_v24_witness_page_router.py`: phase-local monitor and explicit cleanup.
@@ -207,7 +209,33 @@
 - [ ] **Step 5: Implement the minimal launcher and truth boundary.** Use the credentialed stager in the parent process, run the static child with stripped AWS/proxy environment, upload only explicit output/receipt/progress files, publish one canonical terminal conditionally, verify it from the controller, and terminate the instance. Replace input-authored oracle pages with the independently recomputed exact cover in each isolated cohort boundary.
 - [ ] **Step 6: Run GREEN and commit.** Run the same tests, pinned Ruff, pycompile, shell syntax, docs validator, and diff-check. Commit with message `Launch V24 qualification on Spot`.
 
-### Task 11: One qualification campaign and production decision
+### Task 11: Unbiased pseudoquery qualification phase
+
+**Files:**
+- Create: `crates/borsuk/src/v24_witness_pseudoquery.rs`
+- Modify: `crates/borsuk/src/v24_witness.rs`
+- Modify: `crates/borsuk/src/v24_witness_local.rs`
+- Modify: `crates/borsuk/src/lib.rs`
+- Modify: `crates/borsuk/examples/v24_witness_page_router.rs`
+- Modify: `scripts/run_v24_witness_page_router.py`
+- Modify: `scripts/stage_v24_witness_inputs.py`
+- Modify: `scripts/launch_v24_qualification_spot.py`
+- Test: focused Rust modules and the affected V24 Python files
+
+**Interfaces:**
+- Consumes: authenticated `posting-result.json`, `witness-graph.arrow`, `witness-postings.arrow`, `construction-rows.parquet`, and `page-rows.parquet` from one logical generation.
+- Produces: `V24PseudoquerySplit`, `V24PseudoqueryTruth`, `V24PseudoqueryResult`, `select_v24_pseudoqueries`, `scan_v24_pseudoquery_truth`, `canonical_v24_pseudoquery_evidence_parquet`, `canonical_v24_pseudoquery_result_bytes`, local phase `EvaluatePseudoqueries`, CLI flag `--evaluate-pseudoqueries`, and one Spot phase terminal.
+
+- [ ] **Step 1: Write split and exact-truth REDs.** Add `v24_pseudoquery_split_is_disjoint_rank_exact_and_partition_invariant` and `v24_pseudoquery_truth_scans_every_row_excludes_self_and_matches_scalar`. A reduced fixture uses 64 rows, 16 witnesses, and 8 pseudoqueries; require ranks `[16,24)`, exact witness-vector binding, partition/order invariance, self exclusion, ten-neighbor `f32::total_cmp(distance)` then source-ordinal ties, fixed-block bounded storage, scalar/fused ordering equality within the registered numeric delta, and rejection of an incomplete scan.
+- [ ] **Step 2: Run core RED.** Run `cargo test -p borsuk --lib v24_pseudoquery_ -- --nocapture`. Expected: unresolved pseudoquery split/truth symbols only.
+- [ ] **Step 3: Implement bounded split and truth.** Reuse the registered SplitMix total order and fused distance backend. Validate witnesses against the first-ranked source rows, retain a 1,024-entry non-witness heap, stream construction row groups, and keep only ten neighbors per pseudoquery. Do not allocate query-by-corpus pairs or accept a nonfused scientific fallback.
+- [ ] **Step 4: Write page/evidence/result REDs.** Add `v24_pseudoquery_pages_bind_complete_primary_replica_stream` and `v24_pseudoquery_result_recomputes_all_cells_and_cannot_select`. Require a complete ordered page-table scan, exact primary/optional-replica assignments, exact budget-matched oracle, all 108 cells in registered order, deterministic Parquet schema/bytes, recomputed sample and cell metrics, quality and memory gates, `selected_cell: null`, zero benchmark/page reads, and rejection only when no cell passes. Mutation-lock every input/output identity and prove a passing pseudoquery cell cannot prune the development ladder.
+- [ ] **Step 5: Run evidence RED and implement GREEN.** Run the same `v24_pseudoquery_` selector, then implement only the page binder and canonical Parquet/JSON boundaries. Rows must be `(cell_ordinal,pseudoquery_ordinal)` ordered and selected pages must be ascending, unique, and exactly the registered budget.
+- [ ] **Step 6: Write local phase/CLI REDs.** Extend the existing local tests with `v24_witness_local_pseudoquery_authenticates_corpus_only_inputs` and the example test with `v24_witness_cli_exposes_only_offline_pseudoquery_phase`. Require the exact five-file inventory, parent posting-result binding, no query/neighbor/page-body/storage/AWS/D3 surface, progress over split/truth/page/evaluation work, and explicit output cleanup.
+- [ ] **Step 7: Implement the local phase and controller.** Add `V24Phase::PseudoqueryEvaluation`, `V24LocalPhase::EvaluatePseudoqueries`, strict manifest parsing, `--evaluate-pseudoqueries`, phase-specific staging, one fresh `causality` Spot worker, terminal no-clobber, and immediate termination. Bulk evidence stays Parquet; JSON contains only authority and aggregates.
+- [ ] **Step 8: Verify and commit.** Run focused Rust RED/GREEN selectors, affected example/Python tests, grouped `v24_witness_`, fmt, strict locked Clippy, dependency-complete Python discovery, docs validator, and diff-check serially. Commit with message `Screen V24 with unbiased pseudoqueries` and push only as a fast-forward.
+
+### Task 12: One qualification campaign and production decision
 
 **Files:**
 - Modify: `docs/research/publication-v3-attempt-ledger.md` after terminals only
@@ -220,7 +248,7 @@
 - [ ] **Step 1: Run one query-independent preparation phase on Spot.** Stage the 58 corpus shards, page roster, and 28,282 page objects, execute the offline deterministic preparer, authenticate both Parquet outputs and the exact 9,990,000/18,620,111 row counts, and terminate immediately. An interrupted attempt may restart; no terminal attempt may restart.
 - [ ] **Step 2: Run one tree/witness training phase on Spot.** Monitor only health/progress/resources/terminal; terminate immediately. No restart after a scientific terminal.
 - [ ] **Step 3: Run one posting phase on a fresh Spot worker.** Stream the authenticated prepared page rows once; preserve and authenticate outputs; terminate immediately.
-- [ ] **Step 4: Run the unbiased pseudoquery screen.** It may reject but cannot select. On rejection, record evidence and stop.
+- [ ] **Step 4: Run the unbiased pseudoquery screen on a fresh Spot worker.** Authenticate ranks `[1,048,576,1,049,600)`, exact self-excluded top-10 truth over all 9,990,000 rows, the complete page-assignment scan, all 108 cells, the Parquet evidence, and canonical result. Stop if every cell fails; otherwise pass the unchanged full ladder to development without exposing which pseudoquery cells passed.
 - [ ] **Step 5: Run burned development only after pseudoquery pass.** Seal the first passing lexicographic cell. Do not expose holdout bytes earlier.
 - [ ] **Step 6: Bind and evaluate holdout once on a fresh worker.** Recompute the exact recall@10 eight-page structural oracle and the sealed cell's budget-matched oracle from canonical decimal page IDs. Any failure rejects the architecture without tuning.
 - [ ] **Step 7: Record evidence and decide.** On pass, write a separate V24 production page-body integration design covering warm end-to-end fetch/decode/exact-rerank p99 and freeze the MVP only after it passes. On failure, record the causal class and do not rerun the same representation.
@@ -228,7 +256,7 @@
 
 ## Self-Review Record
 
-- Every spec requirement maps to Tasks 1--11.
+- Every spec requirement maps to Tasks 1--12.
 - V24 identity originates once; no V23 artifact crosses the boundary.
 - Original dataset ordinals are present before any page-truth or posting logic.
 - Serving RAM arithmetic is locked by a reduced-shape projection test.
