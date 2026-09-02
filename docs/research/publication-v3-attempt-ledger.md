@@ -1851,7 +1851,8 @@ A bounded post-terminal identity check then compared the first-ten row
 ordinals retained by exact-global scoring with the independently authenticated
 external-truth Parquet. All 512 ordered lists matched exactly. Consequently,
 applying the already-registered exact maximum-cover rule to those ten rows is
-algebraically the layout oracle: 998,828 ppm aggregate, 900,000 ppm minimum,
+algebraically the external-query layout oracle: 998,437 ppm aggregate,
+800,000 ppm minimum,
 and at most eight pages. This is not a third fitted reducer and requires no new
 scientific run. It proves that exact row retrieval plus exact maximum cover can
 map the external queries to the passing layout, while both lossy weighted page
@@ -1884,8 +1885,9 @@ Artifacts are rooted at
 
 This is a scientific `tree-router-rejected` result. Latency and memory are not
 the failure: the fixed threshold-margin traversal does not recover the leaves
-containing the exact top-ten rows that the authenticated maximum-cover control
-maps to 998,828 ppm aggregate and 900,000 ppm minimum recall. The quality
+containing the exact top-ten rows that the authenticated external-query
+maximum-cover control maps to 998,437 ppm aggregate and 800,000 ppm minimum
+recall. The quality
 thresholds are unchanged. Milestone assurance, the sealed sentry, D3, and
 release progression remain fenced for this router. The next work is a bounded
 local causal diagnostic of traversal versus representation; no further paid
@@ -1966,3 +1968,39 @@ weight tuning, quality-gate relaxation, sealed sentry, D3, or release claim is
 authorized. The next falsifier must preserve multiple query-independent modes
 per page under a fixed memory/CPU ladder, or reject summaries and advance to a
 bounded compact row-code scan within the same frontier.
+
+### Fixed page-mode ladder rejection
+
+Source commit `409e8c044237efd9f330224ca2166b6f67d4a79e` evaluated the
+fixed query-independent K=2/4/8/16 page-mode ladder once on Spot instance
+`i-0a2c74b7977f26667` (`c7g.4xlarge`, `eu-central-1a`). The
+11,550,976-byte executable had SHA-256
+`2134c765925f9fbbe435659d239800602153ff581391a8a6760a341b27009f60`;
+the 8,430,569-byte source archive had SHA-256
+`8f42c0f017734e52cb312bee8b565582c1bf0f60803566d16fefa7391509a31a`.
+Each arm used deterministic nested balanced page splits, the same first 128
+tree candidates, closest-mode page scoring, and exactly eight selected pages.
+Truth was joined only after selection. Bulk per-query evidence was emitted as
+Parquet, and no page bodies were read.
+
+The aggregate/minimum/oracle-attainment ppm triples for K=2, 4, 8, and 16 were
+respectively 705,078/100,000/706,181; 698,632/100,000/699,726;
+713,671/0/714,788; and 716,210/0/717,331. Every arm failed every literal
+quality gate. Scientific execution took 1.490091527 seconds and 1.67
+CPU-seconds, peaked at 124,518,400 bytes RSS, and observed zero memory PSI and
+zero swap growth. The instance terminated after publishing its terminal.
+
+The 1,135-byte canonical result has SHA-256
+`0cd65782887508eda9ee0bb9babb732c40bfecebe2908a92e573c135848943d3`;
+the 25,308-byte Parquet evidence has SHA-256
+`2adafdaa6da29df915e0d7a11a02c4932a1b5d8530d3ff980d0a1546a37734f1`.
+Artifacts are rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/open/409e8c044237efd9f330224ca2166b6f67d4a79e/v26-page-mode-409e8c0/modes-a0001/`.
+
+This rejects the fixed page-score family, not the 128-page frontier. A
+no-spend replay against the same external truth also confirmed that the
+188-page diagnostic and external-query layout oracle are identical at 998,437
+ppm aggregate and 800,000 ppm minimum recall; the earlier 998,828/900,000
+figures belong to the superseded corpus-pseudoquery cohort. The next falsifier
+must preserve row identity inside the fixed frontier and feed the registered
+maximum-cover reducer. Page-mode tuning, D3, and release claims remain fenced.
