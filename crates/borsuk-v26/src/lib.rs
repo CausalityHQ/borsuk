@@ -206,10 +206,17 @@ pub struct V26LayoutSample {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct V26ExactGlobalQuery {
+pub struct V26ExternalQuery {
     pub query_ordinal: u32,
-    pub source_ordinal: u64,
     pub vector: [f32; 96],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26ExternalTruth {
+    pub query_ordinal: u32,
+    pub neighbor_source_ordinals: Vec<u64>,
+    pub neighbor_distance_bits: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -285,6 +292,71 @@ impl Ord for V26RankedRow {
     }
 }
 
+pub fn build_v26_external_truth_rows(
+    rows: &[V26ConstructionRow],
+    queries: &[V26ExternalQuery],
+) -> Result<Vec<V26ExternalTruth>> {
+    if rows.len() < 10 || queries.is_empty() {
+        return Err(invalid("V26 external truth inventory differs"));
+    }
+    let mut source_ordinals = BTreeSet::new();
+    for row in rows {
+        validate_v26_vector(&row.vector)?;
+        if !source_ordinals.insert(row.source_ordinal) {
+            return Err(invalid("V26 external truth construction inventory differs"));
+        }
+    }
+    if source_ordinals
+        .iter()
+        .copied()
+        .ne(0..u64::try_from(rows.len()).unwrap())
+    {
+        return Err(invalid("V26 external truth construction inventory differs"));
+    }
+    queries
+        .par_iter()
+        .enumerate()
+        .map(|(query_index, query)| {
+            validate_v26_vector(&query.vector)?;
+            if usize::try_from(query.query_ordinal).ok() != Some(query_index) {
+                return Err(invalid("V26 external truth query order differs"));
+            }
+            let mut heap = BinaryHeap::with_capacity(10);
+            for row in rows {
+                let dot = query
+                    .vector
+                    .iter()
+                    .zip(row.vector)
+                    .map(|(left, right)| left * right)
+                    .sum::<f32>();
+                let ranked = V26RankedRow {
+                    source_ordinal: row.source_ordinal,
+                    distance: 1.0 - dot,
+                };
+                if !ranked.distance.is_finite() {
+                    return Err(invalid("V26 external truth distance differs"));
+                }
+                if heap.len() < 10 {
+                    heap.push(ranked);
+                } else if ranked < *heap.peek().unwrap() {
+                    heap.pop();
+                    heap.push(ranked);
+                }
+            }
+            let mut ranked = heap.into_vec();
+            ranked.sort();
+            Ok(V26ExternalTruth {
+                query_ordinal: query.query_ordinal,
+                neighbor_source_ordinals: ranked.iter().map(|row| row.source_ordinal).collect(),
+                neighbor_distance_bits: ranked
+                    .iter()
+                    .map(|row| row.distance.to_bits())
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
 fn validate_v26_vector(vector: &[f32; 96]) -> Result<()> {
     if vector.iter().any(|value| !value.is_finite()) {
         return Err(invalid("V26 vector finiteness differs"));
@@ -349,10 +421,10 @@ fn select_v26_ranked_pages(
         .collect())
 }
 
-pub fn evaluate_v26_exact_global_rows(
+pub fn evaluate_v26_exact_global_external_rows(
     rows: &[V26ConstructionRow],
     assignments: &[V26RowPages],
-    queries: &[V26ExactGlobalQuery],
+    queries: &[V26ExternalQuery],
     truths: &[V26QueryTruth],
     ranked_row_limits: &[u32],
     page_budget: u32,
@@ -417,9 +489,6 @@ pub fn evaluate_v26_exact_global_rows(
                 {
                     return Err(invalid("V26 exact-global query authority differs"));
                 }
-                let own = pages_by_source
-                    .get(&query.source_ordinal)
-                    .ok_or_else(|| invalid("V26 pseudoquery page binding differs"))?;
                 for (neighbor, expected_pages) in truth
                     .neighbor_source_ordinals
                     .iter()
@@ -430,7 +499,7 @@ pub fn evaluate_v26_exact_global_rows(
                         .ok_or_else(|| invalid("V26 truth neighbor source differs"))?;
                     let mut observed = vec![assignment.primary_page, assignment.replica_page];
                     observed.sort_unstable();
-                    if &observed != expected_pages || *neighbor == query.source_ordinal {
+                    if &observed != expected_pages {
                         return Err(invalid("V26 truth neighbor page binding differs"));
                     }
                 }
@@ -443,14 +512,6 @@ pub fn evaluate_v26_exact_global_rows(
                 let mut heap = BinaryHeap::with_capacity(retained_limit);
                 let mut candidate_rows = 0_u64;
                 for row in rows_by_source.values() {
-                    let pages = pages_by_source.get(&row.source_ordinal).unwrap();
-                    if row.source_ordinal == query.source_ordinal
-                        || [pages.primary_page, pages.replica_page]
-                            .into_iter()
-                            .any(|page| page == own.primary_page || page == own.replica_page)
-                    {
-                        continue;
-                    }
                     candidate_rows += 1;
                     let dot = query
                         .vector
@@ -775,7 +836,7 @@ pub fn canonical_v26_layout_result_bytes(
 pub fn canonical_v26_exact_global_result_bytes(
     result: &V26ExactGlobalResult,
     assignments: &[V26RowPages],
-    queries: &[V26ExactGlobalQuery],
+    queries: &[V26ExternalQuery],
     truths: &[V26QueryTruth],
     samples: &[V26ExactGlobalSample],
 ) -> Result<Vec<u8>> {
@@ -812,9 +873,6 @@ pub fn canonical_v26_exact_global_result_bytes(
         {
             return Err(invalid("V26 exact-global query result authority differs"));
         }
-        let own = pages_by_source
-            .get(&query.source_ordinal)
-            .ok_or_else(|| invalid("V26 exact-global query page binding differs"))?;
         let oracle_pages = exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?;
         let expected_oracle_hits =
             v26_layout_hits(&truth.ground_truth_page_assignments, &oracle_pages);
@@ -837,10 +895,6 @@ pub fn canonical_v26_exact_global_result_bytes(
                 .ok_or_else(|| invalid("V26 exact-global ranked head binding differs"))?;
             if evidence.primary_page != observed.primary_page
                 || evidence.replica_page != observed.replica_page
-                || evidence.source_ordinal == query.source_ordinal
-                || [observed.primary_page, observed.replica_page]
-                    .into_iter()
-                    .any(|page| page == own.primary_page || page == own.replica_page)
             {
                 return Err(invalid("V26 exact-global ranked head binding differs"));
             }
@@ -921,11 +975,12 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        V26ConstructionRow, V26Disposition, V26ExactGlobalQuery, V26ExactGlobalRankResult,
-        V26ExactGlobalResult, V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult,
-        V26LayoutSample, V26ObjectIdentity, V26QueryTruth, V26RowPages, build_v26_dual_tree_layout,
+        V26ConstructionRow, V26Disposition, V26ExactGlobalRankResult, V26ExactGlobalResult,
+        V26ExternalQuery, V26ExternalTruth, V26LayoutAuthority, V26LayoutReceipt,
+        V26LayoutResult, V26LayoutSample, V26ObjectIdentity, V26QueryTruth, V26RowPages,
+        build_v26_dual_tree_layout, build_v26_external_truth_rows,
         canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
-        canonical_v26_layout_result_bytes, evaluate_v26_exact_global_rows,
+        canonical_v26_layout_result_bytes, evaluate_v26_exact_global_external_rows,
         exact_v26_layout_oracle_pages, validate_v26_dual_tree_layout,
     };
 
@@ -942,6 +997,96 @@ mod tests {
             source_ordinal,
             vector,
         }
+    }
+
+    #[test]
+    fn v26_external_query_exact_global_has_no_own_row_or_page_exclusion() {
+        // Break caught: a production query is assigned a construction source/page identity and
+        // the exact-global ceiling silently discards valid nearest neighbors on those pages.
+        let rows = (0_u64..12)
+            .map(|source_ordinal| {
+                let mut vector = [0.0_f32; 96];
+                vector[0] = 1.0;
+                V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..12)
+            .map(|source_ordinal| V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal).unwrap(),
+                replica_page: u32::try_from(source_ordinal).unwrap() + 32,
+            })
+            .collect::<Vec<_>>();
+        let mut vector = [0.0_f32; 96];
+        vector[0] = 1.0;
+        let queries = [V26ExternalQuery {
+            query_ordinal: 0,
+            vector,
+        }];
+        let truths = [V26QueryTruth {
+            query_ordinal: 0,
+            neighbor_source_ordinals: (0_u64..10).collect(),
+            ground_truth_page_assignments: (0_u32..10).map(|page| vec![page, page + 32]).collect(),
+        }];
+        let limits = [10, 32, 128, 512, 2_048, 4_096];
+
+        let samples = evaluate_v26_exact_global_external_rows(
+            &rows,
+            &assignments,
+            &queries,
+            &truths,
+            &limits,
+            8,
+        )
+        .unwrap();
+
+        assert_eq!(samples.len(), 6);
+        for sample in samples {
+            assert_eq!(sample.candidate_rows, 12);
+            assert_eq!(sample.selected_pages, (0_u32..8).collect::<Vec<_>>());
+            assert_eq!(sample.hits, 8);
+            assert_eq!(sample.oracle_hits, 8);
+            assert_eq!(sample.first_ten_ranked_rows[0].source_ordinal, 0);
+        }
+    }
+
+    #[test]
+    fn v26_external_query_truth_exactly_ranks_construction_without_layout_capability() {
+        // Break caught: truth depends on a page layout, keeps nondeterministic ties, or omits
+        // the exact f32 evidence needed to authenticate later recall evaluation.
+        let rows = (0_u64..12)
+            .map(|source_ordinal| {
+                let mut vector = [0.0_f32; 96];
+                vector[0] = 1.0;
+                V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut vector = [0.0_f32; 96];
+        vector[0] = 1.0;
+        let queries = [V26ExternalQuery {
+            query_ordinal: 0,
+            vector,
+        }];
+
+        let truth = build_v26_external_truth_rows(&rows, &queries).unwrap();
+
+        assert_eq!(
+            truth,
+            vec![V26ExternalTruth {
+                query_ordinal: 0,
+                neighbor_source_ordinals: (0_u64..10).collect(),
+                neighbor_distance_bits: vec![0_f32.to_bits(); 10],
+            }]
+        );
+        let mut reversed = rows;
+        reversed.reverse();
+        assert_eq!(build_v26_external_truth_rows(&reversed, &queries).unwrap(), truth);
     }
 
     fn authority(expected_rows: u64) -> V26LayoutAuthority {
@@ -1237,99 +1382,6 @@ mod tests {
     }
 
     #[test]
-    fn v26_exact_global_bounds_ranking_excludes_own_pages_and_persists_head_evidence() {
-        // Break caught: exact-global retains every row, ranks ties nondeterministically, or leaks
-        // the pseudoquery's own primary/replica pages into the reducer.
-        let rows = (0_u64..32)
-            .map(|source_ordinal| {
-                let mut vector = [0.0_f32; 96];
-                vector[0] = 1.0;
-                V26ConstructionRow {
-                    source_ordinal,
-                    vector,
-                }
-            })
-            .collect::<Vec<_>>();
-        let assignments = (0_u64..32)
-            .map(|source_ordinal| V26RowPages {
-                source_ordinal,
-                primary_page: if source_ordinal == 1 {
-                    0
-                } else {
-                    u32::try_from(source_ordinal).unwrap()
-                },
-                replica_page: u32::try_from(source_ordinal).unwrap() + 32,
-            })
-            .collect::<Vec<_>>();
-        let mut query_vector = [0.0_f32; 96];
-        query_vector[0] = 1.0;
-        let queries = vec![V26ExactGlobalQuery {
-            query_ordinal: 0,
-            source_ordinal: 0,
-            vector: query_vector,
-        }];
-        let truth = V26QueryTruth {
-            query_ordinal: 0,
-            neighbor_source_ordinals: (2_u64..12).collect(),
-            ground_truth_page_assignments: (2_u32..12).map(|page| vec![page, page + 32]).collect(),
-        };
-        let limits = [10, 32, 128, 512, 2_048, 4_096];
-
-        let samples =
-            evaluate_v26_exact_global_rows(&rows, &assignments, &queries, &[truth], &limits, 8)
-                .unwrap();
-
-        assert_eq!(samples.len(), 6);
-        for (sample, limit) in samples.iter().zip(limits) {
-            assert_eq!(sample.query_ordinal, 0);
-            assert_eq!(sample.ranked_row_limit, limit);
-            assert_eq!(sample.candidate_rows, 30);
-            assert_eq!(sample.selected_pages, (2_u32..10).collect::<Vec<_>>());
-            assert_eq!(sample.hits, 8);
-            assert_eq!(sample.oracle_hits, 8);
-            assert_eq!(sample.recall_ppm, 800_000);
-            assert_eq!(sample.oracle_attainment_ppm, 1_000_000);
-            assert_eq!(
-                sample
-                    .first_ten_ranked_rows
-                    .iter()
-                    .map(|row| (row.source_ordinal, row.primary_page, row.replica_page))
-                    .collect::<Vec<_>>(),
-                (2_u64..12)
-                    .map(|source| {
-                        (
-                            source,
-                            u32::try_from(source).unwrap(),
-                            u32::try_from(source).unwrap() + 32,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            );
-        }
-
-        let mut reversed_rows = rows.clone();
-        reversed_rows.reverse();
-        assert_eq!(
-            evaluate_v26_exact_global_rows(
-                &reversed_rows,
-                &assignments,
-                &queries,
-                &[V26QueryTruth {
-                    query_ordinal: 0,
-                    neighbor_source_ordinals: (2_u64..12).collect(),
-                    ground_truth_page_assignments: (2_u32..12)
-                        .map(|page| vec![page, page + 32])
-                        .collect(),
-                }],
-                &limits,
-                8,
-            )
-            .unwrap(),
-            samples
-        );
-    }
-
-    #[test]
     fn v26_exact_global_result_recomputes_samples_rank_gates_and_truth_injection() {
         // Break caught: a forged sample, rank aggregate, or claimed disposition is serialized
         // without independent recomputation from query truth and page assignments.
@@ -1346,36 +1398,37 @@ mod tests {
         let assignments = (0_u64..32)
             .map(|source_ordinal| V26RowPages {
                 source_ordinal,
-                primary_page: if source_ordinal == 1 {
-                    0
-                } else {
-                    u32::try_from(source_ordinal).unwrap()
-                },
+                primary_page: u32::try_from(source_ordinal).unwrap(),
                 replica_page: u32::try_from(source_ordinal).unwrap() + 32,
             })
             .collect::<Vec<_>>();
         let mut vector = [0.0_f32; 96];
         vector[0] = 1.0;
         let queries = (0_u32..512)
-            .map(|query_ordinal| V26ExactGlobalQuery {
+            .map(|query_ordinal| V26ExternalQuery {
                 query_ordinal,
-                source_ordinal: 0,
                 vector,
             })
             .collect::<Vec<_>>();
         let truths = (0_u32..512)
             .map(|query_ordinal| V26QueryTruth {
                 query_ordinal,
-                neighbor_source_ordinals: (2_u64..12).collect(),
-                ground_truth_page_assignments: (2_u32..12)
+                neighbor_source_ordinals: (0_u64..10).collect(),
+                ground_truth_page_assignments: (0_u32..10)
                     .map(|page| vec![page, page + 32])
                     .collect(),
             })
             .collect::<Vec<_>>();
         let limits = [10, 32, 128, 512, 2_048, 4_096];
-        let samples =
-            evaluate_v26_exact_global_rows(&rows, &assignments, &queries, &truths, &limits, 8)
-                .unwrap();
+        let samples = evaluate_v26_exact_global_external_rows(
+            &rows,
+            &assignments,
+            &queries,
+            &truths,
+            &limits,
+            8,
+        )
+        .unwrap();
         let rank_results = limits
             .into_iter()
             .map(|ranked_row_limit| V26ExactGlobalRankResult {

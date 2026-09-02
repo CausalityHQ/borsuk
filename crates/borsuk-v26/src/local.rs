@@ -21,13 +21,13 @@ use sha2::{Digest, Sha256};
 
 use crate::tree::build_v26_dual_tree_layout_with_workers;
 use crate::{
-    Result, V26ConstructionRow, V26Disposition, V26ExactGlobalQuery, V26ExactGlobalRankResult,
-    V26ExactGlobalResult, V26ExactGlobalSample, V26LayoutAuthority, V26LayoutReceipt,
-    V26LayoutResult, V26LayoutSample, V26Node, V26ObjectIdentity, V26QueryTruth, V26RowPages,
-    V26Tree, canonical_json_value, canonical_v26_exact_global_result_bytes,
+    Result, V26ConstructionRow, V26Disposition, V26ExactGlobalRankResult, V26ExactGlobalResult,
+    V26ExactGlobalSample, V26ExternalQuery, V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult,
+    V26LayoutSample, V26Node, V26ObjectIdentity, V26QueryTruth, V26RowPages, V26Tree,
+    canonical_json_value, canonical_v26_exact_global_result_bytes,
     canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
-    evaluate_v26_exact_global_rows, exact_lower_hex, exact_v26_layout_oracle_pages, invalid,
-    projected_steps, validate_layout_authority, validate_v26_dual_tree_layout,
+    evaluate_v26_exact_global_external_rows, exact_lower_hex, exact_v26_layout_oracle_pages,
+    invalid, projected_steps, validate_layout_authority, validate_v26_dual_tree_layout,
 };
 
 fn vector_type() -> DataType {
@@ -54,7 +54,6 @@ pub fn v26_source_map_schema() -> Schema {
 pub fn v26_query_schema() -> Schema {
     Schema::new(vec![
         Field::new("query_ordinal", DataType::UInt32, false),
-        Field::new("source_ordinal", DataType::UInt64, false),
         Field::new("vector", vector_type(), false),
     ])
 }
@@ -252,11 +251,7 @@ pub fn evaluate_v26_layout_oracle(
     {
         return Err(invalid("V26 assignment inventory differs"));
     }
-    let queries = read_evaluation_queries(
-        &request.pseudoqueries.path,
-        request.expected_queries,
-        terminal.row_count,
-    )?;
+    let queries = read_evaluation_queries(&request.pseudoqueries.path, request.expected_queries)?;
     let truths = read_evaluation_truth(
         &request.truth.path,
         request.expected_queries,
@@ -315,11 +310,7 @@ pub fn evaluate_v26_layout_oracle(
     Ok((truths, samples, result))
 }
 
-fn read_evaluation_queries(
-    path: &Path,
-    expected_queries: u32,
-    source_rows: u64,
-) -> Result<Vec<V26ExactGlobalQuery>> {
+fn read_evaluation_queries(path: &Path, expected_queries: u32) -> Result<Vec<V26ExternalQuery>> {
     let reader = open_reader(path)?;
     if reader.schema().as_ref() != &v26_query_schema()
         || u32::try_from(reader.metadata().file_metadata().num_rows()).ok()
@@ -328,7 +319,6 @@ fn read_evaluation_queries(
         return Err(invalid("V26 query Parquet authority differs"));
     }
     let mut queries = Vec::with_capacity(expected_queries as usize);
-    let mut sources = BTreeSet::new();
     for batch in reader
         .build()
         .map_err(|error| invalid(&format!("V26 query reader failed: {error}")))?
@@ -346,13 +336,8 @@ fn read_evaluation_queries(
             .as_any()
             .downcast_ref::<UInt32Array>()
             .ok_or_else(|| invalid("V26 query ordinal differs"))?;
-        let source_ordinals = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| invalid("V26 query source differs"))?;
         let vectors = batch
-            .column(2)
+            .column(1)
             .as_any()
             .downcast_ref::<FixedSizeListArray>()
             .ok_or_else(|| invalid("V26 query vector differs"))?;
@@ -368,10 +353,7 @@ fn read_evaluation_queries(
                 .map(|value| value * value)
                 .sum::<f32>();
             let query_ordinal = ordinals.value(row);
-            let source_ordinal = source_ordinals.value(row);
             if usize::try_from(query_ordinal).ok() != Some(queries.len())
-                || source_ordinal >= source_rows
-                || !sources.insert(source_ordinal)
                 || values.len() != 96
                 || values.null_count() != 0
                 || values.values().iter().any(|value| !value.is_finite())
@@ -385,9 +367,8 @@ fn read_evaluation_queries(
                 .as_ref()
                 .try_into()
                 .map_err(|_| invalid("V26 query vector width differs"))?;
-            queries.push(V26ExactGlobalQuery {
+            queries.push(V26ExternalQuery {
                 query_ordinal,
-                source_ordinal,
                 vector,
             });
         }
@@ -413,7 +394,7 @@ fn fixed_u32_row(list: &FixedSizeListArray, row: usize, width: usize) -> Result<
 fn read_evaluation_truth(
     path: &Path,
     expected_queries: u32,
-    queries: &[V26ExactGlobalQuery],
+    queries: &[V26ExternalQuery],
     assignments: &[V26RowPages],
 ) -> Result<Vec<V26QueryTruth>> {
     let reader = open_reader(path)?;
@@ -584,7 +565,7 @@ fn read_exact_global_construction(
 struct V26LoadedExactGlobal {
     rows: Vec<V26ConstructionRow>,
     assignments: Vec<V26RowPages>,
-    queries: Vec<V26ExactGlobalQuery>,
+    queries: Vec<V26ExternalQuery>,
     truths: Vec<V26QueryTruth>,
 }
 
@@ -616,7 +597,6 @@ fn load_v26_exact_global(request: &V26ExactGlobalRequest) -> Result<V26LoadedExa
     let queries = read_evaluation_queries(
         &request.layout.pseudoqueries.path,
         request.layout.expected_queries,
-        expected_rows,
     )?;
     let truths = read_evaluation_truth(
         &request.layout.truth.path,
@@ -636,7 +616,7 @@ pub fn evaluate_v26_exact_global(
     request: &V26ExactGlobalRequest,
 ) -> Result<Vec<V26ExactGlobalSample>> {
     let loaded = load_v26_exact_global(request)?;
-    evaluate_v26_exact_global_rows(
+    evaluate_v26_exact_global_external_rows(
         &loaded.rows,
         &loaded.assignments,
         &loaded.queries,
@@ -706,7 +686,7 @@ fn summarize_v26_exact_global(
 
 pub fn run_v26_exact_global(request: &V26ExactGlobalRequest) -> Result<Vec<u8>> {
     let loaded = load_v26_exact_global(request)?;
-    let samples = evaluate_v26_exact_global_rows(
+    let samples = evaluate_v26_exact_global_external_rows(
         &loaded.rows,
         &loaded.assignments,
         &loaded.queries,
@@ -1498,7 +1478,6 @@ mod tests {
         .unwrap();
 
         let query_ordinals = UInt32Array::from_iter_values(0..512_u32);
-        let query_sources = UInt64Array::from_iter_values(0..512_u64);
         let mut query_values = Vec::with_capacity(512 * 96);
         for query in 0..512 {
             for dimension in 0..96 {
@@ -1514,11 +1493,7 @@ mod tests {
         .unwrap();
         let query_batch = RecordBatch::try_new(
             Arc::new(v26_query_schema()),
-            vec![
-                Arc::new(query_ordinals.clone()),
-                Arc::new(query_sources),
-                Arc::new(query_vectors),
-            ],
+            vec![Arc::new(query_ordinals.clone()), Arc::new(query_vectors)],
         )
         .unwrap();
         let query_path = temp.path().join("queries.parquet");
@@ -1840,7 +1815,7 @@ mod tests {
 
         assert_eq!(samples.len(), 512 * 6);
         assert!(samples.iter().all(|sample| {
-            sample.candidate_rows < 1_409
+            sample.candidate_rows == 1_409
                 && sample.first_ten_ranked_rows.len() == 10
                 && sample.selected_pages.len() <= 8
         }));
