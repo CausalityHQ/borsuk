@@ -61,6 +61,11 @@ With exact global scores this is order-equivalent to taking the first distinct
 pages in exact row rank. It retains sharp rank information and does not reward
 dense but irrelevant pages.
 
+Diagnostic controls may emit fewer than eight pages when their registered
+candidate prefix contains fewer than eight distinct pages; this is scientific
+evidence, not an authority failure. The bounded serving control must emit
+exactly eight pages.
+
 ## Phase A: page-containment decomposition
 
 The first V25 artifact reuses authenticated construction rows, page-row

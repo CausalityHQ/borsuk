@@ -29,7 +29,8 @@
 ## File Structure
 
 - Create `crates/borsuk-v25/Cargo.toml` and `crates/borsuk-v25/src/lib.rs`: small internal crate for V25 identities, manifests, exact page reducer, evidence rows, metrics, gates, causal classification, and canonical serializers.
-- Create `crates/borsuk/src/v25_containment_local.rs`: strict Parquet/Arrow readers, streaming exact controls, local request boundary, progress, and known-file cleanup contract.
+- Create `crates/borsuk-v25/src/local.rs`: strict Parquet/Arrow readers, streaming exact controls, progress, and local artifact contract without relinking `borsuk`.
+- Create `crates/borsuk/src/v25_containment_local.rs`: thin milestone integration around the already-tested `borsuk-v25` local artifact contract.
 - Modify `crates/borsuk/src/lib.rs` and `crates/borsuk/Cargo.toml` only at the local-runner integration milestone.
 - Create `crates/borsuk/examples/v25_page_containment.rs`: thin offline CLI with no storage/page client.
 - Create `scripts/run_v25_page_containment.py`: one-process monitor, resource stops, terminal preservation, and explicit cleanup.
@@ -65,9 +66,10 @@ assert_eq!(pages, vec![2, 7, 11, 13, 17, 19, 23, 29]);
 ### Task 2: Strict local artifacts and exact-global decomposition
 
 **Files:**
-- Create: `crates/borsuk/src/v25_containment_local.rs`
-- Modify: `crates/borsuk/src/lib.rs`
-- Test: `crates/borsuk/src/v25_containment_local.rs`
+- Create: `crates/borsuk-v25/src/local.rs`
+- Modify: `crates/borsuk-v25/src/lib.rs`
+- Modify: `crates/borsuk-v25/Cargo.toml`
+- Test: `crates/borsuk-v25/src/local.rs`
 
 **Interfaces:**
 - Consumes: authenticated construction rows, page assignments, pseudoqueries, and exact truth.
@@ -84,7 +86,7 @@ assert_eq!(result.samples[0].selected_pages, expected_pages);
 ```
 
 - [ ] **Step 3: Write evidence Parquet REDs.** Require rows ordered `(query_ordinal, control_ordinal, page_budget)`, `selected_pages: FixedSizeList<element: UInt32 non-null, 16> non-null` plus `selected_page_count`, exact scalar fields, pinned writer settings, canonical metadata, and mutation rejection for every field and identity. Unused page slots contain `u32::MAX` and never enter metrics.
-- [ ] **Step 4: Run focused RED.** Run `cargo test -p borsuk --lib v25_containment_local_ -- --nocapture`.
+- [ ] **Step 4: Run focused RED.** Run `cargo test -p borsuk-v25 v25_containment_local_ -- --nocapture`.
 - [ ] **Step 5: Implement streaming readers and controls.** Authenticate bytes before parse, scan fixed record batches, retain only query vectors/truth and per-page minima, write evidence, re-read it, and derive JSON through Task 1's serializer. Add no corpus-sized vector plane or storage client.
 - [ ] **Step 6: Run focused GREEN, fmt/diff, and commit.** Commit with message `Evaluate exact V25 page containment locally`.
 

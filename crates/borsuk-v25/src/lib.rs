@@ -9,6 +9,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+mod local;
+
+pub use local::{
+    V25ConstructionRow, V25LocalQuery, evaluate_v25_exact_global, validate_v25_construction_schema,
+    validate_v25_page_assignment_schema, validate_v25_query_schema, validate_v25_truth_schema,
+};
+
 /// Error returned when V25 authority or scientific evidence is inconsistent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V25Error(String);
@@ -197,7 +204,7 @@ pub fn select_v25_rank_sharp_pages(
             }
         }
     }
-    if rows.len() != row_pages.len() || page_minima.len() < page_budget {
+    if rows.len() != row_pages.len() || page_minima.is_empty() {
         return Err(invalid("V25 page containment cardinality differs"));
     }
     let mut pages = page_minima.into_iter().collect::<Vec<_>>();
@@ -390,10 +397,14 @@ pub fn canonical_v25_containment_result_bytes(
         } else {
             sample.ranked_row_limit == result.ranked_row_limit && sample.candidate_rows != 0
         };
+        let page_count_is_valid = !sample.selected_pages.is_empty()
+            && sample.selected_pages.len() <= result.page_budget as usize
+            && (sample.control != V25Control::Bounded
+                || sample.selected_pages.len() == result.page_budget as usize);
         if sample.query_ordinal != truth.query_ordinal
             || sample.control != V25Control::registered_order()[control_index]
             || !rank_authority_is_valid
-            || sample.selected_pages.len() != result.page_budget as usize
+            || !page_count_is_valid
             || sample
                 .selected_pages
                 .windows(2)
@@ -542,6 +553,10 @@ mod tests {
         assert_eq!(
             select_v25_rank_sharp_pages(&ranked_rows, &assignments, 8).unwrap(),
             winning_pages
+        );
+        assert_eq!(
+            select_v25_rank_sharp_pages(&ranked_rows[..2], &assignments[..2], 8).unwrap(),
+            vec![2, 7]
         );
 
         let mut tied = ranked_rows.clone();
