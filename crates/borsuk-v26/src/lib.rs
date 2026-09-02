@@ -348,10 +348,7 @@ pub fn build_v26_external_truth_rows(
             Ok(V26ExternalTruth {
                 query_ordinal: query.query_ordinal,
                 neighbor_source_ordinals: ranked.iter().map(|row| row.source_ordinal).collect(),
-                neighbor_distance_bits: ranked
-                    .iter()
-                    .map(|row| row.distance.to_bits())
-                    .collect(),
+                neighbor_distance_bits: ranked.iter().map(|row| row.distance.to_bits()).collect(),
             })
         })
         .collect()
@@ -976,12 +973,12 @@ mod tests {
 
     use super::{
         V26ConstructionRow, V26Disposition, V26ExactGlobalRankResult, V26ExactGlobalResult,
-        V26ExternalQuery, V26ExternalTruth, V26LayoutAuthority, V26LayoutReceipt,
-        V26LayoutResult, V26LayoutSample, V26ObjectIdentity, V26QueryTruth, V26RowPages,
-        build_v26_dual_tree_layout, build_v26_external_truth_rows,
-        canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
-        canonical_v26_layout_result_bytes, evaluate_v26_exact_global_external_rows,
-        exact_v26_layout_oracle_pages, validate_v26_dual_tree_layout,
+        V26ExternalQuery, V26ExternalTruth, V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult,
+        V26LayoutSample, V26ObjectIdentity, V26QueryTruth, V26RowPages, build_v26_dual_tree_layout,
+        build_v26_external_truth_rows, canonical_v26_exact_global_result_bytes,
+        canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
+        evaluate_v26_exact_global_external_rows, exact_v26_layout_oracle_pages,
+        validate_v26_dual_tree_layout,
     };
 
     const PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
@@ -1086,7 +1083,10 @@ mod tests {
         );
         let mut reversed = rows;
         reversed.reverse();
-        assert_eq!(build_v26_external_truth_rows(&reversed, &queries).unwrap(), truth);
+        assert_eq!(
+            build_v26_external_truth_rows(&reversed, &queries).unwrap(),
+            truth
+        );
     }
 
     fn authority(expected_rows: u64) -> V26LayoutAuthority {
@@ -1505,8 +1505,8 @@ mod local_schema_tests {
     use arrow_schema::{DataType, Field, Schema};
 
     use super::{
-        v26_construction_schema, v26_page_assignments_schema, v26_source_map_schema,
-        v26_tree_schema,
+        v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
+        v26_source_map_schema, v26_tree_schema, v26_truth_schema,
     };
 
     #[test]
@@ -1548,6 +1548,42 @@ mod local_schema_tests {
                 Field::new("source_ordinal", DataType::UInt64, false),
                 Field::new("primary_page", DataType::UInt32, false),
                 Field::new("replica_page", DataType::UInt32, false),
+            ])
+        );
+        assert_eq!(
+            v26_query_schema(),
+            Schema::new(vec![
+                Field::new("query_ordinal", DataType::UInt32, false),
+                Field::new(
+                    "vector",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("element", DataType::Float32, false)),
+                        96,
+                    ),
+                    false,
+                ),
+            ])
+        );
+        assert_eq!(
+            v26_truth_schema(),
+            Schema::new(vec![
+                Field::new("query_ordinal", DataType::UInt32, false),
+                Field::new(
+                    "neighbor_source_ordinals",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("element", DataType::UInt64, false)),
+                        10,
+                    ),
+                    false,
+                ),
+                Field::new(
+                    "neighbor_distance_bits",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("element", DataType::UInt32, false)),
+                        10,
+                    ),
+                    false,
+                ),
             ])
         );
     }

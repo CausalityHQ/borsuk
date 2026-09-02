@@ -59,12 +59,6 @@ pub fn v26_query_schema() -> Schema {
 }
 
 pub fn v26_truth_schema() -> Schema {
-    let u32_list = |width| {
-        DataType::FixedSizeList(
-            Arc::new(Field::new("element", DataType::UInt32, false)),
-            width,
-        )
-    };
     Schema::new(vec![
         Field::new("query_ordinal", DataType::UInt32, false),
         Field::new(
@@ -72,9 +66,11 @@ pub fn v26_truth_schema() -> Schema {
             DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt64, false)), 10),
             false,
         ),
-        Field::new("primary_pages", u32_list(10), false),
-        Field::new("replica_pages", u32_list(10), false),
-        Field::new("oracle_pages", u32_list(8), false),
+        Field::new(
+            "neighbor_distance_bits",
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt32, false)), 10),
+            false,
+        ),
     ])
 }
 
@@ -379,18 +375,6 @@ fn read_evaluation_queries(path: &Path, expected_queries: u32) -> Result<Vec<V26
     Ok(queries)
 }
 
-fn fixed_u32_row(list: &FixedSizeListArray, row: usize, width: usize) -> Result<Vec<u32>> {
-    let value = list.value(row);
-    let values = value
-        .as_any()
-        .downcast_ref::<UInt32Array>()
-        .ok_or_else(|| invalid("V26 truth page child differs"))?;
-    if values.len() != width || values.null_count() != 0 {
-        return Err(invalid("V26 truth page width differs"));
-    }
-    Ok(values.values().to_vec())
-}
-
 fn read_evaluation_truth(
     path: &Path,
     expected_queries: u32,
@@ -427,16 +411,11 @@ fn read_evaluation_truth(
             .as_any()
             .downcast_ref::<FixedSizeListArray>()
             .ok_or_else(|| invalid("V26 truth neighbors differ"))?;
-        let lists = [2_usize, 3, 4]
-            .map(|column| {
-                batch
-                    .column(column)
-                    .as_any()
-                    .downcast_ref::<FixedSizeListArray>()
-                    .ok_or_else(|| invalid("V26 truth pages differ"))
-            })
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
+        let distances = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V26 truth distances differ"))?;
         for row in 0..batch.num_rows() {
             let query_index = truths.len();
             let neighbor_value = neighbors.value(row);
@@ -444,13 +423,36 @@ fn read_evaluation_truth(
                 .as_any()
                 .downcast_ref::<UInt64Array>()
                 .ok_or_else(|| invalid("V26 truth neighbor child differs"))?;
-            let _historical_primary = fixed_u32_row(lists[0], row, 10)?;
-            let _historical_replica = fixed_u32_row(lists[1], row, 10)?;
+            let distance_value = distances.value(row);
+            let distance_values = distance_value
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .ok_or_else(|| invalid("V26 truth distance child differs"))?;
             let mut ground_truth_page_assignments = Vec::with_capacity(10);
-            if neighbor_values.len() != 10 || neighbor_values.null_count() != 0 {
+            if neighbor_values.len() != 10
+                || neighbor_values.null_count() != 0
+                || distance_values.len() != 10
+                || distance_values.null_count() != 0
+            {
                 return Err(invalid("V26 truth neighbor width differs"));
             }
-            for neighbor in neighbor_values.values() {
+            let mut prior = None;
+            for (neighbor, distance_bits) in neighbor_values
+                .values()
+                .iter()
+                .zip(distance_values.values())
+            {
+                let distance = f32::from_bits(*distance_bits);
+                if !distance.is_finite()
+                    || prior.is_some_and(|(prior_distance, prior_source): (f32, u64)| {
+                        distance.total_cmp(&prior_distance).is_lt()
+                            || distance.total_cmp(&prior_distance).is_eq()
+                                && *neighbor <= prior_source
+                    })
+                {
+                    return Err(invalid("V26 truth rank order differs"));
+                }
+                prior = Some((distance, *neighbor));
                 let assignment = assignments
                     .get(
                         usize::try_from(*neighbor)
@@ -461,17 +463,6 @@ fn read_evaluation_truth(
                 pages.sort_unstable();
                 ground_truth_page_assignments.push(pages);
             }
-            let stored_oracle = fixed_u32_row(lists[2], row, 8)?;
-            let oracle_length = stored_oracle
-                .iter()
-                .position(|page| *page == u32::MAX)
-                .unwrap_or(8);
-            if stored_oracle[oracle_length..]
-                .iter()
-                .any(|page| *page != u32::MAX)
-            {
-                return Err(invalid("V26 truth oracle padding differs"));
-            }
             let truth = V26QueryTruth {
                 query_ordinal: ordinals.value(row),
                 neighbor_source_ordinals: neighbor_values.values().to_vec(),
@@ -479,9 +470,6 @@ fn read_evaluation_truth(
             };
             if queries.get(query_index).map(|query| query.query_ordinal)
                 != Some(truth.query_ordinal)
-                || stored_oracle[..oracle_length]
-                    .windows(2)
-                    .any(|pair| pair[0] >= pair[1])
             {
                 return Err(invalid("V26 truth oracle authority differs"));
             }
@@ -1311,7 +1299,7 @@ mod tests {
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
         canonical_json_value, canonical_v26_layout_receipt_bytes,
-        canonical_v26_layout_result_bytes, exact_v26_layout_oracle_pages,
+        canonical_v26_layout_result_bytes,
     };
 
     fn write_parquet(path: &std::path::Path, batch: &RecordBatch) {
@@ -1499,35 +1487,14 @@ mod tests {
         let query_path = temp.path().join("queries.parquet");
         write_parquet(&query_path, &query_batch);
 
-        let assignments = read_assignments(
-            &output_dir.join("page-assignments.parquet"),
-            i64::from(build.row_count as u32),
-        )
-        .unwrap();
         let neighbors = (512_u64..522).collect::<Vec<_>>();
-        let neighbor_pages = neighbors
-            .iter()
-            .map(|neighbor| {
-                let row = assignments[usize::try_from(*neighbor).unwrap()];
-                let mut pages = vec![row.primary_page + 10_000];
-                pages.sort_unstable();
-                pages
-            })
-            .collect::<Vec<_>>();
-        let oracle = exact_v26_layout_oracle_pages(&neighbor_pages, 8).unwrap();
         let mut neighbor_values = Vec::with_capacity(512 * 10);
-        let mut primary_values = Vec::with_capacity(512 * 10);
-        let mut replica_values = Vec::with_capacity(512 * 10);
-        let mut oracle_values = Vec::with_capacity(512 * 8);
+        let mut distance_values = Vec::with_capacity(512 * 10);
         for _ in 0..512 {
             neighbor_values.extend_from_slice(&neighbors);
-            for neighbor in &neighbors {
-                let row = assignments[usize::try_from(*neighbor).unwrap()];
-                primary_values.push(row.primary_page + 10_000);
-                replica_values.push(row.primary_page + 10_000);
+            for rank in 0..10 {
+                distance_values.push((rank as f32 / 10.0).to_bits());
             }
-            oracle_values.extend_from_slice(&oracle);
-            oracle_values.resize(oracle_values.len() + 8 - oracle.len(), u32::MAX);
         }
         let truth_batch = RecordBatch::try_new(
             Arc::new(v26_truth_schema()),
@@ -1542,9 +1509,7 @@ mod tests {
                     )
                     .unwrap(),
                 ),
-                Arc::new(fixed_u32(primary_values, 10)),
-                Arc::new(fixed_u32(replica_values, 10)),
-                Arc::new(fixed_u32(oracle_values, 8)),
+                Arc::new(fixed_u32(distance_values, 10)),
             ],
         )
         .unwrap();
