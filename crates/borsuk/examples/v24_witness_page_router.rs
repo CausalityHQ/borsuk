@@ -1,8 +1,12 @@
 //! Offline local-file boundary for the claim-ineligible V24 witness-router campaign.
 
-use std::{collections::BTreeSet, io::Write, path::PathBuf};
+#[cfg(not(test))]
+use std::io::Write;
+use std::{collections::BTreeSet, path::PathBuf};
 
-use borsuk::{BorsukError, V24LocalPhase, V24LocalRunRequest, run_v24_local_request};
+use borsuk::{BorsukError, V24LocalPhase};
+#[cfg(not(test))]
+use borsuk::{V24LocalRunRequest, run_v24_local_request};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum V24CliPhase {

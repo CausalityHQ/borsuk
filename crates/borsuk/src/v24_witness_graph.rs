@@ -1308,7 +1308,8 @@ mod tests {
 
     #[test]
     fn v24_witness_sample_is_order_partition_and_thread_invariant() {
-        let single = sample_ranges(&[0..257]);
+        let single_range = std::iter::once(0..257).collect::<Vec<_>>();
+        let single = sample_ranges(&single_range);
         let partitioned = sample_ranges(&[0..61, 61..129, 129..200, 200..257]);
         assert_eq!(single, partitioned);
         assert_eq!(
@@ -1377,7 +1378,8 @@ mod tests {
 
     #[test]
     fn v24_witness_sample_arrow_rejects_schema_identity_and_vector_drift() {
-        let witnesses = sample_ranges(&[0..257]);
+        let single_range = std::iter::once(0..257).collect::<Vec<_>>();
+        let witnesses = sample_ranges(&single_range);
         let bytes = write_v24_witnesses(&witnesses).unwrap();
         let registered = identity(&bytes);
         assert_eq!(

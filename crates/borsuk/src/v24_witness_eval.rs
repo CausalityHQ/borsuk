@@ -811,12 +811,14 @@ mod tests {
 
     #[test]
     fn v24_witness_result_recomputes_every_sample_aggregate_gate_and_identity() {
+        type ResultMutation = Box<dyn Fn(&mut V24Result)>;
+
         let (result, identities, truth) = result();
         let bytes = canonical_v24_result_bytes(&result, &identities, &truth, 32).unwrap();
         assert_eq!(bytes.last(), Some(&b'\n'));
         assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);
 
-        let mut mutations: Vec<Box<dyn Fn(&mut V24Result)>> = vec![
+        let mut mutations: Vec<ResultMutation> = vec![
             Box::new(|value| value.claim_eligible = true),
             Box::new(|value| value.evaluated_cells.clear()),
             Box::new(|value| value.evaluated_cells.push(value.serving.clone())),

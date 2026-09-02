@@ -1586,3 +1586,42 @@ or construction memory cannot credibly close the gap while retaining the
 rejected. The next architecture must use query-dependent row or witness
 evidence rather than another fixed page summary. No holdout, D3, or further
 paid balanced-page campaign is authorized.
+
+## V24 witness-router reduced determinism and CPU preflight on 2026-09-01
+
+The claim-ineligible reduced preflight ran once from source commit
+`efe3a60c7995f33da254d8cc3789eb62852c36cf` on Spot instance
+`i-00800236e2d22a2f6`, an `m7g.4xlarge` in `eu-central-1c`. The source archive
+was 5,843,804 bytes with SHA-256
+`8309e9c8b2e52fc87dc122c0cfb7309aa4f13e0b4454d7a97b2d2096a9e4d0f2`.
+The 10,487,936-byte statically linked ARM64 executable had SHA-256
+`959f614a48caa4695fe8860f61430a152c3bf55c32f12dee676db376954407d1`.
+The instance remained at zero memory PSI and zero swap and terminated after
+publishing its terminal.
+
+The 143,561-byte canonical preflight receipt has SHA-256
+`e41eb656f53ce0273bb64a0d8c9295b75002e9e74665be7af660839b34d5d6d1`.
+The 467-byte complete terminal has SHA-256
+`62b37259bb1d512a6e6bf89d56b4411fc2e310d170c94d3e9bb800b80ffb7b11`.
+One-worker and four-worker processes produced identical construction rows,
+queries, neighbors, page rows, witnesses, graph, postings, training receipt,
+posting receipt, and normalized evaluation evidence. The normalized evidence
+SHA-256 is
+`b4ea837f1c18da27c3894dea8ac556d3fdcc1f7cd66fb7a094e6f282e7e6ef90`.
+Raw timing-bearing development results intentionally differ.
+
+Both processes selected the same first passing reduced cell: 64 pages,
+`ef_search=128`, 8 selected witnesses, and posting cap 16. Each achieved
+1,000,000 ppm aggregate recall, 1,000,000 ppm minimum-query recall, and
+1,000,000 ppm oracle attainment with exact scalar/SIMD page equality. After
+1,024 untimed warmups, their independently retained 10,000-sample selector
+p99 values were 491,329 ns and 489,170 ns. Both are more than thirty times
+below the 15,000,000-ns selector gate. The exact serving projection is
+1,644,167,168 bytes, below 3 GiB.
+
+This closes reduced determinism, projected serving memory, and native selector
+CPU methodology. It does not qualify the architecture or authorize a release:
+the fixture has only 65,536 corpus rows, 4,096 witnesses, 64 pages, and 32
+synthetic queries. Full-scale load RSS, unbiased pseudoqueries, burned
+development, sealed holdout, and page-body end-to-end latency remain fenced.
+D3 remains unauthorized.
