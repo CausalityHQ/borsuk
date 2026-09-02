@@ -1,15 +1,22 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet, BinaryHeap},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap},
     fs,
     io::Read,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use arrow_array::{Array, FixedSizeListArray, Float32Array, UInt32Array, UInt64Array};
+use arrow_array::{
+    Array, ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt8Array, UInt32Array,
+    UInt64Array,
+};
 use arrow_schema::{DataType, Field, Schema};
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::{
+    arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
+    basic::Compression,
+    file::properties::{WriterProperties, WriterVersion},
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -182,6 +189,296 @@ fn open_reader(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<fs::File>>
         .map_err(|error| invalid(&format!("V25 Parquet open failed: {error}")))?;
     ParquetRecordBatchReaderBuilder::try_new(file)
         .map_err(|error| invalid(&format!("V25 Parquet metadata failed: {error}")))
+}
+
+fn control_ordinal(control: V25Control) -> u8 {
+    match control {
+        V25Control::Layout => 0,
+        V25Control::ExactGlobal => 1,
+        V25Control::ExactContained => 2,
+        V25Control::CodedContained => 3,
+        V25Control::Bounded => 4,
+    }
+}
+
+fn control_from_ordinal(ordinal: u8) -> Result<V25Control> {
+    match ordinal {
+        0 => Ok(V25Control::Layout),
+        1 => Ok(V25Control::ExactGlobal),
+        2 => Ok(V25Control::ExactContained),
+        3 => Ok(V25Control::CodedContained),
+        4 => Ok(V25Control::Bounded),
+        _ => Err(invalid("V25 evidence control differs")),
+    }
+}
+
+fn evidence_schema(generation: &str) -> Arc<Schema> {
+    let metadata = HashMap::from([(
+        "borsuk.authority".to_owned(),
+        format!("v25-containment-evidence-v1:{generation}"),
+    )]);
+    Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("query_ordinal", DataType::UInt32, false),
+            Field::new("control_ordinal", DataType::UInt8, false),
+            Field::new("page_budget", DataType::UInt32, false),
+            Field::new("ranked_row_limit", DataType::UInt32, false),
+            Field::new("candidate_rows", DataType::UInt64, false),
+            Field::new(
+                "selected_pages",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::UInt32, false)),
+                    16,
+                ),
+                false,
+            ),
+            Field::new("selected_page_count", DataType::UInt32, false),
+            Field::new("hits", DataType::UInt32, false),
+            Field::new("oracle_hits", DataType::UInt32, false),
+            Field::new("recall_ppm", DataType::UInt64, false),
+            Field::new("oracle_attainment_ppm", DataType::UInt64, false),
+        ],
+        metadata,
+    ))
+}
+
+fn validate_evidence_samples(samples: &[V25ContainmentSample], page_budget: u32) -> Result<()> {
+    if samples.is_empty() || ![8, 12, 16].contains(&page_budget) {
+        return Err(invalid("V25 evidence request differs"));
+    }
+    let mut prior = None;
+    for sample in samples {
+        let key = (
+            sample.query_ordinal,
+            control_ordinal(sample.control),
+            page_budget,
+            sample.ranked_row_limit,
+        );
+        if prior.is_some_and(|prior| prior >= key)
+            || sample.selected_pages.len() > page_budget as usize
+            || sample
+                .selected_pages
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || sample.hits > 10
+            || sample.oracle_hits > 10
+            || sample.hits > sample.oracle_hits
+        {
+            return Err(invalid("V25 evidence sample differs"));
+        }
+        prior = Some(key);
+    }
+    Ok(())
+}
+
+fn local_identity(
+    role: &str,
+    uri: &str,
+    generation: &str,
+    path: &Path,
+) -> Result<V25LocalObjectPath> {
+    let bytes =
+        fs::read(path).map_err(|error| invalid(&format!("V25 evidence read failed: {error}")))?;
+    let identity = V25ObjectIdentity {
+        role: role.to_owned(),
+        uri: uri.to_owned(),
+        digest_algorithm: "sha256".to_owned(),
+        digest: format!("{:x}", Sha256::digest(&bytes)),
+        encoded_bytes: bytes.len() as u64,
+        generation: generation.to_owned(),
+    };
+    validate_identity(&identity, generation)?;
+    Ok(V25LocalObjectPath {
+        identity,
+        path: path.to_owned(),
+    })
+}
+
+pub fn write_v25_containment_evidence(
+    path: &Path,
+    uri: &str,
+    generation: &str,
+    page_budget: u32,
+    samples: &[V25ContainmentSample],
+) -> Result<V25LocalObjectPath> {
+    validate_evidence_samples(samples, page_budget)?;
+    let mut selected_pages = Vec::with_capacity(samples.len() * 16);
+    for sample in samples {
+        selected_pages.extend_from_slice(&sample.selected_pages);
+        selected_pages.resize(
+            selected_pages.len() + 16 - sample.selected_pages.len(),
+            u32::MAX,
+        );
+    }
+    let selected_pages = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::UInt32, false)),
+        16,
+        Arc::new(UInt32Array::from(selected_pages)),
+        None,
+    )
+    .map_err(|error| invalid(&format!("V25 evidence pages failed: {error}")))?;
+    let schema = evidence_schema(generation);
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.query_ordinal),
+            )) as ArrayRef,
+            Arc::new(UInt8Array::from_iter_values(
+                samples.iter().map(|sample| control_ordinal(sample.control)),
+            )),
+            Arc::new(UInt32Array::from_value(page_budget, samples.len())),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.ranked_row_limit),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.candidate_rows),
+            )),
+            Arc::new(selected_pages),
+            Arc::new(UInt32Array::from_iter_values(
+                samples
+                    .iter()
+                    .map(|sample| sample.selected_pages.len() as u32),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.hits),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.oracle_hits),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.recall_ppm),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.oracle_attainment_ppm),
+            )),
+        ],
+    )
+    .map_err(|error| invalid(&format!("V25 evidence batch failed: {error}")))?;
+    let properties = WriterProperties::builder()
+        .set_compression(Compression::ZSTD(Default::default()))
+        .set_writer_version(WriterVersion::PARQUET_2_0)
+        .set_max_row_group_row_count(Some(1_024))
+        .set_data_page_size_limit(256 * 1024)
+        .build();
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| invalid(&format!("V25 evidence create failed: {error}")))?;
+    let write_result = (|| -> Result<()> {
+        let mut writer = ArrowWriter::try_new(file, schema, Some(properties))
+            .map_err(|error| invalid(&format!("V25 evidence writer failed: {error}")))?;
+        writer
+            .write(&batch)
+            .map_err(|error| invalid(&format!("V25 evidence write failed: {error}")))?;
+        writer
+            .close()
+            .map_err(|error| invalid(&format!("V25 evidence close failed: {error}")))?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| invalid(&format!("V25 evidence sync failed: {error}")))?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(path);
+        return Err(error);
+    }
+    let object = local_identity("containment-evidence-parquet", uri, generation, path)?;
+    read_v25_containment_evidence(&object, page_budget, samples)?;
+    Ok(object)
+}
+
+pub fn read_v25_containment_evidence(
+    object: &V25LocalObjectPath,
+    page_budget: u32,
+    expected: &[V25ContainmentSample],
+) -> Result<()> {
+    validate_evidence_samples(expected, page_budget)?;
+    authenticate_local_object(
+        object,
+        "containment-evidence-parquet",
+        &object.identity.generation,
+    )?;
+    let builder = open_reader(&object.path)?;
+    if builder.schema().as_ref() != evidence_schema(&object.identity.generation).as_ref()
+        || usize::try_from(builder.metadata().file_metadata().num_rows()).ok()
+            != Some(expected.len())
+    {
+        return Err(invalid("V25 evidence Parquet authority differs"));
+    }
+    let mut observed = Vec::with_capacity(expected.len());
+    for batch in builder
+        .build()
+        .map_err(|error| invalid(&format!("V25 evidence reader failed: {error}")))?
+    {
+        let batch =
+            batch.map_err(|error| invalid(&format!("V25 evidence batch failed: {error}")))?;
+        if batch.num_columns() != 11
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V25 evidence batch differs"));
+        }
+        let u32_column = |column: usize| {
+            batch
+                .column(column)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .ok_or_else(|| invalid("V25 evidence u32 column differs"))
+        };
+        let u64_column = |column: usize| {
+            batch
+                .column(column)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| invalid("V25 evidence u64 column differs"))
+        };
+        let controls = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .ok_or_else(|| invalid("V25 evidence control column differs"))?;
+        let pages = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V25 evidence page column differs"))?;
+        for row in 0..batch.num_rows() {
+            if u32_column(2)?.value(row) != page_budget {
+                return Err(invalid("V25 evidence page budget differs"));
+            }
+            let selected_count = usize::try_from(u32_column(6)?.value(row)).unwrap();
+            let encoded_pages = fixed_u32_values(pages, row, 16)?;
+            if selected_count > page_budget as usize
+                || encoded_pages[selected_count..]
+                    .iter()
+                    .any(|page| *page != u32::MAX)
+            {
+                return Err(invalid("V25 evidence page padding differs"));
+            }
+            observed.push(V25ContainmentSample {
+                query_ordinal: u32_column(0)?.value(row),
+                control: control_from_ordinal(controls.value(row))?,
+                ranked_row_limit: u32_column(3)?.value(row),
+                candidate_rows: u64_column(4)?.value(row),
+                selected_pages: encoded_pages[..selected_count].to_vec(),
+                hits: u32_column(7)?.value(row),
+                oracle_hits: u32_column(8)?.value(row),
+                recall_ppm: u64_column(9)?.value(row),
+                oracle_attainment_ppm: u64_column(10)?.value(row),
+            });
+        }
+    }
+    validate_evidence_samples(&observed, page_budget)?;
+    if observed != expected {
+        return Err(invalid("V25 evidence rows differ"));
+    }
+    Ok(())
 }
 
 fn read_page_assignments(
@@ -845,9 +1142,10 @@ mod tests {
 
     use super::{
         V25ConstructionRow, V25ContainmentLocalRequest, V25LocalObjectPath, V25LocalQuery,
-        evaluate_v25_exact_global, run_v25_containment_local_request,
-        validate_v25_construction_schema, validate_v25_page_assignment_schema,
-        validate_v25_query_schema, validate_v25_truth_schema,
+        evaluate_v25_exact_global, read_v25_containment_evidence,
+        run_v25_containment_local_request, validate_v25_construction_schema,
+        validate_v25_page_assignment_schema, validate_v25_query_schema, validate_v25_truth_schema,
+        write_v25_containment_evidence,
     };
 
     fn vector(first: f32, second: f32) -> [f32; 96] {
@@ -1247,6 +1545,38 @@ mod tests {
                 && sample.oracle_attainment_ppm == 1_000_000
         }));
         assert_eq!(output.page_body_reads, 0);
+
+        let evidence_path = temporary.path().join("evidence.parquet");
+        let evidence_copy_path = temporary.path().join("evidence-copy.parquet");
+        let evidence = write_v25_containment_evidence(
+            &evidence_path,
+            "s3://borsuk-v25/containment/evidence.parquet",
+            "v25-local-test",
+            request.page_budget,
+            &output.samples,
+        )
+        .unwrap();
+        assert_eq!(evidence.identity.role, "containment-evidence-parquet");
+        read_v25_containment_evidence(&evidence, request.page_budget, &output.samples).unwrap();
+        let evidence_copy = write_v25_containment_evidence(
+            &evidence_copy_path,
+            "s3://borsuk-v25/containment/evidence-copy.parquet",
+            "v25-local-test",
+            request.page_budget,
+            &output.samples,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(&evidence.path).unwrap(),
+            fs::read(&evidence_copy.path).unwrap()
+        );
+
+        let mut changed_samples = output.samples.clone();
+        changed_samples[0].hits = 9;
+        assert!(
+            read_v25_containment_evidence(&evidence, request.page_budget, &changed_samples)
+                .is_err()
+        );
 
         fs::write(&construction_path, b"changed").unwrap();
         assert!(run_v25_containment_local_request(&request).is_err());

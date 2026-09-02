@@ -13,9 +13,10 @@ mod local;
 
 pub use local::{
     V25ConstructionRow, V25ContainmentLocalOutput, V25ContainmentLocalRequest, V25LocalObjectPath,
-    V25LocalQuery, evaluate_v25_exact_global, run_v25_containment_local_request,
-    validate_v25_construction_schema, validate_v25_page_assignment_schema,
-    validate_v25_query_schema, validate_v25_truth_schema,
+    V25LocalQuery, evaluate_v25_exact_global, read_v25_containment_evidence,
+    run_v25_containment_local_request, validate_v25_construction_schema,
+    validate_v25_page_assignment_schema, validate_v25_query_schema, validate_v25_truth_schema,
+    write_v25_containment_evidence,
 };
 
 /// Error returned when V25 authority or scientific evidence is inconsistent.
