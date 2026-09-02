@@ -100,12 +100,15 @@ struct SourceOccurrence {
     vector: [f16; 96],
 }
 
-fn normalize_row(vector: &[f32; 96]) -> Result<[f16; 96]> {
-    let normalized = normalize_v24_witness_vector(vector)?.map(f16::from_f32);
-    if normalized.iter().any(|value| !value.is_finite()) {
-        return Err(invalid("V24 posting normalized row differs"));
+fn authenticated_page_code(vector: &[f32; 96]) -> Result<[f16; 96]> {
+    let code = vector.map(f16::from_f32);
+    if code.iter().any(|value| !value.is_finite())
+        || code.map(f32::from) != *vector
+        || code.iter().all(|value| *value == f16::ZERO)
+    {
+        return Err(invalid("V24 posting page code differs"));
     }
-    Ok(normalized)
+    Ok(code)
 }
 
 fn source_run_path(scratch: &Path, partition: usize) -> PathBuf {
@@ -234,7 +237,7 @@ fn process_source_partition(
         {
             return Err(invalid("V24 posting source occurrence authority differs"));
         }
-        let query = primaries[0].vector.map(f32::from);
+        let query = normalize_v24_witness_vector(&primaries[0].vector.map(f32::from))?;
         if let Ok(position) =
             source_index.binary_search_by_key(&source_ordinal, |(registered, _)| *registered)
         {
@@ -320,7 +323,7 @@ where
                     source_ordinal,
                     page_ordinal: page.page_ordinal,
                     replica,
-                    vector: normalize_row(&row.vector)?,
+                    vector: authenticated_page_code(&row.vector)?,
                 },
             )?;
             physical_source_rows = physical_source_rows
@@ -721,13 +724,14 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        V24PostingPage, V24PostingPageRow, build_v24_witness_postings,
+        V24PostingPage, V24PostingPageRow, authenticated_page_code, build_v24_witness_postings,
         build_v24_witness_postings_with_workers, read_v24_witness_postings,
         write_v24_witness_postings,
     };
     use crate::{
+        metric::unit_l2_normalized,
         v24_witness::V24ObjectIdentity,
-        v24_witness_graph::{V24Witness, build_v24_witness_graph},
+        v24_witness_graph::{V24Witness, build_v24_witness_graph, normalize_v24_witness_vector},
     };
 
     const SEED: u64 = 0xd6e8_feb8_6659_fd93;
@@ -858,6 +862,87 @@ mod tests {
             .is_err()
         );
         fs::remove_dir(&scratch).unwrap();
+    }
+
+    #[test]
+    fn v24_witness_postings_use_the_page_encoder_normalization_for_registered_witness_rows() {
+        let (source, page_code) = (1_u32..=1_024)
+            .find_map(|seed| {
+                let source = std::array::from_fn(|column| {
+                    ((u32::try_from(column).unwrap() + 1)
+                        .wrapping_mul(seed.wrapping_mul(2).wrapping_add(1))
+                        % 257) as f32
+                        + 1.0
+                });
+                let page: [f32; 96] = unit_l2_normalized(&source).try_into().unwrap();
+                let page_code = page.map(f16::from_f32);
+                let squared_norm = source
+                    .iter()
+                    .map(|value| f64::from(*value) * f64::from(*value))
+                    .sum::<f64>();
+                let inverse = (1.0 / squared_norm.sqrt()) as f32;
+                let legacy_code = source.map(|value| f16::from_f32(value * inverse));
+                (legacy_code != page_code).then_some((source, page_code))
+            })
+            .expect("fixture must expose the retired normalization drift");
+        let witness_vector = normalize_v24_witness_vector(&source)
+            .unwrap()
+            .map(f16::from_f32);
+        assert_eq!(witness_vector, page_code);
+        let graph = build_v24_witness_graph(
+            &[
+                V24Witness {
+                    witness_ordinal: 0,
+                    source_ordinal: 7,
+                    vector: witness_vector,
+                },
+                V24Witness {
+                    witness_ordinal: 1,
+                    source_ordinal: 8,
+                    vector: unit_vector(0).map(f16::from_f32),
+                },
+                V24Witness {
+                    witness_ordinal: 2,
+                    source_ordinal: 9,
+                    vector: unit_vector(1).map(f16::from_f32),
+                },
+                V24Witness {
+                    witness_ordinal: 3,
+                    source_ordinal: 10,
+                    vector: unit_vector(2).map(f16::from_f32),
+                },
+            ],
+            SEED,
+        )
+        .unwrap();
+        let pages = vec![V24PostingPage {
+            page_ordinal: 0,
+            primary_rows: vec![V24PostingPageRow {
+                record_id: b"7".to_vec(),
+                vector: page_code.map(f32::from),
+            }],
+            replica_rows: vec![],
+        }];
+        let scratch = scratch("registered-witness-code");
+
+        let plane =
+            build_v24_witness_postings(&graph, 8, pages.into_iter().map(Ok), &scratch).unwrap();
+
+        assert_eq!(plane.unique_source_rows(), 1);
+        assert_eq!(plane.records_for(0, 64), &[(0, 1)]);
+        fs::remove_dir(scratch).unwrap();
+    }
+
+    #[test]
+    fn v24_witness_postings_preserve_authenticated_page_codes_before_search_normalization() {
+        let mut page_vector = [0.0_f32; 96];
+        page_vector[0] = 1.0;
+        page_vector[1] = 1.0;
+
+        assert_eq!(
+            authenticated_page_code(&page_vector).unwrap(),
+            page_vector.map(f16::from_f32)
+        );
     }
 
     #[test]

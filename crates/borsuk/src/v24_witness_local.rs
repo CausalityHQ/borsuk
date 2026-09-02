@@ -2419,6 +2419,7 @@ mod tests {
         UInt32Array, UInt64Array,
     };
     use arrow_schema::{DataType, Field, Schema};
+    use half::f16;
     use parquet::arrow::ArrowWriter;
     use serde_json::json;
     use sha2::{Digest, Sha256};
@@ -2457,6 +2458,7 @@ mod tests {
         fs::remove_file(root).unwrap();
     }
     use crate::{
+        metric::unit_l2_normalized,
         v24_witness::V24ObjectIdentity,
         v24_witness_eval::{V24Disposition, V24Result},
         v24_witness_graph::{
@@ -2548,7 +2550,12 @@ mod tests {
             let mut vector = [0.0_f32; 96];
             vector[usize::try_from(source % 96).unwrap()] = 1.0;
             vector[usize::try_from((source * 17 + 3) % 96).unwrap()] += 0.125;
-            values.extend_from_slice(&vector);
+            values.extend(
+                unit_l2_normalized(&vector)
+                    .into_iter()
+                    .map(f16::from_f32)
+                    .map(f32::from),
+            );
         }
         let vectors =
             FixedSizeListArray::try_new(child, 96, Arc::new(Float32Array::from(values)), None)
@@ -2638,7 +2645,12 @@ mod tests {
             let mut vector = [0.0_f32; 96];
             vector[usize::try_from(source % 96).unwrap()] = 1.0;
             vector[usize::try_from((source * 17 + 3) % 96).unwrap()] += 0.125;
-            values.extend_from_slice(&vector);
+            values.extend(
+                unit_l2_normalized(&vector)
+                    .into_iter()
+                    .map(f16::from_f32)
+                    .map(f32::from),
+            );
         }
         let vectors =
             FixedSizeListArray::try_new(child, 96, Arc::new(Float32Array::from(values)), None)

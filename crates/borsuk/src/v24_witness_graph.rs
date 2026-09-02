@@ -82,15 +82,13 @@ pub(crate) fn normalize_v24_witness_vector(vector: &[f32; 96]) -> Result<[f32; 9
     if vector.iter().any(|value| !value.is_finite()) {
         return Err(invalid("V24 witness source vector is non-finite"));
     }
-    let squared_norm = vector
-        .iter()
-        .map(|value| f64::from(*value) * f64::from(*value))
-        .sum::<f64>();
-    if !squared_norm.is_finite() || squared_norm <= f64::from(f32::MIN_POSITIVE) {
+    let normalized: [f32; 96] = crate::metric::unit_l2_normalized(vector)
+        .try_into()
+        .unwrap();
+    if normalized.iter().all(|value| *value == 0.0) {
         return Err(invalid("V24 witness source vector norm differs"));
     }
-    let inverse = (1.0 / squared_norm.sqrt()) as f32;
-    Ok(vector.map(|value| value * inverse))
+    Ok(normalized)
 }
 
 impl V24WitnessSampler {
