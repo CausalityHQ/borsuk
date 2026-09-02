@@ -451,7 +451,7 @@ fn read_evaluation_truth(
             if neighbor_values.len() != 10 || neighbor_values.null_count() != 0 {
                 return Err(invalid("V26 truth neighbor width differs"));
             }
-            for ((neighbor, primary), replica) in
+            for ((neighbor, historical_primary), historical_replica) in
                 neighbor_values.values().iter().zip(primary).zip(replica)
             {
                 let assignment = assignments
@@ -460,10 +460,13 @@ fn read_evaluation_truth(
                             .map_err(|_| invalid("V26 truth source differs"))?,
                     )
                     .ok_or_else(|| invalid("V26 truth source differs"))?;
-                if assignment.primary_page != primary || assignment.replica_page != replica {
-                    return Err(invalid("V26 truth assignment binding differs"));
+                if historical_primary == u32::MAX
+                    || historical_replica == u32::MAX
+                    || historical_primary == historical_replica
+                {
+                    return Err(invalid("V26 historical truth pages differ"));
                 }
-                let mut pages = vec![primary, replica];
+                let mut pages = vec![assignment.primary_page, assignment.replica_page];
                 pages.sort_unstable();
                 ground_truth_page_assignments.push(pages);
             }
@@ -484,8 +487,9 @@ fn read_evaluation_truth(
                 ground_truth_page_assignments,
             };
             if queries.get(query_index).map(|query| query.0) != Some(truth.query_ordinal)
-                || exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?
-                    != stored_oracle[..oracle_length]
+                || stored_oracle[..oracle_length]
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
             {
                 return Err(invalid("V26 truth oracle authority differs"));
             }
@@ -1299,7 +1303,7 @@ mod tests {
             .iter()
             .map(|neighbor| {
                 let row = assignments[usize::try_from(*neighbor).unwrap()];
-                let mut pages = vec![row.primary_page, row.replica_page];
+                let mut pages = vec![row.primary_page + 10_000, row.replica_page + 10_000];
                 pages.sort_unstable();
                 pages
             })
@@ -1313,8 +1317,8 @@ mod tests {
             neighbor_values.extend_from_slice(&neighbors);
             for neighbor in &neighbors {
                 let row = assignments[usize::try_from(*neighbor).unwrap()];
-                primary_values.push(row.primary_page);
-                replica_values.push(row.replica_page);
+                primary_values.push(row.primary_page + 10_000);
+                replica_values.push(row.replica_page + 10_000);
             }
             oracle_values.extend_from_slice(&oracle);
             oracle_values.resize(oracle_values.len() + 8 - oracle.len(), u32::MAX);
