@@ -10,6 +10,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, BinaryHeap},
 };
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 mod local;
@@ -395,115 +396,125 @@ pub fn evaluate_v26_exact_global_rows(
     }
 
     let retained_limit = usize::try_from(*LIMITS.last().unwrap()).unwrap();
-    let mut samples = Vec::with_capacity(queries.len() * LIMITS.len());
-    for (query_index, (query, truth)) in queries.iter().zip(truths).enumerate() {
-        validate_v26_vector(&query.vector)?;
-        if usize::try_from(query.query_ordinal).ok() != Some(query_index)
-            || truth.query_ordinal != query.query_ordinal
-            || truth.neighbor_source_ordinals.len() != 10
-            || truth.ground_truth_page_assignments.len() != 10
-            || truth
-                .neighbor_source_ordinals
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>()
-                .len()
-                != 10
-        {
-            return Err(invalid("V26 exact-global query authority differs"));
-        }
-        let own = pages_by_source
-            .get(&query.source_ordinal)
-            .ok_or_else(|| invalid("V26 pseudoquery page binding differs"))?;
-        for (neighbor, expected_pages) in truth
-            .neighbor_source_ordinals
-            .iter()
-            .zip(&truth.ground_truth_page_assignments)
-        {
-            let assignment = pages_by_source
-                .get(neighbor)
-                .ok_or_else(|| invalid("V26 truth neighbor source differs"))?;
-            let mut observed = vec![assignment.primary_page, assignment.replica_page];
-            observed.sort_unstable();
-            if &observed != expected_pages || *neighbor == query.source_ordinal {
-                return Err(invalid("V26 truth neighbor page binding differs"));
-            }
-        }
-        let oracle_pages = exact_v26_layout_oracle_pages(
-            &truth.ground_truth_page_assignments,
-            usize::try_from(page_budget).unwrap(),
-        )?;
-        let oracle_hits = v26_layout_hits(&truth.ground_truth_page_assignments, &oracle_pages);
-        let mut heap = BinaryHeap::with_capacity(retained_limit);
-        let mut candidate_rows = 0_u64;
-        for row in rows_by_source.values() {
-            let pages = pages_by_source.get(&row.source_ordinal).unwrap();
-            if row.source_ordinal == query.source_ordinal
-                || [pages.primary_page, pages.replica_page]
-                    .into_iter()
-                    .any(|page| page == own.primary_page || page == own.replica_page)
-            {
-                continue;
-            }
-            candidate_rows += 1;
-            let dot = query
-                .vector
-                .iter()
-                .zip(row.vector)
-                .map(|(left, right)| left * right)
-                .sum::<f32>();
-            let ranked = V26RankedRow {
-                source_ordinal: row.source_ordinal,
-                distance: 1.0 - dot,
-            };
-            if !ranked.distance.is_finite() {
-                return Err(invalid("V26 exact-global distance differs"));
-            }
-            if heap.len() < retained_limit {
-                heap.push(ranked);
-            } else if ranked < *heap.peek().unwrap() {
-                heap.pop();
-                heap.push(ranked);
-            }
-        }
-        let mut ranked = heap.into_vec();
-        ranked.sort();
-        let first_ten_ranked_rows = ranked
-            .iter()
-            .take(10)
-            .map(|row| {
-                let pages = pages_by_source.get(&row.source_ordinal).unwrap();
-                V26RankedRowEvidence {
-                    source_ordinal: row.source_ordinal,
-                    primary_page: pages.primary_page,
-                    replica_page: pages.replica_page,
-                    distance_bits: row.distance.to_bits(),
+    let per_query_samples = queries
+        .par_iter()
+        .zip(truths.par_iter())
+        .enumerate()
+        .map(
+            |(query_index, (query, truth))| -> Result<Vec<V26ExactGlobalSample>> {
+                validate_v26_vector(&query.vector)?;
+                if usize::try_from(query.query_ordinal).ok() != Some(query_index)
+                    || truth.query_ordinal != query.query_ordinal
+                    || truth.neighbor_source_ordinals.len() != 10
+                    || truth.ground_truth_page_assignments.len() != 10
+                    || truth
+                        .neighbor_source_ordinals
+                        .iter()
+                        .copied()
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                        != 10
+                {
+                    return Err(invalid("V26 exact-global query authority differs"));
                 }
-            })
-            .collect::<Vec<_>>();
-        for limit in ranked_row_limits {
-            let retained = &ranked[..usize::try_from(*limit).unwrap().min(ranked.len())];
-            let mut selected_pages = select_v26_ranked_pages(
-                retained,
-                &pages_by_source,
-                usize::try_from(page_budget).unwrap(),
-            )?;
-            selected_pages.sort_unstable();
-            let hits = v26_layout_hits(&truth.ground_truth_page_assignments, &selected_pages);
-            samples.push(V26ExactGlobalSample {
-                query_ordinal: query.query_ordinal,
-                ranked_row_limit: *limit,
-                candidate_rows,
-                selected_pages,
-                first_ten_ranked_rows: first_ten_ranked_rows.clone(),
-                hits,
-                oracle_hits,
-                recall_ppm: v26_ppm(u64::from(hits), 10)?,
-                oracle_attainment_ppm: v26_ppm(u64::from(hits), u64::from(oracle_hits))?,
-            });
-        }
-    }
-    Ok(samples)
+                let own = pages_by_source
+                    .get(&query.source_ordinal)
+                    .ok_or_else(|| invalid("V26 pseudoquery page binding differs"))?;
+                for (neighbor, expected_pages) in truth
+                    .neighbor_source_ordinals
+                    .iter()
+                    .zip(&truth.ground_truth_page_assignments)
+                {
+                    let assignment = pages_by_source
+                        .get(neighbor)
+                        .ok_or_else(|| invalid("V26 truth neighbor source differs"))?;
+                    let mut observed = vec![assignment.primary_page, assignment.replica_page];
+                    observed.sort_unstable();
+                    if &observed != expected_pages || *neighbor == query.source_ordinal {
+                        return Err(invalid("V26 truth neighbor page binding differs"));
+                    }
+                }
+                let oracle_pages = exact_v26_layout_oracle_pages(
+                    &truth.ground_truth_page_assignments,
+                    usize::try_from(page_budget).unwrap(),
+                )?;
+                let oracle_hits =
+                    v26_layout_hits(&truth.ground_truth_page_assignments, &oracle_pages);
+                let mut heap = BinaryHeap::with_capacity(retained_limit);
+                let mut candidate_rows = 0_u64;
+                for row in rows_by_source.values() {
+                    let pages = pages_by_source.get(&row.source_ordinal).unwrap();
+                    if row.source_ordinal == query.source_ordinal
+                        || [pages.primary_page, pages.replica_page]
+                            .into_iter()
+                            .any(|page| page == own.primary_page || page == own.replica_page)
+                    {
+                        continue;
+                    }
+                    candidate_rows += 1;
+                    let dot = query
+                        .vector
+                        .iter()
+                        .zip(row.vector)
+                        .map(|(left, right)| left * right)
+                        .sum::<f32>();
+                    let ranked = V26RankedRow {
+                        source_ordinal: row.source_ordinal,
+                        distance: 1.0 - dot,
+                    };
+                    if !ranked.distance.is_finite() {
+                        return Err(invalid("V26 exact-global distance differs"));
+                    }
+                    if heap.len() < retained_limit {
+                        heap.push(ranked);
+                    } else if ranked < *heap.peek().unwrap() {
+                        heap.pop();
+                        heap.push(ranked);
+                    }
+                }
+                let mut ranked = heap.into_vec();
+                ranked.sort();
+                let first_ten_ranked_rows = ranked
+                    .iter()
+                    .take(10)
+                    .map(|row| {
+                        let pages = pages_by_source.get(&row.source_ordinal).unwrap();
+                        V26RankedRowEvidence {
+                            source_ordinal: row.source_ordinal,
+                            primary_page: pages.primary_page,
+                            replica_page: pages.replica_page,
+                            distance_bits: row.distance.to_bits(),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let mut samples = Vec::with_capacity(LIMITS.len());
+                for limit in ranked_row_limits {
+                    let retained = &ranked[..usize::try_from(*limit).unwrap().min(ranked.len())];
+                    let mut selected_pages = select_v26_ranked_pages(
+                        retained,
+                        &pages_by_source,
+                        usize::try_from(page_budget).unwrap(),
+                    )?;
+                    selected_pages.sort_unstable();
+                    let hits =
+                        v26_layout_hits(&truth.ground_truth_page_assignments, &selected_pages);
+                    samples.push(V26ExactGlobalSample {
+                        query_ordinal: query.query_ordinal,
+                        ranked_row_limit: *limit,
+                        candidate_rows,
+                        selected_pages,
+                        first_ten_ranked_rows: first_ten_ranked_rows.clone(),
+                        hits,
+                        oracle_hits,
+                        recall_ppm: v26_ppm(u64::from(hits), 10)?,
+                        oracle_attainment_ppm: v26_ppm(u64::from(hits), u64::from(oracle_hits))?,
+                    });
+                }
+                Ok(samples)
+            },
+        )
+        .collect::<Result<Vec<_>>>()?;
+    Ok(per_query_samples.into_iter().flatten().collect())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
