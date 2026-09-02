@@ -13,6 +13,7 @@ const V24_MAX_PSI_FULL_AVG10_PPM: u32 = 500_000;
 pub(crate) enum V24Phase {
     WitnessTraining,
     PostingConstruction,
+    PseudoqueryEvaluation,
     DevelopmentEvaluation,
     HoldoutBinding,
     HoldoutEvaluation,
@@ -69,6 +70,7 @@ fn role_is_registered(role: &str) -> bool {
             | "training-result"
             | "witnesses-arrow"
             | "witness-graph"
+            | "posting-result"
             | "posting-manifest"
             | "page-rows-parquet"
             | "page-roster"
@@ -80,6 +82,9 @@ fn role_is_registered(role: &str) -> bool {
             | "development-result"
             | "holdout-truth"
             | "holdout-result"
+            | "pseudoquery-evidence"
+            | "pseudoquery-result"
+            | "pseudoquery-pass-receipt"
     ) || role
         .strip_prefix("training-shard-")
         .is_some_and(|suffix| suffix.len() == 5 && suffix.bytes().all(|byte| byte.is_ascii_digit()))
@@ -140,6 +145,7 @@ pub(crate) fn canonical_v24_receipt_bytes(receipt: &V24Receipt) -> Result<Vec<u8
     let parent_is_valid = match receipt.phase {
         V24Phase::WitnessTraining => receipt.parent_receipt_sha256.is_none(),
         V24Phase::PostingConstruction
+        | V24Phase::PseudoqueryEvaluation
         | V24Phase::DevelopmentEvaluation
         | V24Phase::HoldoutBinding
         | V24Phase::HoldoutEvaluation => receipt
@@ -147,14 +153,63 @@ pub(crate) fn canonical_v24_receipt_bytes(receipt: &V24Receipt) -> Result<Vec<u8
             .as_deref()
             .is_some_and(|digest| exact_lower_hex(digest, 64)),
     };
+    let input_roles = receipt
+        .ordered_inputs
+        .iter()
+        .map(|identity| identity.role.as_str())
+        .collect::<Vec<_>>();
+    let output_roles = receipt
+        .outputs
+        .iter()
+        .map(|identity| identity.role.as_str())
+        .collect::<Vec<_>>();
+    let phase_roles_are_valid = match receipt.phase {
+        V24Phase::PseudoqueryEvaluation => {
+            input_roles
+                == [
+                    "posting-result",
+                    "witness-graph",
+                    "witness-postings",
+                    "construction-rows-parquet",
+                    "page-rows-parquet",
+                ]
+                && (output_roles == ["pseudoquery-evidence", "pseudoquery-result"]
+                    || output_roles
+                        == [
+                            "pseudoquery-evidence",
+                            "pseudoquery-result",
+                            "pseudoquery-pass-receipt",
+                        ])
+        }
+        V24Phase::DevelopmentEvaluation => {
+            !input_roles
+                .iter()
+                .any(|role| matches!(*role, "pseudoquery-evidence" | "pseudoquery-result"))
+                && !output_roles.iter().any(|role| {
+                    matches!(
+                        *role,
+                        "pseudoquery-evidence" | "pseudoquery-result" | "pseudoquery-pass-receipt"
+                    )
+                })
+        }
+        _ => !input_roles.iter().chain(&output_roles).any(|role| {
+            matches!(
+                *role,
+                "pseudoquery-evidence" | "pseudoquery-result" | "pseudoquery-pass-receipt"
+            )
+        }),
+    };
     if receipt.schema != V24_RECEIPT_SCHEMA
         || receipt.claim_eligible
         || !parent_is_valid
+        || !phase_roles_are_valid
         || !exact_lower_hex(&receipt.executable_sha256, 64)
         || receipt.ordered_inputs.is_empty()
         || receipt.outputs.is_empty()
         || receipt.peak_rss_bytes == 0
         || receipt.peak_rss_bytes > V24_MAX_CONSTRUCTION_RSS_BYTES
+        || receipt.phase == V24Phase::PseudoqueryEvaluation
+            && receipt.peak_rss_bytes > 3 * 1024 * 1024 * 1024
         || receipt.peak_psi_full_avg10_ppm > V24_MAX_PSI_FULL_AVG10_PPM
         || receipt.swap_delta_bytes != 0
     {
@@ -263,5 +318,46 @@ mod tests {
         let mut changed = registered;
         changed.swap_delta_bytes = 1;
         assert!(canonical_v24_receipt_bytes(&changed).is_err());
+    }
+
+    #[test]
+    fn v24_witness_receipt_roles_are_phase_specific() {
+        let pseudoquery = V24Receipt {
+            schema: "borsuk-v24-witness-receipt-v1".to_owned(),
+            claim_eligible: false,
+            phase: V24Phase::PseudoqueryEvaluation,
+            parent_receipt_sha256: Some("11".repeat(32)),
+            executable_sha256: "22".repeat(32),
+            ordered_inputs: [
+                "posting-result",
+                "witness-graph",
+                "witness-postings",
+                "construction-rows-parquet",
+                "page-rows-parquet",
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, role)| object(role, "sha256", &format!("{:02x}", ordinal + 3)))
+            .collect(),
+            outputs: ["pseudoquery-evidence", "pseudoquery-result"]
+                .into_iter()
+                .enumerate()
+                .map(|(ordinal, role)| object(role, "sha256", &format!("{:02x}", ordinal + 9)))
+                .collect(),
+            peak_rss_bytes: 2_147_483_648,
+            peak_psi_full_avg10_ppm: 0,
+            swap_delta_bytes: 0,
+        };
+        assert!(canonical_v24_receipt_bytes(&pseudoquery).is_ok());
+
+        let mut query_leak = pseudoquery.clone();
+        query_leak.ordered_inputs[3] = object("query-parquet", "sha256", "33");
+        assert!(canonical_v24_receipt_bytes(&query_leak).is_err());
+        let mut page_leak = pseudoquery.clone();
+        page_leak.ordered_inputs[3] = object("page-body-00000", "sha256", "44");
+        assert!(canonical_v24_receipt_bytes(&page_leak).is_err());
+        let mut output_leak = pseudoquery;
+        output_leak.outputs[0] = object("development-result", "sha256", "55");
+        assert!(canonical_v24_receipt_bytes(&output_leak).is_err());
     }
 }

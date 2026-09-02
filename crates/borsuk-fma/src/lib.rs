@@ -25,6 +25,63 @@ impl std::fmt::Display for FmaUnavailable {
 
 impl std::error::Error for FmaUnavailable {}
 
+/// A fused-dot kernel whose architecture capability is detected once.
+///
+/// Reusing this value avoids feature detection and `Result` construction in
+/// corpus-scale inner loops while preserving the registered arithmetic.
+#[derive(Debug, Clone, Copy)]
+pub struct FusedDot8x12 {
+    backend: FmaBackend,
+}
+
+impl FusedDot8x12 {
+    /// Detect and freeze the available fused backend.
+    pub fn detect() -> Result<Self, FmaUnavailable> {
+        #[cfg(target_arch = "aarch64")]
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            return Ok(Self {
+                backend: FmaBackend::Aarch64NeonFma,
+            });
+        }
+
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if std::arch::is_x86_feature_detected!("avx") && std::arch::is_x86_feature_detected!("fma")
+        {
+            return Ok(Self {
+                backend: FmaBackend::X86AvxFma,
+            });
+        }
+
+        Err(FmaUnavailable)
+    }
+
+    /// The exact backend frozen by [`Self::detect`].
+    pub fn backend(self) -> FmaBackend {
+        self.backend
+    }
+
+    /// Compute one registered dot product without repeating feature detection.
+    #[inline(always)]
+    pub fn dot(self, left: &[f32; 96], right: &[f32; 96]) -> f32 {
+        match self.backend {
+            #[cfg(target_arch = "aarch64")]
+            FmaBackend::Aarch64NeonFma => {
+                // SAFETY: `detect` established NEON availability and the
+                // private field prevents construction with another backend.
+                unsafe { aarch64_dot(left, right) }
+            }
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            FmaBackend::X86AvxFma => {
+                // SAFETY: `detect` established AVX+FMA availability and the
+                // private field prevents construction with another backend.
+                unsafe { x86_dot(left, right) }
+            }
+            #[allow(unreachable_patterns)]
+            _ => unreachable!("a fused kernel cannot contain a foreign backend"),
+        }
+    }
+}
+
 /// Compute the registered eight-lane by twelve-step fused dot product.
 ///
 /// Each lane starts at positive zero, consumes dimensions `lane * 12 + step`
@@ -33,24 +90,8 @@ pub fn fused_dot_8x12(
     left: &[f32; 96],
     right: &[f32; 96],
 ) -> Result<(f32, FmaBackend), FmaUnavailable> {
-    #[cfg(target_arch = "aarch64")]
-    if std::arch::is_aarch64_feature_detected!("neon") {
-        // SAFETY: runtime feature detection establishes NEON availability;
-        // the fixed arrays make every intrinsic load/store exactly in bounds.
-        return Ok((
-            unsafe { aarch64_dot(left, right) },
-            FmaBackend::Aarch64NeonFma,
-        ));
-    }
-
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    if std::arch::is_x86_feature_detected!("avx") && std::arch::is_x86_feature_detected!("fma") {
-        // SAFETY: runtime feature detection establishes AVX+FMA availability;
-        // the fixed arrays make every intrinsic load/store exactly in bounds.
-        return Ok((unsafe { x86_dot(left, right) }, FmaBackend::X86AvxFma));
-    }
-
-    Err(FmaUnavailable)
+    let kernel = FusedDot8x12::detect()?;
+    Ok((kernel.dot(left, right), kernel.backend()))
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -117,7 +158,7 @@ unsafe fn x86_dot(left: &[f32; 96], right: &[f32; 96]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::fused_dot_8x12;
+    use super::{FusedDot8x12, fused_dot_8x12};
 
     fn scalar(left: &[f32; 96], right: &[f32; 96]) -> f32 {
         let mut lanes = [0.0_f32; 8];
@@ -136,6 +177,9 @@ mod tests {
         let right = std::array::from_fn(|index| (97.0 - index as f32) / 103.0);
         let (actual, _) = fused_dot_8x12(&left, &right).unwrap();
         assert_eq!(actual.to_bits(), scalar(&left, &right).to_bits());
+        let kernel = FusedDot8x12::detect().unwrap();
+        assert_eq!(kernel.dot(&left, &right).to_bits(), actual.to_bits());
+        assert_eq!(kernel.backend(), fused_dot_8x12(&left, &right).unwrap().1);
 
         let subnormal = f32::from_bits(1);
         let left = [subnormal; 96];
