@@ -53,6 +53,7 @@ def _write_v24_fixture(
     replica_vector_drift: bool = False,
     page_modulo: int | None = None,
     f16_projection_probe: bool = False,
+    page_projection_ulp_drift: int = 0,
 ) -> tuple[RegisteredV24Input, RegisteredV24Input]:
     generation = "v24-full-fixture"
     construction_path = root / "construction-rows.parquet"
@@ -114,6 +115,10 @@ def _write_v24_fixture(
         page_values[0, :2] = np.asarray(
             [1.0 / np.sqrt(1.01), 0.1 / np.sqrt(1.01)], dtype=np.float16
         ).astype(np.float32)
+        bits = int(np.float16(page_values[0, 1]).view(np.uint16))
+        page_values[0, 1] = np.asarray(
+            bits + page_projection_ulp_drift, dtype=np.uint16
+        ).view(np.float16)
     if with_replica or replica_vector_drift:
         page_ordinals.append(1)
         replicas.append(True)
@@ -333,6 +338,32 @@ class V25OpenConversionTests(unittest.TestCase):
             )
 
             build_v25_open_inputs(_request(construction, page_rows, root / "output"))
+
+    def test_v25_open_conversion_allows_one_historical_f16_ulp_not_two(self) -> None:
+        """Historical independent materializations may differ by one f16 ULP only."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            construction, page_rows = _write_v24_fixture(
+                root,
+                16,
+                f16_projection_probe=True,
+                page_projection_ulp_drift=1,
+            )
+            build_v25_open_inputs(_request(construction, page_rows, root / "accepted"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            construction, page_rows = _write_v24_fixture(
+                root,
+                16,
+                f16_projection_probe=True,
+                page_projection_ulp_drift=2,
+            )
+            with self.assertRaisesRegex(
+                ValueError, "V25 open page construction vector differs"
+            ):
+                build_v25_open_inputs(
+                    _request(construction, page_rows, root / "rejected")
+                )
 
     def test_v25_open_conversion_pads_short_oracle_without_losing_cardinality(self) -> None:
         """A valid sub-eight oracle must serialize with explicit sentinel padding."""

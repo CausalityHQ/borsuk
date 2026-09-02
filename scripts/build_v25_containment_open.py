@@ -224,6 +224,20 @@ def _batch_vectors(column: pa.Array) -> np.ndarray:
     return column.values.to_numpy(zero_copy_only=False).reshape(-1, 96)
 
 
+def _matches_historical_f16_projection(
+    observed: np.ndarray, normalized_construction: np.ndarray
+) -> bool:
+    expected = normalized_construction.astype(np.float16)
+    lower = np.nextafter(expected, np.float16(-math.inf)).astype(np.float32)
+    upper = np.nextafter(expected, np.float16(math.inf)).astype(np.float32)
+    expected32 = expected.astype(np.float32)
+    representable = observed.astype(np.float16).astype(np.float32) == observed
+    return bool(
+        representable.all()
+        and ((observed == expected32) | (observed == lower) | (observed == upper)).all()
+    )
+
+
 def _read_selected_construction(
     request: V25OpenBuildRequest, selection: V25OpenSelection
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -339,9 +353,10 @@ def _read_selected_pages(
     replicated = replica != np.iinfo(np.uint32).max
     if not np.array_equal(primary_vectors[replicated], replica_vectors[replicated]):
         raise ValueError("V25 open replica vector differs")
-    projected_vectors = construction_vectors.astype(np.float16).astype(np.float32)
-    if not np.array_equal(primary_vectors, projected_vectors) or not np.array_equal(
-        replica_vectors[replicated], projected_vectors[replicated]
+    if not _matches_historical_f16_projection(
+        primary_vectors, construction_vectors
+    ) or not _matches_historical_f16_projection(
+        replica_vectors[replicated], construction_vectors[replicated]
     ):
         raise ValueError("V25 open page construction vector differs")
     return primary, replica
