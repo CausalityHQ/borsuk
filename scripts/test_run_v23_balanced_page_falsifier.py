@@ -59,7 +59,9 @@ class BalancedOfflineWorkerTests(unittest.TestCase):
                 "--execute",
             ]
             parsed_policy, limits = subject.parse_args(arguments)
-            self.assertEqual(parsed_policy, dataclasses.replace(policy, cleanup_paths=()))
+            self.assertEqual(
+                parsed_policy, dataclasses.replace(policy, cleanup_paths=())
+            )
             self.assertEqual(limits, subject.MonitorLimits())
             with mock.patch("sys.stderr"):
                 with self.assertRaises(SystemExit):
@@ -120,7 +122,9 @@ class BalancedOfflineWorkerTests(unittest.TestCase):
             "selected_pair": None,
             "stop": None,
         }
-        terminal = json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        terminal = (
+            json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        )
         self.assertEqual(subject.validate_terminal(terminal, mode="execute"), value)
         with self.assertRaisesRegex(ValueError, "canonical"):
             subject.validate_terminal(json.dumps(value, indent=2).encode())
@@ -134,8 +138,7 @@ class BalancedOfflineWorkerTests(unittest.TestCase):
         old = dict(value, schema="borsuk-v23-balanced-page-receipt-v3")
         with self.assertRaisesRegex(ValueError, "authority"):
             subject.validate_terminal(
-                json.dumps(old, separators=(",", ":"), sort_keys=True).encode()
-                + b"\n"
+                json.dumps(old, separators=(",", ":"), sort_keys=True).encode() + b"\n"
             )
 
         incomplete = dict(value, pseudoquery_pairs=value["pseudoquery_pairs"][:-1])
@@ -146,7 +149,9 @@ class BalancedOfflineWorkerTests(unittest.TestCase):
                 mode="execute",
             )
 
-    def test_cleanup_unlinks_only_explicit_regular_files_after_pid_clearance(self) -> None:
+    def test_cleanup_unlinks_only_explicit_regular_files_after_pid_clearance(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             first = root / "first"
@@ -163,7 +168,9 @@ class BalancedOfflineWorkerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "process group"):
                 subject.cleanup_explicit_files((), process_group_alive=True)
 
-    def test_receipt_outputs_are_reauthenticated_against_exact_local_inventory(self) -> None:
+    def test_receipt_outputs_are_reauthenticated_against_exact_local_inventory(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = pathlib.Path(directory)
             artifact = output / "balanced-tree.bin"
@@ -183,9 +190,7 @@ class BalancedOfflineWorkerTests(unittest.TestCase):
                 subject.authenticate_receipt_outputs(receipt, output), (artifact,)
             )
 
-            changed = {
-                "outputs": [dict(receipt["outputs"][0], digest="00" * 32)]
-            }
+            changed = {"outputs": [dict(receipt["outputs"][0], digest="00" * 32)]}
             with self.assertRaisesRegex(ValueError, "output authority"):
                 subject.authenticate_receipt_outputs(changed, output)
 

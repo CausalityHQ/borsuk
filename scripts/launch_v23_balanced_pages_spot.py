@@ -239,9 +239,7 @@ def _validate_registered_objects(objects: Sequence[RegisteredObject]) -> None:
         if (
             type(registered.role) is not str
             or not registered.role
-            or not registered.uri.startswith(
-                "s3://borsuk-bench-453182569524-euc1/"
-            )
+            or not registered.uri.startswith("s3://borsuk-bench-453182569524-euc1/")
             or not _valid_sha256(registered.sha256)
             or type(registered.encoded_bytes) is not int
             or registered.encoded_bytes <= 0
@@ -265,7 +263,9 @@ def validate_remote_plan(plan: BalancedRemotePlan) -> None:
     _validate_registered_objects(artifacts)
     if (
         not plan.run_id
-        or any(not (character.isalnum() or character in "-_") for character in plan.run_id)
+        or any(
+            not (character.isalnum() or character in "-_") for character in plan.run_id
+        )
         or len(plan.run_id) > 96
         or len(plan.ordered_inputs) != 4
         or plan.supervisor.role != "offline-supervisor"
@@ -295,12 +295,12 @@ def build_remote_worker_user_data(plan: BalancedRemotePlan) -> str:
     artifacts = (plan.supervisor, plan.executable, plan.manifest, *plan.ordered_inputs)
     stage_lines = []
     for artifact in artifacts:
-        destination = f'$root/{artifact.basename}'
+        destination = f"$root/{artifact.basename}"
         stage_lines.extend(
             (
-                f"aws s3 cp {shlex.quote(artifact.uri)} \"{destination}\" --only-show-errors",
-                f"test \"$(stat -c %s \"{destination}\")\" = {artifact.encoded_bytes}",
-                f"test \"$(sha256sum \"{destination}\" | cut -d' ' -f1)\" = {artifact.sha256}",
+                f'aws s3 cp {shlex.quote(artifact.uri)} "{destination}" --only-show-errors',
+                f'test "$(stat -c %s "{destination}")" = {artifact.encoded_bytes}',
+                f'test "$(sha256sum "{destination}" | cut -d\' \' -f1)" = {artifact.sha256}',
             )
         )
     uploads = "\n".join(
@@ -335,7 +335,7 @@ finish() {{
   if [ "$trap_code" -ne 0 ]; then status=failed; code=$trap_code; fi
   set +e
   instance_id=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token | xargs -I{{}} curl -fsS -H 'X-aws-ec2-metadata-token: {{}}' http://169.254.169.254/latest/meta-data/instance-id)
-  if [ -f "$root/worker.log" ]; then aws s3 cp "$root/worker.log" {shlex.quote(plan.output_prefix + 'worker.log')} --only-show-errors || true; fi
+  if [ -f "$root/worker.log" ]; then aws s3 cp "$root/worker.log" {shlex.quote(plan.output_prefix + "worker.log")} --only-show-errors || true; fi
   {cleanup}
   python3 - "$status" "$instance_id" <<'PY' > "$root/TERMINAL.json"
 import json,sys
@@ -369,7 +369,7 @@ set -e
 if [ "$code" -eq 0 ]; then
   status=$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); print("quality" if value["stop"] == "quality" else "complete")' "$root/receipt.json")
   {uploads}
-  aws s3 cp "$root/receipt.json" {shlex.quote(plan.output_prefix + 'RECEIPT.json')} --only-show-errors
+  aws s3 cp "$root/receipt.json" {shlex.quote(plan.output_prefix + "RECEIPT.json")} --only-show-errors
 elif [ "$code" -eq 70 ]; then
   status=stopped
 else
@@ -458,7 +458,9 @@ def load_spot_authority(path: pathlib.Path) -> BalancedSpotAuthority:
         supervisor=_registered_object_from_value(remote_value["supervisor"]),
         executable=_registered_object_from_value(remote_value["executable"]),
         manifest=_registered_object_from_value(remote_value["manifest"]),
-        ordered_inputs=tuple(_registered_object_from_value(item) for item in ordered_inputs),
+        ordered_inputs=tuple(
+            _registered_object_from_value(item) for item in ordered_inputs
+        ),
         output_prefix=remote_value["output_prefix"],
     )
     validate_remote_plan(remote_plan)

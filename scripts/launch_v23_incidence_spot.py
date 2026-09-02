@@ -83,9 +83,7 @@ FROZEN_QUERY_URI = (
     "s3://borsuk-bench-453182569524-euc1/publication/v3/20260812/datasets/"
     "deep-image-96/attempts/0001/materialized/test.parquet"
 )
-FROZEN_QUERY_SHA256 = (
-    "296d45828020c1c0b88c6a1d5c822f6283280513b8c58d01cfa961f3a139a5d4"
-)
+FROZEN_QUERY_SHA256 = "296d45828020c1c0b88c6a1d5c822f6283280513b8c58d01cfa961f3a139a5d4"
 FROZEN_QUERY_BYTES = 3_843_448
 SUPPORTED_PHASES = (
     "tree-training",
@@ -103,9 +101,12 @@ MEMORY_PSI_PATH = pathlib.Path("/proc/pressure/memory")
 
 
 def _canonical_bytes(value: object) -> bytes:
-    return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), allow_nan=False
-    ).encode() + b"\n"
+    return (
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
+        + b"\n"
+    )
 
 
 def _require_token(label: str, value: str) -> str:
@@ -248,8 +249,7 @@ def build_posting_manifest(
         or LOWER_SHA256.fullmatch(tree_receipt["final_progress_sha256"]) is None
         or type(tree_receipt["executable_sha256"]) is not str
         or LOWER_SHA256.fullmatch(tree_receipt["executable_sha256"]) is None
-        or tree_receipt["fma_backend"]
-        not in {"aarch64-neon-fma", "x86-avx-fma"}
+        or tree_receipt["fma_backend"] not in {"aarch64-neon-fma", "x86-avx-fma"}
     ):
         raise ValueError("tree receipt authority differs")
     tree_identity = tree_receipt["outputs"][0]
@@ -388,6 +388,7 @@ def build_posting_manifest(
             "authority_kind": "phase-object",
             "identity": identity,
         }
+
     manifest = {
         "algorithm": base["algorithm"],
         "claim_eligible": False,
@@ -507,7 +508,9 @@ def build_development_manifest(
     ):
         raise ValueError("posting receipt authority differs")
 
-    def registered_identity(value: object, role: str, algorithm: str) -> dict[str, object]:
+    def registered_identity(
+        value: object, role: str, algorithm: str
+    ) -> dict[str, object]:
         if (
             type(value) is not dict
             or set(value) != identity_keys
@@ -638,9 +641,10 @@ def build_launch_spec(
         raise ValueError("worker user data does not self-terminate")
     if len(user_data.encode()) > 16_384:
         raise ValueError("worker user data length exceeds EC2 authority")
-    client_token = "borsuk-v23-" + hashlib.sha256(
-        f"{source_commit}:{run_id}".encode()
-    ).hexdigest()[:48]
+    client_token = (
+        "borsuk-v23-"
+        + hashlib.sha256(f"{source_commit}:{run_id}".encode()).hexdigest()[:48]
+    )
     return {
         "BlockDeviceMappings": [
             {
@@ -723,13 +727,13 @@ def build_worker_script(
     }
     return f"""#!/usr/bin/env bash
 set -euo pipefail
-phase={quoted['phase']}
-run_id={quoted['run']}
-source_commit={quoted['commit']}
-source_uri={quoted['source_uri']}
-source_sha256={quoted['source_sha']}
-result_uri={quoted['result_uri']}
-spot_price={quoted['price']}
+phase={quoted["phase"]}
+run_id={quoted["run"]}
+source_commit={quoted["commit"]}
+source_uri={quoted["source_uri"]}
+source_sha256={quoted["source_sha"]}
+result_uri={quoted["result_uri"]}
+spot_price={quoted["price"]}
 workspace=/var/lib/borsuk-v23-incidence/source
 evidence=/var/lib/borsuk-v23-incidence/evidence
 scratch_root=/var/lib/borsuk-v23-incidence/scratch
@@ -1037,33 +1041,32 @@ def _upload_source(source_commit: str, run_id: str) -> tuple[str, str]:
         except subprocess.CalledProcessError:
             observed = json.loads(
                 _aws(
-                [
-                    "s3api",
-                    "head-object",
-                    "--bucket",
-                    BUCKET,
-                    "--key",
-                    key,
-                    "--expected-bucket-owner",
-                    EXPECTED_AWS_ACCOUNT,
-                    "--checksum-mode",
-                    "ENABLED",
-                    "--query",
-                    "{ContentLength:ContentLength,ChecksumSHA256:ChecksumSHA256,Metadata:Metadata}",
-                    "--output",
-                    "json",
-                ]
+                    [
+                        "s3api",
+                        "head-object",
+                        "--bucket",
+                        BUCKET,
+                        "--key",
+                        key,
+                        "--expected-bucket-owner",
+                        EXPECTED_AWS_ACCOUNT,
+                        "--checksum-mode",
+                        "ENABLED",
+                        "--query",
+                        "{ContentLength:ContentLength,ChecksumSHA256:ChecksumSHA256,Metadata:Metadata}",
+                        "--output",
+                        "json",
+                    ]
+                )
             )
-            )
-            if (
-                observed
-                != {
-                    "ContentLength": length,
-                    "ChecksumSHA256": checksum_base64,
-                    "Metadata": {"borsuk-sha256": digest},
-                }
-            ):
-                raise RuntimeError("existing source archive authority differs") from None
+            if observed != {
+                "ContentLength": length,
+                "ChecksumSHA256": checksum_base64,
+                "Metadata": {"borsuk-sha256": digest},
+            }:
+                raise RuntimeError(
+                    "existing source archive authority differs"
+                ) from None
         return uri, digest
     finally:
         if archive_path.exists():
@@ -1329,7 +1332,9 @@ def launch(phase: str, run_id: str, source_commit: str) -> tuple[str, str]:
 
     build_launch_plan(phase=phase, run_id=run_id, source_commit=source_commit)
     _assert_clean_pushed_source(source_commit)
-    account = _aws(["sts", "get-caller-identity", "--query", "Account", "--output", "text"])
+    account = _aws(
+        ["sts", "get-caller-identity", "--query", "Account", "--output", "text"]
+    )
     if account != EXPECTED_AWS_ACCOUNT:
         raise RuntimeError("AWS account differs")
     active = _aws(
@@ -1348,10 +1353,7 @@ def launch(phase: str, run_id: str, source_commit: str) -> tuple[str, str]:
     if active and active != "None":
         raise RuntimeError(f"another V23 incidence worker is active: {active}")
     source_uri, source_sha = _upload_source(source_commit, run_id)
-    result_uri = (
-        f"s3://{BUCKET}/research/v23-leaf-page-incidence/"
-        f"{source_sha}/{run_id}"
-    )
+    result_uri = f"s3://{BUCKET}/research/v23-leaf-page-incidence/{source_sha}/{run_id}"
     _run(
         [
             "python3",
@@ -1438,7 +1440,9 @@ def _identity(role: str, path: pathlib.Path, uri: str) -> Any:
     )
 
 
-def _write_bulk_manifest(source: pathlib.Path, target: pathlib.Path, full: bool) -> None:
+def _write_bulk_manifest(
+    source: pathlib.Path, target: pathlib.Path, full: bool
+) -> None:
     value = json.loads(source.read_bytes())
     if not full:
         if value.get("phase") == "tree-training":
@@ -1491,7 +1495,9 @@ def _rewrite_tree_receipt_uri(
         or not receipt_path.is_file()
         or tree_path.is_symlink()
         or not tree_path.is_file()
-        or re.fullmatch(r"s3://[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+/incidence-tree\.bin", output_uri)
+        or re.fullmatch(
+            r"s3://[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+/incidence-tree\.bin", output_uri
+        )
         is None
     ):
         raise ValueError("tree handoff output URI differs")
@@ -1670,7 +1676,9 @@ def _rewrite_development_receipt_uris(
     return paths
 
 
-def _stage(manifest: pathlib.Path, directory: pathlib.Path, receipt: pathlib.Path) -> None:
+def _stage(
+    manifest: pathlib.Path, directory: pathlib.Path, receipt: pathlib.Path
+) -> None:
     import boto3
 
     from scripts.stage_v23_leaf_page_incidence_inputs import stage_manifest
@@ -1704,10 +1712,7 @@ def _phase_policy(
     if (
         manifest_raw != _canonical_bytes(manifest_value)
         or manifest_value.get("phase") != phase
-        or (
-            phase == "tree-training"
-            and parent_receipt_sha256 is not None
-        )
+        or (phase == "tree-training" and parent_receipt_sha256 is not None)
         or (
             phase != "tree-training"
             and (
@@ -1732,7 +1737,9 @@ def _phase_policy(
     ]
     if preflight_receipt is not None:
         inputs.append(
-            _identity("preflight-receipt", preflight_receipt, f"file://{preflight_receipt}")
+            _identity(
+                "preflight-receipt", preflight_receipt, f"file://{preflight_receipt}"
+            )
         )
     binary_bytes = binary.read_bytes()
     if hashlib.sha256(binary_bytes).hexdigest() != binary_sha256:
@@ -2009,8 +2016,7 @@ def worker_posting(
         if (
             manifest_bytes != _canonical_bytes(manifest_value)
             or manifest_value.get("phase") != "posting-construction"
-            or manifest_value.get("parent_receipt_sha256")
-            != FROZEN_TREE_RECEIPT_SHA256
+            or manifest_value.get("parent_receipt_sha256") != FROZEN_TREE_RECEIPT_SHA256
         ):
             raise ValueError("posting parent receipt authority differs")
         for path in (
@@ -2041,7 +2047,10 @@ def worker_posting(
         preflight_status = run_phase(preflight_policy, MonitorLimits())
         if preflight_status != 0:
             raise RuntimeError(f"posting preflight failed with exit {preflight_status}")
-        if phase_preflight_receipt.is_symlink() or not phase_preflight_receipt.is_file():
+        if (
+            phase_preflight_receipt.is_symlink()
+            or not phase_preflight_receipt.is_file()
+        ):
             raise RuntimeError("posting preflight receipt is absent")
         evidence.mkdir(parents=True, exist_ok=True)
         _write_exclusive(
@@ -2175,7 +2184,10 @@ def worker_development(
         stage = "preflight-run"
         if run_phase(preflight_policy, MonitorLimits()) != 0:
             raise RuntimeError("development preflight failed")
-        if phase_preflight_receipt.is_symlink() or not phase_preflight_receipt.is_file():
+        if (
+            phase_preflight_receipt.is_symlink()
+            or not phase_preflight_receipt.is_file()
+        ):
             raise RuntimeError("development preflight receipt is absent")
         evidence.mkdir(parents=True, exist_ok=True)
         _write_exclusive(
@@ -2568,7 +2580,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
             parsed.output_uri_prefix,
         )
     if parsed.worker_posting:
-        if parsed.posting_manifest.is_symlink() or not parsed.posting_manifest.is_file():
+        if (
+            parsed.posting_manifest.is_symlink()
+            or not parsed.posting_manifest.is_file()
+        ):
             raise ValueError("posting manifest path differs")
         return worker_posting(
             parsed.binary.resolve(),

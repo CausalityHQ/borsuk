@@ -104,7 +104,9 @@ def canonical_json_bytes(value: object) -> bytes:
     """Return canonical newline JSON for terminal authority."""
 
     return (
-        json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+        json.dumps(
+            value, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
         + b"\n"
     )
 
@@ -205,11 +207,11 @@ binary="$root/v24_witness_page_router"
 mkdir -p "$root" "$workspace" "$preflight"
 touch "$root/worker.log"
 exec >>"$root/worker.log" 2>&1
-output_bucket={quoted['bucket']}
-output_prefix={quoted['prefix']}
-run_id={quoted['run_id']}
-source_commit={quoted['commit']}
-binary_sha256={quoted['binary_sha']}
+output_bucket={quoted["bucket"]}
+output_prefix={quoted["prefix"]}
+run_id={quoted["run_id"]}
+source_commit={quoted["commit"]}
+binary_sha256={quoted["binary_sha"]}
 imds_token="$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)"
 instance_id="$(curl -fsS -H "X-aws-ec2-metadata-token: $imds_token" http://169.254.169.254/latest/meta-data/instance-id)"
 terminal=failed
@@ -245,12 +247,12 @@ PY
 trap finish EXIT
 dnf install -y python3 python3-pip tar zstd
 python3 -m pip install uv==0.8.17
-aws s3 cp {quoted['archive_uri']} "$archive" --only-show-errors
-aws s3 cp {quoted['binary_uri']} "$binary" --only-show-errors
-test "$(stat -c %s "$archive")" -eq {quoted['archive_bytes']}
-test "$(stat -c %s "$binary")" -eq {quoted['binary_bytes']}
-printf '%s  %s\n' {quoted['archive_sha']} "$archive" | sha256sum --check --status
-printf '%s  %s\n' {quoted['binary_sha']} "$binary" | sha256sum --check --status
+aws s3 cp {quoted["archive_uri"]} "$archive" --only-show-errors
+aws s3 cp {quoted["binary_uri"]} "$binary" --only-show-errors
+test "$(stat -c %s "$archive")" -eq {quoted["archive_bytes"]}
+test "$(stat -c %s "$binary")" -eq {quoted["binary_bytes"]}
+printf '%s  %s\n' {quoted["archive_sha"]} "$archive" | sha256sum --check --status
+printf '%s  %s\n' {quoted["binary_sha"]} "$binary" | sha256sum --check --status
 chmod 0555 "$binary"
 tar --zstd -xf "$archive" -C "$workspace"
 cd "$workspace"
@@ -260,8 +262,8 @@ test "$(cat .borsuk-source-commit)" = "$source_commit"
 "$(command -v uv)" pip install --python /opt/borsuk-v24-venv/bin/python --requirement scripts/requirements-format-bench.txt
 export PYTHONPATH="$workspace" RAYON_NUM_THREADS=1
 /opt/borsuk-v24-venv/bin/python -m scripts.run_v24_reduced_preflight \
-  --binary "$binary" --binary-sha256 {quoted['binary_sha']} \
-  --binary-bytes {quoted['binary_bytes']} --root "$preflight" \
+  --binary "$binary" --binary-sha256 {quoted["binary_sha"]} \
+  --binary-bytes {quoted["binary_bytes"]} --root "$preflight" \
   --source-commit "$source_commit" --execute-reduced-preflight >"$root/stdout.json"
 cmp "$root/stdout.json" "$preflight/preflight-receipt.json"
 receipt_sha256="$(sha256sum "$root/stdout.json" | awk '{{print $1}}')"
@@ -407,9 +409,9 @@ def run_spot(plan: ReducedSpotPlan, *, ec2_client: Any, s3_client: Any) -> str:
                 if name == "FAILED.json":
                     raise RuntimeError(f"V24 reduced Spot worker failed at {uri}")
                 return uri
-            state = ec2_client.describe_instances(InstanceIds=[instance_id])["Reservations"][0][
-                "Instances"
-            ][0]["State"]["Name"]
+            state = ec2_client.describe_instances(InstanceIds=[instance_id])[
+                "Reservations"
+            ][0]["Instances"][0]["State"]["Name"]
             if state in {"shutting-down", "terminated", "stopping", "stopped"}:
                 raise RuntimeError("V24 reduced Spot instance exited without terminal")
             time.sleep(15)

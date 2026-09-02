@@ -199,7 +199,11 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
                 query_identity=query_identity,
             )
         manifest = json.loads(raw)
-        self.assertEqual(raw, json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n")
+        self.assertEqual(
+            raw,
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n",
+        )
         self.assertEqual(manifest["phase"], "development-evaluation")
         self.assertEqual(manifest["parent_receipt_sha256"], posting_identity["digest"])
         self.assertEqual(
@@ -214,7 +218,9 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
             ],
         )
 
-    def test_development_plan_binds_sealed_inputs_and_keeps_holdout_fenced(self) -> None:
+    def test_development_plan_binds_sealed_inputs_and_keeps_holdout_fenced(
+        self,
+    ) -> None:
         plan = build_launch_plan(
             phase="development-evaluation",
             run_id="fixture-development-run",
@@ -249,7 +255,9 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
 
     def test_development_bulk_manifest_preflight_excludes_burned_queries(self) -> None:
         construction = json.loads(
-            (ROOT / "scripts/fixtures/v23_incidence_training_manifest.json").read_bytes()
+            (
+                ROOT / "scripts/fixtures/v23_incidence_training_manifest.json"
+            ).read_bytes()
         )
         identity = construction["ordered_inputs"][0]["identity"]
 
@@ -280,8 +288,12 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
             )
             _write_bulk_manifest(source, preflight, False)
             _write_bulk_manifest(source, execute, True)
-            self.assertEqual(json.loads(preflight.read_bytes())["ordered_inputs"], fixed)
-            self.assertEqual(json.loads(execute.read_bytes())["ordered_inputs"], fixed + burned)
+            self.assertEqual(
+                json.loads(preflight.read_bytes())["ordered_inputs"], fixed
+            )
+            self.assertEqual(
+                json.loads(execute.read_bytes())["ordered_inputs"], fixed + burned
+            )
 
     def test_development_cli_builds_manifest_and_dispatches_worker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -316,7 +328,9 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
                     0,
                 )
             self.assertEqual(manifest.read_bytes(), expected)
-            self.assertEqual(build.call_args.kwargs["posting_receipt_bytes"], posting.read_bytes())
+            self.assertEqual(
+                build.call_args.kwargs["posting_receipt_bytes"], posting.read_bytes()
+            )
             self.assertEqual(build.call_args.kwargs["d2_report_bytes"], d2.read_bytes())
             self.assertEqual(build.call_args.kwargs["query_bytes"], query.read_bytes())
 
@@ -364,8 +378,7 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
             "source_commit": SOURCE_SHA,
         }
         manifest_bytes = (
-            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
-            + b"\n"
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
         )
 
         def stage_stub(_manifest: Path, directory: Path, receipt: Path) -> None:
@@ -478,7 +491,9 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
                 evidence.joinpath("development-latency.bin").read_bytes(),
                 b"latency-bundle",
             )
-            receipt = json.loads(evidence.joinpath("development-receipt.json").read_bytes())
+            receipt = json.loads(
+                evidence.joinpath("development-receipt.json").read_bytes()
+            )
             self.assertEqual(
                 [item["uri"] for item in receipt["outputs"]],
                 [
@@ -544,8 +559,7 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         )
         generation = list(
             bytes.fromhex(
-                "b20f22206edd140fdd5474a3786f3f1a"
-                "6ff51fa5f9d5f1be9363092156cb74ec"
+                "b20f22206edd140fdd5474a3786f3f1a6ff51fa5f9d5f1be9363092156cb74ec"
             )
         )
         primary_base, primary_extra = divmod(9_990_000, 28_282)
@@ -570,8 +584,7 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         roster = {
             "claim_eligible": False,
             "d1_report_sha256": (
-                "91717a4077c8a7d6b909f1f8d14f59d6"
-                "a6d422a29e06b3d665a02c29743cbc39"
+                "91717a4077c8a7d6b909f1f8d14f59d6a6d422a29e06b3d665a02c29743cbc39"
             ),
             "dataset_id": "deep-image-96",
             "document_kind": "publication-v3-v23-page-roster",
@@ -584,8 +597,7 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
             "pages": pages,
             "schema": "borsuk-v23-pages-v1",
             "source_archive_sha256": (
-                "77917b0f5621d2580fef444ee362669a"
-                "39d01c8453bee1c10ca1823631117f6d"
+                "77917b0f5621d2580fef444ee362669a39d01c8453bee1c10ca1823631117f6d"
             ),
             "stage": "d2",
         }
@@ -671,8 +683,7 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         self.assertEqual(identities[3]["role"], "page-body-00000")
         self.assertEqual(
             identities[3]["uri"],
-            roster["page_uri"] + "/pages/"
-            + pages[0]["checksum"],
+            roster["page_uri"] + "/pages/" + pages[0]["checksum"],
         )
         self.assertEqual(identities[3]["digest_algorithm"], "blake3")
         self.assertEqual(
@@ -732,14 +743,19 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         duplicate_identity = dict(roster_identity)
         duplicate_identity["digest"] = hashlib.sha256(duplicate_bytes).hexdigest()
         duplicate_identity["encoded_bytes"] = len(duplicate_bytes)
-        with patch(
-            "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_SHA256",
-            duplicate_identity["digest"],
-        ), patch(
-            "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_BYTES",
-            duplicate_identity["encoded_bytes"],
-        ), frozen_tree[0], frozen_tree[1], frozen_tree[2], self.assertRaisesRegex(
-            ValueError, "page roster authority"
+        with (
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_SHA256",
+                duplicate_identity["digest"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_BYTES",
+                duplicate_identity["encoded_bytes"],
+            ),
+            frozen_tree[0],
+            frozen_tree[1],
+            frozen_tree[2],
+            self.assertRaisesRegex(ValueError, "page roster authority"),
         ):
             build_posting_manifest(
                 tree_receipt_bytes=tree_receipt_bytes,
@@ -751,9 +767,7 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
         encoded_drift = json.loads(roster_bytes)
         encoded_drift["pages"][0]["encoded_bytes"] += 1
         encoded_drift_bytes = (
-            json.dumps(
-                encoded_drift, sort_keys=True, separators=(",", ":")
-            ).encode()
+            json.dumps(encoded_drift, sort_keys=True, separators=(",", ":")).encode()
             + b"\n"
         )
         encoded_drift_identity = dict(roster_identity)
@@ -761,14 +775,19 @@ class V23IncidenceSpotLauncherTests(unittest.TestCase):
             encoded_drift_bytes
         ).hexdigest()
         encoded_drift_identity["encoded_bytes"] = len(encoded_drift_bytes)
-        with patch(
-            "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_SHA256",
-            encoded_drift_identity["digest"],
-        ), patch(
-            "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_BYTES",
-            encoded_drift_identity["encoded_bytes"],
-        ), frozen_tree[0], frozen_tree[1], frozen_tree[2], self.assertRaisesRegex(
-            ValueError, "page roster authority"
+        with (
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_SHA256",
+                encoded_drift_identity["digest"],
+            ),
+            patch(
+                "scripts.launch_v23_incidence_spot.FROZEN_PAGE_ROSTER_BYTES",
+                encoded_drift_identity["encoded_bytes"],
+            ),
+            frozen_tree[0],
+            frozen_tree[1],
+            frozen_tree[2],
+            self.assertRaisesRegex(ValueError, "page roster authority"),
         ):
             build_posting_manifest(
                 tree_receipt_bytes=tree_receipt_bytes,
@@ -986,10 +1005,8 @@ with tempfile.TemporaryDirectory() as directory:
         self.assertIn(FROZEN_PAGE_ROSTER_URI, worker)
         self.assertIn("--build-posting-manifest", worker)
         self.assertIn("--worker-posting", worker)
-        self.assertIn('phase=posting-construction', worker)
-        self.assertIn(
-            'if [[ "$phase" == "posting-construction" ]]; then', worker
-        )
+        self.assertIn("phase=posting-construction", worker)
+        self.assertIn('if [[ "$phase" == "posting-construction" ]]; then', worker)
         self.assertIn(
             'worker_mode=(--worker-posting --posting-manifest "$posting_manifest")',
             worker,
@@ -1007,9 +1024,7 @@ with tempfile.TemporaryDirectory() as directory:
         )
 
     def test_worker_tree_preserves_traceback_and_partial_receipts(self) -> None:
-        def stage_stub(
-            _manifest: Path, directory: Path, receipt: Path
-        ) -> None:
+        def stage_stub(_manifest: Path, directory: Path, receipt: Path) -> None:
             directory.mkdir()
             receipt.write_text('{"staged":true}\n', encoding="utf-8")
 
@@ -1100,9 +1115,7 @@ with tempfile.TemporaryDirectory() as directory:
     def test_worker_tree_preserves_existing_preflight_receipt_on_execute_failure(
         self,
     ) -> None:
-        def stage_stub(
-            _manifest: Path, directory: Path, receipt: Path
-        ) -> None:
+        def stage_stub(_manifest: Path, directory: Path, receipt: Path) -> None:
             directory.mkdir()
             receipt.write_text('{"staged":true}\n', encoding="utf-8")
 
@@ -1178,7 +1191,9 @@ with tempfile.TemporaryDirectory() as directory:
         import blake3
 
         construction = json.loads(
-            (ROOT / "scripts/fixtures/v23_incidence_training_manifest.json").read_bytes()
+            (
+                ROOT / "scripts/fixtures/v23_incidence_training_manifest.json"
+            ).read_bytes()
         )
         template = construction["ordered_inputs"][0]["identity"]
 
@@ -1190,8 +1205,7 @@ with tempfile.TemporaryDirectory() as directory:
 
         construction["phase"] = "posting-construction"
         construction["parent_receipt_sha256"] = (
-            "c1af5ab84ef20797ffe52fa0a93872008"
-            "df817c142957f009895c8b7fc853a99"
+            "c1af5ab84ef20797ffe52fa0a93872008df817c142957f009895c8b7fc853a99"
         )
         construction["ordered_inputs"] = [
             phase_object("parent-receipt", 0),
@@ -1208,7 +1222,9 @@ with tempfile.TemporaryDirectory() as directory:
         )
 
         def stage_stub(manifest: Path, directory: Path, receipt: Path) -> None:
-            staged_counts.append(len(json.loads(manifest.read_bytes())["ordered_inputs"]))
+            staged_counts.append(
+                len(json.loads(manifest.read_bytes())["ordered_inputs"])
+            )
             directory.mkdir()
             receipt.write_text('{"staged":true}\n', encoding="utf-8")
 
@@ -1324,7 +1340,9 @@ with tempfile.TemporaryDirectory() as directory:
 
     def test_worker_posting_rejects_unregistered_parent_before_staging(self) -> None:
         construction = json.loads(
-            (ROOT / "scripts/fixtures/v23_incidence_training_manifest.json").read_bytes()
+            (
+                ROOT / "scripts/fixtures/v23_incidence_training_manifest.json"
+            ).read_bytes()
         )
         construction["phase"] = "posting-construction"
         construction["parent_receipt_sha256"] = "ab" * 32
@@ -1525,8 +1543,9 @@ with tempfile.TemporaryDirectory() as directory:
 
     def test_later_phases_refuse_without_committed_immutable_manifests(self) -> None:
         for phase in ("holdout-binding", "holdout-evaluation"):
-            with self.subTest(phase=phase), self.assertRaisesRegex(
-                ValueError, "immutable phase manifest"
+            with (
+                self.subTest(phase=phase),
+                self.assertRaisesRegex(ValueError, "immutable phase manifest"),
             ):
                 build_launch_plan(
                     phase=phase,
@@ -1561,12 +1580,9 @@ with tempfile.TemporaryDirectory() as directory:
         )
         self.assertEqual(spec["InstanceInitiatedShutdownBehavior"], "terminate")
         self.assertEqual(spec["MetadataOptions"]["HttpTokens"], "required")
-        self.assertTrue(
-            spec["BlockDeviceMappings"][0]["Ebs"]["DeleteOnTermination"]
-        )
+        self.assertTrue(spec["BlockDeviceMappings"][0]["Ebs"]["DeleteOnTermination"])
         tags = {
-            item["Key"]: item["Value"]
-            for item in spec["TagSpecifications"][0]["Tags"]
+            item["Key"]: item["Value"] for item in spec["TagSpecifications"][0]["Tags"]
         }
         self.assertEqual(tags["Project"], "BorsukBenchmark")
         self.assertEqual(tags["Phase"], "tree-training")
@@ -1588,8 +1604,7 @@ with tempfile.TemporaryDirectory() as directory:
             user_data="#!/bin/bash\nshutdown -h now\n",
         )
         tags = {
-            item["Key"]: item["Value"]
-            for item in spec["TagSpecifications"][0]["Tags"]
+            item["Key"]: item["Value"] for item in spec["TagSpecifications"][0]["Tags"]
         }
         self.assertEqual(tags["Phase"], "posting-construction")
         self.assertEqual(tags["RunId"], "fixture-posting-run")
@@ -1611,7 +1626,9 @@ with tempfile.TemporaryDirectory() as directory:
         self.assertIn("trap finish EXIT", worker)
         self.assertIn("shutdown -h now", worker)
         self.assertIn("shutdown --poweroff +360", worker)
-        self.assertLess(worker.index("shutdown --poweroff +360"), worker.index("aws s3 cp"))
+        self.assertLess(
+            worker.index("shutdown --poweroff +360"), worker.index("aws s3 cp")
+        )
         self.assertIn("cargo build --locked --release", worker)
         install_line = next(
             line for line in worker.splitlines() if line.startswith("dnf install -y ")
@@ -1641,18 +1658,16 @@ with tempfile.TemporaryDirectory() as directory:
         self.assertIn("MemoryMax=3G", worker)
         self.assertIn("MemorySwapMax=0", worker)
         self.assertIn("RuntimeMaxSec=16200", worker)
-        self.assertIn(
-            "scratch_root=/var/lib/borsuk-v23-incidence/scratch", worker
-        )
+        self.assertIn("scratch_root=/var/lib/borsuk-v23-incidence/scratch", worker)
         self.assertIn('mkdir -p "$evidence" "$scratch_root"', worker)
         self.assertIn('--setenv=TMPDIR="$scratch_root"', worker)
         self.assertIn("systemd-run --wait --collect", worker)
         self.assertIn('--working-directory="$workspace"', worker)
         self.assertIn('--setenv=PYTHONPATH="$workspace"', worker)
         self.assertIn(
-            'find target -type f -path \'*/release/examples/'
-            'v23_leaf_page_incidence_falsifier\' -perm -0100 -print -quit '
-            '2>/dev/null || true',
+            "find target -type f -path '*/release/examples/"
+            "v23_leaf_page_incidence_falsifier' -perm -0100 -print -quit "
+            "2>/dev/null || true",
             worker,
         )
         self.assertNotIn("find /data/target target", worker)
@@ -1663,13 +1678,13 @@ with tempfile.TemporaryDirectory() as directory:
         self.assertIn("ATTEMPT_COMPLETE.json", worker)
         self.assertIn("ATTEMPT_FAILED.json", worker)
         self.assertIn("publish_status=0", worker)
-        self.assertIn("if [[ \"$publish_status\" -eq 0 ]]", worker)
+        self.assertIn('if [[ "$publish_status" -eq 0 ]]', worker)
         self.assertNotIn("phase-resource.json", worker)
         self.assertNotIn("MemoryPeak", worker)
         self.assertIn("ATTEMPT_INTERRUPTED.json", worker)
         self.assertIn("interruption-monitor-failed.json", worker)
         self.assertIn("incidence-executable", worker)
-        self.assertIn("--output-uri-prefix \"$result_uri\"", worker)
+        self.assertIn('--output-uri-prefix "$result_uri"', worker)
         self.assertIn("--if-none-match '*'", worker)
         self.assertIn("--generate-cli-skeleton input", worker)
         self.assertLess(
@@ -1723,7 +1738,9 @@ with tempfile.TemporaryDirectory() as directory:
         self,
     ) -> None:
         construction = json.loads(
-            (ROOT / "scripts/fixtures/v23_incidence_training_manifest.json").read_bytes()
+            (
+                ROOT / "scripts/fixtures/v23_incidence_training_manifest.json"
+            ).read_bytes()
         )
         identity = construction["ordered_inputs"][0]["identity"]
 
@@ -1739,8 +1756,7 @@ with tempfile.TemporaryDirectory() as directory:
             phase_object("page-roster", 0),
         ]
         pages = [
-            phase_object(f"page-body-{ordinal:05}", ordinal)
-            for ordinal in range(300)
+            phase_object(f"page-body-{ordinal:05}", ordinal) for ordinal in range(300)
         ]
         posting = dict(construction)
         posting["phase"] = "posting-construction"
@@ -1773,7 +1789,9 @@ with tempfile.TemporaryDirectory() as directory:
     def test_policy_builder_registers_distinct_manifest_roles_and_runtime_closure(
         self,
     ) -> None:
-        source = (ROOT / "scripts/fixtures/v23_incidence_training_manifest.json").resolve()
+        source = (
+            ROOT / "scripts/fixtures/v23_incidence_training_manifest.json"
+        ).resolve()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bulk = root / "execute-manifest.json"
@@ -1833,7 +1851,9 @@ with tempfile.TemporaryDirectory() as directory:
 
     def test_posting_policy_binds_phase_manifest_and_parent_tree_receipt(self) -> None:
         construction = json.loads(
-            (ROOT / "scripts/fixtures/v23_incidence_training_manifest.json").read_bytes()
+            (
+                ROOT / "scripts/fixtures/v23_incidence_training_manifest.json"
+            ).read_bytes()
         )
         construction["phase"] = "posting-construction"
         construction["parent_receipt_sha256"] = "ab" * 32
@@ -1847,9 +1867,7 @@ with tempfile.TemporaryDirectory() as directory:
             scratch = root / "scratch"
             output = root / "output"
             manifest.write_bytes(
-                json.dumps(
-                    construction, sort_keys=True, separators=(",", ":")
-                ).encode()
+                json.dumps(construction, sort_keys=True, separators=(",", ":")).encode()
                 + b"\n"
             )
             bulk.write_bytes(manifest.read_bytes())
@@ -1982,8 +2000,7 @@ with tempfile.TemporaryDirectory() as directory:
             "status": "complete",
         }
         complete_raw = (
-            json.dumps(complete, sort_keys=True, separators=(",", ":")).encode()
-            + b"\n"
+            json.dumps(complete, sort_keys=True, separators=(",", ":")).encode() + b"\n"
         )
         with self.assertRaisesRegex(ValueError, "Spot price"):
             _validate_terminal_bytes(

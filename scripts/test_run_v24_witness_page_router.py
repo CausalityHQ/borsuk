@@ -104,7 +104,9 @@ def _with_manifest_phase(
 
 
 class V24RunnerTests(unittest.TestCase):
-    def test_runner_cli_requires_every_authority_and_rejects_network_flags(self) -> None:
+    def test_runner_cli_requires_every_authority_and_rejects_network_flags(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             request = _request(pathlib.Path(temporary))
             arguments = [
@@ -173,8 +175,9 @@ class V24RunnerTests(unittest.TestCase):
             skipped | {"phase": "holdout-evaluation", "sequence": 4},
             skipped | {"total_units": 101, "sequence": 4},
         ):
-            with self.subTest(mutation=mutation), self.assertRaisesRegex(
-                ValueError, "progress"
+            with (
+                self.subTest(mutation=mutation),
+                self.assertRaisesRegex(ValueError, "progress"),
             ):
                 changed = subject.AuthenticatedProgressMonitor("witness-training")
                 changed.observe(encode(first))
@@ -182,7 +185,9 @@ class V24RunnerTests(unittest.TestCase):
                 changed.observe(encode(skipped))
                 changed.observe(encode(mutation))
 
-    def test_phase_command_is_direct_static_binary_with_one_explicit_phase(self) -> None:
+    def test_phase_command_is_direct_static_binary_with_one_explicit_phase(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             request = _request(pathlib.Path(temporary))
             self.assertEqual(
@@ -275,7 +280,9 @@ class V24RunnerTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, source)
 
-    def test_child_environment_is_minimal_and_strips_aws_boto_and_proxy_state(self) -> None:
+    def test_child_environment_is_minimal_and_strips_aws_boto_and_proxy_state(
+        self,
+    ) -> None:
         ambient = {
             "AWS_PROFILE": "causality",
             "AWS_SESSION_TOKEN": "secret",
@@ -296,7 +303,9 @@ class V24RunnerTests(unittest.TestCase):
             },
         )
 
-    def test_monitor_classifies_exact_resource_progress_and_wall_boundaries(self) -> None:
+    def test_monitor_classifies_exact_resource_progress_and_wall_boundaries(
+        self,
+    ) -> None:
         limits = subject.MonitorLimits(
             rss_bytes=32 << 30,
             psi_full_avg10=0.50,
@@ -351,7 +360,9 @@ class V24RunnerTests(unittest.TestCase):
             (0, 0, 1),
         )
 
-    def test_monitor_preserves_original_exit_and_terms_then_kills_one_group(self) -> None:
+    def test_monitor_preserves_original_exit_and_terms_then_kills_one_group(
+        self,
+    ) -> None:
         pid = os.posix_spawn(
             sys.executable,
             [sys.executable, "-c", "raise SystemExit(7)"],
@@ -403,16 +414,19 @@ class V24RunnerTests(unittest.TestCase):
     def test_monitor_requires_authenticated_progress_at_process_terminal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             progress = pathlib.Path(temporary) / "progress.json"
-            payload = json.dumps(
-                {
-                    "completed_units": 17,
-                    "phase": "witness-training",
-                    "sequence": 2,
-                    "total_units": 17,
-                },
-                separators=(",", ":"),
-                sort_keys=True,
-            ) + "\n"
+            payload = (
+                json.dumps(
+                    {
+                        "completed_units": 17,
+                        "phase": "witness-training",
+                        "sequence": 2,
+                        "total_units": 17,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                + "\n"
+            )
             pid = os.posix_spawn(
                 sys.executable,
                 [
@@ -452,7 +466,9 @@ class V24RunnerTests(unittest.TestCase):
             )
             self.assertEqual((status, stop), (0, "progress-authority"))
 
-    def test_cleanup_unlinks_only_explicit_regular_files_and_rejects_surprises(self) -> None:
+    def test_cleanup_unlinks_only_explicit_regular_files_and_rejects_surprises(
+        self,
+    ) -> None:
         root = pathlib.Path(tempfile.mkdtemp())
         (root / "manifest.json").write_bytes(b"{}\n")
         (root / "rows.parquet").write_bytes(b"PAR1")
@@ -470,7 +486,9 @@ class V24RunnerTests(unittest.TestCase):
         (root / "unexpected").unlink()
         root.rmdir()
 
-    def test_run_phase_reauthenticates_cleans_scratch_and_fails_nonzero_exit(self) -> None:
+    def test_run_phase_reauthenticates_cleans_scratch_and_fails_nonzero_exit(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             request = _request(pathlib.Path(temporary))
             process = types.SimpleNamespace(pid=12345, returncode=None)
@@ -481,7 +499,9 @@ class V24RunnerTests(unittest.TestCase):
 
             with (
                 patch.object(subject, "validate_inventory") as authenticate,
-                patch.object(subject.subprocess, "Popen", return_value=process) as popen,
+                patch.object(
+                    subject.subprocess, "Popen", return_value=process
+                ) as popen,
                 patch.object(subject, "monitor_process_group", side_effect=completed),
             ):
                 self.assertEqual(subject.run_phase(request), 0)

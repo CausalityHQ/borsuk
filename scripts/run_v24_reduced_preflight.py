@@ -47,7 +47,9 @@ def canonical_json_bytes(value: object) -> bytes:
     """Return recursively key-sorted compact JSON with one trailing newline."""
 
     return (
-        json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+        json.dumps(
+            value, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
         + b"\n"
     )
 
@@ -118,9 +120,7 @@ def _run_phase(
                 stdout=stdout,
                 stderr=stderr,
                 start_new_session=True,
-                env=offline_environment(
-                    scratch, {"RAYON_NUM_THREADS": str(workers)}
-                ),
+                env=offline_environment(scratch, {"RAYON_NUM_THREADS": str(workers)}),
             )
             status, stop = monitor_process_group(
                 process.pid,
@@ -134,7 +134,9 @@ def _run_phase(
             )
             process.returncode = status
         if stop is not None or status != 0:
-            diagnostic = stderr_path.read_text(encoding="utf-8", errors="replace")[-4096:]
+            diagnostic = stderr_path.read_text(encoding="utf-8", errors="replace")[
+                -4096:
+            ]
             raise RuntimeError(
                 f"V24 reduced {phase} failed: status={status} stop={stop}: {diagnostic}"
             )
@@ -278,7 +280,8 @@ def _run_once(request: ReducedPreflightRequest, workers: int) -> dict[str, objec
     }
     return {
         "artifact_sha256": {
-            role: sha256_file(path) for role, path in sorted(deterministic_paths.items())
+            role: sha256_file(path)
+            for role, path in sorted(deterministic_paths.items())
         },
         "cpu_preflight": _cpu_preflight(development_result),
         "development_result_sha256": hashlib.sha256(development_result).hexdigest(),
@@ -327,7 +330,9 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--binary-bytes", required=True, type=int)
     parser.add_argument("--root", required=True, type=pathlib.Path)
     parser.add_argument("--source-commit", required=True)
-    parser.add_argument("--execute-reduced-preflight", action="store_true", required=True)
+    parser.add_argument(
+        "--execute-reduced-preflight", action="store_true", required=True
+    )
     return parser
 
 

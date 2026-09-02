@@ -103,7 +103,12 @@ def _registered_role(role: str) -> bool:
         return True
     for prefix in ("training-shard-", "page-body-"):
         suffix = role.removeprefix(prefix)
-        if suffix != role and len(suffix) == 5 and suffix.isascii() and suffix.isdigit():
+        if (
+            suffix != role
+            and len(suffix) == 5
+            and suffix.isascii()
+            and suffix.isdigit()
+        ):
             return True
     return False
 
@@ -149,7 +154,10 @@ def _read_manifest(
     if path.is_symlink() or not path.is_file():
         raise ValueError("manifest file authority differs")
     raw = path.read_bytes()
-    if not _valid_digest(expected_sha256) or hashlib.sha256(raw).hexdigest() != expected_sha256:
+    if (
+        not _valid_digest(expected_sha256)
+        or hashlib.sha256(raw).hexdigest() != expected_sha256
+    ):
         raise ValueError("manifest digest differs")
     try:
         value = json.loads(raw)
@@ -164,12 +172,13 @@ def _read_manifest(
         raise ValueError("manifest generation differs")
     schema = value.get("schema")
     if schema == _MANIFEST_SCHEMA:
-        if value.get("phase") not in _PHASES or type(value.get("inputs")) is not list or not value["inputs"]:  # noqa: E721
+        if (
+            value.get("phase") not in _PHASES
+            or type(value.get("inputs")) is not list
+            or not value["inputs"]
+        ):  # noqa: E721
             raise ValueError("manifest authority differs")
-        registered = [
-            (identity, None, None)
-            for identity in value["inputs"]
-        ]
+        registered = [(identity, None, None) for identity in value["inputs"]]
     elif schema == _PREPARATION_MANIFEST_SCHEMA:
         expected_keys = {
             "claim_eligible",
@@ -219,7 +228,9 @@ def _read_manifest(
                 or shard["ordinal_end"] - next_ordinal != shard["rows"]
             ):
                 raise ValueError("preparation shard authority differs")
-            registered.append((shard["identity"], f"training-shard-{index:05}", "sha256"))
+            registered.append(
+                (shard["identity"], f"training-shard-{index:05}", "sha256")
+            )
             next_ordinal = shard["ordinal_end"]
         if next_ordinal != value["source_row_count"]:
             raise ValueError("preparation source count differs")
@@ -244,14 +255,20 @@ def _read_manifest(
                 or page["replica_rows"] < 0
                 or type(page["generation_checksum"]) is not list
                 or len(page["generation_checksum"]) != 32
-                or any(type(byte) is not int or byte < 0 or byte > 255 for byte in page["generation_checksum"])
+                or any(
+                    type(byte) is not int or byte < 0 or byte > 255
+                    for byte in page["generation_checksum"]
+                )
                 or not any(page["generation_checksum"])
             ):
                 raise ValueError("preparation page authority differs")
             registered.append((page["identity"], f"page-body-{index:05}", "blake3"))
             primary_rows += page["primary_rows"]
             physical_rows += page["primary_rows"] + page["replica_rows"]
-        if primary_rows != value["source_row_count"] or physical_rows != value["physical_row_count"]:
+        if (
+            primary_rows != value["source_row_count"]
+            or physical_rows != value["physical_row_count"]
+        ):
             raise ValueError("preparation page counts differ")
     else:
         raise ValueError("manifest schema differs")
@@ -285,9 +302,11 @@ def _read_manifest(
         roles.add(role)
         uris.add(uri)
         identities.append(identity)
-    if schema == _MANIFEST_SCHEMA and tuple(
-        identity["role"] for identity in identities
-    ) != _PHASE_ROLES[value["phase"]]:
+    if (
+        schema == _MANIFEST_SCHEMA
+        and tuple(identity["role"] for identity in identities)
+        != _PHASE_ROLES[value["phase"]]
+    ):
         raise ValueError("manifest phase roles differ")
     if schema == _PREPARATION_MANIFEST_SCHEMA:
         for identity in identities:
@@ -368,7 +387,9 @@ def _write_exclusive(path: pathlib.Path, payload: bytes) -> None:
         os.close(descriptor)
 
 
-def _cleanup_staging(root: pathlib.Path, receipt: pathlib.Path, names: Sequence[str]) -> None:
+def _cleanup_staging(
+    root: pathlib.Path, receipt: pathlib.Path, names: Sequence[str]
+) -> None:
     if receipt.exists():
         if receipt.is_symlink() or not receipt.is_file():
             raise ValueError("staging receipt cleanup authority differs")
@@ -412,7 +433,8 @@ def validate_inventory(
     if (
         receipt_raw != _canonical_json_bytes(receipt)
         or type(receipt) is not dict  # noqa: E721
-        or set(receipt) != {
+        or set(receipt)
+        != {
             "claim_eligible",
             "manifest_sha256",
             "ordered_objects",
@@ -460,7 +482,8 @@ def validate_inventory(
             path.is_symlink()
             or not path.is_file()
             or path.stat().st_size != identity["encoded_bytes"]
-            or _digest_file(path, str(identity["digest_algorithm"])) != identity["digest"]
+            or _digest_file(path, str(identity["digest_algorithm"]))
+            != identity["digest"]
         ):
             raise ValueError("staged inventory object differs")
     return tuple(str(identity["role"]) for identity in identities)

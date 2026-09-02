@@ -39,8 +39,13 @@ class V24ReducedFixtureTests(unittest.TestCase):
         if total_units is not None:
             self.assertEqual(value["total_units"], total_units)
 
-    def test_reduced_fixture_is_deterministic_parquet_with_original_ordinals(self) -> None:
-        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+    def test_reduced_fixture_is_deterministic_parquet_with_original_ordinals(
+        self,
+    ) -> None:
+        with (
+            tempfile.TemporaryDirectory() as first,
+            tempfile.TemporaryDirectory() as second,
+        ):
             first_root = pathlib.Path(first)
             second_root = pathlib.Path(second)
             first_manifest = subject.build_reduced_fixture(
@@ -91,21 +96,28 @@ class V24ReducedFixtureTests(unittest.TestCase):
                     ]
                 ),
             )
-            self.assertEqual(construction.column("source_ordinal").to_pylist(), list(range(257)))
+            self.assertEqual(
+                construction.column("source_ordinal").to_pylist(), list(range(257))
+            )
             source_vectors = construction.column("vector").to_pylist()
             self.assertEqual(len({tuple(vector) for vector in source_vectors}), 257)
 
             pages = pq.read_table(first_root / "page-rows.parquet")
             self.assertEqual(pages.num_rows, 257)
-            self.assertEqual(pages.column("record_id").to_pylist(), [
-                str(ordinal)
-                for page in range(16)
-                for ordinal in range(page, 257, 16)
-            ])
+            self.assertEqual(
+                pages.column("record_id").to_pylist(),
+                [
+                    str(ordinal)
+                    for page in range(16)
+                    for ordinal in range(page, 257, 16)
+                ],
+            )
             expected_metadata = {
                 b"construction_rows_sha256": hashlib.sha256(
                     (first_root / "construction-rows.parquet").read_bytes()
-                ).hexdigest().encode(),
+                )
+                .hexdigest()
+                .encode(),
                 b"generation": b"generation-v24-reduced-fixture",
             }
             self.assertEqual(pages.schema.metadata, expected_metadata)
@@ -113,11 +125,21 @@ class V24ReducedFixtureTests(unittest.TestCase):
             queries = pq.read_table(first_root / "queries.parquet")
             neighbors = pq.read_table(first_root / "neighbors.parquet")
             self.assertEqual((queries.num_rows, neighbors.num_rows), (32, 32))
-            self.assertEqual(queries.column("query_ordinal").to_pylist(), list(range(32)))
-            self.assertEqual(neighbors.column("query_ordinal").to_pylist(), list(range(32)))
+            self.assertEqual(
+                queries.column("query_ordinal").to_pylist(), list(range(32))
+            )
+            self.assertEqual(
+                neighbors.column("query_ordinal").to_pylist(), list(range(32))
+            )
 
             raw = (first_root / "training-manifest.json").read_bytes()
-            self.assertEqual(raw, json.dumps(json.loads(raw), separators=(",", ":"), sort_keys=True).encode() + b"\n")
+            self.assertEqual(
+                raw,
+                json.dumps(
+                    json.loads(raw), separators=(",", ":"), sort_keys=True
+                ).encode()
+                + b"\n",
+            )
             self.assertEqual(first_manifest, json.loads(raw))
             self.assertEqual(first_manifest["source_row_count"], 257)
             self.assertEqual(first_manifest["witness_count"], 32)
@@ -126,7 +148,9 @@ class V24ReducedFixtureTests(unittest.TestCase):
                 expected_metadata[b"construction_rows_sha256"].decode(),
             )
 
-    def test_phase_manifests_bind_exact_parent_outputs_and_cross_language_files(self) -> None:
+    def test_phase_manifests_bind_exact_parent_outputs_and_cross_language_files(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             training_manifest = subject.build_reduced_fixture(

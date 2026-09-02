@@ -96,7 +96,9 @@ class IncidenceDevelopmentScreenRunnerTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
         self.assertEqual(list(self.root.glob("v23-incidence-screen-*")), [])
 
-    def test_binary_failure_is_terminal_and_does_not_publish_partial_output(self) -> None:
+    def test_binary_failure_is_terminal_and_does_not_publish_partial_output(
+        self,
+    ) -> None:
         client = FakeS3(self.payloads)
         with (
             mock.patch.object(runner, "FROZEN_ARTIFACTS", self.artifacts),

@@ -152,7 +152,9 @@ def canonical_json_bytes(value: object) -> bytes:
     """Encode exact newline-terminated canonical JSON."""
 
     return (
-        json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+        json.dumps(
+            value, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
         + b"\n"
     )
 
@@ -281,23 +283,23 @@ staging_receipt="$root/staging-receipt.json"
 mkdir -p "$workspace" "$outputs" "$scratch"
 touch "$root/worker.log"
 exec >>"$root/worker.log" 2>&1
-output_bucket={quoted['bucket']}
-output_prefix={quoted['prefix']}
+output_bucket={quoted["bucket"]}
+output_prefix={quoted["prefix"]}
 construction_uri="s3://$output_bucket/${{output_prefix}}construction-rows.parquet"
 page_rows_uri="s3://$output_bucket/${{output_prefix}}page-rows.parquet"
-run_id={quoted['run_id']}
-phase={quoted['phase']}
-runner_phase={quoted['runner_phase']}
-source_commit={quoted['commit']}
-source_archive_uri={quoted['archive_uri']}
-source_archive_sha256={quoted['archive_sha']}
-source_archive_bytes={quoted['archive_bytes']}
-binary_uri={quoted['binary_uri']}
-binary_sha256={quoted['binary_sha']}
-binary_bytes={quoted['binary_bytes']}
-manifest_uri={quoted['manifest_uri']}
-manifest_sha256={quoted['manifest_sha']}
-manifest_bytes={quoted['manifest_bytes']}
+run_id={quoted["run_id"]}
+phase={quoted["phase"]}
+runner_phase={quoted["runner_phase"]}
+source_commit={quoted["commit"]}
+source_archive_uri={quoted["archive_uri"]}
+source_archive_sha256={quoted["archive_sha"]}
+source_archive_bytes={quoted["archive_bytes"]}
+binary_uri={quoted["binary_uri"]}
+binary_sha256={quoted["binary_sha"]}
+binary_bytes={quoted["binary_bytes"]}
+manifest_uri={quoted["manifest_uri"]}
+manifest_sha256={quoted["manifest_sha"]}
+manifest_bytes={quoted["manifest_bytes"]}
 imds_token="$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)"
 instance_id="$(curl -fsS -H "X-aws-ec2-metadata-token: $imds_token" http://169.254.169.254/latest/meta-data/instance-id)"
 terminal=failed
@@ -328,15 +330,15 @@ trap finish EXIT
 dnf install -y python3 python3-pip tar zstd
 python3 -m pip install boto3==1.34.46 blake3==1.0.8
 aws s3api put-object --generate-cli-skeleton input | grep -q '"IfNoneMatch"'
-aws s3 cp {quoted['archive_uri']} "$archive" --only-show-errors
-aws s3 cp {quoted['binary_uri']} "$binary" --only-show-errors
-aws s3 cp {quoted['manifest_uri']} "$manifest" --only-show-errors
-test "$(stat -c %s "$archive")" -eq {quoted['archive_bytes']}
-test "$(stat -c %s "$binary")" -eq {quoted['binary_bytes']}
-test "$(stat -c %s "$manifest")" -eq {quoted['manifest_bytes']}
-printf '%s  %s\n' {quoted['archive_sha']} "$archive" | sha256sum --check --status
-printf '%s  %s\n' {quoted['binary_sha']} "$binary" | sha256sum --check --status
-printf '%s  %s\n' {quoted['manifest_sha']} "$manifest" | sha256sum --check --status
+aws s3 cp {quoted["archive_uri"]} "$archive" --only-show-errors
+aws s3 cp {quoted["binary_uri"]} "$binary" --only-show-errors
+aws s3 cp {quoted["manifest_uri"]} "$manifest" --only-show-errors
+test "$(stat -c %s "$archive")" -eq {quoted["archive_bytes"]}
+test "$(stat -c %s "$binary")" -eq {quoted["binary_bytes"]}
+test "$(stat -c %s "$manifest")" -eq {quoted["manifest_bytes"]}
+printf '%s  %s\n' {quoted["archive_sha"]} "$archive" | sha256sum --check --status
+printf '%s  %s\n' {quoted["binary_sha"]} "$binary" | sha256sum --check --status
+printf '%s  %s\n' {quoted["manifest_sha"]} "$manifest" | sha256sum --check --status
 chmod 0555 "$binary"
 tar --zstd -xf "$archive" -C "$workspace"
 test "$(cat "$workspace/.borsuk-source-commit")" = "$source_commit"
@@ -365,7 +367,7 @@ PY
 else
   python3 scripts/run_v24_witness_page_router.py \
     --phase "$runner_phase" --executable "$binary" \
-    --executable-sha256 "$binary_sha256" --executable-bytes {quoted['binary_bytes']} \
+    --executable-sha256 "$binary_sha256" --executable-bytes {quoted["binary_bytes"]} \
     --manifest "$manifest" --manifest-sha256 "$manifest_sha256" \
     --staging-receipt "$staging_receipt" --input-dir "$inputs" \
     --output-dir "$outputs" --scratch "$scratch" >"$root/stdout.json"

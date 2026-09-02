@@ -20,7 +20,9 @@ class FakeS3:
 
 
 class V23RaBitQRunnerTests(unittest.TestCase):
-    def test_default_client_uses_ambient_instance_role_and_explicit_region(self) -> None:
+    def test_default_client_uses_ambient_instance_role_and_explicit_region(
+        self,
+    ) -> None:
         with mock.patch("boto3.Session") as session_factory:
             client = runner._default_s3_client()
 
@@ -116,7 +118,9 @@ class V23RaBitQRunnerTests(unittest.TestCase):
     def test_digest_drift_stops_before_binary_and_cleans_named_files(self) -> None:
         client = FakeS3(self.payloads | {self.inputs[0]["uri"]: b"drift"})
         with mock.patch.object(runner.subprocess, "run") as run:
-            with self.assertRaisesRegex(ValueError, "construction-receipt length differs"):
+            with self.assertRaisesRegex(
+                ValueError, "construction-receipt length differs"
+            ):
                 runner.run_falsifier(
                     binary=self.binary,
                     manifest=self.manifest,
@@ -128,7 +132,9 @@ class V23RaBitQRunnerTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
         self.assertEqual(list(self.root.glob("v23-rabitq-*")), [])
 
-    def test_binary_failure_is_terminal_and_never_publishes_partial_output(self) -> None:
+    def test_binary_failure_is_terminal_and_never_publishes_partial_output(
+        self,
+    ) -> None:
         client = FakeS3(self.payloads)
         with mock.patch.object(
             runner.subprocess,

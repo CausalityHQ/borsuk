@@ -113,8 +113,7 @@ def _remote_plan() -> subject.BalancedRemotePlan:
             named("neighbors-parquet", "neighbors.parquet"),
         ),
         output_prefix=(
-            "s3://borsuk-bench-453182569524-euc1/publication/v23/"
-            "balanced/attempt-0001/"
+            "s3://borsuk-bench-453182569524-euc1/publication/v23/balanced/attempt-0001/"
         ),
     )
 
@@ -127,11 +126,11 @@ class BalancedSpotLifecycleTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 subject.parse_args(["--authority", str(path)])
             with self.assertRaises(SystemExit):
-                subject.parse_args(
-                    ["--authority", str(path), "--spot", "--on-demand"]
-                )
+                subject.parse_args(["--authority", str(path), "--spot", "--on-demand"])
 
-    def test_canonical_launch_authority_runs_only_one_account_bound_spot_cell(self) -> None:
+    def test_canonical_launch_authority_runs_only_one_account_bound_spot_cell(
+        self,
+    ) -> None:
         remote = _remote_plan()
         value = {
             "aws_account": "453182569524",
@@ -181,7 +180,9 @@ class BalancedSpotLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "launch authority"):
                 subject.load_spot_authority(path)
 
-    def test_remote_worker_is_direct_exact_offline_and_has_explicit_cleanup(self) -> None:
+    def test_remote_worker_is_direct_exact_offline_and_has_explicit_cleanup(
+        self,
+    ) -> None:
         plan = _remote_plan()
         worker = subject.build_remote_worker_user_data(plan)
         self.assertTrue(worker.startswith("#!/bin/bash\nset -euo pipefail\n"))
@@ -195,15 +196,17 @@ class BalancedSpotLifecycleTests(unittest.TestCase):
             self.assertIn(artifact.sha256, worker)
             self.assertIn(str(artifact.encoded_bytes), worker)
             self.assertIn(artifact.basename, worker)
-        self.assertIn("python3 \"$root/run_v23_balanced_page_falsifier.py\"", worker)
-        self.assertIn("\"$root/v23-balanced-page-falsifier\"", worker)
+        self.assertIn('python3 "$root/run_v23_balanced_page_falsifier.py"', worker)
+        self.assertIn('"$root/v23-balanced-page-falsifier"', worker)
         self.assertIn("--rss-bytes 34359738368", worker)
         self.assertNotIn("pip install", worker)
         self.assertNotIn("ldd", worker)
         self.assertNotIn("mount", worker)
         self.assertNotIn("docker", worker)
         self.assertIn("trap_code=$?", worker)
-        self.assertIn('if [ "$trap_code" -ne 0 ]; then status=failed; code=$trap_code; fi', worker)
+        self.assertIn(
+            'if [ "$trap_code" -ne 0 ]; then status=failed; code=$trap_code; fi', worker
+        )
         for basename in subject.REMOTE_OUTPUT_BASENAMES:
             self.assertIn(basename, worker)
         for artifact in plan.ordered_inputs:
@@ -213,7 +216,9 @@ class BalancedSpotLifecycleTests(unittest.TestCase):
                 worker,
             )
 
-    def test_boto_adapter_launches_one_spot_reads_canonical_terminal_and_terminates(self) -> None:
+    def test_boto_adapter_launches_one_spot_reads_canonical_terminal_and_terminates(
+        self,
+    ) -> None:
         prefix = "publication/v23/balanced/attempt-0001/"
         ec2 = FakeEc2Client()
         s3 = FakeS3Client(prefix, "quality")
@@ -239,7 +244,9 @@ class BalancedSpotLifecycleTests(unittest.TestCase):
         self.assertTrue(subject.payload_is_spot(ec2.launches[0]))
         self.assertEqual(ec2.terminations, [["i-balanced-0001"]])
 
-    def test_boto_adapter_stops_when_instance_terminates_without_terminal_marker(self) -> None:
+    def test_boto_adapter_stops_when_instance_terminates_without_terminal_marker(
+        self,
+    ) -> None:
         prefix = "publication/v23/balanced/attempt-0001/"
         cloud = subject.Boto3SpotCloud(
             ec2_client=TerminatedEc2Client(),
@@ -253,16 +260,22 @@ class BalancedSpotLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "terminated without terminal marker"):
             cloud.wait_terminal("i-balanced-0001")
 
-    def test_staging_downloads_only_registered_objects_and_reauthenticates(self) -> None:
+    def test_staging_downloads_only_registered_objects_and_reauthenticates(
+        self,
+    ) -> None:
         first = _object("manifest", b"manifest\n")
         second = _object("f16-control", b"vectors\n")
         storage = FakeStorage({first.uri: b"manifest\n", second.uri: b"vectors\n"})
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             staged = subject.stage_registered_inputs(storage, (first, second), root)
-            self.assertEqual(tuple(path.name for path in staged), (first.basename, second.basename))
+            self.assertEqual(
+                tuple(path.name for path in staged), (first.basename, second.basename)
+            )
             self.assertEqual(len(storage.calls), 2)
-            self.assertFalse(any(path.name.endswith(".partial") for path in root.iterdir()))
+            self.assertFalse(
+                any(path.name.endswith(".partial") for path in root.iterdir())
+            )
             with self.assertRaisesRegex(ValueError, "digest"):
                 subject.stage_registered_inputs(
                     FakeStorage({first.uri: b"drift"}),
@@ -293,9 +306,7 @@ class BalancedSpotLifecycleTests(unittest.TestCase):
             "terminate",
         )
         self.assertEqual(payload["BlockDeviceMappings"][0]["Ebs"]["VolumeSize"], 96)
-        self.assertTrue(
-            payload["BlockDeviceMappings"][0]["Ebs"]["DeleteOnTermination"]
-        )
+        self.assertTrue(payload["BlockDeviceMappings"][0]["Ebs"]["DeleteOnTermination"])
 
     def test_every_terminal_and_exception_terminates_the_exact_instance(self) -> None:
         request = subject.SpotLaunchRequest(

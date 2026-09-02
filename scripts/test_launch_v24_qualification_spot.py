@@ -64,12 +64,8 @@ class V24QualificationSpotTests(unittest.TestCase):
                 )
                 self.assertEqual(spec["InstanceInitiatedShutdownBehavior"], "terminate")
 
-        first = subject.build_v24_launch_specs(
-            self.plan(), launch_nonce="a" * 32
-        )
-        restarted = subject.build_v24_launch_specs(
-            self.plan(), launch_nonce="b" * 32
-        )
+        first = subject.build_v24_launch_specs(self.plan(), launch_nonce="a" * 32)
+        restarted = subject.build_v24_launch_specs(self.plan(), launch_nonce="b" * 32)
         self.assertNotEqual(
             [spec["ClientToken"] for spec in first],
             [spec["ClientToken"] for spec in restarted],
@@ -81,12 +77,12 @@ class V24QualificationSpotTests(unittest.TestCase):
             subject.controller_wall_seconds("witness-training"), 10_800
         )
 
-    def test_worker_authenticates_exact_inputs_and_runs_one_offline_monitored_phase(self) -> None:
+    def test_worker_authenticates_exact_inputs_and_runs_one_offline_monitored_phase(
+        self,
+    ) -> None:
         plan = self.plan()
         script = base64.b64decode(
-            subject.build_v24_launch_specs(plan, launch_nonce="a" * 32)[0][
-                "UserData"
-            ]
+            subject.build_v24_launch_specs(plan, launch_nonce="a" * 32)[0]["UserData"]
         ).decode()
         for authority in (
             plan.source_archive_sha256,
@@ -102,7 +98,7 @@ class V24QualificationSpotTests(unittest.TestCase):
         self.assertIn("ATTEMPT_COMPLETE.json", script)
         self.assertIn("ATTEMPT_FAILED.json", script)
         self.assertIn("--generate-cli-skeleton input", script)
-        self.assertIn('grep -q \'"IfNoneMatch"\'', script)
+        self.assertIn("grep -q '\"IfNoneMatch\"'", script)
         self.assertIn("--if-none-match '*'", script)
         self.assertIn("shutdown -h now", script)
         self.assertNotIn("on-demand", script.lower())
@@ -125,7 +121,9 @@ class V24QualificationSpotTests(unittest.TestCase):
                 self.plan("witness-training"), launch_nonce="a" * 32
             )[0]["UserData"]
         ).decode()
-        self.assertIn('put_once "$root/stdout.json" training-result.json', training_script)
+        self.assertIn(
+            'put_once "$root/stdout.json" training-result.json', training_script
+        )
         development_script = base64.b64decode(
             subject.build_v24_launch_specs(
                 self.plan("development-evaluation"), launch_nonce="a" * 32
@@ -140,9 +138,13 @@ class V24QualificationSpotTests(unittest.TestCase):
                 self.plan("holdout-evaluation"), launch_nonce="a" * 32
             )[0]["UserData"]
         ).decode()
-        self.assertIn('put_once "$root/stdout.json" holdout-result.json', holdout_script)
+        self.assertIn(
+            'put_once "$root/stdout.json" holdout-result.json', holdout_script
+        )
 
-    def test_preparation_worker_uses_direct_preparer_and_exact_output_uris(self) -> None:
+    def test_preparation_worker_uses_direct_preparer_and_exact_output_uris(
+        self,
+    ) -> None:
         script = base64.b64decode(
             subject.build_v24_launch_specs(
                 self.plan("input-preparation"), launch_nonce="a" * 32
@@ -159,7 +161,9 @@ class V24QualificationSpotTests(unittest.TestCase):
         self.assertIn("offline_environment", script)
         self.assertIn("blake3==1.0.8", script)
 
-    def test_capacity_fallback_uses_one_fresh_instance_and_always_terminates(self) -> None:
+    def test_capacity_fallback_uses_one_fresh_instance_and_always_terminates(
+        self,
+    ) -> None:
         plan = self.plan()
         ec2 = mock.Mock()
         ec2.run_instances.side_effect = [
@@ -230,11 +234,11 @@ class V24QualificationSpotTests(unittest.TestCase):
             "s3://fixture/v24/results/witness-training/ATTEMPT_COMPLETE.json",
         )
         self.assertEqual(ec2.run_instances.call_count, 2)
-        ec2.terminate_instances.assert_called_once_with(
-            InstanceIds=["i-v24-fixture"]
-        )
+        ec2.terminate_instances.assert_called_once_with(InstanceIds=["i-v24-fixture"])
 
-    def test_noncapacity_error_terminal_no_clobber_and_timeout_never_fall_through(self) -> None:
+    def test_noncapacity_error_terminal_no_clobber_and_timeout_never_fall_through(
+        self,
+    ) -> None:
         plan = self.plan()
         ec2 = mock.Mock()
         ec2.run_instances.side_effect = _AwsError("UnauthorizedOperation")
@@ -313,9 +317,7 @@ class V24QualificationSpotTests(unittest.TestCase):
             uri,
             "s3://fixture/v24/results/witness-training/ATTEMPT_COMPLETE.json",
         )
-        ec2.terminate_instances.assert_called_once_with(
-            InstanceIds=["i-v24-transient"]
-        )
+        ec2.terminate_instances.assert_called_once_with(InstanceIds=["i-v24-transient"])
 
 
 if __name__ == "__main__":

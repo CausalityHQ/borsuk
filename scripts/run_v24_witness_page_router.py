@@ -98,8 +98,7 @@ class AuthenticatedProgressMonitor:
             raise ValueError("V24 progress encoding differs") from error
         if (
             raw
-            != json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
-            + b"\n"
+            != json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
             or type(value) is not dict  # noqa: E721
             or set(value) != {"completed_units", "phase", "sequence", "total_units"}
             or type(value["phase"]) is not str
@@ -159,7 +158,9 @@ def _validate_request_paths(request: PhaseRequest) -> None:
         request.output_dir,
         request.scratch,
     )
-    if request.phase not in _PHASE_FLAGS or any(not path.is_absolute() for path in paths):
+    if request.phase not in _PHASE_FLAGS or any(
+        not path.is_absolute() for path in paths
+    ):
         raise ValueError("V24 phase path or phase differs")
     if (
         request.executable.is_symlink()
@@ -376,9 +377,7 @@ def monitor_process_group(
     last_progress = started
     initial_swap = _swap_used_bytes()
     progress_monitor = (
-        None
-        if progress_phase is None
-        else AuthenticatedProgressMonitor(progress_phase)
+        None if progress_phase is None else AuthenticatedProgressMonitor(progress_phase)
     )
     progress_digest: str | None = None
 
@@ -406,7 +405,9 @@ def monitor_process_group(
                 if progress_path is not None:
                     try:
                         if not observe_progress():
-                            return os.waitstatus_to_exitcode(status), "progress-authority"
+                            return os.waitstatus_to_exitcode(
+                                status
+                            ), "progress-authority"
                     except (OSError, ValueError):
                         return os.waitstatus_to_exitcode(status), "progress-authority"
                 return os.waitstatus_to_exitcode(status), None

@@ -161,9 +161,8 @@ class OfflinePhasePolicyTests(unittest.TestCase):
                 "digest": hashlib.sha256(shard.read_bytes()).hexdigest(),
                 "digest_algorithm": "sha256",
                 "encoded_bytes": shard.stat().st_size,
-                "generation": "unversioned-sha256:" + hashlib.sha256(
-                    shard.read_bytes()
-                ).hexdigest(),
+                "generation": "unversioned-sha256:"
+                + hashlib.sha256(shard.read_bytes()).hexdigest(),
                 "role": shard.name,
                 "uri": "s3://borsuk-evidence/training-shard-0000",
             }
@@ -184,9 +183,7 @@ class OfflinePhasePolicyTests(unittest.TestCase):
                         "manifest_sha256": hashlib.sha256(
                             bulk_manifest.read_bytes()
                         ).hexdigest(),
-                        "ordered_objects": [
-                            {**identity, "relative_path": shard.name}
-                        ],
+                        "ordered_objects": [{**identity, "relative_path": shard.name}],
                         "schema": "borsuk-v23-incidence-staging-receipt-v1",
                     },
                     separators=(",", ":"),
@@ -311,10 +308,10 @@ class OfflinePhasePolicyTests(unittest.TestCase):
             with (
                 patch.object(subject, "_network_namespace_inode", return_value=91),
                 patch.object(subject, "authenticate_policy_files"),
-                patch.object(subject.subprocess, "Popen", return_value=process) as popen,
                 patch.object(
-                    subject, "monitor_process_group", return_value=(0, None)
-                ),
+                    subject.subprocess, "Popen", return_value=process
+                ) as popen,
+                patch.object(subject, "monitor_process_group", return_value=(0, None)),
             ):
                 self.assertEqual(subject.run_phase(policy), 0)
             environment = popen.call_args.kwargs["env"]
@@ -342,9 +339,7 @@ class OfflinePhasePolicyTests(unittest.TestCase):
                 patch.object(subject, "_network_namespace_inode", return_value=91),
                 patch.object(subject, "authenticate_policy_files") as authenticate,
                 patch.object(subject.subprocess, "Popen", return_value=process),
-                patch.object(
-                    subject, "monitor_process_group", return_value=(0, None)
-                ),
+                patch.object(subject, "monitor_process_group", return_value=(0, None)),
             ):
                 self.assertEqual(subject.run_phase(policy), 0)
             self.assertEqual(authenticate.call_count, 2)
@@ -457,9 +452,7 @@ class OfflinePhasePolicyTests(unittest.TestCase):
             previous_progress_sha256=initial_digest,
         )
         advanced_digest = hashlib.sha256(advanced).hexdigest()
-        self.assertEqual(
-            monitor.observe(initial + advanced), (1, 64, advanced_digest)
-        )
+        self.assertEqual(monitor.observe(initial + advanced), (1, 64, advanced_digest))
 
         second = _progress_bytes(
             sequence=2,
@@ -881,8 +874,11 @@ class OfflinePhasePolicyTests(unittest.TestCase):
             (TimeoutError(), False),
             (OSError(errno.ENETUNREACH, "network unreachable"), True),
         ):
-            with self.subTest(failure=failure), patch.object(
-                subject.socket, "socket", return_value=SocketStub(failure)
+            with (
+                self.subTest(failure=failure),
+                patch.object(
+                    subject.socket, "socket", return_value=SocketStub(failure)
+                ),
             ):
                 self.assertEqual(subject._network_canary_denied(), expected)
 
@@ -1005,9 +1001,7 @@ class OfflinePhasePolicyTests(unittest.TestCase):
         policy = _policy()
 
         mutable = list(policy.inputs)
-        mutable[0] = dataclasses.replace(
-            mutable[0], source=pathlib.Path("relative")
-        )
+        mutable[0] = dataclasses.replace(mutable[0], source=pathlib.Path("relative"))
         with self.assertRaisesRegex(ValueError, "absolute"):
             subject.validate_phase_inputs(
                 dataclasses.replace(policy, inputs=tuple(mutable))
@@ -1031,8 +1025,9 @@ class OfflinePhasePolicyTests(unittest.TestCase):
         policy = _policy()
         for field in ("uri", "generation"):
             changed = dataclasses.replace(policy.inputs[0], **{field: 7})
-            with self.subTest(field=field), self.assertRaisesRegex(
-                ValueError, "phase input"
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(ValueError, "phase input"),
             ):
                 subject.validate_phase_inputs(
                     dataclasses.replace(
@@ -1078,9 +1073,7 @@ class OfflinePhasePolicyTests(unittest.TestCase):
             preflight = dataclasses.replace(
                 execute,
                 inputs=tuple(
-                    item
-                    for item in execute.inputs
-                    if item.role != "preflight-receipt"
+                    item for item in execute.inputs if item.role != "preflight-receipt"
                 ),
                 phase_argv=(),
             )
@@ -1359,7 +1352,9 @@ class OfflinePhasePolicyTests(unittest.TestCase):
                 (manifest, b"manifest"),
             ):
                 path.write_bytes(payload)
-            _write_staged_inventory(bulk_manifest, staging, bulk_inputs, "shard", b"shard")
+            _write_staged_inventory(
+                bulk_manifest, staging, bulk_inputs, "shard", b"shard"
+            )
 
             def authenticated(mount: subject.AuthenticatedInput, path: pathlib.Path):
                 payload = path.read_bytes()
@@ -1396,6 +1391,7 @@ class OfflinePhasePolicyTests(unittest.TestCase):
             manifest.write_bytes(b"swapped")
             with self.assertRaisesRegex(ValueError, "digest|length"):
                 subject.authenticate_policy_files(policy)
+
 
 if __name__ == "__main__":
     unittest.main()

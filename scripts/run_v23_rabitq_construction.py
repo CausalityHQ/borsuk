@@ -59,7 +59,9 @@ class Occurrence:
 
 def _canonical_bytes(value: object) -> bytes:
     return (
-        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
         + b"\n"
     )
 
@@ -107,7 +109,9 @@ def _validate_artifact(artifact: FrozenArtifact, role: str) -> None:
     _split_s3_uri(artifact.uri)
 
 
-def _manifest_inputs(raw: bytes) -> tuple[dict[str, object], tuple[FrozenArtifact, ...]]:
+def _manifest_inputs(
+    raw: bytes,
+) -> tuple[dict[str, object], tuple[FrozenArtifact, ...]]:
     try:
         value = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -226,9 +230,11 @@ def _read_roster(
     pages = tuple(historical._page_from_json(item) for item in value["pages"])
     if tuple(page.page_ordinal for page in pages) != tuple(range(len(pages))):
         raise ValueError("page roster ordering differs")
-    if sum(page.primary_rows + page.replicated_rows for page in pages) != manifest[
-        "expected_source_occurrences"
-    ] or sum(page.primary_rows for page in pages) != manifest["expected_unique_rows"]:
+    if (
+        sum(page.primary_rows + page.replicated_rows for page in pages)
+        != manifest["expected_source_occurrences"]
+        or sum(page.primary_rows for page in pages) != manifest["expected_unique_rows"]
+    ):
         raise ValueError("page roster row counts differ")
     return pages
 
@@ -237,9 +243,7 @@ def decode_bvp2_occurrences(
     reference: dict[str, object] | historical.PageRef, body: bytes
 ) -> tuple[Occurrence, ...]:
     page = (
-        historical._page_from_json(reference)
-        if type(reference) is dict
-        else reference
+        historical._page_from_json(reference) if type(reference) is dict else reference
     )
     if type(page) is not historical.PageRef:
         raise ValueError("page reference differs")
@@ -281,7 +285,9 @@ def _occurrence_schema() -> pa.Schema:
 def _occurrence_batch(rows: Sequence[Occurrence]) -> pa.RecordBatch:
     if not rows:
         raise ValueError("empty occurrence batch")
-    vectors = numpy.stack([row.vector for row in rows]).astype(numpy.float32, copy=False)
+    vectors = numpy.stack([row.vector for row in rows]).astype(
+        numpy.float32, copy=False
+    )
     if vectors.shape != (len(rows), 96) or not numpy.isfinite(vectors).all():
         raise ValueError("occurrence vector differs")
     values = pa.array(vectors.reshape(-1), type=pa.float32())
@@ -493,7 +499,9 @@ def run_construction(
         )
         if process.stdin is None:
             raise RuntimeError("construction stdin is absent")
-        page_bucket, page_prefix = _split_s3_uri(manifest_value["page_namespace_uri_prefix"])
+        page_bucket, page_prefix = _split_s3_uri(
+            manifest_value["page_namespace_uri_prefix"]
+        )
         batches = (
             decode_bvp2_occurrences(reference, body)
             for reference, body in historical.ordered_page_bodies(
@@ -553,7 +561,10 @@ def run_construction(
             client.upload_file(str(output_directory / basename), bucket, key)
         for path, uri in (
             (receipt_path, receipt_identity["uri"]),
-            (development_path, manifest_value["output_uri_prefix"] + "development-manifest.json"),
+            (
+                development_path,
+                manifest_value["output_uri_prefix"] + "development-manifest.json",
+            ),
         ):
             bucket, key = _split_s3_uri(uri)
             client.upload_file(str(path), bucket, key)
@@ -562,7 +573,11 @@ def run_construction(
         if process is not None and process.poll() is None:
             process.terminate()
             process.wait(timeout=30)
-        for basename in (*OUTPUT_BASENAMES.values(), "construction-receipt.json", "progress.json"):
+        for basename in (
+            *OUTPUT_BASENAMES.values(),
+            "construction-receipt.json",
+            "progress.json",
+        ):
             (output_directory / basename).unlink(missing_ok=True)
         development_path.unlink(missing_ok=True)
         for path in local_inputs.values():

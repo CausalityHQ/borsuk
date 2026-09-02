@@ -43,19 +43,25 @@ class V24ReducedSpotTests(unittest.TestCase):
         for spec in specs:
             self.assertEqual(spec["InstanceMarketOptions"]["MarketType"], "spot")
             self.assertEqual(
-                spec["InstanceMarketOptions"]["SpotOptions"]["InstanceInterruptionBehavior"],
+                spec["InstanceMarketOptions"]["SpotOptions"][
+                    "InstanceInterruptionBehavior"
+                ],
                 "terminate",
             )
             self.assertEqual(spec["InstanceInitiatedShutdownBehavior"], "terminate")
             self.assertEqual(spec["BlockDeviceMappings"][0]["Ebs"]["VolumeSize"], 500)
 
     def test_worker_runs_direct_static_driver_and_conditionally_publishes(self) -> None:
-        script = base64.b64decode(subject.build_launch_specs(self.plan())[0]["UserData"]).decode()
+        script = base64.b64decode(
+            subject.build_launch_specs(self.plan())[0]["UserData"]
+        ).decode()
         self.assertIn("sha256sum --check", script)
         self.assertIn("scripts.run_v24_reduced_preflight", script)
         self.assertIn("--execute-reduced-preflight", script)
         self.assertIn("--if-none-match '*'", script)
-        self.assertLess(script.index("worker.log\nlog_published=1"), script.index("COMPLETE.json"))
+        self.assertLess(
+            script.index("worker.log\nlog_published=1"), script.index("COMPLETE.json")
+        )
         self.assertIn("shutdown --poweroff +150", script)
         self.assertIn("trap - EXIT\n  set +e", script)
         self.assertEqual(script.count('encode()+b"\\n")'), 2)
@@ -65,7 +71,9 @@ class V24ReducedSpotTests(unittest.TestCase):
         self.assertNotIn("page-body", script)
         self.assertNotIn("d3", script.lower())
 
-    def test_capacity_fallback_stops_after_first_launched_instance_and_terminates(self) -> None:
+    def test_capacity_fallback_stops_after_first_launched_instance_and_terminates(
+        self,
+    ) -> None:
         ec2 = mock.Mock()
         ec2.run_instances.side_effect = [
             _CapacityError("InsufficientInstanceCapacity"),
@@ -90,7 +98,9 @@ class V24ReducedSpotTests(unittest.TestCase):
         }
         with mock.patch.object(subject.time, "sleep"):
             terminal_uri = subject.run_spot(self.plan(), ec2_client=ec2, s3_client=s3)
-        self.assertEqual(terminal_uri, "s3://fixture/results/v24-reduced-fixture/COMPLETE.json")
+        self.assertEqual(
+            terminal_uri, "s3://fixture/results/v24-reduced-fixture/COMPLETE.json"
+        )
         self.assertEqual(ec2.run_instances.call_count, 2)
         ec2.terminate_instances.assert_called_once_with(InstanceIds=["i-fixture"])
 

@@ -8,7 +8,9 @@ from scripts import run_v24_reduced_preflight as subject
 
 
 class V24ReducedPreflightTests(unittest.TestCase):
-    def test_two_process_worker_counts_emit_identical_authenticated_receipt(self) -> None:
+    def test_two_process_worker_counts_emit_identical_authenticated_receipt(
+        self,
+    ) -> None:
         binary_value = os.environ.get("BORSUK_V24_BINARY")
         if binary_value is None:
             self.skipTest("BORSUK_V24_BINARY is required for direct-binary integration")
@@ -37,14 +39,14 @@ class V24ReducedPreflightTests(unittest.TestCase):
             self.assertEqual(value["witness_count"], 32)
             self.assertEqual(value["page_count"], 16)
             self.assertEqual(value["serving_bytes"], 1_644_167_168)
-            self.assertEqual(value["runs"][0]["artifact_sha256"], value["runs"][1]["artifact_sha256"])
+            self.assertEqual(
+                value["runs"][0]["artifact_sha256"], value["runs"][1]["artifact_sha256"]
+            )
             self.assertEqual(
                 value["runs"][0]["evaluation_evidence_sha256"],
                 value["runs"][1]["evaluation_evidence_sha256"],
             )
-            self.assertNotEqual(
-                value["runs"][0]["development_result_sha256"], ""
-            )
+            self.assertNotEqual(value["runs"][0]["development_result_sha256"], "")
             for run in value["runs"]:
                 cpu = run["cpu_preflight"]
                 self.assertEqual(cpu["warmup_samples"], 1_024)

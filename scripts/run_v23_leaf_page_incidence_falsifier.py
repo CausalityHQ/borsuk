@@ -359,10 +359,7 @@ def validate_phase_inputs(policy: OfflinePhasePolicy) -> None:
     seen_roles: set[str] = set()
     for mount in policy.inputs:
         _validate_input(mount)
-        if (
-            mount.source in seen_sources
-            or mount.role in seen_roles
-        ):
+        if mount.source in seen_sources or mount.role in seen_roles:
             raise ValueError("duplicate offline phase authority")
         seen_sources.add(mount.source)
         seen_roles.add(mount.role)
@@ -380,10 +377,7 @@ def validate_phase_inputs(policy: OfflinePhasePolicy) -> None:
             or capability.manifest_role == capability.staging_receipt_role
         ):
             raise ValueError("offline phase directory authority role is absent")
-        if (
-            capability.source in seen_sources
-            or capability.role in seen_roles
-        ):
+        if capability.source in seen_sources or capability.role in seen_roles:
             raise ValueError("duplicate offline phase authority")
         seen_sources.add(capability.source)
         seen_roles.add(capability.role)
@@ -663,7 +657,9 @@ def _read_canonical_json_file(path: pathlib.Path, label: str) -> tuple[bytes, ob
         value = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"{label} JSON differs") from error
-    canonical = json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+    canonical = (
+        json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+    )
     if raw != canonical:
         raise ValueError(f"{label} canonical bytes differ")
     return raw, value
@@ -678,9 +674,7 @@ def _authenticate_staged_inventory(
     manifest_raw, manifest = _read_canonical_json_file(
         manifest_input.source, "bulk manifest"
     )
-    _, receipt = _read_canonical_json_file(
-        receipt_input.source, "staging receipt"
-    )
+    _, receipt = _read_canonical_json_file(receipt_input.source, "staging receipt")
     if (
         type(manifest) is not dict
         or type(manifest.get("ordered_inputs")) is not list
@@ -947,9 +941,7 @@ def _offline_startup_probes(
     )
     failed = [key for key in required if not probes[key]]
     if failed:
-        raise RuntimeError(
-            "offline phase capability probe failed: " + ",".join(failed)
-        )
+        raise RuntimeError("offline phase capability probe failed: " + ",".join(failed))
     return probes
 
 
@@ -1162,9 +1154,7 @@ def _process_group_rss_bytes(pgid: int) -> int:
 def _memory_psi_full_avg10(
     path: pathlib.Path = pathlib.Path("/proc/pressure/memory"),
 ) -> float:
-    for line in (
-        path.read_text(encoding="ascii").splitlines()
-    ):
+    for line in path.read_text(encoding="ascii").splitlines():
         if line.startswith("full "):
             try:
                 fields = dict(field.split("=", 1) for field in line.split()[1:])

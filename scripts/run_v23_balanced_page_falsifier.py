@@ -182,7 +182,9 @@ def validate_terminal(raw: bytes, *, mode: str | None = None) -> dict[str, objec
             raise ValueError("run mode differs")
         if len(value["pseudoquery_pairs"]) != expected_pairs:
             raise ValueError("terminal pair inventory differs")
-    canonical = json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+    canonical = (
+        json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+    )
     if raw != canonical:
         raise ValueError("terminal canonical bytes differ")
     return value
@@ -244,7 +246,9 @@ def authenticate_receipt_outputs(
         roles.add(role)
         basenames.add(basename)
         paths.append(path)
-    inventory = {path.name for path in output_directory.iterdir() if _regular_file(path)}
+    inventory = {
+        path.name for path in output_directory.iterdir() if _regular_file(path)
+    }
     if inventory != basenames or len(tuple(output_directory.iterdir())) != len(paths):
         raise ValueError("output inventory differs")
     return tuple(paths)

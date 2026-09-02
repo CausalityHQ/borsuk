@@ -127,9 +127,7 @@ class BrokenPipeProcess(FakeProcess):
 
     def communicate(self, timeout: int) -> tuple[bytes, bytes]:
         assert self.command is not None
-        scratch = Path(
-            self.command[self.command.index("--scratch-directory") + 1]
-        )
+        scratch = Path(self.command[self.command.index("--scratch-directory") + 1])
         (scratch / "rabitq-id-run-00000000.arrow").write_bytes(b"partial spill")
         self.stdin = None
         self.returncode = 2
@@ -161,7 +159,9 @@ class WedgedBrokenPipeProcess(BrokenPipeProcess):
 
 def _canonical(value: object) -> bytes:
     return (
-        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
         + b"\n"
     )
 
@@ -195,7 +195,9 @@ def _page(page_ordinal: int) -> tuple[dict[str, object], bytes]:
     header = bytearray(96)
     header[:4] = b"BVP2"
     header[4:8] = bytes((2, 3, 4, 0))
-    struct.pack_into("<IIIIII", header, 8, 96, page_ordinal, 1, 1, id_section_bytes, len(codes))
+    struct.pack_into(
+        "<IIIIII", header, 8, 96, page_ordinal, 1, 1, id_section_bytes, len(codes)
+    )
     header[32:64] = generation
     struct.pack_into("<H", header, 64, 192)
     body = bytes(header) + offset_bytes + bytes(id_bytes) + codes
@@ -219,7 +221,9 @@ def _page(page_ordinal: int) -> tuple[dict[str, object], bytes]:
 
 
 class V23RaBitQConstructionTests(unittest.TestCase):
-    def test_default_client_uses_ambient_instance_role_and_explicit_region(self) -> None:
+    def test_default_client_uses_ambient_instance_role_and_explicit_region(
+        self,
+    ) -> None:
         with mock.patch("boto3.Session") as session_factory:
             client = runner._default_s3_client()
 
@@ -305,10 +309,14 @@ class V23RaBitQConstructionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def test_bvp2_occurrences_preserve_ids_primary_replica_and_arrow_schema(self) -> None:
+    def test_bvp2_occurrences_preserve_ids_primary_replica_and_arrow_schema(
+        self,
+    ) -> None:
         reference, body = _page(0)
         occurrences = runner.decode_bvp2_occurrences(reference, body)
-        self.assertEqual([row.canonical_record_id for row in occurrences], [b"row-00", b"row-01"])
+        self.assertEqual(
+            [row.canonical_record_id for row in occurrences], [b"row-00", b"row-01"]
+        )
         self.assertEqual([row.page_ordinal for row in occurrences], [0, 0])
         self.assertEqual([row.is_primary for row in occurrences], [True, False])
 
@@ -332,7 +340,9 @@ class V23RaBitQConstructionTests(unittest.TestCase):
         )
         self.assertEqual(stream.read_all().num_rows, 2)
 
-    def test_authenticated_historical_roster_keeps_its_distinct_source_archive(self) -> None:
+    def test_authenticated_historical_roster_keeps_its_distinct_source_archive(
+        self,
+    ) -> None:
         manifest, _ = runner._manifest_inputs(self.manifest_bytes)
         roster_uri = next(
             item["uri"]
@@ -349,7 +359,9 @@ class V23RaBitQConstructionTests(unittest.TestCase):
             roster["source_archive_sha256"], manifest["source_archive_sha256"]
         )
 
-    def test_exact_roster_pages_feed_one_binary_and_publish_receipt_and_manifest(self) -> None:
+    def test_exact_roster_pages_feed_one_binary_and_publish_receipt_and_manifest(
+        self,
+    ) -> None:
         client = FakeS3(self.payloads)
         process = FakeProcess()
         with mock.patch.object(
@@ -380,11 +392,17 @@ class V23RaBitQConstructionTests(unittest.TestCase):
         self.assertNotIn("--d3", command)
         self.assertEqual(
             [name for name, _ in client.uploads],
-            [*runner.OUTPUT_BASENAMES.values(), "construction-receipt.json", "development-manifest.json"],
+            [
+                *runner.OUTPUT_BASENAMES.values(),
+                "construction-receipt.json",
+                "development-manifest.json",
+            ],
         )
         self.assertEqual(list(self.root.glob("v23-rabitq-construction-*")), [])
 
-    def test_input_digest_drift_stops_before_page_get_or_binary_and_cleans(self) -> None:
+    def test_input_digest_drift_stops_before_page_get_or_binary_and_cleans(
+        self,
+    ) -> None:
         drifted = dict(self.payloads)
         drifted["s3://fixture/input/incidence-tree"] = b"drift"
         client = FakeS3(drifted)

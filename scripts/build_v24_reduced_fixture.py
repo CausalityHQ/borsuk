@@ -37,9 +37,7 @@ def _vectors(ordinals: np.ndarray) -> np.ndarray:
         words ^= words >> np.uint64(31)
     mantissas = (words >> np.uint64(40)).astype(np.uint32)
     values = mantissas.astype(np.float32) / np.float32(1 << 23) - np.float32(1.0)
-    norms = np.sqrt(np.sum(values.astype(np.float64) ** 2, axis=1)).astype(
-        np.float32
-    )
+    norms = np.sqrt(np.sum(values.astype(np.float64) ** 2, axis=1)).astype(np.float32)
     return values / norms.reshape(-1, 1)
 
 
@@ -136,7 +134,10 @@ def build_reduced_fixture(
     construction_sha256 = hashlib.sha256(construction.read_bytes()).hexdigest()
 
     page_order = np.concatenate(
-        [np.arange(page, source_rows, page_count, dtype=np.uint64) for page in range(page_count)]
+        [
+            np.arange(page, source_rows, page_count, dtype=np.uint64)
+            for page in range(page_count)
+        ]
     )
     page_schema = pa.schema(
         [
@@ -196,7 +197,9 @@ def build_reduced_fixture(
     replica = np.full((query_count, 10), _U32_MAX, dtype=np.uint32)
     oracle = np.full((query_count, 8), _U32_MAX, dtype=np.uint32)
     for query in range(query_count):
-        candidates = [int((query + rank * _DIMENSIONS) % source_rows) for rank in range(10)]
+        candidates = [
+            int((query + rank * _DIMENSIONS) % source_rows) for rank in range(10)
+        ]
         primary[query] = [candidate % page_count for candidate in candidates]
         pages_for_query = sorted(set(int(page) for page in primary[query]))[:8]
         oracle[query, : len(pages_for_query)] = pages_for_query
@@ -374,17 +377,20 @@ def prepare_development_phase(
         _copy_exact(source, input_dir / name)
     inputs = [
         _identity(input_dir / "witness-graph.arrow", "witness-graph", generation),
-        _identity(
-            input_dir / "witness-postings.arrow", "witness-postings", generation
-        ),
+        _identity(input_dir / "witness-postings.arrow", "witness-postings", generation),
         _identity(input_dir / "queries.parquet", "query-parquet", generation),
-        _identity(
-            input_dir / "neighbors.parquet", "neighbors-parquet", generation
-        ),
+        _identity(input_dir / "neighbors.parquet", "neighbors-parquet", generation),
     ]
-    page_count = int(
-        np.max(pq.read_table(root / "page-rows.parquet", columns=["page_ordinal"])[0].to_numpy())
-    ) + 1
+    page_count = (
+        int(
+            np.max(
+                pq.read_table(root / "page-rows.parquet", columns=["page_ordinal"])[
+                    0
+                ].to_numpy()
+            )
+        )
+        + 1
+    )
     query_count = pq.read_metadata(queries).num_rows
     manifest = {
         "claim_eligible": False,

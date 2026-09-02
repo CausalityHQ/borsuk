@@ -85,7 +85,10 @@ def build_launch_plan(
             LOWER_SHA256.fullmatch(value) is None
             for value in (source_archive_sha256, binary_sha256, manifest_sha256)
         )
-        or any(type(value) is not int or value <= 0 for value in (source_archive_bytes, binary_bytes, manifest_bytes))
+        or any(
+            type(value) is not int or value <= 0
+            for value in (source_archive_bytes, binary_bytes, manifest_bytes)
+        )
         or not output_prefix.endswith("/")
     ):
         raise ValueError("RaBitQ launch authority differs")
@@ -97,7 +100,12 @@ def build_launch_plan(
             "manifest": [manifest_uri, manifest_sha256, manifest_bytes],
             "output_prefix": output_prefix,
             "run_id": run_id,
-            "source": [source_commit, source_archive_uri, source_archive_sha256, source_archive_bytes],
+            "source": [
+                source_commit,
+                source_archive_uri,
+                source_archive_sha256,
+                source_archive_bytes,
+            ],
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -176,7 +184,11 @@ def build_construction_launch_plan(
             "d2_report": [d2_report_uri, d2_report_sha256, d2_report_bytes],
             "development_output_prefix": development_output_prefix,
             "phase": "construction",
-            "query_parquet": [query_parquet_uri, query_parquet_sha256, query_parquet_bytes],
+            "query_parquet": [
+                query_parquet_uri,
+                query_parquet_sha256,
+                query_parquet_bytes,
+            ],
         },
         sort_keys=True,
         separators=(",", ":"),

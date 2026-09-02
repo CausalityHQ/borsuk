@@ -145,7 +145,10 @@ def _default_s3_client() -> Any:
 
 
 def _validate_inputs(
-    binary: pathlib.Path, source_commit: str, source_archive_sha256: str, output: pathlib.Path
+    binary: pathlib.Path,
+    source_commit: str,
+    source_archive_sha256: str,
+    output: pathlib.Path,
 ) -> None:
     if not binary.is_absolute() or not binary.is_file():
         raise ValueError("screen binary differs")
@@ -178,7 +181,9 @@ def run_screen(
             dir=None if scratch_parent is None else str(scratch_parent),
         )
     )
-    local_paths = {artifact.role: scratch / artifact.basename for artifact in FROZEN_ARTIFACTS}
+    local_paths = {
+        artifact.role: scratch / artifact.basename for artifact in FROZEN_ARTIFACTS
+    }
     partial_output = scratch / "screen-result.json"
     try:
         for artifact in FROZEN_ARTIFACTS:

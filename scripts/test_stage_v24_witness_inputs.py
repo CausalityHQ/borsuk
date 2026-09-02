@@ -100,7 +100,9 @@ class FakeS3Client:
         ]
         return {
             "Body": io.BytesIO(payload),
-            "ChecksumSHA256": base64.b64encode(hashlib.sha256(payload).digest()).decode(),
+            "ChecksumSHA256": base64.b64encode(
+                hashlib.sha256(payload).digest()
+            ).decode(),
             "ContentLength": len(payload),
             "ETag": '"deliberately-not-authority"',
             "VersionId": (
@@ -112,7 +114,9 @@ class FakeS3Client:
 
 
 class V24StagingTests(unittest.TestCase):
-    def test_preparation_manifest_stages_parquet_roster_and_blake3_page_bodies(self) -> None:
+    def test_preparation_manifest_stages_parquet_roster_and_blake3_page_bodies(
+        self,
+    ) -> None:
         shard_payloads = [b"shard-zero", b"shard-one"]
         roster_payload = b"page-roster"
         page_payloads = [b"page-zero", b"page-one"]
@@ -194,7 +198,9 @@ class V24StagingTests(unittest.TestCase):
                 ),
             )
 
-    def test_four_objects_share_logical_generation_with_optional_transport_versions(self) -> None:
+    def test_four_objects_share_logical_generation_with_optional_transport_versions(
+        self,
+    ) -> None:
         roles = (
             "training-result",
             "witness-graph",
@@ -207,8 +213,7 @@ class V24StagingTests(unittest.TestCase):
             for ordinal, role in enumerate(roles)
         ]
         object_payloads = {
-            ("registered-bucket", f"v24/{role}", None): payloads[role]
-            for role in roles
+            ("registered-bucket", f"v24/{role}", None): payloads[role] for role in roles
         }
         versions = {
             "v24/training-result": "version-a",
@@ -238,7 +243,9 @@ class V24StagingTests(unittest.TestCase):
                 all(item["generation"] == "generation-v24-fixture" for item in objects)
             )
 
-    def test_stage_manifest_uses_exact_generation_length_and_digest_not_etag(self) -> None:
+    def test_stage_manifest_uses_exact_generation_length_and_digest_not_etag(
+        self,
+    ) -> None:
         payload = b"rows-parquet"
         identities = [_identity("construction-rows-parquet", payload, 0)]
         client = FakeS3Client(
@@ -274,9 +281,7 @@ class V24StagingTests(unittest.TestCase):
             )
             self.assertEqual(receipt.read_bytes(), raw)
             self.assertEqual(
-                subject.validate_inventory(
-                    manifest, manifest_sha256, staging, receipt
-                ),
+                subject.validate_inventory(manifest, manifest_sha256, staging, receipt),
                 ("construction-rows-parquet",),
             )
             self.assertEqual(
@@ -293,7 +298,9 @@ class V24StagingTests(unittest.TestCase):
                 "transport-v24/construction-rows-parquet",
             )
 
-    def test_staging_rejects_digest_drift_and_removes_only_owned_partial_files(self) -> None:
+    def test_staging_rejects_digest_drift_and_removes_only_owned_partial_files(
+        self,
+    ) -> None:
         expected = b"registered"
         identity = _identity("construction-rows-parquet", expected, 0)
         client = FakeS3Client(
@@ -338,21 +345,15 @@ class V24StagingTests(unittest.TestCase):
             receipt = root / "staging-receipt.json"
             manifest.write_bytes(_manifest_bytes([identity]))
             manifest_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
-            subject.stage_manifest(
-                manifest, manifest_sha256, staging, receipt, client
-            )
+            subject.stage_manifest(manifest, manifest_sha256, staging, receipt, client)
 
             (staging / "unexpected").write_bytes(b"not-owned")
             with self.assertRaisesRegex(ValueError, "inventory"):
-                subject.validate_inventory(
-                    manifest, manifest_sha256, staging, receipt
-                )
+                subject.validate_inventory(manifest, manifest_sha256, staging, receipt)
             (staging / "unexpected").unlink()
             (staging / "construction-rows.parquet").unlink()
             with self.assertRaisesRegex(ValueError, "inventory"):
-                subject.validate_inventory(
-                    manifest, manifest_sha256, staging, receipt
-                )
+                subject.validate_inventory(manifest, manifest_sha256, staging, receipt)
 
     def test_manifest_rejects_noncanonical_duplicate_and_unsafe_roles(self) -> None:
         payload = b"registered"
@@ -370,7 +371,10 @@ class V24StagingTests(unittest.TestCase):
             (_manifest_bytes([blake3]), "authority"),
             (_manifest_bytes([valid])[:-1] + b" \n", "canonical"),
         ):
-            with self.subTest(message=message), tempfile.TemporaryDirectory() as temporary:
+            with (
+                self.subTest(message=message),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
                 root = pathlib.Path(temporary)
                 manifest = root / "manifest.json"
                 manifest.write_bytes(raw)
@@ -383,7 +387,9 @@ class V24StagingTests(unittest.TestCase):
                         FakeS3Client({}),
                     )
 
-    def test_staging_rejects_manifest_digest_drift_before_any_object_request(self) -> None:
+    def test_staging_rejects_manifest_digest_drift_before_any_object_request(
+        self,
+    ) -> None:
         payload = b"registered"
         identity = _identity("construction-rows-parquet", payload, 0)
         client = FakeS3Client({})

@@ -53,7 +53,9 @@ class FrozenArtifact:
 
 def _canonical_bytes(value: object) -> bytes:
     return (
-        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
         + b"\n"
     )
 
@@ -100,7 +102,9 @@ def _validate_artifact(artifact: FrozenArtifact) -> None:
         raise ValueError(f"{artifact.role} identity differs")
 
 
-def _manifest_inputs(raw: bytes) -> tuple[dict[str, object], tuple[FrozenArtifact, ...]]:
+def _manifest_inputs(
+    raw: bytes,
+) -> tuple[dict[str, object], tuple[FrozenArtifact, ...]]:
     try:
         value = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -241,7 +245,9 @@ def run_falsifier(
         )
         if completed.returncode != 0:
             detail = completed.stderr.decode(errors="replace").strip()
-            raise RuntimeError(detail or f"RaBitQ falsifier exited {completed.returncode}")
+            raise RuntimeError(
+                detail or f"RaBitQ falsifier exited {completed.returncode}"
+            )
         try:
             result = json.loads(completed.stdout)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
