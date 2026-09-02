@@ -19,14 +19,15 @@ mod tree;
 pub use local::{
     V26CandidateCoverRequest, V26CentroidRouterRequest, V26ExactGlobalRequest,
     V26LayoutBuildOutput, V26LayoutBuildRequest, V26LayoutEvaluationRequest, V26LocalObjectPath,
-    V26PageModeRouterRequest, V26Pq8CoverRequest, V26PqWidthLadderRequest, V26TreeRouterRequest,
-    V26TruthBuildRequest, canonical_v26_layout_build_output_bytes, evaluate_v26_exact_global,
-    evaluate_v26_layout_oracle, run_v26_candidate_row_cover, run_v26_centroid_router,
-    run_v26_exact_global, run_v26_layout_build, run_v26_layout_build_directory,
-    run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
-    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
-    v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_source_map_schema,
-    v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
+    V26PageModeRouterRequest, V26Pq8CoverRequest, V26Pq16RerankRequest, V26PqWidthLadderRequest,
+    V26TreeRouterRequest, V26TruthBuildRequest, canonical_v26_layout_build_output_bytes,
+    evaluate_v26_exact_global, evaluate_v26_layout_oracle, run_v26_candidate_row_cover,
+    run_v26_centroid_router, run_v26_exact_global, run_v26_layout_build,
+    run_v26_layout_build_directory, run_v26_page_mode_router, run_v26_pq_width_ladder,
+    run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank, run_v26_tree_router,
+    run_v26_tree_router_diagnostic, run_v26_truth_build, v26_construction_schema,
+    v26_page_assignments_schema, v26_query_schema, v26_source_map_schema, v26_tree_schema,
+    v26_truth_schema, validate_v26_layout_build_output,
 };
 
 pub use tree::{
@@ -1403,6 +1404,286 @@ pub(crate) fn evaluate_v26_pq_width_ladder(
                     page_body_reads: 0,
                     claim_eligible: false,
                 },
+            })
+        })
+        .collect()
+}
+
+const V26_PQ16_RERANK_LADDER: [usize; 5] = [10, 32, 128, 512, 2_048];
+
+fn projected_v26_pq16_rerank_resident_bytes(rows: u64, page_capacity: u32) -> Result<u64> {
+    if rows == 0 || page_capacity == 0 {
+        return Err(invalid("V26 PQ16 rerank projection request differs"));
+    }
+    let codes_and_postings = rows
+        .checked_mul(16 + 2 * 4)
+        .ok_or_else(|| invalid("V26 PQ16 rerank projection overflows"))?;
+    let offsets = rows
+        .div_ceil(u64::from(page_capacity))
+        .checked_mul(2)
+        .and_then(|pages| pages.checked_add(1))
+        .and_then(|offsets| offsets.checked_mul(8))
+        .ok_or_else(|| invalid("V26 PQ16 rerank offset projection overflows"))?;
+    codes_and_postings
+        .checked_add(offsets)
+        .and_then(|value| value.checked_add(16 * 256 * 6 * 4))
+        .and_then(|value| value.checked_add(512 * 1_024 * 1_024))
+        .ok_or_else(|| invalid("V26 PQ16 rerank projection overflows"))
+}
+
+fn v26_squared_l2(left: &[f32; 96], right: &[f32; 96]) -> f32 {
+    left.iter()
+        .zip(right)
+        .map(|(left, right)| {
+            let delta = left - right;
+            delta * delta
+        })
+        .sum()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct V26PqRankedRow {
+    source_ordinal: u64,
+    distance: f32,
+}
+
+impl PartialEq for V26PqRankedRow {
+    fn eq(&self, other: &Self) -> bool {
+        self.source_ordinal == other.source_ordinal
+            && self.distance.to_bits() == other.distance.to_bits()
+    }
+}
+
+impl Eq for V26PqRankedRow {}
+
+impl PartialOrd for V26PqRankedRow {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for V26PqRankedRow {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.distance
+            .total_cmp(&other.distance)
+            .then_with(|| self.source_ordinal.cmp(&other.source_ordinal))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V26Pq16RerankEvaluation {
+    pub(crate) ranked_row_limit: usize,
+    pub(crate) projected_resident_bytes_100m: u64,
+    pub(crate) samples: Vec<V26TreeRouterSample>,
+    pub(crate) result: V26TreeRouterResult,
+}
+
+fn rank_v26_pq16_candidate_rows(
+    codes: &[Vec<u8>],
+    assignments: &[V26RowPages],
+    candidate_pages: &[u32],
+    tables: &[[f32; 256]],
+) -> Result<Vec<V26PqRankedRow>> {
+    if codes.len() != assignments.len()
+        || candidate_pages.is_empty()
+        || candidate_pages.windows(2).any(|pair| pair[0] >= pair[1])
+        || tables.len() != 16
+    {
+        return Err(invalid("V26 PQ16 rerank request differs"));
+    }
+    let candidates = candidate_pages.iter().copied().collect::<BTreeSet<_>>();
+    let mut heap = BinaryHeap::with_capacity(V26_PQ16_RERANK_LADDER[4]);
+    for (index, (code, assignment)) in codes.iter().zip(assignments).enumerate() {
+        if usize::try_from(assignment.source_ordinal).ok() != Some(index) || code.len() != 16 {
+            return Err(invalid("V26 PQ16 rerank binding differs"));
+        }
+        if !candidates.contains(&assignment.primary_page)
+            && !candidates.contains(&assignment.replica_page)
+        {
+            continue;
+        }
+        let distance = code
+            .iter()
+            .enumerate()
+            .map(|(subspace, code)| tables[subspace][usize::from(*code)])
+            .sum::<f32>();
+        if !distance.is_finite() {
+            return Err(invalid("V26 PQ16 rerank distance differs"));
+        }
+        let ranked = V26PqRankedRow {
+            source_ordinal: assignment.source_ordinal,
+            distance,
+        };
+        if heap.len() < V26_PQ16_RERANK_LADDER[4] {
+            heap.push(ranked);
+        } else if ranked < *heap.peek().unwrap() {
+            heap.pop();
+            heap.push(ranked);
+        }
+    }
+    if heap.len() != V26_PQ16_RERANK_LADDER[4] {
+        return Err(invalid("V26 PQ16 candidate inventory differs"));
+    }
+    let mut ranked = heap.into_vec();
+    ranked.sort();
+    Ok(ranked)
+}
+
+fn summarize_v26_pq16_samples(samples: &[V26TreeRouterSample]) -> Result<V26TreeRouterResult> {
+    if samples.len() != 512 {
+        return Err(invalid("V26 PQ16 sample inventory differs"));
+    }
+    let total_hits = samples.iter().try_fold(0_u64, |sum, sample| {
+        sum.checked_add(u64::from(sample.hits))
+            .ok_or_else(|| invalid("V26 PQ16 metric overflows"))
+    })?;
+    let total_oracle_hits = samples.iter().try_fold(0_u64, |sum, sample| {
+        sum.checked_add(u64::from(sample.oracle_hits))
+            .ok_or_else(|| invalid("V26 PQ16 metric overflows"))
+    })?;
+    let aggregate_recall_ppm = v26_ppm(total_hits, 5_120)?;
+    let minimum_query_recall_ppm = samples
+        .iter()
+        .map(|sample| sample.recall_ppm)
+        .min()
+        .ok_or_else(|| invalid("V26 PQ16 samples are absent"))?;
+    let oracle_attainment_ppm = v26_ppm(total_hits, total_oracle_hits)?;
+    let passed = aggregate_recall_ppm >= 975_000
+        && minimum_query_recall_ppm >= 800_000
+        && oracle_attainment_ppm >= 995_000;
+    Ok(V26TreeRouterResult {
+        schema: "borsuk-v26-pq16-exact-rerank-result-v1".to_owned(),
+        query_count: 512,
+        aggregate_recall_ppm,
+        minimum_query_recall_ppm,
+        oracle_attainment_ppm,
+        disposition: if passed {
+            V26Disposition::BoundedLayoutCandidate
+        } else {
+            V26Disposition::RankReducerRejected
+        },
+        page_body_reads: 0,
+        claim_eligible: false,
+    })
+}
+
+pub(crate) fn evaluate_v26_pq16_exact_rerank_ladder(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    rows: &[V26ConstructionRow],
+    assignments: &[V26RowPages],
+    queries: &[V26ExternalQuery],
+    truths: &[V26QueryTruth],
+    candidate_page_limit: usize,
+) -> Result<Vec<V26Pq16RerankEvaluation>> {
+    if queries.len() != 512 || truths.len() != 512 || rows.len() != assignments.len() {
+        return Err(invalid("V26 PQ16 ladder authority differs"));
+    }
+    let vectors = rows.iter().map(|row| row.vector).collect::<Vec<_>>();
+    let codebook = fit_v26_pq_codebook(&vectors, 16)?;
+    let codes = rows
+        .iter()
+        .map(|row| codebook.encode(&row.vector))
+        .collect::<Result<Vec<_>>>()?;
+    let per_query = queries
+        .par_iter()
+        .zip(truths.par_iter())
+        .enumerate()
+        .map(|(query_index, (query, truth))| {
+            if usize::try_from(query.query_ordinal).ok() != Some(query_index)
+                || truth.query_ordinal != query.query_ordinal
+                || truth.neighbor_source_ordinals.len() != 10
+                || truth.ground_truth_page_assignments.len() != 10
+            {
+                return Err(invalid("V26 PQ16 query authority differs"));
+            }
+            let ranked_candidates = tree::rank_v26_tree_page_prefix(
+                primary,
+                replica,
+                &query.vector,
+                candidate_page_limit,
+            )?;
+            let mut candidate_pages = ranked_candidates.clone();
+            candidate_pages.sort_unstable();
+            let tables = prepare_v26_pq_tables(&codebook, &query.vector)?;
+            let ranked =
+                rank_v26_pq16_candidate_rows(&codes, assignments, &candidate_pages, &tables)?;
+            V26_PQ16_RERANK_LADDER
+                .into_iter()
+                .map(|ranked_row_limit| {
+                    let mut exact = ranked[..ranked_row_limit]
+                        .iter()
+                        .map(|candidate| {
+                            let row = &rows[usize::try_from(candidate.source_ordinal).unwrap()];
+                            let distance = v26_squared_l2(&row.vector, &query.vector);
+                            V26PqRankedRow {
+                                source_ordinal: candidate.source_ordinal,
+                                distance,
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    if exact
+                        .iter()
+                        .any(|candidate| !candidate.distance.is_finite())
+                    {
+                        return Err(invalid("V26 PQ16 exact distance differs"));
+                    }
+                    exact.sort();
+                    let ranked_assignments = exact[..10]
+                        .iter()
+                        .map(|candidate| {
+                            let assignment =
+                                assignments[usize::try_from(candidate.source_ordinal).unwrap()];
+                            vec![assignment.primary_page, assignment.replica_page]
+                        })
+                        .collect::<Vec<_>>();
+                    let mut selected_pages = exact_v26_layout_oracle_pages(&ranked_assignments, 8)?;
+                    for page in &ranked_candidates {
+                        if selected_pages.len() == 8 {
+                            break;
+                        }
+                        if !selected_pages.contains(page) {
+                            selected_pages.push(*page);
+                        }
+                    }
+                    if selected_pages.len() != 8 {
+                        return Err(invalid("V26 PQ16 selected page inventory differs"));
+                    }
+                    selected_pages.sort_unstable();
+                    let oracle_pages =
+                        exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?;
+                    let hits =
+                        v26_layout_hits(&truth.ground_truth_page_assignments, &selected_pages);
+                    let oracle_hits =
+                        v26_layout_hits(&truth.ground_truth_page_assignments, &oracle_pages);
+                    Ok(V26TreeRouterSample {
+                        query_ordinal: query.query_ordinal,
+                        selected_pages,
+                        hits,
+                        oracle_hits,
+                        recall_ppm: v26_ppm(u64::from(hits), 10)?,
+                        oracle_attainment_ppm: v26_ppm(u64::from(hits), u64::from(oracle_hits))?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    V26_PQ16_RERANK_LADDER
+        .into_iter()
+        .enumerate()
+        .map(|(arm_index, ranked_row_limit)| {
+            let samples = per_query
+                .iter()
+                .map(|query| query[arm_index].clone())
+                .collect::<Vec<_>>();
+            Ok(V26Pq16RerankEvaluation {
+                ranked_row_limit,
+                projected_resident_bytes_100m: projected_v26_pq16_rerank_resident_bytes(
+                    100_000_000,
+                    2_816,
+                )?,
+                result: summarize_v26_pq16_samples(&samples)?,
+                samples,
             })
         })
         .collect()
@@ -2839,7 +3120,8 @@ mod tests {
         canonical_v26_tree_router_result_bytes, diagnose_v26_tree_router_candidate_widths,
         evaluate_v26_candidate_row_cover, evaluate_v26_centroid_router,
         evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
-        evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover, evaluate_v26_tree_router,
+        evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
+        evaluate_v26_pq16_exact_rerank_ladder, evaluate_v26_tree_router,
         exact_v26_layout_oracle_pages, fit_v26_pq_codebook, fit_v26_pq8_codebook,
         prepare_v26_pq8_tables, projected_v26_pq_resident_bytes, projected_v26_pq8_resident_bytes,
         rank_v26_candidate_rows, rank_v26_pq8_occurrences, rank_v26_tree_pages, route_v26_pages,
@@ -3561,6 +3843,82 @@ mod tests {
         );
         assert!(arms.iter().all(|arm| {
             arm.samples.len() == 512
+                && arm
+                    .samples
+                    .iter()
+                    .all(|sample| sample.selected_pages.len() == 8)
+        }));
+    }
+
+    #[test]
+    fn v26_pq16_exact_rerank_ladder_preserves_one_resident_index_and_fixed_depths() {
+        // Break caught: top-L arms use different PQ training/frontiers, retain unbounded state,
+        // join truth before page selection, or silently omit the exact rerank.
+        let primary = v26_router_test_tree(PRIMARY_SEED, 0, [100.0, 10.0, 1.0, 2.0, 5.0, 1.0, 2.0]);
+        let replica = v26_router_test_tree(REPLICA_SEED, 8, [200.0, 20.0, 3.0, 4.0, 5.0, 1.0, 2.0]);
+        let rows = (0_u64..2_113)
+            .map(|source_ordinal| {
+                let angle = source_ordinal as f32 / 2_048.0;
+                let mut vector = [0.0_f32; 96];
+                vector[0] = angle.cos();
+                vector[1] = angle.sin();
+                V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..2_113)
+            .map(|source_ordinal| V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
+                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let queries = (0_u32..512)
+            .map(|query_ordinal| V26ExternalQuery {
+                query_ordinal,
+                vector: rows[usize::try_from(query_ordinal).unwrap()].vector,
+            })
+            .collect::<Vec<_>>();
+        let truths = (0_u32..512)
+            .map(|query_ordinal| {
+                let start = u64::from(query_ordinal);
+                V26QueryTruth {
+                    query_ordinal,
+                    neighbor_source_ordinals: (start..start + 10).collect(),
+                    ground_truth_page_assignments: (start..start + 10)
+                        .map(|source_ordinal| {
+                            vec![
+                                u32::try_from(source_ordinal % 8).unwrap(),
+                                8 + u32::try_from(source_ordinal % 8).unwrap(),
+                            ]
+                        })
+                        .collect(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let arms = evaluate_v26_pq16_exact_rerank_ladder(
+            &primary,
+            &replica,
+            &rows,
+            &assignments,
+            &queries,
+            &truths,
+            16,
+        )
+        .unwrap();
+
+        assert_eq!(
+            arms.iter()
+                .map(|arm| arm.ranked_row_limit)
+                .collect::<Vec<_>>(),
+            [10, 32, 128, 512, 2_048]
+        );
+        assert!(arms.iter().all(|arm| {
+            arm.projected_resident_bytes_100m == 2_937_537_416
+                && arm.samples.len() == 512
                 && arm
                     .samples
                     .iter()

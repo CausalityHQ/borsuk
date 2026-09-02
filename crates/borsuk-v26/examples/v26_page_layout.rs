@@ -5,11 +5,12 @@ use std::{collections::BTreeMap, io::Write, path::PathBuf};
 use borsuk_v26::{
     V26CandidateCoverRequest, V26CentroidRouterRequest, V26ExactGlobalRequest,
     V26LayoutEvaluationRequest, V26LocalObjectPath, V26ObjectIdentity, V26PageModeRouterRequest,
-    V26Pq8CoverRequest, V26PqWidthLadderRequest, V26TreeRouterRequest, V26TruthBuildRequest,
-    canonical_v26_layout_build_output_bytes, canonical_v26_layout_result_bytes,
-    canonical_v26_object_identity_bytes, evaluate_v26_layout_oracle, run_v26_candidate_row_cover,
-    run_v26_centroid_router, run_v26_exact_global, run_v26_layout_build_directory,
-    run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
+    V26Pq8CoverRequest, V26Pq16RerankRequest, V26PqWidthLadderRequest, V26TreeRouterRequest,
+    V26TruthBuildRequest, canonical_v26_layout_build_output_bytes,
+    canonical_v26_layout_result_bytes, canonical_v26_object_identity_bytes,
+    evaluate_v26_layout_oracle, run_v26_candidate_row_cover, run_v26_centroid_router,
+    run_v26_exact_global, run_v26_layout_build_directory, run_v26_page_mode_router,
+    run_v26_pq_width_ladder, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
     run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
 };
 
@@ -104,6 +105,7 @@ enum V26CliMode {
     CandidateCover(CandidateCoverRequest),
     Pq8Cover(CandidateCoverRequest),
     PqWidthLadder(CandidateCoverRequest),
+    Pq16ExactRerank(CandidateCoverRequest),
 }
 
 fn take(values: &mut BTreeMap<String, String>, key: &str) -> Result<String, String> {
@@ -168,6 +170,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
     let mut candidate_cover = false;
     let mut pq8_cover = false;
     let mut pq_width_ladder = false;
+    let mut pq16_exact_rerank = false;
     let mut execute = false;
     let mut values = BTreeMap::new();
     while let Some(flag) = arguments.next() {
@@ -237,6 +240,12 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     return Err("duplicate --route-pq-width-ladder".to_owned());
                 }
                 pq_width_ladder = true;
+            }
+            "--route-pq16-exact-rerank" => {
+                if pq16_exact_rerank {
+                    return Err("duplicate --route-pq16-exact-rerank".to_owned());
+                }
+                pq16_exact_rerank = true;
             }
             "--execute" => {
                 if execute {
@@ -324,6 +333,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             + u8::from(candidate_cover)
             + u8::from(pq8_cover)
             + u8::from(pq_width_ladder)
+            + u8::from(pq16_exact_rerank)
             != 1
     {
         return Err("exactly one executable phase is required".to_owned());
@@ -431,6 +441,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         || candidate_cover
         || pq8_cover
         || pq_width_ladder
+        || pq16_exact_rerank
     {
         let primary_tree = take_registered(&mut values, "primary-tree")?;
         let replica_tree = take_registered(&mut values, "replica-tree")?;
@@ -500,8 +511,15 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     evidence_output_path,
                     evidence_output_uri,
                 })
-            } else {
+            } else if pq_width_ladder {
                 V26CliMode::PqWidthLadder(CandidateCoverRequest {
+                    construction,
+                    router: request,
+                    evidence_output_path,
+                    evidence_output_uri,
+                })
+            } else {
+                V26CliMode::Pq16ExactRerank(CandidateCoverRequest {
                     construction,
                     router: request,
                     evidence_output_path,
@@ -779,6 +797,33 @@ fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
             })
             .map_err(|error| error.to_string())
         }
+        V26CliMode::Pq16ExactRerank(request) => {
+            let generation = request.router.generation.clone();
+            run_v26_pq16_exact_rerank(&V26Pq16RerankRequest {
+                construction_rows: local_object(
+                    "construction-parquet",
+                    &generation,
+                    request.construction,
+                ),
+                router: V26TreeRouterRequest {
+                    primary_tree: local_object(
+                        "primary-tree-parquet",
+                        &generation,
+                        request.router.primary_tree,
+                    ),
+                    replica_tree: local_object(
+                        "replica-tree-parquet",
+                        &generation,
+                        request.router.replica_tree,
+                    ),
+                    layout: evaluation_request(request.router.layout),
+                    page_budget: request.router.page_budget,
+                },
+                evidence_output_path: request.evidence_output_path,
+                evidence_output_uri: request.evidence_output_uri,
+            })
+            .map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -986,6 +1031,19 @@ mod tests {
         *mode = "--route-pq-width-ladder".to_owned();
         for argument in &mut args {
             *argument = argument.replace("pq8-cover-evidence", "pq-width-ladder-evidence");
+        }
+        args
+    }
+
+    fn pq16_exact_rerank_args() -> Vec<String> {
+        let mut args = pq_width_ladder_args();
+        let mode = args
+            .iter_mut()
+            .find(|argument| argument.as_str() == "--route-pq-width-ladder")
+            .unwrap();
+        *mode = "--route-pq16-exact-rerank".to_owned();
+        for argument in &mut args {
+            *argument = argument.replace("pq-width-ladder-evidence", "pq16-rerank-evidence");
         }
         args
     }
@@ -1357,6 +1415,34 @@ mod tests {
             vec!["--d3", "forbidden"],
         ] {
             let mut args = pq_width_ladder_args();
+            args.extend(mutation.into_iter().map(str::to_owned));
+            assert!(parse_v26_args(args).is_err());
+        }
+    }
+
+    #[test]
+    fn v26_pq16_exact_rerank_cli_has_fixed_depths_and_no_storage_surface() {
+        // Break caught: exact rerank depth becomes caller tuned or the diagnostic gains a page,
+        // object-store, endpoint, AWS, or D3 capability.
+        let parsed = parse_v26_args(pq16_exact_rerank_args()).unwrap();
+        let V26CliMode::Pq16ExactRerank(request) = parsed else {
+            panic!("PQ16 exact rerank mode differs");
+        };
+        assert_eq!(
+            request.evidence_output_path,
+            std::path::PathBuf::from("/output/pq16-rerank-evidence.parquet")
+        );
+        for mutation in [
+            vec!["--ranked-row-limits", "10,32,128,512,2048"],
+            vec!["--pq-width", "16"],
+            vec!["--candidate-page-limit", "128"],
+            vec!["--bucket", "forbidden"],
+            vec!["--region", "eu-central-1"],
+            vec!["--endpoint", "https://forbidden"],
+            vec!["--page-prefix", "forbidden"],
+            vec!["--d3", "forbidden"],
+        ] {
+            let mut args = pq16_exact_rerank_args();
             args.extend(mutation.into_iter().map(str::to_owned));
             assert!(parse_v26_args(args).is_err());
         }

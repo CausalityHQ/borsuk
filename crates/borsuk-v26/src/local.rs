@@ -30,9 +30,9 @@ use crate::{
     diagnose_v26_tree_router_candidate_widths, evaluate_v26_candidate_row_cover,
     evaluate_v26_centroid_router, evaluate_v26_exact_global_external_rows,
     evaluate_v26_page_mode_router, evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
-    evaluate_v26_tree_router, exact_lower_hex, exact_v26_layout_oracle_pages, invalid,
-    projected_steps, projected_v26_pq8_resident_bytes, rank_v26_tree_pages,
-    validate_layout_authority, validate_v26_dual_tree_layout,
+    evaluate_v26_pq16_exact_rerank_ladder, evaluate_v26_tree_router, exact_lower_hex,
+    exact_v26_layout_oracle_pages, invalid, projected_steps, projected_v26_pq8_resident_bytes,
+    rank_v26_tree_pages, validate_layout_authority, validate_v26_dual_tree_layout,
 };
 
 fn vector_type() -> DataType {
@@ -168,6 +168,14 @@ pub struct V26Pq8CoverRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V26PqWidthLadderRequest {
+    pub construction_rows: V26LocalObjectPath,
+    pub router: V26TreeRouterRequest,
+    pub evidence_output_path: PathBuf,
+    pub evidence_output_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26Pq16RerankRequest {
     pub construction_rows: V26LocalObjectPath,
     pub router: V26TreeRouterRequest,
     pub evidence_output_path: PathBuf,
@@ -1447,6 +1455,155 @@ pub fn run_v26_pq_width_ladder(request: &V26PqWidthLadderRequest) -> Result<Vec<
     output
 }
 
+fn v26_pq16_rerank_evidence_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("ranked_row_limit", DataType::UInt32, false),
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new(
+            "selected_pages",
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt32, false)), 8),
+            false,
+        ),
+        Field::new("hits", DataType::UInt32, false),
+        Field::new("oracle_hits", DataType::UInt32, false),
+        Field::new("recall_ppm", DataType::UInt64, false),
+        Field::new("oracle_attainment_ppm", DataType::UInt64, false),
+    ])
+}
+
+fn v26_pq16_rerank_evidence_batch(arms: &[crate::V26Pq16RerankEvaluation]) -> Result<RecordBatch> {
+    if arms.len() != 5
+        || arms.iter().any(|arm| {
+            arm.samples.len() != 512
+                || arm
+                    .samples
+                    .iter()
+                    .any(|sample| sample.selected_pages.len() != 8)
+        })
+    {
+        return Err(invalid("V26 PQ16 rerank evidence inventory differs"));
+    }
+    let pages = arms
+        .iter()
+        .flat_map(|arm| &arm.samples)
+        .flat_map(|sample| sample.selected_pages.iter().copied())
+        .collect::<Vec<_>>();
+    RecordBatch::try_new(
+        Arc::new(v26_pq16_rerank_evidence_schema()),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(arms.iter().flat_map(|arm| {
+                std::iter::repeat_n(u32::try_from(arm.ranked_row_limit).unwrap(), 512)
+            }))),
+            Arc::new(UInt32Array::from_iter_values(
+                arms.iter()
+                    .flat_map(|arm| &arm.samples)
+                    .map(|sample| sample.query_ordinal),
+            )),
+            Arc::new(
+                FixedSizeListArray::try_new(
+                    Arc::new(Field::new("element", DataType::UInt32, false)),
+                    8,
+                    Arc::new(UInt32Array::from(pages)),
+                    None,
+                )
+                .map_err(|error| invalid(&format!("V26 PQ16 rerank evidence failed: {error}")))?,
+            ),
+            Arc::new(UInt32Array::from_iter_values(
+                arms.iter()
+                    .flat_map(|arm| &arm.samples)
+                    .map(|sample| sample.hits),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                arms.iter()
+                    .flat_map(|arm| &arm.samples)
+                    .map(|sample| sample.oracle_hits),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                arms.iter()
+                    .flat_map(|arm| &arm.samples)
+                    .map(|sample| sample.recall_ppm),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                arms.iter()
+                    .flat_map(|arm| &arm.samples)
+                    .map(|sample| sample.oracle_attainment_ppm),
+            )),
+        ],
+    )
+    .map_err(|error| invalid(&format!("V26 PQ16 rerank evidence failed: {error}")))
+}
+
+pub fn run_v26_pq16_exact_rerank(request: &V26Pq16RerankRequest) -> Result<Vec<u8>> {
+    if request.evidence_output_path.exists()
+        || !request.evidence_output_uri.starts_with("s3://")
+        || !request.evidence_output_uri.ends_with(".parquet")
+    {
+        return Err(invalid("V26 PQ16 rerank output authority differs"));
+    }
+    let exact = V26ExactGlobalRequest {
+        construction_rows: request.construction_rows.clone(),
+        layout: request.router.layout.clone(),
+        ranked_row_limits: vec![10],
+    };
+    let loaded = load_v26_exact_global(&exact)?;
+    let (primary, replica, queries, truths) = load_v26_tree_router(&request.router)?;
+    if queries != loaded.queries || truths != loaded.truths || request.router.page_budget != 8 {
+        return Err(invalid("V26 PQ16 rerank authority differs"));
+    }
+    let page_count = rank_v26_tree_pages(&primary, &replica, &queries[0].vector)?.len();
+    let candidate_page_limit = 128.min(page_count);
+    let arms = evaluate_v26_pq16_exact_rerank_ladder(
+        &primary,
+        &replica,
+        &loaded.rows,
+        &loaded.assignments,
+        &queries,
+        &truths,
+        candidate_page_limit,
+    )?;
+    let output = (|| {
+        write_batch(
+            &request.evidence_output_path,
+            v26_pq16_rerank_evidence_batch(&arms)?,
+        )?;
+        let (encoded_bytes, digest) = sha256_file(&request.evidence_output_path)?;
+        let evidence = V26ObjectIdentity {
+            role: "pq16-exact-rerank-evidence-parquet".to_owned(),
+            uri: request.evidence_output_uri.clone(),
+            digest_algorithm: "sha256".to_owned(),
+            digest,
+            encoded_bytes,
+            generation: request.construction_rows.identity.generation.clone(),
+        };
+        let summaries = arms
+            .iter()
+            .map(|arm| {
+                serde_json::json!({
+                    "ranked_row_limit": arm.ranked_row_limit,
+                    "projected_resident_bytes_100m": arm.projected_resident_bytes_100m,
+                    "result": arm.result,
+                })
+            })
+            .collect::<Vec<_>>();
+        let value = serde_json::json!({
+            "schema": "borsuk-v26-pq16-exact-rerank-output-v1",
+            "candidate_page_limit": candidate_page_limit,
+            "arms": summaries,
+            "evidence": evidence,
+            "page_body_reads": 0,
+            "claim_eligible": false,
+        });
+        let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+            .map_err(|error| invalid(&format!("V26 PQ16 rerank serialization failed: {error}")))?;
+        bytes.push(b'\n');
+        Ok(bytes)
+    })();
+    if output.is_err() {
+        let _ = fs::remove_file(&request.evidence_output_path);
+    }
+    output
+}
+
 fn open_reader(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<fs::File>> {
     let file = fs::File::open(path)
         .map_err(|error| invalid(&format!("V26 Parquet open failed: {error}")))?;
@@ -2043,15 +2200,15 @@ mod tests {
     use super::{
         V26CandidateCoverRequest, V26CentroidRouterRequest, V26ExactGlobalRequest,
         V26LayoutBuildRequest, V26LayoutEvaluationRequest, V26LocalObjectPath,
-        V26PageModeRouterRequest, V26Pq8CoverRequest, V26PqWidthLadderRequest,
-        V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch, evaluate_v26_exact_global,
-        evaluate_v26_layout_oracle, open_reader, output_identity, read_assignments,
-        read_layout_terminal, run_v26_candidate_row_cover, run_v26_centroid_router,
-        run_v26_layout_build, run_v26_page_mode_router, run_v26_pq_width_ladder,
-        run_v26_pq8_candidate_cover, run_v26_tree_router, run_v26_tree_router_diagnostic,
-        run_v26_truth_build, v26_construction_schema, v26_page_assignments_schema,
-        v26_query_schema, v26_source_map_schema, v26_tree_schema, v26_truth_schema,
-        validate_v26_layout_build_output,
+        V26PageModeRouterRequest, V26Pq8CoverRequest, V26Pq16RerankRequest,
+        V26PqWidthLadderRequest, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
+        evaluate_v26_exact_global, evaluate_v26_layout_oracle, open_reader, output_identity,
+        read_assignments, read_layout_terminal, run_v26_candidate_row_cover,
+        run_v26_centroid_router, run_v26_layout_build, run_v26_page_mode_router,
+        run_v26_pq_width_ladder, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
+        run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
+        v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
+        v26_source_map_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -2917,5 +3074,67 @@ mod tests {
         let reader = open_reader(&evidence_path).unwrap();
         assert_eq!(reader.metadata().file_metadata().num_rows(), 4 * 512);
         assert_eq!(reader.schema().field(0).name(), "code_width");
+    }
+
+    #[test]
+    fn v26_pq16_exact_rerank_local_persists_fixed_depth_evidence() {
+        // Break caught: the hybrid runner discovers cold vectors, tunes rank depth, emits bulk
+        // JSON, or fails to bind its single resident projection to every arm.
+        let (temp, layout) = evaluation_fixture_with_rows(2_113);
+        let terminal = read_layout_terminal(&layout.layout_terminal).unwrap();
+        let tree = |role: &str, name: &str| V26LocalObjectPath {
+            identity: terminal
+                .outputs
+                .iter()
+                .find(|identity| identity.role == role)
+                .unwrap()
+                .clone(),
+            path: temp.path().join("layout").join(name),
+        };
+        let evidence_path = temp.path().join("pq16-rerank-evidence.parquet");
+        let request = V26Pq16RerankRequest {
+            construction_rows: V26LocalObjectPath {
+                identity: terminal.authority.construction_rows.clone(),
+                path: temp.path().join("construction.parquet"),
+            },
+            router: V26TreeRouterRequest {
+                primary_tree: tree("primary-tree-parquet", "primary-tree.parquet"),
+                replica_tree: tree("replica-tree-parquet", "replica-tree.parquet"),
+                layout,
+                page_budget: 8,
+            },
+            evidence_output_path: evidence_path.clone(),
+            evidence_output_uri: "s3://frozen/v26/pq16-rerank-evidence.parquet".to_owned(),
+        };
+
+        let bytes = run_v26_pq16_exact_rerank(&request).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema"], "borsuk-v26-pq16-exact-rerank-output-v1");
+        assert_eq!(value["candidate_page_limit"], 8);
+        assert_eq!(value["page_body_reads"], 0);
+        assert_eq!(value["claim_eligible"], false);
+        assert_eq!(
+            value["arms"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|arm| arm["ranked_row_limit"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [10, 32, 128, 512, 2_048]
+        );
+        assert!(
+            value["arms"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|arm| arm["projected_resident_bytes_100m"] == 2_937_537_416_u64)
+        );
+        assert_eq!(
+            value["evidence"]["role"],
+            "pq16-exact-rerank-evidence-parquet"
+        );
+        let reader = open_reader(&evidence_path).unwrap();
+        assert_eq!(reader.metadata().file_metadata().num_rows(), 5 * 512);
+        assert_eq!(reader.schema().field(0).name(), "ranked_row_limit");
     }
 }
