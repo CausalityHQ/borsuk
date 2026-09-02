@@ -781,6 +781,7 @@ pub fn run_v26_exact_global(request: &V26ExactGlobalRequest) -> Result<Vec<u8>> 
     )?;
     canonical_v26_exact_global_result_bytes(
         &result,
+        &loaded.rows,
         &loaded.assignments,
         &loaded.queries,
         &loaded.truths,

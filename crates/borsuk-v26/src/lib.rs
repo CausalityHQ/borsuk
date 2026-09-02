@@ -373,9 +373,9 @@ fn select_v26_ranked_pages(
     if ranked_rows.is_empty() || page_budget != 8 {
         return Err(invalid("V26 ranked page request differs"));
     }
-    let mut page_minima = BTreeMap::<u32, (f32, u64)>::new();
+    let mut page_scores = BTreeMap::<u32, u64>::new();
     let mut prior = None;
-    for row in ranked_rows {
+    for (rank_index, row) in ranked_rows.iter().enumerate() {
         if !row.distance.is_finite()
             || prior.is_some_and(|(distance, source): (f32, u64)| {
                 row.distance.total_cmp(&distance).is_lt()
@@ -388,27 +388,23 @@ fn select_v26_ranked_pages(
         let assignment = assignments
             .get(&row.source_ordinal)
             .ok_or_else(|| invalid("V26 ranked row page binding differs"))?;
+        if assignment.primary_page == assignment.replica_page {
+            return Err(invalid("V26 ranked row page binding differs"));
+        }
+        let rank =
+            u64::try_from(rank_index + 1).map_err(|_| invalid("V26 ranked row rank overflows"))?;
+        let weight = (1_u64 << 32) / rank;
         for page in [assignment.primary_page, assignment.replica_page] {
-            let candidate = (row.distance, row.source_ordinal);
-            match page_minima.entry(page) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(candidate);
-                }
-                std::collections::btree_map::Entry::Occupied(mut entry)
-                    if candidate.0.total_cmp(&entry.get().0).is_lt()
-                        || candidate.0.total_cmp(&entry.get().0).is_eq()
-                            && candidate.1 < entry.get().1 =>
-                {
-                    entry.insert(candidate);
-                }
-                std::collections::btree_map::Entry::Occupied(_) => {}
-            }
+            let score = page_scores.entry(page).or_default();
+            *score = score
+                .checked_add(weight)
+                .ok_or_else(|| invalid("V26 ranked page score overflows"))?;
         }
     }
-    let mut pages = page_minima.into_iter().collect::<Vec<_>>();
-    pages.sort_by(|(left_page, left), (right_page, right)| {
-        left.0
-            .total_cmp(&right.0)
+    let mut pages = page_scores.into_iter().collect::<Vec<_>>();
+    pages.sort_by(|(left_page, left_score), (right_page, right_score)| {
+        right_score
+            .cmp(left_score)
             .then_with(|| left_page.cmp(right_page))
     });
     Ok(pages
@@ -842,12 +838,15 @@ pub fn canonical_v26_layout_result_bytes(
 
 pub fn canonical_v26_exact_global_result_bytes(
     result: &V26ExactGlobalResult,
+    rows: &[V26ConstructionRow],
     assignments: &[V26RowPages],
     queries: &[V26ExternalQuery],
     truths: &[V26QueryTruth],
     samples: &[V26ExactGlobalSample],
 ) -> Result<Vec<u8>> {
     const LIMITS: [u32; 6] = [10, 32, 128, 512, 2_048, 4_096];
+    let expected_samples =
+        evaluate_v26_exact_global_external_rows(rows, assignments, queries, truths, &LIMITS, 8)?;
     if result.schema != "borsuk-v26-exact-global-result-v1"
         || result.query_count != 512
         || queries.len() != 512
@@ -856,6 +855,7 @@ pub fn canonical_v26_exact_global_result_bytes(
         || result.rank_results.len() != LIMITS.len()
         || result.page_body_reads != 0
         || result.claim_eligible
+        || samples != expected_samples
     {
         return Err(invalid("V26 exact-global result authority differs"));
     }
@@ -984,11 +984,11 @@ mod tests {
     use super::{
         V26ConstructionRow, V26Disposition, V26ExactGlobalRankResult, V26ExactGlobalResult,
         V26ExternalQuery, V26ExternalTruth, V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult,
-        V26LayoutSample, V26ObjectIdentity, V26QueryTruth, V26RowPages, build_v26_dual_tree_layout,
-        build_v26_external_truth_rows, canonical_v26_exact_global_result_bytes,
-        canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
-        evaluate_v26_exact_global_external_rows, exact_v26_layout_oracle_pages,
-        validate_v26_dual_tree_layout,
+        V26LayoutSample, V26ObjectIdentity, V26QueryTruth, V26RankedRow, V26RowPages,
+        build_v26_dual_tree_layout, build_v26_external_truth_rows,
+        canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
+        canonical_v26_layout_result_bytes, evaluate_v26_exact_global_external_rows,
+        exact_v26_layout_oracle_pages, select_v26_ranked_pages, validate_v26_dual_tree_layout,
     };
 
     const PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
@@ -1004,6 +1004,36 @@ mod tests {
             source_ordinal,
             vector,
         }
+    }
+
+    #[test]
+    fn v26_exact_global_cumulative_rank_evidence_replaces_rank_sharp_minimum() {
+        // Break caught: a page is represented only by its nearest row, so repeated later
+        // evidence cannot promote a coherent page above isolated early rows.
+        let ranked = (0_u64..12)
+            .map(|source_ordinal| V26RankedRow {
+                source_ordinal,
+                distance: source_ordinal as f32,
+            })
+            .collect::<Vec<_>>();
+        let assignments = ranked
+            .iter()
+            .map(|row| V26RowPages {
+                source_ordinal: row.source_ordinal,
+                primary_page: match row.source_ordinal {
+                    0 => 99,
+                    1 => 8,
+                    _ => 7,
+                },
+                replica_page: 100 + u32::try_from(row.source_ordinal).unwrap(),
+            })
+            .map(|row| (row.source_ordinal, row))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            select_v26_ranked_pages(&ranked, &assignments, 8).unwrap(),
+            vec![7, 99, 100, 8, 101, 102, 103, 104]
+        );
     }
 
     #[test]
@@ -1053,8 +1083,8 @@ mod tests {
         assert_eq!(samples.len(), 6);
         for sample in samples {
             assert_eq!(sample.candidate_rows, 12);
-            assert_eq!(sample.selected_pages, (0_u32..8).collect::<Vec<_>>());
-            assert_eq!(sample.hits, 8);
+            assert_eq!(sample.selected_pages, vec![0, 1, 2, 3, 32, 33, 34, 35]);
+            assert_eq!(sample.hits, 4);
             assert_eq!(sample.oracle_hits, 8);
             assert_eq!(sample.first_ten_ranked_rows[0].source_ordinal, 0);
         }
@@ -1443,9 +1473,9 @@ mod tests {
             .into_iter()
             .map(|ranked_row_limit| V26ExactGlobalRankResult {
                 ranked_row_limit,
-                aggregate_recall_ppm: 800_000,
-                minimum_query_recall_ppm: 800_000,
-                oracle_attainment_ppm: 1_000_000,
+                aggregate_recall_ppm: 400_000,
+                minimum_query_recall_ppm: 400_000,
+                oracle_attainment_ppm: 500_000,
                 passed: false,
             })
             .collect();
@@ -1460,6 +1490,7 @@ mod tests {
 
         let bytes = canonical_v26_exact_global_result_bytes(
             &valid,
+            &rows,
             &assignments,
             &queries,
             &truths,
@@ -1474,6 +1505,7 @@ mod tests {
         assert!(
             canonical_v26_exact_global_result_bytes(
                 &forged_result,
+                &rows,
                 &assignments,
                 &queries,
                 &truths,
@@ -1486,6 +1518,7 @@ mod tests {
         assert!(
             canonical_v26_exact_global_result_bytes(
                 &valid,
+                &rows,
                 &assignments,
                 &queries,
                 &truths,
@@ -1498,6 +1531,20 @@ mod tests {
         assert!(
             canonical_v26_exact_global_result_bytes(
                 &valid,
+                &rows,
+                &assignments,
+                &queries,
+                &truths,
+                &forged_samples,
+            )
+            .is_err()
+        );
+        forged_samples = samples.clone();
+        forged_samples[1].selected_pages = vec![0, 1, 2, 3, 32, 33, 34, 63];
+        assert!(
+            canonical_v26_exact_global_result_bytes(
+                &valid,
+                &rows,
                 &assignments,
                 &queries,
                 &truths,
