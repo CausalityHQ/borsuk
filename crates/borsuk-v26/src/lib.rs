@@ -847,7 +847,7 @@ pub fn canonical_v26_exact_global_result_bytes(
     const LIMITS: [u32; 6] = [10, 32, 128, 512, 2_048, 4_096];
     let expected_samples =
         evaluate_v26_exact_global_external_rows(rows, assignments, queries, truths, &LIMITS, 8)?;
-    if result.schema != "borsuk-v26-exact-global-result-v1"
+    if result.schema != "borsuk-v26-cumulative-exact-global-result-v1"
         || result.query_count != 512
         || queries.len() != 512
         || truths.len() != queries.len()
@@ -1480,7 +1480,7 @@ mod tests {
             })
             .collect();
         let valid = V26ExactGlobalResult {
-            schema: "borsuk-v26-exact-global-result-v1".to_owned(),
+            schema: "borsuk-v26-cumulative-exact-global-result-v1".to_owned(),
             query_count: 512,
             rank_results,
             disposition: V26Disposition::RankReducerRejected,

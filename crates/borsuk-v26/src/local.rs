@@ -755,7 +755,7 @@ fn summarize_v26_exact_global(
         V26Disposition::RankReducerRejected
     };
     Ok(V26ExactGlobalResult {
-        schema: "borsuk-v26-exact-global-result-v1".to_owned(),
+        schema: "borsuk-v26-cumulative-exact-global-result-v1".to_owned(),
         query_count,
         rank_results,
         disposition,
