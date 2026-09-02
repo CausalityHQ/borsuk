@@ -59,6 +59,7 @@ _CAPACITY_ERRORS = {
     "Unsupported",
 }
 _TRANSIENT_ERRORS = {
+    "InvalidInstanceID.NotFound",
     "InternalError",
     "InternalFailure",
     "PriorRequestNotComplete",

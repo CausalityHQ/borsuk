@@ -357,6 +357,20 @@ class V24QualificationSpotTests(unittest.TestCase):
         )
         ec2.terminate_instances.assert_called_once_with(InstanceIds=["i-v24-transient"])
 
+    def test_new_instance_eventual_consistency_is_a_bounded_transient(self) -> None:
+        outcomes: list[object] = [_AwsError("InvalidInstanceID.NotFound"), "ready"]
+
+        def call() -> object:
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        with mock.patch.object(subject.time, "sleep") as sleep:
+            self.assertEqual(subject._retry_aws_call(call), "ready")
+        sleep.assert_called_once_with(1)
+        self.assertEqual(outcomes, [])
+
     def test_pseudoquery_terminal_authenticates_pass_receipt_and_result_binding(
         self,
     ) -> None:
