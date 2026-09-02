@@ -26,7 +26,8 @@ use crate::{
     V26LayoutResult, V26LayoutSample, V26Node, V26ObjectIdentity, V26QueryTruth, V26RowPages,
     V26Tree, build_v26_external_truth_rows, canonical_json_value,
     canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
-    canonical_v26_layout_result_bytes, evaluate_v26_exact_global_external_rows, exact_lower_hex,
+    canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
+    evaluate_v26_exact_global_external_rows, evaluate_v26_tree_router, exact_lower_hex,
     exact_v26_layout_oracle_pages, invalid, projected_steps, validate_layout_authority,
     validate_v26_dual_tree_layout,
 };
@@ -122,6 +123,14 @@ pub struct V26ExactGlobalRequest {
     pub construction_rows: V26LocalObjectPath,
     pub layout: V26LayoutEvaluationRequest,
     pub ranked_row_limits: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26TreeRouterRequest {
+    pub primary_tree: V26LocalObjectPath,
+    pub replica_tree: V26LocalObjectPath,
+    pub layout: V26LayoutEvaluationRequest,
+    pub page_budget: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -789,6 +798,60 @@ pub fn run_v26_exact_global(request: &V26ExactGlobalRequest) -> Result<Vec<u8>> 
     )
 }
 
+pub fn run_v26_tree_router(request: &V26TreeRouterRequest) -> Result<Vec<u8>> {
+    let (truths, _, layout_result) = evaluate_v26_layout_oracle(&request.layout)?;
+    if request.page_budget != 8
+        || layout_result.disposition != V26Disposition::BoundedLayoutCandidate
+    {
+        return Err(invalid("V26 tree router layout gate is closed"));
+    }
+    let terminal = read_layout_terminal(&request.layout.layout_terminal)?;
+    if [
+        &request.primary_tree.identity,
+        &request.replica_tree.identity,
+    ]
+    .iter()
+    .any(|identity| {
+        identity.generation != terminal.authority.generation
+            || !terminal.outputs.iter().any(|output| output == *identity)
+    }) {
+        return Err(invalid("V26 tree router input authority differs"));
+    }
+    authenticate(&request.primary_tree, "primary-tree-parquet")?;
+    authenticate(&request.replica_tree, "replica-tree-parquet")?;
+    let node_count = i64::from(terminal.leaves_per_tree)
+        .checked_mul(2)
+        .and_then(|value| value.checked_sub(1))
+        .ok_or_else(|| invalid("V26 tree router node count overflows"))?;
+    let primary = read_tree(
+        &request.primary_tree.path,
+        node_count,
+        terminal.authority.primary_seed,
+    )?;
+    let replica = read_tree(
+        &request.replica_tree.path,
+        node_count,
+        terminal.authority.replica_seed,
+    )?;
+    let assignment_rows = i64::try_from(terminal.row_count)
+        .map_err(|_| invalid("V26 tree router assignment count overflows"))?;
+    let assignments = read_assignments(&request.layout.page_assignments.path, assignment_rows)?;
+    validate_v26_dual_tree_layout(&terminal.authority, &primary, &replica, &assignments)?;
+    let queries = read_evaluation_queries(
+        &request.layout.external_queries.path,
+        request.layout.expected_queries,
+    )?;
+    let (samples, result) = evaluate_v26_tree_router(
+        &primary,
+        &replica,
+        &queries,
+        &truths,
+        usize::try_from(request.page_budget)
+            .map_err(|_| invalid("V26 tree router page budget overflows"))?,
+    )?;
+    canonical_v26_tree_router_result_bytes(&result, &primary, &replica, &queries, &truths, &samples)
+}
+
 fn open_reader(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<fs::File>> {
     let file = fs::File::open(path)
         .map_err(|error| invalid(&format!("V26 Parquet open failed: {error}")))?;
@@ -1384,11 +1447,11 @@ mod tests {
 
     use super::{
         V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
-        V26LocalObjectPath, V26TruthBuildRequest, assignments_batch, evaluate_v26_exact_global,
-        evaluate_v26_layout_oracle, output_identity, read_assignments, run_v26_layout_build,
-        run_v26_truth_build, v26_construction_schema, v26_page_assignments_schema,
-        v26_query_schema, v26_source_map_schema, v26_tree_schema, v26_truth_schema,
-        validate_v26_layout_build_output,
+        V26LocalObjectPath, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
+        evaluate_v26_exact_global, evaluate_v26_layout_oracle, output_identity, read_assignments,
+        read_layout_terminal, run_v26_layout_build, run_v26_tree_router, run_v26_truth_build,
+        v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
+        v26_source_map_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -1422,14 +1485,15 @@ mod tests {
         }
     }
 
-    fn fixture() -> (
+    fn fixture_with_rows(
+        expected_rows: u64,
+    ) -> (
         TempDir,
         V26LocalObjectPath,
         V26LocalObjectPath,
         V26LocalObjectPath,
     ) {
         let temp = TempDir::new().unwrap();
-        let expected_rows = 1_409_u64;
         let ordinals = UInt64Array::from_iter_values(0..expected_rows);
         let mut flat = Vec::with_capacity(expected_rows as usize * 96);
         for ordinal in 0..expected_rows as usize {
@@ -1501,6 +1565,15 @@ mod tests {
         )
     }
 
+    fn fixture() -> (
+        TempDir,
+        V26LocalObjectPath,
+        V26LocalObjectPath,
+        V26LocalObjectPath,
+    ) {
+        fixture_with_rows(1_409)
+    }
+
     fn request(
         manifest: V26LocalObjectPath,
         construction_rows: V26LocalObjectPath,
@@ -1528,8 +1601,8 @@ mod tests {
         .unwrap()
     }
 
-    fn evaluation_fixture() -> (TempDir, V26LayoutEvaluationRequest) {
-        let (temp, manifest, construction, source_map) = fixture();
+    fn evaluation_fixture_with_rows(expected_rows: u64) -> (TempDir, V26LayoutEvaluationRequest) {
+        let (temp, manifest, construction, source_map) = fixture_with_rows(expected_rows);
         let output_dir = temp.path().join("layout");
         let build_request = request(manifest, construction, source_map, output_dir.clone(), 2);
         let build = run_v26_layout_build(&build_request).unwrap();
@@ -1620,6 +1693,10 @@ mod tests {
             expected_queries: 512,
         };
         (temp, request)
+    }
+
+    fn evaluation_fixture() -> (TempDir, V26LayoutEvaluationRequest) {
+        evaluation_fixture_with_rows(1_409)
     }
 
     #[test]
@@ -1906,5 +1983,40 @@ mod tests {
                 && sample.first_ten_ranked_rows.len() == 10
                 && sample.selected_pages.len() <= 8
         }));
+    }
+
+    #[test]
+    fn v26_tree_router_local_authenticates_closed_trees_and_emits_canonical_result() {
+        // Break caught: the router bypasses the closed tree identities, opens construction/page
+        // data, or trusts emitted metrics instead of the pure router contract.
+        let (temp, layout) = evaluation_fixture_with_rows(2_113);
+        let terminal = read_layout_terminal(&layout.layout_terminal).unwrap();
+        let tree = |role: &str, name: &str| V26LocalObjectPath {
+            identity: terminal
+                .outputs
+                .iter()
+                .find(|identity| identity.role == role)
+                .unwrap()
+                .clone(),
+            path: temp.path().join("layout").join(name),
+        };
+        let request = V26TreeRouterRequest {
+            primary_tree: tree("primary-tree-parquet", "primary-tree.parquet"),
+            replica_tree: tree("replica-tree-parquet", "replica-tree.parquet"),
+            layout,
+            page_budget: 8,
+        };
+
+        let bytes = run_v26_tree_router(&request).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert_eq!(
+            value["result"]["schema"],
+            "borsuk-v26-tree-router-result-v1"
+        );
+        assert_eq!(value["result"]["page_body_reads"], 0);
+        assert_eq!(value["result"]["claim_eligible"], false);
+        assert_eq!(value["samples"].as_array().unwrap().len(), 512);
     }
 }

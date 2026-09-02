@@ -1,9 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, V26Error, V26LayoutAuthority, invalid};
+use crate::{Result, V26Error, V26LayoutAuthority, invalid, validate_v26_vector};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct V26ConstructionRow {
@@ -63,6 +63,165 @@ fn score(row: &V26ConstructionRow, direction: &[f32; 96]) -> f32 {
         .iter()
         .zip(direction)
         .fold(0.0_f32, |sum, (coordinate, sign)| sum + coordinate * sign)
+}
+
+fn score_query(query: &[f32; 96], direction: &[f32; 96]) -> f32 {
+    query
+        .iter()
+        .zip(direction)
+        .fold(0.0_f32, |sum, (coordinate, sign)| sum + coordinate * sign)
+}
+
+fn validate_router_tree(tree: &V26Tree, expected_seed: u64) -> Result<BTreeSet<u32>> {
+    if tree.seed != expected_seed
+        || usize::try_from(tree.root)
+            .ok()
+            .is_none_or(|root| root >= tree.nodes.len())
+        || tree.nodes.is_empty()
+    {
+        return Err(invalid("V26 router tree authority differs"));
+    }
+    let mut pending = vec![tree.root];
+    let mut visited = HashSet::new();
+    let mut pages = BTreeSet::new();
+    while let Some(node_ordinal) = pending.pop() {
+        let index = usize::try_from(node_ordinal)
+            .map_err(|_| invalid("V26 router node ordinal overflows"))?;
+        let node = tree
+            .nodes
+            .get(index)
+            .ok_or_else(|| invalid("V26 router tree topology differs"))?;
+        if node.node_ordinal != node_ordinal
+            || !visited.insert(node_ordinal)
+            || !node.threshold.is_finite()
+            || !node.split_gap.is_finite()
+            || node.split_gap < 0.0
+        {
+            return Err(invalid("V26 router tree topology differs"));
+        }
+        match (node.left, node.right, node.leaf_page) {
+            (Some(left), Some(right), None) if left != right && node.direction_ordinal < 16 => {
+                pending.push(right);
+                pending.push(left);
+            }
+            (None, None, Some(page))
+                if node.direction_ordinal == 0
+                    && node.threshold.to_bits() == 0
+                    && node.split_gap.to_bits() == 0 =>
+            {
+                if !pages.insert(page) {
+                    return Err(invalid("V26 router leaf page repeats"));
+                }
+            }
+            _ => return Err(invalid("V26 router node shape differs")),
+        }
+    }
+    if visited.len() != tree.nodes.len() || pages.is_empty() {
+        return Err(invalid("V26 router tree inventory differs"));
+    }
+    Ok(pages)
+}
+
+#[derive(Clone, Copy)]
+struct RouterFrontier {
+    margin: f32,
+    tree_ordinal: u8,
+    node_ordinal: u32,
+}
+
+fn descend_router_branch(
+    tree: &V26Tree,
+    tree_ordinal: u8,
+    mut node_ordinal: u32,
+    inherited_margin: f32,
+    query: &[f32; 96],
+    frontier: &mut Vec<RouterFrontier>,
+) -> Result<u32> {
+    loop {
+        let node = &tree.nodes[usize::try_from(node_ordinal)
+            .map_err(|_| invalid("V26 router node ordinal overflows"))?];
+        if let Some(page) = node.leaf_page {
+            return Ok(page);
+        }
+        let direction = make_direction(tree.seed, node.node_ordinal, node.direction_ordinal);
+        let query_score = score_query(query, &direction);
+        let margin = (query_score - node.threshold).abs();
+        if !query_score.is_finite() || !margin.is_finite() {
+            return Err(invalid("V26 router projection differs"));
+        }
+        let (near, far) = if query_score <= node.threshold {
+            (node.left.unwrap(), node.right.unwrap())
+        } else {
+            (node.right.unwrap(), node.left.unwrap())
+        };
+        frontier.push(RouterFrontier {
+            margin: inherited_margin.max(margin),
+            tree_ordinal,
+            node_ordinal: far,
+        });
+        node_ordinal = near;
+    }
+}
+
+pub fn route_v26_pages(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    query: &[f32; 96],
+    page_budget: usize,
+) -> Result<Vec<u32>> {
+    if page_budget != 8 {
+        return Err(invalid("V26 router page budget differs"));
+    }
+    validate_v26_vector(query)?;
+    let primary_pages = validate_router_tree(primary, 0x5632_362d_5452_4545)?;
+    let replica_pages = validate_router_tree(replica, 0x5632_362d_5245_504c)?;
+    if !primary_pages.is_disjoint(&replica_pages)
+        || primary_pages.len() + replica_pages.len() < page_budget
+    {
+        return Err(invalid("V26 router page inventory differs"));
+    }
+    let mut frontier = vec![
+        RouterFrontier {
+            margin: 0.0,
+            tree_ordinal: 0,
+            node_ordinal: primary.root,
+        },
+        RouterFrontier {
+            margin: 0.0,
+            tree_ordinal: 1,
+            node_ordinal: replica.root,
+        },
+    ];
+    let mut selected = BTreeSet::new();
+    while selected.len() < page_budget {
+        let next = frontier
+            .iter()
+            .enumerate()
+            .min_by(|(_, left), (_, right)| {
+                left.margin
+                    .total_cmp(&right.margin)
+                    .then_with(|| left.tree_ordinal.cmp(&right.tree_ordinal))
+                    .then_with(|| left.node_ordinal.cmp(&right.node_ordinal))
+            })
+            .map(|(index, _)| index)
+            .ok_or_else(|| invalid("V26 router frontier exhausted"))?;
+        let branch = frontier.swap_remove(next);
+        let tree = if branch.tree_ordinal == 0 {
+            primary
+        } else {
+            replica
+        };
+        let page = descend_router_branch(
+            tree,
+            branch.tree_ordinal,
+            branch.node_ordinal,
+            branch.margin,
+            query,
+            &mut frontier,
+        )?;
+        selected.insert(page);
+    }
+    Ok(selected.into_iter().collect())
 }
 
 fn compare_ranked(left: &RankedRow, right: &RankedRow) -> std::cmp::Ordering {

@@ -4,10 +4,10 @@ use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
 use borsuk_v26::{
     V26ExactGlobalRequest, V26LayoutEvaluationRequest, V26LocalObjectPath, V26ObjectIdentity,
-    V26TruthBuildRequest, canonical_v26_layout_build_output_bytes,
+    V26TreeRouterRequest, V26TruthBuildRequest, canonical_v26_layout_build_output_bytes,
     canonical_v26_layout_result_bytes, canonical_v26_object_identity_bytes,
     evaluate_v26_layout_oracle, run_v26_exact_global, run_v26_layout_build_directory,
-    run_v26_truth_build,
+    run_v26_tree_router, run_v26_truth_build,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +47,15 @@ struct ExactGlobalRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct TreeRouterRequest {
+    generation: String,
+    primary_tree: RegisteredFile,
+    replica_tree: RegisteredFile,
+    layout: EvaluationRequest,
+    page_budget: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct TruthRequest {
     generation: String,
     construction: RegisteredFile,
@@ -63,6 +72,7 @@ enum V26CliMode {
     Truth(TruthRequest),
     Evaluate(EvaluationRequest),
     ExactGlobal(ExactGlobalRequest),
+    Router(TreeRouterRequest),
 }
 
 fn take(values: &mut BTreeMap<String, String>, key: &str) -> Result<String, String> {
@@ -120,6 +130,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
     let mut truth_build = false;
     let mut evaluate = false;
     let mut exact_global = false;
+    let mut router = false;
     let mut execute = false;
     let mut values = BTreeMap::new();
     while let Some(flag) = arguments.next() {
@@ -147,6 +158,12 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     return Err("duplicate --exact-global".to_owned());
                 }
                 exact_global = true;
+            }
+            "--route-trees" => {
+                if router {
+                    return Err("duplicate --route-trees".to_owned());
+                }
+                router = true;
             }
             "--execute" => {
                 if execute {
@@ -182,7 +199,16 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             | "--truth-output-path"
             | "--truth-output-uri"
             | "--expected-rows"
-            | "--expected-queries" => {
+            | "--expected-queries"
+            | "--primary-tree-path"
+            | "--primary-tree-uri"
+            | "--primary-tree-sha256"
+            | "--primary-tree-bytes"
+            | "--replica-tree-path"
+            | "--replica-tree-uri"
+            | "--replica-tree-sha256"
+            | "--replica-tree-bytes"
+            | "--page-budget" => {
                 let value = arguments
                     .next()
                     .ok_or_else(|| format!("missing value for {flag}"))?;
@@ -206,7 +232,11 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         }
     }
     if !execute
-        || u8::from(build) + u8::from(truth_build) + u8::from(evaluate) + u8::from(exact_global)
+        || u8::from(build)
+            + u8::from(truth_build)
+            + u8::from(evaluate)
+            + u8::from(exact_global)
+            + u8::from(router)
             != 1
     {
         return Err("exactly one executable phase is required".to_owned());
@@ -306,6 +336,27 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             return Err("V26 evaluation arguments differ".to_owned());
         }
         return Ok(V26CliMode::Evaluate(layout));
+    }
+    if router {
+        let primary_tree = take_registered(&mut values, "primary-tree")?;
+        let replica_tree = take_registered(&mut values, "replica-tree")?;
+        let page_budget = take(&mut values, "--page-budget")?
+            .parse()
+            .map_err(|_| "invalid --page-budget".to_owned())?;
+        if !values.is_empty()
+            || !valid_registered(&primary_tree)
+            || !valid_registered(&replica_tree)
+            || page_budget != 8
+        {
+            return Err("V26 tree router arguments differ".to_owned());
+        }
+        return Ok(V26CliMode::Router(TreeRouterRequest {
+            generation: layout.generation.clone(),
+            primary_tree,
+            replica_tree,
+            layout,
+            page_budget,
+        }));
     }
     let construction = take_registered(&mut values, "construction")?;
     let ranked_row_limits = take(&mut values, "--ranked-row-limits")?
@@ -411,6 +462,21 @@ fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
             ranked_row_limits: request.ranked_row_limits,
         })
         .map_err(|error| error.to_string()),
+        V26CliMode::Router(request) => run_v26_tree_router(&V26TreeRouterRequest {
+            primary_tree: local_object(
+                "primary-tree-parquet",
+                &request.generation,
+                request.primary_tree,
+            ),
+            replica_tree: local_object(
+                "replica-tree-parquet",
+                &request.generation,
+                request.replica_tree,
+            ),
+            layout: evaluation_request(request.layout),
+            page_budget: request.page_budget,
+        })
+        .map_err(|error| error.to_string()),
     }
 }
 
@@ -507,6 +573,26 @@ mod tests {
             "--ranked-row-limits".to_owned(),
             "10,32,128,512,2048,4096".to_owned(),
         ]);
+        args
+    }
+
+    fn tree_router_args() -> Vec<String> {
+        let mut args = evaluation_args();
+        args.retain(|argument| argument != "--evaluate-layout");
+        args.insert(1, "--route-trees".to_owned());
+        for (role, byte) in [("primary-tree", '6'), ("replica-tree", '7')] {
+            args.extend([
+                format!("--{role}-path"),
+                format!("/input/{role}.parquet"),
+                format!("--{role}-uri"),
+                format!("s3://bucket/{role}.parquet"),
+                format!("--{role}-sha256"),
+                byte.to_string().repeat(64),
+                format!("--{role}-bytes"),
+                "4096".to_owned(),
+            ]);
+        }
+        args.extend(["--page-budget".to_owned(), "8".to_owned()]);
         args
     }
 
@@ -678,6 +764,33 @@ mod tests {
             vec!["--ranked-row-limits", "10,32"],
         ] {
             let mut args = exact_global_args();
+            args.extend(mutation.into_iter().map(str::to_owned));
+            assert!(parse_v26_args(args).is_err());
+        }
+    }
+
+    #[test]
+    fn v26_tree_router_cli_accepts_only_closed_local_tree_authority() {
+        // Break caught: bounded routing discovers a tree, opens construction/page bodies, or
+        // accepts a tunable page budget.
+        let parsed = parse_v26_args(tree_router_args()).unwrap();
+        let V26CliMode::Router(request) = parsed else {
+            panic!("tree router mode differs");
+        };
+        assert_eq!(request.generation, "v26-generation");
+        assert_eq!(request.primary_tree.sha256, "6".repeat(64));
+        assert_eq!(request.replica_tree.sha256, "7".repeat(64));
+        assert_eq!(request.page_budget, 8);
+
+        for mutation in [
+            vec!["--bucket", "forbidden"],
+            vec!["--endpoint", "https://forbidden"],
+            vec!["--page-prefix", "forbidden"],
+            vec!["--construction-path", "/forbidden"],
+            vec!["--d3", "forbidden"],
+            vec!["--page-budget", "16"],
+        ] {
+            let mut args = tree_router_args();
             args.extend(mutation.into_iter().map(str::to_owned));
             assert!(parse_v26_args(args).is_err());
         }
