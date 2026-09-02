@@ -56,13 +56,19 @@ pub struct V26ObjectIdentity {
     pub digest: String, pub encoded_bytes: u64, pub generation: String,
 }
 pub struct V26LayoutAuthority {
-    pub schema: String, pub generation: String, pub primary_seed: u64,
+    pub schema: String, pub generation: String, pub source_commit: String,
+    pub source_archive_sha256: String, pub primary_seed: u64,
     pub replica_seed: u64, pub page_capacity: u32, pub expected_rows: u64,
 }
 pub struct V26LayoutReceipt {
     pub authority: V26LayoutAuthority, pub inputs: Vec<V26ObjectIdentity>,
-    pub outputs: Vec<V26ObjectIdentity>, pub projection_steps: u64,
-    pub query_role_opens: u64, pub claim_eligible: bool,
+    pub outputs: Vec<V26ObjectIdentity>, pub row_count: u64,
+    pub leaves_per_tree: u32, pub page_count: u32, pub projection_steps: u64,
+    pub worker_count: u32, pub elapsed_ns: u64, pub cpu_ns: u64,
+    pub peak_rss_bytes: u64, pub peak_psi_full_avg10_ppm: u64,
+    pub swap_start_bytes: u64, pub swap_end_bytes: u64,
+    pub query_role_opens: u64, pub page_body_reads: u64,
+    pub claim_eligible: bool,
 }
 pub enum V26Disposition {
     AuthorityStop, LayoutRejected, RankReducerRejected,
