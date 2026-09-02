@@ -70,10 +70,6 @@ pub struct V26LayoutReceipt {
     pub query_role_opens: u64, pub page_body_reads: u64,
     pub claim_eligible: bool,
 }
-pub enum V26Disposition {
-    AuthorityStop, LayoutRejected, RankReducerRejected,
-    TreeRouterRejected, BoundedLayoutCandidate,
-}
 pub struct V26ConstructionRow { pub source_ordinal: u64, pub vector: [f32; 96] }
 pub struct V26Node {
     pub node_ordinal: u32,
@@ -143,6 +139,10 @@ pub fn run_v26_layout_build(request: &V26LayoutBuildRequest) -> Result<V26Layout
 - Produces: `V26LayoutEvaluationRequest`, `V26LayoutSample`, `V26LayoutResult`, `evaluate_v26_layout_oracle`, `canonical_v26_layout_result_bytes`.
 
 ```rust
+pub enum V26Disposition {
+    AuthorityStop, LayoutRejected, RankReducerRejected,
+    TreeRouterRejected, BoundedLayoutCandidate,
+}
 pub struct V26LayoutEvaluationRequest {
     pub layout_terminal: V26LocalObjectPath,
     pub page_assignments: V26LocalObjectPath,

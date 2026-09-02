@@ -450,6 +450,7 @@ dependencies = [
 name = "borsuk-v26"
 version = "0.0.0"
 dependencies = [
+ "arrow-schema",
  "serde",
  "serde_json",
 ]

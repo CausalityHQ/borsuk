@@ -9,7 +9,12 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+mod local;
 mod tree;
+
+pub use local::{
+    v26_construction_schema, v26_page_assignments_schema, v26_source_map_schema, v26_tree_schema,
+};
 
 pub use tree::{
     V26ConstructionRow, V26Node, V26RowPages, V26Tree, build_v26_dual_tree_layout,
@@ -419,5 +424,60 @@ mod tests {
             mutate(&mut candidate);
             assert!(canonical_v26_layout_receipt_bytes(&candidate).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod local_schema_tests {
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType, Field, Schema};
+
+    use super::{
+        v26_construction_schema, v26_page_assignments_schema, v26_source_map_schema,
+        v26_tree_schema,
+    };
+
+    #[test]
+    fn v26_layout_local_schema_contracts_are_exact_and_nonnullable() {
+        // Break caught: cross-language field/type/order/nullability drift.
+        let vector = DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            96,
+        );
+        assert_eq!(
+            v26_construction_schema(),
+            Schema::new(vec![
+                Field::new("source_ordinal", DataType::UInt64, false),
+                Field::new("vector", vector, false),
+            ])
+        );
+        assert_eq!(
+            v26_source_map_schema(),
+            Schema::new(vec![
+                Field::new("source_ordinal", DataType::UInt64, false),
+                Field::new("dataset_ordinal", DataType::UInt64, false),
+            ])
+        );
+        assert_eq!(
+            v26_tree_schema(),
+            Schema::new(vec![
+                Field::new("node_ordinal", DataType::UInt32, false),
+                Field::new("left", DataType::UInt32, true),
+                Field::new("right", DataType::UInt32, true),
+                Field::new("direction_ordinal", DataType::UInt8, false),
+                Field::new("threshold", DataType::Float32, false),
+                Field::new("split_gap", DataType::Float32, false),
+                Field::new("leaf_page", DataType::UInt32, true),
+            ])
+        );
+        assert_eq!(
+            v26_page_assignments_schema(),
+            Schema::new(vec![
+                Field::new("source_ordinal", DataType::UInt64, false),
+                Field::new("primary_page", DataType::UInt32, false),
+                Field::new("replica_page", DataType::UInt32, false),
+            ])
+        );
     }
 }
