@@ -20,7 +20,7 @@
 - The warm named gate must complete in under one second. A cold dependency build
   is paid once and reported separately; it is never repeated after a logic
   failure.
-- Stop before exact-global scoring unless layout aggregate recall is at least 975,000 ppm and minimum-query recall at least 800,000 ppm.
+- Stop before exact-global scoring unless layout aggregate recall reaches the 995,000 ppm promotion target and minimum-query recall is at least 800,000 ppm; report 975,000 ppm as a lower floor only.
 - Stop before routing unless exact-global aggregate recall is at least 975,000 ppm and oracle attainment at least 995,000 ppm.
 - Scientific work uses one `causality` Spot worker with multi-AZ fallback, no DGX, zero page-body reads, zero swap growth, and immediate terminal shutdown.
 
@@ -48,7 +48,7 @@
 - Modify: `Cargo.toml`
 
 **Interfaces:**
-- Produces: `V26ObjectIdentity`, `V26LayoutAuthority`, `V26LayoutReceipt`, `V26Tree`, `V26Node`, `V26RowPages`, `build_v26_dual_tree_layout`, `route_v26_pages`, `canonical_v26_layout_receipt_bytes`.
+- Produces: `V26ObjectIdentity`, `V26LayoutAuthority`, `V26LayoutReceipt`, `V26Tree`, `V26Node`, `V26RowPages`, `build_v26_dual_tree_layout`, `canonical_v26_layout_receipt_bytes`.
 
 ```rust
 pub struct V26ObjectIdentity {
@@ -65,7 +65,7 @@ pub struct V26LayoutReceipt {
     pub outputs: Vec<V26ObjectIdentity>, pub row_count: u64,
     pub leaves_per_tree: u32, pub page_count: u32, pub projection_steps: u64,
     pub worker_count: u32, pub elapsed_ns: u64, pub cpu_ns: u64,
-    pub peak_rss_bytes: u64, pub peak_psi_full_avg10_ppm: u64,
+    pub peak_rss_bytes: u64, pub peak_psi_full_avg10_milli_percent: u64,
     pub swap_start_bytes: u64, pub swap_end_bytes: u64,
     pub query_role_opens: u64, pub page_body_reads: u64,
     pub claim_eligible: bool,
@@ -80,7 +80,7 @@ pub struct V26Node {
     pub left: Option<u32>,
     pub right: Option<u32>,
     pub direction_ordinal: u8,
-    pub threshold: f32,
+    pub threshold: f32, pub split_gap: f32,
     pub leaf_page: Option<u32>,
 }
 pub struct V26Tree { pub seed: u64, pub root: u32, pub nodes: Vec<V26Node> }
@@ -88,20 +88,19 @@ pub struct V26RowPages { pub source_ordinal: u64, pub primary_page: u32, pub rep
 pub fn build_v26_dual_tree_layout(
     authority: &V26LayoutAuthority,
     rows: &[V26ConstructionRow],
-    worker_count: usize,
 ) -> Result<(V26Tree, V26Tree, Vec<V26RowPages>)>;
-pub fn route_v26_pages(
+pub fn validate_v26_dual_tree_layout(
+    authority: &V26LayoutAuthority,
     primary: &V26Tree,
     replica: &V26Tree,
-    query: &[f32; 96],
-    page_budget: usize,
-) -> Result<Vec<u32>>;
+    assignments: &[V26RowPages],
+) -> Result<()>;
 ```
 
-- [ ] **Step 1: Write the tree RED.** Add `v26_tree_balances_aligned_leaves_and_is_byte_deterministic`. Use 1,409 literal 96D rows so each tree requires three leaves. Assert complete ordinal inventory, maximum 704 rows per leaf, disjoint page ranges, distinct primary/replica pages, the exact left-maximum threshold and `<=` branch rule, deterministic sibling-margin ties, and byte-identical one-worker/four-worker output.
+- [ ] **Step 1: Write the tree RED.** Add `v26_tree_balances_aligned_leaves_and_is_byte_deterministic` and `v26_tree_records_zero_gap_plateaus_without_losing_assignment_authority`. Use 1,409 literal 96D rows so each tree requires three leaves. Assert complete ordinal inventory, maximum 704 rows per leaf, disjoint page ranges, distinct primary/replica pages, finite deterministic left-maximum thresholds, explicit zero-gap evidence, post-build validation, and byte-identical repeated output. Query branching and sibling-margin behavior belong to the Task 6 router RED; worker-count determinism belongs to the Task 2 local runner that actually owns parallel execution.
 - [ ] **Step 2: Write the authority RED.** Add `v26_tree_layout_receipt_recomputes_counts_work_and_identities`. Mutation-lock schema, both seeds, capacity, source/archive/generation, role/URI/digest/length, row and page counts, actual projection steps, worker count, RSS/PSI/swap, query-role-open count zero, and claim eligibility false.
 - [ ] **Step 3: Run focused RED.** Run `cargo test -p borsuk-v26 v26_tree_ -- --nocapture`. Require unresolved V26 symbols only.
-- [ ] **Step 4: Implement the minimal tree.** Generate 16 SplitMix sign directions per node; compute fixed 96-step f32 scores; choose maximum adjacent split gap then direction ordinal; sort by `(score, source_ordinal)`; split with the registered aligned formula; number nodes/leaves by preorder.
+- [ ] **Step 4: Implement the minimal tree.** Generate and cache 16 SplitMix sign directions per node; compute fixed 96-step f32 scores; use deterministic rank selection to find each adjacent split gap, sort only the winning direction by `(score, source_ordinal)`, store its gap, split with the registered aligned formula, and number nodes/leaves by preorder. Validate topology, capacity, page ranges, sentinel absence, and complete assignments before return.
 - [ ] **Step 5: Implement strict canonical authority.** Validate all derivable counts and identities, serialize sorted compact JSON plus one LF, and reject any query/evaluation role in construction inputs.
 - [ ] **Step 6: Run GREEN and mechanical checks.** Run `cargo test -p borsuk-v26 v26_tree_ -- --nocapture`, `cargo fmt --all -- --check`, and `git diff --check`. Commit `Add V26 dual-tree layout contracts`.
 
@@ -213,7 +212,7 @@ v26_page_layout --manifest <file> --input-dir <dir> --output-dir <empty-dir> \
 - [ ] **Step 1: Freeze the manifest.** Bind source commit/archive, binary, exact four Parquets, seeds, capacity 704, expected 262,144 rows, 373 leaves/tree, 746 pages, 512 queries, gates, 1 GiB RSS, 0.5 PSI, zero swap growth, 300-second wall/progress, outputs, and no-restart semantics.
 - [ ] **Step 2: Run authentic 4,096-row structural smoke.** Use one Spot process and the first 4,096 source ordinals selected by literal ordinal range from the authenticated construction/source-map inputs. Require exact inventory, two-copy assignments, maximum capacity, byte-identical repeated validation, zero query/truth-role opens, zero page reads, RSS below 512 MiB, and wall below 30 seconds. Do not compute or report recall from this smoke.
 - [ ] **Step 3: Run construction once.** Stage only construction/source-map roles, build both trees and assignments, upload terminal, and terminate the builder.
-- [ ] **Step 4: Run layout-only evaluation once.** Stage the closed layout plus truth/pseudoquery roles, compute 512 exact covers, and stop if either 975,000 aggregate or 800,000 minimum recall misses.
+- [ ] **Step 4: Run layout-only evaluation once.** Stage the closed layout plus truth/pseudoquery roles, compute 512 exact covers, report the 975,000 lower floor, and stop unless both the 995,000 aggregate promotion target and 800,000 minimum pass.
 - [ ] **Step 5: Authenticate and record.** Recompute every sample from Parquet, verify terminal/resource/cleanup evidence, terminate compute, and commit only the manifest and ledger with `Record V26 layout causal screen`.
 
 ### Task 6: Conditional exact-global and router gates
@@ -226,7 +225,7 @@ v26_page_layout --manifest <file> --input-dir <dir> --output-dir <empty-dir> \
 - Update after terminal: `docs/research/publication-v3-attempt-ledger.md`
 
 **Interfaces:**
-- Produces exact-global rank-reducer evidence, then fixed best-first dual-tree routing evidence.
+- Produces exact-global rank-reducer evidence, then `route_v26_pages` and fixed best-first dual-tree routing evidence.
 
 ```rust
 pub struct V26ExactGlobalRequest {
@@ -244,9 +243,15 @@ pub fn evaluate_v26_exact_global(
 pub fn evaluate_v26_tree_router(
     request: &V26TreeRouterRequest,
 ) -> Result<Vec<V26ContainmentSample>>;
+pub fn route_v26_pages(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    query: &[f32; 96],
+    page_budget: usize,
+) -> Result<Vec<u32>>;
 ```
 
-- [ ] **Step 1: Reuse the V25 exact-global scorer contract.** Test rank limits 10 through 4,096, own-page exclusion, best-row-per-page ties, and independent sample/aggregate recomputation against the new assignments.
+- [ ] **Step 1: Reuse and strengthen the V25 exact-global scorer contract.** Test rank limits 10 through 4,096, own-page exclusion, best-row-per-page ties, and independent sample/aggregate recomputation against the new assignments. Persist the first ten ranked source ordinals and their pages; a literal truth-rank injection must reproduce the reducer's expected hit count so f32/f64 head drift cannot masquerade as an authority defect.
 - [ ] **Step 2: Run exact-global open gate.** Stop below 975,000 aggregate or 995,000 oracle attainment; do not train or tune a router.
 - [ ] **Step 3: Test fixed tree routing.** Best-first expand sibling margins from both roots, emit exactly eight unique leaves, prohibit outcome-dependent widening and exhaustive fallback, and require scalar/parallel page equality.
 - [ ] **Step 4: Run routing open gate.** Require 975,000 aggregate, 995,000 oracle attainment, projected memory below 3 GiB, warm p99 below 12 ms, and no more than eight page reads.

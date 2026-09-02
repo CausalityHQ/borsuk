@@ -2,6 +2,7 @@
 members = [
   "crates/borsuk",
   "crates/borsuk-v25",
+  "crates/borsuk-v26",
   "crates/borsuk-fma",
   "crates/borsuk-cli",
   "crates/borsuk-node",

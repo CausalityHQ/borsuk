@@ -1,0 +1,344 @@
+use std::collections::BTreeSet;
+
+use serde::{Deserialize, Serialize};
+
+use crate::{Result, V26Error, V26LayoutAuthority, invalid};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct V26ConstructionRow {
+    pub source_ordinal: u64,
+    pub vector: [f32; 96],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26Node {
+    pub node_ordinal: u32,
+    pub left: Option<u32>,
+    pub right: Option<u32>,
+    pub direction_ordinal: u8,
+    pub threshold: f32,
+    pub split_gap: f32,
+    pub leaf_page: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26Tree {
+    pub seed: u64,
+    pub root: u32,
+    pub nodes: Vec<V26Node>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26RowPages {
+    pub source_ordinal: u64,
+    pub primary_page: u32,
+    pub replica_page: u32,
+}
+
+fn splitmix64(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+fn direction_sign(seed: u64, node: u32, direction: u8, dimension: usize) -> f32 {
+    let key = seed
+        ^ u64::from(node).wrapping_mul(0xd6e8_feb8_6659_fd93)
+        ^ u64::from(direction).wrapping_mul(0xa5a3_564e_27f8_864d)
+        ^ (dimension as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    if splitmix64(key) & 1 == 0 { -1.0 } else { 1.0 }
+}
+
+fn make_direction(seed: u64, node: u32, direction: u8) -> [f32; 96] {
+    std::array::from_fn(|dimension| direction_sign(seed, node, direction, dimension))
+}
+
+fn score(row: &V26ConstructionRow, direction: &[f32; 96]) -> f32 {
+    row.vector
+        .iter()
+        .zip(direction)
+        .fold(0.0_f32, |sum, (coordinate, sign)| sum + coordinate * sign)
+}
+
+fn compare_ranked(left: &RankedRow, right: &RankedRow) -> std::cmp::Ordering {
+    left.0
+        .total_cmp(&right.0)
+        .then_with(|| left.1.cmp(&right.1))
+}
+
+struct TreeBuilder<'a> {
+    seed: u64,
+    page_offset: u32,
+    next_page: u32,
+    rows: &'a [V26ConstructionRow],
+    nodes: Vec<V26Node>,
+    row_pages: Vec<u32>,
+}
+
+type RankedRow = (f32, u64, usize);
+type SelectedDirection = (f32, u8, Vec<RankedRow>);
+
+impl TreeBuilder<'_> {
+    fn build_node(&mut self, row_indexes: Vec<usize>, leaves: u32, capacity: u32) -> Result<u32> {
+        let node_ordinal = u32::try_from(self.nodes.len())
+            .map_err(|_| V26Error("V26 node count overflows".to_owned()))?;
+        self.nodes.push(V26Node {
+            node_ordinal,
+            left: None,
+            right: None,
+            direction_ordinal: 0,
+            threshold: 0.0,
+            split_gap: 0.0,
+            leaf_page: None,
+        });
+        if leaves == 1 {
+            let page = self
+                .page_offset
+                .checked_add(self.next_page)
+                .ok_or_else(|| V26Error("V26 page count overflows".to_owned()))?;
+            self.next_page += 1;
+            for row_index in row_indexes {
+                self.row_pages[row_index] = page;
+            }
+            self.nodes[node_ordinal as usize].leaf_page = Some(page);
+            return Ok(node_ordinal);
+        }
+
+        let left_leaves = leaves / 2;
+        let right_leaves = leaves - left_leaves;
+        let left_rows = (row_indexes.len() - right_leaves as usize)
+            .min(left_leaves as usize * capacity as usize);
+        let mut selected: Option<SelectedDirection> = None;
+        for direction in 0_u8..16 {
+            let plane = make_direction(self.seed, node_ordinal, direction);
+            let mut ranked = row_indexes
+                .iter()
+                .map(|index| {
+                    let value = score(&self.rows[*index], &plane);
+                    (value, self.rows[*index].source_ordinal, *index)
+                })
+                .collect::<Vec<_>>();
+            if ranked.iter().any(|(value, _, _)| !value.is_finite()) {
+                return Err(V26Error("V26 projection score is not finite".to_owned()));
+            }
+            ranked.select_nth_unstable_by(left_rows - 1, compare_ranked);
+            let left_max = ranked[left_rows - 1];
+            let right_min = *ranked[left_rows..]
+                .iter()
+                .min_by(|left, right| compare_ranked(left, right))
+                .ok_or_else(|| V26Error("V26 split rank differs".to_owned()))?;
+            let gap = right_min.0 - left_max.0;
+            if !gap.is_finite() || gap < 0.0 {
+                return Err(V26Error("V26 split gap is not finite".to_owned()));
+            }
+            let replace = selected
+                .as_ref()
+                .is_none_or(|(best_gap, _, _)| gap.total_cmp(best_gap).is_gt());
+            if replace {
+                selected = Some((gap, direction, ranked));
+            }
+        }
+        let (split_gap, direction, mut ranked) =
+            selected.ok_or_else(|| V26Error("V26 split direction is absent".to_owned()))?;
+        ranked.sort_by(compare_ranked);
+        let threshold = ranked[left_rows - 1].0;
+        let right = ranked.split_off(left_rows);
+        let left_indexes = ranked.into_iter().map(|(_, _, index)| index).collect();
+        let right_indexes = right.into_iter().map(|(_, _, index)| index).collect();
+        let left = self.build_node(left_indexes, left_leaves, capacity)?;
+        let right = self.build_node(right_indexes, right_leaves, capacity)?;
+        self.nodes[node_ordinal as usize] = V26Node {
+            node_ordinal,
+            left: Some(left),
+            right: Some(right),
+            direction_ordinal: direction,
+            threshold,
+            split_gap,
+            leaf_page: None,
+        };
+        Ok(node_ordinal)
+    }
+}
+
+fn build_tree(
+    seed: u64,
+    page_offset: u32,
+    leaves: u32,
+    capacity: u32,
+    rows: &[V26ConstructionRow],
+) -> Result<(V26Tree, Vec<u32>)> {
+    let mut builder = TreeBuilder {
+        seed,
+        page_offset,
+        next_page: 0,
+        rows,
+        nodes: Vec::new(),
+        row_pages: vec![u32::MAX; rows.len()],
+    };
+    let root = builder.build_node((0..rows.len()).collect(), leaves, capacity)?;
+    Ok((
+        V26Tree {
+            seed,
+            root,
+            nodes: builder.nodes,
+        },
+        builder.row_pages,
+    ))
+}
+
+pub fn build_v26_dual_tree_layout(
+    authority: &V26LayoutAuthority,
+    rows: &[V26ConstructionRow],
+) -> Result<(V26Tree, V26Tree, Vec<V26RowPages>)> {
+    if authority.schema != "borsuk-v26-dual-tree-layout-v1"
+        || authority.primary_seed != 0x5632_362d_5452_4545
+        || authority.replica_seed != 0x5632_362d_5245_504c
+        || authority.page_capacity != 704
+        || authority.expected_rows != rows.len() as u64
+        || rows.is_empty()
+    {
+        return Err(invalid("V26 tree authority differs"));
+    }
+    let mut prior = None;
+    for row in rows {
+        if row.vector.iter().any(|coordinate| !coordinate.is_finite())
+            || prior.is_some_and(|ordinal| row.source_ordinal <= ordinal)
+        {
+            return Err(invalid("V26 construction row authority differs"));
+        }
+        prior = Some(row.source_ordinal);
+    }
+    let leaves_u64 = (rows.len() as u64).div_ceil(u64::from(authority.page_capacity));
+    let leaves = u32::try_from(leaves_u64).map_err(|_| invalid("V26 tree page count overflows"))?;
+    let (primary, primary_pages) = build_tree(
+        authority.primary_seed,
+        0,
+        leaves,
+        authority.page_capacity,
+        rows,
+    )?;
+    let (replica, replica_pages) = build_tree(
+        authority.replica_seed,
+        leaves,
+        leaves,
+        authority.page_capacity,
+        rows,
+    )?;
+    let assignments = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| V26RowPages {
+            source_ordinal: row.source_ordinal,
+            primary_page: primary_pages[index],
+            replica_page: replica_pages[index],
+        })
+        .collect::<Vec<_>>();
+    validate_v26_dual_tree_layout(authority, &primary, &replica, &assignments)?;
+    Ok((primary, replica, assignments))
+}
+
+fn validate_tree(tree: &V26Tree, seed: u64, first_page: u32, leaves: u32) -> Result<()> {
+    let expected_nodes = leaves
+        .checked_mul(2)
+        .and_then(|value| value.checked_sub(1))
+        .ok_or_else(|| invalid("V26 tree node count overflows"))?;
+    if tree.seed != seed || tree.root != 0 || tree.nodes.len() != expected_nodes as usize {
+        return Err(invalid("V26 tree topology differs"));
+    }
+    let end_page = first_page
+        .checked_add(leaves)
+        .ok_or_else(|| invalid("V26 page count overflows"))?;
+    let mut referenced = vec![false; tree.nodes.len()];
+    referenced[0] = true;
+    let mut pages = BTreeSet::new();
+    for (index, node) in tree.nodes.iter().enumerate() {
+        if node.node_ordinal as usize != index
+            || !node.threshold.is_finite()
+            || !node.split_gap.is_finite()
+            || node.split_gap < 0.0
+        {
+            return Err(invalid("V26 tree node authority differs"));
+        }
+        match (node.left, node.right, node.leaf_page) {
+            (None, None, Some(page)) => {
+                if page < first_page
+                    || page >= end_page
+                    || !pages.insert(page)
+                    || node.direction_ordinal != 0
+                    || node.threshold != 0.0
+                    || node.split_gap != 0.0
+                {
+                    return Err(invalid("V26 tree leaf authority differs"));
+                }
+            }
+            (Some(left), Some(right), None) => {
+                if node.direction_ordinal >= 16
+                    || left <= node.node_ordinal
+                    || right <= node.node_ordinal
+                    || left as usize >= tree.nodes.len()
+                    || right as usize >= tree.nodes.len()
+                    || referenced[left as usize]
+                    || referenced[right as usize]
+                {
+                    return Err(invalid("V26 tree edge authority differs"));
+                }
+                referenced[left as usize] = true;
+                referenced[right as usize] = true;
+            }
+            _ => return Err(invalid("V26 tree node shape differs")),
+        }
+    }
+    if referenced.iter().any(|value| !value) || pages.len() != leaves as usize {
+        return Err(invalid("V26 tree inventory differs"));
+    }
+    Ok(())
+}
+
+pub fn validate_v26_dual_tree_layout(
+    authority: &V26LayoutAuthority,
+    primary: &V26Tree,
+    replica: &V26Tree,
+    assignments: &[V26RowPages],
+) -> Result<()> {
+    let leaves_u64 = authority
+        .expected_rows
+        .div_ceil(u64::from(authority.page_capacity));
+    let leaves = u32::try_from(leaves_u64).map_err(|_| invalid("V26 page count overflows"))?;
+    let page_count = leaves
+        .checked_mul(2)
+        .ok_or_else(|| invalid("V26 page count overflows"))?;
+    validate_tree(primary, authority.primary_seed, 0, leaves)?;
+    validate_tree(replica, authority.replica_seed, leaves, leaves)?;
+    if assignments.len() as u64 != authority.expected_rows {
+        return Err(invalid("V26 assignment count differs"));
+    }
+    let mut prior = None;
+    let mut counts = vec![0_u32; page_count as usize];
+    for assignment in assignments {
+        if prior.is_some_and(|ordinal| assignment.source_ordinal <= ordinal)
+            || assignment.primary_page >= leaves
+            || assignment.replica_page < leaves
+            || assignment.replica_page >= page_count
+            || assignment.primary_page == assignment.replica_page
+        {
+            return Err(invalid("V26 assignment authority differs"));
+        }
+        prior = Some(assignment.source_ordinal);
+        for page in [assignment.primary_page, assignment.replica_page] {
+            counts[page as usize] = counts[page as usize]
+                .checked_add(1)
+                .ok_or_else(|| invalid("V26 page occupancy overflows"))?;
+        }
+    }
+    if counts
+        .iter()
+        .any(|count| *count == 0 || *count > authority.page_capacity)
+    {
+        return Err(invalid("V26 page capacity differs"));
+    }
+    Ok(())
+}

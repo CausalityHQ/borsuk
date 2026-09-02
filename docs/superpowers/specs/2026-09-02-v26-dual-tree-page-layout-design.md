@@ -7,10 +7,15 @@
 ## Decision
 
 V26 replaces the inherited physical page layout before it builds another row
-router. V25 proved on 262,144 real Deep Image rows that the old layout's exact
-eight-page oracle reaches only 953,125 ppm and that exact global rank reduction
-reaches only 644,921 ppm. No scorer or routing search can recover neighbors that
-the page layout scatters beyond the read budget.
+router. V25 proved that the inherited 10-million-row page identities, when
+restricted to a 262,144-row Deep Image cohort, give an exact eight-page oracle
+of 953,125 ppm and exact-global rank reduction of 644,921 ppm. That cohort is a
+sparse projection of the old pages rather than a native 262,144-row rebuild, so
+it is a valid failure of the tested V25 artifact but not evidence that the
+incumbent packing recipe loses at native density. V26 therefore treats
+953,125 ppm only as the rejected V25 artifact result and uses the absolute
+995,000 ppm target, rather than a cross-density comparison, as its promotion
+gate.
 
 The next falsifier builds two independent, deterministic balanced projection
 trees from construction vectors only. One tree assigns each row's primary page;
@@ -87,6 +92,10 @@ threshold as the sibling margin and breaks equal margins by
 `(tree_ordinal, node_ordinal)`. These rules are part of the format rather than
 implementation choices.
 
+The selected adjacent split gap is stored on every internal node. A zero gap is
+valid and later causes best-first routing to enqueue the sibling with zero
+margin; it is never silently represented as a separating hyperplane.
+
 All integer derivations are checked. Scores must be finite. Empty nodes,
 duplicate/missing ordinals, capacity overflow, nondeterministic bytes, and
 primary/replica overlap are authority failures. A one-worker and four-worker
@@ -111,13 +120,14 @@ truth from V25 are reused by exact identity. Only the layout is new.
    verify every assignment and output identity. This is a structural boundary,
    not a recall claim: it opens no pseudoquery or truth role. Wall time is below
    30 seconds, RSS below 512 MiB, and page reads are zero.
-3. **Layout-only 262,144-row screen:** build the layout without query capability,
-   close its terminal, then join only the ten frozen ground-truth neighbors to
-   page assignments. The oracle may select at most eight unique pages; among
-   equal-hit covers it prefers fewer pages and then the lexicographically
-   smaller vector. Stop unless aggregate oracle recall is at least 975,000
-   ppm and minimum-query recall is at least 800,000 ppm. Report the 995,000 ppm
-   aggregate target separately.
+3. **Layout-only 262,144-row screen:** build the dual-tree layout without query
+   capability, close its terminal, then join only the ten frozen ground-truth
+   neighbors to its page assignment. The oracle may select at most eight unique pages;
+   among equal-hit covers it prefers fewer pages and then the lexicographically
+   smaller vector. Report the 975,000 ppm lower floor, but stop unless aggregate
+   oracle recall reaches the 995,000 ppm promotion target and minimum-query
+   recall reaches 800,000 ppm. A result between the floor and target is useful
+   evidence, not authority to build the router.
 4. **Exact-global screen:** only after layout passes, exact f32 scoring evaluates
    rank limits `10, 32, 128, 512, 2,048, 4,096`. Stop unless aggregate recall is
    at least 975,000 ppm and oracle attainment at least 995,000 ppm.
@@ -128,6 +138,13 @@ truth from V25 are reused by exact identity. Only the layout is new.
 The first failing class has strict precedence: `authority-stop`,
 `layout-rejected`, `rank-reducer-rejected`, `tree-router-rejected`, or
 `bounded-layout-candidate`. Every result is claim-ineligible.
+
+The V25 evidence does not persist the exact-global ranked row ordinals. Its
+644,921 ppm result therefore cannot, by itself, distinguish f32/f64 head-rank
+drift from an authority defect. Before an exact-global V26 result is used, its
+Parquet evidence must persist the first ten ranked source ordinals and their
+page assignments so that a truth-rank injection control independently proves
+the reducer and exclusion bindings.
 
 ## Serving projection
 
@@ -153,8 +170,8 @@ two 2 MiB ordinal buffers, projection scores, Parquet decode buffers, and bounde
 sort scratch. Its hard RSS cap is 1 GiB. The registered upper work is
 `2 * 16 * 19 * 262144 * 96 = 15,300,820,992` multiply-add steps before shrinking
 nodes are accounted for; actual work must be reported. Wall and no-progress
-caps are five minutes, memory PSI full avg10 is at most 0.5, and swap growth is
-zero.
+caps are five minutes, memory PSI full avg10 is at most 0.5 percent (encoded in
+receipts as integer milli-percent, maximum 500), and swap growth is zero.
 
 Scientific execution uses one `causality` EC2 Spot worker with multi-AZ fallback,
 immutable inputs, one original process, terminal upload, and immediate instance
