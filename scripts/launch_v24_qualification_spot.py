@@ -388,7 +388,7 @@ if status != 0:
 PY
   result_path="$outputs/preparation-receipt.json"
 else
-  python3 scripts/run_v24_witness_page_router.py \
+  python3 -m scripts.run_v24_witness_page_router \
     --phase "$runner_phase" --executable "$binary" \
     --executable-sha256 "$binary_sha256" --executable-bytes {quoted["binary_bytes"]} \
     --manifest "$manifest" --manifest-sha256 "$manifest_sha256" \

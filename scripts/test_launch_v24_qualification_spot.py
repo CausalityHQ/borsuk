@@ -97,7 +97,8 @@ class V24QualificationSpotTests(unittest.TestCase):
         ):
             self.assertIn(authority, script)
         self.assertIn("stage_v24_witness_inputs", script)
-        self.assertIn("run_v24_witness_page_router.py", script)
+        self.assertIn("python3 -m scripts.run_v24_witness_page_router", script)
+        self.assertNotIn("python3 scripts/run_v24_witness_page_router.py", script)
         self.assertIn("ATTEMPT_COMPLETE.json", script)
         self.assertIn("ATTEMPT_FAILED.json", script)
         self.assertIn("--generate-cli-skeleton input", script)
