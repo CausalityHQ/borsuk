@@ -1790,3 +1790,45 @@ reader, with 512 immutable external test queries and a separately authenticated
 exact top-ten truth Parquet against the frozen construction. External queries
 have no construction source or own page. The fast gate remains the iteration
 boundary; full workspace assurance remains deferred to a coherent milestone.
+
+### External-query truth and exact-global reducer result
+
+Source commit `5bfede30588b2f7ebc884e008000db6f1caee7c8` removed the invalid
+corpus-pseudoquery protocol and consumed physical rows 0 through 511 of the
+immutable Deep Image test artifact as an external development cohort. The
+3,843,448-byte query Parquet has SHA-256
+`296d45828020c1c0b88c6a1d5c822f6283280513b8c58d01cfa961f3a139a5d4`.
+Spot instance `i-0edef53e333f4e5b9` generated exact top-ten truth against all
+262,144 frozen construction rows. Scientific execution took 1.297258385
+seconds and 8.49 CPU-seconds, peaked at 115,331,072 bytes RSS, and observed
+zero memory PSI, swap, and page-body reads. The 31,875-byte truth Parquet has
+SHA-256
+`6789ab82f1014bb7f3d1476045b0f95af5bd18e33e6cf9befbf4270a2a297548`;
+the 881-byte terminal has SHA-256
+`fdfdd31b7ada44b6f09deea964457e7d0cc988a055ac7fb91ba8e5fbee0d8005`.
+
+The preregistered exact-global rank-reducer screen then ran once on Spot
+instance `i-0febaad9826a946ff` (`c7g.4xlarge`, `eu-central-1c`). The
+11,163,640-byte executable had SHA-256
+`a9a1f28516e037f4eaa88a104160f0fdb97fc10930dd5f9e7d45f8def5ebc24f`.
+It scanned all 262,144 rows for every external query, read zero page bodies,
+and completed in 1.669034887 seconds and 11.79 CPU-seconds with peak RSS
+143,323,136 bytes, zero PSI, and zero swap. Every registered prefix length
+from 10 through 4,096 produced the same 831,054 ppm aggregate recall, 400,000
+ppm minimum-query recall, and 832,355 ppm oracle attainment. All cells failed
+the literal 975,000 aggregate and 995,000 oracle-attainment gates. The
+3,420,057-byte canonical result has SHA-256
+`bcaaa20cd1460d86e9e7e27bd45e37067fc8cb61017b2365adb81aa52af0578f`;
+the 1,331-byte terminal has SHA-256
+`59446d4cc435152b12de475f2c8ebc0312839ec488953bb55e10363b4ec13ab7`.
+Artifacts are rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/open/5bfede30588b2f7ebc884e008000db6f1caee7c8/v26-external-exact-global-5bfede3/exact-a0001/`.
+
+This is a valid `rank-reducer-rejected` result, not a layout rejection. The
+rank-sharp reducer represents each page only by its nearest ranked row, so
+additional corroborating rows cannot strengthen a page after its minimum is
+set. The flat prefix ladder is evidence against that objective, not evidence
+against exact global row ranking or the already-passing physical layout. Router
+construction, D3, and release claims remain fenced. The next bounded falsifier
+must freeze and test a genuinely different cumulative page-evidence reducer
+before any router is built.
