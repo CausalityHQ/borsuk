@@ -1,5 +1,6 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet, BinaryHeap},
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -47,12 +48,15 @@ pub struct V25ContainmentLocalRequest {
     pub expected_source_rows: u64,
     pub expected_page_count: u32,
     pub expected_queries: u32,
+    pub construction_batch_rows: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V25ContainmentLocalOutput {
     pub samples: Vec<V25ContainmentSample>,
     pub scanned_rows: u64,
+    pub peak_construction_batch_rows: u64,
+    pub peak_ranked_rows_retained: u64,
     pub page_body_reads: u64,
 }
 
@@ -180,50 +184,6 @@ fn open_reader(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<fs::File>>
         .map_err(|error| invalid(&format!("V25 Parquet metadata failed: {error}")))
 }
 
-fn read_construction_rows(path: &Path, expected_rows: u64) -> Result<Vec<V25ConstructionRow>> {
-    let builder = open_reader(path)?;
-    validate_v25_construction_schema(builder.schema())?;
-    if u64::try_from(builder.metadata().file_metadata().num_rows()).ok() != Some(expected_rows) {
-        return Err(invalid("V25 construction Parquet row count differs"));
-    }
-    let mut rows = Vec::with_capacity(expected_rows as usize);
-    for batch in builder
-        .build()
-        .map_err(|error| invalid(&format!("V25 construction reader failed: {error}")))?
-    {
-        let batch =
-            batch.map_err(|error| invalid(&format!("V25 construction batch failed: {error}")))?;
-        if batch.num_columns() != 2
-            || batch
-                .columns()
-                .iter()
-                .any(|column| column.null_count() != 0)
-        {
-            return Err(invalid("V25 construction batch differs"));
-        }
-        let ordinals = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| invalid("V25 construction ordinal differs"))?;
-        let vectors = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<FixedSizeListArray>()
-            .ok_or_else(|| invalid("V25 construction vector differs"))?;
-        for row in 0..batch.num_rows() {
-            rows.push(V25ConstructionRow {
-                source_ordinal: ordinals.value(row),
-                vector: fixed_f32_vector(vectors, row)?,
-            });
-        }
-    }
-    if rows.len() != expected_rows as usize {
-        return Err(invalid("V25 construction decoded row count differs"));
-    }
-    Ok(rows)
-}
-
 fn read_page_assignments(
     path: &Path,
     expected_rows: u64,
@@ -281,6 +241,13 @@ fn read_page_assignments(
     }
     if rows.len() != expected_rows as usize {
         return Err(invalid("V25 page assignment decoded row count differs"));
+    }
+    if rows
+        .iter()
+        .enumerate()
+        .any(|(ordinal, row)| usize::try_from(row.source_ordinal).ok() != Some(ordinal))
+    {
+        return Err(invalid("V25 page assignment source inventory differs"));
     }
     Ok(rows)
 }
@@ -446,10 +413,6 @@ pub fn run_v25_containment_local_request(
     ] {
         authenticate_local_object(object, role, generation)?;
     }
-    let rows = read_construction_rows(
-        &request.construction_rows.path,
-        request.expected_source_rows,
-    )?;
     let pages = read_page_assignments(
         &request.page_assignments.path,
         request.expected_source_rows,
@@ -457,19 +420,246 @@ pub fn run_v25_containment_local_request(
     )?;
     let queries = read_queries(&request.pseudoqueries.path, request.expected_queries)?;
     let truths = read_truth(&request.truth.path, request.expected_queries)?;
-    let samples = evaluate_v25_exact_global(
-        &rows,
-        &pages,
-        &queries,
-        &truths,
-        &request.ranked_row_limits,
-        request.page_budget,
-    )?;
+    let (samples, peak_construction_batch_rows, peak_ranked_rows_retained) =
+        evaluate_v25_exact_global_parquet(request, &pages, &queries, &truths)?;
     Ok(V25ContainmentLocalOutput {
         samples,
         scanned_rows: request.expected_source_rows,
+        peak_construction_batch_rows,
+        peak_ranked_rows_retained,
         page_body_reads: 0,
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HeapRow(V25RankedRow);
+
+impl PartialEq for HeapRow {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.distance.total_cmp(&other.0.distance) == Ordering::Equal
+            && self.0.source_ordinal == other.0.source_ordinal
+    }
+}
+
+impl Eq for HeapRow {}
+
+impl PartialOrd for HeapRow {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapRow {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0
+            .distance
+            .total_cmp(&other.0.distance)
+            .then_with(|| self.0.source_ordinal.cmp(&other.0.source_ordinal))
+    }
+}
+
+fn validate_streaming_truth(
+    pages: &[V25RowPages],
+    queries: &[V25LocalQuery],
+    truths: &[V25QueryTruth],
+    page_budget: u32,
+) -> Result<()> {
+    for (query_index, (query, truth)) in queries.iter().zip(truths).enumerate() {
+        validate_vector(&query.vector)?;
+        if usize::try_from(query.query_ordinal).ok() != Some(query_index)
+            || truth.query_ordinal != query.query_ordinal
+            || truth.neighbor_source_ordinals.len() != 10
+            || truth.ground_truth_page_assignments.len() != 10
+            || truth
+                .neighbor_source_ordinals
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != 10
+            || usize::try_from(query.source_ordinal)
+                .ok()
+                .is_none_or(|source| source >= pages.len())
+            || exact_oracle_pages(&truth.ground_truth_page_assignments, page_budget as usize)?
+                != truth.oracle_pages
+        {
+            return Err(invalid("V25 exact-global query authority differs"));
+        }
+        for (neighbor, expected_pages) in truth
+            .neighbor_source_ordinals
+            .iter()
+            .zip(&truth.ground_truth_page_assignments)
+        {
+            let assignment = usize::try_from(*neighbor)
+                .ok()
+                .and_then(|source| pages.get(source))
+                .ok_or_else(|| invalid("V25 truth neighbor source differs"))?;
+            let mut observed = vec![assignment.primary_page];
+            if let Some(replica) = assignment.replica_page {
+                observed.push(replica);
+                observed.sort_unstable();
+            }
+            if &observed != expected_pages || *neighbor == query.source_ordinal {
+                return Err(invalid("V25 truth neighbor page binding differs"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn evaluate_v25_exact_global_parquet(
+    request: &V25ContainmentLocalRequest,
+    pages: &[V25RowPages],
+    queries: &[V25LocalQuery],
+    truths: &[V25QueryTruth],
+) -> Result<(Vec<V25ContainmentSample>, u64, u64)> {
+    if request.construction_batch_rows == 0
+        || pages.len() != usize::try_from(request.expected_source_rows).unwrap_or(usize::MAX)
+        || queries.is_empty()
+        || queries.len() != truths.len()
+        || request.page_budget != 8
+        || request.ranked_row_limits.is_empty()
+        || request
+            .ranked_row_limits
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || request
+            .ranked_row_limits
+            .iter()
+            .any(|limit| ![10, 32, 128, 512, 2_048, 4_096].contains(limit))
+    {
+        return Err(invalid("V25 exact-global streaming request differs"));
+    }
+    validate_streaming_truth(pages, queries, truths, request.page_budget)?;
+    let retained_limit = usize::try_from(*request.ranked_row_limits.last().unwrap()).unwrap();
+    let mut heaps = (0..queries.len())
+        .map(|_| BinaryHeap::<HeapRow>::with_capacity(retained_limit))
+        .collect::<Vec<_>>();
+    let mut candidate_counts = vec![0_u64; queries.len()];
+    let mut scanned_rows = 0_u64;
+    let mut peak_batch_rows = 0_u64;
+
+    let builder = open_reader(&request.construction_rows.path)?;
+    validate_v25_construction_schema(builder.schema())?;
+    if u64::try_from(builder.metadata().file_metadata().num_rows()).ok()
+        != Some(request.expected_source_rows)
+    {
+        return Err(invalid("V25 construction Parquet row count differs"));
+    }
+    for batch in builder
+        .with_batch_size(request.construction_batch_rows)
+        .build()
+        .map_err(|error| invalid(&format!("V25 construction reader failed: {error}")))?
+    {
+        let batch =
+            batch.map_err(|error| invalid(&format!("V25 construction batch failed: {error}")))?;
+        peak_batch_rows = peak_batch_rows.max(batch.num_rows() as u64);
+        if batch.num_columns() != 2
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V25 construction batch differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V25 construction ordinal differs"))?;
+        let vectors = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V25 construction vector differs"))?;
+        for row_index in 0..batch.num_rows() {
+            let source_ordinal = ordinals.value(row_index);
+            if source_ordinal != scanned_rows {
+                return Err(invalid("V25 construction source inventory differs"));
+            }
+            let vector = fixed_f32_vector(vectors, row_index)?;
+            let assignment = pages
+                .get(usize::try_from(source_ordinal).unwrap())
+                .ok_or_else(|| invalid("V25 construction page inventory differs"))?;
+            for (query_index, query) in queries.iter().enumerate() {
+                let own = &pages[usize::try_from(query.source_ordinal).unwrap()];
+                if source_ordinal == query.source_ordinal
+                    || [Some(assignment.primary_page), assignment.replica_page]
+                        .into_iter()
+                        .flatten()
+                        .any(|page| page == own.primary_page || Some(page) == own.replica_page)
+                {
+                    continue;
+                }
+                candidate_counts[query_index] += 1;
+                let distance = 1.0
+                    - query
+                        .vector
+                        .iter()
+                        .zip(vector)
+                        .map(|(left, right)| left * right)
+                        .sum::<f32>();
+                if !distance.is_finite() {
+                    return Err(invalid("V25 exact-global distance differs"));
+                }
+                let candidate = HeapRow(V25RankedRow {
+                    source_ordinal,
+                    distance,
+                    page_mass: 1,
+                });
+                let heap = &mut heaps[query_index];
+                if heap.len() < retained_limit {
+                    heap.push(candidate);
+                } else if candidate < *heap.peek().unwrap() {
+                    heap.pop();
+                    heap.push(candidate);
+                }
+            }
+            scanned_rows += 1;
+        }
+    }
+    if scanned_rows != request.expected_source_rows {
+        return Err(invalid("V25 construction decoded row count differs"));
+    }
+
+    let peak_retained = heaps.iter().map(BinaryHeap::len).max().unwrap_or(0) as u64;
+    let mut samples = Vec::with_capacity(queries.len() * request.ranked_row_limits.len());
+    for (query_index, heap) in heaps.into_iter().enumerate() {
+        let mut ranked = heap.into_iter().map(|row| row.0).collect::<Vec<_>>();
+        ranked.sort_by(|left, right| {
+            left.distance
+                .total_cmp(&right.distance)
+                .then_with(|| left.source_ordinal.cmp(&right.source_ordinal))
+        });
+        for limit in &request.ranked_row_limits {
+            let retained = &ranked[..usize::try_from(*limit).unwrap().min(ranked.len())];
+            let retained_pages = retained
+                .iter()
+                .map(|row| pages[usize::try_from(row.source_ordinal).unwrap()])
+                .collect::<Vec<_>>();
+            let mut selected_pages = select_v25_rank_sharp_pages(
+                retained,
+                &retained_pages,
+                request.page_budget as usize,
+            )?;
+            selected_pages.sort_unstable();
+            let truth = &truths[query_index];
+            let selected_hits = hits(&truth.ground_truth_page_assignments, &selected_pages);
+            let oracle_hits = hits(&truth.ground_truth_page_assignments, &truth.oracle_pages);
+            samples.push(V25ContainmentSample {
+                query_ordinal: queries[query_index].query_ordinal,
+                control: V25Control::ExactGlobal,
+                ranked_row_limit: *limit,
+                candidate_rows: candidate_counts[query_index],
+                selected_pages,
+                hits: selected_hits,
+                oracle_hits,
+                recall_ppm: ppm(u64::from(selected_hits), 10)?,
+                oracle_attainment_ppm: ppm(u64::from(selected_hits), u64::from(oracle_hits))?,
+            });
+        }
+    }
+    Ok((samples, peak_batch_rows, peak_retained))
 }
 
 fn validate_vector(vector: &[f32; 96]) -> Result<()> {
@@ -906,8 +1096,10 @@ mod tests {
         let queries_path = temporary.path().join("queries.parquet");
         let truth_path = temporary.path().join("truth.parquet");
 
-        let vectors = (0..20_u64)
-            .map(|source_ordinal| vector(20.0 - source_ordinal as f32, source_ordinal as f32 + 1.0))
+        let vectors = (0..257_u64)
+            .map(|source_ordinal| {
+                vector(257.0 - source_ordinal as f32, source_ordinal as f32 + 1.0)
+            })
             .collect::<Vec<_>>();
         let construction_schema = Arc::new(Schema::new(vec![
             Field::new("source_ordinal", DataType::UInt64, false),
@@ -925,7 +1117,7 @@ mod tests {
             RecordBatch::try_new(
                 construction_schema,
                 vec![
-                    Arc::new(UInt64Array::from_iter_values(0..20_u64)) as ArrayRef,
+                    Arc::new(UInt64Array::from_iter_values(0..257_u64)) as ArrayRef,
                     Arc::new(vector_array(&vectors)),
                 ],
             )
@@ -942,12 +1134,12 @@ mod tests {
             RecordBatch::try_new(
                 pages_schema,
                 vec![
-                    Arc::new(UInt64Array::from_iter_values(0..20_u64)) as ArrayRef,
+                    Arc::new(UInt64Array::from_iter_values(0..257_u64)) as ArrayRef,
                     Arc::new(UInt32Array::from_iter_values(
-                        (0..20_u64).map(fixture_primary_page),
+                        (0..257_u64).map(fixture_primary_page),
                     )),
                     Arc::new(UInt32Array::from_iter_values(
-                        (0..20_u32).map(|source| if source == 0 { 19 } else { u32::MAX }),
+                        (0..257_u32).map(|source| if source == 0 { 256 } else { u32::MAX }),
                     )),
                 ],
             )
@@ -1036,13 +1228,24 @@ mod tests {
             truth: local_object("truth-parquet", &truth_path),
             ranked_row_limits: vec![10, 32],
             page_budget: 8,
-            expected_source_rows: 20,
-            expected_page_count: 20,
+            expected_source_rows: 257,
+            expected_page_count: 257,
             expected_queries: 1,
+            construction_batch_rows: 64,
         };
         let output = run_v25_containment_local_request(&request).unwrap();
-        assert_eq!(output.scanned_rows, 20);
+        assert_eq!(output.scanned_rows, 257);
         assert_eq!(output.samples.len(), 2);
+        assert_eq!(output.peak_construction_batch_rows, 64);
+        assert!(output.peak_ranked_rows_retained <= 32);
+        assert!(output.samples.iter().all(|sample| {
+            sample.candidate_rows == 255
+                && sample.selected_pages == (1..=8).collect::<Vec<_>>()
+                && sample.hits == 10
+                && sample.oracle_hits == 10
+                && sample.recall_ppm == 1_000_000
+                && sample.oracle_attainment_ppm == 1_000_000
+        }));
         assert_eq!(output.page_body_reads, 0);
 
         fs::write(&construction_path, b"changed").unwrap();
