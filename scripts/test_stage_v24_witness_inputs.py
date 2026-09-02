@@ -423,6 +423,39 @@ class V24StagingTests(unittest.TestCase):
                     FakeS3Client({}),
                 )
 
+    def test_pseudoquery_phase_accepts_only_corpus_and_router_authority(self) -> None:
+        roles = (
+            "posting-result",
+            "witness-graph",
+            "witness-postings",
+            "construction-rows-parquet",
+            "page-rows-parquet",
+        )
+        identities = [
+            _identity(role, f"payload-{index}".encode(), index)
+            for index, role in enumerate(roles)
+        ]
+        raw = _manifest_bytes(identities, "pseudoquery-evaluation")
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = pathlib.Path(temporary) / "manifest.json"
+            manifest.write_bytes(raw)
+            self.assertEqual(
+                subject.manifest_phase(manifest, hashlib.sha256(raw).hexdigest()),
+                "pseudoquery-evaluation",
+            )
+
+            leaked = json.loads(raw)
+            leaked["inputs"][-1] = _identity("query-parquet", b"sealed", 9)
+            changed = (
+                json.dumps(leaked, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+            manifest.write_bytes(changed)
+            with self.assertRaisesRegex(ValueError, "phase roles"):
+                subject.manifest_phase(
+                    manifest, hashlib.sha256(changed).hexdigest()
+                )
+
     def test_staging_requires_one_shared_logical_generation(self) -> None:
         payload = b"registered"
         identity = _identity("construction-rows-parquet", payload, 0)

@@ -21,6 +21,7 @@ from scripts.stage_v24_witness_inputs import manifest_phase, validate_inventory
 _PHASE_FLAGS = {
     "train-witnesses": "--train-witnesses",
     "build-postings": "--build-postings",
+    "evaluate-pseudoqueries": "--evaluate-pseudoqueries",
     "evaluate-development": "--evaluate-development",
     "bind-holdout": "--bind-holdout",
     "evaluate-holdout": "--evaluate-holdout",
@@ -28,6 +29,7 @@ _PHASE_FLAGS = {
 _MANIFEST_PHASES = {
     "train-witnesses": "witness-training",
     "build-postings": "posting-construction",
+    "evaluate-pseudoqueries": "pseudoquery-evaluation",
     "evaluate-development": "development-evaluation",
     "bind-holdout": "holdout-binding",
     "evaluate-holdout": "holdout-evaluation",

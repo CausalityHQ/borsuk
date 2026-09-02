@@ -217,6 +217,18 @@ class V24RunnerTests(unittest.TestCase):
                     "--build-postings",
                 ),
                 (
+                    "evaluate-pseudoqueries",
+                    "pseudoquery-evaluation",
+                    (
+                        "posting-result",
+                        "witness-graph",
+                        "witness-postings",
+                        "construction-rows-parquet",
+                        "page-rows-parquet",
+                    ),
+                    "--evaluate-pseudoqueries",
+                ),
+                (
                     "evaluate-development",
                     "development-evaluation",
                     (
@@ -348,6 +360,7 @@ class V24RunnerTests(unittest.TestCase):
         for phase in ("prepare-inputs", "train-witnesses", "build-postings"):
             self.assertEqual(subject.MonitorLimits.for_phase(phase).rss_bytes, 32 << 30)
         for phase in (
+            "evaluate-pseudoqueries",
             "evaluate-development",
             "bind-holdout",
             "evaluate-holdout",

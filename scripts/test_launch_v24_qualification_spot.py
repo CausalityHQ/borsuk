@@ -133,6 +133,21 @@ class V24QualificationSpotTests(unittest.TestCase):
             'put_once "$root/stdout.json" development-result.json',
             development_script,
         )
+        pseudoquery_script = base64.b64decode(
+            subject.build_v24_launch_specs(
+                self.plan("pseudoquery-evaluation"), launch_nonce="a" * 32
+            )[0]["UserData"]
+        ).decode()
+        self.assertIn("runner_phase=evaluate-pseudoqueries", pseudoquery_script)
+        self.assertIn('--phase "$runner_phase"', pseudoquery_script)
+        self.assertIn(
+            'put_once "$outputs/pseudoquery-evidence.parquet" pseudoquery-evidence.parquet',
+            pseudoquery_script,
+        )
+        self.assertIn(
+            'put_once "$root/stdout.json" pseudoquery-result.json',
+            pseudoquery_script,
+        )
         holdout_script = base64.b64decode(
             subject.build_v24_launch_specs(
                 self.plan("holdout-evaluation"), launch_nonce="a" * 32

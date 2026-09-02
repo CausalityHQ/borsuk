@@ -21,6 +21,7 @@ _RECEIPT_SCHEMA = "borsuk-v24-staging-receipt-v1"
 _PHASES = {
     "witness-training",
     "posting-construction",
+    "pseudoquery-evaluation",
     "development-evaluation",
     "holdout-binding",
     "holdout-evaluation",
@@ -31,6 +32,13 @@ _PHASE_ROLES = {
         "training-result",
         "witness-graph",
         "witnesses-arrow",
+        "page-rows-parquet",
+    ),
+    "pseudoquery-evaluation": (
+        "posting-result",
+        "witness-graph",
+        "witness-postings",
+        "construction-rows-parquet",
         "page-rows-parquet",
     ),
     "development-evaluation": (
@@ -85,6 +93,7 @@ def _registered_role(role: str) -> bool:
         "dataset-meta",
         "training-manifest",
         "training-result",
+        "posting-result",
         "witnesses-arrow",
         "witness-graph",
         "posting-manifest",
@@ -120,6 +129,7 @@ def _relative_path(role: str) -> str:
         "dataset-meta": "dataset-meta.json",
         "training-manifest": "training-manifest.json",
         "training-result": "training-result.json",
+        "posting-result": "posting-result.json",
         "witnesses-arrow": "witnesses.arrow",
         "witness-graph": "witness-graph.arrow",
         "posting-manifest": "posting-manifest.json",

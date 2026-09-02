@@ -47,6 +47,22 @@ fn splitmix64(mut value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
+pub(crate) trait IntoV24PseudoquerySourceRow {
+    fn into_v24_pseudoquery_source_row(self) -> Result<V24SourceRow>;
+}
+
+impl IntoV24PseudoquerySourceRow for V24SourceRow {
+    fn into_v24_pseudoquery_source_row(self) -> Result<V24SourceRow> {
+        Ok(self)
+    }
+}
+
+impl IntoV24PseudoquerySourceRow for Result<V24SourceRow> {
+    fn into_v24_pseudoquery_source_row(self) -> Result<V24SourceRow> {
+        self
+    }
+}
+
 /// One deterministic corpus-only pseudoquery.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct V24Pseudoquery {
@@ -99,7 +115,8 @@ pub(crate) fn select_v24_pseudoqueries<I>(
     seed: u64,
 ) -> Result<V24PseudoquerySplit>
 where
-    I: IntoIterator<Item = V24SourceRow>,
+    I: IntoIterator,
+    I::Item: IntoV24PseudoquerySourceRow,
 {
     select_v24_pseudoqueries_with_progress(
         rows,
@@ -120,7 +137,8 @@ pub(crate) fn select_v24_pseudoqueries_with_progress<I, F>(
     mut progress: F,
 ) -> Result<V24PseudoquerySplit>
 where
-    I: IntoIterator<Item = V24SourceRow>,
+    I: IntoIterator,
+    I::Item: IntoV24PseudoquerySourceRow,
     F: FnMut(u64) -> Result<()>,
 {
     if witnesses.is_empty()
@@ -158,6 +176,7 @@ where
     let mut seen_sources = vec![0_u64; word_count];
     let mut source_rows = 0_u64;
     for row in rows {
+        let row = row.into_v24_pseudoquery_source_row()?;
         if row.source_ordinal >= expected_source_rows {
             return Err(invalid("V24 pseudoquery source ordinal differs"));
         }
@@ -285,6 +304,22 @@ pub(crate) struct V24PseudoqueryPageRow {
     pub(crate) source_ordinal: u64,
 }
 
+pub(crate) trait IntoV24PseudoqueryPageRow {
+    fn into_v24_pseudoquery_page_row(self) -> Result<V24PseudoqueryPageRow>;
+}
+
+impl IntoV24PseudoqueryPageRow for V24PseudoqueryPageRow {
+    fn into_v24_pseudoquery_page_row(self) -> Result<V24PseudoqueryPageRow> {
+        Ok(self)
+    }
+}
+
+impl IntoV24PseudoqueryPageRow for Result<V24PseudoqueryPageRow> {
+    fn into_v24_pseudoquery_page_row(self) -> Result<V24PseudoqueryPageRow> {
+        self
+    }
+}
+
 /// Exact page assignments needed to score one pseudoquery without page reads.
 #[derive(Debug, Clone)]
 pub(crate) struct V24PseudoqueryPageTruth {
@@ -369,7 +404,8 @@ pub(crate) fn bind_v24_pseudoquery_pages<I>(
     page_count: u32,
 ) -> Result<Vec<V24PseudoqueryPageTruth>>
 where
-    I: IntoIterator<Item = V24PseudoqueryPageRow>,
+    I: IntoIterator,
+    I::Item: IntoV24PseudoqueryPageRow,
 {
     bind_v24_pseudoquery_pages_with_progress(
         truth,
@@ -390,7 +426,8 @@ pub(crate) fn bind_v24_pseudoquery_pages_with_progress<I, F>(
     mut progress: F,
 ) -> Result<Vec<V24PseudoqueryPageTruth>>
 where
-    I: IntoIterator<Item = V24PseudoqueryPageRow>,
+    I: IntoIterator,
+    I::Item: IntoV24PseudoqueryPageRow,
     F: FnMut(u64) -> Result<()>,
 {
     if truth.is_empty()
@@ -433,6 +470,7 @@ where
     let mut replica_sources = vec![0_u64; word_count];
     let mut primary_rows = 0_u64;
     for row in rows {
+        let row = row.into_v24_pseudoquery_page_row()?;
         let key = (row.page_ordinal, row.replica, row.source_ordinal);
         if row.page_ordinal >= page_count
             || row.source_ordinal >= expected_source_rows
@@ -561,6 +599,86 @@ fn expected_without_own_pages(
         }
     }
     pages
+}
+
+pub(crate) fn build_v24_pseudoquery_evidence_with_progress<F, P>(
+    split: &V24PseudoquerySplit,
+    page_truth: &[V24PseudoqueryPageTruth],
+    page_count: usize,
+    mut select_pages: F,
+    mut progress: P,
+) -> Result<Vec<V24PseudoqueryEvidenceRow>>
+where
+    F: FnMut(&[f32; 96], V24Cell) -> Result<Vec<u32>>,
+    P: FnMut(u64) -> Result<()>,
+{
+    if split.queries.len() != page_truth.len() || split.queries.is_empty() {
+        return Err(invalid(
+            "V24 pseudoquery evaluation query inventory differs",
+        ));
+    }
+    let cells = V24Cell::registered_ladder();
+    let oracle_pages = page_truth
+        .iter()
+        .map(|truth| {
+            [8_usize, 16, 32, 64]
+                .map(|budget| exact_v24_oracle_pages(&truth.ground_truth_page_assignments, budget))
+                .into_iter()
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut evidence = Vec::with_capacity(cells.len() * split.queries.len());
+    for (cell_ordinal, cell) in cells.into_iter().enumerate() {
+        let budget = usize::try_from(cell.page_budget).unwrap();
+        let budget_ordinal = match budget {
+            8 => 0,
+            16 => 1,
+            32 => 2,
+            64 => 3,
+            _ => return Err(invalid("V24 pseudoquery page budget differs")),
+        };
+        for (query_ordinal, (query, truth)) in split.queries.iter().zip(page_truth).enumerate() {
+            if query.query_ordinal != truth.query_ordinal
+                || query.source_ordinal != truth.source_ordinal
+            {
+                return Err(invalid("V24 pseudoquery evaluation truth differs"));
+            }
+            let mut selected_pages = select_pages(&query.vector, cell)?;
+            selected_pages.sort_unstable();
+            let oracle_pages = &oracle_pages[query_ordinal][budget_ordinal];
+            let hits = hits_for_pages(&truth.ground_truth_page_assignments, &selected_pages);
+            let oracle_hits = hits_for_pages(&truth.ground_truth_page_assignments, oracle_pages);
+            if oracle_hits == 0 {
+                return Err(invalid("V24 pseudoquery evaluation oracle differs"));
+            }
+            let without_own =
+                expected_without_own_pages(&selected_pages, &truth.query_pages, budget, page_count);
+            let hits_without_own =
+                hits_for_pages(&truth.ground_truth_page_assignments, &without_own);
+            let own_page_selected = truth
+                .query_pages
+                .iter()
+                .any(|page| selected_pages.binary_search(page).is_ok());
+            evidence.push(V24PseudoqueryEvidenceRow {
+                pseudoquery_ordinal: query.query_ordinal,
+                source_ordinal: query.source_ordinal,
+                cell_ordinal: u32::try_from(cell_ordinal).unwrap(),
+                selected_pages,
+                hits: u32::try_from(hits).unwrap(),
+                oracle_hits: u32::try_from(oracle_hits).unwrap(),
+                recall_ppm: u32::try_from(hits).unwrap() * 100_000,
+                oracle_attainment_ppm: u32::try_from(hits * 1_000_000 / oracle_hits).unwrap(),
+                query_pages: truth.query_pages.clone(),
+                own_page_selected,
+                selected_pages_without_own: without_own,
+                hits_without_own_pages: u32::try_from(hits_without_own).unwrap(),
+                recall_without_own_pages_ppm: u32::try_from(hits_without_own).unwrap() * 100_000,
+                rank_one_distance: truth.rank_one_distance,
+            });
+        }
+        progress(u64::try_from(cell_ordinal + 1).unwrap())?;
+    }
+    Ok(evidence)
 }
 
 pub(crate) fn evaluate_v24_pseudoquery_result(
@@ -1209,7 +1327,8 @@ pub(crate) fn scan_v24_pseudoquery_truth<I>(
     backend: V24DistanceBackend,
 ) -> Result<Vec<V24PseudoqueryTruth>>
 where
-    I: IntoIterator<Item = V24SourceRow>,
+    I: IntoIterator,
+    I::Item: IntoV24PseudoquerySourceRow,
 {
     scan_v24_pseudoquery_truth_with_progress(split, rows, expected_source_rows, backend, |_| Ok(()))
 }
@@ -1222,7 +1341,8 @@ pub(crate) fn scan_v24_pseudoquery_truth_with_progress<I, F>(
     mut progress: F,
 ) -> Result<Vec<V24PseudoqueryTruth>>
 where
-    I: IntoIterator<Item = V24SourceRow>,
+    I: IntoIterator,
+    I::Item: IntoV24PseudoquerySourceRow,
     F: FnMut(u64) -> Result<()>,
 {
     if expected_source_rows <= 10
@@ -1243,6 +1363,7 @@ where
     let mut next_source_ordinal = 0_u64;
     let mut block = Vec::with_capacity(4_096);
     for row in rows {
+        let row = row.into_v24_pseudoquery_source_row()?;
         if row.source_ordinal != next_source_ordinal {
             return Err(invalid("V24 pseudoquery truth source order differs"));
         }

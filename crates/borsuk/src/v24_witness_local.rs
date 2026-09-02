@@ -18,7 +18,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     BorsukError, Result,
-    v24_witness::{V24ObjectIdentity, V24SourceRow, validate_v24_identity},
+    v24_witness::{
+        V24ObjectIdentity, V24SourceRow, parse_v24_decimal_source_ordinal, validate_v24_identity,
+    },
     v24_witness_eval::{
         V24_SELECTOR_WARMUP_SAMPLES, V24Cell, V24Disposition, V24Evaluation, V24EvaluationScope,
         V24QuerySample, V24QueryTruth, V24Result, canonical_v24_result_bytes, classify_v24_ladder,
@@ -26,7 +28,7 @@ use crate::{
         fuse_v24_posting_plane,
     },
     v24_witness_graph::{
-        V24DistanceBackend, V24WitnessGraph, V24WitnessSampler, V24WitnessSearch,
+        V24DistanceBackend, V24Witness, V24WitnessGraph, V24WitnessSampler, V24WitnessSearch,
         build_v24_witness_graph_with_progress, normalize_v24_witness_vector,
         read_v24_witness_graph, read_v24_witnesses, v24_scientific_distance_backend,
         write_v24_witness_graph, write_v24_witnesses,
@@ -35,6 +37,13 @@ use crate::{
         V24PostingPage, V24PostingPageRow, V24PostingPlane,
         build_v24_witness_postings_with_progress, read_v24_witness_postings,
         v24_posting_total_work_units, write_v24_witness_postings,
+    },
+    v24_witness_pseudoquery::{
+        V24PseudoqueryEvidenceOutput, V24PseudoqueryPageRow,
+        bind_v24_pseudoquery_pages_with_progress, bind_v24_pseudoquery_result_authority,
+        build_v24_pseudoquery_evidence_with_progress, canonical_v24_pseudoquery_result_bytes,
+        evaluate_v24_pseudoquery_result_with_progress, scan_v24_pseudoquery_truth_with_progress,
+        select_v24_pseudoqueries_with_progress, write_v24_pseudoquery_evidence_parquet,
     },
 };
 
@@ -48,6 +57,8 @@ const RESULT_FILE: &str = "result.json";
 const TRAINING_RESULT_FILE: &str = "training-result.json";
 const PAGE_ROWS_FILE: &str = "page-rows.parquet";
 const POSTINGS_FILE: &str = "witness-postings.arrow";
+const POSTING_RESULT_FILE: &str = "posting-result.json";
+const PSEUDOQUERY_EVIDENCE_FILE: &str = "pseudoquery-evidence.parquet";
 const POSTING_SCRATCH_DIR: &str = ".posting-scratch";
 const QUERIES_FILE: &str = "queries.parquet";
 const NEIGHBORS_FILE: &str = "neighbors.parquet";
@@ -67,6 +78,8 @@ pub enum V24LocalPhase {
     TrainWitnesses,
     /// Stream page rows and construct witness-to-page postings.
     BuildPostings,
+    /// Run the query-independent corpus-uniform catastrophe screen.
+    EvaluatePseudoqueries,
     /// Evaluate the preregistered development ladder.
     EvaluateDevelopment,
     /// Bind sealed holdout truth without exposing it to construction.
@@ -114,6 +127,23 @@ struct V24PostingManifest {
     witness_count: u64,
     construction_rows_digest: String,
     parent_result_sha256: String,
+    inputs: Vec<V24ObjectIdentity>,
+    output_uris: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V24PseudoqueryManifest {
+    schema: String,
+    claim_eligible: bool,
+    generation: String,
+    phase: String,
+    seed: u64,
+    source_row_count: u64,
+    witness_count: u64,
+    pseudoquery_count: u64,
+    page_count: u32,
+    physical_source_rows: u64,
     inputs: Vec<V24ObjectIdentity>,
     output_uris: BTreeMap<String, String>,
 }
@@ -404,6 +434,33 @@ fn exact_directory_file(input_dir: &Path, expected_name: &str) -> Result<PathBuf
     Ok(input_dir.join(expected_name))
 }
 
+fn exact_directory_files(input_dir: &Path, expected_names: &[&str]) -> Result<()> {
+    let mut names = fs::read_dir(input_dir)
+        .map_err(|source| BorsukError::Io {
+            path: input_dir.to_owned(),
+            source,
+        })?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.file_name())
+                .map_err(|source| BorsukError::Io {
+                    path: input_dir.to_owned(),
+                    source,
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    names.sort();
+    let mut expected = expected_names
+        .iter()
+        .map(std::ffi::OsString::from)
+        .collect::<Vec<_>>();
+    expected.sort();
+    if names != expected {
+        return Err(invalid("V24 local input inventory differs"));
+    }
+    Ok(())
+}
+
 fn construction_schema() -> Schema {
     Schema::new(vec![
         Field::new("source_ordinal", DataType::UInt64, false),
@@ -416,6 +473,102 @@ fn construction_schema() -> Schema {
             false,
         ),
     ])
+}
+
+struct V24ConstructionRows {
+    batches: parquet::arrow::arrow_reader::ParquetRecordBatchReader,
+    batch: Option<RecordBatch>,
+    row: usize,
+    next_ordinal: u64,
+    expected_rows: u64,
+}
+
+impl V24ConstructionRows {
+    fn open(path: &Path, expected_rows: u64) -> Result<Self> {
+        let file = fs::File::open(path).map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+        if expected_rows == 0
+            || builder.schema().as_ref() != &construction_schema()
+            || builder.metadata().file_metadata().num_rows()
+                != i64::try_from(expected_rows)
+                    .map_err(|_| invalid("V24 construction row count exceeds i64"))?
+        {
+            return Err(invalid("V24 construction Parquet authority differs"));
+        }
+        Ok(Self {
+            batches: builder.build()?,
+            batch: None,
+            row: 0,
+            next_ordinal: 0,
+            expected_rows,
+        })
+    }
+}
+
+impl Iterator for V24ConstructionRows {
+    type Item = Result<V24SourceRow>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(batch) = &self.batch
+                && self.row < batch.num_rows()
+            {
+                if batch.num_columns() != 2
+                    || batch
+                        .columns()
+                        .iter()
+                        .any(|column| column.null_count() != 0)
+                {
+                    return Some(Err(invalid("V24 construction Parquet batch differs")));
+                }
+                let ordinals = match batch.columns()[0].as_any().downcast_ref::<UInt64Array>() {
+                    Some(ordinals) => ordinals,
+                    None => return Some(Err(invalid("V24 construction ordinal column differs"))),
+                };
+                let vectors = match batch.columns()[1]
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                {
+                    Some(vectors) => vectors,
+                    None => return Some(Err(invalid("V24 construction vector column differs"))),
+                };
+                let values = match vectors.values().as_any().downcast_ref::<Float32Array>() {
+                    Some(values) => values,
+                    None => return Some(Err(invalid("V24 construction vector child differs"))),
+                };
+                if vectors.offset() != 0
+                    || vectors.value_length() != 96
+                    || values.null_count() != 0
+                    || values.len() != batch.num_rows() * 96
+                {
+                    return Some(Err(invalid("V24 construction vector layout differs")));
+                }
+                let source_ordinal = ordinals.value(self.row);
+                if source_ordinal != self.next_ordinal {
+                    return Some(Err(invalid("V24 construction source order differs")));
+                }
+                let vector = values.values()[self.row * 96..(self.row + 1) * 96]
+                    .try_into()
+                    .unwrap();
+                self.row += 1;
+                self.next_ordinal += 1;
+                return Some(Ok(V24SourceRow {
+                    source_ordinal,
+                    vector,
+                }));
+            }
+            self.batch = match self.batches.next() {
+                Some(Ok(batch)) => Some(batch),
+                Some(Err(error)) => return Some(Err(error.into())),
+                None if self.next_ordinal == self.expected_rows => return None,
+                None => return Some(Err(invalid("V24 construction row count differs"))),
+            };
+            self.row = 0;
+        }
+    }
 }
 
 fn page_rows_schema(construction_rows_digest: &str, generation: &str) -> Schema {
@@ -770,6 +923,30 @@ impl Iterator for V24PageRows {
             primary_rows,
             replica_rows,
         }))
+    }
+}
+
+struct V24PseudoqueryPageRows {
+    rows: V24PageRows,
+}
+
+impl Iterator for V24PseudoqueryPageRows {
+    type Item = Result<V24PseudoqueryPageRow>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.rows.next_row() {
+            Ok(Some((page_ordinal, replica, row))) => Some(
+                parse_v24_decimal_source_ordinal(&row.record_id).map(|source_ordinal| {
+                    V24PseudoqueryPageRow {
+                        page_ordinal,
+                        replica,
+                        source_ordinal,
+                    }
+                }),
+            ),
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        }
     }
 }
 
@@ -1872,6 +2049,275 @@ fn run_holdout_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn run_pseudoquery_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
+    const INPUTS: [(&str, &str); 5] = [
+        ("posting-result", POSTING_RESULT_FILE),
+        ("witness-graph", WITNESS_GRAPH_FILE),
+        ("witness-postings", POSTINGS_FILE),
+        ("construction-rows-parquet", CONSTRUCTION_ROWS_FILE),
+        ("page-rows-parquet", PAGE_ROWS_FILE),
+    ];
+    let manifest_bytes = fs::read(&request.manifest).map_err(|source| BorsukError::Io {
+        path: request.manifest.clone(),
+        source,
+    })?;
+    let manifest: V24PseudoqueryManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| invalid(&format!("V24 pseudoquery manifest differs: {error}")))?;
+    let roles = manifest
+        .inputs
+        .iter()
+        .map(|identity| identity.role.as_str())
+        .collect::<Vec<_>>();
+    if canonical_json_bytes(&manifest)? != manifest_bytes
+        || manifest.schema != V24_LOCAL_MANIFEST_SCHEMA
+        || manifest.claim_eligible
+        || manifest.phase != "pseudoquery-evaluation"
+        || manifest.generation.is_empty()
+        || manifest.source_row_count <= 10
+        || manifest.witness_count < 128
+        || manifest.witness_count > u64::from(u32::MAX)
+        || manifest.pseudoquery_count == 0
+        || manifest.pseudoquery_count > u64::from(u32::MAX)
+        || manifest.witness_count + manifest.pseudoquery_count > manifest.source_row_count
+        || manifest.page_count < 64
+        || manifest.physical_source_rows < manifest.source_row_count
+        || manifest.physical_source_rows > manifest.source_row_count.saturating_mul(2)
+        || roles != INPUTS.map(|(role, _)| role)
+        || manifest.output_uris.len() != 2
+        || manifest
+            .output_uris
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            != ["pseudoquery-evidence", "pseudoquery-result"]
+        || manifest
+            .output_uris
+            .values()
+            .any(|uri| !uri.starts_with("s3://") || uri.ends_with('/') || uri.contains("/../"))
+        || manifest.output_uris["pseudoquery-evidence"]
+            == manifest.output_uris["pseudoquery-result"]
+    {
+        return Err(invalid("V24 pseudoquery manifest authority differs"));
+    }
+    exact_directory_files(&request.input_dir, &INPUTS.map(|(_, name)| name))?;
+    let registered = |role: &str| {
+        manifest
+            .inputs
+            .iter()
+            .find(|identity| identity.role == role)
+            .unwrap()
+    };
+    for (role, name) in INPUTS {
+        let authority = registered(role);
+        let observed = sha256_file_identity(
+            &request.input_dir.join(name),
+            role,
+            &authority.uri,
+            &manifest.generation,
+        )?;
+        validate_v24_identity(&observed, authority)?;
+    }
+
+    let posting_result_path = request.input_dir.join(POSTING_RESULT_FILE);
+    let posting_result_bytes =
+        fs::read(&posting_result_path).map_err(|source| BorsukError::Io {
+            path: posting_result_path,
+            source,
+        })?;
+    let posting_result: V24PostingResult = serde_json::from_slice(&posting_result_bytes)
+        .map_err(|error| invalid(&format!("V24 pseudoquery posting result differs: {error}")))?;
+    let posting_input = |role: &str| {
+        posting_result
+            .inputs
+            .iter()
+            .find(|identity| identity.role == role)
+    };
+    if canonical_json_bytes(&posting_result)? != posting_result_bytes
+        || posting_result.schema != "borsuk-v24-posting-result-v1"
+        || posting_result.claim_eligible
+        || posting_result.phase != "posting-construction"
+        || posting_result.generation != manifest.generation
+        || posting_result.source_row_count != manifest.source_row_count
+        || posting_result.witness_count != manifest.witness_count
+        || posting_result.unique_source_rows != manifest.source_row_count
+        || posting_result.physical_source_rows != manifest.physical_source_rows
+        || posting_result.distance_backend != v24_scientific_distance_backend()?
+        || posting_result.inputs.len() != 4
+        || posting_result.outputs != [registered("witness-postings").clone()]
+        || posting_input("witness-graph") != Some(registered("witness-graph"))
+        || posting_input("page-rows-parquet") != Some(registered("page-rows-parquet"))
+        || posting_result.construction_rows_digest != registered("construction-rows-parquet").digest
+    {
+        return Err(invalid("V24 pseudoquery posting authority differs"));
+    }
+
+    let expected_witnesses = usize::try_from(manifest.witness_count).unwrap();
+    let graph_path = request.input_dir.join(WITNESS_GRAPH_FILE);
+    let graph_bytes = fs::read(&graph_path).map_err(|source| BorsukError::Io {
+        path: graph_path,
+        source,
+    })?;
+    let graph = read_v24_witness_graph(
+        &graph_bytes,
+        registered("witness-graph"),
+        expected_witnesses,
+    )?;
+    if graph.distance_backend() != posting_result.distance_backend {
+        return Err(invalid("V24 pseudoquery graph backend differs"));
+    }
+    let mut witnesses = vec![None; expected_witnesses];
+    for (source_ordinal, witness_ordinal) in graph.source_index() {
+        let slot = usize::try_from(witness_ordinal).unwrap();
+        let vector = *graph
+            .witness_vector(witness_ordinal)
+            .ok_or_else(|| invalid("V24 pseudoquery witness vector differs"))?;
+        if slot >= witnesses.len()
+            || witnesses[slot]
+                .replace(V24Witness {
+                    witness_ordinal,
+                    source_ordinal,
+                    vector,
+                })
+                .is_some()
+        {
+            return Err(invalid("V24 pseudoquery witness inventory differs"));
+        }
+    }
+    let witnesses = witnesses
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| invalid("V24 pseudoquery witness inventory differs"))?;
+
+    let posting_path = request.input_dir.join(POSTINGS_FILE);
+    let posting_bytes = fs::read(&posting_path).map_err(|source| BorsukError::Io {
+        path: posting_path,
+        source,
+    })?;
+    let plane = read_v24_witness_postings(
+        &posting_bytes,
+        registered("witness-postings"),
+        expected_witnesses,
+    )?;
+    if plane.unique_source_rows() != manifest.source_row_count
+        || plane.physical_source_rows() != manifest.physical_source_rows
+    {
+        return Err(invalid("V24 pseudoquery posting counts differ"));
+    }
+
+    let cells = u64::try_from(V24Cell::registered_ladder().len()).unwrap();
+    let total_units = manifest
+        .source_row_count
+        .checked_mul(2)
+        .and_then(|units| units.checked_add(manifest.physical_source_rows))
+        .and_then(|units| units.checked_add(cells * 2))
+        .and_then(|units| units.checked_add(manifest.pseudoquery_count))
+        .ok_or_else(|| invalid("V24 pseudoquery progress total overflows"))?;
+    let mut progress =
+        V24ProgressWriter::start(&request.output_dir, "pseudoquery-evaluation", total_units)?;
+    let construction_path = request.input_dir.join(CONSTRUCTION_ROWS_FILE);
+    let split = select_v24_pseudoqueries_with_progress(
+        V24ConstructionRows::open(&construction_path, manifest.source_row_count)?,
+        &witnesses,
+        usize::try_from(manifest.pseudoquery_count).unwrap(),
+        manifest.source_row_count,
+        manifest.seed,
+        |completed| progress.advance(completed),
+    )?;
+    let split_units = manifest.source_row_count;
+    let truth = scan_v24_pseudoquery_truth_with_progress(
+        &split,
+        V24ConstructionRows::open(&construction_path, manifest.source_row_count)?,
+        manifest.source_row_count,
+        posting_result.distance_backend,
+        |completed| progress.advance(split_units + completed),
+    )?;
+    let truth_units = split_units + manifest.source_row_count;
+    let pages = V24PageRows::open(
+        &request.input_dir.join(PAGE_ROWS_FILE),
+        manifest.source_row_count,
+        &posting_result.construction_rows_digest,
+        &manifest.generation,
+    )?;
+    let page_truth = bind_v24_pseudoquery_pages_with_progress(
+        &truth,
+        V24PseudoqueryPageRows { rows: pages },
+        manifest.source_row_count,
+        manifest.physical_source_rows,
+        manifest.page_count,
+        |completed| progress.advance(truth_units + completed),
+    )?;
+    let page_units = truth_units + manifest.physical_source_rows;
+    let search = V24WitnessSearch::new(&graph)?;
+    let evidence = build_v24_pseudoquery_evidence_with_progress(
+        &split,
+        &page_truth,
+        usize::try_from(manifest.page_count).unwrap(),
+        |query, cell| {
+            select_development_pages(
+                &search,
+                &plane,
+                query,
+                cell,
+                usize::try_from(manifest.page_count).unwrap(),
+                false,
+                false,
+            )
+        },
+        |completed| progress.advance(page_units + completed),
+    )?;
+    let evidence_units = page_units + cells;
+    let base_result = evaluate_v24_pseudoquery_result_with_progress(
+        &split,
+        &page_truth,
+        &evidence,
+        usize::try_from(manifest.page_count).unwrap(),
+        posting_result.distance_backend,
+        |completed| progress.advance(evidence_units + completed),
+    )?;
+    let evidence_path = request.output_dir.join(PSEUDOQUERY_EVIDENCE_FILE);
+    let finish = (|| -> Result<Vec<u8>> {
+        let evidence_identity = write_v24_pseudoquery_evidence_parquet(
+            V24PseudoqueryEvidenceOutput {
+                path: &evidence_path,
+                uri: &manifest.output_uris["pseudoquery-evidence"],
+                generation: &manifest.generation,
+            },
+            &base_result,
+            &split,
+            &page_truth,
+            &evidence,
+            usize::try_from(manifest.page_count).unwrap(),
+        )?;
+        let result = bind_v24_pseudoquery_result_authority(
+            base_result,
+            manifest.inputs.clone(),
+            evidence_identity.clone(),
+        )?;
+        let result_bytes = canonical_v24_pseudoquery_result_bytes(
+            &result,
+            &manifest.inputs,
+            &evidence_identity,
+            &split,
+            &page_truth,
+            &evidence,
+            usize::try_from(manifest.page_count).unwrap(),
+        )?;
+        write_owned_file(&request.output_dir, RESULT_FILE, &result_bytes)?;
+        Ok(result_bytes)
+    })();
+    let result_bytes = match finish {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let _ = fs::remove_file(&evidence_path);
+            let _ = fs::remove_file(request.output_dir.join(RESULT_FILE));
+            let _ = fs::remove_file(request.output_dir.join(format!(".{RESULT_FILE}.tmp")));
+            return Err(error);
+        }
+    };
+    progress.commit();
+    Ok(result_bytes)
+}
+
 /// Execute one offline V24 phase after validating its complete local boundary.
 ///
 #[doc(hidden)]
@@ -1880,6 +2326,7 @@ pub fn run_v24_local_request(request: V24LocalRunRequest) -> Result<Vec<u8>> {
     match request.phase {
         V24LocalPhase::TrainWitnesses => run_training(&request),
         V24LocalPhase::BuildPostings => run_posting_construction(&request),
+        V24LocalPhase::EvaluatePseudoqueries => run_pseudoquery_evaluation(&request),
         V24LocalPhase::EvaluateDevelopment => run_development_evaluation(&request),
         V24LocalPhase::BindHoldout => run_holdout_binding(&request),
         V24LocalPhase::EvaluateHoldout => run_holdout_evaluation(&request),
@@ -2252,6 +2699,29 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
+    fn write_pseudoquery_manifest(path: &std::path::Path, inputs: &[V24ObjectIdentity]) {
+        let manifest = json!({
+            "claim_eligible": false,
+            "generation": "generation-v24-training-fixture",
+            "inputs": inputs,
+            "output_uris": {
+                "pseudoquery-evidence": "s3://borsuk-v24/pseudoquery-evidence.parquet",
+                "pseudoquery-result": "s3://borsuk-v24/pseudoquery-result.json"
+            },
+            "page_count": 64,
+            "phase": "pseudoquery-evaluation",
+            "physical_source_rows": 514,
+            "pseudoquery_count": 8,
+            "schema": "borsuk-v24-local-manifest-v1",
+            "seed": 1311768467463790320_u64,
+            "source_row_count": 257,
+            "witness_count": 128
+        });
+        let mut bytes = serde_json::to_vec(&manifest).unwrap();
+        bytes.push(b'\n');
+        fs::write(path, bytes).unwrap();
+    }
+
     fn write_holdout_manifest(
         path: &std::path::Path,
         phase: &str,
@@ -2535,6 +3005,187 @@ mod tests {
             })
         );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn v24_witness_local_pseudoquery_authenticates_corpus_only_inputs() {
+        let root = std::env::temp_dir().join(format!(
+            "borsuk-v24-local-pseudoquery-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let training_input = root.join("training-input");
+        let training_output = root.join("training-output");
+        let posting_input = root.join("posting-input");
+        let posting_output = root.join("posting-output");
+        let pseudoquery_input = root.join("pseudoquery-input");
+        let pseudoquery_output = root.join("pseudoquery-output");
+        for directory in [
+            &training_input,
+            &training_output,
+            &posting_input,
+            &posting_output,
+            &pseudoquery_input,
+            &pseudoquery_output,
+        ] {
+            fs::create_dir_all(directory).unwrap();
+        }
+        let construction = training_input.join("construction-rows.parquet");
+        write_construction_rows(&construction, 257);
+        let training_manifest = root.join("training-manifest.json");
+        write_training_manifest(&training_manifest, &input_identity(&construction), 128);
+        run_v24_local_request(V24LocalRunRequest {
+            manifest: training_manifest,
+            input_dir: training_input.clone(),
+            output_dir: training_output.clone(),
+            phase: V24LocalPhase::TrainWitnesses,
+        })
+        .unwrap();
+        for name in ["witnesses.arrow", "witness-graph.arrow"] {
+            fs::rename(training_output.join(name), posting_input.join(name)).unwrap();
+        }
+        let training_result_path = posting_input.join("training-result.json");
+        fs::rename(training_output.join("result.json"), &training_result_path).unwrap();
+        let training_result_bytes = fs::read(&training_result_path).unwrap();
+        let training_result: V24TrainingResult =
+            serde_json::from_slice(&training_result_bytes).unwrap();
+        let construction_digest = training_result.inputs[0].digest.clone();
+        let parent_result_sha256 = format!("{:x}", Sha256::digest(&training_result_bytes));
+        let page_rows = posting_input.join("page-rows.parquet");
+        write_evaluation_page_rows(&page_rows, 257, &construction_digest);
+        let posting_inputs = vec![
+            file_identity(
+                &training_result_path,
+                "training-result",
+                "s3://borsuk-v24/training-result.json",
+            ),
+            file_identity(
+                &posting_input.join("witness-graph.arrow"),
+                "witness-graph",
+                "s3://borsuk-v24/witness-graph.arrow",
+            ),
+            file_identity(
+                &posting_input.join("witnesses.arrow"),
+                "witnesses-arrow",
+                "s3://borsuk-v24/witnesses.arrow",
+            ),
+            file_identity(
+                &page_rows,
+                "page-rows-parquet",
+                "s3://borsuk-v24/page-rows.parquet",
+            ),
+        ];
+        let posting_manifest = root.join("posting-manifest.json");
+        write_posting_manifest(
+            &posting_manifest,
+            &posting_inputs,
+            128,
+            &construction_digest,
+            &parent_result_sha256,
+        );
+        let posting_result_bytes = run_v24_local_request(V24LocalRunRequest {
+            manifest: posting_manifest,
+            input_dir: posting_input.clone(),
+            output_dir: posting_output.clone(),
+            phase: V24LocalPhase::BuildPostings,
+        })
+        .unwrap();
+
+        fs::write(
+            pseudoquery_input.join("posting-result.json"),
+            &posting_result_bytes,
+        )
+        .unwrap();
+        fs::copy(
+            posting_input.join("witness-graph.arrow"),
+            pseudoquery_input.join("witness-graph.arrow"),
+        )
+        .unwrap();
+        fs::copy(
+            posting_output.join("witness-postings.arrow"),
+            pseudoquery_input.join("witness-postings.arrow"),
+        )
+        .unwrap();
+        fs::copy(
+            &construction,
+            pseudoquery_input.join("construction-rows.parquet"),
+        )
+        .unwrap();
+        fs::copy(&page_rows, pseudoquery_input.join("page-rows.parquet")).unwrap();
+        let inputs = vec![
+            file_identity(
+                &pseudoquery_input.join("posting-result.json"),
+                "posting-result",
+                "s3://borsuk-v24/posting-result.json",
+            ),
+            file_identity(
+                &pseudoquery_input.join("witness-graph.arrow"),
+                "witness-graph",
+                "s3://borsuk-v24/witness-graph.arrow",
+            ),
+            file_identity(
+                &pseudoquery_input.join("witness-postings.arrow"),
+                "witness-postings",
+                "s3://borsuk-v24/witness-postings.arrow",
+            ),
+            file_identity(
+                &pseudoquery_input.join("construction-rows.parquet"),
+                "construction-rows-parquet",
+                "s3://borsuk-v24/construction-rows.parquet",
+            ),
+            file_identity(
+                &pseudoquery_input.join("page-rows.parquet"),
+                "page-rows-parquet",
+                "s3://borsuk-v24/page-rows.parquet",
+            ),
+        ];
+        let manifest = root.join("pseudoquery-manifest.json");
+        write_pseudoquery_manifest(&manifest, &inputs);
+        let rejected_output = root.join("pseudoquery-rejected-output");
+        fs::create_dir(&rejected_output).unwrap();
+        let rejected_manifest = root.join("pseudoquery-rejected-manifest.json");
+        let mut rejected: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        rejected["output_uris"]["pseudoquery-result"] = json!("s3://borsuk-v24/../escape");
+        let mut rejected_bytes = serde_json::to_vec(&rejected).unwrap();
+        rejected_bytes.push(b'\n');
+        fs::write(&rejected_manifest, rejected_bytes).unwrap();
+        let error = run_v24_local_request(V24LocalRunRequest {
+            manifest: rejected_manifest,
+            input_dir: pseudoquery_input.clone(),
+            output_dir: rejected_output.clone(),
+            phase: V24LocalPhase::EvaluatePseudoqueries,
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("manifest authority differs"));
+        assert_eq!(fs::read_dir(rejected_output).unwrap().count(), 0);
+        let result_bytes = run_v24_local_request(V24LocalRunRequest {
+            manifest,
+            input_dir: pseudoquery_input,
+            output_dir: pseudoquery_output.clone(),
+            phase: V24LocalPhase::EvaluatePseudoqueries,
+        })
+        .unwrap();
+        let result: crate::v24_witness_pseudoquery::V24PseudoqueryResult =
+            serde_json::from_slice(&result_bytes).unwrap();
+        assert_eq!(result.ordered_inputs, inputs);
+        assert_eq!(result.selected_cell, None);
+        assert_eq!(result.benchmark_query_reads, 0);
+        assert_eq!(result.page_body_reads, 0);
+        assert_eq!(
+            result.evidence.as_ref().unwrap().role,
+            "pseudoquery-evidence"
+        );
+        assert!(
+            pseudoquery_output
+                .join("pseudoquery-evidence.parquet")
+                .is_file()
+        );
+        assert_eq!(
+            fs::read(pseudoquery_output.join("result.json")).unwrap(),
+            result_bytes
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

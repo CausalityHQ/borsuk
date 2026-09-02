@@ -28,6 +28,7 @@ _CONTROLLER_WALL_SECONDS = {
     "input-preparation": 21_600,
     "witness-training": 10_800,
     "posting-construction": 10_800,
+    "pseudoquery-evaluation": 10_800,
     "development-evaluation": 10_800,
     "holdout-binding": 10_800,
     "holdout-evaluation": 10_800,
@@ -36,6 +37,7 @@ PHASES = (
     "input-preparation",
     "witness-training",
     "posting-construction",
+    "pseudoquery-evaluation",
     "development-evaluation",
     "holdout-binding",
     "holdout-evaluation",
@@ -43,6 +45,7 @@ PHASES = (
 _RUNNER_PHASES = {
     "witness-training": "train-witnesses",
     "posting-construction": "build-postings",
+    "pseudoquery-evaluation": "evaluate-pseudoqueries",
     "development-evaluation": "evaluate-development",
     "holdout-binding": "bind-holdout",
     "holdout-evaluation": "evaluate-holdout",
@@ -391,6 +394,9 @@ elif [[ "$phase" == witness-training ]]; then
 elif [[ "$phase" == posting-construction ]]; then
   put_once "$outputs/witness-postings.arrow" witness-postings.arrow
   put_once "$root/stdout.json" result.json
+elif [[ "$phase" == pseudoquery-evaluation ]]; then
+  put_once "$outputs/pseudoquery-evidence.parquet" pseudoquery-evidence.parquet
+  put_once "$root/stdout.json" pseudoquery-result.json
 elif [[ "$phase" == development-evaluation ]]; then
   put_once "$root/stdout.json" development-result.json
 elif [[ "$phase" == holdout-binding ]]; then

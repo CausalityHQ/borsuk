@@ -12,6 +12,7 @@ use borsuk::{V24LocalRunRequest, run_v24_local_request};
 enum V24CliPhase {
     TrainWitnesses,
     BuildPostings,
+    EvaluatePseudoqueries,
     EvaluateDevelopment,
     BindHoldout,
     EvaluateHoldout,
@@ -22,6 +23,7 @@ impl From<V24CliPhase> for V24LocalPhase {
         match value {
             V24CliPhase::TrainWitnesses => Self::TrainWitnesses,
             V24CliPhase::BuildPostings => Self::BuildPostings,
+            V24CliPhase::EvaluatePseudoqueries => Self::EvaluatePseudoqueries,
             V24CliPhase::EvaluateDevelopment => Self::EvaluateDevelopment,
             V24CliPhase::BindHoldout => Self::BindHoldout,
             V24CliPhase::EvaluateHoldout => Self::EvaluateHoldout,
@@ -71,12 +73,14 @@ fn parse_v24_cli(arguments: Vec<String>) -> borsuk::Result<V24Cli> {
             }
             "--train-witnesses"
             | "--build-postings"
+            | "--evaluate-pseudoqueries"
             | "--evaluate-development"
             | "--bind-holdout"
             | "--evaluate-holdout" => {
                 let parsed = match argument.as_str() {
                     "--train-witnesses" => V24CliPhase::TrainWitnesses,
                     "--build-postings" => V24CliPhase::BuildPostings,
+                    "--evaluate-pseudoqueries" => V24CliPhase::EvaluatePseudoqueries,
                     "--evaluate-development" => V24CliPhase::EvaluateDevelopment,
                     "--bind-holdout" => V24CliPhase::BindHoldout,
                     _ => V24CliPhase::EvaluateHoldout,
@@ -173,6 +177,10 @@ mod tests {
         for (flag, phase) in [
             ("--train-witnesses", V24CliPhase::TrainWitnesses),
             ("--build-postings", V24CliPhase::BuildPostings),
+            (
+                "--evaluate-pseudoqueries",
+                V24CliPhase::EvaluatePseudoqueries,
+            ),
             ("--evaluate-development", V24CliPhase::EvaluateDevelopment),
             ("--bind-holdout", V24CliPhase::BindHoldout),
             ("--evaluate-holdout", V24CliPhase::EvaluateHoldout),
