@@ -370,6 +370,7 @@ dependencies = [
  "axum",
  "blake3",
  "borsuk-fma",
+ "borsuk-v25",
  "bytes",
  "chrono",
  "criterion",
