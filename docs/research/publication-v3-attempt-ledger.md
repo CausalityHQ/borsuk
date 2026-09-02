@@ -2122,3 +2122,49 @@ than 4.5 GiB. The next bounded falsifier deduplicates one 16-byte code per row
 plus two page identifiers within the 3 GiB resident gate, retrieves a fixed
 top-L ladder, and exact-reranks only that bounded set from local cold vector
 storage. Recall gates, D3, and release claims remain fenced.
+
+### PQ16 plus bounded exact rerank passes at depth 512
+
+Source commit `066075cdb8adce33ffe94e2b6ff739123d56f346` evaluated one
+fixed PQ16 top-L plus exact-rerank ladder on Spot instance
+`i-019929d5991b73373` (`c7g.4xlarge`, `eu-central-1a`). A single 16-byte
+code per row provided approximate membership inside the same immutable
+first-128-page frontier. The diagnostic retained bounded depths
+10/32/128/512/2,048, exact-reranked only each retained set against the
+authenticated float32 construction vectors, and then applied the same exact
+eight-page maximum-cover reducer. Truth was joined only after page selection.
+All arms share the 2,937,537,416-byte 100M-row serving projection: one code per
+row, two four-byte page-posting row identifiers, page offsets, codebook, and a
+512 MiB runtime reserve. Cold exact vectors are excluded from resident memory
+and require a separately qualified local-storage representation.
+
+The aggregate/minimum/oracle-attainment ppm triples for depths 10, 32, 128,
+512, and 2,048 were respectively 815,039/300,000/816,314;
+910,937/400,000/912,363; 979,687/500,000/981,220;
+995,507/800,000/997,065; and 997,851/800,000/999,413. Depth 512 is the
+smallest arm passing all literal quality gates. Depth 128 passes aggregate
+recall but fails worst-query recall and oracle attainment, so it is not a
+qualifying shortcut.
+
+The 11,873,832-byte executable had SHA-256
+`dbe1b872a6b87bb102101e665d694855b2f08c29316200b83df0334e7f9fe740`;
+the 8,446,323-byte source archive had SHA-256
+`94082c101fe6358ba8936b6060a16988ce32927287f515e534bf7350c551c888`.
+Scientific execution took 7.039013601 seconds and 13.64 CPU-seconds, peaked at
+231,956,480 bytes RSS, and observed zero memory PSI and zero swap growth. The
+2,154-byte canonical result has SHA-256
+`3bd1909a914b2ff450e1969511f2f2c83c19cc7dc48b7eb5644624cade68921e`;
+the 24,493-byte Parquet evidence has SHA-256
+`aa62454c3c12bde9da85d5e4c996e656a26f2d9b107a54aa61c1635a4c5f10ec`;
+the 2,424-byte terminal has SHA-256
+`298ddae61b9a3d16a947e9b46d29565bcf2a8283cbabffce3a681da13f7b4d6d`.
+Artifacts are rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/open/066075cdb8adce33ffe94e2b6ff739123d56f346/v26-pq16-rerank-066075c/rerank-a0001/`.
+The instance published its terminal and is terminated.
+
+This accepts PQ16 depth 512 as the serving architecture candidate, not as a
+latency or release claim. The next implementation must use packed resident
+codes and page postings, a bounded deduplicating candidate merge, and an
+authenticated Arrow cold-vector file on local SSD. It must reproduce the
+quality result and independently pass the 15 ms p99 gate before promotion.
+D3 and release claims remain fenced.
