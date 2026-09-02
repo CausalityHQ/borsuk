@@ -28,7 +28,8 @@ pub use tree::{
 const V26_LAYOUT_SCHEMA: &str = "borsuk-v26-dual-tree-layout-v1";
 const V26_PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
 const V26_REPLICA_SEED: u64 = 0x5632_362d_5245_504c;
-pub(crate) const V26_PAGE_CAPACITY_LADDER: [u32; 6] = [704, 768, 896, 1_024, 1_408, 2_048];
+pub(crate) const V26_PAGE_CAPACITY_LADDER: [u32; 9] =
+    [704, 768, 896, 1_024, 1_408, 2_048, 2_816, 4_096, 8_192];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V26Error(String);
@@ -586,14 +587,14 @@ mod tests {
     fn v26_tree_accepts_only_the_preregistered_page_capacity_ladder() {
         // Break caught: the open-screen capacity ladder is hard-coded away or widened ad hoc.
         let rows = (0..705).map(row).collect::<Vec<_>>();
-        for page_capacity in [704, 768, 896, 1_024, 1_408, 2_048] {
+        for page_capacity in [704, 768, 896, 1_024, 1_408, 2_048, 2_816, 4_096, 8_192] {
             let mut candidate = authority(rows.len() as u64);
             candidate.page_capacity = page_capacity;
             let (primary, replica, assignments) =
                 build_v26_dual_tree_layout(&candidate, &rows).unwrap();
             validate_v26_dual_tree_layout(&candidate, &primary, &replica, &assignments).unwrap();
         }
-        for page_capacity in [0, 512, 2_049, 4_096] {
+        for page_capacity in [0, 512, 2_049, 2_817, 16_384] {
             let mut candidate = authority(rows.len() as u64);
             candidate.page_capacity = page_capacity;
             assert!(build_v26_dual_tree_layout(&candidate, &rows).is_err());

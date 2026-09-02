@@ -4,7 +4,7 @@
 
 **Goal:** Replace the rejected inherited page layout with a deterministic query-independent dual-tree layout and reject it cheaply unless its exact eight-page oracle clears 975,000 ppm.
 
-**Architecture:** A small V26 crate builds two balanced projection trees from construction vectors only and emits disjoint primary/replica pages using the smallest passing member of the preregistered `704, 768, 896, 1,024, 1,408, 2,048` development ladder. A phase-separated evaluator joins frozen truth only after construction closes, runs the layout oracle first, and permits exact-global scoring and tree routing only after their preceding gates pass.
+**Architecture:** A small V26 crate builds two balanced projection trees from construction vectors only and emits disjoint primary/replica pages using the smallest passing member of the preregistered `704, 768, 896, 1,024, 1,408, 2,048, 2,816, 4,096, 8,192` development ladder. A phase-separated evaluator joins frozen truth only after construction closes, runs the layout oracle first, and permits exact-global scoring and tree routing only after their preceding gates pass.
 
 **Tech Stack:** Rust 2024, Arrow/Parquet 58.3, Rayon, SHA-256, Python 3.12 standard library, pinned Ruff 0.15.20, AWS EC2 Spot through profile `causality`.
 
@@ -15,7 +15,7 @@
 - V26 is a clean format; do not add V24/V25 readers, aliases, migrations, or version dispatch.
 - Use Parquet/Arrow IPC for bulk cross-language data and canonical JSON only for small authority/evidence objects.
 - The construction process cannot open pseudoquery, truth, prior-result, benchmark-query, or page-quality roles.
-- Page capacity is selected only from the exact ascending development ladder `704, 768, 896, 1,024, 1,408, 2,048`; every row has one primary and one replica page, and tree page ranges are disjoint.
+- Page capacity is selected only from the exact ascending development ladder `704, 768, 896, 1,024, 1,408, 2,048, 2,816, 4,096, 8,192`; every row has one primary and one replica page, and tree page ranges are disjoint.
 - Run one named RED/GREEN while iterating, one affected crate gate per coherent slice, and strict Clippy/full workspace only at the milestone.
 - The warm named gate must complete in under one second. A cold dependency build
   is paid once and reported separately; it is never repeated after a logic

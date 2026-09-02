@@ -22,7 +22,8 @@ trees from construction vectors only. One tree assigns each row's primary page;
 the other assigns its replica page. Pages from the two trees occupy disjoint
 ordinal ranges and contain at most the registered page capacity. The open
 development screen tests the ascending capacity ladder
-`704, 768, 896, 1,024, 1,408, 2,048` and stops at its smallest passing member.
+`704, 768, 896, 1,024, 1,408, 2,048, 2,816, 4,096, 8,192` and stops at its
+smallest passing member.
 Every row therefore has exactly two
 page choices without exceeding the existing approximately 1.86-copy storage
 shape by more than the explicitly reported delta.
@@ -74,7 +75,7 @@ The sentry uses a preregistered SplitMix selection and permits no retry.
 ## Deterministic layout algorithm
 
 Let `C` be one member of the exact registered ladder
-`[704, 768, 896, 1024, 1408, 2048]` rows per physical page and
+`[704, 768, 896, 1024, 1408, 2048, 2816, 4096, 8192]` rows per physical page and
 `L = ceil(row_count / C)` leaves per tree. Tree A uses seed
 `0x5632362d54524545`; tree B uses `0x5632362d5245504c`. Each node owns a stable
 ascending list of source ordinals and a registered number of descendant leaves.
@@ -114,8 +115,8 @@ reduced harness must produce byte-identical trees and assignments.
 
 At the original `C=704`, the open cohort has 373 leaves per tree and 746
 physical pages. Across the registered ladder, 100 million rows project from
-284,092 pages at `C=704` down to 97,658 pages at `C=2,048`; the largest page is
-786,432 raw vector bytes and eight such pages are 6 MiB. Two copies store
+284,092 pages at `C=704` down to 24,416 pages at `C=8,192`; the largest page is
+3,145,728 raw vector bytes and eight such pages are 24 MiB. Two copies store
 exactly 200 million row occurrences; the manifest reports this 7.303%
 increase over V24's 186,387,497.497-row 100-million-scale projection rather
 than hiding it.
