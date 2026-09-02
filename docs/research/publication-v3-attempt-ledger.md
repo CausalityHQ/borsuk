@@ -1625,3 +1625,57 @@ the fixture has only 65,536 corpus rows, 4,096 witnesses, 64 pages, and 32
 synthetic queries. Full-scale load RSS, unbiased pseudoqueries, burned
 development, sealed holdout, and page-body end-to-end latency remain fenced.
 D3 remains unauthorized.
+
+## V24 full-scale witness-router pseudoquery rejection on 2026-09-02
+
+The one preregistered corpus-uniform pseudoquery screen ran from source commit
+`c8ddcdf323eaf336fb418709f20c489afb7c4ab4` and source-archive SHA-256
+`04f7aabbd551ba7f99a04d79bad678a2949b001bb0cf3ccc384a4794cbdce2c5`.
+The 12,566,200-byte statically linked ARM64 worker had SHA-256
+`b190d6ded31328500662362682322eb6c6741c0fde37e7e1ace427b1eb4ee003`.
+The canonical 3,141-byte manifest had SHA-256
+`0a8c0a668d5afb3523bc77c4a89c7d448a0cb6beccce8986a70b09fb83b7c3ff`.
+Spot instance `i-0aae54e541083223a` was an `m7g.8xlarge` in
+`eu-central-1c`; both EC2 health checks were `ok`, it emitted its terminal in
+about eight minutes, and it terminated.
+
+The screen authenticated the full 9,990,000-row construction stream,
+18,620,111 physical page assignments, 28,282 pages, 1,048,576 witnesses, the
+319,049,002-byte witness graph, and the 225,619,098-byte posting plane. It
+selected exactly 1,024 non-witness source rows with split seed
+`1311768467463790320`; their ordered source-list SHA-256 is
+`206eb6cb019059688f4802cd70e958256841fa6d233b52a4eeab524530a317da`.
+The worker completed all 38,601,351 registered progress units, read zero
+benchmark queries and zero page bodies, and evaluated all 108 cells.
+
+The 33,382-byte canonical `borsuk-v24-pseudoquery-result-v1` result has
+SHA-256
+`8eebdb1449e0bb6d59471ab39451c24bb23bf359619e18162b4c9faafd5b1271`.
+Its 10,312,464-byte Parquet evidence has SHA-256
+`9188c714a3330975331e7046bb6c4f295704c547b991b17de89c725a2365ec61`.
+The 1,210-byte complete terminal has SHA-256
+`e26db217ba56259e4625ab235ec94f8d19186a844eddfc51e90a83dc7ac984aa`.
+All are under the immutable prefix
+`s3://borsuk-bench-453182569524-euc1/research/v24-witness-router/full/04f7aabbd551ba7f99a04d79bad678a2949b001bb0cf3ccc384a4794cbdce2c5/v24-full-20260902T090100Z-a5a5db3/pseudoquery-a0001/`.
+
+No cell reached the catastrophe-screen gates of 975,000 ppm aggregate recall
+and 995,000 ppm oracle attainment:
+
+| Page budget | Best aggregate ppm | Minimum ppm | Oracle attainment ppm | Cell (`ef`, witnesses, cap) |
+|---:|---:|---:|---:|---|
+| 8 | 652,636 | 0 | 659,463 | 512, 32, 64 |
+| 16 | 763,183 | 0 | 763,183 | 512, 32, 64 |
+| 32 | 857,226 | 0 | 857,226 | 512, 32, 64 |
+| 64 | 913,281 | 300,000 | 913,281 | 512, 32, 64 |
+
+The result records `passed=false`, `selected_cell=null`, and
+`claim_eligible=false`; consequently no pseudoquery pass receipt exists. The
+failure is scientific rather than operational: increasing every registered
+search/posting knob and the page budget from 8 to 64 improves recall
+monotonically but still misses the gate by 61,719 ppm. At the product's exact
+eight-page budget the gap is 322,364 ppm. The tested witness-HNSW plus capped
+witness-to-page reducer is therefore rejected at full scale, despite its
+perfect reduced fixture. Burned development, sealed holdout, page-body
+integration, D3, and release claims remain fenced. The next falsifier must
+change the query-dependent routing/layout representation rather than tune this
+terminal ladder or loosen the registered quality boundary.
