@@ -280,8 +280,13 @@ pub fn route_v26_pages(
 
 - [x] **Step 1: Strengthen the exact-global scorer contract for external queries.** Authenticate every exact first-ten row list against external truth and recompute exact maximum cover from closed page assignments. Preserve rank-sharp and fixed reciprocal-rank diagnostics as rejected evidence; do not tune another weighted reducer. Reject any own-row/page exclusion surface because external queries have no construction identity.
 - [x] **Step 2: Close the exact-global open gate.** All 512 exact first-ten lists matched truth, so the fixed maximum-cover target equals the passing layout oracle at 998,828 ppm aggregate and 900,000 ppm minimum recall. This algebraic control authorizes only the bounded router RED; it does not authorize D3 or a release claim.
-- [ ] **Step 3: Test fixed tree routing.** Best-first expand sibling margins from both roots, emit exactly eight unique leaves, prohibit outcome-dependent widening and exhaustive fallback, and require scalar/parallel page equality.
-- [ ] **Step 4: Run routing open gate.** Require 975,000 aggregate, 995,000 oracle attainment, projected memory below 3 GiB, warm p99 below 12 ms, and no more than eight page reads.
+- [x] **Step 3: Test fixed tree routing.** Best-first expand sibling margins from both roots, emit exactly eight unique leaves, prohibit outcome-dependent widening and exhaustive fallback, and require scalar/parallel page equality.
+- [x] **Step 4: Run routing open gate.** The fixed router was authenticated at
+  source `40aa4717d62ae04085f435bbc825ac140a614e03` and rejected at
+  641,406 ppm aggregate recall, zero minimum-query recall, and 642,410 ppm
+  oracle attainment. It used exactly eight pages, read zero page bodies, and
+  stayed far inside the resource gates. This result fences milestone assurance,
+  the sealed sentry, D3, and release progression for this router.
 - [ ] **Step 5: Run milestone assurance once.** Run strict workspace/all-targets Clippy and one locked workspace/all-targets test only after all focused gates are GREEN. Commit `Qualify V26 bounded page routing`.
 
 ### Task 7: Sealed sentry and release progression

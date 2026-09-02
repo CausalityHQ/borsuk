@@ -1857,3 +1857,36 @@ scientific run. It proves that exact row retrieval plus exact maximum cover can
 map the external queries to the passing layout, while both lossy weighted page
 summaries are rejected. The bounded router may now be falsified against this
 fixed top-ten/maximum-cover target. D3 and release claims remain fenced.
+
+### Fixed dual-tree router rejection
+
+Source commit `40aa4717d62ae04085f435bbc825ac140a614e03` tested the
+preregistered best-first dual-tree router once on Spot instance
+`i-0beb8218e9c376c6c` (`c7g.4xlarge`, `eu-central-1c`). The
+11,257,096-byte executable had SHA-256
+`b5efe3ebcf939e16f853dea7486e61ee8352fceb3a846168521009d33a7e36ed`;
+the source archive had SHA-256
+`58882a13ddb379fe751e10f6bad525da9194f244fe1a04b6a6e53338512fe75a`.
+The router selected exactly eight pages for each of 512 external queries and
+read zero page bodies. It completed normally in 0.117644136 seconds and 0.14
+CPU-seconds, peaked at 11,780,096 bytes RSS, and observed zero memory PSI and
+zero swap growth. The instance terminated after publishing its terminal.
+
+The result was 641,406 ppm aggregate recall, zero minimum-query recall, and
+642,410 ppm oracle attainment. It therefore failed all three registered quality
+gates: 975,000 aggregate, 800,000 minimum-query, and 995,000 oracle attainment.
+The 74,633-byte canonical result has SHA-256
+`22911c3c6b65df13dbc17308c7582677433e18a511653aed2a2dbf872ea554f0`;
+the 685-byte terminal has SHA-256
+`9c2912d1aaa40624b4fad861083af6ac28acbb168284ae4f1190fb1ef07a9b55`.
+Artifacts are rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/open/40aa4717d62ae04085f435bbc825ac140a614e03/v26-tree-router-40aa471/router-a0001/`.
+
+This is a scientific `tree-router-rejected` result. Latency and memory are not
+the failure: the fixed threshold-margin traversal does not recover the leaves
+containing the exact top-ten rows that the authenticated maximum-cover control
+maps to 998,828 ppm aggregate and 900,000 ppm minimum recall. The quality
+thresholds are unchanged. Milestone assurance, the sealed sentry, D3, and
+release progression remain fenced for this router. The next work is a bounded
+local causal diagnostic of traversal versus representation; no further paid
+run is authorized by this terminal.
