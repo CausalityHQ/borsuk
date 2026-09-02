@@ -28,9 +28,9 @@
 
 ## File Structure
 
-- Create `crates/borsuk/src/v25_containment.rs`: V25 identities, manifests, exact page reducer, evidence rows, metrics, gates, causal classification, and canonical serializers.
+- Create `crates/borsuk-v25/Cargo.toml` and `crates/borsuk-v25/src/lib.rs`: small internal crate for V25 identities, manifests, exact page reducer, evidence rows, metrics, gates, causal classification, and canonical serializers.
 - Create `crates/borsuk/src/v25_containment_local.rs`: strict Parquet/Arrow readers, streaming exact controls, local request boundary, progress, and known-file cleanup contract.
-- Modify `crates/borsuk/src/lib.rs`: private V25 modules and one doc-hidden local request/run export.
+- Modify `crates/borsuk/src/lib.rs` and `crates/borsuk/Cargo.toml` only at the local-runner integration milestone.
 - Create `crates/borsuk/examples/v25_page_containment.rs`: thin offline CLI with no storage/page client.
 - Create `scripts/run_v25_page_containment.py`: one-process monitor, resource stops, terminal preservation, and explicit cleanup.
 - Create `scripts/stage_v25_page_containment.py`: credentialed exact-object staging and offline inventory receipt.
@@ -42,9 +42,10 @@
 ### Task 1: V25 authority, fixed reducer, and result contract
 
 **Files:**
-- Create: `crates/borsuk/src/v25_containment.rs`
-- Modify: `crates/borsuk/src/lib.rs`
-- Test: `crates/borsuk/src/v25_containment.rs`
+- Create: `crates/borsuk-v25/Cargo.toml`
+- Create: `crates/borsuk-v25/src/lib.rs`
+- Modify: root `Cargo.toml` workspace members
+- Test: `crates/borsuk-v25/src/lib.rs`
 
 **Interfaces:**
 - Produces: `V25ObjectIdentity`, `V25Control`, `V25ContainmentSample`, `V25ContainmentResult`, `V25Disposition`, `select_v25_rank_sharp_pages`, `canonical_v25_containment_result_bytes`.
@@ -57,9 +58,9 @@ assert_eq!(pages, vec![2, 7, 11, 13, 17, 19, 23, 29]);
 ```
 
 - [ ] **Step 2: Write the authority/result RED.** Add `v25_containment_result_recomputes_samples_gates_and_identities`. Mutation-lock schema, source/archive/index/generation, query/control ordering, page cardinality, finite distances, hits, recall, oracle hits, oracle attainment, candidate count, aggregates, minimums, page-budget ladder, disposition, claim eligibility, URI, digest algorithm, digest, length, and input/output role disjointness.
-- [ ] **Step 3: Run only the focused RED.** Run `cargo test -p borsuk --lib v25_containment_ -- --nocapture`. Expected: unresolved V25 boundary symbols only.
+- [ ] **Step 3: Run only the focused RED.** Run `cargo test -p borsuk-v25 v25_containment_ -- --nocapture`. Expected: unresolved V25 boundary symbols only.
 - [ ] **Step 4: Implement the minimal pure boundary.** Use `f32::total_cmp` then page ordinal for total ordering. Recompute all metrics from samples; require `claim_eligible=false`; serialize sorted compact JSON with one trailing newline.
-- [ ] **Step 5: Run focused GREEN and mechanical checks.** Run the same selector, then `cargo fmt --all -- --check` and `git diff --check`. Commit only the two files with message `Add V25 rank-sharp containment contracts`.
+- [ ] **Step 5: Run focused GREEN and mechanical checks.** Run the same selector, then `cargo fmt --all -- --check` and `git diff --check`. Record compile and test wall separately; the named test must not build `borsuk`. Commit only the small crate, root workspace member, spec, and plan with message `Add fast V25 rank-sharp containment contracts`.
 
 ### Task 2: Strict local artifacts and exact-global decomposition
 

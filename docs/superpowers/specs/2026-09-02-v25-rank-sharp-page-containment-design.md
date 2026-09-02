@@ -24,6 +24,14 @@ sentry. Full 10-million-row and 100-million-row work is forbidden until those
 cheap gates pass with margin. Strict Clippy and the full workspace suite run
 once per verified milestone, not after each repair.
 
+Pure V25 authority, reducer, metric, and codec contracts live in the small
+internal `borsuk-v25` workspace crate. Their named tests must not relink the
+monolithic `borsuk` crate. Main-crate integration is a milestone gate. This
+keeps a pure contract RED/GREEN loop in seconds rather than approximately one
+minute of unrelated recompilation. The first measured slice compiled cold in
+4.70 seconds and reran warm in 0.63 seconds; later gates must report their own
+wall time so regressions are visible.
+
 ## Evidence and corrected failure mechanism
 
 The V24 full-scale screen used 9,990,000 unique rows, 18,620,111 physical page

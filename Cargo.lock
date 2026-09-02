@@ -433,6 +433,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "borsuk-v25"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
