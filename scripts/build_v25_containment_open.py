@@ -203,10 +203,14 @@ def _normalize_vectors(values: np.ndarray) -> np.ndarray:
     vectors = np.asarray(values, dtype=np.float32)
     if vectors.ndim != 2 or vectors.shape[1] != 96 or not np.isfinite(vectors).all():
         raise ValueError("V25 open vector values differ")
-    norms = np.linalg.norm(vectors.astype(np.float64), axis=1)
+    vectors64 = vectors.astype(np.float64)
+    squared_norms = np.zeros(vectors.shape[0], dtype=np.float64)
+    for dimension in range(96):
+        squared_norms += vectors64[:, dimension] * vectors64[:, dimension]
+    norms = np.sqrt(squared_norms)
     if not np.isfinite(norms).all() or np.any(norms == 0.0):
         raise ValueError("V25 open vector values differ")
-    return (vectors.astype(np.float64) / norms[:, None]).astype(np.float32)
+    return (vectors64 / norms[:, None]).astype(np.float32)
 
 
 def _batch_vectors(column: pa.Array) -> np.ndarray:
@@ -222,7 +226,7 @@ def _batch_vectors(column: pa.Array) -> np.ndarray:
 
 def _read_selected_construction(
     request: V25OpenBuildRequest, selection: V25OpenSelection
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     parquet = pq.ParquetFile(request.construction.path)
     if (
         parquet.schema_arrow != _construction_schema()
@@ -260,15 +264,20 @@ def _read_selected_construction(
         expected_source += batch.num_rows
     if expected_source != request.source_row_count or not found.all():
         raise ValueError("V25 open construction inventory differs")
-    return _normalize_vectors(output)
+    return output, _normalize_vectors(output)
 
 
 def _read_selected_pages(
-    request: V25OpenBuildRequest, selection: V25OpenSelection
+    request: V25OpenBuildRequest,
+    selection: V25OpenSelection,
+    construction_vectors: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     parquet = pq.ParquetFile(request.page_rows.path)
-    if parquet.schema_arrow != _page_rows_schema(
-        request.construction.sha256, request.construction.generation
+    if not parquet.schema_arrow.equals(
+        _page_rows_schema(
+            request.construction.sha256, request.construction.generation
+        ),
+        check_metadata=True,
     ):
         raise ValueError("V25 open page schema differs")
     selected = np.asarray(selection.dataset_ordinals, dtype=np.uint64)
@@ -330,6 +339,10 @@ def _read_selected_pages(
     replicated = replica != np.iinfo(np.uint32).max
     if not np.array_equal(primary_vectors[replicated], replica_vectors[replicated]):
         raise ValueError("V25 open replica vector differs")
+    if not np.array_equal(primary_vectors, construction_vectors) or not np.array_equal(
+        replica_vectors[replicated], construction_vectors[replicated]
+    ):
+        raise ValueError("V25 open page construction vector differs")
     return primary, replica
 
 
@@ -359,6 +372,17 @@ def _exact_oracle_pages(assignments: Iterable[tuple[int, ...]], budget: int) -> 
     )
 
 
+def _fixed_order_cosine_distances(
+    vectors64: np.ndarray, query64: np.ndarray
+) -> np.ndarray:
+    if vectors64.ndim != 2 or vectors64.shape[1] != 96 or query64.shape != (96,):
+        raise ValueError("V25 open exact truth vector shape differs")
+    similarities = np.zeros(vectors64.shape[0], dtype=np.float64)
+    for dimension in range(96):
+        similarities += vectors64[:, dimension] * query64[dimension]
+    return 1.0 - similarities
+
+
 def _exact_truth(
     vectors: np.ndarray,
     primary: np.ndarray,
@@ -376,16 +400,14 @@ def _exact_truth(
         own_pages = {int(primary[query_source])}
         if replica[query_source] != maximum:
             own_pages.add(int(replica[query_source]))
-        distances = 1.0 - vectors64 @ vectors64[query_source]
-        forbidden = np.fromiter(
-            (
-                row == query_source
-                or int(primary[row]) in own_pages
-                or (replica[row] != maximum and int(replica[row]) in own_pages)
-                for row in range(vectors.shape[0])
-            ),
-            dtype=np.bool_,
-            count=vectors.shape[0],
+        distances = _fixed_order_cosine_distances(
+            vectors64, vectors64[query_source]
+        )
+        own_page_array = np.fromiter(sorted(own_pages), dtype=np.uint32)
+        forbidden = (
+            (ordinals == query_source)
+            | np.isin(primary, own_page_array)
+            | np.isin(replica, own_page_array)
         )
         distances[forbidden] = math.inf
         order = np.lexsort((ordinals, distances))[:10]
@@ -454,8 +476,10 @@ def build_v25_open_inputs(request: V25OpenBuildRequest) -> V25OpenBuildReceipt:
         cohort_seed=request.cohort_seed,
         pseudoquery_seed=request.pseudoquery_seed,
     )
-    vectors = _read_selected_construction(request, selection)
-    primary, replica = _read_selected_pages(request, selection)
+    construction_vectors, vectors = _read_selected_construction(request, selection)
+    primary, replica = _read_selected_pages(
+        request, selection, construction_vectors
+    )
     query_sources = selection.query_source_ordinals
     truth = _exact_truth(vectors, primary, replica, query_sources)
 
@@ -538,8 +562,14 @@ def build_v25_open_inputs(request: V25OpenBuildRequest) -> V25OpenBuildReceipt:
         )
         def fixed(rows: list[list[int]], kind: pa.DataType, width: int) -> pa.Array:
             numpy_kind = np.uint64 if kind == pa.uint64() else np.uint32
+            padded = [
+                [*row, *([np.iinfo(numpy_kind).max] * (width - len(row)))]
+                for row in rows
+            ]
+            if any(len(row) > width for row in rows):
+                raise ValueError("V25 open fixed-list width differs")
             return pa.FixedSizeListArray.from_arrays(
-                pa.array(np.asarray(rows, dtype=numpy_kind).reshape(-1), type=kind),
+                pa.array(np.asarray(padded, dtype=numpy_kind).reshape(-1), type=kind),
                 type=pa.list_(pa.field("element", kind, nullable=False), width),
             )
         tables["truth-parquet"] = pa.Table.from_arrays(

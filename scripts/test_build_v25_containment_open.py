@@ -5,11 +5,13 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+import scripts.build_v25_containment_open as subject
 from scripts.build_v25_containment_open import (
     RegisteredV24Input,
     V25OpenBuildRequest,
@@ -49,6 +51,7 @@ def _write_v24_fixture(
     *,
     with_replica: bool = False,
     replica_vector_drift: bool = False,
+    page_modulo: int | None = None,
 ) -> tuple[RegisteredV24Input, RegisteredV24Input]:
     generation = "v24-full-fixture"
     construction_path = root / "construction-rows.parquet"
@@ -92,7 +95,10 @@ def _write_v24_fixture(
             b"generation": generation.encode(),
         },
     )
-    page_ordinals = list(range(rows))
+    page_ordinals = [
+        value if page_modulo is None else value % page_modulo
+        for value in range(rows)
+    ]
     replicas = [False] * rows
     record_ids = [str(value) for value in range(rows)]
     page_values = np.zeros((rows, 96), dtype=np.float32)
@@ -263,6 +269,101 @@ class V25OpenConversionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "V25 open page record ID differs"):
                 build_v25_open_inputs(_request(construction, page_rows, output))
             self.assertFalse(output.exists())
+
+    def test_v25_open_conversion_rejects_reauthenticated_page_metadata_drift(self) -> None:
+        """A changed V24 construction binding must fail before page semantics run."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            construction, page_rows = _write_v24_fixture(root, 16)
+            table = pq.read_table(page_rows.path).replace_schema_metadata(
+                {
+                    b"construction_rows_sha256": b"0" * 64,
+                    b"generation": page_rows.generation.encode(),
+                }
+            )
+            pq.write_table(table, page_rows.path, compression="zstd", version="2.6")
+            changed = _identity(
+                "page-rows-parquet", page_rows.path, page_rows.generation
+            )
+
+            with self.assertRaisesRegex(ValueError, "V25 open page schema differs"):
+                build_v25_open_inputs(_request(construction, changed, root / "output"))
+
+    def test_v25_open_conversion_rejects_primary_vector_drift_from_construction(self) -> None:
+        """A selected page vector must be byte-equal to its construction vector."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            construction, page_rows = _write_v24_fixture(root, 16)
+            table = pq.read_table(page_rows.path)
+            vectors = np.asarray(table.column("vector").to_pylist(), dtype=np.float32)
+            vectors[0] = 0.0
+            vectors[0, 1] = 1.0
+            changed_table = table.set_column(
+                3, table.schema.field(3), _vector_array(vectors)
+            )
+            pq.write_table(
+                changed_table, page_rows.path, compression="zstd", version="2.6"
+            )
+            changed = _identity(
+                "page-rows-parquet", page_rows.path, page_rows.generation
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "V25 open page construction vector differs"
+            ):
+                build_v25_open_inputs(_request(construction, changed, root / "output"))
+
+    def test_v25_open_conversion_pads_short_oracle_without_losing_cardinality(self) -> None:
+        """A valid sub-eight oracle must serialize with explicit sentinel padding."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            construction, page_rows = _write_v24_fixture(root, 16, page_modulo=7)
+            output = root / "output"
+
+            build_v25_open_inputs(
+                _request(construction, page_rows, output, page_count=7)
+            )
+
+            oracle = pq.read_table(output / "truth.parquet").column(
+                "oracle_pages"
+            )[0].as_py()
+            self.assertEqual(len(oracle), 8)
+            self.assertEqual(oracle[-2:], [2**32 - 1, 2**32 - 1])
+
+    def test_v25_open_truth_uses_fixed_order_float64_reduction(self) -> None:
+        """Changing truth scoring back to backend BLAS must change this authority."""
+        query = np.asarray(([1.0, 2**-26, -1.0, 2**-26] * 24), dtype=np.float64)
+        vectors = np.stack(
+            [
+                np.asarray(([1.0, 1.0, 1.0, 1.0] * 24), dtype=np.float64),
+                np.asarray(([1.0, -1.0, -1.0, 1.0] * 24), dtype=np.float64),
+            ]
+        )
+
+        distances = subject._fixed_order_cosine_distances(vectors, query)
+
+        self.assertEqual(
+            [value.hex() for value in distances],
+            ["0x1.ffffe80000000p-1", "-0x1.7800000000000p+5"],
+        )
+
+    def test_v25_open_normalization_does_not_delegate_reduction_to_blas(self) -> None:
+        """Restoring backend-dependent norm reduction must fail this authority test."""
+        vectors = np.zeros((2, 96), dtype=np.float32)
+        vectors[0, :2] = [3.0, 4.0]
+        vectors[1, :2] = [-4.0, 3.0]
+
+        with mock.patch.object(
+            np.linalg, "norm", side_effect=AssertionError("backend reduction used")
+        ):
+            normalized = subject._normalize_vectors(vectors)
+
+        self.assertTrue(
+            np.array_equal(
+                normalized[:, :2],
+                np.asarray([[0.6, 0.8], [-0.8, 0.6]], dtype=np.float32),
+            )
+        )
 
 class V25OpenCliTests(unittest.TestCase):
     def test_v25_open_cli_fails_closed_before_reading_inputs(self) -> None:
