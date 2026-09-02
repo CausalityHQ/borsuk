@@ -4,10 +4,11 @@ use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
 use borsuk_v26::{
     V26CentroidRouterRequest, V26ExactGlobalRequest, V26LayoutEvaluationRequest,
-    V26LocalObjectPath, V26ObjectIdentity, V26TreeRouterRequest, V26TruthBuildRequest,
-    canonical_v26_layout_build_output_bytes, canonical_v26_layout_result_bytes,
-    canonical_v26_object_identity_bytes, evaluate_v26_layout_oracle, run_v26_centroid_router,
-    run_v26_exact_global, run_v26_layout_build_directory, run_v26_tree_router,
+    V26LocalObjectPath, V26ObjectIdentity, V26PageModeRouterRequest, V26TreeRouterRequest,
+    V26TruthBuildRequest, canonical_v26_layout_build_output_bytes,
+    canonical_v26_layout_result_bytes, canonical_v26_object_identity_bytes,
+    evaluate_v26_layout_oracle, run_v26_centroid_router, run_v26_exact_global,
+    run_v26_layout_build_directory, run_v26_page_mode_router, run_v26_tree_router,
     run_v26_tree_router_diagnostic, run_v26_truth_build,
 };
 
@@ -63,6 +64,14 @@ struct CentroidRouterRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct PageModeRouterRequest {
+    construction: RegisteredFile,
+    router: TreeRouterRequest,
+    evidence_output_path: PathBuf,
+    evidence_output_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct TruthRequest {
     generation: String,
     construction: RegisteredFile,
@@ -82,6 +91,7 @@ enum V26CliMode {
     Router(TreeRouterRequest),
     RouterDiagnostic(TreeRouterRequest),
     CentroidRouter(CentroidRouterRequest),
+    PageModeRouter(PageModeRouterRequest),
 }
 
 fn take(values: &mut BTreeMap<String, String>, key: &str) -> Result<String, String> {
@@ -142,6 +152,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
     let mut router = false;
     let mut router_diagnostic = false;
     let mut centroid_router = false;
+    let mut page_mode_router = false;
     let mut execute = false;
     let mut values = BTreeMap::new();
     while let Some(flag) = arguments.next() {
@@ -187,6 +198,12 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     return Err("duplicate --route-centroids".to_owned());
                 }
                 centroid_router = true;
+            }
+            "--route-page-modes" => {
+                if page_mode_router {
+                    return Err("duplicate --route-page-modes".to_owned());
+                }
+                page_mode_router = true;
             }
             "--execute" => {
                 if execute {
@@ -251,6 +268,14 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     return Err(format!("invalid or duplicate {flag}"));
                 }
             }
+            "--evidence-output-path" | "--evidence-output-uri" => {
+                let value = arguments
+                    .next()
+                    .ok_or_else(|| format!("missing value for {flag}"))?;
+                if value.starts_with("--") || values.insert(flag.clone(), value).is_some() {
+                    return Err(format!("invalid or duplicate {flag}"));
+                }
+            }
             _ => return Err(format!("unknown or forbidden flag {flag}")),
         }
     }
@@ -262,6 +287,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             + u8::from(router)
             + u8::from(router_diagnostic)
             + u8::from(centroid_router)
+            + u8::from(page_mode_router)
             != 1
     {
         return Err("exactly one executable phase is required".to_owned());
@@ -362,7 +388,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         }
         return Ok(V26CliMode::Evaluate(layout));
     }
-    if router || router_diagnostic || centroid_router {
+    if router || router_diagnostic || centroid_router || page_mode_router {
         let primary_tree = take_registered(&mut values, "primary-tree")?;
         let replica_tree = take_registered(&mut values, "replica-tree")?;
         let page_budget = take(&mut values, "--page-budget")?
@@ -379,21 +405,42 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             layout,
             page_budget,
         };
-        if !centroid_router && !values.is_empty() {
+        if (router || router_diagnostic) && !values.is_empty() {
             return Err("V26 tree router arguments differ".to_owned());
         }
-        return Ok(if router {
-            V26CliMode::Router(request)
-        } else if router_diagnostic {
-            V26CliMode::RouterDiagnostic(request)
-        } else {
-            let construction = take_registered(&mut values, "construction")?;
-            if !values.is_empty() || !valid_registered(&construction) {
+        if router {
+            return Ok(V26CliMode::Router(request));
+        }
+        if router_diagnostic {
+            return Ok(V26CliMode::RouterDiagnostic(request));
+        }
+        let construction = take_registered(&mut values, "construction")?;
+        if !valid_registered(&construction) {
+            return Err("V26 page summary router arguments differ".to_owned());
+        }
+        return Ok(if centroid_router {
+            if !values.is_empty() {
                 return Err("V26 centroid router arguments differ".to_owned());
             }
             V26CliMode::CentroidRouter(CentroidRouterRequest {
                 construction,
                 router: request,
+            })
+        } else {
+            let evidence_output_path = PathBuf::from(take(&mut values, "--evidence-output-path")?);
+            let evidence_output_uri = take(&mut values, "--evidence-output-uri")?;
+            if !values.is_empty()
+                || evidence_output_path.as_os_str().is_empty()
+                || !evidence_output_uri.starts_with("s3://")
+                || !evidence_output_uri.ends_with(".parquet")
+            {
+                return Err("V26 page mode router arguments differ".to_owned());
+            }
+            V26CliMode::PageModeRouter(PageModeRouterRequest {
+                construction,
+                router: request,
+                evidence_output_path,
+                evidence_output_uri,
             })
         });
     }
@@ -558,6 +605,33 @@ fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
             })
             .map_err(|error| error.to_string())
         }
+        V26CliMode::PageModeRouter(request) => {
+            let generation = request.router.generation.clone();
+            run_v26_page_mode_router(&V26PageModeRouterRequest {
+                construction_rows: local_object(
+                    "construction-parquet",
+                    &generation,
+                    request.construction,
+                ),
+                router: V26TreeRouterRequest {
+                    primary_tree: local_object(
+                        "primary-tree-parquet",
+                        &generation,
+                        request.router.primary_tree,
+                    ),
+                    replica_tree: local_object(
+                        "replica-tree-parquet",
+                        &generation,
+                        request.router.replica_tree,
+                    ),
+                    layout: evaluation_request(request.router.layout),
+                    page_budget: request.router.page_budget,
+                },
+                evidence_output_path: request.evidence_output_path,
+                evidence_output_uri: request.evidence_output_uri,
+            })
+            .map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -703,6 +777,22 @@ mod tests {
             "5".repeat(64),
             "--construction-bytes".to_owned(),
             "4096".to_owned(),
+        ]);
+        args
+    }
+
+    fn page_mode_router_args() -> Vec<String> {
+        let mut args = centroid_router_args();
+        let mode = args
+            .iter_mut()
+            .find(|argument| argument.as_str() == "--route-centroids")
+            .unwrap();
+        *mode = "--route-page-modes".to_owned();
+        args.extend([
+            "--evidence-output-path".to_owned(),
+            "/output/page-mode-evidence.parquet".to_owned(),
+            "--evidence-output-uri".to_owned(),
+            "s3://bucket/page-mode-evidence.parquet".to_owned(),
         ]);
         args
     }
@@ -955,6 +1045,37 @@ mod tests {
             vec!["--d3", "forbidden"],
         ] {
             let mut args = centroid_router_args();
+            args.extend(mutation.into_iter().map(str::to_owned));
+            assert!(parse_v26_args(args).is_err());
+        }
+    }
+
+    #[test]
+    fn v26_page_mode_router_cli_has_fixed_ladder_and_parquet_evidence_only() {
+        // Break caught: the page-mode diagnostic exposes K/frontier tuning, emits bulk JSON,
+        // or gains page, storage, endpoint, or D3 capabilities.
+        let parsed = parse_v26_args(page_mode_router_args()).unwrap();
+        let V26CliMode::PageModeRouter(request) = parsed else {
+            panic!("page mode router differs");
+        };
+        assert_eq!(
+            request.evidence_output_path,
+            std::path::PathBuf::from("/output/page-mode-evidence.parquet")
+        );
+        assert_eq!(
+            request.evidence_output_uri,
+            "s3://bucket/page-mode-evidence.parquet"
+        );
+
+        for mutation in [
+            vec!["--mode-counts", "2,4,8"],
+            vec!["--candidate-page-limit", "64"],
+            vec!["--bucket", "forbidden"],
+            vec!["--endpoint", "https://forbidden"],
+            vec!["--page-prefix", "forbidden"],
+            vec!["--d3", "forbidden"],
+        ] {
+            let mut args = page_mode_router_args();
             args.extend(mutation.into_iter().map(str::to_owned));
             assert!(parse_v26_args(args).is_err());
         }
