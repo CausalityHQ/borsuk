@@ -311,7 +311,7 @@ pub(crate) fn validate_v24_preparation_manifest(manifest: &V24PreparationManifes
         || !exact_lower_hex(&manifest.source_archive_sha256)
         || !exact_lower_hex(&manifest.d1_report_sha256)
         || !manifest.page_uri.starts_with("s3://")
-        || !manifest.page_uri.ends_with('/')
+        || manifest.page_uri.ends_with('/')
         || manifest.page_uri.contains("/../")
         || manifest.source_row_count == 0
         || manifest.physical_row_count < manifest.source_row_count
@@ -371,7 +371,7 @@ pub(crate) fn validate_v24_preparation_manifest(manifest: &V24PreparationManifes
             &mut roles,
             &mut uris,
         )?;
-        if page.identity.uri != format!("{}pages/{}", manifest.page_uri, page.identity.digest) {
+        if page.identity.uri != format!("{}/pages/{}", manifest.page_uri, page.identity.digest) {
             return Err(invalid("V24 preparation page URI differs"));
         }
         primary_rows = primary_rows
@@ -418,7 +418,7 @@ pub(crate) fn validate_v24_preparation_roster_bytes(
     let page_uri = object
         .get("page_uri")
         .and_then(serde_json::Value::as_str)
-        .filter(|uri| uri.starts_with("s3://") && uri.ends_with('/') && !uri.contains("/../"))
+        .filter(|uri| uri.starts_with("s3://") && !uri.ends_with('/') && !uri.contains("/../"))
         .ok_or_else(|| invalid("V24 preparation roster page URI differs"))?;
     if canonical != bytes
         || object.get("schema").and_then(serde_json::Value::as_str) != Some("borsuk-v23-pages-v1")
@@ -464,7 +464,7 @@ pub(crate) fn validate_v24_preparation_roster_bytes(
             || page.encoded_bytes != registered.identity.encoded_bytes
             || u64::from(page.primary_rows) != registered.primary_rows
             || u64::from(page.replicated_rows) != registered.replica_rows
-            || registered.identity.uri != format!("{page_uri}{}", page.path)
+            || registered.identity.uri != format!("{page_uri}/{}", page.path)
         {
             return Err(invalid("V24 preparation roster page differs"));
         }
@@ -1282,7 +1282,7 @@ mod tests {
             index_id: "index-v24-preparation".to_owned(),
             source_archive_sha256: "bb".repeat(32),
             d1_report_sha256: "aa".repeat(32),
-            page_uri: "s3://borsuk-v24-preparation/".to_owned(),
+            page_uri: "s3://borsuk-v24-preparation/pages".to_owned(),
             source_row_count: 6,
             physical_row_count: 10,
             shards: vec![
@@ -1308,7 +1308,10 @@ mod tests {
                         "blake3",
                         &format!("{:02x}", page_ordinal + 4),
                     );
-                    identity.uri = format!("s3://borsuk-v24-preparation/pages/{}", identity.digest);
+                    identity.uri = format!(
+                        "s3://borsuk-v24-preparation/pages/pages/{}",
+                        identity.digest
+                    );
                     V24PreparationPage {
                         identity,
                         page_ordinal,
@@ -1396,8 +1399,10 @@ mod tests {
             fs::write(path, &bytes).unwrap();
             page.identity.encoded_bytes = bytes.len() as u64;
             page.identity.digest = blake3::hash(&bytes).to_hex().to_string();
-            page.identity.uri =
-                format!("s3://borsuk-v24-preparation/pages/{}", page.identity.digest);
+            page.identity.uri = format!(
+                "s3://borsuk-v24-preparation/pages/pages/{}",
+                page.identity.digest
+            );
         }
     }
 
@@ -1427,7 +1432,7 @@ mod tests {
             "dataset_id": "deep-image-96",
             "document_kind": "publication-v3-v23-page-roster",
             "index_id": "index-v24-preparation",
-            "page_uri": "s3://borsuk-v24-preparation/",
+            "page_uri": manifest.page_uri,
             "pages": pages,
             "schema": "borsuk-v23-pages-v1",
             "source_archive_sha256": "bb".repeat(32),
@@ -1458,6 +1463,22 @@ mod tests {
         let mut mutation = baseline.clone();
         mutation.physical_row_count += 1;
         assert!(validate_v24_preparation_manifest(&mutation).is_err());
+    }
+
+    #[test]
+    fn v24_preparation_roster_accepts_frozen_page_namespace_semantics() {
+        let frozen = manifest();
+        assert_eq!(frozen.page_uri, "s3://borsuk-v24-preparation/pages");
+        assert_eq!(
+            frozen.pages[0].identity.uri,
+            format!(
+                "{}/pages/{}",
+                frozen.page_uri, frozen.pages[0].identity.digest
+            )
+        );
+
+        validate_v24_preparation_manifest(&frozen).unwrap();
+        validate_v24_preparation_roster_bytes(&frozen, &roster_bytes(&frozen)).unwrap();
     }
 
     #[test]
@@ -1700,7 +1721,7 @@ mod tests {
         manifest.pages[0].identity.encoded_bytes = drift_page.len() as u64;
         manifest.pages[0].identity.digest = blake3::hash(&drift_page).to_hex().to_string();
         manifest.pages[0].identity.uri = format!(
-            "{}pages/{}",
+            "{}/pages/{}",
             manifest.page_uri, manifest.pages[0].identity.digest
         );
         assert!(
@@ -1756,7 +1777,7 @@ mod tests {
             ("dataset_id", serde_json::json!("other-dataset")),
             ("index_id", serde_json::json!("other-index")),
             ("d1_report_sha256", serde_json::json!("dd".repeat(32))),
-            ("page_uri", serde_json::json!("s3://other-prefix/")),
+            ("page_uri", serde_json::json!("s3://other-prefix/pages")),
         ] {
             let mut drift: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             drift[field] = value;

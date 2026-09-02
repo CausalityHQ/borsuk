@@ -54,7 +54,7 @@ def _preparation_manifest_bytes(
         "dataset_id": "deep-image-96",
         "generation": "generation-v24-fixture",
         "index_id": "index-v24-fixture",
-        "page_uri": "s3://registered-bucket/v24/",
+        "page_uri": "s3://registered-bucket/v24/pages",
         "pages": [
             {
                 "generation_checksum": [7] * 32,
@@ -114,6 +114,36 @@ class FakeS3Client:
 
 
 class V24StagingTests(unittest.TestCase):
+    def test_preparation_manifest_accepts_frozen_page_namespace_semantics(self) -> None:
+        shards = [
+            _identity(f"training-shard-{ordinal:05}", f"shard-{ordinal}".encode(), ordinal)
+            for ordinal in range(2)
+        ]
+        roster = _identity("page-roster", b"roster", 2)
+        pages = [
+            {
+                **_identity(f"page-body-{ordinal:05}", f"page-{ordinal}".encode(), ordinal),
+                "digest_algorithm": "blake3",
+                "uri": f"s3://registered-bucket/v24/pages/pages/{ordinal + 1:064x}",
+                "digest": f"{ordinal + 1:064x}",
+            }
+            for ordinal in range(2)
+        ]
+        value = json.loads(_preparation_manifest_bytes(shards, roster, pages))
+        self.assertEqual(value["page_uri"], "s3://registered-bucket/v24/pages")
+        self.assertEqual(
+            value["pages"][0]["identity"]["uri"],
+            "s3://registered-bucket/v24/pages/pages/" + "0" * 63 + "1",
+        )
+        raw = json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = pathlib.Path(temporary) / "manifest.json"
+            manifest.write_bytes(raw)
+            self.assertEqual(
+                subject.manifest_phase(manifest, hashlib.sha256(raw).hexdigest()),
+                "input-preparation",
+            )
+
     def test_preparation_manifest_stages_parquet_roster_and_blake3_page_bodies(
         self,
     ) -> None:
@@ -136,7 +166,7 @@ class V24StagingTests(unittest.TestCase):
                 "encoded_bytes": len(payload),
                 "generation": "generation-v24-fixture",
                 "role": f"page-body-{ordinal:05}",
-                "uri": f"s3://registered-bucket/v24/pages/{digest}",
+                "uri": f"s3://registered-bucket/v24/pages/pages/{digest}",
             }
             for ordinal, (payload, digest) in enumerate(
                 zip(page_payloads, page_digests, strict=True)
@@ -150,7 +180,7 @@ class V24StagingTests(unittest.TestCase):
         payloads[("registered-bucket", "v24/page-roster", None)] = roster_payload
         payloads.update(
             {
-                ("registered-bucket", f"v24/pages/{digest}", None): payload
+                ("registered-bucket", f"v24/pages/pages/{digest}", None): payload
                 for digest, payload in zip(page_digests, page_payloads, strict=True)
             }
         )

@@ -227,7 +227,7 @@ def _read_manifest(
             or not value["pages"]
             or type(value["roster"]) is not dict
             or type(value["page_uri"]) is not str
-            or not value["page_uri"].endswith("/")
+            or value["page_uri"].endswith("/")
         ):
             raise ValueError("preparation manifest authority differs")
         registered = []
@@ -326,7 +326,7 @@ def _read_manifest(
     if schema == _PREPARATION_MANIFEST_SCHEMA:
         for identity in identities:
             if identity["role"].startswith("page-body-") and identity["uri"] != (
-                value["page_uri"] + "pages/" + identity["digest"]
+                value["page_uri"] + "/pages/" + identity["digest"]
             ):
                 raise ValueError("preparation page URI differs")
     return raw, tuple(identities)

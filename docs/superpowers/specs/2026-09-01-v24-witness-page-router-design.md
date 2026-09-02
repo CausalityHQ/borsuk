@@ -99,7 +99,8 @@ and algorithm, encoded length, row interval, and logical campaign generation.
 It also binds the exact dataset ID, index ID, source-archive SHA-256, D1-report
 SHA-256, and page-namespace URI copied from the authenticated page roster. The
 roster must match every one of those values, and every registered page-body URI
-must equal that namespace plus `pages/` plus its registered BLAKE3 digest.
+must equal that namespace plus `/` plus its exact roster path
+`pages/<registered BLAKE3 digest>`.
 Dataset shards and the roster retain their SHA-256 authority; immutable page
 bodies retain their registered BLAKE3 authority. New V24 outputs use SHA-256.
 Production code does not parse a V23 manifest. A query-independent preparation phase reads those shards
