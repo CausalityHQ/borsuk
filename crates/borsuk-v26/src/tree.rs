@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, V26Error, V26LayoutAuthority, invalid};
@@ -75,12 +76,23 @@ struct TreeBuilder<'a> {
     page_offset: u32,
     next_page: u32,
     rows: &'a [V26ConstructionRow],
+    pool: Option<&'a rayon::ThreadPool>,
     nodes: Vec<V26Node>,
     row_pages: Vec<u32>,
 }
 
 type RankedRow = (f32, u64, usize);
 type SelectedDirection = (f32, u8, Vec<RankedRow>);
+
+fn preferred_direction(left: SelectedDirection, right: SelectedDirection) -> SelectedDirection {
+    if right.0.total_cmp(&left.0).is_gt()
+        || (right.0.total_cmp(&left.0).is_eq() && right.1 < left.1)
+    {
+        right
+    } else {
+        left
+    }
+}
 
 impl TreeBuilder<'_> {
     fn build_node(&mut self, row_indexes: Vec<usize>, leaves: u32, capacity: u32) -> Result<u32> {
@@ -112,8 +124,7 @@ impl TreeBuilder<'_> {
         let right_leaves = leaves - left_leaves;
         let left_rows = (row_indexes.len() - right_leaves as usize)
             .min(left_leaves as usize * capacity as usize);
-        let mut selected: Option<SelectedDirection> = None;
-        for direction in 0_u8..16 {
+        let evaluate = |direction: u8| -> Result<SelectedDirection> {
             let plane = make_direction(self.seed, node_ordinal, direction);
             let mut ranked = row_indexes
                 .iter()
@@ -135,16 +146,28 @@ impl TreeBuilder<'_> {
             if !gap.is_finite() || gap < 0.0 {
                 return Err(V26Error("V26 split gap is not finite".to_owned()));
             }
-            let replace = selected
-                .as_ref()
-                .is_none_or(|(best_gap, _, _)| gap.total_cmp(best_gap).is_gt());
-            if replace {
-                selected = Some((gap, direction, ranked));
+            Ok((gap, direction, ranked))
+        };
+        let selected = if let Some(pool) = self.pool {
+            pool.install(|| {
+                (0_u8..16)
+                    .into_par_iter()
+                    .map(evaluate)
+                    .try_reduce_with(|left, right| Ok(preferred_direction(left, right)))
+            })
+            .ok_or_else(|| V26Error("V26 split direction is absent".to_owned()))??
+        } else {
+            let mut selected = None;
+            for direction in 0_u8..16 {
+                let candidate = evaluate(direction)?;
+                selected = Some(match selected {
+                    Some(current) => preferred_direction(current, candidate),
+                    None => candidate,
+                });
             }
-        }
-        let (split_gap, direction, mut ranked) =
-            selected.ok_or_else(|| V26Error("V26 split direction is absent".to_owned()))?;
-        ranked.sort_by(compare_ranked);
+            selected.ok_or_else(|| V26Error("V26 split direction is absent".to_owned()))?
+        };
+        let (split_gap, direction, mut ranked) = selected;
         let threshold = ranked[left_rows - 1].0;
         let right = ranked.split_off(left_rows);
         let left_indexes = ranked.into_iter().map(|(_, _, index)| index).collect();
@@ -170,12 +193,14 @@ fn build_tree(
     leaves: u32,
     capacity: u32,
     rows: &[V26ConstructionRow],
+    pool: Option<&rayon::ThreadPool>,
 ) -> Result<(V26Tree, Vec<u32>)> {
     let mut builder = TreeBuilder {
         seed,
         page_offset,
         next_page: 0,
         rows,
+        pool,
         nodes: Vec::new(),
         row_pages: vec![u32::MAX; rows.len()],
     };
@@ -193,6 +218,32 @@ fn build_tree(
 pub fn build_v26_dual_tree_layout(
     authority: &V26LayoutAuthority,
     rows: &[V26ConstructionRow],
+) -> Result<(V26Tree, V26Tree, Vec<V26RowPages>)> {
+    build_v26_dual_tree_layout_inner(authority, rows, None)
+}
+
+pub(crate) fn build_v26_dual_tree_layout_with_workers(
+    authority: &V26LayoutAuthority,
+    rows: &[V26ConstructionRow],
+    worker_count: usize,
+) -> Result<(V26Tree, V26Tree, Vec<V26RowPages>)> {
+    if worker_count == 0 {
+        return Err(invalid("V26 worker count differs"));
+    }
+    if worker_count == 1 {
+        return build_v26_dual_tree_layout_inner(authority, rows, None);
+    }
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(worker_count)
+        .build()
+        .map_err(|error| V26Error(format!("V26 worker pool failed: {error}")))?;
+    build_v26_dual_tree_layout_inner(authority, rows, Some(&pool))
+}
+
+fn build_v26_dual_tree_layout_inner(
+    authority: &V26LayoutAuthority,
+    rows: &[V26ConstructionRow],
+    pool: Option<&rayon::ThreadPool>,
 ) -> Result<(V26Tree, V26Tree, Vec<V26RowPages>)> {
     if authority.schema != "borsuk-v26-dual-tree-layout-v1"
         || authority.primary_seed != 0x5632_362d_5452_4545
@@ -220,6 +271,7 @@ pub fn build_v26_dual_tree_layout(
         leaves,
         authority.page_capacity,
         rows,
+        pool,
     )?;
     let (replica, replica_pages) = build_tree(
         authority.replica_seed,
@@ -227,6 +279,7 @@ pub fn build_v26_dual_tree_layout(
         leaves,
         authority.page_capacity,
         rows,
+        pool,
     )?;
     let assignments = rows
         .iter()

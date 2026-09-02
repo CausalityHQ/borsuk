@@ -450,9 +450,14 @@ dependencies = [
 name = "borsuk-v26"
 version = "0.0.0"
 dependencies = [
+ "arrow-array",
  "arrow-schema",
+ "parquet",
+ "rayon",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

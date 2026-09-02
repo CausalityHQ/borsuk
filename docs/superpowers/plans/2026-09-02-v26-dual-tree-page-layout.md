@@ -108,18 +108,33 @@ pub fn validate_v26_dual_tree_layout(
 
 **Interfaces:**
 - Consumes: the registered clean construction/source-map Parquet schemas as immutable research inputs, without importing V24 or V25 code.
-- Produces: `V26LayoutBuildRequest`, `run_v26_layout_build`, `tree-a.parquet`, `tree-b.parquet`, `page-assignments.parquet`, `layout-receipt.json`.
+- Produces: `V26LayoutBuildRequest`, `V26LayoutBuildOutput`, `run_v26_layout_build`, `primary-tree.parquet`, `replica-tree.parquet`, and `page-assignments.parquet`. Task 4 combines this deterministic output with externally measured runtime evidence to seal `layout-receipt.json`; the library never fabricates RSS, PSI, swap, CPU, or wall measurements.
 
 ```rust
 pub struct V26LocalObjectPath { pub identity: V26ObjectIdentity, pub path: PathBuf }
 pub struct V26LayoutBuildRequest {
-    pub manifest: V26LayoutAuthority,
+    pub manifest: V26LocalObjectPath,
     pub construction_rows: V26LocalObjectPath,
     pub source_map: V26LocalObjectPath,
     pub output_dir: PathBuf,
+    pub output_uri_prefix: String,
     pub worker_count: usize,
 }
-pub fn run_v26_layout_build(request: &V26LayoutBuildRequest) -> Result<V26LayoutReceipt>;
+pub struct V26LayoutBuildOutput {
+    pub authority: V26LayoutAuthority,
+    pub inputs: Vec<V26ObjectIdentity>,
+    pub outputs: Vec<V26ObjectIdentity>,
+    pub row_count: u64,
+    pub leaves_per_tree: u32,
+    pub page_count: u32,
+    pub projection_steps: u64,
+    pub worker_count: u32,
+}
+pub fn run_v26_layout_build(request: &V26LayoutBuildRequest) -> Result<V26LayoutBuildOutput>;
+pub fn validate_v26_layout_build_output(
+    request: &V26LayoutBuildRequest,
+    output: &V26LayoutBuildOutput,
+) -> Result<()>;
 ```
 
 - [ ] **Step 1: Write schema/identity RED.** Add `v26_layout_local_authenticates_construction_only_and_emits_parquet`. Require nonnullable `u64 source_ordinal`, nonnullable fixed-list `f32[96] vector` with child `element`, exact source-map equality, full finite normalized rows, and exact file identities before parsing.
@@ -185,10 +200,10 @@ pub fn canonical_v26_layout_result_bytes(
 - Create: `scripts/test_launch_v26_page_layout_spot.py`
 
 **Interfaces:**
-- Produces strict modes `--build-layout` and `--evaluate-layout`; each accepts one manifest, one input directory, one empty output directory, and explicit `--execute`.
+- Produces strict modes `--build-layout` and `--evaluate-layout`; each accepts one manifest, one input directory, one absent output path created atomically by the process, and explicit `--execute`.
 
 ```text
-v26_page_layout --manifest <file> --input-dir <dir> --output-dir <empty-dir> \
+v26_page_layout --manifest <file> --input-dir <dir> --output-dir <absent-path> \
   (--build-layout | --evaluate-layout) --execute
 ```
 

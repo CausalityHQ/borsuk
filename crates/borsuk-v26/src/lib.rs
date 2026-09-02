@@ -13,7 +13,9 @@ mod local;
 mod tree;
 
 pub use local::{
+    V26LayoutBuildOutput, V26LayoutBuildRequest, V26LocalObjectPath, run_v26_layout_build,
     v26_construction_schema, v26_page_assignments_schema, v26_source_map_schema, v26_tree_schema,
+    validate_v26_layout_build_output,
 };
 
 pub use tree::{
@@ -96,7 +98,7 @@ pub struct V26LayoutReceipt {
     pub claim_eligible: bool,
 }
 
-fn projected_steps(rows: u64, leaves: u64) -> Result<u64> {
+pub(crate) fn projected_steps(rows: u64, leaves: u64) -> Result<u64> {
     if leaves <= 1 {
         return Ok(0);
     }
