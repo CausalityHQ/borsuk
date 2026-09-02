@@ -19,13 +19,14 @@ mod tree;
 pub use local::{
     V26CandidateCoverRequest, V26CentroidRouterRequest, V26ExactGlobalRequest,
     V26LayoutBuildOutput, V26LayoutBuildRequest, V26LayoutEvaluationRequest, V26LocalObjectPath,
-    V26PageModeRouterRequest, V26Pq8CoverRequest, V26TreeRouterRequest, V26TruthBuildRequest,
-    canonical_v26_layout_build_output_bytes, evaluate_v26_exact_global, evaluate_v26_layout_oracle,
-    run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_exact_global,
-    run_v26_layout_build, run_v26_layout_build_directory, run_v26_page_mode_router,
-    run_v26_pq8_candidate_cover, run_v26_tree_router, run_v26_tree_router_diagnostic,
-    run_v26_truth_build, v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
-    v26_source_map_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
+    V26PageModeRouterRequest, V26Pq8CoverRequest, V26PqWidthLadderRequest, V26TreeRouterRequest,
+    V26TruthBuildRequest, canonical_v26_layout_build_output_bytes, evaluate_v26_exact_global,
+    evaluate_v26_layout_oracle, run_v26_candidate_row_cover, run_v26_centroid_router,
+    run_v26_exact_global, run_v26_layout_build, run_v26_layout_build_directory,
+    run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
+    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
+    v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_source_map_schema,
+    v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
 };
 
 pub use tree::{
@@ -949,6 +950,463 @@ fn build_v26_page_centroids(
 pub(crate) const V26_PAGE_MODE_LADDER: [u32; 4] = [2, 4, 8, 16];
 type V26PageModes = BTreeMap<u32, Vec<[f32; 96]>>;
 type V26PageModeInventory = BTreeMap<u32, V26PageModes>;
+pub(crate) const V26_PQ_WIDTH_LADDER: [usize; 4] = [8, 16, 24, 32];
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V26PqCodebook {
+    width: usize,
+    subspace_width: usize,
+    centroids: Vec<Vec<f32>>,
+}
+
+impl V26PqCodebook {
+    pub(crate) fn encode(&self, vector: &[f32; 96]) -> Result<Vec<u8>> {
+        validate_v26_vector(vector)?;
+        if !V26_PQ_WIDTH_LADDER.contains(&self.width)
+            || self.subspace_width != 96 / self.width
+            || self.centroids.len() != self.width
+            || self
+                .centroids
+                .iter()
+                .any(|centroids| centroids.len() != 256 * self.subspace_width)
+        {
+            return Err(invalid("V26 PQ codebook authority differs"));
+        }
+        (0..self.width)
+            .map(|subspace| {
+                let start = subspace * self.subspace_width;
+                let query = &vector[start..start + self.subspace_width];
+                let centroids = &self.centroids[subspace];
+                let best = (0..256)
+                    .map(|centroid| {
+                        let values = &centroids
+                            [centroid * self.subspace_width..(centroid + 1) * self.subspace_width];
+                        let distance = query
+                            .iter()
+                            .zip(values)
+                            .map(|(left, right)| {
+                                let delta = left - right;
+                                delta * delta
+                            })
+                            .sum::<f32>();
+                        (distance, centroid)
+                    })
+                    .min_by(|left, right| {
+                        left.0
+                            .total_cmp(&right.0)
+                            .then_with(|| left.1.cmp(&right.1))
+                    })
+                    .ok_or_else(|| invalid("V26 PQ centroid inventory differs"))?;
+                if !best.0.is_finite() {
+                    return Err(invalid("V26 PQ encoding distance differs"));
+                }
+                Ok(u8::try_from(best.1).unwrap())
+            })
+            .collect()
+    }
+}
+
+pub(crate) fn fit_v26_pq_codebook(rows: &[[f32; 96]], width: usize) -> Result<V26PqCodebook> {
+    if rows.len() < 256 || !V26_PQ_WIDTH_LADDER.contains(&width) || !96_usize.is_multiple_of(width)
+    {
+        return Err(invalid("V26 PQ fitting inventory differs"));
+    }
+    for row in rows {
+        validate_v26_vector(row)?;
+    }
+    let subspace_width = 96 / width;
+    let sample_count = rows.len().min(8_192);
+    let sample = (0..sample_count)
+        .map(|index| &rows[index * rows.len() / sample_count])
+        .collect::<Vec<_>>();
+    let centroids = (0..width)
+        .into_par_iter()
+        .map(|subspace| {
+            let start = subspace * subspace_width;
+            let mut centroids = (0..256)
+                .flat_map(|centroid| {
+                    sample[centroid * sample.len() / 256][start..start + subspace_width]
+                        .iter()
+                        .copied()
+                })
+                .collect::<Vec<_>>();
+            for _ in 0..4 {
+                let mut sums = vec![0.0_f64; 256 * subspace_width];
+                let mut counts = vec![0_u32; 256];
+                for row in &sample {
+                    let values = &row[start..start + subspace_width];
+                    let nearest = (0..256)
+                        .map(|centroid| {
+                            let center = &centroids
+                                [centroid * subspace_width..(centroid + 1) * subspace_width];
+                            let distance = values
+                                .iter()
+                                .zip(center)
+                                .map(|(left, right)| {
+                                    let delta = left - right;
+                                    delta * delta
+                                })
+                                .sum::<f32>();
+                            (distance, centroid)
+                        })
+                        .min_by(|left, right| {
+                            left.0
+                                .total_cmp(&right.0)
+                                .then_with(|| left.1.cmp(&right.1))
+                        })
+                        .unwrap()
+                        .1;
+                    for dimension in 0..subspace_width {
+                        sums[nearest * subspace_width + dimension] += f64::from(values[dimension]);
+                    }
+                    counts[nearest] += 1;
+                }
+                for centroid in 0..256 {
+                    if counts[centroid] == 0 {
+                        continue;
+                    }
+                    for dimension in 0..subspace_width {
+                        centroids[centroid * subspace_width + dimension] =
+                            (sums[centroid * subspace_width + dimension]
+                                / f64::from(counts[centroid])) as f32;
+                    }
+                }
+            }
+            centroids
+        })
+        .collect::<Vec<_>>();
+    Ok(V26PqCodebook {
+        width,
+        subspace_width,
+        centroids,
+    })
+}
+
+pub(crate) fn projected_v26_pq_resident_bytes(
+    rows: u64,
+    page_capacity: u32,
+    width: usize,
+) -> Result<u64> {
+    if rows == 0
+        || page_capacity == 0
+        || !V26_PQ_WIDTH_LADDER.contains(&width)
+        || !96_usize.is_multiple_of(width)
+    {
+        return Err(invalid("V26 PQ projection request differs"));
+    }
+    let occurrence_width = u64::try_from(width)
+        .map_err(|_| invalid("V26 PQ width overflows"))?
+        .checked_add(4)
+        .ok_or_else(|| invalid("V26 PQ occurrence width overflows"))?;
+    let occurrences = rows
+        .checked_mul(2)
+        .and_then(|value| value.checked_mul(occurrence_width))
+        .ok_or_else(|| invalid("V26 PQ occurrence projection overflows"))?;
+    let page_count = rows
+        .div_ceil(u64::from(page_capacity))
+        .checked_mul(2)
+        .ok_or_else(|| invalid("V26 PQ page projection overflows"))?;
+    let offsets = page_count
+        .checked_add(1)
+        .and_then(|value| value.checked_mul(8))
+        .ok_or_else(|| invalid("V26 PQ offset projection overflows"))?;
+    occurrences
+        .checked_add(offsets)
+        .and_then(|value| value.checked_add(8 * 256 * 12 * 4))
+        .and_then(|value| value.checked_add(512 * 1_024 * 1_024))
+        .ok_or_else(|| invalid("V26 PQ resident projection overflows"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct V26PqOccurrence {
+    code: Vec<u8>,
+    partner_page: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct V26PqRankedOccurrence {
+    pages: [u32; 2],
+    distance: f32,
+    occurrence_ordinal: u32,
+}
+
+impl PartialEq for V26PqRankedOccurrence {
+    fn eq(&self, other: &Self) -> bool {
+        self.pages == other.pages
+            && self.distance.to_bits() == other.distance.to_bits()
+            && self.occurrence_ordinal == other.occurrence_ordinal
+    }
+}
+
+impl Eq for V26PqRankedOccurrence {}
+
+impl PartialOrd for V26PqRankedOccurrence {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for V26PqRankedOccurrence {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.distance
+            .total_cmp(&other.distance)
+            .then_with(|| self.pages.cmp(&other.pages))
+            .then_with(|| self.occurrence_ordinal.cmp(&other.occurrence_ordinal))
+    }
+}
+
+fn prepare_v26_pq_tables(codebook: &V26PqCodebook, query: &[f32; 96]) -> Result<Vec<[f32; 256]>> {
+    validate_v26_vector(query)?;
+    if codebook.centroids.len() != codebook.width {
+        return Err(invalid("V26 PQ codebook authority differs"));
+    }
+    let tables = (0..codebook.width)
+        .map(|subspace| {
+            let start = subspace * codebook.subspace_width;
+            let query = &query[start..start + codebook.subspace_width];
+            std::array::from_fn(|centroid| {
+                query
+                    .iter()
+                    .zip(
+                        &codebook.centroids[subspace][centroid * codebook.subspace_width
+                            ..(centroid + 1) * codebook.subspace_width],
+                    )
+                    .map(|(left, right)| {
+                        let delta = left - right;
+                        delta * delta
+                    })
+                    .sum::<f32>()
+            })
+        })
+        .collect::<Vec<_>>();
+    if tables
+        .iter()
+        .flatten()
+        .any(|distance| !distance.is_finite())
+    {
+        return Err(invalid("V26 PQ query table differs"));
+    }
+    Ok(tables)
+}
+
+fn build_v26_pq_page_occurrences(
+    rows: &[V26ConstructionRow],
+    assignments: &[V26RowPages],
+    codebook: &V26PqCodebook,
+) -> Result<BTreeMap<u32, Vec<V26PqOccurrence>>> {
+    if rows.is_empty() || rows.len() != assignments.len() {
+        return Err(invalid("V26 PQ materialization request differs"));
+    }
+    let mut pages = BTreeMap::<u32, Vec<V26PqOccurrence>>::new();
+    for (index, (row, assignment)) in rows.iter().zip(assignments).enumerate() {
+        if usize::try_from(row.source_ordinal).ok() != Some(index)
+            || assignment.source_ordinal != row.source_ordinal
+            || assignment.primary_page == assignment.replica_page
+        {
+            return Err(invalid("V26 PQ materialization binding differs"));
+        }
+        let code = codebook.encode(&row.vector)?;
+        pages
+            .entry(assignment.primary_page)
+            .or_default()
+            .push(V26PqOccurrence {
+                code: code.clone(),
+                partner_page: assignment.replica_page,
+            });
+        pages
+            .entry(assignment.replica_page)
+            .or_default()
+            .push(V26PqOccurrence {
+                code,
+                partner_page: assignment.primary_page,
+            });
+    }
+    Ok(pages)
+}
+
+fn rank_v26_pq_occurrences(
+    pages: &BTreeMap<u32, Vec<V26PqOccurrence>>,
+    candidate_pages: &[u32],
+    tables: &[[f32; 256]],
+) -> Result<Vec<V26PqRankedOccurrence>> {
+    if candidate_pages.is_empty()
+        || candidate_pages.windows(2).any(|pair| pair[0] >= pair[1])
+        || !V26_PQ_WIDTH_LADDER.contains(&tables.len())
+    {
+        return Err(invalid("V26 PQ candidate scan request differs"));
+    }
+    let candidates = candidate_pages.iter().copied().collect::<BTreeSet<_>>();
+    let mut heap = BinaryHeap::with_capacity(10);
+    let mut occurrence_ordinal = 0_u32;
+    for page in candidate_pages {
+        for occurrence in pages
+            .get(page)
+            .ok_or_else(|| invalid("V26 PQ candidate page is absent"))?
+        {
+            if occurrence.partner_page == *page || occurrence.code.len() != tables.len() {
+                return Err(invalid("V26 PQ occurrence binding differs"));
+            }
+            if candidates.contains(&occurrence.partner_page) && *page > occurrence.partner_page {
+                continue;
+            }
+            let distance = occurrence
+                .code
+                .iter()
+                .enumerate()
+                .map(|(subspace, code)| tables[subspace][usize::from(*code)])
+                .sum::<f32>();
+            let ranked = V26PqRankedOccurrence {
+                pages: [
+                    (*page).min(occurrence.partner_page),
+                    (*page).max(occurrence.partner_page),
+                ],
+                distance,
+                occurrence_ordinal,
+            };
+            occurrence_ordinal = occurrence_ordinal
+                .checked_add(1)
+                .ok_or_else(|| invalid("V26 PQ occurrence ordinal overflows"))?;
+            if heap.len() < 10 {
+                heap.push(ranked);
+            } else if ranked < *heap.peek().unwrap() {
+                heap.pop();
+                heap.push(ranked);
+            }
+        }
+    }
+    if heap.len() != 10 {
+        return Err(invalid("V26 PQ candidate row inventory differs"));
+    }
+    let mut ranked = heap.into_vec();
+    ranked.sort();
+    Ok(ranked)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V26PqWidthEvaluation {
+    pub(crate) code_width: usize,
+    pub(crate) projected_resident_bytes_100m: u64,
+    pub(crate) samples: Vec<V26TreeRouterSample>,
+    pub(crate) result: V26TreeRouterResult,
+}
+
+pub(crate) fn evaluate_v26_pq_width_ladder(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    rows: &[V26ConstructionRow],
+    assignments: &[V26RowPages],
+    queries: &[V26ExternalQuery],
+    truths: &[V26QueryTruth],
+    candidate_page_limit: usize,
+) -> Result<Vec<V26PqWidthEvaluation>> {
+    if queries.len() != 512 || truths.len() != 512 || rows.len() != assignments.len() {
+        return Err(invalid("V26 PQ width ladder request differs"));
+    }
+    let vectors = rows.iter().map(|row| row.vector).collect::<Vec<_>>();
+    V26_PQ_WIDTH_LADDER
+        .into_iter()
+        .map(|width| {
+            let codebook = fit_v26_pq_codebook(&vectors, width)?;
+            let pages = build_v26_pq_page_occurrences(rows, assignments, &codebook)?;
+            let samples = queries
+                .par_iter()
+                .zip(truths.par_iter())
+                .enumerate()
+                .map(|(query_index, (query, truth))| {
+                    if usize::try_from(query.query_ordinal).ok() != Some(query_index)
+                        || truth.query_ordinal != query.query_ordinal
+                        || truth.neighbor_source_ordinals.len() != 10
+                        || truth.ground_truth_page_assignments.len() != 10
+                    {
+                        return Err(invalid("V26 PQ width query authority differs"));
+                    }
+                    let ranked_candidates = tree::rank_v26_tree_page_prefix(
+                        primary,
+                        replica,
+                        &query.vector,
+                        candidate_page_limit,
+                    )?;
+                    let mut candidate_pages = ranked_candidates.clone();
+                    candidate_pages.sort_unstable();
+                    let tables = prepare_v26_pq_tables(&codebook, &query.vector)?;
+                    let ranked = rank_v26_pq_occurrences(&pages, &candidate_pages, &tables)?;
+                    let ranked_assignments = ranked
+                        .iter()
+                        .map(|row| row.pages.to_vec())
+                        .collect::<Vec<_>>();
+                    let mut selected_pages = exact_v26_layout_oracle_pages(&ranked_assignments, 8)?;
+                    for page in ranked_candidates {
+                        if selected_pages.len() == 8 {
+                            break;
+                        }
+                        if !selected_pages.contains(&page) {
+                            selected_pages.push(page);
+                        }
+                    }
+                    if selected_pages.len() != 8 {
+                        return Err(invalid("V26 PQ width selected page inventory differs"));
+                    }
+                    selected_pages.sort_unstable();
+                    let oracle_pages =
+                        exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?;
+                    let hits =
+                        v26_layout_hits(&truth.ground_truth_page_assignments, &selected_pages);
+                    let oracle_hits =
+                        v26_layout_hits(&truth.ground_truth_page_assignments, &oracle_pages);
+                    Ok(V26TreeRouterSample {
+                        query_ordinal: query.query_ordinal,
+                        selected_pages,
+                        hits,
+                        oracle_hits,
+                        recall_ppm: v26_ppm(u64::from(hits), 10)?,
+                        oracle_attainment_ppm: v26_ppm(u64::from(hits), u64::from(oracle_hits))?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let total_hits = samples.iter().try_fold(0_u64, |sum, sample| {
+                sum.checked_add(u64::from(sample.hits))
+                    .ok_or_else(|| invalid("V26 PQ width metric overflows"))
+            })?;
+            let total_oracle_hits = samples.iter().try_fold(0_u64, |sum, sample| {
+                sum.checked_add(u64::from(sample.oracle_hits))
+                    .ok_or_else(|| invalid("V26 PQ width metric overflows"))
+            })?;
+            let aggregate_recall_ppm = v26_ppm(total_hits, queries.len() as u64 * 10)?;
+            let minimum_query_recall_ppm = samples
+                .iter()
+                .map(|sample| sample.recall_ppm)
+                .min()
+                .ok_or_else(|| invalid("V26 PQ width samples are absent"))?;
+            let oracle_attainment_ppm = v26_ppm(total_hits, total_oracle_hits)?;
+            let passed = aggregate_recall_ppm >= 975_000
+                && minimum_query_recall_ppm >= 800_000
+                && oracle_attainment_ppm >= 995_000;
+            Ok(V26PqWidthEvaluation {
+                code_width: width,
+                projected_resident_bytes_100m: projected_v26_pq_resident_bytes(
+                    100_000_000,
+                    2_816,
+                    width,
+                )?,
+                samples,
+                result: V26TreeRouterResult {
+                    schema: "borsuk-v26-pq-width-candidate-cover-result-v1".to_owned(),
+                    query_count: 512,
+                    aggregate_recall_ppm,
+                    minimum_query_recall_ppm,
+                    oracle_attainment_ppm,
+                    disposition: if passed {
+                        V26Disposition::BoundedLayoutCandidate
+                    } else {
+                        V26Disposition::RankReducerRejected
+                    },
+                    page_body_reads: 0,
+                    claim_eligible: false,
+                },
+            })
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct V26Pq8Occurrence {
@@ -2371,18 +2829,19 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        V26_PAGE_MODE_LADDER, V26ConstructionRow, V26Disposition, V26ExactGlobalRankResult,
-        V26ExactGlobalResult, V26ExternalQuery, V26ExternalTruth, V26LayoutAuthority,
-        V26LayoutReceipt, V26LayoutResult, V26LayoutSample, V26Node, V26ObjectIdentity,
-        V26Pq8Occurrence, V26QueryTruth, V26RankedRow, V26RowPages, V26Tree,
+        V26_PAGE_MODE_LADDER, V26_PQ_WIDTH_LADDER, V26ConstructionRow, V26Disposition,
+        V26ExactGlobalRankResult, V26ExactGlobalResult, V26ExternalQuery, V26ExternalTruth,
+        V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult, V26LayoutSample, V26Node,
+        V26ObjectIdentity, V26Pq8Occurrence, V26QueryTruth, V26RankedRow, V26RowPages, V26Tree,
         build_v26_dual_tree_layout, build_v26_external_truth_rows, build_v26_page_mode_centroids,
         build_v26_pq8_page_occurrences, canonical_v26_exact_global_result_bytes,
         canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
         canonical_v26_tree_router_result_bytes, diagnose_v26_tree_router_candidate_widths,
         evaluate_v26_candidate_row_cover, evaluate_v26_centroid_router,
         evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
-        evaluate_v26_pq8_candidate_cover, evaluate_v26_tree_router, exact_v26_layout_oracle_pages,
-        fit_v26_pq8_codebook, prepare_v26_pq8_tables, projected_v26_pq8_resident_bytes,
+        evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover, evaluate_v26_tree_router,
+        exact_v26_layout_oracle_pages, fit_v26_pq_codebook, fit_v26_pq8_codebook,
+        prepare_v26_pq8_tables, projected_v26_pq_resident_bytes, projected_v26_pq8_resident_bytes,
         rank_v26_candidate_rows, rank_v26_pq8_occurrences, rank_v26_tree_pages, route_v26_pages,
         select_v26_ranked_pages, validate_v26_dual_tree_layout,
     };
@@ -3006,6 +3465,107 @@ mod tests {
         };
         assert_eq!(near.len(), 8);
         assert!(score(near) <= score(far));
+    }
+
+    #[test]
+    fn v26_pq_width_ladder_has_exact_codes_and_monotonic_resident_projection() {
+        // Break caught: the diagnostic silently tunes widths, emitted code width differs, or
+        // projection omits the bytes that force a serving-memory tradeoff.
+        let rows = (0..512)
+            .map(|row| {
+                let mut vector = std::array::from_fn(|dimension| {
+                    (((row * 131 + dimension * 17 + 11) % 257) as f32 - 128.0) / 128.0
+                });
+                let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+                vector.iter_mut().for_each(|value| *value /= norm);
+                vector
+            })
+            .collect::<Vec<[f32; 96]>>();
+        assert_eq!(V26_PQ_WIDTH_LADDER, [8, 16, 24, 32]);
+        let expected = [
+            2_937_537_416_u64,
+            4_537_537_416,
+            6_137_537_416,
+            7_737_537_416,
+        ];
+        for (width, expected_bytes) in V26_PQ_WIDTH_LADDER.into_iter().zip(expected) {
+            let codebook = fit_v26_pq_codebook(&rows, width).unwrap();
+            assert_eq!(codebook.encode(&rows[42]).unwrap().len(), width);
+            assert_eq!(
+                projected_v26_pq_resident_bytes(100_000_000, 2_816, width).unwrap(),
+                expected_bytes
+            );
+        }
+    }
+
+    #[test]
+    fn v26_pq_width_ladder_evaluates_one_frozen_query_and_cover_contract() {
+        // Break caught: width arms use different frontiers/reducers/truth timing or omit exact
+        // eight-page evidence, making the fidelity curve causally incomparable.
+        let primary = v26_router_test_tree(PRIMARY_SEED, 0, [100.0, 10.0, 1.0, 2.0, 5.0, 1.0, 2.0]);
+        let replica = v26_router_test_tree(REPLICA_SEED, 8, [200.0, 20.0, 3.0, 4.0, 5.0, 1.0, 2.0]);
+        let rows = (0_u64..512)
+            .map(|source_ordinal| {
+                let angle = source_ordinal as f32 / 1_024.0;
+                let mut vector = [0.0_f32; 96];
+                vector[0] = angle.cos();
+                vector[1] = angle.sin();
+                V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..512)
+            .map(|source_ordinal| V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
+                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let queries = (0_u32..512)
+            .map(|query_ordinal| V26ExternalQuery {
+                query_ordinal,
+                vector: rows[0].vector,
+            })
+            .collect::<Vec<_>>();
+        let truths = (0_u32..512)
+            .map(|query_ordinal| V26QueryTruth {
+                query_ordinal,
+                neighbor_source_ordinals: (0_u64..10).collect(),
+                ground_truth_page_assignments: (0_u64..10)
+                    .map(|source_ordinal| {
+                        vec![
+                            u32::try_from(source_ordinal % 8).unwrap(),
+                            8 + u32::try_from(source_ordinal % 8).unwrap(),
+                        ]
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+
+        let arms = evaluate_v26_pq_width_ladder(
+            &primary,
+            &replica,
+            &rows,
+            &assignments,
+            &queries,
+            &truths,
+            16,
+        )
+        .unwrap();
+
+        assert_eq!(
+            arms.iter().map(|arm| arm.code_width).collect::<Vec<_>>(),
+            [8, 16, 24, 32]
+        );
+        assert!(arms.iter().all(|arm| {
+            arm.samples.len() == 512
+                && arm
+                    .samples
+                    .iter()
+                    .all(|sample| sample.selected_pages.len() == 8)
+        }));
     }
 
     #[test]
