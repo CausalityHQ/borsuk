@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import io
 import json
+import re
 import unittest
 from unittest import mock
 
@@ -165,6 +167,17 @@ class V24QualificationSpotTests(unittest.TestCase):
         self.assertIn(
             'put_once "$root/stdout.json" holdout-result.json', holdout_script
         )
+
+    def test_worker_inline_python_is_syntactically_valid(self) -> None:
+        script = base64.b64decode(
+            subject.build_v24_launch_specs(
+                self.plan("input-preparation"), launch_nonce="a" * 32
+            )[0]["UserData"]
+        ).decode()
+        blocks = re.findall(r"<<'PY'[^\n]*\n(.*?)\nPY\n", script, re.DOTALL)
+        self.assertGreaterEqual(len(blocks), 4)
+        for block in blocks:
+            ast.parse(block)
 
     def test_preparation_worker_uses_direct_preparer_and_exact_output_uris(
         self,

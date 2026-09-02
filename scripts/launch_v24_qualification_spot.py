@@ -340,7 +340,7 @@ finish() {{
 import json,sys
 path,run_id,phase,commit,archive_uri,archive_sha,archive_bytes,binary_uri,binary_sha,binary_bytes,manifest_uri,manifest_sha,manifest_bytes,instance_id,status=sys.argv[1:]
 value={{"binary_bytes":int(binary_bytes),"binary_sha256":binary_sha,"binary_uri":binary_uri,"claim_eligible":False,"instance_id":instance_id,"manifest_bytes":int(manifest_bytes),"manifest_sha256":manifest_sha,"manifest_uri":manifest_uri,"phase":phase,"run_id":run_id,"schema":"borsuk-v24-qualification-spot-terminal-v1","source_archive_bytes":int(archive_bytes),"source_archive_sha256":archive_sha,"source_archive_uri":archive_uri,"source_commit":commit,"status":"failed","worker_status":int(status)}}
-open(path,"wb").write(json.dumps(value,separators=(",",":"),sort_keys=True).encode()+b"\n")
+open(path,"wb").write(json.dumps(value,separators=(",",":"),sort_keys=True).encode()+b"\\n")
 PY
     put_once "$root/worker.log" worker.log || true
     put_once "$root/ATTEMPT_FAILED.json" ATTEMPT_FAILED.json || true
@@ -444,7 +444,7 @@ value={{"binary_bytes":int(binary_bytes),"binary_sha256":binary_sha,"binary_uri"
 if pass_receipt_sha:
     value["pass_receipt_bytes"]=int(pass_receipt_bytes)
     value["pass_receipt_sha256"]=pass_receipt_sha
-open(path,"wb").write(json.dumps(value,separators=(",",":"),sort_keys=True).encode()+b"\n")
+open(path,"wb").write(json.dumps(value,separators=(",",":"),sort_keys=True).encode()+b"\\n")
 PY
 put_once "$root/ATTEMPT_COMPLETE.json" ATTEMPT_COMPLETE.json
 terminal=complete

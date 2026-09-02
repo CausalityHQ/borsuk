@@ -462,7 +462,8 @@ def validate_inventory(
         or len(receipt["ordered_objects"]) != len(identities)
     ):
         raise ValueError("staged inventory receipt differs")
-    for identity, observed in zip(identities, receipt["ordered_objects"], strict=True):
+    for index, identity in enumerate(identities):
+        observed = receipt["ordered_objects"][index]
         expected = {
             **identity,
             "relative_path": _relative_path(str(identity["role"])),

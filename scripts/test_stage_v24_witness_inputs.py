@@ -7,6 +7,7 @@ import json
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts import stage_v24_witness_inputs as subject
 
@@ -191,13 +192,21 @@ class V24StagingTests(unittest.TestCase):
             receipt = root / "staging-receipt.json"
             manifest.write_bytes(manifest_raw)
             manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
-            subject.stage_manifest(
-                manifest,
-                manifest_sha256,
-                inputs,
-                receipt,
-                FakeS3Client(payloads),
-            )
+            builtin_zip = zip
+
+            def python39_zip(*iterables: object, **keywords: object) -> object:
+                if keywords:
+                    raise TypeError("zip() takes no keyword arguments")
+                return builtin_zip(*iterables)
+
+            with mock.patch("builtins.zip", python39_zip):
+                subject.stage_manifest(
+                    manifest,
+                    manifest_sha256,
+                    inputs,
+                    receipt,
+                    FakeS3Client(payloads),
+                )
             self.assertEqual(
                 subject.manifest_phase(manifest, manifest_sha256),
                 "input-preparation",
