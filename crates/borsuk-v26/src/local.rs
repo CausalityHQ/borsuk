@@ -27,10 +27,11 @@ use crate::{
     V26RowPages, V26Tree, build_v26_external_truth_rows, canonical_json_value,
     canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
     canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
-    diagnose_v26_tree_router_candidate_widths, evaluate_v26_centroid_router,
-    evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
-    evaluate_v26_tree_router, exact_lower_hex, exact_v26_layout_oracle_pages, invalid,
-    projected_steps, rank_v26_tree_pages, validate_layout_authority, validate_v26_dual_tree_layout,
+    diagnose_v26_tree_router_candidate_widths, evaluate_v26_candidate_row_cover,
+    evaluate_v26_centroid_router, evaluate_v26_exact_global_external_rows,
+    evaluate_v26_page_mode_router, evaluate_v26_tree_router, exact_lower_hex,
+    exact_v26_layout_oracle_pages, invalid, projected_steps, rank_v26_tree_pages,
+    validate_layout_authority, validate_v26_dual_tree_layout,
 };
 
 fn vector_type() -> DataType {
@@ -142,6 +143,14 @@ pub struct V26CentroidRouterRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V26PageModeRouterRequest {
+    pub construction_rows: V26LocalObjectPath,
+    pub router: V26TreeRouterRequest,
+    pub evidence_output_path: PathBuf,
+    pub evidence_output_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26CandidateCoverRequest {
     pub construction_rows: V26LocalObjectPath,
     pub router: V26TreeRouterRequest,
     pub evidence_output_path: PathBuf,
@@ -1051,6 +1060,143 @@ pub fn run_v26_page_mode_router(request: &V26PageModeRouterRequest) -> Result<Ve
     result
 }
 
+fn v26_candidate_cover_evidence_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new("candidate_page_limit", DataType::UInt32, false),
+        Field::new("ranked_row_limit", DataType::UInt32, false),
+        Field::new(
+            "selected_pages",
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt32, false)), 8),
+            false,
+        ),
+        Field::new("hits", DataType::UInt32, false),
+        Field::new("oracle_hits", DataType::UInt32, false),
+        Field::new("recall_ppm", DataType::UInt64, false),
+        Field::new("oracle_attainment_ppm", DataType::UInt64, false),
+    ])
+}
+
+fn v26_candidate_cover_evidence_batch(
+    samples: &[crate::V26TreeRouterSample],
+    candidate_page_limit: u32,
+) -> Result<RecordBatch> {
+    if samples.len() != 512
+        || samples
+            .iter()
+            .any(|sample| sample.selected_pages.len() != 8)
+    {
+        return Err(invalid("V26 candidate cover evidence inventory differs"));
+    }
+    let pages = samples
+        .iter()
+        .flat_map(|sample| sample.selected_pages.iter().copied())
+        .collect::<Vec<_>>();
+    RecordBatch::try_new(
+        Arc::new(v26_candidate_cover_evidence_schema()),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.query_ordinal),
+            )),
+            Arc::new(UInt32Array::from_value(candidate_page_limit, samples.len())),
+            Arc::new(UInt32Array::from_value(10, samples.len())),
+            Arc::new(
+                FixedSizeListArray::try_new(
+                    Arc::new(Field::new("element", DataType::UInt32, false)),
+                    8,
+                    Arc::new(UInt32Array::from(pages)),
+                    None,
+                )
+                .map_err(|error| {
+                    invalid(&format!("V26 candidate cover evidence failed: {error}"))
+                })?,
+            ),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.hits),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.oracle_hits),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.recall_ppm),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.oracle_attainment_ppm),
+            )),
+        ],
+    )
+    .map_err(|error| invalid(&format!("V26 candidate cover evidence failed: {error}")))
+}
+
+pub fn run_v26_candidate_row_cover(request: &V26CandidateCoverRequest) -> Result<Vec<u8>> {
+    if request.evidence_output_path.exists()
+        || !request.evidence_output_uri.starts_with("s3://")
+        || !request.evidence_output_uri.ends_with(".parquet")
+    {
+        return Err(invalid("V26 candidate cover output authority differs"));
+    }
+    let exact = V26ExactGlobalRequest {
+        construction_rows: request.construction_rows.clone(),
+        layout: request.router.layout.clone(),
+        ranked_row_limits: vec![10],
+    };
+    let loaded = load_v26_exact_global(&exact)?;
+    let (primary, replica, queries, truths) = load_v26_tree_router(&request.router)?;
+    if queries != loaded.queries || truths != loaded.truths || request.router.page_budget != 8 {
+        return Err(invalid("V26 candidate cover authority differs"));
+    }
+    let page_count = rank_v26_tree_pages(&primary, &replica, &queries[0].vector)?.len();
+    let candidate_page_limit = 128.min(page_count);
+    let (samples, result) = evaluate_v26_candidate_row_cover(
+        &primary,
+        &replica,
+        &loaded.rows,
+        &loaded.assignments,
+        &queries,
+        &truths,
+        candidate_page_limit,
+    )?;
+    let output = (|| {
+        write_batch(
+            &request.evidence_output_path,
+            v26_candidate_cover_evidence_batch(
+                &samples,
+                u32::try_from(candidate_page_limit)
+                    .map_err(|_| invalid("V26 candidate cover width overflows"))?,
+            )?,
+        )?;
+        let (encoded_bytes, digest) = sha256_file(&request.evidence_output_path)?;
+        let evidence = V26ObjectIdentity {
+            role: "candidate-cover-evidence-parquet".to_owned(),
+            uri: request.evidence_output_uri.clone(),
+            digest_algorithm: "sha256".to_owned(),
+            digest,
+            encoded_bytes,
+            generation: request.construction_rows.identity.generation.clone(),
+        };
+        let value = serde_json::json!({
+            "schema": "borsuk-v26-candidate-row-cover-output-v1",
+            "candidate_page_limit": candidate_page_limit,
+            "ranked_row_limit": 10,
+            "result": result,
+            "evidence": evidence,
+            "page_body_reads": 0,
+            "claim_eligible": false,
+        });
+        let mut bytes = serde_json::to_vec(&canonical_json_value(value)).map_err(|error| {
+            invalid(&format!(
+                "V26 candidate cover serialization failed: {error}"
+            ))
+        })?;
+        bytes.push(b'\n');
+        Ok(bytes)
+    })();
+    if output.is_err() {
+        let _ = fs::remove_file(&request.evidence_output_path);
+    }
+    output
+}
+
 fn open_reader(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<fs::File>> {
     let file = fs::File::open(path)
         .map_err(|error| invalid(&format!("V26 Parquet open failed: {error}")))?;
@@ -1645,15 +1791,15 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        V26CentroidRouterRequest, V26ExactGlobalRequest, V26LayoutBuildRequest,
-        V26LayoutEvaluationRequest, V26LocalObjectPath, V26PageModeRouterRequest,
-        V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch, evaluate_v26_exact_global,
-        evaluate_v26_layout_oracle, open_reader, output_identity, read_assignments,
-        read_layout_terminal, run_v26_centroid_router, run_v26_layout_build,
-        run_v26_page_mode_router, run_v26_tree_router, run_v26_tree_router_diagnostic,
-        run_v26_truth_build, v26_construction_schema, v26_page_assignments_schema,
-        v26_query_schema, v26_source_map_schema, v26_tree_schema, v26_truth_schema,
-        validate_v26_layout_build_output,
+        V26CandidateCoverRequest, V26CentroidRouterRequest, V26ExactGlobalRequest,
+        V26LayoutBuildRequest, V26LayoutEvaluationRequest, V26LocalObjectPath,
+        V26PageModeRouterRequest, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
+        evaluate_v26_exact_global, evaluate_v26_layout_oracle, open_reader, output_identity,
+        read_assignments, read_layout_terminal, run_v26_candidate_row_cover,
+        run_v26_centroid_router, run_v26_layout_build, run_v26_page_mode_router,
+        run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
+        v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
+        v26_source_map_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -2359,5 +2505,51 @@ mod tests {
         assert!(evidence_path.is_file());
         let reader = open_reader(&evidence_path).unwrap();
         assert_eq!(reader.metadata().file_metadata().num_rows(), 4 * 512);
+    }
+
+    #[test]
+    fn v26_candidate_cover_local_persists_only_bounded_parquet_evidence() {
+        // Break caught: exact candidate scoring retains a full ranking, emits bulk JSON, or
+        // gains page/network access instead of using the authenticated local construction.
+        let (temp, layout) = evaluation_fixture_with_rows(2_113);
+        let terminal = read_layout_terminal(&layout.layout_terminal).unwrap();
+        let tree = |role: &str, name: &str| V26LocalObjectPath {
+            identity: terminal
+                .outputs
+                .iter()
+                .find(|identity| identity.role == role)
+                .unwrap()
+                .clone(),
+            path: temp.path().join("layout").join(name),
+        };
+        let evidence_path = temp.path().join("candidate-cover-evidence.parquet");
+        let request = V26CandidateCoverRequest {
+            construction_rows: V26LocalObjectPath {
+                identity: terminal.authority.construction_rows.clone(),
+                path: temp.path().join("construction.parquet"),
+            },
+            router: V26TreeRouterRequest {
+                primary_tree: tree("primary-tree-parquet", "primary-tree.parquet"),
+                replica_tree: tree("replica-tree-parquet", "replica-tree.parquet"),
+                layout,
+                page_budget: 8,
+            },
+            evidence_output_path: evidence_path.clone(),
+            evidence_output_uri: "s3://frozen/v26/candidate-cover-evidence.parquet".to_owned(),
+        };
+
+        let bytes = run_v26_candidate_row_cover(&request).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema"], "borsuk-v26-candidate-row-cover-output-v1");
+        assert_eq!(value["candidate_page_limit"], 8);
+        assert_eq!(value["ranked_row_limit"], 10);
+        assert_eq!(
+            value["evidence"]["role"],
+            "candidate-cover-evidence-parquet"
+        );
+        assert_eq!(value["page_body_reads"], 0);
+        assert_eq!(value["claim_eligible"], false);
+        let reader = open_reader(&evidence_path).unwrap();
+        assert_eq!(reader.metadata().file_metadata().num_rows(), 512);
     }
 }

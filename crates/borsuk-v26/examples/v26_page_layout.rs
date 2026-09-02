@@ -3,13 +3,13 @@
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
 use borsuk_v26::{
-    V26CentroidRouterRequest, V26ExactGlobalRequest, V26LayoutEvaluationRequest,
-    V26LocalObjectPath, V26ObjectIdentity, V26PageModeRouterRequest, V26TreeRouterRequest,
-    V26TruthBuildRequest, canonical_v26_layout_build_output_bytes,
+    V26CandidateCoverRequest, V26CentroidRouterRequest, V26ExactGlobalRequest,
+    V26LayoutEvaluationRequest, V26LocalObjectPath, V26ObjectIdentity, V26PageModeRouterRequest,
+    V26TreeRouterRequest, V26TruthBuildRequest, canonical_v26_layout_build_output_bytes,
     canonical_v26_layout_result_bytes, canonical_v26_object_identity_bytes,
-    evaluate_v26_layout_oracle, run_v26_centroid_router, run_v26_exact_global,
-    run_v26_layout_build_directory, run_v26_page_mode_router, run_v26_tree_router,
-    run_v26_tree_router_diagnostic, run_v26_truth_build,
+    evaluate_v26_layout_oracle, run_v26_candidate_row_cover, run_v26_centroid_router,
+    run_v26_exact_global, run_v26_layout_build_directory, run_v26_page_mode_router,
+    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +72,14 @@ struct PageModeRouterRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct CandidateCoverRequest {
+    construction: RegisteredFile,
+    router: TreeRouterRequest,
+    evidence_output_path: PathBuf,
+    evidence_output_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct TruthRequest {
     generation: String,
     construction: RegisteredFile,
@@ -92,6 +100,7 @@ enum V26CliMode {
     RouterDiagnostic(TreeRouterRequest),
     CentroidRouter(CentroidRouterRequest),
     PageModeRouter(PageModeRouterRequest),
+    CandidateCover(CandidateCoverRequest),
 }
 
 fn take(values: &mut BTreeMap<String, String>, key: &str) -> Result<String, String> {
@@ -153,6 +162,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
     let mut router_diagnostic = false;
     let mut centroid_router = false;
     let mut page_mode_router = false;
+    let mut candidate_cover = false;
     let mut execute = false;
     let mut values = BTreeMap::new();
     while let Some(flag) = arguments.next() {
@@ -204,6 +214,12 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     return Err("duplicate --route-page-modes".to_owned());
                 }
                 page_mode_router = true;
+            }
+            "--scan-candidate-rows" => {
+                if candidate_cover {
+                    return Err("duplicate --scan-candidate-rows".to_owned());
+                }
+                candidate_cover = true;
             }
             "--execute" => {
                 if execute {
@@ -288,6 +304,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             + u8::from(router_diagnostic)
             + u8::from(centroid_router)
             + u8::from(page_mode_router)
+            + u8::from(candidate_cover)
             != 1
     {
         return Err("exactly one executable phase is required".to_owned());
@@ -388,7 +405,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         }
         return Ok(V26CliMode::Evaluate(layout));
     }
-    if router || router_diagnostic || centroid_router || page_mode_router {
+    if router || router_diagnostic || centroid_router || page_mode_router || candidate_cover {
         let primary_tree = take_registered(&mut values, "primary-tree")?;
         let replica_tree = take_registered(&mut values, "replica-tree")?;
         let page_budget = take(&mut values, "--page-budget")?
@@ -434,14 +451,23 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                 || !evidence_output_uri.starts_with("s3://")
                 || !evidence_output_uri.ends_with(".parquet")
             {
-                return Err("V26 page mode router arguments differ".to_owned());
+                return Err("V26 evidence router arguments differ".to_owned());
             }
-            V26CliMode::PageModeRouter(PageModeRouterRequest {
-                construction,
-                router: request,
-                evidence_output_path,
-                evidence_output_uri,
-            })
+            if page_mode_router {
+                V26CliMode::PageModeRouter(PageModeRouterRequest {
+                    construction,
+                    router: request,
+                    evidence_output_path,
+                    evidence_output_uri,
+                })
+            } else {
+                V26CliMode::CandidateCover(CandidateCoverRequest {
+                    construction,
+                    router: request,
+                    evidence_output_path,
+                    evidence_output_uri,
+                })
+            }
         });
     }
     let construction = take_registered(&mut values, "construction")?;
@@ -632,6 +658,33 @@ fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
             })
             .map_err(|error| error.to_string())
         }
+        V26CliMode::CandidateCover(request) => {
+            let generation = request.router.generation.clone();
+            run_v26_candidate_row_cover(&V26CandidateCoverRequest {
+                construction_rows: local_object(
+                    "construction-parquet",
+                    &generation,
+                    request.construction,
+                ),
+                router: V26TreeRouterRequest {
+                    primary_tree: local_object(
+                        "primary-tree-parquet",
+                        &generation,
+                        request.router.primary_tree,
+                    ),
+                    replica_tree: local_object(
+                        "replica-tree-parquet",
+                        &generation,
+                        request.router.replica_tree,
+                    ),
+                    layout: evaluation_request(request.router.layout),
+                    page_budget: request.router.page_budget,
+                },
+                evidence_output_path: request.evidence_output_path,
+                evidence_output_uri: request.evidence_output_uri,
+            })
+            .map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -794,6 +847,26 @@ mod tests {
             "--evidence-output-uri".to_owned(),
             "s3://bucket/page-mode-evidence.parquet".to_owned(),
         ]);
+        args
+    }
+
+    fn candidate_cover_args() -> Vec<String> {
+        let mut args = page_mode_router_args();
+        let mode = args
+            .iter_mut()
+            .find(|argument| argument.as_str() == "--route-page-modes")
+            .unwrap();
+        *mode = "--scan-candidate-rows".to_owned();
+        let evidence = args
+            .iter_mut()
+            .find(|argument| argument.as_str() == "/output/page-mode-evidence.parquet")
+            .unwrap();
+        *evidence = "/output/candidate-cover-evidence.parquet".to_owned();
+        let evidence_uri = args
+            .iter_mut()
+            .find(|argument| argument.as_str() == "s3://bucket/page-mode-evidence.parquet")
+            .unwrap();
+        *evidence_uri = "s3://bucket/candidate-cover-evidence.parquet".to_owned();
         args
     }
 
@@ -1076,6 +1149,37 @@ mod tests {
             vec!["--d3", "forbidden"],
         ] {
             let mut args = page_mode_router_args();
+            args.extend(mutation.into_iter().map(str::to_owned));
+            assert!(parse_v26_args(args).is_err());
+        }
+    }
+
+    #[test]
+    fn v26_candidate_cover_cli_has_fixed_exact_row_scan_and_parquet_evidence_only() {
+        // Break caught: the ceiling diagnostic exposes frontier/rank tuning, emits bulk JSON,
+        // or gains page, storage, endpoint, or D3 capabilities.
+        let parsed = parse_v26_args(candidate_cover_args()).unwrap();
+        let V26CliMode::CandidateCover(request) = parsed else {
+            panic!("candidate cover mode differs");
+        };
+        assert_eq!(
+            request.evidence_output_path,
+            std::path::PathBuf::from("/output/candidate-cover-evidence.parquet")
+        );
+        assert_eq!(
+            request.evidence_output_uri,
+            "s3://bucket/candidate-cover-evidence.parquet"
+        );
+
+        for mutation in [
+            vec!["--candidate-page-limit", "64"],
+            vec!["--ranked-row-limits", "10"],
+            vec!["--bucket", "forbidden"],
+            vec!["--endpoint", "https://forbidden"],
+            vec!["--page-prefix", "forbidden"],
+            vec!["--d3", "forbidden"],
+        ] {
+            let mut args = candidate_cover_args();
             args.extend(mutation.into_iter().map(str::to_owned));
             assert!(parse_v26_args(args).is_err());
         }

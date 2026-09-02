@@ -17,10 +17,11 @@ mod local;
 mod tree;
 
 pub use local::{
-    V26CentroidRouterRequest, V26ExactGlobalRequest, V26LayoutBuildOutput, V26LayoutBuildRequest,
-    V26LayoutEvaluationRequest, V26LocalObjectPath, V26PageModeRouterRequest, V26TreeRouterRequest,
-    V26TruthBuildRequest, canonical_v26_layout_build_output_bytes, evaluate_v26_exact_global,
-    evaluate_v26_layout_oracle, run_v26_centroid_router, run_v26_exact_global,
+    V26CandidateCoverRequest, V26CentroidRouterRequest, V26ExactGlobalRequest,
+    V26LayoutBuildOutput, V26LayoutBuildRequest, V26LayoutEvaluationRequest, V26LocalObjectPath,
+    V26PageModeRouterRequest, V26TreeRouterRequest, V26TruthBuildRequest,
+    canonical_v26_layout_build_output_bytes, evaluate_v26_exact_global, evaluate_v26_layout_oracle,
+    run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_exact_global,
     run_v26_layout_build, run_v26_layout_build_directory, run_v26_page_mode_router,
     run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
     v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_source_map_schema,
@@ -949,6 +950,192 @@ pub(crate) const V26_PAGE_MODE_LADDER: [u32; 4] = [2, 4, 8, 16];
 type V26PageModes = BTreeMap<u32, Vec<[f32; 96]>>;
 type V26PageModeInventory = BTreeMap<u32, V26PageModes>;
 
+pub(crate) fn rank_v26_candidate_rows(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    rows: &[V26ConstructionRow],
+    assignments: &[V26RowPages],
+    query: &[f32; 96],
+    candidate_page_limit: usize,
+    retained_row_limit: usize,
+) -> Result<Vec<V26RankedRow>> {
+    if rows.is_empty()
+        || rows.len() != assignments.len()
+        || retained_row_limit == 0
+        || retained_row_limit > rows.len()
+    {
+        return Err(invalid("V26 candidate row request differs"));
+    }
+    validate_v26_vector(query)?;
+    let candidates =
+        tree::rank_v26_tree_page_prefix(primary, replica, query, candidate_page_limit)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+    let mut heap = BinaryHeap::with_capacity(retained_row_limit);
+    for (index, (row, assignment)) in rows.iter().zip(assignments).enumerate() {
+        if usize::try_from(row.source_ordinal).ok() != Some(index)
+            || assignment.source_ordinal != row.source_ordinal
+            || assignment.primary_page == assignment.replica_page
+        {
+            return Err(invalid("V26 candidate row binding differs"));
+        }
+        validate_v26_vector(&row.vector)?;
+        if !candidates.contains(&assignment.primary_page)
+            && !candidates.contains(&assignment.replica_page)
+        {
+            continue;
+        }
+        let dot = query
+            .iter()
+            .zip(row.vector)
+            .map(|(left, right)| left * right)
+            .sum::<f32>();
+        let ranked = V26RankedRow {
+            source_ordinal: row.source_ordinal,
+            distance: 1.0 - dot,
+        };
+        if !ranked.distance.is_finite() {
+            return Err(invalid("V26 candidate row distance differs"));
+        }
+        if heap.len() < retained_row_limit {
+            heap.push(ranked);
+        } else if ranked < *heap.peek().unwrap() {
+            heap.pop();
+            heap.push(ranked);
+        }
+    }
+    if heap.len() != retained_row_limit {
+        return Err(invalid("V26 candidate row inventory differs"));
+    }
+    let mut ranked = heap.into_vec();
+    ranked.sort();
+    Ok(ranked)
+}
+
+pub(crate) fn evaluate_v26_candidate_row_cover(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    rows: &[V26ConstructionRow],
+    assignments: &[V26RowPages],
+    queries: &[V26ExternalQuery],
+    truths: &[V26QueryTruth],
+    candidate_page_limit: usize,
+) -> Result<(Vec<V26TreeRouterSample>, V26TreeRouterResult)> {
+    if queries.len() != 512 || truths.len() != queries.len() || rows.len() != assignments.len() {
+        return Err(invalid("V26 candidate cover request differs"));
+    }
+    let samples = queries
+        .par_iter()
+        .zip(truths.par_iter())
+        .enumerate()
+        .map(|(query_index, (query, truth))| {
+            if usize::try_from(query.query_ordinal).ok() != Some(query_index)
+                || truth.query_ordinal != query.query_ordinal
+                || truth.neighbor_source_ordinals.len() != 10
+                || truth.ground_truth_page_assignments.len() != 10
+            {
+                return Err(invalid("V26 candidate cover query authority differs"));
+            }
+            let ranked_candidates = tree::rank_v26_tree_page_prefix(
+                primary,
+                replica,
+                &query.vector,
+                candidate_page_limit,
+            )?;
+            let candidates = ranked_candidates.iter().copied().collect::<BTreeSet<_>>();
+            let ranked = rank_v26_candidate_rows(
+                primary,
+                replica,
+                rows,
+                assignments,
+                &query.vector,
+                candidate_page_limit,
+                10,
+            )?;
+            let ranked_assignments = ranked
+                .iter()
+                .map(|row| {
+                    let assignment =
+                        assignments
+                            .get(usize::try_from(row.source_ordinal).map_err(|_| {
+                                invalid("V26 candidate cover source ordinal overflows")
+                            })?)
+                            .filter(|assignment| assignment.source_ordinal == row.source_ordinal)
+                            .ok_or_else(|| invalid("V26 candidate cover row binding differs"))?;
+                    let pages = [assignment.primary_page, assignment.replica_page]
+                        .into_iter()
+                        .filter(|page| candidates.contains(page))
+                        .collect::<Vec<_>>();
+                    if pages.is_empty() {
+                        return Err(invalid("V26 candidate cover page binding differs"));
+                    }
+                    Ok(pages)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut selected_pages = exact_v26_layout_oracle_pages(&ranked_assignments, 8)?;
+            for page in ranked_candidates {
+                if selected_pages.len() == 8 {
+                    break;
+                }
+                if !selected_pages.contains(&page) {
+                    selected_pages.push(page);
+                }
+            }
+            if selected_pages.len() != 8 {
+                return Err(invalid("V26 candidate cover page inventory differs"));
+            }
+            selected_pages.sort_unstable();
+            let oracle_pages =
+                exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?;
+            let hits = v26_layout_hits(&truth.ground_truth_page_assignments, &selected_pages);
+            let oracle_hits = v26_layout_hits(&truth.ground_truth_page_assignments, &oracle_pages);
+            Ok(V26TreeRouterSample {
+                query_ordinal: query.query_ordinal,
+                selected_pages,
+                hits,
+                oracle_hits,
+                recall_ppm: v26_ppm(u64::from(hits), 10)?,
+                oracle_attainment_ppm: v26_ppm(u64::from(hits), u64::from(oracle_hits))?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let total_hits = samples.iter().try_fold(0_u64, |sum, sample| {
+        sum.checked_add(u64::from(sample.hits))
+            .ok_or_else(|| invalid("V26 candidate cover metric overflows"))
+    })?;
+    let total_oracle_hits = samples.iter().try_fold(0_u64, |sum, sample| {
+        sum.checked_add(u64::from(sample.oracle_hits))
+            .ok_or_else(|| invalid("V26 candidate cover metric overflows"))
+    })?;
+    let aggregate_recall_ppm = v26_ppm(total_hits, queries.len() as u64 * 10)?;
+    let minimum_query_recall_ppm = samples
+        .iter()
+        .map(|sample| sample.recall_ppm)
+        .min()
+        .ok_or_else(|| invalid("V26 candidate cover samples are absent"))?;
+    let oracle_attainment_ppm = v26_ppm(total_hits, total_oracle_hits)?;
+    let passed = aggregate_recall_ppm >= 975_000
+        && minimum_query_recall_ppm >= 800_000
+        && oracle_attainment_ppm >= 995_000;
+    Ok((
+        samples,
+        V26TreeRouterResult {
+            schema: "borsuk-v26-candidate-row-cover-result-v1".to_owned(),
+            query_count: 512,
+            aggregate_recall_ppm,
+            minimum_query_recall_ppm,
+            oracle_attainment_ppm,
+            disposition: if passed {
+                V26Disposition::BoundedLayoutCandidate
+            } else {
+                V26Disposition::RankReducerRejected
+            },
+            page_body_reads: 0,
+            claim_eligible: false,
+        },
+    ))
+}
+
 fn v26_page_mode_sign(page: u32, level: u32, cluster: u32, dimension: usize) -> f64 {
     let mut value = u64::from(page).wrapping_mul(0xd6e8_feb8_6659_fd93)
         ^ u64::from(level).wrapping_mul(0xa5a3_564e_27f8_864d)
@@ -1774,10 +1961,11 @@ mod tests {
         build_v26_external_truth_rows, build_v26_page_mode_centroids,
         canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
         canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
-        diagnose_v26_tree_router_candidate_widths, evaluate_v26_centroid_router,
-        evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
-        evaluate_v26_tree_router, exact_v26_layout_oracle_pages, rank_v26_tree_pages,
-        route_v26_pages, select_v26_ranked_pages, validate_v26_dual_tree_layout,
+        diagnose_v26_tree_router_candidate_widths, evaluate_v26_candidate_row_cover,
+        evaluate_v26_centroid_router, evaluate_v26_exact_global_external_rows,
+        evaluate_v26_page_mode_router, evaluate_v26_tree_router, exact_v26_layout_oracle_pages,
+        rank_v26_candidate_rows, rank_v26_tree_pages, route_v26_pages, select_v26_ranked_pages,
+        validate_v26_dual_tree_layout,
     };
 
     const PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
@@ -2215,6 +2403,103 @@ mod tests {
                     .windows(2)
                     .all(|pair| pair[0] < pair[1])
         }));
+    }
+
+    #[test]
+    fn v26_candidate_row_scan_is_frontier_bounded_and_retains_only_ranked_head() {
+        // Break caught: the row scan widens past the fixed tree frontier, retains every scored
+        // row, or resolves equal distances nondeterministically instead of by source ordinal.
+        let primary = v26_router_test_tree(PRIMARY_SEED, 0, [100.0, 10.0, 1.0, 2.0, 5.0, 1.0, 2.0]);
+        let replica = v26_router_test_tree(REPLICA_SEED, 8, [200.0, 20.0, 3.0, 4.0, 5.0, 1.0, 2.0]);
+        let mut query = [0.0_f32; 96];
+        query[0] = 1.0;
+        let rows = (0_u64..128)
+            .map(|source_ordinal| V26ConstructionRow {
+                source_ordinal,
+                vector: query,
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..128)
+            .map(|source_ordinal| V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
+                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
+            })
+            .collect::<Vec<_>>();
+
+        let ranked =
+            rank_v26_candidate_rows(&primary, &replica, &rows, &assignments, &query, 16, 32)
+                .unwrap();
+
+        assert_eq!(ranked.len(), 32);
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|row| row.source_ordinal)
+                .collect::<Vec<_>>(),
+            (0_u64..32).collect::<Vec<_>>()
+        );
+        assert!(ranked.iter().all(|row| row.distance.to_bits() == 0));
+    }
+
+    #[test]
+    fn v26_candidate_row_cover_uses_row_identity_and_exact_eight_page_cover() {
+        // Break caught: candidate rows are reduced to independent page scores, partner pages
+        // escape the frontier, or truth participates before the eight pages are persisted.
+        let primary = v26_router_test_tree(PRIMARY_SEED, 0, [100.0, 10.0, 1.0, 2.0, 5.0, 1.0, 2.0]);
+        let replica = v26_router_test_tree(REPLICA_SEED, 8, [200.0, 20.0, 3.0, 4.0, 5.0, 1.0, 2.0]);
+        let mut vector = [0.0_f32; 96];
+        vector[0] = 1.0;
+        let rows = (0_u64..128)
+            .map(|source_ordinal| V26ConstructionRow {
+                source_ordinal,
+                vector,
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..128)
+            .map(|source_ordinal| V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
+                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let queries = (0_u32..512)
+            .map(|query_ordinal| V26ExternalQuery {
+                query_ordinal,
+                vector,
+            })
+            .collect::<Vec<_>>();
+        let truths = (0_u32..512)
+            .map(|query_ordinal| V26QueryTruth {
+                query_ordinal,
+                neighbor_source_ordinals: (0_u64..10).collect(),
+                ground_truth_page_assignments: (0_u32..10)
+                    .map(|neighbor| vec![neighbor % 8, 8 + neighbor % 8])
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+
+        let (samples, result) = evaluate_v26_candidate_row_cover(
+            &primary,
+            &replica,
+            &rows,
+            &assignments,
+            &queries,
+            &truths,
+            16,
+        )
+        .unwrap();
+
+        assert_eq!(result.schema, "borsuk-v26-candidate-row-cover-result-v1");
+        assert_eq!(result.aggregate_recall_ppm, 1_000_000);
+        assert_eq!(result.minimum_query_recall_ppm, 1_000_000);
+        assert_eq!(result.oracle_attainment_ppm, 1_000_000);
+        assert_eq!(result.disposition, V26Disposition::BoundedLayoutCandidate);
+        assert!(
+            samples
+                .iter()
+                .all(|sample| sample.selected_pages.len() == 8)
+        );
     }
 
     #[test]
