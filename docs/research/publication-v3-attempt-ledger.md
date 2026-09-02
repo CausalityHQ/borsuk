@@ -1926,3 +1926,43 @@ frontier, rather than absence of the relevant pages from every bounded prefix.
 The next falsifier is therefore a query-independent page-summary reranker over
 exactly the first 128 tree candidates. It must still choose exactly eight pages
 without truth or page-body access. D3 and release claims remain fenced.
+
+### Single-centroid bounded-frontier rejection
+
+Source commit `95b6b8cfbe93d34fcccb2ebfd109e0ad8734793b` tested the first
+query-independent page-summary reranker once on Spot instance
+`i-047c0df919a85ae72` (`c7g.4xlarge`, `eu-central-1c`). The
+11,364,888-byte executable had SHA-256
+`a3002b5bbfccb3aec30adafbf85d8fe50dd65e91fabb2ac49adb1847aed18c94`;
+the 8,438,358-byte source archive had SHA-256
+`ee19ec9f5b182e132f7f782cd7784a9e654ba6db058e5fb31ebf548dcef69da1`.
+Construction computed one normalized centroid per physical page using every
+primary and replica assignment. Serving ranked only the already-frozen first
+128 tree candidates by centroid distance and selected exactly eight pages. It
+used no truth during selection and read zero page bodies.
+
+The reranker recovered 3,561 of 5,120 ground-truth hits: 695,507 ppm aggregate
+recall, 100,000 ppm minimum-query recall, and 696,596 ppm oracle attainment.
+The hit histogram was 83 queries with ten hits, 61 with nine, 79 with eight,
+77 with seven, 75 with six, 66 with five, 37 with four, 18 with three, 13 with
+two, and three with one. It failed all three literal gates: 975,000 aggregate,
+800,000 minimum-query, and 995,000 oracle attainment. Scientific execution
+took 0.883661622 seconds and 0.85 CPU-seconds, peaked at 124,514,304 bytes RSS,
+and observed zero memory PSI and zero swap growth. The instance terminated
+after publishing its terminal.
+
+The 74,970-byte canonical result has SHA-256
+`4993824fb009d7fd1158c9195ab6f6eb87a29d276feb7961f74e66f52ba2f342`;
+the 683-byte terminal has SHA-256
+`92c51bbe7e9c19156f430ac6d54a957841f5bc7cba91e5c20cedb8e132ef4e6b`.
+Artifacts are rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/open/95b6b8cfbe93d34fcccb2ebfd109e0ad8734793b/v26-centroid-router-95b6b8c/centroid-a0001/`.
+
+This is a scientific `tree-router-rejected` result for a single page centroid,
+not evidence against the 128-page frontier. The authenticated width diagnosis
+showed that the same frontier contains a passing exact eight-page cover, while
+the centroid collapses each page's multimodal neighborhoods to one mean. No
+weight tuning, quality-gate relaxation, sealed sentry, D3, or release claim is
+authorized. The next falsifier must preserve multiple query-independent modes
+per page under a fixed memory/CPU ladder, or reject summaries and advance to a
+bounded compact row-code scan within the same frontier.
