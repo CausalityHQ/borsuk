@@ -22,12 +22,13 @@ use sha2::{Digest, Sha256};
 use crate::tree::build_v26_dual_tree_layout_with_workers;
 use crate::{
     Result, V26ConstructionRow, V26Disposition, V26ExactGlobalRankResult, V26ExactGlobalResult,
-    V26ExactGlobalSample, V26ExternalQuery, V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult,
-    V26LayoutSample, V26Node, V26ObjectIdentity, V26QueryTruth, V26RowPages, V26Tree,
-    canonical_json_value, canonical_v26_exact_global_result_bytes,
-    canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
-    evaluate_v26_exact_global_external_rows, exact_lower_hex, exact_v26_layout_oracle_pages,
-    invalid, projected_steps, validate_layout_authority, validate_v26_dual_tree_layout,
+    V26ExactGlobalSample, V26ExternalQuery, V26ExternalTruth, V26LayoutAuthority, V26LayoutReceipt,
+    V26LayoutResult, V26LayoutSample, V26Node, V26ObjectIdentity, V26QueryTruth, V26RowPages,
+    V26Tree, build_v26_external_truth_rows, canonical_json_value,
+    canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
+    canonical_v26_layout_result_bytes, evaluate_v26_exact_global_external_rows, exact_lower_hex,
+    exact_v26_layout_oracle_pages, invalid, projected_steps, validate_layout_authority,
+    validate_v26_dual_tree_layout,
 };
 
 fn vector_type() -> DataType {
@@ -124,6 +125,16 @@ pub struct V26ExactGlobalRequest {
     pub construction_rows: V26LocalObjectPath,
     pub layout: V26LayoutEvaluationRequest,
     pub ranked_row_limits: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26TruthBuildRequest {
+    pub construction_rows: V26LocalObjectPath,
+    pub external_queries: V26LocalObjectPath,
+    pub expected_rows: u64,
+    pub expected_queries: u32,
+    pub output_path: PathBuf,
+    pub output_uri: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -548,6 +559,90 @@ fn read_exact_global_construction(
         return Err(invalid("V26 exact-global construction inventory differs"));
     }
     Ok(rows)
+}
+
+fn external_truth_batch(rows: &[V26ExternalTruth]) -> Result<RecordBatch> {
+    let mut neighbors = Vec::with_capacity(rows.len() * 10);
+    let mut distances = Vec::with_capacity(rows.len() * 10);
+    for row in rows {
+        if row.neighbor_source_ordinals.len() != 10 || row.neighbor_distance_bits.len() != 10 {
+            return Err(invalid("V26 external truth row width differs"));
+        }
+        neighbors.extend_from_slice(&row.neighbor_source_ordinals);
+        distances.extend_from_slice(&row.neighbor_distance_bits);
+    }
+    RecordBatch::try_new(
+        Arc::new(v26_truth_schema()),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                rows.iter().map(|row| row.query_ordinal),
+            )) as ArrayRef,
+            Arc::new(
+                FixedSizeListArray::try_new(
+                    Arc::new(Field::new("element", DataType::UInt64, false)),
+                    10,
+                    Arc::new(UInt64Array::from(neighbors)),
+                    None,
+                )
+                .map_err(|error| invalid(&format!("V26 truth neighbor batch failed: {error}")))?,
+            ),
+            Arc::new(
+                FixedSizeListArray::try_new(
+                    Arc::new(Field::new("element", DataType::UInt32, false)),
+                    10,
+                    Arc::new(UInt32Array::from(distances)),
+                    None,
+                )
+                .map_err(|error| invalid(&format!("V26 truth distance batch failed: {error}")))?,
+            ),
+        ],
+    )
+    .map_err(|error| invalid(&format!("V26 truth batch failed: {error}")))
+}
+
+pub fn run_v26_truth_build(request: &V26TruthBuildRequest) -> Result<V26LocalObjectPath> {
+    if request.expected_rows < 10
+        || request.expected_queries != 512
+        || request.output_path.exists()
+        || !request.output_uri.starts_with("s3://")
+        || request.construction_rows.identity.generation
+            != request.external_queries.identity.generation
+    {
+        return Err(invalid("V26 truth build request differs"));
+    }
+    authenticate(&request.construction_rows, "construction-parquet")?;
+    authenticate(&request.external_queries, "external-queries-parquet")?;
+    let rows =
+        read_exact_global_construction(&request.construction_rows.path, request.expected_rows)?;
+    let queries =
+        read_evaluation_queries(&request.external_queries.path, request.expected_queries)?;
+    let truth = build_v26_external_truth_rows(&rows, &queries)?;
+    let result = (|| {
+        write_batch(&request.output_path, external_truth_batch(&truth)?)?;
+        let reader = open_reader(&request.output_path)?;
+        if reader.schema().as_ref() != &v26_truth_schema()
+            || u32::try_from(reader.metadata().file_metadata().num_rows()).ok()
+                != Some(request.expected_queries)
+        {
+            return Err(invalid("V26 truth output authority differs"));
+        }
+        let (encoded_bytes, digest) = sha256_file(&request.output_path)?;
+        Ok(V26LocalObjectPath {
+            identity: V26ObjectIdentity {
+                role: "external-truth-parquet".to_owned(),
+                uri: request.output_uri.clone(),
+                digest_algorithm: "sha256".to_owned(),
+                digest,
+                encoded_bytes,
+                generation: request.construction_rows.identity.generation.clone(),
+            },
+            path: request.output_path.clone(),
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&request.output_path);
+    }
+    result
 }
 
 struct V26LoadedExactGlobal {
@@ -1291,10 +1386,11 @@ mod tests {
 
     use super::{
         V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
-        V26LocalObjectPath, assignments_batch, evaluate_v26_exact_global,
+        V26LocalObjectPath, V26TruthBuildRequest, assignments_batch, evaluate_v26_exact_global,
         evaluate_v26_layout_oracle, output_identity, read_assignments, run_v26_layout_build,
-        v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
-        v26_source_map_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
+        run_v26_truth_build, v26_construction_schema, v26_page_assignments_schema,
+        v26_query_schema, v26_source_map_schema, v26_tree_schema, v26_truth_schema,
+        validate_v26_layout_build_output,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -1573,6 +1669,37 @@ mod tests {
                 fs::read(second_dir.join(name)).unwrap()
             );
         }
+    }
+
+    #[test]
+    fn v26_external_query_truth_local_writes_only_ranked_parquet_evidence() {
+        // Break caught: the truth phase requires a layout/page role or emits JSON bulk data.
+        let (temp, evaluation) = evaluation_fixture();
+        let output_path = temp.path().join("external-truth.parquet");
+        let mut external_queries = evaluation.pseudoqueries;
+        external_queries.identity.role = "external-queries-parquet".to_owned();
+        let request = V26TruthBuildRequest {
+            construction_rows: identity(
+                "construction-parquet",
+                &temp.path().join("construction.parquet"),
+            ),
+            external_queries,
+            expected_rows: 1_409,
+            expected_queries: 512,
+            output_path: output_path.clone(),
+            output_uri: "s3://v26-output/external-truth.parquet".to_owned(),
+        };
+
+        let output = run_v26_truth_build(&request).unwrap();
+
+        assert_eq!(output.identity.role, "external-truth-parquet");
+        assert_eq!(output.identity.uri, request.output_uri);
+        assert_eq!(output.path, output_path);
+        let reader =
+            ParquetRecordBatchReaderBuilder::try_new(fs::File::open(&output.path).unwrap())
+                .unwrap();
+        assert_eq!(reader.schema().as_ref(), &v26_truth_schema());
+        assert_eq!(reader.metadata().file_metadata().num_rows(), 512);
     }
 
     #[test]
