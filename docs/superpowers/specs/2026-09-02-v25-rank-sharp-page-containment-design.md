@@ -186,6 +186,24 @@ GETs.
 
 The tunable cohort contains exactly 262,144 hash-ranked rows and 512
 leave-self-out pseudoqueries. Exact truth scores 12,884,901,888 dimensions.
+The immutable source evidence is the registered V24 construction-row and
+physical page-row Parquet pair.  A research-only converter authenticates those
+bytes, selects the cohort by `(SplitMix64(dataset_ordinal ^ cohort_seed),
+dataset_ordinal)`, assigns dense V25-local ordinals in that rank order, and
+selects pseudoqueries from the cohort by a second independently registered
+SplitMix64 seed.  It emits only clean V25 Parquet tables plus a Parquet source
+map `(source_ordinal, dataset_ordinal)` and a small canonical conversion
+receipt binding both V24 inputs, every V25 output, both seeds, and the selected
+dataset-ordinal digest.  The converter is not linked by the V25 library and is
+not a V24 compatibility reader.
+
+The converter derives one primary and at most one distinct replica assignment
+from the complete physical page-row inventory.  It computes truth independently
+in float64 cosine blocks, excludes each pseudoquery and every row on its own
+primary/replica pages, orders neighbors by `(distance, source_ordinal)`, and
+derives the exact eight-page layout oracle from the resulting top ten.  No V24
+pseudoquery result, witness graph, router output, or prior quality metric enters
+selection or truth.
 The exact-global control requires no hierarchy or codebook. If it passes, the
 bounded reduced router uses 4,096 lists of exactly 64 rows and probes 32 lists,
 preserving the production 0.782% scan fraction. Controls stop at the first
@@ -241,6 +259,11 @@ floor.
 Strict Clippy and the full locked workspace assurance run once immediately
 before the immutable release build. They do not run during each scientific
 repair.
+
+The fail-fast progression is fixed: pure selection/schema tests, a tiny real
+Parquet conversion fixture, the existing authentic offline smoke, then one
+open Spot cell.  A failure stops at its current layer.  The full workspace
+suite is a milestone gate rather than an iteration loop.
 
 ## Leakage and authority
 
