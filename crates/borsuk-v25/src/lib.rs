@@ -12,8 +12,10 @@ use serde::{Deserialize, Serialize};
 mod local;
 
 pub use local::{
-    V25ConstructionRow, V25LocalQuery, evaluate_v25_exact_global, validate_v25_construction_schema,
-    validate_v25_page_assignment_schema, validate_v25_query_schema, validate_v25_truth_schema,
+    V25ConstructionRow, V25ContainmentLocalOutput, V25ContainmentLocalRequest, V25LocalObjectPath,
+    V25LocalQuery, evaluate_v25_exact_global, run_v25_containment_local_request,
+    validate_v25_construction_schema, validate_v25_page_assignment_schema,
+    validate_v25_query_schema, validate_v25_truth_schema,
 };
 
 /// Error returned when V25 authority or scientific evidence is inconsistent.
@@ -98,6 +100,7 @@ impl V25Control {
 #[serde(deny_unknown_fields)]
 pub struct V25QueryTruth {
     pub query_ordinal: u32,
+    pub neighbor_source_ordinals: Vec<u64>,
     pub ground_truth_page_assignments: Vec<Vec<u32>>,
     pub oracle_pages: Vec<u32>,
 }
@@ -367,6 +370,17 @@ pub fn canonical_v25_containment_result_bytes(
 
     let mut truth_by_query = BTreeMap::new();
     for truth in truths {
+        if truth.neighbor_source_ordinals.len() != 10
+            || truth
+                .neighbor_source_ordinals
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != 10
+        {
+            return Err(invalid("V25 truth neighbor inventory differs"));
+        }
         let oracle = exact_oracle_pages(
             &truth.ground_truth_page_assignments,
             result.page_budget as usize,
@@ -572,6 +586,7 @@ mod tests {
     fn truth() -> V25QueryTruth {
         V25QueryTruth {
             query_ordinal: 0,
+            neighbor_source_ordinals: (1..=10).collect(),
             ground_truth_page_assignments: vec![
                 vec![0],
                 vec![0],

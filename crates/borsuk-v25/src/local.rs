@@ -1,10 +1,20 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
+use arrow_array::{Array, FixedSizeListArray, Float32Array, UInt32Array, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use sha2::{Digest, Sha256};
 
 use crate::{
-    Result, V25ContainmentSample, V25Control, V25QueryTruth, V25RankedRow, V25RowPages,
-    exact_oracle_pages, hits, invalid, ppm, select_v25_rank_sharp_pages,
+    Result, V25ContainmentSample, V25Control, V25ObjectIdentity, V25QueryTruth, V25RankedRow,
+    V25RowPages, exact_oracle_pages, hits, invalid, ppm, select_v25_rank_sharp_pages,
+    validate_identity,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -18,6 +28,32 @@ pub struct V25LocalQuery {
     pub query_ordinal: u32,
     pub source_ordinal: u64,
     pub vector: [f32; 96],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V25LocalObjectPath {
+    pub identity: V25ObjectIdentity,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V25ContainmentLocalRequest {
+    pub construction_rows: V25LocalObjectPath,
+    pub page_assignments: V25LocalObjectPath,
+    pub pseudoqueries: V25LocalObjectPath,
+    pub truth: V25LocalObjectPath,
+    pub ranked_row_limits: Vec<u32>,
+    pub page_budget: u32,
+    pub expected_source_rows: u64,
+    pub expected_page_count: u32,
+    pub expected_queries: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V25ContainmentLocalOutput {
+    pub samples: Vec<V25ContainmentSample>,
+    pub scanned_rows: u64,
+    pub page_body_reads: u64,
 }
 
 fn vector_type() -> DataType {
@@ -71,6 +107,11 @@ pub fn validate_v25_truth_schema(schema: &Schema) -> Result<()> {
     };
     let expected = Schema::new(vec![
         Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new(
+            "neighbor_source_ordinals",
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt64, false)), 10),
+            false,
+        ),
         Field::new("primary_pages", page_list(10), false),
         Field::new("replica_pages", page_list(10), false),
         Field::new("oracle_pages", page_list(8), false),
@@ -79,6 +120,356 @@ pub fn validate_v25_truth_schema(schema: &Schema) -> Result<()> {
         return Err(invalid("V25 truth Parquet schema differs"));
     }
     Ok(())
+}
+
+fn authenticate_local_object(
+    object: &V25LocalObjectPath,
+    expected_role: &str,
+    generation: &str,
+) -> Result<()> {
+    if object.identity.role != expected_role {
+        return Err(invalid("V25 local object role differs"));
+    }
+    validate_identity(&object.identity, generation)?;
+    let mut file = fs::File::open(&object.path)
+        .map_err(|error| invalid(&format!("V25 local object open failed: {error}")))?;
+    let encoded_bytes = file
+        .metadata()
+        .map_err(|error| invalid(&format!("V25 local object metadata failed: {error}")))?
+        .len();
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| invalid(&format!("V25 local object read failed: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    if encoded_bytes != object.identity.encoded_bytes
+        || format!("{:x}", hasher.finalize()) != object.identity.digest
+    {
+        return Err(invalid("V25 local object bytes differ"));
+    }
+    Ok(())
+}
+
+fn fixed_f32_vector(list: &FixedSizeListArray, row: usize) -> Result<[f32; 96]> {
+    if list.null_count() != 0 || list.offset() != 0 {
+        return Err(invalid("V25 vector list differs"));
+    }
+    let value = list.value(row);
+    let values = value
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| invalid("V25 vector child differs"))?;
+    if values.null_count() != 0 || values.len() != 96 {
+        return Err(invalid("V25 vector width differs"));
+    }
+    let vector = values.values().as_ref().try_into().unwrap();
+    validate_vector(&vector)?;
+    Ok(vector)
+}
+
+fn open_reader(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<fs::File>> {
+    let file = fs::File::open(path)
+        .map_err(|error| invalid(&format!("V25 Parquet open failed: {error}")))?;
+    ParquetRecordBatchReaderBuilder::try_new(file)
+        .map_err(|error| invalid(&format!("V25 Parquet metadata failed: {error}")))
+}
+
+fn read_construction_rows(path: &Path, expected_rows: u64) -> Result<Vec<V25ConstructionRow>> {
+    let builder = open_reader(path)?;
+    validate_v25_construction_schema(builder.schema())?;
+    if u64::try_from(builder.metadata().file_metadata().num_rows()).ok() != Some(expected_rows) {
+        return Err(invalid("V25 construction Parquet row count differs"));
+    }
+    let mut rows = Vec::with_capacity(expected_rows as usize);
+    for batch in builder
+        .build()
+        .map_err(|error| invalid(&format!("V25 construction reader failed: {error}")))?
+    {
+        let batch =
+            batch.map_err(|error| invalid(&format!("V25 construction batch failed: {error}")))?;
+        if batch.num_columns() != 2
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V25 construction batch differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V25 construction ordinal differs"))?;
+        let vectors = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V25 construction vector differs"))?;
+        for row in 0..batch.num_rows() {
+            rows.push(V25ConstructionRow {
+                source_ordinal: ordinals.value(row),
+                vector: fixed_f32_vector(vectors, row)?,
+            });
+        }
+    }
+    if rows.len() != expected_rows as usize {
+        return Err(invalid("V25 construction decoded row count differs"));
+    }
+    Ok(rows)
+}
+
+fn read_page_assignments(
+    path: &Path,
+    expected_rows: u64,
+    expected_page_count: u32,
+) -> Result<Vec<V25RowPages>> {
+    let builder = open_reader(path)?;
+    validate_v25_page_assignment_schema(builder.schema())?;
+    if u64::try_from(builder.metadata().file_metadata().num_rows()).ok() != Some(expected_rows) {
+        return Err(invalid("V25 page assignment row count differs"));
+    }
+    let mut rows = Vec::with_capacity(expected_rows as usize);
+    for batch in builder
+        .build()
+        .map_err(|error| invalid(&format!("V25 page reader failed: {error}")))?
+    {
+        let batch = batch.map_err(|error| invalid(&format!("V25 page batch failed: {error}")))?;
+        if batch.num_columns() != 3
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V25 page assignment batch differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V25 page source ordinal differs"))?;
+        let primary = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V25 primary page differs"))?;
+        let replica = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V25 replica page differs"))?;
+        for row in 0..batch.num_rows() {
+            let primary_page = primary.value(row);
+            let replica_page = replica.value(row);
+            if primary_page >= expected_page_count
+                || (replica_page != u32::MAX
+                    && (replica_page >= expected_page_count || replica_page == primary_page))
+            {
+                return Err(invalid("V25 page assignment page differs"));
+            }
+            rows.push(V25RowPages {
+                source_ordinal: ordinals.value(row),
+                primary_page,
+                replica_page: (replica_page != u32::MAX).then_some(replica_page),
+            });
+        }
+    }
+    if rows.len() != expected_rows as usize {
+        return Err(invalid("V25 page assignment decoded row count differs"));
+    }
+    Ok(rows)
+}
+
+fn read_queries(path: &Path, expected_queries: u32) -> Result<Vec<V25LocalQuery>> {
+    let builder = open_reader(path)?;
+    validate_v25_query_schema(builder.schema())?;
+    if u32::try_from(builder.metadata().file_metadata().num_rows()).ok() != Some(expected_queries) {
+        return Err(invalid("V25 query row count differs"));
+    }
+    let mut queries = Vec::with_capacity(expected_queries as usize);
+    for batch in builder
+        .build()
+        .map_err(|error| invalid(&format!("V25 query reader failed: {error}")))?
+    {
+        let batch = batch.map_err(|error| invalid(&format!("V25 query batch failed: {error}")))?;
+        if batch.num_columns() != 3
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V25 query batch differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V25 query ordinal differs"))?;
+        let sources = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V25 query source differs"))?;
+        let vectors = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V25 query vector differs"))?;
+        for row in 0..batch.num_rows() {
+            queries.push(V25LocalQuery {
+                query_ordinal: ordinals.value(row),
+                source_ordinal: sources.value(row),
+                vector: fixed_f32_vector(vectors, row)?,
+            });
+        }
+    }
+    if queries.len() != expected_queries as usize {
+        return Err(invalid("V25 query decoded row count differs"));
+    }
+    Ok(queries)
+}
+
+fn fixed_u32_values(list: &FixedSizeListArray, row: usize, width: usize) -> Result<Vec<u32>> {
+    if list.null_count() != 0 || list.offset() != 0 {
+        return Err(invalid("V25 truth list differs"));
+    }
+    let value = list.value(row);
+    let values = value
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| invalid("V25 truth list child differs"))?;
+    if values.null_count() != 0 || values.len() != width {
+        return Err(invalid("V25 truth list width differs"));
+    }
+    Ok(values.values().to_vec())
+}
+
+fn read_truth(path: &Path, expected_queries: u32) -> Result<Vec<V25QueryTruth>> {
+    let builder = open_reader(path)?;
+    validate_v25_truth_schema(builder.schema())?;
+    if u32::try_from(builder.metadata().file_metadata().num_rows()).ok() != Some(expected_queries) {
+        return Err(invalid("V25 truth row count differs"));
+    }
+    let mut truths = Vec::with_capacity(expected_queries as usize);
+    for batch in builder
+        .build()
+        .map_err(|error| invalid(&format!("V25 truth reader failed: {error}")))?
+    {
+        let batch = batch.map_err(|error| invalid(&format!("V25 truth batch failed: {error}")))?;
+        if batch.num_columns() != 5
+            || batch
+                .columns()
+                .iter()
+                .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V25 truth batch differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V25 truth ordinal differs"))?;
+        let neighbor_lists = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V25 truth neighbor list differs"))?;
+        let lists = [2_usize, 3, 4]
+            .map(|column| {
+                batch
+                    .column(column)
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .ok_or_else(|| invalid("V25 truth list differs"))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        for row in 0..batch.num_rows() {
+            let neighbor_value = neighbor_lists.value(row);
+            let neighbor_values = neighbor_value
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| invalid("V25 truth neighbor child differs"))?;
+            if neighbor_lists.offset() != 0
+                || neighbor_values.null_count() != 0
+                || neighbor_values.len() != 10
+            {
+                return Err(invalid("V25 truth neighbor width differs"));
+            }
+            let primary = fixed_u32_values(lists[0], row, 10)?;
+            let replica = fixed_u32_values(lists[1], row, 10)?;
+            let mut assignments = Vec::with_capacity(10);
+            for (&primary, &replica) in primary.iter().zip(&replica) {
+                let mut pages = vec![primary];
+                if replica != u32::MAX {
+                    pages.push(replica);
+                    pages.sort_unstable();
+                }
+                assignments.push(pages);
+            }
+            let oracle = fixed_u32_values(lists[2], row, 8)?;
+            let oracle_length = oracle
+                .iter()
+                .position(|page| *page == u32::MAX)
+                .unwrap_or(8);
+            if oracle[oracle_length..].iter().any(|page| *page != u32::MAX) {
+                return Err(invalid("V25 truth oracle padding differs"));
+            }
+            truths.push(V25QueryTruth {
+                query_ordinal: ordinals.value(row),
+                neighbor_source_ordinals: neighbor_values.values().to_vec(),
+                ground_truth_page_assignments: assignments,
+                oracle_pages: oracle[..oracle_length].to_vec(),
+            });
+        }
+    }
+    if truths.len() != expected_queries as usize {
+        return Err(invalid("V25 truth decoded row count differs"));
+    }
+    Ok(truths)
+}
+
+pub fn run_v25_containment_local_request(
+    request: &V25ContainmentLocalRequest,
+) -> Result<V25ContainmentLocalOutput> {
+    let generation = request.construction_rows.identity.generation.as_str();
+    for (object, role) in [
+        (&request.construction_rows, "construction-rows-parquet"),
+        (&request.page_assignments, "page-assignments-parquet"),
+        (&request.pseudoqueries, "pseudoqueries-parquet"),
+        (&request.truth, "truth-parquet"),
+    ] {
+        authenticate_local_object(object, role, generation)?;
+    }
+    let rows = read_construction_rows(
+        &request.construction_rows.path,
+        request.expected_source_rows,
+    )?;
+    let pages = read_page_assignments(
+        &request.page_assignments.path,
+        request.expected_source_rows,
+        request.expected_page_count,
+    )?;
+    let queries = read_queries(&request.pseudoqueries.path, request.expected_queries)?;
+    let truths = read_truth(&request.truth.path, request.expected_queries)?;
+    let samples = evaluate_v25_exact_global(
+        &rows,
+        &pages,
+        &queries,
+        &truths,
+        &request.ranked_row_limits,
+        request.page_budget,
+    )?;
+    Ok(V25ContainmentLocalOutput {
+        samples,
+        scanned_rows: request.expected_source_rows,
+        page_body_reads: 0,
+    })
 }
 
 fn validate_vector(vector: &[f32; 96]) -> Result<()> {
@@ -120,6 +511,13 @@ pub fn evaluate_v25_exact_global(
             return Err(invalid("V25 construction source ordinal repeats"));
         }
     }
+    if row_by_source
+        .keys()
+        .copied()
+        .ne(0..u64::try_from(rows.len()).unwrap())
+    {
+        return Err(invalid("V25 construction source inventory differs"));
+    }
     let mut pages_by_source = BTreeMap::new();
     for assignment in assignments {
         if assignment.replica_page == Some(assignment.primary_page)
@@ -139,11 +537,37 @@ pub fn evaluate_v25_exact_global(
         validate_vector(&query.vector)?;
         if usize::try_from(query.query_ordinal).ok() != Some(query_index)
             || truth.query_ordinal != query.query_ordinal
+            || truth.neighbor_source_ordinals.len() != 10
+            || truth.ground_truth_page_assignments.len() != 10
+            || truth
+                .neighbor_source_ordinals
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != 10
             || !row_by_source.contains_key(&query.source_ordinal)
             || exact_oracle_pages(&truth.ground_truth_page_assignments, page_budget as usize)?
                 != truth.oracle_pages
         {
             return Err(invalid("V25 exact-global query authority differs"));
+        }
+        for (neighbor, expected_pages) in truth
+            .neighbor_source_ordinals
+            .iter()
+            .zip(&truth.ground_truth_page_assignments)
+        {
+            let pages = pages_by_source
+                .get(neighbor)
+                .ok_or_else(|| invalid("V25 truth neighbor source differs"))?;
+            let mut observed = vec![pages.primary_page];
+            if let Some(replica) = pages.replica_page {
+                observed.push(replica);
+                observed.sort_unstable();
+            }
+            if &observed != expected_pages || *neighbor == query.source_ordinal {
+                return Err(invalid("V25 truth neighbor page binding differs"));
+            }
         }
         let own_pages = pages_by_source
             .get(&query.source_ordinal)
@@ -218,14 +642,20 @@ pub fn evaluate_v25_exact_global(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{fs, path::Path, sync::Arc};
 
+    use arrow_array::{
+        ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt32Array, UInt64Array,
+    };
     use arrow_schema::{DataType, Field, Schema};
+    use parquet::arrow::ArrowWriter;
+    use sha2::{Digest, Sha256};
 
-    use crate::{V25QueryTruth, V25RowPages};
+    use crate::{V25ObjectIdentity, V25QueryTruth, V25RowPages};
 
     use super::{
-        V25ConstructionRow, V25LocalQuery, evaluate_v25_exact_global,
+        V25ConstructionRow, V25ContainmentLocalRequest, V25LocalObjectPath, V25LocalQuery,
+        evaluate_v25_exact_global, run_v25_containment_local_request,
         validate_v25_construction_schema, validate_v25_page_assignment_schema,
         validate_v25_query_schema, validate_v25_truth_schema,
     };
@@ -236,6 +666,70 @@ mod tests {
         vector[0] = first / norm;
         vector[1] = second / norm;
         vector
+    }
+
+    fn vector_array(vectors: &[[f32; 96]]) -> FixedSizeListArray {
+        FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            96,
+            Arc::new(Float32Array::from_iter_values(
+                vectors.iter().flat_map(|vector| vector.iter().copied()),
+            )),
+            None,
+        )
+        .unwrap()
+    }
+
+    fn list_array(values: &[u32], width: i32) -> FixedSizeListArray {
+        FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::UInt32, false)),
+            width,
+            Arc::new(UInt32Array::from(values.to_vec())),
+            None,
+        )
+        .unwrap()
+    }
+
+    fn list_u64_array(values: &[u64], width: i32) -> FixedSizeListArray {
+        FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::UInt64, false)),
+            width,
+            Arc::new(UInt64Array::from(values.to_vec())),
+            None,
+        )
+        .unwrap()
+    }
+
+    fn fixture_primary_page(source_ordinal: u64) -> u32 {
+        match source_ordinal {
+            0 => 0,
+            1 | 2 => 1,
+            3 | 4 => 2,
+            5..=10 => u32::try_from(source_ordinal - 2).unwrap(),
+            _ => u32::try_from(source_ordinal).unwrap(),
+        }
+    }
+
+    fn write_batch(path: &Path, batch: RecordBatch) {
+        let file = fs::File::create(path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    fn local_object(role: &str, path: &Path) -> V25LocalObjectPath {
+        let bytes = fs::read(path).unwrap();
+        V25LocalObjectPath {
+            identity: V25ObjectIdentity {
+                role: role.to_owned(),
+                uri: format!("s3://borsuk-v25/{role}"),
+                digest_algorithm: "sha256".to_owned(),
+                digest: format!("{:x}", Sha256::digest(&bytes)),
+                encoded_bytes: bytes.len() as u64,
+                generation: "v25-local-test".to_owned(),
+            },
+            path: path.to_owned(),
+        }
     }
 
     #[test]
@@ -265,6 +759,14 @@ mod tests {
         };
         let truth = Schema::new(vec![
             Field::new("query_ordinal", DataType::UInt32, false),
+            Field::new(
+                "neighbor_source_ordinals",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::UInt64, false)),
+                    10,
+                ),
+                false,
+            ),
             Field::new("primary_pages", page_list(), false),
             Field::new("replica_pages", page_list(), false),
             Field::new(
@@ -316,12 +818,13 @@ mod tests {
         let pages = (0..20_u64)
             .map(|source_ordinal| V25RowPages {
                 source_ordinal,
-                primary_page: u32::try_from(source_ordinal).unwrap(),
+                primary_page: fixture_primary_page(source_ordinal),
                 replica_page: (source_ordinal == 0).then_some(19),
             })
             .collect::<Vec<_>>();
         let truth = V25QueryTruth {
             query_ordinal: 0,
+            neighbor_source_ordinals: (1..=10).collect(),
             ground_truth_page_assignments: vec![
                 vec![1],
                 vec![1],
@@ -363,5 +866,186 @@ mod tests {
                 && !sample.selected_pages.contains(&0)
                 && !sample.selected_pages.contains(&19)
         }));
+
+        let mut truncated_truth = truth.clone();
+        truncated_truth.neighbor_source_ordinals.pop();
+        assert!(
+            evaluate_v25_exact_global(
+                &rows,
+                &pages,
+                std::slice::from_ref(&query),
+                std::slice::from_ref(&truncated_truth),
+                &[10, 32],
+                8,
+            )
+            .is_err()
+        );
+
+        let mut noncontiguous_rows = rows.clone();
+        let mut noncontiguous_pages = pages.clone();
+        noncontiguous_rows.last_mut().unwrap().source_ordinal = 20;
+        noncontiguous_pages.last_mut().unwrap().source_ordinal = 20;
+        assert!(
+            evaluate_v25_exact_global(
+                &noncontiguous_rows,
+                &noncontiguous_pages,
+                std::slice::from_ref(&query),
+                std::slice::from_ref(&truth),
+                &[10, 32],
+                8,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn v25_containment_parquet_authenticates_four_roles_and_streams_exact_global() {
+        let temporary = tempfile::tempdir().unwrap();
+        let construction_path = temporary.path().join("construction.parquet");
+        let pages_path = temporary.path().join("pages.parquet");
+        let queries_path = temporary.path().join("queries.parquet");
+        let truth_path = temporary.path().join("truth.parquet");
+
+        let vectors = (0..20_u64)
+            .map(|source_ordinal| vector(20.0 - source_ordinal as f32, source_ordinal as f32 + 1.0))
+            .collect::<Vec<_>>();
+        let construction_schema = Arc::new(Schema::new(vec![
+            Field::new("source_ordinal", DataType::UInt64, false),
+            Field::new(
+                "vector",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    96,
+                ),
+                false,
+            ),
+        ]));
+        write_batch(
+            &construction_path,
+            RecordBatch::try_new(
+                construction_schema,
+                vec![
+                    Arc::new(UInt64Array::from_iter_values(0..20_u64)) as ArrayRef,
+                    Arc::new(vector_array(&vectors)),
+                ],
+            )
+            .unwrap(),
+        );
+
+        let pages_schema = Arc::new(Schema::new(vec![
+            Field::new("source_ordinal", DataType::UInt64, false),
+            Field::new("primary_page", DataType::UInt32, false),
+            Field::new("replica_page", DataType::UInt32, false),
+        ]));
+        write_batch(
+            &pages_path,
+            RecordBatch::try_new(
+                pages_schema,
+                vec![
+                    Arc::new(UInt64Array::from_iter_values(0..20_u64)) as ArrayRef,
+                    Arc::new(UInt32Array::from_iter_values(
+                        (0..20_u64).map(fixture_primary_page),
+                    )),
+                    Arc::new(UInt32Array::from_iter_values(
+                        (0..20_u32).map(|source| if source == 0 { 19 } else { u32::MAX }),
+                    )),
+                ],
+            )
+            .unwrap(),
+        );
+
+        let query_schema = Arc::new(Schema::new(vec![
+            Field::new("query_ordinal", DataType::UInt32, false),
+            Field::new("source_ordinal", DataType::UInt64, false),
+            Field::new(
+                "vector",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    96,
+                ),
+                false,
+            ),
+        ]));
+        write_batch(
+            &queries_path,
+            RecordBatch::try_new(
+                query_schema,
+                vec![
+                    Arc::new(UInt32Array::from(vec![0])) as ArrayRef,
+                    Arc::new(UInt64Array::from(vec![0])),
+                    Arc::new(vector_array(&[vector(1.0, 0.0)])),
+                ],
+            )
+            .unwrap(),
+        );
+
+        let truth_schema = Arc::new(Schema::new(vec![
+            Field::new("query_ordinal", DataType::UInt32, false),
+            Field::new(
+                "neighbor_source_ordinals",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::UInt64, false)),
+                    10,
+                ),
+                false,
+            ),
+            Field::new(
+                "primary_pages",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::UInt32, false)),
+                    10,
+                ),
+                false,
+            ),
+            Field::new(
+                "replica_pages",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::UInt32, false)),
+                    10,
+                ),
+                false,
+            ),
+            Field::new(
+                "oracle_pages",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::UInt32, false)),
+                    8,
+                ),
+                false,
+            ),
+        ]));
+        write_batch(
+            &truth_path,
+            RecordBatch::try_new(
+                truth_schema,
+                vec![
+                    Arc::new(UInt32Array::from(vec![0])) as ArrayRef,
+                    Arc::new(list_u64_array(&(1..=10).collect::<Vec<_>>(), 10)),
+                    Arc::new(list_array(&[1, 1, 2, 2, 3, 4, 5, 6, 7, 8], 10)),
+                    Arc::new(list_array(&[u32::MAX; 10], 10)),
+                    Arc::new(list_array(&(1..=8).collect::<Vec<_>>(), 8)),
+                ],
+            )
+            .unwrap(),
+        );
+
+        let request = V25ContainmentLocalRequest {
+            construction_rows: local_object("construction-rows-parquet", &construction_path),
+            page_assignments: local_object("page-assignments-parquet", &pages_path),
+            pseudoqueries: local_object("pseudoqueries-parquet", &queries_path),
+            truth: local_object("truth-parquet", &truth_path),
+            ranked_row_limits: vec![10, 32],
+            page_budget: 8,
+            expected_source_rows: 20,
+            expected_page_count: 20,
+            expected_queries: 1,
+        };
+        let output = run_v25_containment_local_request(&request).unwrap();
+        assert_eq!(output.scanned_rows, 20);
+        assert_eq!(output.samples.len(), 2);
+        assert_eq!(output.page_body_reads, 0);
+
+        fs::write(&construction_path, b"changed").unwrap();
+        assert!(run_v25_containment_local_request(&request).is_err());
     }
 }
