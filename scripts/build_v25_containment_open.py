@@ -477,9 +477,9 @@ def build_v25_open_inputs(request: V25OpenBuildRequest) -> V25OpenBuildReceipt:
         cohort_seed=request.cohort_seed,
         pseudoquery_seed=request.pseudoquery_seed,
     )
-    construction_vectors, vectors = _read_selected_construction(request, selection)
+    _construction_vectors, vectors = _read_selected_construction(request, selection)
     primary, replica = _read_selected_pages(
-        request, selection, construction_vectors
+        request, selection, vectors
     )
     query_sources = selection.query_source_ordinals
     truth = _exact_truth(vectors, primary, replica, query_sources)

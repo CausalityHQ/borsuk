@@ -110,6 +110,10 @@ def _write_v24_fixture(
     replicas = [False] * rows
     record_ids = [str(value) for value in range(rows)]
     page_values = construction_values.astype(np.float16).astype(np.float32)
+    if f16_projection_probe:
+        page_values[0, :2] = np.asarray(
+            [1.0 / np.sqrt(1.01), 0.1 / np.sqrt(1.01)], dtype=np.float16
+        ).astype(np.float32)
     if with_replica or replica_vector_drift:
         page_ordinals.append(1)
         replicas.append(True)
@@ -321,7 +325,7 @@ class V25OpenConversionTests(unittest.TestCase):
                 build_v25_open_inputs(_request(construction, changed, root / "output"))
 
     def test_v25_open_conversion_accepts_exact_f16_page_projection(self) -> None:
-        """Requiring raw f32 equality must fail this authentic V24 writer contract."""
+        """V24 pages bind to normalized-then-f16 construction vectors."""
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             construction, page_rows = _write_v24_fixture(
