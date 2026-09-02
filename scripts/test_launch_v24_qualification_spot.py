@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import unittest
@@ -146,6 +147,14 @@ class V24QualificationSpotTests(unittest.TestCase):
         )
         self.assertIn(
             'put_once "$root/stdout.json" pseudoquery-result.json',
+            pseudoquery_script,
+        )
+        self.assertIn(
+            'put_once "$outputs/pseudoquery-pass-receipt.json" pseudoquery-pass-receipt.json',
+            pseudoquery_script,
+        )
+        self.assertIn(
+            'if [[ -f "$outputs/pseudoquery-pass-receipt.json" ]]; then',
             pseudoquery_script,
         )
         holdout_script = base64.b64decode(
@@ -333,6 +342,105 @@ class V24QualificationSpotTests(unittest.TestCase):
             "s3://fixture/v24/results/witness-training/ATTEMPT_COMPLETE.json",
         )
         ec2.terminate_instances.assert_called_once_with(InstanceIds=["i-v24-transient"])
+
+    def test_pseudoquery_terminal_authenticates_pass_receipt_and_result_binding(
+        self,
+    ) -> None:
+        plan = self.plan("pseudoquery-evaluation")
+        result_sha256 = "5" * 64
+        result_bytes = 1024
+        output = plan.output_prefix
+        receipt = subject.canonical_json_bytes(
+            {
+                "benchmark_query_reads": 0,
+                "claim_eligible": False,
+                "distance_backend": "aarch64-neon-fma",
+                "evidence": {
+                    "digest": "6" * 64,
+                    "digest_algorithm": "sha256",
+                    "encoded_bytes": 2048,
+                    "generation": "generation-v24-fixture",
+                    "role": "pseudoquery-evidence",
+                    "uri": output + "pseudoquery-evidence.parquet",
+                },
+                "generation": "generation-v24-fixture",
+                "ordered_inputs": [],
+                "page_body_reads": 0,
+                "passed": True,
+                "pseudoquery_count": 1024,
+                "result": {
+                    "digest": result_sha256,
+                    "digest_algorithm": "sha256",
+                    "encoded_bytes": result_bytes,
+                    "generation": "generation-v24-fixture",
+                    "role": "pseudoquery-result",
+                    "uri": output + "pseudoquery-result.json",
+                },
+                "schema": "borsuk-v24-pseudoquery-pass-receipt-v1",
+                "source_ordinals_sha256": "7" * 64,
+                "split_seed": 0x123456789ABCDEF0,
+                "witness_count": 4096,
+            }
+        )
+        terminal = subject.canonical_v24_terminal_bytes(
+            plan,
+            instance_id="i-v24-pseudoquery",
+            status="complete",
+            result_sha256=result_sha256,
+            result_bytes=result_bytes,
+            pass_receipt_sha256=hashlib.sha256(receipt).hexdigest(),
+            pass_receipt_bytes=len(receipt),
+        )
+
+        def run(receipt_bytes: bytes, terminal_bytes: bytes) -> None:
+            calls: dict[str, int] = {}
+
+            def get_object(**request: object) -> dict[str, object]:
+                key = str(request["Key"])
+                calls[key] = calls.get(key, 0) + 1
+                if key.endswith("ATTEMPT_FAILED.json"):
+                    raise _AwsError("NoSuchKey")
+                if key.endswith("ATTEMPT_COMPLETE.json") and calls[key] == 1:
+                    raise _AwsError("NoSuchKey")
+                if key.endswith("ATTEMPT_COMPLETE.json"):
+                    return {
+                        "Body": io.BytesIO(terminal_bytes),
+                        "ContentLength": len(terminal_bytes),
+                    }
+                if key.endswith("pseudoquery-pass-receipt.json"):
+                    return {
+                        "Body": io.BytesIO(receipt_bytes),
+                        "ContentLength": len(receipt_bytes),
+                    }
+                raise AssertionError(key)
+
+            ec2 = mock.Mock()
+            ec2.run_instances.return_value = {
+                "Instances": [{"InstanceId": "i-v24-pseudoquery"}]
+            }
+            s3 = mock.Mock()
+            s3.get_object.side_effect = get_object
+            uri = subject.run_v24_spot_phase(plan, ec2_client=ec2, s3_client=s3)
+            self.assertTrue(uri.endswith("ATTEMPT_COMPLETE.json"))
+            ec2.terminate_instances.assert_called_once_with(
+                InstanceIds=["i-v24-pseudoquery"]
+            )
+
+        run(receipt, terminal)
+        drifted = json.loads(receipt)
+        drifted["result"]["digest"] = "8" * 64
+        drifted_receipt = subject.canonical_json_bytes(drifted)
+        drifted_terminal = subject.canonical_v24_terminal_bytes(
+            plan,
+            instance_id="i-v24-pseudoquery",
+            status="complete",
+            result_sha256=result_sha256,
+            result_bytes=result_bytes,
+            pass_receipt_sha256=hashlib.sha256(drifted_receipt).hexdigest(),
+            pass_receipt_bytes=len(drifted_receipt),
+        )
+        with self.assertRaisesRegex(ValueError, "pass receipt"):
+            run(drifted_receipt, drifted_terminal)
 
 
 if __name__ == "__main__":

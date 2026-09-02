@@ -80,8 +80,8 @@ def _validate_request(request: ReducedPreflightRequest) -> None:
         or len(request.source_commit) != 40
         or any(character not in _LOWER_HEX for character in request.source_commit)
         or request.source_rows < 257
-        or not 2 <= request.witness_count <= request.source_rows
-        or request.page_count < 8
+        or not 128 <= request.witness_count < request.source_rows
+        or request.page_count < 64
         or request.worker_counts != (1, 4)
     ):
         raise ValueError("V24 reduced preflight authority differs")
@@ -129,6 +129,7 @@ def _run_phase(
                 progress_phase={
                     "train-witnesses": "witness-training",
                     "build-postings": "posting-construction",
+                    "evaluate-pseudoqueries": "pseudoquery-evaluation",
                     "evaluate-development": "development-evaluation",
                 }[phase],
             )
@@ -146,6 +147,26 @@ def _run_phase(
         return result
     finally:
         cleanup_known_files(scratch, ())
+
+
+def _validate_pseudoquery_transition(raw: bytes, pass_receipt: pathlib.Path) -> bool:
+    """Require the one-way PASS receipt to exist exactly when the screen passes."""
+
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("V24 reduced pseudoquery result differs") from error
+    passed = value.get("passed") if type(value) is dict else None  # noqa: E721
+    exists = pass_receipt.is_file() and not pass_receipt.is_symlink()
+    if (
+        raw != canonical_json_bytes(value)
+        or value.get("schema") != "borsuk-v24-pseudoquery-result-v1"
+        or value.get("claim_eligible") is not False
+        or type(passed) is not bool  # noqa: E721
+        or exists != passed
+    ):
+        raise RuntimeError("V24 reduced pseudoquery receipt differs")
+    return passed
 
 
 def _evaluation_evidence(raw: bytes) -> str:
@@ -254,8 +275,27 @@ def _run_once(request: ReducedPreflightRequest, workers: int) -> dict[str, objec
         output_dir=posting_output,
         phase_flag="--build-postings",
     )
+    pseudoquery_manifest = fixture_builder.prepare_pseudoquery_phase(
+        root,
+        training_output,
+        posting_output,
+        pseudoquery_count=min(1_024, request.source_rows - request.witness_count),
+    )
+    pseudoquery_output = root / "pseudoquery-output"
+    pseudoquery_result = _run_phase(
+        binary=request.binary,
+        workers=workers,
+        phase="evaluate-pseudoqueries",
+        manifest=pseudoquery_manifest,
+        input_dir=root / "pseudoquery-input",
+        output_dir=pseudoquery_output,
+        phase_flag="--evaluate-pseudoqueries",
+    )
+    pass_receipt = pseudoquery_output / "pseudoquery-pass-receipt.json"
+    if not _validate_pseudoquery_transition(pseudoquery_result, pass_receipt):
+        raise RuntimeError("V24 reduced pseudoquery screen rejected")
     development_manifest = fixture_builder.prepare_development_phase(
-        root, training_output, posting_output
+        root, training_output, posting_output, pass_receipt
     )
     development_output = root / "development-output"
     development_result = _run_phase(
@@ -272,6 +312,9 @@ def _run_once(request: ReducedPreflightRequest, workers: int) -> dict[str, objec
         "neighbors": root / "neighbors.parquet",
         "page_rows": root / "page-rows.parquet",
         "posting_result": posting_output / "result.json",
+        "pseudoquery_evidence": pseudoquery_output / "pseudoquery-evidence.parquet",
+        "pseudoquery_pass_receipt": pass_receipt,
+        "pseudoquery_result": pseudoquery_output / "result.json",
         "queries": root / "queries.parquet",
         "training_result": training_output / "result.json",
         "witness_graph": training_output / "witness-graph.arrow",
@@ -287,6 +330,7 @@ def _run_once(request: ReducedPreflightRequest, workers: int) -> dict[str, objec
         "development_result_sha256": hashlib.sha256(development_result).hexdigest(),
         "evaluation_evidence_sha256": _evaluation_evidence(development_result),
         "posting_result_sha256": hashlib.sha256(posting_result).hexdigest(),
+        "pseudoquery_result_sha256": hashlib.sha256(pseudoquery_result).hexdigest(),
         "training_result_sha256": hashlib.sha256(training_result).hexdigest(),
         "workers": workers,
     }

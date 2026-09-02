@@ -8,6 +8,50 @@ from scripts import run_v24_reduced_preflight as subject
 
 
 class V24ReducedPreflightTests(unittest.TestCase):
+    def test_reduced_preflight_requires_screen_capable_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            binary = root / "v24_witness_page_router"
+            binary.write_bytes(b"binary")
+            scratch = root / "scratch"
+            scratch.mkdir()
+            request = subject.ReducedPreflightRequest(
+                binary=binary,
+                binary_sha256=subject.sha256_file(binary),
+                binary_bytes=binary.stat().st_size,
+                root=scratch,
+                source_commit="1" * 40,
+                source_rows=257,
+                witness_count=32,
+                page_count=16,
+            )
+            with self.assertRaisesRegex(ValueError, "authority"):
+                subject._validate_request(request)
+
+    def test_reduced_preflight_reject_cannot_publish_or_unlock_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = pathlib.Path(temporary) / "pseudoquery-pass-receipt.json"
+            receipt.write_bytes(b"forged\n")
+            rejected = subject.canonical_json_bytes(
+                {
+                    "claim_eligible": False,
+                    "passed": False,
+                    "schema": "borsuk-v24-pseudoquery-result-v1",
+                }
+            )
+            with self.assertRaisesRegex(RuntimeError, "receipt differs"):
+                subject._validate_pseudoquery_transition(rejected, receipt)
+            receipt.unlink()
+            accepted = subject.canonical_json_bytes(
+                {
+                    "claim_eligible": False,
+                    "passed": True,
+                    "schema": "borsuk-v24-pseudoquery-result-v1",
+                }
+            )
+            with self.assertRaisesRegex(RuntimeError, "receipt differs"):
+                subject._validate_pseudoquery_transition(accepted, receipt)
+
     def test_two_process_worker_counts_emit_identical_authenticated_receipt(
         self,
     ) -> None:
@@ -25,8 +69,8 @@ class V24ReducedPreflightTests(unittest.TestCase):
                     root=root,
                     source_commit="1" * 40,
                     source_rows=257,
-                    witness_count=32,
-                    page_count=16,
+                    witness_count=128,
+                    page_count=64,
                     worker_counts=(1, 4),
                 )
             )
@@ -36,8 +80,8 @@ class V24ReducedPreflightTests(unittest.TestCase):
             self.assertFalse(value["claim_eligible"])
             self.assertEqual(value["worker_counts"], [1, 4])
             self.assertEqual(value["source_rows"], 257)
-            self.assertEqual(value["witness_count"], 32)
-            self.assertEqual(value["page_count"], 16)
+            self.assertEqual(value["witness_count"], 128)
+            self.assertEqual(value["page_count"], 64)
             self.assertEqual(value["serving_bytes"], 1_644_167_168)
             self.assertEqual(
                 value["runs"][0]["artifact_sha256"], value["runs"][1]["artifact_sha256"]

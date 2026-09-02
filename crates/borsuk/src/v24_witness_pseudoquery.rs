@@ -33,6 +33,7 @@ use crate::{
 };
 
 const V24_PSEUDOQUERY_RESULT_SCHEMA: &str = "borsuk-v24-pseudoquery-result-v1";
+const V24_PSEUDOQUERY_PASS_RECEIPT_SCHEMA: &str = "borsuk-v24-pseudoquery-pass-receipt-v1";
 const V24_PSEUDOQUERY_AGGREGATE_RECALL_GATE_PPM: u64 = 975_000;
 const V24_PSEUDOQUERY_ORACLE_ATTAINMENT_GATE_PPM: u64 = 995_000;
 
@@ -385,6 +386,37 @@ pub(crate) struct V24PseudoqueryResult {
     pub(crate) passed: bool,
     pub(crate) benchmark_query_reads: u64,
     pub(crate) page_body_reads: u64,
+}
+
+/// Digest-only one-way authority that allows burned development to start.
+/// Per-cell pseudoquery metrics deliberately cannot cross this boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct V24PseudoqueryPassReceipt {
+    pub(crate) schema: String,
+    pub(crate) claim_eligible: bool,
+    pub(crate) generation: String,
+    pub(crate) split_seed: u64,
+    pub(crate) witness_count: u32,
+    pub(crate) pseudoquery_count: u32,
+    pub(crate) source_ordinals_sha256: String,
+    pub(crate) distance_backend: V24DistanceBackend,
+    pub(crate) ordered_inputs: Vec<V24ObjectIdentity>,
+    pub(crate) evidence: V24ObjectIdentity,
+    pub(crate) result: V24ObjectIdentity,
+    pub(crate) passed: bool,
+    pub(crate) benchmark_query_reads: u64,
+    pub(crate) page_body_reads: u64,
+}
+
+pub(crate) struct V24PseudoqueryPassAuthority<'a> {
+    pub(crate) graph: &'a V24ObjectIdentity,
+    pub(crate) postings: &'a V24ObjectIdentity,
+    pub(crate) generation: &'a str,
+    pub(crate) witness_count: u64,
+    pub(crate) distance_backend: V24DistanceBackend,
+    pub(crate) split_seed: u64,
+    pub(crate) pseudoquery_count: u32,
 }
 
 #[derive(Debug, Default)]
@@ -947,6 +979,156 @@ pub(crate) fn bind_v24_pseudoquery_result_authority(
     Ok(result)
 }
 
+pub(crate) fn bind_v24_pseudoquery_pass_receipt_authority(
+    result: &V24PseudoqueryResult,
+    result_identity: V24ObjectIdentity,
+) -> Result<V24PseudoqueryPassReceipt> {
+    let evidence = result
+        .evidence
+        .as_ref()
+        .ok_or_else(|| invalid("V24 pseudoquery pass receipt evidence is missing"))?;
+    let generation = evidence.generation.clone();
+    let source_digest_is_valid = result.source_ordinals_sha256.len() == 64
+        && result
+            .source_ordinals_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if !result.passed
+        || result.claim_eligible
+        || result.selected_cell.is_some()
+        || result.benchmark_query_reads != 0
+        || result.page_body_reads != 0
+        || result.ordered_inputs.len() != 5
+        || !source_digest_is_valid
+        || result_identity.role != "pseudoquery-result"
+        || result_identity.generation != generation
+    {
+        return Err(invalid("V24 pseudoquery pass receipt authority differs"));
+    }
+    validate_v24_identity(&result_identity, &result_identity)?;
+    let mut uris = BTreeSet::new();
+    for identity in result
+        .ordered_inputs
+        .iter()
+        .chain([evidence, &result_identity])
+    {
+        validate_v24_identity(identity, identity)?;
+        if identity.generation != generation || !uris.insert(identity.uri.as_str()) {
+            return Err(invalid("V24 pseudoquery pass receipt identities differ"));
+        }
+    }
+    Ok(V24PseudoqueryPassReceipt {
+        schema: V24_PSEUDOQUERY_PASS_RECEIPT_SCHEMA.to_owned(),
+        claim_eligible: false,
+        generation,
+        split_seed: result.split_seed,
+        witness_count: result.witness_count,
+        pseudoquery_count: result.pseudoquery_count,
+        source_ordinals_sha256: result.source_ordinals_sha256.clone(),
+        distance_backend: result.distance_backend,
+        ordered_inputs: result.ordered_inputs.clone(),
+        evidence: evidence.clone(),
+        result: result_identity,
+        passed: true,
+        benchmark_query_reads: 0,
+        page_body_reads: 0,
+    })
+}
+
+pub(crate) fn canonical_v24_pseudoquery_pass_receipt_bytes(
+    receipt: &V24PseudoqueryPassReceipt,
+    result: &V24PseudoqueryResult,
+    expected_result: &V24ObjectIdentity,
+) -> Result<Vec<u8>> {
+    let recomputed = bind_v24_pseudoquery_pass_receipt_authority(result, expected_result.clone())?;
+    if receipt != &recomputed {
+        return Err(invalid("V24 pseudoquery pass receipt evidence differs"));
+    }
+    fn canonical(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Array(values) => {
+                serde_json::Value::Array(values.into_iter().map(canonical).collect())
+            }
+            serde_json::Value::Object(values) => serde_json::Value::Object(
+                values
+                    .into_iter()
+                    .map(|(key, value)| (key, canonical(value)))
+                    .collect(),
+            ),
+            scalar => scalar,
+        }
+    }
+    let value = serde_json::to_value(receipt).map_err(|error| {
+        invalid(&format!(
+            "V24 pseudoquery pass receipt serialization failed: {error}"
+        ))
+    })?;
+    let mut bytes = serde_json::to_vec(&canonical(value)).map_err(|error| {
+        invalid(&format!(
+            "V24 pseudoquery pass receipt serialization failed: {error}"
+        ))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+pub(crate) fn validate_v24_pseudoquery_pass_receipt(
+    receipt: &V24PseudoqueryPassReceipt,
+    expected: V24PseudoqueryPassAuthority<'_>,
+) -> Result<()> {
+    const INPUT_ROLES: [&str; 5] = [
+        "posting-result",
+        "witness-graph",
+        "witness-postings",
+        "construction-rows-parquet",
+        "page-rows-parquet",
+    ];
+    let source_digest_is_valid = receipt.source_ordinals_sha256.len() == 64
+        && receipt
+            .source_ordinals_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if receipt.schema != V24_PSEUDOQUERY_PASS_RECEIPT_SCHEMA
+        || receipt.claim_eligible
+        || receipt.generation != expected.generation
+        || u32::try_from(expected.witness_count).ok() != Some(receipt.witness_count)
+        || receipt.pseudoquery_count != expected.pseudoquery_count
+        || receipt.split_seed != expected.split_seed
+        || !source_digest_is_valid
+        || receipt.distance_backend != expected.distance_backend
+        || receipt.ordered_inputs.len() != INPUT_ROLES.len()
+        || receipt.evidence.role != "pseudoquery-evidence"
+        || receipt.result.role != "pseudoquery-result"
+        || !receipt.passed
+        || receipt.benchmark_query_reads != 0
+        || receipt.page_body_reads != 0
+    {
+        return Err(invalid("V24 pseudoquery pass receipt authority differs"));
+    }
+    let mut uris = BTreeSet::new();
+    for (identity, role) in receipt.ordered_inputs.iter().zip(INPUT_ROLES) {
+        validate_v24_identity(identity, identity)?;
+        if identity.role != role
+            || identity.generation != expected.generation
+            || !uris.insert(identity.uri.as_str())
+        {
+            return Err(invalid("V24 pseudoquery pass receipt inputs differ"));
+        }
+    }
+    for identity in [&receipt.evidence, &receipt.result] {
+        validate_v24_identity(identity, identity)?;
+        if identity.generation != expected.generation || !uris.insert(identity.uri.as_str()) {
+            return Err(invalid("V24 pseudoquery pass receipt outputs differ"));
+        }
+    }
+    if receipt.ordered_inputs[1] != *expected.graph
+        || receipt.ordered_inputs[2] != *expected.postings
+    {
+        return Err(invalid("V24 pseudoquery pass receipt router differs"));
+    }
+    Ok(())
+}
+
 fn pseudoquery_evidence_schema(generation: &str, source_ordinals_sha256: &str) -> Schema {
     let list = || DataType::List(Arc::new(Field::new("element", DataType::UInt32, false)));
     Schema::new_with_metadata(
@@ -1422,7 +1604,8 @@ mod tests {
     use super::{
         V24PseudoqueryEvidenceOutput, V24PseudoqueryEvidenceRow, V24PseudoqueryPageRow,
         V24PseudoqueryResult, V24PseudoquerySplit, bind_v24_pseudoquery_pages,
-        bind_v24_pseudoquery_result_authority, canonical_v24_pseudoquery_result_bytes,
+        bind_v24_pseudoquery_pass_receipt_authority, bind_v24_pseudoquery_result_authority,
+        canonical_v24_pseudoquery_pass_receipt_bytes, canonical_v24_pseudoquery_result_bytes,
         evaluate_v24_pseudoquery_result, scan_v24_pseudoquery_truth, select_v24_pseudoqueries,
         write_v24_pseudoquery_evidence_parquet,
     };
@@ -1932,6 +2115,59 @@ mod tests {
                 64,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn v24_pseudoquery_pass_receipt_binds_pass_and_hides_cell_metrics() {
+        let (split, page_truth, evidence) = screen_rows();
+        let (inputs, evidence_identity) = screen_identities();
+        let result = bind_v24_pseudoquery_result_authority(
+            evaluate_v24_pseudoquery_result(
+                &split,
+                &page_truth,
+                &evidence,
+                64,
+                v24_scientific_distance_backend().unwrap(),
+            )
+            .unwrap(),
+            inputs,
+            evidence_identity,
+        )
+        .unwrap();
+        let result_identity = identity("pseudoquery-result", "19");
+        let receipt =
+            bind_v24_pseudoquery_pass_receipt_authority(&result, result_identity.clone()).unwrap();
+        let bytes =
+            canonical_v24_pseudoquery_pass_receipt_bytes(&receipt, &result, &result_identity)
+                .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema"], "borsuk-v24-pseudoquery-pass-receipt-v1");
+        assert_eq!(value["passed"], true);
+        assert!(value.get("cells").is_none());
+        assert!(
+            !String::from_utf8(bytes.clone())
+                .unwrap()
+                .contains("aggregate_recall")
+        );
+        assert_eq!(bytes.last(), Some(&b'\n'));
+
+        let mut failed = result.clone();
+        failed.passed = false;
+        assert!(
+            bind_v24_pseudoquery_pass_receipt_authority(&failed, result_identity.clone()).is_err()
+        );
+        let mut drifted_result = result_identity.clone();
+        drifted_result.digest = "20".repeat(32);
+        assert!(
+            canonical_v24_pseudoquery_pass_receipt_bytes(&receipt, &result, &drifted_result,)
+                .is_err()
+        );
+        let mut leaked = receipt;
+        leaked.passed = false;
+        assert!(
+            canonical_v24_pseudoquery_pass_receipt_bytes(&leaked, &result, &result_identity,)
+                .is_err()
         );
     }
 

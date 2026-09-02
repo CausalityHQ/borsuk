@@ -39,11 +39,13 @@ use crate::{
         v24_posting_total_work_units, write_v24_witness_postings,
     },
     v24_witness_pseudoquery::{
-        V24PseudoqueryEvidenceOutput, V24PseudoqueryPageRow,
-        bind_v24_pseudoquery_pages_with_progress, bind_v24_pseudoquery_result_authority,
-        build_v24_pseudoquery_evidence_with_progress, canonical_v24_pseudoquery_result_bytes,
-        evaluate_v24_pseudoquery_result_with_progress, scan_v24_pseudoquery_truth_with_progress,
-        select_v24_pseudoqueries_with_progress, write_v24_pseudoquery_evidence_parquet,
+        V24PseudoqueryEvidenceOutput, V24PseudoqueryPageRow, V24PseudoqueryPassAuthority,
+        V24PseudoqueryPassReceipt, bind_v24_pseudoquery_pages_with_progress,
+        bind_v24_pseudoquery_pass_receipt_authority, bind_v24_pseudoquery_result_authority,
+        build_v24_pseudoquery_evidence_with_progress, canonical_v24_pseudoquery_pass_receipt_bytes,
+        canonical_v24_pseudoquery_result_bytes, evaluate_v24_pseudoquery_result_with_progress,
+        scan_v24_pseudoquery_truth_with_progress, select_v24_pseudoqueries_with_progress,
+        validate_v24_pseudoquery_pass_receipt, write_v24_pseudoquery_evidence_parquet,
     },
 };
 
@@ -59,6 +61,7 @@ const PAGE_ROWS_FILE: &str = "page-rows.parquet";
 const POSTINGS_FILE: &str = "witness-postings.arrow";
 const POSTING_RESULT_FILE: &str = "posting-result.json";
 const PSEUDOQUERY_EVIDENCE_FILE: &str = "pseudoquery-evidence.parquet";
+const PSEUDOQUERY_PASS_RECEIPT_FILE: &str = "pseudoquery-pass-receipt.json";
 const POSTING_SCRATCH_DIR: &str = ".posting-scratch";
 const QUERIES_FILE: &str = "queries.parquet";
 const NEIGHBORS_FILE: &str = "neighbors.parquet";
@@ -151,6 +154,23 @@ struct V24PseudoqueryManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct V24DevelopmentManifest {
+    schema: String,
+    claim_eligible: bool,
+    generation: String,
+    phase: String,
+    page_count: u32,
+    query_count: u32,
+    witness_count: u64,
+    pseudoquery_count: u32,
+    pseudoquery_split_seed: u64,
+    serving_bytes: u64,
+    inputs: Vec<V24ObjectIdentity>,
+    output_uris: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V24HoldoutManifest {
     schema: String,
     claim_eligible: bool,
     generation: String,
@@ -1558,9 +1578,11 @@ fn run_development_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         || manifest.page_count < 8
         || manifest.query_count != 32
         || manifest.witness_count < 32
+        || manifest.pseudoquery_count == 0
         || manifest.serving_bytes != V24_SERVING_BYTES
         || roles
             != [
+                "pseudoquery-pass-receipt",
                 "witness-graph",
                 "witness-postings",
                 "query-parquet",
@@ -1592,6 +1614,7 @@ fn run_development_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
     if names
         != [
             NEIGHBORS_FILE,
+            PSEUDOQUERY_PASS_RECEIPT_FILE,
             QUERIES_FILE,
             WITNESS_GRAPH_FILE,
             POSTINGS_FILE,
@@ -1607,6 +1630,7 @@ fn run_development_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
             .unwrap()
     };
     for (role, name) in [
+        ("pseudoquery-pass-receipt", PSEUDOQUERY_PASS_RECEIPT_FILE),
         ("witness-graph", WITNESS_GRAPH_FILE),
         ("witness-postings", POSTINGS_FILE),
         ("query-parquet", QUERIES_FILE),
@@ -1631,6 +1655,28 @@ fn run_development_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         &graph_bytes,
         registered("witness-graph"),
         expected_witnesses,
+    )?;
+    let pass_receipt_path = request.input_dir.join(PSEUDOQUERY_PASS_RECEIPT_FILE);
+    let pass_receipt_bytes = fs::read(&pass_receipt_path).map_err(|source| BorsukError::Io {
+        path: pass_receipt_path,
+        source,
+    })?;
+    let pass_receipt: V24PseudoqueryPassReceipt = serde_json::from_slice(&pass_receipt_bytes)
+        .map_err(|error| invalid(&format!("V24 pseudoquery pass receipt differs: {error}")))?;
+    if canonical_json_bytes(&pass_receipt)? != pass_receipt_bytes {
+        return Err(invalid("V24 pseudoquery pass receipt bytes differ"));
+    }
+    validate_v24_pseudoquery_pass_receipt(
+        &pass_receipt,
+        V24PseudoqueryPassAuthority {
+            graph: registered("witness-graph"),
+            postings: registered("witness-postings"),
+            generation: &manifest.generation,
+            witness_count: manifest.witness_count,
+            distance_backend: graph.distance_backend(),
+            split_seed: manifest.pseudoquery_split_seed,
+            pseudoquery_count: manifest.pseudoquery_count,
+        },
     )?;
     let posting_path = request.input_dir.join(POSTINGS_FILE);
     let posting_bytes = fs::read(&posting_path).map_err(|source| BorsukError::Io {
@@ -1731,7 +1777,7 @@ fn run_holdout_binding(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         path: request.manifest.clone(),
         source,
     })?;
-    let manifest: V24DevelopmentManifest = serde_json::from_slice(&manifest_bytes)
+    let manifest: V24HoldoutManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| invalid(&format!("V24 holdout binding manifest differs: {error}")))?;
     let roles = manifest
         .inputs
@@ -1855,7 +1901,7 @@ fn run_holdout_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         path: request.manifest.clone(),
         source,
     })?;
-    let manifest: V24DevelopmentManifest = serde_json::from_slice(&manifest_bytes)
+    let manifest: V24HoldoutManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| invalid(&format!("V24 holdout evaluation manifest differs: {error}")))?;
     let roles = manifest
         .inputs
@@ -2083,18 +2129,26 @@ fn run_pseudoquery_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
         || manifest.physical_source_rows < manifest.source_row_count
         || manifest.physical_source_rows > manifest.source_row_count.saturating_mul(2)
         || roles != INPUTS.map(|(role, _)| role)
-        || manifest.output_uris.len() != 2
+        || manifest.output_uris.len() != 3
         || manifest
             .output_uris
             .keys()
             .map(String::as_str)
             .collect::<Vec<_>>()
-            != ["pseudoquery-evidence", "pseudoquery-result"]
+            != [
+                "pseudoquery-evidence",
+                "pseudoquery-pass-receipt",
+                "pseudoquery-result",
+            ]
         || manifest
             .output_uris
             .values()
             .any(|uri| !uri.starts_with("s3://") || uri.ends_with('/') || uri.contains("/../"))
         || manifest.output_uris["pseudoquery-evidence"]
+            == manifest.output_uris["pseudoquery-result"]
+        || manifest.output_uris["pseudoquery-evidence"]
+            == manifest.output_uris["pseudoquery-pass-receipt"]
+        || manifest.output_uris["pseudoquery-pass-receipt"]
             == manifest.output_uris["pseudoquery-result"]
     {
         return Err(invalid("V24 pseudoquery manifest authority differs"));
@@ -2303,6 +2357,23 @@ fn run_pseudoquery_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
             usize::try_from(manifest.page_count).unwrap(),
         )?;
         write_owned_file(&request.output_dir, RESULT_FILE, &result_bytes)?;
+        if result.passed {
+            let result_identity = sha256_identity(
+                "pseudoquery-result",
+                &manifest.output_uris["pseudoquery-result"],
+                &manifest.generation,
+                &result_bytes,
+            );
+            let receipt =
+                bind_v24_pseudoquery_pass_receipt_authority(&result, result_identity.clone())?;
+            let receipt_bytes =
+                canonical_v24_pseudoquery_pass_receipt_bytes(&receipt, &result, &result_identity)?;
+            write_owned_file(
+                &request.output_dir,
+                PSEUDOQUERY_PASS_RECEIPT_FILE,
+                &receipt_bytes,
+            )?;
+        }
         Ok(result_bytes)
     })();
     let result_bytes = match finish {
@@ -2311,6 +2382,12 @@ fn run_pseudoquery_evaluation(request: &V24LocalRunRequest) -> Result<Vec<u8>> {
             let _ = fs::remove_file(&evidence_path);
             let _ = fs::remove_file(request.output_dir.join(RESULT_FILE));
             let _ = fs::remove_file(request.output_dir.join(format!(".{RESULT_FILE}.tmp")));
+            let _ = fs::remove_file(request.output_dir.join(PSEUDOQUERY_PASS_RECEIPT_FILE));
+            let _ = fs::remove_file(
+                request
+                    .output_dir
+                    .join(format!(".{PSEUDOQUERY_PASS_RECEIPT_FILE}.tmp")),
+            );
             return Err(error);
         }
     };
@@ -2689,12 +2766,69 @@ mod tests {
             },
             "page_count": 16,
             "phase": "development-evaluation",
+            "pseudoquery_count": 8,
+            "pseudoquery_split_seed": 1311768467463790320_u64,
             "query_count": 32,
             "schema": "borsuk-v24-local-manifest-v1",
             "serving_bytes": 1_644_167_168_u64,
             "witness_count": 32
         });
         let mut bytes = serde_json::to_vec(&manifest).unwrap();
+        bytes.push(b'\n');
+        fs::write(path, bytes).unwrap();
+    }
+
+    fn write_pseudoquery_pass_receipt(
+        path: &std::path::Path,
+        ordered_inputs: &[V24ObjectIdentity],
+        witness_count: u32,
+    ) {
+        assert_eq!(
+            ordered_inputs
+                .iter()
+                .map(|identity| identity.role.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "posting-result",
+                "witness-graph",
+                "witness-postings",
+                "construction-rows-parquet",
+                "page-rows-parquet",
+            ]
+        );
+        let object = |role: &str, uri: &str, digest_byte: &str| V24ObjectIdentity {
+            role: role.to_owned(),
+            uri: uri.to_owned(),
+            digest_algorithm: "sha256".to_owned(),
+            digest: digest_byte.repeat(32),
+            encoded_bytes: 17,
+            generation: "generation-v24-training-fixture".to_owned(),
+        };
+        let receipt = json!({
+            "benchmark_query_reads": 0,
+            "claim_eligible": false,
+            "distance_backend": v24_scientific_distance_backend().unwrap(),
+            "evidence": object(
+                "pseudoquery-evidence",
+                "s3://borsuk-v24/pseudoquery-evidence.parquet",
+                "71",
+            ),
+            "generation": "generation-v24-training-fixture",
+            "ordered_inputs": ordered_inputs,
+            "page_body_reads": 0,
+            "passed": true,
+            "pseudoquery_count": 8,
+            "result": object(
+                "pseudoquery-result",
+                "s3://borsuk-v24/pseudoquery-result.json",
+                "72",
+            ),
+            "schema": "borsuk-v24-pseudoquery-pass-receipt-v1",
+            "source_ordinals_sha256": "73".repeat(32),
+            "split_seed": 1311768467463790320_u64,
+            "witness_count": witness_count,
+        });
+        let mut bytes = serde_json::to_vec(&receipt).unwrap();
         bytes.push(b'\n');
         fs::write(path, bytes).unwrap();
     }
@@ -2706,6 +2840,7 @@ mod tests {
             "inputs": inputs,
             "output_uris": {
                 "pseudoquery-evidence": "s3://borsuk-v24/pseudoquery-evidence.parquet",
+                "pseudoquery-pass-receipt": "s3://borsuk-v24/pseudoquery-pass-receipt.json",
                 "pseudoquery-result": "s3://borsuk-v24/pseudoquery-result.json"
             },
             "page_count": 64,
@@ -3171,6 +3306,7 @@ mod tests {
             serde_json::from_slice(&result_bytes).unwrap();
         assert_eq!(result.ordered_inputs, inputs);
         assert_eq!(result.selected_cell, None);
+        assert!(result.passed);
         assert_eq!(result.benchmark_query_reads, 0);
         assert_eq!(result.page_body_reads, 0);
         assert_eq!(
@@ -3185,6 +3321,17 @@ mod tests {
         assert_eq!(
             fs::read(pseudoquery_output.join("result.json")).unwrap(),
             result_bytes
+        );
+        let receipt_bytes =
+            fs::read(pseudoquery_output.join("pseudoquery-pass-receipt.json")).unwrap();
+        let receipt: serde_json::Value = serde_json::from_slice(&receipt_bytes).unwrap();
+        assert_eq!(receipt["schema"], "borsuk-v24-pseudoquery-pass-receipt-v1");
+        assert_eq!(receipt["passed"], true);
+        assert!(receipt.get("cells").is_none());
+        assert!(
+            !String::from_utf8(receipt_bytes)
+                .unwrap()
+                .contains("aggregate_recall")
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -3273,13 +3420,17 @@ mod tests {
             &construction_digest,
             &parent_result_sha256,
         );
-        run_v24_local_request(V24LocalRunRequest {
+        let posting_result_bytes = run_v24_local_request(V24LocalRunRequest {
             manifest: posting_manifest,
             input_dir: posting_input.clone(),
             output_dir: posting_output.clone(),
             phase: V24LocalPhase::BuildPostings,
         })
         .unwrap();
+        assert_eq!(
+            fs::read(posting_output.join("result.json")).unwrap(),
+            posting_result_bytes
+        );
 
         fs::copy(
             posting_input.join("witness-graph.arrow"),
@@ -3295,7 +3446,41 @@ mod tests {
         let truth = development_input.join("neighbors.parquet");
         write_development_queries(&queries);
         write_development_truth(&truth);
+        let screen_inputs = vec![
+            file_identity(
+                &posting_output.join("result.json"),
+                "posting-result",
+                "s3://borsuk-v24/posting-result.json",
+            ),
+            file_identity(
+                &development_input.join("witness-graph.arrow"),
+                "witness-graph",
+                "s3://borsuk-v24/witness-graph.arrow",
+            ),
+            file_identity(
+                &development_input.join("witness-postings.arrow"),
+                "witness-postings",
+                "s3://borsuk-v24/witness-postings.arrow",
+            ),
+            file_identity(
+                &construction,
+                "construction-rows-parquet",
+                "s3://borsuk-v24/construction-rows.parquet",
+            ),
+            file_identity(
+                &page_rows,
+                "page-rows-parquet",
+                "s3://borsuk-v24/page-rows.parquet",
+            ),
+        ];
+        let pass_receipt = development_input.join("pseudoquery-pass-receipt.json");
+        write_pseudoquery_pass_receipt(&pass_receipt, &screen_inputs, 32);
         let inputs = vec![
+            file_identity(
+                &pass_receipt,
+                "pseudoquery-pass-receipt",
+                "s3://borsuk-v24/pseudoquery-pass-receipt.json",
+            ),
             file_identity(
                 &development_input.join("witness-graph.arrow"),
                 "witness-graph",
@@ -3315,6 +3500,74 @@ mod tests {
         ];
         let development_manifest = root.join("development-manifest.json");
         write_development_manifest(&development_manifest, &inputs);
+        fs::rename(
+            &pass_receipt,
+            development_input.join("pseudoquery-pass-receipt.missing"),
+        )
+        .unwrap();
+        let missing_receipt_output = root.join("development-missing-receipt-output");
+        fs::create_dir(&missing_receipt_output).unwrap();
+        let error = run_v24_local_request(V24LocalRunRequest {
+            manifest: development_manifest.clone(),
+            input_dir: development_input.clone(),
+            output_dir: missing_receipt_output,
+            phase: V24LocalPhase::EvaluateDevelopment,
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("input inventory"));
+        fs::rename(
+            development_input.join("pseudoquery-pass-receipt.missing"),
+            &pass_receipt,
+        )
+        .unwrap();
+        let valid_receipt_bytes = fs::read(&pass_receipt).unwrap();
+        let mut drifted_receipt: serde_json::Value =
+            serde_json::from_slice(&valid_receipt_bytes).unwrap();
+        drifted_receipt["ordered_inputs"][1]["digest"] = json!("74".repeat(32));
+        let mut drifted_bytes = serde_json::to_vec(&drifted_receipt).unwrap();
+        drifted_bytes.push(b'\n');
+        fs::write(&pass_receipt, drifted_bytes).unwrap();
+        let mut drifted_inputs = inputs.clone();
+        drifted_inputs[0] = file_identity(
+            &pass_receipt,
+            "pseudoquery-pass-receipt",
+            "s3://borsuk-v24/pseudoquery-pass-receipt.json",
+        );
+        let drifted_manifest = root.join("development-drifted-manifest.json");
+        write_development_manifest(&drifted_manifest, &drifted_inputs);
+        let drifted_output = root.join("development-drifted-output");
+        fs::create_dir(&drifted_output).unwrap();
+        let error = run_v24_local_request(V24LocalRunRequest {
+            manifest: drifted_manifest,
+            input_dir: development_input.clone(),
+            output_dir: drifted_output,
+            phase: V24LocalPhase::EvaluateDevelopment,
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("pass receipt"));
+        fs::write(&pass_receipt, valid_receipt_bytes).unwrap();
+        for (field, value) in [
+            ("pseudoquery_count", json!(1)),
+            ("pseudoquery_split_seed", json!(7)),
+        ] {
+            let manifest_bytes = fs::read(&development_manifest).unwrap();
+            let mut manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
+            manifest[field] = value;
+            let mut bytes = serde_json::to_vec(&manifest).unwrap();
+            bytes.push(b'\n');
+            let drifted_manifest = root.join(format!("development-{field}-manifest.json"));
+            fs::write(&drifted_manifest, bytes).unwrap();
+            let drifted_output = root.join(format!("development-{field}-output"));
+            fs::create_dir(&drifted_output).unwrap();
+            let error = run_v24_local_request(V24LocalRunRequest {
+                manifest: drifted_manifest,
+                input_dir: development_input.clone(),
+                output_dir: drifted_output,
+                phase: V24LocalPhase::EvaluateDevelopment,
+            })
+            .unwrap_err();
+            assert!(error.to_string().contains("pass receipt"));
+        }
         let result_bytes = run_v24_local_request(V24LocalRunRequest {
             manifest: development_manifest,
             input_dir: development_input.clone(),

@@ -42,6 +42,7 @@ _PHASE_ROLES = {
         "page-rows-parquet",
     ),
     "development-evaluation": (
+        "pseudoquery-pass-receipt",
         "witness-graph",
         "witness-postings",
         "query-parquet",
@@ -107,6 +108,9 @@ def _registered_role(role: str) -> bool:
         "development-result",
         "holdout-truth",
         "holdout-result",
+        "pseudoquery-evidence",
+        "pseudoquery-pass-receipt",
+        "pseudoquery-result",
     }
     if role in fixed:
         return True
@@ -143,6 +147,7 @@ def _relative_path(role: str) -> str:
         "development-result": "development-result.json",
         "holdout-truth": "holdout-binding.json",
         "holdout-result": "holdout-result.json",
+        "pseudoquery-pass-receipt": "pseudoquery-pass-receipt.json",
     }
     if role in fixed:
         return fixed[role]

@@ -232,6 +232,7 @@ class V24RunnerTests(unittest.TestCase):
                     "evaluate-development",
                     "development-evaluation",
                     (
+                        "pseudoquery-pass-receipt",
                         "witness-graph",
                         "witness-postings",
                         "query-parquet",

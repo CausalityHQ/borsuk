@@ -354,21 +354,32 @@ def prepare_development_phase(
     root: pathlib.Path,
     training_output: pathlib.Path,
     posting_output: pathlib.Path,
+    pass_receipt: pathlib.Path,
 ) -> pathlib.Path:
     """Bind exact reduced graph/postings/query/truth inputs for development."""
 
     _, training = _read_canonical_object(training_output / "result.json")
+    _, pseudoquery = _read_canonical_object(root / "pseudoquery-manifest.json")
     generation = str(training["generation"])
+    if (
+        pseudoquery.get("phase") != "pseudoquery-evaluation"
+        or pseudoquery.get("generation") != generation
+        or pseudoquery.get("witness_count") != training["witness_count"]
+        or type(pseudoquery.get("pseudoquery_count")) is not int  # noqa: E721
+        or type(pseudoquery.get("seed")) is not int  # noqa: E721
+    ):
+        raise ValueError("V24 reduced pseudoquery manifest authority differs")
     graph = training_output / "witness-graph.arrow"
     postings = posting_output / "witness-postings.arrow"
     queries = root / "queries.parquet"
     neighbors = root / "neighbors.parquet"
-    for path in (graph, postings, queries, neighbors):
+    for path in (pass_receipt, graph, postings, queries, neighbors):
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
             raise ValueError("V24 reduced development input differs")
     input_dir = root / "development-input"
     input_dir.mkdir(mode=0o700)
     for source, name in (
+        (pass_receipt, "pseudoquery-pass-receipt.json"),
         (graph, "witness-graph.arrow"),
         (postings, "witness-postings.arrow"),
         (queries, "queries.parquet"),
@@ -376,6 +387,11 @@ def prepare_development_phase(
     ):
         _copy_exact(source, input_dir / name)
     inputs = [
+        _identity(
+            input_dir / "pseudoquery-pass-receipt.json",
+            "pseudoquery-pass-receipt",
+            generation,
+        ),
         _identity(input_dir / "witness-graph.arrow", "witness-graph", generation),
         _identity(input_dir / "witness-postings.arrow", "witness-postings", generation),
         _identity(input_dir / "queries.parquet", "query-parquet", generation),
@@ -401,11 +417,78 @@ def prepare_development_phase(
         },
         "page_count": page_count,
         "phase": "development-evaluation",
+        "pseudoquery_count": pseudoquery["pseudoquery_count"],
+        "pseudoquery_split_seed": pseudoquery["seed"],
         "query_count": query_count,
         "schema": "borsuk-v24-local-manifest-v1",
         "serving_bytes": 1_644_167_168,
         "witness_count": training["witness_count"],
     }
     path = root / "development-manifest.json"
+    path.write_bytes(_canonical_json_bytes(manifest))
+    return path
+
+
+def prepare_pseudoquery_phase(
+    root: pathlib.Path,
+    training_output: pathlib.Path,
+    posting_output: pathlib.Path,
+    *,
+    pseudoquery_count: int,
+) -> pathlib.Path:
+    """Bind the real reduced corpus/router inputs for the unbiased screen."""
+
+    _, training = _read_canonical_object(training_output / "result.json")
+    generation = str(training["generation"])
+    source_row_count = int(training["source_row_count"])
+    witness_count = int(training["witness_count"])
+    if not 0 < pseudoquery_count <= source_row_count - witness_count:
+        raise ValueError("V24 reduced pseudoquery count differs")
+    sources = (
+        (posting_output / "result.json", "posting-result.json"),
+        (training_output / "witness-graph.arrow", "witness-graph.arrow"),
+        (posting_output / "witness-postings.arrow", "witness-postings.arrow"),
+        (root / "construction-rows.parquet", "construction-rows.parquet"),
+        (root / "page-rows.parquet", "page-rows.parquet"),
+    )
+    for source, _ in sources:
+        if source.is_symlink() or not source.is_file() or source.stat().st_size == 0:
+            raise ValueError("V24 reduced pseudoquery input differs")
+    input_dir = root / "pseudoquery-input"
+    input_dir.mkdir(mode=0o700)
+    for source, name in sources:
+        _copy_exact(source, input_dir / name)
+    roles = (
+        "posting-result",
+        "witness-graph",
+        "witness-postings",
+        "construction-rows-parquet",
+        "page-rows-parquet",
+    )
+    inputs = [
+        _identity(input_dir / name, role, generation)
+        for role, (_, name) in zip(roles, sources, strict=True)
+    ]
+    page_rows = pq.read_table(root / "page-rows.parquet", columns=["page_ordinal"])
+    page_ordinals = page_rows.column("page_ordinal").to_numpy()
+    manifest = {
+        "claim_eligible": False,
+        "generation": generation,
+        "inputs": inputs,
+        "output_uris": {
+            "pseudoquery-evidence": "s3://borsuk-v24-reduced/pseudoquery-evidence.parquet",
+            "pseudoquery-pass-receipt": "s3://borsuk-v24-reduced/pseudoquery-pass-receipt.json",
+            "pseudoquery-result": "s3://borsuk-v24-reduced/pseudoquery-result.json",
+        },
+        "page_count": int(np.max(page_ordinals)) + 1,
+        "phase": "pseudoquery-evaluation",
+        "physical_source_rows": int(page_rows.num_rows),
+        "pseudoquery_count": pseudoquery_count,
+        "schema": "borsuk-v24-local-manifest-v1",
+        "seed": int(training["seed"]),
+        "source_row_count": source_row_count,
+        "witness_count": witness_count,
+    }
+    path = root / "pseudoquery-manifest.json"
     path.write_bytes(_canonical_json_bytes(manifest))
     return path

@@ -178,6 +178,8 @@ def canonical_v24_terminal_bytes(
     status: str,
     result_sha256: str | None = None,
     result_bytes: int | None = None,
+    pass_receipt_sha256: str | None = None,
+    pass_receipt_bytes: int | None = None,
     worker_status: int | None = None,
 ) -> bytes:
     """Build one exact success or failure terminal."""
@@ -203,22 +205,38 @@ def canonical_v24_terminal_bytes(
         "status": status,
     }
     if status == "complete":
+        receipt_is_absent = (
+            pass_receipt_sha256 is None and pass_receipt_bytes is None
+        )
+        receipt_is_valid = (
+            plan.phase == "pseudoquery-evaluation"
+            and type(pass_receipt_sha256) is str  # noqa: E721
+            and _LOWER_SHA256.fullmatch(pass_receipt_sha256) is not None
+            and type(pass_receipt_bytes) is int  # noqa: E721
+            and pass_receipt_bytes > 0
+        )
         if (
             result_sha256 is None
             or _LOWER_SHA256.fullmatch(result_sha256) is None
             or type(result_bytes) is not int  # noqa: E721
             or result_bytes <= 0
+            or not (receipt_is_absent or receipt_is_valid)
             or worker_status is not None
         ):
             raise ValueError("V24 qualification complete terminal differs")
         value["result_bytes"] = result_bytes
         value["result_sha256"] = result_sha256
+        if receipt_is_valid:
+            value["pass_receipt_bytes"] = pass_receipt_bytes
+            value["pass_receipt_sha256"] = pass_receipt_sha256
     else:
         if (
             type(worker_status) is not int  # noqa: E721
             or worker_status < 0
             or result_sha256 is not None
             or result_bytes is not None
+            or pass_receipt_sha256 is not None
+            or pass_receipt_bytes is not None
         ):
             raise ValueError("V24 qualification failure terminal differs")
         value["worker_status"] = worker_status
@@ -243,6 +261,8 @@ def validate_v24_terminal_bytes(raw: bytes, plan: V24SpotPlan, status: str) -> N
         status=status,
         result_sha256=value.get("result_sha256"),
         result_bytes=value.get("result_bytes"),
+        pass_receipt_sha256=value.get("pass_receipt_sha256"),
+        pass_receipt_bytes=value.get("pass_receipt_bytes"),
         worker_status=value.get("worker_status"),
     )
     if raw != expected:
@@ -383,6 +403,12 @@ fi
 cmp "$root/stdout.json" "$result_path"
 result_sha256="$(sha256sum "$root/stdout.json" | awk '{{print $1}}')"
 result_bytes="$(stat -c %s "$root/stdout.json")"
+pass_receipt_sha256=
+pass_receipt_bytes=0
+if [[ "$phase" == pseudoquery-evaluation && -f "$outputs/pseudoquery-pass-receipt.json" ]]; then
+  pass_receipt_sha256="$(sha256sum "$outputs/pseudoquery-pass-receipt.json" | awk '{{print $1}}')"
+  pass_receipt_bytes="$(stat -c %s "$outputs/pseudoquery-pass-receipt.json")"
+fi
 if [[ "$phase" == input-preparation ]]; then
   put_once "$outputs/construction-rows.parquet" construction-rows.parquet
   put_once "$outputs/page-rows.parquet" page-rows.parquet
@@ -397,6 +423,9 @@ elif [[ "$phase" == posting-construction ]]; then
 elif [[ "$phase" == pseudoquery-evaluation ]]; then
   put_once "$outputs/pseudoquery-evidence.parquet" pseudoquery-evidence.parquet
   put_once "$root/stdout.json" pseudoquery-result.json
+  if [[ -f "$outputs/pseudoquery-pass-receipt.json" ]]; then
+    put_once "$outputs/pseudoquery-pass-receipt.json" pseudoquery-pass-receipt.json
+  fi
 elif [[ "$phase" == development-evaluation ]]; then
   put_once "$root/stdout.json" development-result.json
 elif [[ "$phase" == holdout-binding ]]; then
@@ -408,10 +437,13 @@ else
 fi
 put_once "$outputs/progress.json" progress.json
 put_once "$staging_receipt" staging-receipt.json
-python3 - "$root/ATTEMPT_COMPLETE.json" "$run_id" "$phase" "$source_commit" "$source_archive_uri" "$source_archive_sha256" "$source_archive_bytes" "$binary_uri" "$binary_sha256" "$binary_bytes" "$manifest_uri" "$manifest_sha256" "$manifest_bytes" "$instance_id" "$result_sha256" "$result_bytes" <<'PY'
+python3 - "$root/ATTEMPT_COMPLETE.json" "$run_id" "$phase" "$source_commit" "$source_archive_uri" "$source_archive_sha256" "$source_archive_bytes" "$binary_uri" "$binary_sha256" "$binary_bytes" "$manifest_uri" "$manifest_sha256" "$manifest_bytes" "$instance_id" "$result_sha256" "$result_bytes" "$pass_receipt_sha256" "$pass_receipt_bytes" <<'PY'
 import json,sys
-path,run_id,phase,commit,archive_uri,archive_sha,archive_bytes,binary_uri,binary_sha,binary_bytes,manifest_uri,manifest_sha,manifest_bytes,instance_id,result_sha,result_bytes=sys.argv[1:]
+path,run_id,phase,commit,archive_uri,archive_sha,archive_bytes,binary_uri,binary_sha,binary_bytes,manifest_uri,manifest_sha,manifest_bytes,instance_id,result_sha,result_bytes,pass_receipt_sha,pass_receipt_bytes=sys.argv[1:]
 value={{"binary_bytes":int(binary_bytes),"binary_sha256":binary_sha,"binary_uri":binary_uri,"claim_eligible":False,"instance_id":instance_id,"manifest_bytes":int(manifest_bytes),"manifest_sha256":manifest_sha,"manifest_uri":manifest_uri,"phase":phase,"result_bytes":int(result_bytes),"result_sha256":result_sha,"run_id":run_id,"schema":"borsuk-v24-qualification-spot-terminal-v1","source_archive_bytes":int(archive_bytes),"source_archive_sha256":archive_sha,"source_archive_uri":archive_uri,"source_commit":commit,"status":"complete"}}
+if pass_receipt_sha:
+    value["pass_receipt_bytes"]=int(pass_receipt_bytes)
+    value["pass_receipt_sha256"]=pass_receipt_sha
 open(path,"wb").write(json.dumps(value,separators=(",",":"),sort_keys=True).encode()+b"\n")
 PY
 put_once "$root/ATTEMPT_COMPLETE.json" ATTEMPT_COMPLETE.json
@@ -507,6 +539,78 @@ def _retry_aws_call(call: Callable[[], Any]) -> Any:
     raise AssertionError("unreachable")
 
 
+def _validate_pseudoquery_pass_receipt_terminal(
+    raw: bytes,
+    terminal: dict[str, object],
+    plan: V24SpotPlan,
+    bucket: str,
+    prefix: str,
+) -> None:
+    """Bind one pseudoquery PASS receipt to its authenticated worker terminal."""
+
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("V24 pseudoquery pass receipt differs") from error
+    expected_keys = {
+        "benchmark_query_reads",
+        "claim_eligible",
+        "distance_backend",
+        "evidence",
+        "generation",
+        "ordered_inputs",
+        "page_body_reads",
+        "passed",
+        "pseudoquery_count",
+        "result",
+        "schema",
+        "source_ordinals_sha256",
+        "split_seed",
+        "witness_count",
+    }
+    identity_keys = {
+        "digest",
+        "digest_algorithm",
+        "encoded_bytes",
+        "generation",
+        "role",
+        "uri",
+    }
+    if (
+        plan.phase != "pseudoquery-evaluation"
+        or raw != canonical_json_bytes(value)
+        or type(value) is not dict  # noqa: E721
+        or set(value) != expected_keys
+        or hashlib.sha256(raw).hexdigest() != terminal["pass_receipt_sha256"]
+        or len(raw) != terminal["pass_receipt_bytes"]
+        or value["schema"] != "borsuk-v24-pseudoquery-pass-receipt-v1"
+        or value["claim_eligible"] is not False
+        or value["passed"] is not True
+        or value["benchmark_query_reads"] != 0
+        or value["page_body_reads"] != 0
+    ):
+        raise ValueError("V24 pseudoquery pass receipt authority differs")
+    result = value["result"]
+    evidence = value["evidence"]
+    if (
+        type(result) is not dict  # noqa: E721
+        or type(evidence) is not dict  # noqa: E721
+        or set(result) != identity_keys
+        or set(evidence) != identity_keys
+        or result["role"] != "pseudoquery-result"
+        or result["digest_algorithm"] != "sha256"
+        or result["digest"] != terminal["result_sha256"]
+        or result["encoded_bytes"] != terminal["result_bytes"]
+        or result["uri"] != f"s3://{bucket}/{prefix}pseudoquery-result.json"
+        or evidence["role"] != "pseudoquery-evidence"
+        or evidence["digest_algorithm"] != "sha256"
+        or evidence["uri"] != f"s3://{bucket}/{prefix}pseudoquery-evidence.parquet"
+        or result["generation"] != value["generation"]
+        or evidence["generation"] != value["generation"]
+    ):
+        raise ValueError("V24 pseudoquery pass receipt result differs")
+
+
 def run_v24_spot_phase(plan: V24SpotPlan, *, ec2_client: Any, s3_client: Any) -> str:
     """Run one original Spot phase and terminate its instance on every exit path."""
 
@@ -567,11 +671,19 @@ def run_v24_spot_phase(plan: V24SpotPlan, *, ec2_client: Any, s3_client: Any) ->
                     continue
                 status = "failed" if name == "ATTEMPT_FAILED.json" else "complete"
                 validate_v24_terminal_bytes(raw, plan, status)
-                if json.loads(raw)["instance_id"] != instance_id:
+                terminal = json.loads(raw)
+                if terminal["instance_id"] != instance_id:
                     raise ValueError("V24 qualification terminal instance differs")
                 uri = f"s3://{bucket}/{prefix}{name}"
                 if status == "failed":
                     raise RuntimeError(f"V24 qualification worker failed at {uri}")
+                if "pass_receipt_sha256" in terminal:
+                    receipt = read_terminal("pseudoquery-pass-receipt.json")
+                    if receipt is None:
+                        raise ValueError("V24 pseudoquery pass receipt is missing")
+                    _validate_pseudoquery_pass_receipt_terminal(
+                        receipt, terminal, plan, bucket, prefix
+                    )
                 return uri
             reservations = _retry_aws_call(
                 lambda: ec2_client.describe_instances(InstanceIds=[instance_id])

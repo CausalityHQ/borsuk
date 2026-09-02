@@ -182,15 +182,15 @@ pub(crate) fn canonical_v24_receipt_bytes(receipt: &V24Receipt) -> Result<Vec<u8
                         ])
         }
         V24Phase::DevelopmentEvaluation => {
-            !input_roles
-                .iter()
-                .any(|role| matches!(*role, "pseudoquery-evidence" | "pseudoquery-result"))
-                && !output_roles.iter().any(|role| {
-                    matches!(
-                        *role,
-                        "pseudoquery-evidence" | "pseudoquery-result" | "pseudoquery-pass-receipt"
-                    )
-                })
+            input_roles
+                == [
+                    "pseudoquery-pass-receipt",
+                    "witness-graph",
+                    "witness-postings",
+                    "query-parquet",
+                    "neighbors-parquet",
+                ]
+                && output_roles == ["development-result"]
         }
         _ => !input_roles.iter().chain(&output_roles).any(|role| {
             matches!(
@@ -359,5 +359,35 @@ mod tests {
         let mut output_leak = pseudoquery;
         output_leak.outputs[0] = object("development-result", "sha256", "55");
         assert!(canonical_v24_receipt_bytes(&output_leak).is_err());
+
+        let development = V24Receipt {
+            schema: "borsuk-v24-witness-receipt-v1".to_owned(),
+            claim_eligible: false,
+            phase: V24Phase::DevelopmentEvaluation,
+            parent_receipt_sha256: Some("61".repeat(32)),
+            executable_sha256: "62".repeat(32),
+            ordered_inputs: [
+                "pseudoquery-pass-receipt",
+                "witness-graph",
+                "witness-postings",
+                "query-parquet",
+                "neighbors-parquet",
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, role)| object(role, "sha256", &format!("{:02x}", ordinal + 70)))
+            .collect(),
+            outputs: vec![object("development-result", "sha256", "80")],
+            peak_rss_bytes: 2_147_483_648,
+            peak_psi_full_avg10_ppm: 0,
+            swap_delta_bytes: 0,
+        };
+        assert!(canonical_v24_receipt_bytes(&development).is_ok());
+        let mut missing_pass = development.clone();
+        missing_pass.ordered_inputs.remove(0);
+        assert!(canonical_v24_receipt_bytes(&missing_pass).is_err());
+        let mut metric_leak = development;
+        metric_leak.ordered_inputs[0] = object("pseudoquery-result", "sha256", "81");
+        assert!(canonical_v24_receipt_bytes(&metric_leak).is_err());
     }
 }

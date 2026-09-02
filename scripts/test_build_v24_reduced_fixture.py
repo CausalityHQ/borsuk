@@ -222,13 +222,46 @@ class V24ReducedFixtureTests(unittest.TestCase):
             posting_output.mkdir()
             postings = posting_output / "witness-postings.arrow"
             postings.write_bytes(b"ARROW1-postings")
+            (posting_output / "result.json").write_bytes(
+                b'{"claim_eligible":false,"schema":"reduced-posting-fixture"}\n'
+            )
+            pseudoquery_manifest_path = subject.prepare_pseudoquery_phase(
+                root,
+                training_output,
+                posting_output,
+                pseudoquery_count=8,
+            )
+            pseudoquery_manifest = json.loads(pseudoquery_manifest_path.read_bytes())
+            self.assertEqual(
+                [identity["role"] for identity in pseudoquery_manifest["inputs"]],
+                [
+                    "posting-result",
+                    "witness-graph",
+                    "witness-postings",
+                    "construction-rows-parquet",
+                    "page-rows-parquet",
+                ],
+            )
+            pseudoquery_output = root / "pseudoquery-output"
+            pseudoquery_output.mkdir()
+            pass_receipt = pseudoquery_output / "pseudoquery-pass-receipt.json"
+            pass_receipt.write_bytes(b'{"claim_eligible":false,"passed":true}\n')
             development_manifest_path = subject.prepare_development_phase(
-                root, training_output, posting_output
+                root, training_output, posting_output, pass_receipt
             )
             development_manifest = json.loads(development_manifest_path.read_bytes())
             self.assertEqual(
+                development_manifest["pseudoquery_count"],
+                pseudoquery_manifest["pseudoquery_count"],
+            )
+            self.assertEqual(
+                development_manifest["pseudoquery_split_seed"],
+                pseudoquery_manifest["seed"],
+            )
+            self.assertEqual(
                 [identity["role"] for identity in development_manifest["inputs"]],
                 [
+                    "pseudoquery-pass-receipt",
                     "witness-graph",
                     "witness-postings",
                     "query-parquet",
@@ -239,13 +272,14 @@ class V24ReducedFixtureTests(unittest.TestCase):
                 sorted(path.name for path in (root / "development-input").iterdir()),
                 [
                     "neighbors.parquet",
+                    "pseudoquery-pass-receipt.json",
                     "queries.parquet",
                     "witness-graph.arrow",
                     "witness-postings.arrow",
                 ],
             )
 
-    def test_reduced_fixture_runs_real_three_phase_binary_when_registered(self) -> None:
+    def test_reduced_fixture_runs_real_construction_binary_when_registered(self) -> None:
         binary_value = os.environ.get("BORSUK_V24_BINARY")
         if binary_value is None:
             self.skipTest("BORSUK_V24_BINARY is not registered")
@@ -287,8 +321,8 @@ class V24ReducedFixtureTests(unittest.TestCase):
             self.assert_progress(
                 training_output / "progress.json",
                 phase="witness-training",
-                completed_units=289,
-                total_units=289,
+                completed_units=385,
+                total_units=385,
             )
             posting_manifest = subject.prepare_posting_phase(root, training_output)
             posting_output = root / "posting-output"
@@ -311,36 +345,8 @@ class V24ReducedFixtureTests(unittest.TestCase):
             self.assert_progress(
                 posting_output / "progress.json",
                 phase="posting-construction",
-                completed_units=545,
-                total_units=545,
-            )
-            development_manifest = subject.prepare_development_phase(
-                root, training_output, posting_output
-            )
-            development_output = root / "development-output"
-            development_output.mkdir()
-            completed = subprocess.run(
-                [
-                    str(binary),
-                    "--manifest",
-                    str(development_manifest),
-                    "--input-dir",
-                    str(root / "development-input"),
-                    "--output-dir",
-                    str(development_output),
-                    "--evaluate-development",
-                    "--execute",
-                ],
-                check=True,
-                capture_output=True,
-            )
-            self.assert_progress(
-                development_output / "progress.json",
-                phase="development-evaluation",
-            )
-            self.assertEqual(
-                completed.stdout,
-                (development_output / "result.json").read_bytes(),
+                completed_units=641,
+                total_units=641,
             )
 
 
