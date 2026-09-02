@@ -2043,3 +2043,39 @@ step: the frontier is sufficient, while single-centroid and fixed page-mode
 reducers discarded the decisive row-level overlap evidence. The next serving
 falsifier must replace exact float32 rows with a preregistered compact row-code
 ladder under the 3 GiB and 15 ms gates. D3 and release claims remain fenced.
+
+### Eight-byte page-major PQ rejection
+
+Source commit `89899eef2c5ff60414b93269f4591a87b58270e1` evaluated a
+fixed eight-byte product-quantized row code once on Spot instance
+`i-0a16eb6cea7661962` (`c7g.4xlarge`, `eu-central-1a`). Every source row
+was represented by two page-major occurrences containing only its eight-byte
+code and four-byte partner page. When both assigned pages were in the fixed
+first-128-page frontier, the query scan scored only the lower-page occurrence,
+so each row contributed once without a stored row identifier. The complete
+100M-row projection, including offsets, codebook, and a 512 MiB runtime
+reserve, was 2,937,537,416 bytes. Selection retained a bounded top ten and used
+the same exact eight-page maximum-cover reducer as the passing float32 control.
+
+The arm reached 720,898 ppm aggregate recall, 0 ppm minimum-query recall, and
+722,026 ppm oracle attainment. It failed all three literal quality gates while
+passing the 3 GiB resident-memory projection. Scientific execution took
+5.628570197 seconds and 11.09 CPU-seconds, peaked at 225,763,328 bytes RSS,
+and observed zero memory PSI and zero swap growth. The instance published its
+terminal and shut down.
+
+The 828-byte canonical result has SHA-256
+`3573c189081df5994fe8f15e099349c78893395a1330465e7e638249a2713b6d`;
+the 9,988-byte Parquet evidence has SHA-256
+`0dca2c6e5492c9faf48d9d2c1f702ed7eeba8b9d59f5bf1fe42b834ed6f0cede`;
+the 1,057-byte terminal has SHA-256
+`932c7daec7127b1ac55eeb71e51ef6fed18e8e98b6276cfa42a3931cd3f03a8d`.
+Artifacts are rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/open/89899eef2c5ff60414b93269f4591a87b58270e1/v26-pq8-cover-89899ee/pq8-a0001/`.
+
+This rejects the tested eight-byte identity-PQ representation, not row-identity
+maximum cover: the exact float32 control on the identical frontier passed at
+997,265/800,000/998,826 ppm. Recall gates must not be relaxed. The next
+diagnostic is a single preregistered 8/16/24/32-byte fidelity curve; it will
+identify the minimum code width that recovers the control before any serving
+RAM gate is revised. D3 and release claims remain fenced.
