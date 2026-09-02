@@ -2004,3 +2004,42 @@ ppm aggregate and 800,000 ppm minimum recall; the earlier 998,828/900,000
 figures belong to the superseded corpus-pseudoquery cohort. The next falsifier
 must preserve row identity inside the fixed frontier and feed the registered
 maximum-cover reducer. Page-mode tuning, D3, and release claims remain fenced.
+
+### Exact candidate-row ceiling passes
+
+Source commit `99c57bcada25a9bcc32a15d52e7d13889d17a4ef` evaluated the
+fixed first-128-page tree frontier with exact float32 construction-row scoring,
+a bounded top-10 row heap, and the exact eight-page maximum-cover reducer once
+on Spot instance `i-0de7e3efba5c1bf21` (`c7g.4xlarge`,
+`eu-central-1c`). The 11,564,872-byte executable had SHA-256
+`79db57b451c73738294f8205a0f530d823af829e9125d0ca43d65d013c5cdf11`;
+the 7,001,673-byte source archive had SHA-256
+`15a488452259d4680c124c3b7219b94ea4cff25fe43b04525ddd092b83f9a610`.
+Truth was joined only after the eight pages were selected. Bulk per-query
+evidence was emitted as Parquet, and the diagnostic read zero page bodies.
+
+The fixed arm recovered 5,106 of 5,120 ground-truth hits: 997,265 ppm aggregate
+recall, 800,000 ppm minimum-query recall, and 998,826 ppm oracle attainment.
+It passed all three literal gates: 975,000 aggregate, 800,000 minimum-query,
+and 995,000 oracle attainment. Scientific execution took 2.576466685 seconds
+and 28.77 CPU-seconds, peaked at 125,435,904 bytes RSS, and observed zero
+memory PSI and zero swap growth. The instance terminated after publishing its
+terminal. A first bootstrap-only Spot cell, `i-0a0ed4a89fd21f0ca`, had no
+instance profile, executed no authenticated science, and was replaced rather
+than treated as a scientific repetition.
+
+The 813-byte canonical result has SHA-256
+`79e60f7db9ed4bccd84a3ff245c32d99d4784c93e5140fec4e4d774b5bfe9ac4`;
+the 7,948-byte Parquet evidence has SHA-256
+`d4f49709bacba222748b6875d30b2054be6b33077e6239f4ad9bca6a2df7d79c`;
+the 1,057-byte terminal has SHA-256
+`df49e543e6db692370e4d39d8f91baa2360d6d2fec5495c39143cbb1fe3c5a0c`.
+Artifacts are rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/open/99c57bcada25a9bcc32a15d52e7d13889d17a4ef/v26-candidate-cover-99c57bc/cover-a0001/`.
+
+This is a causal pass for row identity plus maximum cover inside the existing
+128-page tree frontier. It rejects additional page-score tuning as the next
+step: the frontier is sufficient, while single-centroid and fixed page-mode
+reducers discarded the decisive row-level overlap evidence. The next serving
+falsifier must replace exact float32 rows with a preregistered compact row-code
+ladder under the 3 GiB and 15 ms gates. D3 and release claims remain fenced.
