@@ -92,9 +92,15 @@ small manifests, policies, progress, receipts, and results.
 
 The immutable Deep Image source consists of exactly 58 ordered Parquet shards
 whose authenticated ordinal intervals are contiguous over `[0, 9,990,000)`.
-A frozen V24 preparation manifest records every source URI, SHA-256, encoded
-length, row interval, and logical campaign generation; production code does not
-parse a V23 manifest. A query-independent preparation phase reads those shards
+A frozen V24 preparation manifest records every source URI, registered digest
+and algorithm, encoded length, row interval, and logical campaign generation.
+It also binds the exact dataset ID, index ID, source-archive SHA-256, D1-report
+SHA-256, and page-namespace URI copied from the authenticated page roster. The
+roster must match every one of those values, and every registered page-body URI
+must equal that namespace plus `pages/` plus its registered BLAKE3 digest.
+Dataset shards and the roster retain their SHA-256 authority; immutable page
+bodies retain their registered BLAKE3 authority. New V24 outputs use SHA-256.
+Production code does not parse a V23 manifest. A query-independent preparation phase reads those shards
 in manifest order and emits the V24 construction-row table below. The same
 phase reads the 28,282 authenticated historical page objects in ascending
 roster ordinal and emits the V24 page-row table below. A standalone preparation
@@ -119,9 +125,13 @@ logical campaign generation. Preparation requires 9,990,000 unique primary
 IDs covering the complete ordinal interval, 18,620,111 physical primary plus
 replica rows, and at most one replica per source row. Rows are ordered by
 `(page_ordinal, replica, numeric record_id)`, with primary rows before replicas.
-The independently sorted `(record_id, vector)` relation must contain one primary
-and no more than one replica, and a replica vector must equal its primary vector
-after decoding the immutable page representation.
+The independently checked record relation must contain one primary and no more
+than one replica for every canonical source ordinal. When a replica exists, its
+decoded 192-byte f16-flat code must exactly equal the primary code. Preparation
+verifies this with at most 256 bounded ordinal-range scratch runs of fixed
+records and explicitly unlinks every run; it never retains the corpus vector
+plane in RAM. Exact registered page-body digests remain the byte authority for
+the immutable encoded vectors.
 
 The witness schema is exactly:
 
@@ -154,7 +164,7 @@ identical SHA-256 values before full input preparation is authorized.
 
 Training, posting construction, development, and holdout run on fresh phase-
 specific workers. A credentialed parent stages exact registered files; the
-scientific child runs a direct binary offline with no AWS credentials or page
+scientific child runs a direct binary offline with no `AWS_*` environment or page
 client. The child authenticates its complete input inventory before semantic
 use. No dynamic-loader discovery, private-root emulation, `ldd`, or mount magic
 is part of scientific authority.

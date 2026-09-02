@@ -179,6 +179,7 @@ mod v24_witness_local;
     reason = "V24 witness postings are wired incrementally by the committed plan"
 )]
 mod v24_witness_postings;
+mod v24_witness_prepare;
 
 /// Print and reset the env-gated (`BORSUK_BUILD_TIMING=1`) per-phase build timing
 /// breakdown accumulated since the last call. When
@@ -461,6 +462,8 @@ pub use storage_trace::{
 pub use text::{CharNgram, Tokenizer, UnicodeWordLowercase, Whitespace, term_frequencies, term_id};
 #[doc(hidden)]
 pub use v24_witness_local::{V24LocalPhase, V24LocalRunRequest, run_v24_local_request};
+#[doc(hidden)]
+pub use v24_witness_prepare::{V24PreparationRunRequest, run_v24_preparation_request};
 
 #[cfg(test)]
 mod configuration_tests {
