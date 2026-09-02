@@ -16,6 +16,9 @@
 - Preserve original `u64` dataset row ordinals in every construction and posting boundary.
 - Bulk cross-language data is Parquet or Arrow IPC; JSON is only small authority/evidence.
 - Training sees no queries, neighbors, page labels, or prior results; posting sees no queries or neighbors.
+- One query-independent preparation worker converts exactly 58 authenticated corpus shards and 28,282 authenticated historical pages into deterministic V24 Parquet; no historical reader enters the V24 scientific binary.
+- Recall is recall@10. Each development or holdout truth boundary computes the exact optimal eight-page cover over primary and replica assignments with lexicographic page-list ties; an oracle below eight hits is a structural rejection, not an exception.
+- `V24ObjectIdentity.generation` is logical campaign authority. S3 version IDs are optional staging metadata and never replace that value.
 - Use exactly 1,048,576 witnesses and HNSW `M=16`; only `ef=128/256/512`, selected witnesses `8/16/32`, posting caps `16/32/64`, and page budgets `8/16/32/64` are legal.
 - Recall gates remain 975,000 aggregate, 800,000 minimum-query, and 995,000 oracle-attainment ppm.
 - Serving projection remains below 3 GiB and warm selector p99 remains at most 15,000,000 ns.
@@ -35,6 +38,9 @@
 - Create `crates/borsuk/examples/v24_witness_page_router.rs`: strict local phase CLI.
 - Create `scripts/run_v24_witness_page_router.py`: phase-local monitor and explicit cleanup.
 - Create `scripts/stage_v24_witness_inputs.py`: credentialed exact-object staging.
+- Create `crates/borsuk/src/v24_witness_prepare.rs`: deterministic consolidation of immutable dataset shards and historical page objects into strict V24 Parquet.
+- Create `crates/borsuk/examples/v24_prepare_witness_inputs.rs`: strict offline preparation CLI with no query, neighbor, evaluation, or storage surface.
+- Create `scripts/launch_v24_qualification_spot.py`: multi-zone `causality` Spot preparation and phase launcher with authenticated terminals and immediate termination.
 - Create corresponding `scripts/test_*.py` files and frozen research authority JSON before any allocation.
 - Update `docs/research/publication-v3-attempt-ledger.md` only after authenticated terminals.
 
@@ -162,27 +168,67 @@
 - [ ] **Step 3: Run final repository assurance once.** Execute fmt, strict locked workspace/all-target Clippy, locked workspace/all-target tests, dependency-complete Python discovery, docs validator, and diff-check serially. Repair only failing layers via focused TDD, then rerun the final progression once.
 - [ ] **Step 4: Freeze and commit exact authority.** Bind source commit/archive, static binary, AWS account/region/AMI/Spot type, all input objects, schemas, arms, gates, stops, scratch names, output prefix, and no-restart rule. Push fast-forward only after proving `origin/main` is an ancestor.
 
-### Task 9: One qualification campaign and production decision
+### Task 9: Deterministic full-scale input preparation
+
+**Files:**
+- Create: `crates/borsuk/src/v24_witness_prepare.rs`
+- Modify: `crates/borsuk/src/lib.rs`
+- Create: `crates/borsuk/examples/v24_prepare_witness_inputs.rs`
+- Create: `scripts/test_prepare_v24_witness_inputs.py`
+- Modify: `docs/superpowers/specs/2026-09-01-v24-witness-page-router-design.md`
+
+**Interfaces:**
+- Consumes: a frozen V24-only preparation manifest containing the exact 58 corpus-shard authorities copied once from the immutable dataset evidence, the authenticated 28,282-page roster, and its content-addressed page objects. Production never parses a V23 manifest.
+- Produces: `V24PreparationRequest`, `prepare_v24_inputs`, `construction-rows.parquet`, `page-rows.parquet`, `preparation-receipt.json`, and a direct offline CLI.
+
+- [ ] **Step 1: Write the preparation authority REDs.** Require 58 contiguous shard roles and ordinal intervals over `[0, 9,990,000)`, exact input `emb: FixedSizeList<element: Float32 non-null, 96> non-null`, ascending unique page ordinals, canonical decimal record IDs, exactly 9,990,000 unique primary IDs, exactly 18,620,111 physical rows, at most one replica per ID, and complete input URI/digest/length authority. Reject any query, neighbor, development, holdout, AWS, endpoint, page-prefix, or recursive-cleanup surface.
+- [ ] **Step 2: Write deterministic Parquet REDs.** In separate processes, prepare a reduced two-shard/four-page fixture twice and require byte-identical SHA-256 values. Mutation-lock column order, child name, types, nullability, `(page_ordinal, replica, numeric record_id)` row order, primary/replica vector equality, pinned row-group/data-page/compression/statistics/writer settings, construction digest metadata, and logical generation. Add nonzero-offset FixedSizeList mutations to every V24 reader.
+- [ ] **Step 3: Write bounded-streaming REDs.** Require one sequential read of every shard and page object, bounded row-group buffers plus bounded external `(record_id, replica, vector)` validation runs, checked primary/physical counts, explicit progress, and explicit known scratch cleanup. Prove the preparer has no query/truth input and cannot emit development or holdout authority.
+- [ ] **Step 4: Run focused REDs.** Run `cargo test -p borsuk --lib v24_preparation_ -- --nocapture` and `cargo test -p borsuk --example v24_prepare_witness_inputs v24_prepare_ -- --nocapture`. Expected: only unresolved preparation/truth symbols.
+- [ ] **Step 5: Implement the minimal offline preparer.** Stage historical objects outside the child, use a standalone codec for the one frozen immutable page format only inside the preparer, stream each input once, write explicit known output names exclusively, and remove only explicit scratch runs. Do not add a legacy reader, alias, or version dispatch to production. The scientific V24 runner remains unchanged and contains no historical reader.
+- [ ] **Step 6: Run focused GREEN and commit.** Run the same Rust selectors, the Python preparation tests, fmt, strict targeted Clippy, pycompile, docs validator, and diff-check. Commit with message `Prepare authenticated V24 full inputs`.
+
+### Task 10: Full qualification Spot launcher and staging integration
+
+**Files:**
+- Create: `scripts/launch_v24_qualification_spot.py`
+- Create: `scripts/test_launch_v24_qualification_spot.py`
+- Modify: `scripts/stage_v24_witness_inputs.py`
+- Modify: `scripts/test_stage_v24_witness_inputs.py`
+
+**Interfaces:**
+- Consumes: content-addressed source archive/static binary, one exact phase manifest, optional S3 transport version metadata, and the three registered `eu-central-1` Spot targets.
+- Produces: `build_v24_spot_plan`, `build_v24_launch_specs`, `run_v24_spot_phase`, authenticated `ATTEMPT_COMPLETE.json` or `ATTEMPT_FAILED.json`, and immediate instance termination.
+
+- [ ] **Step 1: Write staging-integration REDs.** Stage at least four fake S3 objects with one shared logical generation and distinct or absent S3 version IDs, feed the resulting directory to the real phase inventory validator, and require exact SHA-256/length/URI authentication. Prove ETag is never authority and an overwritten object fails by digest.
+- [ ] **Step 2: Write exact truth-binding REDs.** For each ten-neighbor assignment set, enumerate every candidate page subset of size at most eight, maximize covered neighbors, and use the lexicographically smallest sorted page list on ties. Recompute this independently in development and holdout binding, prove selected hits cannot exceed oracle hits, and encode an oracle below eight hits as a structural layout rejection. Never accept preregistered `oracle_pages` as truth authority.
+- [ ] **Step 3: Write Spot-launch REDs.** Require AWS profile `causality`, Spot-only one-time requests, ordered `eu-central-1c/b/a` fallback, no fallback after a non-capacity error, one fresh instance per phase, exact source/binary/manifest identities, terminal no-clobber, health/progress/resource monitoring, and termination on every terminal/error/timeout path.
+- [ ] **Step 4: Run focused RED.** Run `python3 -m unittest scripts.test_stage_v24_witness_inputs scripts.test_launch_v24_qualification_spot` plus the focused Rust truth-binding selector.
+- [ ] **Step 5: Implement the minimal launcher and truth boundary.** Use the credentialed stager in the parent process, run the static child with stripped AWS/proxy environment, upload only explicit output/receipt/progress files, publish one canonical terminal conditionally, verify it from the controller, and terminate the instance. Replace input-authored oracle pages with the independently recomputed exact cover in each isolated cohort boundary.
+- [ ] **Step 6: Run GREEN and commit.** Run the same tests, pinned Ruff, pycompile, shell syntax, docs validator, and diff-check. Commit with message `Launch V24 qualification on Spot`.
+
+### Task 11: One qualification campaign and production decision
 
 **Files:**
 - Modify: `docs/research/publication-v3-attempt-ledger.md` after terminals only
 - Create production integration spec only if holdout passes
 
 **Interfaces:**
-- Consumes: frozen Task 8 authority.
+- Consumes: frozen Task 8 authority plus the Task 9 preparation receipt and Task 10 Spot launcher.
 - Produces: authenticated pseudoquery, development, holdout, and disposition receipts.
 
-- [ ] **Step 1: Run one tree/witness training phase on Spot.** Monitor only health/progress/resources/terminal; terminate immediately. No restart after a scientific terminal.
-- [ ] **Step 2: Run one posting phase on a fresh Spot worker.** Stream the authenticated D2 pages once; preserve and authenticate outputs; terminate immediately.
-- [ ] **Step 3: Run the unbiased pseudoquery screen.** It may reject but cannot select. On rejection, record evidence and stop.
-- [ ] **Step 4: Run burned development only after pseudoquery pass.** Seal the first passing lexicographic cell. Do not expose holdout bytes earlier.
-- [ ] **Step 5: Bind and evaluate holdout once on a fresh worker.** Recompute truth from canonical decimal page IDs. Any failure rejects the architecture without tuning.
-- [ ] **Step 6: Record evidence and decide.** On pass, write a separate V24 production page-body integration design covering warm end-to-end fetch/decode/exact-rerank p99 and freeze the MVP only after it passes. On failure, record the causal class and do not rerun the same representation.
-- [ ] **Step 7: Validate, commit, and push only the ledger.** Prove HEAD, `origin/main`, and `ls-remote` equality and a clean worktree.
+- [ ] **Step 1: Run one query-independent preparation phase on Spot.** Stage the 58 corpus shards, page roster, and 28,282 page objects, execute the offline deterministic preparer, authenticate both Parquet outputs and the exact 9,990,000/18,620,111 row counts, and terminate immediately. An interrupted attempt may restart; no terminal attempt may restart.
+- [ ] **Step 2: Run one tree/witness training phase on Spot.** Monitor only health/progress/resources/terminal; terminate immediately. No restart after a scientific terminal.
+- [ ] **Step 3: Run one posting phase on a fresh Spot worker.** Stream the authenticated prepared page rows once; preserve and authenticate outputs; terminate immediately.
+- [ ] **Step 4: Run the unbiased pseudoquery screen.** It may reject but cannot select. On rejection, record evidence and stop.
+- [ ] **Step 5: Run burned development only after pseudoquery pass.** Seal the first passing lexicographic cell. Do not expose holdout bytes earlier.
+- [ ] **Step 6: Bind and evaluate holdout once on a fresh worker.** Recompute the exact recall@10 eight-page oracle from canonical decimal page IDs. Any failure rejects the architecture without tuning.
+- [ ] **Step 7: Record evidence and decide.** On pass, write a separate V24 production page-body integration design covering warm end-to-end fetch/decode/exact-rerank p99 and freeze the MVP only after it passes. On failure, record the causal class and do not rerun the same representation.
+- [ ] **Step 8: Validate, commit, and push only the ledger.** Prove HEAD, `origin/main`, and `ls-remote` equality and a clean worktree.
 
 ## Self-Review Record
 
-- Every spec requirement maps to Tasks 1--9.
+- Every spec requirement maps to Tasks 1--11.
 - V24 identity originates once; no V23 artifact crosses the boundary.
 - Original dataset ordinals are present before any page-truth or posting logic.
 - Serving RAM arithmetic is locked by a reduced-shape projection test.

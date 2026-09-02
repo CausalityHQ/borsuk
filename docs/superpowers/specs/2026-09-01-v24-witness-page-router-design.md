@@ -73,15 +73,55 @@ in 8, 16, 32, 64 that passes every quality and resource gate. No exhaustive
 fallback, benchmark-derived weight, learned page rescorer, or outcome-dependent
 parameter change is permitted.
 
+Quality is recall@10 over the registered top ten neighbor ordinals, matching
+the 320-row Revision-4 evidence used by this design. Each cohort's isolated
+truth-binding boundary computes the exact optimal eight-page cover over each
+query's primary and optional replica page assignments. It enumerates the at
+most twenty candidate pages, maximizes covered neighbors, and breaks equal-hit
+ties by the lexicographically smallest sorted page list. The resulting oracle
+may contain fewer than eight pages. A query whose exact oracle covers fewer
+than eight of ten neighbors structurally rejects the page layout before that
+cohort is evaluated; it is evidence, not an authority error and not a reason
+to weaken the recall gate. Evaluation requires every selected hit count to be
+at most this independently recomputed oracle hit count.
+
 ## Formats and identity
 
 Bulk cross-language data uses Parquet or Arrow IPC. JSON is restricted to
 small manifests, policies, progress, receipts, and results.
 
+The immutable Deep Image source consists of exactly 58 ordered Parquet shards
+whose authenticated ordinal intervals are contiguous over `[0, 9,990,000)`.
+A frozen V24 preparation manifest records every source URI, SHA-256, encoded
+length, row interval, and logical campaign generation; production code does not
+parse a V23 manifest. A query-independent preparation phase reads those shards
+in manifest order and emits the V24 construction-row table below. The same
+phase reads the 28,282 authenticated historical page objects in ascending
+roster ordinal and emits the V24 page-row table below. A standalone preparation
+codec may decode that one immutable historical page format, but it is not a
+compatibility reader and is absent from the V24 scientific training, posting,
+evaluation, and serving binaries. Those binaries contain no storage client.
+
 The V24 construction-row schema is exactly:
 
 - `source_ordinal: UInt64 non-null`;
 - `vector: FixedSizeList<element: Float32 non-null, 96> non-null`.
+
+The V24 page-row schema is exactly:
+
+- `page_ordinal: UInt32 non-null`;
+- `replica: Boolean non-null`;
+- `record_id: Utf8 non-null`, containing the canonical decimal source ordinal;
+- `vector: FixedSizeList<element: Float32 non-null, 96> non-null`.
+
+Its Parquet schema metadata binds the exact construction-row SHA-256 and the
+logical campaign generation. Preparation requires 9,990,000 unique primary
+IDs covering the complete ordinal interval, 18,620,111 physical primary plus
+replica rows, and at most one replica per source row. Rows are ordered by
+`(page_ordinal, replica, numeric record_id)`, with primary rows before replicas.
+The independently sorted `(record_id, vector)` relation must contain one primary
+and no more than one replica, and a replica vector must equal its primary vector
+after decoding the immutable page representation.
 
 The witness schema is exactly:
 
@@ -103,6 +143,13 @@ All tables require exact names, order, physical types, nullability, row counts,
 sortedness, uniqueness, finite nonzero vectors, URI, generation, encoded length,
 and SHA-256. V24 rejects V23 artifacts rather than adapting them.
 
+Preparation Parquet bytes are deterministic authority: column order, row
+order, row-group size, data-page size, compression, statistics, writer version,
+and schema metadata are pinned. Readers reject a nonzero fixed-size-list offset
+instead of silently slicing a different physical vector plane. Two
+separate-process reduced preparations of the same logical inputs must have
+identical SHA-256 values before full input preparation is authorized.
+
 ## Authority and leakage boundary
 
 Training, posting construction, development, and holdout run on fresh phase-
@@ -112,8 +159,26 @@ client. The child authenticates its complete input inventory before semantic
 use. No dynamic-loader discovery, private-root emulation, `ldd`, or mount magic
 is part of scientific authority.
 
-Training sees only corpus shards. Posting sees only witnesses/graph and the D2
-roster/pages. Development sees only the sealed router and burned queries 0--31.
+One earlier fresh Spot worker performs only query-independent input
+preparation. Its credentialed parent stages the 58 corpus shards, page roster,
+and 28,282 page objects; an offline preparation child emits exactly
+`construction-rows.parquet` and `page-rows.parquet`, authenticates their
+complete counts and digests, and publishes a canonical receipt. It receives no
+query, neighbor, development, holdout, or prior-result object. An interrupted
+preparation attempt may restart from immutable inputs, but no attempt may
+resume after publishing a scientific terminal.
+
+`V24ObjectIdentity.generation` is the logical campaign generation and is
+identical across a phase's inputs and outputs. S3 version IDs are storage
+transport metadata and never masquerade as that logical generation. The
+credentialed stager authenticates URI, encoded length, and full SHA-256 after
+download; it may additionally bind a version ID in its staging receipt, but
+the offline scientific manifest remains independent of S3 versioning.
+
+Preparation sees only corpus shards, the page roster, and page bodies. Training
+sees only the prepared construction rows. Posting sees only witnesses/graph and
+the prepared page rows. Development sees only the sealed router and burned
+queries 0--31.
 Holdout binding independently maps all neighbor IDs for queries 32--159 through
 canonical decimal page record IDs, and holdout evaluation runs once after a
 cell is sealed. Repeated-query or prior-result data never enters construction.
