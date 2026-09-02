@@ -3,11 +3,12 @@
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
 use borsuk_v26::{
-    V26ExactGlobalRequest, V26LayoutEvaluationRequest, V26LocalObjectPath, V26ObjectIdentity,
-    V26TreeRouterRequest, V26TruthBuildRequest, canonical_v26_layout_build_output_bytes,
-    canonical_v26_layout_result_bytes, canonical_v26_object_identity_bytes,
-    evaluate_v26_layout_oracle, run_v26_exact_global, run_v26_layout_build_directory,
-    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
+    V26CentroidRouterRequest, V26ExactGlobalRequest, V26LayoutEvaluationRequest,
+    V26LocalObjectPath, V26ObjectIdentity, V26TreeRouterRequest, V26TruthBuildRequest,
+    canonical_v26_layout_build_output_bytes, canonical_v26_layout_result_bytes,
+    canonical_v26_object_identity_bytes, evaluate_v26_layout_oracle, run_v26_centroid_router,
+    run_v26_exact_global, run_v26_layout_build_directory, run_v26_tree_router,
+    run_v26_tree_router_diagnostic, run_v26_truth_build,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +57,12 @@ struct TreeRouterRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct CentroidRouterRequest {
+    construction: RegisteredFile,
+    router: TreeRouterRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct TruthRequest {
     generation: String,
     construction: RegisteredFile,
@@ -74,6 +81,7 @@ enum V26CliMode {
     ExactGlobal(ExactGlobalRequest),
     Router(TreeRouterRequest),
     RouterDiagnostic(TreeRouterRequest),
+    CentroidRouter(CentroidRouterRequest),
 }
 
 fn take(values: &mut BTreeMap<String, String>, key: &str) -> Result<String, String> {
@@ -133,6 +141,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
     let mut exact_global = false;
     let mut router = false;
     let mut router_diagnostic = false;
+    let mut centroid_router = false;
     let mut execute = false;
     let mut values = BTreeMap::new();
     while let Some(flag) = arguments.next() {
@@ -172,6 +181,12 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     return Err("duplicate --diagnose-tree-router".to_owned());
                 }
                 router_diagnostic = true;
+            }
+            "--route-centroids" => {
+                if centroid_router {
+                    return Err("duplicate --route-centroids".to_owned());
+                }
+                centroid_router = true;
             }
             "--execute" => {
                 if execute {
@@ -246,6 +261,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             + u8::from(exact_global)
             + u8::from(router)
             + u8::from(router_diagnostic)
+            + u8::from(centroid_router)
             != 1
     {
         return Err("exactly one executable phase is required".to_owned());
@@ -346,16 +362,13 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         }
         return Ok(V26CliMode::Evaluate(layout));
     }
-    if router || router_diagnostic {
+    if router || router_diagnostic || centroid_router {
         let primary_tree = take_registered(&mut values, "primary-tree")?;
         let replica_tree = take_registered(&mut values, "replica-tree")?;
         let page_budget = take(&mut values, "--page-budget")?
             .parse()
             .map_err(|_| "invalid --page-budget".to_owned())?;
-        if !values.is_empty()
-            || !valid_registered(&primary_tree)
-            || !valid_registered(&replica_tree)
-            || page_budget != 8
+        if !valid_registered(&primary_tree) || !valid_registered(&replica_tree) || page_budget != 8
         {
             return Err("V26 tree router arguments differ".to_owned());
         }
@@ -366,10 +379,22 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             layout,
             page_budget,
         };
+        if !centroid_router && !values.is_empty() {
+            return Err("V26 tree router arguments differ".to_owned());
+        }
         return Ok(if router {
             V26CliMode::Router(request)
-        } else {
+        } else if router_diagnostic {
             V26CliMode::RouterDiagnostic(request)
+        } else {
+            let construction = take_registered(&mut values, "construction")?;
+            if !values.is_empty() || !valid_registered(&construction) {
+                return Err("V26 centroid router arguments differ".to_owned());
+            }
+            V26CliMode::CentroidRouter(CentroidRouterRequest {
+                construction,
+                router: request,
+            })
         });
     }
     let construction = take_registered(&mut values, "construction")?;
@@ -508,6 +533,31 @@ fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
             })
             .map_err(|error| error.to_string())
         }
+        V26CliMode::CentroidRouter(request) => {
+            let generation = request.router.generation.clone();
+            run_v26_centroid_router(&V26CentroidRouterRequest {
+                construction_rows: local_object(
+                    "construction-parquet",
+                    &generation,
+                    request.construction,
+                ),
+                router: V26TreeRouterRequest {
+                    primary_tree: local_object(
+                        "primary-tree-parquet",
+                        &generation,
+                        request.router.primary_tree,
+                    ),
+                    replica_tree: local_object(
+                        "replica-tree-parquet",
+                        &generation,
+                        request.router.replica_tree,
+                    ),
+                    layout: evaluation_request(request.router.layout),
+                    page_budget: request.router.page_budget,
+                },
+            })
+            .map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -634,6 +684,26 @@ mod tests {
             .find(|argument| argument.as_str() == "--route-trees")
             .unwrap();
         *mode = "--diagnose-tree-router".to_owned();
+        args
+    }
+
+    fn centroid_router_args() -> Vec<String> {
+        let mut args = tree_router_args();
+        let mode = args
+            .iter_mut()
+            .find(|argument| argument.as_str() == "--route-trees")
+            .unwrap();
+        *mode = "--route-centroids".to_owned();
+        args.extend([
+            "--construction-path".to_owned(),
+            "/input/construction.parquet".to_owned(),
+            "--construction-uri".to_owned(),
+            "s3://bucket/construction.parquet".to_owned(),
+            "--construction-sha256".to_owned(),
+            "5".repeat(64),
+            "--construction-bytes".to_owned(),
+            "4096".to_owned(),
+        ]);
         args
     }
 
@@ -858,6 +928,33 @@ mod tests {
             vec!["--page-budget", "16"],
         ] {
             let mut args = tree_router_diagnostic_args();
+            args.extend(mutation.into_iter().map(str::to_owned));
+            assert!(parse_v26_args(args).is_err());
+        }
+    }
+
+    #[test]
+    fn v26_centroid_router_cli_accepts_only_construction_and_closed_router_roles() {
+        // Break caught: centroid routing discovers construction data, exposes its candidate
+        // width, or gains a storage/page/D3 execution surface.
+        let parsed = parse_v26_args(centroid_router_args()).unwrap();
+        let V26CliMode::CentroidRouter(request) = parsed else {
+            panic!("centroid router mode differs");
+        };
+        assert_eq!(request.construction.sha256, "5".repeat(64));
+        assert_eq!(request.router.page_budget, 8);
+        let error = execute_v26_mode(V26CliMode::CentroidRouter(request)).unwrap_err();
+        assert!(error.contains("local object open failed"));
+
+        for mutation in [
+            vec!["--bucket", "forbidden"],
+            vec!["--endpoint", "https://forbidden"],
+            vec!["--page-prefix", "forbidden"],
+            vec!["--candidate-page-limit", "64"],
+            vec!["--ranked-row-limits", "128"],
+            vec!["--d3", "forbidden"],
+        ] {
+            let mut args = centroid_router_args();
             args.extend(mutation.into_iter().map(str::to_owned));
             assert!(parse_v26_args(args).is_err());
         }

@@ -238,6 +238,15 @@ pub fn rank_v26_tree_pages(
     rank_v26_tree_pages_to_limit(primary, replica, query, None)
 }
 
+pub(crate) fn rank_v26_tree_page_prefix(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    query: &[f32; 96],
+    candidate_page_limit: usize,
+) -> Result<Vec<u32>> {
+    rank_v26_tree_pages_to_limit(primary, replica, query, Some(candidate_page_limit))
+}
+
 pub fn route_v26_pages(
     primary: &V26Tree,
     replica: &V26Tree,

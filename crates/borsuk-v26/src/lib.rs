@@ -17,13 +17,13 @@ mod local;
 mod tree;
 
 pub use local::{
-    V26ExactGlobalRequest, V26LayoutBuildOutput, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
-    V26LocalObjectPath, V26TreeRouterRequest, V26TruthBuildRequest,
+    V26CentroidRouterRequest, V26ExactGlobalRequest, V26LayoutBuildOutput, V26LayoutBuildRequest,
+    V26LayoutEvaluationRequest, V26LocalObjectPath, V26TreeRouterRequest, V26TruthBuildRequest,
     canonical_v26_layout_build_output_bytes, evaluate_v26_exact_global, evaluate_v26_layout_oracle,
-    run_v26_exact_global, run_v26_layout_build, run_v26_layout_build_directory,
-    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
-    v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_source_map_schema,
-    v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
+    run_v26_centroid_router, run_v26_exact_global, run_v26_layout_build,
+    run_v26_layout_build_directory, run_v26_tree_router, run_v26_tree_router_diagnostic,
+    run_v26_truth_build, v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
+    v26_source_map_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
 };
 
 pub use tree::{
@@ -864,6 +864,178 @@ pub fn diagnose_v26_tree_router_candidate_widths(
     Ok((samples, results))
 }
 
+fn build_v26_page_centroids(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    rows: &[V26ConstructionRow],
+    assignments: &[V26RowPages],
+) -> Result<BTreeMap<u32, [f32; 96]>> {
+    if rows.is_empty() || rows.len() != assignments.len() {
+        return Err(invalid(
+            "V26 centroid router construction inventory differs",
+        ));
+    }
+    let mut probe = [0.0_f32; 96];
+    probe[0] = 1.0;
+    let page_inventory = rank_v26_tree_pages(primary, replica, &probe)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let mut sums = BTreeMap::<u32, ([f64; 96], u64)>::new();
+    for (index, (row, assignment)) in rows.iter().zip(assignments).enumerate() {
+        if usize::try_from(row.source_ordinal).ok() != Some(index)
+            || assignment.source_ordinal != row.source_ordinal
+            || assignment.primary_page == assignment.replica_page
+            || !page_inventory.contains(&assignment.primary_page)
+            || !page_inventory.contains(&assignment.replica_page)
+        {
+            return Err(invalid("V26 centroid router row binding differs"));
+        }
+        validate_v26_vector(&row.vector)?;
+        for page in [assignment.primary_page, assignment.replica_page] {
+            let (sum, count) = sums.entry(page).or_insert(([0.0; 96], 0));
+            for (coordinate, value) in sum.iter_mut().zip(row.vector) {
+                *coordinate += f64::from(value);
+            }
+            *count = count
+                .checked_add(1)
+                .ok_or_else(|| invalid("V26 centroid router page count overflows"))?;
+        }
+    }
+    if sums.len() != page_inventory.len() {
+        return Err(invalid("V26 centroid router page inventory differs"));
+    }
+    sums.into_iter()
+        .map(|(page, (sum, count))| {
+            if count == 0 {
+                return Err(invalid("V26 centroid router page is empty"));
+            }
+            let norm = sum.iter().map(|value| value * value).sum::<f64>().sqrt();
+            if !norm.is_finite() || norm == 0.0 {
+                return Err(invalid("V26 centroid router page centroid differs"));
+            }
+            let centroid = std::array::from_fn(|dimension| (sum[dimension] / norm) as f32);
+            validate_v26_vector(&centroid)?;
+            Ok((page, centroid))
+        })
+        .collect()
+}
+
+pub(crate) fn evaluate_v26_centroid_router(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    rows: &[V26ConstructionRow],
+    assignments: &[V26RowPages],
+    queries: &[V26ExternalQuery],
+    truths: &[V26QueryTruth],
+    candidate_page_limit: usize,
+) -> Result<(Vec<V26TreeRouterSample>, V26TreeRouterResult)> {
+    let page_budget = 8;
+    if queries.len() != 512 || truths.len() != queries.len() || candidate_page_limit < page_budget {
+        return Err(invalid("V26 centroid router request differs"));
+    }
+    let centroids = build_v26_page_centroids(primary, replica, rows, assignments)?;
+    let samples = queries
+        .par_iter()
+        .zip(truths.par_iter())
+        .enumerate()
+        .map(|(query_index, (query, truth))| {
+            if usize::try_from(query.query_ordinal).ok() != Some(query_index)
+                || truth.query_ordinal != query.query_ordinal
+                || truth.neighbor_source_ordinals.len() != 10
+                || truth.ground_truth_page_assignments.len() != 10
+            {
+                return Err(invalid("V26 centroid router query authority differs"));
+            }
+            let candidates = tree::rank_v26_tree_page_prefix(
+                primary,
+                replica,
+                &query.vector,
+                candidate_page_limit,
+            )?;
+            let mut ranked = candidates
+                .into_iter()
+                .map(|page| {
+                    let centroid = centroids
+                        .get(&page)
+                        .ok_or_else(|| invalid("V26 centroid router page differs"))?;
+                    let dot = query
+                        .vector
+                        .iter()
+                        .zip(centroid)
+                        .map(|(left, right)| left * right)
+                        .sum::<f32>();
+                    let distance = 1.0 - dot;
+                    if !distance.is_finite() {
+                        return Err(invalid("V26 centroid router distance differs"));
+                    }
+                    Ok((distance, page))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            ranked.sort_by(|left, right| {
+                left.0
+                    .total_cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            });
+            let mut selected_pages = ranked
+                .into_iter()
+                .take(page_budget)
+                .map(|(_, page)| page)
+                .collect::<Vec<_>>();
+            if selected_pages.len() != page_budget {
+                return Err(invalid("V26 centroid router selected pages differ"));
+            }
+            selected_pages.sort_unstable();
+            let oracle_pages =
+                exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, page_budget)?;
+            let hits = v26_layout_hits(&truth.ground_truth_page_assignments, &selected_pages);
+            let oracle_hits = v26_layout_hits(&truth.ground_truth_page_assignments, &oracle_pages);
+            Ok(V26TreeRouterSample {
+                query_ordinal: query.query_ordinal,
+                selected_pages,
+                hits,
+                oracle_hits,
+                recall_ppm: v26_ppm(u64::from(hits), 10)?,
+                oracle_attainment_ppm: v26_ppm(u64::from(hits), u64::from(oracle_hits))?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let total_hits = samples.iter().try_fold(0_u64, |sum, sample| {
+        sum.checked_add(u64::from(sample.hits))
+            .ok_or_else(|| invalid("V26 centroid router metric overflows"))
+    })?;
+    let total_oracle_hits = samples.iter().try_fold(0_u64, |sum, sample| {
+        sum.checked_add(u64::from(sample.oracle_hits))
+            .ok_or_else(|| invalid("V26 centroid router metric overflows"))
+    })?;
+    let aggregate_recall_ppm = v26_ppm(total_hits, queries.len() as u64 * 10)?;
+    let minimum_query_recall_ppm = samples
+        .iter()
+        .map(|sample| sample.recall_ppm)
+        .min()
+        .ok_or_else(|| invalid("V26 centroid router samples are absent"))?;
+    let oracle_attainment_ppm = v26_ppm(total_hits, total_oracle_hits)?;
+    let passed = aggregate_recall_ppm >= 975_000
+        && minimum_query_recall_ppm >= 800_000
+        && oracle_attainment_ppm >= 995_000;
+    Ok((
+        samples,
+        V26TreeRouterResult {
+            schema: "borsuk-v26-centroid-router-result-v1".to_owned(),
+            query_count: 512,
+            aggregate_recall_ppm,
+            minimum_query_recall_ppm,
+            oracle_attainment_ppm,
+            disposition: if passed {
+                V26Disposition::BoundedLayoutCandidate
+            } else {
+                V26Disposition::TreeRouterRejected
+            },
+            page_body_reads: 0,
+            claim_eligible: false,
+        },
+    ))
+}
+
 pub fn canonical_v26_tree_router_result_bytes(
     result: &V26TreeRouterResult,
     primary: &V26Tree,
@@ -1301,9 +1473,10 @@ mod tests {
         V26Tree, build_v26_dual_tree_layout, build_v26_external_truth_rows,
         canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
         canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
-        diagnose_v26_tree_router_candidate_widths, evaluate_v26_exact_global_external_rows,
-        evaluate_v26_tree_router, exact_v26_layout_oracle_pages, rank_v26_tree_pages,
-        route_v26_pages, select_v26_ranked_pages, validate_v26_dual_tree_layout,
+        diagnose_v26_tree_router_candidate_widths, evaluate_v26_centroid_router,
+        evaluate_v26_exact_global_external_rows, evaluate_v26_tree_router,
+        exact_v26_layout_oracle_pages, rank_v26_tree_pages, route_v26_pages,
+        select_v26_ranked_pages, validate_v26_dual_tree_layout,
     };
 
     const PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
@@ -1554,6 +1727,78 @@ mod tests {
             samples
                 .iter()
                 .all(|sample| sample.selected_pages.len() <= 8)
+        );
+    }
+
+    #[test]
+    fn v26_centroid_router_reranks_a_bounded_frontier_without_truth_or_page_reads() {
+        // Break caught: page centroids depend on query/truth data, candidate order replaces
+        // centroid distance, or the reranker widens beyond its fixed frontier/eight-page budget.
+        let primary = v26_router_test_tree(PRIMARY_SEED, 0, [100.0, 10.0, 1.0, 2.0, 5.0, 1.0, 2.0]);
+        let replica = v26_router_test_tree(REPLICA_SEED, 8, [200.0, 20.0, 3.0, 4.0, 5.0, 1.0, 2.0]);
+        let mut vector = [0.0_f32; 96];
+        vector[0] = 1.0;
+        let rows = (0_u64..32)
+            .map(|source_ordinal| V26ConstructionRow {
+                source_ordinal,
+                vector,
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..32)
+            .map(|source_ordinal| V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
+                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let queries = (0_u32..512)
+            .map(|query_ordinal| V26ExternalQuery {
+                query_ordinal,
+                vector,
+            })
+            .collect::<Vec<_>>();
+        let truths = (0_u32..512)
+            .map(|query_ordinal| V26QueryTruth {
+                query_ordinal,
+                neighbor_source_ordinals: (0_u64..10).collect(),
+                ground_truth_page_assignments: (0_u32..10)
+                    .map(|neighbor| vec![neighbor % 8, 8 + neighbor % 8])
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+
+        let (_, narrow) = evaluate_v26_centroid_router(
+            &primary,
+            &replica,
+            &rows,
+            &assignments,
+            &queries,
+            &truths,
+            8,
+        )
+        .unwrap();
+        let (samples, wide) = evaluate_v26_centroid_router(
+            &primary,
+            &replica,
+            &rows,
+            &assignments,
+            &queries,
+            &truths,
+            16,
+        )
+        .unwrap();
+
+        assert_eq!(narrow.aggregate_recall_ppm, 600_000);
+        assert_eq!(narrow.disposition, V26Disposition::TreeRouterRejected);
+        assert_eq!(wide.aggregate_recall_ppm, 1_000_000);
+        assert_eq!(wide.minimum_query_recall_ppm, 1_000_000);
+        assert_eq!(wide.oracle_attainment_ppm, 1_000_000);
+        assert_eq!(wide.disposition, V26Disposition::BoundedLayoutCandidate);
+        assert_eq!(samples[0].selected_pages, vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        assert!(
+            samples
+                .iter()
+                .all(|sample| sample.selected_pages.len() == 8)
         );
     }
 
