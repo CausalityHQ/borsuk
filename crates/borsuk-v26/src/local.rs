@@ -835,6 +835,45 @@ pub fn run_v26_layout_build(request: &V26LayoutBuildRequest) -> Result<V26Layout
     result
 }
 
+pub fn run_v26_layout_build_directory(
+    manifest: V26LocalObjectPath,
+    input_dir: &Path,
+    output_dir: PathBuf,
+    output_uri_prefix: String,
+    worker_count: usize,
+) -> Result<(V26LayoutBuildRequest, V26LayoutBuildOutput)> {
+    let authority = read_manifest(&manifest)?;
+    let request = V26LayoutBuildRequest {
+        construction_rows: V26LocalObjectPath {
+            identity: authority.construction_rows.clone(),
+            path: input_dir.join("construction.parquet"),
+        },
+        source_map: V26LocalObjectPath {
+            identity: authority.source_map.clone(),
+            path: input_dir.join("source-map.parquet"),
+        },
+        manifest,
+        output_dir,
+        output_uri_prefix,
+        worker_count,
+    };
+    let output = run_v26_layout_build(&request)?;
+    Ok((request, output))
+}
+
+pub fn canonical_v26_layout_build_output_bytes(
+    request: &V26LayoutBuildRequest,
+    output: &V26LayoutBuildOutput,
+) -> Result<Vec<u8>> {
+    validate_v26_layout_build_output(request, output)?;
+    let value = serde_json::to_value(output)
+        .map_err(|error| invalid(&format!("V26 layout build output failed: {error}")))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V26 layout build output failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn read_tree(path: &Path, expected_rows: i64, seed: u64) -> Result<V26Tree> {
     let reader = open_reader(path)?;
     if reader.schema().as_ref() != &v26_tree_schema()

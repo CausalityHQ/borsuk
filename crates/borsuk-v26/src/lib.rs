@@ -14,9 +14,10 @@ mod tree;
 
 pub use local::{
     V26LayoutBuildOutput, V26LayoutBuildRequest, V26LayoutEvaluationRequest, V26LocalObjectPath,
-    evaluate_v26_layout_oracle, run_v26_layout_build, v26_construction_schema,
-    v26_page_assignments_schema, v26_query_schema, v26_source_map_schema, v26_tree_schema,
-    v26_truth_schema, validate_v26_layout_build_output,
+    canonical_v26_layout_build_output_bytes, evaluate_v26_layout_oracle, run_v26_layout_build,
+    run_v26_layout_build_directory, v26_construction_schema, v26_page_assignments_schema,
+    v26_query_schema, v26_source_map_schema, v26_tree_schema, v26_truth_schema,
+    validate_v26_layout_build_output,
 };
 
 pub use tree::{

@@ -33,7 +33,7 @@
 - Create `crates/borsuk-v26/src/tree.rs`: deterministic dual-tree construction and query traversal.
 - Create `crates/borsuk-v26/src/local.rs`: strict Parquet readers/writers and phase-separated local requests.
 - Modify root `Cargo.toml`: add only the `borsuk-v26` workspace member.
-- Create `crates/borsuk/examples/v26_page_layout.rs`: thin offline CLI with no storage client.
+- Create `crates/borsuk-v26/examples/v26_page_layout.rs`: thin offline CLI with no storage client.
 - Create `scripts/run_v26_page_layout.py` and its unittest: process monitor, progress, terminal, cleanup.
 - Create `scripts/launch_v26_page_layout_spot.py` and its unittest: `causality` Spot multi-AZ launch and termination.
 - Create `docs/research/v26-page-layout-open-manifest.json` only after the implementation milestone is verified.
@@ -200,7 +200,7 @@ pub fn canonical_v26_layout_result_bytes(
 ### Task 4: Offline executable and monitored Spot boundary
 
 **Files:**
-- Create: `crates/borsuk/examples/v26_page_layout.rs`
+- Create: `crates/borsuk-v26/examples/v26_page_layout.rs`
 - Create: `scripts/run_v26_page_layout.py`
 - Create: `scripts/test_run_v26_page_layout.py`
 - Create: `scripts/launch_v26_page_layout_spot.py`
@@ -210,8 +210,10 @@ pub fn canonical_v26_layout_result_bytes(
 - Produces strict modes `--build-layout` and `--evaluate-layout`; each accepts one manifest, one input directory, one absent output path created atomically by the process, and explicit `--execute`.
 
 ```text
-v26_page_layout --manifest <file> --input-dir <dir> --output-dir <absent-path> \
-  (--build-layout | --evaluate-layout) --execute
+v26_page_layout --build-layout --execute --generation <id> \
+  --manifest-path <file> --manifest-uri <s3-uri> --manifest-sha256 <digest> \
+  --manifest-bytes <n> --input-dir <dir> --output-dir <absent-path> \
+  --output-uri-prefix <s3-prefix> --workers <n>
 ```
 
 - [ ] **Step 1: Write CLI RED.** Test required/duplicate/unknown flags, mutually exclusive phase modes, exact inventory, no bucket/endpoint/page/D3 flags, canonical stdout, and nonzero errors.
