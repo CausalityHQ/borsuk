@@ -100,18 +100,6 @@ fn parse_args(args: Vec<String>) -> Result<V26ServingMode, String> {
         "layout-terminal",
         &generation,
     )?;
-    let primary_tree = registered(
-        &mut values,
-        "primary-tree",
-        "primary-tree-parquet",
-        &generation,
-    )?;
-    let replica_tree = registered(
-        &mut values,
-        "replica-tree",
-        "replica-tree-parquet",
-        &generation,
-    )?;
     let external_queries = registered(
         &mut values,
         "external-queries",
@@ -128,10 +116,36 @@ fn parse_args(args: Vec<String>) -> Result<V26ServingMode, String> {
     } else {
         None
     };
-    if !values.is_empty()
-        || !latency_output_uri.starts_with("s3://")
-        || !latency_output_uri.ends_with(".parquet")
-    {
+    if !latency_output_uri.starts_with("s3://") || !latency_output_uri.ends_with(".parquet") {
+        return Err("unknown or invalid argument".to_owned());
+    }
+    if mode == "--execute-pq16-global-quality" {
+        if !values.is_empty() {
+            return Err("unknown or invalid argument".to_owned());
+        }
+        return Ok(V26ServingMode::GlobalQuality(V26Pq16GlobalQualityRequest {
+            serving_manifest,
+            serving_dir,
+            layout_terminal,
+            external_queries,
+            truth: truth.unwrap(),
+            evidence_output_path: latency_output_path,
+            evidence_output_uri: latency_output_uri,
+        }));
+    }
+    let primary_tree = registered(
+        &mut values,
+        "primary-tree",
+        "primary-tree-parquet",
+        &generation,
+    )?;
+    let replica_tree = registered(
+        &mut values,
+        "replica-tree",
+        "replica-tree-parquet",
+        &generation,
+    )?;
+    if !values.is_empty() {
         return Err("unknown or invalid argument".to_owned());
     }
     let runtime = V26Pq16ServingRuntimeRequest {
@@ -156,17 +170,6 @@ fn parse_args(args: Vec<String>) -> Result<V26ServingMode, String> {
                 latency_output_uri,
             },
         )),
-        "--execute-pq16-global-quality" => {
-            Ok(V26ServingMode::GlobalQuality(V26Pq16GlobalQualityRequest {
-                serving_manifest: runtime.serving_manifest,
-                serving_dir: runtime.serving_dir,
-                layout_terminal: runtime.layout_terminal,
-                external_queries: runtime.external_queries,
-                truth: truth.unwrap(),
-                evidence_output_path: latency_output_path,
-                evidence_output_uri: latency_output_uri,
-            }))
-        }
         _ => unreachable!(),
     }
 }
@@ -305,6 +308,13 @@ mod tests {
         // acquire page bodies/AWS inputs instead of using seven local Arrow/Parquet artifacts.
         let mut args = valid_args();
         args[0] = "--execute-pq16-global-quality".to_owned();
+        for role in ["primary-tree", "replica-tree"] {
+            let start = args
+                .iter()
+                .position(|value| value == &format!("--{role}-path"))
+                .unwrap();
+            args.drain(start..start + 8);
+        }
         for (flag, value) in [
             ("--truth-path".to_owned(), "/tmp/truth.parquet".to_owned()),
             (
@@ -325,6 +335,13 @@ mod tests {
 
         let mut forbidden = valid_args();
         forbidden[0] = "--execute-pq16-global-quality".to_owned();
+        for role in ["primary-tree", "replica-tree"] {
+            let start = forbidden
+                .iter()
+                .position(|value| value == &format!("--{role}-path"))
+                .unwrap();
+            forbidden.drain(start..start + 8);
+        }
         forbidden.extend(["--bucket".to_owned(), "forbidden".to_owned()]);
         assert!(super::parse_args(forbidden).is_err());
     }
