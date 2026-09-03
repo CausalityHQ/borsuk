@@ -56,6 +56,78 @@ struct GenerationSpec {
     generator: GeneratorKind,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GenerationRange {
+    start: usize,
+    end: usize,
+    write_evaluation: bool,
+}
+
+impl GenerationRange {
+    fn new(
+        total_train: usize,
+        group_size: usize,
+        start: usize,
+        end: usize,
+        write_evaluation: bool,
+    ) -> io::Result<Self> {
+        if total_train == 0
+            || group_size == 0
+            || !total_train.is_multiple_of(group_size)
+            || start >= end
+            || end > total_train
+            || !start.is_multiple_of(group_size)
+            || !end.is_multiple_of(group_size)
+            || (write_evaluation && start != 0)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "synthetic generation range differs",
+            ));
+        }
+        Ok(Self {
+            start,
+            end,
+            write_evaluation,
+        })
+    }
+
+    fn row_count(self) -> usize {
+        self.end - self.start
+    }
+}
+
+fn parse_generation_range(
+    spec: &GenerationSpec,
+    start: &str,
+    end: &str,
+    write_evaluation: &str,
+) -> io::Result<GenerationRange> {
+    let start = start.parse::<usize>().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("BORSUK_SYNTHETIC_ROW_START must be an unsigned integer: {error}"),
+        )
+    })?;
+    let end = end.parse::<usize>().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("BORSUK_SYNTHETIC_ROW_END must be an unsigned integer: {error}"),
+        )
+    })?;
+    let write_evaluation = match write_evaluation {
+        "0" => false,
+        "1" => true,
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "BORSUK_SYNTHETIC_WRITE_EVAL must be 0 or 1",
+            ));
+        }
+    };
+    GenerationRange::new(spec.train, spec.group_size, start, end, write_evaluation)
+}
+
 impl GeneratorKind {
     fn parse(value: &str) -> io::Result<Self> {
         match value {
@@ -113,33 +185,54 @@ fn main() -> io::Result<()> {
     };
     validate_config(train, dimensions, queries, group_size, generator)?;
 
-    fs::create_dir_all(&output)?;
-    ensure_output_empty(&output)?;
-    write_train_parquet(&output, &spec, TRAIN_SHARD_TARGET_BYTES)?;
-    write_queries_and_truth_parquet(
-        &output.join("test.parquet"),
-        &output.join("neighbors.parquet"),
+    let range = parse_generation_range(
         &spec,
+        &env_string("BORSUK_SYNTHETIC_ROW_START", "0")?,
+        &env_string("BORSUK_SYNTHETIC_ROW_END", &train.to_string())?,
+        &env_string("BORSUK_SYNTHETIC_WRITE_EVAL", "1")?,
     )?;
-    write_meta(
-        &output,
-        &dataset_id,
-        train,
-        dimensions,
-        queries,
-        seed,
-        generator,
-    )?;
+    fs::create_dir_all(&output)?;
+    write_generation_output(&output, &dataset_id, &spec, range, TRAIN_SHARD_TARGET_BYTES)?;
     eprintln!(
-        "generated output={} generator={} train={} dimensions={} queries={} group_size={} seed={}",
+        "generated output={} generator={} train={} range={}..{} dimensions={} queries={} group_size={} seed={}",
         output.display(),
         generator.id(),
         train,
+        range.start,
+        range.end,
         dimensions,
         queries,
         group_size,
         seed
     );
+    Ok(())
+}
+
+fn write_generation_output(
+    output: &Path,
+    dataset_id: &str,
+    spec: &GenerationSpec,
+    range: GenerationRange,
+    target_bytes: usize,
+) -> io::Result<()> {
+    ensure_output_empty(output)?;
+    write_train_parquet_range(output, spec, range, target_bytes)?;
+    if range.write_evaluation {
+        write_queries_and_truth_parquet(
+            &output.join("test.parquet"),
+            &output.join("neighbors.parquet"),
+            spec,
+        )?;
+        write_meta(
+            output,
+            dataset_id,
+            spec.train,
+            spec.dimensions,
+            spec.queries,
+            spec.seed,
+            spec.generator,
+        )?;
+    }
     Ok(())
 }
 
@@ -206,6 +299,20 @@ fn write_train_parquet(
     spec: &GenerationSpec,
     target_bytes: usize,
 ) -> io::Result<()> {
+    write_train_parquet_range(
+        output,
+        spec,
+        GenerationRange::new(spec.train, spec.group_size, 0, spec.train, true)?,
+        target_bytes,
+    )
+}
+
+fn write_train_parquet_range(
+    output: &Path,
+    spec: &GenerationSpec,
+    range: GenerationRange,
+    target_bytes: usize,
+) -> io::Result<()> {
     let GenerationSpec {
         train,
         dimensions,
@@ -217,7 +324,8 @@ fn write_train_parquet(
     let groups = train / group_size;
     let rows_per_shard = rows_per_train_shard(dimensions, target_bytes)?;
     let schema = embedding_schema(dimensions)?;
-    let shard_count = train.div_ceil(rows_per_shard);
+    let range_rows = range.row_count();
+    let shard_count = range_rows.div_ceil(rows_per_shard);
     if shard_count > MAX_TRAIN_SHARDS {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -225,8 +333,9 @@ fn write_train_parquet(
         ));
     }
     (0..shard_count).into_par_iter().try_for_each(|shard| {
-        let first_row = shard.saturating_mul(rows_per_shard);
-        let shard_rows = rows_per_shard.min(train - first_row);
+        let local_first_row = shard.saturating_mul(rows_per_shard);
+        let first_row = range.start + local_first_row;
+        let shard_rows = rows_per_shard.min(range_rows - local_first_row);
         let path = output.join(format!("train-{shard:08}.parquet"));
         let mut writer = ArrowWriter::try_new(
             File::create(&path)?,
@@ -276,7 +385,10 @@ fn write_train_parquet(
             ));
         }
         let completed_rows = first_row + shard_rows;
-        eprintln!("generated_train_rows={completed_rows} of {train}");
+        eprintln!(
+            "generated_train_rows={completed_rows} range_end={} total={train}",
+            range.end
+        );
         Ok(())
     })
 }
@@ -840,9 +952,174 @@ fn env_u64(name: &str, default: u64) -> io::Result<u64> {
     }
 }
 
+fn env_string(name: &str, default: &str) -> io::Result<String> {
+    match env::var(name) {
+        Ok(value) => Ok(value),
+        Err(env::VarError::NotPresent) => Ok(default.to_owned()),
+        Err(error) => Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn read_training_values(directory: &Path) -> Vec<f32> {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let mut paths = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("train-")
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        let mut values = Vec::new();
+        for path in paths {
+            let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(path).unwrap())
+                .unwrap()
+                .build()
+                .unwrap();
+            for batch in reader {
+                let batch = batch.unwrap();
+                let vectors = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .unwrap();
+                let floats = vectors
+                    .values()
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .unwrap();
+                values.extend_from_slice(floats.values());
+            }
+        }
+        values
+    }
+
+    #[test]
+    fn v26_pq4_100m_range_partitions_equal_one_global_generation() {
+        // Break caught: each Spot worker seeds and numbers an independent 10M universe instead of
+        // generating its registered half-open range from the shared 100M corpus recipe.
+        let complete = tempfile::tempdir().unwrap();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let spec = GenerationSpec {
+            train: 400,
+            dimensions: 32,
+            queries: 2,
+            group_size: 100,
+            seed: 1_501_096,
+            generator: GeneratorKind::Clustered,
+        };
+
+        write_train_parquet(complete.path(), &spec, 3_200).unwrap();
+        write_train_parquet_range(
+            first.path(),
+            &spec,
+            GenerationRange::new(400, 100, 0, 200, false).unwrap(),
+            3_200,
+        )
+        .unwrap();
+        write_train_parquet_range(
+            second.path(),
+            &spec,
+            GenerationRange::new(400, 100, 200, 400, false).unwrap(),
+            3_200,
+        )
+        .unwrap();
+
+        let expected = read_training_values(complete.path());
+        let mut actual = read_training_values(first.path());
+        actual.extend(read_training_values(second.path()));
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn v26_pq4_100m_range_rejects_ambiguous_bounds_and_eval_ownership() {
+        // Break caught: a range can split an analytic truth group, exceed the global corpus, or
+        // let multiple workers publish competing query/truth artifacts.
+        assert_eq!(
+            GenerationRange::new(100_000_000, 100, 10_000_000, 20_000_000, false)
+                .unwrap()
+                .row_count(),
+            10_000_000
+        );
+        assert!(GenerationRange::new(400, 100, 50, 200, false).is_err());
+        assert!(GenerationRange::new(400, 100, 200, 100, false).is_err());
+        assert!(GenerationRange::new(400, 100, 0, 500, false).is_err());
+        assert!(GenerationRange::new(400, 100, 100, 200, true).is_err());
+        assert!(GenerationRange::new(400, 100, 0, 200, true).is_ok());
+    }
+
+    #[test]
+    fn v26_pq4_100m_range_cli_values_are_explicit_and_fail_closed() {
+        // Break caught: malformed or implicit range flags silently fall back to a full-corpus
+        // generation, or a nonzero worker is allowed to publish evaluation artifacts.
+        let spec = GenerationSpec {
+            train: 100_000_000,
+            dimensions: 96,
+            queries: 100,
+            group_size: 100,
+            seed: 1_501_096,
+            generator: GeneratorKind::Clustered,
+        };
+        assert_eq!(
+            parse_generation_range(&spec, "10000000", "20000000", "0").unwrap(),
+            GenerationRange::new(100_000_000, 100, 10_000_000, 20_000_000, false).unwrap()
+        );
+        assert!(parse_generation_range(&spec, "10000000", "20000000", "1").is_err());
+        assert!(parse_generation_range(&spec, "ten", "20000000", "0").is_err());
+        assert!(parse_generation_range(&spec, "10000000", "20000000", "false").is_err());
+        assert!(parse_generation_range(&spec, "10000000", "", "0").is_err());
+    }
+
+    #[test]
+    fn v26_pq4_100m_range_only_elected_worker_writes_evaluation_artifacts() {
+        // Break caught: every parallel range writes query/truth/meta, creating multiple competing
+        // evaluation authorities, or a training-only worker leaks evaluation inputs.
+        let elected = tempfile::tempdir().unwrap();
+        let training_only = tempfile::tempdir().unwrap();
+        let spec = GenerationSpec {
+            train: 400,
+            dimensions: 32,
+            queries: 2,
+            group_size: 100,
+            seed: 1_501_096,
+            generator: GeneratorKind::Clustered,
+        };
+
+        write_generation_output(
+            elected.path(),
+            "synthetic-clustered-100m-96",
+            &spec,
+            GenerationRange::new(400, 100, 0, 200, true).unwrap(),
+            3_200,
+        )
+        .unwrap();
+        write_generation_output(
+            training_only.path(),
+            "synthetic-clustered-100m-96",
+            &spec,
+            GenerationRange::new(400, 100, 200, 400, false).unwrap(),
+            3_200,
+        )
+        .unwrap();
+
+        for name in ["test.parquet", "neighbors.parquet", "meta.json"] {
+            assert!(elected.path().join(name).is_file(), "missing {name}");
+            assert!(!training_only.path().join(name).exists(), "leaked {name}");
+        }
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(elected.path().join("meta.json")).unwrap()).unwrap();
+        assert_eq!(metadata["n_train"], 400);
+        assert_eq!(metadata["n_test"], 2);
+    }
 
     #[test]
     fn every_publication_dense_generator_is_distinct_deterministic_and_group_local() {
