@@ -194,6 +194,7 @@ pub use v27_s3_build::{
     V27PagePosting, V27PageSink, decode_v27_layout, encode_v27_layout,
 };
 mod v27_s3_search;
+pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[allow(
     dead_code,

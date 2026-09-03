@@ -49,6 +49,52 @@ pub struct V27Router {
     leaf_ranges: Vec<(usize, usize)>,
 }
 
+/// One exact-reranked neighbor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct V27Match {
+    /// Stable global source ordinal.
+    pub source_ordinal: u64,
+    /// Exact raw-vector squared L2 distance.
+    pub squared_distance: f64,
+}
+
+/// Explicit immutable-page read boundary. Implementations may use S3 or local fixtures.
+pub trait V27PageStore: Send + Sync {
+    /// Fetch all selected pages concurrently as one all-or-nothing wave.
+    fn read_wave(&self, pages: &[V27PageIdentity]) -> Result<Vec<Vec<u8>>>;
+}
+
+/// Truthful combined routing, transfer, and rerank work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V27SearchWork {
+    /// Resident routing work.
+    pub routing: V27RoutingWork,
+    /// Immutable objects requested in the one read wave.
+    pub get_count: usize,
+    /// Authenticated encoded bytes returned by the store.
+    pub encoded_bytes: u64,
+    /// Primary-plus-replica rows decoded.
+    pub decoded_rows: usize,
+    /// Unique source rows exactly reranked.
+    pub unique_rows: usize,
+}
+
+/// Complete exact-reranked query result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct V27SearchResult {
+    /// Neighbors ordered by `(squared_distance,source_ordinal)`.
+    pub matches: Vec<V27Match>,
+    /// Truthful bounded work.
+    pub work: V27SearchWork,
+}
+
+/// Resident router plus an explicit one-wave page store.
+pub struct V27SearchIndex<S> {
+    router: V27Router,
+    store: S,
+    arm: V27SearchArm,
+}
+
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
 }
@@ -262,11 +308,109 @@ impl V27Router {
     }
 }
 
+impl<S: V27PageStore> V27SearchIndex<S> {
+    /// Bind one frozen arm and one explicit page-store implementation.
+    pub fn new(router: V27Router, store: S, arm: V27SearchArm) -> Result<Self> {
+        if arm.root_beam == 0
+            || arm.root_beam > router.hierarchy.roots.len()
+            || arm.leaf_beam == 0
+            || arm.leaf_beam > router.hierarchy.leaves.len()
+            || arm.page_count == 0
+            || arm.page_count > 10
+        {
+            return Err(invalid("V27 search index arm differs"));
+        }
+        Ok(Self { router, store, arm })
+    }
+
+    /// Route, fetch exactly one page wave, authenticate, and exact-rerank.
+    pub fn search(&self, query: &[f32; 96], k: usize) -> Result<V27SearchResult> {
+        if k == 0 || k > 10_240 {
+            return Err(invalid("V27 exact rerank k differs"));
+        }
+        let selection = self.router.select_pages(query, self.arm)?;
+        let expected_bytes = selection.pages.iter().try_fold(0_u64, |total, page| {
+            total
+                .checked_add(page.encoded_bytes)
+                .ok_or_else(|| invalid("V27 page byte projection overflows"))
+        })?;
+        if selection.pages.len() > 10 || expected_bytes > 4_587_520 {
+            return Err(invalid("V27 page wave bound differs"));
+        }
+        let bodies = self.store.read_wave(&selection.pages)?;
+        if bodies.len() != selection.pages.len() {
+            return Err(invalid("V27 page wave is partial"));
+        }
+        let mut rows = std::collections::BTreeMap::<u64, [f32; 96]>::new();
+        let mut decoded_rows = 0;
+        let mut encoded_bytes = 0_u64;
+        for (identity, body) in selection.pages.iter().zip(&bodies) {
+            let page = crate::decode_v27_page(identity, body)?;
+            encoded_bytes = encoded_bytes
+                .checked_add(body.len() as u64)
+                .ok_or_else(|| invalid("V27 returned page bytes overflow"))?;
+            decoded_rows += page.rows.len();
+            for row in page.rows {
+                if let Some(existing) = rows.insert(row.source_ordinal, row.vector)
+                    && existing != row.vector
+                {
+                    return Err(invalid("V27 replica vector authority differs"));
+                }
+            }
+        }
+        if encoded_bytes != expected_bytes || decoded_rows > 10_240 || rows.len() < k {
+            return Err(invalid("V27 exact rerank work differs"));
+        }
+        let unique_rows = rows.len();
+        let mut matches = rows
+            .into_iter()
+            .map(|(source_ordinal, vector)| V27Match {
+                source_ordinal,
+                squared_distance: vector
+                    .iter()
+                    .zip(query)
+                    .map(|(left, right)| {
+                        let delta = f64::from(*left) - f64::from(*right);
+                        delta * delta
+                    })
+                    .sum(),
+            })
+            .collect::<Vec<_>>();
+        if matches
+            .iter()
+            .any(|value| !value.squared_distance.is_finite())
+        {
+            return Err(invalid("V27 exact rerank distance is non-finite"));
+        }
+        matches.sort_by(|left, right| {
+            left.squared_distance
+                .total_cmp(&right.squared_distance)
+                .then(left.source_ordinal.cmp(&right.source_ordinal))
+        });
+        matches.truncate(k);
+        Ok(V27SearchResult {
+            matches,
+            work: V27SearchWork {
+                routing: selection.work,
+                get_count: selection.pages.len(),
+                encoded_bytes,
+                decoded_rows,
+                unique_rows,
+            },
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use half::f16;
 
-    use crate::{V27Hierarchy, V27PageIdentity, V27PagePosting, V27Router, V27SearchArm};
+    use crate::{
+        Result, V27Hierarchy, V27PageIdentity, V27PagePosting, V27PageRow, V27PageStore, V27Router,
+        V27SearchArm, V27SearchIndex, encode_v27_page,
+    };
 
     fn centroid(axis: usize, scale: f32) -> [f16; 96] {
         let mut value = [f16::from_f32(0.0); 96];
@@ -412,5 +556,134 @@ mod tests {
         let mut postings = router().postings().to_vec();
         postings.push(postings[0].clone());
         assert!(V27Router::new(router().hierarchy().clone(), postings).is_err());
+    }
+
+    #[derive(Clone)]
+    struct MemoryStore {
+        bodies: Arc<Vec<(V27PageIdentity, Vec<u8>)>>,
+        calls: Arc<Mutex<Vec<Vec<u32>>>>,
+        truncate: bool,
+    }
+
+    impl V27PageStore for MemoryStore {
+        fn read_wave(&self, pages: &[V27PageIdentity]) -> Result<Vec<Vec<u8>>> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(pages.iter().map(|page| page.ordinal).collect());
+            let mut bodies = pages
+                .iter()
+                .map(|page| {
+                    self.bodies
+                        .iter()
+                        .find(|body| body.0.ordinal == page.ordinal)
+                        .unwrap()
+                        .1
+                        .clone()
+                })
+                .collect::<Vec<_>>();
+            if self.truncate {
+                bodies.pop();
+            }
+            Ok(bodies)
+        }
+    }
+
+    fn search_index(truncate: bool) -> (V27SearchIndex<MemoryStore>, Arc<Mutex<Vec<Vec<u32>>>>) {
+        let rows = [
+            vec![
+                V27PageRow {
+                    source_ordinal: 7,
+                    vector: centroid(0, 1.0).map(f32::from),
+                },
+                V27PageRow {
+                    source_ordinal: 9,
+                    vector: centroid(0, 0.8).map(f32::from),
+                },
+            ],
+            vec![
+                V27PageRow {
+                    source_ordinal: 11,
+                    vector: centroid(0, 0.6).map(f32::from),
+                },
+                V27PageRow {
+                    source_ordinal: 13,
+                    vector: centroid(1, 1.0).map(f32::from),
+                },
+            ],
+        ];
+        let bodies = rows
+            .iter()
+            .enumerate()
+            .map(|(ordinal, rows)| encode_v27_page(ordinal as u32, 2, 0, rows).unwrap())
+            .collect::<Vec<_>>();
+        let postings = bodies
+            .iter()
+            .enumerate()
+            .map(|(ordinal, body)| V27PagePosting {
+                leaf_ordinal: ordinal as u32,
+                page: body.0.clone(),
+                modes: vec![centroid(0, 1.0 - ordinal as f32 * 0.4)],
+            })
+            .collect();
+        let router = V27Router::new(
+            V27Hierarchy {
+                roots: vec![centroid(0, 1.0)],
+                leaves: vec![centroid(0, 1.0), centroid(0, 0.6)],
+                leaf_roots: vec![0, 0],
+            },
+            postings,
+        )
+        .unwrap();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let store = MemoryStore {
+            bodies: Arc::new(bodies),
+            calls: Arc::clone(&calls),
+            truncate,
+        };
+        (
+            V27SearchIndex::new(
+                router,
+                store,
+                V27SearchArm {
+                    root_beam: 1,
+                    leaf_beam: 2,
+                    page_count: 2,
+                },
+            )
+            .unwrap(),
+            calls,
+        )
+    }
+
+    #[test]
+    fn v27_s3_fetch_reads_one_wave_and_exactly_reranks_authenticated_rows() {
+        // Break caught: serving issues dependent GET waves, skips page authentication, or reports
+        // fewer bytes/rows than the exact reranker consumed.
+        let (index, calls) = search_index(false);
+        let query = centroid(0, 1.0).map(f32::from);
+        let result = index.search(&query, 3).unwrap();
+        assert_eq!(calls.lock().unwrap().as_slice(), &[vec![0, 1]]);
+        assert_eq!(
+            result
+                .matches
+                .iter()
+                .map(|value| value.source_ordinal)
+                .collect::<Vec<_>>(),
+            vec![7, 9, 11]
+        );
+        assert_eq!(result.work.get_count, 2);
+        assert_eq!(result.work.decoded_rows, 4);
+        assert_eq!(result.work.unique_rows, 4);
+        assert!(result.work.encoded_bytes > 0);
+        assert!(result.work.encoded_bytes <= 4_587_520);
+    }
+
+    #[test]
+    fn v27_s3_fetch_fails_the_whole_query_on_partial_wave() {
+        // Break caught: a partial S3 wave silently returns lower-recall results.
+        let (index, calls) = search_index(true);
+        assert!(index.search(&centroid(0, 1.0).map(f32::from), 3).is_err());
+        assert_eq!(calls.lock().unwrap().len(), 1);
     }
 }
