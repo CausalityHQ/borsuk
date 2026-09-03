@@ -1257,6 +1257,158 @@ type V26PageModeInventory = BTreeMap<u32, V26PageModes>;
 pub(crate) const V26_PQ_WIDTH_LADDER: [usize; 4] = [8, 16, 24, 32];
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V26Pq4FastCodebook {
+    centroids: Vec<[f32; 48]>,
+}
+
+impl V26Pq4FastCodebook {
+    pub(crate) fn encode(&self, vector: &[f32; 96]) -> Result<[u8; 32]> {
+        if self.centroids.len() != 32
+            || self
+                .centroids
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+        {
+            return Err(invalid("V26 PQ4 codebook differs"));
+        }
+        validate_v26_vector(vector)?;
+        let mut code = [0_u8; 32];
+        for (subspace, encoded) in code.iter_mut().enumerate() {
+            let start = subspace * 3;
+            let center = &self.centroids[subspace];
+            let nearest = (0..16)
+                .map(|centroid| {
+                    let distance = (0..3)
+                        .map(|dimension| {
+                            let delta =
+                                vector[start + dimension] - center[centroid * 3 + dimension];
+                            delta * delta
+                        })
+                        .sum::<f32>();
+                    (distance, centroid)
+                })
+                .min_by(|left, right| {
+                    left.0
+                        .total_cmp(&right.0)
+                        .then_with(|| left.1.cmp(&right.1))
+                })
+                .unwrap()
+                .1;
+            *encoded = u8::try_from(nearest).unwrap();
+        }
+        Ok(code)
+    }
+}
+
+pub(crate) fn projected_v26_pq4_fast_resident_bytes(rows: u64) -> Result<u64> {
+    if rows == 0 {
+        return Err(invalid("V26 PQ4 projection request differs"));
+    }
+    rows.checked_mul(16)
+        .and_then(|bytes| bytes.checked_add(rows.checked_mul(2)?))
+        .and_then(|bytes| bytes.checked_add(512 * 1_024 * 1_024))
+        .and_then(|bytes| bytes.checked_add(32 * 16 * 3 * 4))
+        .and_then(|bytes| bytes.checked_add(8_192 * 4))
+        .and_then(|bytes| bytes.checked_add(4_096 * 16))
+        .and_then(|bytes| bytes.checked_add(384))
+        .ok_or_else(|| invalid("V26 PQ4 projection overflows"))
+}
+
+pub(crate) fn fit_v26_pq4_fast_codebook(rows: &[[f32; 96]]) -> Result<V26Pq4FastCodebook> {
+    const SUBQUANTIZERS: usize = 32;
+    const CENTROIDS: usize = 16;
+    const DIMENSIONS: usize = 3;
+    if rows.len() < CENTROIDS {
+        return Err(invalid("V26 PQ4 training inventory differs"));
+    }
+    for row in rows {
+        validate_v26_vector(row)?;
+    }
+    let sample_count = rows.len().min(8_192);
+    let sample = (0..sample_count)
+        .map(|index| &rows[index * rows.len() / sample_count])
+        .collect::<Vec<_>>();
+    let centroids = (0..SUBQUANTIZERS)
+        .into_par_iter()
+        .map(|subspace| {
+            let start = subspace * DIMENSIONS;
+            let mut centers = [0.0_f32; CENTROIDS * DIMENSIONS];
+            for centroid in 0..CENTROIDS {
+                centers[centroid * DIMENSIONS..(centroid + 1) * DIMENSIONS].copy_from_slice(
+                    &sample[centroid * sample.len() / CENTROIDS][start..start + DIMENSIONS],
+                );
+            }
+            for _ in 0..4 {
+                let mut sums = [0.0_f64; CENTROIDS * DIMENSIONS];
+                let mut counts = [0_u32; CENTROIDS];
+                for row in &sample {
+                    let values = &row[start..start + DIMENSIONS];
+                    let nearest = (0..CENTROIDS)
+                        .map(|centroid| {
+                            let distance = (0..DIMENSIONS)
+                                .map(|dimension| {
+                                    let delta = values[dimension]
+                                        - centers[centroid * DIMENSIONS + dimension];
+                                    delta * delta
+                                })
+                                .sum::<f32>();
+                            (distance, centroid)
+                        })
+                        .min_by(|left, right| {
+                            left.0
+                                .total_cmp(&right.0)
+                                .then_with(|| left.1.cmp(&right.1))
+                        })
+                        .unwrap()
+                        .1;
+                    counts[nearest] += 1;
+                    for dimension in 0..DIMENSIONS {
+                        sums[nearest * DIMENSIONS + dimension] += f64::from(values[dimension]);
+                    }
+                }
+                for centroid in 0..CENTROIDS {
+                    if counts[centroid] == 0 {
+                        continue;
+                    }
+                    for dimension in 0..DIMENSIONS {
+                        centers[centroid * DIMENSIONS + dimension] =
+                            (sums[centroid * DIMENSIONS + dimension] / f64::from(counts[centroid]))
+                                as f32;
+                    }
+                }
+            }
+            centers
+        })
+        .collect::<Vec<_>>();
+    if centroids.len() != SUBQUANTIZERS
+        || centroids.iter().flatten().any(|value| !value.is_finite())
+    {
+        return Err(invalid("V26 PQ4 codebook differs"));
+    }
+    Ok(V26Pq4FastCodebook { centroids })
+}
+
+pub(crate) fn pack_v26_pq4_fast_blocks(codes: &[[u8; 32]]) -> Result<Vec<[u8; 512]>> {
+    if codes.is_empty() || codes.iter().flatten().any(|code| *code >= 16) {
+        return Err(invalid("V26 PQ4 code inventory differs"));
+    }
+    let mut blocks = vec![[0_u8; 512]; codes.len().div_ceil(32)];
+    for (row, code) in codes.iter().enumerate() {
+        let row_in_block = row % 32;
+        for (subspace, value) in code.iter().enumerate() {
+            let byte = &mut blocks[row / 32][subspace * 16 + row_in_block / 2];
+            if row_in_block.is_multiple_of(2) {
+                *byte = (*byte & 0xf0) | value;
+            } else {
+                *byte = (*byte & 0x0f) | (value << 4);
+            }
+        }
+    }
+    Ok(blocks)
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct V26PqCodebook {
     width: usize,
     subspace_width: usize,
@@ -4304,9 +4456,9 @@ mod tests {
         V26_PAGE_MODE_LADDER, V26_PQ_WIDTH_LADDER, V26ConstructionRow, V26Disposition,
         V26ExactGlobalRankResult, V26ExactGlobalResult, V26ExternalQuery, V26ExternalTruth,
         V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult, V26LayoutSample, V26Node,
-        V26ObjectIdentity, V26Pq8Occurrence, V26QueryTruth, V26RankedRow, V26RowPages, V26Tree,
-        build_v26_dual_tree_layout, build_v26_external_truth_rows, build_v26_page_mode_centroids,
-        build_v26_pq8_page_occurrences, build_v26_pq16_packed_index,
+        V26ObjectIdentity, V26Pq4FastCodebook, V26Pq8Occurrence, V26QueryTruth, V26RankedRow,
+        V26RowPages, V26Tree, build_v26_dual_tree_layout, build_v26_external_truth_rows,
+        build_v26_page_mode_centroids, build_v26_pq8_page_occurrences, build_v26_pq16_packed_index,
         canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
         canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
         diagnose_v26_global_centroid_candidate_widths,
@@ -4315,14 +4467,15 @@ mod tests {
         evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
         evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
         evaluate_v26_pq16_exact_rerank_ladder, evaluate_v26_tree_router,
-        exact_v26_layout_oracle_pages, fit_v26_pq_codebook, fit_v26_pq8_codebook,
-        prepare_v26_pq_tables, prepare_v26_pq8_tables, projected_v26_pq_resident_bytes,
-        projected_v26_pq8_resident_bytes, rank_v26_candidate_rows, rank_v26_pq8_occurrences,
-        rank_v26_pq16_candidate_rows, rank_v26_pq16_global_candidates,
-        rank_v26_pq16_linear_occurrence_candidates, rank_v26_pq16_packed_candidates,
-        rank_v26_pq16_parallel_occurrence_candidates, rank_v26_tree_pages, route_v26_pages,
-        select_v26_pq16_global_packed_pages, select_v26_pq16_packed_pages, select_v26_ranked_pages,
-        validate_v26_dual_tree_layout,
+        exact_v26_layout_oracle_pages, fit_v26_pq_codebook, fit_v26_pq4_fast_codebook,
+        fit_v26_pq8_codebook, pack_v26_pq4_fast_blocks, prepare_v26_pq_tables,
+        prepare_v26_pq8_tables, projected_v26_pq_resident_bytes,
+        projected_v26_pq4_fast_resident_bytes, projected_v26_pq8_resident_bytes,
+        rank_v26_candidate_rows, rank_v26_pq8_occurrences, rank_v26_pq16_candidate_rows,
+        rank_v26_pq16_global_candidates, rank_v26_pq16_linear_occurrence_candidates,
+        rank_v26_pq16_packed_candidates, rank_v26_pq16_parallel_occurrence_candidates,
+        rank_v26_tree_pages, route_v26_pages, select_v26_pq16_global_packed_pages,
+        select_v26_pq16_packed_pages, select_v26_ranked_pages, validate_v26_dual_tree_layout,
     };
 
     const PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
@@ -4338,6 +4491,21 @@ mod tests {
             source_ordinal,
             vector,
         }
+    }
+
+    fn normalized_row(source_ordinal: u64) -> [f32; 96] {
+        let mut vector = std::array::from_fn(|dimension| {
+            (((source_ordinal * 37 + dimension as u64 * 17) % 257) as i32 - 128) as f32
+        });
+        let norm = vector
+            .iter()
+            .map(|coordinate| coordinate * coordinate)
+            .sum::<f32>()
+            .sqrt();
+        for coordinate in &mut vector {
+            *coordinate /= norm;
+        }
+        vector
     }
 
     fn v26_router_test_sign(seed: u64, node: u32) -> f32 {
@@ -5097,6 +5265,84 @@ mod tests {
         };
         assert_eq!(near.len(), 8);
         assert!(score(near) <= score(far));
+    }
+
+    #[test]
+    fn v26_fast_smoke_pq4_projection_is_exact() {
+        // Break caught: the fast-scan design silently charges fewer resident bytes than its
+        // codes, score buffer, cold cache, codebook, histogram, and bounded candidates use.
+        assert_eq!(
+            projected_v26_pq4_fast_resident_bytes(100_000_000).unwrap(),
+            2_336_975_744
+        );
+        assert!(projected_v26_pq4_fast_resident_bytes(0).is_err());
+    }
+
+    #[test]
+    fn v26_pq4_codebook_is_deterministic_and_rejects_invalid_vectors() {
+        // Break caught: the query-independent training sample or tie rule becomes nondeterministic,
+        // or invalid construction values reach the persisted codebook.
+        let rows = (0_u64..256).map(normalized_row).collect::<Vec<_>>();
+        let first = fit_v26_pq4_fast_codebook(&rows).unwrap();
+        let second = fit_v26_pq4_fast_codebook(&rows).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.centroids.len(), 32);
+        assert!(
+            first
+                .centroids
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite())
+        );
+        assert!(
+            first
+                .encode(&rows[42])
+                .unwrap()
+                .iter()
+                .all(|code| *code < 16)
+        );
+
+        let ties = V26Pq4FastCodebook {
+            centroids: vec![[0.0; 48]; 32],
+        };
+        assert_eq!(ties.encode(&rows[42]).unwrap(), [0_u8; 32]);
+
+        let mut nonfinite = rows.clone();
+        nonfinite[7][19] = f32::NAN;
+        assert!(fit_v26_pq4_fast_codebook(&nonfinite).is_err());
+        let mut zero = rows;
+        zero[11] = [0.0; 96];
+        assert!(fit_v26_pq4_fast_codebook(&zero).is_err());
+    }
+
+    #[test]
+    fn v26_pq4_codebook_blocks_are_transposed_and_padding_is_not_a_row() {
+        // Break caught: nibble orientation, subquantizer plane order, or final-block padding
+        // changes and makes the SIMD scorer rank a different source ordinal.
+        let codes = (0_u8..35)
+            .map(|row| std::array::from_fn(|subspace| row.wrapping_add(subspace as u8) & 15))
+            .collect::<Vec<_>>();
+        let blocks = pack_v26_pq4_fast_blocks(&codes).unwrap();
+        assert_eq!(blocks.len(), 2);
+        for row in 0..35_usize {
+            for subspace in 0..32_usize {
+                let byte = blocks[row / 32][subspace * 16 + (row % 32) / 2];
+                let observed = if row % 2 == 0 { byte & 15 } else { byte >> 4 };
+                assert_eq!(observed, codes[row][subspace]);
+            }
+        }
+        for row in 35..64_usize {
+            for subspace in 0..32_usize {
+                let byte = blocks[1][subspace * 16 + (row % 32) / 2];
+                let observed = if row % 2 == 0 { byte & 15 } else { byte >> 4 };
+                assert_eq!(observed, 0);
+            }
+        }
+
+        let mut invalid = codes;
+        invalid[3][9] = 16;
+        assert!(pack_v26_pq4_fast_blocks(&invalid).is_err());
+        assert!(pack_v26_pq4_fast_blocks(&[]).is_err());
     }
 
     #[test]
