@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import time
@@ -12,11 +13,16 @@ from pathlib import Path
 from typing import Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
+EMPTY_TEST_SELECTION_EXIT = 65
+_CARGO_TEST_COUNT = re.compile(
+    r"(?:cargo test:\s*|test result: [^.]*\.\s*)(\d+) passed"
+)
 
 
 def fast_commands(python_executable: str) -> list[list[str]]:
     """Return the production-representative checks used on every V26 change."""
     return [
+        [python_executable, "-m", "unittest", "scripts.test_check_v26_fast"],
         [
             "cargo",
             "test",
@@ -97,19 +103,45 @@ def run_gate(commands: Sequence[Sequence[str]], root: Path = ROOT) -> int:
     for index, command in enumerate(commands, start=1):
         started = time.monotonic()
         print(f"v26-gate start={index}/{len(commands)} command={' '.join(command)}")
-        completed = subprocess.run(command, cwd=root, env=environment, check=False)
+        process = subprocess.Popen(
+            command,
+            cwd=root,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        output: list[str] = []
+        assert process.stdout is not None
+        with process.stdout:
+            for line in process.stdout:
+                print(line, end="")
+                output.append(line)
+        status = process.wait()
+        is_cargo_test = len(command) > 1 and command[0] == "cargo" and command[1] == "test"
+        if status == 0 and is_cargo_test:
+            executed = sum(
+                int(match.group(1))
+                for match in _CARGO_TEST_COUNT.finditer("".join(output))
+            )
+            if executed == 0:
+                print(
+                    "v26-gate error=cargo-test-selected-zero-tests",
+                    file=sys.stderr,
+                )
+                status = EMPTY_TEST_SELECTION_EXIT
         elapsed = time.monotonic() - started
         print(
             f"v26-gate terminal={index}/{len(commands)} "
-            f"status={completed.returncode} elapsed_seconds={elapsed:.3f}"
+            f"status={status} elapsed_seconds={elapsed:.3f}"
         )
-        if completed.returncode != 0:
+        if status != 0:
             print(
                 f"v26-gate result=failed failed_step={index} "
                 f"elapsed_seconds={time.monotonic() - gate_started:.3f}",
                 file=sys.stderr,
             )
-            return completed.returncode
+            return status
     print(
         f"v26-gate result=passed steps={len(commands)} "
         f"elapsed_seconds={time.monotonic() - gate_started:.3f}"

@@ -5300,7 +5300,7 @@ mod tests {
     }
 
     #[test]
-    fn v26_pq16_arrow_serving_matches_reference_with_bounded_cold_reads() {
+    fn v26_fast_pq16_arrow_serving_matches_reference_with_bounded_cold_reads() {
         // Break caught: serving loads the cold corpus, changes top-512 exact-rerank semantics,
         // reads page bodies, or loses the Arrow batch-read bound.
         let temp = TempDir::new().unwrap();

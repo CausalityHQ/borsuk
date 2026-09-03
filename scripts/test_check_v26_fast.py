@@ -1,7 +1,9 @@
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts import check_v26_fast
 
@@ -11,27 +13,31 @@ class V26FastGateTests(unittest.TestCase):
         commands = check_v26_fast.fast_commands(sys.executable)
 
         rendered = [" ".join(command) for command in commands]
-        self.assertEqual(len(commands), 7)
-        self.assertIn("cargo test -p borsuk-v26 --lib v26_fast_", rendered[0])
+        self.assertEqual(len(commands), 8)
+        self.assertEqual(
+            rendered[0],
+            f"{sys.executable} -m unittest scripts.test_check_v26_fast",
+        )
+        self.assertIn("cargo test -p borsuk-v26 --lib v26_fast_", rendered[1])
         self.assertIn(
             "cargo test -p borsuk-v26 --example v26_page_layout v26_",
-            rendered[1],
-        )
-        self.assertIn(
-            "cargo test -p borsuk-v26 --example v26_pq16_serving_build v26_",
             rendered[2],
         )
         self.assertIn(
-            "cargo test -p borsuk-v26 --example v26_pq16_serving v26_",
+            "cargo test -p borsuk-v26 --example v26_pq16_serving_build v26_",
             rendered[3],
+        )
+        self.assertIn(
+            "cargo test -p borsuk-v26 --example v26_pq16_serving v26_",
+            rendered[4],
         )
         self.assertIn(
             "-m unittest scripts.test_run_v26_page_layout "
             "scripts.test_launch_v26_page_layout_spot",
-            rendered[4],
+            rendered[5],
         )
-        self.assertEqual(rendered[5], "cargo fmt --all -- --check")
-        self.assertEqual(rendered[6], "git diff --check")
+        self.assertEqual(rendered[6], "cargo fmt --all -- --check")
+        self.assertEqual(rendered[7], "git diff --check")
         self.assertFalse(any("--workspace" in command for command in rendered))
         self.assertFalse(any("--all-targets" in command for command in rendered))
 
@@ -56,6 +62,36 @@ class V26FastGateTests(unittest.TestCase):
 
             self.assertEqual(result, 7)
             self.assertEqual(marker.read_text(encoding="utf-8"), "one\n")
+
+    def test_gate_rejects_a_cargo_test_command_that_executes_zero_tests(self) -> None:
+        # Break caught: a stale Cargo filter exits zero while silently exercising no contract.
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_path = Path(temporary)
+            cargo = temporary_path / "cargo"
+            cargo.write_text(
+                "#!/bin/sh\nprintf '%s\\n' "
+                "'cargo test: 0 passed, 62 filtered out (1 suite, 0.00s)'\n",
+                encoding="utf-8",
+            )
+            cargo.chmod(0o755)
+            marker = temporary_path / "later.txt"
+            commands = [
+                ["cargo", "test", "-p", "borsuk-v26", "missing-filter"],
+                [
+                    sys.executable,
+                    "-c",
+                    f"from pathlib import Path; Path({str(marker)!r}).write_text('ran')",
+                ],
+            ]
+
+            with mock.patch.dict(
+                os.environ,
+                {"PATH": f"{temporary}{os.pathsep}{os.environ['PATH']}"},
+            ):
+                result = check_v26_fast.run_gate(commands, temporary_path)
+
+            self.assertNotEqual(result, 0)
+            self.assertFalse(marker.exists())
 
     def test_milestone_layer_is_explicit_and_adds_full_assurance_last(self) -> None:
         fast = check_v26_fast.fast_commands(sys.executable)
