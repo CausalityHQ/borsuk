@@ -5359,7 +5359,7 @@ mod tests {
     }
 
     #[test]
-    fn v26_fast_global_pq16_scans_each_row_once_and_ignores_tree_postings() {
+    fn v26_fast_smoke_global_pq16_scans_each_row_once_and_ignores_tree_postings() {
         // Break caught: the router-free quality gate still depends on a tree frontier, scans
         // mirrored posting occurrences, or changes deterministic (distance, ordinal) ranking.
         let codebook = super::V26PqCodebook {
@@ -6128,7 +6128,7 @@ mod tests {
     }
 
     #[test]
-    fn v26_fast_layout_oracle_supports_the_frozen_ten_page_serving_budget() {
+    fn v26_fast_smoke_layout_oracle_supports_the_frozen_ten_page_serving_budget() {
         // Break caught: the full-scale perfect-recall budget is rejected or truncated at eight.
         let assignments = (0_u32..10)
             .map(|page| vec![page, page + 10])

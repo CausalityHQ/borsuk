@@ -8771,7 +8771,7 @@ mod tests {
     }
 
     #[test]
-    fn v26_fast_global_quality_recomputes_the_fail_fast_truth_gate() {
+    fn v26_fast_smoke_global_quality_recomputes_the_fail_fast_truth_gate() {
         // Break caught: the short global-scan preflight can pass latency while silently
         // missing truth neighbors, trusting stored quality aggregates, or changing its depth.
         let samples = (0_u32..32)
@@ -8843,7 +8843,7 @@ mod tests {
     }
 
     #[test]
-    fn v26_fast_global_quality_sample_joins_selection_to_truth_without_page_reads() {
+    fn v26_fast_smoke_global_quality_sample_joins_selection_to_truth_without_page_reads() {
         // Break caught: the fast global screen measures latency but never joins the selected
         // pages to the independently authenticated truth assignments.
         let selection = crate::V26Pq16ServingSelection {

@@ -19,8 +19,27 @@ _CARGO_TEST_COUNT = re.compile(
 )
 
 
-def fast_commands(python_executable: str) -> list[list[str]]:
-    """Return the production-representative checks used on every V26 change."""
+def smoke_commands(python_executable: str) -> list[list[str]]:
+    """Return the seconds-long contract gate used during implementation."""
+    return [
+        [python_executable, "-m", "unittest", "scripts.test_check_v26_fast"],
+        [
+            "cargo",
+            "test",
+            "-p",
+            "borsuk-v26",
+            "--lib",
+            "v26_fast_smoke_",
+            "--",
+            "--nocapture",
+        ],
+        ["cargo", "fmt", "--all", "--", "--check"],
+        ["git", "diff", "--check"],
+    ]
+
+
+def affected_commands(python_executable: str) -> list[list[str]]:
+    """Return all focused V26 checks used at a stable implementation boundary."""
     return [
         [python_executable, "-m", "unittest", "scripts.test_check_v26_fast"],
         [
@@ -102,7 +121,7 @@ def fast_commands(python_executable: str) -> list[list[str]]:
 
 def milestone_commands(python_executable: str) -> list[list[str]]:
     """Return focused checks followed by the deliberately expensive assurance."""
-    return fast_commands(python_executable) + [
+    return affected_commands(python_executable) + [
         [
             "cargo",
             "clippy",
@@ -173,17 +192,24 @@ def run_gate(commands: Sequence[Sequence[str]], root: Path = ROOT) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    layer = parser.add_mutually_exclusive_group()
+    layer.add_argument(
+        "--affected",
+        action="store_true",
+        help="run every focused V26 component gate",
+    )
+    layer.add_argument(
         "--milestone",
         action="store_true",
-        help="append strict workspace Clippy and the full workspace test suite",
+        help="run affected checks, strict Clippy, and the full workspace suite",
     )
     arguments = parser.parse_args(argv)
-    commands = (
-        milestone_commands(sys.executable)
-        if arguments.milestone
-        else fast_commands(sys.executable)
-    )
+    if arguments.milestone:
+        commands = milestone_commands(sys.executable)
+    elif arguments.affected:
+        commands = affected_commands(sys.executable)
+    else:
+        commands = smoke_commands(sys.executable)
     return run_gate(commands)
 
 

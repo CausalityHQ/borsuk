@@ -9,8 +9,25 @@ from scripts import check_v26_fast
 
 
 class V26FastGateTests(unittest.TestCase):
-    def test_fast_layer_contains_only_focused_v26_checks(self) -> None:
-        commands = check_v26_fast.fast_commands(sys.executable)
+    def test_smoke_layer_contains_only_contract_and_static_checks(self) -> None:
+        commands = check_v26_fast.smoke_commands(sys.executable)
+
+        rendered = [" ".join(command) for command in commands]
+        self.assertEqual(len(commands), 4)
+        self.assertEqual(
+            rendered[0],
+            f"{sys.executable} -m unittest scripts.test_check_v26_fast",
+        )
+        self.assertIn(
+            "cargo test -p borsuk-v26 --lib v26_fast_smoke_", rendered[1]
+        )
+        self.assertEqual(rendered[2], "cargo fmt --all -- --check")
+        self.assertEqual(rendered[3], "git diff --check")
+        self.assertFalse(any("--workspace" in command for command in rendered))
+        self.assertFalse(any("--all-targets" in command for command in rendered))
+
+    def test_affected_layer_contains_all_focused_v26_checks(self) -> None:
+        commands = check_v26_fast.affected_commands(sys.executable)
 
         rendered = [" ".join(command) for command in commands]
         self.assertEqual(len(commands), 10)
@@ -102,10 +119,10 @@ class V26FastGateTests(unittest.TestCase):
             self.assertFalse(marker.exists())
 
     def test_milestone_layer_is_explicit_and_adds_full_assurance_last(self) -> None:
-        fast = check_v26_fast.fast_commands(sys.executable)
+        affected = check_v26_fast.affected_commands(sys.executable)
         milestone = check_v26_fast.milestone_commands(sys.executable)
 
-        self.assertEqual(milestone[: len(fast)], fast)
+        self.assertEqual(milestone[: len(affected)], affected)
         self.assertEqual(
             milestone[-2],
             [
