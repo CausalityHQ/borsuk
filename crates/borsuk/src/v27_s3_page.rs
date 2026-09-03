@@ -9,6 +9,7 @@ use arrow_ipc::{
     writer::{FileWriter, IpcWriteOptions},
 };
 use arrow_schema::{DataType, Field, Schema};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{BorsukError, Result};
@@ -18,7 +19,8 @@ const ID_BYTES: i32 = 8;
 const MAX_PAGE_ROWS: usize = 1_024;
 
 /// Exact content identity and row accounting for one immutable V27 page.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct V27PageIdentity {
     /// Stable page ordinal used only for deterministic routing ties.
     pub ordinal: u32,

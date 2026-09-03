@@ -191,7 +191,8 @@ pub use v27_s3_router::{
 mod v27_s3_build;
 pub use v27_s3_build::{
     V27BuildConfig, V27BuildReceipt, V27LayoutArtifactIdentity, V27LayoutArtifacts, V27PageBuilder,
-    V27PagePosting, V27PageSink, decode_v27_layout, encode_v27_layout,
+    V27PageManifest, V27PagePosting, V27PageSink, decode_v27_layout, decode_v27_page_manifest,
+    encode_v27_layout, encode_v27_page_manifest,
 };
 mod v27_s3_search;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};

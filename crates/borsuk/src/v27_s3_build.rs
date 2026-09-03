@@ -18,6 +18,7 @@ use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use half::f16;
 use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{BorsukError, Result, V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_page};
@@ -90,6 +91,24 @@ pub struct V27LayoutArtifacts {
     pub postings_parquet: Vec<u8>,
     /// Strict page-mode Arrow IPC bytes.
     pub modes_arrow: Vec<u8>,
+}
+
+/// Canonical authority for every immutable V27 S3 page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V27PageManifest {
+    /// Pages in exact ordinal order.
+    pub pages: Vec<V27PageIdentity>,
+    /// Primary rows, exactly equal to the source population.
+    pub primary_rows: u64,
+    /// Query-independent replicas.
+    pub replica_rows: u64,
+    /// Frozen manifest schema version.
+    pub schema_version: u32,
+    /// Source rows consumed.
+    pub source_rows: u64,
+    /// Primary-plus-replica rows stored.
+    pub stored_rows: u64,
 }
 
 /// Explicit scratch and immutable-page boundary for bounded construction.
@@ -1032,6 +1051,81 @@ fn layout_identity(role: &str, bytes: &[u8]) -> Result<V27LayoutArtifactIdentity
     })
 }
 
+fn valid_page_manifest(manifest: &V27PageManifest) -> bool {
+    manifest.schema_version == 1
+        && !manifest.pages.is_empty()
+        && manifest.primary_rows == manifest.source_rows
+        && manifest.stored_rows == manifest.primary_rows + manifest.replica_rows
+        && manifest.pages.iter().enumerate().all(|(ordinal, page)| {
+            page.ordinal as usize == ordinal
+                && page.encoded_bytes > 0
+                && page.primary_rows > 0
+                && usize::from(page.primary_rows) + usize::from(page.replica_rows) <= 1_024
+                && page.sha256.len() == 64
+                && page
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        && manifest
+            .pages
+            .iter()
+            .map(|page| u64::from(page.primary_rows))
+            .sum::<u64>()
+            == manifest.primary_rows
+        && manifest
+            .pages
+            .iter()
+            .map(|page| u64::from(page.replica_rows))
+            .sum::<u64>()
+            == manifest.replica_rows
+}
+
+fn canonical_manifest_bytes(manifest: &V27PageManifest) -> Result<Vec<u8>> {
+    let value = serde_json::to_value(manifest)
+        .map_err(|_| invalid("V27 page manifest serialization failed"))?;
+    let mut bytes = serde_json::to_vec(&value)
+        .map_err(|_| invalid("V27 page manifest serialization failed"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+/// Encode the exact canonical newline-JSON page manifest and its identity.
+pub fn encode_v27_page_manifest(
+    receipt: &V27BuildReceipt,
+) -> Result<(V27LayoutArtifactIdentity, Vec<u8>)> {
+    let manifest = V27PageManifest {
+        pages: receipt.pages.clone(),
+        primary_rows: receipt.primary_rows,
+        replica_rows: receipt.replica_rows,
+        schema_version: 1,
+        source_rows: receipt.source_rows,
+        stored_rows: receipt.stored_rows,
+    };
+    if !valid_page_manifest(&manifest) {
+        return Err(invalid("V27 page manifest authority differs"));
+    }
+    let bytes = canonical_manifest_bytes(&manifest)?;
+    Ok((layout_identity("v27-page-manifest-json", &bytes)?, bytes))
+}
+
+/// Authenticate and strictly decode one canonical V27 page manifest.
+pub fn decode_v27_page_manifest(
+    identity: &V27LayoutArtifactIdentity,
+    bytes: &[u8],
+) -> Result<V27PageManifest> {
+    authenticate_layout(identity, bytes, "v27-page-manifest-json")?;
+    if !bytes.ends_with(b"\n") || bytes[..bytes.len() - 1].contains(&b'\n') {
+        return Err(invalid("V27 page manifest newline convention differs"));
+    }
+    let manifest: V27PageManifest =
+        serde_json::from_slice(bytes).map_err(|_| invalid("V27 page manifest JSON differs"))?;
+    if !valid_page_manifest(&manifest) || canonical_manifest_bytes(&manifest)? != bytes {
+        return Err(invalid("V27 page manifest authority differs"));
+    }
+    Ok(manifest)
+}
+
 /// Encode strict Parquet postings and Arrow page modes for resident serving.
 pub fn encode_v27_layout(receipt: &V27BuildReceipt) -> Result<V27LayoutArtifacts> {
     if receipt.primary_rows != receipt.source_rows
@@ -1298,10 +1392,12 @@ mod tests {
     };
 
     use half::f16;
+    use sha2::Digest;
 
     use crate::{
         Result, V27BuildConfig, V27Hierarchy, V27PageBuilder, V27PageIdentity, V27PageRow,
-        V27PageSink, decode_v27_layout, decode_v27_page, encode_v27_layout,
+        V27PageSink, decode_v27_layout, decode_v27_page, decode_v27_page_manifest,
+        encode_v27_layout, encode_v27_page_manifest,
     };
 
     #[derive(Default)]
@@ -1467,6 +1563,19 @@ mod tests {
         let mut digest_drift = artifacts.clone();
         digest_drift.postings.sha256 = "0".repeat(64);
         assert!(decode_v27_layout(&receipt.pages, &digest_drift).is_err());
+
+        let (manifest_identity, manifest_bytes) = encode_v27_page_manifest(&receipt).unwrap();
+        assert_eq!(manifest_identity.role, "v27-page-manifest-json");
+        assert_eq!(manifest_bytes.last(), Some(&b'\n'));
+        let manifest = decode_v27_page_manifest(&manifest_identity, &manifest_bytes).unwrap();
+        assert_eq!(manifest.pages, receipt.pages);
+        assert_eq!(manifest.source_rows, 32);
+        let mut noncanonical = manifest_bytes.clone();
+        noncanonical.insert(0, b' ');
+        let mut changed = manifest_identity.clone();
+        changed.sha256 = format!("{:x}", sha2::Sha256::digest(&noncanonical));
+        changed.encoded_bytes = noncanonical.len() as u64;
+        assert!(decode_v27_page_manifest(&changed, &noncanonical).is_err());
     }
 
     #[test]
