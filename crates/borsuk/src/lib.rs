@@ -204,6 +204,10 @@ pub fn report_build_timing(label: &str) -> std::io::Result<()> {
 /// ```
 pub mod public_api_policy {}
 
+pub use borsuk_pq4::{
+    BorsukError as Pq4Error, Pq4BuildConfig, Pq4BuildReport, Pq4Builder, Pq4Index, Pq4Match,
+    Pq4OpenOptions, merge_pq4_shard_matches,
+};
 pub use cell_wal::{
     CellWalConfig, CellWalRunKind, DEFAULT_CELL_WAL_LANES, LogicalCellId, MAX_CELL_WAL_LANES,
 };

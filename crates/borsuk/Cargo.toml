@@ -47,6 +47,7 @@ url = "2.5"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 wide = "0.7"
 borsuk-fma = { path = "../borsuk-fma" }
+borsuk-pq4 = { path = "../borsuk-pq4" }
 borsuk-v25 = { path = "../borsuk-v25" }
 zstd = "0.13"
 
