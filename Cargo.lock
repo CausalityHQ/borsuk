@@ -451,6 +451,7 @@ name = "borsuk-v26"
 version = "0.0.0"
 dependencies = [
  "arrow-array",
+ "arrow-ipc",
  "arrow-schema",
  "parquet",
  "rayon",

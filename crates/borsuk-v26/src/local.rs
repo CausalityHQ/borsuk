@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -10,6 +10,7 @@ use arrow_array::{
     Array, ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt8Array, UInt32Array,
     UInt64Array,
 };
+use arrow_ipc::{reader::FileReader, writer::FileWriter};
 use arrow_schema::{DataType, Field, Schema};
 use parquet::{
     arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
@@ -23,16 +24,18 @@ use crate::tree::build_v26_dual_tree_layout_with_workers;
 use crate::{
     Result, V26ConstructionRow, V26Disposition, V26ExactGlobalRankResult, V26ExactGlobalResult,
     V26ExactGlobalSample, V26ExternalQuery, V26ExternalTruth, V26LayoutAuthority, V26LayoutReceipt,
-    V26LayoutResult, V26LayoutSample, V26Node, V26ObjectIdentity, V26PageModeSample, V26QueryTruth,
-    V26RowPages, V26Tree, build_v26_external_truth_rows, canonical_json_value,
-    canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
-    canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
-    diagnose_v26_tree_router_candidate_widths, evaluate_v26_candidate_row_cover,
-    evaluate_v26_centroid_router, evaluate_v26_exact_global_external_rows,
-    evaluate_v26_page_mode_router, evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
+    V26LayoutResult, V26LayoutSample, V26Node, V26ObjectIdentity, V26PageModeSample,
+    V26Pq16ServingSelection, V26PqRankedRow, V26QueryTruth, V26RowPages, V26Tree,
+    build_v26_external_truth_rows, canonical_json_value, canonical_v26_exact_global_result_bytes,
+    canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
+    canonical_v26_tree_router_result_bytes, diagnose_v26_tree_router_candidate_widths,
+    evaluate_v26_candidate_row_cover, evaluate_v26_centroid_router,
+    evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
+    evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
     evaluate_v26_pq16_exact_rerank_ladder, evaluate_v26_tree_router, exact_lower_hex,
     exact_v26_layout_oracle_pages, invalid, projected_steps, projected_v26_pq8_resident_bytes,
-    rank_v26_tree_pages, validate_layout_authority, validate_v26_dual_tree_layout,
+    rank_v26_pq16_packed_candidates, rank_v26_tree_pages, v26_squared_l2,
+    validate_layout_authority, validate_v26_dual_tree_layout, validate_v26_vector,
 };
 
 fn vector_type() -> DataType {
@@ -180,6 +183,27 @@ pub struct V26Pq16RerankRequest {
     pub router: V26TreeRouterRequest,
     pub evidence_output_path: PathBuf,
     pub evidence_output_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26ColdVectorManifest {
+    pub row_count: u64,
+    pub page_count: u32,
+    pub occurrence_count: u64,
+    pub encoded_bytes: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct V26ColdVectorRead {
+    pub vectors: Vec<[f32; 96]>,
+    pub batches_read: u32,
+}
+
+pub struct V26ArrowColdVectors {
+    reader: FileReader<fs::File>,
+    row_count: u64,
+    page_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1604,6 +1628,280 @@ pub fn run_v26_pq16_exact_rerank(request: &V26Pq16RerankRequest) -> Result<Vec<u
     output
 }
 
+fn v26_cold_vector_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("source_ordinal", DataType::UInt64, false),
+        Field::new("vector", vector_type(), false),
+    ])
+}
+
+pub fn write_v26_cold_vectors_arrow(
+    path: &Path,
+    rows: &[V26ConstructionRow],
+    assignments: &[V26RowPages],
+    page_count: u32,
+) -> Result<V26ColdVectorManifest> {
+    if path.exists()
+        || rows.is_empty()
+        || rows.len() != assignments.len()
+        || page_count == 0
+        || rows.len() > usize::try_from(u32::MAX).unwrap()
+    {
+        return Err(invalid("V26 cold-vector write request differs"));
+    }
+    let result = (|| {
+        let mut page_rows = vec![Vec::<u32>::new(); usize::try_from(page_count).unwrap()];
+        for (index, (row, assignment)) in rows.iter().zip(assignments).enumerate() {
+            if usize::try_from(row.source_ordinal).ok() != Some(index)
+                || assignment.source_ordinal != row.source_ordinal
+                || assignment.primary_page == assignment.replica_page
+                || assignment.primary_page >= page_count
+                || assignment.replica_page >= page_count
+                || validate_v26_vector(&row.vector).is_err()
+            {
+                return Err(invalid("V26 cold-vector row authority differs"));
+            }
+            let row_id = u32::try_from(index).unwrap();
+            page_rows[usize::try_from(assignment.primary_page).unwrap()].push(row_id);
+            page_rows[usize::try_from(assignment.replica_page).unwrap()].push(row_id);
+        }
+        if page_rows.iter().any(Vec::is_empty) {
+            return Err(invalid("V26 cold-vector page inventory differs"));
+        }
+        let file = fs::File::create(path)
+            .map_err(|error| invalid(&format!("V26 cold-vector create failed: {error}")))?;
+        let mut writer = FileWriter::try_new(file, &v26_cold_vector_schema())
+            .map_err(|error| invalid(&format!("V26 cold-vector writer failed: {error}")))?;
+        for page in &page_rows {
+            let values = page
+                .iter()
+                .flat_map(|row_id| rows[usize::try_from(*row_id).unwrap()].vector)
+                .collect::<Vec<_>>();
+            let vectors = FixedSizeListArray::try_new(
+                Arc::new(Field::new("element", DataType::Float32, false)),
+                96,
+                Arc::new(Float32Array::from(values)),
+                None,
+            )
+            .map_err(|error| invalid(&format!("V26 cold-vector array failed: {error}")))?;
+            let batch = RecordBatch::try_new(
+                Arc::new(v26_cold_vector_schema()),
+                vec![
+                    Arc::new(UInt64Array::from_iter_values(
+                        page.iter().map(|row_id| u64::from(*row_id)),
+                    )),
+                    Arc::new(vectors),
+                ],
+            )
+            .map_err(|error| invalid(&format!("V26 cold-vector batch failed: {error}")))?;
+            writer
+                .write(&batch)
+                .map_err(|error| invalid(&format!("V26 cold-vector write failed: {error}")))?;
+        }
+        writer
+            .finish()
+            .map_err(|error| invalid(&format!("V26 cold-vector finish failed: {error}")))?;
+        let (encoded_bytes, sha256) = sha256_file(path)?;
+        Ok(V26ColdVectorManifest {
+            row_count: u64::try_from(rows.len()).unwrap(),
+            page_count,
+            occurrence_count: u64::try_from(rows.len()).unwrap() * 2,
+            encoded_bytes,
+            sha256,
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
+}
+
+impl V26ArrowColdVectors {
+    pub fn open(path: &Path, manifest: &V26ColdVectorManifest) -> Result<Self> {
+        if manifest.row_count == 0
+            || manifest.page_count == 0
+            || manifest.occurrence_count != manifest.row_count.checked_mul(2).unwrap_or(0)
+            || manifest.encoded_bytes == 0
+            || !exact_lower_hex(&manifest.sha256, 64)
+        {
+            return Err(invalid("V26 cold-vector manifest differs"));
+        }
+        let (encoded_bytes, sha256) = sha256_file(path)?;
+        if encoded_bytes != manifest.encoded_bytes || sha256 != manifest.sha256 {
+            return Err(invalid("V26 cold-vector identity differs"));
+        }
+        let file = fs::File::open(path)
+            .map_err(|error| invalid(&format!("V26 cold-vector open failed: {error}")))?;
+        let reader = FileReader::try_new(file, None)
+            .map_err(|error| invalid(&format!("V26 cold-vector metadata failed: {error}")))?;
+        if reader.schema().as_ref() != &v26_cold_vector_schema()
+            || u32::try_from(reader.num_batches()).ok() != Some(manifest.page_count)
+        {
+            return Err(invalid("V26 cold-vector schema differs"));
+        }
+        Ok(Self {
+            reader,
+            row_count: manifest.row_count,
+            page_count: manifest.page_count,
+        })
+    }
+
+    pub fn read_rows_from_pages(
+        &mut self,
+        candidate_pages: &[u32],
+        row_ids: &[u32],
+    ) -> Result<V26ColdVectorRead> {
+        if candidate_pages.is_empty()
+            || candidate_pages.windows(2).any(|pair| pair[0] >= pair[1])
+            || candidate_pages.iter().any(|page| *page >= self.page_count)
+            || row_ids.is_empty()
+            || row_ids.windows(2).any(|pair| pair[0] >= pair[1])
+            || row_ids.iter().any(|row| u64::from(*row) >= self.row_count)
+        {
+            return Err(invalid("V26 cold-vector read request differs"));
+        }
+        let requested = row_ids.iter().copied().collect::<BTreeSet<_>>();
+        let mut found = BTreeMap::<u32, [f32; 96]>::new();
+        let mut batches_read = 0_u32;
+        for page in candidate_pages {
+            self.reader
+                .set_index(usize::try_from(*page).unwrap())
+                .map_err(|error| invalid(&format!("V26 cold-vector seek failed: {error}")))?;
+            let batch = self
+                .reader
+                .next()
+                .transpose()
+                .map_err(|error| invalid(&format!("V26 cold-vector read failed: {error}")))?
+                .ok_or_else(|| invalid("V26 cold-vector batch is absent"))?;
+            batches_read = batches_read
+                .checked_add(1)
+                .ok_or_else(|| invalid("V26 cold-vector batch count overflows"))?;
+            let ordinals = batch.columns()[0]
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| invalid("V26 cold-vector ordinal array differs"))?;
+            let list = batch.columns()[1]
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .ok_or_else(|| invalid("V26 cold-vector list differs"))?;
+            let values = list
+                .values()
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| invalid("V26 cold-vector values differ"))?;
+            let mut prior = None;
+            for local in 0..batch.num_rows() {
+                let row_id = u32::try_from(ordinals.value(local))
+                    .map_err(|_| invalid("V26 cold-vector row binding differs"))?;
+                if prior.is_some_and(|prior| prior >= row_id)
+                    || batch.columns().iter().any(|column| column.is_null(local))
+                {
+                    return Err(invalid("V26 cold-vector row binding differs"));
+                }
+                prior = Some(row_id);
+                let start = local * 96;
+                let vector: [f32; 96] = values.values()[start..start + 96]
+                    .try_into()
+                    .map_err(|_| invalid("V26 cold-vector width differs"))?;
+                validate_v26_vector(&vector)?;
+                if requested.contains(&row_id)
+                    && found
+                        .insert(row_id, vector)
+                        .is_some_and(|prior| prior != vector)
+                {
+                    return Err(invalid("V26 cold-vector replica differs"));
+                }
+            }
+        }
+        let vectors = row_ids
+            .iter()
+            .map(|row_id| {
+                found
+                    .get(row_id)
+                    .copied()
+                    .ok_or_else(|| invalid("V26 cold-vector candidate binding differs"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(V26ColdVectorRead {
+            vectors,
+            batches_read,
+        })
+    }
+}
+
+pub fn select_v26_pq16_pages_from_arrow(
+    index: &crate::V26PackedPq16Index,
+    candidate_pages: &[u32],
+    query: &[f32; 96],
+    cold_vectors: &mut V26ArrowColdVectors,
+    assignments: &[V26RowPages],
+) -> Result<V26Pq16ServingSelection> {
+    if index.codes.len() != assignments.len() * 16
+        || u64::try_from(assignments.len()).unwrap() != cold_vectors.row_count
+    {
+        return Err(invalid("V26 PQ16 Arrow serving authority differs"));
+    }
+    let approximate = rank_v26_pq16_packed_candidates(index, candidate_pages, query, 512)?;
+    let mut source_ordinals = approximate
+        .iter()
+        .map(|candidate| u32::try_from(candidate.source_ordinal))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| invalid("V26 PQ16 Arrow source ordinal differs"))?;
+    source_ordinals.sort_unstable();
+    let cold = cold_vectors.read_rows_from_pages(candidate_pages, &source_ordinals)?;
+    let mut exact = approximate
+        .iter()
+        .map(|candidate| {
+            let source_ordinal = u32::try_from(candidate.source_ordinal)
+                .map_err(|_| invalid("V26 PQ16 Arrow source ordinal differs"))?;
+            let position = source_ordinals
+                .binary_search(&source_ordinal)
+                .map_err(|_| invalid("V26 PQ16 Arrow cold-vector binding differs"))?;
+            let assignment = assignments
+                .get(usize::try_from(source_ordinal).unwrap())
+                .ok_or_else(|| invalid("V26 PQ16 Arrow assignment differs"))?;
+            if assignment.source_ordinal != candidate.source_ordinal {
+                return Err(invalid("V26 PQ16 Arrow assignment binding differs"));
+            }
+            let distance = v26_squared_l2(&cold.vectors[position], query);
+            if !distance.is_finite() {
+                return Err(invalid("V26 PQ16 Arrow exact distance differs"));
+            }
+            Ok((
+                V26PqRankedRow {
+                    source_ordinal: candidate.source_ordinal,
+                    distance,
+                },
+                [assignment.primary_page, assignment.replica_page],
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    exact.sort_by_key(|entry| entry.0);
+    let ranked_assignments = exact[..10]
+        .iter()
+        .map(|(_, pages)| pages.to_vec())
+        .collect::<Vec<_>>();
+    let mut selected_pages = exact_v26_layout_oracle_pages(&ranked_assignments, 8)?;
+    for page in candidate_pages {
+        if selected_pages.len() == 8 {
+            break;
+        }
+        if !selected_pages.contains(page) {
+            selected_pages.push(*page);
+        }
+    }
+    if selected_pages.len() != 8 {
+        return Err(invalid("V26 PQ16 Arrow serving page inventory differs"));
+    }
+    selected_pages.sort_unstable();
+    Ok(V26Pq16ServingSelection {
+        selected_pages,
+        exact_rows_read: 512,
+        cold_batches_read: cold.batches_read,
+        page_body_reads: 0,
+    })
+}
+
 fn open_reader(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<fs::File>> {
     let file = fs::File::open(path)
         .map_err(|error| invalid(&format!("V26 Parquet open failed: {error}")))?;
@@ -2198,17 +2496,18 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        V26CandidateCoverRequest, V26CentroidRouterRequest, V26ExactGlobalRequest,
-        V26LayoutBuildRequest, V26LayoutEvaluationRequest, V26LocalObjectPath,
-        V26PageModeRouterRequest, V26Pq8CoverRequest, V26Pq16RerankRequest,
+        V26ArrowColdVectors, V26CandidateCoverRequest, V26CentroidRouterRequest,
+        V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
+        V26LocalObjectPath, V26PageModeRouterRequest, V26Pq8CoverRequest, V26Pq16RerankRequest,
         V26PqWidthLadderRequest, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
         evaluate_v26_exact_global, evaluate_v26_layout_oracle, open_reader, output_identity,
         read_assignments, read_layout_terminal, run_v26_candidate_row_cover,
         run_v26_centroid_router, run_v26_layout_build, run_v26_page_mode_router,
         run_v26_pq_width_ladder, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
         run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
-        v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
-        v26_source_map_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
+        select_v26_pq16_pages_from_arrow, v26_construction_schema, v26_page_assignments_schema,
+        v26_query_schema, v26_source_map_schema, v26_tree_schema, v26_truth_schema,
+        validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -3136,5 +3435,102 @@ mod tests {
         let reader = open_reader(&evidence_path).unwrap();
         assert_eq!(reader.metadata().file_metadata().num_rows(), 5 * 512);
         assert_eq!(reader.schema().field(0).name(), "ranked_row_limit");
+    }
+
+    #[test]
+    fn v26_arrow_cold_vectors_read_only_requested_fixed_batches() {
+        // Break caught: exact vectors use a private binary format, load the full corpus into RAM,
+        // lose assignment authority, or seek once per reranked row instead of once per page.
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("cold-vectors.arrow");
+        let rows = (0_u64..1_024)
+            .map(|source_ordinal| {
+                let mut vector = [0.0_f32; 96];
+                vector[usize::try_from(source_ordinal % 96).unwrap()] = 1.0;
+                crate::V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..1_024)
+            .map(|source_ordinal| crate::V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
+                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let manifest = write_v26_cold_vectors_arrow(&path, &rows, &assignments, 16).unwrap();
+        assert_eq!(manifest.row_count, 1_024);
+        assert_eq!(manifest.page_count, 16);
+        assert_eq!(manifest.occurrence_count, 2_048);
+        let bytes = fs::read(&path).unwrap();
+        assert_eq!(&bytes[..6], b"ARROW1");
+        assert_eq!(&bytes[bytes.len() - 6..], b"ARROW1");
+
+        let mut reader = V26ArrowColdVectors::open(&path, &manifest).unwrap();
+        let selected = reader
+            .read_rows_from_pages(&[0, 8], &[0, 8, 16, 24])
+            .unwrap();
+        assert_eq!(selected.vectors.len(), 4);
+        assert_eq!(selected.batches_read, 2);
+        assert_eq!(selected.vectors[0], rows[0].vector);
+        assert_eq!(selected.vectors[3], rows[24].vector);
+        assert!(reader.read_rows_from_pages(&[8, 0], &[0]).is_err());
+        assert!(reader.read_rows_from_pages(&[0], &[1_024]).is_err());
+    }
+
+    #[test]
+    fn v26_pq16_arrow_serving_matches_reference_with_bounded_cold_reads() {
+        // Break caught: serving loads the cold corpus, changes top-512 exact-rerank semantics,
+        // reads page bodies, or loses the Arrow batch-read bound.
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("cold-vectors.arrow");
+        let rows = (0_u64..2_113)
+            .map(|source_ordinal| {
+                let angle = source_ordinal as f32 / 2_048.0;
+                let mut vector = [0.0_f32; 96];
+                vector[0] = angle.cos();
+                vector[1] = angle.sin();
+                crate::V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..2_113)
+            .map(|source_ordinal| crate::V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
+                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let index = crate::build_v26_pq16_packed_index(&rows, &assignments).unwrap();
+        let candidate_pages = (0_u32..16).collect::<Vec<_>>();
+        let query = rows[42].vector;
+        let reference = crate::select_v26_pq16_packed_pages(
+            &index,
+            &candidate_pages,
+            &query,
+            &rows,
+            &assignments,
+        )
+        .unwrap();
+
+        let manifest = write_v26_cold_vectors_arrow(&path, &rows, &assignments, 16).unwrap();
+        let mut reader = V26ArrowColdVectors::open(&path, &manifest).unwrap();
+        let result = select_v26_pq16_pages_from_arrow(
+            &index,
+            &candidate_pages,
+            &query,
+            &mut reader,
+            &assignments,
+        )
+        .unwrap();
+
+        assert_eq!(result.selected_pages, reference.selected_pages);
+        assert_eq!(result.exact_rows_read, 512);
+        assert_eq!(result.cold_batches_read, 16);
+        assert_eq!(result.page_body_reads, 0);
     }
 }
