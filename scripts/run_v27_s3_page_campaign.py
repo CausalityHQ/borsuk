@@ -389,6 +389,7 @@ trap finish EXIT
 dnf install -y gcc gcc-c++ python3 python3-pip tar zstd
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
 python3 -m venv "$root/venv"
+"$root/venv/bin/python" -m pip install --upgrade pip
 "$root/venv/bin/pip" install --no-cache-dir numpy==2.4.2 pyarrow==24.0.0
 {downloads}
 tar --zstd -xf "$source_archive" -C "$source_dir"

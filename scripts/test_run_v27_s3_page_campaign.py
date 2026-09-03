@@ -293,6 +293,10 @@ class V27QualitySpotTests(unittest.TestCase):
         self.assertIn("--s3-page-prefix s3://bucket/index/pages", script)
         self.assertIn("--page-count 10", script)
         self.assertIn("numpy==2.4.2 pyarrow==24.0.0", script)
+        self.assertLess(
+            script.index('"$root/venv/bin/python" -m pip install --upgrade pip'),
+            script.index('"$root/venv/bin/pip" install --no-cache-dir numpy==2.4.2'),
+        )
         self.assertNotIn("aws s3 sync", script)
         self.assertNotIn("train-00000001.parquet", script)
         self.assertNotIn("index/pages/ --recursive", script)
