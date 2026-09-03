@@ -4875,6 +4875,41 @@ pub fn write_v26_dual_pq_key_index_arrow(
     result
 }
 
+/// Derives the two dual-PQ-key Arrow planes from an authenticated serving bundle.
+pub fn build_v26_dual_pq_key_index_from_serving(
+    serving_manifest: &V26LocalObjectPath,
+    serving_dir: &Path,
+    dual_index_dir: &Path,
+) -> Result<V26DualPqKeyIndexManifest> {
+    let manifest = read_v26_pq16_serving_manifest(serving_manifest)?;
+    let expected_names = v26_pq16_serving_output_names()
+        .into_iter()
+        .chain(std::iter::once("serving-manifest.json"))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let observed_names = fs::read_dir(serving_dir)
+        .map_err(|error| invalid(&format!("V26 dual PQ-key directory read failed: {error}")))?
+        .map(|entry| {
+            entry
+                .map_err(|error| {
+                    invalid(&format!("V26 dual PQ-key directory read failed: {error}"))
+                })
+                .and_then(|entry| {
+                    entry
+                        .file_name()
+                        .into_string()
+                        .map_err(|_| invalid("V26 dual PQ-key artifact name differs"))
+                })
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    if observed_names != expected_names || !dual_index_dir.is_dir() {
+        return Err(invalid("V26 dual PQ-key artifact inventory differs"));
+    }
+    let packed = read_v26_pq16_index_arrow(serving_dir, &manifest.index)?;
+    let index = crate::build_v26_dual_pq_key_index(&packed)?;
+    write_v26_dual_pq_key_index_arrow(dual_index_dir, &index)
+}
+
 pub fn read_v26_dual_pq_key_index_arrow(
     directory: &Path,
     manifest: &V26DualPqKeyIndexManifest,
@@ -7717,19 +7752,18 @@ mod tests {
         })
         .unwrap();
         let serving_manifest_path = serving_dir.join("serving-manifest.json");
-        let serving_manifest = super::read_v26_pq16_serving_manifest(&identity(
-            "pq16-serving-manifest",
-            &serving_manifest_path,
-        ))
-        .unwrap();
-        let packed = read_v26_pq16_index_arrow(&serving_dir, &serving_manifest.index).unwrap();
-        let dual = crate::build_v26_dual_pq_key_index(&packed).unwrap();
         let dual_dir = temp.path().join("dual-index");
         fs::create_dir(&dual_dir).unwrap();
-        let dual_manifest = super::write_v26_dual_pq_key_index_arrow(&dual_dir, &dual).unwrap();
+        let serving_manifest_identity = identity("pq16-serving-manifest", &serving_manifest_path);
+        let dual_manifest = super::build_v26_dual_pq_key_index_from_serving(
+            &serving_manifest_identity,
+            &serving_dir,
+            &dual_dir,
+        )
+        .unwrap();
         let evidence_path = temp.path().join("dual-preflight.parquet");
         let request = super::V26DualPqKeyPreflightRequest {
-            serving_manifest: identity("pq16-serving-manifest", &serving_manifest_path),
+            serving_manifest: serving_manifest_identity,
             serving_dir,
             layout_terminal: evaluation.layout_terminal,
             external_queries: evaluation.external_queries,
