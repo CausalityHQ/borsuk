@@ -291,6 +291,7 @@ class V27QualitySpotTests(unittest.TestCase):
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
         self.assertIn("run_v27_reduced_quality.py --execute", script)
         self.assertIn("--s3-page-prefix s3://bucket/index/pages", script)
+        self.assertIn("export AWS_REGION=eu-central-1", script)
         self.assertIn("--page-count 10", script)
         self.assertIn("numpy==2.4.2 pyarrow==24.0.0", script)
         self.assertIn("python3.11 python3.11-pip", script)

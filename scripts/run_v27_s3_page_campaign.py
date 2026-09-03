@@ -372,6 +372,7 @@ exec >"$root/worker.log" 2>&1
 bucket={shlex.quote(bucket)}
 prefix={shlex.quote(prefix)}
 terminal=failed
+export AWS_REGION=eu-central-1
 put_once() {{ aws s3api put-object --bucket "$bucket" --key "$prefix$2" --body "$1" --if-none-match '*' --checksum-algorithm SHA256 >/dev/null; }}
 finish() {{
   status=$?
