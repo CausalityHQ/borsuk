@@ -137,6 +137,38 @@ code runs against object storage. Ids are optional — omit them on `add` and yo
 get generated ids back. Want the vectors too? Use `search_vectors` /
 `searchVectors`. Want the full I/O and timing report? `search_with_report`.
 
+### Direct-row PQ4 local shards (pre-release)
+
+The high-recall V26 path builds an immutable local shard from Parquet and
+serves it from authenticated Arrow IPC files. It has no page stage, network
+client, dynamic loader, or hidden storage flags. The input schema is exactly a
+non-nullable binary `id` column plus a non-nullable fixed-size-list
+`f32[96]` `vector` column whose child is named `element`. Finite nonzero vectors
+are normalized by the builder.
+
+```bash
+cargo run --release -p borsuk --example pq4_build -- \
+  --input /data/deep-image-96.parquet \
+  --output /data/pq4-shard-0000 \
+  --workers 16 --batch-rows 8192 \
+  --generation deep-image-96-generation-0001 \
+  --source-uri s3://frozen/deep-image-96.parquet
+
+cargo run --release -p borsuk --example pq4_search -- \
+  --snapshot /data/pq4-shard-0000 \
+  --query-parquet /data/query.parquet \
+  --shard-ordinal 0 --memory-budget-bytes 3221225472 \
+  --query-threads 4 --admission-timeout-ms 1000 --k 10
+```
+
+The query Parquet contains exactly one non-nullable fixed-size-list
+`f32[96]` `vector`. Search returns compact newline JSON containing opaque IDs
+as hex, squared distance, shard ordinal, and source ordinal. Multiple shards
+search concurrently and their exact local top-k lists merge deterministically.
+The burned development result is 997,291-ppm aggregate Recall@10 at
+14,863,808-ns p99 on one 9.99-million-row shard; release promotion still
+requires the separately sealed holdout and distributed 100-million-row gate.
+
 ## Filtered search
 
 Attach metadata when you add, then filter any search with a Pinecone-style query.
