@@ -32,7 +32,7 @@
 - Consumes: V26 PQ4 distance-table and SIMD block semantics.
 - Produces: `V28PqWidth`, `V28PqCodebook`, `V28CodeBlock`, `encode_v28_code`, `score_v28_blocks`, and strict Arrow codecs.
 
-- [ ] **Step 1: Write REDs.** Add `v28_s3_pq_` tests for 16-byte/32x3D and 24-byte/48x2D widths, scalar/SIMD equality, deterministic ties, block padding, reversed traversal, exact Arrow schema, checksum drift, and nonfinite/zero input rejection.
+- [ ] **Step 1: Write REDs.** Add `v28_s3_pq_` tests for 16-byte/32x3D and 24-byte/48x2D widths, scalar/SIMD equality, deterministic ties, block padding, reversed traversal, exact Arrow schema, checksum drift, nonfinite rejection, and valid exact-zero leaf residuals.
 - [ ] **Step 2: Run RED.** Run `cargo test -p borsuk --lib v28_s3_pq_ -- --nocapture`; require only unresolved V28 symbols and at least six selected tests.
 - [ ] **Step 3: Implement the minimal codec/kernel.** Use explicit width dispatch, 32-row transposed blocks, fixed 16-entry tables, `u16` accumulation, and no corpus-sized score allocation.
 - [ ] **Step 4: Run GREEN and commit.** Run the same selector, `cargo fmt --all -- --check`, and `git diff --check`; commit only Task 1 files.
@@ -49,7 +49,7 @@
 
 - [ ] **Step 1: Write REDs.** Require one primary owner for every source ordinal, bounded external sort by `(leaf,pq_code,source_ordinal)`, page size at most 1,024, exact leaf/block/page offsets, no replica plane, complete primary union, and code-position-to-page equality at every boundary.
 - [ ] **Step 2: Run RED.** Run `cargo test -p borsuk --lib v28_s3_layout_ -- --nocapture`; require missing layout symbols only.
-- [ ] **Step 3: Implement the bounded builder.** Stream normalized rows, assign a primary leaf, encode the explicitly requested width, spill fixed records under an explicit memory cap, merge deterministically, and emit code blocks and Arrow pages in the identical order. The 100K controller may invoke separate width builds; no process opens both code planes.
+- [ ] **Step 3: Implement the bounded builder.** Stream normalized rows, assign a primary leaf, subtract that leaf centroid, encode the residual at the explicitly requested width, spill fixed records under an explicit memory cap, merge deterministically, and emit code blocks and Arrow pages in the identical order. Query ADC subtracts the same selected-leaf centroid. The 100K controller may invoke separate width builds; no process opens both code planes.
 - [ ] **Step 4: Authenticate formats.** Validate exact root/leaf/codebook/code/page-offset/page schemas, digests, lengths, counts, offsets, and source bindings before exposing a layout.
 - [ ] **Step 5: Run GREEN and commit.** Run the focused selector, fmt, and diff-check; commit only Task 2 files.
 

@@ -63,7 +63,10 @@ cannot access queries, truth, evaluation ordinals, prior results, or page-read
 credentials. A deterministic hash sample trains the hierarchy and both PQ
 widths. One bounded corpus stream normalizes each row, assigns its primary
 leaf, encodes its global PQ code, and emits a fixed record to bounded external
-sort. Boundary recovery is performed by query multi-probe, not row replication.
+leaf, subtracts that leaf centroid, encodes the leaf-residual PQ code, and emits
+a fixed record to bounded external sort. Queries subtract the same selected-leaf
+centroid before ADC scoring. Exact-zero residuals are valid. Boundary recovery
+is performed by query multi-probe, not row replication.
 
 The merge order is `(leaf_ordinal,pq_code,source_ordinal)`. Consecutive records
 within a leaf are packed into pages of at most 1,024 rows. Every source ordinal

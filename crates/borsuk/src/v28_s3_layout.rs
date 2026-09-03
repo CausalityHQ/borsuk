@@ -381,10 +381,14 @@ impl V28LayoutBuilder {
                 return Err(invalid("V28 layout source order differs"));
             }
             previous = Some(row.source_ordinal);
+            let leaf = assign_leaf(&row.vector, hierarchy)?;
+            let residual = std::array::from_fn(|dimension| {
+                row.vector[dimension] - f32::from(hierarchy.leaves[leaf as usize][dimension])
+            });
             records.push(SortRecord {
-                leaf: assign_leaf(&row.vector, hierarchy)?,
+                leaf,
                 source_ordinal: row.source_ordinal,
-                code: encode_v28_code(codebook, &row.vector)?,
+                code: encode_v28_code(codebook, &residual)?,
                 vector: row.vector,
             });
             source_rows += 1;
@@ -919,9 +923,10 @@ mod tests {
 
     #[test]
     fn v28_s3_layout_orders_codes_then_source_and_pads_each_leaf() {
+        let input = rows(65);
         let mut sink = Sink::default();
         let layout = V28LayoutBuilder::build(
-            rows(65),
+            input.clone(),
             &hierarchy(),
             &codebook(),
             V28LayoutConfig {
@@ -939,6 +944,17 @@ mod tests {
                     .unwrap()
                     .rows as u64,
                 leaf.row_count - (leaf.block_count - 1) * 32
+            );
+        }
+        for (leaf, code, source_ordinal) in &layout.sorted_keys {
+            let row = &input[*source_ordinal as usize];
+            let centroid = &hierarchy().leaves[*leaf as usize];
+            let residual = std::array::from_fn(|dimension| {
+                row.vector[dimension] - f32::from(centroid[dimension])
+            });
+            assert_eq!(
+                *code,
+                crate::v28_s3_pq::encode_v28_code(&codebook(), &residual).unwrap()
             );
         }
         assert!(layout.sorted_keys.windows(2).all(|pair| pair[0] < pair[1]));

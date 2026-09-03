@@ -183,14 +183,8 @@ pub(crate) struct V28DecodedPqArtifacts {
 }
 
 fn validate_vector(vector: &[f32; 96]) -> Result<()> {
-    if vector.iter().any(|value| !value.is_finite())
-        || vector
-            .iter()
-            .map(|value| f64::from(*value) * f64::from(*value))
-            .sum::<f64>()
-            <= 0.0
-    {
-        return Err(invalid("V28 PQ vector must be finite and nonzero"));
+    if vector.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("V28 PQ residual must be finite"));
     }
     Ok(())
 }
@@ -662,6 +656,30 @@ mod tests {
             let encoded = encode_v28_code(&book, &vector).unwrap();
             assert_eq!(encoded, vec![0; width.subquantizers()]);
         }
+    }
+
+    #[test]
+    fn v28_s3_pq_accepts_an_exact_zero_leaf_residual() {
+        let book = codebook(V28PqWidth::Bytes24);
+        assert_eq!(
+            encode_v28_code(&book, &[0.0; 96]).unwrap(),
+            vec![0; V28PqWidth::Bytes24.subquantizers()]
+        );
+        assert_eq!(
+            score_v28_blocks(
+                &book,
+                &encode_v28_blocks(
+                    V28PqWidth::Bytes24,
+                    &[vec![0; V28PqWidth::Bytes24.subquantizers()]],
+                )
+                .unwrap(),
+                1,
+                &[0.0; 96],
+            )
+            .unwrap()
+            .len(),
+            1
+        );
     }
 
     #[test]

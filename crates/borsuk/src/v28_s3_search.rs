@@ -254,11 +254,14 @@ impl V28Router {
             observer(leaf.leaf_ordinal);
             let start = leaf.block_start as usize;
             let end = start + leaf.block_count as usize;
+            let residual = std::array::from_fn(|dimension| {
+                query[dimension] - f32::from(self.hierarchy.leaves[leaf_ordinal][dimension])
+            });
             let scores = score_v28_blocks(
                 &self.codebook,
                 &self.layout.blocks[start..end],
                 leaf.row_count as usize,
-                &query,
+                &residual,
             )?;
             for (row, score) in scores.into_iter().enumerate() {
                 let candidate = Candidate {
