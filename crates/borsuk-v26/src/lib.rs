@@ -30,16 +30,17 @@ pub use local::{
     canonical_v26_layout_build_output_bytes, canonical_v26_pq16_global_preflight_result_bytes,
     canonical_v26_pq16_serving_benchmark_result_bytes,
     canonical_v26_pq16_serving_build_output_bytes, canonical_v26_simhash_preflight_result_bytes,
-    evaluate_v26_exact_global, evaluate_v26_layout_oracle, open_v26_pq16_serving_runtime,
-    read_v26_pq16_index_arrow, run_v26_candidate_row_cover, run_v26_centroid_router,
-    run_v26_exact_global, run_v26_layout_build, run_v26_layout_build_directory,
-    run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
-    run_v26_pq16_exact_rerank, run_v26_pq16_global_preflight, run_v26_pq16_serving_benchmark,
-    run_v26_pq16_serving_build, run_v26_tree_router, run_v26_tree_router_diagnostic,
-    run_v26_truth_build, select_v26_pq16_global_pages_from_arrow, select_v26_pq16_pages_from_arrow,
-    select_v26_simhash_pq16_pages_from_arrow, v26_construction_schema, v26_page_assignments_schema,
-    v26_query_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
-    write_v26_cold_vectors_arrow, write_v26_pq16_index_arrow,
+    evaluate_v26_exact_global, evaluate_v26_layout_oracle, evaluate_v26_simhash_preflight,
+    open_v26_pq16_serving_runtime, read_v26_pq16_index_arrow, run_v26_candidate_row_cover,
+    run_v26_centroid_router, run_v26_exact_global, run_v26_layout_build,
+    run_v26_layout_build_directory, run_v26_page_mode_router, run_v26_pq_width_ladder,
+    run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank, run_v26_pq16_global_preflight,
+    run_v26_pq16_serving_benchmark, run_v26_pq16_serving_build, run_v26_tree_router,
+    run_v26_tree_router_diagnostic, run_v26_truth_build, select_v26_pq16_global_pages_from_arrow,
+    select_v26_pq16_pages_from_arrow, select_v26_simhash_pq16_pages_from_arrow,
+    v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
+    v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
+    write_v26_pq16_index_arrow,
 };
 
 pub use tree::{
@@ -1870,19 +1871,10 @@ pub(crate) fn rank_v26_simhash_pq16_candidates(
     {
         return Err(invalid("V26 SimHash PQ16 query request differs"));
     }
-    let query_signature = v26_simhash_signature(query)?;
+    let buckets = rank_v26_simhash_buckets(query)?;
     let tables = prepare_v26_pq_tables(&index.codebook, query)?;
-    let mut buckets = (0_u32..u32::try_from(V26_SIMHASH_BUCKETS).unwrap())
-        .map(|bucket| {
-            (
-                (u32::from(query_signature) ^ bucket).count_ones(),
-                u16::try_from(bucket).unwrap(),
-            )
-        })
-        .collect::<Vec<_>>();
-    buckets.sort_unstable();
     let mut ranked = BinaryHeap::with_capacity(ranked_row_limit);
-    for (_, bucket) in buckets.into_iter().take(bucket_limit) {
+    for bucket in buckets.into_iter().take(bucket_limit) {
         let start = usize::try_from(index.bucket_offsets[usize::from(bucket)]).unwrap();
         let end = usize::try_from(index.bucket_offsets[usize::from(bucket) + 1]).unwrap();
         for position in start..end {
@@ -1913,6 +1905,42 @@ pub(crate) fn rank_v26_simhash_pq16_candidates(
         return Err(invalid("V26 SimHash PQ16 candidate inventory differs"));
     }
     Ok(ranked)
+}
+
+fn rank_v26_simhash_buckets(query: &[f32; 96]) -> Result<Vec<u16>> {
+    let query_signature = v26_simhash_signature(query)?;
+    let mut buckets = (0_u32..u32::try_from(V26_SIMHASH_BUCKETS).unwrap())
+        .map(|bucket| {
+            (
+                (u32::from(query_signature) ^ bucket).count_ones(),
+                u16::try_from(bucket).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    buckets.sort_unstable();
+    Ok(buckets.into_iter().map(|(_, bucket)| bucket).collect())
+}
+
+pub(crate) fn v26_simhash_rows_scanned(
+    index: &V26SimHashPq16MultiIndex,
+    query: &[f32; 96],
+    bucket_limit: usize,
+) -> Result<u64> {
+    if bucket_limit == 0
+        || bucket_limit > V26_SIMHASH_BUCKETS
+        || index.bucket_offsets.len() != V26_SIMHASH_BUCKETS + 1
+    {
+        return Err(invalid("V26 SimHash bucket scan request differs"));
+    }
+    rank_v26_simhash_buckets(query)?
+        .into_iter()
+        .take(bucket_limit)
+        .try_fold(0_u64, |rows, bucket| {
+            let start = index.bucket_offsets[usize::from(bucket)];
+            let end = index.bucket_offsets[usize::from(bucket) + 1];
+            rows.checked_add(end - start)
+                .ok_or_else(|| invalid("V26 SimHash bucket scan overflows"))
+        })
 }
 
 pub fn build_v26_pq16_packed_index(

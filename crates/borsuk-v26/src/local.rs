@@ -3080,6 +3080,83 @@ pub fn select_v26_simhash_pq16_pages_from_arrow(
     })
 }
 
+/// Executes the fixed three-arm, 32-query SimHash/PQ16 truth-bound preflight.
+pub fn evaluate_v26_simhash_preflight(
+    index: &crate::V26SimHashPq16MultiIndex,
+    cold_vectors: &V26ArrowColdVectors,
+    queries: &[V26ExternalQuery],
+    truths: &[V26QueryTruth],
+) -> Result<(Vec<V26SimHashPreflightSample>, V26SimHashPreflightResult)> {
+    const BUCKET_LIMITS: [usize; 3] = [137, 697, 2_517];
+    if queries.len() != 32 || truths.len() != queries.len() {
+        return Err(invalid("V26 SimHash preflight query inventory differs"));
+    }
+    let mut samples = Vec::with_capacity(BUCKET_LIMITS.len() * queries.len());
+    for bucket_limit in BUCKET_LIMITS {
+        for (query_index, (query, truth)) in queries.iter().zip(truths).enumerate() {
+            if usize::try_from(query.query_ordinal).ok() != Some(query_index)
+                || truth.query_ordinal != query.query_ordinal
+                || truth.neighbor_source_ordinals.len() != 10
+                || truth.ground_truth_page_assignments.len() != 10
+                || truth
+                    .ground_truth_page_assignments
+                    .iter()
+                    .any(|pages| pages.len() != 2 || pages[0] >= pages[1])
+            {
+                return Err(invalid("V26 SimHash preflight truth authority differs"));
+            }
+            let rows_scanned = crate::v26_simhash_rows_scanned(index, &query.vector, bucket_limit)?;
+            let started = std::time::Instant::now();
+            let selection = select_v26_simhash_pq16_pages_from_arrow(
+                index,
+                &query.vector,
+                cold_vectors,
+                bucket_limit,
+                2_048,
+            )?;
+            let elapsed_ns = u64::try_from(started.elapsed().as_nanos())
+                .map_err(|_| invalid("V26 SimHash preflight latency overflows"))?
+                .max(1);
+            let oracle_pages = exact_v26_layout_oracle_pages(
+                &truth.ground_truth_page_assignments,
+                crate::V26_SERVING_PAGE_BUDGET,
+            )?;
+            let hits = truth
+                .ground_truth_page_assignments
+                .iter()
+                .filter(|pages| {
+                    pages
+                        .iter()
+                        .any(|page| selection.selected_pages.binary_search(page).is_ok())
+                })
+                .count() as u32;
+            let oracle_hits = truth
+                .ground_truth_page_assignments
+                .iter()
+                .filter(|pages| {
+                    pages
+                        .iter()
+                        .any(|page| oracle_pages.binary_search(page).is_ok())
+                })
+                .count() as u32;
+            samples.push(V26SimHashPreflightSample {
+                bucket_limit: u32::try_from(bucket_limit).unwrap(),
+                query_ordinal: query.query_ordinal,
+                selected_pages: selection.selected_pages,
+                hits,
+                oracle_hits,
+                recall_ppm: u64::from(hits) * 100_000,
+                oracle_attainment_ppm: u64::from(hits) * 1_000_000 / u64::from(oracle_hits),
+                elapsed_ns,
+                rows_scanned,
+                cold_batches_read: selection.cold_batches_read,
+            });
+        }
+    }
+    let result = summarize_v26_simhash_preflight(&samples)?;
+    Ok((samples, result))
+}
+
 fn v26_pq16_codebook_schema() -> Schema {
     Schema::new(vec![
         Field::new("subspace", DataType::UInt8, false),
@@ -5546,6 +5623,85 @@ mod tests {
             eprintln!("v26-pq16-arrow-reduced-shape-p99-ns={p99_ns}");
             assert!(p99_ns < 15_000_000);
         }
+    }
+
+    #[test]
+    fn v26_simhash_preflight_executes_32_truth_bound_queries_without_page_reads() {
+        // Break caught: the preflight reports stored quality without executing every fixed arm
+        // against independently supplied truth, or opens page bodies while selecting pages.
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("simhash-preflight-cold.arrow");
+        let rows = (0_u64..2_113)
+            .map(|source_ordinal| {
+                let mut vector = [0.0_f32; 96];
+                vector[0] = 1.0;
+                crate::V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..2_113)
+            .map(|source_ordinal| crate::V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 5).unwrap(),
+                replica_page: 5 + u32::try_from(source_ordinal % 5).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let packed = crate::build_v26_pq16_packed_index(&rows, &assignments).unwrap();
+        let manifest = write_v26_cold_vectors_arrow(
+            &path,
+            &rows,
+            &assignments,
+            super::V26_COLD_VECTOR_BATCH_ROWS,
+        )
+        .unwrap();
+        let cold = V26ArrowColdVectors::open(&path, &manifest).unwrap();
+        let index = super::build_v26_simhash_pq16_multi_index_from_arrow(&packed, &cold).unwrap();
+        let queries = rows[..32]
+            .iter()
+            .enumerate()
+            .map(|(query_ordinal, row)| crate::V26ExternalQuery {
+                query_ordinal: u32::try_from(query_ordinal).unwrap(),
+                vector: row.vector,
+            })
+            .collect::<Vec<_>>();
+        let truths = queries
+            .iter()
+            .map(|query| {
+                let neighbors = (0_u64..10)
+                    .map(|offset| u64::from(query.query_ordinal) + offset)
+                    .collect::<Vec<_>>();
+                let ground_truth_page_assignments = neighbors
+                    .iter()
+                    .map(|neighbor| {
+                        let assignment = assignments[usize::try_from(*neighbor).unwrap()];
+                        let mut pages = vec![assignment.primary_page, assignment.replica_page];
+                        pages.sort_unstable();
+                        pages
+                    })
+                    .collect();
+                crate::V26QueryTruth {
+                    query_ordinal: query.query_ordinal,
+                    neighbor_source_ordinals: neighbors,
+                    ground_truth_page_assignments,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let (samples, result) =
+            super::evaluate_v26_simhash_preflight(&index, &cold, &queries, &truths).unwrap();
+
+        assert_eq!(samples.len(), 96);
+        assert_eq!(result.arms.len(), 3);
+        assert_eq!(result.page_body_reads, 0);
+        assert!(samples.iter().all(|sample| {
+            sample.selected_pages.len() == 10
+                && sample.hits <= sample.oracle_hits
+                && sample.elapsed_ns > 0
+                && sample.rows_scanned >= 2_048
+        }));
+        assert!(super::canonical_v26_simhash_preflight_result_bytes(&result, &samples).is_ok());
     }
 
     #[test]
