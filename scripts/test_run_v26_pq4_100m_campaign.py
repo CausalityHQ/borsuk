@@ -5,6 +5,9 @@ from scripts.run_v26_pq4_100m_campaign import (
     CampaignMonitor,
     MonitorLimits,
     MonitorSnapshot,
+    S3LatencyProfile,
+    S3RequestCounter,
+    estimate_s3_transfer,
 )
 
 
@@ -135,6 +138,46 @@ class AttemptRegistryTests(unittest.TestCase):
         registry.finish(8, "partition-0008-a0001", "failed")
         with self.assertRaises(ValueError):
             registry.start(8, "partition-0008-a0002", "i-0018")
+
+
+class S3LatencyProjectionTests(unittest.TestCase):
+    def test_v26_pq4_100m_s3_projection_counts_exact_requests_and_bytes(self) -> None:
+        # Break caught: a remote layout reaches a long campaign before anyone accounts for its
+        # object GET fan-out or distinguishes request RTT from aggregate transfer throughput.
+        counter = S3RequestCounter()
+        counter.add("manifest", requests=10, bytes_read=100_000)
+        counter.add("snapshot", requests=90, bytes_read=999_900_000)
+        self.assertEqual(counter.counts(), (100, 1_000_000_000))
+
+        projection = estimate_s3_transfer(
+            counter,
+            S3LatencyProfile(
+                name="expected",
+                request_latency_ms=10,
+                aggregate_bytes_per_second=100_000_000,
+                parallel_requests=10,
+            ),
+            wall_budget_seconds=11.0,
+        )
+        self.assertEqual(projection.request_waves, 10)
+        self.assertAlmostEqual(projection.request_seconds, 0.1)
+        self.assertAlmostEqual(projection.transfer_seconds, 10.0)
+        self.assertAlmostEqual(projection.wall_seconds, 10.1)
+        self.assertTrue(projection.within_wall_budget)
+
+        over_budget = estimate_s3_transfer(
+            counter,
+            S3LatencyProfile("pessimistic", 40, 25_000_000, 4),
+            wall_budget_seconds=45.0,
+        )
+        self.assertEqual(over_budget.request_waves, 25)
+        self.assertAlmostEqual(over_budget.wall_seconds, 41.0)
+        self.assertTrue(over_budget.within_wall_budget)
+
+        with self.assertRaises(ValueError):
+            counter.add("snapshot", requests=0, bytes_read=1)
+        with self.assertRaises(ValueError):
+            estimate_s3_transfer(counter, projection.profile, wall_budget_seconds=0)
 
 
 if __name__ == "__main__":

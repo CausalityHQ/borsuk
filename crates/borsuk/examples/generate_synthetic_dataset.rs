@@ -481,7 +481,7 @@ fn embedding_schema(dimensions: usize) -> io::Result<Arc<Schema>> {
     Ok(Arc::new(Schema::new(vec![Field::new(
         "emb",
         DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, false)),
+            Arc::new(Field::new("element", DataType::Float32, false)),
             dimensions,
         ),
         false,
@@ -501,7 +501,7 @@ fn embedding_batch(
         ));
     }
     let array = FixedSizeListArray::try_new(
-        Arc::new(Field::new("item", DataType::Float32, false)),
+        Arc::new(Field::new("element", DataType::Float32, false)),
         i32::try_from(dimensions).map_err(io::Error::other)?,
         Arc::new(Float32Array::from(values)) as ArrayRef,
         None,
@@ -1000,6 +1000,28 @@ mod tests {
             }
         }
         values
+    }
+
+    #[test]
+    fn v26_pq4_100m_range_uses_registered_cross_language_parquet_schema() {
+        // Break caught: the parallel generator emits Arrow's conventional `item` child while
+        // every PQ4 reader requires the registered cross-language child name `element`.
+        let expected = Arc::new(Schema::new(vec![Field::new(
+            "emb",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Float32, false)),
+                96,
+            ),
+            false,
+        )]));
+
+        assert_eq!(embedding_schema(96).unwrap(), expected);
+        assert_eq!(
+            embedding_batch(expected.clone(), 96, vec![0.0; 96], 1)
+                .unwrap()
+                .schema(),
+            expected
+        );
     }
 
     #[test]
