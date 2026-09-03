@@ -424,6 +424,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "borsuk-pq4"
+version = "0.1.0"
+dependencies = [
+ "borsuk-fma",
+ "rayon",
+ "thiserror",
+]
+
+[[package]]
 name = "borsuk-python"
 version = "0.1.0"
 dependencies = [

@@ -57,11 +57,6 @@ mod physical_layout;
 mod positioned_candidate;
 mod positioned_log;
 mod positioned_materializer;
-#[allow(
-    dead_code,
-    reason = "the V26 PQ4 core is consumed by the snapshot and public index tasks"
-)]
-mod pq4;
 mod quantizer_sidecar;
 mod record;
 mod rotated_product_quantizer;

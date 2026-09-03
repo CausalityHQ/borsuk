@@ -1,0 +1,16 @@
+[package]
+name = "borsuk-pq4"
+version = "0.1.0"
+edition.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+borsuk-fma = { path = "../borsuk-fma" }
+rayon = "1.11"
+thiserror = "2.0"
+
+[lints]
+workspace = true

@@ -4,7 +4,7 @@
 
 **Goal:** Ship a public immutable PQ4 shard that builds in parallel from Parquet and returns exact-reranked rows from an authenticated Arrow IPC snapshot within the measured quality, memory, and latency gates.
 
-**Architecture:** Each local shard owns its compact code plane and reads only 3,072 exact candidate vectors before returning local top-k. There is no page stage or network client. A 100-million-row deployment trains and searches roughly 10-million-row shards concurrently and merges bounded exact results outside the shard.
+**Architecture:** The focused `borsuk-pq4` crate owns each local shard and its fast contract tests; `borsuk` re-exports only the finished public API. Each shard reads 3,072 exact candidate vectors before returning local top-k. There is no page stage or network client. A 100-million-row deployment trains and searches roughly 10-million-row shards concurrently and merges bounded exact results outside the shard.
 
 **Tech Stack:** Rust 2024, Rayon, AArch64 NEON, x86_64 AVX2/SSSE3, Apache Arrow IPC, Parquet, SHA-256, canonical JSON, AWS EC2 Spot.
 
@@ -25,7 +25,7 @@
 
 **Files:**
 - Modify: `crates/borsuk-fma/src/lib.rs`
-- Modify: `crates/borsuk/src/pq4/core.rs`
+- Modify: `crates/borsuk-pq4/src/core.rs`
 
 **Interfaces:**
 - Produces: `Pq4BlockScorer::detect()` and `Pq4BlockScorer::score(&[u8; 512], &[[u8; 16]; 32]) -> [u16; 32]` on AArch64 and x86_64.
@@ -36,22 +36,22 @@
 - [ ] **Step 3: Write the x86 RED.** Extend the same literal blocks so `Pq4BlockScorer::detect()` must choose an x86 SIMD backend and match scalar output bit-for-bit; an unsupported CPU must return `Pq4Unavailable`.
 - [ ] **Step 4: Run the x86 RED.** Run `cargo test -p borsuk-fma pq4_block_ -- --nocapture`; require the missing x86 backend only.
 - [ ] **Step 5: Implement x86 scoring.** Use runtime feature detection and private target-feature functions with `_mm_shuffle_epi8` table lookup and widened integer accumulation. Expose no raw pointer and do not fall back silently to scalar in production.
-- [ ] **Step 6: Run GREEN and commit.** Run the focused scorer and `cargo test -p borsuk --lib v26_release_contract_pq4_core_ -- --nocapture`, then fmt and diff-check; commit only the two affected files.
+- [ ] **Step 6: Run GREEN and commit.** Run the focused scorer and `cargo test -p borsuk-pq4 --lib v26_release_contract_pq4_core_ -- --nocapture`, then fmt and diff-check; commit only the two affected files.
 
 ### Task 2: Write and open the direct-row snapshot
 
 **Files:**
-- Create: `crates/borsuk/src/pq4/format.rs`
-- Create: `crates/borsuk/src/pq4/snapshot.rs`
-- Modify: `crates/borsuk/src/pq4/mod.rs`
-- Modify: `crates/borsuk/Cargo.toml`
+- Create: `crates/borsuk-pq4/src/format.rs`
+- Create: `crates/borsuk-pq4/src/snapshot.rs`
+- Modify: `crates/borsuk-pq4/src/lib.rs`
+- Modify: `crates/borsuk-pq4/Cargo.toml`
 
 **Interfaces:**
 - Produces: crate-private `Pq4Manifest`, `Pq4SnapshotWriter`, and `Pq4Snapshot`.
 - Consumes: `Pq4Codebook` and `Pq4Blocks` from Task 1.
 
 - [ ] **Step 1: Write strict mutation tests.** Test every role, digest, length, field, concrete Arrow type, child name/nullability, dimensions, row count, padding, source order, generation, extra file, and missing file under `v26_release_contract_pq4_snapshot_`.
-- [ ] **Step 2: Run RED.** Run `cargo test -p borsuk --lib v26_release_contract_pq4_snapshot_ -- --nocapture`; require only missing snapshot types.
+- [ ] **Step 2: Run RED.** Run `cargo test -p borsuk-pq4 --lib v26_release_contract_pq4_snapshot_ -- --nocapture`; require only missing snapshot types.
 - [ ] **Step 3: Implement the writer.** Write the four Arrow files into a sibling temporary directory, fsync each, compute identities, serialize a sorted compact newline manifest, fsync the directory, and rename atomically.
 - [ ] **Step 4: Implement strict open.** Authenticate file bytes before parsing, require exact schemas and cross-bindings, load codes into owned memory, and retain safe `FileExt::read_exact_at` handles plus validated batch offsets for vectors and IDs.
 - [ ] **Step 5: Run GREEN and commit.** Run the exact selector and release-contract group, then fmt/diff-check; commit only Task 2 files and legitimate lockfile changes.
@@ -59,16 +59,15 @@
 ### Task 3: Build shards in parallel from Parquet
 
 **Files:**
-- Create: `crates/borsuk/src/pq4/builder.rs`
-- Modify: `crates/borsuk/src/pq4/mod.rs`
-- Modify: `crates/borsuk/src/lib.rs`
+- Create: `crates/borsuk-pq4/src/builder.rs`
+- Modify: `crates/borsuk-pq4/src/lib.rs`
 
 **Interfaces:**
 - Produces: public `Pq4BuildConfig`, `Pq4BuildReport`, and `Pq4Builder::build_parquet(input, output, config)`.
 - Consumes: Task 2's snapshot writer.
 
 - [ ] **Step 1: Write builder tests.** Require exact `id`/`vector` Parquet schema, complete finiteness/nonzero validation, deterministic identities across worker counts, bounded batch memory, identical row order across all four Arrow roles, and cleanup after injected failure.
-- [ ] **Step 2: Run RED.** Run `cargo test -p borsuk --lib v26_release_contract_pq4_builder_ -- --nocapture`; require missing public builder symbols.
+- [ ] **Step 2: Run RED.** Run `cargo test -p borsuk-pq4 --lib v26_release_contract_pq4_builder_ -- --nocapture`; require missing public builder symbols.
 - [ ] **Step 3: Implement pass one.** Stream all rows, validate them, retain the exact stratified 8,192-row sample, and train 32 subquantizers in the configured Rayon pool.
 - [ ] **Step 4: Implement pass two.** Encode bounded batches in parallel, merge by source batch/row order, and feed codes, vectors, and IDs to the atomic snapshot writer.
 - [ ] **Step 5: Run GREEN and commit.** Run the builder selector and release-contract group, then fmt/diff-check; commit the builder and public exports.
@@ -76,8 +75,8 @@
 ### Task 4: Serve exact local rows with bounded concurrency
 
 **Files:**
-- Create: `crates/borsuk/src/pq4/index.rs`
-- Modify: `crates/borsuk/src/pq4/mod.rs`
+- Create: `crates/borsuk-pq4/src/index.rs`
+- Modify: `crates/borsuk-pq4/src/lib.rs`
 - Modify: `crates/borsuk/src/lib.rs`
 
 **Interfaces:**
@@ -86,7 +85,7 @@
 
 - [ ] **Step 1: Write direct-row REDs.** Build a reduced snapshot with multiple blocks, a partial last block, tied scores, literal exact neighbors, and variable binary IDs; require exact `(distance, source_ordinal)` order and zero page/network surface.
 - [ ] **Step 2: Write admission REDs.** Concurrent calls must own independent score buffers, preserve results, and return an explicit admission timeout when the exact projection would exceed 3 GiB.
-- [ ] **Step 3: Run RED.** Run `cargo test -p borsuk --lib v26_release_contract_pq4_search_ -- --nocapture`; require missing public index symbols.
+- [ ] **Step 3: Run RED.** Run `cargo test -p borsuk-pq4 --lib v26_release_contract_pq4_search_ -- --nocapture`; require missing public index symbols.
 - [ ] **Step 4: Implement open and admission.** Validate candidate depth equals 3,072, construct the fixed query pool, and allocate bounded reusable score/candidate scratch slots from the configured budget.
 - [ ] **Step 5: Implement search.** Scan codes, retain 3,072 candidates, positionally read exact vectors, rerank, read only final IDs, and return top-k without page or network calls.
 - [ ] **Step 6: Run GREEN and commit.** Run the search selector and release-contract group, then fmt/diff-check; commit only Task 4 files.
@@ -94,16 +93,15 @@
 ### Task 5: Add deterministic shard-result merging
 
 **Files:**
-- Create: `crates/borsuk/src/pq4/shards.rs`
-- Modify: `crates/borsuk/src/pq4/mod.rs`
-- Modify: `crates/borsuk/src/lib.rs`
+- Create: `crates/borsuk-pq4/src/shards.rs`
+- Modify: `crates/borsuk-pq4/src/lib.rs`
 
 **Interfaces:**
 - Produces: `merge_pq4_shard_matches(Vec<(u32, Vec<Pq4Match>)>, k) -> Result<Vec<Pq4Match>>`.
 - Consumes: exact local top-k outputs from Task 4.
 
 - [ ] **Step 1: Write merge REDs.** Cover empty/duplicate shard ordinals, fewer than k rows, equal distances, opaque ID preservation, permutation invariance, and the proof that global top-k is contained in the union of exact local top-k lists.
-- [ ] **Step 2: Run RED.** Run `cargo test -p borsuk --lib v26_release_contract_pq4_shards_ -- --nocapture`; require the missing merge function.
+- [ ] **Step 2: Run RED.** Run `cargo test -p borsuk-pq4 --lib v26_release_contract_pq4_shards_ -- --nocapture`; require the missing merge function.
 - [ ] **Step 3: Implement bounded merge.** Validate unique shard ordinals and merge at most `shards * k` rows using `(distance, shard_ordinal, source_ordinal)`.
 - [ ] **Step 4: Run GREEN and commit.** Run the shard selector and release-contract group, then fmt/diff-check; commit only Task 5 files.
 

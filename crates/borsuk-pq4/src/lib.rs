@@ -1,4 +1,22 @@
+//! Immutable PQ4 shard construction and bounded exact-row search.
+
+#![forbid(unsafe_code)]
+
 mod core;
+
+/// Errors returned by PQ4 construction and search contracts.
+#[derive(Debug, thiserror::Error)]
+pub enum BorsukError {
+    /// An input, artifact, or metric violates the concrete PQ4 contract.
+    #[error("{0}")]
+    InvalidMetricInput(String),
+    /// A required local storage or SIMD capability is unavailable.
+    #[error("{0}")]
+    InvalidStorage(String),
+}
+
+/// Result type for PQ4 operations.
+pub type Result<T> = std::result::Result<T, BorsukError>;
 
 #[cfg(all(test, not(target_arch = "aarch64")))]
 pub(crate) use core::rank_candidates;

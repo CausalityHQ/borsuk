@@ -2,8 +2,9 @@
 
 ## Decision
 
-Promote the V26 PQ4 fast scan into the public `borsuk` crate as an immutable
-local `Pq4Index` shard that returns exact-reranked rows directly. Delete the
+Implement the V26 PQ4 fast scan in the focused `borsuk-pq4` crate and re-export
+its finished API from `borsuk` as an immutable local `Pq4Index` shard that
+returns exact-reranked rows directly. Delete the
 page-selection and page-decoding stage from this new API. This is a clean
 pre-release format: there are no compatibility readers, aliases, version
 dispatch, dynamic loaders, `ldd` workarounds, storage clients, or hidden
@@ -121,7 +122,7 @@ temporary directory. A failed build leaves no openable snapshot.
 
 `Pq4Index::open` authenticates every byte and complete Arrow schema, owns the
 compact code plane, opens vectors and IDs, and freezes a Rayon query pool. The
-public crate retains `#![forbid(unsafe_code)]`; AArch64 NEON and x86_64 SIMD are
+both crates retain `#![forbid(unsafe_code)]`; AArch64 NEON and x86_64 SIMD are
 exposed only through safe `borsuk-fma` functions.
 
 Each query:
@@ -159,9 +160,10 @@ before any 100-million-row latency claim.
 
 Development uses the narrowest gate that can falsify the current change:
 
-1. one exact contract node, normally below one second;
-2. `cargo test -p borsuk --lib v26_release_contract_ -- --nocapture` at a
-   stable component boundary;
+1. one `cargo test -p borsuk-pq4 --lib <exact-filter>` contract, normally
+   about one second;
+2. the complete `cargo test -p borsuk-pq4 --lib` crate gate at a stable
+   component boundary;
 3. `python3 scripts/check_v26_fast.py --affected` once per stable slice;
 4. strict workspace Clippy once after affected gates are green;
 5. one locked workspace/all-targets test only for the final candidate.
