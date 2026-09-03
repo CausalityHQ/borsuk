@@ -1585,6 +1585,7 @@ fn v26_pq4_neon_block_scores(block: &[u8; 512], tables: &V26Pq4QueryTables) -> [
     }
 }
 
+#[cfg(test)]
 pub(crate) fn rank_v26_pq4_fast_candidates(
     index: &V26Pq4FastIndex,
     query: &[f32; 96],
