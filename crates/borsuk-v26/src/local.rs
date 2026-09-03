@@ -246,6 +246,17 @@ pub struct V26Pq16IndexManifest {
     pub postings: V26ArrowFileIdentity,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26SimHashPq16IndexManifest {
+    pub row_count: u64,
+    pub bucket_count: u32,
+    pub projected_resident_bytes_100m: u64,
+    pub codebook: V26ArrowFileIdentity,
+    pub buckets: V26ArrowFileIdentity,
+    pub records: V26ArrowFileIdentity,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V26Pq16ServingBuildRequest {
     pub construction_rows: V26LocalObjectPath,
@@ -3183,6 +3194,21 @@ fn v26_pq16_postings_schema() -> Schema {
     ])
 }
 
+fn v26_simhash_buckets_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("bucket_ordinal", DataType::UInt32, false),
+        Field::new("row_start", DataType::UInt64, false),
+        Field::new("row_end", DataType::UInt64, false),
+    ])
+}
+
+fn v26_simhash_records_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("source_ordinal", DataType::UInt32, false),
+        Field::new("pq16_code", DataType::FixedSizeBinary(16), false),
+    ])
+}
+
 fn arrow_file_identity(path: &Path) -> Result<V26ArrowFileIdentity> {
     let (encoded_bytes, sha256) = sha256_file(path)?;
     Ok(V26ArrowFileIdentity {
@@ -3514,6 +3540,324 @@ pub fn read_v26_pq16_index_arrow(
         codes,
         page_offsets,
         posting_rows,
+        projected_resident_bytes_100m: manifest.projected_resident_bytes_100m,
+    })
+}
+
+pub fn write_v26_simhash_pq16_index_arrow(
+    directory: &Path,
+    index: &crate::V26SimHashPq16MultiIndex,
+) -> Result<V26SimHashPq16IndexManifest> {
+    let codebook_path = directory.join("simhash-pq16-codebook.arrow");
+    let buckets_path = directory.join("simhash-pq16-buckets.arrow");
+    let records_path = directory.join("simhash-pq16-records.arrow");
+    if !directory.is_dir()
+        || [&codebook_path, &buckets_path, &records_path]
+            .iter()
+            .any(|path| path.exists())
+        || index.codebook.width != 16
+        || index.codebook.subspace_width != 6
+        || index.bucket_offsets.len() != 65_537
+        || index.source_ordinals.len() * 16 != index.codes.len()
+    {
+        return Err(invalid("V26 SimHash Arrow write request differs"));
+    }
+    let result = (|| {
+        let codebook_file = fs::File::create(&codebook_path)
+            .map_err(|error| invalid(&format!("V26 SimHash codebook create failed: {error}")))?;
+        let mut codebook_writer = FileWriter::try_new(codebook_file, &v26_pq16_codebook_schema())
+            .map_err(|error| {
+            invalid(&format!("V26 SimHash codebook writer failed: {error}"))
+        })?;
+        let values = index
+            .codebook
+            .centroids
+            .iter()
+            .flat_map(|centroids| centroids.iter().copied())
+            .collect::<Vec<_>>();
+        let centroid_values = FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            6,
+            Arc::new(Float32Array::from(values)),
+            None,
+        )
+        .map_err(|error| invalid(&format!("V26 SimHash codebook values failed: {error}")))?;
+        codebook_writer
+            .write(
+                &RecordBatch::try_new(
+                    Arc::new(v26_pq16_codebook_schema()),
+                    vec![
+                        Arc::new(UInt8Array::from_iter_values(
+                            (0_u8..16).flat_map(|subspace| std::iter::repeat_n(subspace, 256)),
+                        )),
+                        Arc::new(UInt16Array::from_iter_values(
+                            (0_u8..16).flat_map(|_| 0_u16..256),
+                        )),
+                        Arc::new(centroid_values),
+                    ],
+                )
+                .map_err(|error| invalid(&format!("V26 SimHash codebook batch failed: {error}")))?,
+            )
+            .map_err(|error| invalid(&format!("V26 SimHash codebook write failed: {error}")))?;
+        codebook_writer
+            .finish()
+            .map_err(|error| invalid(&format!("V26 SimHash codebook finish failed: {error}")))?;
+
+        let buckets_file = fs::File::create(&buckets_path)
+            .map_err(|error| invalid(&format!("V26 SimHash buckets create failed: {error}")))?;
+        let mut buckets_writer =
+            FileWriter::try_new(buckets_file, &v26_simhash_buckets_schema())
+                .map_err(|error| invalid(&format!("V26 SimHash buckets writer failed: {error}")))?;
+        buckets_writer
+            .write(
+                &RecordBatch::try_new(
+                    Arc::new(v26_simhash_buckets_schema()),
+                    vec![
+                        Arc::new(UInt32Array::from_iter_values(0_u32..65_536)),
+                        Arc::new(UInt64Array::from_iter_values(
+                            index.bucket_offsets[..65_536].iter().copied(),
+                        )),
+                        Arc::new(UInt64Array::from_iter_values(
+                            index.bucket_offsets[1..].iter().copied(),
+                        )),
+                    ],
+                )
+                .map_err(|error| invalid(&format!("V26 SimHash buckets batch failed: {error}")))?,
+            )
+            .map_err(|error| invalid(&format!("V26 SimHash buckets write failed: {error}")))?;
+        buckets_writer
+            .finish()
+            .map_err(|error| invalid(&format!("V26 SimHash buckets finish failed: {error}")))?;
+
+        let records_file = fs::File::create(&records_path)
+            .map_err(|error| invalid(&format!("V26 SimHash records create failed: {error}")))?;
+        let mut records_writer =
+            FileWriter::try_new(records_file, &v26_simhash_records_schema())
+                .map_err(|error| invalid(&format!("V26 SimHash records writer failed: {error}")))?;
+        for (batch_index, ordinals) in index.source_ordinals.chunks(65_536).enumerate() {
+            let start = batch_index * 65_536;
+            let end = start + ordinals.len();
+            let codes = FixedSizeBinaryArray::try_from_iter(
+                index.codes[start * 16..end * 16].as_chunks::<16>().0.iter(),
+            )
+            .map_err(|error| invalid(&format!("V26 SimHash records array failed: {error}")))?;
+            records_writer
+                .write(
+                    &RecordBatch::try_new(
+                        Arc::new(v26_simhash_records_schema()),
+                        vec![
+                            Arc::new(UInt32Array::from_iter_values(ordinals.iter().copied())),
+                            Arc::new(codes),
+                        ],
+                    )
+                    .map_err(|error| {
+                        invalid(&format!("V26 SimHash records batch failed: {error}"))
+                    })?,
+                )
+                .map_err(|error| invalid(&format!("V26 SimHash records write failed: {error}")))?;
+        }
+        records_writer
+            .finish()
+            .map_err(|error| invalid(&format!("V26 SimHash records finish failed: {error}")))?;
+        Ok(V26SimHashPq16IndexManifest {
+            row_count: u64::try_from(index.source_ordinals.len()).unwrap(),
+            bucket_count: 65_536,
+            projected_resident_bytes_100m: index.projected_resident_bytes_100m,
+            codebook: arrow_file_identity(&codebook_path)?,
+            buckets: arrow_file_identity(&buckets_path)?,
+            records: arrow_file_identity(&records_path)?,
+        })
+    })();
+    if result.is_err() {
+        for path in [&codebook_path, &buckets_path, &records_path] {
+            let _ = fs::remove_file(path);
+        }
+    }
+    result
+}
+
+pub fn read_v26_simhash_pq16_index_arrow(
+    directory: &Path,
+    manifest: &V26SimHashPq16IndexManifest,
+) -> Result<crate::V26SimHashPq16MultiIndex> {
+    if manifest.row_count == 0
+        || manifest.row_count > u64::from(u32::MAX)
+        || manifest.bucket_count != 65_536
+        || manifest.projected_resident_bytes_100m != 2_537_493_520
+    {
+        return Err(invalid("V26 SimHash Arrow manifest differs"));
+    }
+    let mut codebook_reader = authenticate_arrow_file(
+        &directory.join("simhash-pq16-codebook.arrow"),
+        &manifest.codebook,
+    )?;
+    if codebook_reader.schema().as_ref() != &v26_pq16_codebook_schema() {
+        return Err(invalid("V26 SimHash codebook schema differs"));
+    }
+    let mut centroids = vec![Vec::<f32>::new(); 16];
+    let mut codebook_row = 0_usize;
+    for batch in &mut codebook_reader {
+        let batch = batch
+            .map_err(|error| invalid(&format!("V26 SimHash codebook read failed: {error}")))?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V26 SimHash codebook nullability differs"));
+        }
+        let subspaces = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .unwrap();
+        let centroid_ids = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt16Array>()
+            .unwrap();
+        let lists = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        let values = lists
+            .values()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            if usize::from(subspaces.value(row)) != codebook_row / 256
+                || usize::from(centroid_ids.value(row)) != codebook_row % 256
+            {
+                return Err(invalid("V26 SimHash codebook order differs"));
+            }
+            let start = row * 6;
+            let value = &values.values()[start..start + 6];
+            if value.iter().any(|value| !value.is_finite()) {
+                return Err(invalid("V26 SimHash codebook value differs"));
+            }
+            centroids[codebook_row / 256].extend_from_slice(value);
+            codebook_row += 1;
+        }
+    }
+    if codebook_row != 16 * 256 {
+        return Err(invalid("V26 SimHash codebook inventory differs"));
+    }
+
+    let mut buckets_reader = authenticate_arrow_file(
+        &directory.join("simhash-pq16-buckets.arrow"),
+        &manifest.buckets,
+    )?;
+    if buckets_reader.schema().as_ref() != &v26_simhash_buckets_schema() {
+        return Err(invalid("V26 SimHash bucket schema differs"));
+    }
+    let mut bucket_offsets = Vec::with_capacity(65_537);
+    let mut expected_bucket = 0_u32;
+    for batch in &mut buckets_reader {
+        let batch =
+            batch.map_err(|error| invalid(&format!("V26 SimHash bucket read failed: {error}")))?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V26 SimHash bucket nullability differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        let starts = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        let ends = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            let start = starts.value(row);
+            let end = ends.value(row);
+            if ordinals.value(row) != expected_bucket
+                || start > end
+                || bucket_offsets.last().is_some_and(|prior| *prior != start)
+            {
+                return Err(invalid("V26 SimHash bucket order differs"));
+            }
+            if bucket_offsets.is_empty() {
+                bucket_offsets.push(start);
+            }
+            bucket_offsets.push(end);
+            expected_bucket += 1;
+        }
+    }
+    if expected_bucket != 65_536
+        || bucket_offsets.first() != Some(&0)
+        || bucket_offsets.last().copied() != Some(manifest.row_count)
+    {
+        return Err(invalid("V26 SimHash bucket inventory differs"));
+    }
+
+    let mut records_reader = authenticate_arrow_file(
+        &directory.join("simhash-pq16-records.arrow"),
+        &manifest.records,
+    )?;
+    if records_reader.schema().as_ref() != &v26_simhash_records_schema() {
+        return Err(invalid("V26 SimHash records schema differs"));
+    }
+    let mut source_ordinals = Vec::with_capacity(usize::try_from(manifest.row_count).unwrap());
+    let mut codes = Vec::with_capacity(source_ordinals.capacity() * 16);
+    for batch in &mut records_reader {
+        let batch =
+            batch.map_err(|error| invalid(&format!("V26 SimHash records read failed: {error}")))?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V26 SimHash records nullability differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        let encoded = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            source_ordinals.push(ordinals.value(row));
+            codes.extend_from_slice(encoded.value(row));
+        }
+    }
+    if u64::try_from(source_ordinals.len()).unwrap() != manifest.row_count
+        || source_ordinals
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != source_ordinals.len()
+        || source_ordinals
+            .iter()
+            .any(|ordinal| u64::from(*ordinal) >= manifest.row_count)
+    {
+        return Err(invalid("V26 SimHash record inventory differs"));
+    }
+    Ok(crate::V26SimHashPq16MultiIndex {
+        codebook: crate::V26PqCodebook {
+            width: 16,
+            subspace_width: 6,
+            centroids,
+        },
+        bucket_offsets,
+        source_ordinals,
+        codes,
         projected_resident_bytes_100m: manifest.projected_resident_bytes_100m,
     })
 }
@@ -5570,6 +5914,16 @@ mod tests {
         let arrow_multi =
             super::build_v26_simhash_pq16_multi_index_from_arrow(&index, &reader).unwrap();
         assert_eq!(arrow_multi, in_memory_multi);
+        let multi_dir = temp.path().join("simhash-pq16");
+        fs::create_dir(&multi_dir).unwrap();
+        let multi_manifest =
+            super::write_v26_simhash_pq16_index_arrow(&multi_dir, &arrow_multi).unwrap();
+        assert_eq!(multi_manifest.row_count, rows.len() as u64);
+        assert_eq!(multi_manifest.bucket_count, 65_536);
+        assert_eq!(multi_manifest.projected_resident_bytes_100m, 2_537_493_520);
+        let restored =
+            super::read_v26_simhash_pq16_index_arrow(&multi_dir, &multi_manifest).unwrap();
+        assert_eq!(restored, arrow_multi);
         let result =
             select_v26_pq16_pages_from_arrow(&index, &candidate_pages, &query, &reader).unwrap();
 
