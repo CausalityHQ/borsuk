@@ -2692,3 +2692,56 @@ test run passed every executed target, including 1,209 core tests (four
 ignored) and all 87 `borsuk-v26` library tests. Development now uses the smoke
 gate per edit, focused/release-contract gates at boundaries, and the exhaustive
 workspace gate only once per release candidate.
+
+### Production PQ4 shard passes the sealed external-query holdout
+
+Source `f8f23ad4f4cca3a8173b4420034b70f25488149c` moved the bounded 3,072-row
+exact rerank into the existing 16-thread Rayon pool without changing final
+distance/source ordering. On the burned queries 0 through 511, `causality`
+Spot instance `i-0653e9592306dee89` (`c7i.4xlarge`, `eu-central-1c`) measured
+997,265-ppm aggregate Recall@10, 998,046-ppm compliance with the 800,000-ppm
+per-query floor, 15,617,910-ns p99, and 16,365,560-ns maximum latency. This was
+a 15.8-percent p99 reduction from the same-host 18,559,407-ns baseline, but it
+remained 617,910 ns above the unchanged release gate. The 1,060-byte result has
+SHA-256 `7910ebf2254e379444f7fc165df94ce4aa621e2ccfdfa9503ea002118b111725`;
+the 59,371-byte Parquet samples have SHA-256
+`7604d7e46d24990c7975d5fc658eb9066cffee28224fbb9eaf1722e5d8f26b24`.
+
+Source `163996525bb35cb24647ede934c5ca67b1d5e577` then removed a redundant
+serial pass over all 9,990,000 query scores by merging and reusing the
+histograms already produced by the parallel scan. Burned development instance
+`i-02a24e12549edbf44` (`c7i.4xlarge`, `eu-central-1c`) preserved the identical
+997,265/998,046-ppm quality values while reducing p99 to 12,886,594 ns and
+maximum latency to 13,511,357 ns. Peak process RSS was 342,228,992 bytes;
+monitor RSS peaked at 222,609,408 bytes; memory PSI and swap were zero. Its
+1,059-byte result has SHA-256
+`ff7f6cafe1741e2e996a7f784e70c515607df5244e01cdd9bcc82d3299b222bb`;
+the 59,371-byte Parquet samples have SHA-256
+`79dcda3a8330e3cf2af0d36bcc22c0c27a0b0e32e652dc11e3dca27d16e18272`.
+Both instances published complete terminals and terminated. An intervening
+instance `i-02a474440f9fefcde` omitted the benchmark IAM/network launch fields,
+failed before science, published a claim-ineligible failure receipt, and
+terminated; it contributes no measurement.
+
+Source `d0632a8c14cdf942aacbeed172e37aad0ce3dc21` froze the independently selected
+16-thread configuration and evaluated the untouched sealed query ordinals 512
+through 991 once. Spot instance `i-038db8a7f462f525d` (`c7i.4xlarge`,
+`eu-central-1c`) achieved 997,708-ppm aggregate Recall@10, 1,000,000-ppm floor
+compliance, 800,000-ppm minimum recall, 11,465,765-ns p99, and 11,863,230-ns
+maximum latency. These pass the literal 995,000/997,500/800,000-ppm quality
+gates and the 15,000,000-ns p99 gate. Peak process RSS was 342,233,088 bytes,
+well below 3 GiB; monitor RSS peaked at 202,362,880 bytes; memory PSI and swap
+were zero. The 1,065-byte canonical result has SHA-256
+`ce6fac4609987a158fc3a99c112ac496df541ecbdd65572f246da54a60b39ada`;
+the 55,732-byte Parquet samples have SHA-256
+`a9c28208e7d8894f2674a0780663ae05206d049968b331c7a8cbae00ec923345`.
+Evidence is rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-pq4-production/d0632a8c14cdf942aacbeed172e37aad0ce3dc21/v26-pq4-sealed-20260903T171227Z-a0015-x86/`.
+The terminal is complete and the instance terminated.
+
+This promotes the immutable 9.99-million-row PQ4 shard boundary: exact-row
+quality, memory, and latency pass on sealed external queries without page-body
+reads. The result remains claim-ineligible until the same frozen code is
+qualified as a roughly ten-shard 100-million-row deployment, including bounded
+parallel fan-out and deterministic global top-k merge. D3 and competitor claims
+remain fenced.
