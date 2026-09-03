@@ -294,6 +294,7 @@ fn validate_config(
     Ok(())
 }
 
+#[cfg(test)]
 fn write_train_parquet(
     output: &Path,
     spec: &GenerationSpec,
