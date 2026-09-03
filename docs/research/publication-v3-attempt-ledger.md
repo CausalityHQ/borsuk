@@ -2745,3 +2745,25 @@ reads. The result remains claim-ineligible until the same frozen code is
 qualified as a roughly ten-shard 100-million-row deployment, including bounded
 parallel fan-out and deterministic global top-k merge. D3 and competitor claims
 remain fenced.
+
+Final repository assurance is rooted at
+`b797352fb673007441c1723e8f87e5c217434845`. The only change after the sealed
+measurement was a test-only replacement of wall-clock sleeps in the maintenance
+lease-renewal test with an observed-renewal handshake; production search and
+storage code are byte-identical to the measured candidate. On `causality` Spot
+instance `i-04c02c30d37b99037` (`r7g.4xlarge`, `eu-central-1c`), strict locked
+workspace/all-targets Clippy exited zero, followed by the complete locked
+workspace/all-targets test gate with 2,053 passed, zero failed, and 23 explicitly
+ignored tests across 102 result suites. The test process peaked at 3,161,592 KiB
+RSS; memory PSI and swap remained zero. The 195-byte canonical assurance
+terminal has SHA-256
+`22d65dae7fb8448f27c5ea210974c7ae1fe80104dfa658cbd7fea39a5cb8c08a`;
+the 4,519-byte compressed Clippy log has SHA-256
+`120c23bf43e10add9db7aeff190588da08ec34a2d9e0b4817f8a8673e18ca1c2`;
+and the 47,124-byte compressed test log has SHA-256
+`6a9a44f558d3eaa9f75bc5983928d28ff1c8af29298f8222102109bba9dbd685`.
+They are preserved under
+`s3://borsuk-bench-453182569524-euc1/research/v26-pq4-production/b797352fb673007441c1723e8f87e5c217434845/assurance/`.
+The builder terminated immediately after evidence publication. This assurance
+closes the repository-quality checkpoint only; it does not relax the explicit
+100-million-row fan-out, package, object-store, D3, or competitor-claim fences.
