@@ -1,13 +1,19 @@
+import json
 import unittest
 
 from scripts.run_v26_pq4_100m_campaign import (
     AttemptRegistry,
     CampaignMonitor,
+    CampaignPhaseMachine,
     MonitorLimits,
     MonitorSnapshot,
     S3LatencyProfile,
     S3RequestCounter,
+    SpotTarget,
+    build_worker_capability,
+    canonical_phase_receipt_bytes,
     estimate_s3_transfer,
+    plan_spot_placements,
 )
 
 
@@ -178,6 +184,118 @@ class S3LatencyProjectionTests(unittest.TestCase):
             counter.add("snapshot", requests=0, bytes_read=1)
         with self.assertRaises(ValueError):
             estimate_s3_transfer(counter, projection.profile, wall_budget_seconds=0)
+
+
+class CampaignPhaseTests(unittest.TestCase):
+    def receipt(
+        self,
+        phase: str,
+        *,
+        status: str = "passed",
+        shard_ordinal: int | None = None,
+        attempt_id: str | None = None,
+    ) -> bytes:
+        if attempt_id is None:
+            attempt_id = f"{phase}-a0001"
+        return canonical_phase_receipt_bytes(
+            campaign_id="v26-fixture",
+            source_commit="a" * 40,
+            phase=phase,
+            status=status,
+            attempt_id=attempt_id,
+            instance_id="i-0123456789abcdef0",
+            shard_ordinal=shard_ordinal,
+        )
+
+    def test_v26_pq4_100m_campaign_advances_only_from_authenticated_receipts(self) -> None:
+        # Break caught: quiet output or an unauthenticated object advances directly into paid work.
+        machine = CampaignPhaseMachine("v26-fixture", "a" * 40)
+        self.assertEqual(machine.phase, "preflight")
+        with self.assertRaises(ValueError):
+            machine.accept(self.receipt("serve"))
+        machine.accept(self.receipt("preflight"))
+        self.assertEqual(machine.phase, "build")
+        for ordinal in range(10):
+            machine.accept(
+                self.receipt(
+                    "build",
+                    shard_ordinal=ordinal,
+                    attempt_id=f"partition-{ordinal:04d}-a0001",
+                )
+            )
+        self.assertEqual(machine.phase, "serve")
+        machine.accept(self.receipt("serve"))
+        self.assertEqual(machine.phase, "terminal")
+        self.assertEqual(machine.status, "passed")
+
+        mutated = bytearray(self.receipt("preflight"))
+        mutated[-2] = ord(" ")
+        with self.assertRaises(ValueError):
+            CampaignPhaseMachine("v26-fixture", "a" * 40).accept(bytes(mutated))
+
+        baseline = json.loads(self.receipt("preflight"))
+        for label, mutation in {
+            "missing": lambda value: value.pop("source_commit"),
+            "extra": lambda value: value.update(extra=True),
+            "type": lambda value: value.update(source_commit=7),
+            "claim": lambda value: value.update(claim_eligible=True),
+            "identity": lambda value: value.update(campaign_id="another-campaign"),
+        }.items():
+            with self.subTest(label=label):
+                value = dict(baseline)
+                mutation(value)
+                raw = (
+                    json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+                    + b"\n"
+                )
+                with self.assertRaises(ValueError):
+                    CampaignPhaseMachine("v26-fixture", "a" * 40).accept(raw)
+
+    def test_v26_pq4_100m_failure_fences_later_phases(self) -> None:
+        machine = CampaignPhaseMachine("v26-fixture", "a" * 40)
+        machine.accept(self.receipt("preflight", status="failed"))
+        self.assertEqual((machine.phase, machine.status), ("terminal", "failed"))
+        with self.assertRaises(ValueError):
+            machine.accept(self.receipt("preflight"))
+
+    def test_v26_pq4_100m_build_capability_and_cross_zone_spot_plan_are_bounded(self) -> None:
+        capability = build_worker_capability(
+            shard_ordinal=3,
+            train_uris=("s3://fixture/train-0003.parquet",),
+            output_prefix="s3://fixture/campaign/build/0003/",
+        )
+        self.assertEqual(
+            set(capability),
+            {"output_prefix", "shard_ordinal", "train_uris"},
+        )
+        self.assertNotIn("query", repr(capability))
+        self.assertNotIn("truth", repr(capability))
+
+        placements = plan_spot_placements(
+            (
+                SpotTarget("eu-central-1a", "subnet-a"),
+                SpotTarget("eu-central-1b", "subnet-b"),
+                SpotTarget("eu-central-1c", "subnet-c"),
+            ),
+            shard_count=10,
+        )
+        self.assertEqual([item.shard_ordinal for item in placements], list(range(10)))
+        self.assertEqual(
+            [item.availability_zone for item in placements[:6]],
+            [
+                "eu-central-1a",
+                "eu-central-1b",
+                "eu-central-1c",
+                "eu-central-1a",
+                "eu-central-1b",
+                "eu-central-1c",
+            ],
+        )
+        with self.assertRaises(ValueError):
+            plan_spot_placements(
+                (SpotTarget("eu-central-1a", "subnet-a"),) * 2,
+                shard_count=10,
+            )
 
 
 if __name__ == "__main__":
