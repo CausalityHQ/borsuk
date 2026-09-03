@@ -1409,6 +1409,29 @@ pub(crate) fn pack_v26_pq4_fast_blocks(codes: &[[u8; 32]]) -> Result<Vec<[u8; 51
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V26Pq4FastIndex {
+    codebook: V26Pq4FastCodebook,
+    blocks: Vec<[u8; 512]>,
+    row_count: u64,
+    projected_resident_bytes_100m: u64,
+}
+
+pub(crate) fn build_v26_pq4_fast_index(rows: &[[f32; 96]]) -> Result<V26Pq4FastIndex> {
+    let codebook = fit_v26_pq4_fast_codebook(rows)?;
+    let codes = rows
+        .iter()
+        .map(|row| codebook.encode(row))
+        .collect::<Result<Vec<_>>>()?;
+    let blocks = pack_v26_pq4_fast_blocks(&codes)?;
+    Ok(V26Pq4FastIndex {
+        codebook,
+        blocks,
+        row_count: u64::try_from(rows.len()).unwrap(),
+        projected_resident_bytes_100m: projected_v26_pq4_fast_resident_bytes(100_000_000)?,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct V26PqCodebook {
     width: usize,
     subspace_width: usize,
@@ -4458,10 +4481,10 @@ mod tests {
         V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult, V26LayoutSample, V26Node,
         V26ObjectIdentity, V26Pq4FastCodebook, V26Pq8Occurrence, V26QueryTruth, V26RankedRow,
         V26RowPages, V26Tree, build_v26_dual_tree_layout, build_v26_external_truth_rows,
-        build_v26_page_mode_centroids, build_v26_pq8_page_occurrences, build_v26_pq16_packed_index,
-        canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
-        canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
-        diagnose_v26_global_centroid_candidate_widths,
+        build_v26_page_mode_centroids, build_v26_pq4_fast_index, build_v26_pq8_page_occurrences,
+        build_v26_pq16_packed_index, canonical_v26_exact_global_result_bytes,
+        canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
+        canonical_v26_tree_router_result_bytes, diagnose_v26_global_centroid_candidate_widths,
         diagnose_v26_global_page_mode_candidate_widths, diagnose_v26_tree_router_candidate_widths,
         evaluate_v26_candidate_row_cover, evaluate_v26_centroid_router,
         evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
@@ -5301,6 +5324,11 @@ mod tests {
                 .iter()
                 .all(|code| *code < 16)
         );
+        let index = build_v26_pq4_fast_index(&rows).unwrap();
+        assert_eq!(index.row_count, 256);
+        assert_eq!(index.blocks.len(), 8);
+        assert_eq!(index.codebook, first);
+        assert_eq!(index.projected_resident_bytes_100m, 2_336_975_744);
 
         let ties = V26Pq4FastCodebook {
             centroids: vec![[0.0; 48]; 32],
