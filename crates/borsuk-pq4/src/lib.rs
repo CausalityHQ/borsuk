@@ -5,6 +5,7 @@
 mod builder;
 mod core;
 mod format;
+mod index;
 
 #[cfg(test)]
 pub(crate) use format::{Pq4ArtifactIdentity, Pq4Manifest, canonical_manifest_bytes};
@@ -12,6 +13,7 @@ pub(crate) use format::{Pq4ArtifactIdentity, Pq4Manifest, canonical_manifest_byt
 pub(crate) use snapshot::{Pq4Snapshot, Pq4SnapshotWriteRequest, write_snapshot};
 
 pub use builder::{Pq4BuildConfig, Pq4BuildReport, Pq4Builder};
+pub use index::{Pq4Index, Pq4Match, Pq4OpenOptions};
 
 mod snapshot;
 
@@ -42,10 +44,11 @@ mod tests {
     #[cfg(not(target_arch = "aarch64"))]
     use super::rank_candidates;
     use super::{
-        Pq4ArtifactIdentity, Pq4BuildConfig, Pq4Builder, Pq4Codebook, Pq4Manifest, Pq4Snapshot,
-        Pq4SnapshotWriteRequest, canonical_manifest_bytes, encode_blocks, fit_codebook,
-        projected_resident_bytes, rank_candidates_parallel_scalar_for_test, rank_candidates_scalar,
-        score_rows_scalar, write_snapshot,
+        Pq4ArtifactIdentity, Pq4BuildConfig, Pq4Builder, Pq4Codebook, Pq4Index, Pq4Manifest,
+        Pq4OpenOptions, Pq4Snapshot, Pq4SnapshotWriteRequest, canonical_manifest_bytes,
+        encode_blocks, fit_codebook, projected_resident_bytes,
+        rank_candidates_parallel_scalar_for_test, rank_candidates_scalar, score_rows_scalar,
+        write_snapshot,
     };
     use std::sync::Arc;
 
@@ -541,6 +544,64 @@ mod tests {
                 .all(|(left, right)| (left - right).abs() <= 1.0e-6)
         );
         assert!((actual.iter().map(|value| value * value).sum::<f32>() - 1.0).abs() <= 1.0e-6);
+    }
+
+    #[test]
+    fn v26_release_contract_pq4_search_returns_exact_rows_with_bounded_admission() {
+        // Break caught: serving returns quantized/page candidates instead of exact rows, loses
+        // deterministic tie order, skips query normalization, or oversubscribes query scratch.
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("input.parquet");
+        let vectors = rows(4_097);
+        let ids = (0..vectors.len())
+            .map(|ordinal| format!("id-{ordinal:08}").into_bytes())
+            .collect::<Vec<_>>();
+        write_pq4_input(&input, &vectors, &ids);
+        let output = temp.path().join("snapshot");
+        Pq4Builder::build_parquet(
+            &input,
+            &output,
+            &Pq4BuildConfig {
+                worker_count: 2,
+                batch_rows: 512,
+                generation: "search-contract".to_owned(),
+                source_uri: "s3://frozen/search.parquet".to_owned(),
+            },
+        )
+        .unwrap();
+        let options = Pq4OpenOptions {
+            memory_budget_bytes: 64 * 1024 * 1024,
+            query_threads: 2,
+            admission_timeout_ms: 1_000,
+        };
+        let index = Arc::new(Pq4Index::open(&output, options.clone()).unwrap());
+        let query = vectors[2_113].map(|value| value * 9.0);
+        let matches = index.search(&query, 10).unwrap();
+        let expected_ordinals = (0..10).map(|index| 57 + index * 257).collect::<Vec<_>>();
+        assert_eq!(
+            matches
+                .iter()
+                .map(|item| item.source_ordinal)
+                .collect::<Vec<_>>(),
+            expected_ordinals
+        );
+        assert!(matches.iter().all(|item| item.squared_distance <= 1.0e-12));
+        assert_eq!(matches[3].id, ids[expected_ordinals[3] as usize]);
+
+        let handles = (0..4)
+            .map(|_| {
+                let index = index.clone();
+                std::thread::spawn(move || index.search(&query, 10).unwrap())
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            assert_eq!(handle.join().unwrap(), matches);
+        }
+        let too_small = Pq4OpenOptions {
+            memory_budget_bytes: 1_024,
+            ..options
+        };
+        assert!(Pq4Index::open(&output, too_small).is_err());
     }
 
     #[cfg(not(target_arch = "aarch64"))]
