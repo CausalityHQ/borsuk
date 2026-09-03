@@ -6,7 +6,7 @@
 )]
 
 use std::{
-    cmp::Ordering,
+    cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet, BinaryHeap},
 };
 
@@ -1478,6 +1478,7 @@ pub(crate) struct V26Pq16RerankEvaluation {
     pub(crate) result: V26TreeRouterResult,
 }
 
+#[cfg(test)]
 fn rank_v26_pq16_candidate_rows(
     codes: &[Vec<u8>],
     assignments: &[V26RowPages],
@@ -1579,12 +1580,7 @@ pub(crate) fn evaluate_v26_pq16_exact_rerank_ladder(
     if queries.len() != 512 || truths.len() != 512 || rows.len() != assignments.len() {
         return Err(invalid("V26 PQ16 ladder authority differs"));
     }
-    let vectors = rows.iter().map(|row| row.vector).collect::<Vec<_>>();
-    let codebook = fit_v26_pq_codebook(&vectors, 16)?;
-    let codes = rows
-        .iter()
-        .map(|row| codebook.encode(&row.vector))
-        .collect::<Result<Vec<_>>>()?;
+    let index = build_v26_pq16_packed_index(rows, assignments)?;
     let per_query = queries
         .par_iter()
         .zip(truths.par_iter())
@@ -1605,9 +1601,12 @@ pub(crate) fn evaluate_v26_pq16_exact_rerank_ladder(
             )?;
             let mut candidate_pages = ranked_candidates.clone();
             candidate_pages.sort_unstable();
-            let tables = prepare_v26_pq_tables(&codebook, &query.vector)?;
-            let ranked =
-                rank_v26_pq16_candidate_rows(&codes, assignments, &candidate_pages, &tables)?;
+            let ranked = rank_v26_pq16_packed_candidates(
+                &index,
+                &candidate_pages,
+                &query.vector,
+                V26_PQ16_RERANK_LADDER[4],
+            )?;
             V26_PQ16_RERANK_LADDER
                 .into_iter()
                 .map(|ranked_row_limit| {
@@ -1687,6 +1686,225 @@ pub(crate) fn evaluate_v26_pq16_exact_rerank_ladder(
             })
         })
         .collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct V26PackedPq16Index {
+    codebook: V26PqCodebook,
+    pub(crate) codes: Vec<u8>,
+    pub(crate) page_offsets: Vec<u64>,
+    pub(crate) posting_rows: Vec<u32>,
+    pub(crate) projected_resident_bytes_100m: u64,
+}
+
+pub fn build_v26_pq16_packed_index(
+    rows: &[V26ConstructionRow],
+    assignments: &[V26RowPages],
+) -> Result<V26PackedPq16Index> {
+    if rows.is_empty() || rows.len() != assignments.len() || rows.len() > u32::MAX as usize {
+        return Err(invalid("V26 packed PQ16 build request differs"));
+    }
+    let vectors = rows.iter().map(|row| row.vector).collect::<Vec<_>>();
+    let codebook = fit_v26_pq_codebook(&vectors, 16)?;
+    let mut codes = Vec::with_capacity(rows.len() * 16);
+    let page_count = assignments
+        .iter()
+        .flat_map(|assignment| [assignment.primary_page, assignment.replica_page])
+        .max()
+        .and_then(|page| page.checked_add(1))
+        .ok_or_else(|| invalid("V26 packed PQ16 page inventory differs"))?;
+    let mut postings = vec![Vec::<u32>::new(); usize::try_from(page_count).unwrap()];
+    for (index, (row, assignment)) in rows.iter().zip(assignments).enumerate() {
+        if usize::try_from(row.source_ordinal).ok() != Some(index)
+            || assignment.source_ordinal != row.source_ordinal
+            || assignment.primary_page == assignment.replica_page
+        {
+            return Err(invalid("V26 packed PQ16 binding differs"));
+        }
+        codes.extend(codebook.encode(&row.vector)?);
+        let row_id = u32::try_from(index).unwrap();
+        postings[usize::try_from(assignment.primary_page).unwrap()].push(row_id);
+        postings[usize::try_from(assignment.replica_page).unwrap()].push(row_id);
+    }
+    if postings.iter().any(Vec::is_empty) {
+        return Err(invalid("V26 packed PQ16 page inventory differs"));
+    }
+    let mut page_offsets = Vec::with_capacity(postings.len() + 1);
+    let mut posting_rows = Vec::with_capacity(rows.len() * 2);
+    page_offsets.push(0);
+    for posting in postings {
+        posting_rows.extend(posting);
+        page_offsets.push(u64::try_from(posting_rows.len()).unwrap());
+    }
+    Ok(V26PackedPq16Index {
+        codebook,
+        codes,
+        page_offsets,
+        posting_rows,
+        projected_resident_bytes_100m: projected_v26_pq16_rerank_resident_bytes(
+            100_000_000,
+            2_816,
+        )?,
+    })
+}
+
+pub(crate) fn rank_v26_pq16_packed_candidates(
+    index: &V26PackedPq16Index,
+    candidate_pages: &[u32],
+    query: &[f32; 96],
+    ranked_row_limit: usize,
+) -> Result<Vec<V26PqRankedRow>> {
+    if candidate_pages.is_empty()
+        || candidate_pages.windows(2).any(|pair| pair[0] >= pair[1])
+        || ranked_row_limit == 0
+        || ranked_row_limit > V26_PQ16_RERANK_LADDER[4]
+        || !index.codes.len().is_multiple_of(16)
+    {
+        return Err(invalid("V26 packed PQ16 query request differs"));
+    }
+    let tables = prepare_v26_pq_tables(&index.codebook, query)?;
+    let mut merge = BinaryHeap::<Reverse<(u32, usize, usize, usize)>>::new();
+    for (candidate_index, page) in candidate_pages.iter().enumerate() {
+        let page = usize::try_from(*page).unwrap();
+        let start = *index
+            .page_offsets
+            .get(page)
+            .ok_or_else(|| invalid("V26 packed PQ16 candidate page differs"))?;
+        let end = *index
+            .page_offsets
+            .get(page + 1)
+            .ok_or_else(|| invalid("V26 packed PQ16 candidate page differs"))?;
+        let start = usize::try_from(start).unwrap();
+        let end = usize::try_from(end).unwrap();
+        if start >= end {
+            return Err(invalid("V26 packed PQ16 candidate page differs"));
+        }
+        merge.push(Reverse((
+            index.posting_rows[start],
+            candidate_index,
+            start,
+            end,
+        )));
+    }
+    let mut ranked = BinaryHeap::with_capacity(ranked_row_limit);
+    let mut last_row = None;
+    while let Some(Reverse((row_id, candidate_index, position, end))) = merge.pop() {
+        if last_row != Some(row_id) {
+            let start = usize::try_from(row_id)
+                .unwrap()
+                .checked_mul(16)
+                .ok_or_else(|| invalid("V26 packed PQ16 code offset overflows"))?;
+            let code = index
+                .codes
+                .get(start..start + 16)
+                .ok_or_else(|| invalid("V26 packed PQ16 row differs"))?;
+            let distance = code
+                .iter()
+                .enumerate()
+                .map(|(subspace, code)| tables[subspace][usize::from(*code)])
+                .sum::<f32>();
+            if !distance.is_finite() {
+                return Err(invalid("V26 packed PQ16 distance differs"));
+            }
+            let value = V26PqRankedRow {
+                source_ordinal: u64::from(row_id),
+                distance,
+            };
+            if ranked.len() < ranked_row_limit {
+                ranked.push(value);
+            } else if value < *ranked.peek().unwrap() {
+                ranked.pop();
+                ranked.push(value);
+            }
+            last_row = Some(row_id);
+        }
+        let next = position + 1;
+        if next < end {
+            merge.push(Reverse((
+                index.posting_rows[next],
+                candidate_index,
+                next,
+                end,
+            )));
+        }
+    }
+    if ranked.len() != ranked_row_limit {
+        return Err(invalid("V26 packed PQ16 candidate inventory differs"));
+    }
+    let mut ranked = ranked.into_vec();
+    ranked.sort();
+    Ok(ranked)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26Pq16ServingSelection {
+    pub selected_pages: Vec<u32>,
+    pub exact_rows_read: u32,
+    pub page_body_reads: u32,
+}
+
+pub fn select_v26_pq16_packed_pages(
+    index: &V26PackedPq16Index,
+    candidate_pages: &[u32],
+    query: &[f32; 96],
+    cold_rows: &[V26ConstructionRow],
+    assignments: &[V26RowPages],
+) -> Result<V26Pq16ServingSelection> {
+    if cold_rows.len() != assignments.len() || index.codes.len() != cold_rows.len() * 16 {
+        return Err(invalid("V26 PQ16 serving authority differs"));
+    }
+    let approximate = rank_v26_pq16_packed_candidates(index, candidate_pages, query, 512)?;
+    let mut exact = approximate
+        .iter()
+        .map(|candidate| {
+            let index = usize::try_from(candidate.source_ordinal).unwrap();
+            let row = cold_rows
+                .get(index)
+                .ok_or_else(|| invalid("V26 PQ16 cold row differs"))?;
+            let assignment = assignments
+                .get(index)
+                .ok_or_else(|| invalid("V26 PQ16 assignment differs"))?;
+            if row.source_ordinal != candidate.source_ordinal
+                || assignment.source_ordinal != candidate.source_ordinal
+            {
+                return Err(invalid("V26 PQ16 cold-row binding differs"));
+            }
+            let distance = v26_squared_l2(&row.vector, query);
+            if !distance.is_finite() {
+                return Err(invalid("V26 PQ16 exact distance differs"));
+            }
+            Ok((
+                V26PqRankedRow {
+                    source_ordinal: candidate.source_ordinal,
+                    distance,
+                },
+                [assignment.primary_page, assignment.replica_page],
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    exact.sort_by_key(|entry| entry.0);
+    let ranked_assignments = exact[..10]
+        .iter()
+        .map(|(_, pages)| pages.to_vec())
+        .collect::<Vec<_>>();
+    let mut selected_pages = exact_v26_layout_oracle_pages(&ranked_assignments, 8)?;
+    for page in candidate_pages {
+        if selected_pages.len() == 8 {
+            break;
+        }
+        if !selected_pages.contains(page) {
+            selected_pages.push(*page);
+        }
+    }
+    if selected_pages.len() != 8 {
+        return Err(invalid("V26 PQ16 serving page inventory differs"));
+    }
+    selected_pages.sort_unstable();
+    Ok(V26Pq16ServingSelection {
+        selected_pages,
+        exact_rows_read: 512,
+        page_body_reads: 0,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3115,16 +3333,18 @@ mod tests {
         V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult, V26LayoutSample, V26Node,
         V26ObjectIdentity, V26Pq8Occurrence, V26QueryTruth, V26RankedRow, V26RowPages, V26Tree,
         build_v26_dual_tree_layout, build_v26_external_truth_rows, build_v26_page_mode_centroids,
-        build_v26_pq8_page_occurrences, canonical_v26_exact_global_result_bytes,
-        canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
-        canonical_v26_tree_router_result_bytes, diagnose_v26_tree_router_candidate_widths,
-        evaluate_v26_candidate_row_cover, evaluate_v26_centroid_router,
-        evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
-        evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
-        evaluate_v26_pq16_exact_rerank_ladder, evaluate_v26_tree_router,
-        exact_v26_layout_oracle_pages, fit_v26_pq_codebook, fit_v26_pq8_codebook,
-        prepare_v26_pq8_tables, projected_v26_pq_resident_bytes, projected_v26_pq8_resident_bytes,
-        rank_v26_candidate_rows, rank_v26_pq8_occurrences, rank_v26_tree_pages, route_v26_pages,
+        build_v26_pq8_page_occurrences, build_v26_pq16_packed_index,
+        canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
+        canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
+        diagnose_v26_tree_router_candidate_widths, evaluate_v26_candidate_row_cover,
+        evaluate_v26_centroid_router, evaluate_v26_exact_global_external_rows,
+        evaluate_v26_page_mode_router, evaluate_v26_pq_width_ladder,
+        evaluate_v26_pq8_candidate_cover, evaluate_v26_pq16_exact_rerank_ladder,
+        evaluate_v26_tree_router, exact_v26_layout_oracle_pages, fit_v26_pq_codebook,
+        fit_v26_pq8_codebook, prepare_v26_pq_tables, prepare_v26_pq8_tables,
+        projected_v26_pq_resident_bytes, projected_v26_pq8_resident_bytes, rank_v26_candidate_rows,
+        rank_v26_pq8_occurrences, rank_v26_pq16_candidate_rows, rank_v26_pq16_packed_candidates,
+        rank_v26_tree_pages, route_v26_pages, select_v26_pq16_packed_pages,
         select_v26_ranked_pages, validate_v26_dual_tree_layout,
     };
 
@@ -3924,6 +4144,115 @@ mod tests {
                     .iter()
                     .all(|sample| sample.selected_pages.len() == 8)
         }));
+    }
+
+    #[test]
+    fn v26_pq16_packed_index_deduplicates_postings_and_matches_reference_top512() {
+        // Break caught: production duplicates codes per page, allocates a corpus-sized query
+        // marker, scores dual-page rows twice, or changes deterministic PQ ranking.
+        let rows = (0_u64..2_113)
+            .map(|source_ordinal| {
+                let angle = source_ordinal as f32 / 2_048.0;
+                let mut vector = [0.0_f32; 96];
+                vector[0] = angle.cos();
+                vector[1] = angle.sin();
+                V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..2_113)
+            .map(|source_ordinal| V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
+                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let index = build_v26_pq16_packed_index(&rows, &assignments).unwrap();
+        assert_eq!(index.codes.len(), rows.len() * 16);
+        assert_eq!(index.posting_rows.len(), rows.len() * 2);
+        assert_eq!(index.page_offsets.len(), 17);
+        assert_eq!(index.projected_resident_bytes_100m, 2_937_537_416);
+
+        let candidate_pages = (0_u32..16).collect::<Vec<_>>();
+        let packed =
+            rank_v26_pq16_packed_candidates(&index, &candidate_pages, &rows[42].vector, 512)
+                .unwrap();
+        assert_eq!(packed.len(), 512);
+        assert_eq!(
+            packed
+                .iter()
+                .map(|row| row.source_ordinal)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            512
+        );
+        assert!(packed.windows(2).all(|pair| pair[0] <= pair[1]));
+        let codes = index
+            .codes
+            .as_chunks::<16>()
+            .0
+            .iter()
+            .map(|code| code.to_vec())
+            .collect::<Vec<_>>();
+        let tables = prepare_v26_pq_tables(&index.codebook, &rows[42].vector).unwrap();
+        let reference =
+            rank_v26_pq16_candidate_rows(&codes, &assignments, &candidate_pages, &tables).unwrap();
+        assert_eq!(
+            packed
+                .iter()
+                .map(|row| (row.source_ordinal, row.distance.to_bits()))
+                .collect::<Vec<_>>(),
+            reference
+                .iter()
+                .take(512)
+                .map(|row| (row.source_ordinal, row.distance.to_bits()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn v26_pq16_serving_kernel_reads_exactly_512_cold_vectors_and_selects_eight_pages() {
+        // Break caught: serving exact-reranks an unbounded set, consults truth, reads page bodies,
+        // or changes the fixed depth-512/eight-page contract.
+        let rows = (0_u64..2_113)
+            .map(|source_ordinal| {
+                let angle = source_ordinal as f32 / 2_048.0;
+                let mut vector = [0.0_f32; 96];
+                vector[0] = angle.cos();
+                vector[1] = angle.sin();
+                V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..2_113)
+            .map(|source_ordinal| V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
+                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let index = build_v26_pq16_packed_index(&rows, &assignments).unwrap();
+        let result = select_v26_pq16_packed_pages(
+            &index,
+            &(0_u32..16).collect::<Vec<_>>(),
+            &rows[42].vector,
+            &rows,
+            &assignments,
+        )
+        .unwrap();
+        assert_eq!(result.exact_rows_read, 512);
+        assert_eq!(result.selected_pages.len(), 8);
+        assert!(
+            result
+                .selected_pages
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
+        assert_eq!(result.page_body_reads, 0);
     }
 
     #[test]
