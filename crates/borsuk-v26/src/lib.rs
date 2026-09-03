@@ -1733,6 +1733,172 @@ pub struct V26SimHashPq16MultiIndex {
     pub(crate) projected_resident_bytes_100m: u64,
 }
 
+const V26_DUAL_PQ_KEY_SUBSPACES: [[usize; 2]; 2] = [[0, 8], [4, 12]];
+
+/// Source-order PQ16 codes plus two distance-aligned 16-bit ordinal indexes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct V26DualPqKeyIndex {
+    codebook: V26PqCodebook,
+    pub(crate) bucket_offsets: [Vec<u64>; 2],
+    pub(crate) source_ordinals: [Vec<u32>; 2],
+    pub(crate) codes: Vec<u8>,
+    pub(crate) projected_resident_bytes_100m: u64,
+}
+
+fn projected_v26_dual_pq_key_resident_bytes(rows: u64) -> Result<u64> {
+    if rows == 0 || rows > u64::from(u32::MAX) {
+        return Err(invalid("V26 dual PQ-key projection request differs"));
+    }
+    rows.checked_mul(16)
+        .and_then(|bytes| bytes.checked_add(rows * 2 * 4))
+        .and_then(|bytes| bytes.checked_add(2 * 65_537 * 8))
+        .and_then(|bytes| bytes.checked_add(16 * 256 * 6 * 4))
+        .and_then(|bytes| bytes.checked_add(512 * 1_024 * 1_024))
+        .and_then(|bytes| bytes.checked_add(8))
+        .ok_or_else(|| invalid("V26 dual PQ-key projection overflows"))
+}
+
+fn v26_dual_pq_key(code: &[u8; 16], plane: usize) -> u16 {
+    let [low, high] = V26_DUAL_PQ_KEY_SUBSPACES[plane];
+    u16::from_le_bytes([code[low], code[high]])
+}
+
+/// Builds two stable counting indexes directly from authenticated source-order PQ16 codes.
+pub fn build_v26_dual_pq_key_index(packed: &V26PackedPq16Index) -> Result<V26DualPqKeyIndex> {
+    const BUCKETS: usize = 65_536;
+    let codes = packed.codes.as_chunks::<16>();
+    if !codes.1.is_empty() || codes.0.is_empty() || codes.0.len() > u32::MAX as usize {
+        return Err(invalid("V26 dual PQ-key build request differs"));
+    }
+    let mut bucket_offsets = [Vec::new(), Vec::new()];
+    let mut source_ordinals = [Vec::new(), Vec::new()];
+    for plane in 0..2 {
+        let mut counts = vec![0_usize; BUCKETS];
+        for code in codes.0 {
+            let bucket = usize::from(v26_dual_pq_key(code, plane));
+            counts[bucket] = counts[bucket]
+                .checked_add(1)
+                .ok_or_else(|| invalid("V26 dual PQ-key bucket count overflows"))?;
+        }
+        let mut offsets = Vec::with_capacity(BUCKETS + 1);
+        offsets.push(0_u64);
+        for count in counts {
+            offsets.push(
+                offsets
+                    .last()
+                    .copied()
+                    .unwrap()
+                    .checked_add(u64::try_from(count).unwrap())
+                    .ok_or_else(|| invalid("V26 dual PQ-key bucket offset overflows"))?,
+            );
+        }
+        let mut positions = offsets[..BUCKETS]
+            .iter()
+            .map(|offset| usize::try_from(*offset).unwrap())
+            .collect::<Vec<_>>();
+        let mut ordinals = vec![0_u32; codes.0.len()];
+        for (source_ordinal, code) in codes.0.iter().enumerate() {
+            let bucket = usize::from(v26_dual_pq_key(code, plane));
+            let position = positions[bucket];
+            positions[bucket] += 1;
+            ordinals[position] = u32::try_from(source_ordinal).unwrap();
+        }
+        bucket_offsets[plane] = offsets;
+        source_ordinals[plane] = ordinals;
+    }
+    Ok(V26DualPqKeyIndex {
+        codebook: packed.codebook.clone(),
+        bucket_offsets,
+        source_ordinals,
+        codes: packed.codes.clone(),
+        projected_resident_bytes_100m: projected_v26_dual_pq_key_resident_bytes(100_000_000)?,
+    })
+}
+
+/// Ranks the union of the nearest fixed PQ-key buckets by the complete PQ16 distance.
+pub(crate) fn rank_v26_dual_pq_key_candidates(
+    index: &V26DualPqKeyIndex,
+    query: &[f32; 96],
+    key_limit_per_plane: usize,
+    ranked_row_limit: usize,
+) -> Result<Vec<V26PqRankedRow>> {
+    const BUCKETS: usize = 65_536;
+    if key_limit_per_plane == 0
+        || key_limit_per_plane > BUCKETS
+        || ranked_row_limit == 0
+        || ranked_row_limit > V26_PQ16_RERANK_LADDER[4]
+        || !index.codes.len().is_multiple_of(16)
+        || index.codes.len() / 16 < ranked_row_limit
+        || index.bucket_offsets.iter().any(|offsets| {
+            offsets.len() != BUCKETS + 1
+                || offsets.first() != Some(&0)
+                || offsets.last().copied() != Some(u64::try_from(index.codes.len() / 16).unwrap())
+                || offsets.windows(2).any(|pair| pair[0] > pair[1])
+        })
+        || index
+            .source_ordinals
+            .iter()
+            .any(|ordinals| ordinals.len() * 16 != index.codes.len())
+    {
+        return Err(invalid("V26 dual PQ-key query request differs"));
+    }
+    let tables = prepare_v26_pq_tables(&index.codebook, query)?;
+    let mut candidates = Vec::new();
+    for plane in 0..2 {
+        let [low, high] = V26_DUAL_PQ_KEY_SUBSPACES[plane];
+        let mut keys = (0_u32..u32::try_from(BUCKETS).unwrap())
+            .map(|key| {
+                let [low_code, high_code] = u16::try_from(key).unwrap().to_le_bytes();
+                (
+                    tables[low][usize::from(low_code)] + tables[high][usize::from(high_code)],
+                    u16::try_from(key).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        keys.sort_unstable_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        for (_, key) in keys.into_iter().take(key_limit_per_plane) {
+            let start = usize::try_from(index.bucket_offsets[plane][usize::from(key)]).unwrap();
+            let end = usize::try_from(index.bucket_offsets[plane][usize::from(key) + 1]).unwrap();
+            candidates.extend_from_slice(&index.source_ordinals[plane][start..end]);
+        }
+    }
+    candidates.sort_unstable();
+    candidates.dedup();
+    if candidates.len() < ranked_row_limit {
+        return Err(invalid("V26 dual PQ-key candidate inventory differs"));
+    }
+    let mut ranked = BinaryHeap::with_capacity(ranked_row_limit);
+    for source_ordinal in candidates {
+        let start = usize::try_from(source_ordinal).unwrap() * 16;
+        let code: &[u8; 16] = index.codes[start..start + 16].try_into().unwrap();
+        let distance = code
+            .iter()
+            .enumerate()
+            .map(|(subspace, code)| tables[subspace][usize::from(*code)])
+            .sum::<f32>();
+        if !distance.is_finite() {
+            return Err(invalid("V26 dual PQ-key distance differs"));
+        }
+        let value = V26PqRankedRow {
+            source_ordinal: u64::from(source_ordinal),
+            distance,
+        };
+        if ranked.len() < ranked_row_limit {
+            ranked.push(value);
+        } else if value < *ranked.peek().unwrap() {
+            ranked.pop();
+            ranked.push(value);
+        }
+    }
+    let mut ranked = ranked.into_vec();
+    ranked.sort();
+    Ok(ranked)
+}
+
 fn v26_splitmix64(mut value: u64) -> u64 {
     value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -4847,6 +5013,63 @@ mod tests {
         assert_eq!(multi.codes.len(), rows.len() * 16);
         assert_eq!(multi.projected_resident_bytes_100m, 2_537_493_520);
         assert!(multi.projected_resident_bytes_100m < 3 * 1_024_u64.pow(3));
+    }
+
+    #[test]
+    fn v26_fast_dual_pq_key_index_matches_global_ranking_and_memory_contract() {
+        // Break caught: the distance-aligned router drops rows, depends on tree postings,
+        // changes deterministic full-PQ ranking, or exceeds the 3 GiB serving ceiling.
+        let codebook = super::V26PqCodebook {
+            width: 16,
+            subspace_width: 6,
+            centroids: (0..16)
+                .map(|subspace| {
+                    (0..256)
+                        .flat_map(|centroid| {
+                            (0..6).map(move |dimension| {
+                                (centroid * 17 + subspace * 11 + dimension) as f32 / 4_096.0
+                            })
+                        })
+                        .collect()
+                })
+                .collect(),
+        };
+        let codes = (0..4_096)
+            .flat_map(|row| (0..16).map(move |subspace| ((row * 37 + subspace * 19) % 256) as u8))
+            .collect::<Vec<_>>();
+        let packed = super::V26PackedPq16Index {
+            codebook,
+            codes,
+            page_offsets: vec![u64::MAX; 17],
+            posting_rows: vec![u32::MAX; 8_192],
+            projected_resident_bytes_100m: 2_937_537_416,
+        };
+        let mut query = [0.0_f32; 96];
+        query[0] = (15.0_f32 / 16.0).sqrt();
+        query[48] = -0.25;
+        let expected = rank_v26_pq16_global_candidates(&packed, &query, 512).unwrap();
+
+        let dual = super::build_v26_dual_pq_key_index(&packed).unwrap();
+        let actual = super::rank_v26_dual_pq_key_candidates(&dual, &query, 65_536, 512).unwrap();
+
+        assert_eq!(actual, expected);
+        assert_eq!(dual.bucket_offsets[0].len(), 65_537);
+        assert_eq!(dual.bucket_offsets[1].len(), 65_537);
+        assert_eq!(dual.source_ordinals[0].len(), 4_096);
+        assert_eq!(dual.source_ordinals[1].len(), 4_096);
+        for plane in 0..2 {
+            for bounds in dual.bucket_offsets[plane].windows(2) {
+                let start = usize::try_from(bounds[0]).unwrap();
+                let end = usize::try_from(bounds[1]).unwrap();
+                assert!(
+                    dual.source_ordinals[plane][start..end]
+                        .windows(2)
+                        .all(|pair| pair[0] < pair[1])
+                );
+            }
+        }
+        assert_eq!(dual.projected_resident_bytes_100m, 2_938_017_816);
+        assert!(dual.projected_resident_bytes_100m < 3 * 1_024_u64.pow(3));
     }
 
     #[test]
