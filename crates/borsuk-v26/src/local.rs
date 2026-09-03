@@ -194,7 +194,8 @@ pub struct V26Pq16RerankRequest {
     pub evidence_output_uri: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct V26ColdVectorManifest {
     pub row_count: u64,
     pub batch_rows: u32,
@@ -220,13 +221,15 @@ pub struct V26ArrowColdVectors {
     batch_rows: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct V26ArrowFileIdentity {
     pub encoded_bytes: u64,
     pub sha256: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct V26Pq16IndexManifest {
     pub row_count: u64,
     pub page_count: u32,
@@ -235,6 +238,31 @@ pub struct V26Pq16IndexManifest {
     pub codebook: V26ArrowFileIdentity,
     pub codes: V26ArrowFileIdentity,
     pub postings: V26ArrowFileIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26Pq16ServingBuildRequest {
+    pub construction_rows: V26LocalObjectPath,
+    pub page_assignments: V26LocalObjectPath,
+    pub expected_rows: u64,
+    pub output_dir: PathBuf,
+    pub output_uri_prefix: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26Pq16ServingBuildOutput {
+    pub schema: String,
+    pub inputs: Vec<V26ObjectIdentity>,
+    pub outputs: Vec<V26ObjectIdentity>,
+    pub row_count: u64,
+    pub page_count: u32,
+    pub projected_resident_bytes_100m: u64,
+    pub index: V26Pq16IndexManifest,
+    pub cold_vectors: V26ColdVectorManifest,
+    pub query_role_opens: u32,
+    pub page_body_reads: u32,
+    pub claim_eligible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2877,6 +2905,259 @@ fn read_assignments(path: &Path, expected_rows: i64) -> Result<Vec<V26RowPages>>
     Ok(rows)
 }
 
+fn read_construction_rows(path: &Path, expected_rows: u64) -> Result<Vec<V26ConstructionRow>> {
+    let expected_rows_i64 = i64::try_from(expected_rows)
+        .map_err(|_| invalid("V26 construction row count overflows"))?;
+    let reader = open_reader(path)?;
+    if reader.schema().as_ref() != &v26_construction_schema()
+        || reader.metadata().file_metadata().num_rows() != expected_rows_i64
+    {
+        return Err(invalid("V26 construction Parquet authority differs"));
+    }
+    let mut rows = Vec::with_capacity(
+        usize::try_from(expected_rows)
+            .map_err(|_| invalid("V26 construction row count overflows"))?,
+    );
+    for batch in reader
+        .build()
+        .map_err(|error| invalid(&format!("V26 construction reader failed: {error}")))?
+    {
+        let batch =
+            batch.map_err(|error| invalid(&format!("V26 construction batch failed: {error}")))?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V26 construction nullability differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V26 construction ordinal differs"))?;
+        let vectors = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V26 construction vector differs"))?;
+        if vectors.values().null_count() != 0 {
+            return Err(invalid("V26 construction vector nullability differs"));
+        }
+        let flat = vectors
+            .values()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("V26 construction vector child differs"))?;
+        let value_offset = vectors
+            .offset()
+            .checked_mul(96)
+            .ok_or_else(|| invalid("V26 construction vector offset overflows"))?;
+        for index in 0..batch.num_rows() {
+            let source_ordinal = ordinals.value(index);
+            if usize::try_from(source_ordinal).ok() != Some(rows.len()) {
+                return Err(invalid("V26 construction inventory differs"));
+            }
+            let start = value_offset
+                .checked_add(
+                    index
+                        .checked_mul(96)
+                        .ok_or_else(|| invalid("V26 construction vector offset overflows"))?,
+                )
+                .ok_or_else(|| invalid("V26 construction vector offset overflows"))?;
+            let vector: [f32; 96] = flat.values()[start..start + 96].try_into().unwrap();
+            validate_v26_vector(&vector)?;
+            rows.push(V26ConstructionRow {
+                source_ordinal,
+                vector,
+            });
+        }
+    }
+    if u64::try_from(rows.len()).ok() != Some(expected_rows) {
+        return Err(invalid("V26 construction inventory differs"));
+    }
+    Ok(rows)
+}
+
+fn v26_pq16_serving_output_names() -> [&'static str; 4] {
+    [
+        "pq16-codebook.arrow",
+        "pq16-codes.arrow",
+        "pq16-postings.arrow",
+        "cold-vectors.arrow",
+    ]
+}
+
+fn validate_v26_pq16_serving_build_output(
+    request: &V26Pq16ServingBuildRequest,
+    output: &V26Pq16ServingBuildOutput,
+) -> Result<()> {
+    if output.schema != "borsuk-v26-pq16-serving-manifest-v1"
+        || output.inputs
+            != [
+                request.construction_rows.identity.clone(),
+                request.page_assignments.identity.clone(),
+            ]
+        || output.row_count != request.expected_rows
+        || output.index.row_count != output.row_count
+        || output.cold_vectors.row_count != output.row_count
+        || output.page_count != output.index.page_count
+        || output.projected_resident_bytes_100m != output.index.projected_resident_bytes_100m
+        || output.outputs.len() != 4
+        || output.query_role_opens != 0
+        || output.page_body_reads != 0
+        || output.claim_eligible
+    {
+        return Err(invalid("V26 PQ16 serving build output differs"));
+    }
+    let generation = &request.construction_rows.identity.generation;
+    let expected_roles = [
+        "pq16-codebook-arrow",
+        "pq16-codes-arrow",
+        "pq16-postings-arrow",
+        "cold-vectors-arrow",
+    ];
+    for ((identity, name), role) in output
+        .outputs
+        .iter()
+        .zip(v26_pq16_serving_output_names())
+        .zip(expected_roles)
+    {
+        let expected = output_identity(
+            role,
+            &request.output_dir.join(name),
+            &request.output_uri_prefix,
+            generation,
+        )?;
+        if identity != &expected {
+            return Err(invalid("V26 PQ16 serving output identity differs"));
+        }
+    }
+    if output.outputs[0].encoded_bytes != output.index.codebook.encoded_bytes
+        || output.outputs[0].digest != output.index.codebook.sha256
+        || output.outputs[1].encoded_bytes != output.index.codes.encoded_bytes
+        || output.outputs[1].digest != output.index.codes.sha256
+        || output.outputs[2].encoded_bytes != output.index.postings.encoded_bytes
+        || output.outputs[2].digest != output.index.postings.sha256
+        || output.outputs[3].encoded_bytes != output.cold_vectors.encoded_bytes
+        || output.outputs[3].digest != output.cold_vectors.sha256
+    {
+        return Err(invalid("V26 PQ16 serving manifest binding differs"));
+    }
+    Ok(())
+}
+
+pub fn canonical_v26_pq16_serving_build_output_bytes(
+    request: &V26Pq16ServingBuildRequest,
+    output: &V26Pq16ServingBuildOutput,
+) -> Result<Vec<u8>> {
+    validate_v26_pq16_serving_build_output(request, output)?;
+    let value = serde_json::to_value(output)
+        .map_err(|error| invalid(&format!("V26 PQ16 serving manifest failed: {error}")))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V26 PQ16 serving manifest failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+pub fn run_v26_pq16_serving_build(
+    request: &V26Pq16ServingBuildRequest,
+) -> Result<V26Pq16ServingBuildOutput> {
+    let mut uris = BTreeSet::new();
+    let uri_inventory_is_unique = [
+        request.construction_rows.identity.uri.clone(),
+        request.page_assignments.identity.uri.clone(),
+    ]
+    .into_iter()
+    .chain(
+        v26_pq16_serving_output_names().map(|name| format!("{}{name}", request.output_uri_prefix)),
+    )
+    .all(|uri| uris.insert(uri));
+    if request.expected_rows == 0
+        || request.expected_rows > u64::from(u32::MAX)
+        || request.output_dir.exists()
+        || !request.output_uri_prefix.starts_with("s3://")
+        || !request.output_uri_prefix.ends_with('/')
+        || request.construction_rows.identity.generation
+            != request.page_assignments.identity.generation
+        || !uri_inventory_is_unique
+    {
+        return Err(invalid("V26 PQ16 serving build request differs"));
+    }
+    authenticate(&request.construction_rows, "construction-parquet")?;
+    authenticate(&request.page_assignments, "page-assignments-parquet")?;
+    let rows = read_construction_rows(&request.construction_rows.path, request.expected_rows)?;
+    let assignments = read_assignments(
+        &request.page_assignments.path,
+        i64::try_from(request.expected_rows)
+            .map_err(|_| invalid("V26 assignment row count overflows"))?,
+    )?;
+    if assignments.iter().enumerate().any(|(ordinal, assignment)| {
+        usize::try_from(assignment.source_ordinal).ok() != Some(ordinal)
+            || assignment.primary_page == assignment.replica_page
+    }) {
+        return Err(invalid("V26 assignment inventory differs"));
+    }
+    let index = crate::build_v26_pq16_packed_index(&rows, &assignments)?;
+    fs::create_dir(&request.output_dir)
+        .map_err(|error| invalid(&format!("V26 serving output directory failed: {error}")))?;
+    let result = (|| {
+        let index_manifest = write_v26_pq16_index_arrow(&request.output_dir, &index, &assignments)?;
+        let cold_vectors = write_v26_cold_vectors_arrow(
+            &request.output_dir.join("cold-vectors.arrow"),
+            &rows,
+            &assignments,
+            64,
+        )?;
+        let roles = [
+            "pq16-codebook-arrow",
+            "pq16-codes-arrow",
+            "pq16-postings-arrow",
+            "cold-vectors-arrow",
+        ];
+        let outputs = v26_pq16_serving_output_names()
+            .into_iter()
+            .zip(roles)
+            .map(|(name, role)| {
+                output_identity(
+                    role,
+                    &request.output_dir.join(name),
+                    &request.output_uri_prefix,
+                    &request.construction_rows.identity.generation,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let output = V26Pq16ServingBuildOutput {
+            schema: "borsuk-v26-pq16-serving-manifest-v1".to_owned(),
+            inputs: vec![
+                request.construction_rows.identity.clone(),
+                request.page_assignments.identity.clone(),
+            ],
+            outputs,
+            row_count: request.expected_rows,
+            page_count: index_manifest.page_count,
+            projected_resident_bytes_100m: index_manifest.projected_resident_bytes_100m,
+            index: index_manifest,
+            cold_vectors,
+            query_role_opens: 0,
+            page_body_reads: 0,
+            claim_eligible: false,
+        };
+        let bytes = canonical_v26_pq16_serving_build_output_bytes(request, &output)?;
+        fs::write(request.output_dir.join("serving-manifest.json"), bytes)
+            .map_err(|error| invalid(&format!("V26 serving manifest write failed: {error}")))?;
+        Ok(output)
+    })();
+    if result.is_err() {
+        for name in v26_pq16_serving_output_names() {
+            let _ = fs::remove_file(request.output_dir.join(name));
+        }
+        let _ = fs::remove_file(request.output_dir.join("serving-manifest.json"));
+        let _ = fs::remove_dir(&request.output_dir);
+    }
+    result
+}
+
 pub fn validate_v26_layout_build_output(
     request: &V26LayoutBuildRequest,
     output: &V26LayoutBuildOutput,
@@ -2980,12 +3261,13 @@ mod tests {
         V26ArrowColdVectors, V26CandidateCoverRequest, V26CentroidRouterRequest,
         V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
         V26LocalObjectPath, V26PageModeRouterRequest, V26Pq8CoverRequest, V26Pq16RerankRequest,
-        V26PqWidthLadderRequest, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
-        evaluate_v26_exact_global, evaluate_v26_layout_oracle, open_reader, output_identity,
-        read_assignments, read_layout_terminal, read_v26_pq16_index_arrow,
-        run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_layout_build,
-        run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
-        run_v26_pq16_exact_rerank, run_v26_tree_router, run_v26_tree_router_diagnostic,
+        V26Pq16ServingBuildRequest, V26PqWidthLadderRequest, V26TreeRouterRequest,
+        V26TruthBuildRequest, assignments_batch, evaluate_v26_exact_global,
+        evaluate_v26_layout_oracle, open_reader, output_identity, read_assignments,
+        read_layout_terminal, read_v26_pq16_index_arrow, run_v26_candidate_row_cover,
+        run_v26_centroid_router, run_v26_layout_build, run_v26_page_mode_router,
+        run_v26_pq_width_ladder, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
+        run_v26_pq16_serving_build, run_v26_tree_router, run_v26_tree_router_diagnostic,
         run_v26_truth_build, select_v26_pq16_pages_from_arrow, v26_construction_schema,
         v26_page_assignments_schema, v26_query_schema, v26_source_map_schema, v26_tree_schema,
         v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
@@ -4158,5 +4440,112 @@ mod tests {
             eprintln!("v26-arrow-512-sparse-batches-p99-ns={p99_ns}");
             assert!(p99_ns < 15_000_000);
         }
+    }
+
+    #[test]
+    fn v26_pq16_serving_build_emits_authenticated_arrow_without_query_access() {
+        // Break caught: construction and serving share a process, a query artifact leaks into
+        // construction, or the deployable Arrow files are not bound by one canonical manifest.
+        let temp = TempDir::new().unwrap();
+        let row_count = 1_024_u64;
+        let ordinals = UInt64Array::from_iter_values(0..row_count);
+        let rows = (0..row_count)
+            .map(|source_ordinal| {
+                let angle = source_ordinal as f32 / 1_024.0;
+                let mut vector = [0.0_f32; 96];
+                vector[0] = angle.cos();
+                vector[1] = angle.sin();
+                crate::V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let vectors = FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            96,
+            Arc::new(Float32Array::from(
+                rows.iter().flat_map(|row| row.vector).collect::<Vec<_>>(),
+            )),
+            None,
+        )
+        .unwrap();
+        let construction_path = temp.path().join("construction.parquet");
+        write_parquet(
+            &construction_path,
+            &RecordBatch::try_new(
+                Arc::new(v26_construction_schema()),
+                vec![Arc::new(ordinals), Arc::new(vectors)],
+            )
+            .unwrap(),
+        );
+        let assignments = (0..row_count)
+            .map(|source_ordinal| crate::V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
+                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let assignment_path = temp.path().join("page-assignments.parquet");
+        write_parquet(&assignment_path, &assignments_batch(&assignments).unwrap());
+        let output_dir = temp.path().join("serving");
+        let request = V26Pq16ServingBuildRequest {
+            construction_rows: identity("construction-parquet", &construction_path),
+            page_assignments: identity("page-assignments-parquet", &assignment_path),
+            expected_rows: row_count,
+            output_dir: output_dir.clone(),
+            output_uri_prefix: "s3://v26-output/serving-a/".to_owned(),
+        };
+
+        let output = run_v26_pq16_serving_build(&request).unwrap();
+
+        assert_eq!(output.schema, "borsuk-v26-pq16-serving-manifest-v1");
+        assert_eq!(output.inputs.len(), 2);
+        assert_eq!(output.outputs.len(), 4);
+        assert_eq!(output.row_count, row_count);
+        assert_eq!(output.page_count, 16);
+        assert_eq!(output.page_body_reads, 0);
+        assert_eq!(output.query_role_opens, 0);
+        assert_eq!(
+            fs::read(output_dir.join("serving-manifest.json")).unwrap(),
+            super::canonical_v26_pq16_serving_build_output_bytes(&request, &output).unwrap()
+        );
+        for name in [
+            "pq16-codebook.arrow",
+            "pq16-codes.arrow",
+            "pq16-postings.arrow",
+            "cold-vectors.arrow",
+        ] {
+            let bytes = fs::read(output_dir.join(name)).unwrap();
+            assert_eq!(&bytes[..6], b"ARROW1");
+            assert_eq!(&bytes[bytes.len() - 6..], b"ARROW1");
+        }
+        let reopened = read_v26_pq16_index_arrow(&output_dir, &output.index).unwrap();
+        let cold =
+            V26ArrowColdVectors::open(&output_dir.join("cold-vectors.arrow"), &output.cold_vectors)
+                .unwrap();
+        assert_eq!(
+            reopened.codes.len(),
+            usize::try_from(row_count).unwrap() * 16
+        );
+        assert_eq!(
+            cold.read_rows(&[0, 63, 64, 1_023]).unwrap().vectors.len(),
+            4
+        );
+
+        let mut drifted = request.clone();
+        let replacement = if drifted.construction_rows.identity.digest.starts_with('f') {
+            "e"
+        } else {
+            "f"
+        };
+        drifted
+            .construction_rows
+            .identity
+            .digest
+            .replace_range(0..1, replacement);
+        drifted.output_dir = temp.path().join("rejected");
+        assert!(run_v26_pq16_serving_build(&drifted).is_err());
+        assert!(!drifted.output_dir.exists());
     }
 }
