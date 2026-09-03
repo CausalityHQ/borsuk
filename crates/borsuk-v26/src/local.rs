@@ -457,6 +457,59 @@ pub struct V26Pq16GlobalQualityResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct V26Pq4QualitySample {
+    pub ranked_row_limit: u32,
+    pub query_ordinal: u32,
+    pub selected_pages: Vec<u32>,
+    pub hits: u32,
+    pub oracle_hits: u32,
+    pub recall_ppm: u64,
+    pub oracle_attainment_ppm: u64,
+    pub scan_elapsed_ns: u64,
+    pub exact_rerank_elapsed_ns: u64,
+    pub quantization_scale_bits: u32,
+    pub saturation_count: u32,
+    pub maximum_distance_error_bits: u32,
+    pub page_body_reads: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26Pq4QualityArmResult {
+    pub ranked_row_limit: u32,
+    pub aggregate_recall_ppm: u64,
+    pub minimum_query_recall_ppm: u64,
+    pub oracle_attainment_ppm: u64,
+    pub maximum_scan_elapsed_ns: u64,
+    pub maximum_exact_rerank_elapsed_ns: u64,
+    pub maximum_saturation_count: u32,
+    pub maximum_distance_error_bits: u32,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26Pq4QualityResult {
+    pub schema: String,
+    pub pq4_manifest: V26ObjectIdentity,
+    pub external_queries: V26ObjectIdentity,
+    pub truth: V26ObjectIdentity,
+    pub evidence: V26ObjectIdentity,
+    pub backend: String,
+    pub query_count: u32,
+    pub candidate_depths: Vec<u32>,
+    pub selected_page_count: u32,
+    pub aggregate_recall_gate_ppm: u64,
+    pub minimum_query_recall_gate_ppm: u64,
+    pub oracle_attainment_gate_ppm: u64,
+    pub arms: Vec<V26Pq4QualityArmResult>,
+    pub smallest_passing_ranked_row_limit: Option<u32>,
+    pub page_body_reads: u32,
+    pub claim_eligible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct V26SimHashPreflightSample {
     pub bucket_limit: u32,
     pub query_ordinal: u32,
@@ -1141,6 +1194,136 @@ fn validate_v26_benchmark_identity(identity: &V26ObjectIdentity, role: &str) -> 
         return Err(invalid("V26 serving benchmark identity differs"));
     }
     Ok(())
+}
+
+fn summarize_v26_pq4_quality(
+    pq4_manifest: V26ObjectIdentity,
+    external_queries: V26ObjectIdentity,
+    truth: V26ObjectIdentity,
+    evidence: V26ObjectIdentity,
+    samples: &[V26Pq4QualitySample],
+) -> Result<V26Pq4QualityResult> {
+    const DEPTHS: [u32; 4] = [512, 1_024, 2_048, 4_096];
+    const QUERY_COUNT: usize = 32;
+    let identities = [
+        (&pq4_manifest, "pq4-fast-manifest"),
+        (&external_queries, "external-queries-parquet"),
+        (&truth, "truth-parquet"),
+        (&evidence, "pq4-fast-quality-evidence-parquet"),
+    ];
+    let generation = &pq4_manifest.generation;
+    let mut uris = BTreeSet::new();
+    for (identity, role) in identities {
+        validate_v26_benchmark_identity(identity, role)?;
+        if identity.generation != *generation || !uris.insert(&identity.uri) {
+            return Err(invalid("V26 PQ4 quality identity differs"));
+        }
+    }
+    if samples.len() != DEPTHS.len() * QUERY_COUNT {
+        return Err(invalid("V26 PQ4 quality sample inventory differs"));
+    }
+    let mut arms = Vec::with_capacity(DEPTHS.len());
+    for (arm_index, depth) in DEPTHS.into_iter().enumerate() {
+        let arm = &samples[arm_index * QUERY_COUNT..(arm_index + 1) * QUERY_COUNT];
+        let mut total_hits = 0_u64;
+        let mut total_oracle_hits = 0_u64;
+        let mut minimum_recall = u64::MAX;
+        let mut maximum_scan = 0_u64;
+        let mut maximum_rerank = 0_u64;
+        let mut maximum_saturation = 0_u32;
+        let mut maximum_error = 0.0_f32;
+        for (query_index, sample) in arm.iter().enumerate() {
+            let scale = f32::from_bits(sample.quantization_scale_bits);
+            let error = f32::from_bits(sample.maximum_distance_error_bits);
+            if sample.ranked_row_limit != depth
+                || sample.query_ordinal as usize != query_index
+                || sample.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
+                || sample
+                    .selected_pages
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+                || sample.hits > sample.oracle_hits
+                || !(1..=10).contains(&sample.oracle_hits)
+                || sample.recall_ppm != u64::from(sample.hits) * 100_000
+                || sample.oracle_attainment_ppm
+                    != u64::from(sample.hits) * 1_000_000 / u64::from(sample.oracle_hits)
+                || sample.scan_elapsed_ns == 0
+                || sample.exact_rerank_elapsed_ns == 0
+                || !scale.is_finite()
+                || scale <= 0.0
+                || !error.is_finite()
+                || error < 0.0
+                || sample.saturation_count > 512
+                || sample.page_body_reads != 0
+            {
+                return Err(invalid("V26 PQ4 quality sample differs"));
+            }
+            total_hits += u64::from(sample.hits);
+            total_oracle_hits += u64::from(sample.oracle_hits);
+            minimum_recall = minimum_recall.min(sample.recall_ppm);
+            maximum_scan = maximum_scan.max(sample.scan_elapsed_ns);
+            maximum_rerank = maximum_rerank.max(sample.exact_rerank_elapsed_ns);
+            maximum_saturation = maximum_saturation.max(sample.saturation_count);
+            maximum_error = maximum_error.max(error);
+        }
+        let aggregate = total_hits * 1_000_000 / 320;
+        let oracle = total_hits * 1_000_000 / total_oracle_hits;
+        arms.push(V26Pq4QualityArmResult {
+            ranked_row_limit: depth,
+            aggregate_recall_ppm: aggregate,
+            minimum_query_recall_ppm: minimum_recall,
+            oracle_attainment_ppm: oracle,
+            maximum_scan_elapsed_ns: maximum_scan,
+            maximum_exact_rerank_elapsed_ns: maximum_rerank,
+            maximum_saturation_count: maximum_saturation,
+            maximum_distance_error_bits: maximum_error.to_bits(),
+            passed: aggregate >= 975_000 && minimum_recall >= 800_000 && oracle >= 995_000,
+        });
+    }
+    let smallest_passing_ranked_row_limit = arms
+        .iter()
+        .find(|arm| arm.passed)
+        .map(|arm| arm.ranked_row_limit);
+    Ok(V26Pq4QualityResult {
+        schema: "borsuk-v26-pq4-fast-quality-result-v1".to_owned(),
+        pq4_manifest,
+        external_queries,
+        truth,
+        evidence,
+        backend: "aarch64-neon-table".to_owned(),
+        query_count: QUERY_COUNT as u32,
+        candidate_depths: DEPTHS.to_vec(),
+        selected_page_count: crate::V26_SERVING_PAGE_BUDGET as u32,
+        aggregate_recall_gate_ppm: 975_000,
+        minimum_query_recall_gate_ppm: 800_000,
+        oracle_attainment_gate_ppm: 995_000,
+        arms,
+        smallest_passing_ranked_row_limit,
+        page_body_reads: 0,
+        claim_eligible: false,
+    })
+}
+
+pub fn canonical_v26_pq4_quality_result_bytes(
+    result: &V26Pq4QualityResult,
+    samples: &[V26Pq4QualitySample],
+) -> Result<Vec<u8>> {
+    let expected = summarize_v26_pq4_quality(
+        result.pq4_manifest.clone(),
+        result.external_queries.clone(),
+        result.truth.clone(),
+        result.evidence.clone(),
+        samples,
+    )?;
+    if result != &expected {
+        return Err(invalid("V26 PQ4 quality result differs"));
+    }
+    let value = serde_json::to_value(result)
+        .map_err(|error| invalid(&format!("V26 PQ4 quality result failed: {error}")))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V26 PQ4 quality result failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 fn summarize_v26_pq16_serving_benchmark(
@@ -7207,10 +7390,11 @@ mod tests {
         V26ArrowColdVectors, V26CandidateCoverRequest, V26CentroidRouterRequest,
         V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
         V26LocalObjectPath, V26PageModeRouterRequest, V26Pq4FastBuildRequest, V26Pq4FastManifest,
-        V26Pq8CoverRequest, V26Pq16GlobalQualityResult, V26Pq16GlobalQualitySample,
-        V26Pq16RerankRequest, V26Pq16ServingBuildRequest, V26Pq16ServingRuntimeRequest,
-        V26PqWidthLadderRequest, V26ServingLatencySample, V26TreeRouterRequest,
-        V26TruthBuildRequest, assignments_batch, canonical_v26_pq4_fast_manifest_bytes,
+        V26Pq4QualitySample, V26Pq8CoverRequest, V26Pq16GlobalQualityResult,
+        V26Pq16GlobalQualitySample, V26Pq16RerankRequest, V26Pq16ServingBuildRequest,
+        V26Pq16ServingRuntimeRequest, V26PqWidthLadderRequest, V26ServingLatencySample,
+        V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
+        canonical_v26_pq4_fast_manifest_bytes, canonical_v26_pq4_quality_result_bytes,
         canonical_v26_pq16_serving_benchmark_result_bytes, evaluate_v26_exact_global,
         evaluate_v26_layout_oracle, evaluate_v26_layout_oracle_with_page_budget, open_reader,
         open_v26_pq16_serving_runtime, output_identity, read_assignments, read_evaluation_queries,
@@ -7221,9 +7405,10 @@ mod tests {
         run_v26_pq4_fast_build, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
         run_v26_pq16_serving_build, run_v26_tree_router, run_v26_tree_router_diagnostic,
         run_v26_truth_build, select_v26_pq16_global_pages_from_arrow,
-        select_v26_pq16_pages_from_arrow, v26_construction_schema, v26_page_assignments_schema,
-        v26_query_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
-        write_v26_cold_vectors_arrow, write_v26_pq4_fast_index_arrow, write_v26_pq16_index_arrow,
+        select_v26_pq16_pages_from_arrow, summarize_v26_pq4_quality, v26_construction_schema,
+        v26_page_assignments_schema, v26_query_schema, v26_tree_schema, v26_truth_schema,
+        validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
+        write_v26_pq4_fast_index_arrow, write_v26_pq16_index_arrow,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -8800,6 +8985,63 @@ mod tests {
         drifted.output_dir = temp.path().join("rejected-pq4-fast");
         assert!(run_v26_pq4_fast_build(&drifted).is_err());
         assert!(!drifted.output_dir.exists());
+    }
+
+    #[test]
+    fn v26_pq4_quality_result_recomputes_the_fixed_four_arm_frontier() {
+        // Break caught: the result trusts reported aggregates, tunes the candidate ladder, loses
+        // quantization telemetry, or becomes claim-eligible on the burned development queries.
+        let depths = [512_u32, 1_024, 2_048, 4_096];
+        let samples = depths
+            .into_iter()
+            .flat_map(|ranked_row_limit| {
+                (0_u32..32).map(move |query_ordinal| {
+                    let hits = if ranked_row_limit == 512 { 9 } else { 10 };
+                    V26Pq4QualitySample {
+                        ranked_row_limit,
+                        query_ordinal,
+                        selected_pages: (0_u32..10).collect(),
+                        hits,
+                        oracle_hits: 10,
+                        recall_ppm: u64::from(hits) * 100_000,
+                        oracle_attainment_ppm: u64::from(hits) * 100_000,
+                        scan_elapsed_ns: 100,
+                        exact_rerank_elapsed_ns: 20 + u64::from(ranked_row_limit),
+                        quantization_scale_bits: 1.0_f32.to_bits(),
+                        saturation_count: 32,
+                        maximum_distance_error_bits: 0.01_f32.to_bits(),
+                        page_body_reads: 0,
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let manifest = pq4_authority("pq4-fast-manifest", 'a');
+        let queries = pq4_authority("external-queries-parquet", 'b');
+        let truth = pq4_authority("truth-parquet", 'c');
+        let evidence = pq4_authority("pq4-fast-quality-evidence-parquet", 'd');
+        let result = summarize_v26_pq4_quality(
+            manifest.clone(),
+            queries.clone(),
+            truth.clone(),
+            evidence.clone(),
+            &samples,
+        )
+        .unwrap();
+        assert_eq!(result.schema, "borsuk-v26-pq4-fast-quality-result-v1");
+        assert_eq!(result.arms.len(), 4);
+        assert_eq!(result.smallest_passing_ranked_row_limit, Some(1_024));
+        assert_eq!(result.backend, "aarch64-neon-table");
+        assert_eq!(result.page_body_reads, 0);
+        assert!(!result.claim_eligible);
+        let bytes = canonical_v26_pq4_quality_result_bytes(&result, &samples).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+
+        let mut drifted_result = result.clone();
+        drifted_result.arms[1].aggregate_recall_ppm -= 1;
+        assert!(canonical_v26_pq4_quality_result_bytes(&drifted_result, &samples).is_err());
+        let mut drifted_samples = samples.clone();
+        drifted_samples[32].hits = 9;
+        assert!(canonical_v26_pq4_quality_result_bytes(&result, &drifted_samples).is_err());
     }
 
     #[test]
