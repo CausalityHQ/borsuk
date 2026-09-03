@@ -428,6 +428,7 @@ pub struct V26SimHashPreflightResult {
 #[serde(deny_unknown_fields)]
 pub struct V26DualPqKeyPreflightSample {
     pub key_limit_per_plane: u32,
+    pub ranked_row_limit: u32,
     pub query_ordinal: u32,
     pub selected_pages: Vec<u32>,
     pub hits: u32,
@@ -443,6 +444,7 @@ pub struct V26DualPqKeyPreflightSample {
 #[serde(deny_unknown_fields)]
 pub struct V26DualPqKeyPreflightArmResult {
     pub key_limit_per_plane: u32,
+    pub ranked_row_limit: u32,
     pub aggregate_recall_ppm: u64,
     pub minimum_query_recall_ppm: u64,
     pub oracle_attainment_ppm: u64,
@@ -484,7 +486,8 @@ fn summarize_v26_dual_pq_key_preflight(
     authority: V26DualPqKeyPreflightAuthority,
     samples: &[V26DualPqKeyPreflightSample],
 ) -> Result<V26DualPqKeyPreflightResult> {
-    const KEY_LIMITS: [u32; 3] = [128, 512, 1_536];
+    const KEY_LIMITS: [u32; 3] = [1_536, 4_096, 8_192];
+    const RANKED_ROW_LIMIT: u32 = 512;
     const QUERY_COUNT: usize = 32;
     let roles = [
         "pq16-serving-manifest",
@@ -525,6 +528,7 @@ fn summarize_v26_dual_pq_key_preflight(
             let mut total_oracle_hits = 0_u64;
             for (query_index, sample) in arm.iter().enumerate() {
                 if sample.key_limit_per_plane != key_limit_per_plane
+                    || sample.ranked_row_limit != RANKED_ROW_LIMIT
                     || usize::try_from(sample.query_ordinal).ok() != Some(query_index)
                     || sample.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
                     || sample
@@ -537,7 +541,7 @@ fn summarize_v26_dual_pq_key_preflight(
                     || sample.oracle_attainment_ppm
                         != u64::from(sample.hits) * 1_000_000 / u64::from(sample.oracle_hits)
                     || sample.elapsed_ns == 0
-                    || sample.unique_rows_scanned < 10
+                    || sample.unique_rows_scanned < u64::from(RANKED_ROW_LIMIT)
                     || sample.cold_batches_read == 0
                 {
                     return Err(invalid(
@@ -554,6 +558,7 @@ fn summarize_v26_dual_pq_key_preflight(
             let maximum_latency_ns = arm.iter().map(|sample| sample.elapsed_ns).max().unwrap();
             Ok(V26DualPqKeyPreflightArmResult {
                 key_limit_per_plane,
+                ranked_row_limit: RANKED_ROW_LIMIT,
                 aggregate_recall_ppm,
                 minimum_query_recall_ppm,
                 oracle_attainment_ppm,
@@ -572,7 +577,9 @@ fn summarize_v26_dual_pq_key_preflight(
                     && minimum_query_recall_ppm >= 800_000
                     && oracle_attainment_ppm >= 995_000
                     && maximum_latency_ns <= 15_000_000
-                    && arm.iter().all(|sample| sample.unique_rows_scanned >= 2_048),
+                    && arm
+                        .iter()
+                        .all(|sample| sample.unique_rows_scanned >= u64::from(RANKED_ROW_LIMIT)),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -580,7 +587,7 @@ fn summarize_v26_dual_pq_key_preflight(
         schema: "borsuk-v26-dual-pq-key-preflight-result-v1".to_owned(),
         authority,
         query_count: 32,
-        ranked_row_limit: 2_048,
+        ranked_row_limit: RANKED_ROW_LIMIT,
         selected_page_count: u32::try_from(crate::V26_SERVING_PAGE_BUDGET).unwrap(),
         aggregate_recall_gate_ppm: 975_000,
         minimum_query_recall_gate_ppm: 800_000,
@@ -3587,7 +3594,8 @@ fn execute_v26_dual_pq_key_preflight_samples(
     queries: &[V26ExternalQuery],
     truths: &[V26QueryTruth],
 ) -> Result<Vec<V26DualPqKeyPreflightSample>> {
-    const KEY_LIMITS: [usize; 3] = [128, 512, 1_536];
+    const KEY_LIMITS: [usize; 3] = [1_536, 4_096, 8_192];
+    const RANKED_ROW_LIMIT: usize = 512;
     if queries.len() != 32 || truths.len() != queries.len() {
         return Err(invalid("V26 dual PQ-key preflight query inventory differs"));
     }
@@ -3612,7 +3620,7 @@ fn execute_v26_dual_pq_key_preflight_samples(
                     &query.vector,
                     cold_vectors,
                     key_limit_per_plane,
-                    2_048,
+                    RANKED_ROW_LIMIT,
                 )?;
             let elapsed_ns = u64::try_from(started.elapsed().as_nanos())
                 .map_err(|_| invalid("V26 dual PQ-key latency overflows"))?
@@ -3641,6 +3649,7 @@ fn execute_v26_dual_pq_key_preflight_samples(
                 .count() as u32;
             samples.push(V26DualPqKeyPreflightSample {
                 key_limit_per_plane: u32::try_from(key_limit_per_plane).unwrap(),
+                ranked_row_limit: u32::try_from(RANKED_ROW_LIMIT).unwrap(),
                 query_ordinal: query.query_ordinal,
                 selected_pages: selection.selected_pages,
                 hits,
@@ -3744,6 +3753,7 @@ fn v26_simhash_preflight_batch(samples: &[V26SimHashPreflightSample]) -> Result<
 fn v26_dual_pq_key_preflight_schema() -> Schema {
     Schema::new(vec![
         Field::new("key_limit_per_plane", DataType::UInt32, false),
+        Field::new("ranked_row_limit", DataType::UInt32, false),
         Field::new("query_ordinal", DataType::UInt32, false),
         Field::new(
             "selected_pages",
@@ -3780,6 +3790,9 @@ fn v26_dual_pq_key_preflight_batch(samples: &[V26DualPqKeyPreflightSample]) -> R
         vec![
             Arc::new(UInt32Array::from_iter_values(
                 samples.iter().map(|sample| sample.key_limit_per_plane),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.ranked_row_limit),
             )),
             Arc::new(UInt32Array::from_iter_values(
                 samples.iter().map(|sample| sample.query_ordinal),
@@ -7352,7 +7365,13 @@ mod tests {
                 .iter()
                 .map(|arm| arm.key_limit_per_plane)
                 .collect::<Vec<_>>(),
-            [128, 512, 1_536]
+            [1_536, 4_096, 8_192]
+        );
+        assert_eq!(dual_result.ranked_row_limit, 512);
+        assert!(
+            dual_samples
+                .iter()
+                .all(|sample| sample.ranked_row_limit == 512)
         );
         assert_eq!(dual_result.page_body_reads, 0);
         assert!(dual_samples.iter().all(|sample| {
@@ -7790,8 +7809,9 @@ mod tests {
                 .iter()
                 .map(|arm| arm.key_limit_per_plane)
                 .collect::<Vec<_>>(),
-            [128, 512, 1_536]
+            [1_536, 4_096, 8_192]
         );
+        assert_eq!(result.ranked_row_limit, 512);
         let reader = open_reader(&evidence_path).unwrap();
         assert_eq!(reader.metadata().file_metadata().num_rows(), 96);
         assert_eq!(
@@ -7833,11 +7853,12 @@ mod tests {
             ordinals: object("dual-pq-key-ordinals-arrow", 'e'),
             evidence: object("dual-pq-key-preflight-evidence-parquet", 'f'),
         };
-        let samples = [128_u32, 512, 1_536]
+        let samples = [1_536_u32, 4_096, 8_192]
             .into_iter()
             .flat_map(|key_limit_per_plane| {
                 (0_u32..32).map(move |query_ordinal| super::V26DualPqKeyPreflightSample {
                     key_limit_per_plane,
+                    ranked_row_limit: 512,
                     query_ordinal,
                     selected_pages: (0_u32..10).collect(),
                     hits: 10,

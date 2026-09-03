@@ -1872,6 +1872,8 @@ pub(crate) fn rank_v26_dual_pq_key_candidates_with_count(
         return Err(invalid("V26 dual PQ-key query request differs"));
     }
     let tables = prepare_v26_pq_tables(&index.codebook, query)?;
+    let row_count = index.codes.len() / 16;
+    let mut seen = vec![0_u64; row_count.div_ceil(64)];
     let mut candidates = Vec::new();
     for plane in 0..2 {
         let [low, high] = V26_DUAL_PQ_KEY_SUBSPACES[plane];
@@ -1884,19 +1886,28 @@ pub(crate) fn rank_v26_dual_pq_key_candidates_with_count(
                 )
             })
             .collect::<Vec<_>>();
-        keys.sort_unstable_by(|left, right| {
+        let compare = |left: &(f32, u16), right: &(f32, u16)| {
             left.0
                 .total_cmp(&right.0)
                 .then_with(|| left.1.cmp(&right.1))
-        });
-        for (_, key) in keys.into_iter().take(key_limit_per_plane) {
-            let start = usize::try_from(index.bucket_offsets[plane][usize::from(key)]).unwrap();
-            let end = usize::try_from(index.bucket_offsets[plane][usize::from(key) + 1]).unwrap();
-            candidates.extend_from_slice(&index.source_ordinals[plane][start..end]);
+        };
+        if key_limit_per_plane < keys.len() {
+            keys.select_nth_unstable_by(key_limit_per_plane, compare);
+        }
+        for (_, key) in &keys[..key_limit_per_plane] {
+            let start = usize::try_from(index.bucket_offsets[plane][usize::from(*key)]).unwrap();
+            let end = usize::try_from(index.bucket_offsets[plane][usize::from(*key) + 1]).unwrap();
+            for source_ordinal in &index.source_ordinals[plane][start..end] {
+                let ordinal = usize::try_from(*source_ordinal).unwrap();
+                let word = ordinal / 64;
+                let mask = 1_u64 << (ordinal % 64);
+                if seen[word] & mask == 0 {
+                    seen[word] |= mask;
+                    candidates.push(*source_ordinal);
+                }
+            }
         }
     }
-    candidates.sort_unstable();
-    candidates.dedup();
     if candidates.len() < ranked_row_limit {
         return Err(invalid("V26 dual PQ-key candidate inventory differs"));
     }
@@ -5100,6 +5111,57 @@ mod tests {
         }
         assert_eq!(dual.projected_resident_bytes_100m, 2_938_017_816);
         assert!(dual.projected_resident_bytes_100m < 3 * 1_024_u64.pow(3));
+
+        // Independently reconstruct the partial-key candidate set with a full key sort. This
+        // locks the bounded nth-selection and dense-bitset implementation to the simple oracle.
+        let tables = prepare_v26_pq_tables(&dual.codebook, &query).unwrap();
+        let mut reference_candidates = BTreeSet::<u32>::new();
+        for plane in 0..2 {
+            let [low, high] = super::V26_DUAL_PQ_KEY_SUBSPACES[plane];
+            let mut keys = (0_u32..65_536)
+                .map(|key| {
+                    let [low_code, high_code] = u16::try_from(key).unwrap().to_le_bytes();
+                    (
+                        tables[low][usize::from(low_code)] + tables[high][usize::from(high_code)],
+                        u16::try_from(key).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            keys.sort_unstable_by(|left, right| {
+                left.0
+                    .total_cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            });
+            for (_, key) in keys.into_iter().take(32_768) {
+                let start = usize::try_from(dual.bucket_offsets[plane][usize::from(key)]).unwrap();
+                let end =
+                    usize::try_from(dual.bucket_offsets[plane][usize::from(key) + 1]).unwrap();
+                reference_candidates.extend(&dual.source_ordinals[plane][start..end]);
+            }
+        }
+        let mut reference_partial = reference_candidates
+            .iter()
+            .map(|source_ordinal| {
+                let start = usize::try_from(*source_ordinal).unwrap() * 16;
+                let code: &[u8; 16] = dual.codes[start..start + 16].try_into().unwrap();
+                super::V26PqRankedRow {
+                    source_ordinal: u64::from(*source_ordinal),
+                    distance: code
+                        .iter()
+                        .enumerate()
+                        .map(|(subspace, code)| tables[subspace][usize::from(*code)])
+                        .sum(),
+                }
+            })
+            .collect::<Vec<_>>();
+        reference_partial.sort();
+        assert!(reference_partial.len() >= 512);
+        reference_partial.truncate(512);
+
+        let (actual_partial, unique_rows_scanned) =
+            super::rank_v26_dual_pq_key_candidates_with_count(&dual, &query, 32_768, 512).unwrap();
+        assert_eq!(unique_rows_scanned, reference_candidates.len() as u64);
+        assert_eq!(actual_partial, reference_partial);
     }
 
     #[test]
