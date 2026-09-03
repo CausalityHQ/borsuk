@@ -30,7 +30,7 @@ class V26FastGateTests(unittest.TestCase):
         commands = check_v26_fast.affected_commands(sys.executable)
 
         rendered = [" ".join(command) for command in commands]
-        self.assertEqual(len(commands), 14)
+        self.assertEqual(len(commands), 15)
         self.assertEqual(
             rendered[0],
             f"{sys.executable} -m unittest scripts.test_check_v26_fast",
@@ -70,12 +70,16 @@ class V26FastGateTests(unittest.TestCase):
             rendered[10],
         )
         self.assertIn(
-            "-m unittest scripts.test_run_v26_page_layout "
-            "scripts.test_launch_v26_page_layout_spot",
+            "cargo test -p borsuk-v26 --example v26_pq4_fast_holdout v26_",
             rendered[11],
         )
-        self.assertEqual(rendered[12], "cargo fmt --all -- --check")
-        self.assertEqual(rendered[13], "git diff --check")
+        self.assertIn(
+            "-m unittest scripts.test_run_v26_page_layout "
+            "scripts.test_launch_v26_page_layout_spot",
+            rendered[12],
+        )
+        self.assertEqual(rendered[13], "cargo fmt --all -- --check")
+        self.assertEqual(rendered[14], "git diff --check")
         self.assertFalse(any("--workspace" in command for command in rendered))
         self.assertFalse(any("--all-targets" in command for command in rendered))
 

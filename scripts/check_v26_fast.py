@@ -151,6 +151,17 @@ def affected_commands(python_executable: str) -> list[list[str]]:
             "--nocapture",
         ],
         [
+            "cargo",
+            "test",
+            "-p",
+            "borsuk-v26",
+            "--example",
+            "v26_pq4_fast_holdout",
+            "v26_",
+            "--",
+            "--nocapture",
+        ],
+        [
             python_executable,
             "-m",
             "unittest",

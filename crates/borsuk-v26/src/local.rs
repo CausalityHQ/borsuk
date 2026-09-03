@@ -343,6 +343,21 @@ pub struct V26Pq4ServingScreenRequest {
     pub evidence_output_uri: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26Pq4HoldoutRequest {
+    pub pq4_manifest: V26LocalObjectPath,
+    pub pq4_dir: PathBuf,
+    pub cold_vectors: V26LocalObjectPath,
+    pub cold_vectors_manifest: V26ColdVectorManifest,
+    pub layout_terminal: V26LocalObjectPath,
+    pub external_queries: V26LocalObjectPath,
+    pub truth: V26LocalObjectPath,
+    pub frontier_result: V26LocalObjectPath,
+    pub development_serving_result: V26LocalObjectPath,
+    pub evidence_output_path: PathBuf,
+    pub evidence_output_uri: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct V26Pq16ServingBuildOutput {
@@ -565,6 +580,51 @@ pub struct V26Pq4ServingScreenResult {
     pub p50_ns: u64,
     pub p95_ns: u64,
     pub maximum_ns: u64,
+    pub maximum_latency_gate_ns: u64,
+    pub passed: bool,
+    pub page_body_reads: u32,
+    pub claim_eligible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26Pq4HoldoutSample {
+    pub query_ordinal: u32,
+    pub selected_pages: Vec<u32>,
+    pub hits: u32,
+    pub oracle_hits: u32,
+    pub recall_ppm: u64,
+    pub oracle_attainment_ppm: u64,
+    pub elapsed_ns: u64,
+    pub scan_elapsed_ns: u64,
+    pub exact_rerank_elapsed_ns: u64,
+    pub exact_rows_read: u32,
+    pub cold_batches_read: u32,
+    pub page_body_reads: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26Pq4HoldoutResult {
+    pub schema: String,
+    pub pq4_manifest: V26ObjectIdentity,
+    pub frontier_result: V26ObjectIdentity,
+    pub development_serving_result: V26ObjectIdentity,
+    pub external_queries: V26ObjectIdentity,
+    pub truth: V26ObjectIdentity,
+    pub evidence: V26ObjectIdentity,
+    pub backend: String,
+    pub query_start: u32,
+    pub query_count: u32,
+    pub ranked_row_limit: u32,
+    pub selected_page_count: u32,
+    pub aggregate_recall_ppm: u64,
+    pub minimum_query_recall_ppm: u64,
+    pub oracle_attainment_ppm: u64,
+    pub maximum_ns: u64,
+    pub aggregate_recall_gate_ppm: u64,
+    pub minimum_query_recall_gate_ppm: u64,
+    pub oracle_attainment_gate_ppm: u64,
     pub maximum_latency_gate_ns: u64,
     pub passed: bool,
     pub page_body_reads: u32,
@@ -1614,6 +1674,192 @@ fn v26_pq4_serving_screen_batch(samples: &[V26Pq4ServingScreenSample]) -> Result
         ],
     )
     .map_err(|error| invalid(&format!("V26 PQ4 serving batch failed: {error}")))
+}
+
+fn summarize_v26_pq4_holdout(
+    pq4_manifest: V26ObjectIdentity,
+    frontier_result: V26ObjectIdentity,
+    development_serving_result: V26ObjectIdentity,
+    external_queries: V26ObjectIdentity,
+    truth: V26ObjectIdentity,
+    evidence: V26ObjectIdentity,
+    samples: &[V26Pq4HoldoutSample],
+) -> Result<V26Pq4HoldoutResult> {
+    let identities = [
+        (&pq4_manifest, "pq4-fast-manifest"),
+        (&frontier_result, "pq4-fast-quality-result"),
+        (&development_serving_result, "pq4-fast-serving-result"),
+        (&external_queries, "external-queries-parquet"),
+        (&truth, "truth-parquet"),
+        (&evidence, "pq4-fast-holdout-evidence-parquet"),
+    ];
+    let generation = &pq4_manifest.generation;
+    let mut uris = BTreeSet::new();
+    for (identity, role) in identities {
+        validate_v26_benchmark_identity(identity, role)?;
+        if identity.generation != *generation || !uris.insert(&identity.uri) {
+            return Err(invalid("V26 PQ4 holdout identity differs"));
+        }
+    }
+    if samples.len() != 480 {
+        return Err(invalid("V26 PQ4 holdout sample inventory differs"));
+    }
+    let mut total_hits = 0_u64;
+    let mut total_oracle_hits = 0_u64;
+    let mut minimum_recall = u64::MAX;
+    let mut maximum_ns = 0_u64;
+    for (index, sample) in samples.iter().enumerate() {
+        if sample.query_ordinal != index as u32 + 32
+            || sample.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
+            || sample
+                .selected_pages
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || sample.hits > sample.oracle_hits
+            || !(1..=10).contains(&sample.oracle_hits)
+            || sample.recall_ppm != u64::from(sample.hits) * 100_000
+            || sample.oracle_attainment_ppm
+                != u64::from(sample.hits) * 1_000_000 / u64::from(sample.oracle_hits)
+            || sample.elapsed_ns == 0
+            || sample.scan_elapsed_ns == 0
+            || sample.exact_rerank_elapsed_ns == 0
+            || sample
+                .scan_elapsed_ns
+                .checked_add(sample.exact_rerank_elapsed_ns)
+                .is_none_or(|stages| stages > sample.elapsed_ns)
+            || sample.exact_rows_read != 2_048
+            || !(1..=2_048).contains(&sample.cold_batches_read)
+            || sample.page_body_reads != 0
+        {
+            return Err(invalid("V26 PQ4 holdout sample differs"));
+        }
+        total_hits += u64::from(sample.hits);
+        total_oracle_hits += u64::from(sample.oracle_hits);
+        minimum_recall = minimum_recall.min(sample.recall_ppm);
+        maximum_ns = maximum_ns.max(sample.elapsed_ns);
+    }
+    let aggregate = total_hits * 1_000_000 / 4_800;
+    let oracle = total_hits * 1_000_000 / total_oracle_hits;
+    let passed = aggregate >= 975_000
+        && minimum_recall >= 800_000
+        && oracle >= 995_000
+        && maximum_ns <= 15_000_000;
+    Ok(V26Pq4HoldoutResult {
+        schema: "borsuk-v26-pq4-fast-holdout-result-v1".to_owned(),
+        pq4_manifest,
+        frontier_result,
+        development_serving_result,
+        external_queries,
+        truth,
+        evidence,
+        backend: "aarch64-neon-table".to_owned(),
+        query_start: 32,
+        query_count: 480,
+        ranked_row_limit: 2_048,
+        selected_page_count: crate::V26_SERVING_PAGE_BUDGET as u32,
+        aggregate_recall_ppm: aggregate,
+        minimum_query_recall_ppm: minimum_recall,
+        oracle_attainment_ppm: oracle,
+        maximum_ns,
+        aggregate_recall_gate_ppm: 975_000,
+        minimum_query_recall_gate_ppm: 800_000,
+        oracle_attainment_gate_ppm: 995_000,
+        maximum_latency_gate_ns: 15_000_000,
+        passed,
+        page_body_reads: 0,
+        claim_eligible: false,
+    })
+}
+
+pub fn canonical_v26_pq4_holdout_result_bytes(
+    result: &V26Pq4HoldoutResult,
+    samples: &[V26Pq4HoldoutSample],
+) -> Result<Vec<u8>> {
+    let expected = summarize_v26_pq4_holdout(
+        result.pq4_manifest.clone(),
+        result.frontier_result.clone(),
+        result.development_serving_result.clone(),
+        result.external_queries.clone(),
+        result.truth.clone(),
+        result.evidence.clone(),
+        samples,
+    )?;
+    if result != &expected {
+        return Err(invalid("V26 PQ4 holdout result differs"));
+    }
+    let value = serde_json::to_value(result)
+        .map_err(|error| invalid(&format!("V26 PQ4 holdout result failed: {error}")))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V26 PQ4 holdout result failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn v26_pq4_holdout_batch(samples: &[V26Pq4HoldoutSample]) -> Result<RecordBatch> {
+    let schema = Schema::new(vec![
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new(
+            "selected_pages",
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt32, false)), 10),
+            false,
+        ),
+        Field::new("hits", DataType::UInt32, false),
+        Field::new("oracle_hits", DataType::UInt32, false),
+        Field::new("recall_ppm", DataType::UInt64, false),
+        Field::new("oracle_attainment_ppm", DataType::UInt64, false),
+        Field::new("elapsed_ns", DataType::UInt64, false),
+        Field::new("scan_elapsed_ns", DataType::UInt64, false),
+        Field::new("exact_rerank_elapsed_ns", DataType::UInt64, false),
+        Field::new("exact_rows_read", DataType::UInt32, false),
+        Field::new("cold_batches_read", DataType::UInt32, false),
+        Field::new("page_body_reads", DataType::UInt32, false),
+    ]);
+    let selected_pages = samples
+        .iter()
+        .flat_map(|sample| sample.selected_pages.iter().copied())
+        .collect::<Vec<_>>();
+    let pages = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::UInt32, false)),
+        10,
+        Arc::new(UInt32Array::from(selected_pages)),
+        None,
+    )
+    .map_err(|error| invalid(&format!("V26 PQ4 holdout pages failed: {error}")))?;
+    let u32s = |values: Vec<u32>| Arc::new(UInt32Array::from(values)) as ArrayRef;
+    let u64s = |values: Vec<u64>| Arc::new(UInt64Array::from(values)) as ArrayRef;
+    RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            u32s(samples.iter().map(|value| value.query_ordinal).collect()),
+            Arc::new(pages),
+            u32s(samples.iter().map(|value| value.hits).collect()),
+            u32s(samples.iter().map(|value| value.oracle_hits).collect()),
+            u64s(samples.iter().map(|value| value.recall_ppm).collect()),
+            u64s(
+                samples
+                    .iter()
+                    .map(|value| value.oracle_attainment_ppm)
+                    .collect(),
+            ),
+            u64s(samples.iter().map(|value| value.elapsed_ns).collect()),
+            u64s(samples.iter().map(|value| value.scan_elapsed_ns).collect()),
+            u64s(
+                samples
+                    .iter()
+                    .map(|value| value.exact_rerank_elapsed_ns)
+                    .collect(),
+            ),
+            u32s(samples.iter().map(|value| value.exact_rows_read).collect()),
+            u32s(
+                samples
+                    .iter()
+                    .map(|value| value.cold_batches_read)
+                    .collect(),
+            ),
+            u32s(samples.iter().map(|value| value.page_body_reads).collect()),
+        ],
+    )
+    .map_err(|error| invalid(&format!("V26 PQ4 holdout batch failed: {error}")))
 }
 
 fn summarize_v26_pq16_serving_benchmark(
@@ -7399,6 +7645,37 @@ fn read_v26_pq4_frontier_result(object: &V26LocalObjectPath) -> Result<V26Pq4Qua
     Ok(result)
 }
 
+fn read_v26_pq4_development_serving_result(
+    object: &V26LocalObjectPath,
+) -> Result<V26Pq4ServingScreenResult> {
+    authenticate(object, "pq4-fast-serving-result")?;
+    let bytes = fs::read(&object.path)
+        .map_err(|error| invalid(&format!("V26 PQ4 serving result read failed: {error}")))?;
+    let result: V26Pq4ServingScreenResult = serde_json::from_slice(&bytes)
+        .map_err(|error| invalid(&format!("V26 PQ4 serving result parse failed: {error}")))?;
+    let value = serde_json::to_value(&result)
+        .map_err(|error| invalid(&format!("V26 PQ4 serving result parse failed: {error}")))?;
+    let mut expected_bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V26 PQ4 serving result parse failed: {error}")))?;
+    expected_bytes.push(b'\n');
+    if bytes != expected_bytes
+        || result.schema != "borsuk-v26-pq4-fast-serving-screen-v1"
+        || result.backend != "aarch64-neon-table"
+        || result.ranked_row_limit != 2_048
+        || result.selected_page_count != crate::V26_SERVING_PAGE_BUDGET as u32
+        || result.warmup_count != 2
+        || result.measurement_count != 32
+        || result.maximum_latency_gate_ns != 15_000_000
+        || !result.passed
+        || result.maximum_ns > result.maximum_latency_gate_ns
+        || result.page_body_reads != 0
+        || result.claim_eligible
+    {
+        return Err(invalid("V26 PQ4 development serving result differs"));
+    }
+    Ok(result)
+}
+
 fn select_v26_pq4_serving_arm(
     index: &crate::V26Pq4FastIndex,
     query: &[f32; 96],
@@ -7616,6 +7893,196 @@ pub fn run_v26_pq4_serving_screen(request: &V26Pq4ServingScreenRequest) -> Resul
             &samples,
         )?;
         canonical_v26_pq4_serving_screen_result_bytes(&result, &samples)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&request.evidence_output_path);
+    }
+    result
+}
+
+fn v26_pq4_holdout_sample(
+    query_ordinal: u32,
+    selection: V26Pq16ServingSelection,
+    truth: &V26QueryTruth,
+    elapsed_ns: u64,
+    scan_elapsed_ns: u64,
+    exact_rerank_elapsed_ns: u64,
+) -> Result<V26Pq4HoldoutSample> {
+    if truth.query_ordinal != query_ordinal
+        || truth.neighbor_source_ordinals.len() != 10
+        || truth.ground_truth_page_assignments.len() != 10
+        || selection.exact_rows_read != 2_048
+        || selection.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
+        || selection.page_body_reads != 0
+    {
+        return Err(invalid("V26 PQ4 holdout selection differs"));
+    }
+    let oracle_pages = exact_v26_layout_oracle_pages(
+        &truth.ground_truth_page_assignments,
+        crate::V26_SERVING_PAGE_BUDGET,
+    )?;
+    let hits = truth
+        .ground_truth_page_assignments
+        .iter()
+        .filter(|pages| {
+            pages
+                .iter()
+                .any(|page| selection.selected_pages.binary_search(page).is_ok())
+        })
+        .count() as u32;
+    let oracle_hits = truth
+        .ground_truth_page_assignments
+        .iter()
+        .filter(|pages| {
+            pages
+                .iter()
+                .any(|page| oracle_pages.binary_search(page).is_ok())
+        })
+        .count() as u32;
+    Ok(V26Pq4HoldoutSample {
+        query_ordinal,
+        selected_pages: selection.selected_pages,
+        hits,
+        oracle_hits,
+        recall_ppm: u64::from(hits) * 100_000,
+        oracle_attainment_ppm: u64::from(hits) * 1_000_000 / u64::from(oracle_hits),
+        elapsed_ns,
+        scan_elapsed_ns,
+        exact_rerank_elapsed_ns,
+        exact_rows_read: selection.exact_rows_read,
+        cold_batches_read: selection.cold_batches_read,
+        page_body_reads: selection.page_body_reads,
+    })
+}
+
+pub fn run_v26_pq4_holdout(request: &V26Pq4HoldoutRequest) -> Result<Vec<u8>> {
+    if request.evidence_output_path.exists()
+        || !request.evidence_output_uri.starts_with("s3://")
+        || !request.evidence_output_uri.ends_with(".parquet")
+    {
+        return Err(invalid("V26 PQ4 holdout request differs"));
+    }
+    let manifest = read_v26_pq4_fast_manifest(&request.pq4_manifest)?;
+    let terminal = read_layout_terminal(&request.layout_terminal)?;
+    authenticate(&request.cold_vectors, "cold-vectors-arrow")?;
+    authenticate(&request.external_queries, "external-queries-parquet")?;
+    authenticate(&request.truth, "truth-parquet")?;
+    let frontier = read_v26_pq4_frontier_result(&request.frontier_result)?;
+    let development = read_v26_pq4_development_serving_result(&request.development_serving_result)?;
+    let generation = &manifest.construction_rows.generation;
+    let mut uris = BTreeSet::new();
+    if manifest.layout_terminal != request.layout_terminal.identity
+        || terminal.row_count != manifest.row_count
+        || request.cold_vectors_manifest.row_count != manifest.row_count
+        || request.cold_vectors_manifest.encoded_bytes
+            != request.cold_vectors.identity.encoded_bytes
+        || request.cold_vectors_manifest.sha256 != request.cold_vectors.identity.digest
+        || frontier.pq4_manifest != request.pq4_manifest.identity
+        || frontier.external_queries != request.external_queries.identity
+        || frontier.truth != request.truth.identity
+        || development.pq4_manifest != request.pq4_manifest.identity
+        || development.frontier_result != request.frontier_result.identity
+        || development.external_queries != request.external_queries.identity
+        || [
+            &request.pq4_manifest.identity,
+            &request.cold_vectors.identity,
+            &request.layout_terminal.identity,
+            &request.external_queries.identity,
+            &request.truth.identity,
+            &request.frontier_result.identity,
+            &request.development_serving_result.identity,
+        ]
+        .iter()
+        .any(|identity| identity.generation != *generation || !uris.insert(&identity.uri))
+        || !uris.insert(&request.evidence_output_uri)
+    {
+        return Err(invalid("V26 PQ4 holdout authority differs"));
+    }
+    let expected_names = [
+        "pq4-fast-codebook.arrow",
+        "pq4-fast-codes.arrow",
+        "pq4-fast-manifest.json",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
+    let observed_names = fs::read_dir(&request.pq4_dir)
+        .map_err(|error| invalid(&format!("V26 PQ4 directory failed: {error}")))?
+        .map(|entry| {
+            entry
+                .map_err(|error| invalid(&format!("V26 PQ4 directory failed: {error}")))?
+                .file_name()
+                .into_string()
+                .map_err(|_| invalid("V26 PQ4 artifact name differs"))
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    if observed_names != expected_names {
+        return Err(invalid("V26 PQ4 artifact inventory differs"));
+    }
+    let index = read_v26_pq4_fast_index_arrow(&request.pq4_dir, &manifest)?;
+    let cold_vectors =
+        V26ArrowColdVectors::open(&request.cold_vectors.path, &request.cold_vectors_manifest)?;
+    let queries = read_evaluation_queries(&request.external_queries.path, 512)?;
+    let truths = read_evaluation_truth_with_assignment(
+        &request.truth.path,
+        512,
+        &queries,
+        &manifest.construction_rows.digest,
+        &request.external_queries.identity.digest,
+        |neighbor| {
+            let ordinal =
+                u32::try_from(neighbor).map_err(|_| invalid("V26 PQ4 truth source differs"))?;
+            cold_vectors.read_assignment(ordinal)
+        },
+    )?;
+    for query in queries.iter().skip(32).take(2) {
+        select_v26_pq4_serving_arm(&index, &query.vector, &cold_vectors)?;
+    }
+    let samples = queries
+        .iter()
+        .zip(&truths)
+        .skip(32)
+        .map(|(query, truth)| {
+            let (selection, elapsed_ns, scan_elapsed_ns, exact_rerank_elapsed_ns) =
+                select_v26_pq4_serving_arm(&index, &query.vector, &cold_vectors)?;
+            v26_pq4_holdout_sample(
+                query.query_ordinal,
+                selection,
+                truth,
+                elapsed_ns,
+                scan_elapsed_ns,
+                exact_rerank_elapsed_ns,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let result = (|| {
+        write_batch(
+            &request.evidence_output_path,
+            v26_pq4_holdout_batch(&samples)?,
+        )?;
+        let slash = request
+            .evidence_output_uri
+            .rfind('/')
+            .ok_or_else(|| invalid("V26 PQ4 holdout evidence URI differs"))?;
+        let evidence = output_identity(
+            "pq4-fast-holdout-evidence-parquet",
+            &request.evidence_output_path,
+            &request.evidence_output_uri[..=slash],
+            generation,
+        )?;
+        if evidence.uri != request.evidence_output_uri {
+            return Err(invalid("V26 PQ4 holdout evidence URI differs"));
+        }
+        let result = summarize_v26_pq4_holdout(
+            request.pq4_manifest.identity.clone(),
+            request.frontier_result.identity.clone(),
+            request.development_serving_result.identity.clone(),
+            request.external_queries.identity.clone(),
+            request.truth.identity.clone(),
+            evidence,
+            &samples,
+        )?;
+        canonical_v26_pq4_holdout_result_bytes(&result, &samples)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&request.evidence_output_path);
@@ -10102,6 +10569,60 @@ mod tests {
         assert!(!result.claim_eligible);
         let reader = open_reader(&evidence_path).unwrap();
         assert_eq!(reader.metadata().file_metadata().num_rows(), 32);
+    }
+
+    #[test]
+    fn v26_pq4_holdout_recomputes_sealed_quality_and_latency_without_tuning() {
+        // Break caught: the sealed cohort overlaps development, changes the frozen depth, trusts
+        // stored recall/latency aggregates, or becomes publishable before final assurance.
+        let samples = (32_u32..512)
+            .map(|query_ordinal| super::V26Pq4HoldoutSample {
+                query_ordinal,
+                selected_pages: (0_u32..10).collect(),
+                hits: 10,
+                oracle_hits: 10,
+                recall_ppm: 1_000_000,
+                oracle_attainment_ppm: 1_000_000,
+                elapsed_ns: 10_000_000 + u64::from(query_ordinal),
+                scan_elapsed_ns: 8_000_000,
+                exact_rerank_elapsed_ns: 2_000_000,
+                exact_rows_read: 2_048,
+                cold_batches_read: 32,
+                page_body_reads: 0,
+            })
+            .collect::<Vec<_>>();
+        let result = super::summarize_v26_pq4_holdout(
+            pq4_authority("pq4-fast-manifest", 'a'),
+            pq4_authority("pq4-fast-quality-result", 'b'),
+            pq4_authority("pq4-fast-serving-result", 'c'),
+            pq4_authority("external-queries-parquet", 'd'),
+            pq4_authority("truth-parquet", 'e'),
+            pq4_authority("pq4-fast-holdout-evidence-parquet", 'f'),
+            &samples,
+        )
+        .unwrap();
+
+        assert_eq!(result.query_start, 32);
+        assert_eq!(result.query_count, 480);
+        assert_eq!(result.ranked_row_limit, 2_048);
+        assert_eq!(result.aggregate_recall_ppm, 1_000_000);
+        assert_eq!(result.minimum_query_recall_ppm, 1_000_000);
+        assert_eq!(result.oracle_attainment_ppm, 1_000_000);
+        assert_eq!(result.maximum_latency_gate_ns, 15_000_000);
+        assert!(result.passed);
+        assert!(!result.claim_eligible);
+        let bytes = super::canonical_v26_pq4_holdout_result_bytes(&result, &samples).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+
+        let mut drifted = samples.clone();
+        drifted[0].query_ordinal = 0;
+        assert!(super::canonical_v26_pq4_holdout_result_bytes(&result, &drifted).is_err());
+        let mut drifted = samples;
+        drifted[17].recall_ppm -= 1;
+        assert!(super::canonical_v26_pq4_holdout_result_bytes(&result, &drifted).is_err());
+        let mut drifted_result = result;
+        drifted_result.maximum_ns += 1;
+        assert!(super::canonical_v26_pq4_holdout_result_bytes(&drifted_result, &drifted).is_err());
     }
 
     #[test]
