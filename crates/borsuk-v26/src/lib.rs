@@ -1739,6 +1739,7 @@ const V26_DUAL_PQ_KEY_SUBSPACES: [[usize; 2]; 2] = [[0, 8], [4, 12]];
 #[derive(Debug, Clone, PartialEq)]
 pub struct V26DualPqKeyIndex {
     codebook: V26PqCodebook,
+    pub(crate) page_count: u32,
     pub(crate) bucket_offsets: [Vec<u64>; 2],
     pub(crate) source_ordinals: [Vec<u32>; 2],
     pub(crate) codes: Vec<u8>,
@@ -1767,7 +1768,11 @@ fn v26_dual_pq_key(code: &[u8; 16], plane: usize) -> u16 {
 pub fn build_v26_dual_pq_key_index(packed: &V26PackedPq16Index) -> Result<V26DualPqKeyIndex> {
     const BUCKETS: usize = 65_536;
     let codes = packed.codes.as_chunks::<16>();
-    if !codes.1.is_empty() || codes.0.is_empty() || codes.0.len() > u32::MAX as usize {
+    if !codes.1.is_empty()
+        || codes.0.is_empty()
+        || codes.0.len() > u32::MAX as usize
+        || packed.page_offsets.len() < 2
+    {
         return Err(invalid("V26 dual PQ-key build request differs"));
     }
     let mut bucket_offsets = [Vec::new(), Vec::new()];
@@ -1808,6 +1813,7 @@ pub fn build_v26_dual_pq_key_index(packed: &V26PackedPq16Index) -> Result<V26Dua
     }
     Ok(V26DualPqKeyIndex {
         codebook: packed.codebook.clone(),
+        page_count: u32::try_from(packed.page_offsets.len() - 1).unwrap(),
         bucket_offsets,
         source_ordinals,
         codes: packed.codes.clone(),

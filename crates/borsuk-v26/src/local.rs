@@ -258,6 +258,17 @@ pub struct V26SimHashPq16IndexManifest {
     pub records: V26ArrowFileIdentity,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26DualPqKeyIndexManifest {
+    pub row_count: u64,
+    pub plane_count: u32,
+    pub bucket_count: u32,
+    pub projected_resident_bytes_100m: u64,
+    pub offsets: V26ArrowFileIdentity,
+    pub ordinals: V26ArrowFileIdentity,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V26Pq16ServingBuildRequest {
     pub construction_rows: V26LocalObjectPath,
@@ -3161,6 +3172,105 @@ pub fn select_v26_simhash_pq16_pages_from_arrow(
     })
 }
 
+/// Selects ten pages from two bounded PQ-key planes with sparse exact Arrow reranking.
+pub fn select_v26_dual_pq_key_pages_from_arrow(
+    index: &crate::V26DualPqKeyIndex,
+    query: &[f32; 96],
+    cold_vectors: &V26ArrowColdVectors,
+    key_limit_per_plane: usize,
+    ranked_row_limit: usize,
+) -> Result<V26Pq16ServingSelection> {
+    if u64::try_from(index.codes.len() / 16).unwrap() != cold_vectors.row_count {
+        return Err(invalid("V26 dual PQ-key Arrow authority differs"));
+    }
+    let approximate = crate::rank_v26_dual_pq_key_candidates(
+        index,
+        query,
+        key_limit_per_plane,
+        ranked_row_limit,
+    )?;
+    let mut source_ordinals = approximate
+        .iter()
+        .map(|candidate| u32::try_from(candidate.source_ordinal))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| invalid("V26 dual PQ-key Arrow source ordinal differs"))?;
+    source_ordinals.sort_unstable();
+    let cold = cold_vectors.read_vectors(&source_ordinals)?;
+    let mut exact = approximate
+        .iter()
+        .map(|candidate| {
+            let source_ordinal = u32::try_from(candidate.source_ordinal)
+                .map_err(|_| invalid("V26 dual PQ-key Arrow source ordinal differs"))?;
+            let position = source_ordinals
+                .binary_search(&source_ordinal)
+                .map_err(|_| invalid("V26 dual PQ-key Arrow vector binding differs"))?;
+            let distance = v26_squared_l2(&cold.vectors[position], query);
+            if !distance.is_finite() {
+                return Err(invalid("V26 dual PQ-key Arrow exact distance differs"));
+            }
+            Ok(V26PqRankedRow {
+                source_ordinal: candidate.source_ordinal,
+                distance,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    exact.sort_unstable();
+    let mut assignment_ordinals = exact
+        .iter()
+        .map(|row| u32::try_from(row.source_ordinal).unwrap())
+        .collect::<Vec<_>>();
+    assignment_ordinals.sort_unstable();
+    let assignments = cold_vectors.read_assignments(&assignment_ordinals)?;
+    let ranked_assignments = exact
+        .iter()
+        .map(|row| {
+            let source_ordinal = u32::try_from(row.source_ordinal).unwrap();
+            let position = assignment_ordinals.binary_search(&source_ordinal).unwrap();
+            let assignment = assignments[position];
+            if assignment.source_ordinal != row.source_ordinal {
+                return Err(invalid("V26 dual PQ-key Arrow assignment differs"));
+            }
+            Ok([assignment.primary_page, assignment.replica_page])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let top_assignments = ranked_assignments[..10]
+        .iter()
+        .map(|pages| pages.to_vec())
+        .collect::<Vec<_>>();
+    let mut selected_pages =
+        exact_v26_layout_oracle_pages(&top_assignments, crate::V26_SERVING_PAGE_BUDGET)?;
+    for pages in &ranked_assignments {
+        for page in pages {
+            if selected_pages.len() == crate::V26_SERVING_PAGE_BUDGET {
+                break;
+            }
+            if !selected_pages.contains(page) {
+                selected_pages.push(*page);
+            }
+        }
+    }
+    for page in 0..index.page_count {
+        if selected_pages.len() == crate::V26_SERVING_PAGE_BUDGET {
+            break;
+        }
+        if !selected_pages.contains(&page) {
+            selected_pages.push(page);
+        }
+    }
+    if selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET {
+        return Err(invalid("V26 dual PQ-key Arrow page inventory differs"));
+    }
+    selected_pages.sort_unstable();
+    Ok(V26Pq16ServingSelection {
+        selected_pages,
+        exact_rows_read: u32::try_from(ranked_row_limit)
+            .map_err(|_| invalid("V26 dual PQ-key Arrow ranked-row limit overflows"))?,
+        cold_batches_read: cold.batches_read,
+        cold_read_workers: cold.read_workers,
+        page_body_reads: 0,
+    })
+}
+
 fn execute_v26_simhash_preflight_samples(
     index: &crate::V26SimHashPq16MultiIndex,
     cold_vectors: &V26ArrowColdVectors,
@@ -3461,6 +3571,23 @@ fn v26_simhash_records_schema() -> Schema {
     Schema::new(vec![
         Field::new("source_ordinal", DataType::UInt32, false),
         Field::new("pq16_code", DataType::FixedSizeBinary(16), false),
+    ])
+}
+
+fn v26_dual_pq_key_offsets_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("plane_ordinal", DataType::UInt8, false),
+        Field::new("bucket_ordinal", DataType::UInt32, false),
+        Field::new("row_start", DataType::UInt64, false),
+        Field::new("row_end", DataType::UInt64, false),
+    ])
+}
+
+fn v26_dual_pq_key_ordinals_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("plane_ordinal", DataType::UInt8, false),
+        Field::new("position", DataType::UInt64, false),
+        Field::new("source_ordinal", DataType::UInt32, false),
     ])
 }
 
@@ -4117,6 +4244,271 @@ pub fn read_v26_simhash_pq16_index_arrow(
         bucket_offsets,
         source_ordinals,
         codes,
+        projected_resident_bytes_100m: manifest.projected_resident_bytes_100m,
+    })
+}
+
+pub fn write_v26_dual_pq_key_index_arrow(
+    directory: &Path,
+    index: &crate::V26DualPqKeyIndex,
+) -> Result<V26DualPqKeyIndexManifest> {
+    let offsets_path = directory.join("pq16-dual-key-offsets.arrow");
+    let ordinals_path = directory.join("pq16-dual-key-ordinals.arrow");
+    let row_count = index.source_ordinals[0].len();
+    if !directory.is_dir()
+        || offsets_path.exists()
+        || ordinals_path.exists()
+        || row_count == 0
+        || index.source_ordinals[1].len() != row_count
+        || index.codes.len() != row_count * 16
+        || index.bucket_offsets.iter().any(|offsets| {
+            offsets.len() != 65_537
+                || offsets.first() != Some(&0)
+                || offsets.last().copied() != Some(u64::try_from(row_count).unwrap())
+                || offsets.windows(2).any(|pair| pair[0] > pair[1])
+        })
+        || index.projected_resident_bytes_100m != 2_938_017_816
+    {
+        return Err(invalid("V26 dual PQ-key Arrow write request differs"));
+    }
+    let result = (|| {
+        let file = fs::File::create(&offsets_path)
+            .map_err(|error| invalid(&format!("V26 dual PQ-key offsets create failed: {error}")))?;
+        let mut writer = FileWriter::try_new(file, &v26_dual_pq_key_offsets_schema())
+            .map_err(|error| invalid(&format!("V26 dual PQ-key offsets writer failed: {error}")))?;
+        for plane in 0..2 {
+            writer
+                .write(
+                    &RecordBatch::try_new(
+                        Arc::new(v26_dual_pq_key_offsets_schema()),
+                        vec![
+                            Arc::new(UInt8Array::from_iter_values(std::iter::repeat_n(
+                                u8::try_from(plane).unwrap(),
+                                65_536,
+                            ))),
+                            Arc::new(UInt32Array::from_iter_values(0_u32..65_536)),
+                            Arc::new(UInt64Array::from_iter_values(
+                                index.bucket_offsets[plane][..65_536].iter().copied(),
+                            )),
+                            Arc::new(UInt64Array::from_iter_values(
+                                index.bucket_offsets[plane][1..].iter().copied(),
+                            )),
+                        ],
+                    )
+                    .map_err(|error| {
+                        invalid(&format!("V26 dual PQ-key offsets batch failed: {error}"))
+                    })?,
+                )
+                .map_err(|error| {
+                    invalid(&format!("V26 dual PQ-key offsets write failed: {error}"))
+                })?;
+        }
+        writer
+            .finish()
+            .map_err(|error| invalid(&format!("V26 dual PQ-key offsets finish failed: {error}")))?;
+
+        let file = fs::File::create(&ordinals_path).map_err(|error| {
+            invalid(&format!("V26 dual PQ-key ordinals create failed: {error}"))
+        })?;
+        let mut writer =
+            FileWriter::try_new(file, &v26_dual_pq_key_ordinals_schema()).map_err(|error| {
+                invalid(&format!("V26 dual PQ-key ordinals writer failed: {error}"))
+            })?;
+        for plane in 0..2 {
+            for (batch_index, ordinals) in index.source_ordinals[plane].chunks(65_536).enumerate() {
+                let first = batch_index * 65_536;
+                writer
+                    .write(
+                        &RecordBatch::try_new(
+                            Arc::new(v26_dual_pq_key_ordinals_schema()),
+                            vec![
+                                Arc::new(UInt8Array::from_iter_values(std::iter::repeat_n(
+                                    u8::try_from(plane).unwrap(),
+                                    ordinals.len(),
+                                ))),
+                                Arc::new(UInt64Array::from_iter_values(
+                                    (first..first + ordinals.len())
+                                        .map(|position| u64::try_from(position).unwrap()),
+                                )),
+                                Arc::new(UInt32Array::from_iter_values(ordinals.iter().copied())),
+                            ],
+                        )
+                        .map_err(|error| {
+                            invalid(&format!("V26 dual PQ-key ordinals batch failed: {error}"))
+                        })?,
+                    )
+                    .map_err(|error| {
+                        invalid(&format!("V26 dual PQ-key ordinals write failed: {error}"))
+                    })?;
+            }
+        }
+        writer.finish().map_err(|error| {
+            invalid(&format!("V26 dual PQ-key ordinals finish failed: {error}"))
+        })?;
+        Ok(V26DualPqKeyIndexManifest {
+            row_count: u64::try_from(row_count).unwrap(),
+            plane_count: 2,
+            bucket_count: 65_536,
+            projected_resident_bytes_100m: index.projected_resident_bytes_100m,
+            offsets: arrow_file_identity(&offsets_path)?,
+            ordinals: arrow_file_identity(&ordinals_path)?,
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(offsets_path);
+        let _ = fs::remove_file(ordinals_path);
+    }
+    result
+}
+
+pub fn read_v26_dual_pq_key_index_arrow(
+    directory: &Path,
+    manifest: &V26DualPqKeyIndexManifest,
+    packed: &crate::V26PackedPq16Index,
+) -> Result<crate::V26DualPqKeyIndex> {
+    if manifest.row_count == 0
+        || manifest.row_count > u64::from(u32::MAX)
+        || manifest.plane_count != 2
+        || manifest.bucket_count != 65_536
+        || manifest.projected_resident_bytes_100m != 2_938_017_816
+        || u64::try_from(packed.codes.len() / 16).ok() != Some(manifest.row_count)
+        || !packed.codes.len().is_multiple_of(16)
+    {
+        return Err(invalid("V26 dual PQ-key Arrow manifest differs"));
+    }
+    let mut offsets_reader = authenticate_arrow_file(
+        &directory.join("pq16-dual-key-offsets.arrow"),
+        &manifest.offsets,
+    )?;
+    if offsets_reader.schema().as_ref() != &v26_dual_pq_key_offsets_schema() {
+        return Err(invalid("V26 dual PQ-key offsets schema differs"));
+    }
+    let mut bucket_offsets = [vec![0_u64], vec![0_u64]];
+    let mut expected = [(0_u32, 0_u64), (0_u32, 0_u64)];
+    for batch in &mut offsets_reader {
+        let batch = batch
+            .map_err(|error| invalid(&format!("V26 dual PQ-key offsets read failed: {error}")))?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V26 dual PQ-key offsets nullability differs"));
+        }
+        let planes = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .unwrap();
+        let buckets = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        let starts = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        let ends = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            let plane = usize::from(planes.value(row));
+            if plane >= 2
+                || buckets.value(row) != expected[plane].0
+                || starts.value(row) != expected[plane].1
+                || starts.value(row) > ends.value(row)
+            {
+                return Err(invalid("V26 dual PQ-key offsets order differs"));
+            }
+            bucket_offsets[plane].push(ends.value(row));
+            expected[plane] = (expected[plane].0 + 1, ends.value(row));
+        }
+    }
+    if expected != [(65_536, manifest.row_count), (65_536, manifest.row_count)] {
+        return Err(invalid("V26 dual PQ-key offsets inventory differs"));
+    }
+
+    let mut ordinals_reader = authenticate_arrow_file(
+        &directory.join("pq16-dual-key-ordinals.arrow"),
+        &manifest.ordinals,
+    )?;
+    if ordinals_reader.schema().as_ref() != &v26_dual_pq_key_ordinals_schema() {
+        return Err(invalid("V26 dual PQ-key ordinals schema differs"));
+    }
+    let row_count = usize::try_from(manifest.row_count).unwrap();
+    let mut source_ordinals = [Vec::with_capacity(row_count), Vec::with_capacity(row_count)];
+    for batch in &mut ordinals_reader {
+        let batch = batch
+            .map_err(|error| invalid(&format!("V26 dual PQ-key ordinals read failed: {error}")))?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V26 dual PQ-key ordinals nullability differs"));
+        }
+        let planes = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .unwrap();
+        let positions = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        let ordinals = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            let plane = usize::from(planes.value(row));
+            if plane >= 2
+                || usize::try_from(positions.value(row)).ok() != Some(source_ordinals[plane].len())
+                || u64::from(ordinals.value(row)) >= manifest.row_count
+            {
+                return Err(invalid("V26 dual PQ-key ordinal order differs"));
+            }
+            source_ordinals[plane].push(ordinals.value(row));
+        }
+    }
+    for plane in 0..2 {
+        let mut seen = vec![false; row_count];
+        for (bucket, bounds) in bucket_offsets[plane].windows(2).enumerate() {
+            let start = usize::try_from(bounds[0]).unwrap();
+            let end = usize::try_from(bounds[1]).unwrap();
+            let rows = source_ordinals[plane]
+                .get(start..end)
+                .ok_or_else(|| invalid("V26 dual PQ-key ordinal inventory differs"))?;
+            if rows.windows(2).any(|pair| pair[0] >= pair[1]) {
+                return Err(invalid("V26 dual PQ-key ordinal stability differs"));
+            }
+            for source_ordinal in rows {
+                let ordinal = usize::try_from(*source_ordinal).unwrap();
+                let code: &[u8; 16] = packed.codes[ordinal * 16..ordinal * 16 + 16]
+                    .try_into()
+                    .unwrap();
+                if seen[ordinal] || usize::from(crate::v26_dual_pq_key(code, plane)) != bucket {
+                    return Err(invalid("V26 dual PQ-key ordinal binding differs"));
+                }
+                seen[ordinal] = true;
+            }
+        }
+        if source_ordinals[plane].len() != row_count || seen.iter().any(|value| !value) {
+            return Err(invalid("V26 dual PQ-key ordinal inventory differs"));
+        }
+    }
+    Ok(crate::V26DualPqKeyIndex {
+        codebook: packed.codebook.clone(),
+        page_count: u32::try_from(packed.page_offsets.len() - 1).unwrap(),
+        bucket_offsets,
+        source_ordinals,
+        codes: packed.codes.clone(),
         projected_resident_bytes_100m: manifest.projected_resident_bytes_100m,
     })
 }
@@ -6247,6 +6639,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(simhash, global);
+
+        // Break caught: the two distance-aligned ordinal planes are serialized with an
+        // ambiguous schema, lose stable source order, or exact-rerank a different row set.
+        let dual = crate::build_v26_dual_pq_key_index(&index).unwrap();
+        let dual_dir = temp.path().join("dual-pq-key");
+        fs::create_dir(&dual_dir).unwrap();
+        let dual_manifest = super::write_v26_dual_pq_key_index_arrow(&dual_dir, &dual).unwrap();
+        assert_eq!(dual_manifest.row_count, rows.len() as u64);
+        assert_eq!(dual_manifest.plane_count, 2);
+        assert_eq!(dual_manifest.bucket_count, 65_536);
+        assert_eq!(dual_manifest.projected_resident_bytes_100m, 2_938_017_816);
+        let restored =
+            super::read_v26_dual_pq_key_index_arrow(&dual_dir, &dual_manifest, &index).unwrap();
+        assert_eq!(restored, dual);
+        let dual_selection = super::select_v26_dual_pq_key_pages_from_arrow(
+            &restored, &query, &reader, 65_536, 2_048,
+        )
+        .unwrap();
+        assert_eq!(dual_selection, global);
 
         if !cfg!(debug_assertions) {
             let mut latency_ns = Vec::with_capacity(128);
