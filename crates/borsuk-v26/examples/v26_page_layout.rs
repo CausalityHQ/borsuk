@@ -9,9 +9,10 @@ use borsuk_v26::{
     V26TruthBuildRequest, canonical_v26_layout_build_output_bytes,
     canonical_v26_layout_result_bytes, canonical_v26_object_identity_bytes,
     evaluate_v26_layout_oracle, run_v26_candidate_row_cover, run_v26_centroid_router,
-    run_v26_exact_global, run_v26_layout_build_directory, run_v26_page_mode_router,
-    run_v26_pq_width_ladder, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
-    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
+    run_v26_exact_global, run_v26_global_centroid_frontier_diagnostic,
+    run_v26_layout_build_directory, run_v26_page_mode_router, run_v26_pq_width_ladder,
+    run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank, run_v26_tree_router,
+    run_v26_tree_router_diagnostic, run_v26_truth_build,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +102,7 @@ enum V26CliMode {
     Router(TreeRouterRequest),
     RouterDiagnostic(TreeRouterRequest),
     CentroidRouter(CentroidRouterRequest),
+    GlobalCentroidFrontier(CentroidRouterRequest),
     PageModeRouter(PageModeRouterRequest),
     CandidateCover(CandidateCoverRequest),
     Pq8Cover(CandidateCoverRequest),
@@ -166,6 +168,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
     let mut router = false;
     let mut router_diagnostic = false;
     let mut centroid_router = false;
+    let mut global_centroid_frontier = false;
     let mut page_mode_router = false;
     let mut candidate_cover = false;
     let mut pq8_cover = false;
@@ -216,6 +219,12 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                     return Err("duplicate --route-centroids".to_owned());
                 }
                 centroid_router = true;
+            }
+            "--diagnose-global-centroid-frontier" => {
+                if global_centroid_frontier {
+                    return Err("duplicate --diagnose-global-centroid-frontier".to_owned());
+                }
+                global_centroid_frontier = true;
             }
             "--route-page-modes" => {
                 if page_mode_router {
@@ -329,6 +338,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             + u8::from(router)
             + u8::from(router_diagnostic)
             + u8::from(centroid_router)
+            + u8::from(global_centroid_frontier)
             + u8::from(page_mode_router)
             + u8::from(candidate_cover)
             + u8::from(pq8_cover)
@@ -437,6 +447,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
     if router
         || router_diagnostic
         || centroid_router
+        || global_centroid_frontier
         || page_mode_router
         || candidate_cover
         || pq8_cover
@@ -448,7 +459,11 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         let page_budget = take(&mut values, "--page-budget")?
             .parse()
             .map_err(|_| "invalid --page-budget".to_owned())?;
-        let expected_page_budget = if router_diagnostic || candidate_cover || pq16_exact_rerank {
+        let expected_page_budget = if router_diagnostic
+            || global_centroid_frontier
+            || candidate_cover
+            || pq16_exact_rerank
+        {
             10
         } else {
             8
@@ -479,14 +494,19 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         if !valid_registered(&construction) {
             return Err("V26 page summary router arguments differ".to_owned());
         }
-        return Ok(if centroid_router {
+        return Ok(if centroid_router || global_centroid_frontier {
             if !values.is_empty() {
                 return Err("V26 centroid router arguments differ".to_owned());
             }
-            V26CliMode::CentroidRouter(CentroidRouterRequest {
+            let request = CentroidRouterRequest {
                 construction,
                 router: request,
-            })
+            };
+            if global_centroid_frontier {
+                V26CliMode::GlobalCentroidFrontier(request)
+            } else {
+                V26CliMode::CentroidRouter(request)
+            }
         } else {
             let evidence_output_path = PathBuf::from(take(&mut values, "--evidence-output-path")?);
             let evidence_output_uri = take(&mut values, "--evidence-output-uri")?;
@@ -674,6 +694,31 @@ fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
         V26CliMode::CentroidRouter(request) => {
             let generation = request.router.generation.clone();
             run_v26_centroid_router(&V26CentroidRouterRequest {
+                construction_rows: local_object(
+                    "construction-parquet",
+                    &generation,
+                    request.construction,
+                ),
+                router: V26TreeRouterRequest {
+                    primary_tree: local_object(
+                        "primary-tree-parquet",
+                        &generation,
+                        request.router.primary_tree,
+                    ),
+                    replica_tree: local_object(
+                        "replica-tree-parquet",
+                        &generation,
+                        request.router.replica_tree,
+                    ),
+                    layout: evaluation_request(request.router.layout),
+                    page_budget: request.router.page_budget,
+                },
+            })
+            .map_err(|error| error.to_string())
+        }
+        V26CliMode::GlobalCentroidFrontier(request) => {
+            let generation = request.router.generation.clone();
+            run_v26_global_centroid_frontier_diagnostic(&V26CentroidRouterRequest {
                 construction_rows: local_object(
                     "construction-parquet",
                     &generation,
@@ -983,6 +1028,22 @@ mod tests {
             "--construction-bytes".to_owned(),
             "4096".to_owned(),
         ]);
+        args
+    }
+
+    fn global_centroid_frontier_args() -> Vec<String> {
+        let mut args = centroid_router_args();
+        let mode = args
+            .iter_mut()
+            .find(|argument| argument.as_str() == "--route-centroids")
+            .unwrap();
+        *mode = "--diagnose-global-centroid-frontier".to_owned();
+        let page_budget = args
+            .iter_mut()
+            .skip_while(|argument| argument.as_str() != "--page-budget")
+            .nth(1)
+            .unwrap();
+        *page_budget = "10".to_owned();
         args
     }
 
@@ -1327,6 +1388,29 @@ mod tests {
             vec!["--d3", "forbidden"],
         ] {
             let mut args = centroid_router_args();
+            args.extend(mutation.into_iter().map(str::to_owned));
+            assert!(parse_v26_args(args).is_err());
+        }
+    }
+
+    #[test]
+    fn v26_global_centroid_frontier_cli_is_fixed_offline_and_truth_bound() {
+        let parsed = parse_v26_args(global_centroid_frontier_args()).unwrap();
+        let V26CliMode::GlobalCentroidFrontier(request) = parsed else {
+            panic!("global centroid frontier mode differs");
+        };
+        assert_eq!(request.construction.sha256, "5".repeat(64));
+        assert_eq!(request.router.page_budget, 10);
+        let error = execute_v26_mode(V26CliMode::GlobalCentroidFrontier(request)).unwrap_err();
+        assert!(error.contains("local object open failed"));
+
+        for mutation in [
+            vec!["--candidate-page-limit", "128"],
+            vec!["--bucket", "forbidden"],
+            vec!["--page-prefix", "forbidden"],
+            vec!["--d3", "forbidden"],
+        ] {
+            let mut args = global_centroid_frontier_args();
             args.extend(mutation.into_iter().map(str::to_owned));
             assert!(parse_v26_args(args).is_err());
         }

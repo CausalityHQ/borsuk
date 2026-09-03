@@ -39,15 +39,16 @@ pub use local::{
     evaluate_v26_simhash_preflight, open_v26_pq16_serving_runtime,
     read_v26_dual_pq_key_index_arrow, read_v26_pq16_index_arrow, read_v26_simhash_pq16_index_arrow,
     run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_dual_pq_key_preflight,
-    run_v26_exact_global, run_v26_layout_build, run_v26_layout_build_directory,
-    run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
-    run_v26_pq16_exact_rerank, run_v26_pq16_global_preflight, run_v26_pq16_serving_benchmark,
-    run_v26_pq16_serving_build, run_v26_simhash_preflight, run_v26_tree_router,
-    run_v26_tree_router_diagnostic, run_v26_truth_build, select_v26_dual_pq_key_pages_from_arrow,
-    select_v26_pq16_global_pages_from_arrow, select_v26_pq16_pages_from_arrow,
-    select_v26_simhash_pq16_pages_from_arrow, v26_construction_schema, v26_page_assignments_schema,
-    v26_query_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
-    write_v26_cold_vectors_arrow, write_v26_dual_pq_key_index_arrow, write_v26_pq16_index_arrow,
+    run_v26_exact_global, run_v26_global_centroid_frontier_diagnostic, run_v26_layout_build,
+    run_v26_layout_build_directory, run_v26_page_mode_router, run_v26_pq_width_ladder,
+    run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank, run_v26_pq16_global_preflight,
+    run_v26_pq16_serving_benchmark, run_v26_pq16_serving_build, run_v26_simhash_preflight,
+    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
+    select_v26_dual_pq_key_pages_from_arrow, select_v26_pq16_global_pages_from_arrow,
+    select_v26_pq16_pages_from_arrow, select_v26_simhash_pq16_pages_from_arrow,
+    v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
+    v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
+    write_v26_dual_pq_key_index_arrow, write_v26_pq16_index_arrow,
     write_v26_simhash_pq16_index_arrow,
 };
 
@@ -969,6 +970,131 @@ fn build_v26_page_centroids(
             Ok((page, centroid))
         })
         .collect()
+}
+
+pub(crate) fn diagnose_v26_global_centroid_candidate_widths(
+    primary: &V26Tree,
+    replica: &V26Tree,
+    rows: &[V26ConstructionRow],
+    assignments: &[V26RowPages],
+    queries: &[V26ExternalQuery],
+    truths: &[V26QueryTruth],
+) -> Result<(Vec<V26TreeRouterWidthSample>, Vec<V26TreeRouterWidthResult>)> {
+    if queries.len() != 512 || truths.len() != queries.len() {
+        return Err(invalid("V26 global centroid diagnostic request differs"));
+    }
+    let centroids = build_v26_page_centroids(primary, replica, rows, assignments)?;
+    let total_pages = centroids.len();
+    if total_pages < 10 {
+        return Err(invalid("V26 global centroid page inventory differs"));
+    }
+    let mut widths = [8_usize, 16, 32, 64, 128, 256, 512, 1_024, 2_048]
+        .into_iter()
+        .filter(|width| *width < total_pages)
+        .collect::<Vec<_>>();
+    widths.push(total_pages);
+
+    let per_query = queries
+        .par_iter()
+        .zip(truths.par_iter())
+        .enumerate()
+        .map(|(query_index, (query, truth))| {
+            if usize::try_from(query.query_ordinal).ok() != Some(query_index)
+                || truth.query_ordinal != query.query_ordinal
+                || truth.neighbor_source_ordinals.len() != 10
+                || truth.ground_truth_page_assignments.len() != 10
+            {
+                return Err(invalid("V26 global centroid query authority differs"));
+            }
+            validate_v26_vector(&query.vector)?;
+            let mut ranked = centroids
+                .iter()
+                .map(|(page, centroid)| {
+                    let dot = query
+                        .vector
+                        .iter()
+                        .zip(centroid)
+                        .map(|(left, right)| left * right)
+                        .sum::<f32>();
+                    let distance = 1.0 - dot;
+                    if !distance.is_finite() {
+                        return Err(invalid("V26 global centroid distance differs"));
+                    }
+                    Ok((distance, *page))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            ranked.sort_unstable_by(|left, right| {
+                left.0
+                    .total_cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+            });
+            let oracle_pages =
+                exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 10)?;
+            let oracle_hits = v26_layout_hits(&truth.ground_truth_page_assignments, &oracle_pages);
+            widths
+                .iter()
+                .map(|width| {
+                    let mut candidates = ranked[..*width]
+                        .iter()
+                        .map(|(_, page)| *page)
+                        .collect::<Vec<_>>();
+                    candidates.sort_unstable();
+                    let selected_pages = exact_v26_candidate_cover_pages(
+                        &truth.ground_truth_page_assignments,
+                        &candidates,
+                        10,
+                    )?;
+                    let hits =
+                        v26_layout_hits(&truth.ground_truth_page_assignments, &selected_pages);
+                    Ok(V26TreeRouterWidthSample {
+                        query_ordinal: query.query_ordinal,
+                        candidate_page_limit: u32::try_from(*width).map_err(|_| {
+                            invalid("V26 global centroid diagnostic width overflows")
+                        })?,
+                        selected_pages,
+                        hits,
+                        oracle_hits,
+                        recall_ppm: v26_ppm(u64::from(hits), 10)?,
+                        oracle_attainment_ppm: v26_ppm(u64::from(hits), u64::from(oracle_hits))?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let samples = per_query.into_iter().flatten().collect::<Vec<_>>();
+    let results = widths
+        .iter()
+        .map(|width| {
+            let width = u32::try_from(*width)
+                .map_err(|_| invalid("V26 global centroid diagnostic width overflows"))?;
+            let arm = samples
+                .iter()
+                .filter(|sample| sample.candidate_page_limit == width)
+                .collect::<Vec<_>>();
+            if arm.len() != queries.len() {
+                return Err(invalid("V26 global centroid sample inventory differs"));
+            }
+            let total_hits = arm.iter().map(|sample| u64::from(sample.hits)).sum::<u64>();
+            let total_oracle_hits = arm
+                .iter()
+                .map(|sample| u64::from(sample.oracle_hits))
+                .sum::<u64>();
+            let aggregate_recall_ppm = v26_ppm(total_hits, queries.len() as u64 * 10)?;
+            let minimum_query_recall_ppm =
+                arm.iter().map(|sample| sample.recall_ppm).min().unwrap();
+            let oracle_attainment_ppm = v26_ppm(total_hits, total_oracle_hits)?;
+            Ok(V26TreeRouterWidthResult {
+                candidate_page_limit: width,
+                aggregate_recall_ppm,
+                minimum_query_recall_ppm,
+                oracle_attainment_ppm,
+                passed: aggregate_recall_ppm >= 975_000
+                    && minimum_query_recall_ppm >= 800_000
+                    && oracle_attainment_ppm >= 995_000,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((samples, results))
 }
 
 pub(crate) const V26_PAGE_MODE_LADDER: [u32; 4] = [2, 4, 8, 16];
@@ -4029,14 +4155,15 @@ mod tests {
         build_v26_pq8_page_occurrences, build_v26_pq16_packed_index,
         canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
         canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
-        diagnose_v26_tree_router_candidate_widths, evaluate_v26_candidate_row_cover,
-        evaluate_v26_centroid_router, evaluate_v26_exact_global_external_rows,
-        evaluate_v26_page_mode_router, evaluate_v26_pq_width_ladder,
-        evaluate_v26_pq8_candidate_cover, evaluate_v26_pq16_exact_rerank_ladder,
-        evaluate_v26_tree_router, exact_v26_layout_oracle_pages, fit_v26_pq_codebook,
-        fit_v26_pq8_codebook, prepare_v26_pq_tables, prepare_v26_pq8_tables,
-        projected_v26_pq_resident_bytes, projected_v26_pq8_resident_bytes, rank_v26_candidate_rows,
-        rank_v26_pq8_occurrences, rank_v26_pq16_candidate_rows, rank_v26_pq16_global_candidates,
+        diagnose_v26_global_centroid_candidate_widths, diagnose_v26_tree_router_candidate_widths,
+        evaluate_v26_candidate_row_cover, evaluate_v26_centroid_router,
+        evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
+        evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
+        evaluate_v26_pq16_exact_rerank_ladder, evaluate_v26_tree_router,
+        exact_v26_layout_oracle_pages, fit_v26_pq_codebook, fit_v26_pq8_codebook,
+        prepare_v26_pq_tables, prepare_v26_pq8_tables, projected_v26_pq_resident_bytes,
+        projected_v26_pq8_resident_bytes, rank_v26_candidate_rows, rank_v26_pq8_occurrences,
+        rank_v26_pq16_candidate_rows, rank_v26_pq16_global_candidates,
         rank_v26_pq16_linear_occurrence_candidates, rank_v26_pq16_packed_candidates,
         rank_v26_pq16_parallel_occurrence_candidates, rank_v26_tree_pages, route_v26_pages,
         select_v26_pq16_global_packed_pages, select_v26_pq16_packed_pages, select_v26_ranked_pages,
@@ -4364,6 +4491,80 @@ mod tests {
                 .iter()
                 .all(|sample| sample.selected_pages.len() == 8)
         );
+    }
+
+    #[test]
+    fn v26_fast_global_centroid_frontier_preserves_broad_geometric_containment() {
+        // Break caught: page centroids are treated as final-page selectors rather than a broad
+        // query-independent frontier, truth enters ranking, or the exact frontier ladder drifts.
+        let primary = v26_router_test_tree(PRIMARY_SEED, 0, [1.0; 7]);
+        let replica = v26_router_test_tree(REPLICA_SEED, 8, [1.0; 7]);
+        let rows = (0_u64..32)
+            .map(|source_ordinal| {
+                let group = usize::try_from(source_ordinal / 4).unwrap();
+                let mut vector = [0.0_f32; 96];
+                vector[0] = if group < 4 { 1.0 } else { -1.0 };
+                V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..32)
+            .map(|source_ordinal| {
+                let primary_page = u32::try_from(source_ordinal / 4).unwrap();
+                V26RowPages {
+                    source_ordinal,
+                    primary_page,
+                    replica_page: primary_page + 8,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut query = [0.0_f32; 96];
+        query[0] = 1.0;
+        let queries = (0_u32..512)
+            .map(|query_ordinal| V26ExternalQuery {
+                query_ordinal,
+                vector: query,
+            })
+            .collect::<Vec<_>>();
+        let truth_rows = [0_u64, 4, 8, 12, 16, 20, 24, 28, 17, 21];
+        let truths = (0_u32..512)
+            .map(|query_ordinal| V26QueryTruth {
+                query_ordinal,
+                neighbor_source_ordinals: truth_rows.to_vec(),
+                ground_truth_page_assignments: truth_rows
+                    .iter()
+                    .map(|source_ordinal| {
+                        let page = u32::try_from(source_ordinal / 4).unwrap();
+                        vec![page, page + 8]
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+
+        let (samples, widths) = diagnose_v26_global_centroid_candidate_widths(
+            &primary,
+            &replica,
+            &rows,
+            &assignments,
+            &queries,
+            &truths,
+        )
+        .unwrap();
+
+        assert_eq!(
+            widths
+                .iter()
+                .map(|arm| arm.candidate_page_limit)
+                .collect::<Vec<_>>(),
+            [8, 16]
+        );
+        assert!(!widths[0].passed);
+        assert_eq!(widths[1].aggregate_recall_ppm, 1_000_000);
+        assert_eq!(widths[1].minimum_query_recall_ppm, 1_000_000);
+        assert!(widths[1].passed);
+        assert_eq!(samples.len(), 1_024);
     }
 
     #[test]

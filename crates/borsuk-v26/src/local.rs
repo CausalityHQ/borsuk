@@ -35,10 +35,10 @@ use crate::{
     V26Pq16ServingSelection, V26PqRankedRow, V26QueryTruth, V26RowPages, V26Tree,
     build_v26_external_truth_rows, canonical_json_value, canonical_v26_exact_global_result_bytes,
     canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes_with_page_budget,
-    canonical_v26_tree_router_result_bytes, diagnose_v26_tree_router_candidate_widths,
-    evaluate_v26_candidate_row_cover, evaluate_v26_centroid_router,
-    evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
-    evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
+    canonical_v26_tree_router_result_bytes, diagnose_v26_global_centroid_candidate_widths,
+    diagnose_v26_tree_router_candidate_widths, evaluate_v26_candidate_row_cover,
+    evaluate_v26_centroid_router, evaluate_v26_exact_global_external_rows,
+    evaluate_v26_page_mode_router, evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
     evaluate_v26_pq16_exact_rerank_ladder, evaluate_v26_tree_router, exact_lower_hex,
     exact_v26_layout_oracle_pages, invalid, projected_steps, projected_v26_pq8_resident_bytes,
     projected_v26_pq16_rerank_resident_bytes, rank_v26_pq16_packed_candidates, rank_v26_tree_pages,
@@ -2048,6 +2048,44 @@ pub fn run_v26_centroid_router(request: &V26CentroidRouterRequest) -> Result<Vec
     let mut bytes = serde_json::to_vec(&canonical_json_value(value)).map_err(|error| {
         invalid(&format!(
             "V26 centroid router serialization failed: {error}"
+        ))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+pub fn run_v26_global_centroid_frontier_diagnostic(
+    request: &V26CentroidRouterRequest,
+) -> Result<Vec<u8>> {
+    let exact = V26ExactGlobalRequest {
+        construction_rows: request.construction_rows.clone(),
+        layout: request.router.layout.clone(),
+        ranked_row_limits: vec![10, 32, 128, 512, 2_048, 4_096],
+    };
+    let loaded = load_v26_exact_global(&exact)?;
+    let (primary, replica, queries, truths) =
+        load_v26_tree_router_with_page_budget(&request.router, 10)?;
+    if queries != loaded.queries || truths != loaded.truths || request.router.page_budget != 10 {
+        return Err(invalid("V26 global centroid authority differs"));
+    }
+    let (samples, widths) = diagnose_v26_global_centroid_candidate_widths(
+        &primary,
+        &replica,
+        &loaded.rows,
+        &loaded.assignments,
+        &queries,
+        &truths,
+    )?;
+    let value = serde_json::json!({
+        "claim_eligible": false,
+        "page_body_reads": 0,
+        "samples": samples,
+        "schema": "borsuk-v26-global-centroid-frontier-result-v1",
+        "widths": widths,
+    });
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value)).map_err(|error| {
+        invalid(&format!(
+            "V26 global centroid serialization failed: {error}"
         ))
     })?;
     bytes.push(b'\n');
