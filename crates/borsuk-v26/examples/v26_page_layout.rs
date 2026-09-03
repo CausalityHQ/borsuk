@@ -448,7 +448,10 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         let page_budget = take(&mut values, "--page-budget")?
             .parse()
             .map_err(|_| "invalid --page-budget".to_owned())?;
-        if !valid_registered(&primary_tree) || !valid_registered(&replica_tree) || page_budget != 8
+        let expected_page_budget = if pq16_exact_rerank { 10 } else { 8 };
+        if !valid_registered(&primary_tree)
+            || !valid_registered(&replica_tree)
+            || page_budget != expected_page_budget
         {
             return Err("V26 tree router arguments differ".to_owned());
         }
@@ -1045,6 +1048,12 @@ mod tests {
         for argument in &mut args {
             *argument = argument.replace("pq-width-ladder-evidence", "pq16-rerank-evidence");
         }
+        let page_budget = args
+            .iter_mut()
+            .skip_while(|argument| argument.as_str() != "--page-budget")
+            .nth(1)
+            .unwrap();
+        *page_budget = "10".to_owned();
         args
     }
 
@@ -1428,10 +1437,19 @@ mod tests {
         let V26CliMode::Pq16ExactRerank(request) = parsed else {
             panic!("PQ16 exact rerank mode differs");
         };
+        assert_eq!(request.router.page_budget, 10);
         assert_eq!(
             request.evidence_output_path,
             std::path::PathBuf::from("/output/pq16-rerank-evidence.parquet")
         );
+        let mut stale_budget = pq16_exact_rerank_args();
+        let page_budget = stale_budget
+            .iter_mut()
+            .skip_while(|argument| argument.as_str() != "--page-budget")
+            .nth(1)
+            .unwrap();
+        *page_budget = "8".to_owned();
+        assert!(parse_v26_args(stale_budget).is_err());
         for mutation in [
             vec!["--ranked-row-limits", "10,32,128,512,2048"],
             vec!["--pq-width", "16"],
