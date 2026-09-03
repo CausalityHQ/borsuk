@@ -2454,3 +2454,44 @@ both representations require a 1,024-page frontier on the frozen geometry. The
 next no-spend gate must represent multimodal within-page structure and pass at
 no more than 256 candidate pages before any serving-latency or full-suite run.
 Recall, oracle-attainment, D3, competitor, and release gates remain unchanged.
+
+### Sixteen page modes halve but do not close the native frontier
+
+Source commit `f3b43e4350839d96999e9bdaefd4cb1f6ad23870` replaced each
+single page mean with a deterministic query-independent 2/4/8/16-mode ladder.
+It ranked every one of the 2,440 pages by nearest mode, then joined truth only
+to measure the exact best ten-page cover inside each fixed frontier. The run
+authenticated the same 9,990,000 construction rows, assignments, trees, 512
+queries, and 512 truth rows as the preceding diagnostics. It opened no page
+body and stored all 20,480 samples in typed Parquet rather than bulk JSON.
+
+At 256 candidate pages, the aggregate/minimum/oracle-attainment ppm triples for
+2, 4, 8, and 16 modes were respectively 966,601/500,000/966,601;
+972,851/500,000/972,851; 976,953/400,000/976,953; and
+979,101/500,000/979,101. None passed. At 512 pages, the corresponding triples
+were 993,359/800,000/993,359; 992,578/800,000/992,578;
+994,531/800,000/994,531; and 996,093/800,000/996,093. Only the 16-mode arm
+passed all unchanged gates. Every arm passed by width 1,024. Multimodal page
+summaries therefore move the passing frontier from 1,024 to 512 pages, but do
+not yet reach the preregistered at-most-256-page concentration boundary.
+
+The sole run used `causality` Spot instance `i-0b971d9f0e4923da7`
+(`m7gd.4xlarge`, `eu-central-1c`) and SSM command
+`e398d309-9426-4756-9ff9-b32d0aac0737`. Scientific execution took 60 seconds,
+peaked at 4,259,348,480 bytes RSS, and observed zero memory PSI and zero swap
+growth. The 12,004,088-byte executable has SHA-256
+`9b983f07abff6c4979c2ed1eea32c1ccbcbac03852f4d3ca703cff15962167f1`.
+The 6,690-byte result has SHA-256
+`0a24f13d0b7459cbbf6cc721deb0c51a033bc2d83b9133b0e5a40e07a1bfe320`;
+the 169,714-byte Parquet evidence has SHA-256
+`e975bd3d6d99fb7455f437d7c48545383de2ec51b2d5c90010a6a7cbfc9d52e3`.
+An independent PyArrow pass authenticated all 20,480 rows, 40 arm groups, and
+17 physical fields. Evidence is rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-global-page-mode-frontier/f3b43e4350839d96999e9bdaefd4cb1f6ad23870/v26-global-page-modes-20260903T081207Z-a0001/`.
+The instance published its terminal and was terminated.
+
+This establishes within-page multimodality as causal but rejects the tested
+2/4/8/16 ladder as sufficient concentration. The next cheap falsifier extends
+the same query-independent ladder to 32 and 64 modes and must pass at no more
+than 256 pages before any row-code latency or full-suite work. D3 and release
+claims remain fenced.
