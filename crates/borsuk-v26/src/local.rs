@@ -2758,7 +2758,7 @@ pub fn select_v26_pq16_global_pages_from_arrow(
         })
         .collect::<Result<Vec<_>>>()?;
     exact.sort_unstable();
-    let assignment_limit = exact.len().min(128);
+    let assignment_limit = exact.len();
     let mut assignment_ordinals = exact[..assignment_limit]
         .iter()
         .map(|row| u32::try_from(row.source_ordinal).unwrap())
@@ -5180,10 +5180,20 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let assignments = (0_u64..2_113)
-            .map(|source_ordinal| crate::V26RowPages {
-                source_ordinal,
-                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
-                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
+            .map(|source_ordinal| {
+                let (primary_page, replica_page) = if source_ordinal < 256 {
+                    (0, 1)
+                } else {
+                    (
+                        2 + u32::try_from(source_ordinal % 8).unwrap(),
+                        10 + u32::try_from(source_ordinal % 8).unwrap(),
+                    )
+                };
+                crate::V26RowPages {
+                    source_ordinal,
+                    primary_page,
+                    replica_page,
+                }
             })
             .collect::<Vec<_>>();
         let index = crate::build_v26_pq16_packed_index(&rows, &assignments).unwrap();
