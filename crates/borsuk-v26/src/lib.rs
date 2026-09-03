@@ -1493,6 +1493,19 @@ fn prepare_v26_pq_tables(codebook: &V26PqCodebook, query: &[f32; 96]) -> Result<
     Ok(tables)
 }
 
+#[inline]
+fn v26_pq16_four_row_distances(tables: &[[f32; 256]], codes: &[[u8; 16]; 4]) -> [f32; 4] {
+    debug_assert_eq!(tables.len(), 16);
+    let mut distances = [0.0_f32; 4];
+    for subspace in 0..16 {
+        distances[0] += tables[subspace][usize::from(codes[0][subspace])];
+        distances[1] += tables[subspace][usize::from(codes[1][subspace])];
+        distances[2] += tables[subspace][usize::from(codes[2][subspace])];
+        distances[3] += tables[subspace][usize::from(codes[3][subspace])];
+    }
+    distances
+}
+
 fn build_v26_pq_page_occurrences(
     rows: &[V26ConstructionRow],
     assignments: &[V26RowPages],
@@ -2522,7 +2535,32 @@ pub(crate) fn rank_v26_pq16_global_candidates(
                 let first_row = block_index
                     .checked_mul(ROWS_PER_BLOCK)
                     .ok_or_else(|| invalid("V26 global PQ16 row offset overflows"))?;
-                for (row_offset, code) in block.as_chunks::<CODE_BYTES>().0.iter().enumerate() {
+                let (groups, remainder) = block.as_chunks::<{ CODE_BYTES * 4 }>();
+                for (group_index, group) in groups.iter().enumerate() {
+                    let codes: &[[u8; CODE_BYTES]; 4] =
+                        group.as_chunks::<CODE_BYTES>().0.try_into().unwrap();
+                    let distances = v26_pq16_four_row_distances(&tables, codes);
+                    for (row_index, distance) in distances.into_iter().enumerate() {
+                        if !distance.is_finite() {
+                            return Err(invalid("V26 global PQ16 distance differs"));
+                        }
+                        let row_offset = group_index * 4 + row_index;
+                        let value = V26PqRankedRow {
+                            source_ordinal: u64::try_from(first_row + row_offset).unwrap(),
+                            distance,
+                        };
+                        if ranked.len() < ranked_row_limit {
+                            ranked.push(value);
+                        } else if value < *ranked.peek().unwrap() {
+                            ranked.pop();
+                            ranked.push(value);
+                        }
+                    }
+                }
+                let first_remainder_row = groups.len() * 4;
+                for (remainder_index, code) in
+                    remainder.as_chunks::<CODE_BYTES>().0.iter().enumerate()
+                {
                     let distance = code
                         .iter()
                         .enumerate()
@@ -2532,7 +2570,10 @@ pub(crate) fn rank_v26_pq16_global_candidates(
                         return Err(invalid("V26 global PQ16 distance differs"));
                     }
                     let value = V26PqRankedRow {
-                        source_ordinal: u64::try_from(first_row + row_offset).unwrap(),
+                        source_ordinal: u64::try_from(
+                            first_row + first_remainder_row + remainder_index,
+                        )
+                        .unwrap(),
                         distance,
                     };
                     if ranked.len() < ranked_row_limit {
@@ -5446,6 +5487,35 @@ mod tests {
         );
         assert_eq!(selection.exact_rows_read, 2_048);
         assert_eq!(selection.page_body_reads, 0);
+    }
+
+    #[test]
+    fn v26_fast_smoke_pq16_four_row_kernel_is_bit_exact_to_scalar_order() {
+        // Break caught: batching rows changes floating-point addition order, tie ordering, or
+        // ignores a code byte while optimizing the 9.99M-row global ADC scan.
+        let tables = (0..16)
+            .map(|subspace| {
+                std::array::from_fn(|centroid| {
+                    ((subspace * 257 + centroid * 17) as f32 - 12_345.0) / 8_192.0
+                })
+            })
+            .collect::<Vec<_>>();
+        let codes = [
+            std::array::from_fn(|subspace| (subspace * 17) as u8),
+            std::array::from_fn(|subspace| 255_u8.wrapping_sub((subspace * 13) as u8)),
+            [0_u8; 16],
+            [255_u8; 16],
+        ];
+        let expected = codes.map(|code| {
+            code.iter()
+                .enumerate()
+                .map(|(subspace, code)| tables[subspace][usize::from(*code)])
+                .sum::<f32>()
+        });
+
+        let actual = super::v26_pq16_four_row_distances(&tables, &codes);
+
+        assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
     }
 
     #[test]
