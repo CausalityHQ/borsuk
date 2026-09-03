@@ -2282,3 +2282,49 @@ trade rather than a relaxed recall claim. The next gate must show that the fixed
 128-page PQ16 frontier, bounded top-512 exact rerank, ten-page selection, and
 local Arrow cold-vector reads remain below 15 milliseconds p99 at native scale.
 D3 and competitor claims remain fenced.
+
+### Dual PQ-key router reaches the recall boundary but fails oracle and latency
+
+Source commit `ba509c88e4ce83a0d67f74756694093cee02f6de` evaluated the
+fixed two-plane PQ16 key router once on `causality` Spot instance
+`i-0aa96cac1548b0449` (`c7gd.4xlarge`, `eu-central-1a`). The two key planes
+were fixed at code-byte pairs `(0,8)` and `(4,12)`, the per-plane arm ladder was
+128/512/1,536, each arm retained 2,048 rows for exact Arrow reranking, and every
+query selected exactly ten pages. The run authenticated the complete
+9,990,000-row serving bundle, 512-query Parquet, and 512-row truth Parquet before
+evaluating the fixed first 32 queries. It read zero page bodies and emitted 96
+samples as Parquet. Truth was joined only after page selection.
+
+The aggregate/minimum/oracle-attainment ppm triples for 128, 512, and 1,536
+keys per plane were respectively 809,375/300,000/809,375;
+925,000/400,000/925,000; and 975,000/800,000/975,000. Maximum query latency was
+22,383,494; 30,742,644; and 47,115,175 ns. Thus the widest arm exactly reached
+the 975,000 aggregate and 800,000 minimum-query gates, but failed the 995,000
+oracle-attainment gate and exceeded the 15,000,000-ns latency gate by 3.14x.
+Its per-query unique-row inventory ranged from 510,939 to 825,730, showing that
+the current two-plane key union is both too broad and still eight total hits
+short across the 320 ground-truth opportunities.
+
+The complete 100M-row resident projection is 2,938,017,816 bytes, 283,207,656
+bytes below 3 GiB. Scientific execution took 21 seconds, peaked at 500,703,232
+bytes RSS, and observed zero memory PSI and zero swap growth. The 11,688,328-byte
+binary has SHA-256
+`2e1c26d700fa832db58ba3d91a3a3d48858073b2716b09b4e3ee905f6318947c`.
+The 3,493-byte canonical result has SHA-256
+`4988ffd398f00f04e3f20ec6ef79ec97bc0773186c04ef0826c9807c3bf8c32b`;
+the 5,421-byte Parquet evidence has SHA-256
+`4741dfbf59f15dff373a354b4cdc4d936dfdf5baa8d0c65481f0532520828b14`.
+The two cross-language Arrow planes are 2,819,458 and 267,318,994 bytes with
+SHA-256 `a9121720c6cd7c860b0c62d1d5049b11903538ffe10a32ac7d82326df38b8b99`
+and `b553bb3f2de1a80ac17088e78f889f4056a060af2c758ab81c40f8a9785e578d`.
+All artifacts are rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-pq-key/ba509c88e4ce83a0d67f74756694093cee02f6de/v26-dual-pq-key-preflight-20260903T070022Z-a0002/`.
+The instance published its terminal and is terminated.
+
+This rejects the tested two-plane key ranking and top-2,048 reducer, not PQ16
+itself: prior global PQ16 evidence retains a perfect-recall frontier at wider
+rank depth. Memory is no longer causal. The next no-spend work must improve
+candidate concentration and replace full 65,536-key sorting with a bounded
+selection kernel under the fast synthetic gate. No further Spot run is allowed
+until that gate predicts both fewer candidate rows and a credible path below
+15 ms. Recall gates remain unchanged; D3 and release claims remain fenced.
