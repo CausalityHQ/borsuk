@@ -28,8 +28,15 @@ const QUERY_FLOOR_PPM: u32 = 800_000;
 const FLOOR_COMPLIANCE_GATE_PPM: u32 = 997_500;
 const P99_LATENCY_GATE_NS: u64 = 15_000_000;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pq4QualifyMode {
+    Development,
+    SealedHoldout,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Pq4QualifyRequest {
+    mode: Pq4QualifyMode,
     snapshot: PathBuf,
     query_parquet: PathBuf,
     truth_parquet: PathBuf,
@@ -109,13 +116,17 @@ fn parse_pq4_qualify_args(
         .next()
         .ok_or_else(|| "program name is absent".to_owned())?;
     let mut values = BTreeMap::new();
-    let mut execute = false;
+    let mut mode = None;
     while let Some(flag) = arguments.next() {
-        if flag == "--execute-sealed-holdout" {
-            if execute {
-                return Err("duplicate --execute-sealed-holdout".to_owned());
+        if flag == "--execute-sealed-holdout" || flag == "--execute-development" {
+            let next = if flag == "--execute-sealed-holdout" {
+                Pq4QualifyMode::SealedHoldout
+            } else {
+                Pq4QualifyMode::Development
+            };
+            if mode.replace(next).is_some() {
+                return Err("duplicate PQ4 execution mode".to_owned());
             }
-            execute = true;
             continue;
         }
         if !flag.starts_with("--") {
@@ -128,7 +139,9 @@ fn parse_pq4_qualify_args(
             return Err(format!("invalid or duplicate flag {flag}"));
         }
     }
+    let mode = mode.ok_or_else(|| "PQ4 execution mode is absent".to_owned())?;
     let request = Pq4QualifyRequest {
+        mode,
         snapshot: PathBuf::from(take(&mut values, "--snapshot")?),
         query_parquet: PathBuf::from(take(&mut values, "--query-parquet")?),
         truth_parquet: PathBuf::from(take(&mut values, "--truth-parquet")?),
@@ -143,7 +156,9 @@ fn parse_pq4_qualify_args(
         truth_sha256: digest(&mut values, "--truth-sha256")?,
         truth_bytes: positive(&mut values, "--truth-bytes")?,
         source_commit: take(&mut values, "--source-commit")?,
-        query_start: positive(&mut values, "--query-start")?,
+        query_start: take(&mut values, "--query-start")?
+            .parse::<u32>()
+            .map_err(|_| "invalid --query-start".to_owned())?,
         query_count: positive(&mut values, "--query-count")?,
         candidate_depth: positive(&mut values, "--candidate-depth")?,
         query_threads: positive(&mut values, "--query-threads")?,
@@ -151,8 +166,17 @@ fn parse_pq4_qualify_args(
         admission_timeout_ms: positive(&mut values, "--admission-timeout-ms")?,
         warmup_queries: positive(&mut values, "--warmup-queries")?,
     };
-    if !execute
-        || !values.is_empty()
+    let mode_matches = match request.mode {
+        Pq4QualifyMode::SealedHoldout => {
+            request.query_start == 512 && request.query_count == 480 && request.query_threads == 4
+        }
+        Pq4QualifyMode::Development => {
+            request.query_start == 0
+                && request.query_count == 512
+                && [4, 8, 16].contains(&request.query_threads)
+        }
+    };
+    if !values.is_empty()
         || request.source_commit.len() != 40
         || !request
             .source_commit
@@ -163,10 +187,8 @@ fn parse_pq4_qualify_args(
         || request.truth_parquet.as_os_str().is_empty()
         || request.result_json.as_os_str().is_empty()
         || request.samples_parquet.as_os_str().is_empty()
-        || request.query_start != 512
-        || request.query_count != 480
+        || !mode_matches
         || request.candidate_depth != 3_072
-        || request.query_threads != 4
         || request.memory_budget_bytes != 3_221_225_472
         || request.admission_timeout_ms != 1_000
         || request.warmup_queries != 32
@@ -176,10 +198,13 @@ fn parse_pq4_qualify_args(
     Ok(request)
 }
 
-fn summarize_holdout(samples: &[HoldoutSample]) -> Result<HoldoutSummary, String> {
+fn summarize_holdout(
+    samples: &[HoldoutSample],
+    first_query_ordinal: u32,
+) -> Result<HoldoutSummary, String> {
     if samples.is_empty()
         || samples.iter().enumerate().any(|(index, sample)| {
-            sample.query_ordinal != 512 + u32::try_from(index).unwrap()
+            sample.query_ordinal != first_query_ordinal + u32::try_from(index).unwrap()
                 || sample.hits > 10
                 || sample.recall_ppm != sample.hits * 100_000
                 || sample.latency_ns == 0
@@ -536,7 +561,7 @@ fn run() -> Result<(), String> {
             latency_ns,
         });
     }
-    let summary = summarize_holdout(&samples)?;
+    let summary = summarize_holdout(&samples, request.query_start)?;
     write_samples(&request.samples_parquet, &samples)?;
     let (samples_sha256, samples_bytes) = sha256_file(&request.samples_parquet)?;
     let result = BTreeMap::from([
@@ -587,7 +612,10 @@ fn run() -> Result<(), String> {
         ("samples_sha256", serde_json::json!(samples_sha256)),
         (
             "schema",
-            serde_json::json!("borsuk-v26-pq4-sealed-holdout-v1"),
+            serde_json::json!(match request.mode {
+                Pq4QualifyMode::Development => "borsuk-v26-pq4-development-v1",
+                Pq4QualifyMode::SealedHoldout => "borsuk-v26-pq4-sealed-holdout-v1",
+            }),
         ),
         (
             "snapshot_manifest_bytes",
@@ -685,6 +713,11 @@ mod tests {
         .to_vec()
     }
 
+    fn set_flag(arguments: &mut [String], flag: &str, value: &str) {
+        let index = arguments.iter().position(|item| item == flag).unwrap();
+        arguments[index + 1] = value.to_owned();
+    }
+
     #[test]
     fn pq4_qualify_cli_is_explicit_local_parquet_only_and_freezes_the_holdout() {
         let request = parse_pq4_qualify_args(arguments()).unwrap();
@@ -712,6 +745,34 @@ mod tests {
         let mut missing_execute = arguments();
         missing_execute.pop();
         assert!(parse_pq4_qualify_args(missing_execute).is_err());
+    }
+
+    #[test]
+    fn pq4_qualify_development_mode_is_burned_and_freezes_the_thread_ladder() {
+        for threads in [4, 8, 16] {
+            let mut development = arguments();
+            set_flag(&mut development, "--query-start", "0");
+            set_flag(&mut development, "--query-count", "512");
+            set_flag(&mut development, "--query-threads", &threads.to_string());
+            *development.last_mut().unwrap() = "--execute-development".to_owned();
+            let request = parse_pq4_qualify_args(development).unwrap();
+            assert_eq!(request.query_start, 0);
+            assert_eq!(request.query_count, 512);
+            assert_eq!(request.query_threads, threads);
+        }
+
+        for threads in [1, 2, 3, 5, 32] {
+            let mut development = arguments();
+            set_flag(&mut development, "--query-start", "0");
+            set_flag(&mut development, "--query-count", "512");
+            set_flag(&mut development, "--query-threads", &threads.to_string());
+            *development.last_mut().unwrap() = "--execute-development".to_owned();
+            assert!(parse_pq4_qualify_args(development).is_err());
+        }
+
+        let mut leaked_holdout = arguments();
+        *leaked_holdout.last_mut().unwrap() = "--execute-development".to_owned();
+        assert!(parse_pq4_qualify_args(leaked_holdout).is_err());
     }
 
     fn sample(query_ordinal: u32, hits: u32, latency_ns: u64) -> HoldoutSample {
@@ -806,7 +867,7 @@ mod tests {
         samples[399].latency_ns = 15_000_000;
         samples[0].hits = 9;
         samples[0].recall_ppm = 900_000;
-        let summary = summarize_holdout(&samples).unwrap();
+        let summary = summarize_holdout(&samples, 512).unwrap();
         assert_eq!(summary.aggregate_recall_ppm, 999_750);
         assert_eq!(summary.floor_compliance_ppm, 1_000_000);
         assert_eq!(summary.minimum_recall_ppm, 900_000);
@@ -818,12 +879,12 @@ mod tests {
         quality_failure[0].recall_ppm = 700_000;
         quality_failure[1].hits = 7;
         quality_failure[1].recall_ppm = 700_000;
-        assert!(!summarize_holdout(&quality_failure).unwrap().passed);
+        assert!(!summarize_holdout(&quality_failure, 512).unwrap().passed);
 
         let mut latency_failure = samples;
         for row in latency_failure.iter_mut().skip(395) {
             row.latency_ns = 15_000_001;
         }
-        assert!(!summarize_holdout(&latency_failure).unwrap().passed);
+        assert!(!summarize_holdout(&latency_failure, 512).unwrap().passed);
     }
 }
