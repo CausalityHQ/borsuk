@@ -306,6 +306,16 @@ pub struct V26Pq16ServingBuildRequest {
     pub output_uri_prefix: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26Pq4FastBuildRequest {
+    pub construction_rows: V26LocalObjectPath,
+    pub page_assignments: V26LocalObjectPath,
+    pub layout_terminal: V26LocalObjectPath,
+    pub expected_rows: u64,
+    pub output_dir: PathBuf,
+    pub output_uri_prefix: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct V26Pq16ServingBuildOutput {
@@ -4799,7 +4809,10 @@ fn validate_v26_pq4_fast_manifest(manifest: &V26Pq4FastManifest) -> Result<()> {
     }
     let expected_blocks = manifest.row_count.div_ceil(32);
     let expected_padding = u32::try_from(expected_blocks * 32 - manifest.row_count).unwrap();
-    if manifest.schema != "borsuk-v26-pq4-fast-manifest-v1"
+    if generation.is_empty()
+        || !manifest.codebook.uri.ends_with("/pq4-fast-codebook.arrow")
+        || !manifest.codes.uri.ends_with("/pq4-fast-codes.arrow")
+        || manifest.schema != "borsuk-v26-pq4-fast-manifest-v1"
         || manifest.row_count == 0
         || manifest.row_count > u64::from(u32::MAX)
         || manifest.block_count != expected_blocks
@@ -6586,6 +6599,89 @@ fn read_construction_rows(path: &Path, expected_rows: u64) -> Result<Vec<V26Cons
     Ok(rows)
 }
 
+pub fn run_v26_pq4_fast_build(request: &V26Pq4FastBuildRequest) -> Result<V26Pq4FastManifest> {
+    if request.expected_rows == 0
+        || request.expected_rows > u64::from(u32::MAX)
+        || request.output_dir.exists()
+        || !request.output_uri_prefix.starts_with("s3://")
+        || !request.output_uri_prefix.ends_with('/')
+    {
+        return Err(invalid("V26 PQ4 build request differs"));
+    }
+    authenticate(&request.construction_rows, "construction-parquet")?;
+    authenticate(&request.page_assignments, "page-assignments-parquet")?;
+    let terminal = read_layout_terminal(&request.layout_terminal)?;
+    let generation = &terminal.authority.generation;
+    if terminal.row_count != request.expected_rows
+        || terminal.authority.expected_rows != request.expected_rows
+        || terminal.authority.construction_rows != request.construction_rows.identity
+        || !terminal
+            .outputs
+            .iter()
+            .any(|identity| identity == &request.page_assignments.identity)
+        || [
+            &request.construction_rows.identity,
+            &request.page_assignments.identity,
+            &request.layout_terminal.identity,
+        ]
+        .iter()
+        .any(|identity| identity.generation != *generation)
+    {
+        return Err(invalid("V26 PQ4 build authority differs"));
+    }
+    let rows = read_construction_rows(&request.construction_rows.path, request.expected_rows)?;
+    let assignments = read_assignments(
+        &request.page_assignments.path,
+        i64::try_from(request.expected_rows)
+            .map_err(|_| invalid("V26 PQ4 assignment count overflows"))?,
+    )?;
+    if rows
+        .iter()
+        .zip(&assignments)
+        .enumerate()
+        .any(|(ordinal, (row, assignment))| {
+            row.source_ordinal != ordinal as u64
+                || assignment.source_ordinal != ordinal as u64
+                || assignment.primary_page == assignment.replica_page
+                || assignment.primary_page >= terminal.page_count
+                || assignment.replica_page >= terminal.page_count
+        })
+    {
+        return Err(invalid("V26 PQ4 source order differs"));
+    }
+    let vectors = rows.iter().map(|row| row.vector).collect::<Vec<_>>();
+    let index = crate::build_v26_pq4_fast_index(&vectors)?;
+    fs::create_dir(&request.output_dir)
+        .map_err(|error| invalid(&format!("V26 PQ4 output directory failed: {error}")))?;
+    let result = (|| {
+        let manifest = write_v26_pq4_fast_index_arrow(
+            &request.output_dir,
+            &index,
+            &request.construction_rows.identity,
+            &request.page_assignments.identity,
+            &request.layout_terminal.identity,
+            &request.output_uri_prefix,
+        )?;
+        fs::write(
+            request.output_dir.join("pq4-fast-manifest.json"),
+            canonical_v26_pq4_fast_manifest_bytes(&manifest)?,
+        )
+        .map_err(|error| invalid(&format!("V26 PQ4 manifest write failed: {error}")))?;
+        Ok(manifest)
+    })();
+    if result.is_err() {
+        for name in [
+            "pq4-fast-codebook.arrow",
+            "pq4-fast-codes.arrow",
+            "pq4-fast-manifest.json",
+        ] {
+            let _ = fs::remove_file(request.output_dir.join(name));
+        }
+        let _ = fs::remove_dir(&request.output_dir);
+    }
+    result
+}
+
 fn v26_pq16_serving_output_names() -> [&'static str; 7] {
     [
         "pq16-codebook.arrow",
@@ -7110,24 +7206,24 @@ mod tests {
     use super::{
         V26ArrowColdVectors, V26CandidateCoverRequest, V26CentroidRouterRequest,
         V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
-        V26LocalObjectPath, V26PageModeRouterRequest, V26Pq4FastManifest, V26Pq8CoverRequest,
-        V26Pq16GlobalQualityResult, V26Pq16GlobalQualitySample, V26Pq16RerankRequest,
-        V26Pq16ServingBuildRequest, V26Pq16ServingRuntimeRequest, V26PqWidthLadderRequest,
-        V26ServingLatencySample, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
-        canonical_v26_pq4_fast_manifest_bytes, canonical_v26_pq16_serving_benchmark_result_bytes,
-        evaluate_v26_exact_global, evaluate_v26_layout_oracle,
-        evaluate_v26_layout_oracle_with_page_budget, open_reader, open_v26_pq16_serving_runtime,
-        output_identity, read_assignments, read_evaluation_queries, read_evaluation_truth,
-        read_layout_terminal, read_v26_pq4_fast_index_arrow, read_v26_pq16_index_arrow,
-        run_v26_candidate_row_cover, run_v26_centroid_router,
+        V26LocalObjectPath, V26PageModeRouterRequest, V26Pq4FastBuildRequest, V26Pq4FastManifest,
+        V26Pq8CoverRequest, V26Pq16GlobalQualityResult, V26Pq16GlobalQualitySample,
+        V26Pq16RerankRequest, V26Pq16ServingBuildRequest, V26Pq16ServingRuntimeRequest,
+        V26PqWidthLadderRequest, V26ServingLatencySample, V26TreeRouterRequest,
+        V26TruthBuildRequest, assignments_batch, canonical_v26_pq4_fast_manifest_bytes,
+        canonical_v26_pq16_serving_benchmark_result_bytes, evaluate_v26_exact_global,
+        evaluate_v26_layout_oracle, evaluate_v26_layout_oracle_with_page_budget, open_reader,
+        open_v26_pq16_serving_runtime, output_identity, read_assignments, read_evaluation_queries,
+        read_evaluation_truth, read_layout_terminal, read_v26_pq4_fast_index_arrow,
+        read_v26_pq16_index_arrow, run_v26_candidate_row_cover, run_v26_centroid_router,
         run_v26_global_centroid_frontier_diagnostic, run_v26_global_page_mode_frontier_diagnostic,
         run_v26_layout_build, run_v26_page_mode_router, run_v26_pq_width_ladder,
-        run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank, run_v26_pq16_serving_build,
-        run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
-        select_v26_pq16_global_pages_from_arrow, select_v26_pq16_pages_from_arrow,
-        v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
-        v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
-        write_v26_pq4_fast_index_arrow, write_v26_pq16_index_arrow,
+        run_v26_pq4_fast_build, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
+        run_v26_pq16_serving_build, run_v26_tree_router, run_v26_tree_router_diagnostic,
+        run_v26_truth_build, select_v26_pq16_global_pages_from_arrow,
+        select_v26_pq16_pages_from_arrow, v26_construction_schema, v26_page_assignments_schema,
+        v26_query_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
+        write_v26_cold_vectors_arrow, write_v26_pq4_fast_index_arrow, write_v26_pq16_index_arrow,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -8559,9 +8655,14 @@ mod tests {
     }
 
     fn pq4_authority(role: &str, marker: char) -> V26ObjectIdentity {
+        let name = match role {
+            "pq4-fast-codebook-arrow" => "output/pq4-fast-codebook.arrow",
+            "pq4-fast-codes-arrow" => "output/pq4-fast-codes.arrow",
+            _ => role,
+        };
         V26ObjectIdentity {
             role: role.to_owned(),
-            uri: format!("s3://v26-pq4-test/{role}"),
+            uri: format!("s3://v26-pq4-test/{name}"),
             digest_algorithm: "sha256".to_owned(),
             digest: marker.to_string().repeat(64),
             encoded_bytes: 1,
@@ -8658,6 +8759,47 @@ mod tests {
             mutate(&mut drifted);
             assert!(canonical_v26_pq4_fast_manifest_bytes(&drifted).is_err());
         }
+    }
+
+    #[test]
+    fn v26_pq4_arrow_builder_binds_only_query_independent_inputs() {
+        // Break caught: PQ4 construction admits query/truth/page data, loses the layout receipt
+        // binding, rereads source order inconsistently, or emits an unauthenticated manifest.
+        let (temp, evaluation) = evaluation_fixture_with_rows(1_024);
+        let output_dir = temp.path().join("pq4-fast");
+        let request = V26Pq4FastBuildRequest {
+            construction_rows: identity(
+                "construction-parquet",
+                &temp.path().join("construction.parquet"),
+            ),
+            page_assignments: evaluation.page_assignments.clone(),
+            layout_terminal: evaluation.layout_terminal.clone(),
+            expected_rows: 1_024,
+            output_dir: output_dir.clone(),
+            output_uri_prefix: "s3://v26-output/pq4-fast-a0001/".to_owned(),
+        };
+
+        let output = run_v26_pq4_fast_build(&request).unwrap();
+        assert_eq!(output.row_count, 1_024);
+        assert_eq!(output.construction_rows, request.construction_rows.identity);
+        assert_eq!(output.page_assignments, request.page_assignments.identity);
+        assert_eq!(output.layout_terminal, request.layout_terminal.identity);
+        assert_eq!(
+            fs::read(output_dir.join("pq4-fast-manifest.json")).unwrap(),
+            canonical_v26_pq4_fast_manifest_bytes(&output).unwrap()
+        );
+        assert_eq!(
+            read_v26_pq4_fast_index_arrow(&output_dir, &output)
+                .unwrap()
+                .row_count,
+            1_024
+        );
+
+        let mut drifted = request.clone();
+        drifted.page_assignments.identity.digest = "f".repeat(64);
+        drifted.output_dir = temp.path().join("rejected-pq4-fast");
+        assert!(run_v26_pq4_fast_build(&drifted).is_err());
+        assert!(!drifted.output_dir.exists());
     }
 
     #[test]
