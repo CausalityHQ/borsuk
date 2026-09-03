@@ -8,8 +8,11 @@ import unittest
 from scripts.run_v27_s3_page_campaign import (
     S3LatencyProfile,
     SpotTarget,
+    V27QualitySpotPlan,
     V27QueryEvidence,
     V27ReducedSpotPlan,
+    V27SpotArtifact,
+    build_v27_quality_spot_specs,
     build_v27_spot_specs,
     preflight_v27_reduced_campaign,
     project_v27_query_latency,
@@ -241,6 +244,73 @@ class V27ReducedSpotTests(unittest.TestCase):
             )
         self.assertEqual(terminated, ["i-0123456789abcdef0"])
 
+
+class V27QualitySpotTests(unittest.TestCase):
+    def plan(self) -> V27QualitySpotPlan:
+        def artifact(role: str, basename: str) -> V27SpotArtifact:
+            return V27SpotArtifact(
+                role=role,
+                uri=f"s3://bucket/input/{basename}",
+                sha256="d" * 64,
+                encoded_bytes=7,
+                basename=basename,
+            )
+
+        return V27QualitySpotPlan(
+            run_id="v27-quality-20260903T120000Z",
+            source_commit="a" * 40,
+            source_archive=artifact("source-archive", "source.tar.zst"),
+            train=artifact("train", "train-00000000.parquet"),
+            query=artifact("query", "test.parquet"),
+            roots=artifact("roots", "roots.arrow"),
+            leaves=artifact("leaves", "leaves.arrow"),
+            postings=artifact("postings", "postings.parquet"),
+            modes=artifact("modes", "modes.arrow"),
+            manifest=artifact("manifest", "pages.json"),
+            s3_page_prefix="s3://bucket/index/pages",
+            output_prefix="s3://bucket/quality/",
+            root_beam=8,
+            leaf_beam=128,
+            page_count=10,
+        )
+
+    def test_v27_quality_spot_reads_only_bounded_inputs_and_selected_s3_pages(self) -> None:
+        # Break caught: the quality worker downloads the complete page corpus or a second train
+        # shard instead of exercising the real selected-page S3 boundary.
+        spec = build_v27_quality_spot_specs(
+            self.plan(),
+            (
+                SpotTarget("eu-central-1a", "subnet-a"),
+                SpotTarget("eu-central-1b", "subnet-b"),
+            ),
+        )[0]
+        script = base64.b64decode(spec["UserData"]).decode()
+        syntax = subprocess.run(
+            ["bash", "-n"], input=script, text=True, capture_output=True, check=False
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        self.assertIn("run_v27_reduced_quality.py --execute", script)
+        self.assertIn("--s3-page-prefix s3://bucket/index/pages", script)
+        self.assertIn("--page-count 10", script)
+        self.assertIn("numpy==2.4.2 pyarrow==24.0.0", script)
+        self.assertNotIn("aws s3 sync", script)
+        self.assertNotIn("train-00000001.parquet", script)
+        self.assertNotIn("index/pages/ --recursive", script)
+        for basename in (
+            "source.tar.zst",
+            "train-00000000.parquet",
+            "test.parquet",
+            "roots.arrow",
+            "leaves.arrow",
+            "postings.parquet",
+            "modes.arrow",
+            "pages.json",
+        ):
+            self.assertEqual(script.count(f'/{basename}"'), 1)
+        self.assertLess(
+            script.index('put_once "$root/quality.json" quality.json'),
+            script.index('put_once "$root/COMPLETE.json" COMPLETE.json'),
+        )
 
 if __name__ == "__main__":
     unittest.main()

@@ -83,6 +83,38 @@ class V27ReducedSpotPlan:
     page_rows: int
 
 
+@dataclass(frozen=True)
+class V27SpotArtifact:
+    """One immutable object staged by a Spot worker."""
+
+    role: str
+    uri: str
+    sha256: str
+    encoded_bytes: int
+    basename: str
+
+
+@dataclass(frozen=True)
+class V27QualitySpotPlan:
+    """Exact authority for one 32-query reduced V27 quality gate."""
+
+    run_id: str
+    source_commit: str
+    source_archive: V27SpotArtifact
+    train: V27SpotArtifact
+    query: V27SpotArtifact
+    roots: V27SpotArtifact
+    leaves: V27SpotArtifact
+    postings: V27SpotArtifact
+    modes: V27SpotArtifact
+    manifest: V27SpotArtifact
+    s3_page_prefix: str
+    output_prefix: str
+    root_beam: int
+    leaf_beam: int
+    page_count: int
+
+
 def _real_number(value: object) -> bool:
     return type(value) in {int, float} and math.isfinite(float(value))
 
@@ -272,6 +304,158 @@ put_once "$root/worker.log" worker.log
 put_once "$root/COMPLETE.json" COMPLETE.json
 terminal=complete
 """
+
+
+def _validate_spot_artifact(artifact: V27SpotArtifact, role: str, basename: str) -> None:
+    if (
+        artifact.role != role
+        or artifact.basename != basename
+        or not artifact.uri.startswith("s3://")
+        or not artifact.uri.endswith("/" + basename)
+        or not _digest(artifact.sha256, 64)
+        or type(artifact.encoded_bytes) is not int
+        or artifact.encoded_bytes <= 0
+    ):
+        raise ValueError(f"V27 quality {role} authority differs")
+
+
+def _quality_worker_script(plan: V27QualitySpotPlan) -> str:
+    if (
+        type(plan.run_id) is not str
+        or not plan.run_id.startswith("v27-quality-")
+        or not _digest(plan.source_commit, 40)
+        or not plan.s3_page_prefix.startswith("s3://")
+        or plan.s3_page_prefix.endswith("/")
+        or not plan.output_prefix.startswith("s3://")
+        or not plan.output_prefix.endswith("/")
+        or plan.root_beam <= 0
+        or plan.leaf_beam <= 0
+        or not 1 <= plan.page_count <= MAX_GETS
+    ):
+        raise ValueError("V27 quality Spot plan differs")
+    expected = (
+        (plan.source_archive, "source-archive", "source.tar.zst"),
+        (plan.train, "train", "train-00000000.parquet"),
+        (plan.query, "query", "test.parquet"),
+        (plan.roots, "roots", "roots.arrow"),
+        (plan.leaves, "leaves", "leaves.arrow"),
+        (plan.postings, "postings", "postings.parquet"),
+        (plan.modes, "modes", "modes.arrow"),
+        (plan.manifest, "manifest", "pages.json"),
+    )
+    for artifact, role, basename in expected:
+        _validate_spot_artifact(artifact, role, basename)
+    bucket, prefix = _split_s3(plan.output_prefix, prefix=True)
+    assignments = "\n".join(
+        f'{role.replace("-", "_")}="$root/{artifact.basename}"'
+        for artifact, role, _basename in expected
+    )
+    downloads = "\n".join(
+        f'aws s3 cp {shlex.quote(artifact.uri)} "${role.replace("-", "_")}" --only-show-errors\n'
+        f'test "$(stat -c %s "${role.replace("-", "_")}")" -eq {artifact.encoded_bytes}\n'
+        f'printf \'%s  %s\\n\' {artifact.sha256} "${role.replace("-", "_")}" | sha256sum --check --status'
+        for artifact, role, _basename in expected
+    )
+    artifact_flags = " ".join(
+        f'--{role} "${role}" --{role}-sha256 {artifact.sha256} --{role}-bytes {artifact.encoded_bytes}'
+        for artifact, role, _basename in expected[3:]
+    )
+    return f"""#!/bin/bash
+set -Eeuo pipefail
+umask 077
+shutdown --poweroff +90
+root=/opt/borsuk-v27-quality
+source_dir="$root/source"
+mkdir -p "$root" "$source_dir"
+{assignments}
+exec >"$root/worker.log" 2>&1
+bucket={shlex.quote(bucket)}
+prefix={shlex.quote(prefix)}
+terminal=failed
+put_once() {{ aws s3api put-object --bucket "$bucket" --key "$prefix$2" --body "$1" --if-none-match '*' --checksum-algorithm SHA256 >/dev/null; }}
+finish() {{
+  status=$?
+  trap - EXIT
+  set +e
+  if [[ "$terminal" != complete ]]; then
+    [[ -f "$root/quality.json" ]] && put_once "$root/quality.json" quality.json || true
+    printf '{{"claim_eligible":false,"run_id":"%s","schema":"borsuk-v27-quality-spot-terminal-v1","status":"failed","worker_status":%d}}\n' {shlex.quote(plan.run_id)} "$status" >"$root/FAILED.json"
+    put_once "$root/worker.log" worker.log || true
+    put_once "$root/FAILED.json" FAILED.json || true
+  fi
+  shutdown -h now
+}}
+trap finish EXIT
+dnf install -y gcc gcc-c++ python3 python3-pip tar zstd
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+python3 -m venv "$root/venv"
+"$root/venv/bin/pip" install --no-cache-dir numpy==2.4.2 pyarrow==24.0.0
+{downloads}
+tar --zstd -xf "$source_archive" -C "$source_dir"
+cd "$source_dir"
+test "$(cat .borsuk-source-commit)" = {plan.source_commit}
+/root/.cargo/bin/cargo build --release --locked -p borsuk --example v27_s3_qualify
+"$root/venv/bin/python" scripts/run_v27_reduced_quality.py --execute \
+  --train-parquet "$train" --train-sha256 {plan.train.sha256} --train-bytes {plan.train.encoded_bytes} \
+  --query-parquet "$query" --query-sha256 {plan.query.sha256} --query-bytes {plan.query.encoded_bytes} \
+  {artifact_flags} \
+  --qualifier-binary target/release/examples/v27_s3_qualify \
+  --s3-page-prefix {shlex.quote(plan.s3_page_prefix)} --root-beam {plan.root_beam} \
+  --leaf-beam {plan.leaf_beam} --page-count {plan.page_count} >"$root/quality.json"
+put_once "$root/quality.json" quality.json
+printf '{{"claim_eligible":false,"run_id":"%s","schema":"borsuk-v27-quality-spot-terminal-v1","source_commit":"%s","status":"complete"}}\n' {shlex.quote(plan.run_id)} {plan.source_commit} >"$root/COMPLETE.json"
+put_once "$root/worker.log" worker.log
+put_once "$root/COMPLETE.json" COMPLETE.json
+terminal=complete
+"""
+
+
+def build_v27_quality_spot_specs(
+    plan: V27QualitySpotPlan, targets: tuple[SpotTarget, ...]
+) -> list[dict[str, object]]:
+    """Build deterministic quality-worker Spot requests without page-corpus staging."""
+
+    script = _quality_worker_script(plan)
+    if (
+        len(targets) < 2
+        or len({target.availability_zone for target in targets}) != len(targets)
+        or len({target.subnet_id for target in targets}) != len(targets)
+    ):
+        raise ValueError("V27 Spot target inventory differs")
+    specs = []
+    for ordinal, target in enumerate(targets):
+        token = hashlib.sha256(f"{plan.run_id}:{target.subnet_id}:{ordinal}".encode()).hexdigest()
+        specs.append(
+            {
+                "ImageId": AMI_ID,
+                "InstanceType": INSTANCE_TYPE,
+                "MinCount": 1,
+                "MaxCount": 1,
+                "ClientToken": "v27-quality-" + token[:48],
+                "SubnetId": target.subnet_id,
+                "SecurityGroupIds": [SECURITY_GROUP_ID],
+                "IamInstanceProfile": {"Name": INSTANCE_PROFILE},
+                "InstanceInitiatedShutdownBehavior": "terminate",
+                "InstanceMarketOptions": {
+                    "MarketType": "spot",
+                    "SpotOptions": {
+                        "SpotInstanceType": "one-time",
+                        "InstanceInterruptionBehavior": "terminate",
+                    },
+                },
+                "UserData": base64.b64encode(script.encode()).decode(),
+                "TagSpecifications": [
+                    {
+                        "ResourceType": "instance",
+                        "Tags": [
+                            {"Key": "Name", "Value": plan.run_id},
+                            {"Key": "borsuk-purpose", "Value": "v27-reduced-quality"},
+                        ],
+                    }
+                ],
+            }
+        )
+    return specs
 
 
 def build_v27_spot_specs(
