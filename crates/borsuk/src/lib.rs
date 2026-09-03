@@ -182,6 +182,12 @@ mod v24_witness_postings;
 mod v24_witness_prepare;
 mod v27_s3_page;
 pub use v27_s3_page::{V27Page, V27PageIdentity, V27PageRow, decode_v27_page, encode_v27_page};
+mod v27_s3_router;
+pub use v27_s3_router::{
+    V27_LEAF_CENTROIDS, V27_LEAVES_PER_ROOT, V27_ROOT_CENTROIDS, V27Hierarchy,
+    V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V27HierarchyConfig, decode_v27_hierarchy,
+    encode_v27_hierarchy, fit_v27_hierarchy,
+};
 #[allow(
     dead_code,
     reason = "V24 pseudoquery qualification is wired incrementally by the committed plan"
