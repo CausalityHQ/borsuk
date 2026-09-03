@@ -4,6 +4,13 @@
 
 **Goal:** Replace the rejected inherited page layout with a deterministic query-independent dual-tree layout and reject it cheaply unless its exact eight-page oracle clears 975,000 ppm.
 
+**Native-scale amendment:** The full 9,990,000-row ladder rejected the
+eight-page arm and froze ten selected pages, which produced perfect 512-query
+oracle recall at capacity 8,192. Remaining serving work uses ten pages while
+retaining the 995,000 aggregate, 800,000 minimum, 3-GiB resident, and
+15-millisecond p99 gates. Historical eight-page tasks below remain evidence of
+the rejected arm.
+
 **Architecture:** A small V26 crate builds two balanced projection trees from construction vectors only and emits disjoint primary/replica pages using the smallest passing member of the preregistered `704, 768, 896, 1,024, 1,408, 2,048, 2,816, 4,096, 8,192` development ladder. A phase-separated truth builder exact-scores 512 immutable external test queries against the closed construction. A separate evaluator joins that truth only after construction closes, runs the layout oracle first, and permits exact-global scoring and tree routing only after their preceding gates pass.
 
 **Tech Stack:** Rust 2024, Arrow/Parquet 58.3, Rayon, SHA-256, Python 3.12 standard library, pinned Ruff 0.15.20, AWS EC2 Spot through profile `causality`.

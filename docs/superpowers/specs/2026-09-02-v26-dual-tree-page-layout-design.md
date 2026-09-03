@@ -146,6 +146,19 @@ than hiding it.
 
 ## Fail-fast evaluation
 
+### Native-scale page-budget amendment
+
+The authenticated 9,990,000-row capacity ladder showed that the original
+eight-page limit, rather than construction cost or memory, prevents the layout
+from reaching the quality target. At capacities 2,816, 4,096, and 8,192, the
+exact eight-page oracle reached 954,101, 959,765, and 979,492 ppm aggregate
+recall. The final 8,192-row layout reached 995,312 ppm with nine pages and
+1,000,000 ppm aggregate and minimum-query recall with ten pages. V26 therefore
+freezes ten selected pages for the serving candidate. This raises the resource
+budget; it does not relax the 995,000 aggregate, 800,000 minimum-query, or
+15-millisecond p99 gates. Earlier eight-page results remain historical evidence
+for the rejected arm, not a compatibility contract.
+
 The same frozen 262,144-row construction is reused by exact identity.
 Evaluation uses the first 512 immutable external test queries and a
 new exact-truth Parquet bound to those queries and that construction. Bulk data

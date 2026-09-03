@@ -447,7 +447,7 @@ fn v26_serving_latency_batch(samples: &[V26ServingLatencySample]) -> Result<Reco
 }
 
 fn require_v26_serving_selection(selection: &V26Pq16ServingSelection) -> Result<()> {
-    if selection.selected_pages.len() != 8
+    if selection.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
         || selection
             .selected_pages
             .windows(2)
@@ -2407,16 +2407,17 @@ pub fn select_v26_pq16_pages_from_arrow(
             Ok(vec![assignment.primary_page, assignment.replica_page])
         })
         .collect::<Result<Vec<_>>>()?;
-    let mut selected_pages = exact_v26_layout_oracle_pages(&ranked_assignments, 8)?;
+    let mut selected_pages =
+        exact_v26_layout_oracle_pages(&ranked_assignments, crate::V26_SERVING_PAGE_BUDGET)?;
     for page in candidate_pages {
-        if selected_pages.len() == 8 {
+        if selected_pages.len() == crate::V26_SERVING_PAGE_BUDGET {
             break;
         }
         if !selected_pages.contains(page) {
             selected_pages.push(*page);
         }
     }
-    if selected_pages.len() != 8 {
+    if selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET {
         return Err(invalid("V26 PQ16 Arrow serving page inventory differs"));
     }
     selected_pages.sort_unstable();
@@ -4779,6 +4780,7 @@ mod tests {
             select_v26_pq16_pages_from_arrow(&index, &candidate_pages, &query, &reader).unwrap();
 
         assert_eq!(result.selected_pages, reference.selected_pages);
+        assert_eq!(result.selected_pages.len(), 10);
         assert_eq!(result.exact_rows_read, 512);
         assert!(result.cold_batches_read > 0 && result.cold_batches_read <= 34);
         assert_eq!(result.cold_read_workers, 4);

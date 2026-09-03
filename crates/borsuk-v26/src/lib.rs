@@ -47,6 +47,7 @@ const V26_PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
 const V26_REPLICA_SEED: u64 = 0x5632_362d_5245_504c;
 pub(crate) const V26_PAGE_CAPACITY_LADDER: [u32; 9] =
     [704, 768, 896, 1_024, 1_408, 2_048, 2_816, 4_096, 8_192];
+pub(crate) const V26_SERVING_PAGE_BUDGET: usize = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V26Error(String);
@@ -70,7 +71,8 @@ pub fn exact_v26_layout_oracle_pages(
     page_budget: usize,
 ) -> Result<Vec<u32>> {
     if assignments.len() != 10
-        || page_budget != 8
+        || page_budget == 0
+        || page_budget > V26_SERVING_PAGE_BUDGET
         || assignments.iter().any(|pages| {
             pages.is_empty() || pages.len() > 2 || pages.windows(2).any(|pair| pair[0] >= pair[1])
         })
@@ -84,8 +86,8 @@ pub fn exact_v26_layout_oracle_pages(
         }
     }
     let maximum_pages = page_budget.min(page_masks.len());
-    let mut states = vec![None::<([u32; 8], usize)>; 1 << assignments.len()];
-    states[0] = Some(([0; 8], 0));
+    let mut states = vec![None::<([u32; V26_SERVING_PAGE_BUDGET], usize)>; 1 << assignments.len()];
+    states[0] = Some(([0; V26_SERVING_PAGE_BUDGET], 0));
     for (page, mask) in page_masks {
         for covered in (0..states.len()).rev() {
             let Some((mut pages, count)) = states[covered] else {
@@ -1889,16 +1891,17 @@ pub fn select_v26_pq16_packed_pages(
         .iter()
         .map(|(_, pages)| pages.to_vec())
         .collect::<Vec<_>>();
-    let mut selected_pages = exact_v26_layout_oracle_pages(&ranked_assignments, 8)?;
+    let mut selected_pages =
+        exact_v26_layout_oracle_pages(&ranked_assignments, V26_SERVING_PAGE_BUDGET)?;
     for page in candidate_pages {
-        if selected_pages.len() == 8 {
+        if selected_pages.len() == V26_SERVING_PAGE_BUDGET {
             break;
         }
         if !selected_pages.contains(page) {
             selected_pages.push(*page);
         }
     }
-    if selected_pages.len() != 8 {
+    if selected_pages.len() != V26_SERVING_PAGE_BUDGET {
         return Err(invalid("V26 PQ16 serving page inventory differs"));
     }
     selected_pages.sort_unstable();
@@ -4212,9 +4215,9 @@ mod tests {
     }
 
     #[test]
-    fn v26_pq16_serving_kernel_reads_exactly_512_cold_vectors_and_selects_eight_pages() {
+    fn v26_pq16_serving_kernel_reads_exactly_512_cold_vectors_and_selects_ten_pages() {
         // Break caught: serving exact-reranks an unbounded set, consults truth, reads page bodies,
-        // or changes the fixed depth-512/eight-page contract.
+        // or changes the fixed depth-512/ten-page contract.
         let rows = (0_u64..2_113)
             .map(|source_ordinal| {
                 let angle = source_ordinal as f32 / 2_048.0;
@@ -4244,7 +4247,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.exact_rows_read, 512);
-        assert_eq!(result.selected_pages.len(), 8);
+        assert_eq!(result.selected_pages.len(), super::V26_SERVING_PAGE_BUDGET);
         assert!(
             result
                 .selected_pages
@@ -4736,6 +4739,18 @@ mod tests {
         assert_eq!(
             exact_v26_layout_oracle_pages(&assignments, 8).unwrap(),
             vec![8, 9, 10, 11, 12, 14]
+        );
+    }
+
+    #[test]
+    fn v26_fast_layout_oracle_supports_the_frozen_ten_page_serving_budget() {
+        // Break caught: the full-scale perfect-recall budget is rejected or truncated at eight.
+        let assignments = (0_u32..10)
+            .map(|page| vec![page, page + 10])
+            .collect::<Vec<_>>();
+        assert_eq!(
+            exact_v26_layout_oracle_pages(&assignments, 10).unwrap(),
+            (0_u32..10).collect::<Vec<_>>()
         );
     }
 

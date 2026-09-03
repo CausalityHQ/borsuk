@@ -2246,3 +2246,39 @@ not a recall or serving-latency claim. The exact 9,990,000-row manifest is now
 frozen without changing capacity, seeds, binary, or source data. D3 and
 competitor claims remain fenced until native layout, truth, quality, and serving
 measurements pass.
+
+### Native 9,990,000-row layout ladder freezes ten pages
+
+The frozen full-scale capacity ladder built three layouts from the same
+authenticated 9,990,000-row construction Parquet, binary, projection seeds, and
+16-worker method on `causality` Spot `m7g.4xlarge` instances in
+`eu-central-1c`. Every instance published its terminal and terminated. Capacity
+2,816 produced 7,096 pages in 144.758136441 seconds, used 1,095.37 CPU-seconds,
+and peaked at 8,419,000,320 bytes RSS. Its receipt SHA-256 is
+`2ae33960bc54eb06dc4f83210ca3646f250549614a1214078115135773b9144f`.
+Capacity 4,096 produced 4,878 pages in 126.331000369 seconds, used 914.93
+CPU-seconds, and peaked at 8,437,325,824 bytes RSS. Its receipt SHA-256 is
+`382407fee465c74b9d2a95ce56eba3baa28d4893bd74884acb5a41f6b8092dab`.
+Capacity 8,192 produced 2,440 pages in 119.665546686 seconds, used 843.69
+CPU-seconds, and peaked at 8,432,369,664 bytes RSS. Its receipt SHA-256 is
+`53b15fcec13d11ea65a3e3069ea86feb6b4c0c964acec2c13385d507960ece30`.
+All three observed zero memory PSI, zero swap, zero query-role opens, and zero
+page-body reads.
+
+A bounded exact cover check streamed each authenticated assignment Parquet and
+the immutable official Deep Image neighbor Parquet (SHA-256
+`d305fcea7387988941defd2942cca1673693271329f977ba073da888cac3de8d`).
+It retained only the first ten official neighbors for query ordinals 0 through
+511 and their two page assignments. At an eight-page budget, capacities 2,816,
+4,096, and 8,192 reached respectively 954,101, 959,765, and 979,492 ppm
+aggregate oracle recall; all failed the 995,000 gate. On the 8,192-row layout,
+nine pages reached 995,312 ppm aggregate and 900,000 ppm minimum-query recall.
+Ten pages reached exactly 1,000,000 ppm aggregate and minimum-query recall: all
+512 queries recovered all ten official neighbors. Twelve pages added no quality.
+
+The native serving candidate therefore freezes capacity 8,192 and ten selected
+pages. Quality gates are unchanged; the extra two pages are an explicit resource
+trade rather than a relaxed recall claim. The next gate must show that the fixed
+128-page PQ16 frontier, bounded top-512 exact rerank, ten-page selection, and
+local Arrow cold-vector reads remain below 15 milliseconds p99 at native scale.
+D3 and competitor claims remain fenced.
