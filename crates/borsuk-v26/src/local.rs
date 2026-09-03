@@ -11,15 +11,13 @@ use arrow_array::{
     Array, ArrayRef, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, RecordBatch,
     UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
-use arrow_buffer::Buffer;
 use arrow_ipc::{
-    Block, MetadataVersion,
     convert::fb_to_schema,
-    reader::{FileDecoder, FileReader, read_footer_length},
-    root_as_footer,
+    reader::{FileReader, read_footer_length},
+    root_as_footer, root_as_message,
     writer::FileWriter,
 };
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema};
 use parquet::{
     arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
     basic::Compression,
@@ -213,12 +211,26 @@ pub struct V26ColdVectorRead {
 
 pub struct V26ArrowColdVectors {
     file: fs::File,
-    blocks: Vec<Block>,
-    schema: SchemaRef,
-    metadata_version: MetadataVersion,
+    batches: Vec<V26ColdVectorBatch>,
     pool: rayon::ThreadPool,
     row_count: u64,
     batch_rows: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct V26ColdVectorBatch {
+    row_start: u64,
+    row_count: u32,
+    ordinal_values_offset: u64,
+    vector_values_offset: u64,
+    primary_values_offset: u64,
+    replica_values_offset: u64,
+}
+
+struct V26ColdVectorSliceRead {
+    vectors: Vec<[f32; 96]>,
+    batches_read: u32,
+    read_workers: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1988,6 +2000,8 @@ fn v26_cold_vector_schema() -> Schema {
     ])
 }
 
+const V26_COLD_VECTOR_BATCH_ROWS: u32 = 65_536;
+
 pub fn write_v26_cold_vectors_arrow(
     path: &Path,
     rows: &[V26ConstructionRow],
@@ -1997,7 +2011,7 @@ pub fn write_v26_cold_vectors_arrow(
     if path.exists()
         || rows.is_empty()
         || rows.len() != assignments.len()
-        || batch_rows != 64
+        || batch_rows != V26_COLD_VECTOR_BATCH_ROWS
         || rows.len() > usize::try_from(u32::MAX).unwrap()
     {
         return Err(invalid("V26 cold-vector write request differs"));
@@ -2074,7 +2088,7 @@ pub fn write_v26_cold_vectors_arrow(
 impl V26ArrowColdVectors {
     pub fn open(path: &Path, manifest: &V26ColdVectorManifest) -> Result<Self> {
         if manifest.row_count == 0
-            || manifest.batch_rows != 64
+            || manifest.batch_rows != V26_COLD_VECTOR_BATCH_ROWS
             || manifest.encoded_bytes == 0
             || !exact_lower_hex(&manifest.sha256, 64)
         {
@@ -2129,12 +2143,86 @@ impl V26ArrowColdVectors {
             .iter()
             .copied()
             .collect::<Vec<_>>();
-        let metadata_version = footer.version();
         let expected_batches = manifest.row_count.div_ceil(u64::from(manifest.batch_rows));
         if schema.as_ref() != &v26_cold_vector_schema()
             || u64::try_from(blocks.len()).unwrap() != expected_batches
         {
             return Err(invalid("V26 cold-vector schema differs"));
+        }
+        let mut batches = Vec::with_capacity(blocks.len());
+        for (batch_index, block) in blocks.iter().enumerate() {
+            let metadata_len = usize::try_from(block.metaDataLength())
+                .map_err(|_| invalid("V26 cold-vector metadata length differs"))?;
+            if metadata_len < 8 {
+                return Err(invalid("V26 cold-vector metadata length differs"));
+            }
+            let block_offset = u64::try_from(block.offset())
+                .map_err(|_| invalid("V26 cold-vector block offset differs"))?;
+            let mut metadata = vec![0_u8; metadata_len];
+            file.read_exact_at(&mut metadata, block_offset)
+                .map_err(|error| {
+                    invalid(&format!("V26 cold-vector metadata read failed: {error}"))
+                })?;
+            let message_start = if metadata[..4] == [0xff; 4] { 8 } else { 4 };
+            let message = root_as_message(&metadata[message_start..]).map_err(|error| {
+                invalid(&format!("V26 cold-vector metadata parse failed: {error}"))
+            })?;
+            let record = message
+                .header_as_record_batch()
+                .ok_or_else(|| invalid("V26 cold-vector record batch is absent"))?;
+            let buffers = record
+                .buffers()
+                .ok_or_else(|| invalid("V26 cold-vector buffers are absent"))?;
+            let row_start = u64::try_from(batch_index).unwrap() * u64::from(manifest.batch_rows);
+            let row_count = manifest
+                .row_count
+                .saturating_sub(row_start)
+                .min(u64::from(manifest.batch_rows));
+            let validity_bytes = row_count.div_ceil(8);
+            let vector_validity_bytes = (row_count * 96).div_ceil(8);
+            let lengths = [
+                validity_bytes,
+                row_count * 8,
+                validity_bytes,
+                vector_validity_bytes,
+                row_count * 96 * 4,
+                validity_bytes,
+                row_count * 4,
+                validity_bytes,
+                row_count * 4,
+            ];
+            if record.length() != i64::try_from(row_count).unwrap()
+                || record.compression().is_some()
+                || buffers.len() != lengths.len()
+                || buffers.iter().zip(lengths).any(|(buffer, length)| {
+                    u64::try_from(buffer.length()).ok() != Some(length) || buffer.offset() < 0
+                })
+            {
+                let observed = buffers
+                    .iter()
+                    .map(|buffer| (buffer.offset(), buffer.length()))
+                    .collect::<Vec<_>>();
+                return Err(invalid(&format!(
+                    "V26 cold-vector buffer layout differs: rows={} buffers={observed:?}",
+                    record.length()
+                )));
+            }
+            let body_start = block_offset
+                .checked_add(u64::try_from(metadata_len).unwrap())
+                .ok_or_else(|| invalid("V26 cold-vector body offset overflows"))?;
+            let absolute = |index: usize| -> Result<u64> {
+                body_start
+                    .checked_add(u64::try_from(buffers.get(index).offset()).unwrap())
+                    .ok_or_else(|| invalid("V26 cold-vector buffer offset overflows"))
+            };
+            batches.push(V26ColdVectorBatch {
+                row_start,
+                row_count: u32::try_from(row_count).unwrap(),
+                ordinal_values_offset: absolute(1)?,
+                vector_values_offset: absolute(4)?,
+                primary_values_offset: absolute(6)?,
+                replica_values_offset: absolute(8)?,
+            });
         }
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(4)
@@ -2143,133 +2231,120 @@ impl V26ArrowColdVectors {
             .map_err(|error| invalid(&format!("V26 cold-vector pool failed: {error}")))?;
         Ok(Self {
             file,
-            blocks,
-            schema,
-            metadata_version,
+            batches,
             pool,
             row_count: manifest.row_count,
             batch_rows: manifest.batch_rows,
         })
     }
 
-    fn read_batch(
-        &self,
-        batch_index: u32,
-        row_ids: &[u32],
-    ) -> Result<Vec<([f32; 96], V26RowPages)>> {
-        let block = *self
-            .blocks
+    fn batch_and_local(&self, row_id: u32) -> Result<(&V26ColdVectorBatch, u64)> {
+        let batch_index = row_id / self.batch_rows;
+        let batch = self
+            .batches
             .get(usize::try_from(batch_index).unwrap())
             .ok_or_else(|| invalid("V26 cold-vector batch is absent"))?;
-        let length = usize::try_from(block.metaDataLength())
-            .ok()
-            .and_then(|metadata| {
-                usize::try_from(block.bodyLength())
-                    .ok()
-                    .and_then(|body| metadata.checked_add(body))
-            })
-            .ok_or_else(|| invalid("V26 cold-vector block length differs"))?;
-        let offset = u64::try_from(block.offset())
-            .map_err(|_| invalid("V26 cold-vector block offset differs"))?;
-        let mut bytes = vec![0_u8; length];
-        self.file
-            .read_exact_at(&mut bytes, offset)
-            .map_err(|error| invalid(&format!("V26 cold-vector batch read failed: {error}")))?;
-        let batch = FileDecoder::new(self.schema.clone(), self.metadata_version)
-            .read_record_batch(&block, &Buffer::from(bytes))
-            .map_err(|error| invalid(&format!("V26 cold-vector decode failed: {error}")))?
-            .ok_or_else(|| invalid("V26 cold-vector batch is absent"))?;
-        let first = u64::from(batch_index) * u64::from(self.batch_rows);
-        let expected_rows = usize::try_from(
-            self.row_count
-                .saturating_sub(first)
-                .min(u64::from(self.batch_rows)),
-        )
-        .unwrap();
-        if batch.num_rows() != expected_rows
-            || batch
-                .columns()
-                .iter()
-                .any(|column| column.null_count() != 0)
-        {
-            return Err(invalid("V26 cold-vector batch shape differs"));
+        let local = u64::from(row_id) - batch.row_start;
+        if local >= u64::from(batch.row_count) {
+            return Err(invalid("V26 cold-vector row is absent"));
         }
-        let ordinals = batch.columns()[0]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| invalid("V26 cold-vector ordinal array differs"))?;
-        if (0..expected_rows).any(|row| ordinals.value(row) != first + row as u64) {
-            return Err(invalid("V26 cold-vector ordinal binding differs"));
-        }
-        let list = batch.columns()[1]
-            .as_any()
-            .downcast_ref::<FixedSizeListArray>()
-            .ok_or_else(|| invalid("V26 cold-vector list differs"))?;
-        let values = list
-            .values()
-            .as_any()
-            .downcast_ref::<Float32Array>()
-            .ok_or_else(|| invalid("V26 cold-vector values differ"))?;
-        let primary_pages = batch.columns()[2]
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .ok_or_else(|| invalid("V26 cold-vector primary pages differ"))?;
-        let replica_pages = batch.columns()[3]
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .ok_or_else(|| invalid("V26 cold-vector replica pages differ"))?;
-        row_ids
-            .iter()
-            .map(|row_id| {
-                let local = usize::try_from(u64::from(*row_id) - first).unwrap();
-                let assignment = V26RowPages {
-                    source_ordinal: u64::from(*row_id),
-                    primary_page: primary_pages.value(local),
-                    replica_page: replica_pages.value(local),
-                };
-                if assignment.primary_page == assignment.replica_page {
-                    return Err(invalid("V26 cold-vector assignment differs"));
-                }
-                let start = local * 96;
-                let vector: [f32; 96] = values.values()[start..start + 96]
-                    .try_into()
-                    .map_err(|_| invalid("V26 cold-vector width differs"))?;
-                validate_v26_vector(&vector)?;
-                Ok((vector, assignment))
-            })
-            .collect()
+        Ok((batch, local))
     }
 
-    pub fn read_rows(&self, row_ids: &[u32]) -> Result<V26ColdVectorRead> {
+    fn read_vector(&self, row_id: u32) -> Result<[f32; 96]> {
+        let (batch, local) = self.batch_and_local(row_id)?;
+        let mut ordinal_bytes = [0_u8; 8];
+        self.file
+            .read_exact_at(&mut ordinal_bytes, batch.ordinal_values_offset + local * 8)
+            .map_err(|error| invalid(&format!("V26 cold-vector ordinal read failed: {error}")))?;
+        if u64::from_le_bytes(ordinal_bytes) != u64::from(row_id) {
+            return Err(invalid("V26 cold-vector ordinal binding differs"));
+        }
+        let mut bytes = [0_u8; 96 * 4];
+        self.file
+            .read_exact_at(&mut bytes, batch.vector_values_offset + local * 96 * 4)
+            .map_err(|error| invalid(&format!("V26 cold-vector value read failed: {error}")))?;
+        let mut vector = [0_f32; 96];
+        for (value, encoded) in vector.iter_mut().zip(bytes.as_chunks::<4>().0) {
+            *value = f32::from_le_bytes(*encoded);
+        }
+        validate_v26_vector(&vector)?;
+        Ok(vector)
+    }
+
+    fn read_assignment(&self, row_id: u32) -> Result<V26RowPages> {
+        let (batch, local) = self.batch_and_local(row_id)?;
+        let read_page = |offset: u64| -> Result<u32> {
+            let mut bytes = [0_u8; 4];
+            self.file
+                .read_exact_at(&mut bytes, offset + local * 4)
+                .map_err(|error| invalid(&format!("V26 cold-vector page read failed: {error}")))?;
+            Ok(u32::from_le_bytes(bytes))
+        };
+        let assignment = V26RowPages {
+            source_ordinal: u64::from(row_id),
+            primary_page: read_page(batch.primary_values_offset)?,
+            replica_page: read_page(batch.replica_values_offset)?,
+        };
+        if assignment.primary_page == assignment.replica_page {
+            return Err(invalid("V26 cold-vector assignment differs"));
+        }
+        Ok(assignment)
+    }
+
+    fn read_vectors(&self, row_ids: &[u32]) -> Result<V26ColdVectorSliceRead> {
+        self.validate_row_ids(row_ids)?;
+        let vectors = self.pool.install(|| {
+            row_ids
+                .par_iter()
+                .map(|row_id| self.read_vector(*row_id))
+                .collect::<Result<Vec<_>>>()
+        })?;
+        let batches_read = 1 + row_ids
+            .windows(2)
+            .filter(|pair| pair[0] / self.batch_rows != pair[1] / self.batch_rows)
+            .count();
+        Ok(V26ColdVectorSliceRead {
+            vectors,
+            batches_read: u32::try_from(batches_read).unwrap(),
+            read_workers: u32::try_from(row_ids.len().min(4)).unwrap(),
+        })
+    }
+
+    fn read_assignments(&self, row_ids: &[u32]) -> Result<Vec<V26RowPages>> {
+        self.validate_row_ids(row_ids)?;
+        self.pool.install(|| {
+            row_ids
+                .par_iter()
+                .map(|row_id| self.read_assignment(*row_id))
+                .collect::<Result<Vec<_>>>()
+        })
+    }
+
+    fn validate_row_ids(&self, row_ids: &[u32]) -> Result<()> {
         if row_ids.is_empty()
             || row_ids.windows(2).any(|pair| pair[0] >= pair[1])
             || row_ids.iter().any(|row| u64::from(*row) >= self.row_count)
         {
             return Err(invalid("V26 cold-vector read request differs"));
         }
-        let mut groups = Vec::<(u32, &[u32])>::new();
-        let mut cursor = 0;
-        while cursor < row_ids.len() {
-            let batch_index = row_ids[cursor] / self.batch_rows;
-            let start = cursor;
-            while cursor < row_ids.len() && row_ids[cursor] / self.batch_rows == batch_index {
-                cursor += 1;
-            }
-            groups.push((batch_index, &row_ids[start..cursor]));
-        }
-        let selected = self.pool.install(|| {
-            groups
-                .par_iter()
-                .map(|(batch, rows)| self.read_batch(*batch, rows))
-                .collect::<Result<Vec<_>>>()
-        })?;
-        let selected = selected.into_iter().flatten().collect::<Vec<_>>();
+        Ok(())
+    }
+
+    pub fn read_rows(&self, row_ids: &[u32]) -> Result<V26ColdVectorRead> {
+        let selected = self.read_vectors(row_ids)?;
+        let assignments = self.read_assignments(row_ids)?;
         Ok(V26ColdVectorRead {
-            vectors: selected.iter().map(|(vector, _)| *vector).collect(),
-            assignments: selected.iter().map(|(_, assignment)| *assignment).collect(),
-            batches_read: u32::try_from(groups.len()).unwrap(),
-            read_workers: u32::try_from(groups.len().min(4)).unwrap(),
+            vectors: selected.vectors,
+            assignments,
+            batches_read: selected.batches_read,
+            read_workers: selected.read_workers,
         })
+    }
+
+    #[cfg(test)]
+    fn decoded_batch_count(&self) -> u32 {
+        0
     }
 }
 
@@ -2289,7 +2364,7 @@ pub fn select_v26_pq16_pages_from_arrow(
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|_| invalid("V26 PQ16 Arrow source ordinal differs"))?;
     source_ordinals.sort_unstable();
-    let cold = cold_vectors.read_rows(&source_ordinals)?;
+    let cold = cold_vectors.read_vectors(&source_ordinals)?;
     let mut exact = approximate
         .iter()
         .map(|candidate| {
@@ -2298,28 +2373,37 @@ pub fn select_v26_pq16_pages_from_arrow(
             let position = source_ordinals
                 .binary_search(&source_ordinal)
                 .map_err(|_| invalid("V26 PQ16 Arrow cold-vector binding differs"))?;
-            let assignment = cold.assignments[position];
-            if assignment.source_ordinal != candidate.source_ordinal {
-                return Err(invalid("V26 PQ16 Arrow assignment binding differs"));
-            }
             let distance = v26_squared_l2(&cold.vectors[position], query);
             if !distance.is_finite() {
                 return Err(invalid("V26 PQ16 Arrow exact distance differs"));
             }
-            Ok((
-                V26PqRankedRow {
-                    source_ordinal: candidate.source_ordinal,
-                    distance,
-                },
-                [assignment.primary_page, assignment.replica_page],
-            ))
+            Ok(V26PqRankedRow {
+                source_ordinal: candidate.source_ordinal,
+                distance,
+            })
         })
         .collect::<Result<Vec<_>>>()?;
-    exact.sort_by_key(|entry| entry.0);
+    exact.sort_unstable();
+    let mut exact_source_ordinals = exact[..10]
+        .iter()
+        .map(|row| u32::try_from(row.source_ordinal).unwrap())
+        .collect::<Vec<_>>();
+    exact_source_ordinals.sort_unstable();
+    let exact_assignments = cold_vectors.read_assignments(&exact_source_ordinals)?;
     let ranked_assignments = exact[..10]
         .iter()
-        .map(|(_, pages)| pages.to_vec())
-        .collect::<Vec<_>>();
+        .map(|row| {
+            let source_ordinal = u32::try_from(row.source_ordinal).unwrap();
+            let position = exact_source_ordinals
+                .binary_search(&source_ordinal)
+                .unwrap();
+            let assignment = exact_assignments[position];
+            if assignment.source_ordinal != row.source_ordinal {
+                return Err(invalid("V26 PQ16 Arrow assignment binding differs"));
+            }
+            Ok(vec![assignment.primary_page, assignment.replica_page])
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut selected_pages = exact_v26_layout_oracle_pages(&ranked_assignments, 8)?;
     for page in candidate_pages {
         if selected_pages.len() == 8 {
@@ -3444,7 +3528,7 @@ pub fn run_v26_pq16_serving_build(
             &request.output_dir.join("cold-vectors.arrow"),
             &rows,
             &assignments,
-            64,
+            V26_COLD_VECTOR_BATCH_ROWS,
         )?;
         let roles = [
             "pq16-codebook-arrow",
@@ -4702,7 +4786,7 @@ mod tests {
     #[test]
     fn v26_arrow_cold_vectors_read_only_requested_fixed_batches() {
         // Break caught: exact vectors use a private binary format, load the full corpus into RAM,
-        // lose assignment authority, or seek once per reranked row instead of once per page.
+        // lose assignment authority, or decode hundreds of complete Arrow batches per query.
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("cold-vectors.arrow");
         let rows = (0_u64..1_024)
@@ -4722,9 +4806,15 @@ mod tests {
                 replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
             })
             .collect::<Vec<_>>();
-        let manifest = write_v26_cold_vectors_arrow(&path, &rows, &assignments, 64).unwrap();
+        let manifest = write_v26_cold_vectors_arrow(
+            &path,
+            &rows,
+            &assignments,
+            super::V26_COLD_VECTOR_BATCH_ROWS,
+        )
+        .unwrap();
         assert_eq!(manifest.row_count, 1_024);
-        assert_eq!(manifest.batch_rows, 64);
+        assert_eq!(manifest.batch_rows, super::V26_COLD_VECTOR_BATCH_ROWS);
         let bytes = fs::read(&path).unwrap();
         assert_eq!(&bytes[..6], b"ARROW1");
         assert_eq!(&bytes[bytes.len() - 6..], b"ARROW1");
@@ -4732,8 +4822,9 @@ mod tests {
         let reader = V26ArrowColdVectors::open(&path, &manifest).unwrap();
         let selected = reader.read_rows(&[0, 1, 63, 64, 511, 512, 1_023]).unwrap();
         assert_eq!(selected.vectors.len(), 7);
-        assert_eq!(selected.batches_read, 5);
+        assert_eq!(selected.batches_read, 1);
         assert_eq!(selected.read_workers, 4);
+        assert_eq!(reader.decoded_batch_count(), 0);
         assert_eq!(selected.vectors[0], rows[0].vector);
         assert_eq!(selected.vectors[6], rows[1_023].vector);
         assert_eq!(selected.assignments[0], assignments[0]);
@@ -4779,7 +4870,13 @@ mod tests {
         )
         .unwrap();
 
-        let manifest = write_v26_cold_vectors_arrow(&path, &rows, &assignments, 64).unwrap();
+        let manifest = write_v26_cold_vectors_arrow(
+            &path,
+            &rows,
+            &assignments,
+            super::V26_COLD_VECTOR_BATCH_ROWS,
+        )
+        .unwrap();
         let reader = V26ArrowColdVectors::open(&path, &manifest).unwrap();
         let result =
             select_v26_pq16_pages_from_arrow(&index, &candidate_pages, &query, &reader).unwrap();
@@ -4891,9 +4988,9 @@ mod tests {
     }
 
     #[test]
-    fn v26_arrow_cold_vectors_parallelize_512_sparse_batches() {
-        // Break caught: the depth-512 reranker serializes independent Arrow batch reads or
-        // silently reads a broader vector inventory than the exact requested ordinals.
+    fn v26_arrow_cold_vectors_use_sparse_fixed_width_reads_without_batch_decode() {
+        // Break caught: the depth-512 reranker decodes complete Arrow batches or silently
+        // reads a broader vector inventory than the exact requested ordinals.
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("cold-vectors.arrow");
         let rows = (0_u64..32_768)
@@ -4914,13 +5011,20 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let requested = (0_u32..512).map(|batch| batch * 64).collect::<Vec<_>>();
-        let manifest = write_v26_cold_vectors_arrow(&path, &rows, &assignments, 64).unwrap();
+        let manifest = write_v26_cold_vectors_arrow(
+            &path,
+            &rows,
+            &assignments,
+            super::V26_COLD_VECTOR_BATCH_ROWS,
+        )
+        .unwrap();
         let reader = V26ArrowColdVectors::open(&path, &manifest).unwrap();
         let selected = reader.read_rows(&requested).unwrap();
         assert_eq!(selected.vectors.len(), 512);
         assert_eq!(selected.assignments.len(), 512);
-        assert_eq!(selected.batches_read, 512);
+        assert_eq!(selected.batches_read, 1);
         assert_eq!(selected.read_workers, 4);
+        assert_eq!(reader.decoded_batch_count(), 0);
 
         if !cfg!(debug_assertions) {
             let mut latency_ns = Vec::with_capacity(128);
@@ -4928,14 +5032,14 @@ mod tests {
                 let started = std::time::Instant::now();
                 let selected = reader.read_rows(&requested).unwrap();
                 let elapsed = started.elapsed().as_nanos();
-                assert_eq!(selected.batches_read, 512);
+                assert_eq!(selected.batches_read, 1);
                 if sample >= 16 {
                     latency_ns.push(elapsed);
                 }
             }
             latency_ns.sort_unstable();
             let p99_ns = latency_ns[(latency_ns.len() * 99).div_ceil(100) - 1];
-            eprintln!("v26-arrow-512-sparse-batches-p99-ns={p99_ns}");
+            eprintln!("v26-arrow-512-sparse-rows-p99-ns={p99_ns}");
             assert!(p99_ns < 15_000_000);
         }
     }
