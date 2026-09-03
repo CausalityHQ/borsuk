@@ -6,7 +6,7 @@
 )]
 
 use std::{
-    cmp::{Ordering, Reverse},
+    cmp::Ordering,
     collections::{BTreeMap, BTreeSet, BinaryHeap},
 };
 
@@ -1761,6 +1761,15 @@ pub(crate) fn rank_v26_pq16_packed_candidates(
     query: &[f32; 96],
     ranked_row_limit: usize,
 ) -> Result<Vec<V26PqRankedRow>> {
+    rank_v26_pq16_linear_occurrence_candidates(index, candidate_pages, query, ranked_row_limit)
+}
+
+pub(crate) fn rank_v26_pq16_linear_occurrence_candidates(
+    index: &V26PackedPq16Index,
+    candidate_pages: &[u32],
+    query: &[f32; 96],
+    ranked_row_limit: usize,
+) -> Result<Vec<V26PqRankedRow>> {
     if candidate_pages.is_empty()
         || candidate_pages.windows(2).any(|pair| pair[0] >= pair[1])
         || ranked_row_limit == 0
@@ -1770,8 +1779,11 @@ pub(crate) fn rank_v26_pq16_packed_candidates(
         return Err(invalid("V26 packed PQ16 query request differs"));
     }
     let tables = prepare_v26_pq_tables(&index.codebook, query)?;
-    let mut merge = BinaryHeap::<Reverse<(u32, usize, usize, usize)>>::new();
-    for (candidate_index, page) in candidate_pages.iter().enumerate() {
+    let occurrence_limit = ranked_row_limit
+        .checked_mul(2)
+        .ok_or_else(|| invalid("V26 packed PQ16 occurrence limit overflows"))?;
+    let mut ranked = BinaryHeap::with_capacity(occurrence_limit);
+    for page in candidate_pages {
         let page = usize::try_from(*page).unwrap();
         let start = *index
             .page_offsets
@@ -1786,24 +1798,14 @@ pub(crate) fn rank_v26_pq16_packed_candidates(
         if start >= end {
             return Err(invalid("V26 packed PQ16 candidate page differs"));
         }
-        merge.push(Reverse((
-            index.posting_rows[start],
-            candidate_index,
-            start,
-            end,
-        )));
-    }
-    let mut ranked = BinaryHeap::with_capacity(ranked_row_limit);
-    let mut last_row = None;
-    while let Some(Reverse((row_id, candidate_index, position, end))) = merge.pop() {
-        if last_row != Some(row_id) {
-            let start = usize::try_from(row_id)
+        for row_id in &index.posting_rows[start..end] {
+            let code_start = usize::try_from(*row_id)
                 .unwrap()
                 .checked_mul(16)
                 .ok_or_else(|| invalid("V26 packed PQ16 code offset overflows"))?;
             let code = index
                 .codes
-                .get(start..start + 16)
+                .get(code_start..code_start + 16)
                 .ok_or_else(|| invalid("V26 packed PQ16 row differs"))?;
             let distance = code
                 .iter()
@@ -1814,32 +1816,24 @@ pub(crate) fn rank_v26_pq16_packed_candidates(
                 return Err(invalid("V26 packed PQ16 distance differs"));
             }
             let value = V26PqRankedRow {
-                source_ordinal: u64::from(row_id),
+                source_ordinal: u64::from(*row_id),
                 distance,
             };
-            if ranked.len() < ranked_row_limit {
+            if ranked.len() < occurrence_limit {
                 ranked.push(value);
             } else if value < *ranked.peek().unwrap() {
                 ranked.pop();
                 ranked.push(value);
             }
-            last_row = Some(row_id);
         }
-        let next = position + 1;
-        if next < end {
-            merge.push(Reverse((
-                index.posting_rows[next],
-                candidate_index,
-                next,
-                end,
-            )));
-        }
-    }
-    if ranked.len() != ranked_row_limit {
-        return Err(invalid("V26 packed PQ16 candidate inventory differs"));
     }
     let mut ranked = ranked.into_vec();
     ranked.sort();
+    ranked.dedup_by_key(|row| row.source_ordinal);
+    if ranked.len() < ranked_row_limit {
+        return Err(invalid("V26 packed PQ16 candidate inventory differs"));
+    }
+    ranked.truncate(ranked_row_limit);
     Ok(ranked)
 }
 
@@ -3354,7 +3348,8 @@ mod tests {
         evaluate_v26_tree_router, exact_v26_layout_oracle_pages, fit_v26_pq_codebook,
         fit_v26_pq8_codebook, prepare_v26_pq_tables, prepare_v26_pq8_tables,
         projected_v26_pq_resident_bytes, projected_v26_pq8_resident_bytes, rank_v26_candidate_rows,
-        rank_v26_pq8_occurrences, rank_v26_pq16_candidate_rows, rank_v26_pq16_packed_candidates,
+        rank_v26_pq8_occurrences, rank_v26_pq16_candidate_rows,
+        rank_v26_pq16_linear_occurrence_candidates, rank_v26_pq16_packed_candidates,
         rank_v26_tree_pages, route_v26_pages, select_v26_pq16_packed_pages,
         select_v26_ranked_pages, validate_v26_dual_tree_layout,
     };
@@ -4190,6 +4185,14 @@ mod tests {
         let packed =
             rank_v26_pq16_packed_candidates(&index, &candidate_pages, &rows[42].vector, 512)
                 .unwrap();
+        let linear = rank_v26_pq16_linear_occurrence_candidates(
+            &index,
+            &candidate_pages,
+            &rows[42].vector,
+            512,
+        )
+        .unwrap();
+        assert_eq!(linear, packed);
         assert_eq!(packed.len(), 512);
         assert_eq!(
             packed

@@ -13,6 +13,7 @@ arrow-array = "58.3"
 arrow-buffer = "58.3"
 arrow-ipc = "58.3"
 arrow-schema = "58.3"
+memmap2 = "0.9"
 parquet = "58.3"
 rayon = "1.11"
 serde = { version = "1.0", features = ["derive"] }

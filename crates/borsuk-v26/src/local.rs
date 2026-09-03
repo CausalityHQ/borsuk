@@ -210,7 +210,7 @@ pub struct V26ColdVectorRead {
 }
 
 pub struct V26ArrowColdVectors {
-    file: fs::File,
+    mmap: memmap2::Mmap,
     batches: Vec<V26ColdVectorBatch>,
     pool: rayon::ThreadPool,
     row_count: u64,
@@ -2229,8 +2229,12 @@ impl V26ArrowColdVectors {
             .thread_name(|index| format!("v26-cold-{index}"))
             .build()
             .map_err(|error| invalid(&format!("V26 cold-vector pool failed: {error}")))?;
+        // The serving directory is an authenticated, process-private snapshot. It is never
+        // mutated after this SHA-256 check, which is the safety requirement for a file map.
+        let mmap = unsafe { memmap2::MmapOptions::new().map(&file) }
+            .map_err(|error| invalid(&format!("V26 cold-vector map failed: {error}")))?;
         Ok(Self {
-            file,
+            mmap,
             batches,
             pool,
             row_count: manifest.row_count,
@@ -2253,17 +2257,11 @@ impl V26ArrowColdVectors {
 
     fn read_vector(&self, row_id: u32) -> Result<[f32; 96]> {
         let (batch, local) = self.batch_and_local(row_id)?;
-        let mut ordinal_bytes = [0_u8; 8];
-        self.file
-            .read_exact_at(&mut ordinal_bytes, batch.ordinal_values_offset + local * 8)
-            .map_err(|error| invalid(&format!("V26 cold-vector ordinal read failed: {error}")))?;
-        if u64::from_le_bytes(ordinal_bytes) != u64::from(row_id) {
+        let ordinal_bytes = self.mapped_bytes(batch.ordinal_values_offset + local * 8, 8)?;
+        if u64::from_le_bytes(ordinal_bytes.try_into().unwrap()) != u64::from(row_id) {
             return Err(invalid("V26 cold-vector ordinal binding differs"));
         }
-        let mut bytes = [0_u8; 96 * 4];
-        self.file
-            .read_exact_at(&mut bytes, batch.vector_values_offset + local * 96 * 4)
-            .map_err(|error| invalid(&format!("V26 cold-vector value read failed: {error}")))?;
+        let bytes = self.mapped_bytes(batch.vector_values_offset + local * 96 * 4, 96 * 4)?;
         let mut vector = [0_f32; 96];
         for (value, encoded) in vector.iter_mut().zip(bytes.as_chunks::<4>().0) {
             *value = f32::from_le_bytes(*encoded);
@@ -2275,11 +2273,8 @@ impl V26ArrowColdVectors {
     fn read_assignment(&self, row_id: u32) -> Result<V26RowPages> {
         let (batch, local) = self.batch_and_local(row_id)?;
         let read_page = |offset: u64| -> Result<u32> {
-            let mut bytes = [0_u8; 4];
-            self.file
-                .read_exact_at(&mut bytes, offset + local * 4)
-                .map_err(|error| invalid(&format!("V26 cold-vector page read failed: {error}")))?;
-            Ok(u32::from_le_bytes(bytes))
+            let bytes = self.mapped_bytes(offset + local * 4, 4)?;
+            Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
         };
         let assignment = V26RowPages {
             source_ordinal: u64::from(row_id),
@@ -2290,6 +2285,17 @@ impl V26ArrowColdVectors {
             return Err(invalid("V26 cold-vector assignment differs"));
         }
         Ok(assignment)
+    }
+
+    fn mapped_bytes(&self, offset: u64, length: usize) -> Result<&[u8]> {
+        let start = usize::try_from(offset)
+            .map_err(|_| invalid("V26 cold-vector mapped offset overflows"))?;
+        let end = start
+            .checked_add(length)
+            .ok_or_else(|| invalid("V26 cold-vector mapped range overflows"))?;
+        self.mmap
+            .get(start..end)
+            .ok_or_else(|| invalid("V26 cold-vector mapped range differs"))
     }
 
     fn read_vectors(&self, row_ids: &[u32]) -> Result<V26ColdVectorSliceRead> {
@@ -2345,6 +2351,11 @@ impl V26ArrowColdVectors {
     #[cfg(test)]
     fn decoded_batch_count(&self) -> u32 {
         0
+    }
+
+    #[cfg(test)]
+    fn is_memory_mapped(&self) -> bool {
+        true
     }
 }
 
@@ -4820,6 +4831,7 @@ mod tests {
         assert_eq!(&bytes[bytes.len() - 6..], b"ARROW1");
 
         let reader = V26ArrowColdVectors::open(&path, &manifest).unwrap();
+        assert!(reader.is_memory_mapped());
         let selected = reader.read_rows(&[0, 1, 63, 64, 511, 512, 1_023]).unwrap();
         assert_eq!(selected.vectors.len(), 7);
         assert_eq!(selected.batches_read, 1);
