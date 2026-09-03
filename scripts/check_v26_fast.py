@@ -17,7 +17,16 @@ ROOT = Path(__file__).resolve().parents[1]
 def fast_commands(python_executable: str) -> list[list[str]]:
     """Return the production-representative checks used on every V26 change."""
     return [
-        ["cargo", "test", "-p", "borsuk-v26", "--lib", "v26_", "--", "--nocapture"],
+        [
+            "cargo",
+            "test",
+            "-p",
+            "borsuk-v26",
+            "--lib",
+            "v26_fast_",
+            "--",
+            "--nocapture",
+        ],
         [
             "cargo",
             "test",
@@ -25,6 +34,28 @@ def fast_commands(python_executable: str) -> list[list[str]]:
             "borsuk-v26",
             "--example",
             "v26_page_layout",
+            "v26_",
+            "--",
+            "--nocapture",
+        ],
+        [
+            "cargo",
+            "test",
+            "-p",
+            "borsuk-v26",
+            "--example",
+            "v26_pq16_serving_build",
+            "v26_",
+            "--",
+            "--nocapture",
+        ],
+        [
+            "cargo",
+            "test",
+            "-p",
+            "borsuk-v26",
+            "--example",
+            "v26_pq16_serving",
             "v26_",
             "--",
             "--nocapture",

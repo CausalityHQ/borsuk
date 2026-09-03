@@ -4924,7 +4924,7 @@ mod tests {
     }
 
     #[test]
-    fn v26_pq16_index_arrow_roundtrips_the_exact_resident_representation() {
+    fn v26_fast_pq16_index_arrow_roundtrips_the_exact_resident_representation() {
         // Break caught: the deployable index uses a private format, loses row/page order,
         // rebuilds PQ at open, or admits coherent bytes under a different registered digest.
         let temp = TempDir::new().unwrap();
@@ -5196,7 +5196,7 @@ mod tests {
     }
 
     #[test]
-    fn v26_pq16_serving_benchmark_summary_recomputes_latency_gate() {
+    fn v26_fast_pq16_serving_benchmark_summary_recomputes_latency_gate() {
         // Break caught: p99 is averaged/rounded down, raw timings disappear into JSON, or the
         // reported pass can drift from the fixed 15 ms serving gate.
         let samples = (0_u32..10_000)

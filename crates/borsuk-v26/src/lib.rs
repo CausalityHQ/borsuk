@@ -4153,7 +4153,7 @@ mod tests {
     }
 
     #[test]
-    fn v26_pq16_packed_index_deduplicates_postings_and_matches_reference_top512() {
+    fn v26_fast_pq16_packed_index_deduplicates_postings_and_matches_reference_top512() {
         // Break caught: production duplicates codes per page, allocates a corpus-sized query
         // marker, scores dual-page rows twice, or changes deterministic PQ ranking.
         let rows = (0_u64..2_113)
