@@ -2490,8 +2490,28 @@ An independent PyArrow pass authenticated all 20,480 rows, 40 arm groups, and
 `s3://borsuk-bench-453182569524-euc1/research/v26-global-page-mode-frontier/f3b43e4350839d96999e9bdaefd4cb1f6ad23870/v26-global-page-modes-20260903T081207Z-a0001/`.
 The instance published its terminal and was terminated.
 
-This establishes within-page multimodality as causal but rejects the tested
-2/4/8/16 ladder as sufficient concentration. The next cheap falsifier extends
-the same query-independent ladder to 32 and 64 modes and must pass at no more
-than 256 pages before any row-code latency or full-suite work. D3 and release
-claims remain fenced.
+Source commit `f160d32df8e66344c635d652eb082aed521ac54d` then extended the
+same fixed ladder to 32 and 64 modes. At 256 pages, K32 reached
+982,226/500,000/982,226 and K64 reached 986,523/700,000/986,523 ppm. Both
+failed. At 512 pages, K32 passed with 996,679/800,000/996,679, while K64's
+996,875/700,000/996,875 failed the minimum-query gate. This non-monotone tail
+rules out further blind K widening. The run used `causality` Spot instance
+`i-04c85a09351fe2add` (`m7gd.4xlarge`, `eu-central-1c`) and SSM command
+`d3bf5812-f37f-4a83-a62d-75f43251f845`; it took 73 seconds, peaked at
+4,259,344,384 bytes RSS, and observed zero memory PSI and zero swap growth.
+The executable SHA-256 is
+`5145fd58036fe27ae4db44baacaaa61a09e93789ee821f6c6deb1db29e2f597e`;
+the result SHA-256 is
+`b6afa58dc95317d22512b46ae96d2bac575a57b21d60e20f8d2fdc23ff3dc6bd`;
+and the 30,720-row Parquet evidence SHA-256 is
+`5e0ab67da6765902b178a0c814e9acd440638e13ecfaf1e5013fb9987d08e3f3`.
+Independent PyArrow recomputation authenticated all 60 arm groups. Evidence is
+rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-global-page-mode-frontier/f160d32df8e66344c635d652eb082aed521ac54d/v26-global-page-modes-20260903T082004Z-a0002/`.
+The instance published its terminal and was terminated.
+
+This establishes within-page multimodality as causal but rejects the complete
+2/4/8/16/32/64 ladder as sufficient concentration at the at-most-256-page
+boundary. The next fast path must bypass page-frontier concentration and test
+the already implemented global packed-PQ16 scan plus bounded exact rerank at
+native scale. D3 and release claims remain fenced.
