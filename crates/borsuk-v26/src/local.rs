@@ -249,6 +249,30 @@ pub struct V26Pq16IndexManifest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct V26Pq4FastManifest {
+    pub schema: String,
+    pub construction_rows: V26ObjectIdentity,
+    pub page_assignments: V26ObjectIdentity,
+    pub layout_terminal: V26ObjectIdentity,
+    pub codebook: V26ObjectIdentity,
+    pub codes: V26ObjectIdentity,
+    pub row_count: u64,
+    pub block_count: u64,
+    pub padding_rows: u32,
+    pub dimension: u32,
+    pub subquantizer_count: u32,
+    pub subspace_dimensions: u32,
+    pub centroid_count: u32,
+    pub block_rows: u32,
+    pub code_bytes_per_row: u32,
+    pub byte_order: String,
+    pub nibble_order: String,
+    pub source_order: String,
+    pub projected_resident_bytes_100m: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct V26SimHashPq16IndexManifest {
     pub row_count: u64,
     pub page_count: u32,
@@ -4739,6 +4763,311 @@ fn v26_pq16_codebook_schema() -> Schema {
     ])
 }
 
+fn v26_pq4_fast_codebook_schema() -> Schema {
+    Schema::new(vec![Field::new(
+        "centroids",
+        DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            1_536,
+        ),
+        false,
+    )])
+}
+
+fn v26_pq4_fast_codes_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("block_ordinal", DataType::UInt64, false),
+        Field::new("packed_codes", DataType::FixedSizeBinary(512), false),
+    ])
+}
+
+fn validate_v26_pq4_fast_manifest(manifest: &V26Pq4FastManifest) -> Result<()> {
+    let identities = [
+        (&manifest.construction_rows, "construction-parquet"),
+        (&manifest.page_assignments, "page-assignments-parquet"),
+        (&manifest.layout_terminal, "layout-terminal"),
+        (&manifest.codebook, "pq4-fast-codebook-arrow"),
+        (&manifest.codes, "pq4-fast-codes-arrow"),
+    ];
+    let generation = &manifest.construction_rows.generation;
+    let mut uris = BTreeSet::new();
+    for (identity, role) in identities {
+        validate_v26_benchmark_identity(identity, role)?;
+        if identity.generation != *generation || !uris.insert(&identity.uri) {
+            return Err(invalid("V26 PQ4 manifest identity differs"));
+        }
+    }
+    let expected_blocks = manifest.row_count.div_ceil(32);
+    let expected_padding = u32::try_from(expected_blocks * 32 - manifest.row_count).unwrap();
+    if manifest.schema != "borsuk-v26-pq4-fast-manifest-v1"
+        || manifest.row_count == 0
+        || manifest.row_count > u64::from(u32::MAX)
+        || manifest.block_count != expected_blocks
+        || manifest.padding_rows != expected_padding
+        || manifest.dimension != 96
+        || manifest.subquantizer_count != 32
+        || manifest.subspace_dimensions != 3
+        || manifest.centroid_count != 16
+        || manifest.block_rows != 32
+        || manifest.code_bytes_per_row != 16
+        || manifest.byte_order != "subquantizer-major"
+        || manifest.nibble_order != "even-low-odd-high"
+        || manifest.source_order != "ascending-source-ordinal"
+        || manifest.projected_resident_bytes_100m
+            != crate::projected_v26_pq4_fast_resident_bytes(100_000_000)?
+    {
+        return Err(invalid("V26 PQ4 manifest differs"));
+    }
+    Ok(())
+}
+
+pub fn canonical_v26_pq4_fast_manifest_bytes(manifest: &V26Pq4FastManifest) -> Result<Vec<u8>> {
+    validate_v26_pq4_fast_manifest(manifest)?;
+    let value = serde_json::to_value(manifest)
+        .map_err(|error| invalid(&format!("V26 PQ4 manifest failed: {error}")))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V26 PQ4 manifest failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+pub fn write_v26_pq4_fast_index_arrow(
+    directory: &Path,
+    index: &crate::V26Pq4FastIndex,
+    construction_rows: &V26ObjectIdentity,
+    page_assignments: &V26ObjectIdentity,
+    layout_terminal: &V26ObjectIdentity,
+    output_uri_prefix: &str,
+) -> Result<V26Pq4FastManifest> {
+    let codebook_path = directory.join("pq4-fast-codebook.arrow");
+    let codes_path = directory.join("pq4-fast-codes.arrow");
+    let generation = &construction_rows.generation;
+    if !directory.is_dir()
+        || codebook_path.exists()
+        || codes_path.exists()
+        || !output_uri_prefix.starts_with("s3://")
+        || !output_uri_prefix.ends_with('/')
+        || index.row_count == 0
+        || index.blocks.len() != usize::try_from(index.row_count).unwrap().div_ceil(32)
+        || index.codebook.centroids.len() != 32
+        || [construction_rows, page_assignments, layout_terminal]
+            .iter()
+            .any(|identity| identity.generation != *generation)
+    {
+        return Err(invalid("V26 PQ4 Arrow write request differs"));
+    }
+    for (identity, role) in [
+        (construction_rows, "construction-parquet"),
+        (page_assignments, "page-assignments-parquet"),
+        (layout_terminal, "layout-terminal"),
+    ] {
+        validate_v26_benchmark_identity(identity, role)?;
+    }
+    let result = (|| {
+        let values = index
+            .codebook
+            .centroids
+            .iter()
+            .flat_map(|centroids| centroids.iter().copied())
+            .collect::<Vec<_>>();
+        let centroids = FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            1_536,
+            Arc::new(Float32Array::from(values)),
+            None,
+        )
+        .map_err(|error| invalid(&format!("V26 PQ4 codebook values failed: {error}")))?;
+        let file = fs::File::create(&codebook_path)
+            .map_err(|error| invalid(&format!("V26 PQ4 codebook create failed: {error}")))?;
+        let mut writer = FileWriter::try_new(file, &v26_pq4_fast_codebook_schema())
+            .map_err(|error| invalid(&format!("V26 PQ4 codebook writer failed: {error}")))?;
+        writer
+            .write(
+                &RecordBatch::try_new(
+                    Arc::new(v26_pq4_fast_codebook_schema()),
+                    vec![Arc::new(centroids)],
+                )
+                .map_err(|error| invalid(&format!("V26 PQ4 codebook batch failed: {error}")))?,
+            )
+            .map_err(|error| invalid(&format!("V26 PQ4 codebook write failed: {error}")))?;
+        writer
+            .finish()
+            .map_err(|error| invalid(&format!("V26 PQ4 codebook finish failed: {error}")))?;
+
+        let file = fs::File::create(&codes_path)
+            .map_err(|error| invalid(&format!("V26 PQ4 codes create failed: {error}")))?;
+        let mut writer = FileWriter::try_new(file, &v26_pq4_fast_codes_schema())
+            .map_err(|error| invalid(&format!("V26 PQ4 codes writer failed: {error}")))?;
+        for (batch_index, blocks) in index.blocks.chunks(65_536).enumerate() {
+            let first = batch_index * 65_536;
+            let packed = FixedSizeBinaryArray::try_from_iter(blocks.iter())
+                .map_err(|error| invalid(&format!("V26 PQ4 codes array failed: {error}")))?;
+            writer
+                .write(
+                    &RecordBatch::try_new(
+                        Arc::new(v26_pq4_fast_codes_schema()),
+                        vec![
+                            Arc::new(UInt64Array::from_iter_values(
+                                (first..first + blocks.len()).map(|value| value as u64),
+                            )),
+                            Arc::new(packed),
+                        ],
+                    )
+                    .map_err(|error| invalid(&format!("V26 PQ4 codes batch failed: {error}")))?,
+                )
+                .map_err(|error| invalid(&format!("V26 PQ4 codes write failed: {error}")))?;
+        }
+        writer
+            .finish()
+            .map_err(|error| invalid(&format!("V26 PQ4 codes finish failed: {error}")))?;
+
+        let manifest = V26Pq4FastManifest {
+            schema: "borsuk-v26-pq4-fast-manifest-v1".to_owned(),
+            construction_rows: construction_rows.clone(),
+            page_assignments: page_assignments.clone(),
+            layout_terminal: layout_terminal.clone(),
+            codebook: output_identity(
+                "pq4-fast-codebook-arrow",
+                &codebook_path,
+                output_uri_prefix,
+                generation,
+            )?,
+            codes: output_identity(
+                "pq4-fast-codes-arrow",
+                &codes_path,
+                output_uri_prefix,
+                generation,
+            )?,
+            row_count: index.row_count,
+            block_count: index.blocks.len() as u64,
+            padding_rows: u32::try_from(index.blocks.len() * 32).unwrap()
+                - u32::try_from(index.row_count).unwrap(),
+            dimension: 96,
+            subquantizer_count: 32,
+            subspace_dimensions: 3,
+            centroid_count: 16,
+            block_rows: 32,
+            code_bytes_per_row: 16,
+            byte_order: "subquantizer-major".to_owned(),
+            nibble_order: "even-low-odd-high".to_owned(),
+            source_order: "ascending-source-ordinal".to_owned(),
+            projected_resident_bytes_100m: index.projected_resident_bytes_100m,
+        };
+        canonical_v26_pq4_fast_manifest_bytes(&manifest)?;
+        Ok(manifest)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&codebook_path);
+        let _ = fs::remove_file(&codes_path);
+    }
+    result
+}
+
+pub fn read_v26_pq4_fast_index_arrow(
+    directory: &Path,
+    manifest: &V26Pq4FastManifest,
+) -> Result<crate::V26Pq4FastIndex> {
+    validate_v26_pq4_fast_manifest(manifest)?;
+    let mut codebook_reader = authenticate_arrow_file(
+        &directory.join("pq4-fast-codebook.arrow"),
+        &V26ArrowFileIdentity {
+            encoded_bytes: manifest.codebook.encoded_bytes,
+            sha256: manifest.codebook.digest.clone(),
+        },
+    )?;
+    if codebook_reader.schema().as_ref() != &v26_pq4_fast_codebook_schema() {
+        return Err(invalid("V26 PQ4 codebook schema differs"));
+    }
+    let batch = codebook_reader
+        .next()
+        .ok_or_else(|| invalid("V26 PQ4 codebook inventory differs"))?
+        .map_err(|error| invalid(&format!("V26 PQ4 codebook read failed: {error}")))?;
+    if batch.num_rows() != 1 || codebook_reader.next().is_some() {
+        return Err(invalid("V26 PQ4 codebook inventory differs"));
+    }
+    let list = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| invalid("V26 PQ4 codebook type differs"))?;
+    let values = list
+        .values()
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| invalid("V26 PQ4 codebook value type differs"))?;
+    let centroids = values
+        .values()
+        .chunks_exact(48)
+        .map(|chunk| {
+            let mut value = [0.0_f32; 48];
+            value.copy_from_slice(chunk);
+            value
+        })
+        .collect::<Vec<_>>();
+    if centroids.len() != 32 || centroids.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(invalid("V26 PQ4 codebook values differ"));
+    }
+
+    let mut codes_reader = authenticate_arrow_file(
+        &directory.join("pq4-fast-codes.arrow"),
+        &V26ArrowFileIdentity {
+            encoded_bytes: manifest.codes.encoded_bytes,
+            sha256: manifest.codes.digest.clone(),
+        },
+    )?;
+    if codes_reader.schema().as_ref() != &v26_pq4_fast_codes_schema() {
+        return Err(invalid("V26 PQ4 codes schema differs"));
+    }
+    let mut blocks = Vec::with_capacity(usize::try_from(manifest.block_count).unwrap());
+    for batch in &mut codes_reader {
+        let batch =
+            batch.map_err(|error| invalid(&format!("V26 PQ4 codes read failed: {error}")))?;
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V26 PQ4 block ordinal type differs"))?;
+        let packed = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .ok_or_else(|| invalid("V26 PQ4 block type differs"))?;
+        for row in 0..batch.num_rows() {
+            if ordinals.value(row) != blocks.len() as u64 {
+                return Err(invalid("V26 PQ4 block order differs"));
+            }
+            let mut block = [0_u8; 512];
+            block.copy_from_slice(packed.value(row));
+            blocks.push(block);
+        }
+    }
+    if blocks.len() as u64 != manifest.block_count {
+        return Err(invalid("V26 PQ4 block inventory differs"));
+    }
+    let used_in_last = usize::try_from(manifest.row_count).unwrap() % 32;
+    if used_in_last != 0 {
+        let last = blocks.last().unwrap();
+        for row in used_in_last..32 {
+            if (0..32).any(|subspace| {
+                let value = last[subspace * 16 + row / 2];
+                if row.is_multiple_of(2) {
+                    value & 15 != 0
+                } else {
+                    value >> 4 != 0
+                }
+            }) {
+                return Err(invalid("V26 PQ4 padding differs"));
+            }
+        }
+    }
+    Ok(crate::V26Pq4FastIndex {
+        codebook: crate::V26Pq4FastCodebook { centroids },
+        blocks,
+        row_count: manifest.row_count,
+        projected_resident_bytes_100m: manifest.projected_resident_bytes_100m,
+    })
+}
+
 fn v26_pq16_codes_schema() -> Schema {
     Schema::new(vec![
         Field::new("source_ordinal", DataType::UInt32, false),
@@ -6781,14 +7110,15 @@ mod tests {
     use super::{
         V26ArrowColdVectors, V26CandidateCoverRequest, V26CentroidRouterRequest,
         V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
-        V26LocalObjectPath, V26PageModeRouterRequest, V26Pq8CoverRequest,
+        V26LocalObjectPath, V26PageModeRouterRequest, V26Pq4FastManifest, V26Pq8CoverRequest,
         V26Pq16GlobalQualityResult, V26Pq16GlobalQualitySample, V26Pq16RerankRequest,
         V26Pq16ServingBuildRequest, V26Pq16ServingRuntimeRequest, V26PqWidthLadderRequest,
         V26ServingLatencySample, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
-        canonical_v26_pq16_serving_benchmark_result_bytes, evaluate_v26_exact_global,
-        evaluate_v26_layout_oracle, evaluate_v26_layout_oracle_with_page_budget, open_reader,
-        open_v26_pq16_serving_runtime, output_identity, read_assignments, read_evaluation_queries,
-        read_evaluation_truth, read_layout_terminal, read_v26_pq16_index_arrow,
+        canonical_v26_pq4_fast_manifest_bytes, canonical_v26_pq16_serving_benchmark_result_bytes,
+        evaluate_v26_exact_global, evaluate_v26_layout_oracle,
+        evaluate_v26_layout_oracle_with_page_budget, open_reader, open_v26_pq16_serving_runtime,
+        output_identity, read_assignments, read_evaluation_queries, read_evaluation_truth,
+        read_layout_terminal, read_v26_pq4_fast_index_arrow, read_v26_pq16_index_arrow,
         run_v26_candidate_row_cover, run_v26_centroid_router,
         run_v26_global_centroid_frontier_diagnostic, run_v26_global_page_mode_frontier_diagnostic,
         run_v26_layout_build, run_v26_page_mode_router, run_v26_pq_width_ladder,
@@ -6797,7 +7127,7 @@ mod tests {
         select_v26_pq16_global_pages_from_arrow, select_v26_pq16_pages_from_arrow,
         v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
         v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
-        write_v26_pq16_index_arrow,
+        write_v26_pq4_fast_index_arrow, write_v26_pq16_index_arrow,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -8226,6 +8556,108 @@ mod tests {
             super::canonical_v26_dual_pq_key_preflight_result_bytes(&dual_result, &dual_samples)
                 .is_ok()
         );
+    }
+
+    fn pq4_authority(role: &str, marker: char) -> V26ObjectIdentity {
+        V26ObjectIdentity {
+            role: role.to_owned(),
+            uri: format!("s3://v26-pq4-test/{role}"),
+            digest_algorithm: "sha256".to_owned(),
+            digest: marker.to_string().repeat(64),
+            encoded_bytes: 1,
+            generation: "v26-pq4-test-a0001".to_owned(),
+        }
+    }
+
+    #[test]
+    fn v26_pq4_arrow_roundtrips_exact_transposed_blocks_and_authority() {
+        // Break caught: PQ4 persistence uses a private blob, changes nibble/source order, or
+        // accepts coherent Arrow bytes under a different registered identity.
+        let temp = TempDir::new().unwrap();
+        let rows = (0_usize..1_024)
+            .map(|source_ordinal| {
+                let mut vector = [0.0_f32; 96];
+                vector[source_ordinal % 96] = 1.0;
+                vector
+            })
+            .collect::<Vec<_>>();
+        let expected = crate::build_v26_pq4_fast_index(&rows).unwrap();
+        let construction = pq4_authority("construction-parquet", 'a');
+        let assignments = pq4_authority("page-assignments-parquet", 'b');
+        let terminal = pq4_authority("layout-terminal", 'c');
+
+        let manifest = write_v26_pq4_fast_index_arrow(
+            temp.path(),
+            &expected,
+            &construction,
+            &assignments,
+            &terminal,
+            "s3://v26-pq4-test/output/",
+        )
+        .unwrap();
+        assert_eq!(manifest.schema, "borsuk-v26-pq4-fast-manifest-v1");
+        assert_eq!(manifest.row_count, 1_024);
+        assert_eq!(manifest.block_count, 32);
+        assert_eq!(manifest.padding_rows, 0);
+        assert_eq!(manifest.codebook.role, "pq4-fast-codebook-arrow");
+        assert_eq!(manifest.codes.role, "pq4-fast-codes-arrow");
+        for name in ["pq4-fast-codebook.arrow", "pq4-fast-codes.arrow"] {
+            let bytes = fs::read(temp.path().join(name)).unwrap();
+            assert_eq!(&bytes[..6], b"ARROW1");
+            assert_eq!(&bytes[bytes.len() - 6..], b"ARROW1");
+        }
+        let reopened = read_v26_pq4_fast_index_arrow(temp.path(), &manifest).unwrap();
+        assert_eq!(reopened, expected);
+
+        let mut drifted = manifest.clone();
+        drifted.codes.digest.replace_range(0..1, "e");
+        assert!(read_v26_pq4_fast_index_arrow(temp.path(), &drifted).is_err());
+    }
+
+    #[test]
+    fn v26_pq4_arrow_manifest_rejects_every_layout_and_identity_drift() {
+        // Break caught: the manifest ceases to be the complete cross-language authority for
+        // dimensions, packing, padding, memory, source inputs, or its two Arrow outputs.
+        let baseline = V26Pq4FastManifest {
+            schema: "borsuk-v26-pq4-fast-manifest-v1".to_owned(),
+            construction_rows: pq4_authority("construction-parquet", 'a'),
+            page_assignments: pq4_authority("page-assignments-parquet", 'b'),
+            layout_terminal: pq4_authority("layout-terminal", 'c'),
+            codebook: pq4_authority("pq4-fast-codebook-arrow", 'd'),
+            codes: pq4_authority("pq4-fast-codes-arrow", 'e'),
+            row_count: 1_025,
+            block_count: 33,
+            padding_rows: 31,
+            dimension: 96,
+            subquantizer_count: 32,
+            subspace_dimensions: 3,
+            centroid_count: 16,
+            block_rows: 32,
+            code_bytes_per_row: 16,
+            byte_order: "subquantizer-major".to_owned(),
+            nibble_order: "even-low-odd-high".to_owned(),
+            source_order: "ascending-source-ordinal".to_owned(),
+            projected_resident_bytes_100m: 2_336_975_744,
+        };
+        let bytes = canonical_v26_pq4_fast_manifest_bytes(&baseline).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert!(!bytes.windows(2).any(|pair| pair == b" \n"));
+
+        let mutations: Vec<Box<dyn Fn(&mut V26Pq4FastManifest)>> = vec![
+            Box::new(|value| value.dimension = 95),
+            Box::new(|value| value.block_count = 32),
+            Box::new(|value| value.padding_rows = 30),
+            Box::new(|value| value.nibble_order = "odd-low-even-high".to_owned()),
+            Box::new(|value| value.projected_resident_bytes_100m += 1),
+            Box::new(|value| value.construction_rows.role = "query-parquet".to_owned()),
+            Box::new(|value| value.codes.uri = value.codebook.uri.clone()),
+            Box::new(|value| value.layout_terminal.digest_algorithm = "blake3".to_owned()),
+        ];
+        for mutate in mutations {
+            let mut drifted = baseline.clone();
+            mutate(&mut drifted);
+            assert!(canonical_v26_pq4_fast_manifest_bytes(&drifted).is_err());
+        }
     }
 
     #[test]
