@@ -231,7 +231,10 @@ fn summarize_holdout(samples: &[HoldoutSample]) -> Result<HoldoutSummary, String
 fn query_schema() -> Schema {
     Schema::new(vec![Field::new(
         "emb",
-        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), 96),
+        DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            96,
+        ),
         false,
     )])
 }
@@ -239,7 +242,7 @@ fn query_schema() -> Schema {
 fn truth_schema() -> Schema {
     Schema::new(vec![Field::new(
         "neighbors_id",
-        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 100),
+        DataType::FixedSizeList(Arc::new(Field::new("element", DataType::Int32, false)), 100),
         false,
     )])
 }
@@ -729,7 +732,7 @@ mod tests {
             .map(|index| if index % 96 == 0 { 1.0 } else { 0.0 })
             .collect::<Vec<_>>();
         let query_vectors = FixedSizeListArray::try_new(
-            Arc::new(Field::new("item", DataType::Float32, false)),
+            Arc::new(Field::new("element", DataType::Float32, false)),
             96,
             Arc::new(Float32Array::from(query_values)),
             None,
@@ -759,7 +762,7 @@ mod tests {
             .map(|index| i32::try_from(index % 100).unwrap())
             .collect::<Vec<_>>();
         let truth_lists = FixedSizeListArray::try_new(
-            Arc::new(Field::new("item", DataType::Int32, false)),
+            Arc::new(Field::new("element", DataType::Int32, false)),
             100,
             Arc::new(Int32Array::from(truth_values)),
             None,
