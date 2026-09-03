@@ -210,3 +210,52 @@ def canonical_partition_authority_bytes(value: Any) -> bytes:
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8") + b"\n"
+
+
+def stage_partition_manifest(value: Any, shard_ordinal: int) -> dict[str, object]:
+    """Project one validated corpus partition into the Rust stager's manifest."""
+
+    if type(shard_ordinal) is not int or shard_ordinal not in range(_PARTITIONS):
+        raise ValueError("stage shard ordinal differs")
+    authority = validate_partition_authority(value)
+    dataset = authority["dataset"]
+    partition = authority["partitions"][shard_ordinal]
+    ordered_inputs = []
+    for file in partition["files"]:
+        ordered_inputs.append(
+            {
+                "authority_kind": "training-shard",
+                "dimensions": dataset["dimensions"],
+                "identity": {
+                    "digest": file["sha256"],
+                    "digest_algorithm": "sha256",
+                    "encoded_bytes": file["encoded_bytes"],
+                    "role": file["role"],
+                    "uri": file["uri"],
+                },
+                "metric": dataset["metric"],
+                "ordinal_end": file["ordinal_end"],
+                "ordinal_start": file["ordinal_start"],
+                "physical_schema": file["physical_schema"],
+                "rows": file["rows"],
+            }
+        )
+    return {
+        "dataset_id": dataset["id"],
+        "ordered_inputs": ordered_inputs,
+        "ordinal_end": partition["ordinal_end"],
+        "ordinal_start": partition["ordinal_start"],
+        "schema": "borsuk-v26-pq4-partition-manifest-v1",
+        "shard_ordinal": shard_ordinal,
+    }
+
+
+def canonical_stage_partition_manifest_bytes(value: Any, shard_ordinal: int) -> bytes:
+    """Serialize one exact Rust staging manifest as sorted compact newline JSON."""
+
+    return json.dumps(
+        stage_partition_manifest(value, shard_ordinal),
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8") + b"\n"

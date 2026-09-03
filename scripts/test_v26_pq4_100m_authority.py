@@ -4,6 +4,8 @@ import unittest
 
 from scripts.v26_pq4_100m_authority import (
     canonical_partition_authority_bytes,
+    canonical_stage_partition_manifest_bytes,
+    stage_partition_manifest,
     validate_partition_authority,
 )
 
@@ -78,6 +80,48 @@ def authority() -> dict[str, object]:
 
 
 class V26Pq4100mAuthorityTests(unittest.TestCase):
+    def test_v26_pq4_100m_stage_manifest_matches_rust_stager_authority(self) -> None:
+        # Break caught: the controller generates 100M partitions but never emits the exact
+        # per-partition manifest that the Rust staging boundary authenticates.
+        observed = authority()
+        manifest = stage_partition_manifest(observed, 4)
+        self.assertEqual(
+            manifest,
+            {
+                "dataset_id": "synthetic-clustered-100m-96",
+                "ordered_inputs": [
+                    {
+                        "authority_kind": "training-shard",
+                        "dimensions": 96,
+                        "identity": {
+                            "digest": f"{25:064x}",
+                            "digest_algorithm": "sha256",
+                            "encoded_bytes": 1_000_024,
+                            "role": "training-shard-0004-0000",
+                            "uri": "s3://frozen-v26/partition-0004/train-00000000.parquet",
+                        },
+                        "metric": "cosine",
+                        "ordinal_end": 50_000_000,
+                        "ordinal_start": 40_000_000,
+                        "physical_schema": "emb:fixed-size-list<element:f32;96>:non-null",
+                        "rows": 10_000_000,
+                    }
+                ],
+                "ordinal_end": 50_000_000,
+                "ordinal_start": 40_000_000,
+                "schema": "borsuk-v26-pq4-partition-manifest-v1",
+                "shard_ordinal": 4,
+            },
+        )
+        encoded = canonical_stage_partition_manifest_bytes(observed, 4)
+        self.assertTrue(encoded.endswith(b"\n"))
+        self.assertEqual(json.loads(encoded), manifest)
+        self.assertEqual(encoded, canonical_stage_partition_manifest_bytes(observed, 4))
+
+        for invalid in (-1, True, 10):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                stage_partition_manifest(observed, invalid)
+
     def test_v26_pq4_100m_authority_accepts_exact_partition_union(self) -> None:
         observed = authority()
         self.assertEqual(validate_partition_authority(observed), observed)
