@@ -1646,6 +1646,82 @@ pub(crate) fn rank_v26_pq4_fast_candidates(
     Ok(ranked)
 }
 
+pub(crate) fn evaluate_v26_pq4_fast_frontier(
+    index: &V26Pq4FastIndex,
+    query: &[f32; 96],
+    rows: &[[f32; 96]],
+    assignments: &[V26RowPages],
+    backend: V26Pq4Backend,
+) -> Result<Vec<V26Pq16ServingSelection>> {
+    const DEPTHS: [usize; 4] = [512, 1_024, 2_048, 4_096];
+    if rows.len() != assignments.len()
+        || index.row_count != rows.len() as u64
+        || assignments.iter().enumerate().any(|(ordinal, row)| {
+            row.source_ordinal != ordinal as u64 || row.primary_page == row.replica_page
+        })
+    {
+        return Err(invalid("V26 PQ4 frontier authority differs"));
+    }
+    let approximate = rank_v26_pq4_fast_candidates(index, query, 4_096, backend)?;
+    DEPTHS
+        .into_iter()
+        .map(|depth| {
+            let mut exact = approximate[..depth]
+                .iter()
+                .map(|candidate| {
+                    let ordinal = usize::try_from(candidate.source_ordinal)
+                        .map_err(|_| invalid("V26 PQ4 candidate ordinal overflows"))?;
+                    let vector = rows
+                        .get(ordinal)
+                        .ok_or_else(|| invalid("V26 PQ4 candidate row differs"))?;
+                    let assignment = assignments
+                        .get(ordinal)
+                        .ok_or_else(|| invalid("V26 PQ4 candidate assignment differs"))?;
+                    let distance = v26_squared_l2(vector, query);
+                    if !distance.is_finite() {
+                        return Err(invalid("V26 PQ4 exact distance differs"));
+                    }
+                    Ok((
+                        V26PqRankedRow {
+                            source_ordinal: candidate.source_ordinal,
+                            distance,
+                        },
+                        [assignment.primary_page, assignment.replica_page],
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            exact.sort_by_key(|entry| entry.0);
+            let top_assignments = exact[..10]
+                .iter()
+                .map(|(_, pages)| pages.to_vec())
+                .collect::<Vec<_>>();
+            let mut selected_pages =
+                exact_v26_layout_oracle_pages(&top_assignments, V26_SERVING_PAGE_BUDGET)?;
+            for (_, pages) in &exact {
+                for page in pages {
+                    if selected_pages.len() == V26_SERVING_PAGE_BUDGET {
+                        break;
+                    }
+                    if !selected_pages.contains(page) {
+                        selected_pages.push(*page);
+                    }
+                }
+            }
+            if selected_pages.len() != V26_SERVING_PAGE_BUDGET {
+                return Err(invalid("V26 PQ4 page inventory differs"));
+            }
+            selected_pages.sort_unstable();
+            Ok(V26Pq16ServingSelection {
+                selected_pages,
+                exact_rows_read: depth as u32,
+                cold_batches_read: 0,
+                cold_read_workers: 0,
+                page_body_reads: 0,
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct V26PqCodebook {
     width: usize,
@@ -4691,27 +4767,27 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        V26_PAGE_MODE_LADDER, V26_PQ_WIDTH_LADDER, V26ConstructionRow, V26Disposition,
-        V26ExactGlobalRankResult, V26ExactGlobalResult, V26ExternalQuery, V26ExternalTruth,
-        V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult, V26LayoutSample, V26Node,
-        V26ObjectIdentity, V26Pq4Backend, V26Pq4FastCodebook, V26Pq4RankedRow, V26Pq8Occurrence,
-        V26QueryTruth, V26RankedRow, V26RowPages, V26Tree, build_v26_dual_tree_layout,
-        build_v26_external_truth_rows, build_v26_page_mode_centroids, build_v26_pq4_fast_index,
-        build_v26_pq8_page_occurrences, build_v26_pq16_packed_index,
+        V26_PAGE_MODE_LADDER, V26_PQ_WIDTH_LADDER, V26_SERVING_PAGE_BUDGET, V26ConstructionRow,
+        V26Disposition, V26ExactGlobalRankResult, V26ExactGlobalResult, V26ExternalQuery,
+        V26ExternalTruth, V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult, V26LayoutSample,
+        V26Node, V26ObjectIdentity, V26Pq4Backend, V26Pq4FastCodebook, V26Pq4RankedRow,
+        V26Pq8Occurrence, V26QueryTruth, V26RankedRow, V26RowPages, V26Tree,
+        build_v26_dual_tree_layout, build_v26_external_truth_rows, build_v26_page_mode_centroids,
+        build_v26_pq4_fast_index, build_v26_pq8_page_occurrences, build_v26_pq16_packed_index,
         canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
         canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
         diagnose_v26_global_centroid_candidate_widths,
         diagnose_v26_global_page_mode_candidate_widths, diagnose_v26_tree_router_candidate_widths,
         evaluate_v26_candidate_row_cover, evaluate_v26_centroid_router,
         evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
-        evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
-        evaluate_v26_pq16_exact_rerank_ladder, evaluate_v26_tree_router,
-        exact_v26_layout_oracle_pages, fit_v26_pq_codebook, fit_v26_pq4_fast_codebook,
-        fit_v26_pq8_codebook, pack_v26_pq4_fast_blocks, prepare_v26_pq_tables,
-        prepare_v26_pq4_query_tables, prepare_v26_pq8_tables, projected_v26_pq_resident_bytes,
-        projected_v26_pq4_fast_resident_bytes, projected_v26_pq8_resident_bytes,
-        rank_v26_candidate_rows, rank_v26_pq4_fast_candidates, rank_v26_pq8_occurrences,
-        rank_v26_pq16_candidate_rows, rank_v26_pq16_global_candidates,
+        evaluate_v26_pq_width_ladder, evaluate_v26_pq4_fast_frontier,
+        evaluate_v26_pq8_candidate_cover, evaluate_v26_pq16_exact_rerank_ladder,
+        evaluate_v26_tree_router, exact_v26_layout_oracle_pages, fit_v26_pq_codebook,
+        fit_v26_pq4_fast_codebook, fit_v26_pq8_codebook, pack_v26_pq4_fast_blocks,
+        prepare_v26_pq_tables, prepare_v26_pq4_query_tables, prepare_v26_pq8_tables,
+        projected_v26_pq_resident_bytes, projected_v26_pq4_fast_resident_bytes,
+        projected_v26_pq8_resident_bytes, rank_v26_candidate_rows, rank_v26_pq4_fast_candidates,
+        rank_v26_pq8_occurrences, rank_v26_pq16_candidate_rows, rank_v26_pq16_global_candidates,
         rank_v26_pq16_linear_occurrence_candidates, rank_v26_pq16_packed_candidates,
         rank_v26_pq16_parallel_occurrence_candidates, rank_v26_tree_pages, route_v26_pages,
         select_v26_pq16_global_packed_pages, select_v26_pq16_packed_pages, select_v26_ranked_pages,
@@ -5656,6 +5732,54 @@ mod tests {
             rank_v26_pq4_fast_candidates(&index, &query, 513, V26Pq4Backend::ScalarControl,)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn v26_pq4_quality_frontier_reuses_one_scan_without_changing_any_arm() {
+        // Break caught: the four development depths rescan/tune independently or prefix reuse
+        // changes exact reranking, ten-page reduction, ordering, or page-read authority.
+        let rows = (0_u64..8_193)
+            .map(|source_ordinal| {
+                let angle = source_ordinal as f32 / 8_193.0 * std::f32::consts::TAU;
+                let mut vector = [0.0_f32; 96];
+                vector[0] = angle.cos();
+                vector[1] = angle.sin();
+                vector
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..8_193)
+            .map(|source_ordinal| V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 64).unwrap(),
+                replica_page: 64 + u32::try_from(source_ordinal % 64).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let index = build_v26_pq4_fast_index(&rows).unwrap();
+        let query = rows[117];
+        let frontier = evaluate_v26_pq4_fast_frontier(
+            &index,
+            &query,
+            &rows,
+            &assignments,
+            V26Pq4Backend::ScalarControl,
+        )
+        .unwrap();
+        assert_eq!(frontier.len(), 4);
+        assert_eq!(
+            frontier
+                .iter()
+                .map(|selection| selection.exact_rows_read)
+                .collect::<Vec<_>>(),
+            [512, 1_024, 2_048, 4_096]
+        );
+        assert!(frontier.iter().all(|selection| {
+            selection.selected_pages.len() == V26_SERVING_PAGE_BUDGET
+                && selection
+                    .selected_pages
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1])
+                && selection.page_body_reads == 0
+        }));
     }
 
     #[test]
