@@ -1,5 +1,8 @@
 import base64
 import json
+import pathlib
+import subprocess
+import tempfile
 import unittest
 
 from scripts.run_v27_s3_page_campaign import (
@@ -146,6 +149,43 @@ class V27ReducedSpotTests(unittest.TestCase):
             self.assertLess(
                 script.index("python3 - \"$root/COMPLETE.json\""),
                 script.rindex("put_once \"$root/worker.log\" worker.log"),
+            )
+
+    def test_v27_reduced_spot_terminal_writer_executes_and_emits_canonical_json(self) -> None:
+        # Break caught: Python escapes are interpreted by the outer worker template, so the
+        # terminal writer fails only after an otherwise successful remote build.
+        script = base64.b64decode(
+            build_v27_spot_specs(
+                self.plan(),
+                (
+                    SpotTarget("eu-central-1a", "subnet-a"),
+                    SpotTarget("eu-central-1b", "subnet-b"),
+                ),
+            )[0]["UserData"]
+        ).decode()
+        marker = "<<'PY'\n"
+        snippet = script.split(marker, 1)[1].split("\nPY\n", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / "COMPLETE.json"
+            completed = subprocess.run(
+                [
+                    "python3",
+                    "-",
+                    str(output),
+                    self.plan().run_id,
+                    self.plan().source_commit,
+                ],
+                input=snippet,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            value = json.loads(output.read_bytes())
+            self.assertEqual(value["status"], "complete")
+            self.assertEqual(
+                output.read_bytes(),
+                json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n",
             )
 
     def test_v27_reduced_spot_falls_across_capacity_and_terminates_original(self) -> None:

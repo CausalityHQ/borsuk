@@ -266,7 +266,7 @@ python3 - "$root/COMPLETE.json" {values['run_id']} {values['commit']} <<'PY'
 import json,sys
 path,run_id,commit=sys.argv[1:]
 value={{"claim_eligible":False,"run_id":run_id,"schema":"borsuk-v27-reduced-spot-terminal-v1","source_commit":commit,"status":"complete"}}
-open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\n")
+open(path,"wb").write(json.dumps(value,sort_keys=True,separators=(",", ":")).encode()+b"\\n")
 PY
 put_once "$root/worker.log" worker.log
 put_once "$root/COMPLETE.json" COMPLETE.json
