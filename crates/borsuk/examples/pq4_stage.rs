@@ -42,13 +42,18 @@ struct Pq4StageReport {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TrainingManifest {
     schema: String,
     dataset_id: String,
+    shard_ordinal: u32,
+    ordinal_start: u64,
+    ordinal_end: u64,
     ordered_inputs: Vec<ManifestInput>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ManifestInput {
     authority_kind: String,
     dimensions: usize,
@@ -61,6 +66,7 @@ struct ManifestInput {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ManifestIdentity {
     digest: String,
     digest_algorithm: String,
@@ -200,8 +206,11 @@ fn training_inputs<'a>(
     manifest: &'a TrainingManifest,
     request: &Pq4StageRequest,
 ) -> Result<Vec<&'a ManifestInput>, String> {
-    if manifest.schema != "borsuk-v23-incidence-manifest-v1"
-        || manifest.dataset_id != "deep-image-96"
+    if manifest.schema != "borsuk-v26-pq4-partition-manifest-v1"
+        || manifest.dataset_id != "synthetic-clustered-100m-96"
+        || manifest.shard_ordinal >= 10
+        || manifest.ordinal_start != request.ordinal_start
+        || manifest.ordinal_end != request.ordinal_end
     {
         return Err("PQ4 training manifest authority differs".to_owned());
     }
@@ -224,7 +233,8 @@ fn training_inputs<'a>(
         if input.dimensions != request.dimensions
             || input.metric != "cosine"
             || input.physical_schema != "emb:fixed-size-list<element:f32;96>:non-null"
-            || input.identity.role != format!("training-shard-{ordinal:04}")
+            || input.identity.role
+                != format!("training-shard-{:04}-{ordinal:04}", manifest.shard_ordinal)
             || input.identity.digest_algorithm != "sha256"
             || lower_digest(input.identity.digest.clone(), "manifest digest").is_err()
             || !input.identity.uri.starts_with("s3://")
@@ -518,7 +528,7 @@ mod tests {
                         "digest": digest,
                         "digest_algorithm": "sha256",
                         "encoded_bytes": bytes,
-                        "role": format!("training-shard-{shard:04}"),
+                        "role": format!("training-shard-0007-{shard:04}"),
                         "uri": format!("s3://frozen/train-{shard:08}.parquet")
                     },
                     "metric": "cosine",
@@ -533,9 +543,12 @@ mod tests {
         std::fs::write(
             &manifest,
             serde_json::to_vec(&serde_json::json!({
-                "dataset_id": "deep-image-96",
+                "dataset_id": "synthetic-clustered-100m-96",
                 "ordered_inputs": ordered_inputs,
-                "schema": "borsuk-v23-incidence-manifest-v1"
+                "ordinal_end": 104,
+                "ordinal_start": 100,
+                "schema": "borsuk-v26-pq4-partition-manifest-v1",
+                "shard_ordinal": 7
             }))
             .unwrap(),
         )
