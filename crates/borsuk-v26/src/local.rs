@@ -346,6 +346,141 @@ pub struct V26Pq16GlobalPreflightResult {
     pub claim_eligible: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26SimHashPreflightSample {
+    pub bucket_limit: u32,
+    pub query_ordinal: u32,
+    pub selected_pages: Vec<u32>,
+    pub hits: u32,
+    pub oracle_hits: u32,
+    pub recall_ppm: u64,
+    pub oracle_attainment_ppm: u64,
+    pub elapsed_ns: u64,
+    pub rows_scanned: u64,
+    pub cold_batches_read: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26SimHashPreflightArmResult {
+    pub bucket_limit: u32,
+    pub aggregate_recall_ppm: u64,
+    pub minimum_query_recall_ppm: u64,
+    pub oracle_attainment_ppm: u64,
+    pub maximum_latency_ns: u64,
+    pub minimum_rows_scanned: u64,
+    pub maximum_rows_scanned: u64,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26SimHashPreflightResult {
+    pub schema: String,
+    pub query_count: u32,
+    pub ranked_row_limit: u32,
+    pub selected_page_count: u32,
+    pub aggregate_recall_gate_ppm: u64,
+    pub minimum_query_recall_gate_ppm: u64,
+    pub oracle_attainment_gate_ppm: u64,
+    pub maximum_latency_gate_ns: u64,
+    pub arms: Vec<V26SimHashPreflightArmResult>,
+    pub page_body_reads: u32,
+    pub claim_eligible: bool,
+}
+
+fn summarize_v26_simhash_preflight(
+    samples: &[V26SimHashPreflightSample],
+) -> Result<V26SimHashPreflightResult> {
+    const BUCKET_LIMITS: [u32; 3] = [137, 697, 2_517];
+    const QUERY_COUNT: usize = 32;
+    if samples.len() != BUCKET_LIMITS.len() * QUERY_COUNT {
+        return Err(invalid("V26 SimHash preflight sample inventory differs"));
+    }
+    let arms = BUCKET_LIMITS
+        .into_iter()
+        .enumerate()
+        .map(|(arm_index, bucket_limit)| {
+            let arm = &samples[arm_index * QUERY_COUNT..(arm_index + 1) * QUERY_COUNT];
+            let mut total_hits = 0_u64;
+            let mut total_oracle_hits = 0_u64;
+            for (query_index, sample) in arm.iter().enumerate() {
+                if sample.bucket_limit != bucket_limit
+                    || usize::try_from(sample.query_ordinal).ok() != Some(query_index)
+                    || sample.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
+                    || sample
+                        .selected_pages
+                        .windows(2)
+                        .any(|pair| pair[0] >= pair[1])
+                    || sample.hits > sample.oracle_hits
+                    || !(1..=10).contains(&sample.oracle_hits)
+                    || sample.recall_ppm != u64::from(sample.hits) * 100_000
+                    || sample.oracle_attainment_ppm
+                        != u64::from(sample.hits) * 1_000_000 / u64::from(sample.oracle_hits)
+                    || sample.elapsed_ns == 0
+                    || sample.rows_scanned < 2_048
+                    || sample.cold_batches_read == 0
+                {
+                    return Err(invalid("V26 SimHash preflight sample authority differs"));
+                }
+                total_hits = total_hits
+                    .checked_add(u64::from(sample.hits))
+                    .ok_or_else(|| invalid("V26 SimHash preflight metric overflows"))?;
+                total_oracle_hits = total_oracle_hits
+                    .checked_add(u64::from(sample.oracle_hits))
+                    .ok_or_else(|| invalid("V26 SimHash preflight metric overflows"))?;
+            }
+            let aggregate_recall_ppm = total_hits * 1_000_000 / 320;
+            let minimum_query_recall_ppm =
+                arm.iter().map(|sample| sample.recall_ppm).min().unwrap();
+            let oracle_attainment_ppm = total_hits * 1_000_000 / total_oracle_hits;
+            let maximum_latency_ns = arm.iter().map(|sample| sample.elapsed_ns).max().unwrap();
+            Ok(V26SimHashPreflightArmResult {
+                bucket_limit,
+                aggregate_recall_ppm,
+                minimum_query_recall_ppm,
+                oracle_attainment_ppm,
+                maximum_latency_ns,
+                minimum_rows_scanned: arm.iter().map(|sample| sample.rows_scanned).min().unwrap(),
+                maximum_rows_scanned: arm.iter().map(|sample| sample.rows_scanned).max().unwrap(),
+                passed: aggregate_recall_ppm >= 975_000
+                    && minimum_query_recall_ppm >= 800_000
+                    && oracle_attainment_ppm >= 995_000
+                    && maximum_latency_ns <= 15_000_000,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(V26SimHashPreflightResult {
+        schema: "borsuk-v26-simhash-pq16-preflight-result-v1".to_owned(),
+        query_count: 32,
+        ranked_row_limit: 2_048,
+        selected_page_count: u32::try_from(crate::V26_SERVING_PAGE_BUDGET).unwrap(),
+        aggregate_recall_gate_ppm: 975_000,
+        minimum_query_recall_gate_ppm: 800_000,
+        oracle_attainment_gate_ppm: 995_000,
+        maximum_latency_gate_ns: 15_000_000,
+        arms,
+        page_body_reads: 0,
+        claim_eligible: false,
+    })
+}
+
+pub fn canonical_v26_simhash_preflight_result_bytes(
+    result: &V26SimHashPreflightResult,
+    samples: &[V26SimHashPreflightSample],
+) -> Result<Vec<u8>> {
+    if result != &summarize_v26_simhash_preflight(samples)? {
+        return Err(invalid("V26 SimHash preflight result differs"));
+    }
+    let value = serde_json::to_value(result)
+        .map_err(|error| invalid(&format!("V26 SimHash preflight result failed: {error}")))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V26 SimHash preflight result failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V26Pq16ServingBenchmarkRequest {
     pub runtime: V26Pq16ServingRuntimeRequest,
@@ -5793,5 +5928,42 @@ mod tests {
         let mut drifted = result;
         drifted.maximum_ns += 1;
         assert!(canonical_v26_pq16_global_preflight_result_bytes(&drifted, &samples).is_err());
+    }
+
+    #[test]
+    fn v26_fast_simhash_preflight_recomputes_truth_quality_and_latency_gates() {
+        // Break caught: the SimHash preflight trusts stored recall, latency, or arm pass fields.
+        let samples = [137_u32, 697, 2_517]
+            .into_iter()
+            .flat_map(|bucket_limit| {
+                (0_u32..32).map(move |query_ordinal| super::V26SimHashPreflightSample {
+                    bucket_limit,
+                    query_ordinal,
+                    selected_pages: (0_u32..10).collect(),
+                    hits: 10,
+                    oracle_hits: 10,
+                    recall_ppm: 1_000_000,
+                    oracle_attainment_ppm: 1_000_000,
+                    elapsed_ns: 1_000_000 + u64::from(query_ordinal),
+                    rows_scanned: 8_192,
+                    cold_batches_read: 2,
+                })
+            })
+            .collect::<Vec<_>>();
+        let result = super::summarize_v26_simhash_preflight(&samples).unwrap();
+        assert_eq!(result.query_count, 32);
+        assert_eq!(result.arms.len(), 3);
+        assert!(result.arms.iter().all(|arm| arm.passed));
+        assert!(!result.claim_eligible);
+        assert_eq!(result.page_body_reads, 0);
+        let bytes = super::canonical_v26_simhash_preflight_result_bytes(&result, &samples).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+
+        let mut drifted = result.clone();
+        drifted.arms[0].aggregate_recall_ppm -= 1;
+        assert!(super::canonical_v26_simhash_preflight_result_bytes(&drifted, &samples).is_err());
+        let mut drifted = result;
+        drifted.arms[0].passed = false;
+        assert!(super::canonical_v26_simhash_preflight_result_bytes(&drifted, &samples).is_err());
     }
 }
