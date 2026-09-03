@@ -147,6 +147,12 @@ class V27ReducedSpotTests(unittest.TestCase):
         terminated: list[str] = []
         sleeps: list[int] = []
         terminal = iter([None, None, b'{"status":"complete"}\n'])
+        health = iter(
+            [
+                ("pending", "initializing", "initializing"),
+                ("running", "ok", "ok"),
+            ]
+        )
 
         def launch(spec: dict[str, object]) -> str:
             launches.append(str(spec["SubnetId"]))
@@ -162,7 +168,7 @@ class V27ReducedSpotTests(unittest.TestCase):
             ),
             launch=launch,
             terminal=lambda: next(terminal),
-            health=lambda _instance: ("running", "ok", "ok"),
+            health=lambda _instance: next(health),
             sleep=lambda seconds: sleeps.append(seconds),
             terminate=lambda instance: terminated.append(instance),
         )
