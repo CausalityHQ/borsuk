@@ -108,7 +108,7 @@ fn rows_from_batch(batch: &RecordBatch) -> Result<(Vec<[f32; 96]>, &BinaryArray)
     if ids.null_count() != 0
         || vectors.null_count() != 0
         || values.null_count() != 0
-        || remainder.len() != 0
+        || !remainder.is_empty()
         || rows.len() != batch.num_rows()
         || rows.iter().any(|row| {
             row.iter().any(|value| !value.is_finite())
@@ -140,7 +140,7 @@ fn append_codes(
         let row = *pending_rows;
         for (subspace, value) in code.iter().enumerate() {
             let packed = &mut pending[subspace * 16 + row / 2];
-            if row % 2 == 0 {
+            if row.is_multiple_of(2) {
                 *packed = *value;
             } else {
                 *packed |= *value << 4;

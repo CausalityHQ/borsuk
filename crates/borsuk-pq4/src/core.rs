@@ -20,6 +20,7 @@ fn validate_vector(vector: &[f32; 96]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn projected_resident_bytes(rows: u64) -> Result<u64> {
     if rows == 0 {
         return Err(invalid("PQ4 row count must be nonzero"));
@@ -152,6 +153,7 @@ pub(crate) fn fit_codebook(rows: &[[f32; 96]]) -> Result<Pq4Codebook> {
     Ok(codebook)
 }
 
+#[cfg(test)]
 pub(crate) fn encode_blocks(codes: &[[u8; SUBQUANTIZERS]]) -> Result<Vec<[u8; 512]>> {
     if codes.is_empty() || codes.iter().flatten().any(|code| *code >= 16) {
         return Err(invalid("PQ4 codes must be nonempty four-bit values"));

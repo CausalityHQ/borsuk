@@ -100,11 +100,20 @@ pub struct Pq4Unavailable;
 
 impl std::fmt::Display for Pq4Unavailable {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("the qualified AArch64 NEON PQ4 backend is unavailable")
+        formatter.write_str("no qualified PQ4 SIMD backend is available")
     }
 }
 
 impl std::error::Error for Pq4Unavailable {}
+
+/// SIMD table-lookup backend frozen by [`Pq4BlockScorer::detect`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pq4Backend {
+    /// AArch64 Advanced SIMD byte-table lookup.
+    Aarch64Neon,
+    /// x86/x86_64 SSSE3 byte-table lookup.
+    X86Ssse3,
+}
 
 /// A detected, safe PQ4 scorer for one 32-row transposed block.
 ///
@@ -113,7 +122,7 @@ impl std::error::Error for Pq4Unavailable {}
 /// the target-feature function on an unsupported processor.
 #[derive(Debug, Clone, Copy)]
 pub struct Pq4BlockScorer {
-    _private: (),
+    backend: Pq4Backend,
 }
 
 impl Pq4BlockScorer {
@@ -121,25 +130,45 @@ impl Pq4BlockScorer {
     pub fn detect() -> Result<Self, Pq4Unavailable> {
         #[cfg(target_arch = "aarch64")]
         if std::arch::is_aarch64_feature_detected!("neon") {
-            return Ok(Self { _private: () });
+            return Ok(Self {
+                backend: Pq4Backend::Aarch64Neon,
+            });
+        }
+
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        if std::arch::is_x86_feature_detected!("ssse3") {
+            return Ok(Self {
+                backend: Pq4Backend::X86Ssse3,
+            });
         }
 
         Err(Pq4Unavailable)
     }
 
+    /// The exact table-lookup backend frozen by [`Self::detect`].
+    pub fn backend(self) -> Pq4Backend {
+        self.backend
+    }
+
     /// Score exactly 32 rows against 32 sixteen-entry lookup tables.
     #[inline(always)]
     pub fn score(self, block: &[u8; 512], tables: &[[u8; 16]; 32]) -> [u16; 32] {
-        #[cfg(target_arch = "aarch64")]
-        {
-            // SAFETY: `detect` is the only constructor and established NEON
-            // availability; fixed-size arguments make every 16-byte access
-            // valid.
-            return unsafe { aarch64_pq4_block_scores(block, tables) };
+        match self.backend {
+            #[cfg(target_arch = "aarch64")]
+            Pq4Backend::Aarch64Neon => {
+                // SAFETY: `detect` established NEON availability and fixed-size
+                // arguments make every 16-byte access valid.
+                unsafe { aarch64_pq4_block_scores(block, tables) }
+            }
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            Pq4Backend::X86Ssse3 => {
+                // SAFETY: `detect` established SSSE3 availability and fixed-size
+                // arguments make every 16-byte access valid.
+                unsafe { x86_pq4_block_scores(block, tables) }
+            }
+            #[allow(unreachable_patterns)]
+            _ => unreachable!("a PQ4 scorer cannot contain a foreign backend"),
         }
-
-        #[cfg(not(target_arch = "aarch64"))]
-        unreachable!("a PQ4 scorer cannot be constructed without AArch64 NEON")
     }
 }
 
@@ -176,9 +205,9 @@ unsafe fn aarch64_pq4_block_scores(block: &[u8; 512], tables: &[[u8; 16]; 32]) -
         let mut even_high = vdupq_n_u16(0);
         let mut odd_low = vdupq_n_u16(0);
         let mut odd_high = vdupq_n_u16(0);
-        for subspace in 0..32 {
+        for (subspace, table_bytes) in tables.iter().enumerate() {
             let packed = vld1q_u8(block.as_ptr().add(subspace * 16));
-            let table = vld1q_u8(tables[subspace].as_ptr());
+            let table = vld1q_u8(table_bytes.as_ptr());
             let even = vqtbl1q_u8(table, vandq_u8(packed, mask));
             let odd = vqtbl1q_u8(table, vshrq_n_u8::<4>(packed));
             even_low = vaddq_u16(even_low, vmovl_u8(vget_low_u8(even)));
@@ -192,6 +221,57 @@ unsafe fn aarch64_pq4_block_scores(block: &[u8; 512], tables: &[[u8; 16]; 32]) -
         vst1q_u16(even.as_mut_ptr().add(8), even_high);
         vst1q_u16(odd.as_mut_ptr(), odd_low);
         vst1q_u16(odd.as_mut_ptr().add(8), odd_high);
+        std::array::from_fn(|row| {
+            if row.is_multiple_of(2) {
+                even[row / 2]
+            } else {
+                odd[row / 2]
+            }
+        })
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "ssse3")]
+unsafe fn x86_pq4_block_scores(block: &[u8; 512], tables: &[[u8; 16]; 32]) -> [u16; 32] {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::{
+        __m128i, _mm_add_epi16, _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_setzero_si128,
+        _mm_shuffle_epi8, _mm_srli_epi16, _mm_storeu_si128, _mm_unpackhi_epi8, _mm_unpacklo_epi8,
+    };
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::{
+        __m128i, _mm_add_epi16, _mm_and_si128, _mm_loadu_si128, _mm_set1_epi8, _mm_setzero_si128,
+        _mm_shuffle_epi8, _mm_srli_epi16, _mm_storeu_si128, _mm_unpackhi_epi8, _mm_unpacklo_epi8,
+    };
+
+    // SAFETY: each load/store addresses a fixed 16-byte region, SSSE3 was
+    // detected before construction, and four u16 accumulators cannot exceed
+    // the registered maximum score of 8,160.
+    unsafe {
+        let mask = _mm_set1_epi8(0x0f);
+        let zero = _mm_setzero_si128();
+        let mut even_low = zero;
+        let mut even_high = zero;
+        let mut odd_low = zero;
+        let mut odd_high = zero;
+        for (subspace, table_bytes) in tables.iter().enumerate() {
+            let packed = _mm_loadu_si128(block.as_ptr().add(subspace * 16).cast::<__m128i>());
+            let table = _mm_loadu_si128(table_bytes.as_ptr().cast::<__m128i>());
+            let even = _mm_shuffle_epi8(table, _mm_and_si128(packed, mask));
+            let odd_indices = _mm_and_si128(_mm_srli_epi16::<4>(packed), mask);
+            let odd = _mm_shuffle_epi8(table, odd_indices);
+            even_low = _mm_add_epi16(even_low, _mm_unpacklo_epi8(even, zero));
+            even_high = _mm_add_epi16(even_high, _mm_unpackhi_epi8(even, zero));
+            odd_low = _mm_add_epi16(odd_low, _mm_unpacklo_epi8(odd, zero));
+            odd_high = _mm_add_epi16(odd_high, _mm_unpackhi_epi8(odd, zero));
+        }
+        let mut even = [0_u16; 16];
+        let mut odd = [0_u16; 16];
+        _mm_storeu_si128(even.as_mut_ptr().cast::<__m128i>(), even_low);
+        _mm_storeu_si128(even.as_mut_ptr().add(8).cast::<__m128i>(), even_high);
+        _mm_storeu_si128(odd.as_mut_ptr().cast::<__m128i>(), odd_low);
+        _mm_storeu_si128(odd.as_mut_ptr().add(8).cast::<__m128i>(), odd_high);
         std::array::from_fn(|row| {
             if row.is_multiple_of(2) {
                 even[row / 2]
@@ -266,7 +346,9 @@ unsafe fn x86_dot(left: &[f32; 96], right: &[f32; 96]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{FusedDot8x12, Pq4BlockScorer, fused_dot_8x12, pq4_scalar_block_scores};
+    use super::{
+        FusedDot8x12, Pq4Backend, Pq4BlockScorer, fused_dot_8x12, pq4_scalar_block_scores,
+    };
 
     fn scalar(left: &[f32; 96], right: &[f32; 96]) -> f32 {
         let mut lanes = [0.0_f32; 8];
@@ -334,17 +416,17 @@ mod tests {
     }
 
     #[test]
-    fn pq4_block_backend_detection_is_explicit() {
-        let detected = Pq4BlockScorer::detect();
+    fn pq4_block_backend_detection_is_explicit_and_portable() {
+        let detected = Pq4BlockScorer::detect().unwrap();
         #[cfg(target_arch = "aarch64")]
-        assert!(detected.is_ok());
-        #[cfg(not(target_arch = "aarch64"))]
-        assert!(detected.is_err());
+        assert_eq!(detected.backend(), Pq4Backend::Aarch64Neon);
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        assert_eq!(detected.backend(), Pq4Backend::X86Ssse3);
     }
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64"))]
     #[test]
-    fn pq4_block_neon_matches_scalar_for_boundary_patterns() {
+    fn pq4_block_simd_matches_scalar_for_boundary_patterns() {
         let scorer = Pq4BlockScorer::detect().unwrap();
         let tables = std::array::from_fn(|subspace| {
             std::array::from_fn(|centroid| ((subspace * 11 + centroid * 13) % 256) as u8)

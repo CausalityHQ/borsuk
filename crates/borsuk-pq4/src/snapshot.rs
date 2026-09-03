@@ -19,8 +19,10 @@ use crate::{
     format::{Pq4ArtifactIdentity, Pq4Manifest, canonical_manifest_bytes},
 };
 
+#[cfg(test)]
 const BATCH_ROWS: usize = 65_536;
 
+#[cfg(test)]
 pub(crate) struct Pq4SnapshotWriteRequest<'a> {
     pub(crate) directory: &'a Path,
     pub(crate) generation: &'a str,
@@ -289,6 +291,7 @@ pub(super) fn finish_streamed_snapshot(
     Ok(manifest)
 }
 
+#[cfg(test)]
 pub(crate) fn write_snapshot(request: &Pq4SnapshotWriteRequest<'_>) -> Result<Pq4Manifest> {
     let row_count = request.vectors.len();
     if request.directory.exists()
@@ -494,10 +497,9 @@ fn authenticate(path: &Path, identity: &Pq4ArtifactIdentity) -> Result<FileReade
     .map_err(|error| invalid(&format!("PQ4 snapshot Arrow metadata failed: {error}")))
 }
 
-fn raw_batches(
-    path: &Path,
-    schema: &Schema,
-) -> Result<(fs::File, Vec<(u64, u64, Vec<(u64, u64)>)>)> {
+type RawBatch = (u64, u64, Vec<(u64, u64)>);
+
+fn raw_batches(path: &Path, schema: &Schema) -> Result<(fs::File, Vec<RawBatch>)> {
     let file = fs::File::open(path)
         .map_err(|error| invalid(&format!("PQ4 snapshot positional open failed: {error}")))?;
     let file_len = file
@@ -633,13 +635,7 @@ impl Pq4Snapshot {
             return Err(invalid("PQ4 snapshot codebook dimensions differ"));
         }
         let codebook = Pq4Codebook {
-            centroids: centroids
-                .values()
-                .as_chunks::<48>()
-                .0
-                .iter()
-                .copied()
-                .collect(),
+            centroids: centroids.values().as_chunks::<48>().0.to_vec(),
         };
         if codebook.centroids.len() != 32
             || codebook
@@ -709,7 +705,7 @@ impl Pq4Snapshot {
                 .ok_or_else(|| invalid("PQ4 snapshot vector values differ"))?;
             if vectors.null_count() != 0
                 || values.null_count() != 0
-                || values.values().as_chunks::<96>().1.len() != 0
+                || !values.values().as_chunks::<96>().1.is_empty()
                 || values.values().as_chunks::<96>().0.iter().any(|row| {
                     row.iter().any(|value| !value.is_finite())
                         || row.iter().map(|value| value * value).sum::<f32>() <= 0.0
