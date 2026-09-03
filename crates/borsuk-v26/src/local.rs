@@ -9,7 +9,7 @@ use std::{
 
 use arrow_array::{
     Array, ArrayRef, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, RecordBatch,
-    UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_ipc::{
     convert::fb_to_schema,
@@ -76,6 +76,8 @@ pub fn v26_truth_schema() -> Schema {
             DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt32, false)), 10),
             false,
         ),
+        Field::new("construction_sha256", DataType::Utf8, false),
+        Field::new("external_queries_sha256", DataType::Utf8, false),
     ])
 }
 
@@ -709,6 +711,8 @@ fn evaluate_v26_layout_oracle_with_page_budget(
         request.expected_queries,
         &queries,
         &assignments,
+        &terminal.authority.construction_rows.digest,
+        &request.external_queries.identity.digest,
     )?;
     let samples = truths
         .iter()
@@ -835,6 +839,8 @@ fn read_evaluation_truth(
     expected_queries: u32,
     queries: &[V26ExternalQuery],
     assignments: &[V26RowPages],
+    construction_sha256: &str,
+    external_queries_sha256: &str,
 ) -> Result<Vec<V26QueryTruth>> {
     let reader = open_reader(path)?;
     if reader.schema().as_ref() != &v26_truth_schema()
@@ -871,6 +877,16 @@ fn read_evaluation_truth(
             .as_any()
             .downcast_ref::<FixedSizeListArray>()
             .ok_or_else(|| invalid("V26 truth distances differ"))?;
+        let construction_digests = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| invalid("V26 truth construction binding differs"))?;
+        let query_digests = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| invalid("V26 truth query binding differs"))?;
         for row in 0..batch.num_rows() {
             let query_index = truths.len();
             let neighbor_value = neighbors.value(row);
@@ -884,7 +900,9 @@ fn read_evaluation_truth(
                 .downcast_ref::<UInt32Array>()
                 .ok_or_else(|| invalid("V26 truth distance child differs"))?;
             let mut ground_truth_page_assignments = Vec::with_capacity(10);
-            if neighbor_values.len() != 10
+            if construction_digests.value(row) != construction_sha256
+                || query_digests.value(row) != external_queries_sha256
+                || neighbor_values.len() != 10
                 || neighbor_values.null_count() != 0
                 || distance_values.len() != 10
                 || distance_values.null_count() != 0
@@ -1005,7 +1023,11 @@ fn read_exact_global_construction(
     Ok(rows)
 }
 
-fn external_truth_batch(rows: &[V26ExternalTruth]) -> Result<RecordBatch> {
+fn external_truth_batch(
+    rows: &[V26ExternalTruth],
+    construction_sha256: &str,
+    external_queries_sha256: &str,
+) -> Result<RecordBatch> {
     let mut neighbors = Vec::with_capacity(rows.len() * 10);
     let mut distances = Vec::with_capacity(rows.len() * 10);
     for row in rows {
@@ -1039,6 +1061,8 @@ fn external_truth_batch(rows: &[V26ExternalTruth]) -> Result<RecordBatch> {
                 )
                 .map_err(|error| invalid(&format!("V26 truth distance batch failed: {error}")))?,
             ),
+            Arc::new(StringArray::from(vec![construction_sha256; rows.len()])),
+            Arc::new(StringArray::from(vec![external_queries_sha256; rows.len()])),
         ],
     )
     .map_err(|error| invalid(&format!("V26 truth batch failed: {error}")))
@@ -1062,7 +1086,14 @@ pub fn run_v26_truth_build(request: &V26TruthBuildRequest) -> Result<V26LocalObj
         read_evaluation_queries(&request.external_queries.path, request.expected_queries)?;
     let truth = build_v26_external_truth_rows(&rows, &queries)?;
     let result = (|| {
-        write_batch(&request.output_path, external_truth_batch(&truth)?)?;
+        write_batch(
+            &request.output_path,
+            external_truth_batch(
+                &truth,
+                &request.construction_rows.identity.digest,
+                &request.external_queries.identity.digest,
+            )?,
+        )?;
         let reader = open_reader(&request.output_path)?;
         if reader.schema().as_ref() != &v26_truth_schema()
             || u32::try_from(reader.metadata().file_metadata().num_rows()).ok()
@@ -1138,6 +1169,8 @@ fn load_v26_exact_global_with_page_budget(
         request.layout.expected_queries,
         &queries,
         &assignments,
+        &terminal.authority.construction_rows.digest,
+        &request.layout.external_queries.identity.digest,
     )?;
     Ok(V26LoadedExactGlobal {
         rows,
@@ -3798,7 +3831,8 @@ mod tests {
     use std::{collections::BTreeMap, fs, io::Write, sync::Arc};
 
     use arrow_array::{
-        ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt32Array, UInt64Array,
+        ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StringArray, UInt32Array,
+        UInt64Array,
     };
     use arrow_schema::{DataType, Field};
     use parquet::{
@@ -3817,14 +3851,15 @@ mod tests {
         V26ServingLatencySample, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
         canonical_v26_pq16_serving_benchmark_result_bytes, evaluate_v26_exact_global,
         evaluate_v26_layout_oracle, evaluate_v26_layout_oracle_with_page_budget, open_reader,
-        open_v26_pq16_serving_runtime, output_identity, read_assignments, read_layout_terminal,
-        read_v26_pq16_index_arrow, run_v26_candidate_row_cover, run_v26_centroid_router,
-        run_v26_layout_build, run_v26_page_mode_router, run_v26_pq_width_ladder,
-        run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank, run_v26_pq16_serving_build,
-        run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
-        select_v26_pq16_pages_from_arrow, v26_construction_schema, v26_page_assignments_schema,
-        v26_query_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
-        write_v26_cold_vectors_arrow, write_v26_pq16_index_arrow,
+        open_v26_pq16_serving_runtime, output_identity, read_assignments, read_evaluation_queries,
+        read_evaluation_truth, read_layout_terminal, read_v26_pq16_index_arrow,
+        run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_layout_build,
+        run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
+        run_v26_pq16_exact_rerank, run_v26_pq16_serving_build, run_v26_tree_router,
+        run_v26_tree_router_diagnostic, run_v26_truth_build, select_v26_pq16_pages_from_arrow,
+        v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
+        v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
+        write_v26_pq16_index_arrow,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -3995,6 +4030,7 @@ mod tests {
                 .unwrap();
         let query_path = temp.path().join("queries.parquet");
         write_parquet(&query_path, &query_batch);
+        let external_queries = identity("external-queries-parquet", &query_path);
 
         let neighbors = (512_u64..522).collect::<Vec<_>>();
         let mut neighbor_values = Vec::with_capacity(512 * 10);
@@ -4019,6 +4055,21 @@ mod tests {
                     .unwrap(),
                 ),
                 Arc::new(fixed_u32(distance_values, 10)),
+                Arc::new(StringArray::from(vec![
+                    build
+                        .authority
+                        .construction_rows
+                        .digest
+                        .as_str();
+                    512
+                ])),
+                Arc::new(StringArray::from(vec![
+                    external_queries
+                        .identity
+                        .digest
+                        .as_str();
+                    512
+                ])),
             ],
         )
         .unwrap();
@@ -4032,7 +4083,7 @@ mod tests {
         let request = V26LayoutEvaluationRequest {
             layout_terminal: identity("layout-terminal", &terminal_path),
             page_assignments,
-            external_queries: identity("external-queries-parquet", &query_path),
+            external_queries,
             truth: identity("truth-parquet", &truth_path),
             expected_queries: 512,
         };
@@ -4115,6 +4166,8 @@ mod tests {
                 .unwrap();
         assert_eq!(reader.schema().as_ref(), &v26_truth_schema());
         assert_eq!(reader.metadata().file_metadata().num_rows(), 512);
+        assert_eq!(reader.schema().field(3).name(), "construction_sha256");
+        assert_eq!(reader.schema().field(4).name(), "external_queries_sha256");
     }
 
     #[test]
@@ -4272,6 +4325,24 @@ mod tests {
     fn v26_layout_oracle_evaluates_closed_parquet_without_page_reads() {
         // Break caught: layout evaluation scores vectors or trusts stored oracle metrics.
         let (_temp, request) = evaluation_fixture();
+        let terminal = read_layout_terminal(&request.layout_terminal).unwrap();
+        let assignments = read_assignments(
+            &request.page_assignments.path,
+            i64::try_from(terminal.row_count).unwrap(),
+        )
+        .unwrap();
+        let queries = read_evaluation_queries(&request.external_queries.path, 512).unwrap();
+        assert!(
+            read_evaluation_truth(
+                &request.truth.path,
+                512,
+                &queries,
+                &assignments,
+                &"0".repeat(64),
+                &request.external_queries.identity.digest,
+            )
+            .is_err()
+        );
         let (truths, samples, result) = evaluate_v26_layout_oracle(&request).unwrap();
         assert_eq!(truths.len(), 512);
         assert_eq!(samples.len(), 512);
