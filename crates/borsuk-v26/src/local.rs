@@ -29,7 +29,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::tree::build_v26_dual_tree_layout_with_workers;
+use crate::tree::{build_v26_dual_tree_layout_with_workers, rank_v26_tree_page_prefix};
 use crate::{
     Result, V26ConstructionRow, V26Disposition, V26ExactGlobalRankResult, V26ExactGlobalResult,
     V26ExactGlobalSample, V26ExternalQuery, V26ExternalTruth, V26LayoutAuthority, V26LayoutReceipt,
@@ -244,6 +244,9 @@ pub struct V26Pq16IndexManifest {
 pub struct V26Pq16ServingBuildRequest {
     pub construction_rows: V26LocalObjectPath,
     pub page_assignments: V26LocalObjectPath,
+    pub layout_terminal: V26LocalObjectPath,
+    pub primary_tree: V26LocalObjectPath,
+    pub replica_tree: V26LocalObjectPath,
     pub expected_rows: u64,
     pub output_dir: PathBuf,
     pub output_uri_prefix: String,
@@ -263,6 +266,62 @@ pub struct V26Pq16ServingBuildOutput {
     pub query_role_opens: u32,
     pub page_body_reads: u32,
     pub claim_eligible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26Pq16ServingRuntimeRequest {
+    pub serving_manifest: V26LocalObjectPath,
+    pub serving_dir: PathBuf,
+    pub layout_terminal: V26LocalObjectPath,
+    pub primary_tree: V26LocalObjectPath,
+    pub replica_tree: V26LocalObjectPath,
+    pub external_queries: V26LocalObjectPath,
+    pub expected_queries: u32,
+}
+
+pub struct V26Pq16ServingRuntime {
+    index: crate::V26PackedPq16Index,
+    cold_vectors: V26ArrowColdVectors,
+    primary: V26Tree,
+    replica: V26Tree,
+    queries: Vec<V26ExternalQuery>,
+}
+
+impl V26Pq16ServingRuntime {
+    pub fn query_count(&self) -> usize {
+        self.queries.len()
+    }
+
+    pub fn page_body_reads(&self) -> u32 {
+        0
+    }
+
+    pub fn select(&self, query_ordinal: u32) -> Result<V26Pq16ServingSelection> {
+        let query = self
+            .queries
+            .get(
+                usize::try_from(query_ordinal)
+                    .map_err(|_| invalid("V26 serving query ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V26 serving query ordinal differs"))?;
+        if query.query_ordinal != query_ordinal {
+            return Err(invalid("V26 serving query inventory differs"));
+        }
+        let candidate_count = (self.index.page_offsets.len() - 1).min(128);
+        let mut candidate_pages = rank_v26_tree_page_prefix(
+            &self.primary,
+            &self.replica,
+            &query.vector,
+            candidate_count,
+        )?;
+        candidate_pages.sort_unstable();
+        select_v26_pq16_pages_from_arrow(
+            &self.index,
+            &candidate_pages,
+            &query.vector,
+            &self.cold_vectors,
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2997,6 +3056,9 @@ fn validate_v26_pq16_serving_build_output(
             != [
                 request.construction_rows.identity.clone(),
                 request.page_assignments.identity.clone(),
+                request.layout_terminal.identity.clone(),
+                request.primary_tree.identity.clone(),
+                request.replica_tree.identity.clone(),
             ]
         || output.row_count != request.expected_rows
         || output.index.row_count != output.row_count
@@ -3067,6 +3129,9 @@ pub fn run_v26_pq16_serving_build(
     let uri_inventory_is_unique = [
         request.construction_rows.identity.uri.clone(),
         request.page_assignments.identity.uri.clone(),
+        request.layout_terminal.identity.uri.clone(),
+        request.primary_tree.identity.uri.clone(),
+        request.replica_tree.identity.uri.clone(),
     ]
     .into_iter()
     .chain(
@@ -3080,12 +3145,36 @@ pub fn run_v26_pq16_serving_build(
         || !request.output_uri_prefix.ends_with('/')
         || request.construction_rows.identity.generation
             != request.page_assignments.identity.generation
+        || request.construction_rows.identity.generation
+            != request.layout_terminal.identity.generation
+        || request.construction_rows.identity.generation != request.primary_tree.identity.generation
+        || request.construction_rows.identity.generation != request.replica_tree.identity.generation
         || !uri_inventory_is_unique
     {
         return Err(invalid("V26 PQ16 serving build request differs"));
     }
     authenticate(&request.construction_rows, "construction-parquet")?;
     authenticate(&request.page_assignments, "page-assignments-parquet")?;
+    let terminal = read_layout_terminal(&request.layout_terminal)?;
+    authenticate(&request.primary_tree, "primary-tree-parquet")?;
+    authenticate(&request.replica_tree, "replica-tree-parquet")?;
+    if terminal.authority.construction_rows != request.construction_rows.identity
+        || !terminal
+            .outputs
+            .iter()
+            .any(|identity| identity == &request.page_assignments.identity)
+        || !terminal
+            .outputs
+            .iter()
+            .any(|identity| identity == &request.primary_tree.identity)
+        || !terminal
+            .outputs
+            .iter()
+            .any(|identity| identity == &request.replica_tree.identity)
+        || terminal.row_count != request.expected_rows
+    {
+        return Err(invalid("V26 PQ16 serving layout authority differs"));
+    }
     let rows = read_construction_rows(&request.construction_rows.path, request.expected_rows)?;
     let assignments = read_assignments(
         &request.page_assignments.path,
@@ -3098,6 +3187,21 @@ pub fn run_v26_pq16_serving_build(
     }) {
         return Err(invalid("V26 assignment inventory differs"));
     }
+    let node_count = i64::from(terminal.leaves_per_tree)
+        .checked_mul(2)
+        .and_then(|value| value.checked_sub(1))
+        .ok_or_else(|| invalid("V26 serving tree node count overflows"))?;
+    let primary = read_tree(
+        &request.primary_tree.path,
+        node_count,
+        terminal.authority.primary_seed,
+    )?;
+    let replica = read_tree(
+        &request.replica_tree.path,
+        node_count,
+        terminal.authority.replica_seed,
+    )?;
+    validate_v26_dual_tree_layout(&terminal.authority, &primary, &replica, &assignments)?;
     let index = crate::build_v26_pq16_packed_index(&rows, &assignments)?;
     fs::create_dir(&request.output_dir)
         .map_err(|error| invalid(&format!("V26 serving output directory failed: {error}")))?;
@@ -3132,6 +3236,9 @@ pub fn run_v26_pq16_serving_build(
             inputs: vec![
                 request.construction_rows.identity.clone(),
                 request.page_assignments.identity.clone(),
+                request.layout_terminal.identity.clone(),
+                request.primary_tree.identity.clone(),
+                request.replica_tree.identity.clone(),
             ],
             outputs,
             row_count: request.expected_rows,
@@ -3156,6 +3263,163 @@ pub fn run_v26_pq16_serving_build(
         let _ = fs::remove_dir(&request.output_dir);
     }
     result
+}
+
+fn read_v26_pq16_serving_manifest(
+    object: &V26LocalObjectPath,
+) -> Result<V26Pq16ServingBuildOutput> {
+    authenticate(object, "pq16-serving-manifest")?;
+    let bytes = fs::read(&object.path)
+        .map_err(|error| invalid(&format!("V26 serving manifest read failed: {error}")))?;
+    if bytes.last() != Some(&b'\n') || bytes[..bytes.len() - 1].contains(&b'\n') {
+        return Err(invalid("V26 serving manifest bytes differ"));
+    }
+    let output: V26Pq16ServingBuildOutput = serde_json::from_slice(&bytes)
+        .map_err(|error| invalid(&format!("V26 serving manifest parse failed: {error}")))?;
+    let mut expected = serde_json::to_vec(&canonical_json_value(
+        serde_json::to_value(&output)
+            .map_err(|error| invalid(&format!("V26 serving manifest failed: {error}")))?,
+    ))
+    .map_err(|error| invalid(&format!("V26 serving manifest failed: {error}")))?;
+    expected.push(b'\n');
+    let roles = [
+        "pq16-codebook-arrow",
+        "pq16-codes-arrow",
+        "pq16-postings-arrow",
+        "cold-vectors-arrow",
+    ];
+    let generation = output
+        .inputs
+        .first()
+        .map(|identity| identity.generation.as_str())
+        .unwrap_or_default();
+    let mut uris = BTreeSet::new();
+    if bytes != expected
+        || output.schema != "borsuk-v26-pq16-serving-manifest-v1"
+        || output.inputs.len() != 5
+        || output.inputs[0].role != "construction-parquet"
+        || output.inputs[1].role != "page-assignments-parquet"
+        || output.inputs[2].role != "layout-terminal"
+        || output.inputs[3].role != "primary-tree-parquet"
+        || output.inputs[4].role != "replica-tree-parquet"
+        || output.inputs.iter().any(|identity| {
+            identity.generation != generation
+                || identity.digest_algorithm != "sha256"
+                || !exact_lower_hex(&identity.digest, 64)
+                || identity.encoded_bytes == 0
+                || !identity.uri.starts_with("s3://")
+                || !uris.insert(identity.uri.clone())
+        })
+        || output.outputs.len() != roles.len()
+        || output.outputs.iter().zip(roles).any(|(identity, role)| {
+            identity.role != role
+                || identity.generation != generation
+                || identity.digest_algorithm != "sha256"
+                || !exact_lower_hex(&identity.digest, 64)
+                || identity.encoded_bytes == 0
+                || !identity.uri.starts_with("s3://")
+                || !uris.insert(identity.uri.clone())
+        })
+        || object.identity.generation != generation
+        || output.row_count == 0
+        || output.row_count != output.index.row_count
+        || output.row_count != output.cold_vectors.row_count
+        || output.page_count == 0
+        || output.page_count != output.index.page_count
+        || output.projected_resident_bytes_100m != output.index.projected_resident_bytes_100m
+        || output.outputs[0].encoded_bytes != output.index.codebook.encoded_bytes
+        || output.outputs[0].digest != output.index.codebook.sha256
+        || output.outputs[1].encoded_bytes != output.index.codes.encoded_bytes
+        || output.outputs[1].digest != output.index.codes.sha256
+        || output.outputs[2].encoded_bytes != output.index.postings.encoded_bytes
+        || output.outputs[2].digest != output.index.postings.sha256
+        || output.outputs[3].encoded_bytes != output.cold_vectors.encoded_bytes
+        || output.outputs[3].digest != output.cold_vectors.sha256
+        || output.query_role_opens != 0
+        || output.page_body_reads != 0
+        || output.claim_eligible
+        || !uris.insert(object.identity.uri.clone())
+    {
+        return Err(invalid("V26 serving manifest authority differs"));
+    }
+    Ok(output)
+}
+
+pub fn open_v26_pq16_serving_runtime(
+    request: &V26Pq16ServingRuntimeRequest,
+) -> Result<V26Pq16ServingRuntime> {
+    let manifest = read_v26_pq16_serving_manifest(&request.serving_manifest)?;
+    let terminal = read_layout_terminal(&request.layout_terminal)?;
+    if manifest.inputs[0] != terminal.authority.construction_rows
+        || !terminal
+            .outputs
+            .iter()
+            .any(|identity| identity == &manifest.inputs[1])
+        || manifest.inputs[2] != request.layout_terminal.identity
+        || manifest.inputs[3] != request.primary_tree.identity
+        || manifest.inputs[4] != request.replica_tree.identity
+        || manifest.row_count != terminal.row_count
+        || manifest.page_count != terminal.page_count
+        || request.expected_queries != 512
+        || request.external_queries.identity.generation != terminal.authority.generation
+    {
+        return Err(invalid("V26 serving router binding differs"));
+    }
+    let expected_names = v26_pq16_serving_output_names()
+        .into_iter()
+        .chain(std::iter::once("serving-manifest.json"))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let observed_names = fs::read_dir(&request.serving_dir)
+        .map_err(|error| invalid(&format!("V26 serving directory read failed: {error}")))?
+        .map(|entry| {
+            entry
+                .map_err(|error| invalid(&format!("V26 serving directory read failed: {error}")))
+                .and_then(|entry| {
+                    entry
+                        .file_name()
+                        .into_string()
+                        .map_err(|_| invalid("V26 serving artifact name differs"))
+                })
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    if observed_names != expected_names {
+        return Err(invalid("V26 serving artifact inventory differs"));
+    }
+    let index = read_v26_pq16_index_arrow(&request.serving_dir, &manifest.index)?;
+    let cold_vectors = V26ArrowColdVectors::open(
+        &request.serving_dir.join("cold-vectors.arrow"),
+        &manifest.cold_vectors,
+    )?;
+    authenticate(&request.primary_tree, "primary-tree-parquet")?;
+    authenticate(&request.replica_tree, "replica-tree-parquet")?;
+    authenticate(&request.external_queries, "external-queries-parquet")?;
+    let node_count = i64::from(terminal.leaves_per_tree)
+        .checked_mul(2)
+        .and_then(|value| value.checked_sub(1))
+        .ok_or_else(|| invalid("V26 serving tree node count overflows"))?;
+    let primary = read_tree(
+        &request.primary_tree.path,
+        node_count,
+        terminal.authority.primary_seed,
+    )?;
+    let replica = read_tree(
+        &request.replica_tree.path,
+        node_count,
+        terminal.authority.replica_seed,
+    )?;
+    let queries =
+        read_evaluation_queries(&request.external_queries.path, request.expected_queries)?;
+    if index.page_offsets.len() != usize::try_from(manifest.page_count).unwrap() + 1 {
+        return Err(invalid("V26 serving page inventory differs"));
+    }
+    Ok(V26Pq16ServingRuntime {
+        index,
+        cold_vectors,
+        primary,
+        replica,
+        queries,
+    })
 }
 
 pub fn validate_v26_layout_build_output(
@@ -3261,17 +3525,17 @@ mod tests {
         V26ArrowColdVectors, V26CandidateCoverRequest, V26CentroidRouterRequest,
         V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
         V26LocalObjectPath, V26PageModeRouterRequest, V26Pq8CoverRequest, V26Pq16RerankRequest,
-        V26Pq16ServingBuildRequest, V26PqWidthLadderRequest, V26TreeRouterRequest,
-        V26TruthBuildRequest, assignments_batch, evaluate_v26_exact_global,
-        evaluate_v26_layout_oracle, open_reader, output_identity, read_assignments,
-        read_layout_terminal, read_v26_pq16_index_arrow, run_v26_candidate_row_cover,
-        run_v26_centroid_router, run_v26_layout_build, run_v26_page_mode_router,
-        run_v26_pq_width_ladder, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
-        run_v26_pq16_serving_build, run_v26_tree_router, run_v26_tree_router_diagnostic,
-        run_v26_truth_build, select_v26_pq16_pages_from_arrow, v26_construction_schema,
-        v26_page_assignments_schema, v26_query_schema, v26_source_map_schema, v26_tree_schema,
-        v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
-        write_v26_pq16_index_arrow,
+        V26Pq16ServingBuildRequest, V26Pq16ServingRuntimeRequest, V26PqWidthLadderRequest,
+        V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch, evaluate_v26_exact_global,
+        evaluate_v26_layout_oracle, open_reader, open_v26_pq16_serving_runtime, output_identity,
+        read_assignments, read_layout_terminal, read_v26_pq16_index_arrow,
+        run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_layout_build,
+        run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
+        run_v26_pq16_exact_rerank, run_v26_pq16_serving_build, run_v26_tree_router,
+        run_v26_tree_router_diagnostic, run_v26_truth_build, select_v26_pq16_pages_from_arrow,
+        v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
+        v26_source_map_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
+        write_v26_cold_vectors_arrow, write_v26_pq16_index_arrow,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -4446,52 +4710,25 @@ mod tests {
     fn v26_pq16_serving_build_emits_authenticated_arrow_without_query_access() {
         // Break caught: construction and serving share a process, a query artifact leaks into
         // construction, or the deployable Arrow files are not bound by one canonical manifest.
-        let temp = TempDir::new().unwrap();
         let row_count = 1_024_u64;
-        let ordinals = UInt64Array::from_iter_values(0..row_count);
-        let rows = (0..row_count)
-            .map(|source_ordinal| {
-                let angle = source_ordinal as f32 / 1_024.0;
-                let mut vector = [0.0_f32; 96];
-                vector[0] = angle.cos();
-                vector[1] = angle.sin();
-                crate::V26ConstructionRow {
-                    source_ordinal,
-                    vector,
-                }
-            })
-            .collect::<Vec<_>>();
-        let vectors = FixedSizeListArray::try_new(
-            Arc::new(Field::new("element", DataType::Float32, false)),
-            96,
-            Arc::new(Float32Array::from(
-                rows.iter().flat_map(|row| row.vector).collect::<Vec<_>>(),
-            )),
-            None,
-        )
-        .unwrap();
-        let construction_path = temp.path().join("construction.parquet");
-        write_parquet(
-            &construction_path,
-            &RecordBatch::try_new(
-                Arc::new(v26_construction_schema()),
-                vec![Arc::new(ordinals), Arc::new(vectors)],
-            )
-            .unwrap(),
-        );
-        let assignments = (0..row_count)
-            .map(|source_ordinal| crate::V26RowPages {
-                source_ordinal,
-                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
-                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
-            })
-            .collect::<Vec<_>>();
-        let assignment_path = temp.path().join("page-assignments.parquet");
-        write_parquet(&assignment_path, &assignments_batch(&assignments).unwrap());
+        let (temp, evaluation) = evaluation_fixture_with_rows(row_count);
+        let receipt = read_layout_terminal(&evaluation.layout_terminal).unwrap();
         let output_dir = temp.path().join("serving");
         let request = V26Pq16ServingBuildRequest {
-            construction_rows: identity("construction-parquet", &construction_path),
-            page_assignments: identity("page-assignments-parquet", &assignment_path),
+            construction_rows: identity(
+                "construction-parquet",
+                &temp.path().join("construction.parquet"),
+            ),
+            page_assignments: evaluation.page_assignments.clone(),
+            layout_terminal: evaluation.layout_terminal.clone(),
+            primary_tree: V26LocalObjectPath {
+                identity: receipt.outputs[1].clone(),
+                path: temp.path().join("layout/primary-tree.parquet"),
+            },
+            replica_tree: V26LocalObjectPath {
+                identity: receipt.outputs[2].clone(),
+                path: temp.path().join("layout/replica-tree.parquet"),
+            },
             expected_rows: row_count,
             output_dir: output_dir.clone(),
             output_uri_prefix: "s3://v26-output/serving-a/".to_owned(),
@@ -4500,10 +4737,10 @@ mod tests {
         let output = run_v26_pq16_serving_build(&request).unwrap();
 
         assert_eq!(output.schema, "borsuk-v26-pq16-serving-manifest-v1");
-        assert_eq!(output.inputs.len(), 2);
+        assert_eq!(output.inputs.len(), 5);
         assert_eq!(output.outputs.len(), 4);
         assert_eq!(output.row_count, row_count);
-        assert_eq!(output.page_count, 16);
+        assert_eq!(output.page_count, 4);
         assert_eq!(output.page_body_reads, 0);
         assert_eq!(output.query_role_opens, 0);
         assert_eq!(
@@ -4547,5 +4784,64 @@ mod tests {
         drifted.output_dir = temp.path().join("rejected");
         assert!(run_v26_pq16_serving_build(&drifted).is_err());
         assert!(!drifted.output_dir.exists());
+    }
+
+    #[test]
+    fn v26_pq16_serving_runtime_opens_fresh_artifacts_without_construction_state() {
+        // Break caught: the measured process rebuilds PQ, retains construction vectors, opens
+        // page bodies, or accepts a router that is not bound to the serving assignments.
+        let (temp, evaluation) = evaluation_fixture_with_rows(1_024);
+        let construction = identity(
+            "construction-parquet",
+            &temp.path().join("construction.parquet"),
+        );
+        let receipt = read_layout_terminal(&evaluation.layout_terminal).unwrap();
+        let serving_dir = temp.path().join("serving");
+        let build_request = V26Pq16ServingBuildRequest {
+            construction_rows: construction,
+            page_assignments: evaluation.page_assignments.clone(),
+            layout_terminal: evaluation.layout_terminal.clone(),
+            primary_tree: V26LocalObjectPath {
+                identity: receipt.outputs[1].clone(),
+                path: temp.path().join("layout/primary-tree.parquet"),
+            },
+            replica_tree: V26LocalObjectPath {
+                identity: receipt.outputs[2].clone(),
+                path: temp.path().join("layout/replica-tree.parquet"),
+            },
+            expected_rows: 1_024,
+            output_dir: serving_dir.clone(),
+            output_uri_prefix: "s3://v26-output/serving-runtime/".to_owned(),
+        };
+        run_v26_pq16_serving_build(&build_request).unwrap();
+        let request = V26Pq16ServingRuntimeRequest {
+            serving_manifest: identity(
+                "pq16-serving-manifest",
+                &serving_dir.join("serving-manifest.json"),
+            ),
+            serving_dir,
+            layout_terminal: evaluation.layout_terminal,
+            primary_tree: V26LocalObjectPath {
+                identity: receipt.outputs[1].clone(),
+                path: temp.path().join("layout/primary-tree.parquet"),
+            },
+            replica_tree: V26LocalObjectPath {
+                identity: receipt.outputs[2].clone(),
+                path: temp.path().join("layout/replica-tree.parquet"),
+            },
+            external_queries: evaluation.external_queries,
+            expected_queries: 512,
+        };
+
+        let runtime = open_v26_pq16_serving_runtime(&request).unwrap();
+        assert_eq!(runtime.query_count(), 512);
+        assert_eq!(runtime.page_body_reads(), 0);
+        // This deliberately small layout has fewer than eight pages. Opening succeeds and the
+        // serving call fails closed; the separate kernel contract proves exact eight-page output.
+        assert!(runtime.select(0).is_err());
+
+        let mut drifted = request.clone();
+        drifted.primary_tree.identity.digest = "f".repeat(64);
+        assert!(open_v26_pq16_serving_runtime(&drifted).is_err());
     }
 }
