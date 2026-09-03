@@ -94,6 +94,114 @@ pub fn fused_dot_8x12(
     Ok((kernel.dot(left, right), kernel.backend()))
 }
 
+/// Error returned when the qualified PQ4 table-lookup backend is unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pq4Unavailable;
+
+impl std::fmt::Display for Pq4Unavailable {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the qualified AArch64 NEON PQ4 backend is unavailable")
+    }
+}
+
+impl std::error::Error for Pq4Unavailable {}
+
+/// A detected, safe PQ4 scorer for one 32-row transposed block.
+///
+/// Construction succeeds only on the AArch64 NEON backend qualified by the
+/// V26 holdout. Keeping construction private prevents callers from invoking
+/// the target-feature function on an unsupported processor.
+#[derive(Debug, Clone, Copy)]
+pub struct Pq4BlockScorer {
+    _private: (),
+}
+
+impl Pq4BlockScorer {
+    /// Detect the qualified table-lookup backend once before entering a scan.
+    pub fn detect() -> Result<Self, Pq4Unavailable> {
+        #[cfg(target_arch = "aarch64")]
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            return Ok(Self { _private: () });
+        }
+
+        Err(Pq4Unavailable)
+    }
+
+    /// Score exactly 32 rows against 32 sixteen-entry lookup tables.
+    #[inline(always)]
+    pub fn score(self, block: &[u8; 512], tables: &[[u8; 16]; 32]) -> [u16; 32] {
+        #[cfg(target_arch = "aarch64")]
+        {
+            // SAFETY: `detect` is the only constructor and established NEON
+            // availability; fixed-size arguments make every 16-byte access
+            // valid.
+            return unsafe { aarch64_pq4_block_scores(block, tables) };
+        }
+
+        #[cfg(not(target_arch = "aarch64"))]
+        unreachable!("a PQ4 scorer cannot be constructed without AArch64 NEON")
+    }
+}
+
+#[cfg(test)]
+fn pq4_scalar_block_scores(block: &[u8; 512], tables: &[[u8; 16]; 32]) -> [u16; 32] {
+    std::array::from_fn(|row| {
+        (0..32)
+            .map(|subspace| {
+                let packed = block[subspace * 16 + row / 2];
+                let code = if row.is_multiple_of(2) {
+                    packed & 0x0f
+                } else {
+                    packed >> 4
+                };
+                u16::from(tables[subspace][usize::from(code)])
+            })
+            .sum()
+    })
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn aarch64_pq4_block_scores(block: &[u8; 512], tables: &[[u8; 16]; 32]) -> [u16; 32] {
+    use std::arch::aarch64::{
+        vaddq_u16, vandq_u8, vdupq_n_u8, vdupq_n_u16, vget_high_u8, vget_low_u8, vld1q_u8,
+        vmovl_u8, vqtbl1q_u8, vshrq_n_u8, vst1q_u16,
+    };
+
+    // SAFETY: every pointer is derived from a fixed-size array at a proven
+    // 16-byte offset, and the function itself requires NEON.
+    unsafe {
+        let mask = vdupq_n_u8(0x0f);
+        let mut even_low = vdupq_n_u16(0);
+        let mut even_high = vdupq_n_u16(0);
+        let mut odd_low = vdupq_n_u16(0);
+        let mut odd_high = vdupq_n_u16(0);
+        for subspace in 0..32 {
+            let packed = vld1q_u8(block.as_ptr().add(subspace * 16));
+            let table = vld1q_u8(tables[subspace].as_ptr());
+            let even = vqtbl1q_u8(table, vandq_u8(packed, mask));
+            let odd = vqtbl1q_u8(table, vshrq_n_u8::<4>(packed));
+            even_low = vaddq_u16(even_low, vmovl_u8(vget_low_u8(even)));
+            even_high = vaddq_u16(even_high, vmovl_u8(vget_high_u8(even)));
+            odd_low = vaddq_u16(odd_low, vmovl_u8(vget_low_u8(odd)));
+            odd_high = vaddq_u16(odd_high, vmovl_u8(vget_high_u8(odd)));
+        }
+        let mut even = [0_u16; 16];
+        let mut odd = [0_u16; 16];
+        vst1q_u16(even.as_mut_ptr(), even_low);
+        vst1q_u16(even.as_mut_ptr().add(8), even_high);
+        vst1q_u16(odd.as_mut_ptr(), odd_low);
+        vst1q_u16(odd.as_mut_ptr().add(8), odd_high);
+        std::array::from_fn(|row| {
+            if row.is_multiple_of(2) {
+                even[row / 2]
+            } else {
+                odd[row / 2]
+            }
+        })
+    }
+}
+
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn aarch64_dot(left: &[f32; 96], right: &[f32; 96]) -> f32 {
@@ -158,7 +266,7 @@ unsafe fn x86_dot(left: &[f32; 96], right: &[f32; 96]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{FusedDot8x12, fused_dot_8x12};
+    use super::{FusedDot8x12, Pq4BlockScorer, fused_dot_8x12, pq4_scalar_block_scores};
 
     fn scalar(left: &[f32; 96], right: &[f32; 96]) -> f32 {
         let mut lanes = [0.0_f32; 8];
@@ -186,5 +294,70 @@ mod tests {
         let right = [1.0_f32; 96];
         let (actual, _) = fused_dot_8x12(&left, &right).unwrap();
         assert_eq!(actual.to_bits(), scalar(&left, &right).to_bits());
+    }
+
+    #[test]
+    fn pq4_block_scalar_reference_decodes_nibbles_and_never_overflows() {
+        let mut block = [0_u8; 512];
+        for subspace in 0..32 {
+            for packed_row in 0..16 {
+                let even = ((subspace + packed_row * 2) % 16) as u8;
+                let odd = ((15 + subspace - packed_row) % 16) as u8;
+                block[subspace * 16 + packed_row] = even | (odd << 4);
+            }
+        }
+        let tables = std::array::from_fn(|subspace| {
+            std::array::from_fn(|centroid| ((subspace * 3 + centroid * 7) % 256) as u8)
+        });
+
+        let actual = pq4_scalar_block_scores(&block, &tables);
+        for (row, score) in actual.into_iter().enumerate() {
+            let expected = (0..32)
+                .map(|subspace| {
+                    let packed = block[subspace * 16 + row / 2];
+                    let code = if row % 2 == 0 {
+                        packed & 0x0f
+                    } else {
+                        packed >> 4
+                    };
+                    u16::from(tables[subspace][usize::from(code)])
+                })
+                .sum::<u16>();
+            assert_eq!(score, expected, "row {row}");
+            assert!(score <= 8_160);
+        }
+
+        assert_eq!(
+            pq4_scalar_block_scores(&[0xff; 512], &[[255; 16]; 32]),
+            [8_160; 32]
+        );
+    }
+
+    #[test]
+    fn pq4_block_backend_detection_is_explicit() {
+        let detected = Pq4BlockScorer::detect();
+        #[cfg(target_arch = "aarch64")]
+        assert!(detected.is_ok());
+        #[cfg(not(target_arch = "aarch64"))]
+        assert!(detected.is_err());
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn pq4_block_neon_matches_scalar_for_boundary_patterns() {
+        let scorer = Pq4BlockScorer::detect().unwrap();
+        let tables = std::array::from_fn(|subspace| {
+            std::array::from_fn(|centroid| ((subspace * 11 + centroid * 13) % 256) as u8)
+        });
+        for block in [
+            [0_u8; 512],
+            [0xff_u8; 512],
+            std::array::from_fn(|index| (index as u8).wrapping_mul(73)),
+        ] {
+            assert_eq!(
+                scorer.score(&block, &tables),
+                pq4_scalar_block_scores(&block, &tables)
+            );
+        }
     }
 }
