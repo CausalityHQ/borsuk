@@ -442,7 +442,7 @@ fn write_queries_and_truth_parquet(
         test_path,
         embedding_batch(test_schema, dimensions, tests, queries)?,
     )?;
-    let item = Arc::new(Field::new("item", DataType::Int32, false));
+    let item = Arc::new(Field::new("element", DataType::Int32, false));
     let neighbor_array = FixedSizeListArray::try_new(
         item,
         i32::try_from(NEIGHBORS).map_err(io::Error::other)?,
@@ -1021,6 +1021,31 @@ mod tests {
                 .unwrap()
                 .schema(),
             expected
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let query_path = directory.path().join("test.parquet");
+        let truth_path = directory.path().join("neighbors.parquet");
+        write_queries_and_truth_parquet(
+            &query_path,
+            &truth_path,
+            &GenerationSpec {
+                train: 200,
+                dimensions: 96,
+                queries: 2,
+                group_size: 100,
+                seed: 1_501_096,
+                generator: GeneratorKind::Clustered,
+            },
+        )
+        .unwrap();
+        let truth = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+            File::open(truth_path).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            truth.schema().field(0).data_type(),
+            &DataType::FixedSizeList(Arc::new(Field::new("element", DataType::Int32, false)), 100,)
         );
     }
 
