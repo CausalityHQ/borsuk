@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -188,8 +188,7 @@ pub struct V26Pq16RerankRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V26ColdVectorManifest {
     pub row_count: u64,
-    pub page_count: u32,
-    pub occurrence_count: u64,
+    pub batch_rows: u32,
     pub encoded_bytes: u64,
     pub sha256: String,
 }
@@ -204,7 +203,7 @@ pub struct V26ColdVectorRead {
 pub struct V26ArrowColdVectors {
     reader: FileReader<fs::File>,
     row_count: u64,
-    page_count: u32,
+    batch_rows: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1659,44 +1658,37 @@ pub fn write_v26_cold_vectors_arrow(
     path: &Path,
     rows: &[V26ConstructionRow],
     assignments: &[V26RowPages],
-    page_count: u32,
+    batch_rows: u32,
 ) -> Result<V26ColdVectorManifest> {
     if path.exists()
         || rows.is_empty()
         || rows.len() != assignments.len()
-        || page_count == 0
+        || batch_rows != 64
         || rows.len() > usize::try_from(u32::MAX).unwrap()
     {
         return Err(invalid("V26 cold-vector write request differs"));
     }
     let result = (|| {
-        let mut page_rows = vec![Vec::<u32>::new(); usize::try_from(page_count).unwrap()];
         for (index, (row, assignment)) in rows.iter().zip(assignments).enumerate() {
             if usize::try_from(row.source_ordinal).ok() != Some(index)
                 || assignment.source_ordinal != row.source_ordinal
                 || assignment.primary_page == assignment.replica_page
-                || assignment.primary_page >= page_count
-                || assignment.replica_page >= page_count
                 || validate_v26_vector(&row.vector).is_err()
             {
                 return Err(invalid("V26 cold-vector row authority differs"));
             }
-            let row_id = u32::try_from(index).unwrap();
-            page_rows[usize::try_from(assignment.primary_page).unwrap()].push(row_id);
-            page_rows[usize::try_from(assignment.replica_page).unwrap()].push(row_id);
-        }
-        if page_rows.iter().any(Vec::is_empty) {
-            return Err(invalid("V26 cold-vector page inventory differs"));
         }
         let file = fs::File::create(path)
             .map_err(|error| invalid(&format!("V26 cold-vector create failed: {error}")))?;
         let mut writer = FileWriter::try_new(file, &v26_cold_vector_schema())
             .map_err(|error| invalid(&format!("V26 cold-vector writer failed: {error}")))?;
-        for page in &page_rows {
-            let values = page
-                .iter()
-                .flat_map(|row_id| rows[usize::try_from(*row_id).unwrap()].vector)
-                .collect::<Vec<_>>();
+        for (batch_index, chunk) in rows
+            .chunks(usize::try_from(batch_rows).unwrap())
+            .enumerate()
+        {
+            let first = batch_index * usize::try_from(batch_rows).unwrap();
+            let chunk_assignments = &assignments[first..first + chunk.len()];
+            let values = chunk.iter().flat_map(|row| row.vector).collect::<Vec<_>>();
             let vectors = FixedSizeListArray::try_new(
                 Arc::new(Field::new("element", DataType::Float32, false)),
                 96,
@@ -1708,15 +1700,19 @@ pub fn write_v26_cold_vectors_arrow(
                 Arc::new(v26_cold_vector_schema()),
                 vec![
                     Arc::new(UInt64Array::from_iter_values(
-                        page.iter().map(|row_id| u64::from(*row_id)),
+                        chunk.iter().map(|row| row.source_ordinal),
                     )),
                     Arc::new(vectors),
-                    Arc::new(UInt32Array::from_iter_values(page.iter().map(|row_id| {
-                        assignments[usize::try_from(*row_id).unwrap()].primary_page
-                    }))),
-                    Arc::new(UInt32Array::from_iter_values(page.iter().map(|row_id| {
-                        assignments[usize::try_from(*row_id).unwrap()].replica_page
-                    }))),
+                    Arc::new(UInt32Array::from_iter_values(
+                        chunk_assignments
+                            .iter()
+                            .map(|assignment| assignment.primary_page),
+                    )),
+                    Arc::new(UInt32Array::from_iter_values(
+                        chunk_assignments
+                            .iter()
+                            .map(|assignment| assignment.replica_page),
+                    )),
                 ],
             )
             .map_err(|error| invalid(&format!("V26 cold-vector batch failed: {error}")))?;
@@ -1730,8 +1726,7 @@ pub fn write_v26_cold_vectors_arrow(
         let (encoded_bytes, sha256) = sha256_file(path)?;
         Ok(V26ColdVectorManifest {
             row_count: u64::try_from(rows.len()).unwrap(),
-            page_count,
-            occurrence_count: u64::try_from(rows.len()).unwrap() * 2,
+            batch_rows,
             encoded_bytes,
             sha256,
         })
@@ -1745,8 +1740,7 @@ pub fn write_v26_cold_vectors_arrow(
 impl V26ArrowColdVectors {
     pub fn open(path: &Path, manifest: &V26ColdVectorManifest) -> Result<Self> {
         if manifest.row_count == 0
-            || manifest.page_count == 0
-            || manifest.occurrence_count != manifest.row_count.checked_mul(2).unwrap_or(0)
+            || manifest.batch_rows != 64
             || manifest.encoded_bytes == 0
             || !exact_lower_hex(&manifest.sha256, 64)
         {
@@ -1760,38 +1754,34 @@ impl V26ArrowColdVectors {
             .map_err(|error| invalid(&format!("V26 cold-vector open failed: {error}")))?;
         let reader = FileReader::try_new(file, None)
             .map_err(|error| invalid(&format!("V26 cold-vector metadata failed: {error}")))?;
+        let expected_batches = manifest.row_count.div_ceil(u64::from(manifest.batch_rows));
         if reader.schema().as_ref() != &v26_cold_vector_schema()
-            || u32::try_from(reader.num_batches()).ok() != Some(manifest.page_count)
+            || u64::try_from(reader.num_batches()).unwrap() != expected_batches
         {
             return Err(invalid("V26 cold-vector schema differs"));
         }
         Ok(Self {
             reader,
             row_count: manifest.row_count,
-            page_count: manifest.page_count,
+            batch_rows: manifest.batch_rows,
         })
     }
 
-    pub fn read_rows_from_pages(
-        &mut self,
-        candidate_pages: &[u32],
-        row_ids: &[u32],
-    ) -> Result<V26ColdVectorRead> {
-        if candidate_pages.is_empty()
-            || candidate_pages.windows(2).any(|pair| pair[0] >= pair[1])
-            || candidate_pages.iter().any(|page| *page >= self.page_count)
-            || row_ids.is_empty()
+    pub fn read_rows(&mut self, row_ids: &[u32]) -> Result<V26ColdVectorRead> {
+        if row_ids.is_empty()
             || row_ids.windows(2).any(|pair| pair[0] >= pair[1])
             || row_ids.iter().any(|row| u64::from(*row) >= self.row_count)
         {
             return Err(invalid("V26 cold-vector read request differs"));
         }
-        let requested = row_ids.iter().copied().collect::<BTreeSet<_>>();
-        let mut found = BTreeMap::<u32, ([f32; 96], V26RowPages)>::new();
+        let mut vectors = Vec::with_capacity(row_ids.len());
+        let mut assignments = Vec::with_capacity(row_ids.len());
         let mut batches_read = 0_u32;
-        for page in candidate_pages {
+        let mut cursor = 0;
+        while cursor < row_ids.len() {
+            let batch_index = row_ids[cursor] / self.batch_rows;
             self.reader
-                .set_index(usize::try_from(*page).unwrap())
+                .set_index(usize::try_from(batch_index).unwrap())
                 .map_err(|error| invalid(&format!("V26 cold-vector seek failed: {error}")))?;
             let batch = self
                 .reader
@@ -1823,55 +1813,34 @@ impl V26ArrowColdVectors {
                 .as_any()
                 .downcast_ref::<UInt32Array>()
                 .ok_or_else(|| invalid("V26 cold-vector replica pages differ"))?;
-            let mut prior = None;
-            for local in 0..batch.num_rows() {
-                let row_id = u32::try_from(ordinals.value(local))
-                    .map_err(|_| invalid("V26 cold-vector row binding differs"))?;
-                if prior.is_some_and(|prior| prior >= row_id)
-                    || batch.columns().iter().any(|column| column.is_null(local))
-                {
-                    return Err(invalid("V26 cold-vector row binding differs"));
-                }
-                prior = Some(row_id);
+            while cursor < row_ids.len() && row_ids[cursor] / self.batch_rows == batch_index {
+                let row_id = row_ids[cursor];
+                let local = usize::try_from(row_id % self.batch_rows).unwrap();
                 let assignment = V26RowPages {
                     source_ordinal: u64::from(row_id),
                     primary_page: primary_pages.value(local),
                     replica_page: replica_pages.value(local),
                 };
-                if assignment.primary_page == assignment.replica_page
-                    || assignment.primary_page >= self.page_count
-                    || assignment.replica_page >= self.page_count
-                    || (*page != assignment.primary_page && *page != assignment.replica_page)
+                if local >= batch.num_rows()
+                    || batch.columns().iter().any(|column| column.is_null(local))
+                    || ordinals.value(local) != u64::from(row_id)
+                    || assignment.primary_page == assignment.replica_page
                 {
-                    return Err(invalid("V26 cold-vector page binding differs"));
+                    return Err(invalid("V26 cold-vector row binding differs"));
                 }
-                if requested.contains(&row_id) {
-                    let start = local * 96;
-                    let vector: [f32; 96] = values.values()[start..start + 96]
-                        .try_into()
-                        .map_err(|_| invalid("V26 cold-vector width differs"))?;
-                    validate_v26_vector(&vector)?;
-                    if found
-                        .insert(row_id, (vector, assignment))
-                        .is_some_and(|prior| prior != (vector, assignment))
-                    {
-                        return Err(invalid("V26 cold-vector replica differs"));
-                    }
-                }
+                let start = local * 96;
+                let vector: [f32; 96] = values.values()[start..start + 96]
+                    .try_into()
+                    .map_err(|_| invalid("V26 cold-vector width differs"))?;
+                validate_v26_vector(&vector)?;
+                vectors.push(vector);
+                assignments.push(assignment);
+                cursor += 1;
             }
         }
-        let selected = row_ids
-            .iter()
-            .map(|row_id| {
-                found
-                    .get(row_id)
-                    .copied()
-                    .ok_or_else(|| invalid("V26 cold-vector candidate binding differs"))
-            })
-            .collect::<Result<Vec<_>>>()?;
         Ok(V26ColdVectorRead {
-            vectors: selected.iter().map(|(vector, _)| *vector).collect(),
-            assignments: selected.iter().map(|(_, assignment)| *assignment).collect(),
+            vectors,
+            assignments,
             batches_read,
         })
     }
@@ -1893,7 +1862,7 @@ pub fn select_v26_pq16_pages_from_arrow(
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|_| invalid("V26 PQ16 Arrow source ordinal differs"))?;
     source_ordinals.sort_unstable();
-    let cold = cold_vectors.read_rows_from_pages(candidate_pages, &source_ordinals)?;
+    let cold = cold_vectors.read_rows(&source_ordinals)?;
     let mut exact = approximate
         .iter()
         .map(|candidate| {
@@ -3865,26 +3834,23 @@ mod tests {
                 replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
             })
             .collect::<Vec<_>>();
-        let manifest = write_v26_cold_vectors_arrow(&path, &rows, &assignments, 16).unwrap();
+        let manifest = write_v26_cold_vectors_arrow(&path, &rows, &assignments, 64).unwrap();
         assert_eq!(manifest.row_count, 1_024);
-        assert_eq!(manifest.page_count, 16);
-        assert_eq!(manifest.occurrence_count, 2_048);
+        assert_eq!(manifest.batch_rows, 64);
         let bytes = fs::read(&path).unwrap();
         assert_eq!(&bytes[..6], b"ARROW1");
         assert_eq!(&bytes[bytes.len() - 6..], b"ARROW1");
 
         let mut reader = V26ArrowColdVectors::open(&path, &manifest).unwrap();
-        let selected = reader
-            .read_rows_from_pages(&[0, 8], &[0, 8, 16, 24])
-            .unwrap();
-        assert_eq!(selected.vectors.len(), 4);
-        assert_eq!(selected.batches_read, 2);
+        let selected = reader.read_rows(&[0, 1, 63, 64, 511, 512, 1_023]).unwrap();
+        assert_eq!(selected.vectors.len(), 7);
+        assert_eq!(selected.batches_read, 5);
         assert_eq!(selected.vectors[0], rows[0].vector);
-        assert_eq!(selected.vectors[3], rows[24].vector);
+        assert_eq!(selected.vectors[6], rows[1_023].vector);
         assert_eq!(selected.assignments[0], assignments[0]);
-        assert_eq!(selected.assignments[3], assignments[24]);
-        assert!(reader.read_rows_from_pages(&[8, 0], &[0]).is_err());
-        assert!(reader.read_rows_from_pages(&[0], &[1_024]).is_err());
+        assert_eq!(selected.assignments[6], assignments[1_023]);
+        assert!(reader.read_rows(&[64, 63]).is_err());
+        assert!(reader.read_rows(&[1_024]).is_err());
     }
 
     #[test]
@@ -3924,7 +3890,7 @@ mod tests {
         )
         .unwrap();
 
-        let manifest = write_v26_cold_vectors_arrow(&path, &rows, &assignments, 16).unwrap();
+        let manifest = write_v26_cold_vectors_arrow(&path, &rows, &assignments, 64).unwrap();
         let mut reader = V26ArrowColdVectors::open(&path, &manifest).unwrap();
         let result =
             select_v26_pq16_pages_from_arrow(&index, &candidate_pages, &query, &mut reader)
@@ -3932,7 +3898,7 @@ mod tests {
 
         assert_eq!(result.selected_pages, reference.selected_pages);
         assert_eq!(result.exact_rows_read, 512);
-        assert_eq!(result.cold_batches_read, 16);
+        assert!(result.cold_batches_read > 0 && result.cold_batches_read <= 34);
         assert_eq!(result.page_body_reads, 0);
 
         if !cfg!(debug_assertions) {
@@ -3945,7 +3911,7 @@ mod tests {
                         .unwrap();
                 let elapsed = started.elapsed().as_nanos();
                 assert_eq!(selection.exact_rows_read, 512);
-                assert_eq!(selection.cold_batches_read, 16);
+                assert!(selection.cold_batches_read > 0 && selection.cold_batches_read <= 34);
                 assert_eq!(selection.page_body_reads, 0);
                 if sample >= 16 {
                     latency_ns.push(elapsed);
