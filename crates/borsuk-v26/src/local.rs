@@ -250,6 +250,7 @@ pub struct V26Pq16IndexManifest {
 #[serde(deny_unknown_fields)]
 pub struct V26SimHashPq16IndexManifest {
     pub row_count: u64,
+    pub page_count: u32,
     pub bucket_count: u32,
     pub projected_resident_bytes_100m: u64,
     pub codebook: V26ArrowFileIdentity,
@@ -279,6 +280,7 @@ pub struct V26Pq16ServingBuildOutput {
     pub page_count: u32,
     pub projected_resident_bytes_100m: u64,
     pub index: V26Pq16IndexManifest,
+    pub simhash_index: V26SimHashPq16IndexManifest,
     pub cold_vectors: V26ColdVectorManifest,
     pub query_role_opens: u32,
     pub page_body_reads: u32,
@@ -387,8 +389,18 @@ pub struct V26SimHashPreflightArmResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct V26SimHashPreflightAuthority {
+    pub serving_manifest: V26ObjectIdentity,
+    pub external_queries: V26ObjectIdentity,
+    pub truth: V26ObjectIdentity,
+    pub evidence: V26ObjectIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct V26SimHashPreflightResult {
     pub schema: String,
+    pub authority: V26SimHashPreflightAuthority,
     pub query_count: u32,
     pub ranked_row_limit: u32,
     pub selected_page_count: u32,
@@ -402,11 +414,27 @@ pub struct V26SimHashPreflightResult {
 }
 
 fn summarize_v26_simhash_preflight(
+    authority: V26SimHashPreflightAuthority,
     samples: &[V26SimHashPreflightSample],
 ) -> Result<V26SimHashPreflightResult> {
     const BUCKET_LIMITS: [u32; 3] = [137, 697, 2_517];
     const QUERY_COUNT: usize = 32;
-    if samples.len() != BUCKET_LIMITS.len() * QUERY_COUNT {
+    validate_v26_benchmark_identity(&authority.serving_manifest, "pq16-serving-manifest")?;
+    validate_v26_benchmark_identity(&authority.external_queries, "external-queries-parquet")?;
+    validate_v26_benchmark_identity(&authority.truth, "truth-parquet")?;
+    validate_v26_benchmark_identity(&authority.evidence, "simhash-preflight-evidence-parquet")?;
+    let generation = &authority.serving_manifest.generation;
+    let mut uris = BTreeSet::new();
+    if [
+        &authority.serving_manifest,
+        &authority.external_queries,
+        &authority.truth,
+        &authority.evidence,
+    ]
+    .iter()
+    .any(|identity| identity.generation != *generation || !uris.insert(&identity.uri))
+        || samples.len() != BUCKET_LIMITS.len() * QUERY_COUNT
+    {
         return Err(invalid("V26 SimHash preflight sample inventory differs"));
     }
     let arms = BUCKET_LIMITS
@@ -430,7 +458,7 @@ fn summarize_v26_simhash_preflight(
                     || sample.oracle_attainment_ppm
                         != u64::from(sample.hits) * 1_000_000 / u64::from(sample.oracle_hits)
                     || sample.elapsed_ns == 0
-                    || sample.rows_scanned < 2_048
+                    || sample.rows_scanned < 10
                     || sample.cold_batches_read == 0
                 {
                     return Err(invalid("V26 SimHash preflight sample authority differs"));
@@ -458,12 +486,14 @@ fn summarize_v26_simhash_preflight(
                 passed: aggregate_recall_ppm >= 975_000
                     && minimum_query_recall_ppm >= 800_000
                     && oracle_attainment_ppm >= 995_000
-                    && maximum_latency_ns <= 15_000_000,
+                    && maximum_latency_ns <= 15_000_000
+                    && arm.iter().all(|sample| sample.rows_scanned >= 2_048),
             })
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(V26SimHashPreflightResult {
         schema: "borsuk-v26-simhash-pq16-preflight-result-v1".to_owned(),
+        authority,
         query_count: 32,
         ranked_row_limit: 2_048,
         selected_page_count: u32::try_from(crate::V26_SERVING_PAGE_BUDGET).unwrap(),
@@ -481,7 +511,7 @@ pub fn canonical_v26_simhash_preflight_result_bytes(
     result: &V26SimHashPreflightResult,
     samples: &[V26SimHashPreflightSample],
 ) -> Result<Vec<u8>> {
-    if result != &summarize_v26_simhash_preflight(samples)? {
+    if result != &summarize_v26_simhash_preflight(result.authority.clone(), samples)? {
         return Err(invalid("V26 SimHash preflight result differs"));
     }
     let value = serde_json::to_value(result)
@@ -504,6 +534,17 @@ pub struct V26Pq16GlobalPreflightRequest {
     pub runtime: V26Pq16ServingRuntimeRequest,
     pub latency_output_path: PathBuf,
     pub latency_output_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26SimHashPreflightRequest {
+    pub serving_manifest: V26LocalObjectPath,
+    pub serving_dir: PathBuf,
+    pub layout_terminal: V26LocalObjectPath,
+    pub external_queries: V26LocalObjectPath,
+    pub truth: V26LocalObjectPath,
+    pub evidence_output_path: PathBuf,
+    pub evidence_output_uri: String,
 }
 
 fn summarize_v26_pq16_global_preflight(
@@ -1205,6 +1246,32 @@ fn read_evaluation_truth(
     construction_sha256: &str,
     external_queries_sha256: &str,
 ) -> Result<Vec<V26QueryTruth>> {
+    read_evaluation_truth_with_assignment(
+        path,
+        expected_queries,
+        queries,
+        construction_sha256,
+        external_queries_sha256,
+        |neighbor| {
+            assignments
+                .get(usize::try_from(neighbor).map_err(|_| invalid("V26 truth source differs"))?)
+                .copied()
+                .ok_or_else(|| invalid("V26 truth source differs"))
+        },
+    )
+}
+
+fn read_evaluation_truth_with_assignment<F>(
+    path: &Path,
+    expected_queries: u32,
+    queries: &[V26ExternalQuery],
+    construction_sha256: &str,
+    external_queries_sha256: &str,
+    mut assignment_for: F,
+) -> Result<Vec<V26QueryTruth>>
+where
+    F: FnMut(u64) -> Result<V26RowPages>,
+{
     let reader = open_reader(path)?;
     if reader.schema().as_ref() != &v26_truth_schema()
         || u32::try_from(reader.metadata().file_metadata().num_rows()).ok()
@@ -1289,12 +1356,7 @@ fn read_evaluation_truth(
                     return Err(invalid("V26 truth rank order differs"));
                 }
                 prior = Some((distance, *neighbor));
-                let assignment = assignments
-                    .get(
-                        usize::try_from(*neighbor)
-                            .map_err(|_| invalid("V26 truth source differs"))?,
-                    )
-                    .ok_or_else(|| invalid("V26 truth source differs"))?;
+                let assignment = assignment_for(*neighbor)?;
                 let mut pages = vec![assignment.primary_page, assignment.replica_page];
                 pages.sort_unstable();
                 ground_truth_page_assignments.push(pages);
@@ -3077,6 +3139,14 @@ pub fn select_v26_simhash_pq16_pages_from_arrow(
             }
         }
     }
+    for page in 0..index.page_count {
+        if selected_pages.len() == crate::V26_SERVING_PAGE_BUDGET {
+            break;
+        }
+        if !selected_pages.contains(&page) {
+            selected_pages.push(page);
+        }
+    }
     if selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET {
         return Err(invalid("V26 SimHash PQ16 Arrow page inventory differs"));
     }
@@ -3091,13 +3161,12 @@ pub fn select_v26_simhash_pq16_pages_from_arrow(
     })
 }
 
-/// Executes the fixed three-arm, 32-query SimHash/PQ16 truth-bound preflight.
-pub fn evaluate_v26_simhash_preflight(
+fn execute_v26_simhash_preflight_samples(
     index: &crate::V26SimHashPq16MultiIndex,
     cold_vectors: &V26ArrowColdVectors,
     queries: &[V26ExternalQuery],
     truths: &[V26QueryTruth],
-) -> Result<(Vec<V26SimHashPreflightSample>, V26SimHashPreflightResult)> {
+) -> Result<Vec<V26SimHashPreflightSample>> {
     const BUCKET_LIMITS: [usize; 3] = [137, 697, 2_517];
     if queries.len() != 32 || truths.len() != queries.len() {
         return Err(invalid("V26 SimHash preflight query inventory differs"));
@@ -3117,13 +3186,17 @@ pub fn evaluate_v26_simhash_preflight(
                 return Err(invalid("V26 SimHash preflight truth authority differs"));
             }
             let rows_scanned = crate::v26_simhash_rows_scanned(index, &query.vector, bucket_limit)?;
+            let ranked_row_limit = usize::try_from(rows_scanned.min(2_048)).unwrap();
+            if ranked_row_limit < 10 {
+                return Err(invalid("V26 SimHash preflight candidate inventory differs"));
+            }
             let started = std::time::Instant::now();
             let selection = select_v26_simhash_pq16_pages_from_arrow(
                 index,
                 &query.vector,
                 cold_vectors,
                 bucket_limit,
-                2_048,
+                ranked_row_limit,
             )?;
             let elapsed_ns = u64::try_from(started.elapsed().as_nanos())
                 .map_err(|_| invalid("V26 SimHash preflight latency overflows"))?
@@ -3164,8 +3237,189 @@ pub fn evaluate_v26_simhash_preflight(
             });
         }
     }
-    let result = summarize_v26_simhash_preflight(&samples)?;
+    Ok(samples)
+}
+
+/// Executes the fixed three-arm, 32-query SimHash/PQ16 truth-bound preflight.
+pub fn evaluate_v26_simhash_preflight(
+    index: &crate::V26SimHashPq16MultiIndex,
+    cold_vectors: &V26ArrowColdVectors,
+    queries: &[V26ExternalQuery],
+    truths: &[V26QueryTruth],
+    authority: V26SimHashPreflightAuthority,
+) -> Result<(Vec<V26SimHashPreflightSample>, V26SimHashPreflightResult)> {
+    let samples = execute_v26_simhash_preflight_samples(index, cold_vectors, queries, truths)?;
+    let result = summarize_v26_simhash_preflight(authority, &samples)?;
     Ok((samples, result))
+}
+
+fn v26_simhash_preflight_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("bucket_limit", DataType::UInt32, false),
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new(
+            "selected_pages",
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt32, false)), 10),
+            false,
+        ),
+        Field::new("hits", DataType::UInt32, false),
+        Field::new("oracle_hits", DataType::UInt32, false),
+        Field::new("recall_ppm", DataType::UInt64, false),
+        Field::new("oracle_attainment_ppm", DataType::UInt64, false),
+        Field::new("elapsed_ns", DataType::UInt64, false),
+        Field::new("rows_scanned", DataType::UInt64, false),
+        Field::new("cold_batches_read", DataType::UInt32, false),
+    ])
+}
+
+fn v26_simhash_preflight_batch(samples: &[V26SimHashPreflightSample]) -> Result<RecordBatch> {
+    if samples.len() != 96 {
+        return Err(invalid("V26 SimHash preflight evidence inventory differs"));
+    }
+    let selected_pages = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::UInt32, false)),
+        10,
+        Arc::new(UInt32Array::from_iter_values(
+            samples
+                .iter()
+                .flat_map(|sample| sample.selected_pages.iter().copied()),
+        )),
+        None,
+    )
+    .map_err(|error| invalid(&format!("V26 SimHash preflight pages failed: {error}")))?;
+    RecordBatch::try_new(
+        Arc::new(v26_simhash_preflight_schema()),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.bucket_limit),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.query_ordinal),
+            )),
+            Arc::new(selected_pages),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.hits),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.oracle_hits),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.recall_ppm),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.oracle_attainment_ppm),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.elapsed_ns),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.rows_scanned),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.cold_batches_read),
+            )),
+        ],
+    )
+    .map_err(|error| invalid(&format!("V26 SimHash preflight batch failed: {error}")))
+}
+
+pub fn run_v26_simhash_preflight(request: &V26SimHashPreflightRequest) -> Result<Vec<u8>> {
+    if request.evidence_output_path.exists()
+        || !request.evidence_output_uri.starts_with("s3://")
+        || !request.evidence_output_uri.ends_with(".parquet")
+    {
+        return Err(invalid("V26 SimHash preflight request differs"));
+    }
+    let manifest = read_v26_pq16_serving_manifest(&request.serving_manifest)?;
+    let terminal = read_layout_terminal(&request.layout_terminal)?;
+    authenticate(&request.external_queries, "external-queries-parquet")?;
+    authenticate(&request.truth, "truth-parquet")?;
+    let generation = &terminal.authority.generation;
+    let mut uris = BTreeSet::new();
+    if manifest.inputs[0] != terminal.authority.construction_rows
+        || manifest.inputs[2] != request.layout_terminal.identity
+        || manifest.row_count != terminal.row_count
+        || manifest.page_count != terminal.page_count
+        || [
+            &request.serving_manifest.identity,
+            &request.layout_terminal.identity,
+            &request.external_queries.identity,
+            &request.truth.identity,
+        ]
+        .iter()
+        .any(|identity| identity.generation != *generation || !uris.insert(&identity.uri))
+        || !uris.insert(&request.evidence_output_uri)
+    {
+        return Err(invalid("V26 SimHash preflight authority differs"));
+    }
+    let expected_names = v26_pq16_serving_output_names()
+        .into_iter()
+        .chain(std::iter::once("serving-manifest.json"))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let observed_names = fs::read_dir(&request.serving_dir)
+        .map_err(|error| invalid(&format!("V26 SimHash directory read failed: {error}")))?
+        .map(|entry| {
+            entry
+                .map_err(|error| invalid(&format!("V26 SimHash directory read failed: {error}")))
+                .and_then(|entry| {
+                    entry
+                        .file_name()
+                        .into_string()
+                        .map_err(|_| invalid("V26 SimHash artifact name differs"))
+                })
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    if observed_names != expected_names {
+        return Err(invalid("V26 SimHash artifact inventory differs"));
+    }
+    let index = read_v26_simhash_pq16_index_arrow(&request.serving_dir, &manifest.simhash_index)?;
+    let cold_vectors = V26ArrowColdVectors::open(
+        &request.serving_dir.join("cold-vectors.arrow"),
+        &manifest.cold_vectors,
+    )?;
+    let mut queries = read_evaluation_queries(&request.external_queries.path, 512)?;
+    queries.truncate(32);
+    let truths = read_evaluation_truth_with_assignment(
+        &request.truth.path,
+        32,
+        &queries,
+        &terminal.authority.construction_rows.digest,
+        &request.external_queries.identity.digest,
+        |neighbor| {
+            let neighbor =
+                u32::try_from(neighbor).map_err(|_| invalid("V26 SimHash truth source differs"))?;
+            cold_vectors.read_assignment(neighbor)
+        },
+    )?;
+    let samples = execute_v26_simhash_preflight_samples(&index, &cold_vectors, &queries, &truths)?;
+    let result = (|| {
+        write_batch(
+            &request.evidence_output_path,
+            v26_simhash_preflight_batch(&samples)?,
+        )?;
+        let evidence = output_identity(
+            "simhash-preflight-evidence-parquet",
+            &request.evidence_output_path,
+            &request.evidence_output_uri[..request.evidence_output_uri.rfind('/').unwrap() + 1],
+            generation,
+        )?;
+        if evidence.uri != request.evidence_output_uri {
+            return Err(invalid("V26 SimHash evidence URI differs"));
+        }
+        let authority = V26SimHashPreflightAuthority {
+            serving_manifest: request.serving_manifest.identity.clone(),
+            external_queries: request.external_queries.identity.clone(),
+            truth: request.truth.identity.clone(),
+            evidence,
+        };
+        let result = summarize_v26_simhash_preflight(authority, &samples)?;
+        canonical_v26_simhash_preflight_result_bytes(&result, &samples)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&request.evidence_output_path);
+    }
+    result
 }
 
 fn v26_pq16_codebook_schema() -> Schema {
@@ -3558,6 +3812,7 @@ pub fn write_v26_simhash_pq16_index_arrow(
         || index.codebook.width != 16
         || index.codebook.subspace_width != 6
         || index.bucket_offsets.len() != 65_537
+        || index.page_count == 0
         || index.source_ordinals.len() * 16 != index.codes.len()
     {
         return Err(invalid("V26 SimHash Arrow write request differs"));
@@ -3661,6 +3916,7 @@ pub fn write_v26_simhash_pq16_index_arrow(
             .map_err(|error| invalid(&format!("V26 SimHash records finish failed: {error}")))?;
         Ok(V26SimHashPq16IndexManifest {
             row_count: u64::try_from(index.source_ordinals.len()).unwrap(),
+            page_count: index.page_count,
             bucket_count: 65_536,
             projected_resident_bytes_100m: index.projected_resident_bytes_100m,
             codebook: arrow_file_identity(&codebook_path)?,
@@ -3683,6 +3939,7 @@ pub fn read_v26_simhash_pq16_index_arrow(
     if manifest.row_count == 0
         || manifest.row_count > u64::from(u32::MAX)
         || manifest.bucket_count != 65_536
+        || manifest.page_count == 0
         || manifest.projected_resident_bytes_100m != 2_537_493_520
     {
         return Err(invalid("V26 SimHash Arrow manifest differs"));
@@ -3855,6 +4112,7 @@ pub fn read_v26_simhash_pq16_index_arrow(
             subspace_width: 6,
             centroids,
         },
+        page_count: manifest.page_count,
         bucket_offsets,
         source_ordinals,
         codes,
@@ -4377,12 +4635,15 @@ fn read_construction_rows(path: &Path, expected_rows: u64) -> Result<Vec<V26Cons
     Ok(rows)
 }
 
-fn v26_pq16_serving_output_names() -> [&'static str; 4] {
+fn v26_pq16_serving_output_names() -> [&'static str; 7] {
     [
         "pq16-codebook.arrow",
         "pq16-codes.arrow",
         "pq16-postings.arrow",
         "cold-vectors.arrow",
+        "simhash-pq16-codebook.arrow",
+        "simhash-pq16-buckets.arrow",
+        "simhash-pq16-records.arrow",
     ]
 }
 
@@ -4390,7 +4651,7 @@ fn validate_v26_pq16_serving_build_output(
     request: &V26Pq16ServingBuildRequest,
     output: &V26Pq16ServingBuildOutput,
 ) -> Result<()> {
-    if output.schema != "borsuk-v26-pq16-serving-manifest-v1"
+    if output.schema != "borsuk-v26-pq16-serving-manifest-v2"
         || output.inputs
             != [
                 request.construction_rows.identity.clone(),
@@ -4403,8 +4664,11 @@ fn validate_v26_pq16_serving_build_output(
         || output.index.row_count != output.row_count
         || output.cold_vectors.row_count != output.row_count
         || output.page_count != output.index.page_count
-        || output.projected_resident_bytes_100m != output.index.projected_resident_bytes_100m
-        || output.outputs.len() != 4
+        || output.projected_resident_bytes_100m
+            != output.simhash_index.projected_resident_bytes_100m
+        || output.simhash_index.row_count != output.row_count
+        || output.simhash_index.bucket_count != 65_536
+        || output.outputs.len() != 7
         || output.query_role_opens != 0
         || output.page_body_reads != 0
         || output.claim_eligible
@@ -4417,6 +4681,9 @@ fn validate_v26_pq16_serving_build_output(
         "pq16-codes-arrow",
         "pq16-postings-arrow",
         "cold-vectors-arrow",
+        "simhash-pq16-codebook-arrow",
+        "simhash-pq16-buckets-arrow",
+        "simhash-pq16-records-arrow",
     ];
     for ((identity, name), role) in output
         .outputs
@@ -4442,6 +4709,12 @@ fn validate_v26_pq16_serving_build_output(
         || output.outputs[2].digest != output.index.postings.sha256
         || output.outputs[3].encoded_bytes != output.cold_vectors.encoded_bytes
         || output.outputs[3].digest != output.cold_vectors.sha256
+        || output.outputs[4].encoded_bytes != output.simhash_index.codebook.encoded_bytes
+        || output.outputs[4].digest != output.simhash_index.codebook.sha256
+        || output.outputs[5].encoded_bytes != output.simhash_index.buckets.encoded_bytes
+        || output.outputs[5].digest != output.simhash_index.buckets.sha256
+        || output.outputs[6].encoded_bytes != output.simhash_index.records.encoded_bytes
+        || output.outputs[6].digest != output.simhash_index.records.sha256
     {
         return Err(invalid("V26 PQ16 serving manifest binding differs"));
     }
@@ -4542,6 +4815,7 @@ pub fn run_v26_pq16_serving_build(
     )?;
     validate_v26_dual_tree_layout(&terminal.authority, &primary, &replica, &assignments)?;
     let index = crate::build_v26_pq16_packed_index(&rows, &assignments)?;
+    let simhash_index = crate::build_v26_simhash_pq16_multi_index(&index, &rows)?;
     fs::create_dir(&request.output_dir)
         .map_err(|error| invalid(&format!("V26 serving output directory failed: {error}")))?;
     let result = (|| {
@@ -4552,11 +4826,16 @@ pub fn run_v26_pq16_serving_build(
             &assignments,
             V26_COLD_VECTOR_BATCH_ROWS,
         )?;
+        let simhash_manifest =
+            write_v26_simhash_pq16_index_arrow(&request.output_dir, &simhash_index)?;
         let roles = [
             "pq16-codebook-arrow",
             "pq16-codes-arrow",
             "pq16-postings-arrow",
             "cold-vectors-arrow",
+            "simhash-pq16-codebook-arrow",
+            "simhash-pq16-buckets-arrow",
+            "simhash-pq16-records-arrow",
         ];
         let outputs = v26_pq16_serving_output_names()
             .into_iter()
@@ -4571,7 +4850,7 @@ pub fn run_v26_pq16_serving_build(
             })
             .collect::<Result<Vec<_>>>()?;
         let output = V26Pq16ServingBuildOutput {
-            schema: "borsuk-v26-pq16-serving-manifest-v1".to_owned(),
+            schema: "borsuk-v26-pq16-serving-manifest-v2".to_owned(),
             inputs: vec![
                 request.construction_rows.identity.clone(),
                 request.page_assignments.identity.clone(),
@@ -4582,8 +4861,9 @@ pub fn run_v26_pq16_serving_build(
             outputs,
             row_count: request.expected_rows,
             page_count: index_manifest.page_count,
-            projected_resident_bytes_100m: index_manifest.projected_resident_bytes_100m,
+            projected_resident_bytes_100m: simhash_manifest.projected_resident_bytes_100m,
             index: index_manifest,
+            simhash_index: simhash_manifest,
             cold_vectors,
             query_role_opens: 0,
             page_body_reads: 0,
@@ -4626,6 +4906,9 @@ fn read_v26_pq16_serving_manifest(
         "pq16-codes-arrow",
         "pq16-postings-arrow",
         "cold-vectors-arrow",
+        "simhash-pq16-codebook-arrow",
+        "simhash-pq16-buckets-arrow",
+        "simhash-pq16-records-arrow",
     ];
     let generation = output
         .inputs
@@ -4634,7 +4917,7 @@ fn read_v26_pq16_serving_manifest(
         .unwrap_or_default();
     let mut uris = BTreeSet::new();
     if bytes != expected
-        || output.schema != "borsuk-v26-pq16-serving-manifest-v1"
+        || output.schema != "borsuk-v26-pq16-serving-manifest-v2"
         || output.inputs.len() != 5
         || output.inputs[0].role != "construction-parquet"
         || output.inputs[1].role != "page-assignments-parquet"
@@ -4665,7 +4948,10 @@ fn read_v26_pq16_serving_manifest(
         || output.row_count != output.cold_vectors.row_count
         || output.page_count == 0
         || output.page_count != output.index.page_count
-        || output.projected_resident_bytes_100m != output.index.projected_resident_bytes_100m
+        || output.projected_resident_bytes_100m
+            != output.simhash_index.projected_resident_bytes_100m
+        || output.simhash_index.row_count != output.row_count
+        || output.simhash_index.bucket_count != 65_536
         || output.outputs[0].encoded_bytes != output.index.codebook.encoded_bytes
         || output.outputs[0].digest != output.index.codebook.sha256
         || output.outputs[1].encoded_bytes != output.index.codes.encoded_bytes
@@ -4674,6 +4960,12 @@ fn read_v26_pq16_serving_manifest(
         || output.outputs[2].digest != output.index.postings.sha256
         || output.outputs[3].encoded_bytes != output.cold_vectors.encoded_bytes
         || output.outputs[3].digest != output.cold_vectors.sha256
+        || output.outputs[4].encoded_bytes != output.simhash_index.codebook.encoded_bytes
+        || output.outputs[4].digest != output.simhash_index.codebook.sha256
+        || output.outputs[5].encoded_bytes != output.simhash_index.buckets.encoded_bytes
+        || output.outputs[5].digest != output.simhash_index.buckets.sha256
+        || output.outputs[6].encoded_bytes != output.simhash_index.records.encoded_bytes
+        || output.outputs[6].digest != output.simhash_index.records.sha256
         || output.query_role_opens != 0
         || output.page_body_reads != 0
         || output.claim_eligible
@@ -6043,8 +6335,23 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
+        let object = |role: &str, fill: char| V26ObjectIdentity {
+            role: role.to_owned(),
+            uri: format!("s3://v26/{role}"),
+            digest_algorithm: "sha256".to_owned(),
+            digest: fill.to_string().repeat(64),
+            encoded_bytes: 1_024,
+            generation: "v26-local-test".to_owned(),
+        };
+        let authority = super::V26SimHashPreflightAuthority {
+            serving_manifest: object("pq16-serving-manifest", 'a'),
+            external_queries: object("external-queries-parquet", 'b'),
+            truth: object("truth-parquet", 'c'),
+            evidence: object("simhash-preflight-evidence-parquet", 'd'),
+        };
         let (samples, result) =
-            super::evaluate_v26_simhash_preflight(&index, &cold, &queries, &truths).unwrap();
+            super::evaluate_v26_simhash_preflight(&index, &cold, &queries, &truths, authority)
+                .unwrap();
 
         assert_eq!(samples.len(), 96);
         assert_eq!(result.arms.len(), 3);
@@ -6221,9 +6528,9 @@ mod tests {
 
         let output = run_v26_pq16_serving_build(&request).unwrap();
 
-        assert_eq!(output.schema, "borsuk-v26-pq16-serving-manifest-v1");
+        assert_eq!(output.schema, "borsuk-v26-pq16-serving-manifest-v2");
         assert_eq!(output.inputs.len(), 5);
-        assert_eq!(output.outputs.len(), 4);
+        assert_eq!(output.outputs.len(), 7);
         assert_eq!(output.row_count, row_count);
         assert_eq!(output.page_count, 4);
         assert_eq!(output.page_body_reads, 0);
@@ -6237,12 +6544,17 @@ mod tests {
             "pq16-codes.arrow",
             "pq16-postings.arrow",
             "cold-vectors.arrow",
+            "simhash-pq16-codebook.arrow",
+            "simhash-pq16-buckets.arrow",
+            "simhash-pq16-records.arrow",
         ] {
             let bytes = fs::read(output_dir.join(name)).unwrap();
             assert_eq!(&bytes[..6], b"ARROW1");
             assert_eq!(&bytes[bytes.len() - 6..], b"ARROW1");
         }
         let reopened = read_v26_pq16_index_arrow(&output_dir, &output.index).unwrap();
+        let simhash =
+            super::read_v26_simhash_pq16_index_arrow(&output_dir, &output.simhash_index).unwrap();
         let cold =
             V26ArrowColdVectors::open(&output_dir.join("cold-vectors.arrow"), &output.cold_vectors)
                 .unwrap();
@@ -6250,6 +6562,8 @@ mod tests {
             reopened.codes.len(),
             usize::try_from(row_count).unwrap() * 16
         );
+        assert_eq!(simhash.source_ordinals.len(), row_count as usize);
+        assert_eq!(simhash.projected_resident_bytes_100m, 2_537_493_520);
         assert_eq!(
             cold.read_rows(&[0, 63, 64, 1_023]).unwrap().vectors.len(),
             4
@@ -6329,6 +6643,72 @@ mod tests {
         let mut drifted = request.clone();
         drifted.primary_tree.identity.digest = "f".repeat(64);
         assert!(open_v26_pq16_serving_runtime(&drifted).is_err());
+    }
+
+    #[test]
+    fn v26_simhash_preflight_runner_binds_truth_and_writes_96_parquet_samples() {
+        // Break caught: the offline preflight skips immutable truth, rebuilds from construction,
+        // emits JSON-only samples, or can become claim eligible without a later full run.
+        let (temp, mut evaluation) = evaluation_fixture_with_rows(3_521);
+        let mut truth_reader = open_reader(&evaluation.truth.path)
+            .unwrap()
+            .build()
+            .unwrap();
+        let truth_batch = truth_reader.next().unwrap().unwrap();
+        let preflight_truth_path = temp.path().join("preflight-truth.parquet");
+        write_parquet(&preflight_truth_path, &truth_batch.slice(0, 32));
+        evaluation.truth = identity("truth-parquet", &preflight_truth_path);
+        let receipt = read_layout_terminal(&evaluation.layout_terminal).unwrap();
+        let serving_dir = temp.path().join("simhash-serving");
+        let build_request = V26Pq16ServingBuildRequest {
+            construction_rows: identity(
+                "construction-parquet",
+                &temp.path().join("construction.parquet"),
+            ),
+            page_assignments: evaluation.page_assignments,
+            layout_terminal: evaluation.layout_terminal.clone(),
+            primary_tree: V26LocalObjectPath {
+                identity: receipt.outputs[1].clone(),
+                path: temp.path().join("layout/primary-tree.parquet"),
+            },
+            replica_tree: V26LocalObjectPath {
+                identity: receipt.outputs[2].clone(),
+                path: temp.path().join("layout/replica-tree.parquet"),
+            },
+            expected_rows: 3_521,
+            output_dir: serving_dir.clone(),
+            output_uri_prefix: "s3://v26-output/simhash-serving/".to_owned(),
+        };
+        run_v26_pq16_serving_build(&build_request).unwrap();
+        let evidence_path = temp.path().join("simhash-preflight.parquet");
+        let request = super::V26SimHashPreflightRequest {
+            serving_manifest: identity(
+                "pq16-serving-manifest",
+                &serving_dir.join("serving-manifest.json"),
+            ),
+            serving_dir,
+            layout_terminal: evaluation.layout_terminal,
+            external_queries: evaluation.external_queries,
+            truth: evaluation.truth,
+            evidence_output_path: evidence_path.clone(),
+            evidence_output_uri: "s3://v26-output/simhash-preflight.parquet".to_owned(),
+        };
+
+        let bytes = super::run_v26_simhash_preflight(&request).unwrap();
+
+        let result: super::V26SimHashPreflightResult = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(result.schema, "borsuk-v26-simhash-pq16-preflight-result-v1");
+        assert_eq!(result.query_count, 32);
+        assert_eq!(result.arms.len(), 3);
+        assert_eq!(result.page_body_reads, 0);
+        assert!(!result.claim_eligible);
+        let reader = open_reader(&evidence_path).unwrap();
+        assert_eq!(reader.metadata().file_metadata().num_rows(), 96);
+        assert_eq!(result.authority.truth, request.truth.identity);
+        assert_eq!(
+            result.authority.evidence.encoded_bytes,
+            fs::metadata(evidence_path).unwrap().len()
+        );
     }
 
     #[test]
@@ -6443,6 +6823,20 @@ mod tests {
     #[test]
     fn v26_fast_simhash_preflight_recomputes_truth_quality_and_latency_gates() {
         // Break caught: the SimHash preflight trusts stored recall, latency, or arm pass fields.
+        let identity = |role: &str, fill: char| V26ObjectIdentity {
+            role: role.to_owned(),
+            uri: format!("s3://v26/{role}"),
+            digest_algorithm: "sha256".to_owned(),
+            digest: fill.to_string().repeat(64),
+            encoded_bytes: 1_024,
+            generation: "v26-local-test".to_owned(),
+        };
+        let authority = super::V26SimHashPreflightAuthority {
+            serving_manifest: identity("pq16-serving-manifest", 'a'),
+            external_queries: identity("external-queries-parquet", 'b'),
+            truth: identity("truth-parquet", 'c'),
+            evidence: identity("simhash-preflight-evidence-parquet", 'd'),
+        };
         let samples = [137_u32, 697, 2_517]
             .into_iter()
             .flat_map(|bucket_limit| {
@@ -6460,7 +6854,8 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        let result = super::summarize_v26_simhash_preflight(&samples).unwrap();
+        let result = super::summarize_v26_simhash_preflight(authority.clone(), &samples).unwrap();
+        assert_eq!(result.authority, authority);
         assert_eq!(result.query_count, 32);
         assert_eq!(result.arms.len(), 3);
         assert!(result.arms.iter().all(|arm| arm.passed));

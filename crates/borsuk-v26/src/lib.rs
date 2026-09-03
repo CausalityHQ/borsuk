@@ -25,8 +25,9 @@ pub use local::{
     V26Pq16ServingBenchmarkRequest, V26Pq16ServingBenchmarkResult, V26Pq16ServingBuildOutput,
     V26Pq16ServingBuildRequest, V26Pq16ServingRuntime, V26Pq16ServingRuntimeRequest,
     V26PqWidthLadderRequest, V26ServingLatencySample, V26SimHashPq16IndexManifest,
-    V26SimHashPreflightArmResult, V26SimHashPreflightResult, V26SimHashPreflightSample,
-    V26TreeRouterRequest, V26TruthBuildRequest, build_v26_simhash_pq16_multi_index_from_arrow,
+    V26SimHashPreflightArmResult, V26SimHashPreflightAuthority, V26SimHashPreflightRequest,
+    V26SimHashPreflightResult, V26SimHashPreflightSample, V26TreeRouterRequest,
+    V26TruthBuildRequest, build_v26_simhash_pq16_multi_index_from_arrow,
     canonical_v26_layout_build_output_bytes, canonical_v26_pq16_global_preflight_result_bytes,
     canonical_v26_pq16_serving_benchmark_result_bytes,
     canonical_v26_pq16_serving_build_output_bytes, canonical_v26_simhash_preflight_result_bytes,
@@ -36,8 +37,8 @@ pub use local::{
     run_v26_layout_build, run_v26_layout_build_directory, run_v26_page_mode_router,
     run_v26_pq_width_ladder, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
     run_v26_pq16_global_preflight, run_v26_pq16_serving_benchmark, run_v26_pq16_serving_build,
-    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
-    select_v26_pq16_global_pages_from_arrow, select_v26_pq16_pages_from_arrow,
+    run_v26_simhash_preflight, run_v26_tree_router, run_v26_tree_router_diagnostic,
+    run_v26_truth_build, select_v26_pq16_global_pages_from_arrow, select_v26_pq16_pages_from_arrow,
     select_v26_simhash_pq16_pages_from_arrow, v26_construction_schema, v26_page_assignments_schema,
     v26_query_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
     write_v26_cold_vectors_arrow, write_v26_pq16_index_arrow, write_v26_simhash_pq16_index_arrow,
@@ -1725,6 +1726,7 @@ const V26_SIMHASH_SEED: u64 = 0x5632_362d_5349_4d48;
 #[derive(Debug, Clone, PartialEq)]
 pub struct V26SimHashPq16MultiIndex {
     codebook: V26PqCodebook,
+    pub(crate) page_count: u32,
     pub(crate) bucket_offsets: Vec<u64>,
     pub(crate) source_ordinals: Vec<u32>,
     pub(crate) codes: Vec<u8>,
@@ -1782,6 +1784,7 @@ pub fn build_v26_simhash_pq16_multi_index(
     if rows.is_empty()
         || rows.len() > u32::MAX as usize
         || packed.codes.len() != rows.len() * CODE_BYTES
+        || packed.page_offsets.len() < 2
     {
         return Err(invalid("V26 SimHash PQ16 build request differs"));
     }
@@ -1803,6 +1806,7 @@ pub(crate) fn build_v26_simhash_pq16_multi_index_from_signatures(
     if signatures.is_empty()
         || signatures.len() > u32::MAX as usize
         || packed.codes.len() != signatures.len() * CODE_BYTES
+        || packed.page_offsets.len() < 2
     {
         return Err(invalid("V26 SimHash PQ16 signature inventory differs"));
     }
@@ -1840,6 +1844,7 @@ pub(crate) fn build_v26_simhash_pq16_multi_index_from_signatures(
     }
     Ok(V26SimHashPq16MultiIndex {
         codebook: packed.codebook.clone(),
+        page_count: u32::try_from(packed.page_offsets.len() - 1).unwrap(),
         bucket_offsets,
         source_ordinals,
         codes,
