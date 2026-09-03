@@ -448,7 +448,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         let page_budget = take(&mut values, "--page-budget")?
             .parse()
             .map_err(|_| "invalid --page-budget".to_owned())?;
-        let expected_page_budget = if candidate_cover || pq16_exact_rerank {
+        let expected_page_budget = if router_diagnostic || candidate_cover || pq16_exact_rerank {
             10
         } else {
             8
@@ -957,6 +957,12 @@ mod tests {
             .find(|argument| argument.as_str() == "--route-trees")
             .unwrap();
         *mode = "--diagnose-tree-router".to_owned();
+        let page_budget = args
+            .iter_mut()
+            .skip_while(|argument| argument.as_str() != "--page-budget")
+            .nth(1)
+            .unwrap();
+        *page_budget = "10".to_owned();
         args
     }
 
@@ -1281,7 +1287,7 @@ mod tests {
         let V26CliMode::RouterDiagnostic(request) = parsed else {
             panic!("tree router diagnostic mode differs");
         };
-        assert_eq!(request.page_budget, 8);
+        assert_eq!(request.page_budget, 10);
         let error = execute_v26_mode(V26CliMode::RouterDiagnostic(request)).unwrap_err();
         assert!(error.contains("local object open failed"));
 

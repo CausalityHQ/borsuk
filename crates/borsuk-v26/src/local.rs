@@ -1280,13 +1280,21 @@ pub fn run_v26_exact_global(request: &V26ExactGlobalRequest) -> Result<Vec<u8>> 
 fn load_v26_tree_router(
     request: &V26TreeRouterRequest,
 ) -> Result<(V26Tree, V26Tree, Vec<V26ExternalQuery>, Vec<V26QueryTruth>)> {
-    let (truths, _, layout_result) = evaluate_v26_layout_oracle(&request.layout)?;
-    if request.page_budget != 8
+    load_v26_tree_router_with_page_budget(request, 8)
+}
+
+fn load_v26_tree_router_with_page_budget(
+    request: &V26TreeRouterRequest,
+    page_budget: usize,
+) -> Result<(V26Tree, V26Tree, Vec<V26ExternalQuery>, Vec<V26QueryTruth>)> {
+    let (truths, _, layout_result) =
+        evaluate_v26_layout_oracle_with_page_budget(&request.layout, page_budget)?;
+    if usize::try_from(request.page_budget).ok() != Some(page_budget)
         || layout_result.disposition != V26Disposition::BoundedLayoutCandidate
     {
         return Err(invalid("V26 tree router layout gate is closed"));
     }
-    let (primary, replica) = load_v26_router_trees(request, 8)?;
+    let (primary, replica) = load_v26_router_trees(request, request.page_budget)?;
     let queries = read_evaluation_queries(
         &request.layout.external_queries.path,
         request.layout.expected_queries,
@@ -1350,7 +1358,7 @@ pub fn run_v26_tree_router(request: &V26TreeRouterRequest) -> Result<Vec<u8>> {
 }
 
 pub fn run_v26_tree_router_diagnostic(request: &V26TreeRouterRequest) -> Result<Vec<u8>> {
-    let (primary, replica, queries, truths) = load_v26_tree_router(request)?;
+    let (primary, replica, queries, truths) = load_v26_tree_router_with_page_budget(request, 10)?;
     let (samples, widths) =
         diagnose_v26_tree_router_candidate_widths(&primary, &replica, &queries, &truths)?;
     let value = serde_json::json!({

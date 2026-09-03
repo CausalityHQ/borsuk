@@ -134,7 +134,8 @@ fn exact_v26_candidate_cover_pages(
     page_budget: usize,
 ) -> Result<Vec<u32>> {
     if assignments.len() != 10
-        || page_budget != 8
+        || page_budget == 0
+        || page_budget > 10
         || candidate_pages.is_empty()
         || candidate_pages.windows(2).any(|pair| pair[0] >= pair[1])
         || assignments.iter().any(|pages| {
@@ -151,8 +152,8 @@ fn exact_v26_candidate_cover_pages(
         }
     }
     let maximum_pages = page_budget.min(page_masks.len());
-    let mut states = vec![None::<([u32; 8], usize)>; 1 << assignments.len()];
-    states[0] = Some(([0; 8], 0));
+    let mut states = vec![None::<([u32; 10], usize)>; 1 << assignments.len()];
+    states[0] = Some(([0; 10], 0));
     for (page, mask) in page_masks {
         for covered in (0..states.len()).rev() {
             let Some((mut pages, count)) = states[covered] else {
@@ -801,11 +802,11 @@ pub fn diagnose_v26_tree_router_candidate_widths(
         return Err(invalid("V26 tree router diagnostic request differs"));
     }
     let first_ranking = rank_v26_tree_pages(primary, replica, &queries[0].vector)?;
-    if first_ranking.len() < 8 {
+    if first_ranking.len() < 10 {
         return Err(invalid("V26 tree router diagnostic inventory differs"));
     }
     let total_pages = first_ranking.len();
-    let mut widths = [8_usize, 16, 32, 64, 128]
+    let mut widths = [8_usize, 16, 32, 64, 128, 256, 512, 1_024, 2_048]
         .into_iter()
         .filter(|width| *width < total_pages)
         .collect::<Vec<_>>();
@@ -830,7 +831,7 @@ pub fn diagnose_v26_tree_router_candidate_widths(
                 return Err(invalid("V26 tree router diagnostic inventory differs"));
             }
             let oracle_pages =
-                exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?;
+                exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 10)?;
             let oracle_hits = v26_layout_hits(&truth.ground_truth_page_assignments, &oracle_pages);
             widths
                 .iter()
@@ -840,7 +841,7 @@ pub fn diagnose_v26_tree_router_candidate_widths(
                     let selected_pages = exact_v26_candidate_cover_pages(
                         &truth.ground_truth_page_assignments,
                         &candidates,
-                        8,
+                        10,
                     )?;
                     let hits =
                         v26_layout_hits(&truth.ground_truth_page_assignments, &selected_pages);
@@ -3646,7 +3647,7 @@ mod tests {
     #[test]
     fn v26_tree_router_diagnostic_locates_the_smallest_repairable_candidate_width() {
         // Break caught: the diagnostic scores the unrestricted oracle instead of restricting it
-        // to the ranked candidate prefix, or silently changes the exact eight-page read budget.
+        // to the ranked candidate prefix, or silently changes the exact ten-page read budget.
         let primary = v26_router_test_tree(PRIMARY_SEED, 0, [100.0, 10.0, 1.0, 2.0, 5.0, 1.0, 2.0]);
         let replica = v26_router_test_tree(REPLICA_SEED, 8, [200.0, 20.0, 3.0, 4.0, 5.0, 1.0, 2.0]);
         let mut vector = [0.0_f32; 96];
@@ -3700,7 +3701,7 @@ mod tests {
         assert!(
             samples
                 .iter()
-                .all(|sample| sample.selected_pages.len() <= 8)
+                .all(|sample| sample.selected_pages.len() <= 10)
         );
     }
 
