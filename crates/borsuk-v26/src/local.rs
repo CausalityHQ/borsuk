@@ -7082,13 +7082,13 @@ mod tests {
         );
         assert_eq!(value["page_body_reads"], 0);
         assert_eq!(value["claim_eligible"], false);
-        assert_eq!(value["mode_results"].as_array().unwrap().len(), 4 * 3);
+        assert_eq!(value["mode_results"].as_array().unwrap().len(), 6 * 3);
         assert_eq!(
             value["evidence"]["role"],
             "global-page-mode-evidence-parquet"
         );
         let reader = open_reader(&evidence_path).unwrap();
-        assert_eq!(reader.metadata().file_metadata().num_rows(), 4 * 3 * 512);
+        assert_eq!(reader.metadata().file_metadata().num_rows(), 6 * 3 * 512);
     }
 
     #[test]
@@ -7138,14 +7138,14 @@ mod tests {
         assert_eq!(bytes.last(), Some(&b'\n'));
         assert_eq!(value["schema"], "borsuk-v26-page-mode-router-result-v1");
         assert_eq!(value["candidate_page_limit"], 8);
-        assert_eq!(value["mode_results"].as_array().unwrap().len(), 4);
+        assert_eq!(value["mode_results"].as_array().unwrap().len(), 6);
         assert_eq!(value["evidence"]["role"], "page-mode-evidence-parquet");
         assert_eq!(value["evidence"]["uri"], request.evidence_output_uri);
         assert_eq!(value["page_body_reads"], 0);
         assert_eq!(value["claim_eligible"], false);
         assert!(evidence_path.is_file());
         let reader = open_reader(&evidence_path).unwrap();
-        assert_eq!(reader.metadata().file_metadata().num_rows(), 4 * 512);
+        assert_eq!(reader.metadata().file_metadata().num_rows(), 6 * 512);
     }
 
     #[test]

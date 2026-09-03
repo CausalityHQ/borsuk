@@ -1249,7 +1249,7 @@ pub(crate) fn diagnose_v26_global_page_mode_candidate_widths(
     Ok((samples, results))
 }
 
-pub(crate) const V26_PAGE_MODE_LADDER: [u32; 4] = [2, 4, 8, 16];
+pub(crate) const V26_PAGE_MODE_LADDER: [u32; 6] = [2, 4, 8, 16, 32, 64];
 type V26PageModes = BTreeMap<u32, Vec<[f32; 96]>>;
 type V26PageModeInventory = BTreeMap<u32, V26PageModes>;
 pub(crate) const V26_PQ_WIDTH_LADDER: [usize; 4] = [8, 16, 24, 32];
@@ -4742,14 +4742,17 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(V26_PAGE_MODE_LADDER, [2, 4, 8, 16]);
+        assert_eq!(V26_PAGE_MODE_LADDER, [2, 4, 8, 16, 32, 64]);
         let first = build_v26_page_mode_centroids(&rows, &assignments).unwrap();
         let second = build_v26_page_mode_centroids(&rows, &assignments).unwrap();
 
         assert_eq!(first, second);
         for page in [0, 1] {
             let ladder = first.get(&page).unwrap();
-            assert_eq!(ladder.keys().copied().collect::<Vec<_>>(), [2, 4, 8, 16]);
+            assert_eq!(
+                ladder.keys().copied().collect::<Vec<_>>(),
+                [2, 4, 8, 16, 32, 64]
+            );
             let two_modes = &ladder[&2];
             assert_eq!(two_modes.len(), 2);
             assert_eq!(two_modes[0][0], -1.0);
@@ -4815,8 +4818,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(results.len(), 4);
-        assert_eq!(samples.len(), 4 * 512);
+        assert_eq!(results.len(), 6);
+        assert_eq!(samples.len(), 6 * 512);
         for (result, mode_count) in results.iter().zip(V26_PAGE_MODE_LADDER) {
             assert_eq!(result.mode_count, mode_count);
             assert_eq!(result.candidate_page_limit, 16);
@@ -4891,7 +4894,7 @@ mod tests {
 
         assert_eq!(first_samples, second_samples);
         assert_eq!(first_results, second_results);
-        assert_eq!(first_results.len(), 4 * 3);
+        assert_eq!(first_results.len(), 6 * 3);
         assert!(first_results.iter().all(|result| {
             V26_PAGE_MODE_LADDER.contains(&result.mode_count)
                 && [8, 16, 32].contains(&result.candidate_page_limit)
@@ -4907,7 +4910,7 @@ mod tests {
                         && result.passed
                 })
         );
-        assert_eq!(first_samples.len(), 4 * 3 * 512);
+        assert_eq!(first_samples.len(), 6 * 3 * 512);
     }
 
     #[test]
