@@ -7,8 +7,8 @@ use std::{
 };
 
 use arrow_array::{
-    Array, ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt8Array, UInt32Array,
-    UInt64Array,
+    Array, ArrayRef, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, RecordBatch,
+    UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_ipc::{reader::FileReader, writer::FileWriter};
 use arrow_schema::{DataType, Field, Schema};
@@ -34,8 +34,8 @@ use crate::{
     evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
     evaluate_v26_pq16_exact_rerank_ladder, evaluate_v26_tree_router, exact_lower_hex,
     exact_v26_layout_oracle_pages, invalid, projected_steps, projected_v26_pq8_resident_bytes,
-    rank_v26_pq16_packed_candidates, rank_v26_tree_pages, v26_squared_l2,
-    validate_layout_authority, validate_v26_dual_tree_layout, validate_v26_vector,
+    projected_v26_pq16_rerank_resident_bytes, rank_v26_pq16_packed_candidates, rank_v26_tree_pages,
+    v26_squared_l2, validate_layout_authority, validate_v26_dual_tree_layout, validate_v26_vector,
 };
 
 fn vector_type() -> DataType {
@@ -205,6 +205,23 @@ pub struct V26ArrowColdVectors {
     reader: FileReader<fs::File>,
     row_count: u64,
     page_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26ArrowFileIdentity {
+    pub encoded_bytes: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26Pq16IndexManifest {
+    pub row_count: u64,
+    pub page_count: u32,
+    pub occurrence_count: u64,
+    pub projected_resident_bytes_100m: u64,
+    pub codebook: V26ArrowFileIdentity,
+    pub codes: V26ArrowFileIdentity,
+    pub postings: V26ArrowFileIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1928,6 +1945,367 @@ pub fn select_v26_pq16_pages_from_arrow(
     })
 }
 
+fn v26_pq16_codebook_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("subspace", DataType::UInt8, false),
+        Field::new("centroid", DataType::UInt16, false),
+        Field::new(
+            "values",
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::Float32, false)), 6),
+            false,
+        ),
+    ])
+}
+
+fn v26_pq16_codes_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("source_ordinal", DataType::UInt32, false),
+        Field::new("code", DataType::FixedSizeBinary(16), false),
+    ])
+}
+
+fn v26_pq16_postings_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("page_ordinal", DataType::UInt32, false),
+        Field::new("source_ordinal", DataType::UInt32, false),
+    ])
+}
+
+fn arrow_file_identity(path: &Path) -> Result<V26ArrowFileIdentity> {
+    let (encoded_bytes, sha256) = sha256_file(path)?;
+    Ok(V26ArrowFileIdentity {
+        encoded_bytes,
+        sha256,
+    })
+}
+
+fn authenticate_arrow_file(
+    path: &Path,
+    identity: &V26ArrowFileIdentity,
+) -> Result<FileReader<fs::File>> {
+    if identity.encoded_bytes == 0 || !exact_lower_hex(&identity.sha256, 64) {
+        return Err(invalid("V26 Arrow identity differs"));
+    }
+    let (encoded_bytes, sha256) = sha256_file(path)?;
+    if encoded_bytes != identity.encoded_bytes || sha256 != identity.sha256 {
+        return Err(invalid("V26 Arrow file identity differs"));
+    }
+    FileReader::try_new(
+        fs::File::open(path)
+            .map_err(|error| invalid(&format!("V26 Arrow file open failed: {error}")))?,
+        None,
+    )
+    .map_err(|error| invalid(&format!("V26 Arrow metadata failed: {error}")))
+}
+
+pub fn write_v26_pq16_index_arrow(
+    directory: &Path,
+    index: &crate::V26PackedPq16Index,
+    assignments: &[V26RowPages],
+) -> Result<V26Pq16IndexManifest> {
+    let codebook_path = directory.join("pq16-codebook.arrow");
+    let codes_path = directory.join("pq16-codes.arrow");
+    let postings_path = directory.join("pq16-postings.arrow");
+    if !directory.is_dir()
+        || [&codebook_path, &codes_path, &postings_path]
+            .iter()
+            .any(|path| path.exists())
+        || index.codebook.width != 16
+        || index.codebook.subspace_width != 6
+        || index.codes.len() != assignments.len() * 16
+        || index.posting_rows.len() != assignments.len() * 2
+    {
+        return Err(invalid("V26 PQ16 Arrow write request differs"));
+    }
+    let result = (|| {
+        let codebook_file = fs::File::create(&codebook_path)
+            .map_err(|error| invalid(&format!("V26 codebook create failed: {error}")))?;
+        let mut codebook_writer =
+            FileWriter::try_new(codebook_file, &v26_pq16_codebook_schema())
+                .map_err(|error| invalid(&format!("V26 codebook writer failed: {error}")))?;
+        let values = index
+            .codebook
+            .centroids
+            .iter()
+            .flat_map(|centroids| centroids.iter().copied())
+            .collect::<Vec<_>>();
+        let codebook_values = FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            6,
+            Arc::new(Float32Array::from(values)),
+            None,
+        )
+        .map_err(|error| invalid(&format!("V26 codebook values failed: {error}")))?;
+        codebook_writer
+            .write(
+                &RecordBatch::try_new(
+                    Arc::new(v26_pq16_codebook_schema()),
+                    vec![
+                        Arc::new(UInt8Array::from_iter_values(
+                            (0_u8..16).flat_map(|subspace| std::iter::repeat_n(subspace, 256)),
+                        )),
+                        Arc::new(UInt16Array::from_iter_values(
+                            (0_u8..16).flat_map(|_| 0_u16..256),
+                        )),
+                        Arc::new(codebook_values),
+                    ],
+                )
+                .map_err(|error| invalid(&format!("V26 codebook batch failed: {error}")))?,
+            )
+            .map_err(|error| invalid(&format!("V26 codebook write failed: {error}")))?;
+        codebook_writer
+            .finish()
+            .map_err(|error| invalid(&format!("V26 codebook finish failed: {error}")))?;
+
+        let codes_file = fs::File::create(&codes_path)
+            .map_err(|error| invalid(&format!("V26 codes create failed: {error}")))?;
+        let mut codes_writer = FileWriter::try_new(codes_file, &v26_pq16_codes_schema())
+            .map_err(|error| invalid(&format!("V26 codes writer failed: {error}")))?;
+        for (batch_index, chunk) in index.codes.chunks(65_536 * 16).enumerate() {
+            let row_start = batch_index * 65_536;
+            let row_count = chunk.len() / 16;
+            let codes = FixedSizeBinaryArray::try_from_iter(chunk.as_chunks::<16>().0.iter())
+                .map_err(|error| invalid(&format!("V26 codes array failed: {error}")))?;
+            let batch = RecordBatch::try_new(
+                Arc::new(v26_pq16_codes_schema()),
+                vec![
+                    Arc::new(UInt32Array::from_iter_values(
+                        (row_start..row_start + row_count).map(|row| u32::try_from(row).unwrap()),
+                    )),
+                    Arc::new(codes),
+                ],
+            )
+            .map_err(|error| invalid(&format!("V26 codes batch failed: {error}")))?;
+            codes_writer
+                .write(&batch)
+                .map_err(|error| invalid(&format!("V26 codes write failed: {error}")))?;
+        }
+        codes_writer
+            .finish()
+            .map_err(|error| invalid(&format!("V26 codes finish failed: {error}")))?;
+
+        let postings_file = fs::File::create(&postings_path)
+            .map_err(|error| invalid(&format!("V26 postings create failed: {error}")))?;
+        let mut postings_writer =
+            FileWriter::try_new(postings_file, &v26_pq16_postings_schema())
+                .map_err(|error| invalid(&format!("V26 postings writer failed: {error}")))?;
+        for page in 0..index.page_offsets.len() - 1 {
+            let start = usize::try_from(index.page_offsets[page]).unwrap();
+            let end = usize::try_from(index.page_offsets[page + 1]).unwrap();
+            let rows = &index.posting_rows[start..end];
+            let batch = RecordBatch::try_new(
+                Arc::new(v26_pq16_postings_schema()),
+                vec![
+                    Arc::new(UInt32Array::from_iter_values(std::iter::repeat_n(
+                        u32::try_from(page).unwrap(),
+                        rows.len(),
+                    ))),
+                    Arc::new(UInt32Array::from_iter_values(rows.iter().copied())),
+                ],
+            )
+            .map_err(|error| invalid(&format!("V26 postings batch failed: {error}")))?;
+            postings_writer
+                .write(&batch)
+                .map_err(|error| invalid(&format!("V26 postings write failed: {error}")))?;
+        }
+        postings_writer
+            .finish()
+            .map_err(|error| invalid(&format!("V26 postings finish failed: {error}")))?;
+
+        Ok(V26Pq16IndexManifest {
+            row_count: u64::try_from(assignments.len()).unwrap(),
+            page_count: u32::try_from(index.page_offsets.len() - 1).unwrap(),
+            occurrence_count: u64::try_from(index.posting_rows.len()).unwrap(),
+            projected_resident_bytes_100m: index.projected_resident_bytes_100m,
+            codebook: arrow_file_identity(&codebook_path)?,
+            codes: arrow_file_identity(&codes_path)?,
+            postings: arrow_file_identity(&postings_path)?,
+        })
+    })();
+    if result.is_err() {
+        for path in [&codebook_path, &codes_path, &postings_path] {
+            let _ = fs::remove_file(path);
+        }
+    }
+    result
+}
+
+pub fn read_v26_pq16_index_arrow(
+    directory: &Path,
+    manifest: &V26Pq16IndexManifest,
+) -> Result<crate::V26PackedPq16Index> {
+    if manifest.row_count == 0
+        || manifest.row_count > u64::from(u32::MAX)
+        || manifest.page_count == 0
+        || manifest.occurrence_count != manifest.row_count.checked_mul(2).unwrap_or(0)
+        || manifest.projected_resident_bytes_100m
+            != projected_v26_pq16_rerank_resident_bytes(100_000_000, 2_816)?
+    {
+        return Err(invalid("V26 PQ16 Arrow manifest differs"));
+    }
+    let mut codebook_reader =
+        authenticate_arrow_file(&directory.join("pq16-codebook.arrow"), &manifest.codebook)?;
+    if codebook_reader.schema().as_ref() != &v26_pq16_codebook_schema() {
+        return Err(invalid("V26 PQ16 codebook schema differs"));
+    }
+    let mut centroids = vec![Vec::<f32>::new(); 16];
+    let mut codebook_row = 0_usize;
+    for batch in &mut codebook_reader {
+        let batch =
+            batch.map_err(|error| invalid(&format!("V26 codebook read failed: {error}")))?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V26 PQ16 codebook nullability differs"));
+        }
+        let subspaces = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .unwrap();
+        let centroid_ids = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt16Array>()
+            .unwrap();
+        let lists = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        let values = lists
+            .values()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            if usize::from(subspaces.value(row)) != codebook_row / 256
+                || usize::from(centroid_ids.value(row)) != codebook_row % 256
+            {
+                return Err(invalid("V26 PQ16 codebook order differs"));
+            }
+            let start = row * 6;
+            let value = &values.values()[start..start + 6];
+            if value.iter().any(|value| !value.is_finite()) {
+                return Err(invalid("V26 PQ16 codebook value differs"));
+            }
+            centroids[codebook_row / 256].extend_from_slice(value);
+            codebook_row += 1;
+        }
+    }
+    if codebook_row != 16 * 256 {
+        return Err(invalid("V26 PQ16 codebook inventory differs"));
+    }
+
+    let mut codes_reader =
+        authenticate_arrow_file(&directory.join("pq16-codes.arrow"), &manifest.codes)?;
+    if codes_reader.schema().as_ref() != &v26_pq16_codes_schema() {
+        return Err(invalid("V26 PQ16 codes schema differs"));
+    }
+    let mut codes = Vec::with_capacity(usize::try_from(manifest.row_count).unwrap() * 16);
+    let mut expected_row = 0_u32;
+    for batch in &mut codes_reader {
+        let batch = batch.map_err(|error| invalid(&format!("V26 codes read failed: {error}")))?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V26 PQ16 codes nullability differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        let encoded = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            if ordinals.value(row) != expected_row {
+                return Err(invalid("V26 PQ16 code order differs"));
+            }
+            codes.extend_from_slice(encoded.value(row));
+            expected_row += 1;
+        }
+    }
+    if u64::from(expected_row) != manifest.row_count {
+        return Err(invalid("V26 PQ16 code inventory differs"));
+    }
+
+    let mut postings_reader =
+        authenticate_arrow_file(&directory.join("pq16-postings.arrow"), &manifest.postings)?;
+    if postings_reader.schema().as_ref() != &v26_pq16_postings_schema() {
+        return Err(invalid("V26 PQ16 postings schema differs"));
+    }
+    let mut posting_rows = Vec::with_capacity(usize::try_from(manifest.occurrence_count).unwrap());
+    let mut page_offsets = vec![0_u64];
+    let mut current_page = 0_u32;
+    let mut prior_row = None;
+    for batch in &mut postings_reader {
+        let batch =
+            batch.map_err(|error| invalid(&format!("V26 postings read failed: {error}")))?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V26 PQ16 postings nullability differs"));
+        }
+        let pages = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        let rows = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            let page = pages.value(row);
+            let source = rows.value(row);
+            if page >= manifest.page_count || u64::from(source) >= manifest.row_count {
+                return Err(invalid("V26 PQ16 posting value differs"));
+            }
+            while current_page < page {
+                if page_offsets.last().copied() == Some(posting_rows.len() as u64) {
+                    return Err(invalid("V26 PQ16 empty posting page differs"));
+                }
+                page_offsets.push(posting_rows.len() as u64);
+                current_page += 1;
+                prior_row = None;
+            }
+            if page != current_page || prior_row.is_some_and(|prior| prior >= source) {
+                return Err(invalid("V26 PQ16 posting order differs"));
+            }
+            posting_rows.push(source);
+            prior_row = Some(source);
+        }
+    }
+    page_offsets.push(posting_rows.len() as u64);
+    if page_offsets.len() != usize::try_from(manifest.page_count).unwrap() + 1
+        || u64::try_from(posting_rows.len()).unwrap() != manifest.occurrence_count
+    {
+        return Err(invalid("V26 PQ16 posting inventory differs"));
+    }
+    Ok(crate::V26PackedPq16Index {
+        codebook: crate::V26PqCodebook {
+            width: 16,
+            subspace_width: 6,
+            centroids,
+        },
+        codes,
+        page_offsets,
+        posting_rows,
+        projected_resident_bytes_100m: manifest.projected_resident_bytes_100m,
+    })
+}
+
 fn open_reader(path: &Path) -> Result<ParquetRecordBatchReaderBuilder<fs::File>> {
     let file = fs::File::open(path)
         .map_err(|error| invalid(&format!("V26 Parquet open failed: {error}")))?;
@@ -2527,13 +2905,14 @@ mod tests {
         V26LocalObjectPath, V26PageModeRouterRequest, V26Pq8CoverRequest, V26Pq16RerankRequest,
         V26PqWidthLadderRequest, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
         evaluate_v26_exact_global, evaluate_v26_layout_oracle, open_reader, output_identity,
-        read_assignments, read_layout_terminal, run_v26_candidate_row_cover,
-        run_v26_centroid_router, run_v26_layout_build, run_v26_page_mode_router,
-        run_v26_pq_width_ladder, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
-        run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
-        select_v26_pq16_pages_from_arrow, v26_construction_schema, v26_page_assignments_schema,
-        v26_query_schema, v26_source_map_schema, v26_tree_schema, v26_truth_schema,
-        validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
+        read_assignments, read_layout_terminal, read_v26_pq16_index_arrow,
+        run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_layout_build,
+        run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
+        run_v26_pq16_exact_rerank, run_v26_tree_router, run_v26_tree_router_diagnostic,
+        run_v26_truth_build, select_v26_pq16_pages_from_arrow, v26_construction_schema,
+        v26_page_assignments_schema, v26_query_schema, v26_source_map_schema, v26_tree_schema,
+        v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
+        write_v26_pq16_index_arrow,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -3577,5 +3956,81 @@ mod tests {
             eprintln!("v26-pq16-arrow-reduced-shape-p99-ns={p99_ns}");
             assert!(p99_ns < 15_000_000);
         }
+    }
+
+    #[test]
+    fn v26_pq16_index_arrow_roundtrips_the_exact_resident_representation() {
+        // Break caught: the deployable index uses a private format, loses row/page order,
+        // rebuilds PQ at open, or admits coherent bytes under a different registered digest.
+        let temp = TempDir::new().unwrap();
+        let rows = (0_u64..1_024)
+            .map(|source_ordinal| {
+                let angle = source_ordinal as f32 / 1_024.0;
+                let mut vector = [0.0_f32; 96];
+                vector[0] = angle.cos();
+                vector[1] = angle.sin();
+                crate::V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..1_024)
+            .map(|source_ordinal| crate::V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 8).unwrap(),
+                replica_page: 8 + u32::try_from(source_ordinal % 8).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let expected = crate::build_v26_pq16_packed_index(&rows, &assignments).unwrap();
+
+        let manifest = write_v26_pq16_index_arrow(temp.path(), &expected, &assignments).unwrap();
+        assert_eq!(manifest.row_count, 1_024);
+        assert_eq!(manifest.page_count, 16);
+        assert_eq!(manifest.occurrence_count, 2_048);
+        for name in [
+            "pq16-codebook.arrow",
+            "pq16-codes.arrow",
+            "pq16-postings.arrow",
+        ] {
+            let bytes = fs::read(temp.path().join(name)).unwrap();
+            assert_eq!(&bytes[..6], b"ARROW1");
+            assert_eq!(&bytes[bytes.len() - 6..], b"ARROW1");
+        }
+        let reopened = read_v26_pq16_index_arrow(temp.path(), &manifest).unwrap();
+        let candidate_pages = (0_u32..16).collect::<Vec<_>>();
+        let expected_ranked = crate::rank_v26_pq16_packed_candidates(
+            &expected,
+            &candidate_pages,
+            &rows[37].vector,
+            512,
+        )
+        .unwrap();
+        let actual_ranked = crate::rank_v26_pq16_packed_candidates(
+            &reopened,
+            &candidate_pages,
+            &rows[37].vector,
+            512,
+        )
+        .unwrap();
+        assert_eq!(
+            actual_ranked
+                .iter()
+                .map(|row| (row.source_ordinal, row.distance.to_bits()))
+                .collect::<Vec<_>>(),
+            expected_ranked
+                .iter()
+                .map(|row| (row.source_ordinal, row.distance.to_bits()))
+                .collect::<Vec<_>>()
+        );
+
+        let mut drifted = manifest.clone();
+        let replacement = if drifted.codes.sha256.starts_with('f') {
+            "e"
+        } else {
+            "f"
+        };
+        drifted.codes.sha256.replace_range(0..1, replacement);
+        assert!(read_v26_pq16_index_arrow(temp.path(), &drifted).is_err());
     }
 }
