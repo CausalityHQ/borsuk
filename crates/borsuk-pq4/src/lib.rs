@@ -450,7 +450,7 @@ mod tests {
         let second = build(4, &second_dir);
         assert_eq!(first.row_count, 4_097);
         assert_eq!(first.sample_rows, 4_097);
-        assert!(first.maximum_buffered_rows <= 8_704);
+        assert!(first.maximum_buffered_rows <= 9_216);
         assert_eq!(second.worker_count, 4);
         assert_eq!(first.manifest, second.manifest);
         for file_name in [
@@ -467,7 +467,13 @@ mod tests {
             );
         }
         let snapshot = Pq4Snapshot::open(&second_dir).unwrap();
-        assert_eq!(snapshot.read_vector(4_096).unwrap(), vectors[4_096]);
+        let norm = vectors[4_096]
+            .iter()
+            .map(|value| value * value)
+            .sum::<f32>()
+            .sqrt();
+        let expected_vector = vectors[4_096].map(|value| value / norm);
+        assert_eq!(snapshot.read_vector(4_096).unwrap(), expected_vector);
         assert_eq!(snapshot.read_id(4_096).unwrap(), ids[4_096]);
 
         let invalid_input = temp.path().join("invalid.parquet");
@@ -489,6 +495,52 @@ mod tests {
             .is_err()
         );
         assert!(!rejected.exists());
+    }
+
+    #[test]
+    fn v26_release_contract_pq4_builder_normalizes_every_persisted_vector() {
+        // Break caught: ordinary finite Parquet vectors are encoded and reranked at arbitrary
+        // input magnitudes even though the evidence-qualified PQ4 geometry is unit normalized.
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("scaled.parquet");
+        let mut vectors = rows(3_072);
+        for (ordinal, vector) in vectors.iter_mut().enumerate() {
+            let scale = (ordinal % 7 + 2) as f32;
+            for value in vector {
+                *value *= scale;
+            }
+        }
+        let ids = (0..vectors.len())
+            .map(|ordinal| ordinal.to_le_bytes().to_vec())
+            .collect::<Vec<_>>();
+        write_pq4_input(&input, &vectors, &ids);
+        let output = temp.path().join("normalized");
+        Pq4Builder::build_parquet(
+            &input,
+            &output,
+            &Pq4BuildConfig {
+                worker_count: 2,
+                batch_rows: 512,
+                generation: "normalization-contract".to_owned(),
+                source_uri: "s3://frozen/scaled.parquet".to_owned(),
+            },
+        )
+        .unwrap();
+        let snapshot = Pq4Snapshot::open(&output).unwrap();
+        let actual = snapshot.read_vector(1_537).unwrap();
+        let norm = vectors[1_537]
+            .iter()
+            .map(|value| value * value)
+            .sum::<f32>()
+            .sqrt();
+        let expected = vectors[1_537].map(|value| value / norm);
+        assert!(
+            actual
+                .iter()
+                .zip(expected)
+                .all(|(left, right)| (left - right).abs() <= 1.0e-6)
+        );
+        assert!((actual.iter().map(|value| value * value).sum::<f32>() - 1.0).abs() <= 1.0e-6);
     }
 
     #[cfg(not(target_arch = "aarch64"))]

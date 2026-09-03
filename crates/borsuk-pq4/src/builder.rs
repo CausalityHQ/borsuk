@@ -85,7 +85,7 @@ fn open_reader(
     Ok((row_count, reader))
 }
 
-fn rows_from_batch(batch: &RecordBatch) -> Result<(&[[f32; 96]], &BinaryArray)> {
+fn rows_from_batch(batch: &RecordBatch) -> Result<(Vec<[f32; 96]>, &BinaryArray)> {
     if batch.schema().as_ref() != &input_schema() {
         return Err(invalid("PQ4 Parquet batch schema differs"));
     }
@@ -117,7 +117,14 @@ fn rows_from_batch(batch: &RecordBatch) -> Result<(&[[f32; 96]], &BinaryArray)> 
     {
         return Err(invalid("PQ4 Parquet values differ"));
     }
-    Ok((rows, ids))
+    let normalized = rows
+        .iter()
+        .map(|row| {
+            let norm = row.iter().map(|value| value * value).sum::<f32>().sqrt();
+            row.map(|value| value / norm)
+        })
+        .collect();
+    Ok((normalized, ids))
 }
 
 fn append_codes(
@@ -199,7 +206,7 @@ impl Pq4Builder {
                     if next_sample < sample_ordinals.len()
                         && source_ordinal == sample_ordinals[next_sample]
                     {
-                        sample.push(*vector);
+                        sample.push(vector);
                         next_sample += 1;
                     }
                     source_ordinal += 1;
@@ -241,11 +248,19 @@ impl Pq4Builder {
                         .collect::<Result<Vec<_>>>()
                 })?;
                 append_codes(&mut blocks, &mut pending, &mut pending_rows, &codes)?;
+                let vector_values = vectors.iter().flatten().copied().collect::<Vec<_>>();
+                let vector_array = FixedSizeListArray::try_new(
+                    Arc::new(Field::new("element", DataType::Float32, false)),
+                    96,
+                    Arc::new(Float32Array::from(vector_values)),
+                    None,
+                )
+                .map_err(|error| invalid(&format!("PQ4 vector array failed: {error}")))?;
                 vector_writer
                     .write(
                         &RecordBatch::try_new(
                             Arc::new(vectors_schema()),
-                            vec![batch.column(1).clone()],
+                            vec![Arc::new(vector_array)],
                         )
                         .map_err(|error| invalid(&format!("PQ4 vector batch failed: {error}")))?,
                     )
@@ -294,7 +309,7 @@ impl Pq4Builder {
                 row_count,
                 sample_rows: sample_count,
                 worker_count: config.worker_count,
-                maximum_buffered_rows: sample_count + config.batch_rows,
+                maximum_buffered_rows: sample_count + 2 * config.batch_rows,
                 manifest,
             })
         })();
