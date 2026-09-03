@@ -316,6 +316,19 @@ pub struct V26Pq4FastBuildRequest {
     pub output_uri_prefix: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26Pq4QualityRequest {
+    pub pq4_manifest: V26LocalObjectPath,
+    pub pq4_dir: PathBuf,
+    pub cold_vectors: V26LocalObjectPath,
+    pub cold_vectors_manifest: V26ColdVectorManifest,
+    pub layout_terminal: V26LocalObjectPath,
+    pub external_queries: V26LocalObjectPath,
+    pub truth: V26LocalObjectPath,
+    pub evidence_output_path: PathBuf,
+    pub evidence_output_uri: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct V26Pq16ServingBuildOutput {
@@ -1324,6 +1337,83 @@ pub fn canonical_v26_pq4_quality_result_bytes(
         .map_err(|error| invalid(&format!("V26 PQ4 quality result failed: {error}")))?;
     bytes.push(b'\n');
     Ok(bytes)
+}
+
+fn v26_pq4_quality_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("ranked_row_limit", DataType::UInt32, false),
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new(
+            "selected_pages",
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt32, false)), 10),
+            false,
+        ),
+        Field::new("hits", DataType::UInt32, false),
+        Field::new("oracle_hits", DataType::UInt32, false),
+        Field::new("recall_ppm", DataType::UInt64, false),
+        Field::new("oracle_attainment_ppm", DataType::UInt64, false),
+        Field::new("scan_elapsed_ns", DataType::UInt64, false),
+        Field::new("exact_rerank_elapsed_ns", DataType::UInt64, false),
+        Field::new("quantization_scale_bits", DataType::UInt32, false),
+        Field::new("saturation_count", DataType::UInt32, false),
+        Field::new("maximum_distance_error_bits", DataType::UInt32, false),
+        Field::new("page_body_reads", DataType::UInt32, false),
+    ])
+}
+
+fn v26_pq4_quality_batch(samples: &[V26Pq4QualitySample]) -> Result<RecordBatch> {
+    let selected_pages = samples
+        .iter()
+        .flat_map(|sample| sample.selected_pages.iter().copied())
+        .collect::<Vec<_>>();
+    let pages = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::UInt32, false)),
+        10,
+        Arc::new(UInt32Array::from(selected_pages)),
+        None,
+    )
+    .map_err(|error| invalid(&format!("V26 PQ4 quality pages failed: {error}")))?;
+    let u32s = |values: Vec<u32>| Arc::new(UInt32Array::from(values)) as ArrayRef;
+    let u64s = |values: Vec<u64>| Arc::new(UInt64Array::from(values)) as ArrayRef;
+    RecordBatch::try_new(
+        Arc::new(v26_pq4_quality_schema()),
+        vec![
+            u32s(samples.iter().map(|value| value.ranked_row_limit).collect()),
+            u32s(samples.iter().map(|value| value.query_ordinal).collect()),
+            Arc::new(pages),
+            u32s(samples.iter().map(|value| value.hits).collect()),
+            u32s(samples.iter().map(|value| value.oracle_hits).collect()),
+            u64s(samples.iter().map(|value| value.recall_ppm).collect()),
+            u64s(
+                samples
+                    .iter()
+                    .map(|value| value.oracle_attainment_ppm)
+                    .collect(),
+            ),
+            u64s(samples.iter().map(|value| value.scan_elapsed_ns).collect()),
+            u64s(
+                samples
+                    .iter()
+                    .map(|value| value.exact_rerank_elapsed_ns)
+                    .collect(),
+            ),
+            u32s(
+                samples
+                    .iter()
+                    .map(|value| value.quantization_scale_bits)
+                    .collect(),
+            ),
+            u32s(samples.iter().map(|value| value.saturation_count).collect()),
+            u32s(
+                samples
+                    .iter()
+                    .map(|value| value.maximum_distance_error_bits)
+                    .collect(),
+            ),
+            u32s(samples.iter().map(|value| value.page_body_reads).collect()),
+        ],
+    )
+    .map_err(|error| invalid(&format!("V26 PQ4 quality batch failed: {error}")))
 }
 
 fn summarize_v26_pq16_serving_benchmark(
@@ -6865,6 +6955,336 @@ pub fn run_v26_pq4_fast_build(request: &V26Pq4FastBuildRequest) -> Result<V26Pq4
     result
 }
 
+fn read_v26_pq4_fast_manifest(object: &V26LocalObjectPath) -> Result<V26Pq4FastManifest> {
+    authenticate(object, "pq4-fast-manifest")?;
+    let bytes = fs::read(&object.path)
+        .map_err(|error| invalid(&format!("V26 PQ4 manifest read failed: {error}")))?;
+    let manifest: V26Pq4FastManifest = serde_json::from_slice(&bytes)
+        .map_err(|error| invalid(&format!("V26 PQ4 manifest parse failed: {error}")))?;
+    if canonical_v26_pq4_fast_manifest_bytes(&manifest)? != bytes
+        || manifest.construction_rows.generation != object.identity.generation
+    {
+        return Err(invalid("V26 PQ4 manifest bytes differ"));
+    }
+    Ok(manifest)
+}
+
+fn select_v26_pq4_quality_arms(
+    index: &crate::V26Pq4FastIndex,
+    query: &[f32; 96],
+    cold_vectors: &V26ArrowColdVectors,
+) -> Result<(Vec<(V26Pq16ServingSelection, u64)>, u64, u32, u32, u32)> {
+    const DEPTHS: [usize; 4] = [512, 1_024, 2_048, 4_096];
+    if index.row_count != cold_vectors.row_count {
+        return Err(invalid("V26 PQ4 cold-vector authority differs"));
+    }
+    let tables = crate::prepare_v26_pq4_query_tables(&index.codebook, query)?;
+    let scan_started = std::time::Instant::now();
+    let approximate = crate::rank_v26_pq4_fast_candidates(
+        index,
+        query,
+        4_096,
+        crate::V26Pq4Backend::Aarch64NeonTable,
+    )?;
+    let scan_elapsed_ns = u64::try_from(scan_started.elapsed().as_nanos())
+        .map_err(|_| invalid("V26 PQ4 scan latency overflows"))?
+        .max(1);
+    let cold_started = std::time::Instant::now();
+    let mut source_ordinals = approximate
+        .iter()
+        .map(|candidate| u32::try_from(candidate.source_ordinal))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| invalid("V26 PQ4 source ordinal differs"))?;
+    source_ordinals.sort_unstable();
+    let cold = cold_vectors.read_rows(&source_ordinals)?;
+    let cold_elapsed_ns = u64::try_from(cold_started.elapsed().as_nanos())
+        .map_err(|_| invalid("V26 PQ4 cold-read latency overflows"))?
+        .max(1);
+    let mut maximum_error = 0.0_f32;
+    for candidate in &approximate {
+        let ordinal = usize::try_from(candidate.source_ordinal).unwrap();
+        let row_in_block = ordinal % 32;
+        let block = &index.blocks[ordinal / 32];
+        let mut floating = 0.0_f32;
+        for subspace in 0..32 {
+            let packed = block[subspace * 16 + row_in_block / 2];
+            let code = if row_in_block.is_multiple_of(2) {
+                packed & 15
+            } else {
+                packed >> 4
+            };
+            let start = subspace * 3;
+            let centroid = usize::from(code) * 3;
+            floating += (0..3)
+                .map(|dimension| {
+                    let delta = query[start + dimension]
+                        - index.codebook.centroids[subspace][centroid + dimension];
+                    delta * delta
+                })
+                .sum::<f32>();
+        }
+        let quantized = tables.minima_sum + f32::from(candidate.score) * tables.scale;
+        maximum_error = maximum_error.max((floating - quantized).abs());
+    }
+    if !maximum_error.is_finite() {
+        return Err(invalid("V26 PQ4 quantization error differs"));
+    }
+    let selections = DEPTHS
+        .into_iter()
+        .map(|depth| {
+            let rerank_started = std::time::Instant::now();
+            let mut exact = approximate[..depth]
+                .iter()
+                .map(|candidate| {
+                    let source_ordinal = u32::try_from(candidate.source_ordinal).unwrap();
+                    let position = source_ordinals
+                        .binary_search(&source_ordinal)
+                        .map_err(|_| invalid("V26 PQ4 cold binding differs"))?;
+                    let distance = v26_squared_l2(&cold.vectors[position], query);
+                    let assignment = cold.assignments[position];
+                    if assignment.source_ordinal != candidate.source_ordinal
+                        || !distance.is_finite()
+                    {
+                        return Err(invalid("V26 PQ4 exact-row binding differs"));
+                    }
+                    Ok((
+                        V26PqRankedRow {
+                            source_ordinal: candidate.source_ordinal,
+                            distance,
+                        },
+                        [assignment.primary_page, assignment.replica_page],
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            exact.sort_by_key(|entry| entry.0);
+            let top = exact[..10]
+                .iter()
+                .map(|(_, pages)| pages.to_vec())
+                .collect::<Vec<_>>();
+            let mut selected_pages =
+                exact_v26_layout_oracle_pages(&top, crate::V26_SERVING_PAGE_BUDGET)?;
+            for (_, pages) in &exact {
+                for page in pages {
+                    if selected_pages.len() == crate::V26_SERVING_PAGE_BUDGET {
+                        break;
+                    }
+                    if !selected_pages.contains(page) {
+                        selected_pages.push(*page);
+                    }
+                }
+            }
+            if selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET {
+                return Err(invalid("V26 PQ4 selected-page inventory differs"));
+            }
+            selected_pages.sort_unstable();
+            let rerank_elapsed_ns = u64::try_from(rerank_started.elapsed().as_nanos())
+                .map_err(|_| invalid("V26 PQ4 rerank latency overflows"))?
+                .checked_add(cold_elapsed_ns)
+                .ok_or_else(|| invalid("V26 PQ4 rerank latency overflows"))?;
+            Ok((
+                V26Pq16ServingSelection {
+                    selected_pages,
+                    exact_rows_read: depth as u32,
+                    cold_batches_read: cold.batches_read,
+                    cold_read_workers: cold.read_workers,
+                    page_body_reads: 0,
+                },
+                rerank_elapsed_ns,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((
+        selections,
+        scan_elapsed_ns,
+        tables.scale.to_bits(),
+        tables.saturation_count,
+        maximum_error.to_bits(),
+    ))
+}
+
+fn v26_pq4_quality_sample(
+    ranked_row_limit: u32,
+    query_ordinal: u32,
+    selection: &V26Pq16ServingSelection,
+    truth: &V26QueryTruth,
+    scan_elapsed_ns: u64,
+    exact_rerank_elapsed_ns: u64,
+    quantization_scale_bits: u32,
+    saturation_count: u32,
+    maximum_distance_error_bits: u32,
+) -> Result<V26Pq4QualitySample> {
+    if truth.query_ordinal != query_ordinal
+        || truth.neighbor_source_ordinals.len() != 10
+        || truth.ground_truth_page_assignments.len() != 10
+        || selection.exact_rows_read != ranked_row_limit
+        || selection.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
+        || selection.page_body_reads != 0
+    {
+        return Err(invalid("V26 PQ4 quality selection differs"));
+    }
+    let oracle_pages = exact_v26_layout_oracle_pages(
+        &truth.ground_truth_page_assignments,
+        crate::V26_SERVING_PAGE_BUDGET,
+    )?;
+    let hits = truth
+        .ground_truth_page_assignments
+        .iter()
+        .filter(|pages| {
+            pages
+                .iter()
+                .any(|page| selection.selected_pages.binary_search(page).is_ok())
+        })
+        .count() as u32;
+    let oracle_hits = truth
+        .ground_truth_page_assignments
+        .iter()
+        .filter(|pages| {
+            pages
+                .iter()
+                .any(|page| oracle_pages.binary_search(page).is_ok())
+        })
+        .count() as u32;
+    Ok(V26Pq4QualitySample {
+        ranked_row_limit,
+        query_ordinal,
+        selected_pages: selection.selected_pages.clone(),
+        hits,
+        oracle_hits,
+        recall_ppm: u64::from(hits) * 100_000,
+        oracle_attainment_ppm: u64::from(hits) * 1_000_000 / u64::from(oracle_hits),
+        scan_elapsed_ns,
+        exact_rerank_elapsed_ns,
+        quantization_scale_bits,
+        saturation_count,
+        maximum_distance_error_bits,
+        page_body_reads: 0,
+    })
+}
+
+pub fn run_v26_pq4_quality_frontier(request: &V26Pq4QualityRequest) -> Result<Vec<u8>> {
+    if request.evidence_output_path.exists()
+        || !request.evidence_output_uri.starts_with("s3://")
+        || !request.evidence_output_uri.ends_with(".parquet")
+    {
+        return Err(invalid("V26 PQ4 quality request differs"));
+    }
+    let manifest = read_v26_pq4_fast_manifest(&request.pq4_manifest)?;
+    let terminal = read_layout_terminal(&request.layout_terminal)?;
+    authenticate(&request.cold_vectors, "cold-vectors-arrow")?;
+    authenticate(&request.external_queries, "external-queries-parquet")?;
+    authenticate(&request.truth, "truth-parquet")?;
+    let generation = &manifest.construction_rows.generation;
+    let mut uris = BTreeSet::new();
+    if manifest.layout_terminal != request.layout_terminal.identity
+        || terminal.row_count != manifest.row_count
+        || request.cold_vectors_manifest.row_count != manifest.row_count
+        || request.cold_vectors_manifest.encoded_bytes
+            != request.cold_vectors.identity.encoded_bytes
+        || request.cold_vectors_manifest.sha256 != request.cold_vectors.identity.digest
+        || [
+            &request.pq4_manifest.identity,
+            &request.cold_vectors.identity,
+            &request.layout_terminal.identity,
+            &request.external_queries.identity,
+            &request.truth.identity,
+        ]
+        .iter()
+        .any(|identity| identity.generation != *generation || !uris.insert(&identity.uri))
+        || !uris.insert(&request.evidence_output_uri)
+    {
+        return Err(invalid("V26 PQ4 quality authority differs"));
+    }
+    let expected_names = [
+        "pq4-fast-codebook.arrow",
+        "pq4-fast-codes.arrow",
+        "pq4-fast-manifest.json",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
+    let observed_names = fs::read_dir(&request.pq4_dir)
+        .map_err(|error| invalid(&format!("V26 PQ4 directory failed: {error}")))?
+        .map(|entry| {
+            entry
+                .map_err(|error| invalid(&format!("V26 PQ4 directory failed: {error}")))?
+                .file_name()
+                .into_string()
+                .map_err(|_| invalid("V26 PQ4 artifact name differs"))
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    if observed_names != expected_names {
+        return Err(invalid("V26 PQ4 artifact inventory differs"));
+    }
+    let index = read_v26_pq4_fast_index_arrow(&request.pq4_dir, &manifest)?;
+    let cold_vectors =
+        V26ArrowColdVectors::open(&request.cold_vectors.path, &request.cold_vectors_manifest)?;
+    let mut queries = read_evaluation_queries(&request.external_queries.path, 512)?;
+    let mut truths = read_evaluation_truth_with_assignment(
+        &request.truth.path,
+        512,
+        &queries,
+        &manifest.construction_rows.digest,
+        &request.external_queries.identity.digest,
+        |neighbor| {
+            let ordinal =
+                u32::try_from(neighbor).map_err(|_| invalid("V26 PQ4 truth source differs"))?;
+            cold_vectors.read_assignment(ordinal)
+        },
+    )?;
+    queries.truncate(32);
+    truths.truncate(32);
+    let mut by_depth = vec![Vec::with_capacity(32); 4];
+    for (query, truth) in queries.iter().zip(&truths) {
+        let (selections, scan_ns, scale_bits, saturation_count, maximum_error_bits) =
+            select_v26_pq4_quality_arms(&index, &query.vector, &cold_vectors)?;
+        for (arm_index, (selection, rerank_ns)) in selections.iter().enumerate() {
+            by_depth[arm_index].push(v26_pq4_quality_sample(
+                selection.exact_rows_read,
+                query.query_ordinal,
+                selection,
+                truth,
+                scan_ns,
+                *rerank_ns,
+                scale_bits,
+                saturation_count,
+                maximum_error_bits,
+            )?);
+        }
+    }
+    let samples = by_depth.into_iter().flatten().collect::<Vec<_>>();
+    let result = (|| {
+        write_batch(
+            &request.evidence_output_path,
+            v26_pq4_quality_batch(&samples)?,
+        )?;
+        let slash = request
+            .evidence_output_uri
+            .rfind('/')
+            .ok_or_else(|| invalid("V26 PQ4 evidence URI differs"))?;
+        let evidence = output_identity(
+            "pq4-fast-quality-evidence-parquet",
+            &request.evidence_output_path,
+            &request.evidence_output_uri[..=slash],
+            generation,
+        )?;
+        if evidence.uri != request.evidence_output_uri {
+            return Err(invalid("V26 PQ4 evidence URI differs"));
+        }
+        let result = summarize_v26_pq4_quality(
+            request.pq4_manifest.identity.clone(),
+            request.external_queries.identity.clone(),
+            request.truth.identity.clone(),
+            evidence,
+            &samples,
+        )?;
+        canonical_v26_pq4_quality_result_bytes(&result, &samples)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&request.evidence_output_path);
+    }
+    result
+}
+
 fn v26_pq16_serving_output_names() -> [&'static str; 7] {
     [
         "pq16-codebook.arrow",
@@ -7390,19 +7810,20 @@ mod tests {
         V26ArrowColdVectors, V26CandidateCoverRequest, V26CentroidRouterRequest,
         V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
         V26LocalObjectPath, V26PageModeRouterRequest, V26Pq4FastBuildRequest, V26Pq4FastManifest,
-        V26Pq4QualitySample, V26Pq8CoverRequest, V26Pq16GlobalQualityResult,
+        V26Pq4QualityRequest, V26Pq4QualitySample, V26Pq8CoverRequest, V26Pq16GlobalQualityResult,
         V26Pq16GlobalQualitySample, V26Pq16RerankRequest, V26Pq16ServingBuildRequest,
         V26Pq16ServingRuntimeRequest, V26PqWidthLadderRequest, V26ServingLatencySample,
         V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
         canonical_v26_pq4_fast_manifest_bytes, canonical_v26_pq4_quality_result_bytes,
         canonical_v26_pq16_serving_benchmark_result_bytes, evaluate_v26_exact_global,
         evaluate_v26_layout_oracle, evaluate_v26_layout_oracle_with_page_budget, open_reader,
-        open_v26_pq16_serving_runtime, output_identity, read_assignments, read_evaluation_queries,
-        read_evaluation_truth, read_layout_terminal, read_v26_pq4_fast_index_arrow,
-        read_v26_pq16_index_arrow, run_v26_candidate_row_cover, run_v26_centroid_router,
-        run_v26_global_centroid_frontier_diagnostic, run_v26_global_page_mode_frontier_diagnostic,
-        run_v26_layout_build, run_v26_page_mode_router, run_v26_pq_width_ladder,
-        run_v26_pq4_fast_build, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
+        open_v26_pq16_serving_runtime, output_identity, read_assignments, read_construction_rows,
+        read_evaluation_queries, read_evaluation_truth, read_layout_terminal,
+        read_v26_pq4_fast_index_arrow, read_v26_pq16_index_arrow, run_v26_candidate_row_cover,
+        run_v26_centroid_router, run_v26_global_centroid_frontier_diagnostic,
+        run_v26_global_page_mode_frontier_diagnostic, run_v26_layout_build,
+        run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq4_fast_build,
+        run_v26_pq4_quality_frontier, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
         run_v26_pq16_serving_build, run_v26_tree_router, run_v26_tree_router_diagnostic,
         run_v26_truth_build, select_v26_pq16_global_pages_from_arrow,
         select_v26_pq16_pages_from_arrow, summarize_v26_pq4_quality, v26_construction_schema,
@@ -8988,7 +9409,7 @@ mod tests {
     }
 
     #[test]
-    fn v26_pq4_quality_result_recomputes_the_fixed_four_arm_frontier() {
+    fn v26_fast_smoke_pq4_quality_result_recomputes_the_fixed_four_arm_frontier() {
         // Break caught: the result trusts reported aggregates, tunes the candidate ladder, loses
         // quantization telemetry, or becomes claim-eligible on the burned development queries.
         let depths = [512_u32, 1_024, 2_048, 4_096];
@@ -9042,6 +9463,70 @@ mod tests {
         let mut drifted_samples = samples.clone();
         drifted_samples[32].hits = 9;
         assert!(canonical_v26_pq4_quality_result_bytes(&result, &drifted_samples).is_err());
+    }
+
+    #[test]
+    fn v26_pq4_quality_runner_authenticates_full_inputs_and_writes_128_samples() {
+        // Break caught: the frontier truncates before authenticating all queries/truth, rebuilds
+        // PQ, opens page bodies, or writes a result not bound to its typed Parquet evidence.
+        let row_count = 8_193_u64;
+        let (temp, evaluation) = evaluation_fixture_with_rows(row_count);
+        let rows =
+            read_construction_rows(&temp.path().join("construction.parquet"), row_count).unwrap();
+        let assignments = read_assignments(
+            &evaluation.page_assignments.path,
+            i64::try_from(row_count).unwrap(),
+        )
+        .unwrap();
+        let cold_path = temp.path().join("pq4-fast-cold-vectors.arrow");
+        let cold_manifest = write_v26_cold_vectors_arrow(
+            &cold_path,
+            &rows,
+            &assignments,
+            super::V26_COLD_VECTOR_BATCH_ROWS,
+        )
+        .unwrap();
+        let pq4_dir = temp.path().join("pq4-fast");
+        let build_request = V26Pq4FastBuildRequest {
+            construction_rows: identity(
+                "construction-parquet",
+                &temp.path().join("construction.parquet"),
+            ),
+            page_assignments: evaluation.page_assignments.clone(),
+            layout_terminal: evaluation.layout_terminal.clone(),
+            expected_rows: row_count,
+            output_dir: pq4_dir.clone(),
+            output_uri_prefix: "s3://v26-output/pq4-quality/index/".to_owned(),
+        };
+        run_v26_pq4_fast_build(&build_request).unwrap();
+        let evidence_path = temp.path().join("evidence.parquet");
+        let request = V26Pq4QualityRequest {
+            pq4_manifest: identity("pq4-fast-manifest", &pq4_dir.join("pq4-fast-manifest.json")),
+            pq4_dir,
+            cold_vectors: identity("cold-vectors-arrow", &cold_path),
+            cold_vectors_manifest: cold_manifest,
+            layout_terminal: evaluation.layout_terminal,
+            external_queries: evaluation.external_queries,
+            truth: evaluation.truth,
+            evidence_output_path: evidence_path.clone(),
+            evidence_output_uri: "s3://v26-output/pq4-quality/evidence.parquet".to_owned(),
+        };
+
+        let bytes = run_v26_pq4_quality_frontier(&request).unwrap();
+        let result: super::V26Pq4QualityResult = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(result.query_count, 32);
+        assert_eq!(result.arms.len(), 4);
+        assert_eq!(result.candidate_depths, [512, 1_024, 2_048, 4_096]);
+        assert_eq!(result.page_body_reads, 0);
+        assert!(!result.claim_eligible);
+        let reader = open_reader(&evidence_path).unwrap();
+        assert_eq!(reader.metadata().file_metadata().num_rows(), 128);
+
+        let mut drifted = request.clone();
+        drifted.external_queries.identity.digest = "f".repeat(64);
+        drifted.evidence_output_path = temp.path().join("rejected-quality.parquet");
+        assert!(run_v26_pq4_quality_frontier(&drifted).is_err());
+        assert!(!drifted.evidence_output_path.exists());
     }
 
     #[test]

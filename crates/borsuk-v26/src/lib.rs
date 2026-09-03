@@ -22,7 +22,8 @@ pub use local::{
     V26DualPqKeyPreflightArmResult, V26DualPqKeyPreflightAuthority, V26DualPqKeyPreflightRequest,
     V26DualPqKeyPreflightResult, V26DualPqKeyPreflightSample, V26ExactGlobalRequest,
     V26LayoutBuildOutput, V26LayoutBuildRequest, V26LayoutEvaluationRequest, V26LocalObjectPath,
-    V26PageModeRouterRequest, V26Pq4FastBuildRequest, V26Pq4FastManifest, V26Pq8CoverRequest,
+    V26PageModeRouterRequest, V26Pq4FastBuildRequest, V26Pq4FastManifest, V26Pq4QualityArmResult,
+    V26Pq4QualityRequest, V26Pq4QualityResult, V26Pq4QualitySample, V26Pq8CoverRequest,
     V26Pq16GlobalPreflightRequest, V26Pq16GlobalPreflightResult, V26Pq16GlobalQualityRequest,
     V26Pq16GlobalQualityResult, V26Pq16GlobalQualitySample, V26Pq16IndexManifest,
     V26Pq16RerankRequest, V26Pq16ServingBenchmarkRequest, V26Pq16ServingBenchmarkResult,
@@ -33,7 +34,8 @@ pub use local::{
     V26TreeRouterRequest, V26TruthBuildRequest, build_v26_dual_pq_key_index_from_serving,
     build_v26_simhash_pq16_multi_index_from_arrow,
     canonical_v26_dual_pq_key_preflight_result_bytes, canonical_v26_layout_build_output_bytes,
-    canonical_v26_pq4_fast_manifest_bytes, canonical_v26_pq16_global_preflight_result_bytes,
+    canonical_v26_pq4_fast_manifest_bytes, canonical_v26_pq4_quality_result_bytes,
+    canonical_v26_pq16_global_preflight_result_bytes,
     canonical_v26_pq16_global_quality_result_bytes,
     canonical_v26_pq16_serving_benchmark_result_bytes,
     canonical_v26_pq16_serving_build_output_bytes, canonical_v26_simhash_preflight_result_bytes,
@@ -44,15 +46,15 @@ pub use local::{
     run_v26_exact_global, run_v26_global_centroid_frontier_diagnostic,
     run_v26_global_page_mode_frontier_diagnostic, run_v26_layout_build,
     run_v26_layout_build_directory, run_v26_page_mode_router, run_v26_pq_width_ladder,
-    run_v26_pq4_fast_build, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
-    run_v26_pq16_global_preflight, run_v26_pq16_global_quality_preflight,
-    run_v26_pq16_serving_benchmark, run_v26_pq16_serving_build, run_v26_simhash_preflight,
-    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
-    select_v26_dual_pq_key_pages_from_arrow, select_v26_pq16_global_pages_from_arrow,
-    select_v26_pq16_pages_from_arrow, select_v26_simhash_pq16_pages_from_arrow,
-    v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
-    v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
-    write_v26_dual_pq_key_index_arrow, write_v26_pq16_index_arrow,
+    run_v26_pq4_fast_build, run_v26_pq4_quality_frontier, run_v26_pq8_candidate_cover,
+    run_v26_pq16_exact_rerank, run_v26_pq16_global_preflight,
+    run_v26_pq16_global_quality_preflight, run_v26_pq16_serving_benchmark,
+    run_v26_pq16_serving_build, run_v26_simhash_preflight, run_v26_tree_router,
+    run_v26_tree_router_diagnostic, run_v26_truth_build, select_v26_dual_pq_key_pages_from_arrow,
+    select_v26_pq16_global_pages_from_arrow, select_v26_pq16_pages_from_arrow,
+    select_v26_simhash_pq16_pages_from_arrow, v26_construction_schema, v26_page_assignments_schema,
+    v26_query_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
+    write_v26_cold_vectors_arrow, write_v26_dual_pq_key_index_arrow, write_v26_pq16_index_arrow,
     write_v26_simhash_pq16_index_arrow,
 };
 
@@ -1434,6 +1436,7 @@ pub(crate) fn build_v26_pq4_fast_index(rows: &[[f32; 96]]) -> Result<V26Pq4FastI
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum V26Pq4Backend {
+    #[cfg(test)]
     ScalarControl,
     Aarch64NeonTable,
 }
@@ -1524,6 +1527,7 @@ pub(crate) struct V26Pq4RankedRow {
     source_ordinal: u64,
 }
 
+#[cfg(test)]
 fn v26_pq4_scalar_block_scores(block: &[u8; 512], tables: &V26Pq4QueryTables) -> [u16; 32] {
     std::array::from_fn(|row_in_block| {
         (0..32)
@@ -1602,6 +1606,7 @@ pub(crate) fn rank_v26_pq4_fast_candidates(
     let mut histogram = [0_u32; 8_192];
     for (block_index, block) in index.blocks.iter().enumerate() {
         let block_scores = match backend {
+            #[cfg(test)]
             V26Pq4Backend::ScalarControl => v26_pq4_scalar_block_scores(block, &tables),
             V26Pq4Backend::Aarch64NeonTable => {
                 #[cfg(target_arch = "aarch64")]
@@ -1646,6 +1651,7 @@ pub(crate) fn rank_v26_pq4_fast_candidates(
     Ok(ranked)
 }
 
+#[cfg(test)]
 pub(crate) fn evaluate_v26_pq4_fast_frontier(
     index: &V26Pq4FastIndex,
     query: &[f32; 96],
