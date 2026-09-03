@@ -149,7 +149,7 @@ class V27ReducedSpotTests(unittest.TestCase):
         terminal = iter([None, None, b'{"status":"complete"}\n'])
         health = iter(
             [
-                ("pending", "initializing", "initializing"),
+                ("pending", "not-applicable", "not-applicable"),
                 ("running", "ok", "ok"),
             ]
         )

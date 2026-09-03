@@ -375,11 +375,15 @@ def run_v27_reduced_spot(
                     raise ValueError("V27 Spot terminal status differs")
                 return receipt
             state, system_status, instance_status = health(instance_id)
-            if (
-                state not in {"pending", "running"}
-                or system_status not in {"ok", "initializing"}
-                or instance_status not in {"ok", "initializing"}
-            ):
+            pending = state == "pending" and system_status in {
+                "initializing",
+                "not-applicable",
+            } and instance_status in {"initializing", "not-applicable"}
+            running = state == "running" and system_status in {
+                "ok",
+                "initializing",
+            } and instance_status in {"ok", "initializing"}
+            if not (pending or running):
                 raise RuntimeError("V27 Spot health differs")
             sleep(30)
         raise TimeoutError("V27 Spot attempt exceeded wall stop")
