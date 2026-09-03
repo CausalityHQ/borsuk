@@ -1658,7 +1658,7 @@ pub(crate) fn rank_v26_pq4_fast_candidates_parallel(
     ranked_row_limit: usize,
     backend: V26Pq4Backend,
 ) -> Result<Vec<V26Pq4RankedRow>> {
-    const BLOCKS_PER_CHUNK: usize = 1_024;
+    const BLOCKS_PER_CHUNK: usize = 8_192;
     const ROWS_PER_CHUNK: usize = BLOCKS_PER_CHUNK * 32;
     if ![512, 1_024, 2_048, 4_096].contains(&ranked_row_limit)
         || index.row_count < ranked_row_limit as u64
