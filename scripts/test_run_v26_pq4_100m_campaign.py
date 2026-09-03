@@ -13,6 +13,8 @@ from scripts.run_v26_pq4_100m_campaign import (
     build_worker_capability,
     canonical_phase_receipt_bytes,
     estimate_s3_transfer,
+    launch_across_spot_targets,
+    monitor_original_attempt,
     plan_spot_placements,
 )
 
@@ -296,6 +298,70 @@ class CampaignPhaseTests(unittest.TestCase):
                 (SpotTarget("eu-central-1a", "subnet-a"),) * 2,
                 shard_count=10,
             )
+
+
+class SpotExecutionTests(unittest.TestCase):
+    def test_v26_pq4_100m_spot_launch_falls_across_zones_without_duplicates(self) -> None:
+        calls = []
+
+        def launch(target: SpotTarget) -> str:
+            calls.append(target.availability_zone)
+            if target.availability_zone == "eu-central-1a":
+                raise RuntimeError("InsufficientInstanceCapacity")
+            return "i-0123456789abcdef0"
+
+        instance = launch_across_spot_targets(
+            (
+                SpotTarget("eu-central-1a", "subnet-a"),
+                SpotTarget("eu-central-1b", "subnet-b"),
+            ),
+            launch=launch,
+        )
+        self.assertEqual(instance, "i-0123456789abcdef0")
+        self.assertEqual(calls, ["eu-central-1a", "eu-central-1b"])
+
+    def test_v26_pq4_100m_monitor_preserves_original_and_always_terminates(self) -> None:
+        observations = iter(
+            [snapshot(0), snapshot(30, progress=1), snapshot(60, progress=2)]
+        )
+        terminals = iter([None, None, self.receipt("preflight")])
+        sleeps = []
+        terminated = []
+        result = monitor_original_attempt(
+            instance_id="i-0123456789abcdef0",
+            monitor=CampaignMonitor(
+                CampaignMonitorTests().limits
+                if hasattr(CampaignMonitorTests(), "limits")
+                else MonitorLimits(
+                    12 * 1024**3,
+                    3 * 1024**3,
+                    0.01,
+                    300,
+                    60,
+                    7_200,
+                    3_600,
+                ),
+                initial_swap_bytes=0,
+            ),
+            snapshot=lambda: next(observations),
+            terminal=lambda: next(terminals),
+            sleep=lambda seconds: sleeps.append(seconds),
+            terminate=lambda instance: terminated.append(instance),
+        )
+        self.assertEqual(result, self.receipt("preflight"))
+        self.assertEqual(sleeps, [30, 30])
+        self.assertEqual(terminated, ["i-0123456789abcdef0"])
+
+    @staticmethod
+    def receipt(phase: str) -> bytes:
+        return canonical_phase_receipt_bytes(
+            campaign_id="v26-fixture",
+            source_commit="a" * 40,
+            phase=phase,
+            status="passed",
+            attempt_id=f"{phase}-a0001",
+            instance_id="i-0123456789abcdef0",
+        )
 
 
 if __name__ == "__main__":

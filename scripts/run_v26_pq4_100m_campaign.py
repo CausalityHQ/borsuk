@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -112,6 +113,54 @@ def plan_spot_placements(
         for ordinal in range(shard_count)
         for target in (targets[ordinal % len(targets)],)
     )
+
+
+def launch_across_spot_targets(
+    targets: tuple[SpotTarget, ...], *, launch: Callable[[SpotTarget], str]
+) -> str:
+    """Launch one original Spot attempt, falling across capacity-only zone failures."""
+
+    if len(targets) < 2 or len(set(targets)) != len(targets):
+        raise ValueError("Spot launch targets differ")
+    for target in targets:
+        try:
+            instance_id = launch(target)
+        except RuntimeError as error:
+            if str(error) == "InsufficientInstanceCapacity":
+                continue
+            raise
+        if type(instance_id) is not str or _INSTANCE_ID.fullmatch(instance_id) is None:
+            raise ValueError("Spot instance identity differs")
+        return instance_id
+    raise RuntimeError("Spot capacity is unavailable")
+
+
+def monitor_original_attempt(
+    *,
+    instance_id: str,
+    monitor: CampaignMonitor,
+    snapshot: Callable[[], MonitorSnapshot],
+    terminal: Callable[[], bytes | None],
+    sleep: Callable[[int], None],
+    terminate: Callable[[str], None],
+) -> bytes:
+    """Observe one original attempt every 30 seconds and terminate it on every exit."""
+
+    if type(instance_id) is not str or _INSTANCE_ID.fullmatch(instance_id) is None:
+        raise ValueError("Spot instance identity differs")
+    try:
+        while True:
+            receipt = terminal()
+            if receipt is not None:
+                if not receipt:
+                    raise ValueError("empty terminal receipt")
+                return receipt
+            decision = monitor.observe(snapshot())
+            if decision.action == "stop":
+                raise RuntimeError(f"campaign stop: {decision.reason}")
+            sleep(30)
+    finally:
+        terminate(instance_id)
 
 
 def build_worker_capability(
