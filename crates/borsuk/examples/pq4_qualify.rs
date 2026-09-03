@@ -475,6 +475,16 @@ fn peak_rss_bytes() -> Result<u64, String> {
         .ok_or_else(|| "process peak RSS overflows".to_owned())
 }
 
+fn warmup_query_range(request: &Pq4QualifyRequest) -> Result<std::ops::Range<usize>, String> {
+    if request.mode == Pq4QualifyMode::SealedHoldout && request.warmup_queries > request.query_start
+    {
+        return Err("query warmup range differs".to_owned());
+    }
+    let end = usize::try_from(request.warmup_queries)
+        .map_err(|_| "query warmup range overflows".to_owned())?;
+    Ok(0..end)
+}
+
 fn run() -> Result<(), String> {
     let request = parse_pq4_qualify_args(env::args())?;
     if request.result_json.exists() || request.samples_parquet.exists() {
@@ -510,9 +520,8 @@ fn run() -> Result<(), String> {
         .query_start
         .checked_add(request.query_count)
         .ok_or_else(|| "query range overflows".to_owned())?;
-    if usize::try_from(query_end).unwrap() > queries.len()
-        || request.warmup_queries > request.query_start
-    {
+    let warmup_range = warmup_query_range(&request)?;
+    if usize::try_from(query_end).unwrap() > queries.len() || warmup_range.end > queries.len() {
         return Err("query range differs".to_owned());
     }
     let index = Pq4Index::open(
@@ -525,7 +534,7 @@ fn run() -> Result<(), String> {
         },
     )
     .map_err(|error| error.to_string())?;
-    for query in queries.iter().take(request.warmup_queries as usize) {
+    for query in &queries[warmup_range] {
         index.search(query, 10).map_err(|error| error.to_string())?;
     }
     let mut samples = Vec::with_capacity(request.query_count as usize);
@@ -660,6 +669,7 @@ mod tests {
 
     use super::{
         HoldoutSample, parse_pq4_qualify_args, read_queries, read_truth, summarize_holdout,
+        warmup_query_range,
     };
 
     fn arguments() -> Vec<String> {
@@ -759,6 +769,7 @@ mod tests {
             assert_eq!(request.query_start, 0);
             assert_eq!(request.query_count, 512);
             assert_eq!(request.query_threads, threads);
+            assert_eq!(warmup_query_range(&request).unwrap(), 0..32);
         }
 
         for threads in [1, 2, 3, 5, 32] {
