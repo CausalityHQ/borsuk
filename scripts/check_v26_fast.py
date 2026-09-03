@@ -19,10 +19,23 @@ _CARGO_TEST_COUNT = re.compile(
 )
 
 
+def python_contract_command(python_executable: str) -> list[str]:
+    """Return all millisecond-scale Python authority and monitor contracts."""
+
+    return [
+        python_executable,
+        "-m",
+        "unittest",
+        "scripts.test_check_v26_fast",
+        "scripts.test_v26_pq4_100m_authority",
+        "scripts.test_run_v26_pq4_100m_campaign",
+    ]
+
+
 def smoke_commands(python_executable: str) -> list[list[str]]:
     """Return the seconds-long contract gate used during implementation."""
     return [
-        [python_executable, "-m", "unittest", "scripts.test_check_v26_fast"],
+        python_contract_command(python_executable),
         [
             "cargo",
             "test",
@@ -41,7 +54,7 @@ def smoke_commands(python_executable: str) -> list[list[str]]:
 def affected_commands(python_executable: str) -> list[list[str]]:
     """Return the seconds-level PQ4 gate used at a stable implementation boundary."""
     return [
-        [python_executable, "-m", "unittest", "scripts.test_check_v26_fast"],
+        python_contract_command(python_executable),
         [
             "cargo",
             "test",

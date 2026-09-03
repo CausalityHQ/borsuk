@@ -16,7 +16,11 @@ class V26FastGateTests(unittest.TestCase):
         self.assertEqual(len(commands), 4)
         self.assertEqual(
             rendered[0],
-            f"{sys.executable} -m unittest scripts.test_check_v26_fast",
+            (
+                f"{sys.executable} -m unittest scripts.test_check_v26_fast "
+                "scripts.test_v26_pq4_100m_authority "
+                "scripts.test_run_v26_pq4_100m_campaign"
+            ),
         )
         self.assertIn(
             "cargo test -p borsuk-pq4 --lib v26_release_contract_pq4_core_", rendered[1]
@@ -33,7 +37,11 @@ class V26FastGateTests(unittest.TestCase):
         self.assertEqual(len(commands), 6)
         self.assertEqual(
             rendered[0],
-            f"{sys.executable} -m unittest scripts.test_check_v26_fast",
+            (
+                f"{sys.executable} -m unittest scripts.test_check_v26_fast "
+                "scripts.test_v26_pq4_100m_authority "
+                "scripts.test_run_v26_pq4_100m_campaign"
+            ),
         )
         self.assertEqual(rendered[1], "cargo test -p borsuk-pq4 --lib -- --nocapture")
         self.assertEqual(
