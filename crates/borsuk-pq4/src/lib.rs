@@ -14,6 +14,8 @@ pub(crate) use format::{Pq4ArtifactIdentity, Pq4Manifest, canonical_manifest_byt
 pub(crate) use snapshot::{Pq4Snapshot, Pq4SnapshotWriteRequest, write_snapshot};
 
 pub use builder::{Pq4BuildConfig, Pq4BuildReport, Pq4Builder};
+#[cfg(test)]
+pub(crate) use index::search_with_exact_rerank_observer_for_test;
 pub use index::{Pq4Index, Pq4Match, Pq4OpenOptions};
 pub use shards::merge_pq4_shard_matches;
 
@@ -50,9 +52,13 @@ mod tests {
         Pq4Match, Pq4OpenOptions, Pq4Snapshot, Pq4SnapshotWriteRequest, canonical_manifest_bytes,
         encode_blocks, fit_codebook, merge_pq4_shard_matches, projected_resident_bytes,
         rank_candidates_parallel_scalar_for_test, rank_candidates_scalar, score_rows_scalar,
-        write_snapshot,
+        search_with_exact_rerank_observer_for_test, write_snapshot,
     };
-    use std::sync::Arc;
+    use std::{
+        collections::BTreeSet,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
     use arrow_array::{
         Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, RecordBatch,
@@ -580,6 +586,20 @@ mod tests {
         let index = Arc::new(Pq4Index::open(&output, options.clone()).unwrap());
         let query = vectors[2_113].map(|value| value * 9.0);
         let matches = index.search(&query, 10).unwrap();
+        let rerank_workers = Mutex::new(BTreeSet::new());
+        let observed = search_with_exact_rerank_observer_for_test(&index, &query, 10, || {
+            rerank_workers
+                .lock()
+                .unwrap()
+                .insert(std::thread::current().name().unwrap().to_owned());
+            std::thread::sleep(Duration::from_micros(50));
+        })
+        .unwrap();
+        assert_eq!(observed, matches);
+        assert!(
+            rerank_workers.into_inner().unwrap().len() >= 2,
+            "exact rerank silently became serial"
+        );
         let expected_ordinals = (0..10).map(|index| 57 + index * 257).collect::<Vec<_>>();
         assert_eq!(
             matches

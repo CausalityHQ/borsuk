@@ -4,6 +4,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use rayon::prelude::*;
+
 use crate::{BorsukError, Result, core::rank_candidates, snapshot::Pq4Snapshot};
 
 const CANDIDATE_DEPTH: usize = 3_072;
@@ -155,6 +157,18 @@ impl Pq4Index {
 
     /// Search one shard and return exact rows in deterministic distance/source order.
     pub fn search(&self, query: &[f32; 96], k: usize) -> Result<Vec<Pq4Match>> {
+        self.search_with_exact_rerank_observer(query, k, &|| {})
+    }
+
+    fn search_with_exact_rerank_observer<F>(
+        &self,
+        query: &[f32; 96],
+        k: usize,
+        observe: &F,
+    ) -> Result<Vec<Pq4Match>>
+    where
+        F: Fn() + Sync,
+    {
         if k == 0 || k > CANDIDATE_DEPTH {
             return Err(invalid("PQ4 result count differs"));
         }
@@ -169,22 +183,27 @@ impl Pq4Index {
                 CANDIDATE_DEPTH,
             )
         })?;
-        let mut exact = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            let vector = self.snapshot.read_vector(candidate.source_ordinal)?;
-            let distance = vector
-                .iter()
-                .zip(query)
-                .map(|(left, right)| {
-                    let delta = left - right;
-                    delta * delta
+        let mut exact = self.pool.install(|| {
+            candidates
+                .into_par_iter()
+                .map(|candidate| {
+                    observe();
+                    let vector = self.snapshot.read_vector(candidate.source_ordinal)?;
+                    let distance = vector
+                        .iter()
+                        .zip(query)
+                        .map(|(left, right)| {
+                            let delta = left - right;
+                            delta * delta
+                        })
+                        .sum::<f32>();
+                    if !distance.is_finite() {
+                        return Err(invalid("PQ4 exact distance differs"));
+                    }
+                    Ok((distance, candidate.source_ordinal))
                 })
-                .sum::<f32>();
-            if !distance.is_finite() {
-                return Err(invalid("PQ4 exact distance differs"));
-            }
-            exact.push((distance, candidate.source_ordinal));
-        }
+                .collect::<Result<Vec<_>>>()
+        })?;
         exact.sort_unstable_by(|left, right| {
             left.0
                 .total_cmp(&right.0)
@@ -203,4 +222,17 @@ impl Pq4Index {
             })
             .collect()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn search_with_exact_rerank_observer_for_test<F>(
+    index: &Pq4Index,
+    query: &[f32; 96],
+    k: usize,
+    observe: F,
+) -> Result<Vec<Pq4Match>>
+where
+    F: Fn() + Sync,
+{
+    index.search_with_exact_rerank_observer(query, k, &observe)
 }
