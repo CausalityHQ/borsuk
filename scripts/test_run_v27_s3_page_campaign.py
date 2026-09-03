@@ -142,6 +142,11 @@ class V27ReducedSpotTests(unittest.TestCase):
             self.assertIn("BUILD_COMPLETE.json", script)
             self.assertIn("/root/.cargo/bin/cargo build", script)
             self.assertNotIn("source /root/.cargo/env", script)
+            self.assertIn("dnf install -y gcc gcc-c++ python3 tar zstd", script)
+            self.assertLess(
+                script.index("python3 - \"$root/COMPLETE.json\""),
+                script.rindex("put_once \"$root/worker.log\" worker.log"),
+            )
 
     def test_v27_reduced_spot_falls_across_capacity_and_terminates_original(self) -> None:
         plan = self.plan()
