@@ -188,6 +188,11 @@ pub use v27_s3_router::{
     V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V27HierarchyConfig, decode_v27_hierarchy,
     encode_v27_hierarchy, fit_v27_hierarchy,
 };
+mod v27_s3_build;
+pub use v27_s3_build::{
+    V27BuildConfig, V27BuildReceipt, V27LayoutArtifactIdentity, V27LayoutArtifacts, V27PageBuilder,
+    V27PagePosting, V27PageSink, decode_v27_layout, encode_v27_layout,
+};
 #[allow(
     dead_code,
     reason = "V24 pseudoquery qualification is wired incrementally by the committed plan"

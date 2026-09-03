@@ -98,7 +98,7 @@ fn splitmix64(mut value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
-fn normalize(vector: &[f32; 96]) -> Result<[f32; 96]> {
+fn validate_vector(vector: &[f32; 96]) -> Result<[f32; 96]> {
     if vector.iter().any(|value| !value.is_finite()) {
         return Err(invalid("V27 hierarchy vector is non-finite"));
     }
@@ -110,7 +110,7 @@ fn normalize(vector: &[f32; 96]) -> Result<[f32; 96]> {
     if !norm.is_finite() || norm <= 0.0 {
         return Err(invalid("V27 hierarchy vector norm differs"));
     }
-    Ok(vector.map(|value| (f64::from(value) / norm) as f32))
+    Ok(*vector)
 }
 
 fn distance(left: &[f32; 96], right: &[f32; 96]) -> f64 {
@@ -234,7 +234,7 @@ fn train_level(
         centroids = sums
             .into_iter()
             .zip(counts)
-            .map(|(sum, count)| normalize(&sum.map(|value| (value / count as f64) as f32)))
+            .map(|(sum, count)| validate_vector(&sum.map(|value| (value / count as f64) as f32)))
             .collect::<Result<Vec<_>>>()?;
     }
     Ok((centroids, assignments))
@@ -262,7 +262,7 @@ pub fn fit_v27_hierarchy(rows: &[V27PageRow], config: &V27HierarchyConfig) -> Re
                 return Err(invalid("V27 hierarchy source order differs"));
             }
             previous = Some(row.source_ordinal);
-            Ok((row.source_ordinal, normalize(&row.vector)?))
+            Ok((row.source_ordinal, validate_vector(&row.vector)?))
         })
         .collect::<Result<Vec<_>>>()?;
     let pool = ThreadPoolBuilder::new()
@@ -630,5 +630,6 @@ mod tests {
         assert_eq!(hierarchy.roots.len(), 1);
         assert_eq!(hierarchy.leaves.len(), 4);
         assert_eq!(hierarchy.leaf_roots, vec![0; 4]);
+        assert_eq!(f32::from(hierarchy.roots[0][0]), 0.25);
     }
 }
