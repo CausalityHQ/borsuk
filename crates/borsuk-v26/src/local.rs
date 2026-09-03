@@ -3532,5 +3532,32 @@ mod tests {
         assert_eq!(result.exact_rows_read, 512);
         assert_eq!(result.cold_batches_read, 16);
         assert_eq!(result.page_body_reads, 0);
+
+        if !cfg!(debug_assertions) {
+            let mut latency_ns = Vec::with_capacity(128);
+            for sample in 0..144 {
+                let query = rows[(42 + sample * 13) % rows.len()].vector;
+                let started = std::time::Instant::now();
+                let selection = select_v26_pq16_pages_from_arrow(
+                    &index,
+                    &candidate_pages,
+                    &query,
+                    &mut reader,
+                    &assignments,
+                )
+                .unwrap();
+                let elapsed = started.elapsed().as_nanos();
+                assert_eq!(selection.exact_rows_read, 512);
+                assert_eq!(selection.cold_batches_read, 16);
+                assert_eq!(selection.page_body_reads, 0);
+                if sample >= 16 {
+                    latency_ns.push(elapsed);
+                }
+            }
+            latency_ns.sort_unstable();
+            let p99_ns = latency_ns[(latency_ns.len() * 99).div_ceil(100) - 1];
+            eprintln!("v26-pq16-arrow-reduced-shape-p99-ns={p99_ns}");
+            assert!(p99_ns < 15_000_000);
+        }
     }
 }
