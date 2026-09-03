@@ -1737,8 +1737,8 @@ fn summarize_v26_pq4_holdout(
                 .scan_elapsed_ns
                 .checked_add(sample.exact_rerank_elapsed_ns)
                 .is_none_or(|stages| stages > sample.elapsed_ns)
-            || sample.exact_rows_read != 2_048
-            || !(1..=2_048).contains(&sample.cold_batches_read)
+            || sample.exact_rows_read != 3_072
+            || !(1..=3_072).contains(&sample.cold_batches_read)
             || sample.page_body_reads != 0
         {
             return Err(invalid("V26 PQ4 holdout sample differs"));
@@ -1764,7 +1764,7 @@ fn summarize_v26_pq4_holdout(
         && oracle >= 995_000
         && p99_ns <= 15_000_000;
     Ok(V26Pq4HoldoutResult {
-        schema: "borsuk-v26-pq4-fast-holdout-result-v3".to_owned(),
+        schema: "borsuk-v26-pq4-fast-holdout-result-v4".to_owned(),
         pq4_manifest,
         frontier_result,
         development_serving_result,
@@ -1774,7 +1774,7 @@ fn summarize_v26_pq4_holdout(
         backend: "aarch64-neon-table".to_owned(),
         query_start: 32,
         query_count: 480,
-        ranked_row_limit: 2_048,
+        ranked_row_limit: 3_072,
         selected_page_count: crate::V26_SERVING_PAGE_BUDGET as u32,
         aggregate_recall_ppm: aggregate,
         minimum_query_recall_ppm: minimum_recall,
@@ -7724,8 +7724,8 @@ fn select_v26_pq4_serving_arm(
     index: &crate::V26Pq4FastIndex,
     query: &[f32; 96],
     cold_vectors: &V26ArrowColdVectors,
+    ranked_row_limit: usize,
 ) -> Result<(V26Pq16ServingSelection, [u64; 10], u64, u64, u64)> {
-    const RANKED_ROW_LIMIT: usize = 2_048;
     if index.row_count != cold_vectors.row_count {
         return Err(invalid("V26 PQ4 serving cold-vector authority differs"));
     }
@@ -7734,7 +7734,7 @@ fn select_v26_pq4_serving_arm(
     let approximate = crate::rank_v26_pq4_fast_candidates_parallel(
         index,
         query,
-        RANKED_ROW_LIMIT,
+        ranked_row_limit,
         crate::V26Pq4Backend::Aarch64NeonTable,
     )?;
     let scan_elapsed_ns = u64::try_from(scan_started.elapsed().as_nanos())
@@ -7804,7 +7804,8 @@ fn select_v26_pq4_serving_arm(
     Ok((
         V26Pq16ServingSelection {
             selected_pages,
-            exact_rows_read: RANKED_ROW_LIMIT as u32,
+            exact_rows_read: u32::try_from(ranked_row_limit)
+                .map_err(|_| invalid("V26 PQ4 ranked-row limit overflows"))?,
             cold_batches_read: cold.batches_read,
             cold_read_workers: cold.read_workers,
             page_body_reads: 0,
@@ -7897,14 +7898,14 @@ pub fn run_v26_pq4_serving_screen(request: &V26Pq4ServingScreenRequest) -> Resul
         return Err(invalid("V26 PQ4 serving query inventory differs"));
     }
     for query in queries.iter().take(2) {
-        select_v26_pq4_serving_arm(&index, &query.vector, &cold_vectors)?;
+        select_v26_pq4_serving_arm(&index, &query.vector, &cold_vectors, 2_048)?;
     }
     let samples = queries
         .iter()
         .enumerate()
         .map(|(sample_ordinal, query)| {
             let (selection, _returned_rows, elapsed_ns, scan_elapsed_ns, exact_rerank_elapsed_ns) =
-                select_v26_pq4_serving_arm(&index, &query.vector, &cold_vectors)?;
+                select_v26_pq4_serving_arm(&index, &query.vector, &cold_vectors, 2_048)?;
             Ok(V26Pq4ServingScreenSample {
                 sample_ordinal: sample_ordinal as u32,
                 query_ordinal: query.query_ordinal,
@@ -8095,7 +8096,7 @@ pub fn run_v26_pq4_holdout(request: &V26Pq4HoldoutRequest) -> Result<Vec<u8>> {
         },
     )?;
     for query in queries.iter().skip(32).take(2) {
-        select_v26_pq4_serving_arm(&index, &query.vector, &cold_vectors)?;
+        select_v26_pq4_serving_arm(&index, &query.vector, &cold_vectors, 3_072)?;
     }
     let samples = queries
         .iter()
@@ -8103,7 +8104,7 @@ pub fn run_v26_pq4_holdout(request: &V26Pq4HoldoutRequest) -> Result<Vec<u8>> {
         .skip(32)
         .map(|(query, truth)| {
             let (selection, returned_rows, elapsed_ns, scan_elapsed_ns, exact_rerank_elapsed_ns) =
-                select_v26_pq4_serving_arm(&index, &query.vector, &cold_vectors)?;
+                select_v26_pq4_serving_arm(&index, &query.vector, &cold_vectors, 3_072)?;
             v26_pq4_holdout_sample(
                 query.query_ordinal,
                 selection,
@@ -10645,7 +10646,7 @@ mod tests {
                 elapsed_ns: 10_000_000 + u64::from(query_ordinal),
                 scan_elapsed_ns: 8_000_000,
                 exact_rerank_elapsed_ns: 2_000_000,
-                exact_rows_read: 2_048,
+                exact_rows_read: 3_072,
                 cold_batches_read: 32,
                 page_body_reads: 0,
             })
@@ -10666,9 +10667,10 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(result.schema, "borsuk-v26-pq4-fast-holdout-result-v4");
         assert_eq!(result.query_start, 32);
         assert_eq!(result.query_count, 480);
-        assert_eq!(result.ranked_row_limit, 2_048);
+        assert_eq!(result.ranked_row_limit, 3_072);
         assert_eq!(result.aggregate_recall_ppm, 1_000_000);
         assert_eq!(result.minimum_query_recall_ppm, 1_000_000);
         assert_eq!(result.oracle_attainment_ppm, 1_000_000);
