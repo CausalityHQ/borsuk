@@ -27,6 +27,8 @@ struct Pq4StageRequest {
     input_dir: PathBuf,
     output: PathBuf,
     expected_rows: u64,
+    ordinal_start: u64,
+    ordinal_end: u64,
     dimensions: usize,
     batch_rows: usize,
 }
@@ -132,6 +134,10 @@ fn parse_pq4_stage_args(
         input_dir: PathBuf::from(take(&mut values, "--input-dir")?),
         output: PathBuf::from(take(&mut values, "--output")?),
         expected_rows: positive(&mut values, "--expected-rows")?,
+        ordinal_start: take(&mut values, "--ordinal-start")?
+            .parse()
+            .map_err(|_| "invalid --ordinal-start".to_owned())?,
+        ordinal_end: positive(&mut values, "--ordinal-end")?,
         dimensions: positive(&mut values, "--dimensions")?,
         batch_rows: positive(&mut values, "--batch-rows")?,
     };
@@ -140,6 +146,8 @@ fn parse_pq4_stage_args(
         || request.manifest.as_os_str().is_empty()
         || request.input_dir.as_os_str().is_empty()
         || request.output.as_os_str().is_empty()
+        || request.ordinal_end <= request.ordinal_start
+        || request.ordinal_end - request.ordinal_start != request.expected_rows
         || request.dimensions != 96
         || request.batch_rows < 32
         || request.batch_rows > 65_536
@@ -202,7 +210,7 @@ fn training_inputs<'a>(
         .iter()
         .filter(|item| item.authority_kind == "training-shard")
         .collect::<Vec<_>>();
-    let mut next = 0_u64;
+    let mut next = request.ordinal_start;
     for (ordinal, input) in inputs.iter().enumerate() {
         let start = input
             .ordinal_start
@@ -228,7 +236,7 @@ fn training_inputs<'a>(
         }
         next = end;
     }
-    if inputs.is_empty() || next != request.expected_rows {
+    if inputs.is_empty() || next != request.ordinal_end {
         return Err("PQ4 training row authority differs".to_owned());
     }
     Ok(inputs)
@@ -282,7 +290,7 @@ fn stage_pq4_input(request: &Pq4StageRequest) -> Result<Pq4StageReport, String> 
     )
     .map_err(|error| format!("PQ4 stage writer failed: {error}"))?;
     let result = (|| {
-        let mut next_ordinal = 0_u64;
+        let mut next_ordinal = request.ordinal_start;
         for input in &inputs {
             let name = input.identity.uri.rsplit_once('/').unwrap().1;
             let path = request.input_dir.join(name);
@@ -357,7 +365,7 @@ fn stage_pq4_input(request: &Pq4StageRequest) -> Result<Pq4StageReport, String> 
                     .ok_or_else(|| "PQ4 staged ordinal overflows".to_owned())?;
             }
         }
-        if next_ordinal != request.expected_rows {
+        if next_ordinal != request.ordinal_end {
             return Err("PQ4 staged row count differs".to_owned());
         }
         writer
@@ -365,7 +373,7 @@ fn stage_pq4_input(request: &Pq4StageRequest) -> Result<Pq4StageReport, String> 
             .map_err(|error| format!("PQ4 stage close failed: {error}"))?;
         let (output_sha256, output_bytes) = sha256_file(&request.output)?;
         Ok(Pq4StageReport {
-            rows: next_ordinal,
+            rows: request.expected_rows,
             shards: inputs.len(),
             output_sha256,
             output_bytes,
@@ -430,6 +438,10 @@ mod tests {
             "/data/pq4-input.parquet",
             "--expected-rows",
             "9990000",
+            "--ordinal-start",
+            "10000000",
+            "--ordinal-end",
+            "19990000",
             "--dimensions",
             "96",
             "--batch-rows",
@@ -444,6 +456,8 @@ mod tests {
     fn pq4_stage_cli_is_explicit_local_and_rejects_remote_or_ambiguous_flags() {
         let request = parse_pq4_stage_args(arguments()).unwrap();
         assert_eq!(request.batch_rows, 8_192);
+        assert_eq!(request.ordinal_start, 10_000_000);
+        assert_eq!(request.ordinal_end, 19_990_000);
         assert_eq!(request.output.to_str(), Some("/data/pq4-input.parquet"));
         let mut remote = arguments();
         remote.splice(
@@ -460,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn pq4_stage_streams_manifest_order_into_binary_ids_and_exact_vectors() {
+    fn v26_pq4_100m_stage_preserves_global_ordinals_in_binary_ids() {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("materialized");
         std::fs::create_dir(&input).unwrap();
@@ -492,6 +506,7 @@ mod tests {
             let (digest, bytes) = sha256_file(&path).unwrap();
             identities.push((digest, bytes));
         }
+        let ordinal_start = 100_u64;
         let ordered_inputs = identities
             .iter()
             .enumerate()
@@ -507,8 +522,8 @@ mod tests {
                         "uri": format!("s3://frozen/train-{shard:08}.parquet")
                     },
                     "metric": "cosine",
-                    "ordinal_end": (shard + 1) * 2,
-                    "ordinal_start": shard * 2,
+                    "ordinal_end": ordinal_start + ((shard + 1) * 2) as u64,
+                    "ordinal_start": ordinal_start + (shard * 2) as u64,
                     "physical_schema": "emb:fixed-size-list<element:f32;96>:non-null",
                     "rows": 2
                 })
@@ -534,6 +549,8 @@ mod tests {
             input_dir: input,
             output: output.clone(),
             expected_rows: 4,
+            ordinal_start,
+            ordinal_end: 104,
             dimensions: 96,
             batch_rows: 32,
         })
@@ -551,8 +568,8 @@ mod tests {
             .as_any()
             .downcast_ref::<BinaryArray>()
             .unwrap();
-        assert_eq!(ids.value(0), 0_u64.to_le_bytes());
-        assert_eq!(ids.value(3), 3_u64.to_le_bytes());
+        assert_eq!(ids.value(0), 100_u64.to_le_bytes());
+        assert_eq!(ids.value(3), 103_u64.to_le_bytes());
         let vectors = batch
             .column(1)
             .as_any()
