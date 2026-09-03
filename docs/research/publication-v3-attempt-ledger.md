@@ -2412,3 +2412,45 @@ tree as a sufficiently concentrated serving frontier. Scanning 1,024 pages at
 the same leaves with a query-independent geometric representation and show a
 passing frontier at no more than 256 pages before any row-code latency run.
 Recall gates remain unchanged; D3 and release claims remain fenced.
+
+### Global page centroids do not concentrate the native frontier
+
+Source commit `edebedba80421260bd70e9868d56210fdf2e85b2` evaluated one
+query-independent normalized centroid per physical page against the same
+authenticated 9,990,000-row construction data, 2,440-page layout, 512 external
+queries, and 512 truth rows. For each query it ranked all page centroids before
+truth joined the diagnostic, then measured the exact best ten-page cover inside
+each fixed frontier. It read no page body and emitted claim-ineligible canonical
+JSON. The preceding attempt at source `b96085ca8e5231e07266e3cd97e3cd687f70107d`
+closed before loading construction data because the ten-page diagnostic reused
+an eight-page layout gate. A 5.76-second local regression now locks the correct
+ten-page authority before any further remote execution.
+
+The aggregate/minimum/oracle-attainment ppm triples were
+440,625/0/440,625 at 8 pages; 570,898/0/570,898 at 16;
+708,984/100,000/708,984 at 32; 823,632/200,000/823,632 at 64;
+911,523/300,000/911,523 at 128; 966,210/400,000/966,210 at 256;
+991,015/800,000/991,015 at 512; 999,609/900,000/999,609 at 1,024;
+and 1,000,000/1,000,000/1,000,000 at 2,048 and exhaustive 2,440.
+Width 1,024 is again the smallest passing frontier. At width 512, the minimum
+query gate passes but aggregate recall remains below 975,000 and oracle
+attainment remains below 995,000. Width 256 is materially farther away.
+
+The sole scientific run used `causality` Spot instance
+`i-0b6a98cd15d15894a` (`m7gd.4xlarge`, `eu-central-1c`) and SSM command
+`54d7efce-5616-405f-aa19-98c7639f08d4`. The diagnostic took 29 seconds,
+peaked at 4,090,126,336 bytes RSS, and observed zero memory PSI and zero swap
+growth. The 11,983,768-byte executable has SHA-256
+`cafd2ab0162c89e59d7c72a1c39ab085b33d0307f8f1f637a7e8a4b1cdac9f1a`.
+The 871,555-byte result has SHA-256
+`6505e0d5d58806248cb07bb5ab001d22ace2d5680fb5dc71503bcb4697961be2`.
+Evidence is rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-global-centroid-frontier/edebedba80421260bd70e9868d56210fdf2e85b2/v26-global-centroid-20260903T075719Z-a0002/`.
+The instance published its terminal and was terminated.
+
+This rejects a single mean centroid per page as the missing concentration
+mechanism. It also shows that the random-projection tree is not uniquely causal:
+both representations require a 1,024-page frontier on the frozen geometry. The
+next no-spend gate must represent multimodal within-page structure and pass at
+no more than 256 candidate pages before any serving-latency or full-suite run.
+Recall, oracle-attainment, D3, competitor, and release gates remain unchanged.
