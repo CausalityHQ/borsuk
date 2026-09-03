@@ -2739,7 +2739,6 @@ pub fn select_v26_pq16_global_pages_from_arrow(
         .map_err(|_| invalid("V26 global PQ16 Arrow source ordinal differs"))?;
     source_ordinals.sort_unstable();
     let cold = cold_vectors.read_vectors(&source_ordinals)?;
-    let assignments = cold_vectors.read_assignments(&source_ordinals)?;
     let mut exact = approximate
         .iter()
         .map(|candidate| {
@@ -2748,31 +2747,43 @@ pub fn select_v26_pq16_global_pages_from_arrow(
             let position = source_ordinals
                 .binary_search(&source_ordinal)
                 .map_err(|_| invalid("V26 global PQ16 Arrow binding differs"))?;
-            let assignment = assignments[position];
-            if assignment.source_ordinal != candidate.source_ordinal {
-                return Err(invalid("V26 global PQ16 Arrow assignment differs"));
-            }
             let distance = v26_squared_l2(&cold.vectors[position], query);
             if !distance.is_finite() {
                 return Err(invalid("V26 global PQ16 Arrow exact distance differs"));
             }
-            Ok((
-                V26PqRankedRow {
-                    source_ordinal: candidate.source_ordinal,
-                    distance,
-                },
-                [assignment.primary_page, assignment.replica_page],
-            ))
+            Ok(V26PqRankedRow {
+                source_ordinal: candidate.source_ordinal,
+                distance,
+            })
         })
         .collect::<Result<Vec<_>>>()?;
-    exact.sort_by_key(|entry| entry.0);
-    let top_assignments = exact[..10]
+    exact.sort_unstable();
+    let assignment_limit = exact.len().min(128);
+    let mut assignment_ordinals = exact[..assignment_limit]
         .iter()
-        .map(|(_, pages)| pages.to_vec())
+        .map(|row| u32::try_from(row.source_ordinal).unwrap())
+        .collect::<Vec<_>>();
+    assignment_ordinals.sort_unstable();
+    let assignments = cold_vectors.read_assignments(&assignment_ordinals)?;
+    let ranked_assignments = exact[..assignment_limit]
+        .iter()
+        .map(|row| {
+            let source_ordinal = u32::try_from(row.source_ordinal).unwrap();
+            let position = assignment_ordinals.binary_search(&source_ordinal).unwrap();
+            let assignment = assignments[position];
+            if assignment.source_ordinal != row.source_ordinal {
+                return Err(invalid("V26 global PQ16 Arrow assignment differs"));
+            }
+            Ok([assignment.primary_page, assignment.replica_page])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let top_assignments = ranked_assignments[..10]
+        .iter()
+        .map(|pages| pages.to_vec())
         .collect::<Vec<_>>();
     let mut selected_pages =
         exact_v26_layout_oracle_pages(&top_assignments, crate::V26_SERVING_PAGE_BUDGET)?;
-    for (_, pages) in &exact {
+    for pages in &ranked_assignments {
         for page in pages {
             if selected_pages.len() == crate::V26_SERVING_PAGE_BUDGET {
                 break;

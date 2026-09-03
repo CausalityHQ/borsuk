@@ -1790,47 +1790,55 @@ pub(crate) fn rank_v26_pq16_global_candidates(
         return Err(invalid("V26 global PQ16 query request differs"));
     }
     let tables = prepare_v26_pq_tables(&index.codebook, query)?;
-    let block_rankings = index
+    let ranked = index
         .codes
         .par_chunks(ROWS_PER_BLOCK * CODE_BYTES)
         .enumerate()
-        .map(|(block_index, block)| -> Result<Vec<V26PqRankedRow>> {
-            let first_row = block_index
-                .checked_mul(ROWS_PER_BLOCK)
-                .ok_or_else(|| invalid("V26 global PQ16 row offset overflows"))?;
-            let mut ranked = BinaryHeap::with_capacity(ranked_row_limit);
-            for (row_offset, code) in block.as_chunks::<CODE_BYTES>().0.iter().enumerate() {
-                let distance = code
-                    .iter()
-                    .enumerate()
-                    .map(|(subspace, code)| tables[subspace][usize::from(*code)])
-                    .sum::<f32>();
-                if !distance.is_finite() {
-                    return Err(invalid("V26 global PQ16 distance differs"));
+        .fold(
+            || Ok(BinaryHeap::with_capacity(ranked_row_limit)),
+            |ranked, (block_index, block)| -> Result<BinaryHeap<V26PqRankedRow>> {
+                let mut ranked = ranked?;
+                let first_row = block_index
+                    .checked_mul(ROWS_PER_BLOCK)
+                    .ok_or_else(|| invalid("V26 global PQ16 row offset overflows"))?;
+                for (row_offset, code) in block.as_chunks::<CODE_BYTES>().0.iter().enumerate() {
+                    let distance = code
+                        .iter()
+                        .enumerate()
+                        .map(|(subspace, code)| tables[subspace][usize::from(*code)])
+                        .sum::<f32>();
+                    if !distance.is_finite() {
+                        return Err(invalid("V26 global PQ16 distance differs"));
+                    }
+                    let value = V26PqRankedRow {
+                        source_ordinal: u64::try_from(first_row + row_offset).unwrap(),
+                        distance,
+                    };
+                    if ranked.len() < ranked_row_limit {
+                        ranked.push(value);
+                    } else if value < *ranked.peek().unwrap() {
+                        ranked.pop();
+                        ranked.push(value);
+                    }
                 }
-                let value = V26PqRankedRow {
-                    source_ordinal: u64::try_from(first_row + row_offset).unwrap(),
-                    distance,
-                };
-                if ranked.len() < ranked_row_limit {
-                    ranked.push(value);
-                } else if value < *ranked.peek().unwrap() {
-                    ranked.pop();
-                    ranked.push(value);
+                Ok(ranked)
+            },
+        )
+        .reduce(
+            || Ok(BinaryHeap::with_capacity(ranked_row_limit)),
+            |left, right| {
+                let mut left = left?;
+                for value in right? {
+                    if left.len() < ranked_row_limit {
+                        left.push(value);
+                    } else if value < *left.peek().unwrap() {
+                        left.pop();
+                        left.push(value);
+                    }
                 }
-            }
-            Ok(ranked.into_vec())
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut ranked = BinaryHeap::with_capacity(ranked_row_limit);
-    for value in block_rankings.into_iter().flatten() {
-        if ranked.len() < ranked_row_limit {
-            ranked.push(value);
-        } else if value < *ranked.peek().unwrap() {
-            ranked.pop();
-            ranked.push(value);
-        }
-    }
+                Ok(left)
+            },
+        )?;
     let mut ranked = ranked.into_vec();
     ranked.sort();
     if ranked.len() != ranked_row_limit {
