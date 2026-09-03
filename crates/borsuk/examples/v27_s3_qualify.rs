@@ -203,7 +203,7 @@ fn layout_identity(role: &str, argument: &ArtifactArg) -> V27LayoutArtifactIdent
 fn query_schema() -> Schema {
     let child = std::sync::Arc::new(Field::new("element", DataType::Float32, false));
     Schema::new(vec![Field::new(
-        "vector",
+        "emb",
         DataType::FixedSizeList(child, 96),
         false,
     )])
@@ -754,7 +754,7 @@ mod tests {
         let values = Arc::new(Float32Array::from_iter_values(query.iter().copied()));
         let vectors = FixedSizeListArray::try_new(child.clone(), 96, values, None).unwrap();
         let schema = Arc::new(Schema::new(vec![Field::new(
-            "vector",
+            "emb",
             DataType::FixedSizeList(child, 96),
             false,
         )]));
