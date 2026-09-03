@@ -2062,7 +2062,7 @@ pub fn run_v26_global_centroid_frontier_diagnostic(
         layout: request.router.layout.clone(),
         ranked_row_limits: vec![10, 32, 128, 512, 2_048, 4_096],
     };
-    let loaded = load_v26_exact_global(&exact)?;
+    let loaded = load_v26_exact_global_with_page_budget(&exact, 10)?;
     let (primary, replica, queries, truths) =
         load_v26_tree_router_with_page_budget(&request.router, 10)?;
     if queries != loaded.queries || truths != loaded.truths || request.router.page_budget != 10 {
@@ -6129,7 +6129,12 @@ pub fn validate_v26_layout_build_output(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, io::Write, sync::Arc};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fs,
+        io::Write,
+        sync::Arc,
+    };
 
     use arrow_array::{
         ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, StringArray, UInt32Array,
@@ -6156,7 +6161,8 @@ mod tests {
         evaluate_v26_layout_oracle, evaluate_v26_layout_oracle_with_page_budget, open_reader,
         open_v26_pq16_serving_runtime, output_identity, read_assignments, read_evaluation_queries,
         read_evaluation_truth, read_layout_terminal, read_v26_pq16_index_arrow,
-        run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_layout_build,
+        run_v26_candidate_row_cover, run_v26_centroid_router,
+        run_v26_global_centroid_frontier_diagnostic, run_v26_layout_build,
         run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
         run_v26_pq16_exact_rerank, run_v26_pq16_serving_build, run_v26_tree_router,
         run_v26_tree_router_diagnostic, run_v26_truth_build,
@@ -6396,6 +6402,57 @@ mod tests {
 
     fn evaluation_fixture() -> (TempDir, V26LayoutEvaluationRequest) {
         evaluation_fixture_with_rows(1_409)
+    }
+
+    fn rewrite_evaluation_truth_neighbors(
+        request: &mut V26LayoutEvaluationRequest,
+        neighbors: &[u64; 10],
+    ) {
+        let terminal = read_layout_terminal(&request.layout_terminal).unwrap();
+        let query_ordinals = UInt32Array::from_iter_values(0..512_u32);
+        let mut neighbor_values = Vec::with_capacity(512 * 10);
+        let mut distance_values = Vec::with_capacity(512 * 10);
+        for _ in 0..512 {
+            neighbor_values.extend_from_slice(neighbors);
+            for rank in 0..10 {
+                distance_values.push((rank as f32 / 10.0).to_bits());
+            }
+        }
+        let truth_batch = RecordBatch::try_new(
+            Arc::new(v26_truth_schema()),
+            vec![
+                Arc::new(query_ordinals),
+                Arc::new(
+                    FixedSizeListArray::try_new(
+                        Arc::new(Field::new("element", DataType::UInt64, false)),
+                        10,
+                        Arc::new(UInt64Array::from(neighbor_values)),
+                        None,
+                    )
+                    .unwrap(),
+                ),
+                Arc::new(fixed_u32(distance_values, 10)),
+                Arc::new(StringArray::from(vec![
+                    terminal
+                        .authority
+                        .construction_rows
+                        .digest
+                        .as_str();
+                    512
+                ])),
+                Arc::new(StringArray::from(vec![
+                    request
+                        .external_queries
+                        .identity
+                        .digest
+                        .as_str();
+                    512
+                ])),
+            ],
+        )
+        .unwrap();
+        write_parquet(&request.truth.path, &truth_batch);
+        request.truth.identity = identity("truth-parquet", &request.truth.path).identity;
     }
 
     #[test]
@@ -6796,6 +6853,71 @@ mod tests {
         let mut forged = request.clone();
         forged.construction_rows.identity.digest = "f".repeat(64);
         assert!(run_v26_centroid_router(&forged).is_err());
+    }
+
+    #[test]
+    fn v26_fast_global_centroid_frontier_uses_its_registered_ten_page_layout_gate() {
+        // Break caught: the ten-page diagnostic reuses the eight-page exact-global loader and
+        // closes before authenticating or scoring an otherwise valid ten-page layout.
+        let (temp, mut layout) = evaluation_fixture_with_rows(6_000);
+        let assignments = read_assignments(&layout.page_assignments.path, 6_000).unwrap();
+        let mut used_pages = BTreeSet::new();
+        let mut neighbors = Vec::new();
+        for assignment in &assignments {
+            if !used_pages.contains(&assignment.primary_page)
+                && !used_pages.contains(&assignment.replica_page)
+            {
+                used_pages.insert(assignment.primary_page);
+                used_pages.insert(assignment.replica_page);
+                neighbors.push(u64::from(assignment.source_ordinal));
+                if neighbors.len() == 9 {
+                    break;
+                }
+            }
+        }
+        let extra = assignments
+            .iter()
+            .find(|assignment| !neighbors.contains(&u64::from(assignment.source_ordinal)))
+            .unwrap();
+        neighbors.push(u64::from(extra.source_ordinal));
+        let neighbors: [u64; 10] = neighbors.try_into().unwrap();
+        rewrite_evaluation_truth_neighbors(&mut layout, &neighbors);
+        let (_, _, narrow) = evaluate_v26_layout_oracle_with_page_budget(&layout, 8).unwrap();
+        let (_, _, broad) = evaluate_v26_layout_oracle_with_page_budget(&layout, 10).unwrap();
+        assert_eq!(narrow.disposition, V26Disposition::LayoutRejected);
+        assert_eq!(broad.disposition, V26Disposition::BoundedLayoutCandidate);
+
+        let terminal = read_layout_terminal(&layout.layout_terminal).unwrap();
+        let tree = |role: &str, name: &str| V26LocalObjectPath {
+            identity: terminal
+                .outputs
+                .iter()
+                .find(|identity| identity.role == role)
+                .unwrap()
+                .clone(),
+            path: temp.path().join("layout").join(name),
+        };
+        let request = V26CentroidRouterRequest {
+            construction_rows: V26LocalObjectPath {
+                identity: terminal.authority.construction_rows.clone(),
+                path: temp.path().join("construction.parquet"),
+            },
+            router: V26TreeRouterRequest {
+                primary_tree: tree("primary-tree-parquet", "primary-tree.parquet"),
+                replica_tree: tree("replica-tree-parquet", "replica-tree.parquet"),
+                layout,
+                page_budget: 10,
+            },
+        };
+
+        let bytes = run_v26_global_centroid_frontier_diagnostic(&request).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["schema"],
+            "borsuk-v26-global-centroid-frontier-result-v1"
+        );
+        assert_eq!(value["page_body_reads"], 0);
+        assert_eq!(value["claim_eligible"], false);
     }
 
     #[test]
