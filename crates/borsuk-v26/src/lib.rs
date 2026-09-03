@@ -1596,7 +1596,7 @@ pub(crate) fn rank_v26_pq4_fast_candidates(
     ranked_row_limit: usize,
     backend: V26Pq4Backend,
 ) -> Result<Vec<V26Pq4RankedRow>> {
-    if ![512, 1_024, 2_048, 4_096].contains(&ranked_row_limit)
+    if ![512, 1_024, 2_048, 3_072, 4_096].contains(&ranked_row_limit)
         || index.row_count < ranked_row_limit as u64
         || index.blocks.len() != usize::try_from(index.row_count).unwrap().div_ceil(32)
         || index.projected_resident_bytes_100m
@@ -1664,7 +1664,7 @@ pub(crate) fn rank_v26_pq4_fast_candidates_parallel(
 ) -> Result<Vec<V26Pq4RankedRow>> {
     const BLOCKS_PER_CHUNK: usize = 8_192;
     const ROWS_PER_CHUNK: usize = BLOCKS_PER_CHUNK * 32;
-    if ![512, 1_024, 2_048, 4_096].contains(&ranked_row_limit)
+    if ![512, 1_024, 2_048, 3_072, 4_096].contains(&ranked_row_limit)
         || index.row_count < ranked_row_limit as u64
         || index.blocks.len() != usize::try_from(index.row_count).unwrap().div_ceil(32)
         || index.projected_resident_bytes_100m
@@ -5812,7 +5812,7 @@ mod tests {
         reference.sort();
         assert!(reference.iter().all(|row| row.score <= 8_160));
 
-        for limit in [512, 1_024, 2_048, 4_096] {
+        for limit in [512, 1_024, 2_048, 3_072, 4_096] {
             let scalar =
                 rank_v26_pq4_fast_candidates(&index, &query, limit, V26Pq4Backend::ScalarControl)
                     .unwrap();
@@ -5839,7 +5839,7 @@ mod tests {
     #[cfg(target_arch = "aarch64")]
     fn v26_pq4_serving_parallel_rank_matches_scalar_at_the_frozen_depth() {
         // Break caught: the serving scorer changes score/tie authority while splitting the
-        // corpus across cores, or silently evaluates a depth other than the frozen 2,048 rows.
+        // corpus across cores, or rejects the bounded 3,072-row diagnostic depth.
         let codebook = V26Pq4FastCodebook {
             centroids: (0..32)
                 .map(|subspace| {
@@ -5862,13 +5862,13 @@ mod tests {
         };
         let query = normalized_row(317);
         let scalar =
-            rank_v26_pq4_fast_candidates(&index, &query, 2_048, V26Pq4Backend::ScalarControl)
+            rank_v26_pq4_fast_candidates(&index, &query, 3_072, V26Pq4Backend::ScalarControl)
                 .unwrap();
 
         let parallel = super::rank_v26_pq4_fast_candidates_parallel(
             &index,
             &query,
-            2_048,
+            3_072,
             V26Pq4Backend::Aarch64NeonTable,
         )
         .unwrap();
