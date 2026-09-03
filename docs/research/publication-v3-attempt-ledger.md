@@ -2168,3 +2168,50 @@ codes and page postings, a bounded deduplicating candidate merge, and an
 authenticated Arrow cold-vector file on local SSD. It must reproduce the
 quality result and independently pass the 15 ms p99 gate before promotion.
 D3 and release claims remain fenced.
+
+### Packed PQ16 serving preflight passes at 262,144 rows
+
+Source commit `a0a896382f456de9b3e187b2d2418e9033222124` replaced the
+corpus-sized merge heap with an exact bounded occurrence scan and opened the
+authenticated Arrow cold-vector file through a read-only memory map. Arrow IPC
+remains the cross-language storage authority; the memory map is only the local
+access path after SHA-256 authentication. The final preflight ran once on Spot
+instance `i-08edb3f9f153caa89` (`c7gd.4xlarge`, `eu-central-1a`) and the
+instance is terminated.
+
+The benchmark executed 1,024 untimed warmups and retained 10,000 raw latency
+samples across 512 immutable external queries. It used the fixed first-128-page
+frontier, retained and exact-reranked 512 rows, selected exactly eight pages,
+and read zero page bodies. Latency was 8,260,309 ns p50, 8,446,408 ns p95,
+8,553,453 ns p99, and 9,313,985 ns maximum, so the preregistered 15,000,000-ns
+p99 gate passed. The benchmark process completed in 92 seconds, peaked at
+113,688,576 bytes RSS, and observed zero memory PSI and zero swap.
+
+The build process completed in eight seconds, peaked at 221,503,488 bytes RSS,
+and also observed zero PSI and zero swap. Its 262,144-row artifacts contain
+524,288 page occurrences across 188 pages. The authenticated cold-vector Arrow
+file is 108,136,626 bytes with SHA-256
+`a28affeb26f80f57c4c83a2dc2df992e91dbaff86b98e1b2509e226f026dc64b`.
+The complete resident representation projects to 2,937,537,416 bytes at 100
+million rows, below the 3-GiB gate.
+
+The 1,514-byte canonical benchmark result has SHA-256
+`bb94525f98d6def92770ae1b11b713ec7395d00b1be228e09a7d1b6f60f68753`;
+the 26,836-byte latency Parquet has SHA-256
+`33053b2618c6a5e4520a3de1fd6b16c9f3da25e1d1b6bf10e689db4acb15a098`;
+the 4,264-byte serving manifest has SHA-256
+`83aab3ec2582da49a3c41503ccd6e1a70850694b615784239bf873d7097b2230`;
+and the terminal has SHA-256
+`1ce38af17c8346fb68f182acd82616c6735768cfebedcfc4e501e9b132973b0b`.
+The build and benchmark executables have SHA-256
+`87fda90fd13bdb7e90a8932ec43c339286f36237736c2d0b94b10fee356ceb3c`
+and `2ffd3719762a2438b5ff926083a94082a008c890d249a0a9fd0a3984056da456`.
+All evidence is rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/open/a0a896382f456de9b3e187b2d2418e9033222124/v26-pq16-serving-262144-a0a8963/preflight-a0001/`.
+
+This closes the reduced serving latency, memory, deterministic-result, and
+local-artifact access gates. It does not establish native 9,990,000-row or
+100-million-row latency, and it does not turn the burned development quality
+result into a release claim. The next gate is an authenticated native Deep
+Image scale build and serving measurement. D3 and competitor claims remain
+fenced until that scale result passes.
