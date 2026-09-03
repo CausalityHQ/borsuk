@@ -30,7 +30,7 @@ class V26FastGateTests(unittest.TestCase):
         commands = check_v26_fast.affected_commands(sys.executable)
 
         rendered = [" ".join(command) for command in commands]
-        self.assertEqual(len(commands), 15)
+        self.assertEqual(len(commands), 16)
         self.assertEqual(
             rendered[0],
             f"{sys.executable} -m unittest scripts.test_check_v26_fast",
@@ -38,48 +38,51 @@ class V26FastGateTests(unittest.TestCase):
         self.assertIn("cargo test -p borsuk-v26 --lib v26_fast_", rendered[1])
         self.assertIn("cargo test -p borsuk-v26 --lib v26_pq4_", rendered[2])
         self.assertIn(
-            "cargo test -p borsuk-v26 --example v26_page_layout v26_",
-            rendered[3],
+            "cargo test -p borsuk-v26 --lib v26_release_contract_", rendered[3]
         )
         self.assertIn(
-            "cargo test -p borsuk-v26 --example v26_pq16_serving_build v26_",
+            "cargo test -p borsuk-v26 --example v26_page_layout v26_",
             rendered[4],
         )
         self.assertIn(
-            "cargo test -p borsuk-v26 --example v26_pq16_serving v26_",
+            "cargo test -p borsuk-v26 --example v26_pq16_serving_build v26_",
             rendered[5],
         )
         self.assertIn(
-            "cargo test -p borsuk-v26 --example v26_simhash_preflight v26_",
+            "cargo test -p borsuk-v26 --example v26_pq16_serving v26_",
             rendered[6],
         )
         self.assertIn(
-            "cargo test -p borsuk-v26 --example v26_dual_pq_key_preflight v26_",
+            "cargo test -p borsuk-v26 --example v26_simhash_preflight v26_",
             rendered[7],
         )
         self.assertIn(
-            "cargo test -p borsuk-v26 --example v26_pq4_fast_build v26_",
+            "cargo test -p borsuk-v26 --example v26_dual_pq_key_preflight v26_",
             rendered[8],
         )
         self.assertIn(
-            "cargo test -p borsuk-v26 --example v26_pq4_fast_quality v26_",
+            "cargo test -p borsuk-v26 --example v26_pq4_fast_build v26_",
             rendered[9],
         )
         self.assertIn(
-            "cargo test -p borsuk-v26 --example v26_pq4_fast_serving v26_",
+            "cargo test -p borsuk-v26 --example v26_pq4_fast_quality v26_",
             rendered[10],
         )
         self.assertIn(
-            "cargo test -p borsuk-v26 --example v26_pq4_fast_holdout v26_",
+            "cargo test -p borsuk-v26 --example v26_pq4_fast_serving v26_",
             rendered[11],
+        )
+        self.assertIn(
+            "cargo test -p borsuk-v26 --example v26_pq4_fast_holdout v26_",
+            rendered[12],
         )
         self.assertIn(
             "-m unittest scripts.test_run_v26_page_layout "
             "scripts.test_launch_v26_page_layout_spot",
-            rendered[12],
+            rendered[13],
         )
-        self.assertEqual(rendered[13], "cargo fmt --all -- --check")
-        self.assertEqual(rendered[14], "git diff --check")
+        self.assertEqual(rendered[14], "cargo fmt --all -- --check")
+        self.assertEqual(rendered[15], "git diff --check")
         self.assertFalse(any("--workspace" in command for command in rendered))
         self.assertFalse(any("--all-targets" in command for command in rendered))
 

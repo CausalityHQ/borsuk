@@ -2722,8 +2722,8 @@ pub(crate) fn rank_v26_dual_pq_key_candidates_with_count(
     let row_count = index.codes.len() / 16;
     let mut seen = vec![0_u64; row_count.div_ceil(64)];
     let mut candidates = Vec::new();
-    for plane in 0..2 {
-        let [low, high] = V26_DUAL_PQ_KEY_SUBSPACES[plane];
+    for (plane, subspaces) in V26_DUAL_PQ_KEY_SUBSPACES.iter().enumerate() {
+        let [low, high] = *subspaces;
         let mut keys = (0_u32..u32::try_from(BUCKETS).unwrap())
             .map(|key| {
                 let [low_code, high_code] = u16::try_from(key).unwrap().to_le_bytes();
@@ -7179,7 +7179,7 @@ mod local_schema_tests {
     };
 
     #[test]
-    fn v26_layout_local_schema_contracts_are_exact_and_nonnullable() {
+    fn v26_release_contract_layout_schemas_are_exact_and_nonnullable() {
         // Break caught: cross-language field/type/order/nullability drift.
         let vector = DataType::FixedSizeList(
             Arc::new(Field::new("element", DataType::Float32, false)),
@@ -7243,6 +7243,8 @@ mod local_schema_tests {
                     ),
                     false,
                 ),
+                Field::new("construction_sha256", DataType::Utf8, false),
+                Field::new("external_queries_sha256", DataType::Utf8, false),
             ])
         );
     }

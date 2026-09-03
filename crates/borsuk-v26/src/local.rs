@@ -5734,7 +5734,9 @@ pub fn read_v26_pq4_fast_index_arrow(
         .ok_or_else(|| invalid("V26 PQ4 codebook value type differs"))?;
     let centroids = values
         .values()
-        .chunks_exact(48)
+        .as_chunks::<48>()
+        .0
+        .iter()
         .map(|chunk| {
             let mut value = [0.0_f32; 48];
             value.copy_from_slice(chunk);
@@ -7420,11 +7422,19 @@ fn read_v26_pq4_fast_manifest(object: &V26LocalObjectPath) -> Result<V26Pq4FastM
     Ok(manifest)
 }
 
+struct V26Pq4QualitySelections {
+    arms: Vec<(V26Pq16ServingSelection, u64)>,
+    scan_elapsed_ns: u64,
+    quantization_scale_bits: u32,
+    saturation_count: u32,
+    maximum_distance_error_bits: u32,
+}
+
 fn select_v26_pq4_quality_arms(
     index: &crate::V26Pq4FastIndex,
     query: &[f32; 96],
     cold_vectors: &V26ArrowColdVectors,
-) -> Result<(Vec<(V26Pq16ServingSelection, u64)>, u64, u32, u32, u32)> {
+) -> Result<V26Pq4QualitySelections> {
     const DEPTHS: [usize; 4] = [512, 1_024, 2_048, 4_096];
     if index.row_count != cold_vectors.row_count {
         return Err(invalid("V26 PQ4 cold-vector authority differs"));
@@ -7544,13 +7554,13 @@ fn select_v26_pq4_quality_arms(
             ))
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok((
-        selections,
+    Ok(V26Pq4QualitySelections {
+        arms: selections,
         scan_elapsed_ns,
-        tables.scale.to_bits(),
-        tables.saturation_count,
-        maximum_error.to_bits(),
-    ))
+        quantization_scale_bits: tables.scale.to_bits(),
+        saturation_count: tables.saturation_count,
+        maximum_distance_error_bits: maximum_error.to_bits(),
+    })
 }
 
 fn v26_pq4_quality_sample(
@@ -7558,11 +7568,8 @@ fn v26_pq4_quality_sample(
     query_ordinal: u32,
     selection: &V26Pq16ServingSelection,
     truth: &V26QueryTruth,
-    scan_elapsed_ns: u64,
     exact_rerank_elapsed_ns: u64,
-    quantization_scale_bits: u32,
-    saturation_count: u32,
-    maximum_distance_error_bits: u32,
+    measurements: &V26Pq4QualitySelections,
 ) -> Result<V26Pq4QualitySample> {
     if truth.query_ordinal != query_ordinal
         || truth.neighbor_source_ordinals.len() != 10
@@ -7603,11 +7610,11 @@ fn v26_pq4_quality_sample(
         oracle_hits,
         recall_ppm: u64::from(hits) * 100_000,
         oracle_attainment_ppm: u64::from(hits) * 1_000_000 / u64::from(oracle_hits),
-        scan_elapsed_ns,
+        scan_elapsed_ns: measurements.scan_elapsed_ns,
         exact_rerank_elapsed_ns,
-        quantization_scale_bits,
-        saturation_count,
-        maximum_distance_error_bits,
+        quantization_scale_bits: measurements.quantization_scale_bits,
+        saturation_count: measurements.saturation_count,
+        maximum_distance_error_bits: measurements.maximum_distance_error_bits,
         page_body_reads: 0,
     })
 }
@@ -8167,21 +8174,17 @@ pub fn run_v26_pq4_quality_frontier(request: &V26Pq4QualityRequest) -> Result<Ve
     )?;
     queries.truncate(32);
     truths.truncate(32);
-    let mut by_depth = vec![Vec::with_capacity(32); 4];
+    let mut by_depth = (0..4).map(|_| Vec::with_capacity(32)).collect::<Vec<_>>();
     for (query, truth) in queries.iter().zip(&truths) {
-        let (selections, scan_ns, scale_bits, saturation_count, maximum_error_bits) =
-            select_v26_pq4_quality_arms(&index, &query.vector, &cold_vectors)?;
-        for (arm_index, (selection, rerank_ns)) in selections.iter().enumerate() {
+        let selections = select_v26_pq4_quality_arms(&index, &query.vector, &cold_vectors)?;
+        for (arm_index, (selection, rerank_ns)) in selections.arms.iter().enumerate() {
             by_depth[arm_index].push(v26_pq4_quality_sample(
                 selection.exact_rows_read,
                 query.query_ordinal,
                 selection,
                 truth,
-                scan_ns,
                 *rerank_ns,
-                scale_bits,
-                saturation_count,
-                maximum_error_bits,
+                &selections,
             )?);
         }
     }
@@ -9368,10 +9371,10 @@ mod tests {
     }
 
     #[test]
-    fn v26_tree_router_diagnostic_local_reuses_closed_authority_without_page_reads() {
+    fn v26_release_contract_tree_router_diagnostic_reuses_closed_authority_without_page_reads() {
         // Break caught: the diagnostic bypasses the authenticated layout/tree inputs or opens
         // construction/page bodies instead of reusing the closed router boundary.
-        let (temp, layout) = evaluation_fixture_with_rows(2_113);
+        let (temp, layout) = evaluation_fixture_with_rows(6_000);
         let terminal = read_layout_terminal(&layout.layout_terminal).unwrap();
         let tree = |role: &str, name: &str| V26LocalObjectPath {
             identity: terminal
@@ -9386,7 +9389,7 @@ mod tests {
             primary_tree: tree("primary-tree-parquet", "primary-tree.parquet"),
             replica_tree: tree("replica-tree-parquet", "replica-tree.parquet"),
             layout,
-            page_budget: 8,
+            page_budget: 10,
         };
 
         let bytes = run_v26_tree_router_diagnostic(&request).unwrap();
@@ -9400,7 +9403,7 @@ mod tests {
         assert_eq!(value["page_body_reads"], 0);
         assert_eq!(value["claim_eligible"], false);
         assert_eq!(value["widths"][0]["candidate_page_limit"], 8);
-        assert_eq!(value["samples"].as_array().unwrap().len(), 512);
+        assert_eq!(value["samples"].as_array().unwrap().len(), 3 * 512);
     }
 
     #[test]
@@ -9463,7 +9466,7 @@ mod tests {
             {
                 used_pages.insert(assignment.primary_page);
                 used_pages.insert(assignment.replica_page);
-                neighbors.push(u64::from(assignment.source_ordinal));
+                neighbors.push(assignment.source_ordinal);
                 if neighbors.len() == 9 {
                     break;
                 }
@@ -9471,9 +9474,9 @@ mod tests {
         }
         let extra = assignments
             .iter()
-            .find(|assignment| !neighbors.contains(&u64::from(assignment.source_ordinal)))
+            .find(|assignment| !neighbors.contains(&assignment.source_ordinal))
             .unwrap();
-        neighbors.push(u64::from(extra.source_ordinal));
+        neighbors.push(extra.source_ordinal);
         let neighbors: [u64; 10] = neighbors.try_into().unwrap();
         rewrite_evaluation_truth_neighbors(&mut layout, &neighbors);
         let (_, _, narrow) = evaluate_v26_layout_oracle_with_page_budget(&layout, 8).unwrap();
@@ -9620,10 +9623,10 @@ mod tests {
     }
 
     #[test]
-    fn v26_candidate_cover_local_persists_only_bounded_parquet_evidence() {
+    fn v26_release_contract_candidate_cover_persists_only_bounded_parquet_evidence() {
         // Break caught: exact candidate scoring retains a full ranking, emits bulk JSON, or
         // gains page/network access instead of using the authenticated local construction.
-        let (temp, layout) = evaluation_fixture_with_rows(2_113);
+        let (temp, layout) = evaluation_fixture_with_rows(6_000);
         let terminal = read_layout_terminal(&layout.layout_terminal).unwrap();
         let tree = |role: &str, name: &str| V26LocalObjectPath {
             identity: terminal
@@ -9644,7 +9647,7 @@ mod tests {
                 primary_tree: tree("primary-tree-parquet", "primary-tree.parquet"),
                 replica_tree: tree("replica-tree-parquet", "replica-tree.parquet"),
                 layout,
-                page_budget: 8,
+                page_budget: 10,
             },
             evidence_output_path: evidence_path.clone(),
             evidence_output_uri: "s3://frozen/v26/candidate-cover-evidence.parquet".to_owned(),
@@ -9653,7 +9656,7 @@ mod tests {
         let bytes = run_v26_candidate_row_cover(&request).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["schema"], "borsuk-v26-candidate-row-cover-output-v1");
-        assert_eq!(value["candidate_page_limit"], 8);
+        assert_eq!(value["candidate_page_limit"], 18);
         assert_eq!(value["ranked_row_limit"], 10);
         assert_eq!(
             value["evidence"]["role"],
@@ -10284,7 +10287,8 @@ mod tests {
         assert_eq!(bytes.last(), Some(&b'\n'));
         assert!(!bytes.windows(2).any(|pair| pair == b" \n"));
 
-        let mutations: Vec<Box<dyn Fn(&mut V26Pq4FastManifest)>> = vec![
+        type ManifestMutation = Box<dyn Fn(&mut V26Pq4FastManifest)>;
+        let mutations: Vec<ManifestMutation> = vec![
             Box::new(|value| value.dimension = 95),
             Box::new(|value| value.block_count = 32),
             Box::new(|value| value.padding_rows = 30),
@@ -11002,7 +11006,7 @@ mod tests {
     }
 
     #[test]
-    fn v26_pq16_global_quality_runner_binds_truth_and_writes_32_parquet_samples() {
+    fn v26_release_contract_pq16_global_quality_binds_truth_and_writes_32_parquet_samples() {
         // Break caught: native global PQ16 is timed without authenticating truth and persisting
         // independently recomputable per-query quality evidence before a full-scale run.
         let (temp, evaluation) = evaluation_fixture_with_rows(3_521);
@@ -11045,7 +11049,7 @@ mod tests {
         let bytes = super::run_v26_pq16_global_quality_preflight(&request).unwrap();
 
         let result: super::V26Pq16GlobalQualityResult = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(result.schema, "borsuk-v26-pq16-global-quality-result-v1");
+        assert_eq!(result.schema, "borsuk-v26-pq16-global-quality-result-v2");
         assert_eq!(result.query_count, 32);
         assert_eq!(result.measurement_count, 32);
         assert_eq!(result.truth, request.truth.identity);
@@ -11365,7 +11369,6 @@ mod tests {
             super::canonical_v26_pq16_global_quality_result_bytes(&result, &drifted_samples)
                 .is_err()
         );
-        let mut drifted_samples = drifted_samples;
         drifted_samples[0].hits = 8;
         drifted_samples[31].global_adc_elapsed_ns += 1;
         assert!(
