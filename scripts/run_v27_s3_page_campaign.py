@@ -247,7 +247,7 @@ finish() {{
 trap finish EXIT
 dnf install -y gcc gcc-c++ tar zstd
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
-source /root/.cargo/env
+export HOME=/root
 aws s3 cp {values['archive']} "$archive" --only-show-errors
 aws s3 cp {values['train']} "$train" --only-show-errors
 test "$(stat -c %s "$archive")" -eq {values['archive_bytes']}
@@ -257,7 +257,7 @@ printf '%s  %s\n' {values['train_sha']} "$train" | sha256sum --check --status
 tar --zstd -xf "$archive" -C "$source_dir"
 cd "$source_dir"
 test "$(cat .borsuk-source-commit)" = {values['commit']}
-cargo build --release --locked -p borsuk --example v27_s3_build --example v27_s3_qualify
+/root/.cargo/bin/cargo build --release --locked -p borsuk --example v27_s3_build --example v27_s3_qualify
 target/release/examples/v27_s3_build --execute --train-parquet "$train" --train-sha256 {values['train_sha']} --train-bytes {values['train_bytes']} --row-limit 100000 --roots 64 --leaves 4096 --iterations 4 --workers 8 --page-rows 512 --output-dir "$index_dir" >"$root/build.json"
 cmp "$root/build.json" "$index_dir/BUILD_COMPLETE.json"
 aws s3 cp "$index_dir" "s3://$bucket/${{prefix}}index/" --recursive --only-show-errors

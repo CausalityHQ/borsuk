@@ -140,6 +140,8 @@ class V27ReducedSpotTests(unittest.TestCase):
             self.assertNotIn("train-00000001.parquet", script)
             self.assertNotIn("aws s3 sync", script)
             self.assertIn("BUILD_COMPLETE.json", script)
+            self.assertIn("/root/.cargo/bin/cargo build", script)
+            self.assertNotIn("source /root/.cargo/env", script)
 
     def test_v27_reduced_spot_falls_across_capacity_and_terminates_original(self) -> None:
         plan = self.plan()
