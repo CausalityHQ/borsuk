@@ -431,6 +431,7 @@ dependencies = [
  "arrow-ipc",
  "arrow-schema",
  "borsuk-fma",
+ "parquet",
  "rayon",
  "serde",
  "serde_json",

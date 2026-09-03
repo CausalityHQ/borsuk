@@ -62,7 +62,7 @@ fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
 }
 
-fn codebook_schema() -> Schema {
+pub(super) fn codebook_schema() -> Schema {
     Schema::new(vec![Field::new(
         "centroids",
         DataType::FixedSizeList(
@@ -73,14 +73,14 @@ fn codebook_schema() -> Schema {
     )])
 }
 
-fn codes_schema() -> Schema {
+pub(super) fn codes_schema() -> Schema {
     Schema::new(vec![
         Field::new("block_ordinal", DataType::UInt64, false),
         Field::new("packed_codes", DataType::FixedSizeBinary(512), false),
     ])
 }
 
-fn vectors_schema() -> Schema {
+pub(super) fn vectors_schema() -> Schema {
     Schema::new(vec![Field::new(
         "vector",
         DataType::FixedSizeList(
@@ -91,11 +91,11 @@ fn vectors_schema() -> Schema {
     )])
 }
 
-fn ids_schema() -> Schema {
+pub(super) fn ids_schema() -> Schema {
     Schema::new(vec![Field::new("id", DataType::Binary, false)])
 }
 
-fn sha256_file(path: &Path) -> Result<(u64, String)> {
+pub(super) fn sha256_file(path: &Path) -> Result<(u64, String)> {
     let mut file = fs::File::open(path)
         .map_err(|error| invalid(&format!("PQ4 snapshot identity open failed: {error}")))?;
     let mut digest = Sha256::new();
@@ -151,6 +151,142 @@ fn identity(
         row_count,
         schema: schema.to_owned(),
     })
+}
+
+pub(super) struct StreamedSnapshotAuthority<'a> {
+    pub(super) directory: &'a Path,
+    pub(super) temporary: &'a Path,
+    pub(super) generation: &'a str,
+    pub(super) source_uri: &'a str,
+    pub(super) source_sha256: &'a str,
+    pub(super) source_encoded_bytes: u64,
+    pub(super) codebook: &'a Pq4Codebook,
+    pub(super) blocks: &'a [[u8; 512]],
+    pub(super) row_count: u64,
+}
+
+pub(super) fn finish_streamed_snapshot(
+    authority: &StreamedSnapshotAuthority<'_>,
+) -> Result<Pq4Manifest> {
+    let centroid_values = authority
+        .codebook
+        .centroids
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<Vec<_>>();
+    let centroids = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float32, false)),
+        1_536,
+        Arc::new(Float32Array::from(centroid_values)),
+        None,
+    )
+    .map_err(|error| invalid(&format!("PQ4 snapshot codebook array failed: {error}")))?;
+    write_batch_file(
+        &authority.temporary.join("codebook.arrow"),
+        &codebook_schema(),
+        vec![
+            RecordBatch::try_new(Arc::new(codebook_schema()), vec![Arc::new(centroids)]).map_err(
+                |error| invalid(&format!("PQ4 snapshot codebook batch failed: {error}")),
+            )?,
+        ],
+    )?;
+    let packed = FixedSizeBinaryArray::try_from_iter(authority.blocks.iter())
+        .map_err(|error| invalid(&format!("PQ4 snapshot codes array failed: {error}")))?;
+    write_batch_file(
+        &authority.temporary.join("codes.arrow"),
+        &codes_schema(),
+        vec![
+            RecordBatch::try_new(
+                Arc::new(codes_schema()),
+                vec![
+                    Arc::new(UInt64Array::from_iter_values(
+                        0..u64::try_from(authority.blocks.len()).unwrap(),
+                    )),
+                    Arc::new(packed),
+                ],
+            )
+            .map_err(|error| invalid(&format!("PQ4 snapshot codes batch failed: {error}")))?,
+        ],
+    )?;
+
+    let block_count = u64::try_from(authority.blocks.len()).unwrap();
+    let manifest = Pq4Manifest {
+        schema: "borsuk-pq4-snapshot-v1".to_owned(),
+        generation: authority.generation.to_owned(),
+        source_uri: authority.source_uri.to_owned(),
+        source_sha256: authority.source_sha256.to_owned(),
+        source_encoded_bytes: authority.source_encoded_bytes,
+        row_count: authority.row_count,
+        dimension: 96,
+        subquantizer_count: 32,
+        subspace_dimensions: 3,
+        centroid_count: 16,
+        lloyd_iterations: 4,
+        block_rows: 32,
+        block_count,
+        padding_rows: u32::try_from(block_count * 32 - authority.row_count).unwrap(),
+        code_bytes_per_row: 16,
+        byte_order: "subquantizer-major".to_owned(),
+        nibble_order: "even-low-odd-high".to_owned(),
+        source_order: "ascending-source-ordinal".to_owned(),
+        candidate_depth: 3_072,
+        codebook: identity(
+            authority.temporary,
+            "codebook-arrow",
+            "codebook.arrow",
+            1,
+            "centroids:non-nullable-fixed-list-f32[1536]",
+        )?,
+        codes: identity(
+            authority.temporary,
+            "codes-arrow",
+            "codes.arrow",
+            block_count,
+            "block_ordinal:u64,packed_codes:non-nullable-fixed-binary[512]",
+        )?,
+        vectors: identity(
+            authority.temporary,
+            "vectors-arrow",
+            "vectors.arrow",
+            authority.row_count,
+            "vector:non-nullable-fixed-list-f32[96]",
+        )?,
+        ids: identity(
+            authority.temporary,
+            "ids-arrow",
+            "ids.arrow",
+            authority.row_count,
+            "id:non-nullable-binary",
+        )?,
+    };
+    fs::write(
+        authority.temporary.join("manifest.json"),
+        canonical_manifest_bytes(&manifest)?,
+    )
+    .map_err(|error| invalid(&format!("PQ4 snapshot manifest write failed: {error}")))?;
+    for path in [
+        authority.temporary.join("manifest.json"),
+        authority.temporary.join("vectors.arrow"),
+        authority.temporary.join("ids.arrow"),
+    ] {
+        fs::File::open(path)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| invalid(&format!("PQ4 snapshot streamed fsync failed: {error}")))?;
+    }
+    fs::File::open(authority.temporary)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| invalid(&format!("PQ4 snapshot directory fsync failed: {error}")))?;
+    fs::rename(authority.temporary, authority.directory)
+        .map_err(|error| invalid(&format!("PQ4 snapshot rename failed: {error}")))?;
+    let parent = authority
+        .directory
+        .parent()
+        .ok_or_else(|| invalid("PQ4 snapshot parent is absent"))?;
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| invalid(&format!("PQ4 snapshot parent fsync failed: {error}")))?;
+    Ok(manifest)
 }
 
 pub(crate) fn write_snapshot(request: &Pq4SnapshotWriteRequest<'_>) -> Result<Pq4Manifest> {

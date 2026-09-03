@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod builder;
 mod core;
 mod format;
 
@@ -9,6 +10,8 @@ mod format;
 pub(crate) use format::{Pq4ArtifactIdentity, Pq4Manifest, canonical_manifest_bytes};
 #[cfg(test)]
 pub(crate) use snapshot::{Pq4Snapshot, Pq4SnapshotWriteRequest, write_snapshot};
+
+pub use builder::{Pq4BuildConfig, Pq4BuildReport, Pq4Builder};
 
 mod snapshot;
 
@@ -39,10 +42,21 @@ mod tests {
     #[cfg(not(target_arch = "aarch64"))]
     use super::rank_candidates;
     use super::{
-        Pq4ArtifactIdentity, Pq4Codebook, Pq4Manifest, Pq4Snapshot, Pq4SnapshotWriteRequest,
-        canonical_manifest_bytes, encode_blocks, fit_codebook, projected_resident_bytes,
-        rank_candidates_parallel_scalar_for_test, rank_candidates_scalar, score_rows_scalar,
-        write_snapshot,
+        Pq4ArtifactIdentity, Pq4BuildConfig, Pq4Builder, Pq4Codebook, Pq4Manifest, Pq4Snapshot,
+        Pq4SnapshotWriteRequest, canonical_manifest_bytes, encode_blocks, fit_codebook,
+        projected_resident_bytes, rank_candidates_parallel_scalar_for_test, rank_candidates_scalar,
+        score_rows_scalar, write_snapshot,
+    };
+    use std::sync::Arc;
+
+    use arrow_array::{
+        Array, ArrayRef, BinaryArray, FixedSizeListArray, Float32Array, RecordBatch,
+    };
+    use arrow_schema::{DataType, Field, Schema};
+    use parquet::{
+        arrow::ArrowWriter,
+        basic::Compression,
+        file::properties::{WriterProperties, WriterVersion},
     };
 
     fn snapshot_identity(
@@ -72,6 +86,41 @@ mod tests {
                 })
             })
             .collect()
+    }
+
+    fn write_pq4_input(path: &std::path::Path, vectors: &[[f32; 96]], ids: &[Vec<u8>]) {
+        let values = vectors.iter().flatten().copied().collect::<Vec<_>>();
+        let vector_array = FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            96,
+            Arc::new(Float32Array::from(values)),
+            None,
+        )
+        .unwrap();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Binary, false),
+            Field::new("vector", vector_array.data_type().clone(), false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(BinaryArray::from_iter_values(ids.iter().map(Vec::as_slice))) as ArrayRef,
+                Arc::new(vector_array),
+            ],
+        )
+        .unwrap();
+        let properties = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            .set_compression(Compression::UNCOMPRESSED)
+            .build();
+        let mut writer = ArrowWriter::try_new(
+            std::fs::File::create(path).unwrap(),
+            schema,
+            Some(properties),
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
     }
 
     #[test]
@@ -368,6 +417,78 @@ mod tests {
         std::fs::remove_file(second.join("unregistered")).unwrap();
         std::fs::remove_file(second.join("ids.arrow")).unwrap();
         assert!(Pq4Snapshot::open(&second).is_err());
+    }
+
+    #[test]
+    fn v26_release_contract_pq4_builder_is_bounded_parallel_and_byte_deterministic() {
+        // Break caught: worker scheduling changes shard bytes/source order, construction retains
+        // the corpus instead of bounded batches, or malformed input leaves an openable output.
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("input.parquet");
+        let vectors = rows(4_097);
+        let ids = (0..vectors.len())
+            .map(|ordinal| format!("opaque-{ordinal:08}").into_bytes())
+            .collect::<Vec<_>>();
+        write_pq4_input(&input, &vectors, &ids);
+
+        let build = |worker_count, output: &std::path::Path| {
+            Pq4Builder::build_parquet(
+                &input,
+                output,
+                &Pq4BuildConfig {
+                    worker_count,
+                    batch_rows: 512,
+                    generation: "deep-image-96-pq4-generation-0001".to_owned(),
+                    source_uri: "s3://frozen/deep-image-96.parquet".to_owned(),
+                },
+            )
+            .unwrap()
+        };
+        let first_dir = temp.path().join("one-worker");
+        let second_dir = temp.path().join("four-workers");
+        let first = build(1, &first_dir);
+        let second = build(4, &second_dir);
+        assert_eq!(first.row_count, 4_097);
+        assert_eq!(first.sample_rows, 4_097);
+        assert!(first.maximum_buffered_rows <= 8_704);
+        assert_eq!(second.worker_count, 4);
+        assert_eq!(first.manifest, second.manifest);
+        for file_name in [
+            "manifest.json",
+            "codebook.arrow",
+            "codes.arrow",
+            "vectors.arrow",
+            "ids.arrow",
+        ] {
+            assert_eq!(
+                std::fs::read(first_dir.join(file_name)).unwrap(),
+                std::fs::read(second_dir.join(file_name)).unwrap(),
+                "{file_name} differs across worker counts"
+            );
+        }
+        let snapshot = Pq4Snapshot::open(&second_dir).unwrap();
+        assert_eq!(snapshot.read_vector(4_096).unwrap(), vectors[4_096]);
+        assert_eq!(snapshot.read_id(4_096).unwrap(), ids[4_096]);
+
+        let invalid_input = temp.path().join("invalid.parquet");
+        let mut invalid_vectors = vectors;
+        invalid_vectors[2_048][17] = f32::NAN;
+        write_pq4_input(&invalid_input, &invalid_vectors, &ids);
+        let rejected = temp.path().join("rejected");
+        assert!(
+            Pq4Builder::build_parquet(
+                &invalid_input,
+                &rejected,
+                &Pq4BuildConfig {
+                    worker_count: 2,
+                    batch_rows: 512,
+                    generation: "deep-image-96-pq4-generation-0001".to_owned(),
+                    source_uri: "s3://frozen/deep-image-96.parquet".to_owned(),
+                },
+            )
+            .is_err()
+        );
+        assert!(!rejected.exists());
     }
 
     #[cfg(not(target_arch = "aarch64"))]
