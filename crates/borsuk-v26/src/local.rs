@@ -325,11 +325,109 @@ pub struct V26Pq16ServingBenchmarkResult {
     pub claim_eligible: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26Pq16GlobalPreflightResult {
+    pub schema: String,
+    pub serving_manifest: V26ObjectIdentity,
+    pub external_queries: V26ObjectIdentity,
+    pub latency_evidence: V26ObjectIdentity,
+    pub query_count: u32,
+    pub ranked_row_limit: u32,
+    pub selected_page_count: u32,
+    pub warmup_count: u32,
+    pub measurement_count: u32,
+    pub p50_ns: u64,
+    pub p95_ns: u64,
+    pub maximum_ns: u64,
+    pub fail_fast_gate_ns: u64,
+    pub passed: bool,
+    pub page_body_reads: u32,
+    pub claim_eligible: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V26Pq16ServingBenchmarkRequest {
     pub runtime: V26Pq16ServingRuntimeRequest,
     pub latency_output_path: PathBuf,
     pub latency_output_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26Pq16GlobalPreflightRequest {
+    pub runtime: V26Pq16ServingRuntimeRequest,
+    pub latency_output_path: PathBuf,
+    pub latency_output_uri: String,
+}
+
+fn summarize_v26_pq16_global_preflight(
+    serving_manifest: V26ObjectIdentity,
+    external_queries: V26ObjectIdentity,
+    latency_evidence: V26ObjectIdentity,
+    samples: &[V26ServingLatencySample],
+) -> Result<V26Pq16GlobalPreflightResult> {
+    validate_v26_benchmark_identity(&serving_manifest, "pq16-serving-manifest")?;
+    validate_v26_benchmark_identity(&external_queries, "external-queries-parquet")?;
+    validate_v26_benchmark_identity(&latency_evidence, "pq16-global-preflight-latency-parquet")?;
+    if serving_manifest.generation != external_queries.generation
+        || serving_manifest.generation != latency_evidence.generation
+        || samples.len() != 32
+        || samples.iter().enumerate().any(|(ordinal, sample)| {
+            usize::try_from(sample.sample_ordinal).ok() != Some(ordinal)
+                || sample.query_ordinal != sample.sample_ordinal
+                || sample.elapsed_ns == 0
+                || sample.cold_batches_read == 0
+                || sample.cold_batches_read > 2_048
+        })
+    {
+        return Err(invalid("V26 global preflight sample authority differs"));
+    }
+    let mut timings = samples
+        .iter()
+        .map(|sample| sample.elapsed_ns)
+        .collect::<Vec<_>>();
+    timings.sort_unstable();
+    let percentile = |percent: usize| timings[(timings.len() * percent).div_ceil(100) - 1];
+    let maximum_ns = *timings.last().unwrap();
+    Ok(V26Pq16GlobalPreflightResult {
+        schema: "borsuk-v26-pq16-global-preflight-result-v1".to_owned(),
+        serving_manifest,
+        external_queries,
+        latency_evidence,
+        query_count: 32,
+        ranked_row_limit: 2_048,
+        selected_page_count: u32::try_from(crate::V26_SERVING_PAGE_BUDGET).unwrap(),
+        warmup_count: 2,
+        measurement_count: 32,
+        p50_ns: percentile(50),
+        p95_ns: percentile(95),
+        maximum_ns,
+        fail_fast_gate_ns: 15_000_000,
+        passed: maximum_ns <= 15_000_000,
+        page_body_reads: 0,
+        claim_eligible: false,
+    })
+}
+
+pub fn canonical_v26_pq16_global_preflight_result_bytes(
+    result: &V26Pq16GlobalPreflightResult,
+    samples: &[V26ServingLatencySample],
+) -> Result<Vec<u8>> {
+    let expected = summarize_v26_pq16_global_preflight(
+        result.serving_manifest.clone(),
+        result.external_queries.clone(),
+        result.latency_evidence.clone(),
+        samples,
+    )?;
+    if result != &expected {
+        return Err(invalid("V26 global preflight result differs"));
+    }
+    let value = serde_json::to_value(result)
+        .map_err(|error| invalid(&format!("V26 global preflight result failed: {error}")))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V26 global preflight result failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 fn validate_v26_benchmark_identity(identity: &V26ObjectIdentity, role: &str) -> Result<()> {
@@ -448,6 +546,106 @@ fn v26_serving_latency_batch(samples: &[V26ServingLatencySample]) -> Result<Reco
     .map_err(|error| invalid(&format!("V26 serving latency batch failed: {error}")))
 }
 
+fn v26_global_preflight_latency_batch(samples: &[V26ServingLatencySample]) -> Result<RecordBatch> {
+    if samples.len() != 32 {
+        return Err(invalid("V26 global preflight latency inventory differs"));
+    }
+    RecordBatch::try_new(
+        Arc::new(v26_serving_latency_schema()),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.sample_ordinal),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.query_ordinal),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.elapsed_ns),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.cold_batches_read),
+            )),
+        ],
+    )
+    .map_err(|error| {
+        invalid(&format!(
+            "V26 global preflight latency batch failed: {error}"
+        ))
+    })
+}
+
+pub fn run_v26_pq16_global_preflight(request: &V26Pq16GlobalPreflightRequest) -> Result<Vec<u8>> {
+    if request.latency_output_path.exists()
+        || !request.latency_output_uri.starts_with("s3://")
+        || !request.latency_output_uri.ends_with(".parquet")
+        || request.latency_output_uri == request.runtime.serving_manifest.identity.uri
+        || request.latency_output_uri == request.runtime.external_queries.identity.uri
+    {
+        return Err(invalid("V26 global preflight request differs"));
+    }
+    let runtime = open_v26_pq16_serving_runtime(&request.runtime)?;
+    if runtime.query_count() != 512 {
+        return Err(invalid("V26 global preflight query inventory differs"));
+    }
+    for query_ordinal in 0_u32..2 {
+        let selection = runtime.select_global(query_ordinal)?;
+        if selection.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
+            || selection.exact_rows_read != 2_048
+            || selection.cold_batches_read == 0
+            || selection.page_body_reads != 0
+        {
+            return Err(invalid("V26 global preflight warmup differs"));
+        }
+    }
+    let mut samples = Vec::with_capacity(32);
+    for query_ordinal in 0_u32..32 {
+        let started = std::time::Instant::now();
+        let selection = runtime.select_global(query_ordinal)?;
+        let elapsed_ns = u64::try_from(started.elapsed().as_nanos())
+            .map_err(|_| invalid("V26 global preflight latency overflows"))?
+            .max(1);
+        if selection.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
+            || selection.exact_rows_read != 2_048
+            || selection.cold_batches_read == 0
+            || selection.page_body_reads != 0
+        {
+            return Err(invalid("V26 global preflight selection differs"));
+        }
+        samples.push(V26ServingLatencySample {
+            sample_ordinal: query_ordinal,
+            query_ordinal,
+            elapsed_ns,
+            cold_batches_read: selection.cold_batches_read,
+        });
+    }
+    let result = (|| {
+        write_batch(
+            &request.latency_output_path,
+            v26_global_preflight_latency_batch(&samples)?,
+        )?;
+        let (encoded_bytes, digest) = sha256_file(&request.latency_output_path)?;
+        let evidence = V26ObjectIdentity {
+            role: "pq16-global-preflight-latency-parquet".to_owned(),
+            uri: request.latency_output_uri.clone(),
+            digest_algorithm: "sha256".to_owned(),
+            digest,
+            encoded_bytes,
+            generation: request.runtime.serving_manifest.identity.generation.clone(),
+        };
+        let result = summarize_v26_pq16_global_preflight(
+            request.runtime.serving_manifest.identity.clone(),
+            request.runtime.external_queries.identity.clone(),
+            evidence,
+            &samples,
+        )?;
+        canonical_v26_pq16_global_preflight_result_bytes(&result, &samples)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&request.latency_output_path);
+    }
+    result
+}
+
 fn require_v26_serving_selection(selection: &V26Pq16ServingSelection) -> Result<()> {
     if selection.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
         || selection
@@ -559,6 +757,25 @@ impl V26Pq16ServingRuntime {
             &candidate_pages,
             &query.vector,
             &self.cold_vectors,
+        )
+    }
+
+    pub fn select_global(&self, query_ordinal: u32) -> Result<V26Pq16ServingSelection> {
+        let query = self
+            .queries
+            .get(
+                usize::try_from(query_ordinal)
+                    .map_err(|_| invalid("V26 global preflight query ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V26 global preflight query ordinal differs"))?;
+        if query.query_ordinal != query_ordinal {
+            return Err(invalid("V26 global preflight query inventory differs"));
+        }
+        select_v26_pq16_global_pages_from_arrow(
+            &self.index,
+            &query.vector,
+            &self.cold_vectors,
+            2_048,
         )
     }
 }
@@ -1638,8 +1855,7 @@ pub fn run_v26_candidate_row_cover(request: &V26CandidateCoverRequest) -> Result
         &loaded.assignments,
         queries,
         truths,
-        candidate_page_limit,
-        10,
+        (candidate_page_limit, 10),
     )?;
     let output = (|| {
         write_batch(
@@ -2500,6 +2716,80 @@ pub fn select_v26_pq16_pages_from_arrow(
     Ok(V26Pq16ServingSelection {
         selected_pages,
         exact_rows_read: 512,
+        cold_batches_read: cold.batches_read,
+        cold_read_workers: cold.read_workers,
+        page_body_reads: 0,
+    })
+}
+
+pub fn select_v26_pq16_global_pages_from_arrow(
+    index: &crate::V26PackedPq16Index,
+    query: &[f32; 96],
+    cold_vectors: &V26ArrowColdVectors,
+    ranked_row_limit: usize,
+) -> Result<V26Pq16ServingSelection> {
+    if u64::try_from(index.codes.len() / 16).unwrap() != cold_vectors.row_count {
+        return Err(invalid("V26 global PQ16 Arrow authority differs"));
+    }
+    let approximate = crate::rank_v26_pq16_global_candidates(index, query, ranked_row_limit)?;
+    let mut source_ordinals = approximate
+        .iter()
+        .map(|candidate| u32::try_from(candidate.source_ordinal))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| invalid("V26 global PQ16 Arrow source ordinal differs"))?;
+    source_ordinals.sort_unstable();
+    let cold = cold_vectors.read_vectors(&source_ordinals)?;
+    let assignments = cold_vectors.read_assignments(&source_ordinals)?;
+    let mut exact = approximate
+        .iter()
+        .map(|candidate| {
+            let source_ordinal = u32::try_from(candidate.source_ordinal)
+                .map_err(|_| invalid("V26 global PQ16 Arrow source ordinal differs"))?;
+            let position = source_ordinals
+                .binary_search(&source_ordinal)
+                .map_err(|_| invalid("V26 global PQ16 Arrow binding differs"))?;
+            let assignment = assignments[position];
+            if assignment.source_ordinal != candidate.source_ordinal {
+                return Err(invalid("V26 global PQ16 Arrow assignment differs"));
+            }
+            let distance = v26_squared_l2(&cold.vectors[position], query);
+            if !distance.is_finite() {
+                return Err(invalid("V26 global PQ16 Arrow exact distance differs"));
+            }
+            Ok((
+                V26PqRankedRow {
+                    source_ordinal: candidate.source_ordinal,
+                    distance,
+                },
+                [assignment.primary_page, assignment.replica_page],
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    exact.sort_by_key(|entry| entry.0);
+    let top_assignments = exact[..10]
+        .iter()
+        .map(|(_, pages)| pages.to_vec())
+        .collect::<Vec<_>>();
+    let mut selected_pages =
+        exact_v26_layout_oracle_pages(&top_assignments, crate::V26_SERVING_PAGE_BUDGET)?;
+    for (_, pages) in &exact {
+        for page in pages {
+            if selected_pages.len() == crate::V26_SERVING_PAGE_BUDGET {
+                break;
+            }
+            if !selected_pages.contains(page) {
+                selected_pages.push(*page);
+            }
+        }
+    }
+    if selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET {
+        return Err(invalid("V26 global PQ16 Arrow page inventory differs"));
+    }
+    selected_pages.sort_unstable();
+    Ok(V26Pq16ServingSelection {
+        selected_pages,
+        exact_rows_read: u32::try_from(ranked_row_limit)
+            .map_err(|_| invalid("V26 global PQ16 Arrow ranked-row limit overflows"))?,
         cold_batches_read: cold.batches_read,
         cold_read_workers: cold.read_workers,
         page_body_reads: 0,
@@ -3867,9 +4157,11 @@ mod tests {
     use super::{
         V26ArrowColdVectors, V26CandidateCoverRequest, V26CentroidRouterRequest,
         V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
-        V26LocalObjectPath, V26PageModeRouterRequest, V26Pq8CoverRequest, V26Pq16RerankRequest,
-        V26Pq16ServingBuildRequest, V26Pq16ServingRuntimeRequest, V26PqWidthLadderRequest,
-        V26ServingLatencySample, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
+        V26LocalObjectPath, V26PageModeRouterRequest, V26Pq8CoverRequest,
+        V26Pq16GlobalPreflightResult, V26Pq16RerankRequest, V26Pq16ServingBuildRequest,
+        V26Pq16ServingRuntimeRequest, V26PqWidthLadderRequest, V26ServingLatencySample,
+        V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
+        canonical_v26_pq16_global_preflight_result_bytes,
         canonical_v26_pq16_serving_benchmark_result_bytes, evaluate_v26_exact_global,
         evaluate_v26_layout_oracle, evaluate_v26_layout_oracle_with_page_budget, open_reader,
         open_v26_pq16_serving_runtime, output_identity, read_assignments, read_evaluation_queries,
@@ -3877,7 +4169,8 @@ mod tests {
         run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_layout_build,
         run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
         run_v26_pq16_exact_rerank, run_v26_pq16_serving_build, run_v26_tree_router,
-        run_v26_tree_router_diagnostic, run_v26_truth_build, select_v26_pq16_pages_from_arrow,
+        run_v26_tree_router_diagnostic, run_v26_truth_build,
+        select_v26_pq16_global_pages_from_arrow, select_v26_pq16_pages_from_arrow,
         v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
         v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
         write_v26_pq16_index_arrow,
@@ -4912,6 +5205,17 @@ mod tests {
         assert_eq!(result.cold_read_workers, 4);
         assert_eq!(result.page_body_reads, 0);
 
+        let global_reference =
+            crate::select_v26_pq16_global_packed_pages(&index, &query, &rows, &assignments, 2_048)
+                .unwrap();
+        let global =
+            select_v26_pq16_global_pages_from_arrow(&index, &query, &reader, 2_048).unwrap();
+        assert_eq!(global.selected_pages, global_reference.selected_pages);
+        assert_eq!(global.exact_rows_read, 2_048);
+        assert!(global.cold_batches_read > 0 && global.cold_batches_read <= 34);
+        assert_eq!(global.cold_read_workers, 4);
+        assert_eq!(global.page_body_reads, 0);
+
         if !cfg!(debug_assertions) {
             let mut latency_ns = Vec::with_capacity(128);
             for sample in 0..144 {
@@ -5202,6 +5506,7 @@ mod tests {
         // This deliberately small layout has fewer than eight pages. Opening succeeds and the
         // serving call fails closed; the separate kernel contract proves exact eight-page output.
         assert!(runtime.select(0).is_err());
+        assert!(runtime.select_global(0).is_err());
 
         let mut drifted = request.clone();
         drifted.primary_tree.identity.digest = "f".repeat(64);
@@ -5270,5 +5575,50 @@ mod tests {
         let mut drifted = result;
         drifted.passed = false;
         assert!(canonical_v26_pq16_serving_benchmark_result_bytes(&drifted, &samples).is_err());
+    }
+
+    #[test]
+    fn v26_fast_global_preflight_recomputes_the_fail_fast_latency_gate() {
+        // Break caught: a small global-scan preflight can pass without 32 raw measurements,
+        // hide its maximum, change the fixed depth, or become claim eligible.
+        let samples = (0_u32..32)
+            .map(|sample_ordinal| V26ServingLatencySample {
+                sample_ordinal,
+                query_ordinal: sample_ordinal,
+                elapsed_ns: u64::from(sample_ordinal + 1) * 100_000,
+                cold_batches_read: 128,
+            })
+            .collect::<Vec<_>>();
+        let identity = |role: &str, fill: char| V26ObjectIdentity {
+            role: role.to_owned(),
+            uri: format!("s3://v26/{role}"),
+            digest_algorithm: "sha256".to_owned(),
+            digest: fill.to_string().repeat(64),
+            encoded_bytes: 1_024,
+            generation: "v26-local-test".to_owned(),
+        };
+        let result = V26Pq16GlobalPreflightResult {
+            schema: "borsuk-v26-pq16-global-preflight-result-v1".to_owned(),
+            serving_manifest: identity("pq16-serving-manifest", 'a'),
+            external_queries: identity("external-queries-parquet", 'b'),
+            latency_evidence: identity("pq16-global-preflight-latency-parquet", 'c'),
+            query_count: 32,
+            ranked_row_limit: 2_048,
+            selected_page_count: 10,
+            warmup_count: 2,
+            measurement_count: 32,
+            p50_ns: 1_600_000,
+            p95_ns: 3_100_000,
+            maximum_ns: 3_200_000,
+            fail_fast_gate_ns: 15_000_000,
+            passed: true,
+            page_body_reads: 0,
+            claim_eligible: false,
+        };
+        assert!(canonical_v26_pq16_global_preflight_result_bytes(&result, &samples).is_ok());
+
+        let mut drifted = result;
+        drifted.maximum_ns += 1;
+        assert!(canonical_v26_pq16_global_preflight_result_bytes(&drifted, &samples).is_err());
     }
 }

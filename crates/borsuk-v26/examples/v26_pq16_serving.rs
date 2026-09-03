@@ -3,9 +3,15 @@
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
 use borsuk_v26::{
-    V26LocalObjectPath, V26ObjectIdentity, V26Pq16ServingBenchmarkRequest,
-    V26Pq16ServingRuntimeRequest, run_v26_pq16_serving_benchmark,
+    V26LocalObjectPath, V26ObjectIdentity, V26Pq16GlobalPreflightRequest,
+    V26Pq16ServingBenchmarkRequest, V26Pq16ServingRuntimeRequest, run_v26_pq16_global_preflight,
+    run_v26_pq16_serving_benchmark,
 };
+
+enum V26ServingMode {
+    Benchmark(V26Pq16ServingBenchmarkRequest),
+    GlobalPreflight(V26Pq16GlobalPreflightRequest),
+}
 
 fn take(values: &mut BTreeMap<String, String>, key: &str) -> Result<String, String> {
     values.remove(key).ok_or_else(|| format!("missing {key}"))
@@ -45,16 +51,19 @@ fn registered(
     })
 }
 
-fn parse_args(args: Vec<String>) -> Result<V26Pq16ServingBenchmarkRequest, String> {
+fn parse_args(args: Vec<String>) -> Result<V26ServingMode, String> {
     let mut values = BTreeMap::new();
-    let mut execute = false;
+    let mut mode = None;
     let mut args = args.into_iter();
     while let Some(key) = args.next() {
-        if key == "--execute-pq16-serving" {
-            if execute {
-                return Err("duplicate --execute-pq16-serving".to_owned());
+        if matches!(
+            key.as_str(),
+            "--execute-pq16-serving" | "--execute-pq16-global-preflight"
+        ) {
+            if mode.is_some() {
+                return Err("duplicate execution mode".to_owned());
             }
-            execute = true;
+            mode = Some(key);
             continue;
         }
         if !key.starts_with("--") {
@@ -67,9 +76,7 @@ fn parse_args(args: Vec<String>) -> Result<V26Pq16ServingBenchmarkRequest, Strin
             return Err(format!("duplicate {key}"));
         }
     }
-    if !execute {
-        return Err("missing --execute-pq16-serving".to_owned());
-    }
+    let mode = mode.ok_or_else(|| "missing execution mode".to_owned())?;
     let generation = take(&mut values, "--generation")?;
     if generation.is_empty() {
         return Err("invalid --generation".to_owned());
@@ -113,24 +120,42 @@ fn parse_args(args: Vec<String>) -> Result<V26Pq16ServingBenchmarkRequest, Strin
     {
         return Err("unknown or invalid argument".to_owned());
     }
-    Ok(V26Pq16ServingBenchmarkRequest {
-        runtime: V26Pq16ServingRuntimeRequest {
-            serving_manifest,
-            serving_dir,
-            layout_terminal,
-            primary_tree,
-            replica_tree,
-            external_queries,
-            expected_queries: 512,
-        },
-        latency_output_path,
-        latency_output_uri,
-    })
+    let runtime = V26Pq16ServingRuntimeRequest {
+        serving_manifest,
+        serving_dir,
+        layout_terminal,
+        primary_tree,
+        replica_tree,
+        external_queries,
+        expected_queries: 512,
+    };
+    match mode.as_str() {
+        "--execute-pq16-serving" => Ok(V26ServingMode::Benchmark(V26Pq16ServingBenchmarkRequest {
+            runtime,
+            latency_output_path,
+            latency_output_uri,
+        })),
+        "--execute-pq16-global-preflight" => Ok(V26ServingMode::GlobalPreflight(
+            V26Pq16GlobalPreflightRequest {
+                runtime,
+                latency_output_path,
+                latency_output_uri,
+            },
+        )),
+        _ => unreachable!(),
+    }
 }
 
 fn run() -> Result<(), String> {
-    let request = parse_args(std::env::args().skip(1).collect())?;
-    let bytes = run_v26_pq16_serving_benchmark(&request).map_err(|error| error.to_string())?;
+    let mode = parse_args(std::env::args().skip(1).collect())?;
+    let bytes = match mode {
+        V26ServingMode::Benchmark(request) => {
+            run_v26_pq16_serving_benchmark(&request).map_err(|error| error.to_string())?
+        }
+        V26ServingMode::GlobalPreflight(request) => {
+            run_v26_pq16_global_preflight(&request).map_err(|error| error.to_string())?
+        }
+    };
     std::io::stdout()
         .write_all(&bytes)
         .map_err(|error| format!("stdout write failed: {error}"))
@@ -180,7 +205,10 @@ mod tests {
 
     #[test]
     fn v26_pq16_serving_cli_requires_explicit_authority_and_mode() {
-        let request = super::parse_args(valid_args()).unwrap();
+        let super::V26ServingMode::Benchmark(request) = super::parse_args(valid_args()).unwrap()
+        else {
+            panic!("serving benchmark mode differs");
+        };
         assert_eq!(request.runtime.expected_queries, 512);
         assert_eq!(
             request.runtime.serving_manifest.identity.role,
@@ -225,5 +253,21 @@ mod tests {
             .unwrap();
         bytes[index + 1] = "zero".to_owned();
         assert!(super::parse_args(bytes).is_err());
+    }
+
+    #[test]
+    fn v26_pq16_global_preflight_cli_reuses_only_authenticated_serving_artifacts() {
+        let mut args = valid_args();
+        args[0] = "--execute-pq16-global-preflight".to_owned();
+        let super::V26ServingMode::GlobalPreflight(request) = super::parse_args(args).unwrap()
+        else {
+            panic!("global preflight mode differs");
+        };
+        assert_eq!(request.runtime.expected_queries, 512);
+        assert_eq!(
+            request.runtime.serving_manifest.identity.role,
+            "pq16-serving-manifest"
+        );
+        assert_eq!(request.latency_output_uri, "s3://v26/latency.parquet");
     }
 }
