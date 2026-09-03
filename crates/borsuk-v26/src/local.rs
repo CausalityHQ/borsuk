@@ -595,6 +595,8 @@ pub struct V26Pq4HoldoutSample {
     pub oracle_hits: u32,
     pub recall_ppm: u64,
     pub oracle_attainment_ppm: u64,
+    pub returned_row_hits: u32,
+    pub returned_row_recall_ppm: u64,
     pub elapsed_ns: u64,
     pub scan_elapsed_ns: u64,
     pub exact_rerank_elapsed_ns: u64,
@@ -621,6 +623,9 @@ pub struct V26Pq4HoldoutResult {
     pub aggregate_recall_ppm: u64,
     pub minimum_query_recall_ppm: u64,
     pub oracle_attainment_ppm: u64,
+    pub returned_row_aggregate_recall_ppm: u64,
+    pub returned_row_minimum_query_recall_ppm: u64,
+    pub returned_row_passed: bool,
     pub p99_ns: u64,
     pub maximum_ns: u64,
     pub aggregate_recall_gate_ppm: u64,
@@ -1708,6 +1713,8 @@ fn summarize_v26_pq4_holdout(
     let mut total_hits = 0_u64;
     let mut total_oracle_hits = 0_u64;
     let mut minimum_recall = u64::MAX;
+    let mut total_returned_row_hits = 0_u64;
+    let mut minimum_returned_row_recall = u64::MAX;
     let mut timings = Vec::with_capacity(samples.len());
     for (index, sample) in samples.iter().enumerate() {
         if sample.query_ordinal != index as u32 + 32
@@ -1721,6 +1728,8 @@ fn summarize_v26_pq4_holdout(
             || sample.recall_ppm != u64::from(sample.hits) * 100_000
             || sample.oracle_attainment_ppm
                 != u64::from(sample.hits) * 1_000_000 / u64::from(sample.oracle_hits)
+            || sample.returned_row_hits > 10
+            || sample.returned_row_recall_ppm != u64::from(sample.returned_row_hits) * 100_000
             || sample.elapsed_ns == 0
             || sample.scan_elapsed_ns == 0
             || sample.exact_rerank_elapsed_ns == 0
@@ -1737,6 +1746,9 @@ fn summarize_v26_pq4_holdout(
         total_hits += u64::from(sample.hits);
         total_oracle_hits += u64::from(sample.oracle_hits);
         minimum_recall = minimum_recall.min(sample.recall_ppm);
+        total_returned_row_hits += u64::from(sample.returned_row_hits);
+        minimum_returned_row_recall =
+            minimum_returned_row_recall.min(sample.returned_row_recall_ppm);
         timings.push(sample.elapsed_ns);
     }
     timings.sort_unstable();
@@ -1744,12 +1756,15 @@ fn summarize_v26_pq4_holdout(
     let maximum_ns = *timings.last().unwrap();
     let aggregate = total_hits * 1_000_000 / 4_800;
     let oracle = total_hits * 1_000_000 / total_oracle_hits;
+    let returned_row_aggregate = total_returned_row_hits * 1_000_000 / 4_800;
+    let returned_row_passed =
+        returned_row_aggregate >= 975_000 && minimum_returned_row_recall >= 800_000;
     let passed = aggregate >= 975_000
         && minimum_recall >= 800_000
         && oracle >= 995_000
         && p99_ns <= 15_000_000;
     Ok(V26Pq4HoldoutResult {
-        schema: "borsuk-v26-pq4-fast-holdout-result-v2".to_owned(),
+        schema: "borsuk-v26-pq4-fast-holdout-result-v3".to_owned(),
         pq4_manifest,
         frontier_result,
         development_serving_result,
@@ -1764,6 +1779,9 @@ fn summarize_v26_pq4_holdout(
         aggregate_recall_ppm: aggregate,
         minimum_query_recall_ppm: minimum_recall,
         oracle_attainment_ppm: oracle,
+        returned_row_aggregate_recall_ppm: returned_row_aggregate,
+        returned_row_minimum_query_recall_ppm: minimum_returned_row_recall,
+        returned_row_passed,
         p99_ns,
         maximum_ns,
         aggregate_recall_gate_ppm: 975_000,
@@ -1812,6 +1830,8 @@ fn v26_pq4_holdout_batch(samples: &[V26Pq4HoldoutSample]) -> Result<RecordBatch>
         Field::new("oracle_hits", DataType::UInt32, false),
         Field::new("recall_ppm", DataType::UInt64, false),
         Field::new("oracle_attainment_ppm", DataType::UInt64, false),
+        Field::new("returned_row_hits", DataType::UInt32, false),
+        Field::new("returned_row_recall_ppm", DataType::UInt64, false),
         Field::new("elapsed_ns", DataType::UInt64, false),
         Field::new("scan_elapsed_ns", DataType::UInt64, false),
         Field::new("exact_rerank_elapsed_ns", DataType::UInt64, false),
@@ -1844,6 +1864,18 @@ fn v26_pq4_holdout_batch(samples: &[V26Pq4HoldoutSample]) -> Result<RecordBatch>
                 samples
                     .iter()
                     .map(|value| value.oracle_attainment_ppm)
+                    .collect(),
+            ),
+            u32s(
+                samples
+                    .iter()
+                    .map(|value| value.returned_row_hits)
+                    .collect(),
+            ),
+            u64s(
+                samples
+                    .iter()
+                    .map(|value| value.returned_row_recall_ppm)
                     .collect(),
             ),
             u64s(samples.iter().map(|value| value.elapsed_ns).collect()),
@@ -7692,7 +7724,7 @@ fn select_v26_pq4_serving_arm(
     index: &crate::V26Pq4FastIndex,
     query: &[f32; 96],
     cold_vectors: &V26ArrowColdVectors,
-) -> Result<(V26Pq16ServingSelection, u64, u64, u64)> {
+) -> Result<(V26Pq16ServingSelection, [u64; 10], u64, u64, u64)> {
     const RANKED_ROW_LIMIT: usize = 2_048;
     if index.row_count != cold_vectors.row_count {
         return Err(invalid("V26 PQ4 serving cold-vector authority differs"));
@@ -7738,6 +7770,12 @@ fn select_v26_pq4_serving_arm(
         })
         .collect::<Result<Vec<_>>>()?;
     exact.sort_by_key(|entry| entry.0);
+    let returned_rows: [u64; 10] = exact[..10]
+        .iter()
+        .map(|(row, _)| row.source_ordinal)
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| invalid("V26 PQ4 returned-row inventory differs"))?;
     let top = exact[..10]
         .iter()
         .map(|(_, pages)| pages.to_vec())
@@ -7771,6 +7809,7 @@ fn select_v26_pq4_serving_arm(
             cold_read_workers: cold.read_workers,
             page_body_reads: 0,
         },
+        returned_rows,
         elapsed_ns,
         scan_elapsed_ns,
         exact_rerank_elapsed_ns,
@@ -7864,7 +7903,7 @@ pub fn run_v26_pq4_serving_screen(request: &V26Pq4ServingScreenRequest) -> Resul
         .iter()
         .enumerate()
         .map(|(sample_ordinal, query)| {
-            let (selection, elapsed_ns, scan_elapsed_ns, exact_rerank_elapsed_ns) =
+            let (selection, _returned_rows, elapsed_ns, scan_elapsed_ns, exact_rerank_elapsed_ns) =
                 select_v26_pq4_serving_arm(&index, &query.vector, &cold_vectors)?;
             Ok(V26Pq4ServingScreenSample {
                 sample_ordinal: sample_ordinal as u32,
@@ -7915,6 +7954,7 @@ pub fn run_v26_pq4_serving_screen(request: &V26Pq4ServingScreenRequest) -> Resul
 fn v26_pq4_holdout_sample(
     query_ordinal: u32,
     selection: V26Pq16ServingSelection,
+    returned_rows: &[u64; 10],
     truth: &V26QueryTruth,
     elapsed_ns: u64,
     scan_elapsed_ns: u64,
@@ -7951,6 +7991,11 @@ fn v26_pq4_holdout_sample(
                 .any(|page| oracle_pages.binary_search(page).is_ok())
         })
         .count() as u32;
+    let returned_row_hits = truth
+        .neighbor_source_ordinals
+        .iter()
+        .filter(|source_ordinal| returned_rows.contains(source_ordinal))
+        .count() as u32;
     Ok(V26Pq4HoldoutSample {
         query_ordinal,
         selected_pages: selection.selected_pages,
@@ -7958,6 +8003,8 @@ fn v26_pq4_holdout_sample(
         oracle_hits,
         recall_ppm: u64::from(hits) * 100_000,
         oracle_attainment_ppm: u64::from(hits) * 1_000_000 / u64::from(oracle_hits),
+        returned_row_hits,
+        returned_row_recall_ppm: u64::from(returned_row_hits) * 100_000,
         elapsed_ns,
         scan_elapsed_ns,
         exact_rerank_elapsed_ns,
@@ -8055,11 +8102,12 @@ pub fn run_v26_pq4_holdout(request: &V26Pq4HoldoutRequest) -> Result<Vec<u8>> {
         .zip(&truths)
         .skip(32)
         .map(|(query, truth)| {
-            let (selection, elapsed_ns, scan_elapsed_ns, exact_rerank_elapsed_ns) =
+            let (selection, returned_rows, elapsed_ns, scan_elapsed_ns, exact_rerank_elapsed_ns) =
                 select_v26_pq4_serving_arm(&index, &query.vector, &cold_vectors)?;
             v26_pq4_holdout_sample(
                 query.query_ordinal,
                 selection,
+                &returned_rows,
                 truth,
                 elapsed_ns,
                 scan_elapsed_ns,
@@ -10592,6 +10640,8 @@ mod tests {
                 oracle_hits: 10,
                 recall_ppm: 1_000_000,
                 oracle_attainment_ppm: 1_000_000,
+                returned_row_hits: 10,
+                returned_row_recall_ppm: 1_000_000,
                 elapsed_ns: 10_000_000 + u64::from(query_ordinal),
                 scan_elapsed_ns: 8_000_000,
                 exact_rerank_elapsed_ns: 2_000_000,
@@ -10601,6 +10651,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut samples = samples;
+        samples[0].returned_row_hits = 8;
+        samples[0].returned_row_recall_ppm = 800_000;
         samples.last_mut().unwrap().elapsed_ns = 16_500_000;
         samples.last_mut().unwrap().scan_elapsed_ns = 14_000_000;
         let result = super::summarize_v26_pq4_holdout(
@@ -10620,6 +10672,9 @@ mod tests {
         assert_eq!(result.aggregate_recall_ppm, 1_000_000);
         assert_eq!(result.minimum_query_recall_ppm, 1_000_000);
         assert_eq!(result.oracle_attainment_ppm, 1_000_000);
+        assert_eq!(result.returned_row_aggregate_recall_ppm, 999_583);
+        assert_eq!(result.returned_row_minimum_query_recall_ppm, 800_000);
+        assert!(result.returned_row_passed);
         assert!(result.p99_ns < 15_000_000);
         assert_eq!(result.maximum_ns, 16_500_000);
         assert_eq!(result.p99_gate_ns, 15_000_000);
@@ -10654,6 +10709,33 @@ mod tests {
         let mut drifted_result = result;
         drifted_result.p99_ns += 1;
         assert!(super::canonical_v26_pq4_holdout_result_bytes(&drifted_result, &drifted).is_err());
+    }
+
+    #[test]
+    fn v26_pq4_holdout_recomputes_returned_row_recall_separately_from_page_containment() {
+        // Break caught: page containment is reported as though the exact-reranked top ten rows
+        // were returned, even though no page body was read and those are distinct outcomes.
+        let selection = crate::V26Pq16ServingSelection {
+            selected_pages: (0_u32..10).collect(),
+            exact_rows_read: 2_048,
+            cold_batches_read: 32,
+            cold_read_workers: 4,
+            page_body_reads: 0,
+        };
+        let truth = crate::V26QueryTruth {
+            query_ordinal: 32,
+            neighbor_source_ordinals: (0_u64..10).collect(),
+            ground_truth_page_assignments: (0_u32..10).map(|page| vec![page, page + 10]).collect(),
+        };
+        let returned = [0_u64, 1, 2, 3, 4, 50, 51, 52, 53, 54];
+
+        let sample =
+            super::v26_pq4_holdout_sample(32, selection, &returned, &truth, 10_000, 8_000, 2_000)
+                .unwrap();
+
+        assert_eq!(sample.hits, 10);
+        assert_eq!(sample.returned_row_hits, 5);
+        assert_eq!(sample.returned_row_recall_ppm, 500_000);
     }
 
     #[test]
