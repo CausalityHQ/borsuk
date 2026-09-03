@@ -1235,6 +1235,21 @@ fn load_v26_tree_router(
     {
         return Err(invalid("V26 tree router layout gate is closed"));
     }
+    let (primary, replica) = load_v26_router_trees(request, 8)?;
+    let queries = read_evaluation_queries(
+        &request.layout.external_queries.path,
+        request.layout.expected_queries,
+    )?;
+    Ok((primary, replica, queries, truths))
+}
+
+fn load_v26_router_trees(
+    request: &V26TreeRouterRequest,
+    expected_page_budget: u32,
+) -> Result<(V26Tree, V26Tree)> {
+    if request.page_budget != expected_page_budget {
+        return Err(invalid("V26 tree router page budget differs"));
+    }
     let terminal = read_layout_terminal(&request.layout.layout_terminal)?;
     if [
         &request.primary_tree.identity,
@@ -1267,11 +1282,7 @@ fn load_v26_tree_router(
         .map_err(|_| invalid("V26 tree router assignment count overflows"))?;
     let assignments = read_assignments(&request.layout.page_assignments.path, assignment_rows)?;
     validate_v26_dual_tree_layout(&terminal.authority, &primary, &replica, &assignments)?;
-    let queries = read_evaluation_queries(
-        &request.layout.external_queries.path,
-        request.layout.expected_queries,
-    )?;
-    Ok((primary, replica, queries, truths))
+    Ok((primary, replica))
 }
 
 pub fn run_v26_tree_router(request: &V26TreeRouterRequest) -> Result<Vec<u8>> {
@@ -1840,7 +1851,7 @@ fn v26_pq16_rerank_evidence_schema() -> Schema {
         Field::new("query_ordinal", DataType::UInt32, false),
         Field::new(
             "selected_pages",
-            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt32, false)), 8),
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt32, false)), 10),
             false,
         ),
         Field::new("hits", DataType::UInt32, false),
@@ -1857,7 +1868,7 @@ fn v26_pq16_rerank_evidence_batch(arms: &[crate::V26Pq16RerankEvaluation]) -> Re
                 || arm
                     .samples
                     .iter()
-                    .any(|sample| sample.selected_pages.len() != 8)
+                    .any(|sample| sample.selected_pages.len() != 10)
         })
     {
         return Err(invalid("V26 PQ16 rerank evidence inventory differs"));
@@ -1881,7 +1892,7 @@ fn v26_pq16_rerank_evidence_batch(arms: &[crate::V26Pq16RerankEvaluation]) -> Re
             Arc::new(
                 FixedSizeListArray::try_new(
                     Arc::new(Field::new("element", DataType::UInt32, false)),
-                    8,
+                    10,
                     Arc::new(UInt32Array::from(pages)),
                     None,
                 )
@@ -1925,10 +1936,9 @@ pub fn run_v26_pq16_exact_rerank(request: &V26Pq16RerankRequest) -> Result<Vec<u
         ranked_row_limits: vec![10],
     };
     let loaded = load_v26_exact_global(&exact)?;
-    let (primary, replica, queries, truths) = load_v26_tree_router(&request.router)?;
-    if queries != loaded.queries || truths != loaded.truths || request.router.page_budget != 8 {
-        return Err(invalid("V26 PQ16 rerank authority differs"));
-    }
+    let (primary, replica) = load_v26_router_trees(&request.router, 10)?;
+    let queries = loaded.queries;
+    let truths = loaded.truths;
     let page_count = rank_v26_tree_pages(&primary, &replica, &queries[0].vector)?.len();
     let candidate_page_limit = 128.min(page_count);
     let arms = evaluate_v26_pq16_exact_rerank_ladder(
@@ -4616,7 +4626,7 @@ mod tests {
     fn v26_pq16_exact_rerank_local_persists_fixed_depth_evidence() {
         // Break caught: the hybrid runner discovers cold vectors, tunes rank depth, emits bulk
         // JSON, or fails to bind its single resident projection to every arm.
-        let (temp, layout) = evaluation_fixture_with_rows(2_113);
+        let (temp, layout) = evaluation_fixture_with_rows(3_521);
         let terminal = read_layout_terminal(&layout.layout_terminal).unwrap();
         let tree = |role: &str, name: &str| V26LocalObjectPath {
             identity: terminal
@@ -4637,7 +4647,7 @@ mod tests {
                 primary_tree: tree("primary-tree-parquet", "primary-tree.parquet"),
                 replica_tree: tree("replica-tree-parquet", "replica-tree.parquet"),
                 layout,
-                page_budget: 8,
+                page_budget: 10,
             },
             evidence_output_path: evidence_path.clone(),
             evidence_output_uri: "s3://frozen/v26/pq16-rerank-evidence.parquet".to_owned(),
@@ -4646,7 +4656,7 @@ mod tests {
         let bytes = run_v26_pq16_exact_rerank(&request).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["schema"], "borsuk-v26-pq16-exact-rerank-output-v1");
-        assert_eq!(value["candidate_page_limit"], 8);
+        assert_eq!(value["candidate_page_limit"], 12);
         assert_eq!(value["page_body_reads"], 0);
         assert_eq!(value["claim_eligible"], false);
         assert_eq!(

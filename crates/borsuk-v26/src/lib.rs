@@ -1644,21 +1644,26 @@ pub(crate) fn evaluate_v26_pq16_exact_rerank_ladder(
                             vec![assignment.primary_page, assignment.replica_page]
                         })
                         .collect::<Vec<_>>();
-                    let mut selected_pages = exact_v26_layout_oracle_pages(&ranked_assignments, 8)?;
+                    let mut selected_pages = exact_v26_layout_oracle_pages(
+                        &ranked_assignments,
+                        V26_SERVING_PAGE_BUDGET,
+                    )?;
                     for page in &ranked_candidates {
-                        if selected_pages.len() == 8 {
+                        if selected_pages.len() == V26_SERVING_PAGE_BUDGET {
                             break;
                         }
                         if !selected_pages.contains(page) {
                             selected_pages.push(*page);
                         }
                     }
-                    if selected_pages.len() != 8 {
+                    if selected_pages.len() != V26_SERVING_PAGE_BUDGET {
                         return Err(invalid("V26 PQ16 selected page inventory differs"));
                     }
                     selected_pages.sort_unstable();
-                    let oracle_pages =
-                        exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?;
+                    let oracle_pages = exact_v26_layout_oracle_pages(
+                        &truth.ground_truth_page_assignments,
+                        V26_SERVING_PAGE_BUDGET,
+                    )?;
                     let hits =
                         v26_layout_hits(&truth.ground_truth_page_assignments, &selected_pages);
                     let oracle_hits =
@@ -4223,7 +4228,7 @@ mod tests {
                 && arm
                     .samples
                     .iter()
-                    .all(|sample| sample.selected_pages.len() == 8)
+                    .all(|sample| sample.selected_pages.len() == 10)
         }));
     }
 
