@@ -381,6 +381,8 @@ pub struct V26Pq16GlobalQualitySample {
     pub recall_ppm: u64,
     pub oracle_attainment_ppm: u64,
     pub elapsed_ns: u64,
+    pub global_adc_elapsed_ns: u64,
+    pub exact_rerank_elapsed_ns: u64,
     pub exact_rows_read: u32,
     pub cold_batches_read: u32,
 }
@@ -401,6 +403,12 @@ pub struct V26Pq16GlobalQualityResult {
     pub p50_ns: u64,
     pub p95_ns: u64,
     pub maximum_ns: u64,
+    pub global_adc_p50_ns: u64,
+    pub global_adc_p95_ns: u64,
+    pub global_adc_maximum_ns: u64,
+    pub exact_rerank_p50_ns: u64,
+    pub exact_rerank_p95_ns: u64,
+    pub exact_rerank_maximum_ns: u64,
     pub fail_fast_gate_ns: u64,
     pub aggregate_recall_ppm: u64,
     pub minimum_query_recall_ppm: u64,
@@ -913,6 +921,8 @@ fn summarize_v26_pq16_global_quality(
     let mut total_hits = 0_u64;
     let mut total_oracle_hits = 0_u64;
     let mut timings = Vec::with_capacity(samples.len());
+    let mut global_adc_timings = Vec::with_capacity(samples.len());
+    let mut exact_rerank_timings = Vec::with_capacity(samples.len());
     for (query_index, sample) in samples.iter().enumerate() {
         if usize::try_from(sample.query_ordinal).ok() != Some(query_index)
             || sample.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
@@ -926,6 +936,12 @@ fn summarize_v26_pq16_global_quality(
             || sample.oracle_attainment_ppm
                 != u64::from(sample.hits) * 1_000_000 / u64::from(sample.oracle_hits)
             || sample.elapsed_ns == 0
+            || sample.global_adc_elapsed_ns == 0
+            || sample.exact_rerank_elapsed_ns == 0
+            || sample
+                .global_adc_elapsed_ns
+                .checked_add(sample.exact_rerank_elapsed_ns)
+                .is_none_or(|stages| stages > sample.elapsed_ns)
             || sample.exact_rows_read != 2_048
             || sample.cold_batches_read == 0
             || sample.cold_batches_read > 2_048
@@ -935,9 +951,15 @@ fn summarize_v26_pq16_global_quality(
         total_hits += u64::from(sample.hits);
         total_oracle_hits += u64::from(sample.oracle_hits);
         timings.push(sample.elapsed_ns);
+        global_adc_timings.push(sample.global_adc_elapsed_ns);
+        exact_rerank_timings.push(sample.exact_rerank_elapsed_ns);
     }
     timings.sort_unstable();
+    global_adc_timings.sort_unstable();
+    exact_rerank_timings.sort_unstable();
     let percentile = |percent: usize| timings[(timings.len() * percent).div_ceil(100) - 1];
+    let stage_percentile =
+        |timings: &[u64], percent: usize| timings[(timings.len() * percent).div_ceil(100) - 1];
     let aggregate_recall_ppm = total_hits * 1_000_000 / 320;
     let minimum_query_recall_ppm = samples
         .iter()
@@ -947,7 +969,7 @@ fn summarize_v26_pq16_global_quality(
     let oracle_attainment_ppm = total_hits * 1_000_000 / total_oracle_hits;
     let maximum_ns = *timings.last().unwrap();
     Ok(V26Pq16GlobalQualityResult {
-        schema: "borsuk-v26-pq16-global-quality-result-v1".to_owned(),
+        schema: "borsuk-v26-pq16-global-quality-result-v2".to_owned(),
         serving_manifest,
         external_queries,
         truth,
@@ -960,6 +982,12 @@ fn summarize_v26_pq16_global_quality(
         p50_ns: percentile(50),
         p95_ns: percentile(95),
         maximum_ns,
+        global_adc_p50_ns: stage_percentile(&global_adc_timings, 50),
+        global_adc_p95_ns: stage_percentile(&global_adc_timings, 95),
+        global_adc_maximum_ns: *global_adc_timings.last().unwrap(),
+        exact_rerank_p50_ns: stage_percentile(&exact_rerank_timings, 50),
+        exact_rerank_p95_ns: stage_percentile(&exact_rerank_timings, 95),
+        exact_rerank_maximum_ns: *exact_rerank_timings.last().unwrap(),
         fail_fast_gate_ns: 15_000_000,
         aggregate_recall_ppm,
         minimum_query_recall_ppm,
@@ -981,6 +1009,8 @@ fn v26_pq16_global_quality_sample(
     selection: &V26Pq16ServingSelection,
     truth: &V26QueryTruth,
     elapsed_ns: u64,
+    global_adc_elapsed_ns: u64,
+    exact_rerank_elapsed_ns: u64,
 ) -> Result<V26Pq16GlobalQualitySample> {
     if truth.query_ordinal != query_ordinal
         || truth.neighbor_source_ordinals.len() != 10
@@ -1000,6 +1030,11 @@ fn v26_pq16_global_quality_sample(
         || selection.cold_read_workers != 4
         || selection.page_body_reads != 0
         || elapsed_ns == 0
+        || global_adc_elapsed_ns == 0
+        || exact_rerank_elapsed_ns == 0
+        || global_adc_elapsed_ns
+            .checked_add(exact_rerank_elapsed_ns)
+            .is_none_or(|stages| stages > elapsed_ns)
     {
         return Err(invalid("V26 global quality selection authority differs"));
     }
@@ -1033,6 +1068,8 @@ fn v26_pq16_global_quality_sample(
         recall_ppm: u64::from(hits) * 100_000,
         oracle_attainment_ppm: u64::from(hits) * 1_000_000 / u64::from(oracle_hits),
         elapsed_ns,
+        global_adc_elapsed_ns,
+        exact_rerank_elapsed_ns,
         exact_rows_read: selection.exact_rows_read,
         cold_batches_read: selection.cold_batches_read,
     })
@@ -1217,6 +1254,8 @@ fn v26_pq16_global_quality_schema() -> Schema {
         Field::new("recall_ppm", DataType::UInt64, false),
         Field::new("oracle_attainment_ppm", DataType::UInt64, false),
         Field::new("elapsed_ns", DataType::UInt64, false),
+        Field::new("global_adc_elapsed_ns", DataType::UInt64, false),
+        Field::new("exact_rerank_elapsed_ns", DataType::UInt64, false),
         Field::new("exact_rows_read", DataType::UInt32, false),
         Field::new("cold_batches_read", DataType::UInt32, false),
     ])
@@ -1258,6 +1297,12 @@ fn v26_pq16_global_quality_batch(samples: &[V26Pq16GlobalQualitySample]) -> Resu
             )),
             Arc::new(UInt64Array::from_iter_values(
                 samples.iter().map(|sample| sample.elapsed_ns),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.global_adc_elapsed_ns),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.exact_rerank_elapsed_ns),
             )),
             Arc::new(UInt32Array::from_iter_values(
                 samples.iter().map(|sample| sample.exact_rows_read),
@@ -1428,16 +1473,22 @@ pub fn run_v26_pq16_global_quality_preflight(
     let mut samples = Vec::with_capacity(32);
     for (query, truth) in queries.iter().zip(&truths) {
         let started = std::time::Instant::now();
-        let selection =
-            select_v26_pq16_global_pages_from_arrow(&index, &query.vector, &cold_vectors, 2_048)?;
+        let timed = select_v26_pq16_global_pages_from_arrow_timed(
+            &index,
+            &query.vector,
+            &cold_vectors,
+            2_048,
+        )?;
         let elapsed_ns = u64::try_from(started.elapsed().as_nanos())
             .map_err(|_| invalid("V26 global quality latency overflows"))?
             .max(1);
         samples.push(v26_pq16_global_quality_sample(
             query.query_ordinal,
-            &selection,
+            &timed.selection,
             truth,
             elapsed_ns,
+            timed.global_adc_elapsed_ns,
+            timed.exact_rerank_elapsed_ns,
         )?);
     }
     let result = (|| {
@@ -3726,16 +3777,28 @@ pub fn select_v26_pq16_pages_from_arrow(
     })
 }
 
-pub fn select_v26_pq16_global_pages_from_arrow(
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct V26Pq16GlobalTimedSelection {
+    selection: V26Pq16ServingSelection,
+    global_adc_elapsed_ns: u64,
+    exact_rerank_elapsed_ns: u64,
+}
+
+fn select_v26_pq16_global_pages_from_arrow_timed(
     index: &crate::V26PackedPq16Index,
     query: &[f32; 96],
     cold_vectors: &V26ArrowColdVectors,
     ranked_row_limit: usize,
-) -> Result<V26Pq16ServingSelection> {
+) -> Result<V26Pq16GlobalTimedSelection> {
     if u64::try_from(index.codes.len() / 16).unwrap() != cold_vectors.row_count {
         return Err(invalid("V26 global PQ16 Arrow authority differs"));
     }
+    let global_adc_started = std::time::Instant::now();
     let approximate = crate::rank_v26_pq16_global_candidates(index, query, ranked_row_limit)?;
+    let global_adc_elapsed_ns = u64::try_from(global_adc_started.elapsed().as_nanos())
+        .map_err(|_| invalid("V26 global PQ16 ADC latency overflows"))?
+        .max(1);
+    let exact_rerank_started = std::time::Instant::now();
     let mut source_ordinals = approximate
         .iter()
         .map(|candidate| u32::try_from(candidate.source_ordinal))
@@ -3801,14 +3864,38 @@ pub fn select_v26_pq16_global_pages_from_arrow(
         return Err(invalid("V26 global PQ16 Arrow page inventory differs"));
     }
     selected_pages.sort_unstable();
-    Ok(V26Pq16ServingSelection {
-        selected_pages,
-        exact_rows_read: u32::try_from(ranked_row_limit)
-            .map_err(|_| invalid("V26 global PQ16 Arrow ranked-row limit overflows"))?,
-        cold_batches_read: cold.batches_read,
-        cold_read_workers: cold.read_workers,
-        page_body_reads: 0,
+    let exact_rerank_elapsed_ns = u64::try_from(exact_rerank_started.elapsed().as_nanos())
+        .map_err(|_| invalid("V26 global PQ16 exact-rerank latency overflows"))?
+        .max(1);
+    Ok(V26Pq16GlobalTimedSelection {
+        selection: V26Pq16ServingSelection {
+            selected_pages,
+            exact_rows_read: u32::try_from(ranked_row_limit)
+                .map_err(|_| invalid("V26 global PQ16 Arrow ranked-row limit overflows"))?,
+            cold_batches_read: cold.batches_read,
+            cold_read_workers: cold.read_workers,
+            page_body_reads: 0,
+        },
+        global_adc_elapsed_ns,
+        exact_rerank_elapsed_ns,
     })
+}
+
+pub fn select_v26_pq16_global_pages_from_arrow(
+    index: &crate::V26PackedPq16Index,
+    query: &[f32; 96],
+    cold_vectors: &V26ArrowColdVectors,
+    ranked_row_limit: usize,
+) -> Result<V26Pq16ServingSelection> {
+    Ok(
+        select_v26_pq16_global_pages_from_arrow_timed(
+            index,
+            query,
+            cold_vectors,
+            ranked_row_limit,
+        )?
+        .selection,
+    )
 }
 
 /// Builds the deterministic SimHash/PQ16 multi-index by streaming authenticated Arrow vectors.
@@ -7940,6 +8027,12 @@ mod tests {
         assert!(global.cold_batches_read > 0 && global.cold_batches_read <= 34);
         assert_eq!(global.cold_read_workers, 4);
         assert_eq!(global.page_body_reads, 0);
+        let timed =
+            super::select_v26_pq16_global_pages_from_arrow_timed(&index, &query, &reader, 2_048)
+                .unwrap();
+        assert_eq!(timed.selection, global);
+        assert!(timed.global_adc_elapsed_ns > 0);
+        assert!(timed.exact_rerank_elapsed_ns > 0);
 
         let simhash = super::select_v26_simhash_pq16_pages_from_arrow(
             &arrow_multi,
@@ -8777,6 +8870,8 @@ mod tests {
         let samples = (0_u32..32)
             .map(|query_ordinal| V26Pq16GlobalQualitySample {
                 elapsed_ns: u64::from(query_ordinal + 1) * 100_000,
+                global_adc_elapsed_ns: u64::from(query_ordinal + 1) * 100_000 - 20_000,
+                exact_rerank_elapsed_ns: 10_000,
                 query_ordinal,
                 selected_pages: (0_u32..10).collect(),
                 hits: if query_ordinal == 0 { 8 } else { 10 },
@@ -8804,7 +8899,7 @@ mod tests {
             generation: "v26-local-test".to_owned(),
         };
         let result = V26Pq16GlobalQualityResult {
-            schema: "borsuk-v26-pq16-global-quality-result-v1".to_owned(),
+            schema: "borsuk-v26-pq16-global-quality-result-v2".to_owned(),
             serving_manifest: identity("pq16-serving-manifest", 'a'),
             external_queries: identity("external-queries-parquet", 'b'),
             truth: identity("truth-parquet", 'c'),
@@ -8817,6 +8912,12 @@ mod tests {
             p50_ns: 1_600_000,
             p95_ns: 3_100_000,
             maximum_ns: 3_200_000,
+            global_adc_p50_ns: 1_580_000,
+            global_adc_p95_ns: 3_080_000,
+            global_adc_maximum_ns: 3_180_000,
+            exact_rerank_p50_ns: 10_000,
+            exact_rerank_p95_ns: 10_000,
+            exact_rerank_maximum_ns: 10_000,
             fail_fast_gate_ns: 15_000_000,
             aggregate_recall_ppm: 993_750,
             minimum_query_recall_ppm: 800_000,
@@ -8836,6 +8937,13 @@ mod tests {
 
         let mut drifted_samples = samples;
         drifted_samples[0].hits = 10;
+        assert!(
+            super::canonical_v26_pq16_global_quality_result_bytes(&result, &drifted_samples)
+                .is_err()
+        );
+        let mut drifted_samples = drifted_samples;
+        drifted_samples[0].hits = 8;
+        drifted_samples[31].global_adc_elapsed_ns += 1;
         assert!(
             super::canonical_v26_pq16_global_quality_result_bytes(&result, &drifted_samples)
                 .is_err()
@@ -8863,7 +8971,8 @@ mod tests {
             ground_truth_page_assignments: assignments,
         };
 
-        let sample = super::v26_pq16_global_quality_sample(7, &selection, &truth, 1_234).unwrap();
+        let sample =
+            super::v26_pq16_global_quality_sample(7, &selection, &truth, 1_234, 700, 400).unwrap();
         assert_eq!(sample.query_ordinal, 7);
         assert_eq!(sample.selected_pages, (0_u32..10).collect::<Vec<_>>());
         assert_eq!(sample.hits, 8);
@@ -8871,6 +8980,8 @@ mod tests {
         assert_eq!(sample.recall_ppm, 800_000);
         assert_eq!(sample.oracle_attainment_ppm, 800_000);
         assert_eq!(sample.elapsed_ns, 1_234);
+        assert_eq!(sample.global_adc_elapsed_ns, 700);
+        assert_eq!(sample.exact_rerank_elapsed_ns, 400);
         assert_eq!(sample.exact_rows_read, 2_048);
         assert_eq!(sample.cold_batches_read, 2);
     }
