@@ -166,7 +166,10 @@ fn sha256_file(path: &Path) -> Result<(String, u64), String> {
 fn source_schema() -> Schema {
     Schema::new(vec![Field::new(
         "emb",
-        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), 96),
+        DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            96,
+        ),
         false,
     )])
 }
@@ -468,7 +471,7 @@ mod tests {
                 .map(|index| first + index as f32 / 1_000.0)
                 .collect::<Vec<_>>();
             let vectors = FixedSizeListArray::try_new(
-                Arc::new(Field::new("item", DataType::Float32, false)),
+                Arc::new(Field::new("element", DataType::Float32, false)),
                 96,
                 Arc::new(Float32Array::from(values)),
                 None,
