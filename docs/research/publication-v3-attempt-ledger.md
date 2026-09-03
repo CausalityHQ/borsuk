@@ -2215,3 +2215,34 @@ local-artifact access gates. It does not establish native 9,990,000-row or
 result into a release claim. The next gate is an authenticated native Deep
 Image scale build and serving measurement. D3 and competitor claims remain
 fenced until that scale result passes.
+
+### Native-layout 1,048,576-row structural preflight passes
+
+Source commit `e567f58a6a3bed09329f59e71e3a5fb163cde34f` built the
+registered leading 1,048,576 source rows from the authenticated 9,990,000-row
+construction Parquet once on Spot instance `i-0fcd548db2b85c112`
+(`m7g.4xlarge`, `eu-central-1c`). The builder used 16 workers, capacity 2,816,
+and the two frozen projection-tree seeds. It produced 373 leaves per tree,
+746 disjoint physical pages, 1,048,576 two-copy assignments, and
+27,788,574,720 registered projection steps. The phase opened no query role
+and read no page body.
+
+Scientific construction completed in 41.545130431 seconds and 95.6 CPU-seconds,
+peaked at 883,109,888 bytes RSS, and observed zero memory PSI and zero swap.
+The 3,422-byte sealed receipt has SHA-256
+`b4b7660acf642b869e5055285432afdef6e047c805ed2399cf54c500d361f0d8`.
+Output SHA-256 values are
+`f08efe18e27a4496118757e350584bee1454fd73197c7274fe0ffe7131bc623e`
+for page assignments,
+`3d5b5d0c220ffaeabb974b152a7da7f3814d7879ab32828bc734ed6297b3c091`
+for the primary tree, and
+`a6154b36377eaceb69f926bcdca0333b9c44676e5edc9393c1b9e3b2a27dfcc0`
+for the replica tree. The complete terminal is rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-tree/native-layout/v26-native-layout-1048576-c60c9a0-preflight-a0001/`.
+The instance published its terminal and terminated.
+
+This closes the native-layout structural scale and resource preflight. It is
+not a recall or serving-latency claim. The exact 9,990,000-row manifest is now
+frozen without changing capacity, seeds, binary, or source data. D3 and
+competitor claims remain fenced until native layout, truth, quality, and serving
+measurements pass.
