@@ -10,6 +10,7 @@ rust-version.workspace = true
 
 [dependencies]
 arrow-array = "58.3"
+arrow-buffer = "58.3"
 arrow-ipc = "58.3"
 arrow-schema = "58.3"
 parquet = "58.3"

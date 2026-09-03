@@ -1844,6 +1844,7 @@ pub struct V26Pq16ServingSelection {
     pub selected_pages: Vec<u32>,
     pub exact_rows_read: u32,
     pub cold_batches_read: u32,
+    pub cold_read_workers: u32,
     pub page_body_reads: u32,
 }
 
@@ -1908,6 +1909,7 @@ pub fn select_v26_pq16_packed_pages(
         selected_pages,
         exact_rows_read: 512,
         cold_batches_read: 0,
+        cold_read_workers: 0,
         page_body_reads: 0,
     })
 }
