@@ -101,3 +101,36 @@
 - [ ] If no arm passes, record rejection and return to design without changing gates. If an arm passes, run the sub-minute gate, strict workspace Clippy, and one locked workspace/all-targets test.
 - [ ] Validate the evidence ledger, commit, fast-forward push, and verify a clean worktree.
 
+### Task 6: Linear hot path and fixed depth-512 ladder
+
+**Files:**
+- Modify: `crates/borsuk-v26/src/lib.rs`
+- Modify: `crates/borsuk-v26/src/local.rs`
+
+**Interfaces:**
+- Consumes: `rank_v26_dual_pq_key_candidates_with_count` and the authenticated first-run evidence.
+- Produces: identical deterministic rankings using linear key partitioning and bitset deduplication, plus the fixed `(1536,512)/(4096,512)/(8192,512)` arm matrix.
+
+- [ ] Add a scalar full-sort reference test for partial key limits, ties, cross-plane duplicates, and reversed bucket visitation; assert exact ranked-row and unique-row equality.
+- [ ] Add a result mutation test requiring the exact three `(key_limit_per_plane, ranked_row_limit)` pairs and rejecting any stored aggregate, gate, or arm-order drift.
+- [ ] Run the narrow `v26_fast_dual_pq_key_` selector and preserve the intended missing-arm/telemetry RED.
+- [ ] Replace full key sorting with `select_nth_unstable_by` on `(distance,key)` and candidate sort/dedup with a row-count bitset plus append-only unique vector; retain full-PQ `(distance,source_ordinal)` ordering.
+- [ ] Change exact rerank depth to 512 and the immutable key ladder to 1,536/4,096/8,192; record the exact row limit in every sample and arm.
+- [ ] Rerun the narrow selector, the end-to-end runner node, and `python3 scripts/check_v26_fast.py`; require GREEN under 60 seconds.
+- [ ] Commit and fast-forward push only the optimized core/runner slice.
+
+### Task 7: One optimized full-scale Spot falsifier
+
+**Files:**
+- Modify after terminal evidence: `docs/research/publication-v3-attempt-ledger.md`
+
+**Interfaces:**
+- Consumes: the immutable serving/query/truth bundle and Task 6 binary.
+- Produces: one canonical 96-row Parquet/result/terminal evidence set for the revised arm matrix.
+
+- [ ] Build the release example once and bind its source SHA-256, binary SHA-256, and length.
+- [ ] Launch one `causality` Spot instance through the existing multi-AZ/SSM path; download only the authenticated preserved bundle and binary.
+- [ ] Enforce 24 GiB RSS, memory PSI full avg10 at most 1%, zero swap growth, 7,200 seconds wall, one original process, and immediate instance termination.
+- [ ] Preserve the terminal without restart and validate all three arm metrics from Parquet against canonical JSON.
+- [ ] If no arm passes, record rejection and stop. If an arm passes, run one strict Clippy and locked workspace/all-targets gate before release hardening.
+- [ ] Validate and commit the ledger, fast-forward push, and verify a clean worktree.

@@ -73,3 +73,35 @@ executes the three fixed arms. Full workspace tests and Clippy run once only aft
 scientifically passing architecture. A failed arm ladder rejects this router without
 loosening quality or latency gates.
 
+## Evidence-driven second falsifier
+
+The first authenticated run at source
+`ba509c88e4ce83a0d67f74756694093cee02f6de` rejected the initial reducer. Its
+1,536-key arm reached exactly 975,000 ppm aggregate and 800,000 ppm minimum
+recall, but only 975,000 ppm oracle attainment and 47,115,175 ns maximum
+latency. It visited 510,939 to 825,730 unique rows per query and fetched 2,048
+exact vectors scattered across all 153 Arrow batches. Memory remained healthy
+at 500,703,232 bytes peak RSS with zero PSI and swap growth.
+
+The second falsifier keeps the same Arrow representation and immutable inputs.
+It replaces comparison-sorting all 65,536 keys with deterministic linear
+partitioning by `(distance,key)` and replaces candidate sorting/deduplication
+with a source-ordinal bitset plus append-only unique vector. These scratch
+structures are charged to the existing 512 MiB runtime reserve; persistent and
+projected resident bytes remain 2,938,017,816.
+
+The fixed arm ladder becomes `(1,536 keys/plane, 512 exact rows)`, `(4,096,
+512)`, and `(8,192,512)`. Depth 512 is externally justified by the prior
+authenticated global PQ16 result, where it was the smallest exact-rerank depth
+passing all quality gates. The wider key ladder tests candidate coverage only;
+it is not caller tunable. The canonical sample records both key limit and exact
+row limit. The unchanged acceptance gates remain 975,000 ppm aggregate,
+800,000 ppm minimum-query, 995,000 ppm oracle attainment, and 15,000,000 ns
+maximum latency with exactly ten pages and zero page-body reads.
+
+Tests must prove identical candidate ranking against the old full-sort/scalar
+reference for partial limits, ties, duplicates, and reversed bucket visitation.
+They must also prove the bitset bound and exact fixed arm matrix. Only after the
+sub-minute gate passes may one new Spot falsifier reuse the preserved serving,
+query, and truth artifacts. Failure rejects this two-plane family; it does not
+relax recall, latency, or D3 fences.
