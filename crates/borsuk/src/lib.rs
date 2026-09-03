@@ -193,6 +193,8 @@ pub use v27_s3_build::{
     V27BuildConfig, V27BuildReceipt, V27LayoutArtifactIdentity, V27LayoutArtifacts, V27PageBuilder,
     V27PagePosting, V27PageSink, decode_v27_layout, encode_v27_layout,
 };
+mod v27_s3_search;
+pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[allow(
     dead_code,
     reason = "V24 pseudoquery qualification is wired incrementally by the committed plan"
