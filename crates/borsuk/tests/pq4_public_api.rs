@@ -1,3 +1,5 @@
+//! Public PQ4 API boundary checks for deterministic exact-row shard merging.
+
 use borsuk::{Pq4Match, merge_pq4_shard_matches};
 
 #[test]
