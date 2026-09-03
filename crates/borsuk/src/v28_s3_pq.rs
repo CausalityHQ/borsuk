@@ -11,6 +11,7 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk_fma::Pq4BlockScorer;
+use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
 use crate::{BorsukError, Result};
@@ -75,6 +76,80 @@ impl V28PqCodebook {
     fn validate(&self) -> Result<()> {
         Self::new(self.width, self.centroids.clone()).map(|_| ())
     }
+}
+
+pub(crate) fn fit_v28_codebook(rows: &[[f32; 96]], width: V28PqWidth) -> Result<V28PqCodebook> {
+    if rows.len() < CENTROIDS {
+        return Err(invalid("V28 PQ training population differs"));
+    }
+    for row in rows {
+        validate_vector(row)?;
+    }
+    let sample_count = rows.len().min(8_192);
+    let sample = (0..sample_count)
+        .map(|index| &rows[index * rows.len() / sample_count])
+        .collect::<Vec<_>>();
+    let dimensions = width.subspace_dimensions();
+    let trained = (0..width.subquantizers())
+        .into_par_iter()
+        .map(|subquantizer| {
+            let vector_start = subquantizer * dimensions;
+            let mut centers = vec![0.0_f32; CENTROIDS * dimensions];
+            for centroid in 0..CENTROIDS {
+                let source = sample[centroid * sample.len() / CENTROIDS];
+                centers[centroid * dimensions..(centroid + 1) * dimensions]
+                    .copy_from_slice(&source[vector_start..vector_start + dimensions]);
+            }
+            for _ in 0..4 {
+                let mut sums = vec![0.0_f64; CENTROIDS * dimensions];
+                let mut counts = [0_u32; CENTROIDS];
+                for row in &sample {
+                    let nearest = (0..CENTROIDS)
+                        .map(|centroid| {
+                            let distance = (0..dimensions)
+                                .map(|dimension| {
+                                    let delta = row[vector_start + dimension]
+                                        - centers[centroid * dimensions + dimension];
+                                    delta * delta
+                                })
+                                .sum::<f32>();
+                            (distance, centroid)
+                        })
+                        .min_by(|left, right| {
+                            left.0
+                                .total_cmp(&right.0)
+                                .then_with(|| left.1.cmp(&right.1))
+                        })
+                        .unwrap()
+                        .1;
+                    counts[nearest] += 1;
+                    for dimension in 0..dimensions {
+                        sums[nearest * dimensions + dimension] +=
+                            f64::from(row[vector_start + dimension]);
+                    }
+                }
+                for centroid in 0..CENTROIDS {
+                    if counts[centroid] == 0 {
+                        let source = sample[centroid * sample.len() / CENTROIDS];
+                        centers[centroid * dimensions..(centroid + 1) * dimensions]
+                            .copy_from_slice(&source[vector_start..vector_start + dimensions]);
+                    } else {
+                        for dimension in 0..dimensions {
+                            centers[centroid * dimensions + dimension] = (sums
+                                [centroid * dimensions + dimension]
+                                / f64::from(counts[centroid]))
+                                as f32;
+                        }
+                    }
+                }
+            }
+            centers
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .flatten()
+        .collect();
+    V28PqCodebook::new(width, trained)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -671,5 +746,25 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn v28_s3_pq_training_is_query_independent_and_deterministic() {
+        let rows = (0..64)
+            .map(|row| {
+                std::array::from_fn(|dimension| {
+                    0.01 + ((row * 17 + dimension * 13) % 97) as f32 / 97.0
+                })
+            })
+            .collect::<Vec<[f32; 96]>>();
+        for width in [V28PqWidth::Bytes16, V28PqWidth::Bytes24] {
+            let first = fit_v28_codebook(&rows, width).unwrap();
+            let second = fit_v28_codebook(&rows, width).unwrap();
+            assert_eq!(first, second);
+            assert_eq!(
+                encode_v28_code(&first, &rows[7]).unwrap().len(),
+                width.subquantizers()
+            );
+        }
     }
 }

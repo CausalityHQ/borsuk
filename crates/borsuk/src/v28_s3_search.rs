@@ -6,7 +6,7 @@ use std::{
 use half::f16;
 
 use crate::{
-    BorsukError, Result, V27Hierarchy, V27PageIdentity,
+    BorsukError, Result, V27Hierarchy, V27PageIdentity, decode_v27_page,
     v28_s3_layout::V28Layout,
     v28_s3_pq::{V28PqCodebook, score_v28_blocks},
 };
@@ -42,6 +42,37 @@ pub(crate) struct V28Router {
     hierarchy: V27Hierarchy,
     codebook: V28PqCodebook,
     pub(crate) layout: V28Layout,
+}
+
+pub(crate) trait V28PageStore: Send + Sync {
+    fn read_wave(&self, pages: &[V27PageIdentity]) -> Result<Vec<Vec<u8>>>;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V28Match {
+    pub(crate) source_ordinal: u64,
+    pub(crate) squared_distance: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V28SearchWork {
+    pub(crate) routing: V28RoutingWork,
+    pub(crate) get_count: usize,
+    pub(crate) encoded_bytes: u64,
+    pub(crate) decoded_rows: usize,
+    pub(crate) unique_rows: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V28SearchResult {
+    pub(crate) matches: Vec<V28Match>,
+    pub(crate) work: V28SearchWork,
+}
+
+pub(crate) struct V28Index<S> {
+    router: V28Router,
+    pub(crate) store: S,
+    arm: V28SearchArm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,12 +307,92 @@ impl V28Router {
     }
 }
 
+impl<S: V28PageStore> V28Index<S> {
+    pub(crate) fn new(router: V28Router, store: S, arm: V28SearchArm) -> Result<Self> {
+        router.validate_arm(arm)?;
+        Ok(Self { router, store, arm })
+    }
+
+    pub(crate) fn search(&self, query: &[f32; 96], k: usize) -> Result<V28SearchResult> {
+        if k == 0 || k > 10 {
+            return Err(invalid("V28 result count differs"));
+        }
+        let normalized = normalized(query)?;
+        let selection = self.router.select_pages(&normalized, self.arm)?;
+        let bodies = self.store.read_wave(&selection.pages)?;
+        if bodies.len() != selection.pages.len() {
+            return Err(invalid("V28 page wave cardinality differs"));
+        }
+        let encoded_bytes = bodies.iter().try_fold(0_u64, |total, body| {
+            total
+                .checked_add(body.len() as u64)
+                .ok_or_else(|| invalid("V28 page byte count overflows"))
+        })?;
+        if encoded_bytes > 4_587_520 {
+            return Err(invalid("V28 page byte bound differs"));
+        }
+        let mut decoded_rows = 0_usize;
+        let mut seen = BTreeSet::new();
+        let mut matches = Vec::new();
+        for (identity, body) in selection.pages.iter().zip(bodies) {
+            let page = decode_v27_page(identity, &body)?;
+            decoded_rows = decoded_rows
+                .checked_add(page.rows.len())
+                .ok_or_else(|| invalid("V28 decoded row count overflows"))?;
+            for row in page.rows {
+                if !seen.insert(row.source_ordinal) {
+                    return Err(invalid("V28 exact row ownership differs"));
+                }
+                let squared_distance = row
+                    .vector
+                    .iter()
+                    .zip(normalized)
+                    .map(|(left, right)| {
+                        let delta = f64::from(*left) - f64::from(right);
+                        delta * delta
+                    })
+                    .sum::<f64>();
+                if !squared_distance.is_finite() {
+                    return Err(invalid("V28 exact distance differs"));
+                }
+                matches.push(V28Match {
+                    source_ordinal: row.source_ordinal,
+                    squared_distance,
+                });
+            }
+        }
+        if matches.len() < k {
+            return Err(invalid("V28 exact candidate count differs"));
+        }
+        matches.sort_unstable_by(|left, right| {
+            left.squared_distance
+                .total_cmp(&right.squared_distance)
+                .then_with(|| left.source_ordinal.cmp(&right.source_ordinal))
+        });
+        let unique_rows = matches.len();
+        matches.truncate(k);
+        Ok(V28SearchResult {
+            matches,
+            work: V28SearchWork {
+                routing: selection.work,
+                get_count: selection.pages.len(),
+                encoded_bytes,
+                decoded_rows,
+                unique_rows,
+            },
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
         collections::BTreeMap,
         io::{Cursor, Read, Write},
-        sync::Mutex,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use half::f16;
@@ -296,6 +407,7 @@ mod tests {
     #[derive(Default)]
     struct Sink {
         scratch: BTreeMap<String, Vec<u8>>,
+        pages: BTreeMap<u32, Vec<u8>>,
     }
 
     impl V27PageSink for Sink {
@@ -323,7 +435,8 @@ mod tests {
             Ok(())
         }
 
-        fn write_page(&mut self, _identity: &V27PageIdentity, _bytes: &[u8]) -> crate::Result<()> {
+        fn write_page(&mut self, identity: &V27PageIdentity, bytes: &[u8]) -> crate::Result<()> {
+            self.pages.insert(identity.ordinal, bytes.to_vec());
             Ok(())
         }
     }
@@ -335,7 +448,7 @@ mod tests {
         value
     }
 
-    fn fixture() -> V28Router {
+    fn fixture_with_pages() -> (V28Router, BTreeMap<u32, Vec<u8>>) {
         let hierarchy = V27Hierarchy {
             roots: vec![
                 vector(1.0, 0.0).map(f16::from_f32),
@@ -380,7 +493,14 @@ mod tests {
             &mut sink,
         )
         .unwrap();
-        V28Router::new(hierarchy, codebook, layout).unwrap()
+        (
+            V28Router::new(hierarchy, codebook, layout).unwrap(),
+            sink.pages,
+        )
+    }
+
+    fn fixture() -> V28Router {
+        fixture_with_pages().0
     }
 
     #[test]
@@ -517,5 +637,83 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    struct Store {
+        pages: BTreeMap<u32, Vec<u8>>,
+        calls: AtomicUsize,
+        corrupt: bool,
+    }
+
+    impl V28PageStore for Store {
+        fn read_wave(&self, pages: &[V27PageIdentity]) -> crate::Result<Vec<Vec<u8>>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(pages
+                .iter()
+                .map(|page| {
+                    let mut bytes = self.pages[&page.ordinal].clone();
+                    if self.corrupt {
+                        bytes[0] ^= 1;
+                    }
+                    bytes
+                })
+                .collect())
+        }
+    }
+
+    #[test]
+    fn v28_s3_fetch_reads_one_wave_and_exactly_reranks_authenticated_pages() {
+        let (router, pages) = fixture_with_pages();
+        let index = V28Index::new(
+            router,
+            Store {
+                pages,
+                calls: AtomicUsize::new(0),
+                corrupt: false,
+            },
+            V28SearchArm {
+                root_beam: 2,
+                leaf_beam: 4,
+                candidate_depth: 128,
+                page_count: 10,
+            },
+        )
+        .unwrap();
+        let result = index.search(&vector(0.5, 0.5), 10).unwrap();
+        assert_eq!(index.store.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(result.matches.len(), 10);
+        assert_eq!(result.work.get_count, 10);
+        assert!(result.work.encoded_bytes <= 4_587_520);
+        assert_eq!(result.work.decoded_rows, 80);
+        assert_eq!(result.work.unique_rows, 80);
+        assert!(result.matches.windows(2).all(|pair| {
+            pair[0]
+                .squared_distance
+                .total_cmp(&pair[1].squared_distance)
+                .then_with(|| pair[0].source_ordinal.cmp(&pair[1].source_ordinal))
+                != std::cmp::Ordering::Greater
+        }));
+    }
+
+    #[test]
+    fn v28_s3_fetch_fails_closed_on_corrupt_page_wave() {
+        let (router, pages) = fixture_with_pages();
+        let index = V28Index::new(
+            router,
+            Store {
+                pages,
+                calls: AtomicUsize::new(0),
+                corrupt: true,
+            },
+            V28SearchArm {
+                root_beam: 2,
+                leaf_beam: 4,
+                candidate_depth: 128,
+                page_count: 10,
+            },
+        )
+        .unwrap();
+        assert!(index.search(&vector(0.5, 0.5), 10).is_err());
+        assert_eq!(index.store.calls.load(Ordering::SeqCst), 1);
     }
 }
