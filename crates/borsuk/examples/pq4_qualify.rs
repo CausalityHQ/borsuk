@@ -168,7 +168,7 @@ fn parse_pq4_qualify_args(
     };
     let mode_matches = match request.mode {
         Pq4QualifyMode::SealedHoldout => {
-            request.query_start == 512 && request.query_count == 480 && request.query_threads == 4
+            request.query_start == 512 && request.query_count == 480 && request.query_threads == 16
         }
         Pq4QualifyMode::Development => {
             request.query_start == 0
@@ -710,7 +710,7 @@ mod tests {
             "--candidate-depth",
             "3072",
             "--query-threads",
-            "4",
+            "16",
             "--memory-budget-bytes",
             "3221225472",
             "--admission-timeout-ms",
@@ -734,7 +734,7 @@ mod tests {
         assert_eq!(request.query_start, 512);
         assert_eq!(request.query_count, 480);
         assert_eq!(request.candidate_depth, 3_072);
-        assert_eq!(request.query_threads, 4);
+        assert_eq!(request.query_threads, 16);
         assert_eq!(request.memory_budget_bytes, 3_221_225_472);
         assert_eq!(request.warmup_queries, 32);
         assert_eq!(request.query_bytes, 3_843_448);
