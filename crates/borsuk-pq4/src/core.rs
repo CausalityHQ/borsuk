@@ -228,12 +228,25 @@ pub(crate) struct Pq4RankedRow {
     pub(crate) source_ordinal: u64,
 }
 
-fn select_ranked_rows(scores: Vec<u16>, limit: usize) -> Result<Vec<Pq4RankedRow>> {
+#[cfg(test)]
+fn score_histogram(scores: &[u16]) -> Result<Box<[u32; 8_192]>> {
     let mut histogram = [0_u32; 8_192];
-    for score in &scores {
+    for score in scores {
         histogram[usize::from(*score)] = histogram[usize::from(*score)]
             .checked_add(1)
             .ok_or_else(|| invalid("PQ4 histogram overflows"))?;
+    }
+    Ok(Box::new(histogram))
+}
+
+fn select_ranked_rows(
+    scores: Vec<u16>,
+    histogram: Box<[u32; 8_192]>,
+    limit: usize,
+) -> Result<Vec<Pq4RankedRow>> {
+    let histogram_rows = histogram.iter().map(|count| *count as usize).sum::<usize>();
+    if histogram_rows != scores.len() {
+        return Err(invalid("PQ4 histogram differs"));
     }
     let mut cumulative = 0_usize;
     let threshold = histogram
@@ -303,15 +316,15 @@ where
             histogram
         })
         .collect::<Vec<_>>();
-    let histogram_rows = chunk_histograms
-        .iter()
-        .flat_map(|histogram| histogram.iter())
-        .map(|count| u64::from(*count))
-        .sum::<u64>();
-    if histogram_rows != row_count as u64 {
-        return Err(invalid("PQ4 parallel histogram differs"));
+    let mut histogram = Box::new([0_u32; 8_192]);
+    for chunk_histogram in chunk_histograms {
+        for (total, count) in histogram.iter_mut().zip(chunk_histogram.iter()) {
+            *total = total
+                .checked_add(*count)
+                .ok_or_else(|| invalid("PQ4 parallel histogram overflows"))?;
+        }
     }
-    select_ranked_rows(scores, limit)
+    select_ranked_rows(scores, histogram, limit)
 }
 
 pub(crate) fn rank_candidates(
@@ -380,7 +393,17 @@ pub(crate) fn rank_candidates_scalar(
         return Err(invalid("PQ4 ranking authority differs"));
     }
     let scores = score_rows_scalar(codebook, blocks, row_count, query)?;
-    select_ranked_rows(scores, limit)
+    let histogram = score_histogram(&scores)?;
+    select_ranked_rows(scores, histogram, limit)
+}
+
+#[cfg(test)]
+pub(crate) fn select_ranked_rows_with_histogram_for_test(
+    scores: Vec<u16>,
+    histogram: Box<[u32; 8_192]>,
+    limit: usize,
+) -> Result<Vec<Pq4RankedRow>> {
+    select_ranked_rows(scores, histogram, limit)
 }
 
 #[cfg(test)]

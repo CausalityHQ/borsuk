@@ -41,6 +41,7 @@ pub(crate) use core::rank_candidates;
 pub(crate) use core::{
     Pq4Codebook, encode_blocks, fit_codebook, projected_resident_bytes,
     rank_candidates_parallel_scalar_for_test, rank_candidates_scalar, score_rows_scalar,
+    select_ranked_rows_with_histogram_for_test,
 };
 
 #[cfg(test)]
@@ -52,7 +53,8 @@ mod tests {
         Pq4Match, Pq4OpenOptions, Pq4Snapshot, Pq4SnapshotWriteRequest, canonical_manifest_bytes,
         encode_blocks, fit_codebook, merge_pq4_shard_matches, projected_resident_bytes,
         rank_candidates_parallel_scalar_for_test, rank_candidates_scalar, score_rows_scalar,
-        search_with_exact_rerank_observer_for_test, write_snapshot,
+        search_with_exact_rerank_observer_for_test, select_ranked_rows_with_histogram_for_test,
+        write_snapshot,
     };
     use std::{
         collections::BTreeSet,
@@ -231,6 +233,30 @@ mod tests {
         );
         assert!(actual.iter().any(|row| row.source_ordinal == 319));
         assert!(rank_candidates_scalar(&codebook, &blocks, rows.len(), &query, 513).is_err());
+    }
+
+    #[test]
+    fn v26_release_contract_pq4_core_parallel_histogram_is_reused_for_selection() {
+        // Break caught: the parallel scan discards its histogram and serially rebuilds it across
+        // every corpus score before selecting the bounded candidate set.
+        let scores = vec![7_u16, 2, 2, 5];
+        let mut histogram = Box::new([0_u32; 8_192]);
+        histogram[2] = 2;
+        histogram[5] = 1;
+        histogram[7] = 1;
+        let ranked =
+            select_ranked_rows_with_histogram_for_test(scores.clone(), histogram, 2).unwrap();
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|row| (row.score, row.source_ordinal))
+                .collect::<Vec<_>>(),
+            vec![(2, 1), (2, 2)]
+        );
+
+        let mut incomplete = Box::new([0_u32; 8_192]);
+        incomplete[2] = 2;
+        assert!(select_ranked_rows_with_histogram_for_test(scores, incomplete, 2).is_err());
     }
 
     #[test]
