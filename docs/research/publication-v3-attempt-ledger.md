@@ -2515,3 +2515,54 @@ This establishes within-page multimodality as causal but rejects the complete
 boundary. The next fast path must bypass page-frontier concentration and test
 the already implemented global packed-PQ16 scan plus bounded exact rerank at
 native scale. D3 and release claims remain fenced.
+
+### Native global PQ16 is near the quality gate but misses the latency budget
+
+Source `19ac7c377a5fd065d520ff785c0406dd2d9520db` built the native packed-PQ16
+serving representation from the authenticated 9,990,000-row construction data
+and 2,440-page assignment. The first preserved attempt on `causality` Spot
+instance `i-011b4031bd0a66dbf` (`m7gd.4xlarge`) failed before construction
+because its 884.8-GiB instance-store device was not mounted. The corrected
+build took 330 seconds, peaked at
+8,166,158,336 bytes RSS, and observed zero memory PSI and swap growth. Its
+6,100-byte manifest has SHA-256
+`b09813c92e6522ffec1698b26f6bd87939ec52994e6b20522ac697a4fa1fc2ac`;
+the 100-million-row resident projection is 2,937,537,416 bytes. Evidence is
+rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-pq16-native-serving/19ac7c377a5fd065d520ff785c0406dd2d9520db/v26-pq16-native-build-20260903T083000Z-a0002/`.
+The instance was terminated after its terminal.
+
+The first truth-bound 32-query screen at source
+`016426118bd1eb99ac438ae531e7f54ea8a3a0b5` selected exactly ten pages after a
+global scan and exact rerank of 2,048 rows. It recovered 316 of 320 truth
+neighbors: aggregate recall 987,500 ppm, minimum-query recall 900,000 ppm, and
+oracle attainment 987,500 ppm. Aggregate and minimum-query recall passed, but
+oracle attainment missed the unchanged 995,000-ppm gate by three required
+hits. Its p50/p95/maximum latencies were 18,317,209/19,248,000/19,282,390 ns,
+so it also failed the 15-ms gate. It opened no page body and remained
+claim-ineligible.
+
+A bit-exact four-row interleaving experiment did not improve the result and was
+removed. Source `46501ee996bae527128c82f603451601aef98335` added authenticated
+stage timings and reran the same screen on `causality` Spot instance
+`i-0b9c34077eb861a82` (`m7gd.4xlarge`, `eu-central-1b`) with SSM command
+`0eb5f8b0-bafa-443f-b98c-f411103e99f5`. Global ADC alone measured
+15,843,732/16,640,799/17,412,229 ns p50/p95/maximum; exact Arrow rerank measured
+3,130,375/3,229,063/3,238,975 ns. Total p50/p95/maximum was
+19,041,016/19,726,433/20,580,732 ns, with the same 316/320 quality result.
+Peak process-group RSS was 258,887,680 bytes, memory PSI was zero, and swap did
+not grow. The 2,302-byte canonical result has SHA-256
+`bf440eb592f6ccc945d7ea11b2c4e12776e3663948c3742cc0a50b6841ff764e`;
+the 4,234-byte Parquet evidence has SHA-256
+`d796b38cb073eb99aeb1002f54cf1be1b6380cec1e8e964401cfc4aba9c95d4b`.
+Evidence is rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-pq16-native-quality/46501ee996bae527128c82f603451601aef98335/v26-pq16-native-quality-20260903T092519Z-a0001/`.
+The instance was terminated after its terminal.
+
+This rejects scalar 8-bit PQ16 global ADC as the final serving path: its scan
+alone exceeds the total latency budget, while increasing rerank depth to recover
+quality would add work. The next bounded falsifier is a 128-bit, 4-bit
+fast-scan representation with 32 three-dimensional subquantizers, retaining the
+16-byte row-code budget while replacing random 256-entry scalar lookup tables
+with SIMD-resident 16-entry tables. Recall, 15-ms latency, 3-GiB projection,
+page budget, D3, competitor, and release gates remain unchanged.
