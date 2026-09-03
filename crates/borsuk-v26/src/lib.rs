@@ -1762,9 +1762,10 @@ pub(crate) fn rank_v26_pq16_packed_candidates(
     query: &[f32; 96],
     ranked_row_limit: usize,
 ) -> Result<Vec<V26PqRankedRow>> {
-    rank_v26_pq16_linear_occurrence_candidates(index, candidate_pages, query, ranked_row_limit)
+    rank_v26_pq16_parallel_occurrence_candidates(index, candidate_pages, query, ranked_row_limit)
 }
 
+#[cfg(test)]
 pub(crate) fn rank_v26_pq16_linear_occurrence_candidates(
     index: &V26PackedPq16Index,
     candidate_pages: &[u32],
@@ -1826,6 +1827,92 @@ pub(crate) fn rank_v26_pq16_linear_occurrence_candidates(
                 ranked.pop();
                 ranked.push(value);
             }
+        }
+    }
+    let mut ranked = ranked.into_vec();
+    ranked.sort();
+    ranked.dedup_by_key(|row| row.source_ordinal);
+    if ranked.len() < ranked_row_limit {
+        return Err(invalid("V26 packed PQ16 candidate inventory differs"));
+    }
+    ranked.truncate(ranked_row_limit);
+    Ok(ranked)
+}
+
+pub(crate) fn rank_v26_pq16_parallel_occurrence_candidates(
+    index: &V26PackedPq16Index,
+    candidate_pages: &[u32],
+    query: &[f32; 96],
+    ranked_row_limit: usize,
+) -> Result<Vec<V26PqRankedRow>> {
+    if candidate_pages.is_empty()
+        || candidate_pages.windows(2).any(|pair| pair[0] >= pair[1])
+        || ranked_row_limit == 0
+        || ranked_row_limit > V26_PQ16_RERANK_LADDER[4]
+        || !index.codes.len().is_multiple_of(16)
+    {
+        return Err(invalid("V26 packed PQ16 query request differs"));
+    }
+    let tables = prepare_v26_pq_tables(&index.codebook, query)?;
+    let occurrence_limit = ranked_row_limit
+        .checked_mul(2)
+        .ok_or_else(|| invalid("V26 packed PQ16 occurrence limit overflows"))?;
+    let page_rankings = candidate_pages
+        .par_iter()
+        .map(|page| -> Result<Vec<V26PqRankedRow>> {
+            let page = usize::try_from(*page).unwrap();
+            let start = *index
+                .page_offsets
+                .get(page)
+                .ok_or_else(|| invalid("V26 packed PQ16 candidate page differs"))?;
+            let end = *index
+                .page_offsets
+                .get(page + 1)
+                .ok_or_else(|| invalid("V26 packed PQ16 candidate page differs"))?;
+            let start = usize::try_from(start).unwrap();
+            let end = usize::try_from(end).unwrap();
+            if start >= end {
+                return Err(invalid("V26 packed PQ16 candidate page differs"));
+            }
+            let mut ranked = BinaryHeap::with_capacity(occurrence_limit);
+            for row_id in &index.posting_rows[start..end] {
+                let code_start = usize::try_from(*row_id)
+                    .unwrap()
+                    .checked_mul(16)
+                    .ok_or_else(|| invalid("V26 packed PQ16 code offset overflows"))?;
+                let code = index
+                    .codes
+                    .get(code_start..code_start + 16)
+                    .ok_or_else(|| invalid("V26 packed PQ16 row differs"))?;
+                let distance = code
+                    .iter()
+                    .enumerate()
+                    .map(|(subspace, code)| tables[subspace][usize::from(*code)])
+                    .sum::<f32>();
+                if !distance.is_finite() {
+                    return Err(invalid("V26 packed PQ16 distance differs"));
+                }
+                let value = V26PqRankedRow {
+                    source_ordinal: u64::from(*row_id),
+                    distance,
+                };
+                if ranked.len() < occurrence_limit {
+                    ranked.push(value);
+                } else if value < *ranked.peek().unwrap() {
+                    ranked.pop();
+                    ranked.push(value);
+                }
+            }
+            Ok(ranked.into_vec())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut ranked = BinaryHeap::with_capacity(occurrence_limit);
+    for value in page_rankings.into_iter().flatten() {
+        if ranked.len() < occurrence_limit {
+            ranked.push(value);
+        } else if value < *ranked.peek().unwrap() {
+            ranked.pop();
+            ranked.push(value);
         }
     }
     let mut ranked = ranked.into_vec();
@@ -3338,8 +3425,8 @@ mod tests {
         projected_v26_pq_resident_bytes, projected_v26_pq8_resident_bytes, rank_v26_candidate_rows,
         rank_v26_pq8_occurrences, rank_v26_pq16_candidate_rows,
         rank_v26_pq16_linear_occurrence_candidates, rank_v26_pq16_packed_candidates,
-        rank_v26_tree_pages, route_v26_pages, select_v26_pq16_packed_pages,
-        select_v26_ranked_pages, validate_v26_dual_tree_layout,
+        rank_v26_pq16_parallel_occurrence_candidates, rank_v26_tree_pages, route_v26_pages,
+        select_v26_pq16_packed_pages, select_v26_ranked_pages, validate_v26_dual_tree_layout,
     };
 
     const PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
@@ -4180,7 +4267,15 @@ mod tests {
             512,
         )
         .unwrap();
+        let parallel = rank_v26_pq16_parallel_occurrence_candidates(
+            &index,
+            &candidate_pages,
+            &rows[42].vector,
+            512,
+        )
+        .unwrap();
         assert_eq!(linear, packed);
+        assert_eq!(parallel, linear);
         assert_eq!(packed.len(), 512);
         assert_eq!(
             packed

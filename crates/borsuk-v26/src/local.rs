@@ -378,7 +378,7 @@ fn summarize_v26_pq16_serving_benchmark(
         query_count: 512,
         candidate_page_limit: 128,
         ranked_row_limit: 512,
-        selected_page_count: 8,
+        selected_page_count: u32::try_from(crate::V26_SERVING_PAGE_BUDGET).unwrap(),
         warmup_count: 1_024,
         measurement_count: 10_000,
         p50_ns: percentile(50),
@@ -5123,6 +5123,7 @@ mod tests {
         assert_eq!(result.p95_ns, 9_500);
         assert_eq!(result.p99_ns, 9_900);
         assert_eq!(result.maximum_ns, 10_000);
+        assert_eq!(result.selected_page_count, 10);
         assert!(result.passed);
         let batch = super::v26_serving_latency_batch(&samples).unwrap();
         assert_eq!(batch.num_rows(), 10_000);
