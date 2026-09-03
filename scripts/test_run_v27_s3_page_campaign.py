@@ -116,7 +116,7 @@ class V27ReducedSpotTests(unittest.TestCase):
             output_prefix="s3://bucket/v27/reduced/",
             row_limit=100_000,
             roots=64,
-            leaves=4_096,
+            leaves=256,
             iterations=4,
             workers=8,
             page_rows=512,
@@ -142,6 +142,7 @@ class V27ReducedSpotTests(unittest.TestCase):
             )
             script = base64.b64decode(spec["UserData"]).decode()
             self.assertIn("--row-limit 100000", script)
+            self.assertIn("--leaves 256", script)
             self.assertIn("train-00000000.parquet", script)
             self.assertNotIn("train-00000001.parquet", script)
             self.assertNotIn("aws s3 sync", script)

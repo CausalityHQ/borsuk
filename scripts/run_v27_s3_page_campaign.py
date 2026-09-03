@@ -220,7 +220,7 @@ def _validate_spot_plan(plan: V27ReducedSpotPlan) -> None:
         or plan.train_bytes <= 0
         or plan.row_limit != 100_000
         or plan.roots != 64
-        or plan.leaves != 4_096
+        or plan.leaves != 256
         or plan.iterations != 4
         or plan.workers != 8
         or plan.page_rows != 512
@@ -290,7 +290,7 @@ tar --zstd -xf "$archive" -C "$source_dir"
 cd "$source_dir"
 test "$(cat .borsuk-source-commit)" = {values['commit']}
 /root/.cargo/bin/cargo build --release --locked -p borsuk --example v27_s3_build --example v27_s3_qualify
-target/release/examples/v27_s3_build --execute --train-parquet "$train" --train-sha256 {values['train_sha']} --train-bytes {values['train_bytes']} --row-limit 100000 --roots 64 --leaves 4096 --iterations 4 --workers 8 --page-rows 512 --output-dir "$index_dir" >"$root/build.json"
+target/release/examples/v27_s3_build --execute --train-parquet "$train" --train-sha256 {values['train_sha']} --train-bytes {values['train_bytes']} --row-limit 100000 --roots 64 --leaves 256 --iterations 4 --workers 8 --page-rows 512 --output-dir "$index_dir" >"$root/build.json"
 cmp "$root/build.json" "$index_dir/BUILD_COMPLETE.json"
 aws s3 cp "$index_dir" "s3://$bucket/${{prefix}}index/" --recursive --only-show-errors
 put_once "$root/build.json" build.json
