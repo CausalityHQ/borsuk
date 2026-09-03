@@ -6,6 +6,7 @@ mod builder;
 mod core;
 mod format;
 mod index;
+mod sharded_index;
 mod shards;
 
 #[cfg(test)]
@@ -17,6 +18,9 @@ pub use builder::{Pq4BuildConfig, Pq4BuildReport, Pq4Builder};
 #[cfg(test)]
 pub(crate) use index::search_with_exact_rerank_observer_for_test;
 pub use index::{Pq4Index, Pq4Match, Pq4OpenOptions};
+#[cfg(test)]
+pub(crate) use sharded_index::search_with_shard_observer_for_test;
+pub use sharded_index::{Pq4ShardedIndex, Pq4ShardedOpenOptions};
 pub use shards::merge_pq4_shard_matches;
 
 mod snapshot;
@@ -50,15 +54,20 @@ mod tests {
     use super::rank_candidates;
     use super::{
         Pq4ArtifactIdentity, Pq4BuildConfig, Pq4Builder, Pq4Codebook, Pq4Index, Pq4Manifest,
-        Pq4Match, Pq4OpenOptions, Pq4Snapshot, Pq4SnapshotWriteRequest, canonical_manifest_bytes,
-        encode_blocks, fit_codebook, merge_pq4_shard_matches, projected_resident_bytes,
+        Pq4Match, Pq4OpenOptions, Pq4ShardedIndex, Pq4ShardedOpenOptions, Pq4Snapshot,
+        Pq4SnapshotWriteRequest, canonical_manifest_bytes, encode_blocks, fit_codebook,
+        merge_pq4_shard_matches, projected_resident_bytes,
         rank_candidates_parallel_scalar_for_test, rank_candidates_scalar, score_rows_scalar,
-        search_with_exact_rerank_observer_for_test, select_ranked_rows_with_histogram_for_test,
-        write_snapshot,
+        search_with_exact_rerank_observer_for_test, search_with_shard_observer_for_test,
+        select_ranked_rows_with_histogram_for_test, write_snapshot,
     };
     use std::{
         collections::BTreeSet,
-        sync::{Arc, Mutex},
+        path::PathBuf,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::Duration,
     };
 
@@ -134,6 +143,131 @@ mod tests {
         .unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
+    }
+
+    fn write_sharded_fixture(root: &std::path::Path, shard_count: u32) -> Vec<(u32, PathBuf)> {
+        let vectors = rows(4_096);
+        (0..shard_count)
+            .map(|shard_ordinal| {
+                let input = root.join(format!("input-{shard_ordinal}.parquet"));
+                let output = root.join(format!("snapshot-{shard_ordinal}"));
+                let ids = (0..vectors.len())
+                    .map(|source_ordinal| {
+                        (u64::from(shard_ordinal) * 4_096 + source_ordinal as u64)
+                            .to_le_bytes()
+                            .to_vec()
+                    })
+                    .collect::<Vec<_>>();
+                write_pq4_input(&input, &vectors, &ids);
+                Pq4Builder::build_parquet(
+                    &input,
+                    &output,
+                    &Pq4BuildConfig {
+                        generation: format!("pq4-100m-shard-{shard_ordinal:04}"),
+                        source_uri: format!("s3://frozen/partition-{shard_ordinal:04}.parquet"),
+                        batch_rows: 1_024,
+                        worker_count: 2,
+                    },
+                )
+                .unwrap();
+                (shard_ordinal, output)
+            })
+            .collect()
+    }
+
+    fn sharded_options() -> Pq4ShardedOpenOptions {
+        Pq4ShardedOpenOptions {
+            memory_budget_bytes: 64 * 1024 * 1024,
+            fanout_threads: 3,
+            shard_query_threads: 2,
+            admission_timeout_ms: 1_000,
+        }
+    }
+
+    #[test]
+    fn v26_pq4_100m_sharded_open_requires_contiguous_authority_and_aggregate_memory() {
+        // Break caught: the deployment opens a gapped/duplicate shard set or admits each shard
+        // against the full process budget independently and oversubscribes aggregate memory.
+        let directory = tempfile::tempdir().unwrap();
+        let shards = write_sharded_fixture(directory.path(), 3);
+        assert!(Pq4ShardedIndex::open(&shards, sharded_options()).is_ok());
+
+        let gapped = vec![shards[0].clone(), (2, shards[1].1.clone())];
+        assert!(Pq4ShardedIndex::open(&gapped, sharded_options()).is_err());
+        let duplicate = vec![shards[0].clone(), (0, shards[1].1.clone())];
+        assert!(Pq4ShardedIndex::open(&duplicate, sharded_options()).is_err());
+        let mut insufficient = sharded_options();
+        insufficient.memory_budget_bytes = 1;
+        assert!(Pq4ShardedIndex::open(&shards, insufficient).is_err());
+    }
+
+    #[test]
+    fn v26_pq4_100m_sharded_search_merges_exact_local_results_deterministically() {
+        // Break caught: shard completion order changes ties or local IDs are rewritten from their
+        // global little-endian source authority during fan-out/merge.
+        let directory = tempfile::tempdir().unwrap();
+        let shards = write_sharded_fixture(directory.path(), 3);
+        let index = Pq4ShardedIndex::open(&shards, sharded_options()).unwrap();
+        let query = rows(4_096)[2_047];
+
+        let first = index.search(&query, 10).unwrap();
+        let second = index.search(&query, 10).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 10);
+        assert!(first.windows(2).all(|pair| {
+            pair[0]
+                .squared_distance
+                .total_cmp(&pair[1].squared_distance)
+                .then_with(|| pair[0].shard_ordinal.cmp(&pair[1].shard_ordinal))
+                .then_with(|| pair[0].source_ordinal.cmp(&pair[1].source_ordinal))
+                .is_le()
+        }));
+        for item in &first {
+            let global = u64::from_le_bytes(item.id.clone().try_into().unwrap());
+            assert_eq!(
+                global,
+                u64::from(item.shard_ordinal) * 4_096 + item.source_ordinal
+            );
+        }
+    }
+
+    #[test]
+    fn v26_pq4_100m_sharded_search_executes_every_shard_concurrently() {
+        // Break caught: fan-out is accidentally replaced with a serial iterator, making 100M
+        // latency approximately ten times the already measured 10M latency.
+        let directory = tempfile::tempdir().unwrap();
+        let shards = write_sharded_fixture(directory.path(), 3);
+        let index = Pq4ShardedIndex::open(&shards, sharded_options()).unwrap();
+        let active = AtomicUsize::new(0);
+        let maximum = AtomicUsize::new(0);
+        let query = rows(4_096)[2_047];
+
+        let matches = search_with_shard_observer_for_test(&index, &query, 10, |_| {
+            let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+            maximum.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(50));
+            active.fetch_sub(1, Ordering::SeqCst);
+        })
+        .unwrap();
+
+        assert_eq!(matches.len(), 10);
+        assert_eq!(maximum.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn v26_pq4_100m_sharded_search_rejects_partial_results() {
+        // Break caught: one unreadable shard is discarded and the coordinator publishes a top-k
+        // from only the surviving corpus partitions.
+        let directory = tempfile::tempdir().unwrap();
+        let shards = write_sharded_fixture(directory.path(), 3);
+        let index = Pq4ShardedIndex::open(&shards, sharded_options()).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(shards[1].1.join("vectors.arrow"))
+            .unwrap();
+
+        assert!(index.search(&rows(4_096)[2_047], 10).is_err());
     }
 
     #[test]
