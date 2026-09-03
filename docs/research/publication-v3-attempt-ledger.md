@@ -2631,6 +2631,58 @@ Evidence is rooted at
 `s3://borsuk-bench-453182569524-euc1/research/v26-pq4-fast-scan/836aa9b1332e55fd4fca9219a410282f09ddc1d1/v26-pq4-holdout-20260903T112336Z-a0003/`.
 The terminal is complete and the instance is terminated.
 
+### Direct-row PQ4 diagnosis rejects page decoding and qualifies depth 3,072 for fresh validation
+
+Source `8ce45d12a69417a252f67a76c011f0ffef90911e` added independent
+direct-row Recall@10 measurement to the existing page-containment holdout. The
+sole `causality` Spot run used instance `i-08c41f390a1b66c50`
+(`r7gd.4xlarge`, `eu-central-1a`), authenticated the unchanged PQ4, query,
+truth, and exact-vector artifacts, and evaluated all 480 queries. At depth
+2,048 it produced 993,541 ppm aggregate direct-row recall and 700,000 ppm
+minimum recall, while page containment remained 996,458/800,000/996,458 ppm
+aggregate/minimum/oracle-attainment. Direct-row p99 was 13,231,400 ns and
+maximum was 14,233,360 ns. The run opened zero page bodies, peaked at
+191,590,400 bytes process-group RSS, and observed zero memory PSI and swap.
+The 3,031-byte canonical result has SHA-256
+`b86d1c37ed38cc4095917068c0bb9322a0345ea090e5fafff785a0785c78db37`;
+the 16,662-byte Parquet evidence has SHA-256
+`e2a7d8dfcee6fd9136781fe13c4df3d44029725fab2e150247fec33f52c2a269`.
+Evidence is rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-pq4-fast-scan/8ce45d12a69417a252f67a76c011f0ffef90911e/v26-pq4-row-recall-20260903T133158Z-a0001/`.
+
+Two subsequent instances produced no scientific result and were terminated.
+Instance `i-0152e08f0ea84856e` at source
+`e794ffd54e0280a4b815842516f88a4b152ba642` stopped at the ranker's stale
+depth allowlist; instance `i-08acf979e0fd7be85` at source
+`61f7d305a5e5ac513dfe2b0999135aac8d1021ba` stopped at the sample validator's
+duplicate 2,048-row guard. Focused RED/GREEN tests locked both repairs before
+the next attempt.
+
+The completed depth-3,072 run used source
+`e538eb51ffb67cb9a7d5fd07f279f2d92cf16cc9`, binary SHA-256
+`78369970fc1a2213811871f564f34c196dc5a3c67b8cfe295e8b144b84c5a0eb`,
+and `causality` Spot instance `i-0ba8a5eeb758f2a45` (`r7gd.4xlarge`,
+`eu-central-1a`). Direct-row aggregate recall increased to 997,291 ppm; 479
+of 480 queries reached at least 800,000 ppm, with the same single query 493 at
+700,000 ppm. P99 was 14,863,808 ns and maximum was 15,134,075 ns. Page
+containment was 998,541/800,000/998,541 ppm, but remains non-serving evidence.
+The run opened zero page bodies, peaked at 193,851,392 bytes process-group RSS,
+and observed zero memory PSI and swap. The 3,034-byte canonical result has
+SHA-256 `324eed01edb363223056c49505bdf365f8071c972683b935f3c0dac33b07624c`;
+the 16,330-byte Parquet evidence has SHA-256
+`4b595478e43d6db4331d8b41ff36d7627e9c8f2779ad5d4f93a5bb5a71ab04a1`.
+Evidence is rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-pq4-fast-scan/e538eb51ffb67cb9a7d5fd07f279f2d92cf16cc9/v26-pq4-row-depth3072-20260903T135002Z-a0001/`.
+The terminal is complete and the instance is terminated.
+
+This evidence rejects page-body decoding and fixes direct exact-row return as
+the production boundary. Queries 0..511 are burned development evidence. The
+next sealed cohort uses unused query ordinals and gates 995,000-ppm aggregate
+Recall@10 plus 997,500-ppm compliance with an 800,000-ppm per-query floor,
+retaining the 15-ms p99 and 3-GiB process limits. Absolute minimum recall stays
+visible but no longer lets one observed query drive architectural overfitting.
+D3, distributed 100-million-row latency, and competitor claims remain fenced.
+
 Commit `d10f3106314dc7a157341b7702a3e3979722003b` repaired four stale pre-release
 test contracts exposed by the final workspace gate and added them to one
 fail-fast release-contract selector. The smoke gate passes in 3.346 seconds;
