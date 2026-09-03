@@ -188,11 +188,22 @@ fn read_rows(args: &Args) -> borsuk::Result<Vec<V27PageRow>> {
                 return Ok(rows);
             }
             let start = row * 96;
-            let vector: [f32; 96] = values.values()[start..start + 96]
+            let mut vector: [f32; 96] = values.values()[start..start + 96]
                 .try_into()
                 .map_err(|_| invalid("V27 build training dimension differs"))?;
             if vector.iter().any(|value| !value.is_finite()) {
                 return Err(invalid("V27 build training value differs"));
+            }
+            let norm = vector
+                .iter()
+                .map(|value| f64::from(*value) * f64::from(*value))
+                .sum::<f64>()
+                .sqrt();
+            if !norm.is_finite() || norm <= 0.0 {
+                return Err(invalid("V27 build training norm differs"));
+            }
+            for value in &mut vector {
+                *value = (f64::from(*value) / norm) as f32;
             }
             rows.push(V27PageRow {
                 source_ordinal: rows.len() as u64,
@@ -381,6 +392,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{execute, parse_args};
+    use borsuk::{V27LayoutArtifactIdentity, decode_v27_page, decode_v27_page_manifest};
 
     #[test]
     fn v27_s3_build_streams_a_bounded_parquet_subset_into_page_artifacts() {
@@ -436,6 +448,31 @@ mod tests {
             fs::read(output.join("BUILD_COMPLETE.json")).unwrap(),
             receipt
         );
+        let manifest_bytes = fs::read(output.join("pages.json")).unwrap();
+        let manifest = decode_v27_page_manifest(
+            &V27LayoutArtifactIdentity {
+                role: "v27-page-manifest-json".to_owned(),
+                sha256: value["artifacts"]["manifest"]["sha256"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                encoded_bytes: manifest_bytes.len() as u64,
+            },
+            &manifest_bytes,
+        )
+        .unwrap();
+        for identity in manifest.pages {
+            let body = fs::read(
+                output
+                    .join("pages")
+                    .join(format!("{}.arrow", identity.sha256)),
+            )
+            .unwrap();
+            for row in decode_v27_page(&identity, &body).unwrap().rows {
+                let squared_norm = row.vector.iter().map(|value| value * value).sum::<f32>();
+                assert!((squared_norm - 1.0).abs() <= 2.0e-5, "{squared_norm}");
+            }
+        }
     }
 
     fn write_train(path: &std::path::Path, rows: usize) {

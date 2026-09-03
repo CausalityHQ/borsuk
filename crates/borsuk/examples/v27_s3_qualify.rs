@@ -237,11 +237,22 @@ fn read_query(argument: &ArtifactArg, query_row: usize) -> borsuk::Result<[f32; 
                 .downcast_ref::<Float32Array>()
                 .ok_or_else(|| invalid("V27 qualifier query value type differs"))?;
             let start = (query_row - offset) * 96;
-            let query: [f32; 96] = values.values()[start..start + 96]
+            let mut query: [f32; 96] = values.values()[start..start + 96]
                 .try_into()
                 .map_err(|_| invalid("V27 qualifier query dimension differs"))?;
             if query.iter().any(|value| !value.is_finite()) {
                 return Err(invalid("V27 qualifier query value differs"));
+            }
+            let norm = query
+                .iter()
+                .map(|value| f64::from(*value) * f64::from(*value))
+                .sum::<f64>()
+                .sqrt();
+            if !norm.is_finite() || norm <= 0.0 {
+                return Err(invalid("V27 qualifier query norm differs"));
+            }
+            for value in &mut query {
+                *value = (f64::from(*value) / norm) as f32;
             }
             return Ok(query);
         }
@@ -425,7 +436,7 @@ mod tests {
     use sha2::Digest;
     use tempfile::tempdir;
 
-    use super::{ObjectPageStore, execute};
+    use super::{ArtifactArg, ObjectPageStore, execute, read_query};
     use super::{PageSource, parse_args};
     use borsuk::{
         V27BuildReceipt, V27Hierarchy, V27PagePosting, V27PageRow, V27PageStore,
@@ -690,6 +701,27 @@ mod tests {
         .read_wave(&pages)
         .unwrap();
         assert_eq!(bodies, [b"page-a".to_vec(), b"page-b".to_vec()]);
+    }
+
+    #[test]
+    fn v27_s3_qualify_normalizes_the_angular_query_before_search() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("query.parquet");
+        let mut query = [0.0; 96];
+        query[3] = 2.0;
+        write_query(&path, &query);
+        let bytes = fs::read(&path).unwrap();
+        let actual = read_query(
+            &ArtifactArg {
+                path,
+                sha256: format!("{:x}", sha2::Sha256::digest(&bytes)),
+                encoded_bytes: bytes.len() as u64,
+            },
+            0,
+        )
+        .unwrap();
+        assert_eq!(actual[3], 1.0);
+        assert_eq!(actual.iter().map(|value| value * value).sum::<f32>(), 1.0);
     }
 
     fn page_identity(ordinal: u32, sha256: &str, encoded_bytes: u64) -> borsuk::V27PageIdentity {
