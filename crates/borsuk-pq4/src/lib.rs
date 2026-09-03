@@ -3,6 +3,14 @@
 #![forbid(unsafe_code)]
 
 mod core;
+mod format;
+
+#[cfg(test)]
+pub(crate) use format::{Pq4ArtifactIdentity, Pq4Manifest, canonical_manifest_bytes};
+#[cfg(test)]
+pub(crate) use snapshot::{Pq4Snapshot, Pq4SnapshotWriteRequest, write_snapshot};
+
+mod snapshot;
 
 /// Errors returned by PQ4 construction and search contracts.
 #[derive(Debug, thiserror::Error)]
@@ -31,9 +39,29 @@ mod tests {
     #[cfg(not(target_arch = "aarch64"))]
     use super::rank_candidates;
     use super::{
-        Pq4Codebook, encode_blocks, fit_codebook, projected_resident_bytes,
+        Pq4ArtifactIdentity, Pq4Codebook, Pq4Manifest, Pq4Snapshot, Pq4SnapshotWriteRequest,
+        canonical_manifest_bytes, encode_blocks, fit_codebook, projected_resident_bytes,
         rank_candidates_parallel_scalar_for_test, rank_candidates_scalar, score_rows_scalar,
+        write_snapshot,
     };
+
+    fn snapshot_identity(
+        role: &str,
+        file_name: &str,
+        digest_byte: char,
+        encoded_bytes: u64,
+        row_count: u64,
+        schema: &str,
+    ) -> Pq4ArtifactIdentity {
+        Pq4ArtifactIdentity {
+            role: role.to_owned(),
+            file_name: file_name.to_owned(),
+            sha256: digest_byte.to_string().repeat(64),
+            encoded_bytes,
+            row_count,
+            schema: schema.to_owned(),
+        }
+    }
 
     fn rows(count: usize) -> Vec<[f32; 96]> {
         (0..count)
@@ -182,6 +210,164 @@ mod tests {
                 .unwrap();
         assert_eq!(parallel, scalar);
         assert_eq!(parallel.len(), 3_072);
+    }
+
+    #[test]
+    fn v26_release_contract_pq4_snapshot_manifest_rejects_identity_and_layout_drift() {
+        // Break caught: an incomplete or ambiguous manifest admits renamed, mutated, padded, or
+        // differently packed cross-language arrays before their bytes are authenticated.
+        let baseline = Pq4Manifest {
+            schema: "borsuk-pq4-snapshot-v1".to_owned(),
+            generation: "deep-image-96-pq4-generation-0001".to_owned(),
+            source_uri: "s3://frozen/deep-image-96.parquet".to_owned(),
+            source_sha256: "a".repeat(64),
+            source_encoded_bytes: 38_400_000_000,
+            row_count: 4_097,
+            dimension: 96,
+            subquantizer_count: 32,
+            subspace_dimensions: 3,
+            centroid_count: 16,
+            lloyd_iterations: 4,
+            block_rows: 32,
+            block_count: 129,
+            padding_rows: 31,
+            code_bytes_per_row: 16,
+            byte_order: "subquantizer-major".to_owned(),
+            nibble_order: "even-low-odd-high".to_owned(),
+            source_order: "ascending-source-ordinal".to_owned(),
+            candidate_depth: 3_072,
+            codebook: snapshot_identity(
+                "codebook-arrow",
+                "codebook.arrow",
+                'b',
+                8_192,
+                1,
+                "centroids:non-nullable-fixed-list-f32[1536]",
+            ),
+            codes: snapshot_identity(
+                "codes-arrow",
+                "codes.arrow",
+                'c',
+                24_576,
+                129,
+                "block_ordinal:u64,packed_codes:non-nullable-fixed-binary[512]",
+            ),
+            vectors: snapshot_identity(
+                "vectors-arrow",
+                "vectors.arrow",
+                'd',
+                400_000,
+                4_097,
+                "vector:non-nullable-fixed-list-f32[96]",
+            ),
+            ids: snapshot_identity(
+                "ids-arrow",
+                "ids.arrow",
+                'e',
+                20_000,
+                4_097,
+                "id:non-nullable-binary",
+            ),
+        };
+
+        let bytes = canonical_manifest_bytes(&baseline).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        assert_eq!(bytes.iter().filter(|byte| **byte == b'\n').count(), 1);
+        assert!(
+            !bytes
+                .iter()
+                .any(|byte| byte.is_ascii_whitespace() && *byte != b'\n')
+        );
+        assert!(bytes.starts_with(b"{\"block_count\":129,\"block_rows\":32,"));
+        let nested_prefix = b"\"codebook\":{\"encoded_bytes\":8192,\"file_name\"";
+        assert!(
+            bytes
+                .windows(nested_prefix.len())
+                .any(|window| window == nested_prefix)
+        );
+
+        type Mutation = Box<dyn Fn(&mut Pq4Manifest)>;
+        let mutations: Vec<Mutation> = vec![
+            Box::new(|value| value.schema = "borsuk-pq4-snapshot-v2".to_owned()),
+            Box::new(|value| value.generation.clear()),
+            Box::new(|value| value.source_sha256.replace_range(0..1, "A")),
+            Box::new(|value| value.row_count = 4_096),
+            Box::new(|value| value.block_count = 128),
+            Box::new(|value| value.padding_rows = 30),
+            Box::new(|value| value.candidate_depth = 2_048),
+            Box::new(|value| value.nibble_order = "odd-low-even-high".to_owned()),
+            Box::new(|value| value.codebook.role = "vectors-arrow".to_owned()),
+            Box::new(|value| value.codes.file_name = "renamed.arrow".to_owned()),
+            Box::new(|value| value.vectors.sha256.replace_range(0..1, "G")),
+            Box::new(|value| value.ids.encoded_bytes = 0),
+            Box::new(|value| value.ids.row_count = 4_096),
+            Box::new(|value| value.ids.file_name = value.vectors.file_name.clone()),
+        ];
+        for mutate in mutations {
+            let mut drifted = baseline.clone();
+            mutate(&mut drifted);
+            assert!(canonical_manifest_bytes(&drifted).is_err());
+        }
+    }
+
+    #[test]
+    fn v26_release_contract_pq4_snapshot_round_trip_authenticates_arrow_and_source_order() {
+        // Break caught: a snapshot writer/open pair loses source order or admits mutated,
+        // missing, or unregistered files before Arrow bytes are authenticated.
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join("snapshot");
+        let vectors = rows(3_073);
+        let codebook = fit_codebook(&vectors).unwrap();
+        let codes = vectors
+            .iter()
+            .map(|vector| codebook.encode(vector).unwrap())
+            .collect::<Vec<_>>();
+        let blocks = encode_blocks(&codes).unwrap();
+        let source_sha256 = "a".repeat(64);
+        let ids = (0..3_073)
+            .map(|ordinal| vec![0, 255, ordinal as u8, (ordinal * 7) as u8])
+            .collect::<Vec<_>>();
+        let request = Pq4SnapshotWriteRequest {
+            directory: &directory,
+            generation: "deep-image-96-pq4-generation-0001",
+            source_uri: "s3://frozen/deep-image-96.parquet",
+            source_sha256: &source_sha256,
+            source_encoded_bytes: 38_400_000_000,
+            codebook: &codebook,
+            blocks: &blocks,
+            vectors: &vectors,
+            ids: &ids,
+        };
+        let manifest = write_snapshot(&request).unwrap();
+        assert_eq!(manifest.row_count, 3_073);
+        assert_eq!(manifest.block_count, 97);
+        assert_eq!(manifest.padding_rows, 31);
+        assert_eq!(
+            std::fs::read(directory.join("manifest.json")).unwrap(),
+            canonical_manifest_bytes(&manifest).unwrap()
+        );
+
+        let snapshot = Pq4Snapshot::open(&directory).unwrap();
+        assert_eq!(snapshot.row_count(), 3_073);
+        assert_eq!(snapshot.blocks(), blocks.as_slice());
+        assert_eq!(snapshot.codebook(), &codebook);
+        assert_eq!(snapshot.read_vector(3_072).unwrap(), vectors[3_072]);
+        assert_eq!(snapshot.read_id(3_072).unwrap(), ids[3_072]);
+        assert!(snapshot.read_vector(3_073).is_err());
+        assert!(snapshot.read_id(3_073).is_err());
+
+        std::fs::write(directory.join("vectors.arrow"), b"mutated").unwrap();
+        assert!(Pq4Snapshot::open(&directory).is_err());
+
+        let second = parent.path().join("snapshot-extra");
+        let mut second_request = request;
+        second_request.directory = &second;
+        write_snapshot(&second_request).unwrap();
+        std::fs::write(second.join("unregistered"), b"x").unwrap();
+        assert!(Pq4Snapshot::open(&second).is_err());
+        std::fs::remove_file(second.join("unregistered")).unwrap();
+        std::fs::remove_file(second.join("ids.arrow")).unwrap();
+        assert!(Pq4Snapshot::open(&second).is_err());
     }
 
     #[cfg(not(target_arch = "aarch64"))]

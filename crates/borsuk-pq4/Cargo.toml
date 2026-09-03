@@ -8,9 +8,18 @@ documentation.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+arrow-array = "58.3"
+arrow-ipc = "58.3"
+arrow-schema = "58.3"
 borsuk-fma = { path = "../borsuk-fma" }
 rayon = "1.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
 thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3.23"
 
 [lints]
 workspace = true

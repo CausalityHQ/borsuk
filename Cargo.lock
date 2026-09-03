@@ -427,8 +427,15 @@ dependencies = [
 name = "borsuk-pq4"
 version = "0.1.0"
 dependencies = [
+ "arrow-array",
+ "arrow-ipc",
+ "arrow-schema",
  "borsuk-fma",
  "rayon",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
  "thiserror",
 ]
 
