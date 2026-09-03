@@ -2566,3 +2566,77 @@ fast-scan representation with 32 three-dimensional subquantizers, retaining the
 16-byte row-code budget while replacing random 256-entry scalar lookup tables
 with SIMD-resident 16-entry tables. Recall, 15-ms latency, 3-GiB projection,
 page budget, D3, competitor, and release gates remain unchanged.
+
+### Native PQ4 fast scan passes the sealed V26 holdout
+
+Source `82d2f6411cb5e58635da838c4cfdb31bd01f8fb7` built the fixed
+32-subquantizer, 16-centroid, 16-byte-per-row PQ4 representation over all
+9,990,000 rows. The manifest projects 2,336,975,744 resident bytes at 100
+million rows, below the 3-GiB serving bound. Its 7,170-byte Arrow codebook and
+162,417,514-byte Arrow code plane have SHA-256
+`68baeace6e8c24b39009274c1c774f740bd1c88f47b3999652ea3913063b6e3f`
+and `1bc301160860a8151d53373c8dcadcb43fcb4f4d95ef5338ecfafd3533a811c7`.
+The 2,426-byte manifest has SHA-256
+`169005e8978dc4a1a5865dd59968014a4e91a52190a4e0ae6cca6d6a7b7d43e3`.
+The `causality` Spot build instance `i-073590a493de4fb12` completed and was
+terminated; the build monitor peaked at 8,210,640,896 bytes RSS with zero
+memory PSI and zero swap.
+
+The 32-query development frontier at source
+`15faf2351a7de825ba31f3ac13f7b90ac4f03e6c` selected the smallest passing
+depth of 2,048 rows. Its depth-512/1,024/2,048/4,096 aggregate recall was
+953,125/984,375/996,875/1,000,000 ppm; minimum recall was
+600,000/800,000/900,000/1,000,000; and oracle attainment matched aggregate
+recall. Depths 2,048 and 4,096 passed. The 3,088-byte canonical result has
+SHA-256 `90b89f9da7afa61307e769a6eeb3576e76265e7d272be1c53904dcd2eaa25871`;
+the 6,347-byte Parquet evidence has SHA-256
+`bd7b71c434c1af21273c4424c8a9f678bddb390bd2f6f7043d34876e788da57f`.
+The development serving screen at source
+`7f799f32404f946c572cd120840aac9d9d3e920a` measured p50/p95/maximum of
+12,938,087/13,008,570/13,028,312 ns and passed the 15-ms gate. Its result and
+Parquet evidence SHA-256 values are
+`08fa0cab8e18a1e84a288a81d3c5e0acb9e730eb6caf930b5d91986c3e579f20`
+and `fc9ccb1b23807e5810b7c0065b52ed9a2fac11e9543c3d7dc62a720b89e256a7`.
+Both Spot instances published complete terminals and were terminated.
+
+The first sealed-launch attempt, instance `i-02c735cfa197ce2c5`, failed before
+any input download or scientific process because it lacked the required IAM
+profile; it was terminated and contributes no scientific result. The next run
+at source `4b6eedc85ce087a8782b960a5a71d774cf623df2` on Spot instance
+`i-0bd77383d60361410` authenticated and measured all sealed queries 32 through
+511. It produced 996,458 ppm aggregate recall, 800,000 ppm minimum recall, and
+996,458 ppm oracle attainment, but schema v1 incorrectly applied the 15-ms
+release target to the single maximum observation. One 16,546,121-ns outlier
+made `passed=false` even though independently recomputed p99 was 13,313,830 ns
+and only one of 480 samples exceeded 15 ms. The run is preserved with result
+SHA-256 `249bec8512ca7f72a0246c4825786107b6f3d706c4bce069ac449e8fca093d9c`
+and Parquet SHA-256
+`f96acd6170804df6e4d3e3f4ac037164ed4c2c2cbfe1b568c6788f4afda70152`;
+the instance was terminated.
+
+Source `836aa9b1332e55fd4fca9219a410282f09ddc1d1` corrected only that contract:
+schema v2 retains maximum latency as evidence and gates the preregistered p99.
+The final sole sealed run used `causality` Spot instance
+`i-0a42fad21023b07e4` (`r7gd.4xlarge`, `eu-central-1b`). Across all 480 sealed
+queries it achieved 996,458 ppm aggregate recall, 800,000 ppm minimum recall,
+996,458 ppm oracle attainment, and 13,863,178-ns p99 against literal gates of
+975,000/800,000/995,000 ppm and 15,000,000 ns. Maximum latency was 15,360,104
+ns. The arm used depth 2,048, selected exactly ten pages, read zero page bodies,
+and remained claim-ineligible. Peak observed RSS was 191,504,384 bytes, memory
+PSI was zero, and swap did not grow. The 2,910-byte canonical result has
+SHA-256 `c2a13d6f11877e94ba027a282f6499a0b6fe89a23d27aafbfbb0fe94483cd8b6`;
+the 15,953-byte Parquet evidence has SHA-256
+`193804fe47a1a422a7359c8321e818337c812a13b5399fe2913a4aa7597d512f`.
+Evidence is rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-pq4-fast-scan/836aa9b1332e55fd4fca9219a410282f09ddc1d1/v26-pq4-holdout-20260903T112336Z-a0003/`.
+The terminal is complete and the instance is terminated.
+
+Commit `d10f3106314dc7a157341b7702a3e3979722003b` repaired four stale pre-release
+test contracts exposed by the final workspace gate and added them to one
+fail-fast release-contract selector. The smoke gate passes in 3.346 seconds;
+the four release contracts pass together in 23.84 seconds; strict locked
+workspace/all-targets Clippy is clean; and the final locked workspace/all-targets
+test run passed every executed target, including 1,209 core tests (four
+ignored) and all 87 `borsuk-v26` library tests. Development now uses the smoke
+gate per edit, focused/release-contract gates at boundaries, and the exhaustive
+workspace gate only once per release candidate.
