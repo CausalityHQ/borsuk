@@ -11,6 +11,8 @@ const CANDIDATE_DEPTH: usize = 3_072;
 /// Local shard opening and bounded-concurrency policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pq4OpenOptions {
+    /// Stable deployment ordinal used by deterministic cross-shard ties.
+    pub shard_ordinal: u32,
     /// Total bytes available to the owned code plane and concurrent searches.
     pub memory_budget_bytes: u64,
     /// Maximum concurrent searches admitted to the dedicated Rayon pool.
@@ -28,6 +30,8 @@ pub struct Pq4Match {
     pub squared_distance: f32,
     /// Stable source-order ordinal used for deterministic ties.
     pub source_ordinal: u64,
+    /// Stable shard ordinal used by deterministic global merging.
+    pub shard_ordinal: u32,
 }
 
 struct Admission {
@@ -79,6 +83,7 @@ pub struct Pq4Index {
     snapshot: Pq4Snapshot,
     pool: rayon::ThreadPool,
     admission: Admission,
+    shard_ordinal: u32,
 }
 
 fn invalid(message: &str) -> BorsukError {
@@ -144,6 +149,7 @@ impl Pq4Index {
                 wake: Condvar::new(),
                 timeout: Duration::from_millis(options.admission_timeout_ms),
             },
+            shard_ordinal: options.shard_ordinal,
         })
     }
 
@@ -192,6 +198,7 @@ impl Pq4Index {
                     id: self.snapshot.read_id(source_ordinal)?,
                     squared_distance,
                     source_ordinal,
+                    shard_ordinal: self.shard_ordinal,
                 })
             })
             .collect()

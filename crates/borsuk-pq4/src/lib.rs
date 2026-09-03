@@ -6,6 +6,7 @@ mod builder;
 mod core;
 mod format;
 mod index;
+mod shards;
 
 #[cfg(test)]
 pub(crate) use format::{Pq4ArtifactIdentity, Pq4Manifest, canonical_manifest_bytes};
@@ -14,6 +15,7 @@ pub(crate) use snapshot::{Pq4Snapshot, Pq4SnapshotWriteRequest, write_snapshot};
 
 pub use builder::{Pq4BuildConfig, Pq4BuildReport, Pq4Builder};
 pub use index::{Pq4Index, Pq4Match, Pq4OpenOptions};
+pub use shards::merge_pq4_shard_matches;
 
 mod snapshot;
 
@@ -45,8 +47,8 @@ mod tests {
     use super::rank_candidates;
     use super::{
         Pq4ArtifactIdentity, Pq4BuildConfig, Pq4Builder, Pq4Codebook, Pq4Index, Pq4Manifest,
-        Pq4OpenOptions, Pq4Snapshot, Pq4SnapshotWriteRequest, canonical_manifest_bytes,
-        encode_blocks, fit_codebook, projected_resident_bytes,
+        Pq4Match, Pq4OpenOptions, Pq4Snapshot, Pq4SnapshotWriteRequest, canonical_manifest_bytes,
+        encode_blocks, fit_codebook, merge_pq4_shard_matches, projected_resident_bytes,
         rank_candidates_parallel_scalar_for_test, rank_candidates_scalar, score_rows_scalar,
         write_snapshot,
     };
@@ -570,6 +572,7 @@ mod tests {
         )
         .unwrap();
         let options = Pq4OpenOptions {
+            shard_ordinal: 7,
             memory_budget_bytes: 64 * 1024 * 1024,
             query_threads: 2,
             admission_timeout_ms: 1_000,
@@ -587,6 +590,7 @@ mod tests {
         );
         assert!(matches.iter().all(|item| item.squared_distance <= 1.0e-12));
         assert_eq!(matches[3].id, ids[expected_ordinals[3] as usize]);
+        assert!(matches.iter().all(|item| item.shard_ordinal == 7));
 
         let handles = (0..4)
             .map(|_| {
@@ -602,6 +606,40 @@ mod tests {
             ..options
         };
         assert!(Pq4Index::open(&output, too_small).is_err());
+    }
+
+    #[test]
+    fn v26_release_contract_pq4_shards_merge_is_bounded_and_permutation_invariant() {
+        // Break caught: global merging loses shard identity, depends on arrival order, admits a
+        // duplicate shard, or fails to retain the true top-k from exact local top-k lists.
+        let item = |shard_ordinal, source_ordinal, squared_distance| Pq4Match {
+            id: format!("{shard_ordinal}-{source_ordinal}").into_bytes(),
+            squared_distance,
+            source_ordinal,
+            shard_ordinal,
+        };
+        let shard_two = vec![item(2, 0, 0.25), item(2, 1, 0.5), item(2, 2, 0.75)];
+        let shard_five = vec![item(5, 0, 0.25), item(5, 1, 0.4), item(5, 2, 0.9)];
+        let expected = vec![
+            item(2, 0, 0.25),
+            item(5, 0, 0.25),
+            item(5, 1, 0.4),
+            item(2, 1, 0.5),
+        ];
+        assert_eq!(
+            merge_pq4_shard_matches(vec![shard_two.clone(), shard_five.clone()], 4).unwrap(),
+            expected
+        );
+        assert_eq!(
+            merge_pq4_shard_matches(vec![shard_five.clone(), shard_two.clone()], 4).unwrap(),
+            expected
+        );
+        assert!(merge_pq4_shard_matches(vec![], 4).is_err());
+        assert!(merge_pq4_shard_matches(vec![shard_two.clone()], 0).is_err());
+        assert!(merge_pq4_shard_matches(vec![shard_two.clone(), shard_two.clone()], 4).is_err());
+        let mut unsorted = shard_two;
+        unsorted.swap(0, 1);
+        assert!(merge_pq4_shard_matches(vec![unsorted], 2).is_err());
     }
 
     #[cfg(not(target_arch = "aarch64"))]
