@@ -2375,3 +2375,40 @@ already independently sufficient under global PQ16 ranking. Memory remains
 within bounds and is not causal. Quality and latency gates are not relaxed; D3,
 competitor, and release claims remain fenced pending a fundamentally different
 candidate-concentration design.
+
+### Native tree frontier isolates the remaining concentration defect
+
+Source commit `367442ba5526e0c9c2a896610eca79bec141fcf3` ran the existing
+truth-only tree-frontier diagnostic against the frozen 9,990,000-row,
+2,440-page native layout. It authenticated the 29,812,214-byte assignment
+Parquet, both tree Parquets, all 512 external queries, and all 512 truth rows.
+The diagnostic chose no production pages, opened no page body, and used truth
+only to compute the best ten-page cover within each already-ranked frontier.
+
+The width ladder's aggregate/minimum/oracle-attainment ppm triples were:
+422,460/0/422,460 at 8 pages; 543,750/0/543,750 at 16; 661,132/0/661,132
+at 32; 782,812/100,000/782,812 at 64; 881,054/300,000/881,054 at 128;
+949,414/300,000/949,414 at 256; 986,523/800,000/986,523 at 512;
+999,218/900,000/999,218 at 1,024; and 1,000,000/1,000,000/1,000,000 at
+2,048 and at the exhaustive 2,440-page control. Width 1,024 is therefore the
+smallest tested frontier passing the unchanged 975,000/800,000/995,000 quality
+gates, while width 2,048 is perfect.
+
+The sole run used `causality` Spot instance `i-04af8bc2de81934dc`
+(`c7gd.4xlarge`, `eu-central-1a`) and SSM command
+`6d001771-507c-4ee2-90a6-5abb416e9e6c`. The scientific process completed in
+one second, observed zero memory PSI and zero swap growth, and published an
+867,983-byte canonical result with SHA-256
+`f32b1c32c607739ab23014e9c674aecb62d3ac663cf4629f744cace082e71da2`.
+The 11,966,336-byte executable has SHA-256
+`29c8408f2b784d3403c6bb0c213c457606ecc9d79ebc6f6f7138d8bda8567f91`.
+Evidence is rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-native-tree-diagnostic/367442ba5526e0c9c2a896610eca79bec141fcf3/v26-native-tree-20260903T072941Z-a0001/`.
+The instance published its terminal and is terminated.
+
+This accepts the native page geometry and rejects the current random-projection
+tree as a sufficiently concentrated serving frontier. Scanning 1,024 pages at
+8,192 rows per page is not a credible 15-ms path. The next falsifier must rank
+the same leaves with a query-independent geometric representation and show a
+passing frontier at no more than 256 pages before any row-code latency run.
+Recall gates remain unchanged; D3 and release claims remain fenced.
