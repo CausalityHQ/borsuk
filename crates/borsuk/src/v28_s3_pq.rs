@@ -59,8 +59,8 @@ impl V28PqWidth {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct V28PqCodebook {
-    width: V28PqWidth,
-    centroids: Vec<f32>,
+    pub(crate) width: V28PqWidth,
+    pub(crate) centroids: Vec<f32>,
 }
 
 impl V28PqCodebook {
@@ -79,8 +79,8 @@ impl V28PqCodebook {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct V28CodeBlock {
-    bytes: Vec<u8>,
-    rows: u8,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) rows: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
