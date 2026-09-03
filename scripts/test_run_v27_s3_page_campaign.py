@@ -1,11 +1,16 @@
+import base64
 import json
 import unittest
 
 from scripts.run_v27_s3_page_campaign import (
     S3LatencyProfile,
+    SpotTarget,
     V27QueryEvidence,
+    V27ReducedSpotPlan,
+    build_v27_spot_specs,
     preflight_v27_reduced_campaign,
     project_v27_query_latency,
+    run_v27_reduced_spot,
 )
 
 
@@ -89,6 +94,82 @@ class V27FastS3GateTests(unittest.TestCase):
             json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
             + b"\n",
         )
+
+
+class V27ReducedSpotTests(unittest.TestCase):
+    def plan(self) -> V27ReducedSpotPlan:
+        return V27ReducedSpotPlan(
+            run_id="v27-reduced-20260903T120000Z",
+            source_commit="a" * 40,
+            source_archive_uri="s3://bucket/v27/source.tar.zst",
+            source_archive_sha256="b" * 64,
+            source_archive_bytes=1_000_000,
+            train_uri="s3://bucket/deep/train-00000000.parquet",
+            train_sha256="c" * 64,
+            train_bytes=67_160_858,
+            output_prefix="s3://bucket/v27/reduced/",
+            row_limit=100_000,
+            roots=64,
+            leaves=4_096,
+            iterations=4,
+            workers=8,
+            page_rows=512,
+        )
+
+    def test_v27_reduced_spot_specs_are_cross_zone_spot_and_subset_only(self) -> None:
+        specs = build_v27_spot_specs(
+            self.plan(),
+            (
+                SpotTarget("eu-central-1a", "subnet-a"),
+                SpotTarget("eu-central-1b", "subnet-b"),
+                SpotTarget("eu-central-1c", "subnet-c"),
+            ),
+        )
+        self.assertEqual([spec["SubnetId"] for spec in specs], ["subnet-a", "subnet-b", "subnet-c"])
+        for spec in specs:
+            self.assertEqual(spec["MinCount"], 1)
+            self.assertEqual(spec["MaxCount"], 1)
+            self.assertEqual(spec["InstanceInitiatedShutdownBehavior"], "terminate")
+            self.assertEqual(
+                spec["InstanceMarketOptions"]["SpotOptions"]["InstanceInterruptionBehavior"],
+                "terminate",
+            )
+            script = base64.b64decode(spec["UserData"]).decode()
+            self.assertIn("--row-limit 100000", script)
+            self.assertIn("train-00000000.parquet", script)
+            self.assertNotIn("train-00000001.parquet", script)
+            self.assertNotIn("aws s3 sync", script)
+            self.assertIn("BUILD_COMPLETE.json", script)
+
+    def test_v27_reduced_spot_falls_across_capacity_and_terminates_original(self) -> None:
+        plan = self.plan()
+        launches: list[str] = []
+        terminated: list[str] = []
+        sleeps: list[int] = []
+        terminal = iter([None, None, b'{"status":"complete"}\n'])
+
+        def launch(spec: dict[str, object]) -> str:
+            launches.append(str(spec["SubnetId"]))
+            if spec["SubnetId"] == "subnet-a":
+                raise RuntimeError("InsufficientInstanceCapacity")
+            return "i-0123456789abcdef0"
+
+        result = run_v27_reduced_spot(
+            plan,
+            targets=(
+                SpotTarget("eu-central-1a", "subnet-a"),
+                SpotTarget("eu-central-1b", "subnet-b"),
+            ),
+            launch=launch,
+            terminal=lambda: next(terminal),
+            health=lambda _instance: ("running", "ok", "ok"),
+            sleep=lambda seconds: sleeps.append(seconds),
+            terminate=lambda instance: terminated.append(instance),
+        )
+        self.assertEqual(result, b'{"status":"complete"}\n')
+        self.assertEqual(launches, ["subnet-a", "subnet-b"])
+        self.assertEqual(sleeps, [30, 30])
+        self.assertEqual(terminated, ["i-0123456789abcdef0"])
 
 
 if __name__ == "__main__":
