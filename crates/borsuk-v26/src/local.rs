@@ -7964,7 +7964,7 @@ fn v26_pq4_holdout_sample(
     if truth.query_ordinal != query_ordinal
         || truth.neighbor_source_ordinals.len() != 10
         || truth.ground_truth_page_assignments.len() != 10
-        || selection.exact_rows_read != 2_048
+        || selection.exact_rows_read != 3_072
         || selection.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
         || selection.page_body_reads != 0
     {
@@ -10719,7 +10719,7 @@ mod tests {
         // were returned, even though no page body was read and those are distinct outcomes.
         let selection = crate::V26Pq16ServingSelection {
             selected_pages: (0_u32..10).collect(),
-            exact_rows_read: 2_048,
+            exact_rows_read: 3_072,
             cold_batches_read: 32,
             cold_read_workers: 4,
             page_body_reads: 0,
@@ -10738,6 +10738,7 @@ mod tests {
         assert_eq!(sample.hits, 10);
         assert_eq!(sample.returned_row_hits, 5);
         assert_eq!(sample.returned_row_recall_ppm, 500_000);
+        assert_eq!(sample.exact_rows_read, 3_072);
     }
 
     #[test]
