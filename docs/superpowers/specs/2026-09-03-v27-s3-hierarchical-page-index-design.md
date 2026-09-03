@@ -71,6 +71,12 @@ the exact page identity. The layout receipt proves that every source ordinal
 has exactly one primary owner, at most one replica, and that the complete
 primary union equals the corpus authority.
 
+Page encoding takes the page ordinal, primary/replica counts, and rows, then
+returns both the encoded bytes and their computed SHA-256/length identity.
+Decoding takes that immutable identity and authenticates the complete byte
+string before Arrow parsing. An encoder never accepts a caller-predicted digest
+or length for bytes it has not produced.
+
 ## Cross-language artifacts
 
 The persistent format is deliberately small and explicit:

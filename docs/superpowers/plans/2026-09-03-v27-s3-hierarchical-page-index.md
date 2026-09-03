@@ -48,7 +48,12 @@ pub struct V27PageIdentity {
 
 pub struct V27PageRow { pub source_ordinal: u64, pub vector: [f32; 96] }
 pub struct V27Page { pub identity: V27PageIdentity, pub rows: Vec<V27PageRow> }
-pub fn encode_v27_page(identity: &V27PageIdentity, rows: &[V27PageRow]) -> Result<Vec<u8>>;
+pub fn encode_v27_page(
+    ordinal: u32,
+    primary_rows: u16,
+    replica_rows: u16,
+    rows: &[V27PageRow],
+) -> Result<(V27PageIdentity, Vec<u8>)>;
 pub fn decode_v27_page(identity: &V27PageIdentity, bytes: &[u8]) -> Result<V27Page>;
 ```
 
