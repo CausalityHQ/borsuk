@@ -373,6 +373,48 @@ pub struct V26Pq16GlobalPreflightResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct V26Pq16GlobalQualitySample {
+    pub query_ordinal: u32,
+    pub selected_pages: Vec<u32>,
+    pub hits: u32,
+    pub oracle_hits: u32,
+    pub recall_ppm: u64,
+    pub oracle_attainment_ppm: u64,
+    pub elapsed_ns: u64,
+    pub exact_rows_read: u32,
+    pub cold_batches_read: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26Pq16GlobalQualityResult {
+    pub schema: String,
+    pub serving_manifest: V26ObjectIdentity,
+    pub external_queries: V26ObjectIdentity,
+    pub truth: V26ObjectIdentity,
+    pub evidence: V26ObjectIdentity,
+    pub query_count: u32,
+    pub ranked_row_limit: u32,
+    pub selected_page_count: u32,
+    pub warmup_count: u32,
+    pub measurement_count: u32,
+    pub p50_ns: u64,
+    pub p95_ns: u64,
+    pub maximum_ns: u64,
+    pub fail_fast_gate_ns: u64,
+    pub aggregate_recall_ppm: u64,
+    pub minimum_query_recall_ppm: u64,
+    pub oracle_attainment_ppm: u64,
+    pub aggregate_recall_gate_ppm: u64,
+    pub minimum_query_recall_gate_ppm: u64,
+    pub oracle_attainment_gate_ppm: u64,
+    pub passed: bool,
+    pub page_body_reads: u32,
+    pub claim_eligible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct V26SimHashPreflightSample {
     pub bucket_limit: u32,
     pub query_ordinal: u32,
@@ -739,6 +781,17 @@ pub struct V26Pq16GlobalPreflightRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26Pq16GlobalQualityRequest {
+    pub serving_manifest: V26LocalObjectPath,
+    pub serving_dir: PathBuf,
+    pub layout_terminal: V26LocalObjectPath,
+    pub external_queries: V26LocalObjectPath,
+    pub truth: V26LocalObjectPath,
+    pub evidence_output_path: PathBuf,
+    pub evidence_output_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V26SimHashPreflightRequest {
     pub serving_manifest: V26LocalObjectPath,
     pub serving_dir: PathBuf,
@@ -830,6 +883,179 @@ pub fn canonical_v26_pq16_global_preflight_result_bytes(
         .map_err(|error| invalid(&format!("V26 global preflight result failed: {error}")))?;
     let mut bytes = serde_json::to_vec(&canonical_json_value(value))
         .map_err(|error| invalid(&format!("V26 global preflight result failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn summarize_v26_pq16_global_quality(
+    serving_manifest: V26ObjectIdentity,
+    external_queries: V26ObjectIdentity,
+    truth: V26ObjectIdentity,
+    evidence: V26ObjectIdentity,
+    samples: &[V26Pq16GlobalQualitySample],
+) -> Result<V26Pq16GlobalQualityResult> {
+    let identities = [
+        (&serving_manifest, "pq16-serving-manifest"),
+        (&external_queries, "external-queries-parquet"),
+        (&truth, "truth-parquet"),
+        (&evidence, "pq16-global-preflight-evidence-parquet"),
+    ];
+    let mut uris = BTreeSet::new();
+    for (identity, role) in identities {
+        validate_v26_benchmark_identity(identity, role)?;
+        if identity.generation != serving_manifest.generation || !uris.insert(&identity.uri) {
+            return Err(invalid("V26 global quality authority differs"));
+        }
+    }
+    if samples.len() != 32 {
+        return Err(invalid("V26 global quality sample inventory differs"));
+    }
+    let mut total_hits = 0_u64;
+    let mut total_oracle_hits = 0_u64;
+    let mut timings = Vec::with_capacity(samples.len());
+    for (query_index, sample) in samples.iter().enumerate() {
+        if usize::try_from(sample.query_ordinal).ok() != Some(query_index)
+            || sample.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
+            || sample
+                .selected_pages
+                .windows(2)
+                .any(|pages| pages[0] >= pages[1])
+            || sample.hits > sample.oracle_hits
+            || !(1..=10).contains(&sample.oracle_hits)
+            || sample.recall_ppm != u64::from(sample.hits) * 100_000
+            || sample.oracle_attainment_ppm
+                != u64::from(sample.hits) * 1_000_000 / u64::from(sample.oracle_hits)
+            || sample.elapsed_ns == 0
+            || sample.exact_rows_read != 2_048
+            || sample.cold_batches_read == 0
+            || sample.cold_batches_read > 2_048
+        {
+            return Err(invalid("V26 global quality sample authority differs"));
+        }
+        total_hits += u64::from(sample.hits);
+        total_oracle_hits += u64::from(sample.oracle_hits);
+        timings.push(sample.elapsed_ns);
+    }
+    timings.sort_unstable();
+    let percentile = |percent: usize| timings[(timings.len() * percent).div_ceil(100) - 1];
+    let aggregate_recall_ppm = total_hits * 1_000_000 / 320;
+    let minimum_query_recall_ppm = samples
+        .iter()
+        .map(|sample| sample.recall_ppm)
+        .min()
+        .unwrap();
+    let oracle_attainment_ppm = total_hits * 1_000_000 / total_oracle_hits;
+    let maximum_ns = *timings.last().unwrap();
+    Ok(V26Pq16GlobalQualityResult {
+        schema: "borsuk-v26-pq16-global-quality-result-v1".to_owned(),
+        serving_manifest,
+        external_queries,
+        truth,
+        evidence,
+        query_count: 32,
+        ranked_row_limit: 2_048,
+        selected_page_count: u32::try_from(crate::V26_SERVING_PAGE_BUDGET).unwrap(),
+        warmup_count: 2,
+        measurement_count: 32,
+        p50_ns: percentile(50),
+        p95_ns: percentile(95),
+        maximum_ns,
+        fail_fast_gate_ns: 15_000_000,
+        aggregate_recall_ppm,
+        minimum_query_recall_ppm,
+        oracle_attainment_ppm,
+        aggregate_recall_gate_ppm: 975_000,
+        minimum_query_recall_gate_ppm: 800_000,
+        oracle_attainment_gate_ppm: 995_000,
+        passed: aggregate_recall_ppm >= 975_000
+            && minimum_query_recall_ppm >= 800_000
+            && oracle_attainment_ppm >= 995_000
+            && maximum_ns <= 15_000_000,
+        page_body_reads: 0,
+        claim_eligible: false,
+    })
+}
+
+fn v26_pq16_global_quality_sample(
+    query_ordinal: u32,
+    selection: &V26Pq16ServingSelection,
+    truth: &V26QueryTruth,
+    elapsed_ns: u64,
+) -> Result<V26Pq16GlobalQualitySample> {
+    if truth.query_ordinal != query_ordinal
+        || truth.neighbor_source_ordinals.len() != 10
+        || truth.ground_truth_page_assignments.len() != 10
+        || truth
+            .ground_truth_page_assignments
+            .iter()
+            .any(|pages| pages.len() != 2 || pages[0] >= pages[1])
+        || selection.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
+        || selection
+            .selected_pages
+            .windows(2)
+            .any(|pages| pages[0] >= pages[1])
+        || selection.exact_rows_read != 2_048
+        || selection.cold_batches_read == 0
+        || selection.cold_batches_read > 2_048
+        || selection.cold_read_workers != 4
+        || selection.page_body_reads != 0
+        || elapsed_ns == 0
+    {
+        return Err(invalid("V26 global quality selection authority differs"));
+    }
+    let oracle_pages = exact_v26_layout_oracle_pages(
+        &truth.ground_truth_page_assignments,
+        crate::V26_SERVING_PAGE_BUDGET,
+    )?;
+    let hits = truth
+        .ground_truth_page_assignments
+        .iter()
+        .filter(|pages| {
+            pages
+                .iter()
+                .any(|page| selection.selected_pages.binary_search(page).is_ok())
+        })
+        .count() as u32;
+    let oracle_hits = truth
+        .ground_truth_page_assignments
+        .iter()
+        .filter(|pages| {
+            pages
+                .iter()
+                .any(|page| oracle_pages.binary_search(page).is_ok())
+        })
+        .count() as u32;
+    Ok(V26Pq16GlobalQualitySample {
+        query_ordinal,
+        selected_pages: selection.selected_pages.clone(),
+        hits,
+        oracle_hits,
+        recall_ppm: u64::from(hits) * 100_000,
+        oracle_attainment_ppm: u64::from(hits) * 1_000_000 / u64::from(oracle_hits),
+        elapsed_ns,
+        exact_rows_read: selection.exact_rows_read,
+        cold_batches_read: selection.cold_batches_read,
+    })
+}
+
+pub fn canonical_v26_pq16_global_quality_result_bytes(
+    result: &V26Pq16GlobalQualityResult,
+    samples: &[V26Pq16GlobalQualitySample],
+) -> Result<Vec<u8>> {
+    let expected = summarize_v26_pq16_global_quality(
+        result.serving_manifest.clone(),
+        result.external_queries.clone(),
+        result.truth.clone(),
+        result.evidence.clone(),
+        samples,
+    )?;
+    if result != &expected {
+        return Err(invalid("V26 global quality result differs"));
+    }
+    let value = serde_json::to_value(result)
+        .map_err(|error| invalid(&format!("V26 global quality result failed: {error}")))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V26 global quality result failed: {error}")))?;
     bytes.push(b'\n');
     Ok(bytes)
 }
@@ -978,6 +1204,72 @@ fn v26_global_preflight_latency_batch(samples: &[V26ServingLatencySample]) -> Re
     })
 }
 
+fn v26_pq16_global_quality_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new(
+            "selected_pages",
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt32, false)), 10),
+            false,
+        ),
+        Field::new("hits", DataType::UInt32, false),
+        Field::new("oracle_hits", DataType::UInt32, false),
+        Field::new("recall_ppm", DataType::UInt64, false),
+        Field::new("oracle_attainment_ppm", DataType::UInt64, false),
+        Field::new("elapsed_ns", DataType::UInt64, false),
+        Field::new("exact_rows_read", DataType::UInt32, false),
+        Field::new("cold_batches_read", DataType::UInt32, false),
+    ])
+}
+
+fn v26_pq16_global_quality_batch(samples: &[V26Pq16GlobalQualitySample]) -> Result<RecordBatch> {
+    if samples.len() != 32 {
+        return Err(invalid("V26 global quality evidence inventory differs"));
+    }
+    let selected_pages = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::UInt32, false)),
+        10,
+        Arc::new(UInt32Array::from_iter_values(
+            samples
+                .iter()
+                .flat_map(|sample| sample.selected_pages.iter().copied()),
+        )),
+        None,
+    )
+    .map_err(|error| invalid(&format!("V26 global quality pages failed: {error}")))?;
+    RecordBatch::try_new(
+        Arc::new(v26_pq16_global_quality_schema()),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.query_ordinal),
+            )),
+            Arc::new(selected_pages),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.hits),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.oracle_hits),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.recall_ppm),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.oracle_attainment_ppm),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.elapsed_ns),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.exact_rows_read),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.cold_batches_read),
+            )),
+        ],
+    )
+    .map_err(|error| invalid(&format!("V26 global quality batch failed: {error}")))
+}
+
 pub fn run_v26_pq16_global_preflight(request: &V26Pq16GlobalPreflightRequest) -> Result<Vec<u8>> {
     if request.latency_output_path.exists()
         || !request.latency_output_uri.starts_with("s3://")
@@ -1046,6 +1338,133 @@ pub fn run_v26_pq16_global_preflight(request: &V26Pq16GlobalPreflightRequest) ->
     })();
     if result.is_err() {
         let _ = fs::remove_file(&request.latency_output_path);
+    }
+    result
+}
+
+pub fn run_v26_pq16_global_quality_preflight(
+    request: &V26Pq16GlobalQualityRequest,
+) -> Result<Vec<u8>> {
+    if request.evidence_output_path.exists()
+        || !request.evidence_output_uri.starts_with("s3://")
+        || !request.evidence_output_uri.ends_with(".parquet")
+    {
+        return Err(invalid("V26 global quality request differs"));
+    }
+    let manifest = read_v26_pq16_serving_manifest(&request.serving_manifest)?;
+    let terminal = read_layout_terminal(&request.layout_terminal)?;
+    authenticate(&request.external_queries, "external-queries-parquet")?;
+    authenticate(&request.truth, "truth-parquet")?;
+    let generation = &terminal.authority.generation;
+    let mut uris = BTreeSet::new();
+    if manifest.inputs[0] != terminal.authority.construction_rows
+        || manifest.inputs[2] != request.layout_terminal.identity
+        || manifest.row_count != terminal.row_count
+        || manifest.page_count != terminal.page_count
+        || [
+            &request.serving_manifest.identity,
+            &request.layout_terminal.identity,
+            &request.external_queries.identity,
+            &request.truth.identity,
+        ]
+        .iter()
+        .any(|identity| identity.generation != *generation || !uris.insert(&identity.uri))
+        || !uris.insert(&request.evidence_output_uri)
+    {
+        return Err(invalid("V26 global quality authority differs"));
+    }
+    let expected_names = v26_pq16_serving_output_names()
+        .into_iter()
+        .chain(std::iter::once("serving-manifest.json"))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let observed_names = fs::read_dir(&request.serving_dir)
+        .map_err(|error| {
+            invalid(&format!(
+                "V26 global quality directory read failed: {error}"
+            ))
+        })?
+        .map(|entry| {
+            entry
+                .map_err(|error| {
+                    invalid(&format!(
+                        "V26 global quality directory read failed: {error}"
+                    ))
+                })
+                .and_then(|entry| {
+                    entry
+                        .file_name()
+                        .into_string()
+                        .map_err(|_| invalid("V26 global quality artifact name differs"))
+                })
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    if observed_names != expected_names {
+        return Err(invalid("V26 global quality artifact inventory differs"));
+    }
+    let index = read_v26_pq16_index_arrow(&request.serving_dir, &manifest.index)?;
+    let cold_vectors = V26ArrowColdVectors::open(
+        &request.serving_dir.join("cold-vectors.arrow"),
+        &manifest.cold_vectors,
+    )?;
+    let mut queries = read_evaluation_queries(&request.external_queries.path, 512)?;
+    let mut truths = read_evaluation_truth_with_assignment(
+        &request.truth.path,
+        512,
+        &queries,
+        &terminal.authority.construction_rows.digest,
+        &request.external_queries.identity.digest,
+        |neighbor| {
+            let source = u32::try_from(neighbor)
+                .map_err(|_| invalid("V26 global quality truth source differs"))?;
+            cold_vectors.read_assignment(source)
+        },
+    )?;
+    queries.truncate(32);
+    truths.truncate(32);
+    for query in queries.iter().take(2) {
+        select_v26_pq16_global_pages_from_arrow(&index, &query.vector, &cold_vectors, 2_048)?;
+    }
+    let mut samples = Vec::with_capacity(32);
+    for (query, truth) in queries.iter().zip(&truths) {
+        let started = std::time::Instant::now();
+        let selection =
+            select_v26_pq16_global_pages_from_arrow(&index, &query.vector, &cold_vectors, 2_048)?;
+        let elapsed_ns = u64::try_from(started.elapsed().as_nanos())
+            .map_err(|_| invalid("V26 global quality latency overflows"))?
+            .max(1);
+        samples.push(v26_pq16_global_quality_sample(
+            query.query_ordinal,
+            &selection,
+            truth,
+            elapsed_ns,
+        )?);
+    }
+    let result = (|| {
+        write_batch(
+            &request.evidence_output_path,
+            v26_pq16_global_quality_batch(&samples)?,
+        )?;
+        let evidence = output_identity(
+            "pq16-global-preflight-evidence-parquet",
+            &request.evidence_output_path,
+            &request.evidence_output_uri[..request.evidence_output_uri.rfind('/').unwrap() + 1],
+            generation,
+        )?;
+        if evidence.uri != request.evidence_output_uri {
+            return Err(invalid("V26 global quality evidence URI differs"));
+        }
+        let result = summarize_v26_pq16_global_quality(
+            request.serving_manifest.identity.clone(),
+            request.external_queries.identity.clone(),
+            request.truth.identity.clone(),
+            evidence,
+            &samples,
+        )?;
+        canonical_v26_pq16_global_quality_result_bytes(&result, &samples)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&request.evidence_output_path);
     }
     result
 }
@@ -6276,10 +6695,9 @@ mod tests {
         V26ArrowColdVectors, V26CandidateCoverRequest, V26CentroidRouterRequest,
         V26ExactGlobalRequest, V26LayoutBuildRequest, V26LayoutEvaluationRequest,
         V26LocalObjectPath, V26PageModeRouterRequest, V26Pq8CoverRequest,
-        V26Pq16GlobalPreflightResult, V26Pq16RerankRequest, V26Pq16ServingBuildRequest,
-        V26Pq16ServingRuntimeRequest, V26PqWidthLadderRequest, V26ServingLatencySample,
-        V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
-        canonical_v26_pq16_global_preflight_result_bytes,
+        V26Pq16GlobalQualityResult, V26Pq16GlobalQualitySample, V26Pq16RerankRequest,
+        V26Pq16ServingBuildRequest, V26Pq16ServingRuntimeRequest, V26PqWidthLadderRequest,
+        V26ServingLatencySample, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
         canonical_v26_pq16_serving_benchmark_result_bytes, evaluate_v26_exact_global,
         evaluate_v26_layout_oracle, evaluate_v26_layout_oracle_with_page_budget, open_reader,
         open_v26_pq16_serving_runtime, output_identity, read_assignments, read_evaluation_queries,
@@ -8067,6 +8485,68 @@ mod tests {
     }
 
     #[test]
+    fn v26_pq16_global_quality_runner_binds_truth_and_writes_32_parquet_samples() {
+        // Break caught: native global PQ16 is timed without authenticating truth and persisting
+        // independently recomputable per-query quality evidence before a full-scale run.
+        let (temp, evaluation) = evaluation_fixture_with_rows(3_521);
+        let receipt = read_layout_terminal(&evaluation.layout_terminal).unwrap();
+        let serving_dir = temp.path().join("global-quality-serving");
+        run_v26_pq16_serving_build(&V26Pq16ServingBuildRequest {
+            construction_rows: identity(
+                "construction-parquet",
+                &temp.path().join("construction.parquet"),
+            ),
+            page_assignments: evaluation.page_assignments,
+            layout_terminal: evaluation.layout_terminal.clone(),
+            primary_tree: V26LocalObjectPath {
+                identity: receipt.outputs[1].clone(),
+                path: temp.path().join("layout/primary-tree.parquet"),
+            },
+            replica_tree: V26LocalObjectPath {
+                identity: receipt.outputs[2].clone(),
+                path: temp.path().join("layout/replica-tree.parquet"),
+            },
+            expected_rows: 3_521,
+            output_dir: serving_dir.clone(),
+            output_uri_prefix: "s3://v26-output/global-quality-serving/".to_owned(),
+        })
+        .unwrap();
+        let evidence_path = temp.path().join("global-quality.parquet");
+        let request = super::V26Pq16GlobalQualityRequest {
+            serving_manifest: identity(
+                "pq16-serving-manifest",
+                &serving_dir.join("serving-manifest.json"),
+            ),
+            serving_dir,
+            layout_terminal: evaluation.layout_terminal,
+            external_queries: evaluation.external_queries,
+            truth: evaluation.truth,
+            evidence_output_path: evidence_path.clone(),
+            evidence_output_uri: "s3://v26-output/global-quality.parquet".to_owned(),
+        };
+
+        let bytes = super::run_v26_pq16_global_quality_preflight(&request).unwrap();
+
+        let result: super::V26Pq16GlobalQualityResult = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(result.schema, "borsuk-v26-pq16-global-quality-result-v1");
+        assert_eq!(result.query_count, 32);
+        assert_eq!(result.measurement_count, 32);
+        assert_eq!(result.truth, request.truth.identity);
+        assert_eq!(result.page_body_reads, 0);
+        assert!(!result.claim_eligible);
+        let reader = open_reader(&evidence_path).unwrap();
+        assert_eq!(reader.metadata().file_metadata().num_rows(), 32);
+        assert_eq!(
+            reader.schema().as_ref(),
+            &super::v26_pq16_global_quality_schema()
+        );
+        assert_eq!(
+            result.evidence.encoded_bytes,
+            fs::metadata(evidence_path).unwrap().len()
+        );
+    }
+
+    #[test]
     fn v26_dual_pq_key_preflight_runner_binds_arrow_truth_and_writes_96_samples() {
         // Break caught: the dual-key runner tunes on truth, skips an arm/query, loses either
         // Arrow-plane identity, emits non-Parquet evidence, or gains a page-body read surface.
@@ -8291,15 +8771,28 @@ mod tests {
     }
 
     #[test]
-    fn v26_fast_global_preflight_recomputes_the_fail_fast_latency_gate() {
-        // Break caught: a small global-scan preflight can pass without 32 raw measurements,
-        // hide its maximum, change the fixed depth, or become claim eligible.
+    fn v26_fast_global_quality_recomputes_the_fail_fast_truth_gate() {
+        // Break caught: the short global-scan preflight can pass latency while silently
+        // missing truth neighbors, trusting stored quality aggregates, or changing its depth.
         let samples = (0_u32..32)
-            .map(|sample_ordinal| V26ServingLatencySample {
-                sample_ordinal,
-                query_ordinal: sample_ordinal,
-                elapsed_ns: u64::from(sample_ordinal + 1) * 100_000,
-                cold_batches_read: 128,
+            .map(|query_ordinal| V26Pq16GlobalQualitySample {
+                elapsed_ns: u64::from(query_ordinal + 1) * 100_000,
+                query_ordinal,
+                selected_pages: (0_u32..10).collect(),
+                hits: if query_ordinal == 0 { 8 } else { 10 },
+                oracle_hits: 10,
+                recall_ppm: if query_ordinal == 0 {
+                    800_000
+                } else {
+                    1_000_000
+                },
+                oracle_attainment_ppm: if query_ordinal == 0 {
+                    800_000
+                } else {
+                    1_000_000
+                },
+                exact_rows_read: 2_048,
+                cold_batches_read: 153,
             })
             .collect::<Vec<_>>();
         let identity = |role: &str, fill: char| V26ObjectIdentity {
@@ -8310,11 +8803,12 @@ mod tests {
             encoded_bytes: 1_024,
             generation: "v26-local-test".to_owned(),
         };
-        let result = V26Pq16GlobalPreflightResult {
-            schema: "borsuk-v26-pq16-global-preflight-result-v1".to_owned(),
+        let result = V26Pq16GlobalQualityResult {
+            schema: "borsuk-v26-pq16-global-quality-result-v1".to_owned(),
             serving_manifest: identity("pq16-serving-manifest", 'a'),
             external_queries: identity("external-queries-parquet", 'b'),
-            latency_evidence: identity("pq16-global-preflight-latency-parquet", 'c'),
+            truth: identity("truth-parquet", 'c'),
+            evidence: identity("pq16-global-preflight-evidence-parquet", 'd'),
             query_count: 32,
             ranked_row_limit: 2_048,
             selected_page_count: 10,
@@ -8324,15 +8818,61 @@ mod tests {
             p95_ns: 3_100_000,
             maximum_ns: 3_200_000,
             fail_fast_gate_ns: 15_000_000,
-            passed: true,
+            aggregate_recall_ppm: 993_750,
+            minimum_query_recall_ppm: 800_000,
+            oracle_attainment_ppm: 993_750,
+            aggregate_recall_gate_ppm: 975_000,
+            minimum_query_recall_gate_ppm: 800_000,
+            oracle_attainment_gate_ppm: 995_000,
+            passed: false,
             page_body_reads: 0,
             claim_eligible: false,
         };
-        assert!(canonical_v26_pq16_global_preflight_result_bytes(&result, &samples).is_ok());
+        assert!(super::canonical_v26_pq16_global_quality_result_bytes(&result, &samples).is_ok());
 
-        let mut drifted = result;
+        let mut drifted = result.clone();
         drifted.maximum_ns += 1;
-        assert!(canonical_v26_pq16_global_preflight_result_bytes(&drifted, &samples).is_err());
+        assert!(super::canonical_v26_pq16_global_quality_result_bytes(&drifted, &samples).is_err());
+
+        let mut drifted_samples = samples;
+        drifted_samples[0].hits = 10;
+        assert!(
+            super::canonical_v26_pq16_global_quality_result_bytes(&result, &drifted_samples)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn v26_fast_global_quality_sample_joins_selection_to_truth_without_page_reads() {
+        // Break caught: the fast global screen measures latency but never joins the selected
+        // pages to the independently authenticated truth assignments.
+        let selection = crate::V26Pq16ServingSelection {
+            selected_pages: (0_u32..10).collect(),
+            exact_rows_read: 2_048,
+            cold_batches_read: 2,
+            cold_read_workers: 4,
+            page_body_reads: 0,
+        };
+        let mut assignments = (0_u32..8)
+            .map(|page| vec![page, 200 + page])
+            .collect::<Vec<_>>();
+        assignments.extend([vec![100, 101], vec![102, 103]]);
+        let truth = crate::V26QueryTruth {
+            query_ordinal: 7,
+            neighbor_source_ordinals: (0_u64..10).collect(),
+            ground_truth_page_assignments: assignments,
+        };
+
+        let sample = super::v26_pq16_global_quality_sample(7, &selection, &truth, 1_234).unwrap();
+        assert_eq!(sample.query_ordinal, 7);
+        assert_eq!(sample.selected_pages, (0_u32..10).collect::<Vec<_>>());
+        assert_eq!(sample.hits, 8);
+        assert_eq!(sample.oracle_hits, 10);
+        assert_eq!(sample.recall_ppm, 800_000);
+        assert_eq!(sample.oracle_attainment_ppm, 800_000);
+        assert_eq!(sample.elapsed_ns, 1_234);
+        assert_eq!(sample.exact_rows_read, 2_048);
+        assert_eq!(sample.cold_batches_read, 2);
     }
 
     #[test]

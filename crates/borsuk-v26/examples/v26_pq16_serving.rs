@@ -4,13 +4,15 @@ use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
 use borsuk_v26::{
     V26LocalObjectPath, V26ObjectIdentity, V26Pq16GlobalPreflightRequest,
-    V26Pq16ServingBenchmarkRequest, V26Pq16ServingRuntimeRequest, run_v26_pq16_global_preflight,
+    V26Pq16GlobalQualityRequest, V26Pq16ServingBenchmarkRequest, V26Pq16ServingRuntimeRequest,
+    run_v26_pq16_global_preflight, run_v26_pq16_global_quality_preflight,
     run_v26_pq16_serving_benchmark,
 };
 
 enum V26ServingMode {
     Benchmark(V26Pq16ServingBenchmarkRequest),
     GlobalPreflight(V26Pq16GlobalPreflightRequest),
+    GlobalQuality(V26Pq16GlobalQualityRequest),
 }
 
 fn take(values: &mut BTreeMap<String, String>, key: &str) -> Result<String, String> {
@@ -58,7 +60,9 @@ fn parse_args(args: Vec<String>) -> Result<V26ServingMode, String> {
     while let Some(key) = args.next() {
         if matches!(
             key.as_str(),
-            "--execute-pq16-serving" | "--execute-pq16-global-preflight"
+            "--execute-pq16-serving"
+                | "--execute-pq16-global-preflight"
+                | "--execute-pq16-global-quality"
         ) {
             if mode.is_some() {
                 return Err("duplicate execution mode".to_owned());
@@ -114,6 +118,16 @@ fn parse_args(args: Vec<String>) -> Result<V26ServingMode, String> {
         "external-queries-parquet",
         &generation,
     )?;
+    let truth = if mode == "--execute-pq16-global-quality" {
+        Some(registered(
+            &mut values,
+            "truth",
+            "truth-parquet",
+            &generation,
+        )?)
+    } else {
+        None
+    };
     if !values.is_empty()
         || !latency_output_uri.starts_with("s3://")
         || !latency_output_uri.ends_with(".parquet")
@@ -142,6 +156,17 @@ fn parse_args(args: Vec<String>) -> Result<V26ServingMode, String> {
                 latency_output_uri,
             },
         )),
+        "--execute-pq16-global-quality" => {
+            Ok(V26ServingMode::GlobalQuality(V26Pq16GlobalQualityRequest {
+                serving_manifest: runtime.serving_manifest,
+                serving_dir: runtime.serving_dir,
+                layout_terminal: runtime.layout_terminal,
+                external_queries: runtime.external_queries,
+                truth: truth.unwrap(),
+                evidence_output_path: latency_output_path,
+                evidence_output_uri: latency_output_uri,
+            }))
+        }
         _ => unreachable!(),
     }
 }
@@ -154,6 +179,9 @@ fn run() -> Result<(), String> {
         }
         V26ServingMode::GlobalPreflight(request) => {
             run_v26_pq16_global_preflight(&request).map_err(|error| error.to_string())?
+        }
+        V26ServingMode::GlobalQuality(request) => {
+            run_v26_pq16_global_quality_preflight(&request).map_err(|error| error.to_string())?
         }
     };
     std::io::stdout()
@@ -269,5 +297,35 @@ mod tests {
             "pq16-serving-manifest"
         );
         assert_eq!(request.latency_output_uri, "s3://v26/latency.parquet");
+    }
+
+    #[test]
+    fn v26_pq16_global_quality_cli_requires_frozen_truth_without_storage_flags() {
+        // Break caught: the native PQ16 screen can execute without exact truth authority or can
+        // acquire page bodies/AWS inputs instead of using seven local Arrow/Parquet artifacts.
+        let mut args = valid_args();
+        args[0] = "--execute-pq16-global-quality".to_owned();
+        for (flag, value) in [
+            ("--truth-path".to_owned(), "/tmp/truth.parquet".to_owned()),
+            (
+                "--truth-uri".to_owned(),
+                "s3://v26/truth.parquet".to_owned(),
+            ),
+            ("--truth-sha256".to_owned(), "b".repeat(64)),
+            ("--truth-bytes".to_owned(), "2048".to_owned()),
+        ] {
+            args.extend([flag, value]);
+        }
+        let super::V26ServingMode::GlobalQuality(request) = super::parse_args(args).unwrap() else {
+            panic!("global quality mode differs");
+        };
+        assert_eq!(request.truth.identity.role, "truth-parquet");
+        assert_eq!(request.truth.identity.encoded_bytes, 2_048);
+        assert_eq!(request.evidence_output_uri, "s3://v26/latency.parquet");
+
+        let mut forbidden = valid_args();
+        forbidden[0] = "--execute-pq16-global-quality".to_owned();
+        forbidden.extend(["--bucket".to_owned(), "forbidden".to_owned()]);
+        assert!(super::parse_args(forbidden).is_err());
     }
 }
