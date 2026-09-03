@@ -2493,8 +2493,13 @@ pub(crate) fn evaluate_v26_candidate_row_cover(
     queries: &[V26ExternalQuery],
     truths: &[V26QueryTruth],
     candidate_page_limit: usize,
+    page_budget: usize,
 ) -> Result<(Vec<V26TreeRouterSample>, V26TreeRouterResult)> {
-    if queries.len() != 512 || truths.len() != queries.len() || rows.len() != assignments.len() {
+    if queries.len() != 512
+        || truths.len() != queries.len()
+        || rows.len() != assignments.len()
+        || page_budget == 0
+    {
         return Err(invalid("V26 candidate cover request differs"));
     }
     let samples = queries
@@ -2545,21 +2550,22 @@ pub(crate) fn evaluate_v26_candidate_row_cover(
                     Ok(pages)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let mut selected_pages = exact_v26_layout_oracle_pages(&ranked_assignments, 8)?;
+            let mut selected_pages =
+                exact_v26_layout_oracle_pages(&ranked_assignments, page_budget)?;
             for page in ranked_candidates {
-                if selected_pages.len() == 8 {
+                if selected_pages.len() == page_budget {
                     break;
                 }
                 if !selected_pages.contains(&page) {
                     selected_pages.push(page);
                 }
             }
-            if selected_pages.len() != 8 {
+            if selected_pages.len() != page_budget {
                 return Err(invalid("V26 candidate cover page inventory differs"));
             }
             selected_pages.sort_unstable();
             let oracle_pages =
-                exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?;
+                exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, page_budget)?;
             let hits = v26_layout_hits(&truth.ground_truth_page_assignments, &selected_pages);
             let oracle_hits = v26_layout_hits(&truth.ground_truth_page_assignments, &oracle_pages);
             Ok(V26TreeRouterSample {
@@ -3922,7 +3928,7 @@ mod tests {
     }
 
     #[test]
-    fn v26_candidate_row_cover_uses_row_identity_and_exact_eight_page_cover() {
+    fn v26_candidate_row_cover_uses_row_identity_and_exact_ten_page_cover() {
         // Break caught: candidate rows are reduced to independent page scores, partner pages
         // escape the frontier, or truth participates before the eight pages are persisted.
         let primary = v26_router_test_tree(PRIMARY_SEED, 0, [100.0, 10.0, 1.0, 2.0, 5.0, 1.0, 2.0]);
@@ -3966,6 +3972,7 @@ mod tests {
             &queries,
             &truths,
             16,
+            10,
         )
         .unwrap();
 
@@ -3977,7 +3984,7 @@ mod tests {
         assert!(
             samples
                 .iter()
-                .all(|sample| sample.selected_pages.len() == 8)
+                .all(|sample| sample.selected_pages.len() == 10)
         );
     }
 

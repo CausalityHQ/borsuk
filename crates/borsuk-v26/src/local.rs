@@ -1526,14 +1526,17 @@ pub fn run_v26_page_mode_router(request: &V26PageModeRouterRequest) -> Result<Ve
     result
 }
 
-fn v26_candidate_cover_evidence_schema() -> Schema {
+fn v26_candidate_cover_evidence_schema(page_budget: i32) -> Schema {
     Schema::new(vec![
         Field::new("query_ordinal", DataType::UInt32, false),
         Field::new("candidate_page_limit", DataType::UInt32, false),
         Field::new("ranked_row_limit", DataType::UInt32, false),
         Field::new(
             "selected_pages",
-            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt32, false)), 8),
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::UInt32, false)),
+                page_budget,
+            ),
             false,
         ),
         Field::new("hits", DataType::UInt32, false),
@@ -1546,11 +1549,12 @@ fn v26_candidate_cover_evidence_schema() -> Schema {
 fn v26_candidate_cover_evidence_batch(
     samples: &[crate::V26TreeRouterSample],
     candidate_page_limit: u32,
+    page_budget: usize,
 ) -> Result<RecordBatch> {
     if samples.len() != 512
         || samples
             .iter()
-            .any(|sample| sample.selected_pages.len() != 8)
+            .any(|sample| sample.selected_pages.len() != page_budget)
     {
         return Err(invalid("V26 candidate cover evidence inventory differs"));
     }
@@ -1559,7 +1563,10 @@ fn v26_candidate_cover_evidence_batch(
         .flat_map(|sample| sample.selected_pages.iter().copied())
         .collect::<Vec<_>>();
     RecordBatch::try_new(
-        Arc::new(v26_candidate_cover_evidence_schema()),
+        Arc::new(v26_candidate_cover_evidence_schema(
+            i32::try_from(page_budget)
+                .map_err(|_| invalid("V26 candidate cover page budget overflows"))?,
+        )),
         vec![
             Arc::new(UInt32Array::from_iter_values(
                 samples.iter().map(|sample| sample.query_ordinal),
@@ -1569,7 +1576,8 @@ fn v26_candidate_cover_evidence_batch(
             Arc::new(
                 FixedSizeListArray::try_new(
                     Arc::new(Field::new("element", DataType::UInt32, false)),
-                    8,
+                    i32::try_from(page_budget)
+                        .map_err(|_| invalid("V26 candidate cover page budget overflows"))?,
                     Arc::new(UInt32Array::from(pages)),
                     None,
                 )
@@ -1606,11 +1614,13 @@ pub fn run_v26_candidate_row_cover(request: &V26CandidateCoverRequest) -> Result
         layout: request.router.layout.clone(),
         ranked_row_limits: vec![10],
     };
-    let loaded = load_v26_exact_global(&exact)?;
-    let (primary, replica, queries, truths) = load_v26_tree_router(&request.router)?;
-    if queries != loaded.queries || truths != loaded.truths || request.router.page_budget != 8 {
+    let loaded = load_v26_exact_global_with_page_budget(&exact, 10)?;
+    let (primary, replica) = load_v26_router_trees(&request.router, 10)?;
+    if request.router.page_budget != 10 {
         return Err(invalid("V26 candidate cover authority differs"));
     }
+    let queries = &loaded.queries;
+    let truths = &loaded.truths;
     let page_count = rank_v26_tree_pages(&primary, &replica, &queries[0].vector)?.len();
     let candidate_page_limit = 128.min(page_count);
     let (samples, result) = evaluate_v26_candidate_row_cover(
@@ -1618,9 +1628,10 @@ pub fn run_v26_candidate_row_cover(request: &V26CandidateCoverRequest) -> Result
         &replica,
         &loaded.rows,
         &loaded.assignments,
-        &queries,
-        &truths,
+        queries,
+        truths,
         candidate_page_limit,
+        10,
     )?;
     let output = (|| {
         write_batch(
@@ -1629,6 +1640,7 @@ pub fn run_v26_candidate_row_cover(request: &V26CandidateCoverRequest) -> Result
                 &samples,
                 u32::try_from(candidate_page_limit)
                     .map_err(|_| invalid("V26 candidate cover width overflows"))?,
+                10,
             )?,
         )?;
         let (encoded_bytes, digest) = sha256_file(&request.evidence_output_path)?;
@@ -1698,6 +1710,7 @@ pub fn run_v26_pq8_candidate_cover(request: &V26Pq8CoverRequest) -> Result<Vec<u
                 &samples,
                 u32::try_from(candidate_page_limit)
                     .map_err(|_| invalid("V26 PQ8 cover width overflows"))?,
+                8,
             )?,
         )?;
         let (encoded_bytes, digest) = sha256_file(&request.evidence_output_path)?;

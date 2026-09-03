@@ -448,7 +448,11 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
         let page_budget = take(&mut values, "--page-budget")?
             .parse()
             .map_err(|_| "invalid --page-budget".to_owned())?;
-        let expected_page_budget = if pq16_exact_rerank { 10 } else { 8 };
+        let expected_page_budget = if candidate_cover || pq16_exact_rerank {
+            10
+        } else {
+            8
+        };
         if !valid_registered(&primary_tree)
             || !valid_registered(&replica_tree)
             || page_budget != expected_page_budget
@@ -1009,6 +1013,12 @@ mod tests {
             .find(|argument| argument.as_str() == "s3://bucket/page-mode-evidence.parquet")
             .unwrap();
         *evidence_uri = "s3://bucket/candidate-cover-evidence.parquet".to_owned();
+        let page_budget = args
+            .iter_mut()
+            .skip_while(|argument| argument.as_str() != "--page-budget")
+            .nth(1)
+            .unwrap();
+        *page_budget = "10".to_owned();
         args
     }
 
@@ -1022,6 +1032,12 @@ mod tests {
         for argument in &mut args {
             *argument = argument.replace("candidate-cover-evidence", "pq8-cover-evidence");
         }
+        let page_budget = args
+            .iter_mut()
+            .skip_while(|argument| argument.as_str() != "--page-budget")
+            .nth(1)
+            .unwrap();
+        *page_budget = "8".to_owned();
         args
     }
 
@@ -1349,6 +1365,7 @@ mod tests {
         let V26CliMode::CandidateCover(request) = parsed else {
             panic!("candidate cover mode differs");
         };
+        assert_eq!(request.router.page_budget, 10);
         assert_eq!(
             request.evidence_output_path,
             std::path::PathBuf::from("/output/candidate-cover-evidence.parquet")
