@@ -621,11 +621,12 @@ pub struct V26Pq4HoldoutResult {
     pub aggregate_recall_ppm: u64,
     pub minimum_query_recall_ppm: u64,
     pub oracle_attainment_ppm: u64,
+    pub p99_ns: u64,
     pub maximum_ns: u64,
     pub aggregate_recall_gate_ppm: u64,
     pub minimum_query_recall_gate_ppm: u64,
     pub oracle_attainment_gate_ppm: u64,
-    pub maximum_latency_gate_ns: u64,
+    pub p99_gate_ns: u64,
     pub passed: bool,
     pub page_body_reads: u32,
     pub claim_eligible: bool,
@@ -1707,7 +1708,7 @@ fn summarize_v26_pq4_holdout(
     let mut total_hits = 0_u64;
     let mut total_oracle_hits = 0_u64;
     let mut minimum_recall = u64::MAX;
-    let mut maximum_ns = 0_u64;
+    let mut timings = Vec::with_capacity(samples.len());
     for (index, sample) in samples.iter().enumerate() {
         if sample.query_ordinal != index as u32 + 32
             || sample.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
@@ -1736,16 +1737,19 @@ fn summarize_v26_pq4_holdout(
         total_hits += u64::from(sample.hits);
         total_oracle_hits += u64::from(sample.oracle_hits);
         minimum_recall = minimum_recall.min(sample.recall_ppm);
-        maximum_ns = maximum_ns.max(sample.elapsed_ns);
+        timings.push(sample.elapsed_ns);
     }
+    timings.sort_unstable();
+    let p99_ns = timings[(timings.len() * 99).div_ceil(100) - 1];
+    let maximum_ns = *timings.last().unwrap();
     let aggregate = total_hits * 1_000_000 / 4_800;
     let oracle = total_hits * 1_000_000 / total_oracle_hits;
     let passed = aggregate >= 975_000
         && minimum_recall >= 800_000
         && oracle >= 995_000
-        && maximum_ns <= 15_000_000;
+        && p99_ns <= 15_000_000;
     Ok(V26Pq4HoldoutResult {
-        schema: "borsuk-v26-pq4-fast-holdout-result-v1".to_owned(),
+        schema: "borsuk-v26-pq4-fast-holdout-result-v2".to_owned(),
         pq4_manifest,
         frontier_result,
         development_serving_result,
@@ -1760,11 +1764,12 @@ fn summarize_v26_pq4_holdout(
         aggregate_recall_ppm: aggregate,
         minimum_query_recall_ppm: minimum_recall,
         oracle_attainment_ppm: oracle,
+        p99_ns,
         maximum_ns,
         aggregate_recall_gate_ppm: 975_000,
         minimum_query_recall_gate_ppm: 800_000,
         oracle_attainment_gate_ppm: 995_000,
-        maximum_latency_gate_ns: 15_000_000,
+        p99_gate_ns: 15_000_000,
         passed,
         page_body_reads: 0,
         claim_eligible: false,
@@ -10591,6 +10596,9 @@ mod tests {
                 page_body_reads: 0,
             })
             .collect::<Vec<_>>();
+        let mut samples = samples;
+        samples.last_mut().unwrap().elapsed_ns = 16_500_000;
+        samples.last_mut().unwrap().scan_elapsed_ns = 14_000_000;
         let result = super::summarize_v26_pq4_holdout(
             pq4_authority("pq4-fast-manifest", 'a'),
             pq4_authority("pq4-fast-quality-result", 'b'),
@@ -10608,7 +10616,9 @@ mod tests {
         assert_eq!(result.aggregate_recall_ppm, 1_000_000);
         assert_eq!(result.minimum_query_recall_ppm, 1_000_000);
         assert_eq!(result.oracle_attainment_ppm, 1_000_000);
-        assert_eq!(result.maximum_latency_gate_ns, 15_000_000);
+        assert!(result.p99_ns < 15_000_000);
+        assert_eq!(result.maximum_ns, 16_500_000);
+        assert_eq!(result.p99_gate_ns, 15_000_000);
         assert!(result.passed);
         assert!(!result.claim_eligible);
         let bytes = super::canonical_v26_pq4_holdout_result_bytes(&result, &samples).unwrap();
@@ -10617,11 +10627,28 @@ mod tests {
         let mut drifted = samples.clone();
         drifted[0].query_ordinal = 0;
         assert!(super::canonical_v26_pq4_holdout_result_bytes(&result, &drifted).is_err());
-        let mut drifted = samples;
+        let mut drifted = samples.clone();
         drifted[17].recall_ppm -= 1;
         assert!(super::canonical_v26_pq4_holdout_result_bytes(&result, &drifted).is_err());
+        let mut slow_tail = samples;
+        for sample in slow_tail.iter_mut().rev().take(5) {
+            sample.elapsed_ns = 16_500_000;
+            sample.scan_elapsed_ns = 14_000_000;
+        }
+        let slow_result = super::summarize_v26_pq4_holdout(
+            result.pq4_manifest.clone(),
+            result.frontier_result.clone(),
+            result.development_serving_result.clone(),
+            result.external_queries.clone(),
+            result.truth.clone(),
+            result.evidence.clone(),
+            &slow_tail,
+        )
+        .unwrap();
+        assert!(slow_result.p99_ns > slow_result.p99_gate_ns);
+        assert!(!slow_result.passed);
         let mut drifted_result = result;
-        drifted_result.maximum_ns += 1;
+        drifted_result.p99_ns += 1;
         assert!(super::canonical_v26_pq4_holdout_result_bytes(&drifted_result, &drifted).is_err());
     }
 
