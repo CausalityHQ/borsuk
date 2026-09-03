@@ -1,15 +1,19 @@
 mod core;
 
+#[cfg(all(test, not(target_arch = "aarch64")))]
+pub(crate) use core::rank_candidates;
 #[cfg(test)]
 pub(crate) use core::{
-    Pq4Codebook, encode_blocks, fit_codebook, projected_resident_bytes, rank_candidates,
+    Pq4Codebook, encode_blocks, fit_codebook, projected_resident_bytes,
     rank_candidates_parallel_scalar_for_test, rank_candidates_scalar, score_rows_scalar,
 };
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "aarch64"))]
+    use super::rank_candidates;
     use super::{
-        Pq4Codebook, encode_blocks, fit_codebook, projected_resident_bytes, rank_candidates,
+        Pq4Codebook, encode_blocks, fit_codebook, projected_resident_bytes,
         rank_candidates_parallel_scalar_for_test, rank_candidates_scalar, score_rows_scalar,
     };
 
@@ -139,6 +143,27 @@ mod tests {
             rank_candidates_parallel_scalar_for_test(&codebook, &blocks, rows.len(), &query, 2_048)
                 .unwrap();
         assert_eq!(parallel, scalar);
+    }
+
+    #[test]
+    fn v26_release_contract_pq4_core_3072_depth_matches_the_scalar_control() {
+        // Break caught: the evidence-qualified 3,072-row depth is rejected by a stale
+        // diagnostic allowlist or changes deterministic score/source ordering.
+        let rows = rows(4_097);
+        let codebook = fit_codebook(&rows).unwrap();
+        let codes = rows
+            .iter()
+            .map(|row| codebook.encode(row).unwrap())
+            .collect::<Vec<_>>();
+        let blocks = encode_blocks(&codes).unwrap();
+        let query = rows[2_113];
+
+        let scalar = rank_candidates_scalar(&codebook, &blocks, rows.len(), &query, 3_072).unwrap();
+        let parallel =
+            rank_candidates_parallel_scalar_for_test(&codebook, &blocks, rows.len(), &query, 3_072)
+                .unwrap();
+        assert_eq!(parallel, scalar);
+        assert_eq!(parallel.len(), 3_072);
     }
 
     #[cfg(not(target_arch = "aarch64"))]

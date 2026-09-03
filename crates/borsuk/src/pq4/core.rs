@@ -271,7 +271,7 @@ fn rank_candidates_with_scorer<F>(
 where
     F: Fn(&[u8; 512], &[[u8; 16]; 32]) -> [u16; 32] + Sync,
 {
-    if ![512, 1_024, 2_048, 4_096].contains(&limit)
+    if ![512, 1_024, 2_048, 3_072, 4_096].contains(&limit)
         || row_count < limit
         || blocks.len() != row_count.div_ceil(32)
         || blocks_per_chunk == 0
@@ -374,7 +374,7 @@ pub(crate) fn rank_candidates_scalar(
     query: &[f32; 96],
     limit: usize,
 ) -> Result<Vec<Pq4RankedRow>> {
-    if ![512, 1_024, 2_048, 4_096].contains(&limit) || row_count < limit {
+    if ![512, 1_024, 2_048, 3_072, 4_096].contains(&limit) || row_count < limit {
         return Err(invalid("PQ4 ranking authority differs"));
     }
     let scores = score_rows_scalar(codebook, blocks, row_count, query)?;
