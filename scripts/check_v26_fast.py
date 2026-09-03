@@ -67,6 +67,17 @@ def fast_commands(python_executable: str) -> list[list[str]]:
             "--nocapture",
         ],
         [
+            "cargo",
+            "test",
+            "-p",
+            "borsuk-v26",
+            "--example",
+            "v26_simhash_preflight",
+            "v26_",
+            "--",
+            "--nocapture",
+        ],
+        [
             python_executable,
             "-m",
             "unittest",
