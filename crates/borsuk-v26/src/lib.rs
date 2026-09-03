@@ -18,8 +18,10 @@ mod tree;
 
 pub use local::{
     V26ArrowColdVectors, V26ArrowFileIdentity, V26CandidateCoverRequest, V26CentroidRouterRequest,
-    V26ColdVectorManifest, V26ColdVectorRead, V26ExactGlobalRequest, V26LayoutBuildOutput,
-    V26LayoutBuildRequest, V26LayoutEvaluationRequest, V26LocalObjectPath,
+    V26ColdVectorManifest, V26ColdVectorRead, V26DualPqKeyIndexManifest,
+    V26DualPqKeyPreflightArmResult, V26DualPqKeyPreflightAuthority, V26DualPqKeyPreflightRequest,
+    V26DualPqKeyPreflightResult, V26DualPqKeyPreflightSample, V26ExactGlobalRequest,
+    V26LayoutBuildOutput, V26LayoutBuildRequest, V26LayoutEvaluationRequest, V26LocalObjectPath,
     V26PageModeRouterRequest, V26Pq8CoverRequest, V26Pq16GlobalPreflightRequest,
     V26Pq16GlobalPreflightResult, V26Pq16IndexManifest, V26Pq16RerankRequest,
     V26Pq16ServingBenchmarkRequest, V26Pq16ServingBenchmarkResult, V26Pq16ServingBuildOutput,
@@ -28,20 +30,24 @@ pub use local::{
     V26SimHashPreflightArmResult, V26SimHashPreflightAuthority, V26SimHashPreflightRequest,
     V26SimHashPreflightResult, V26SimHashPreflightSample, V26TreeRouterRequest,
     V26TruthBuildRequest, build_v26_simhash_pq16_multi_index_from_arrow,
-    canonical_v26_layout_build_output_bytes, canonical_v26_pq16_global_preflight_result_bytes,
+    canonical_v26_dual_pq_key_preflight_result_bytes, canonical_v26_layout_build_output_bytes,
+    canonical_v26_pq16_global_preflight_result_bytes,
     canonical_v26_pq16_serving_benchmark_result_bytes,
     canonical_v26_pq16_serving_build_output_bytes, canonical_v26_simhash_preflight_result_bytes,
-    evaluate_v26_exact_global, evaluate_v26_layout_oracle, evaluate_v26_simhash_preflight,
-    open_v26_pq16_serving_runtime, read_v26_pq16_index_arrow, read_v26_simhash_pq16_index_arrow,
-    run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_exact_global,
-    run_v26_layout_build, run_v26_layout_build_directory, run_v26_page_mode_router,
-    run_v26_pq_width_ladder, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
-    run_v26_pq16_global_preflight, run_v26_pq16_serving_benchmark, run_v26_pq16_serving_build,
-    run_v26_simhash_preflight, run_v26_tree_router, run_v26_tree_router_diagnostic,
-    run_v26_truth_build, select_v26_pq16_global_pages_from_arrow, select_v26_pq16_pages_from_arrow,
+    evaluate_v26_dual_pq_key_preflight, evaluate_v26_exact_global, evaluate_v26_layout_oracle,
+    evaluate_v26_simhash_preflight, open_v26_pq16_serving_runtime,
+    read_v26_dual_pq_key_index_arrow, read_v26_pq16_index_arrow, read_v26_simhash_pq16_index_arrow,
+    run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_dual_pq_key_preflight,
+    run_v26_exact_global, run_v26_layout_build, run_v26_layout_build_directory,
+    run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
+    run_v26_pq16_exact_rerank, run_v26_pq16_global_preflight, run_v26_pq16_serving_benchmark,
+    run_v26_pq16_serving_build, run_v26_simhash_preflight, run_v26_tree_router,
+    run_v26_tree_router_diagnostic, run_v26_truth_build, select_v26_dual_pq_key_pages_from_arrow,
+    select_v26_pq16_global_pages_from_arrow, select_v26_pq16_pages_from_arrow,
     select_v26_simhash_pq16_pages_from_arrow, v26_construction_schema, v26_page_assignments_schema,
     v26_query_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
-    write_v26_cold_vectors_arrow, write_v26_pq16_index_arrow, write_v26_simhash_pq16_index_arrow,
+    write_v26_cold_vectors_arrow, write_v26_dual_pq_key_index_arrow, write_v26_pq16_index_arrow,
+    write_v26_simhash_pq16_index_arrow,
 };
 
 pub use tree::{
@@ -1822,12 +1828,28 @@ pub fn build_v26_dual_pq_key_index(packed: &V26PackedPq16Index) -> Result<V26Dua
 }
 
 /// Ranks the union of the nearest fixed PQ-key buckets by the complete PQ16 distance.
+#[cfg(test)]
 pub(crate) fn rank_v26_dual_pq_key_candidates(
     index: &V26DualPqKeyIndex,
     query: &[f32; 96],
     key_limit_per_plane: usize,
     ranked_row_limit: usize,
 ) -> Result<Vec<V26PqRankedRow>> {
+    Ok(rank_v26_dual_pq_key_candidates_with_count(
+        index,
+        query,
+        key_limit_per_plane,
+        ranked_row_limit,
+    )?
+    .0)
+}
+
+pub(crate) fn rank_v26_dual_pq_key_candidates_with_count(
+    index: &V26DualPqKeyIndex,
+    query: &[f32; 96],
+    key_limit_per_plane: usize,
+    ranked_row_limit: usize,
+) -> Result<(Vec<V26PqRankedRow>, u64)> {
     const BUCKETS: usize = 65_536;
     if key_limit_per_plane == 0
         || key_limit_per_plane > BUCKETS
@@ -1877,6 +1899,7 @@ pub(crate) fn rank_v26_dual_pq_key_candidates(
     if candidates.len() < ranked_row_limit {
         return Err(invalid("V26 dual PQ-key candidate inventory differs"));
     }
+    let unique_rows_scanned = u64::try_from(candidates.len()).unwrap();
     let mut ranked = BinaryHeap::with_capacity(ranked_row_limit);
     for source_ordinal in candidates {
         let start = usize::try_from(source_ordinal).unwrap() * 16;
@@ -1902,7 +1925,7 @@ pub(crate) fn rank_v26_dual_pq_key_candidates(
     }
     let mut ranked = ranked.into_vec();
     ranked.sort();
-    Ok(ranked)
+    Ok((ranked, unique_rows_scanned))
 }
 
 fn v26_splitmix64(mut value: u64) -> u64 {

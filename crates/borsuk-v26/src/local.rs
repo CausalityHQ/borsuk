@@ -424,6 +424,189 @@ pub struct V26SimHashPreflightResult {
     pub claim_eligible: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26DualPqKeyPreflightSample {
+    pub key_limit_per_plane: u32,
+    pub query_ordinal: u32,
+    pub selected_pages: Vec<u32>,
+    pub hits: u32,
+    pub oracle_hits: u32,
+    pub recall_ppm: u64,
+    pub oracle_attainment_ppm: u64,
+    pub elapsed_ns: u64,
+    pub unique_rows_scanned: u64,
+    pub cold_batches_read: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26DualPqKeyPreflightArmResult {
+    pub key_limit_per_plane: u32,
+    pub aggregate_recall_ppm: u64,
+    pub minimum_query_recall_ppm: u64,
+    pub oracle_attainment_ppm: u64,
+    pub maximum_latency_ns: u64,
+    pub minimum_unique_rows_scanned: u64,
+    pub maximum_unique_rows_scanned: u64,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26DualPqKeyPreflightAuthority {
+    pub serving_manifest: V26ObjectIdentity,
+    pub external_queries: V26ObjectIdentity,
+    pub truth: V26ObjectIdentity,
+    pub offsets: V26ObjectIdentity,
+    pub ordinals: V26ObjectIdentity,
+    pub evidence: V26ObjectIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V26DualPqKeyPreflightResult {
+    pub schema: String,
+    pub authority: V26DualPqKeyPreflightAuthority,
+    pub query_count: u32,
+    pub ranked_row_limit: u32,
+    pub selected_page_count: u32,
+    pub aggregate_recall_gate_ppm: u64,
+    pub minimum_query_recall_gate_ppm: u64,
+    pub oracle_attainment_gate_ppm: u64,
+    pub maximum_latency_gate_ns: u64,
+    pub arms: Vec<V26DualPqKeyPreflightArmResult>,
+    pub page_body_reads: u32,
+    pub claim_eligible: bool,
+}
+
+fn summarize_v26_dual_pq_key_preflight(
+    authority: V26DualPqKeyPreflightAuthority,
+    samples: &[V26DualPqKeyPreflightSample],
+) -> Result<V26DualPqKeyPreflightResult> {
+    const KEY_LIMITS: [u32; 3] = [128, 512, 1_536];
+    const QUERY_COUNT: usize = 32;
+    let roles = [
+        "pq16-serving-manifest",
+        "external-queries-parquet",
+        "truth-parquet",
+        "dual-pq-key-offsets-arrow",
+        "dual-pq-key-ordinals-arrow",
+        "dual-pq-key-preflight-evidence-parquet",
+    ];
+    let identities = [
+        &authority.serving_manifest,
+        &authority.external_queries,
+        &authority.truth,
+        &authority.offsets,
+        &authority.ordinals,
+        &authority.evidence,
+    ];
+    for (identity, role) in identities.iter().zip(roles) {
+        validate_v26_benchmark_identity(identity, role)?;
+    }
+    let generation = &authority.serving_manifest.generation;
+    let mut uris = BTreeSet::new();
+    if identities
+        .iter()
+        .any(|identity| identity.generation != *generation || !uris.insert(&identity.uri))
+        || samples.len() != KEY_LIMITS.len() * QUERY_COUNT
+    {
+        return Err(invalid(
+            "V26 dual PQ-key preflight sample inventory differs",
+        ));
+    }
+    let arms = KEY_LIMITS
+        .into_iter()
+        .enumerate()
+        .map(|(arm_index, key_limit_per_plane)| {
+            let arm = &samples[arm_index * QUERY_COUNT..(arm_index + 1) * QUERY_COUNT];
+            let mut total_hits = 0_u64;
+            let mut total_oracle_hits = 0_u64;
+            for (query_index, sample) in arm.iter().enumerate() {
+                if sample.key_limit_per_plane != key_limit_per_plane
+                    || usize::try_from(sample.query_ordinal).ok() != Some(query_index)
+                    || sample.selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET
+                    || sample
+                        .selected_pages
+                        .windows(2)
+                        .any(|pair| pair[0] >= pair[1])
+                    || sample.hits > sample.oracle_hits
+                    || !(1..=10).contains(&sample.oracle_hits)
+                    || sample.recall_ppm != u64::from(sample.hits) * 100_000
+                    || sample.oracle_attainment_ppm
+                        != u64::from(sample.hits) * 1_000_000 / u64::from(sample.oracle_hits)
+                    || sample.elapsed_ns == 0
+                    || sample.unique_rows_scanned < 10
+                    || sample.cold_batches_read == 0
+                {
+                    return Err(invalid(
+                        "V26 dual PQ-key preflight sample authority differs",
+                    ));
+                }
+                total_hits += u64::from(sample.hits);
+                total_oracle_hits += u64::from(sample.oracle_hits);
+            }
+            let aggregate_recall_ppm = total_hits * 1_000_000 / 320;
+            let minimum_query_recall_ppm =
+                arm.iter().map(|sample| sample.recall_ppm).min().unwrap();
+            let oracle_attainment_ppm = total_hits * 1_000_000 / total_oracle_hits;
+            let maximum_latency_ns = arm.iter().map(|sample| sample.elapsed_ns).max().unwrap();
+            Ok(V26DualPqKeyPreflightArmResult {
+                key_limit_per_plane,
+                aggregate_recall_ppm,
+                minimum_query_recall_ppm,
+                oracle_attainment_ppm,
+                maximum_latency_ns,
+                minimum_unique_rows_scanned: arm
+                    .iter()
+                    .map(|sample| sample.unique_rows_scanned)
+                    .min()
+                    .unwrap(),
+                maximum_unique_rows_scanned: arm
+                    .iter()
+                    .map(|sample| sample.unique_rows_scanned)
+                    .max()
+                    .unwrap(),
+                passed: aggregate_recall_ppm >= 975_000
+                    && minimum_query_recall_ppm >= 800_000
+                    && oracle_attainment_ppm >= 995_000
+                    && maximum_latency_ns <= 15_000_000
+                    && arm.iter().all(|sample| sample.unique_rows_scanned >= 2_048),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(V26DualPqKeyPreflightResult {
+        schema: "borsuk-v26-dual-pq-key-preflight-result-v1".to_owned(),
+        authority,
+        query_count: 32,
+        ranked_row_limit: 2_048,
+        selected_page_count: u32::try_from(crate::V26_SERVING_PAGE_BUDGET).unwrap(),
+        aggregate_recall_gate_ppm: 975_000,
+        minimum_query_recall_gate_ppm: 800_000,
+        oracle_attainment_gate_ppm: 995_000,
+        maximum_latency_gate_ns: 15_000_000,
+        arms,
+        page_body_reads: 0,
+        claim_eligible: false,
+    })
+}
+
+pub fn canonical_v26_dual_pq_key_preflight_result_bytes(
+    result: &V26DualPqKeyPreflightResult,
+    samples: &[V26DualPqKeyPreflightSample],
+) -> Result<Vec<u8>> {
+    if result != &summarize_v26_dual_pq_key_preflight(result.authority.clone(), samples)? {
+        return Err(invalid("V26 dual PQ-key preflight result differs"));
+    }
+    let value = serde_json::to_value(result)
+        .map_err(|error| invalid(&format!("V26 dual PQ-key result failed: {error}")))?;
+    let mut bytes = serde_json::to_vec(&canonical_json_value(value))
+        .map_err(|error| invalid(&format!("V26 dual PQ-key result failed: {error}")))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn summarize_v26_simhash_preflight(
     authority: V26SimHashPreflightAuthority,
     samples: &[V26SimHashPreflightSample],
@@ -554,6 +737,21 @@ pub struct V26SimHashPreflightRequest {
     pub layout_terminal: V26LocalObjectPath,
     pub external_queries: V26LocalObjectPath,
     pub truth: V26LocalObjectPath,
+    pub evidence_output_path: PathBuf,
+    pub evidence_output_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V26DualPqKeyPreflightRequest {
+    pub serving_manifest: V26LocalObjectPath,
+    pub serving_dir: PathBuf,
+    pub layout_terminal: V26LocalObjectPath,
+    pub external_queries: V26LocalObjectPath,
+    pub truth: V26LocalObjectPath,
+    pub dual_index_dir: PathBuf,
+    pub dual_index: V26DualPqKeyIndexManifest,
+    pub offsets_uri: String,
+    pub ordinals_uri: String,
     pub evidence_output_path: PathBuf,
     pub evidence_output_uri: String,
 }
@@ -3180,10 +3378,27 @@ pub fn select_v26_dual_pq_key_pages_from_arrow(
     key_limit_per_plane: usize,
     ranked_row_limit: usize,
 ) -> Result<V26Pq16ServingSelection> {
+    Ok(select_v26_dual_pq_key_pages_from_arrow_with_count(
+        index,
+        query,
+        cold_vectors,
+        key_limit_per_plane,
+        ranked_row_limit,
+    )?
+    .0)
+}
+
+fn select_v26_dual_pq_key_pages_from_arrow_with_count(
+    index: &crate::V26DualPqKeyIndex,
+    query: &[f32; 96],
+    cold_vectors: &V26ArrowColdVectors,
+    key_limit_per_plane: usize,
+    ranked_row_limit: usize,
+) -> Result<(V26Pq16ServingSelection, u64)> {
     if u64::try_from(index.codes.len() / 16).unwrap() != cold_vectors.row_count {
         return Err(invalid("V26 dual PQ-key Arrow authority differs"));
     }
-    let approximate = crate::rank_v26_dual_pq_key_candidates(
+    let (approximate, unique_rows_scanned) = crate::rank_v26_dual_pq_key_candidates_with_count(
         index,
         query,
         key_limit_per_plane,
@@ -3261,14 +3476,17 @@ pub fn select_v26_dual_pq_key_pages_from_arrow(
         return Err(invalid("V26 dual PQ-key Arrow page inventory differs"));
     }
     selected_pages.sort_unstable();
-    Ok(V26Pq16ServingSelection {
-        selected_pages,
-        exact_rows_read: u32::try_from(ranked_row_limit)
-            .map_err(|_| invalid("V26 dual PQ-key Arrow ranked-row limit overflows"))?,
-        cold_batches_read: cold.batches_read,
-        cold_read_workers: cold.read_workers,
-        page_body_reads: 0,
-    })
+    Ok((
+        V26Pq16ServingSelection {
+            selected_pages,
+            exact_rows_read: u32::try_from(ranked_row_limit)
+                .map_err(|_| invalid("V26 dual PQ-key Arrow ranked-row limit overflows"))?,
+            cold_batches_read: cold.batches_read,
+            cold_read_workers: cold.read_workers,
+            page_body_reads: 0,
+        },
+        unique_rows_scanned,
+    ))
 }
 
 fn execute_v26_simhash_preflight_samples(
@@ -3363,6 +3581,96 @@ pub fn evaluate_v26_simhash_preflight(
     Ok((samples, result))
 }
 
+fn execute_v26_dual_pq_key_preflight_samples(
+    index: &crate::V26DualPqKeyIndex,
+    cold_vectors: &V26ArrowColdVectors,
+    queries: &[V26ExternalQuery],
+    truths: &[V26QueryTruth],
+) -> Result<Vec<V26DualPqKeyPreflightSample>> {
+    const KEY_LIMITS: [usize; 3] = [128, 512, 1_536];
+    if queries.len() != 32 || truths.len() != queries.len() {
+        return Err(invalid("V26 dual PQ-key preflight query inventory differs"));
+    }
+    let mut samples = Vec::with_capacity(KEY_LIMITS.len() * queries.len());
+    for key_limit_per_plane in KEY_LIMITS {
+        for (query_index, (query, truth)) in queries.iter().zip(truths).enumerate() {
+            if usize::try_from(query.query_ordinal).ok() != Some(query_index)
+                || truth.query_ordinal != query.query_ordinal
+                || truth.neighbor_source_ordinals.len() != 10
+                || truth.ground_truth_page_assignments.len() != 10
+                || truth
+                    .ground_truth_page_assignments
+                    .iter()
+                    .any(|pages| pages.len() != 2 || pages[0] >= pages[1])
+            {
+                return Err(invalid("V26 dual PQ-key preflight truth authority differs"));
+            }
+            let started = std::time::Instant::now();
+            let (selection, unique_rows_scanned) =
+                select_v26_dual_pq_key_pages_from_arrow_with_count(
+                    index,
+                    &query.vector,
+                    cold_vectors,
+                    key_limit_per_plane,
+                    2_048,
+                )?;
+            let elapsed_ns = u64::try_from(started.elapsed().as_nanos())
+                .map_err(|_| invalid("V26 dual PQ-key latency overflows"))?
+                .max(1);
+            let oracle_pages = exact_v26_layout_oracle_pages(
+                &truth.ground_truth_page_assignments,
+                crate::V26_SERVING_PAGE_BUDGET,
+            )?;
+            let hits = truth
+                .ground_truth_page_assignments
+                .iter()
+                .filter(|pages| {
+                    pages
+                        .iter()
+                        .any(|page| selection.selected_pages.binary_search(page).is_ok())
+                })
+                .count() as u32;
+            let oracle_hits = truth
+                .ground_truth_page_assignments
+                .iter()
+                .filter(|pages| {
+                    pages
+                        .iter()
+                        .any(|page| oracle_pages.binary_search(page).is_ok())
+                })
+                .count() as u32;
+            samples.push(V26DualPqKeyPreflightSample {
+                key_limit_per_plane: u32::try_from(key_limit_per_plane).unwrap(),
+                query_ordinal: query.query_ordinal,
+                selected_pages: selection.selected_pages,
+                hits,
+                oracle_hits,
+                recall_ppm: u64::from(hits) * 100_000,
+                oracle_attainment_ppm: u64::from(hits) * 1_000_000 / u64::from(oracle_hits),
+                elapsed_ns,
+                unique_rows_scanned,
+                cold_batches_read: selection.cold_batches_read,
+            });
+        }
+    }
+    Ok(samples)
+}
+
+pub fn evaluate_v26_dual_pq_key_preflight(
+    index: &crate::V26DualPqKeyIndex,
+    cold_vectors: &V26ArrowColdVectors,
+    queries: &[V26ExternalQuery],
+    truths: &[V26QueryTruth],
+    authority: V26DualPqKeyPreflightAuthority,
+) -> Result<(
+    Vec<V26DualPqKeyPreflightSample>,
+    V26DualPqKeyPreflightResult,
+)> {
+    let samples = execute_v26_dual_pq_key_preflight_samples(index, cold_vectors, queries, truths)?;
+    let result = summarize_v26_dual_pq_key_preflight(authority, &samples)?;
+    Ok((samples, result))
+}
+
 fn v26_simhash_preflight_schema() -> Schema {
     Schema::new(vec![
         Field::new("bucket_limit", DataType::UInt32, false),
@@ -3431,6 +3739,76 @@ fn v26_simhash_preflight_batch(samples: &[V26SimHashPreflightSample]) -> Result<
         ],
     )
     .map_err(|error| invalid(&format!("V26 SimHash preflight batch failed: {error}")))
+}
+
+fn v26_dual_pq_key_preflight_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("key_limit_per_plane", DataType::UInt32, false),
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new(
+            "selected_pages",
+            DataType::FixedSizeList(Arc::new(Field::new("element", DataType::UInt32, false)), 10),
+            false,
+        ),
+        Field::new("hits", DataType::UInt32, false),
+        Field::new("oracle_hits", DataType::UInt32, false),
+        Field::new("recall_ppm", DataType::UInt64, false),
+        Field::new("oracle_attainment_ppm", DataType::UInt64, false),
+        Field::new("elapsed_ns", DataType::UInt64, false),
+        Field::new("unique_rows_scanned", DataType::UInt64, false),
+        Field::new("cold_batches_read", DataType::UInt32, false),
+    ])
+}
+
+fn v26_dual_pq_key_preflight_batch(samples: &[V26DualPqKeyPreflightSample]) -> Result<RecordBatch> {
+    if samples.len() != 96 {
+        return Err(invalid("V26 dual PQ-key evidence inventory differs"));
+    }
+    let selected_pages = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::UInt32, false)),
+        10,
+        Arc::new(UInt32Array::from_iter_values(
+            samples
+                .iter()
+                .flat_map(|sample| sample.selected_pages.iter().copied()),
+        )),
+        None,
+    )
+    .map_err(|error| invalid(&format!("V26 dual PQ-key pages failed: {error}")))?;
+    RecordBatch::try_new(
+        Arc::new(v26_dual_pq_key_preflight_schema()),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.key_limit_per_plane),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.query_ordinal),
+            )),
+            Arc::new(selected_pages),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.hits),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.oracle_hits),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.recall_ppm),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.oracle_attainment_ppm),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.elapsed_ns),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                samples.iter().map(|sample| sample.unique_rows_scanned),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                samples.iter().map(|sample| sample.cold_batches_read),
+            )),
+        ],
+    )
+    .map_err(|error| invalid(&format!("V26 dual PQ-key batch failed: {error}")))
 }
 
 pub fn run_v26_simhash_preflight(request: &V26SimHashPreflightRequest) -> Result<Vec<u8>> {
@@ -3526,6 +3904,142 @@ pub fn run_v26_simhash_preflight(request: &V26SimHashPreflightRequest) -> Result
         };
         let result = summarize_v26_simhash_preflight(authority, &samples)?;
         canonical_v26_simhash_preflight_result_bytes(&result, &samples)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&request.evidence_output_path);
+    }
+    result
+}
+
+/// Runs the fixed, offline dual-PQ-key truth preflight over authenticated Arrow artifacts.
+pub fn run_v26_dual_pq_key_preflight(request: &V26DualPqKeyPreflightRequest) -> Result<Vec<u8>> {
+    if request.evidence_output_path.exists()
+        || !request.offsets_uri.starts_with("s3://")
+        || !request.offsets_uri.ends_with("pq16-dual-key-offsets.arrow")
+        || !request.ordinals_uri.starts_with("s3://")
+        || !request
+            .ordinals_uri
+            .ends_with("pq16-dual-key-ordinals.arrow")
+        || !request.evidence_output_uri.starts_with("s3://")
+        || !request.evidence_output_uri.ends_with(".parquet")
+    {
+        return Err(invalid("V26 dual PQ-key preflight request differs"));
+    }
+    let manifest = read_v26_pq16_serving_manifest(&request.serving_manifest)?;
+    let terminal = read_layout_terminal(&request.layout_terminal)?;
+    authenticate(&request.external_queries, "external-queries-parquet")?;
+    authenticate(&request.truth, "truth-parquet")?;
+    let generation = &terminal.authority.generation;
+    let mut uris = BTreeSet::new();
+    if manifest.inputs[0] != terminal.authority.construction_rows
+        || manifest.inputs[2] != request.layout_terminal.identity
+        || manifest.row_count != terminal.row_count
+        || manifest.page_count != terminal.page_count
+        || request.dual_index.row_count != manifest.row_count
+        || [
+            &request.serving_manifest.identity,
+            &request.layout_terminal.identity,
+            &request.external_queries.identity,
+            &request.truth.identity,
+        ]
+        .iter()
+        .any(|identity| identity.generation != *generation || !uris.insert(&identity.uri))
+        || !uris.insert(&request.offsets_uri)
+        || !uris.insert(&request.ordinals_uri)
+        || !uris.insert(&request.evidence_output_uri)
+    {
+        return Err(invalid("V26 dual PQ-key preflight authority differs"));
+    }
+    let expected_names = v26_pq16_serving_output_names()
+        .into_iter()
+        .chain(std::iter::once("serving-manifest.json"))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let observed_names = fs::read_dir(&request.serving_dir)
+        .map_err(|error| invalid(&format!("V26 dual PQ-key directory read failed: {error}")))?
+        .map(|entry| {
+            entry
+                .map_err(|error| {
+                    invalid(&format!("V26 dual PQ-key directory read failed: {error}"))
+                })
+                .and_then(|entry| {
+                    entry
+                        .file_name()
+                        .into_string()
+                        .map_err(|_| invalid("V26 dual PQ-key artifact name differs"))
+                })
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    if observed_names != expected_names {
+        return Err(invalid("V26 dual PQ-key artifact inventory differs"));
+    }
+    let packed = read_v26_pq16_index_arrow(&request.serving_dir, &manifest.index)?;
+    let index =
+        read_v26_dual_pq_key_index_arrow(&request.dual_index_dir, &request.dual_index, &packed)?;
+    let cold_vectors = V26ArrowColdVectors::open(
+        &request.serving_dir.join("cold-vectors.arrow"),
+        &manifest.cold_vectors,
+    )?;
+    let mut queries = read_evaluation_queries(&request.external_queries.path, 512)?;
+    let mut truths = read_evaluation_truth_with_assignment(
+        &request.truth.path,
+        512,
+        &queries,
+        &terminal.authority.construction_rows.digest,
+        &request.external_queries.identity.digest,
+        |neighbor| {
+            let neighbor = u32::try_from(neighbor)
+                .map_err(|_| invalid("V26 dual PQ-key truth source differs"))?;
+            cold_vectors.read_assignment(neighbor)
+        },
+    )?;
+    queries.truncate(32);
+    truths.truncate(32);
+    let samples =
+        execute_v26_dual_pq_key_preflight_samples(&index, &cold_vectors, &queries, &truths)?;
+    let result = (|| {
+        write_batch(
+            &request.evidence_output_path,
+            v26_dual_pq_key_preflight_batch(&samples)?,
+        )?;
+        let evidence = output_identity(
+            "dual-pq-key-preflight-evidence-parquet",
+            &request.evidence_output_path,
+            &request.evidence_output_uri[..request.evidence_output_uri.rfind('/').unwrap() + 1],
+            generation,
+        )?;
+        if evidence.uri != request.evidence_output_uri {
+            return Err(invalid("V26 dual PQ-key evidence URI differs"));
+        }
+        let arrow_identity =
+            |role: &str, uri: &str, identity: &V26ArrowFileIdentity| -> V26ObjectIdentity {
+                V26ObjectIdentity {
+                    role: role.to_owned(),
+                    uri: uri.to_owned(),
+                    digest_algorithm: "sha256".to_owned(),
+                    digest: identity.sha256.clone(),
+                    encoded_bytes: identity.encoded_bytes,
+                    generation: generation.clone(),
+                }
+            };
+        let authority = V26DualPqKeyPreflightAuthority {
+            serving_manifest: request.serving_manifest.identity.clone(),
+            external_queries: request.external_queries.identity.clone(),
+            truth: request.truth.identity.clone(),
+            offsets: arrow_identity(
+                "dual-pq-key-offsets-arrow",
+                &request.offsets_uri,
+                &request.dual_index.offsets,
+            ),
+            ordinals: arrow_identity(
+                "dual-pq-key-ordinals-arrow",
+                &request.ordinals_uri,
+                &request.dual_index.ordinals,
+            ),
+            evidence,
+        };
+        let result = summarize_v26_dual_pq_key_preflight(authority, &samples)?;
+        canonical_v26_dual_pq_key_preflight_result_bytes(&result, &samples)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&request.evidence_output_path);
@@ -6775,6 +7289,47 @@ mod tests {
                 && sample.rows_scanned >= 2_048
         }));
         assert!(super::canonical_v26_simhash_preflight_result_bytes(&result, &samples).is_ok());
+
+        // Break caught: the distance-aligned preflight skips a fixed arm/query, reports stored
+        // metrics, loses its derived Arrow identities, or gains a page-body surface.
+        let dual = crate::build_v26_dual_pq_key_index(&packed).unwrap();
+        let dual_authority = super::V26DualPqKeyPreflightAuthority {
+            serving_manifest: object("pq16-serving-manifest", 'a'),
+            external_queries: object("external-queries-parquet", 'b'),
+            truth: object("truth-parquet", 'c'),
+            offsets: object("dual-pq-key-offsets-arrow", 'd'),
+            ordinals: object("dual-pq-key-ordinals-arrow", 'e'),
+            evidence: object("dual-pq-key-preflight-evidence-parquet", 'f'),
+        };
+        let (dual_samples, dual_result) = super::evaluate_v26_dual_pq_key_preflight(
+            &dual,
+            &cold,
+            &queries,
+            &truths,
+            dual_authority,
+        )
+        .unwrap();
+        assert_eq!(dual_samples.len(), 96);
+        assert_eq!(dual_result.arms.len(), 3);
+        assert_eq!(
+            dual_result
+                .arms
+                .iter()
+                .map(|arm| arm.key_limit_per_plane)
+                .collect::<Vec<_>>(),
+            [128, 512, 1_536]
+        );
+        assert_eq!(dual_result.page_body_reads, 0);
+        assert!(dual_samples.iter().all(|sample| {
+            sample.selected_pages.len() == 10
+                && sample.hits <= sample.oracle_hits
+                && sample.elapsed_ns > 0
+                && sample.unique_rows_scanned >= 2_048
+        }));
+        assert!(
+            super::canonical_v26_dual_pq_key_preflight_result_bytes(&dual_result, &dual_samples)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -7123,6 +7678,165 @@ mod tests {
         assert_eq!(
             result.authority.evidence.encoded_bytes,
             fs::metadata(evidence_path).unwrap().len()
+        );
+    }
+
+    #[test]
+    fn v26_dual_pq_key_preflight_runner_binds_arrow_truth_and_writes_96_samples() {
+        // Break caught: the dual-key runner tunes on truth, skips an arm/query, loses either
+        // Arrow-plane identity, emits non-Parquet evidence, or gains a page-body read surface.
+        let (temp, mut evaluation) = evaluation_fixture_with_rows(3_521);
+        let mut truth_reader = open_reader(&evaluation.truth.path)
+            .unwrap()
+            .build()
+            .unwrap();
+        let truth_batch = truth_reader.next().unwrap().unwrap();
+        let truth_path = temp.path().join("dual-preflight-truth.parquet");
+        write_parquet(&truth_path, &truth_batch);
+        evaluation.truth = identity("truth-parquet", &truth_path);
+        let receipt = read_layout_terminal(&evaluation.layout_terminal).unwrap();
+        let serving_dir = temp.path().join("dual-serving");
+        run_v26_pq16_serving_build(&V26Pq16ServingBuildRequest {
+            construction_rows: identity(
+                "construction-parquet",
+                &temp.path().join("construction.parquet"),
+            ),
+            page_assignments: evaluation.page_assignments,
+            layout_terminal: evaluation.layout_terminal.clone(),
+            primary_tree: V26LocalObjectPath {
+                identity: receipt.outputs[1].clone(),
+                path: temp.path().join("layout/primary-tree.parquet"),
+            },
+            replica_tree: V26LocalObjectPath {
+                identity: receipt.outputs[2].clone(),
+                path: temp.path().join("layout/replica-tree.parquet"),
+            },
+            expected_rows: 3_521,
+            output_dir: serving_dir.clone(),
+            output_uri_prefix: "s3://v26-output/dual-serving/".to_owned(),
+        })
+        .unwrap();
+        let serving_manifest_path = serving_dir.join("serving-manifest.json");
+        let serving_manifest = super::read_v26_pq16_serving_manifest(&identity(
+            "pq16-serving-manifest",
+            &serving_manifest_path,
+        ))
+        .unwrap();
+        let packed = read_v26_pq16_index_arrow(&serving_dir, &serving_manifest.index).unwrap();
+        let dual = crate::build_v26_dual_pq_key_index(&packed).unwrap();
+        let dual_dir = temp.path().join("dual-index");
+        fs::create_dir(&dual_dir).unwrap();
+        let dual_manifest = super::write_v26_dual_pq_key_index_arrow(&dual_dir, &dual).unwrap();
+        let evidence_path = temp.path().join("dual-preflight.parquet");
+        let request = super::V26DualPqKeyPreflightRequest {
+            serving_manifest: identity("pq16-serving-manifest", &serving_manifest_path),
+            serving_dir,
+            layout_terminal: evaluation.layout_terminal,
+            external_queries: evaluation.external_queries,
+            truth: evaluation.truth,
+            dual_index_dir: dual_dir,
+            dual_index: dual_manifest,
+            offsets_uri: "s3://v26-output/dual-index/pq16-dual-key-offsets.arrow".to_owned(),
+            ordinals_uri: "s3://v26-output/dual-index/pq16-dual-key-ordinals.arrow".to_owned(),
+            evidence_output_path: evidence_path.clone(),
+            evidence_output_uri: "s3://v26-output/dual-preflight.parquet".to_owned(),
+        };
+
+        let bytes = super::run_v26_dual_pq_key_preflight(&request).unwrap();
+
+        let result: super::V26DualPqKeyPreflightResult = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(result.schema, "borsuk-v26-dual-pq-key-preflight-result-v1");
+        assert_eq!(result.query_count, 32);
+        assert_eq!(result.arms.len(), 3);
+        assert_eq!(result.page_body_reads, 0);
+        assert!(!result.claim_eligible);
+        assert_eq!(
+            result
+                .arms
+                .iter()
+                .map(|arm| arm.key_limit_per_plane)
+                .collect::<Vec<_>>(),
+            [128, 512, 1_536]
+        );
+        let reader = open_reader(&evidence_path).unwrap();
+        assert_eq!(reader.metadata().file_metadata().num_rows(), 96);
+        assert_eq!(
+            reader.schema().as_ref(),
+            &super::v26_dual_pq_key_preflight_schema()
+        );
+        assert_eq!(result.authority.truth, request.truth.identity);
+        assert_eq!(
+            result.authority.offsets.digest,
+            request.dual_index.offsets.sha256
+        );
+        assert_eq!(
+            result.authority.ordinals.digest,
+            request.dual_index.ordinals.sha256
+        );
+        assert_eq!(
+            result.authority.evidence.encoded_bytes,
+            fs::metadata(evidence_path).unwrap().len()
+        );
+    }
+
+    #[test]
+    fn v26_fast_dual_pq_key_preflight_summary_recomputes_authority_and_gates() {
+        // Break caught: the canonical result trusts stored arm metrics, accepts a malformed Arrow
+        // identity, or permits incomplete/non-deterministically ordered arm/query evidence.
+        let object = |role: &str, fill: char| V26ObjectIdentity {
+            role: role.to_owned(),
+            uri: format!("s3://v26-fast/{role}"),
+            digest_algorithm: "sha256".to_owned(),
+            digest: fill.to_string().repeat(64),
+            encoded_bytes: 1_024,
+            generation: "v26-fast-dual".to_owned(),
+        };
+        let authority = super::V26DualPqKeyPreflightAuthority {
+            serving_manifest: object("pq16-serving-manifest", 'a'),
+            external_queries: object("external-queries-parquet", 'b'),
+            truth: object("truth-parquet", 'c'),
+            offsets: object("dual-pq-key-offsets-arrow", 'd'),
+            ordinals: object("dual-pq-key-ordinals-arrow", 'e'),
+            evidence: object("dual-pq-key-preflight-evidence-parquet", 'f'),
+        };
+        let samples = [128_u32, 512, 1_536]
+            .into_iter()
+            .flat_map(|key_limit_per_plane| {
+                (0_u32..32).map(move |query_ordinal| super::V26DualPqKeyPreflightSample {
+                    key_limit_per_plane,
+                    query_ordinal,
+                    selected_pages: (0_u32..10).collect(),
+                    hits: 10,
+                    oracle_hits: 10,
+                    recall_ppm: 1_000_000,
+                    oracle_attainment_ppm: 1_000_000,
+                    elapsed_ns: 1,
+                    unique_rows_scanned: 2_048,
+                    cold_batches_read: 1,
+                })
+            })
+            .collect::<Vec<_>>();
+        let result = super::summarize_v26_dual_pq_key_preflight(authority, &samples).unwrap();
+        assert!(result.arms.iter().all(|arm| arm.passed));
+        assert!(super::canonical_v26_dual_pq_key_preflight_result_bytes(&result, &samples).is_ok());
+
+        let mut drifted_samples = samples.clone();
+        drifted_samples[32].recall_ppm -= 1;
+        assert!(
+            super::canonical_v26_dual_pq_key_preflight_result_bytes(&result, &drifted_samples)
+                .is_err()
+        );
+        let mut drifted_result = result.clone();
+        drifted_result.authority.offsets.digest = "0".repeat(63);
+        assert!(
+            super::canonical_v26_dual_pq_key_preflight_result_bytes(&drifted_result, &samples)
+                .is_err()
+        );
+        let mut drifted_result = result;
+        drifted_result.arms[2].maximum_latency_ns += 1;
+        assert!(
+            super::canonical_v26_dual_pq_key_preflight_result_bytes(&drifted_result, &samples)
+                .is_err()
         );
     }
 
