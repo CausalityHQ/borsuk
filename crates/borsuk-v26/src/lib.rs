@@ -1431,6 +1431,220 @@ pub(crate) fn build_v26_pq4_fast_index(rows: &[[f32; 96]]) -> Result<V26Pq4FastI
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum V26Pq4Backend {
+    ScalarControl,
+    Aarch64NeonTable,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V26Pq4QueryTables {
+    values: Vec<[u8; 16]>,
+    minima_sum: f32,
+    scale: f32,
+    saturation_count: u32,
+}
+
+pub(crate) fn prepare_v26_pq4_query_tables(
+    codebook: &V26Pq4FastCodebook,
+    query: &[f32; 96],
+) -> Result<V26Pq4QueryTables> {
+    if codebook.centroids.len() != 32
+        || codebook
+            .centroids
+            .iter()
+            .flatten()
+            .any(|value| !value.is_finite())
+    {
+        return Err(invalid("V26 PQ4 codebook differs"));
+    }
+    validate_v26_vector(query)?;
+    let floating = (0..32)
+        .map(|subspace| {
+            let start = subspace * 3;
+            std::array::from_fn(|centroid| {
+                (0..3)
+                    .map(|dimension| {
+                        let delta = query[start + dimension]
+                            - codebook.centroids[subspace][centroid * 3 + dimension];
+                        delta * delta
+                    })
+                    .sum::<f32>()
+            })
+        })
+        .collect::<Vec<[f32; 16]>>();
+    if floating.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(invalid("V26 PQ4 query table differs"));
+    }
+    let minima = floating
+        .iter()
+        .map(|table| table.iter().copied().min_by(f32::total_cmp).unwrap())
+        .collect::<Vec<_>>();
+    let minima_sum = minima.iter().sum::<f32>();
+    let maximum_residual = floating
+        .iter()
+        .zip(&minima)
+        .flat_map(|(table, minimum)| table.iter().map(move |value| value - minimum))
+        .max_by(f32::total_cmp)
+        .unwrap();
+    let scale = if maximum_residual == 0.0 {
+        1.0
+    } else {
+        maximum_residual / 255.0
+    };
+    if !minima_sum.is_finite() || !scale.is_finite() || scale <= 0.0 {
+        return Err(invalid("V26 PQ4 query scale differs"));
+    }
+    let mut saturation_count = 0_u32;
+    let values = floating
+        .iter()
+        .zip(&minima)
+        .map(|(table, minimum)| {
+            std::array::from_fn(|centroid| {
+                let quantized = ((table[centroid] - minimum) / scale)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+                saturation_count += u32::from(quantized == 255);
+                quantized
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(V26Pq4QueryTables {
+        values,
+        minima_sum,
+        scale,
+        saturation_count,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct V26Pq4RankedRow {
+    score: u16,
+    source_ordinal: u64,
+}
+
+fn v26_pq4_scalar_block_scores(block: &[u8; 512], tables: &V26Pq4QueryTables) -> [u16; 32] {
+    std::array::from_fn(|row_in_block| {
+        (0..32)
+            .map(|subspace| {
+                let packed = block[subspace * 16 + row_in_block / 2];
+                let code = if row_in_block.is_multiple_of(2) {
+                    packed & 15
+                } else {
+                    packed >> 4
+                };
+                u16::from(tables.values[subspace][usize::from(code)])
+            })
+            .sum()
+    })
+}
+
+#[cfg(target_arch = "aarch64")]
+fn v26_pq4_neon_block_scores(block: &[u8; 512], tables: &V26Pq4QueryTables) -> [u16; 32] {
+    use std::arch::aarch64::{
+        vaddq_u16, vandq_u8, vdupq_n_u8, vdupq_n_u16, vget_high_u8, vget_low_u8, vld1q_u8,
+        vmovl_u8, vqtbl1q_u8, vshrq_n_u8, vst1q_u16,
+    };
+
+    // SAFETY: the caller supplies fixed-size blocks/tables, every load/store is exactly 16
+    // bytes, and AArch64 guarantees Advanced SIMD. No pointer escapes this function.
+    unsafe {
+        let mask = vdupq_n_u8(15);
+        let mut even_low = vdupq_n_u16(0);
+        let mut even_high = vdupq_n_u16(0);
+        let mut odd_low = vdupq_n_u16(0);
+        let mut odd_high = vdupq_n_u16(0);
+        for subspace in 0..32 {
+            let packed = vld1q_u8(block.as_ptr().add(subspace * 16));
+            let table = vld1q_u8(tables.values[subspace].as_ptr());
+            let even = vqtbl1q_u8(table, vandq_u8(packed, mask));
+            let odd = vqtbl1q_u8(table, vshrq_n_u8::<4>(packed));
+            even_low = vaddq_u16(even_low, vmovl_u8(vget_low_u8(even)));
+            even_high = vaddq_u16(even_high, vmovl_u8(vget_high_u8(even)));
+            odd_low = vaddq_u16(odd_low, vmovl_u8(vget_low_u8(odd)));
+            odd_high = vaddq_u16(odd_high, vmovl_u8(vget_high_u8(odd)));
+        }
+        let mut even = [0_u16; 16];
+        let mut odd = [0_u16; 16];
+        vst1q_u16(even.as_mut_ptr(), even_low);
+        vst1q_u16(even.as_mut_ptr().add(8), even_high);
+        vst1q_u16(odd.as_mut_ptr(), odd_low);
+        vst1q_u16(odd.as_mut_ptr().add(8), odd_high);
+        std::array::from_fn(|row| {
+            if row.is_multiple_of(2) {
+                even[row / 2]
+            } else {
+                odd[row / 2]
+            }
+        })
+    }
+}
+
+pub(crate) fn rank_v26_pq4_fast_candidates(
+    index: &V26Pq4FastIndex,
+    query: &[f32; 96],
+    ranked_row_limit: usize,
+    backend: V26Pq4Backend,
+) -> Result<Vec<V26Pq4RankedRow>> {
+    if ![512, 1_024, 2_048, 4_096].contains(&ranked_row_limit)
+        || index.row_count < ranked_row_limit as u64
+        || index.blocks.len() != usize::try_from(index.row_count).unwrap().div_ceil(32)
+        || index.projected_resident_bytes_100m
+            != projected_v26_pq4_fast_resident_bytes(100_000_000)?
+    {
+        return Err(invalid("V26 PQ4 ranking authority differs"));
+    }
+    let tables = prepare_v26_pq4_query_tables(&index.codebook, query)?;
+    let row_count =
+        usize::try_from(index.row_count).map_err(|_| invalid("V26 PQ4 row count overflows"))?;
+    let mut scores = Vec::with_capacity(row_count);
+    let mut histogram = [0_u32; 8_192];
+    for (block_index, block) in index.blocks.iter().enumerate() {
+        let block_scores = match backend {
+            V26Pq4Backend::ScalarControl => v26_pq4_scalar_block_scores(block, &tables),
+            V26Pq4Backend::Aarch64NeonTable => {
+                #[cfg(target_arch = "aarch64")]
+                {
+                    v26_pq4_neon_block_scores(block, &tables)
+                }
+                #[cfg(not(target_arch = "aarch64"))]
+                {
+                    return Err(invalid("V26 PQ4 fused backend unavailable"));
+                }
+            }
+        };
+        let rows_in_block = (row_count - block_index * 32).min(32);
+        for score in block_scores.into_iter().take(rows_in_block) {
+            histogram[usize::from(score)] += 1;
+            scores.push(score);
+        }
+    }
+    let mut cumulative = 0_usize;
+    let threshold = histogram
+        .iter()
+        .enumerate()
+        .find_map(|(score, count)| {
+            cumulative += *count as usize;
+            (cumulative >= ranked_row_limit).then_some(score as u16)
+        })
+        .ok_or_else(|| invalid("V26 PQ4 histogram inventory differs"))?;
+    let mut ranked = Vec::with_capacity(ranked_row_limit);
+    for (source_ordinal, score) in scores.into_iter().enumerate() {
+        if score < threshold || (score == threshold && ranked.len() < ranked_row_limit) {
+            ranked.push(V26Pq4RankedRow {
+                score,
+                source_ordinal: source_ordinal as u64,
+            });
+        }
+    }
+    ranked.sort_unstable();
+    ranked.truncate(ranked_row_limit);
+    if ranked.len() != ranked_row_limit {
+        return Err(invalid("V26 PQ4 ranked inventory differs"));
+    }
+    Ok(ranked)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct V26PqCodebook {
     width: usize,
@@ -4479,12 +4693,13 @@ mod tests {
         V26_PAGE_MODE_LADDER, V26_PQ_WIDTH_LADDER, V26ConstructionRow, V26Disposition,
         V26ExactGlobalRankResult, V26ExactGlobalResult, V26ExternalQuery, V26ExternalTruth,
         V26LayoutAuthority, V26LayoutReceipt, V26LayoutResult, V26LayoutSample, V26Node,
-        V26ObjectIdentity, V26Pq4FastCodebook, V26Pq8Occurrence, V26QueryTruth, V26RankedRow,
-        V26RowPages, V26Tree, build_v26_dual_tree_layout, build_v26_external_truth_rows,
-        build_v26_page_mode_centroids, build_v26_pq4_fast_index, build_v26_pq8_page_occurrences,
-        build_v26_pq16_packed_index, canonical_v26_exact_global_result_bytes,
-        canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
-        canonical_v26_tree_router_result_bytes, diagnose_v26_global_centroid_candidate_widths,
+        V26ObjectIdentity, V26Pq4Backend, V26Pq4FastCodebook, V26Pq4RankedRow, V26Pq8Occurrence,
+        V26QueryTruth, V26RankedRow, V26RowPages, V26Tree, build_v26_dual_tree_layout,
+        build_v26_external_truth_rows, build_v26_page_mode_centroids, build_v26_pq4_fast_index,
+        build_v26_pq8_page_occurrences, build_v26_pq16_packed_index,
+        canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
+        canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
+        diagnose_v26_global_centroid_candidate_widths,
         diagnose_v26_global_page_mode_candidate_widths, diagnose_v26_tree_router_candidate_widths,
         evaluate_v26_candidate_row_cover, evaluate_v26_centroid_router,
         evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
@@ -4492,13 +4707,14 @@ mod tests {
         evaluate_v26_pq16_exact_rerank_ladder, evaluate_v26_tree_router,
         exact_v26_layout_oracle_pages, fit_v26_pq_codebook, fit_v26_pq4_fast_codebook,
         fit_v26_pq8_codebook, pack_v26_pq4_fast_blocks, prepare_v26_pq_tables,
-        prepare_v26_pq8_tables, projected_v26_pq_resident_bytes,
+        prepare_v26_pq4_query_tables, prepare_v26_pq8_tables, projected_v26_pq_resident_bytes,
         projected_v26_pq4_fast_resident_bytes, projected_v26_pq8_resident_bytes,
-        rank_v26_candidate_rows, rank_v26_pq8_occurrences, rank_v26_pq16_candidate_rows,
-        rank_v26_pq16_global_candidates, rank_v26_pq16_linear_occurrence_candidates,
-        rank_v26_pq16_packed_candidates, rank_v26_pq16_parallel_occurrence_candidates,
-        rank_v26_tree_pages, route_v26_pages, select_v26_pq16_global_packed_pages,
-        select_v26_pq16_packed_pages, select_v26_ranked_pages, validate_v26_dual_tree_layout,
+        rank_v26_candidate_rows, rank_v26_pq4_fast_candidates, rank_v26_pq8_occurrences,
+        rank_v26_pq16_candidate_rows, rank_v26_pq16_global_candidates,
+        rank_v26_pq16_linear_occurrence_candidates, rank_v26_pq16_packed_candidates,
+        rank_v26_pq16_parallel_occurrence_candidates, rank_v26_tree_pages, route_v26_pages,
+        select_v26_pq16_global_packed_pages, select_v26_pq16_packed_pages, select_v26_ranked_pages,
+        validate_v26_dual_tree_layout,
     };
 
     const PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
@@ -5371,6 +5587,74 @@ mod tests {
         invalid[3][9] = 16;
         assert!(pack_v26_pq4_fast_blocks(&invalid).is_err());
         assert!(pack_v26_pq4_fast_blocks(&[]).is_err());
+    }
+
+    #[test]
+    fn v26_pq4_rank_histogram_matches_full_sort_at_every_fixed_depth() {
+        // Break caught: table quantization, nibble decoding, histogram threshold ties, or a
+        // corpus-sized heap makes fast-scan ranking differ from its scalar authority.
+        let codebook = V26Pq4FastCodebook {
+            centroids: (0..32)
+                .map(|subspace| {
+                    std::array::from_fn(|coordinate| {
+                        ((subspace * 53 + coordinate * 17) as f32 - 512.0) / 4_096.0
+                    })
+                })
+                .collect(),
+        };
+        let codes = (0_u32..8_193)
+            .map(|row| {
+                std::array::from_fn(|subspace| ((row * 37 + subspace as u32 * 19) & 15) as u8)
+            })
+            .collect::<Vec<_>>();
+        let index = super::V26Pq4FastIndex {
+            codebook,
+            blocks: pack_v26_pq4_fast_blocks(&codes).unwrap(),
+            row_count: codes.len() as u64,
+            projected_resident_bytes_100m: 2_336_975_744,
+        };
+        let query = normalized_row(42);
+        let tables = prepare_v26_pq4_query_tables(&index.codebook, &query).unwrap();
+        assert!(tables.scale.is_finite() && tables.scale > 0.0);
+        assert!(tables.minima_sum.is_finite());
+        assert!(tables.saturation_count > 0 && tables.saturation_count <= 512);
+
+        let mut reference = codes
+            .iter()
+            .enumerate()
+            .map(|(source_ordinal, code)| V26Pq4RankedRow {
+                source_ordinal: source_ordinal as u64,
+                score: code
+                    .iter()
+                    .enumerate()
+                    .map(|(subspace, value)| u16::from(tables.values[subspace][*value as usize]))
+                    .sum(),
+            })
+            .collect::<Vec<_>>();
+        reference.sort();
+        assert!(reference.iter().all(|row| row.score <= 8_160));
+
+        for limit in [512, 1_024, 2_048, 4_096] {
+            let scalar =
+                rank_v26_pq4_fast_candidates(&index, &query, limit, V26Pq4Backend::ScalarControl)
+                    .unwrap();
+            assert_eq!(scalar, reference[..limit]);
+            #[cfg(target_arch = "aarch64")]
+            {
+                let neon = rank_v26_pq4_fast_candidates(
+                    &index,
+                    &query,
+                    limit,
+                    V26Pq4Backend::Aarch64NeonTable,
+                )
+                .unwrap();
+                assert_eq!(neon, scalar);
+            }
+        }
+        assert!(
+            rank_v26_pq4_fast_candidates(&index, &query, 513, V26Pq4Backend::ScalarControl,)
+                .is_err()
+        );
     }
 
     #[test]
