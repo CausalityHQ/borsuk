@@ -3211,6 +3211,18 @@ pub fn canonical_v26_layout_result_bytes(
     truths: &[V26QueryTruth],
     samples: &[V26LayoutSample],
 ) -> Result<Vec<u8>> {
+    canonical_v26_layout_result_bytes_with_page_budget(result, truths, samples, 8)
+}
+
+pub(crate) fn canonical_v26_layout_result_bytes_with_page_budget(
+    result: &V26LayoutResult,
+    truths: &[V26QueryTruth],
+    samples: &[V26LayoutSample],
+    page_budget: usize,
+) -> Result<Vec<u8>> {
+    if page_budget == 0 {
+        return Err(invalid("V26 layout page budget differs"));
+    }
     if result.schema != "borsuk-v26-layout-result-v1"
         || result.query_count != 512
         || truths.len() != 512
@@ -3237,7 +3249,8 @@ pub fn canonical_v26_layout_result_bytes(
         {
             return Err(invalid("V26 layout truth authority differs"));
         }
-        let selected = exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?;
+        let selected =
+            exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, page_budget)?;
         let hits = v26_layout_hits(&truth.ground_truth_page_assignments, &selected);
         let recall = v26_ppm(u64::from(hits), 10)?;
         if sample.selected_pages != selected || sample.hits != hits || sample.recall_ppm != recall {

@@ -34,7 +34,7 @@ use crate::{
     V26LayoutResult, V26LayoutSample, V26Node, V26ObjectIdentity, V26PageModeSample,
     V26Pq16ServingSelection, V26PqRankedRow, V26QueryTruth, V26RowPages, V26Tree,
     build_v26_external_truth_rows, canonical_json_value, canonical_v26_exact_global_result_bytes,
-    canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes,
+    canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes_with_page_budget,
     canonical_v26_tree_router_result_bytes, diagnose_v26_tree_router_candidate_widths,
     evaluate_v26_candidate_row_cover, evaluate_v26_centroid_router,
     evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
@@ -660,6 +660,16 @@ fn read_layout_terminal(object: &V26LocalObjectPath) -> Result<V26LayoutReceipt>
 pub fn evaluate_v26_layout_oracle(
     request: &V26LayoutEvaluationRequest,
 ) -> Result<(Vec<V26QueryTruth>, Vec<V26LayoutSample>, V26LayoutResult)> {
+    evaluate_v26_layout_oracle_with_page_budget(request, 8)
+}
+
+fn evaluate_v26_layout_oracle_with_page_budget(
+    request: &V26LayoutEvaluationRequest,
+    page_budget: usize,
+) -> Result<(Vec<V26QueryTruth>, Vec<V26LayoutSample>, V26LayoutResult)> {
+    if page_budget == 0 {
+        return Err(invalid("V26 layout page budget differs"));
+    }
     let terminal = read_layout_terminal(&request.layout_terminal)?;
     if request.expected_queries != 512
         || !terminal
@@ -704,7 +714,7 @@ pub fn evaluate_v26_layout_oracle(
         .iter()
         .map(|truth| {
             let selected_pages =
-                exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 8)?;
+                exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, page_budget)?;
             let hits = truth
                 .ground_truth_page_assignments
                 .iter()
@@ -748,7 +758,7 @@ pub fn evaluate_v26_layout_oracle(
         page_body_reads: 0,
         claim_eligible: false,
     };
-    canonical_v26_layout_result_bytes(&result, &truths, &samples)?;
+    canonical_v26_layout_result_bytes_with_page_budget(&result, &truths, &samples, page_budget)?;
     Ok((truths, samples, result))
 }
 
@@ -1087,7 +1097,15 @@ struct V26LoadedExactGlobal {
 }
 
 fn load_v26_exact_global(request: &V26ExactGlobalRequest) -> Result<V26LoadedExactGlobal> {
-    let (_, _, layout_result) = evaluate_v26_layout_oracle(&request.layout)?;
+    load_v26_exact_global_with_page_budget(request, 8)
+}
+
+fn load_v26_exact_global_with_page_budget(
+    request: &V26ExactGlobalRequest,
+    page_budget: usize,
+) -> Result<V26LoadedExactGlobal> {
+    let (_, _, layout_result) =
+        evaluate_v26_layout_oracle_with_page_budget(&request.layout, page_budget)?;
     if layout_result.disposition != V26Disposition::BoundedLayoutCandidate {
         return Err(invalid("V26 exact-global layout gate is closed"));
     }
@@ -1935,7 +1953,7 @@ pub fn run_v26_pq16_exact_rerank(request: &V26Pq16RerankRequest) -> Result<Vec<u
         layout: request.router.layout.clone(),
         ranked_row_limits: vec![10],
     };
-    let loaded = load_v26_exact_global(&exact)?;
+    let loaded = load_v26_exact_global_with_page_budget(&exact, 10)?;
     let (primary, replica) = load_v26_router_trees(&request.router, 10)?;
     let queries = loaded.queries;
     let truths = loaded.truths;
@@ -3798,15 +3816,15 @@ mod tests {
         V26Pq16ServingBuildRequest, V26Pq16ServingRuntimeRequest, V26PqWidthLadderRequest,
         V26ServingLatencySample, V26TreeRouterRequest, V26TruthBuildRequest, assignments_batch,
         canonical_v26_pq16_serving_benchmark_result_bytes, evaluate_v26_exact_global,
-        evaluate_v26_layout_oracle, open_reader, open_v26_pq16_serving_runtime, output_identity,
-        read_assignments, read_layout_terminal, read_v26_pq16_index_arrow,
-        run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_layout_build,
-        run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
-        run_v26_pq16_exact_rerank, run_v26_pq16_serving_build, run_v26_tree_router,
-        run_v26_tree_router_diagnostic, run_v26_truth_build, select_v26_pq16_pages_from_arrow,
-        v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
-        v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
-        write_v26_pq16_index_arrow,
+        evaluate_v26_layout_oracle, evaluate_v26_layout_oracle_with_page_budget, open_reader,
+        open_v26_pq16_serving_runtime, output_identity, read_assignments, read_layout_terminal,
+        read_v26_pq16_index_arrow, run_v26_candidate_row_cover, run_v26_centroid_router,
+        run_v26_layout_build, run_v26_page_mode_router, run_v26_pq_width_ladder,
+        run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank, run_v26_pq16_serving_build,
+        run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
+        select_v26_pq16_pages_from_arrow, v26_construction_schema, v26_page_assignments_schema,
+        v26_query_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
+        write_v26_cold_vectors_arrow, write_v26_pq16_index_arrow,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -4652,6 +4670,18 @@ mod tests {
             evidence_output_path: evidence_path.clone(),
             evidence_output_uri: "s3://frozen/v26/pq16-rerank-evidence.parquet".to_owned(),
         };
+
+        let (_, layout_samples, layout_result) =
+            evaluate_v26_layout_oracle_with_page_budget(&request.router.layout, 10).unwrap();
+        assert_eq!(
+            layout_result.disposition,
+            V26Disposition::BoundedLayoutCandidate
+        );
+        assert!(
+            layout_samples
+                .iter()
+                .all(|sample| sample.selected_pages.len() <= 10)
+        );
 
         let bytes = run_v26_pq16_exact_rerank(&request).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
