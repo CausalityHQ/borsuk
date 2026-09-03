@@ -171,6 +171,23 @@ class V27ReducedSpotTests(unittest.TestCase):
         self.assertEqual(sleeps, [30, 30])
         self.assertEqual(terminated, ["i-0123456789abcdef0"])
 
+    def test_v27_reduced_spot_failure_receipt_never_advances(self) -> None:
+        terminated: list[str] = []
+        with self.assertRaisesRegex(RuntimeError, "failed"):
+            run_v27_reduced_spot(
+                self.plan(),
+                targets=(
+                    SpotTarget("eu-central-1a", "subnet-a"),
+                    SpotTarget("eu-central-1b", "subnet-b"),
+                ),
+                launch=lambda _spec: "i-0123456789abcdef0",
+                terminal=lambda: b'{"status":"failed"}\n',
+                health=lambda _instance: ("running", "ok", "ok"),
+                sleep=lambda _seconds: None,
+                terminate=lambda instance: terminated.append(instance),
+            )
+        self.assertEqual(terminated, ["i-0123456789abcdef0"])
+
 
 if __name__ == "__main__":
     unittest.main()

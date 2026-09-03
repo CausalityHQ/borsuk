@@ -365,6 +365,14 @@ def run_v27_reduced_spot(
             if receipt is not None:
                 if not receipt:
                     raise ValueError("V27 Spot terminal is empty")
+                try:
+                    terminal_value = json.loads(receipt)
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise ValueError("V27 Spot terminal JSON differs") from error
+                if terminal_value.get("status") == "failed":
+                    raise RuntimeError("V27 Spot worker failed")
+                if terminal_value.get("status") != "complete":
+                    raise ValueError("V27 Spot terminal status differs")
                 return receipt
             state, system_status, instance_status = health(instance_id)
             if state != "running" or system_status not in {"ok", "initializing"} or instance_status not in {"ok", "initializing"}:
