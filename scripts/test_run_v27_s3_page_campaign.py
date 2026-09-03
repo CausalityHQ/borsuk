@@ -293,6 +293,8 @@ class V27QualitySpotTests(unittest.TestCase):
         self.assertIn("--s3-page-prefix s3://bucket/index/pages", script)
         self.assertIn("--page-count 10", script)
         self.assertIn("numpy==2.4.2 pyarrow==24.0.0", script)
+        self.assertIn("python3.11 python3.11-pip", script)
+        self.assertIn('python3.11 -m venv "$root/venv"', script)
         self.assertLess(
             script.index('"$root/venv/bin/python" -m pip install --upgrade pip'),
             script.index('"$root/venv/bin/pip" install --no-cache-dir numpy==2.4.2'),
