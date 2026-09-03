@@ -10,9 +10,9 @@ use borsuk_v26::{
     canonical_v26_layout_result_bytes, canonical_v26_object_identity_bytes,
     evaluate_v26_layout_oracle, run_v26_candidate_row_cover, run_v26_centroid_router,
     run_v26_exact_global, run_v26_global_centroid_frontier_diagnostic,
-    run_v26_layout_build_directory, run_v26_page_mode_router, run_v26_pq_width_ladder,
-    run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank, run_v26_tree_router,
-    run_v26_tree_router_diagnostic, run_v26_truth_build,
+    run_v26_global_page_mode_frontier_diagnostic, run_v26_layout_build_directory,
+    run_v26_pq_width_ladder, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
+    run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,9 +226,9 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
                 }
                 global_centroid_frontier = true;
             }
-            "--route-page-modes" => {
+            "--diagnose-global-page-modes" => {
                 if page_mode_router {
-                    return Err("duplicate --route-page-modes".to_owned());
+                    return Err("duplicate --diagnose-global-page-modes".to_owned());
                 }
                 page_mode_router = true;
             }
@@ -461,6 +461,7 @@ fn parse_v26_args(args: Vec<String>) -> Result<V26CliMode, String> {
             .map_err(|_| "invalid --page-budget".to_owned())?;
         let expected_page_budget = if router_diagnostic
             || global_centroid_frontier
+            || page_mode_router
             || candidate_cover
             || pq16_exact_rerank
         {
@@ -743,7 +744,7 @@ fn execute_v26_mode(mode: V26CliMode) -> Result<Vec<u8>, String> {
         }
         V26CliMode::PageModeRouter(request) => {
             let generation = request.router.generation.clone();
-            run_v26_page_mode_router(&V26PageModeRouterRequest {
+            run_v26_global_page_mode_frontier_diagnostic(&V26PageModeRouterRequest {
                 construction_rows: local_object(
                     "construction-parquet",
                     &generation,
@@ -1053,7 +1054,13 @@ mod tests {
             .iter_mut()
             .find(|argument| argument.as_str() == "--route-centroids")
             .unwrap();
-        *mode = "--route-page-modes".to_owned();
+        *mode = "--diagnose-global-page-modes".to_owned();
+        let page_budget = args
+            .iter_mut()
+            .skip_while(|argument| argument.as_str() != "--page-budget")
+            .nth(1)
+            .unwrap();
+        *page_budget = "10".to_owned();
         args.extend([
             "--evidence-output-path".to_owned(),
             "/output/page-mode-evidence.parquet".to_owned(),
@@ -1067,7 +1074,7 @@ mod tests {
         let mut args = page_mode_router_args();
         let mode = args
             .iter_mut()
-            .find(|argument| argument.as_str() == "--route-page-modes")
+            .find(|argument| argument.as_str() == "--diagnose-global-page-modes")
             .unwrap();
         *mode = "--scan-candidate-rows".to_owned();
         let evidence = args
@@ -1417,9 +1424,9 @@ mod tests {
     }
 
     #[test]
-    fn v26_page_mode_router_cli_has_fixed_ladder_and_parquet_evidence_only() {
-        // Break caught: the page-mode diagnostic exposes K/frontier tuning, emits bulk JSON,
-        // or gains page, storage, endpoint, or D3 capabilities.
+    fn v26_global_page_mode_frontier_cli_has_fixed_ladder_and_parquet_evidence_only() {
+        // Break caught: the global page-mode diagnostic exposes K/frontier tuning, remains
+        // trapped inside the tree frontier, or gains page, storage, endpoint, or D3 capabilities.
         let parsed = parse_v26_args(page_mode_router_args()).unwrap();
         let V26CliMode::PageModeRouter(request) = parsed else {
             panic!("page mode router differs");
@@ -1432,6 +1439,7 @@ mod tests {
             request.evidence_output_uri,
             "s3://bucket/page-mode-evidence.parquet"
         );
+        assert_eq!(request.router.page_budget, 10);
 
         for mutation in [
             vec!["--mode-counts", "2,4,8"],

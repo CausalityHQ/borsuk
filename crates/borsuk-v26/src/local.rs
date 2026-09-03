@@ -36,9 +36,10 @@ use crate::{
     build_v26_external_truth_rows, canonical_json_value, canonical_v26_exact_global_result_bytes,
     canonical_v26_layout_receipt_bytes, canonical_v26_layout_result_bytes_with_page_budget,
     canonical_v26_tree_router_result_bytes, diagnose_v26_global_centroid_candidate_widths,
-    diagnose_v26_tree_router_candidate_widths, evaluate_v26_candidate_row_cover,
-    evaluate_v26_centroid_router, evaluate_v26_exact_global_external_rows,
-    evaluate_v26_page_mode_router, evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
+    diagnose_v26_global_page_mode_candidate_widths, diagnose_v26_tree_router_candidate_widths,
+    evaluate_v26_candidate_row_cover, evaluate_v26_centroid_router,
+    evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
+    evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
     evaluate_v26_pq16_exact_rerank_ladder, evaluate_v26_tree_router, exact_lower_hex,
     exact_v26_layout_oracle_pages, invalid, projected_steps, projected_v26_pq8_resident_bytes,
     projected_v26_pq16_rerank_resident_bytes, rank_v26_pq16_packed_candidates, rank_v26_tree_pages,
@@ -2090,6 +2091,128 @@ pub fn run_v26_global_centroid_frontier_diagnostic(
     })?;
     bytes.push(b'\n');
     Ok(bytes)
+}
+
+fn v26_global_page_mode_evidence_schema() -> Schema {
+    let mut fields = vec![
+        Field::new("query_ordinal", DataType::UInt32, false),
+        Field::new("mode_count", DataType::UInt32, false),
+        Field::new("candidate_page_limit", DataType::UInt32, false),
+    ];
+    fields.extend(
+        (0..10).map(|index| Field::new(format!("selected_page_{index}"), DataType::UInt32, true)),
+    );
+    fields.extend([
+        Field::new("hits", DataType::UInt32, false),
+        Field::new("oracle_hits", DataType::UInt32, false),
+        Field::new("recall_ppm", DataType::UInt64, false),
+        Field::new("oracle_attainment_ppm", DataType::UInt64, false),
+    ]);
+    Schema::new(fields)
+}
+
+fn v26_global_page_mode_evidence_batch(samples: &[V26PageModeSample]) -> Result<RecordBatch> {
+    if samples.is_empty()
+        || samples
+            .iter()
+            .any(|sample| sample.selected_pages.len() > 10)
+    {
+        return Err(invalid("V26 global page mode evidence inventory differs"));
+    }
+    let mut columns: Vec<ArrayRef> = vec![
+        Arc::new(UInt32Array::from_iter_values(
+            samples.iter().map(|sample| sample.query_ordinal),
+        )),
+        Arc::new(UInt32Array::from_iter_values(
+            samples.iter().map(|sample| sample.mode_count),
+        )),
+        Arc::new(UInt32Array::from_iter_values(
+            samples.iter().map(|sample| sample.candidate_page_limit),
+        )),
+    ];
+    columns.extend((0..10).map(|index| {
+        Arc::new(UInt32Array::from_iter(
+            samples
+                .iter()
+                .map(|sample| sample.selected_pages.get(index).copied()),
+        )) as ArrayRef
+    }));
+    columns.extend([
+        Arc::new(UInt32Array::from_iter_values(
+            samples.iter().map(|sample| sample.hits),
+        )) as ArrayRef,
+        Arc::new(UInt32Array::from_iter_values(
+            samples.iter().map(|sample| sample.oracle_hits),
+        )) as ArrayRef,
+        Arc::new(UInt64Array::from_iter_values(
+            samples.iter().map(|sample| sample.recall_ppm),
+        )) as ArrayRef,
+        Arc::new(UInt64Array::from_iter_values(
+            samples.iter().map(|sample| sample.oracle_attainment_ppm),
+        )) as ArrayRef,
+    ]);
+    RecordBatch::try_new(Arc::new(v26_global_page_mode_evidence_schema()), columns)
+        .map_err(|error| invalid(&format!("V26 global page mode evidence failed: {error}")))
+}
+
+pub fn run_v26_global_page_mode_frontier_diagnostic(
+    request: &V26PageModeRouterRequest,
+) -> Result<Vec<u8>> {
+    if request.evidence_output_path.exists()
+        || !request.evidence_output_uri.starts_with("s3://")
+        || !request.evidence_output_uri.ends_with(".parquet")
+    {
+        return Err(invalid("V26 global page mode output authority differs"));
+    }
+    let exact = V26ExactGlobalRequest {
+        construction_rows: request.construction_rows.clone(),
+        layout: request.router.layout.clone(),
+        ranked_row_limits: vec![10, 32, 128, 512, 2_048, 4_096],
+    };
+    let loaded = load_v26_exact_global_with_page_budget(&exact, 10)?;
+    let (_, _, queries, truths) = load_v26_tree_router_with_page_budget(&request.router, 10)?;
+    if queries != loaded.queries || truths != loaded.truths || request.router.page_budget != 10 {
+        return Err(invalid("V26 global page mode authority differs"));
+    }
+    let (samples, mode_results) = diagnose_v26_global_page_mode_candidate_widths(
+        &loaded.rows,
+        &loaded.assignments,
+        &queries,
+        &truths,
+    )?;
+    let output = (|| {
+        write_batch(
+            &request.evidence_output_path,
+            v26_global_page_mode_evidence_batch(&samples)?,
+        )?;
+        let (encoded_bytes, digest) = sha256_file(&request.evidence_output_path)?;
+        let evidence = V26ObjectIdentity {
+            role: "global-page-mode-evidence-parquet".to_owned(),
+            uri: request.evidence_output_uri.clone(),
+            digest_algorithm: "sha256".to_owned(),
+            digest,
+            encoded_bytes,
+            generation: request.construction_rows.identity.generation.clone(),
+        };
+        let value = serde_json::json!({
+            "claim_eligible": false,
+            "evidence": evidence,
+            "mode_results": mode_results,
+            "page_body_reads": 0,
+            "schema": "borsuk-v26-global-page-mode-frontier-result-v1",
+        });
+        let mut bytes = serde_json::to_vec(&canonical_json_value(value)).map_err(|error| {
+            invalid(&format!(
+                "V26 global page mode serialization failed: {error}"
+            ))
+        })?;
+        bytes.push(b'\n');
+        Ok(bytes)
+    })();
+    if output.is_err() {
+        let _ = fs::remove_file(&request.evidence_output_path);
+    }
+    output
 }
 
 fn v26_page_mode_evidence_schema() -> Schema {
@@ -6162,10 +6285,10 @@ mod tests {
         open_v26_pq16_serving_runtime, output_identity, read_assignments, read_evaluation_queries,
         read_evaluation_truth, read_layout_terminal, read_v26_pq16_index_arrow,
         run_v26_candidate_row_cover, run_v26_centroid_router,
-        run_v26_global_centroid_frontier_diagnostic, run_v26_layout_build,
-        run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
-        run_v26_pq16_exact_rerank, run_v26_pq16_serving_build, run_v26_tree_router,
-        run_v26_tree_router_diagnostic, run_v26_truth_build,
+        run_v26_global_centroid_frontier_diagnostic, run_v26_global_page_mode_frontier_diagnostic,
+        run_v26_layout_build, run_v26_page_mode_router, run_v26_pq_width_ladder,
+        run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank, run_v26_pq16_serving_build,
+        run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
         select_v26_pq16_global_pages_from_arrow, select_v26_pq16_pages_from_arrow,
         v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
         v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
@@ -6918,6 +7041,54 @@ mod tests {
         );
         assert_eq!(value["page_body_reads"], 0);
         assert_eq!(value["claim_eligible"], false);
+    }
+
+    #[test]
+    fn v26_fast_global_page_mode_frontier_persists_parquet_without_page_reads() {
+        // Break caught: the multimodal diagnostic stays trapped inside the tree frontier, emits
+        // bulk JSON, or gains page-body access instead of persisting bounded Arrow evidence.
+        let (temp, layout) = evaluation_fixture_with_rows(6_000);
+        let terminal = read_layout_terminal(&layout.layout_terminal).unwrap();
+        let tree = |role: &str, name: &str| V26LocalObjectPath {
+            identity: terminal
+                .outputs
+                .iter()
+                .find(|identity| identity.role == role)
+                .unwrap()
+                .clone(),
+            path: temp.path().join("layout").join(name),
+        };
+        let evidence_path = temp.path().join("global-page-mode-frontier.parquet");
+        let request = V26PageModeRouterRequest {
+            construction_rows: V26LocalObjectPath {
+                identity: terminal.authority.construction_rows.clone(),
+                path: temp.path().join("construction.parquet"),
+            },
+            router: V26TreeRouterRequest {
+                primary_tree: tree("primary-tree-parquet", "primary-tree.parquet"),
+                replica_tree: tree("replica-tree-parquet", "replica-tree.parquet"),
+                layout,
+                page_budget: 10,
+            },
+            evidence_output_path: evidence_path.clone(),
+            evidence_output_uri: "s3://frozen/v26/global-page-mode-frontier.parquet".to_owned(),
+        };
+
+        let bytes = run_v26_global_page_mode_frontier_diagnostic(&request).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["schema"],
+            "borsuk-v26-global-page-mode-frontier-result-v1"
+        );
+        assert_eq!(value["page_body_reads"], 0);
+        assert_eq!(value["claim_eligible"], false);
+        assert_eq!(value["mode_results"].as_array().unwrap().len(), 4 * 3);
+        assert_eq!(
+            value["evidence"]["role"],
+            "global-page-mode-evidence-parquet"
+        );
+        let reader = open_reader(&evidence_path).unwrap();
+        assert_eq!(reader.metadata().file_metadata().num_rows(), 4 * 3 * 512);
     }
 
     #[test]

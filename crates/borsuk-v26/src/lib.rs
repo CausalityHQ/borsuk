@@ -39,7 +39,8 @@ pub use local::{
     evaluate_v26_simhash_preflight, open_v26_pq16_serving_runtime,
     read_v26_dual_pq_key_index_arrow, read_v26_pq16_index_arrow, read_v26_simhash_pq16_index_arrow,
     run_v26_candidate_row_cover, run_v26_centroid_router, run_v26_dual_pq_key_preflight,
-    run_v26_exact_global, run_v26_global_centroid_frontier_diagnostic, run_v26_layout_build,
+    run_v26_exact_global, run_v26_global_centroid_frontier_diagnostic,
+    run_v26_global_page_mode_frontier_diagnostic, run_v26_layout_build,
     run_v26_layout_build_directory, run_v26_page_mode_router, run_v26_pq_width_ladder,
     run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank, run_v26_pq16_global_preflight,
     run_v26_pq16_serving_benchmark, run_v26_pq16_serving_build, run_v26_simhash_preflight,
@@ -1084,6 +1085,157 @@ pub(crate) fn diagnose_v26_global_centroid_candidate_widths(
                 arm.iter().map(|sample| sample.recall_ppm).min().unwrap();
             let oracle_attainment_ppm = v26_ppm(total_hits, total_oracle_hits)?;
             Ok(V26TreeRouterWidthResult {
+                candidate_page_limit: width,
+                aggregate_recall_ppm,
+                minimum_query_recall_ppm,
+                oracle_attainment_ppm,
+                passed: aggregate_recall_ppm >= 975_000
+                    && minimum_query_recall_ppm >= 800_000
+                    && oracle_attainment_ppm >= 995_000,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((samples, results))
+}
+
+pub(crate) fn diagnose_v26_global_page_mode_candidate_widths(
+    rows: &[V26ConstructionRow],
+    assignments: &[V26RowPages],
+    queries: &[V26ExternalQuery],
+    truths: &[V26QueryTruth],
+) -> Result<(Vec<V26PageModeSample>, Vec<V26PageModeResult>)> {
+    if queries.len() != 512 || truths.len() != queries.len() {
+        return Err(invalid("V26 global page mode diagnostic request differs"));
+    }
+    let page_modes = build_v26_page_mode_centroids(rows, assignments)?;
+    let total_pages = page_modes.len();
+    if total_pages < 10
+        || page_modes.values().any(|ladder| {
+            ladder.len() != V26_PAGE_MODE_LADDER.len()
+                || V26_PAGE_MODE_LADDER.iter().any(|count| {
+                    ladder
+                        .get(count)
+                        .is_none_or(|modes| modes.len() != *count as usize)
+                })
+        })
+    {
+        return Err(invalid("V26 global page mode inventory differs"));
+    }
+    let mut widths = [8_usize, 16, 32, 64, 128, 256, 512, 1_024, 2_048]
+        .into_iter()
+        .filter(|width| *width < total_pages)
+        .collect::<Vec<_>>();
+    widths.push(total_pages);
+
+    let per_query = queries
+        .par_iter()
+        .zip(truths.par_iter())
+        .enumerate()
+        .map(|(query_index, (query, truth))| {
+            if usize::try_from(query.query_ordinal).ok() != Some(query_index)
+                || truth.query_ordinal != query.query_ordinal
+                || truth.neighbor_source_ordinals.len() != 10
+                || truth.ground_truth_page_assignments.len() != 10
+            {
+                return Err(invalid("V26 global page mode query authority differs"));
+            }
+            validate_v26_vector(&query.vector)?;
+            let oracle_pages =
+                exact_v26_layout_oracle_pages(&truth.ground_truth_page_assignments, 10)?;
+            let oracle_hits = v26_layout_hits(&truth.ground_truth_page_assignments, &oracle_pages);
+            V26_PAGE_MODE_LADDER
+                .into_iter()
+                .flat_map(|mode_count| {
+                    let ranked = (|| {
+                        let mut ranked = page_modes
+                            .iter()
+                            .map(|(page, ladder)| {
+                                let distance = ladder[&mode_count]
+                                    .iter()
+                                    .map(|mode| {
+                                        1.0_f32
+                                            - query
+                                                .vector
+                                                .iter()
+                                                .zip(mode)
+                                                .map(|(left, right)| left * right)
+                                                .sum::<f32>()
+                                    })
+                                    .min_by(f32::total_cmp)
+                                    .ok_or_else(|| invalid("V26 global page mode is empty"))?;
+                                if !distance.is_finite() {
+                                    return Err(invalid("V26 global page mode distance differs"));
+                                }
+                                Ok((distance, *page))
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        ranked.sort_unstable_by(|left, right| {
+                            left.0
+                                .total_cmp(&right.0)
+                                .then_with(|| left.1.cmp(&right.1))
+                        });
+                        Ok(ranked)
+                    })();
+                    widths.iter().map(move |width| {
+                        let ranked = ranked.as_ref().map_err(Clone::clone)?;
+                        let mut candidates = ranked[..*width]
+                            .iter()
+                            .map(|(_, page)| *page)
+                            .collect::<Vec<_>>();
+                        candidates.sort_unstable();
+                        let selected_pages = exact_v26_candidate_cover_pages(
+                            &truth.ground_truth_page_assignments,
+                            &candidates,
+                            10,
+                        )?;
+                        let hits =
+                            v26_layout_hits(&truth.ground_truth_page_assignments, &selected_pages);
+                        Ok(V26PageModeSample {
+                            query_ordinal: query.query_ordinal,
+                            mode_count,
+                            candidate_page_limit: u32::try_from(*width)
+                                .map_err(|_| invalid("V26 global page mode width overflows"))?,
+                            selected_pages,
+                            hits,
+                            oracle_hits,
+                            recall_ppm: v26_ppm(u64::from(hits), 10)?,
+                            oracle_attainment_ppm: v26_ppm(
+                                u64::from(hits),
+                                u64::from(oracle_hits),
+                            )?,
+                        })
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let samples = per_query.into_iter().flatten().collect::<Vec<_>>();
+    let results = V26_PAGE_MODE_LADDER
+        .into_iter()
+        .flat_map(|mode_count| widths.iter().map(move |width| (mode_count, *width)))
+        .map(|(mode_count, width)| {
+            let width = u32::try_from(width)
+                .map_err(|_| invalid("V26 global page mode width overflows"))?;
+            let arm = samples
+                .iter()
+                .filter(|sample| {
+                    sample.mode_count == mode_count && sample.candidate_page_limit == width
+                })
+                .collect::<Vec<_>>();
+            if arm.len() != queries.len() {
+                return Err(invalid("V26 global page mode sample inventory differs"));
+            }
+            let total_hits = arm.iter().map(|sample| u64::from(sample.hits)).sum::<u64>();
+            let total_oracle_hits = arm
+                .iter()
+                .map(|sample| u64::from(sample.oracle_hits))
+                .sum::<u64>();
+            let aggregate_recall_ppm = v26_ppm(total_hits, queries.len() as u64 * 10)?;
+            let minimum_query_recall_ppm =
+                arm.iter().map(|sample| sample.recall_ppm).min().unwrap();
+            let oracle_attainment_ppm = v26_ppm(total_hits, total_oracle_hits)?;
+            Ok(V26PageModeResult {
+                mode_count,
                 candidate_page_limit: width,
                 aggregate_recall_ppm,
                 minimum_query_recall_ppm,
@@ -4155,7 +4307,8 @@ mod tests {
         build_v26_pq8_page_occurrences, build_v26_pq16_packed_index,
         canonical_v26_exact_global_result_bytes, canonical_v26_layout_receipt_bytes,
         canonical_v26_layout_result_bytes, canonical_v26_tree_router_result_bytes,
-        diagnose_v26_global_centroid_candidate_widths, diagnose_v26_tree_router_candidate_widths,
+        diagnose_v26_global_centroid_candidate_widths,
+        diagnose_v26_global_page_mode_candidate_widths, diagnose_v26_tree_router_candidate_widths,
         evaluate_v26_candidate_row_cover, evaluate_v26_centroid_router,
         evaluate_v26_exact_global_external_rows, evaluate_v26_page_mode_router,
         evaluate_v26_pq_width_ladder, evaluate_v26_pq8_candidate_cover,
@@ -4679,6 +4832,82 @@ mod tests {
                     .windows(2)
                     .all(|pair| pair[0] < pair[1])
         }));
+    }
+
+    #[test]
+    fn v26_fast_global_page_modes_recover_multimodal_pages_inside_a_narrow_frontier() {
+        // Break caught: the diagnostic collapses a multimodal page to its mean, consults truth
+        // while ranking pages, or widens the fixed page frontier independently for each query.
+        let rows = (0_u64..512)
+            .map(|source_ordinal| {
+                let page = usize::try_from(source_ordinal / 32).unwrap();
+                let mut vector = [0.0_f32; 96];
+                vector[page] = if source_ordinal % 32 < 16 { -1.0 } else { 1.0 };
+                V26ConstructionRow {
+                    source_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..512)
+            .map(|source_ordinal| {
+                let page = u32::try_from(source_ordinal / 32).unwrap();
+                V26RowPages {
+                    source_ordinal,
+                    primary_page: page,
+                    replica_page: 16 + page,
+                }
+            })
+            .collect::<Vec<_>>();
+        let queries = (0_u32..512)
+            .map(|query_ordinal| {
+                let page = usize::try_from(query_ordinal % 16).unwrap();
+                let mut vector = [0.0_f32; 96];
+                vector[page] = 1.0;
+                V26ExternalQuery {
+                    query_ordinal,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let truths = queries
+            .iter()
+            .map(|query| {
+                let page = query.query_ordinal % 16;
+                V26QueryTruth {
+                    query_ordinal: query.query_ordinal,
+                    neighbor_source_ordinals: (0_u64..10).collect(),
+                    ground_truth_page_assignments: vec![vec![page, 16 + page]; 10],
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let (first_samples, first_results) =
+            diagnose_v26_global_page_mode_candidate_widths(&rows, &assignments, &queries, &truths)
+                .unwrap();
+        let (second_samples, second_results) =
+            diagnose_v26_global_page_mode_candidate_widths(&rows, &assignments, &queries, &truths)
+                .unwrap();
+
+        assert_eq!(first_samples, second_samples);
+        assert_eq!(first_results, second_results);
+        assert_eq!(first_results.len(), 4 * 3);
+        assert!(first_results.iter().all(|result| {
+            V26_PAGE_MODE_LADDER.contains(&result.mode_count)
+                && [8, 16, 32].contains(&result.candidate_page_limit)
+        }));
+        assert!(
+            first_results
+                .iter()
+                .filter(|result| result.candidate_page_limit == 8)
+                .all(|result| {
+                    result.aggregate_recall_ppm == 1_000_000
+                        && result.minimum_query_recall_ppm == 1_000_000
+                        && result.oracle_attainment_ppm == 1_000_000
+                        && result.passed
+                })
+        );
+        assert_eq!(first_samples.len(), 4 * 3 * 512);
     }
 
     #[test]
