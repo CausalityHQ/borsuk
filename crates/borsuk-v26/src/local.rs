@@ -6980,7 +6980,7 @@ fn select_v26_pq4_quality_arms(
     }
     let tables = crate::prepare_v26_pq4_query_tables(&index.codebook, query)?;
     let scan_started = std::time::Instant::now();
-    let approximate = crate::rank_v26_pq4_fast_candidates(
+    let approximate = crate::rank_v26_pq4_fast_candidates_parallel(
         index,
         query,
         4_096,

@@ -1651,6 +1651,96 @@ pub(crate) fn rank_v26_pq4_fast_candidates(
     Ok(ranked)
 }
 
+pub(crate) fn rank_v26_pq4_fast_candidates_parallel(
+    index: &V26Pq4FastIndex,
+    query: &[f32; 96],
+    ranked_row_limit: usize,
+    backend: V26Pq4Backend,
+) -> Result<Vec<V26Pq4RankedRow>> {
+    const BLOCKS_PER_CHUNK: usize = 1_024;
+    const ROWS_PER_CHUNK: usize = BLOCKS_PER_CHUNK * 32;
+    if ![512, 1_024, 2_048, 4_096].contains(&ranked_row_limit)
+        || index.row_count < ranked_row_limit as u64
+        || index.blocks.len() != usize::try_from(index.row_count).unwrap().div_ceil(32)
+        || index.projected_resident_bytes_100m
+            != projected_v26_pq4_fast_resident_bytes(100_000_000)?
+    {
+        return Err(invalid("V26 PQ4 parallel ranking authority differs"));
+    }
+    let tables = prepare_v26_pq4_query_tables(&index.codebook, query)?;
+    let row_count =
+        usize::try_from(index.row_count).map_err(|_| invalid("V26 PQ4 row count overflows"))?;
+    let mut scores = vec![0_u16; row_count];
+    let chunk_histograms = scores
+        .par_chunks_mut(ROWS_PER_CHUNK)
+        .zip(index.blocks.par_chunks(BLOCKS_PER_CHUNK))
+        .map(|(score_chunk, blocks)| -> Result<Box<[u32; 8_192]>> {
+            let mut histogram = Box::new([0_u32; 8_192]);
+            for (block_index, block) in blocks.iter().enumerate() {
+                let block_scores = match backend {
+                    #[cfg(test)]
+                    V26Pq4Backend::ScalarControl => v26_pq4_scalar_block_scores(block, &tables),
+                    V26Pq4Backend::Aarch64NeonTable => {
+                        #[cfg(target_arch = "aarch64")]
+                        {
+                            v26_pq4_neon_block_scores(block, &tables)
+                        }
+                        #[cfg(not(target_arch = "aarch64"))]
+                        {
+                            return Err(invalid("V26 PQ4 fused backend unavailable"));
+                        }
+                    }
+                };
+                let start = block_index * 32;
+                let rows_in_block = (score_chunk.len() - start).min(32);
+                for (destination, score) in score_chunk[start..start + rows_in_block]
+                    .iter_mut()
+                    .zip(block_scores)
+                {
+                    *destination = score;
+                    histogram[usize::from(score)] += 1;
+                }
+            }
+            Ok(histogram)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut histogram = [0_u32; 8_192];
+    for chunk in chunk_histograms {
+        for (total, count) in histogram.iter_mut().zip(chunk.iter()) {
+            *total = total
+                .checked_add(*count)
+                .ok_or_else(|| invalid("V26 PQ4 histogram overflows"))?;
+        }
+    }
+    if histogram.iter().map(|count| u64::from(*count)).sum::<u64>() != index.row_count {
+        return Err(invalid("V26 PQ4 histogram inventory differs"));
+    }
+    let mut cumulative = 0_usize;
+    let threshold = histogram
+        .iter()
+        .enumerate()
+        .find_map(|(score, count)| {
+            cumulative += *count as usize;
+            (cumulative >= ranked_row_limit).then_some(score as u16)
+        })
+        .ok_or_else(|| invalid("V26 PQ4 histogram inventory differs"))?;
+    let mut ranked = Vec::with_capacity(ranked_row_limit);
+    for (source_ordinal, score) in scores.into_iter().enumerate() {
+        if score < threshold || (score == threshold && ranked.len() < ranked_row_limit) {
+            ranked.push(V26Pq4RankedRow {
+                score,
+                source_ordinal: source_ordinal as u64,
+            });
+        }
+    }
+    ranked.sort_unstable();
+    ranked.truncate(ranked_row_limit);
+    if ranked.len() != ranked_row_limit {
+        return Err(invalid("V26 PQ4 ranked inventory differs"));
+    }
+    Ok(ranked)
+}
+
 #[cfg(test)]
 pub(crate) fn evaluate_v26_pq4_fast_frontier(
     index: &V26Pq4FastIndex,
@@ -5738,6 +5828,47 @@ mod tests {
             rank_v26_pq4_fast_candidates(&index, &query, 513, V26Pq4Backend::ScalarControl,)
                 .is_err()
         );
+    }
+
+    #[test]
+    #[cfg(target_arch = "aarch64")]
+    fn v26_pq4_serving_parallel_rank_matches_scalar_at_the_frozen_depth() {
+        // Break caught: the serving scorer changes score/tie authority while splitting the
+        // corpus across cores, or silently evaluates a depth other than the frozen 2,048 rows.
+        let codebook = V26Pq4FastCodebook {
+            centroids: (0..32)
+                .map(|subspace| {
+                    std::array::from_fn(|coordinate| {
+                        ((subspace * 47 + coordinate * 29) as f32 - 384.0) / 2_048.0
+                    })
+                })
+                .collect(),
+        };
+        let codes = (0_u32..32_769)
+            .map(|row| {
+                std::array::from_fn(|subspace| ((row * 31 + subspace as u32 * 13) & 15) as u8)
+            })
+            .collect::<Vec<_>>();
+        let index = super::V26Pq4FastIndex {
+            codebook,
+            blocks: pack_v26_pq4_fast_blocks(&codes).unwrap(),
+            row_count: codes.len() as u64,
+            projected_resident_bytes_100m: 2_336_975_744,
+        };
+        let query = normalized_row(317);
+        let scalar =
+            rank_v26_pq4_fast_candidates(&index, &query, 2_048, V26Pq4Backend::ScalarControl)
+                .unwrap();
+
+        let parallel = super::rank_v26_pq4_fast_candidates_parallel(
+            &index,
+            &query,
+            2_048,
+            V26Pq4Backend::Aarch64NeonTable,
+        )
+        .unwrap();
+
+        assert_eq!(parallel, scalar);
     }
 
     #[test]
