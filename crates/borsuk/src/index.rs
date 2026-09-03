@@ -40564,22 +40564,55 @@ mod tests {
             purge: false,
         };
         let contender_storage = index.storage.clone();
+        let (checked_tx, checked_rx) = std::sync::mpsc::sync_channel(1);
         let contender = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(500));
-            maintenance::acquire_lease(
+            let lease_path = "maintenance/leases/long-work";
+            let first_expiry = loop {
+                if let Some(stored) = contender_storage
+                    .read_coordination_object(lease_path)
+                    .unwrap()
+                {
+                    break String::from_utf8_lossy(&stored.bytes)
+                        .lines()
+                        .nth(1)
+                        .unwrap()
+                        .parse::<i64>()
+                        .unwrap();
+                }
+                std::thread::yield_now();
+            };
+            let renewed_expiry = loop {
+                let stored = contender_storage
+                    .read_coordination_object(lease_path)
+                    .unwrap()
+                    .unwrap();
+                let expiry = String::from_utf8_lossy(&stored.bytes)
+                    .lines()
+                    .nth(1)
+                    .unwrap()
+                    .parse::<i64>()
+                    .unwrap();
+                if expiry > first_expiry {
+                    break expiry;
+                }
+                std::thread::yield_now();
+            };
+            let acquired = maintenance::acquire_lease(
                 &contender_storage,
                 "long-work",
                 "owner-b",
                 300,
-                Utc::now().timestamp_millis(),
+                renewed_expiry - 1,
             )
             .unwrap()
-            .is_some()
+            .is_some();
+            checked_tx.send(()).unwrap();
+            acquired
         });
         let mut report = MaintenanceReport::default();
         let ran = index
             .run_leased_unit(&config, "long-work", 300, &mut report, |_| {
-                std::thread::sleep(Duration::from_millis(800));
+                checked_rx.recv_timeout(Duration::from_secs(5)).unwrap();
                 Ok(true)
             })
             .unwrap();
