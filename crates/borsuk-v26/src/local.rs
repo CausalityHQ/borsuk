@@ -2807,6 +2807,144 @@ pub fn select_v26_pq16_global_pages_from_arrow(
     })
 }
 
+/// Builds the deterministic SimHash/PQ16 multi-index by streaming authenticated Arrow vectors.
+pub fn build_v26_simhash_pq16_multi_index_from_arrow(
+    packed: &crate::V26PackedPq16Index,
+    cold_vectors: &V26ArrowColdVectors,
+) -> Result<crate::V26SimHashPq16MultiIndex> {
+    const VECTOR_BYTES: usize = 96 * 4;
+    if u64::try_from(packed.codes.len() / 16).unwrap() != cold_vectors.row_count
+        || !packed.codes.len().is_multiple_of(16)
+    {
+        return Err(invalid("V26 SimHash PQ16 Arrow build authority differs"));
+    }
+    let row_count = usize::try_from(cold_vectors.row_count)
+        .map_err(|_| invalid("V26 SimHash PQ16 Arrow row count overflows"))?;
+    let mut signatures = Vec::with_capacity(row_count);
+    for batch in &cold_vectors.batches {
+        let batch_rows = usize::try_from(batch.row_count).unwrap();
+        let mut ordinal_bytes = vec![0_u8; batch_rows * 8];
+        cold_vectors
+            .file
+            .read_exact_at(&mut ordinal_bytes, batch.ordinal_values_offset)
+            .map_err(|error| invalid(&format!("V26 SimHash ordinal read failed: {error}")))?;
+        let mut vector_bytes = vec![0_u8; batch_rows * VECTOR_BYTES];
+        cold_vectors
+            .file
+            .read_exact_at(&mut vector_bytes, batch.vector_values_offset)
+            .map_err(|error| invalid(&format!("V26 SimHash vector read failed: {error}")))?;
+        for row_index in 0..batch_rows {
+            let ordinal_start = row_index * 8;
+            let ordinal = u64::from_le_bytes(
+                ordinal_bytes[ordinal_start..ordinal_start + 8]
+                    .try_into()
+                    .unwrap(),
+            );
+            if ordinal != batch.row_start + u64::try_from(row_index).unwrap() {
+                return Err(invalid("V26 SimHash Arrow ordinal binding differs"));
+            }
+            let vector_start = row_index * VECTOR_BYTES;
+            let vector_slice = &vector_bytes[vector_start..vector_start + VECTOR_BYTES];
+            let mut vector = [0_f32; 96];
+            for (coordinate, bytes) in vector.iter_mut().zip(vector_slice.as_chunks::<4>().0) {
+                *coordinate = f32::from_le_bytes(*bytes);
+            }
+            signatures.push(crate::v26_simhash_signature(&vector)?);
+        }
+    }
+    if signatures.len() != row_count {
+        return Err(invalid("V26 SimHash Arrow vector inventory differs"));
+    }
+    crate::build_v26_simhash_pq16_multi_index_from_signatures(packed, &signatures)
+}
+
+/// Selects ten pages from bounded SimHash buckets with sparse exact Arrow reranking.
+pub fn select_v26_simhash_pq16_pages_from_arrow(
+    index: &crate::V26SimHashPq16MultiIndex,
+    query: &[f32; 96],
+    cold_vectors: &V26ArrowColdVectors,
+    bucket_limit: usize,
+    ranked_row_limit: usize,
+) -> Result<V26Pq16ServingSelection> {
+    if u64::try_from(index.source_ordinals.len()).unwrap() != cold_vectors.row_count {
+        return Err(invalid("V26 SimHash PQ16 Arrow authority differs"));
+    }
+    let approximate =
+        crate::rank_v26_simhash_pq16_candidates(index, query, bucket_limit, ranked_row_limit)?;
+    let mut source_ordinals = approximate
+        .iter()
+        .map(|candidate| u32::try_from(candidate.source_ordinal))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| invalid("V26 SimHash PQ16 Arrow source ordinal differs"))?;
+    source_ordinals.sort_unstable();
+    let cold = cold_vectors.read_vectors(&source_ordinals)?;
+    let mut exact = approximate
+        .iter()
+        .map(|candidate| {
+            let source_ordinal = u32::try_from(candidate.source_ordinal)
+                .map_err(|_| invalid("V26 SimHash PQ16 Arrow source ordinal differs"))?;
+            let position = source_ordinals
+                .binary_search(&source_ordinal)
+                .map_err(|_| invalid("V26 SimHash PQ16 Arrow vector binding differs"))?;
+            let distance = v26_squared_l2(&cold.vectors[position], query);
+            if !distance.is_finite() {
+                return Err(invalid("V26 SimHash PQ16 Arrow exact distance differs"));
+            }
+            Ok(V26PqRankedRow {
+                source_ordinal: candidate.source_ordinal,
+                distance,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    exact.sort_unstable();
+    let mut assignment_ordinals = exact
+        .iter()
+        .map(|row| u32::try_from(row.source_ordinal).unwrap())
+        .collect::<Vec<_>>();
+    assignment_ordinals.sort_unstable();
+    let assignments = cold_vectors.read_assignments(&assignment_ordinals)?;
+    let ranked_assignments = exact
+        .iter()
+        .map(|row| {
+            let source_ordinal = u32::try_from(row.source_ordinal).unwrap();
+            let position = assignment_ordinals.binary_search(&source_ordinal).unwrap();
+            let assignment = assignments[position];
+            if assignment.source_ordinal != row.source_ordinal {
+                return Err(invalid("V26 SimHash PQ16 Arrow assignment differs"));
+            }
+            Ok([assignment.primary_page, assignment.replica_page])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let top_assignments = ranked_assignments[..10]
+        .iter()
+        .map(|pages| pages.to_vec())
+        .collect::<Vec<_>>();
+    let mut selected_pages =
+        exact_v26_layout_oracle_pages(&top_assignments, crate::V26_SERVING_PAGE_BUDGET)?;
+    for pages in &ranked_assignments {
+        for page in pages {
+            if selected_pages.len() == crate::V26_SERVING_PAGE_BUDGET {
+                break;
+            }
+            if !selected_pages.contains(page) {
+                selected_pages.push(*page);
+            }
+        }
+    }
+    if selected_pages.len() != crate::V26_SERVING_PAGE_BUDGET {
+        return Err(invalid("V26 SimHash PQ16 Arrow page inventory differs"));
+    }
+    selected_pages.sort_unstable();
+    Ok(V26Pq16ServingSelection {
+        selected_pages,
+        exact_rows_read: u32::try_from(ranked_row_limit)
+            .map_err(|_| invalid("V26 SimHash PQ16 Arrow ranked-row limit overflows"))?,
+        cold_batches_read: cold.batches_read,
+        cold_read_workers: cold.read_workers,
+        page_body_reads: 0,
+    })
+}
+
 fn v26_pq16_codebook_schema() -> Schema {
     Schema::new(vec![
         Field::new("subspace", DataType::UInt8, false),
@@ -5216,6 +5354,10 @@ mod tests {
         )
         .unwrap();
         let reader = V26ArrowColdVectors::open(&path, &manifest).unwrap();
+        let in_memory_multi = crate::build_v26_simhash_pq16_multi_index(&index, &rows).unwrap();
+        let arrow_multi =
+            super::build_v26_simhash_pq16_multi_index_from_arrow(&index, &reader).unwrap();
+        assert_eq!(arrow_multi, in_memory_multi);
         let result =
             select_v26_pq16_pages_from_arrow(&index, &candidate_pages, &query, &reader).unwrap();
 
@@ -5236,6 +5378,16 @@ mod tests {
         assert!(global.cold_batches_read > 0 && global.cold_batches_read <= 34);
         assert_eq!(global.cold_read_workers, 4);
         assert_eq!(global.page_body_reads, 0);
+
+        let simhash = super::select_v26_simhash_pq16_pages_from_arrow(
+            &arrow_multi,
+            &query,
+            &reader,
+            65_536,
+            2_048,
+        )
+        .unwrap();
+        assert_eq!(simhash, global);
 
         if !cfg!(debug_assertions) {
             let mut latency_ns = Vec::with_capacity(128);

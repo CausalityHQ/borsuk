@@ -25,7 +25,8 @@ pub use local::{
     V26Pq16ServingBenchmarkRequest, V26Pq16ServingBenchmarkResult, V26Pq16ServingBuildOutput,
     V26Pq16ServingBuildRequest, V26Pq16ServingRuntime, V26Pq16ServingRuntimeRequest,
     V26PqWidthLadderRequest, V26ServingLatencySample, V26TreeRouterRequest, V26TruthBuildRequest,
-    canonical_v26_layout_build_output_bytes, canonical_v26_pq16_global_preflight_result_bytes,
+    build_v26_simhash_pq16_multi_index_from_arrow, canonical_v26_layout_build_output_bytes,
+    canonical_v26_pq16_global_preflight_result_bytes,
     canonical_v26_pq16_serving_benchmark_result_bytes,
     canonical_v26_pq16_serving_build_output_bytes, evaluate_v26_exact_global,
     evaluate_v26_layout_oracle, open_v26_pq16_serving_runtime, read_v26_pq16_index_arrow,
@@ -35,9 +36,9 @@ pub use local::{
     run_v26_pq16_global_preflight, run_v26_pq16_serving_benchmark, run_v26_pq16_serving_build,
     run_v26_tree_router, run_v26_tree_router_diagnostic, run_v26_truth_build,
     select_v26_pq16_global_pages_from_arrow, select_v26_pq16_pages_from_arrow,
-    v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
-    v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
-    write_v26_pq16_index_arrow,
+    select_v26_simhash_pq16_pages_from_arrow, v26_construction_schema, v26_page_assignments_schema,
+    v26_query_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
+    write_v26_cold_vectors_arrow, write_v26_pq16_index_arrow,
 };
 
 pub use tree::{
@@ -1712,6 +1713,205 @@ pub struct V26PackedPq16Index {
     pub(crate) page_offsets: Vec<u64>,
     pub(crate) posting_rows: Vec<u32>,
     pub(crate) projected_resident_bytes_100m: u64,
+}
+
+const V26_SIMHASH_BITS: usize = 16;
+const V26_SIMHASH_BUCKETS: usize = 1 << V26_SIMHASH_BITS;
+const V26_SIMHASH_SEED: u64 = 0x5632_362d_5349_4d48;
+
+/// Row-preserving PQ16 records grouped by a deterministic 16-bit SimHash.
+#[derive(Debug, Clone, PartialEq)]
+pub struct V26SimHashPq16MultiIndex {
+    codebook: V26PqCodebook,
+    pub(crate) bucket_offsets: Vec<u64>,
+    pub(crate) source_ordinals: Vec<u32>,
+    pub(crate) codes: Vec<u8>,
+    pub(crate) projected_resident_bytes_100m: u64,
+}
+
+fn v26_splitmix64(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+fn v26_simhash_signature(vector: &[f32; 96]) -> Result<u16> {
+    validate_v26_vector(vector)?;
+    let mut signature = 0_u16;
+    for bit in 0..V26_SIMHASH_BITS {
+        let mut projection = 0.0_f64;
+        for (dimension, coordinate) in vector.iter().enumerate() {
+            let key = V26_SIMHASH_SEED
+                ^ u64::try_from(bit).unwrap().rotate_left(17)
+                ^ u64::try_from(dimension).unwrap();
+            let sign = if v26_splitmix64(key) >> 63 == 0 {
+                -1.0
+            } else {
+                1.0
+            };
+            projection += f64::from(*coordinate) * sign;
+        }
+        if projection >= 0.0 {
+            signature |= 1 << bit;
+        }
+    }
+    Ok(signature)
+}
+
+fn projected_v26_simhash_pq16_resident_bytes(rows: u64) -> Result<u64> {
+    if rows == 0 || rows > u64::from(u32::MAX) {
+        return Err(invalid("V26 SimHash PQ16 projection request differs"));
+    }
+    rows.checked_mul(4 + 16)
+        .and_then(|bytes| bytes.checked_add(u64::try_from(V26_SIMHASH_BUCKETS + 1).unwrap() * 8))
+        .and_then(|bytes| bytes.checked_add(16 * 256 * 6 * 4))
+        .and_then(|bytes| bytes.checked_add(8))
+        .and_then(|bytes| bytes.checked_add(512 * 1_024 * 1_024))
+        .ok_or_else(|| invalid("V26 SimHash PQ16 projection overflows"))
+}
+
+/// Builds the deterministic SimHash/PQ16 multi-index from normalized rows.
+pub fn build_v26_simhash_pq16_multi_index(
+    packed: &V26PackedPq16Index,
+    rows: &[V26ConstructionRow],
+) -> Result<V26SimHashPq16MultiIndex> {
+    const CODE_BYTES: usize = 16;
+    if rows.is_empty()
+        || rows.len() > u32::MAX as usize
+        || packed.codes.len() != rows.len() * CODE_BYTES
+    {
+        return Err(invalid("V26 SimHash PQ16 build request differs"));
+    }
+    let mut signatures = Vec::with_capacity(rows.len());
+    for (row_index, row) in rows.iter().enumerate() {
+        if usize::try_from(row.source_ordinal).ok() != Some(row_index) {
+            return Err(invalid("V26 SimHash PQ16 row authority differs"));
+        }
+        signatures.push(v26_simhash_signature(&row.vector)?);
+    }
+    build_v26_simhash_pq16_multi_index_from_signatures(packed, &signatures)
+}
+
+pub(crate) fn build_v26_simhash_pq16_multi_index_from_signatures(
+    packed: &V26PackedPq16Index,
+    signatures: &[u16],
+) -> Result<V26SimHashPq16MultiIndex> {
+    const CODE_BYTES: usize = 16;
+    if signatures.is_empty()
+        || signatures.len() > u32::MAX as usize
+        || packed.codes.len() != signatures.len() * CODE_BYTES
+    {
+        return Err(invalid("V26 SimHash PQ16 signature inventory differs"));
+    }
+    let mut counts = vec![0_usize; V26_SIMHASH_BUCKETS];
+    for signature in signatures {
+        let bucket = usize::from(*signature);
+        counts[bucket] = counts[bucket]
+            .checked_add(1)
+            .ok_or_else(|| invalid("V26 SimHash PQ16 bucket count overflows"))?;
+    }
+    let mut bucket_offsets = Vec::with_capacity(V26_SIMHASH_BUCKETS + 1);
+    bucket_offsets.push(0_u64);
+    for count in counts {
+        let next = bucket_offsets
+            .last()
+            .copied()
+            .unwrap()
+            .checked_add(u64::try_from(count).unwrap())
+            .ok_or_else(|| invalid("V26 SimHash PQ16 bucket offset overflows"))?;
+        bucket_offsets.push(next);
+    }
+    let mut positions = bucket_offsets[..V26_SIMHASH_BUCKETS]
+        .iter()
+        .map(|offset| usize::try_from(*offset).unwrap())
+        .collect::<Vec<_>>();
+    let mut source_ordinals = vec![0_u32; signatures.len()];
+    let mut codes = vec![0_u8; packed.codes.len()];
+    for (row_index, signature) in signatures.iter().copied().enumerate() {
+        let bucket = usize::from(signature);
+        let position = positions[bucket];
+        positions[bucket] += 1;
+        source_ordinals[position] = u32::try_from(row_index).unwrap();
+        codes[position * CODE_BYTES..(position + 1) * CODE_BYTES]
+            .copy_from_slice(&packed.codes[row_index * CODE_BYTES..(row_index + 1) * CODE_BYTES]);
+    }
+    Ok(V26SimHashPq16MultiIndex {
+        codebook: packed.codebook.clone(),
+        bucket_offsets,
+        source_ordinals,
+        codes,
+        projected_resident_bytes_100m: projected_v26_simhash_pq16_resident_bytes(100_000_000)?,
+    })
+}
+
+pub(crate) fn rank_v26_simhash_pq16_candidates(
+    index: &V26SimHashPq16MultiIndex,
+    query: &[f32; 96],
+    bucket_limit: usize,
+    ranked_row_limit: usize,
+) -> Result<Vec<V26PqRankedRow>> {
+    const CODE_BYTES: usize = 16;
+    if bucket_limit == 0
+        || bucket_limit > V26_SIMHASH_BUCKETS
+        || ranked_row_limit == 0
+        || ranked_row_limit > V26_PQ16_RERANK_LADDER[4]
+        || index.bucket_offsets.len() != V26_SIMHASH_BUCKETS + 1
+        || index.source_ordinals.len() * CODE_BYTES != index.codes.len()
+        || index.source_ordinals.len() < ranked_row_limit
+        || index.bucket_offsets.first() != Some(&0)
+        || index.bucket_offsets.last().copied()
+            != Some(u64::try_from(index.source_ordinals.len()).unwrap())
+        || index
+            .bucket_offsets
+            .windows(2)
+            .any(|pair| pair[0] > pair[1])
+    {
+        return Err(invalid("V26 SimHash PQ16 query request differs"));
+    }
+    let query_signature = v26_simhash_signature(query)?;
+    let tables = prepare_v26_pq_tables(&index.codebook, query)?;
+    let mut buckets = (0_u32..u32::try_from(V26_SIMHASH_BUCKETS).unwrap())
+        .map(|bucket| {
+            (
+                (u32::from(query_signature) ^ bucket).count_ones(),
+                u16::try_from(bucket).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    buckets.sort_unstable();
+    let mut ranked = BinaryHeap::with_capacity(ranked_row_limit);
+    for (_, bucket) in buckets.into_iter().take(bucket_limit) {
+        let start = usize::try_from(index.bucket_offsets[usize::from(bucket)]).unwrap();
+        let end = usize::try_from(index.bucket_offsets[usize::from(bucket) + 1]).unwrap();
+        for position in start..end {
+            let code = &index.codes[position * CODE_BYTES..(position + 1) * CODE_BYTES];
+            let distance = code
+                .iter()
+                .enumerate()
+                .map(|(subspace, code)| tables[subspace][usize::from(*code)])
+                .sum::<f32>();
+            if !distance.is_finite() {
+                return Err(invalid("V26 SimHash PQ16 distance differs"));
+            }
+            let value = V26PqRankedRow {
+                source_ordinal: u64::from(index.source_ordinals[position]),
+                distance,
+            };
+            if ranked.len() < ranked_row_limit {
+                ranked.push(value);
+            } else if value < *ranked.peek().unwrap() {
+                ranked.pop();
+                ranked.push(value);
+            }
+        }
+    }
+    let mut ranked = ranked.into_vec();
+    ranked.sort();
+    if ranked.len() != ranked_row_limit {
+        return Err(invalid("V26 SimHash PQ16 candidate inventory differs"));
+    }
+    Ok(ranked)
 }
 
 pub fn build_v26_pq16_packed_index(
@@ -4570,6 +4770,49 @@ mod tests {
         );
         assert_eq!(selection.exact_rows_read, 2_048);
         assert_eq!(selection.page_body_reads, 0);
+    }
+
+    #[test]
+    fn v26_fast_simhash_pq16_multi_index_matches_global_ranking_without_page_postings() {
+        // Break caught: the fail-fast router loses row identity, depends on the page tree, or
+        // cannot reproduce the global PQ16 order when every registered bucket is searched.
+        let rows = (0_u64..4_096)
+            .map(|source_ordinal| {
+                let mut row = row(source_ordinal);
+                let norm = row
+                    .vector
+                    .iter()
+                    .map(|coordinate| coordinate * coordinate)
+                    .sum::<f32>()
+                    .sqrt();
+                row.vector
+                    .iter_mut()
+                    .for_each(|coordinate| *coordinate /= norm);
+                row
+            })
+            .collect::<Vec<_>>();
+        let assignments = (0_u64..4_096)
+            .map(|source_ordinal| V26RowPages {
+                source_ordinal,
+                primary_page: u32::try_from(source_ordinal % 16).unwrap(),
+                replica_page: 16 + u32::try_from(source_ordinal % 16).unwrap(),
+            })
+            .collect::<Vec<_>>();
+        let mut packed = build_v26_pq16_packed_index(&rows, &assignments).unwrap();
+        packed.page_offsets.fill(u64::MAX);
+        packed.posting_rows.fill(u32::MAX);
+        let query = rows[42].vector;
+        let expected = rank_v26_pq16_global_candidates(&packed, &query, 512).unwrap();
+
+        let multi = super::build_v26_simhash_pq16_multi_index(&packed, &rows).unwrap();
+        let actual = super::rank_v26_simhash_pq16_candidates(&multi, &query, 65_536, 512).unwrap();
+
+        assert_eq!(actual, expected);
+        assert_eq!(multi.bucket_offsets.len(), 65_537);
+        assert_eq!(multi.source_ordinals.len(), rows.len());
+        assert_eq!(multi.codes.len(), rows.len() * 16);
+        assert_eq!(multi.projected_resident_bytes_100m, 2_537_493_520);
+        assert!(multi.projected_resident_bytes_100m < 3 * 1_024_u64.pow(3));
     }
 
     #[test]
