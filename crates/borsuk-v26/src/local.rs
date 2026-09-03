@@ -3379,10 +3379,9 @@ pub fn run_v26_simhash_preflight(request: &V26SimHashPreflightRequest) -> Result
         &manifest.cold_vectors,
     )?;
     let mut queries = read_evaluation_queries(&request.external_queries.path, 512)?;
-    queries.truncate(32);
-    let truths = read_evaluation_truth_with_assignment(
+    let mut truths = read_evaluation_truth_with_assignment(
         &request.truth.path,
-        32,
+        512,
         &queries,
         &terminal.authority.construction_rows.digest,
         &request.external_queries.identity.digest,
@@ -3392,6 +3391,8 @@ pub fn run_v26_simhash_preflight(request: &V26SimHashPreflightRequest) -> Result
             cold_vectors.read_assignment(neighbor)
         },
     )?;
+    queries.truncate(32);
+    truths.truncate(32);
     let samples = execute_v26_simhash_preflight_samples(&index, &cold_vectors, &queries, &truths)?;
     let result = (|| {
         write_batch(
@@ -6656,7 +6657,10 @@ mod tests {
             .unwrap();
         let truth_batch = truth_reader.next().unwrap().unwrap();
         let preflight_truth_path = temp.path().join("preflight-truth.parquet");
-        write_parquet(&preflight_truth_path, &truth_batch.slice(0, 32));
+        // The preflight must authenticate the complete frozen truth artifact before selecting
+        // its fixed 32-query evaluation prefix. A physically truncated truth file is not the
+        // published authority.
+        write_parquet(&preflight_truth_path, &truth_batch);
         evaluation.truth = identity("truth-parquet", &preflight_truth_path);
         let receipt = read_layout_terminal(&evaluation.layout_terminal).unwrap();
         let serving_dir = temp.path().join("simhash-serving");
