@@ -51,18 +51,20 @@ can later serve within eight page reads.
 
 ## Leakage and phase capabilities
 
-The layout builder receives only the authenticated construction Parquet,
-source-map Parquet, layout manifest, and an empty output directory. The manifest
-binds the exact URI, SHA-256, byte length, role, and generation of the executable
-and both Parquets;
+The layout builder receives only the authenticated construction Parquet, layout
+manifest, and an empty output directory. The manifest binds the exact URI,
+SHA-256, byte length, role, and generation of the executable and construction
+Parquet;
 coherent substitution of another valid input is rejected before parsing. It cannot
 open pseudoqueries, truth, evidence, prior results, benchmark queries, neighbors,
 or page-quality metrics. File roles, exact path inventory, and byte identities
 are authenticated before vectors are parsed. The query and truth Parquets are
 made available only to a separate evaluator after the layout terminal exists.
 For the structural smoke only, `expected_rows` selects the exact leading source
-ordinal range from those same authenticated construction and source-map files;
-the two full-file row counts must match and both must cover that prefix.
+ordinal range from that same authenticated construction file; its full-file row
+count must cover that prefix. The construction's ordered `source_ordinal` column
+is the sole inventory authority, so V26 does not materialize a redundant source
+map.
 
 The original 512 corpus-row pseudoqueries are retired from V26 evaluation.
 They make the registered 975,000 ppm gate impossible after their own rows and
@@ -144,15 +146,15 @@ than hiding it.
 
 ## Fail-fast evaluation
 
-The same frozen 262,144-row construction and source map are reused by exact
-identity. Evaluation uses the first 512 immutable external test queries and a
+The same frozen 262,144-row construction is reused by exact identity.
+Evaluation uses the first 512 immutable external test queries and a
 new exact-truth Parquet bound to those queries and that construction. Bulk data
 remains Parquet; JSON is used only for small authority and terminal records.
 
 1. **Named contract gate:** synthetic reducer/tree/codec tests run in the small
    V26 crate and must rerun warm in under one second.
 2. **Authentic 4,096-row smoke:** read the first 4,096 source ordinals from the
-   authenticated construction and source-map Parquets, build both trees, and
+   authenticated construction Parquet, build both trees, and
    verify every assignment and output identity. This is a structural boundary,
    not a recall claim: it opens no pseudoquery or truth role. Wall time is below
    30 seconds, RSS below 512 MiB, and page reads are zero.

@@ -59,13 +59,6 @@ pub fn v26_construction_schema() -> Schema {
     ])
 }
 
-pub fn v26_source_map_schema() -> Schema {
-    Schema::new(vec![
-        Field::new("source_ordinal", DataType::UInt64, false),
-        Field::new("dataset_ordinal", DataType::UInt64, false),
-    ])
-}
-
 pub fn v26_query_schema() -> Schema {
     Schema::new(vec![Field::new("emb", vector_type(), false)])
 }
@@ -116,7 +109,6 @@ pub struct V26LocalObjectPath {
 pub struct V26LayoutBuildRequest {
     pub manifest: V26LocalObjectPath,
     pub construction_rows: V26LocalObjectPath,
-    pub source_map: V26LocalObjectPath,
     pub output_dir: PathBuf,
     pub output_uri_prefix: String,
     pub worker_count: usize,
@@ -2809,16 +2801,11 @@ fn read_inputs(
     request: &V26LayoutBuildRequest,
     authority: &V26LayoutAuthority,
 ) -> Result<Vec<V26ConstructionRow>> {
-    if request.construction_rows.identity != authority.construction_rows
-        || request.source_map.identity != authority.source_map
-    {
+    if request.construction_rows.identity != authority.construction_rows {
         return Err(invalid("V26 construction input authority differs"));
     }
     authenticate(&request.construction_rows, "construction-parquet")?;
-    authenticate(&request.source_map, "source-map-parquet")?;
-    if request.construction_rows.identity.generation != authority.generation
-        || request.source_map.identity.generation != authority.generation
-    {
+    if request.construction_rows.identity.generation != authority.generation {
         return Err(invalid("V26 input generation differs"));
     }
     let expected_rows_i64 = i64::try_from(authority.expected_rows)
@@ -2826,12 +2813,8 @@ fn read_inputs(
     let expected_rows_usize = usize::try_from(authority.expected_rows)
         .map_err(|_| invalid("V26 input row count overflows"))?;
     let construction = open_reader(&request.construction_rows.path)?;
-    let source = open_reader(&request.source_map.path)?;
     let construction_rows = construction.metadata().file_metadata().num_rows();
-    let source_rows = source.metadata().file_metadata().num_rows();
     if construction.schema().as_ref() != &v26_construction_schema()
-        || source.schema().as_ref() != &v26_source_map_schema()
-        || construction_rows != source_rows
         || construction_rows < expected_rows_i64
     {
         return Err(invalid("V26 input Parquet authority differs"));
@@ -2899,45 +2882,7 @@ fn read_inputs(
             });
         }
     }
-    let mut observed_source = Vec::with_capacity(rows.len());
-    let mut datasets = BTreeSet::new();
-    'source: for batch in source
-        .build()
-        .map_err(|error| invalid(&format!("V26 source-map reader failed: {error}")))?
-    {
-        let batch =
-            batch.map_err(|error| invalid(&format!("V26 source-map batch failed: {error}")))?;
-        let sources = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| invalid("V26 source-map ordinal differs"))?;
-        let dataset = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| invalid("V26 dataset ordinal differs"))?;
-        if batch
-            .columns()
-            .iter()
-            .any(|column| column.null_count() != 0)
-        {
-            return Err(invalid("V26 source-map nullability differs"));
-        }
-        for index in 0..batch.num_rows() {
-            if observed_source.len() == expected_rows_usize {
-                break 'source;
-            }
-            let source_ordinal = sources.value(index);
-            if source_ordinal != observed_source.len() as u64
-                || !datasets.insert(dataset.value(index))
-            {
-                return Err(invalid("V26 source-map inventory differs"));
-            }
-            observed_source.push(source_ordinal);
-        }
-    }
-    if rows.len() as u64 != authority.expected_rows || observed_source.len() != rows.len() {
+    if rows.len() as u64 != authority.expected_rows {
         return Err(invalid("V26 input row count differs"));
     }
     Ok(rows)
@@ -3046,7 +2991,6 @@ fn validate_uri_inventory(request: &V26LayoutBuildRequest) -> Result<()> {
     for uri in [
         request.manifest.identity.uri.clone(),
         request.construction_rows.identity.uri.clone(),
-        request.source_map.identity.uri.clone(),
         format!("{}page-assignments.parquet", request.output_uri_prefix),
         format!("{}primary-tree.parquet", request.output_uri_prefix),
         format!("{}replica-tree.parquet", request.output_uri_prefix),
@@ -3114,7 +3058,6 @@ pub fn run_v26_layout_build(request: &V26LayoutBuildRequest) -> Result<V26Layout
             inputs: vec![
                 request.construction_rows.identity.clone(),
                 request.manifest.identity.clone(),
-                request.source_map.identity.clone(),
             ],
             outputs,
             row_count: authority.expected_rows,
@@ -3160,10 +3103,6 @@ pub fn run_v26_layout_build_directory(
         construction_rows: V26LocalObjectPath {
             identity: authority.construction_rows.clone(),
             path: input_dir.join("construction.parquet"),
-        },
-        source_map: V26LocalObjectPath {
-            identity: authority.source_map.clone(),
-            path: input_dir.join("source-map.parquet"),
         },
         manifest,
         output_dir,
@@ -3757,14 +3696,12 @@ pub fn validate_v26_layout_build_output(
     validate_uri_inventory(request)?;
     let observed_authority = read_manifest(&request.manifest)?;
     authenticate(&request.construction_rows, "construction-parquet")?;
-    authenticate(&request.source_map, "source-map-parquet")?;
     if output.authority != observed_authority
         || output.authority.generation != request.manifest.identity.generation
         || output.inputs
             != vec![
                 request.construction_rows.identity.clone(),
                 request.manifest.identity.clone(),
-                request.source_map.identity.clone(),
             ]
         || output.row_count != output.authority.expected_rows
         || output.worker_count as usize != request.worker_count
@@ -3862,9 +3799,9 @@ mod tests {
         run_v26_page_mode_router, run_v26_pq_width_ladder, run_v26_pq8_candidate_cover,
         run_v26_pq16_exact_rerank, run_v26_pq16_serving_build, run_v26_tree_router,
         run_v26_tree_router_diagnostic, run_v26_truth_build, select_v26_pq16_pages_from_arrow,
-        v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
-        v26_source_map_schema, v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
-        write_v26_cold_vectors_arrow, write_v26_pq16_index_arrow,
+        v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
+        v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
+        write_v26_pq16_index_arrow,
     };
     use crate::{
         V26Disposition, V26LayoutAuthority, V26LayoutReceipt, V26ObjectIdentity,
@@ -3898,14 +3835,7 @@ mod tests {
         }
     }
 
-    fn fixture_with_rows(
-        expected_rows: u64,
-    ) -> (
-        TempDir,
-        V26LocalObjectPath,
-        V26LocalObjectPath,
-        V26LocalObjectPath,
-    ) {
+    fn fixture_with_rows(expected_rows: u64) -> (TempDir, V26LocalObjectPath, V26LocalObjectPath) {
         let temp = TempDir::new().unwrap();
         let ordinals = UInt64Array::from_iter_values(0..expected_rows);
         let mut flat = Vec::with_capacity(expected_rows as usize * 96);
@@ -3929,22 +3859,9 @@ mod tests {
         let construction_path = temp.path().join("construction.parquet");
         write_parquet(&construction_path, &construction);
 
-        let source_map = RecordBatch::try_new(
-            Arc::new(v26_source_map_schema()),
-            vec![
-                Arc::new(ordinals) as ArrayRef,
-                Arc::new(UInt64Array::from_iter_values(
-                    10_000..10_000 + expected_rows,
-                )),
-            ],
-        )
-        .unwrap();
-        let source_map_path = temp.path().join("source-map.parquet");
-        write_parquet(&source_map_path, &source_map);
         let construction = identity("construction-parquet", &construction_path);
-        let source_map = identity("source-map-parquet", &source_map_path);
         let authority = V26LayoutAuthority {
-            schema: "borsuk-v26-dual-tree-layout-v1".to_owned(),
+            schema: "borsuk-v26-dual-tree-layout-v2".to_owned(),
             generation: "v26-local-test".to_owned(),
             source_commit: "1".repeat(40),
             source_archive_sha256: "2".repeat(64),
@@ -3957,7 +3874,6 @@ mod tests {
                 generation: "v26-local-test".to_owned(),
             },
             construction_rows: construction.identity.clone(),
-            source_map: source_map.identity.clone(),
             primary_seed: 0x5632_362d_5452_4545,
             replica_seed: 0x5632_362d_5245_504c,
             page_capacity: 704,
@@ -3974,30 +3890,22 @@ mod tests {
             temp,
             identity("layout-manifest", &manifest_path),
             construction,
-            source_map,
         )
     }
 
-    fn fixture() -> (
-        TempDir,
-        V26LocalObjectPath,
-        V26LocalObjectPath,
-        V26LocalObjectPath,
-    ) {
+    fn fixture() -> (TempDir, V26LocalObjectPath, V26LocalObjectPath) {
         fixture_with_rows(1_409)
     }
 
     fn request(
         manifest: V26LocalObjectPath,
         construction_rows: V26LocalObjectPath,
-        source_map: V26LocalObjectPath,
         output_dir: std::path::PathBuf,
         worker_count: usize,
     ) -> V26LayoutBuildRequest {
         V26LayoutBuildRequest {
             manifest,
             construction_rows,
-            source_map,
             output_dir,
             output_uri_prefix: "s3://v26-output/layout-a/".to_owned(),
             worker_count,
@@ -4015,9 +3923,9 @@ mod tests {
     }
 
     fn evaluation_fixture_with_rows(expected_rows: u64) -> (TempDir, V26LayoutEvaluationRequest) {
-        let (temp, manifest, construction, source_map) = fixture_with_rows(expected_rows);
+        let (temp, manifest, construction) = fixture_with_rows(expected_rows);
         let output_dir = temp.path().join("layout");
-        let build_request = request(manifest, construction, source_map, output_dir.clone(), 2);
+        let build_request = request(manifest, construction, output_dir.clone(), 2);
         let build = run_v26_layout_build(&build_request).unwrap();
         let receipt = V26LayoutReceipt {
             authority: build.authority.clone(),
@@ -4115,18 +4023,17 @@ mod tests {
     #[test]
     fn v26_layout_local_authenticates_construction_only_and_emits_parquet() {
         // Break caught: parsing before authentication or emitting a nondeterministic layout.
-        let (temp, manifest, construction, source_map) = fixture();
+        let (temp, manifest, construction) = fixture();
         let first_dir = temp.path().join("out-one");
         let second_dir = temp.path().join("out-four");
         let first = run_v26_layout_build(&request(
             manifest.clone(),
             construction.clone(),
-            source_map.clone(),
             first_dir.clone(),
             1,
         ))
         .unwrap();
-        let second_request = request(manifest, construction, source_map, second_dir.clone(), 4);
+        let second_request = request(manifest, construction, second_dir.clone(), 4);
         let second = run_v26_layout_build(&second_request).unwrap();
         assert_eq!(first.row_count, 1_409);
         assert_eq!(first.leaves_per_tree, 3);
@@ -4191,18 +4098,11 @@ mod tests {
     fn v26_layout_local_rejects_query_truth_and_result_roles() {
         // Break caught: construction gains a query/evaluation capability.
         for forbidden in ["external-queries-parquet", "truth-parquet", "prior-result"] {
-            let (temp, manifest, mut construction, source_map) = fixture();
+            let (temp, manifest, mut construction) = fixture();
             construction.identity.role = forbidden.to_owned();
             let output = temp.path().join("forbidden-output");
             assert!(
-                run_v26_layout_build(&request(
-                    manifest,
-                    construction,
-                    source_map,
-                    output.clone(),
-                    1
-                ))
-                .is_err()
+                run_v26_layout_build(&request(manifest, construction, output.clone(), 1)).is_err()
             );
             assert!(!output.exists());
         }
@@ -4211,18 +4111,11 @@ mod tests {
     #[test]
     fn v26_layout_local_rejects_input_output_uri_role_overlap() {
         // Break caught: one immutable URI is assigned both an input and output role.
-        let (temp, manifest, mut construction, source_map) = fixture();
+        let (temp, manifest, mut construction) = fixture();
         construction.identity.uri = "s3://v26-output/layout-a/page-assignments.parquet".to_owned();
         let output_dir = temp.path().join("overlap-output");
         assert!(
-            run_v26_layout_build(&request(
-                manifest,
-                construction,
-                source_map,
-                output_dir.clone(),
-                1,
-            ))
-            .is_err()
+            run_v26_layout_build(&request(manifest, construction, output_dir.clone(), 1,)).is_err()
         );
         assert!(!output_dir.exists());
     }
@@ -4230,21 +4123,14 @@ mod tests {
     #[test]
     fn v26_layout_local_manifest_rejects_coherent_input_substitution() {
         // Break caught: a different URI with identical valid bytes replaces a frozen input.
-        let (temp, manifest, construction, source_map) = fixture();
+        let (temp, manifest, construction) = fixture();
         let alternate_path = temp.path().join("alternate-construction.parquet");
         fs::copy(&construction.path, &alternate_path).unwrap();
         let mut alternate = identity("construction-parquet", &alternate_path);
         alternate.identity.uri = "s3://v26-input/alternate-construction-parquet".to_owned();
         let output_dir = temp.path().join("substituted-output");
         assert!(
-            run_v26_layout_build(&request(
-                manifest,
-                alternate,
-                source_map,
-                output_dir.clone(),
-                1,
-            ))
-            .is_err()
+            run_v26_layout_build(&request(manifest, alternate, output_dir.clone(), 1,)).is_err()
         );
         assert!(!output_dir.exists());
     }
@@ -4252,7 +4138,7 @@ mod tests {
     #[test]
     fn v26_layout_local_smoke_uses_exact_registered_prefix_without_conversion() {
         // Break caught: the structural smoke requires a separately materialized corpus.
-        let (temp, manifest, construction, source_map) = fixture();
+        let (temp, manifest, construction) = fixture();
         let mut authority: V26LayoutAuthority =
             serde_json::from_slice(&fs::read(&manifest.path).unwrap()).unwrap();
         authority.expected_rows = 705;
@@ -4266,7 +4152,6 @@ mod tests {
         let output = run_v26_layout_build(&request(
             manifest,
             construction,
-            source_map,
             temp.path().join("prefix-output"),
             2,
         ))
@@ -4279,9 +4164,9 @@ mod tests {
     #[test]
     fn v26_layout_local_rejects_output_schema_topology_and_identity_drift() {
         // Break caught: a validated output is modified before receipt sealing.
-        let (temp, manifest, construction, source_map) = fixture();
+        let (temp, manifest, construction) = fixture();
         let output_dir = temp.path().join("outputs");
-        let request = request(manifest, construction, source_map, output_dir.clone(), 1);
+        let request = request(manifest, construction, output_dir.clone(), 1);
         let output = run_v26_layout_build(&request).unwrap();
         let assignments = output_dir.join("page-assignments.parquet");
         fs::OpenOptions::new()
@@ -4296,9 +4181,9 @@ mod tests {
     #[test]
     fn v26_layout_local_reauthenticates_inputs_before_sealing_output() {
         // Break caught: an authenticated construction input changes while the layout is built.
-        let (temp, manifest, construction, source_map) = fixture();
+        let (temp, manifest, construction) = fixture();
         let output_dir = temp.path().join("outputs");
-        let request = request(manifest, construction, source_map, output_dir, 1);
+        let request = request(manifest, construction, output_dir, 1);
         let output = run_v26_layout_build(&request).unwrap();
         fs::OpenOptions::new()
             .append(true)
@@ -4312,9 +4197,9 @@ mod tests {
     #[test]
     fn v26_layout_local_rejects_rehashed_semantic_parquet_drift() {
         // Break caught: byte authority is refreshed around a duplicate assignment ordinal.
-        let (temp, manifest, construction, source_map) = fixture();
+        let (temp, manifest, construction) = fixture();
         let output_dir = temp.path().join("outputs");
-        let request = request(manifest, construction, source_map, output_dir.clone(), 1);
+        let request = request(manifest, construction, output_dir.clone(), 1);
         let mut output = run_v26_layout_build(&request).unwrap();
         let assignment_path = output_dir.join("page-assignments.parquet");
         let mut assignments = read_assignments(&assignment_path, 1_409).unwrap();

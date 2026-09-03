@@ -441,7 +441,7 @@ fn build_v26_dual_tree_layout_inner(
     rows: &[V26ConstructionRow],
     pool: Option<&rayon::ThreadPool>,
 ) -> Result<(V26Tree, V26Tree, Vec<V26RowPages>)> {
-    if authority.schema != "borsuk-v26-dual-tree-layout-v1"
+    if authority.schema != crate::V26_LAYOUT_SCHEMA
         || authority.primary_seed != 0x5632_362d_5452_4545
         || authority.replica_seed != 0x5632_362d_5245_504c
         || !crate::V26_PAGE_CAPACITY_LADDER.contains(&authority.page_capacity)

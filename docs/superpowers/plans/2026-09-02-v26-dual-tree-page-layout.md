@@ -59,7 +59,7 @@ pub struct V26LayoutAuthority {
     pub schema: String, pub generation: String, pub source_commit: String,
     pub source_archive_sha256: String,
     pub binary: V26ObjectIdentity,
-    pub construction_rows: V26ObjectIdentity, pub source_map: V26ObjectIdentity,
+    pub construction_rows: V26ObjectIdentity,
     pub primary_seed: u64,
     pub replica_seed: u64, pub page_capacity: u32, pub expected_rows: u64,
 }
@@ -110,7 +110,7 @@ pub fn validate_v26_dual_tree_layout(
 - Modify: `crates/borsuk-v26/src/lib.rs`
 
 **Interfaces:**
-- Consumes: the registered clean construction/source-map Parquet schemas as immutable research inputs, without importing V24 or V25 code.
+- Consumes: the registered clean construction Parquet schema as an immutable research input, without importing V24 or V25 code or deriving a redundant source map.
 - Produces: `V26LayoutBuildRequest`, `V26LayoutBuildOutput`, `run_v26_layout_build`, `primary-tree.parquet`, `replica-tree.parquet`, and `page-assignments.parquet`. Task 4 combines this deterministic output with externally measured runtime evidence to seal `layout-receipt.json`; the library never fabricates RSS, PSI, swap, CPU, or wall measurements.
 
 ```rust
@@ -118,7 +118,6 @@ pub struct V26LocalObjectPath { pub identity: V26ObjectIdentity, pub path: PathB
 pub struct V26LayoutBuildRequest {
     pub manifest: V26LocalObjectPath,
     pub construction_rows: V26LocalObjectPath,
-    pub source_map: V26LocalObjectPath,
     pub output_dir: PathBuf,
     pub output_uri_prefix: String,
     pub worker_count: usize,
@@ -140,7 +139,7 @@ pub fn validate_v26_layout_build_output(
 ) -> Result<()>;
 ```
 
-- [ ] **Step 1: Write schema/identity RED.** Add `v26_layout_local_authenticates_construction_only_and_emits_parquet`. Require nonnullable `u64 source_ordinal`, nonnullable fixed-list `f32[96] vector` with child `element`, exact source-map equality, full finite normalized rows, and exact file identities before parsing.
+- [ ] **Step 1: Write schema/identity RED.** Add `v26_layout_local_authenticates_construction_only_and_emits_parquet`. Require nonnullable ordered `u64 source_ordinal`, nonnullable fixed-list `f32[96] vector` with child `element`, full finite normalized rows, and exact file identity before parsing. Do not create or accept a duplicate source-map role.
 - [ ] **Step 2: Write capability RED.** Add `v26_layout_local_rejects_query_truth_and_result_roles`. Pass each forbidden role and assert rejection before any output path exists.
 - [ ] **Step 3: Write output mutation RED.** Add `v26_layout_local_rejects_output_schema_topology_and_identity_drift`. Reopen all three Parquets and reject outer/child nullability, field/type/order, duplicate/missing ordinal, page overlap, capacity, tree topology, seed, generation, and digest drift.
 - [ ] **Step 4: Run focused RED.** Run `cargo test -p borsuk-v26 v26_layout_local_ -- --nocapture`.
@@ -232,13 +231,13 @@ v26_page_layout --build-layout --execute --generation <id> \
 - Update after terminal: `docs/research/publication-v3-attempt-ledger.md`
 
 **Interfaces:**
-- Consumes exact V25 construction/source-map identities plus immutable Deep Image `test.parquet`; produces a new external-query/top-ten-truth authority before layout evaluation.
+- Consumes the exact construction identity plus immutable Deep Image `test.parquet`; produces a new external-query/top-ten-truth authority before layout evaluation.
 - Produces one authenticated `layout-rejected` or `layout-candidate` result.
 
-- [ ] **Step 1: Freeze the manifest.** Bind source commit/archive, binary, construction/source-map Parquets, immutable test-query Parquet, new exact-truth output, seeds, the ascending capacity ladder, expected 262,144 rows, query ordinals `0..512`, gates, 1 GiB RSS, 0.5 PSI, zero swap growth, 300-second wall/progress, outputs, smallest-pass selection, and no-restart semantics.
-- [ ] **Step 2: Run authentic 4,096-row structural smoke.** Use one Spot process and `expected_rows=4096` to select the exact leading source-ordinal range from the authenticated full construction/source-map Parquets; do not materialize a derivative corpus. Require matching full-file row counts, exact prefix inventory, two-copy assignments, maximum capacity, byte-identical repeated validation, zero query/truth-role opens, zero page reads, RSS below 512 MiB, and wall below 30 seconds. Do not compute or report recall from this smoke.
+- [ ] **Step 1: Freeze the manifest.** Bind source commit/archive, binary, construction Parquet, immutable test-query Parquet, new exact-truth output, seeds, the ascending capacity ladder, expected 262,144 rows, query ordinals `0..512`, gates, 1 GiB RSS, 0.5 PSI, zero swap growth, 300-second wall/progress, outputs, smallest-pass selection, and no-restart semantics.
+- [ ] **Step 2: Run authentic 4,096-row structural smoke.** Use one Spot process and `expected_rows=4096` to select the exact leading source-ordinal range from the authenticated full construction Parquet; do not materialize a derivative corpus. Require the full-file row count to cover the prefix, exact ordered inventory, two-copy assignments, maximum capacity, byte-identical repeated validation, zero query/truth-role opens, zero page reads, RSS below 512 MiB, and wall below 30 seconds. Do not compute or report recall from this smoke.
 - [ ] **Step 3: Build external truth once.** On one `causality` Spot worker, exact-score the 512 frozen external queries against all 262,144 rows, persist top-ten distances/source ordinals to Parquet, authenticate it independently, and terminate the worker. No layout or page artifact is available to this phase.
-- [ ] **Step 4: Run the construction ladder once.** Stage only construction/source-map roles; for each preregistered capacity build both trees and assignments, close its terminal, and stop after the smallest capacity whose later evaluation passes.
+- [ ] **Step 4: Run the construction ladder once.** Stage only the construction role; for each preregistered capacity build both trees and assignments, close its terminal, and stop after the smallest capacity whose later evaluation passes.
 - [ ] **Step 5: Run layout-only evaluation after each closed build.** Stage the closed layout plus closed external truth, compute 512 exact covers, report the 975,000 lower floor, and stop the ladder at the first result where both the 995,000 aggregate promotion target and 800,000 minimum pass.
 - [ ] **Step 6: Authenticate and record.** Recompute every sample from Parquet, verify terminal/resource/cleanup evidence, terminate compute, and commit only the manifest and ledger with `Record V26 external-query layout screen`.
 

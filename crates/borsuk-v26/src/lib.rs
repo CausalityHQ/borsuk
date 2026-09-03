@@ -32,9 +32,9 @@ pub use local::{
     run_v26_pq_width_ladder, run_v26_pq8_candidate_cover, run_v26_pq16_exact_rerank,
     run_v26_pq16_serving_benchmark, run_v26_pq16_serving_build, run_v26_tree_router,
     run_v26_tree_router_diagnostic, run_v26_truth_build, select_v26_pq16_pages_from_arrow,
-    v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_source_map_schema,
-    v26_tree_schema, v26_truth_schema, validate_v26_layout_build_output,
-    write_v26_cold_vectors_arrow, write_v26_pq16_index_arrow,
+    v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
+    v26_truth_schema, validate_v26_layout_build_output, write_v26_cold_vectors_arrow,
+    write_v26_pq16_index_arrow,
 };
 
 pub use tree::{
@@ -42,7 +42,7 @@ pub use tree::{
     rank_v26_tree_pages, route_v26_pages, validate_v26_dual_tree_layout,
 };
 
-const V26_LAYOUT_SCHEMA: &str = "borsuk-v26-dual-tree-layout-v1";
+const V26_LAYOUT_SCHEMA: &str = "borsuk-v26-dual-tree-layout-v2";
 const V26_PRIMARY_SEED: u64 = 0x5632_362d_5452_4545;
 const V26_REPLICA_SEED: u64 = 0x5632_362d_5245_504c;
 pub(crate) const V26_PAGE_CAPACITY_LADDER: [u32; 9] =
@@ -235,7 +235,6 @@ pub struct V26LayoutAuthority {
     pub source_archive_sha256: String,
     pub binary: V26ObjectIdentity,
     pub construction_rows: V26ObjectIdentity,
-    pub source_map: V26ObjectIdentity,
     pub primary_seed: u64,
     pub replica_seed: u64,
     pub page_capacity: u32,
@@ -3005,19 +3004,10 @@ pub(crate) fn validate_layout_authority(authority: &V26LayoutAuthority) -> Resul
         "construction-parquet",
         &authority.generation,
     )?;
-    validate_identity(
-        &authority.source_map,
-        "source-map-parquet",
-        &authority.generation,
-    )?;
     let mut uris = BTreeSet::new();
-    if [
-        &authority.binary,
-        &authority.construction_rows,
-        &authority.source_map,
-    ]
-    .into_iter()
-    .any(|identity| !uris.insert(identity.uri.as_str()))
+    if [&authority.binary, &authority.construction_rows]
+        .into_iter()
+        .any(|identity| !uris.insert(identity.uri.as_str()))
     {
         return Err(invalid("V26 authority URI roles overlap"));
     }
@@ -3056,11 +3046,7 @@ fn validate_receipt(receipt: &V26LayoutReceipt) -> Result<()> {
         return Err(invalid("V26 layout receipt differs"));
     }
 
-    let input_roles = [
-        "construction-parquet",
-        "layout-manifest",
-        "source-map-parquet",
-    ];
+    let input_roles = ["construction-parquet", "layout-manifest"];
     let output_roles = [
         "page-assignments-parquet",
         "primary-tree-parquet",
@@ -3069,8 +3055,7 @@ fn validate_receipt(receipt: &V26LayoutReceipt) -> Result<()> {
     if receipt.inputs.len() != input_roles.len() || receipt.outputs.len() != output_roles.len() {
         return Err(invalid("V26 object inventory differs"));
     }
-    if receipt.inputs[0] != authority.construction_rows || receipt.inputs[2] != authority.source_map
-    {
+    if receipt.inputs[0] != authority.construction_rows {
         return Err(invalid("V26 construction input authority differs"));
     }
     for (identity, role) in receipt.inputs.iter().zip(input_roles) {
@@ -4519,13 +4504,12 @@ mod tests {
 
     fn authority(expected_rows: u64) -> V26LayoutAuthority {
         V26LayoutAuthority {
-            schema: "borsuk-v26-dual-tree-layout-v1".to_owned(),
+            schema: "borsuk-v26-dual-tree-layout-v2".to_owned(),
             generation: "v26-test-generation".to_owned(),
             source_commit: "1".repeat(40),
             source_archive_sha256: "2".repeat(64),
             binary: identity("v26-layout-binary", '9', 4096),
             construction_rows: identity("construction-parquet", '3', 1024),
-            source_map: identity("source-map-parquet", '4', 512),
             primary_seed: PRIMARY_SEED,
             replica_seed: REPLICA_SEED,
             page_capacity: 704,
@@ -4542,6 +4526,22 @@ mod tests {
             encoded_bytes,
             generation: "v26-test-generation".to_owned(),
         }
+    }
+
+    #[test]
+    fn v26_layout_authority_uses_one_construction_parquet_without_redundant_source_map() {
+        // Break caught: full-scale construction requires a derived ordinal-map artifact even
+        // though construction.parquet already owns the complete ordered source inventory.
+        let mut value = serde_json::to_value(authority(1_409)).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.insert(
+            "schema".to_owned(),
+            serde_json::Value::String("borsuk-v26-dual-tree-layout-v2".to_owned()),
+        );
+        object.remove("source_map");
+
+        let decoded: V26LayoutAuthority = serde_json::from_value(value).unwrap();
+        super::validate_layout_authority(&decoded).unwrap();
     }
 
     #[test]
@@ -4644,7 +4644,6 @@ mod tests {
             inputs: vec![
                 authority.construction_rows.clone(),
                 identity("layout-manifest", '5', 900),
-                authority.source_map.clone(),
             ],
             authority,
             outputs: vec![
@@ -4950,8 +4949,8 @@ mod local_schema_tests {
     use arrow_schema::{DataType, Field, Schema};
 
     use super::{
-        v26_construction_schema, v26_page_assignments_schema, v26_query_schema,
-        v26_source_map_schema, v26_tree_schema, v26_truth_schema,
+        v26_construction_schema, v26_page_assignments_schema, v26_query_schema, v26_tree_schema,
+        v26_truth_schema,
     };
 
     #[test]
@@ -4966,13 +4965,6 @@ mod local_schema_tests {
             Schema::new(vec![
                 Field::new("source_ordinal", DataType::UInt64, false),
                 Field::new("vector", vector, false),
-            ])
-        );
-        assert_eq!(
-            v26_source_map_schema(),
-            Schema::new(vec![
-                Field::new("source_ordinal", DataType::UInt64, false),
-                Field::new("dataset_ordinal", DataType::UInt64, false),
             ])
         );
         assert_eq!(
