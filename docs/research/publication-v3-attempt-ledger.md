@@ -2328,3 +2328,50 @@ candidate concentration and replace full 65,536-key sorting with a bounded
 selection kernel under the fast synthetic gate. No further Spot run is allowed
 until that gate predicts both fewer candidate rows and a credible path below
 15 ms. Recall gates remain unchanged; D3 and release claims remain fenced.
+
+### Optimized dual PQ-key ladder rejects the two-plane family
+
+Source commit `b45a13ed75346001ab638766abf2c87c4a99aa03` replaced full
+65,536-key sorting with deterministic `(distance,key)` partitioning and replaced
+candidate sorting/deduplication with a source-ordinal bitset. It fixed exact
+reranking at 512 rows and evaluated 1,536/4,096/8,192 keys per plane. The
+sub-minute local gate passed all ten steps in 48.822 seconds before the one
+scientific run. The 11,689,992-byte release binary has SHA-256
+`d5ce19ee7b909abcda2a34d97af177959e91b8ec2ae08e3ccea05bdb3956dbd4`.
+
+The sole run used `causality` Spot instance `i-0d74a19b1a04f8855`
+(`c7gd.4xlarge`, `eu-central-1a`) and SSM command
+`743ee2de-34fe-4637-83f5-2d86f03d0ac2`. It authenticated and reused the same
+9,990,000-row serving, 512-query, and 512-truth artifacts as the first run,
+evaluated the fixed first 32 queries, selected exactly ten pages, and read zero
+page bodies. The instance published a complete terminal and was immediately
+terminated.
+
+The aggregate/minimum/oracle-attainment ppm triples for the 1,536, 4,096, and
+8,192 key arms were respectively 956,250/700,000/956,250;
+971,875/800,000/971,875; and 975,000/800,000/975,000. Maximum query latency was
+61,717,111; 129,692,964; and 226,264,900 ns. Unique candidates ranged from
+510,939 to 825,730; 1,283,115 to 1,786,441; and 2,385,413 to 3,142,023.
+Independent PyArrow recomputation over all 96 non-nullable evidence rows exactly
+matched every stored aggregate, minimum, oracle-attainment, latency, and
+candidate bound. No arm passed: the widest arm remained eight total hits short
+of the 995,000-ppm oracle gate and exceeded 15 ms by 15.08x.
+
+The scientific process completed in 31 seconds, peaked at 504,205,312 bytes
+RSS, and observed zero memory PSI and zero swap growth. The 3,570-byte canonical
+result has SHA-256
+`4c0d235e736a2dd0e11f4fcf25b2ac1be0c338c305145c5059fba52656fb8add`;
+the 5,422-byte Parquet evidence has SHA-256
+`9e1270d57156ad65296541b2f2313fd2ff1f7fa84b8237f1fb1b0f45ed01f739`.
+The regenerated Arrow offsets and ordinals retained SHA-256
+`a9121720c6cd7c860b0c62d1d5049b11903538ffe10a32ac7d82326df38b8b99`
+and `b553bb3f2de1a80ac17088e78f889f4056a060af2c758ab81c40f8a9785e578d`.
+All evidence is rooted at
+`s3://borsuk-bench-453182569524-euc1/research/v26-dual-pq-key/b45a13ed75346001ab638766abf2c87c4a99aa03/v26-dual-pq-key-preflight-20260903T072054Z-a0001/`.
+
+This closes the fixed two-plane PQ-key family: widening increases work by
+millions of rows without recovering the missing oracle hits, while depth 512 is
+already independently sufficient under global PQ16 ranking. Memory remains
+within bounds and is not causal. Quality and latency gates are not relaxed; D3,
+competitor, and release claims remain fenced pending a fundamentally different
+candidate-concentration design.
