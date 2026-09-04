@@ -212,6 +212,19 @@ fn tier_store_options(tier: V32ServingTier) -> Vec<(String, String)> {
     }
 }
 
+fn serving_runtime() -> borsuk::Result<Arc<tokio::runtime::Runtime>> {
+    Ok(Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .map_err(|source| BorsukError::Io {
+                path: PathBuf::from("tokio-runtime"),
+                source,
+            })?,
+    ))
+}
+
 fn disk_identity(
     artifact: DiskArtifact,
     role: &str,
@@ -346,14 +359,16 @@ struct LocalPageStore {
 }
 
 impl V32PageStore for LocalPageStore {
-    fn read_wave(&self, pages: &[borsuk::V27PageIdentity]) -> borsuk::Result<Vec<Vec<u8>>> {
+    fn read_wave(&self, pages: &[borsuk::V27PageIdentity]) -> borsuk::Result<Vec<Bytes>> {
         pages
             .iter()
             .map(|page| {
                 let path = self
                     .directory
                     .join(format!("{}{}", page.sha256, self.suffix));
-                fs::read(&path).map_err(|source| BorsukError::Io { path, source })
+                fs::read(&path)
+                    .map(Bytes::from)
+                    .map_err(|source| BorsukError::Io { path, source })
             })
             .collect()
     }
@@ -378,7 +393,7 @@ struct SearchPhaseTiming {
 }
 
 impl V32PageStore for ObjectPageStore {
-    fn read_wave(&self, pages: &[borsuk::V27PageIdentity]) -> borsuk::Result<Vec<Vec<u8>>> {
+    fn read_wave(&self, pages: &[borsuk::V27PageIdentity]) -> borsuk::Result<Vec<Bytes>> {
         self.runtime.block_on(async {
             let reads = pages
                 .iter()
@@ -399,9 +414,7 @@ impl V32PageStore for ObjectPageStore {
                     }
                     let store = Arc::clone(&self.store);
                     let path = path.clone();
-                    Ok(async move {
-                        Ok::<_, BorsukError>(store.get(&path).await?.bytes().await?.to_vec())
-                    })
+                    Ok(async move { Ok::<_, BorsukError>(store.get(&path).await?.bytes().await?) })
                 })
                 .collect::<borsuk::Result<Vec<_>>>()?;
             try_join_all(reads).await
@@ -587,13 +600,24 @@ fn query_schema() -> Schema {
     )])
 }
 
-fn read_query(argument: &ArtifactArg, query_row: usize) -> borsuk::Result<[f32; 96]> {
+fn read_queries(
+    argument: &ArtifactArg,
+    query_start: usize,
+    query_count: usize,
+) -> borsuk::Result<Vec<[f32; 96]>> {
+    let query_end = query_start
+        .checked_add(query_count)
+        .ok_or_else(|| invalid("V30 qualifier query range overflows"))?;
+    if query_count == 0 {
+        return Err(invalid("V30 qualifier query count differs"));
+    }
     let bytes = read_bytes(argument, "query")?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes))?;
     if builder.schema().as_ref() != &query_schema() {
         return Err(invalid("V30 qualifier query Parquet schema differs"));
     }
     let mut offset = 0_usize;
+    let mut queries = Vec::with_capacity(query_count);
     for batch in builder.build()? {
         let batch = batch?;
         if batch
@@ -603,19 +627,22 @@ fn read_query(argument: &ArtifactArg, query_row: usize) -> borsuk::Result<[f32; 
         {
             return Err(invalid("V30 qualifier query nullability differs"));
         }
-        if query_row < offset + batch.num_rows() {
-            let vectors = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<FixedSizeListArray>()
-                .ok_or_else(|| invalid("V30 qualifier query vector type differs"))?;
-            let values = vectors
-                .values()
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .ok_or_else(|| invalid("V30 qualifier query value type differs"))?;
-            let start = (query_row - offset) * 96;
-            let mut query: [f32; 96] = values.values()[start..start + 96]
+        let vectors = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V30 qualifier query vector type differs"))?;
+        let values = vectors
+            .values()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("V30 qualifier query value type differs"))?;
+        let batch_end = offset + batch.num_rows();
+        let selected_start = query_start.max(offset);
+        let selected_end = query_end.min(batch_end);
+        for query_row in selected_start..selected_end {
+            let value_start = (query_row - offset) * 96;
+            let mut query: [f32; 96] = values.values()[value_start..value_start + 96]
                 .try_into()
                 .map_err(|_| invalid("V30 qualifier query dimension differs"))?;
             if query.iter().any(|value| !value.is_finite()) {
@@ -632,11 +659,20 @@ fn read_query(argument: &ArtifactArg, query_row: usize) -> borsuk::Result<[f32; 
             for value in &mut query {
                 *value = (f64::from(*value) / norm) as f32;
             }
-            return Ok(query);
+            queries.push(query);
         }
-        offset += batch.num_rows();
+        offset = batch_end;
     }
-    Err(invalid("V30 qualifier query row differs"))
+    if queries.len() != query_count {
+        return Err(invalid("V30 qualifier query range differs"));
+    }
+    Ok(queries)
+}
+
+fn read_query(argument: &ArtifactArg, query_row: usize) -> borsuk::Result<[f32; 96]> {
+    read_queries(argument, query_row, 1)?
+        .pop()
+        .ok_or_else(|| invalid("V30 qualifier query row differs"))
 }
 
 fn run_batch<S: V32PageStore>(
@@ -648,13 +684,10 @@ fn run_batch<S: V32PageStore>(
     query_count: usize,
     k: usize,
 ) -> borsuk::Result<Vec<u8>> {
+    let queries = read_queries(query, query_start, query_count)?;
     let mut results = Vec::with_capacity(query_count);
     let index = V32Index::new(router, store, arm)?;
-    let query_end = query_start
-        .checked_add(query_count)
-        .ok_or_else(|| invalid("V30 qualifier query range overflows"))?;
-    for query_row in query_start..query_end {
-        let query_vector = read_query(query, query_row)?;
+    for query_vector in queries {
         let cpu_before = process_cpu_nanoseconds()?;
         let started = Instant::now();
         let mut previous_cpu_ns = cpu_before;
@@ -867,15 +900,7 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                 .iter()
                 .map(|url| ObjectPath::from(url.path().trim_start_matches('/')))
                 .collect::<Vec<_>>();
-            let runtime = Arc::new(
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|source| BorsukError::Io {
-                        path: PathBuf::from("tokio-runtime"),
-                        source,
-                    })?,
-            );
+            let runtime = serving_runtime()?;
             run_batch(
                 router,
                 ObjectPageStore {
@@ -1041,20 +1066,29 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, sync::Arc};
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
+    use arrow_array::{FixedSizeListArray, Float32Array, RecordBatch};
     use borsuk::{
         V27PageIdentity, V32Match, V32PageLocation, V32PageStore, V32RoutingTargetReport,
         V32RoutingTargetStage, V32RoutingWork, V32SearchResult, V32SearchWork, V32ServingTier,
     };
+    use bytes::Bytes;
     use object_store::ObjectStoreExt;
+    use object_store::throttle::{ThrottleConfig, ThrottledStore};
+    use parquet::arrow::ArrowWriter;
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
 
     use super::{
         Args, ArtifactArg, LocalPageStore, ObjectPageStore, PageSource, SearchPhaseTiming,
         diagnostic_bytes, execute, parse_args, peak_rss_bytes, process_cpu_nanoseconds,
-        read_manifest, result_bytes, run_batch,
+        read_manifest, read_queries, result_bytes, run_batch,
     };
 
     fn arguments() -> Vec<String> {
@@ -1122,10 +1156,50 @@ mod tests {
         assert_eq!(peak % 1024, 0);
     }
 
+    #[test]
+    fn v32_s3_qualify_reads_one_authenticated_query_range_per_batch() {
+        // Break caught: each of 32 queries rereads, rehashes, and reparses the
+        // complete Parquet artifact instead of sharing one authenticated load.
+        let values =
+            Float32Array::from_iter_values((0..40 * 96).map(|index| 1.0_f32 + (index / 96) as f32));
+        let vectors = FixedSizeListArray::try_new(
+            Arc::new(arrow_schema::Field::new(
+                "element",
+                arrow_schema::DataType::Float32,
+                false,
+            )),
+            96,
+            Arc::new(values),
+            None,
+        )
+        .unwrap();
+        let batch =
+            RecordBatch::try_new(Arc::new(super::query_schema()), vec![Arc::new(vectors)]).unwrap();
+        let mut parquet = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut parquet, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("query.parquet");
+        fs::write(&path, &parquet).unwrap();
+        let argument = ArtifactArg {
+            path,
+            sha256: format!("{:x}", Sha256::digest(&parquet)),
+            encoded_bytes: parquet.len() as u64,
+        };
+        let queries = read_queries(&argument, 3, 32).unwrap();
+        assert_eq!(queries.len(), 32);
+        for query in queries {
+            let norm = query.iter().map(|value| value * value).sum::<f32>();
+            assert!((norm - 1.0).abs() < 1e-5);
+        }
+        assert!(read_queries(&argument, 9, 32).is_err());
+    }
+
     struct NonClonePageStore;
 
     impl V32PageStore for NonClonePageStore {
-        fn read_wave(&self, _pages: &[V27PageIdentity]) -> borsuk::Result<Vec<Vec<u8>>> {
+        fn read_wave(&self, _pages: &[V27PageIdentity]) -> borsuk::Result<Vec<Bytes>> {
             unreachable!("compile-only batch ownership contract")
         }
     }
@@ -1141,12 +1215,8 @@ mod tests {
     fn v32_s3_qualify_object_store_reuses_one_runtime_across_read_waves() {
         // Break caught: every S3 query builds and tears down a Tokio runtime,
         // adding scheduler setup to the measured serving CPU path.
-        let runtime = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
+        let runtime = super::serving_runtime().unwrap();
+        assert!(runtime.metrics().num_workers() >= 2);
         let object_store: Arc<dyn object_store::ObjectStore> =
             Arc::new(object_store::memory::InMemory::new());
         runtime
@@ -1177,7 +1247,7 @@ mod tests {
         };
         assert_eq!(
             store.read_wave(std::slice::from_ref(&page)).unwrap(),
-            vec![b"abc".to_vec()]
+            vec![Bytes::from_static(b"abc")]
         );
         assert!(store.read_wave(&[]).unwrap().is_empty());
         assert_eq!(Arc::strong_count(&runtime), 2);
@@ -1195,6 +1265,60 @@ mod tests {
         assert_eq!(
             super::tier_store_options(V32ServingTier::Express),
             [("aws_s3_express".to_owned(), "true".to_owned())]
+        );
+    }
+
+    #[test]
+    fn v32_s3_qualify_starts_the_complete_page_wave_concurrently() {
+        // Break caught: sixteen object reads are awaited serially, multiplying
+        // request latency instead of paying one concurrent wave maximum.
+        let runtime = super::serving_runtime().unwrap();
+        let memory = object_store::memory::InMemory::new();
+        let locations = (0..4_u32)
+            .map(|ordinal| V32PageLocation {
+                page_ordinal: ordinal,
+                sha256: format!("{ordinal:064x}"),
+                encoded_bytes: 1,
+                standard_uri: format!("s3://frozen/pages/{ordinal}.arrow"),
+                express_uri: None,
+            })
+            .collect::<Vec<_>>();
+        let paths = (0..4_u32)
+            .map(|ordinal| object_store::path::Path::from(format!("pages/{ordinal}.arrow")))
+            .collect::<Vec<_>>();
+        for path in &paths {
+            runtime
+                .block_on(memory.put(path, Bytes::from_static(b"x").into()))
+                .unwrap();
+        }
+        let store = ObjectPageStore {
+            store: Arc::new(ThrottledStore::new(
+                memory,
+                ThrottleConfig {
+                    wait_get_per_call: Duration::from_millis(40),
+                    ..Default::default()
+                },
+            )),
+            locations: Arc::new(locations.clone()),
+            paths: Arc::new(paths),
+            runtime,
+        };
+        let pages = locations
+            .into_iter()
+            .map(|location| V27PageIdentity {
+                ordinal: location.page_ordinal,
+                sha256: location.sha256,
+                encoded_bytes: location.encoded_bytes,
+                primary_rows: 1,
+                replica_rows: 0,
+            })
+            .collect::<Vec<_>>();
+        let started = Instant::now();
+        assert_eq!(store.read_wave(&pages).unwrap().len(), 4);
+        assert!(
+            started.elapsed() < Duration::from_millis(120),
+            "four delayed GETs executed serially: {:?}",
+            started.elapsed()
         );
     }
 

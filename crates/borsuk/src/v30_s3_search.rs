@@ -3,6 +3,7 @@ use std::{
     collections::{BinaryHeap, HashSet},
 };
 
+use bytes::Bytes;
 use half::f16;
 
 use crate::{
@@ -90,7 +91,7 @@ pub struct V32Router {
 
 #[doc(hidden)]
 pub trait V32PageStore: Send + Sync {
-    fn read_wave(&self, pages: &[V27PageIdentity]) -> Result<Vec<Vec<u8>>>;
+    fn read_wave(&self, pages: &[V27PageIdentity]) -> Result<Vec<Bytes>>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -745,6 +746,7 @@ mod tests {
         },
     };
 
+    use bytes::Bytes;
     use half::f16;
 
     use super::{
@@ -1104,11 +1106,11 @@ mod tests {
 
     struct MemoryStore {
         calls: Arc<AtomicUsize>,
-        bodies: BTreeMap<u32, Vec<u8>>,
+        bodies: BTreeMap<u32, Bytes>,
     }
 
     impl V32PageStore for MemoryStore {
-        fn read_wave(&self, pages: &[V27PageIdentity]) -> crate::Result<Vec<Vec<u8>>> {
+        fn read_wave(&self, pages: &[V27PageIdentity]) -> crate::Result<Vec<Bytes>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             pages
                 .iter()
@@ -1127,7 +1129,7 @@ mod tests {
             calls: calls.clone(),
             bodies: bodies
                 .into_iter()
-                .map(|(identity, bytes)| (identity.ordinal, bytes))
+                .map(|(identity, bytes)| (identity.ordinal, Bytes::from(bytes)))
                 .collect(),
         };
         let index = V32Index::new(
@@ -1179,8 +1181,11 @@ mod tests {
     struct OversizedStore;
 
     impl V32PageStore for OversizedStore {
-        fn read_wave(&self, pages: &[V27PageIdentity]) -> crate::Result<Vec<Vec<u8>>> {
-            Ok(pages.iter().map(|_| vec![0; 314_573]).collect())
+        fn read_wave(&self, pages: &[V27PageIdentity]) -> crate::Result<Vec<Bytes>> {
+            Ok(pages
+                .iter()
+                .map(|_| Bytes::from(vec![0; 314_573]))
+                .collect())
         }
     }
 
