@@ -39,6 +39,7 @@ class V30UntouchedPlan:
     source_rows: int
     query_start: int
     query_count: int
+    page_count: int
 
 
 def _digest(value: str) -> bool:
@@ -69,6 +70,8 @@ def _validate(plan: V30UntouchedPlan) -> None:
         or type(plan.query_start) is not int
         or plan.query_start < 0
         or plan.query_count != QUERY_COUNT
+        or type(plan.page_count) is not int
+        or not 1 <= plan.page_count <= 16
     ):
         raise ValueError("V30 untouched plan authority differs")
 
@@ -103,7 +106,7 @@ def build_qualifier_commands(plan: V30UntouchedPlan) -> tuple[tuple[str, ...], .
         "--candidate-depth",
         "12288",
         "--page-count",
-        "10",
+        str(plan.page_count),
         "--k",
         "10",
         "--s3-page-prefix",
@@ -131,7 +134,9 @@ def _read_exact(artifact: LocalArtifact) -> bytes:
     return data
 
 
-def _batch_results(payload: bytes) -> tuple[tuple[tuple[int, ...], dict[str, int]], ...]:
+def _batch_results(
+    payload: bytes, *, expected_pages: int
+) -> tuple[tuple[tuple[int, ...], dict[str, int]], ...]:
     if type(payload) is not bytes or not payload.endswith(b"\n") or b"\n" in payload[:-1]:
         raise ValueError("V30 batch result canonical bytes differ")
     value = json.loads(payload)
@@ -149,7 +154,8 @@ def _batch_results(payload: bytes) -> tuple[tuple[tuple[int, ...], dict[str, int
     return tuple(
         _query_result(
             json.dumps(result, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
-            + b"\n"
+            + b"\n",
+            expected_pages=expected_pages,
         )
         for result in value["results"]
     )
@@ -170,7 +176,7 @@ def run_v30_untouched_quality(
         query_start=plan.query_start,
         source_rows=plan.source_rows,
     )
-    parsed = _batch_results(invoke(commands[0]))
+    parsed = _batch_results(invoke(commands[0]), expected_pages=plan.page_count)
     hits = tuple(
         len(frozenset(matches) & truth[ordinal])
         for ordinal, (matches, _work) in enumerate(parsed)
@@ -268,6 +274,7 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--source-rows", type=int, required=True)
     parser.add_argument("--query-start", type=int, required=True)
     parser.add_argument("--query-count", type=int, required=True)
+    parser.add_argument("--page-count", type=int, required=True)
     args = parser.parse_args(arguments)
     plan = V30UntouchedPlan(
         qualifier=args.qualifier,
@@ -281,6 +288,7 @@ def main(arguments: list[str] | None = None) -> int:
         source_rows=args.source_rows,
         query_start=args.query_start,
         query_count=args.query_count,
+        page_count=args.page_count,
     )
     sys.stdout.buffer.write(run_v30_untouched_quality(plan, invoke=_invoke))
     return 0

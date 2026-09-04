@@ -32,6 +32,7 @@ class V30UntouchedQualityTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr.decode())
         self.assertIn(b"--s3-page-prefix", completed.stdout)
+        self.assertIn(b"--page-count", completed.stdout)
 
     def fixture(self, directory: Path) -> tuple[V30UntouchedPlan, dict[int, bytes]]:
         neighbors = pa.array(
@@ -65,13 +66,14 @@ class V30UntouchedQualityTests(unittest.TestCase):
             source_rows=9_990_000,
             query_start=64,
             query_count=32,
+            page_count=16,
         )
         results = {
-            row: self.result(row, miss=row == 75) for row in range(64, 96)
+            row: self.result(row, miss=row == 75, page_count=16) for row in range(64, 96)
         }
         return plan, results
 
-    def result(self, query_row: int, *, miss: bool) -> bytes:
+    def result(self, query_row: int, *, miss: bool, page_count: int) -> bytes:
         sources = [query_row * 100 + rank for rank in range(10)]
         if miss:
             sources[-1] = 9_000_000
@@ -90,14 +92,14 @@ class V30UntouchedQualityTests(unittest.TestCase):
             "work": {
                 "decoded_rows": 4_000,
                 "encoded_bytes": 2_000_000,
-                "get_count": 10,
+                "get_count": page_count,
                 "routing": {
                     "candidates_retained": 12_288,
                     "codes_scanned": 900_000,
                     "leaves_scored": 64,
-                    "pages_considered": 10,
+                    "pages_considered": page_count,
                     "roots_scored": 1_024,
-                    "selected_pages": 10,
+                    "selected_pages": page_count,
                 },
                 "unique_rows": 4_000,
             },
@@ -113,6 +115,7 @@ class V30UntouchedQualityTests(unittest.TestCase):
             self.assertEqual(len(commands), 1)
             self.assertEqual(int(commands[0][commands[0].index("--query-start") + 1]), 64)
             self.assertEqual(int(commands[0][commands[0].index("--query-count") + 1]), 32)
+            self.assertEqual(int(commands[0][commands[0].index("--page-count") + 1]), 16)
             self.assertTrue(all("--s3-page-prefix" in command for command in commands))
             self.assertTrue(all("--construction-manifest-s3" not in command for command in commands))
 
@@ -134,7 +137,7 @@ class V30UntouchedQualityTests(unittest.TestCase):
             self.assertEqual(value["samples"][11]["hits"], 9)
             self.assertEqual(value["maximum_codes_scanned"], 900_000)
             self.assertEqual(value["maximum_encoded_bytes"], 2_000_000)
-            self.assertEqual(value["maximum_get_count"], 10)
+            self.assertEqual(value["maximum_get_count"], 16)
             self.assertEqual(value["measured_process_cpu_p99_ns"], 12_000_095)
             self.assertEqual(value["measured_cold_p99_ns"], 8_000_095)
             self.assertEqual(value["maximum_peak_rss_bytes"], 2_000_000_095)

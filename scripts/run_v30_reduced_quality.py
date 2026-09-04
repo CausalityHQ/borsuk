@@ -27,7 +27,8 @@ QUERY_COUNT = 32
 RECALL_K = 10
 MAX_CODES = 1_000_000
 MAX_CANDIDATES = 12_288
-MAX_PAGES = 10
+DEFAULT_PAGES = 10
+MAX_PAGES = 16
 MAX_BYTES = 4_587_520
 
 
@@ -79,7 +80,11 @@ def _truth(
     return tuple(truth)
 
 
-def _query_result(payload: bytes) -> tuple[tuple[int, ...], dict[str, int]]:
+def _query_result(
+    payload: bytes, *, expected_pages: int = DEFAULT_PAGES
+) -> tuple[tuple[int, ...], dict[str, int]]:
+    if type(expected_pages) is not int or not 1 <= expected_pages <= MAX_PAGES:
+        raise ValueError("V30 expected page count differs")
     if type(payload) is not bytes or not payload.endswith(b"\n") or b"\n" in payload[:-1]:
         raise ValueError("V30 query result canonical bytes differ")
     value = json.loads(payload)
@@ -141,9 +146,9 @@ def _query_result(payload: bytes) -> tuple[tuple[int, ...], dict[str, int]]:
     if any(type(item) is not int or item < 0 for item in numeric):
         raise ValueError("V30 query work value differs")
     if (
-        work["get_count"] != MAX_PAGES
+        work["get_count"] != expected_pages
         or work["encoded_bytes"] > MAX_BYTES
-        or routing["selected_pages"] != MAX_PAGES
+        or routing["selected_pages"] != expected_pages
         or routing["codes_scanned"] > MAX_CODES
         or routing["candidates_retained"] > MAX_CANDIDATES
     ):
