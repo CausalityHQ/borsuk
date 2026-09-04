@@ -2860,10 +2860,26 @@ The `causality` Spot worker `i-0151a8668ae0ed8b3` completed and terminated.
 
 Neither representation proceeds to production. Together with the earlier V28
 ladder, these results close sparse physical replication, small high-error exact
-sidecars, page-count expansion, page graphs, OPQ, additive PQ, multiview PQ,
-radius routing, and alternate page-score aggregation on this burned fixture.
-The retained production candidate remains the smallest query-independent
-variable-rate residual arm: 996,875-ppm aggregate recall, 900,000-ppm minimum
-recall, 31/32 perfect queries, ten pages, and a 2,625,266,208-byte 100-million-
-row projection. Further selection must use a fresh larger cohort rather than
-tuning the single burned miss.
+sidecars, page-count expansion, page graphs, the previously tested global
+additive-PQ arm, OPQ, multiview PQ, radius routing, and alternate page-score
+aggregation on this burned fixture. The best historical variable-rate
+observation remains 996,875-ppm aggregate recall, 900,000-ppm minimum recall,
+31/32 perfect queries, ten pages, and a reported 2,625,266,208-byte
+100-million-row projection. It is not yet a production candidate.
+
+Post-run reproducibility review found that the variable-rate result and
+terminal did not preserve the evaluator, its input manifest, or the exact code
+composition. The `PQ8`/`refinement` labels and exact 25.2-byte average are
+consistent with a 24-byte PQ4 base plus a sparse 24-byte residual refinement,
+but the result alone cannot distinguish that from a replacement 48-byte code;
+the committed V28 codec implements neither measured interpretation. The
+2,625,266,208-byte projection also increases by exactly the refinement payload
+and does not expose bitmap, rank, sparse-range, or framing components. The arm
+is therefore a promising historical observation, not a production candidate.
+The failed f16 sidecar does not settle this question: that sidecar used a
+different 981,250-ppm page-selection baseline and did not alter approximate
+candidate/page ordering, whereas a residual refinement would alter that
+ordering before page selection.
+V30 must first reproduce fixed PQ4/PQ8 additive/replacement interpretations on
+the same burned fixture with committed code and complete authority, then freeze
+one smallest matching arm before any untouched-cohort run.

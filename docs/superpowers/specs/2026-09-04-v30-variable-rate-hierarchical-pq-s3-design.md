@@ -2,12 +2,14 @@
 
 ## Decision
 
-V30 replaces the experimental V28 routing format with one query-independent,
-variable-rate hierarchical IVF-PQ index. Exact vectors and IDs remain only in
-immutable Arrow pages in S3. Serving retains a two-level centroid hierarchy,
-packed residual codes, strict leaf/page offsets, and bounded scratch in memory;
-it scans at most one percent of the compact code plane, fetches exactly ten
-pages in one concurrent wave, and exact-reranks only those decoded rows.
+V30 first reproduces the only promising V28 variable-rate result with a
+committed, authority-complete evaluator. Only a matching interpretation may
+become a query-independent hierarchical IVF-PQ index. Exact vectors and IDs
+remain only in immutable Arrow pages in S3. Serving retains a scale-derived
+two-level centroid hierarchy, packed residual codes, strict leaf/page offsets,
+and bounded scratch in memory; it scans only selected leaf ranges, fetches
+exactly ten pages in one concurrent wave, and exact-reranks only those decoded
+rows.
 
 This is a pre-release replacement. There is no V28/V29 reader, alias, migration
 path, dual writer, or format negotiation.
@@ -19,48 +21,53 @@ On the burned 100,000-row Deep Image fixture, fixed page prototypes, a
 radius routing, wider page counts, sparse secondary placement, and small f16
 sidecars all failed. They are immutable negative evidence, not fallback paths.
 
-V28's query-independent 24-byte residual code reached 318/320 hits. Upgrading
-five percent of rows to a 48-byte residual code reached 319/320, 996,875-ppm
-aggregate recall, 900,000-ppm minimum recall, and 31/32 perfect queries with a
-2,625,266,208-byte 100-million-row projection. An exact-distance control over
-the same bounded hierarchical candidates reached 320/320. The remaining loss
-is therefore compressed ordering inside a successful frontier, not a need to
-scan the corpus or fetch hundreds of pages.
+V28's archived variable-rate result reports a 24-byte base, a five-percent
+refinement fraction, 25.2 average bytes per row, 319/320 hits, 996,875-ppm
+aggregate recall, 900,000-ppm minimum recall, and 31/32 perfect queries. An
+exact-distance control over the same bounded hierarchical candidates reached
+320/320. The result and terminal did not preserve the evaluator or an input
+manifest, and the archived `PQ8` label conflicts with the committed V28 PQ4
+codec. The 2,625,266,208-byte projection also accounts for exactly 24 extra
+bytes per refined row but not a sparse-plane bitmap, ranks, framing, or range
+metadata. These numbers are historical evidence, not production authority.
 
-The single burned miss is not a license for query-specific tuning. V30 freezes
-the smallest passing variable-rate arm and evaluates it on a larger untouched
-cohort. Perfect Recall@10 remains visible as a stretch result. It is not a
-formal guarantee: guaranteed exactness would require a separately exposed
-adaptive/exhaustive mode whose worst case cannot share the fast-path SLO.
+The first gate therefore compares the plausible PQ4/PQ8 additive and
+replacement interpretations on the same burned 100,000-row fixture. It must
+reproduce the archived counts without query-dependent training. The single
+burned miss is not a license for tuning: after reproduction, one interpretation
+is frozen and evaluated on untouched queries. Perfect Recall@10 remains visible
+as a stretch result, not a formal guarantee.
 
 ## High-dimensional strategy
 
 The hierarchy and residual quantizer have separate jobs:
 
-1. 1,024 normalized f16 roots and 65,536 normalized f16 leaves remove broad
-   angular variation and constrain the query to nearby regions.
+1. The hierarchy size is derived only from corpus rows: leaves are
+   `min(65,536, next_power_of_two(ceil(rows / 512)))` and roots are
+   `min(1,024, max(1, leaves / 16))`. Thus the 100K/9.99M/100M shapes use
+   16/256, 1,024/32,768, and 1,024/65,536 roots/leaves respectively. Training
+   rejects fewer than two rows per leaf.
 2. Every normalized row is assigned to exactly one leaf without query, truth,
    evaluation, or prior-result access.
-3. A global 48-by-2D, 16-centroid PQ4 codebook computes a 24-byte base
-   residual code and its reconstruction error for every row during
-   construction. The persisted base-code plane contains only the 95 percent
-   of rows assigned base fidelity.
-4. A global 96-by-1D, 16-centroid PQ4 codebook persists a 48-byte
-   high-fidelity residual code instead of the base code for the five percent
-   of rows with greatest base-code
-   squared reconstruction error. Selection orders rows by
+3. A global 48-by-2D, 16-centroid PQ4 codebook persists a 24-byte base residual
+   code for every row and computes its reconstruction error during construction.
+4. A second 48-by-2D, 16-centroid PQ4 codebook encodes the base reconstruction
+   residual for the five percent of rows with greatest base-code squared
+   reconstruction error. Those rows retain both 24-byte planes, which form a
+   structured 256-combination/effective-PQ8 code per two-dimensional
+   subspace. Selection orders rows by
    `(error.total_cmp reversed, source_ordinal)` and takes exactly
    `floor(source_rows * 50_000 / 1_000_000)` rows. It is corpus-only and fixed
    before any query object is available.
-5. Query ADC subtracts the selected leaf centroid and dispatches by the stored
-   row fidelity bit. Each width's SIMD table builder returns an explicit
-   `(minimum_sum, scale)` calibration. Candidate comparison uses
-   `minimum_sum + scale * u16_score` in the common f32 squared-distance domain;
-   comparing raw scores from the two widths is forbidden. Scalar f32 ADC is
-   the differential oracle for the calibrated optimized path.
+5. Query ADC subtracts the selected leaf centroid. Base rows use the existing
+   PQ4 SIMD path plus its explicit `(minimum_sum, scale)` calibration. Refined
+   rows use a 48-by-256 f32 lookup over `base_centroid + refinement_centroid`.
+   Both return approximate squared distance in one f32 domain; raw `u16` base
+   scores are never compared directly with refined distances. Scalar execution
+   of the same tables is the differential oracle.
 6. Page ownership remains implicit in leaf-local logical code order. A
-   fidelity bitmap with rank checkpoints maps each logical position to exactly
-   one compact base or high plane. A bounded heap retains at most 12,288
+   refinement bitmap with rank checkpoints maps a refined logical position to
+   its compact refinement row. A bounded heap retains at most 12,288
    candidates and selects the first ten unique pages by
    `(approximate_distance, logical_code_position, page_ordinal)`. Source IDs
    are deliberately unavailable until authenticated Arrow pages are decoded.
@@ -77,18 +84,15 @@ The construction process receives only the registered corpus manifest, ordered
 Parquet training shards, scratch, and output capability. It cannot access test
 queries, neighbor truth, prior results, or page-read credentials.
 
-A deterministic hash sample trains roots, leaves, and both PQ codebooks. One
+A deterministic hash sample trains roots, leaves, and both PQ4 codebooks. One
 ordered corpus stream normalizes each row, assigns its leaf, computes the base
 and high-fidelity residual encodings plus base reconstruction error, and spills
 fixed records under an explicit memory limit. A bounded external selection pass
 finds the exact five-percent error cutoff with source ordinal as the tie break.
 The merge emits logical rows in
-`(leaf_ordinal, base_code, fidelity_desc, high_code, source_ordinal)` order.
-It writes each row to exactly one compact code plane: 24 base bytes for a base
-row or 48 high bytes for a high row. Base bytes are absent for high rows and
-high bytes are absent for base rows; neither plane contains zero-filled
-placeholders. The base code remains a transient construction sort key for a
-high row and is not persisted.
+`(leaf_ordinal, base_code, refined_desc, refinement_code, source_ordinal)`
+order. Every row persists a base code; only selected rows persist a compact
+refinement code. The refinement plane contains no zero-filled placeholders.
 
 Each leaf is split into pages of at most 1,024 rows. Every source ordinal has
 one owner and the primary union equals the corpus authority. The same merge
@@ -103,11 +107,11 @@ Scientific tables use Parquet and typed serving artifacts use Arrow IPC:
 - `leaves.arrow`: the same centroid plus non-null `root_ordinal:u16`;
 - `pq24-codebook.arrow`: width 24 and non-null f32 centroid payload;
 - `pq48-codebook.arrow`: width 48 and non-null f32 centroid payload;
-- `pq-base-codes.arrow`: 32-row transposed fixed-binary base blocks for the
-  exact 95-percent base population;
-- `pq-fidelity.arrow`: non-null fidelity bitmap plus monotone u64 rank offsets;
-- `pq-high-codes.arrow`: 32-row transposed fixed-binary 48-byte blocks for the
-  exact five-percent high population;
+- `pq-base-codes.arrow`: 32-row transposed fixed-binary base blocks for every
+  row;
+- `pq-refinement.arrow`: non-null refinement bitmap, monotone u64 rank
+  checkpoints, and compact 32-row transposed 24-byte refinement blocks for the
+  exact five-percent population;
 - `leaf-ranges.arrow`: monotone base/high block and page ranges;
 - `page-offsets.parquet`: leaf-local row ranges and immutable page identities;
 - S3 page bodies: the existing strict Arrow `id` plus f32[96] vector schema;
@@ -129,20 +133,24 @@ key GETs concurrently with bounded connect/read timeouts and no discovery,
 listing, prefix inference, ETag digest, retry after terminal, or page-body
 cache hidden from measurement.
 
-Standard S3 cold latency is a separate end-to-end metric. Existing evidence is
-approximately 39/65/93 ms p50/p95/p99 for ten concurrent GETs totaling about
-2.06 MB. The 15-ms target applies to resident routing plus exact rerank (and to
-a separately measured hot-cache path); cold Standard-S3 release qualification
-uses 150-ms p99. A future S3 Express tier may target lower cold latency but is
-not required or silently substituted.
+Standard S3 cold latency is a separate end-to-end metric. Before a paid gate,
+the reduced harness injects request-latency distributions and reports the
+decomposition without sleeping; this is a planning estimate, not evidence.
+The 15-ms target applies to resident routing plus exact rerank. The untouched
+Spot gate must measure ten concurrent Standard-S3 GETs and requires 100-ms p99
+with a hard 150-ms ceiling. No unregistered cache or S3 Express substitution is
+allowed.
 
 ## Memory and work bounds
 
-The registered 100-million-row resident projection is 2,625,266,208 bytes for
-the frozen five-percent arm: the code planes average exactly 25.2 bytes per
-row (`95% * 24 + 5% * 48`), and the registered non-code components total
-105,266,208 bytes. Persisting both widths for a high row would violate this
-authority. The total is below 3,221,225,472 bytes. Runtime additionally
+The archived projection is not the V30 authority. V30 provisionally projects
+2,642,995,248 bytes at 100 million rows: the authenticated V28 24-byte base
+projection (2,505,266,208), 120,000,000 compact refinement bytes, 12,500,000
+bitmap bytes, 3,125,000 rank-checkpoint bytes, 1,048,576 leaf refinement-range
+bytes, 6,144 refinement-codebook bytes, at most 744 global refinement-block
+padding bytes, and a 1,048,576-byte Arrow framing reserve. Refinement blocks
+are globally packed and leaf ranges may start inside a block; per-leaf block
+padding is forbidden. The total is below 3,221,225,472 bytes. Runtime additionally
 checks component allocations and process peak RSS. It rejects any fidelity
 fraction other than 50,000 ppm, any width other than 24/48 bytes, any code scan
 above 1,000,000 rows, or any candidate/page/byte bound above the fixed limits.
@@ -153,13 +161,17 @@ Arrow page bodies are transiently decoded and released after exact rerank.
 
 ## Quality, latency, and release gates
 
-The seconds-long 100K gate is burned development evidence and runs after
-affected changes. It requires at least 996,875-ppm aggregate recall, 900,000-ppm
-minimum recall, 31/32 perfect queries, exactly ten pages, and the registered
-work/memory limits. It is a regression gate, not a claim.
+The first seconds-long 100K gate is a reproduction falsifier. It compares four
+fixed interpretations (PQ4 additive, PQ4 replacement, PQ8 additive, PQ8
+replacement) with identical construction, hierarchy, pages, queries, and
+truth. A candidate must exactly reproduce at least 319/320 hits, 900,000-ppm
+minimum recall, 31/32 perfect queries, and ten pages. The winning interpretation
+and every input/output identity are then frozen; later per-edit gates rerun only
+that arm. This burned evidence is not a claim.
 
-Only after code and authority gates pass may one untouched 9.99-million-row
-cohort run on `causality` Spot. It requires:
+Only after reproduction, code, and authority gates pass may one untouched
+9.99-million-row cohort run on `causality` Spot. Its query ordinals must be
+registered and disjoint from every burned cohort before construction. It requires:
 
 - at least 995,000-ppm aggregate Recall@10;
 - at least 997,500-ppm queries meeting an 800,000-ppm per-query floor;
@@ -168,7 +180,8 @@ cohort run on `causality` Spot. It requires:
 - at most 1,000,000 scanned codes and 12,288 retained candidates;
 - under 3 GiB peak RSS;
 - at most 15,000,000-ns CPU/hot-cache p99;
-- at most 150,000,000-ns cold Standard-S3 p99;
+- at most 100,000,000-ns cold Standard-S3 p99 and no sample above
+  150,000,000 ns;
 - deterministic scalar/optimized ordering and exact final rerank equality.
 
 All 100-percent observations are reported explicitly. A missed stretch target
