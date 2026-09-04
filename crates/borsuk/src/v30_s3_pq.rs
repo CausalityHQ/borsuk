@@ -355,8 +355,8 @@ impl V30Fidelity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct V30CodePlanes {
     fidelity: V30Fidelity,
-    base: Vec<Vec<u8>>,
-    high: Vec<Vec<u8>>,
+    base: Vec<u8>,
+    high: Vec<u8>,
     base_ranks: Vec<usize>,
 }
 
@@ -366,27 +366,45 @@ impl V30CodePlanes {
     }
 
     pub(crate) fn base_rows(&self) -> usize {
-        self.base.len()
+        self.base.len() / V30PqWidth::Base24.bytes()
     }
 
     pub(crate) fn high_rows(&self) -> usize {
-        self.high.len()
+        self.high.len() / V30PqWidth::High48.bytes()
     }
 
     pub(crate) fn encoded_code_bytes(&self) -> usize {
-        self.base.len() * V30PqWidth::Base24.bytes() + self.high.len() * V30PqWidth::High48.bytes()
+        self.base.len() + self.high.len()
+    }
+
+    pub(crate) fn base_packed(&self) -> &[u8] {
+        &self.base
+    }
+
+    pub(crate) fn high_packed(&self) -> &[u8] {
+        &self.high
     }
 
     pub(crate) fn code(&self, logical: usize) -> Result<(V30PqWidth, &[u8])> {
         if self.fidelity.is_high(logical)? {
             let rank = self.fidelity.high_rank(logical)?;
-            Ok((V30PqWidth::High48, &self.high[rank]))
+            let start = rank * V30PqWidth::High48.bytes();
+            let code = self
+                .high
+                .get(start..start + V30PqWidth::High48.bytes())
+                .ok_or_else(|| invalid("V30 high code rank differs"))?;
+            Ok((V30PqWidth::High48, code))
         } else {
             let rank = *self
                 .base_ranks
                 .get(logical)
                 .ok_or_else(|| invalid("V30 base rank differs"))?;
-            Ok((V30PqWidth::Base24, &self.base[rank]))
+            let start = rank * V30PqWidth::Base24.bytes();
+            let code = self
+                .base
+                .get(start..start + V30PqWidth::Base24.bytes())
+                .ok_or_else(|| invalid("V30 base code rank differs"))?;
+            Ok((V30PqWidth::Base24, code))
         }
     }
 }
@@ -408,15 +426,16 @@ pub(crate) fn encode_v30_planes(
     {
         return Err(invalid("V30 code plane input differs"));
     }
-    let mut base = Vec::with_capacity(base_codes.len() - fidelity.high_count());
-    let mut high = Vec::with_capacity(fidelity.high_count());
+    let mut base =
+        Vec::with_capacity((base_codes.len() - fidelity.high_count()) * V30PqWidth::Base24.bytes());
+    let mut high = Vec::with_capacity(fidelity.high_count() * V30PqWidth::High48.bytes());
     let mut base_ranks = Vec::with_capacity(base_codes.len());
     for logical in 0..base_codes.len() {
-        base_ranks.push(base.len());
+        base_ranks.push(base.len() / V30PqWidth::Base24.bytes());
         if fidelity.high[logical] {
-            high.push(high_codes[logical].clone());
+            high.extend_from_slice(&high_codes[logical]);
         } else {
-            base.push(base_codes[logical].clone());
+            base.extend_from_slice(&base_codes[logical]);
         }
     }
     Ok(V30CodePlanes {
@@ -566,13 +585,14 @@ fn block_schema(width: V30PqWidth) -> Schema {
     ])
 }
 
-fn encode_blocks(codes: &[Vec<u8>], width: V30PqWidth) -> Result<Vec<u8>> {
-    if codes.is_empty() || codes.iter().any(|code| code.len() != width.bytes()) {
+fn encode_blocks(codes: &[u8], width: V30PqWidth) -> Result<Vec<u8>> {
+    if codes.is_empty() || !codes.len().is_multiple_of(width.bytes()) {
         return Err(invalid("V30 PQ8 compact plane differs"));
     }
-    let block_count = codes.len().div_ceil(BLOCK_ROWS);
+    let row_count = codes.len() / width.bytes();
+    let block_count = row_count.div_ceil(BLOCK_ROWS);
     let mut blocks = vec![vec![0_u8; width.bytes() * BLOCK_ROWS]; block_count];
-    for (row, code) in codes.iter().enumerate() {
+    for (row, code) in codes.chunks_exact(width.bytes()).enumerate() {
         for (subquantizer, value) in code.iter().enumerate() {
             blocks[row / BLOCK_ROWS][subquantizer * BLOCK_ROWS + row % BLOCK_ROWS] = *value;
         }
@@ -583,7 +603,7 @@ fn encode_blocks(codes: &[Vec<u8>], width: V30PqWidth) -> Result<Vec<u8>> {
         vec![
             Arc::new(UInt64Array::from_iter_values(0..block_count as u64)),
             Arc::new(UInt8Array::from_iter_values((0..block_count).map(
-                |block| u8::try_from((codes.len() - block * BLOCK_ROWS).min(BLOCK_ROWS)).unwrap(),
+                |block| u8::try_from((row_count - block * BLOCK_ROWS).min(BLOCK_ROWS)).unwrap(),
             ))),
             Arc::new(packed),
         ],
@@ -591,7 +611,7 @@ fn encode_blocks(codes: &[Vec<u8>], width: V30PqWidth) -> Result<Vec<u8>> {
     write_ipc(block_schema(width), batch)
 }
 
-fn decode_blocks(bytes: &[u8], width: V30PqWidth, row_count: usize) -> Result<Vec<Vec<u8>>> {
+fn decode_blocks(bytes: &[u8], width: V30PqWidth, row_count: usize) -> Result<Vec<u8>> {
     let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
     if reader.schema().as_ref() != &block_schema(width) {
         return Err(invalid("V30 PQ8 block Arrow schema differs"));
@@ -624,7 +644,7 @@ fn decode_blocks(bytes: &[u8], width: V30PqWidth, row_count: usize) -> Result<Ve
         .as_any()
         .downcast_ref::<FixedSizeBinaryArray>()
         .unwrap();
-    let mut codes = Vec::with_capacity(row_count);
+    let mut codes = Vec::with_capacity(row_count * width.bytes());
     for block in 0..expected_blocks {
         let valid_rows = (row_count - block * BLOCK_ROWS).min(BLOCK_ROWS);
         if ordinals.value(block) != block as u64 || usize::from(valid.value(block)) != valid_rows {
@@ -640,10 +660,8 @@ fn decode_blocks(bytes: &[u8], width: V30PqWidth, row_count: usize) -> Result<Ve
             }
         }
         for row in 0..valid_rows {
-            codes.push(
-                (0..width.bytes())
-                    .map(|subquantizer| value[subquantizer * BLOCK_ROWS + row])
-                    .collect(),
+            codes.extend(
+                (0..width.bytes()).map(|subquantizer| value[subquantizer * BLOCK_ROWS + row]),
             );
         }
     }
@@ -979,6 +997,8 @@ mod tests {
             (V30PqWidth::Base24, base[4].as_slice())
         );
         assert_eq!(planes.encoded_code_bytes(), 19 * 24 + 48);
+        assert_eq!(planes.base_packed().len(), 19 * 24);
+        assert_eq!(planes.high_packed().len(), 48);
     }
 
     #[test]
