@@ -35,7 +35,7 @@ class V30UntouchedPlan:
     artifact_dir: Path
     query: LocalArtifact
     truth: LocalArtifact
-    page_s3_prefix: str
+    serving_tier: str
     source_rows: int
     query_start: int
     query_count: int
@@ -64,8 +64,7 @@ def _validate(plan: V30UntouchedPlan) -> None:
     if (
         not plan.qualifier.is_absolute()
         or not plan.artifact_dir.is_absolute()
-        or not plan.page_s3_prefix.startswith("s3://")
-        or plan.page_s3_prefix.endswith("/")
+        or plan.serving_tier not in {"standard", "express"}
         or type(plan.source_rows) is not int
         or plan.source_rows <= 0
         or type(plan.query_start) is not int
@@ -111,8 +110,8 @@ def build_qualifier_commands(plan: V30UntouchedPlan) -> tuple[tuple[str, ...], .
         str(plan.page_count),
         "--k",
         "10",
-        "--s3-page-prefix",
-        plan.page_s3_prefix,
+        "--serving-tier",
+        plan.serving_tier,
     )
     return (
         common
@@ -302,7 +301,7 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--truth-parquet", type=Path, required=True)
     parser.add_argument("--truth-sha256", required=True)
     parser.add_argument("--truth-bytes", type=int, required=True)
-    parser.add_argument("--s3-page-prefix", required=True)
+    parser.add_argument("--serving-tier", choices=("standard", "express"), required=True)
     parser.add_argument("--source-rows", type=int, required=True)
     parser.add_argument("--query-start", type=int, required=True)
     parser.add_argument("--query-count", type=int, required=True)
@@ -317,7 +316,7 @@ def main(arguments: list[str] | None = None) -> int:
         artifact_dir=args.artifact_dir,
         query=LocalArtifact(args.query_parquet, args.query_sha256, args.query_bytes),
         truth=LocalArtifact(args.truth_parquet, args.truth_sha256, args.truth_bytes),
-        page_s3_prefix=args.s3_page_prefix,
+        serving_tier=args.serving_tier,
         source_rows=args.source_rows,
         query_start=args.query_start,
         query_count=args.query_count,

@@ -60,7 +60,7 @@ class V30EvaluationPlan:
     truth_uri: str
     truth_sha256: str
     truth_bytes: int
-    page_s3_prefix: str
+    serving_tier: str
     output_prefix: str
     source_rows: int
     query_start: int
@@ -183,16 +183,11 @@ def _validate_evaluation(plan: V30EvaluationPlan) -> None:
         (plan.query_uri, plan.query_sha256, plan.query_bytes),
         (plan.truth_uri, plan.truth_sha256, plan.truth_bytes),
     )
-    expected_page_prefix = plan.construction_manifest_uri.removesuffix(
-        "manifest.json"
-    ) + "pages"
     if (
         not plan.attempt_id.startswith("v30-")
         or any(not _s3(uri) or not _digest(digest) or length <= 0 for uri, digest, length in artifacts)
         or not plan.construction_manifest_uri.endswith("/manifest.json")
-        or not _s3(plan.page_s3_prefix)
-        or plan.page_s3_prefix.endswith("/")
-        or plan.page_s3_prefix != expected_page_prefix
+        or plan.serving_tier not in {"standard", "express"}
         or plan.source_rows not in {100_000, 9_990_000}
         or plan.query_start < 0
         or plan.query_count != 32
@@ -454,8 +449,8 @@ def _evaluation_script(plan: V30EvaluationPlan) -> str:
             plan.truth_sha256,
             "--truth-bytes",
             str(plan.truth_bytes),
-            "--s3-page-prefix",
-            plan.page_s3_prefix,
+            "--serving-tier",
+            plan.serving_tier,
             "--source-rows",
             str(plan.source_rows),
             "--query-start",

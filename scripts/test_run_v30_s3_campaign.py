@@ -116,7 +116,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             truth_uri="s3://authority/deep-10m/neighbors.parquet",
             truth_sha256="f" * 64,
             truth_bytes=500_000,
-            page_s3_prefix="s3://authority/v30/build-a0001/pages",
+            serving_tier="standard",
             output_prefix="s3://authority/v30/eval-a0001/",
             source_rows=9_990_000,
             query_start=64,
@@ -257,9 +257,8 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("test.parquet", script)
             self.assertIn("neighbors.parquet", script)
             self.assertIn("value['serving']['page_locations']", script)
-            self.assertIn(
-                "--s3-page-prefix s3://authority/v30/build-a0001/pages", script
-            )
+            self.assertIn("--serving-tier standard", script)
+            self.assertNotIn("--s3-page-prefix", script)
             self.assertIn("--query-start 64", script)
             self.assertIn("--query-count 32", script)
             self.assertIn("--page-count 16", script)
@@ -378,12 +377,12 @@ class V30SpotCampaignTests(unittest.TestCase):
         self.assertEqual(terminal, b'{"claim_eligible":false,"status":"passed"}\n')
         self.assertEqual(terminated, ["i-original"])
 
-    def test_v30_evaluation_page_namespace_is_derived_from_manifest(self) -> None:
+    def test_v30_evaluation_serving_tier_is_explicit_and_closed(self) -> None:
         plan = self.evaluation()
         drifted = V30EvaluationPlan(
             **{
                 **plan.__dict__,
-                "page_s3_prefix": "s3://authority/v30/different-build/pages",
+                "serving_tier": "arbitrary-prefix",
             }
         )
         with self.assertRaisesRegex(ValueError, "evaluation authority"):
@@ -396,7 +395,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             construction_manifest_uri=(
                 "s3://authority/v32/build-100k-a0001/manifest.json"
             ),
-            page_s3_prefix="s3://authority/v32/build-100k-a0001/pages",
+            serving_tier="standard",
             output_prefix="s3://authority/v32/eval-100k-a0001/",
             source_rows=100_000,
             query_start=0,

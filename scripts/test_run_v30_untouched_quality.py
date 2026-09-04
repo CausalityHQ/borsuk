@@ -31,7 +31,7 @@ class V30UntouchedQualityTests(unittest.TestCase):
             capture_output=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr.decode())
-        self.assertIn(b"--s3-page-prefix", completed.stdout)
+        self.assertIn(b"--serving-tier", completed.stdout)
         self.assertIn(b"--page-count", completed.stdout)
 
     def fixture(self, directory: Path) -> tuple[V30UntouchedPlan, dict[int, bytes]]:
@@ -62,7 +62,7 @@ class V30UntouchedQualityTests(unittest.TestCase):
             truth=LocalArtifact(
                 truth_path, hashlib.sha256(truth).hexdigest(), len(truth)
             ),
-            page_s3_prefix="s3://authority/v30/build-a0001/pages",
+            serving_tier="standard",
             source_rows=9_990_000,
             query_start=64,
             query_count=32,
@@ -128,7 +128,8 @@ class V30UntouchedQualityTests(unittest.TestCase):
             self.assertEqual(
                 int(commands[0][commands[0].index("--candidate-depth") + 1]), 12_288
             )
-            self.assertTrue(all("--s3-page-prefix" in command for command in commands))
+            self.assertTrue(all("--serving-tier" in command for command in commands))
+            self.assertTrue(all("--s3-page-prefix" not in command for command in commands))
             self.assertTrue(all("--construction-manifest-s3" not in command for command in commands))
 
             seen: list[tuple[str, ...]] = []
