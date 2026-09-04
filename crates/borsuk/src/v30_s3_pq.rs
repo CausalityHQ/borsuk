@@ -10,6 +10,7 @@ use arrow_ipc::{
     writer::{FileWriter, IpcWriteOptions},
 };
 use arrow_schema::{DataType, Field, Schema};
+use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
 use crate::{BorsukError, Result};
@@ -76,6 +77,80 @@ impl V30PqCodebook {
     }
 }
 
+pub(crate) fn fit_v30_codebook(
+    rows: &[[f32; DIMENSIONS]],
+    width: V30PqWidth,
+) -> Result<V30PqCodebook> {
+    if rows.len() < CENTROIDS || rows.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(invalid("V30 PQ8 training population differs"));
+    }
+    let sample_count = rows.len().min(8_192);
+    let sample = (0..sample_count)
+        .map(|index| &rows[index * rows.len() / sample_count])
+        .collect::<Vec<_>>();
+    let dimensions = width.dimensions();
+    let centroids = (0..width.subquantizers())
+        .into_par_iter()
+        .map(|subquantizer| {
+            let vector_start = subquantizer * dimensions;
+            let mut centers = vec![0.0_f32; CENTROIDS * dimensions];
+            for centroid in 0..CENTROIDS {
+                let source = sample[centroid * sample.len() / CENTROIDS];
+                centers[centroid * dimensions..(centroid + 1) * dimensions]
+                    .copy_from_slice(&source[vector_start..vector_start + dimensions]);
+            }
+            for _ in 0..4 {
+                let mut sums = vec![0.0_f64; CENTROIDS * dimensions];
+                let mut counts = [0_u32; CENTROIDS];
+                for row in &sample {
+                    let nearest = (0..CENTROIDS)
+                        .map(|centroid| {
+                            let distance = (0..dimensions)
+                                .map(|dimension| {
+                                    let delta = row[vector_start + dimension]
+                                        - centers[centroid * dimensions + dimension];
+                                    delta * delta
+                                })
+                                .sum::<f32>();
+                            (distance, centroid)
+                        })
+                        .min_by(|left, right| {
+                            left.0
+                                .total_cmp(&right.0)
+                                .then_with(|| left.1.cmp(&right.1))
+                        })
+                        .unwrap()
+                        .1;
+                    counts[nearest] += 1;
+                    for dimension in 0..dimensions {
+                        sums[nearest * dimensions + dimension] +=
+                            f64::from(row[vector_start + dimension]);
+                    }
+                }
+                for centroid in 0..CENTROIDS {
+                    if counts[centroid] == 0 {
+                        let source = sample[centroid * sample.len() / CENTROIDS];
+                        centers[centroid * dimensions..(centroid + 1) * dimensions]
+                            .copy_from_slice(&source[vector_start..vector_start + dimensions]);
+                    } else {
+                        for dimension in 0..dimensions {
+                            centers[centroid * dimensions + dimension] = (sums
+                                [centroid * dimensions + dimension]
+                                / f64::from(counts[centroid]))
+                                as f32;
+                        }
+                    }
+                }
+            }
+            centers
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .flatten()
+        .collect();
+    V30PqCodebook::new(width, centroids)
+}
+
 pub(crate) fn encode_v30_code(
     codebook: &V30PqCodebook,
     vector: &[f32; DIMENSIONS],
@@ -117,18 +192,12 @@ pub(crate) fn encode_v30_code(
     Ok((code, error))
 }
 
-pub(crate) fn score_v30_codes(
+fn query_tables(
     codebook: &V30PqCodebook,
-    codes: &[Vec<u8>],
     query: &[f32; DIMENSIONS],
-) -> Result<Vec<f32>> {
+) -> Result<Vec<[f32; CENTROIDS]>> {
     codebook.validate()?;
-    if codes.is_empty()
-        || codes
-            .iter()
-            .any(|code| code.len() != codebook.width.bytes())
-        || query.iter().any(|value| !value.is_finite())
-    {
+    if query.iter().any(|value| !value.is_finite()) {
         return Err(invalid("V30 PQ8 scoring input differs"));
     }
     let dimensions = codebook.width.dimensions();
@@ -147,6 +216,25 @@ pub(crate) fn score_v30_codes(
             })
         })
         .collect::<Vec<_>>();
+    if tables.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(invalid("V30 PQ8 query table differs"));
+    }
+    Ok(tables)
+}
+
+pub(crate) fn score_v30_codes(
+    codebook: &V30PqCodebook,
+    codes: &[Vec<u8>],
+    query: &[f32; DIMENSIONS],
+) -> Result<Vec<f32>> {
+    if codes.is_empty()
+        || codes
+            .iter()
+            .any(|code| code.len() != codebook.width.bytes())
+    {
+        return Err(invalid("V30 PQ8 scoring input differs"));
+    }
+    let tables = query_tables(codebook, query)?;
     let scores = codes
         .iter()
         .map(|code| {
@@ -156,6 +244,42 @@ pub(crate) fn score_v30_codes(
         })
         .collect::<Vec<_>>();
     if scores
+        .iter()
+        .any(|score| !score.is_finite() || *score < 0.0)
+    {
+        return Err(invalid("V30 PQ8 score differs"));
+    }
+    Ok(scores)
+}
+
+pub(crate) fn score_v30_transposed_block(
+    codebook: &V30PqCodebook,
+    transposed: &[u8],
+    valid_rows: u8,
+    query: &[f32; DIMENSIONS],
+) -> Result<[f32; BLOCK_ROWS]> {
+    let valid_rows = usize::from(valid_rows);
+    if valid_rows == 0
+        || valid_rows > BLOCK_ROWS
+        || transposed.len() != codebook.width.bytes() * BLOCK_ROWS
+        || (0..codebook.width.subquantizers()).any(|subquantizer| {
+            transposed[subquantizer * BLOCK_ROWS + valid_rows..(subquantizer + 1) * BLOCK_ROWS]
+                .iter()
+                .any(|value| *value != 0)
+        })
+    {
+        return Err(invalid("V30 PQ8 transposed block differs"));
+    }
+    let tables = query_tables(codebook, query)?;
+    let mut scores = [f32::INFINITY; BLOCK_ROWS];
+    scores[..valid_rows].fill(0.0);
+    for subquantizer in 0..codebook.width.subquantizers() {
+        for row in 0..valid_rows {
+            scores[row] +=
+                tables[subquantizer][usize::from(transposed[subquantizer * BLOCK_ROWS + row])];
+        }
+    }
+    if scores[..valid_rows]
         .iter()
         .any(|score| !score.is_finite() || *score < 0.0)
     {
@@ -776,7 +900,8 @@ mod tests {
 
     use super::{
         V30Fidelity, V30PqCodebook, V30PqWidth, decode_v30_pq_artifacts, encode_v30_code,
-        encode_v30_planes, encode_v30_pq_artifacts, project_v30_resident_bytes, score_v30_codes,
+        encode_v30_planes, encode_v30_pq_artifacts, fit_v30_codebook, project_v30_resident_bytes,
+        score_v30_codes, score_v30_transposed_block,
     };
 
     fn codebook(width: V30PqWidth) -> V30PqCodebook {
@@ -882,6 +1007,65 @@ mod tests {
         assert!(2_630_588_896_u64 < 3 * 1024 * 1024 * 1024);
         assert!(project_v30_resident_bytes(100_000_000, 50_001).is_err());
         assert!(project_v30_resident_bytes(0, 50_000).is_err());
+    }
+
+    #[test]
+    fn v30_s3_pq_training_is_deterministic_and_uses_registered_ties() {
+        // Break caught: training depends on thread order/randomness or changes the
+        // evenly-spaced source initialization and deterministic cluster means.
+        let rows = (0..512).map(|row| [row as f32; 96]).collect::<Vec<_>>();
+        for width in [V30PqWidth::Base24, V30PqWidth::High48] {
+            let first = fit_v30_codebook(&rows, width).unwrap();
+            let second = fit_v30_codebook(&rows, width).unwrap();
+            assert_eq!(first, second);
+            let dimensions = width.dimensions();
+            for subquantizer in 0..width.subquantizers() {
+                let first_center = subquantizer * 256 * dimensions;
+                let last_center = first_center + 255 * dimensions;
+                assert_eq!(first.centroids[first_center], 0.5);
+                assert_eq!(first.centroids[last_center], 510.5);
+            }
+        }
+        assert!(fit_v30_codebook(&rows[..255], V30PqWidth::Base24).is_err());
+        let mut invalid_rows = rows;
+        invalid_rows[3][7] = f32::NAN;
+        assert!(fit_v30_codebook(&invalid_rows, V30PqWidth::Base24).is_err());
+    }
+
+    #[test]
+    fn v30_s3_pq_transposed_block_scorer_matches_scalar_bits() {
+        // Break caught: block scoring uses a different table/reduction order,
+        // reads padding rows, or requires a row-major reconstruction allocation.
+        let book = codebook(V30PqWidth::Base24);
+        let codes = (0..19)
+            .map(|row| {
+                (0..24)
+                    .map(|subquantizer| ((row * 17 + subquantizer * 29) % 256) as u8)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let query = std::array::from_fn(|dimension| (dimension as f32 - 47.0) / 31.0);
+        let expected = score_v30_codes(&book, &codes, &query).unwrap();
+        let mut transposed = vec![0_u8; 24 * 32];
+        for (row, code) in codes.iter().enumerate() {
+            for (subquantizer, value) in code.iter().enumerate() {
+                transposed[subquantizer * 32 + row] = *value;
+            }
+        }
+        let actual: [f32; 32] = score_v30_transposed_block(&book, &transposed, 19, &query).unwrap();
+        assert!(
+            actual[..19]
+                .iter()
+                .zip(expected)
+                .all(|(actual, expected)| actual.to_bits() == expected.to_bits())
+        );
+        assert!(actual[19..].iter().all(|score| *score == f32::INFINITY));
+
+        let mut nonzero_padding = transposed.clone();
+        nonzero_padding[19] = 1;
+        assert!(score_v30_transposed_block(&book, &nonzero_padding, 19, &query).is_err());
+        assert!(score_v30_transposed_block(&book, &transposed, 0, &query).is_err());
+        assert!(score_v30_transposed_block(&book, &transposed[..100], 19, &query).is_err());
     }
 
     #[test]
