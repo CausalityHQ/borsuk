@@ -7,9 +7,8 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30LayoutArtifactIdentity,
     V30LayoutArtifacts, V30PqArtifactIdentity, V30PqArtifacts, V32Index, V32PageLocation,
-    V32PageLocationsArtifact, V32PageStore, V32Router, V32RoutingTargetReport,
-    V32RoutingTargetStage, V32SearchArm, V32SearchPhase, V32SearchResult, V32ServingTier,
-    decode_v32_page_locations,
+    V32PageLocationsArtifact, V32PageStore, V32Router, V32RoutingDiagnostic, V32RoutingTargetStage,
+    V32SearchArm, V32SearchPhase, V32SearchResult, V32ServingTier, decode_v32_page_locations,
 };
 use bytes::Bytes;
 use futures_util::future::try_join_all;
@@ -48,9 +47,9 @@ struct Args {
     diagnostic: Option<DiagnosticRequest>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct DiagnosticRequest {
-    logical: u64,
+    logicals: Vec<u64>,
     arm: V32SearchArm,
 }
 
@@ -497,27 +496,51 @@ fn result_bytes(
 
 fn diagnostic_bytes(
     query_ordinal: usize,
-    report: V32RoutingTargetReport,
+    diagnostic: V32RoutingDiagnostic,
 ) -> borsuk::Result<Vec<u8>> {
-    let stage = match report.stage {
-        V32RoutingTargetStage::LeafFrontier => "leaf-frontier",
-        V32RoutingTargetStage::CandidateRetention => "candidate-retention",
-        V32RoutingTargetStage::PageReducer => "page-reducer",
-        V32RoutingTargetStage::SelectedPage => "selected-page",
-    };
+    let selected_page_bytes = diagnostic
+        .selection
+        .pages
+        .iter()
+        .try_fold(0_u64, |total, page| total.checked_add(page.encoded_bytes))
+        .ok_or_else(|| invalid("V32 diagnostic selected bytes overflow"))?;
+    let work = diagnostic.selection.work;
+    let diagnostics = diagnostic
+        .targets
+        .into_iter()
+        .map(|report| {
+            let stage = match report.stage {
+                V32RoutingTargetStage::LeafFrontier => "leaf-frontier",
+                V32RoutingTargetStage::CandidateRetention => "candidate-retention",
+                V32RoutingTargetStage::PageReducer => "page-reducer",
+                V32RoutingTargetStage::SelectedPage => "selected-page",
+            };
+            serde_json::json!({
+                "candidate_rank": report.candidate_rank,
+                "first_unique_page_rank": report.first_unique_page_rank,
+                "leaf_ordinal": report.leaf_ordinal,
+                "logical": report.logical,
+                "page_ordinal": report.page_ordinal,
+                "reciprocal_rank_selected": report.reciprocal_rank_selected,
+                "stage": stage,
+            })
+        })
+        .collect::<Vec<_>>();
     let value = serde_json::json!({
         "claim_eligible": false,
-        "diagnostic": {
-            "candidate_rank": report.candidate_rank,
-            "first_unique_page_rank": report.first_unique_page_rank,
-            "leaf_ordinal": report.leaf_ordinal,
-            "logical": report.logical,
-            "page_ordinal": report.page_ordinal,
-            "reciprocal_rank_selected": report.reciprocal_rank_selected,
-            "stage": stage,
-        },
+        "diagnostics": diagnostics,
+        "page_body_reads": 0,
         "query_ordinal": query_ordinal,
-        "schema_version": 1,
+        "routing": {
+            "candidates_retained": work.candidates_retained,
+            "codes_scanned": work.codes_scanned,
+            "leaves_scored": work.leaves_scored,
+            "pages_considered": work.pages_considered,
+            "roots_scored": work.roots_scored,
+            "selected_page_bytes": selected_page_bytes,
+            "selected_pages": work.selected_pages,
+        },
+        "schema_version": 3,
     });
     let mut bytes = serde_json::to_vec(&canonical(value))
         .map_err(|_| invalid("V30 qualifier diagnostic serialization failed"))?;
@@ -845,11 +868,11 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
     };
     if let Some(diagnostic) = args.diagnostic {
         let query = read_query(&args.query, args.query_start)?;
-        let report = router
-            .diagnose_logicals(&query, diagnostic.arm, &[diagnostic.logical])?
-            .into_iter()
-            .next()
-            .ok_or_else(|| invalid("V30 qualifier diagnostic result differs"))?;
+        let report = router.diagnose_logicals_with_selection(
+            &query,
+            diagnostic.arm,
+            &diagnostic.logicals,
+        )?;
         return diagnostic_bytes(args.query_start, report);
     }
     match args.page_source {
@@ -997,18 +1020,31 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
     let candidate_depth = number(&mut values, "candidate-depth")?;
     let page_count = number(&mut values, "page-count")?;
     let k = number(&mut values, "k")?;
-    let diagnostic_logical = values
-        .remove("diagnose-logical")
+    let diagnostic_logicals = values
+        .remove("diagnose-logicals")
         .map(|value| {
-            value
-                .parse::<u64>()
-                .map_err(|_| argument_error("--diagnose-logical type differs"))
+            let logicals = value
+                .split(',')
+                .map(|logical| {
+                    logical
+                        .parse::<u64>()
+                        .map_err(|_| argument_error("--diagnose-logicals type differs"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let unique = logicals
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>();
+            if logicals.len() != 10 || unique.len() != logicals.len() {
+                return Err(argument_error("--diagnose-logicals cardinality differs"));
+            }
+            Ok(logicals)
         })
         .transpose()?;
-    let diagnostic = diagnostic_logical
-        .map(|logical| -> Result<DiagnosticRequest, String> {
+    let diagnostic = diagnostic_logicals
+        .map(|logicals| -> Result<DiagnosticRequest, String> {
             Ok(DiagnosticRequest {
-                logical,
+                logicals,
                 arm: V32SearchArm {
                     root_beam,
                     leaf_beam,
@@ -1027,10 +1063,10 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
             _ => Err(argument_error("--serving-tier value differs")),
         })
         .transpose()?;
-    let page_source = match (diagnostic, local, tier) {
-        (Some(_), None, None) => None,
-        (None, Some(path), None) if path.is_absolute() => Some(PageSource::Local(path)),
-        (None, None, Some(tier)) => Some(PageSource::Tier(tier)),
+    let page_source = match (diagnostic.is_some(), local, tier) {
+        (true, None, None) => None,
+        (false, Some(path), None) if path.is_absolute() => Some(PageSource::Local(path)),
+        (false, None, Some(tier)) => Some(PageSource::Tier(tier)),
         _ => return Err(argument_error("exactly one page source is required")),
     };
     if !artifact_dir.is_absolute()
@@ -1075,8 +1111,9 @@ mod tests {
 
     use arrow_array::{FixedSizeListArray, Float32Array, RecordBatch};
     use borsuk::{
-        V27PageIdentity, V32Match, V32PageLocation, V32PageStore, V32RoutingTargetReport,
-        V32RoutingTargetStage, V32RoutingWork, V32SearchResult, V32SearchWork, V32ServingTier,
+        V27PageIdentity, V32Match, V32PageLocation, V32PageSelection, V32PageStore,
+        V32RoutingDiagnostic, V32RoutingTargetReport, V32RoutingTargetStage, V32RoutingWork,
+        V32SearchResult, V32SearchWork, V32ServingTier,
     };
     use bytes::Bytes;
     use object_store::ObjectStoreExt;
@@ -1381,10 +1418,30 @@ mod tests {
             .position(|value| value == "--query-count")
             .unwrap();
         diagnostic[count + 1] = "1".to_owned();
-        diagnostic.extend(["--diagnose-logical".to_owned(), "25".to_owned()]);
+        diagnostic.extend([
+            "--diagnose-logicals".to_owned(),
+            "0,1,2,3,4,5,6,7,8,9".to_owned(),
+        ]);
         let parsed = parse_args(diagnostic).unwrap();
-        assert_eq!(parsed.diagnostic.unwrap().logical, 25);
+        assert_eq!(
+            parsed.diagnostic.unwrap().logicals,
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        );
         assert_eq!(parsed.page_source, None);
+
+        let mut singular = arguments();
+        let source = singular
+            .iter()
+            .position(|value| value == "--serving-tier")
+            .unwrap();
+        singular.drain(source..=source + 1);
+        let count = singular
+            .iter()
+            .position(|value| value == "--query-count")
+            .unwrap();
+        singular[count + 1] = "1".to_owned();
+        singular.extend(["--diagnose-logical".to_owned(), "25".to_owned()]);
+        assert!(parse_args(singular).is_err());
     }
 
     #[test]
@@ -1404,20 +1461,59 @@ mod tests {
         // whether routing, candidate retention, or page reduction lost truth.
         let bytes = diagnostic_bytes(
             7,
-            V32RoutingTargetReport {
-                logical: 25,
-                leaf_ordinal: 3,
-                page_ordinal: 11,
-                candidate_rank: None,
-                first_unique_page_rank: Some(12),
-                stage: V32RoutingTargetStage::CandidateRetention,
-                reciprocal_rank_selected: false,
+            V32RoutingDiagnostic {
+                selection: V32PageSelection {
+                    pages: vec![
+                        V27PageIdentity {
+                            ordinal: 11,
+                            sha256: "1".repeat(64),
+                            encoded_bytes: 100,
+                            primary_rows: 1,
+                            replica_rows: 0,
+                        },
+                        V27PageIdentity {
+                            ordinal: 12,
+                            sha256: "2".repeat(64),
+                            encoded_bytes: 200,
+                            primary_rows: 1,
+                            replica_rows: 0,
+                        },
+                    ],
+                    work: V32RoutingWork {
+                        roots_scored: 16,
+                        leaves_scored: 32,
+                        codes_scanned: 40_000,
+                        candidates_retained: 12_288,
+                        pages_considered: 20,
+                        selected_pages: 2,
+                    },
+                },
+                targets: vec![
+                    V32RoutingTargetReport {
+                        logical: 25,
+                        leaf_ordinal: 3,
+                        page_ordinal: 11,
+                        candidate_rank: None,
+                        first_unique_page_rank: Some(12),
+                        stage: V32RoutingTargetStage::CandidateRetention,
+                        reciprocal_rank_selected: false,
+                    },
+                    V32RoutingTargetReport {
+                        logical: 26,
+                        leaf_ordinal: 3,
+                        page_ordinal: 12,
+                        candidate_rank: Some(7),
+                        first_unique_page_rank: Some(4),
+                        stage: V32RoutingTargetStage::SelectedPage,
+                        reciprocal_rank_selected: true,
+                    },
+                ],
             },
         )
         .unwrap();
         assert_eq!(
             bytes,
-            b"{\"claim_eligible\":false,\"diagnostic\":{\"candidate_rank\":null,\"first_unique_page_rank\":12,\"leaf_ordinal\":3,\"logical\":25,\"page_ordinal\":11,\"reciprocal_rank_selected\":false,\"stage\":\"candidate-retention\"},\"query_ordinal\":7,\"schema_version\":1}\n"
+            b"{\"claim_eligible\":false,\"diagnostics\":[{\"candidate_rank\":null,\"first_unique_page_rank\":12,\"leaf_ordinal\":3,\"logical\":25,\"page_ordinal\":11,\"reciprocal_rank_selected\":false,\"stage\":\"candidate-retention\"},{\"candidate_rank\":7,\"first_unique_page_rank\":4,\"leaf_ordinal\":3,\"logical\":26,\"page_ordinal\":12,\"reciprocal_rank_selected\":true,\"stage\":\"selected-page\"}],\"page_body_reads\":0,\"query_ordinal\":7,\"routing\":{\"candidates_retained\":12288,\"codes_scanned\":40000,\"leaves_scored\":32,\"pages_considered\":20,\"roots_scored\":16,\"selected_page_bytes\":300,\"selected_pages\":2},\"schema_version\":3}\n"
         );
     }
 

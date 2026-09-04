@@ -79,6 +79,13 @@ pub struct V32RoutingTargetReport {
     pub reciprocal_rank_selected: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V32RoutingDiagnostic {
+    pub selection: V32PageSelection,
+    pub targets: Vec<V32RoutingTargetReport>,
+}
+
 #[derive(Debug, Clone)]
 #[doc(hidden)]
 pub struct V32Router {
@@ -400,6 +407,18 @@ impl V32Router {
         arm: V32SearchArm,
         logicals: &[u64],
     ) -> Result<Vec<V32RoutingTargetReport>> {
+        Ok(self
+            .diagnose_logicals_with_selection(query, arm, logicals)?
+            .targets)
+    }
+
+    #[doc(hidden)]
+    pub fn diagnose_logicals_with_selection(
+        &self,
+        query: &[f32; 96],
+        arm: V32SearchArm,
+        logicals: &[u64],
+    ) -> Result<V32RoutingDiagnostic> {
         let unique = logicals
             .iter()
             .copied()
@@ -412,6 +431,7 @@ impl V32Router {
             return Err(invalid("V30 routing diagnostic target differs"));
         }
         let details = self.routing_details(query, arm, &|_| {})?;
+        let selection = details.selection.clone();
         let selected_leaves = details
             .selected_leaves
             .into_iter()
@@ -456,7 +476,7 @@ impl V32Router {
             .iter()
             .map(|page| page.ordinal)
             .collect::<std::collections::BTreeSet<_>>();
-        logicals
+        let targets = logicals
             .iter()
             .map(|logical| {
                 let page = self
@@ -486,7 +506,8 @@ impl V32Router {
                         .contains(&page.identity.ordinal),
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        Ok(V32RoutingDiagnostic { selection, targets })
     }
 
     fn select_pages_with_leaf_observer<F>(
@@ -924,6 +945,36 @@ mod tests {
                 .map(|report| report.logical)
                 .collect::<Vec<_>>(),
             [0, 15, 25, 35]
+        );
+    }
+
+    #[test]
+    fn v32_s3_search_diagnostic_reports_structural_work_without_page_reads() {
+        // Break caught: the fast containment gate reports truth stages but hides
+        // a scanned-code or selected-page-byte hard failure until S3 execution.
+        let diagnostic = diagnostic_router()
+            .diagnose_logicals_with_selection(
+                &[0.2; 96],
+                V32SearchArm {
+                    root_beam: 1,
+                    leaf_beam: 1,
+                    candidate_depth: 20,
+                    page_count: 10,
+                },
+                &[0, 15],
+            )
+            .unwrap();
+        assert_eq!(diagnostic.targets.len(), 2);
+        assert_eq!(diagnostic.selection.work.codes_scanned, 30);
+        assert_eq!(diagnostic.selection.pages.len(), 10);
+        assert_eq!(
+            diagnostic
+                .selection
+                .pages
+                .iter()
+                .map(|page| page.encoded_bytes)
+                .sum::<u64>(),
+            12_020
         );
     }
 

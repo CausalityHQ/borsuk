@@ -210,9 +210,9 @@ pub use v30_s3_layout::{
 pub use v30_s3_pq::{V30PqArtifactIdentity, V30PqArtifacts};
 #[doc(hidden)]
 pub use v30_s3_search::{
-    V32Index, V32Match, V32PageSelection, V32PageStore, V32Router, V32RoutingTargetReport,
-    V32RoutingTargetStage, V32RoutingWork, V32SearchArm, V32SearchPhase, V32SearchResult,
-    V32SearchWork,
+    V32Index, V32Match, V32PageSelection, V32PageStore, V32Router, V32RoutingDiagnostic,
+    V32RoutingTargetReport, V32RoutingTargetStage, V32RoutingWork, V32SearchArm, V32SearchPhase,
+    V32SearchResult, V32SearchWork,
 };
 #[allow(
     dead_code,
