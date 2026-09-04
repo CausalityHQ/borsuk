@@ -510,8 +510,14 @@ fn result_bytes(
 
 fn diagnostic_bytes(
     query_ordinal: usize,
+    truth_independent_selection: bool,
     diagnostic: V32RoutingDiagnostic,
 ) -> borsuk::Result<Vec<u8>> {
+    if !truth_independent_selection {
+        return Err(invalid(
+            "V32 diagnostic truth-independent selection differs",
+        ));
+    }
     let selected_page_bytes = diagnostic
         .selection
         .pages
@@ -555,6 +561,7 @@ fn diagnostic_bytes(
             "selected_pages": work.selected_pages,
         },
         "schema_version": 3,
+        "truth_independent_selection": truth_independent_selection,
     });
     let mut bytes = serde_json::to_vec(&canonical(value))
         .map_err(|_| invalid("V30 qualifier diagnostic serialization failed"))?;
@@ -882,12 +889,14 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
     };
     if let Some(diagnostic) = args.diagnostic {
         let query = read_query(&args.query, args.query_start)?;
+        let control = router.select_pages(&query, diagnostic.arm)?;
         let report = router.diagnose_logicals_with_selection(
             &query,
             diagnostic.arm,
             &diagnostic.logicals,
         )?;
-        return diagnostic_bytes(args.query_start, report);
+        let truth_independent_selection = control == report.selection;
+        return diagnostic_bytes(args.query_start, truth_independent_selection, report);
     }
     match args.page_source {
         Some(PageSource::Local(directory)) => run_batch(
@@ -1475,6 +1484,7 @@ mod tests {
         // whether routing, candidate retention, or page reduction lost truth.
         let bytes = diagnostic_bytes(
             7,
+            true,
             V32RoutingDiagnostic {
                 selection: V32PageSelection {
                     pages: vec![
@@ -1527,7 +1537,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             bytes,
-            b"{\"claim_eligible\":false,\"diagnostics\":[{\"candidate_rank\":null,\"first_unique_page_rank\":12,\"leaf_ordinal\":3,\"logical\":25,\"page_ordinal\":11,\"reciprocal_rank_selected\":false,\"stage\":\"candidate-retention\"},{\"candidate_rank\":7,\"first_unique_page_rank\":4,\"leaf_ordinal\":3,\"logical\":26,\"page_ordinal\":12,\"reciprocal_rank_selected\":true,\"stage\":\"selected-page\"}],\"page_body_reads\":0,\"query_ordinal\":7,\"routing\":{\"candidates_retained\":12288,\"codes_scanned\":40000,\"leaves_scored\":32,\"pages_considered\":20,\"roots_scored\":16,\"selected_page_bytes\":300,\"selected_pages\":2},\"schema_version\":3}\n"
+            b"{\"claim_eligible\":false,\"diagnostics\":[{\"candidate_rank\":null,\"first_unique_page_rank\":12,\"leaf_ordinal\":3,\"logical\":25,\"page_ordinal\":11,\"reciprocal_rank_selected\":false,\"stage\":\"candidate-retention\"},{\"candidate_rank\":7,\"first_unique_page_rank\":4,\"leaf_ordinal\":3,\"logical\":26,\"page_ordinal\":12,\"reciprocal_rank_selected\":true,\"stage\":\"selected-page\"}],\"page_body_reads\":0,\"query_ordinal\":7,\"routing\":{\"candidates_retained\":12288,\"codes_scanned\":40000,\"leaves_scored\":32,\"pages_considered\":20,\"roots_scored\":16,\"selected_page_bytes\":300,\"selected_pages\":2},\"schema_version\":3,\"truth_independent_selection\":true}\n"
         );
     }
 

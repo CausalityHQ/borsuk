@@ -13,11 +13,24 @@ from scripts.run_v32_no_page_containment import (
     LocalArtifact,
     V32ContainmentPlan,
     build_v32_containment_commands,
+    containment_exit_status,
     run_v32_no_page_containment,
 )
 
 
 class V32NoPageContainmentTests(unittest.TestCase):
+    def test_v32_containment_exit_status_fails_closed_on_scientific_rejection(self) -> None:
+        self.assertEqual(
+            containment_exit_status(b'{"failed_gates":[],"status":"passed"}\n'),
+            0,
+        )
+        self.assertEqual(
+            containment_exit_status(
+                b'{"failed_gates":["perfect-containment"],"status":"failed"}\n'
+            ),
+            2,
+        )
+
     def test_v32_containment_direct_script_exposes_only_resident_diagnostics(self) -> None:
         # Break caught: the Spot boundary is not directly executable or grows a
         # page-source flag that permits scientific page reads in the fast gate.
@@ -53,7 +66,30 @@ class V32NoPageContainmentTests(unittest.TestCase):
         )
         truth = truth_path.read_bytes()
         manifest = directory / "manifest.json"
-        manifest.write_bytes(b"manifest")
+        manifest_bytes = (
+            json.dumps(
+                {
+                    "layout": {
+                        "maximum_leaf_rows": 1_024,
+                        "page_rows": 512,
+                        "source_rows": 1_000_000,
+                    },
+                    "routing": {
+                        "algorithm": "hierarchical-residual-pq-v1",
+                        "candidate_depth": 12_288,
+                        "leaf_beam": 64,
+                        "maximum_pages_per_leaf": 64,
+                        "maximum_scanned_codes": 1_000_000,
+                        "page_count": 16,
+                        "root_beam": 8,
+                    },
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+            + b"\n"
+        )
+        manifest.write_bytes(manifest_bytes)
         query = directory / "test.parquet"
         query.write_bytes(b"query")
         logical_sources_path = directory / "logical-sources.arrow"
@@ -75,7 +111,9 @@ class V32NoPageContainmentTests(unittest.TestCase):
             V32ContainmentPlan(
                 qualifier=Path("/opt/borsuk/v30_s3_qualify"),
                 manifest=LocalArtifact(
-                    manifest, hashlib.sha256(b"manifest").hexdigest(), 8
+                    manifest,
+                    hashlib.sha256(manifest_bytes).hexdigest(),
+                    len(manifest_bytes),
                 ),
                 artifact_dir=directory / "resident",
                 query=LocalArtifact(query, hashlib.sha256(b"query").hexdigest(), 5),
@@ -120,13 +158,14 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     "routing": {
                         "candidates_retained": 12_288,
                         "codes_scanned": 40_000 + query_ordinal,
-                        "leaves_scored": 256,
+                        "leaves_scored": 64,
                         "pages_considered": 20,
                         "roots_scored": 128,
                         "selected_page_bytes": 2_900_000,
                         "selected_pages": 16,
                     },
                     "schema_version": 3,
+                    "truth_independent_selection": True,
                 },
                 allow_nan=False,
                 separators=(",", ":"),
@@ -177,6 +216,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
         self.assertEqual(value["losses_by_stage"], {"candidate-retention": 1})
         self.assertEqual(value["page_body_reads"], 0)
         self.assertEqual(value["maximum_codes_scanned"], 40_095)
+        self.assertEqual(value["maximum_leaf_rows"], 1_024)
         self.assertEqual(value["maximum_selected_page_bytes"], 2_900_000)
         self.assertEqual(value["status"], "failed")
         self.assertEqual(value["failed_gates"], ["perfect-containment"])
@@ -212,6 +252,47 @@ class V32NoPageContainmentTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "truth byte authority"):
                 build_v32_containment_commands(drift, truth)
+
+            manifest_value = json.loads(plan.manifest.path.read_bytes())
+            manifest_value["layout"]["maximum_leaf_rows"] = 1_025
+            manifest_bytes = (
+                json.dumps(manifest_value, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+            plan.manifest.path.write_bytes(manifest_bytes)
+            geometry_drift = V32ContainmentPlan(
+                **{
+                    **plan.__dict__,
+                    "manifest": LocalArtifact(
+                        plan.manifest.path,
+                        hashlib.sha256(manifest_bytes).hexdigest(),
+                        len(manifest_bytes),
+                    ),
+                }
+            )
+            geometry_payload = run_v32_no_page_containment(
+                geometry_drift,
+                truth,
+                invoke=lambda command: results[
+                    int(command[command.index("--query-start") + 1]) - 64
+                ],
+            )
+            self.assertEqual(
+                json.loads(geometry_payload)["failed_gates"],
+                ["maximum-leaf-rows"],
+            )
+
+            plan.manifest.path.write_bytes(
+                json.dumps(
+                    {
+                        **manifest_value,
+                        "layout": {**manifest_value["layout"], "maximum_leaf_rows": 1_024},
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+                + b"\n"
+            )
 
 
 if __name__ == "__main__":

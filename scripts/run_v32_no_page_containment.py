@@ -54,6 +54,52 @@ def _validate_artifact(artifact: LocalArtifact) -> None:
         raise ValueError("V32 containment artifact authority differs")
 
 
+def _read_scale_manifest(plan: V32ContainmentPlan) -> int:
+    _validate_artifact(plan.manifest)
+    payload = plan.manifest.path.read_bytes()
+    if (
+        len(payload) != plan.manifest.encoded_bytes
+        or hashlib.sha256(payload).hexdigest() != plan.manifest.sha256
+        or not payload.endswith(b"\n")
+        or b"\n" in payload[:-1]
+    ):
+        raise ValueError("V32 containment manifest byte authority differs")
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("V32 containment manifest JSON differs") from error
+    expected = (
+        json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+        + b"\n"
+    )
+    layout = value.get("layout") if type(value) is dict else None
+    routing = value.get("routing") if type(value) is dict else None
+    maximum_leaf_rows = (
+        layout.get("maximum_leaf_rows") if type(layout) is dict else None
+    )
+    expected_routing = {
+        "algorithm": "hierarchical-residual-pq-v1",
+        "candidate_depth": 12_288,
+        "leaf_beam": 64,
+        "maximum_pages_per_leaf": 64,
+        "maximum_scanned_codes": 1_000_000,
+        "page_count": 16,
+        "root_beam": 8,
+    }
+    if (
+        payload != expected
+        or type(layout) is not dict
+        or type(routing) is not dict
+        or layout.get("source_rows") != plan.source_rows
+        or layout.get("page_rows") != 512
+        or type(maximum_leaf_rows) is not int
+        or not 1 <= maximum_leaf_rows <= 32_768
+        or routing != expected_routing
+    ):
+        raise ValueError("V32 containment scale geometry differs")
+    return maximum_leaf_rows
+
+
 def _read_truth(
     plan: V32ContainmentPlan, truth_bytes: bytes
 ) -> tuple[tuple[int, ...], ...]:
@@ -189,6 +235,7 @@ def build_v32_containment_commands(
 ) -> tuple[tuple[str, ...], ...]:
     """Build one no-page diagnostic invocation per frozen query."""
 
+    _read_scale_manifest(plan)
     truth = _read_truth(plan, truth_bytes)
     return _commands(plan, truth, _read_logical_sources(plan))
 
@@ -216,10 +263,12 @@ def _diagnostics(
             "query_ordinal",
             "routing",
             "schema_version",
+            "truth_independent_selection",
         }
         or value["claim_eligible"] is not False
         or value["schema_version"] != 3
         or value["page_body_reads"] != 0
+        or value["truth_independent_selection"] is not True
         or value["query_ordinal"] != query_ordinal
         or type(value["diagnostics"]) is not list
         or len(value["diagnostics"]) != RECALL_K
@@ -278,8 +327,8 @@ def _diagnostics(
         or any(type(item) is not int or item < 0 for item in routing.values())
         or routing["candidates_retained"] != 12_288
         or not 12_288 <= routing["codes_scanned"] <= 1_000_000
-        or routing["leaves_scored"] == 0
-        or routing["roots_scored"] == 0
+        or routing["leaves_scored"] != 64
+        or routing["roots_scored"] != 128
         or not 16 <= routing["pages_considered"] <= 12_288
         or routing["selected_pages"] != 16
         or routing["selected_page_bytes"] == 0
@@ -296,6 +345,7 @@ def run_v32_no_page_containment(
 ) -> bytes:
     """Run and independently reduce the page-free scale containment gate."""
 
+    maximum_leaf_rows = _read_scale_manifest(plan)
     truth = _read_truth(plan, truth_bytes)
     source_to_logical = _read_logical_sources(plan)
     commands = _commands(plan, truth, source_to_logical)
@@ -325,17 +375,21 @@ def run_v32_no_page_containment(
     maximum_selected_page_bytes = max(
         work["selected_page_bytes"] for work in routing_work
     )
+    maximum_codes_scanned = max(work["codes_scanned"] for work in routing_work)
     if maximum_selected_page_bytes > 3_145_728:
         failed.append("selected-page-bytes")
+    if maximum_codes_scanned > 65_536:
+        failed.append("maximum-codes-scanned")
+    if maximum_leaf_rows > 1_024:
+        failed.append("maximum-leaf-rows")
     value = {
         "aggregate_containment_ppm": aggregate,
         "claim_eligible": False,
         "failed_gates": failed,
         "losses_by_stage": dict(sorted(losses.items())),
         "manifest_sha256": plan.manifest.sha256,
-        "maximum_codes_scanned": max(
-            work["codes_scanned"] for work in routing_work
-        ),
+        "maximum_codes_scanned": maximum_codes_scanned,
+        "maximum_leaf_rows": maximum_leaf_rows,
         "maximum_selected_page_bytes": maximum_selected_page_bytes,
         "minimum_containment_ppm": minimum,
         "logical_sources_sha256": plan.logical_sources.sha256,
@@ -351,6 +405,21 @@ def run_v32_no_page_containment(
         "truth_sha256": plan.truth.sha256,
     }
     return json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+
+
+def containment_exit_status(payload: bytes) -> int:
+    """Return success only for the canonical passing containment terminal."""
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return 2
+    return (
+        0
+        if type(value) is dict
+        and value.get("status") == "passed"
+        and value.get("failed_gates") == []
+        else 2
+    )
 
 
 def _invoke(command: tuple[str, ...]) -> bytes:
@@ -406,10 +475,9 @@ def main(arguments: list[str] | None = None) -> int:
         query_count=args.query_count,
     )
     truth = args.truth_parquet.read_bytes()
-    sys.stdout.buffer.write(
-        run_v32_no_page_containment(plan, truth, invoke=_invoke)
-    )
-    return 0
+    payload = run_v32_no_page_containment(plan, truth, invoke=_invoke)
+    sys.stdout.buffer.write(payload)
+    return containment_exit_status(payload)
 
 
 if __name__ == "__main__":

@@ -7,9 +7,11 @@ from scripts.run_v30_s3_campaign import (
     V30ConstructionPlan,
     V30EvaluationPlan,
     V30Observation,
+    V32ContainmentSpotPlan,
     build_v30_construction_spot_specs,
     build_v30_corpus_manifest,
     build_v30_evaluation_spot_specs,
+    build_v32_containment_spot_specs,
     execute_v30_spot_phase,
     monitor_v30_original_attempt,
 )
@@ -93,7 +95,6 @@ class V30SpotCampaignTests(unittest.TestCase):
             expected_rows=9_990_000,
             roots=1_024,
             leaves=32_768,
-            routing_leaf_beam=512,
             training_rows=262_144,
             page_rows=512,
         )
@@ -137,9 +138,48 @@ class V30SpotCampaignTests(unittest.TestCase):
             expected_rows=100_000,
             roots=16,
             leaves=256,
-            routing_leaf_beam=192,
             training_rows=8_192,
             page_rows=128,
+        )
+
+    def containment_construction(self) -> V30ConstructionPlan:
+        return V30ConstructionPlan(
+            attempt_id="v30-deep-1m-build-a0001",
+            source_commit="a" * 40,
+            source_archive_uri="s3://authority/source.tar.zst",
+            source_archive_sha256="b" * 64,
+            source_archive_bytes=1_000_000,
+            corpus_manifest_uri="s3://authority/deep-1m/corpus.json",
+            corpus_manifest_sha256="c" * 64,
+            corpus_manifest_bytes=4_000,
+            output_prefix="s3://authority/v32/build-1m-a0001/",
+            expected_rows=1_000_000,
+            roots=128,
+            leaves=4_096,
+            training_rows=32_768,
+            page_rows=512,
+        )
+
+    def containment(self) -> V32ContainmentSpotPlan:
+        return V32ContainmentSpotPlan(
+            attempt_id="v32-deep-1m-containment-a0001",
+            source_commit="a" * 40,
+            source_archive_uri="s3://authority/source.tar.zst",
+            source_archive_sha256="b" * 64,
+            source_archive_bytes=1_000_000,
+            construction_manifest_uri="s3://authority/v32/build-1m-a0001/manifest.json",
+            construction_manifest_sha256="c" * 64,
+            construction_manifest_bytes=8_000,
+            query_uri="s3://authority/deep-image/test.parquet",
+            query_sha256="d" * 64,
+            query_bytes=1_500_000,
+            truth_uri="s3://authority/deep-image/neighbors.parquet",
+            truth_sha256="e" * 64,
+            truth_bytes=500_000,
+            output_prefix="s3://authority/v32/containment-1m-a0001/",
+            source_rows=1_000_000,
+            query_start=0,
+            query_count=32,
         )
 
     def test_v30_campaign_separates_query_blind_construction_from_evaluation(self) -> None:
@@ -149,7 +189,15 @@ class V30SpotCampaignTests(unittest.TestCase):
         self.assertIn("--expected-rows 100000", reduced[0]["UserData"])
         self.assertIn("--roots 16", reduced[0]["UserData"])
         self.assertIn("--page-rows 128", reduced[0]["UserData"])
-        self.assertIn("--routing-leaf-beam 192", reduced[0]["UserData"])
+        self.assertNotIn("--routing-leaf-beam", reduced[0]["UserData"])
+        containment = build_v30_construction_spot_specs(
+            self.containment_construction(), self.targets()
+        )
+        self.assertIn("--expected-rows 1000000", containment[0]["UserData"])
+        self.assertIn("--roots 128", containment[0]["UserData"])
+        self.assertIn("--leaves 4096", containment[0]["UserData"])
+        self.assertIn("--training-rows 32768", containment[0]["UserData"])
+        self.assertIn("--page-rows 512", containment[0]["UserData"])
         specs = build_v30_construction_spot_specs(self.construction(), self.targets())
         self.assertEqual([spec["Placement"]["AvailabilityZone"] for spec in specs], ["eu-central-1a", "eu-central-1b"])
         for spec in specs:
@@ -162,7 +210,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("s3://authority/deep-10m/corpus.json", script)
             self.assertIn("--s3-region eu-central-1", script)
             self.assertIn("--training-rows 262144", script)
-            self.assertIn("--routing-leaf-beam 512", script)
+            self.assertNotIn("--routing-leaf-beam", script)
             self.assertNotIn("test.parquet", script)
             self.assertNotIn("neighbors.parquet", script)
             self.assertNotIn("v30_s3_qualify", script)
@@ -202,7 +250,9 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("run_v30_untouched_quality.py", script)
             self.assertIn("test.parquet", script)
             self.assertIn("neighbors.parquet", script)
-            self.assertIn("--s3-page-prefix s3://authority/v30/build-a0001/pages", script)
+            self.assertIn(
+                "--s3-page-prefix s3://authority/v30/build-a0001/pages", script
+            )
             self.assertIn("--query-start 64", script)
             self.assertIn("--query-count 32", script)
             self.assertIn("--page-count 16", script)
@@ -225,6 +275,31 @@ class V30SpotCampaignTests(unittest.TestCase):
             )
             self.assertIn("rss_limit_bytes=3221225472", script)
             self.assertIn("HEARTBEAT.json", script)
+            self.assertIn("kill -TERM -- \"-$child\"", script)
+
+    def test_v32_containment_spot_reads_resident_artifacts_but_no_page_body(self) -> None:
+        specs = build_v32_containment_spot_specs(self.containment(), self.targets())
+        self.assertEqual(len(specs), 2)
+        for spec in specs:
+            script = spec["UserData"]
+            syntax = subprocess.run(
+                ["bash", "-n"], input=script, text=True, capture_output=True
+            )
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
+            self.assertIn("run_v32_no_page_containment.py", script)
+            self.assertIn("logical-sources.arrow", script)
+            self.assertIn("value['diagnostics']['logical_sources']", script)
+            self.assertIn("--source-rows 1000000", script)
+            self.assertIn("--query-count 32", script)
+            self.assertIn("rss_limit_bytes=3221225472", script)
+            self.assertIn("wall_seconds=3600", script)
+            self.assertIn("HEARTBEAT.json", script)
+            self.assertIn('put_once "$root/TERMINAL.json" TERMINAL.json', script)
+            self.assertNotIn("--s3-page-prefix", script)
+            self.assertNotIn("run_v30_untouched_quality.py", script)
+            self.assertNotIn("aws s3 cp --recursive", script)
+            self.assertNotIn("pages/", script)
+            self.assertIn("kill -TERM -- \"-$child\"", script)
 
     def test_v30_evaluation_page_namespace_is_derived_from_manifest(self) -> None:
         plan = self.evaluation()

@@ -40,6 +40,13 @@ SHA-256 and length. The reader accepts exactly one selected tier per request;
 it never silently falls back across tiers because that would make latency and
 availability evidence ambiguous.
 
+Construction also emits `logical-sources.arrow`, a diagnostic-only Arrow IPC
+permutation from router logical ordinal to source ordinal. Its exact SHA-256,
+length, role, and filename are bound by the manifest. Construction writes it
+in bounded batches and the no-page diagnostic authenticates it before mapping
+source-ordinal truth into router space. Normal serving validates the manifest
+entry but does not load this object; it is not resident serving state.
+
 ## Query path
 
 1. Normalize one finite 96-dimensional query.
@@ -86,11 +93,20 @@ The targets are:
 
 ## Qualification order
 
-All code changes use narrow synthetic RED/GREEN tests first. A 16-object
-same-AZ S3 Express microbenchmark follows using only already-selected 100K page
-objects; it is not a corpus copy. Then one 100K end-to-end Spot run verifies
-quality and timing. Only a passing implementation proceeds to the disjoint
-9.99-million-row cohort and then a 100-million-row construction/serving run.
-Each campaign uses `causality` Spot, writes canonical JSON plus typed Parquet
-evidence, terminates immediately, and keeps D3 and competitor claims fenced.
+All code changes use narrow synthetic RED/GREEN tests first. The first corpus
+gate is a query-blind 1,000,000-row construction with 128 roots, 4,096 leaves,
+32,768 training rows, and 512-row pages. A claim-ineligible 32-query development
+diagnostic then requires 320/320 truth IDs to be contained by the selected 16
+pages while reading zero page bodies. It also requires at most 3,145,728
+selected-page bytes, at most 65,536 scanned codes, and at most 1,024 rows
+in any leaf. Failure stops before any page-latency measurement.
 
+Only perfect 1M containment permits a 16-object same-AZ S3 Express
+microbenchmark using already-selected page objects; it is not a corpus copy.
+Then one 100K end-to-end Spot run verifies quality and timing. A later decisive
+quality gate uses at least 1,000 held-out queries and 10,000 independently
+frozen truth IDs; the 32 development queries cannot qualify a release. Only
+passing stages proceed to the disjoint 9.99-million-row cohort and then a
+100-million-row construction/serving run. Each campaign uses `causality` Spot,
+writes canonical JSON plus typed Arrow/Parquet evidence, terminates immediately,
+and keeps D3 and competitor claims fenced.

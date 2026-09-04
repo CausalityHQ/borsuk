@@ -74,37 +74,43 @@
 - [ ] Run focused GREEN, fmt, strict targeted Clippy, and the affected qualifier tests.
 - [ ] Commit the verified execution slice.
 
-### Task 4: Measure the serving tier before corpus work
+### Task 4: Fail fast on 1M containment without page reads
 
 **Files:**
-- Create: `scripts/run_v32_s3_express_preflight.py`
-- Create: `scripts/test_run_v32_s3_express_preflight.py`
-- Modify after terminal: `docs/research/publication-v3-attempt-ledger.md`
+- Modify: `crates/borsuk/src/v30_s3_layout.rs`
+- Modify: `crates/borsuk/examples/v30_s3_build.rs`
+- Modify: `crates/borsuk/examples/v30_s3_qualify.rs`
+- Modify: `scripts/run_v32_no_page_containment.py`
+- Modify: `scripts/run_v30_s3_campaign.py`
+- Test: corresponding Rust example and Python unittest modules
 
 **Interfaces:**
-- Produces: canonical preflight JSON and non-null Parquet samples for the exact selected page identities.
+- Produces: authenticated logical-to-source Arrow mapping and canonical page-free containment evidence.
 
-- [ ] TDD a controller that creates one `causality` Spot worker in a supported Frankfurt Express AZ, copies only the 16 registered 100K page objects byte-for-byte, runs warmup plus at least 10,000 timed read waves, and deletes the directory bucket objects/bucket after terminal evidence.
-- [ ] Reject source/result identity drift, cross-AZ compute, page-body expansion, RSS/PSI/swap growth, and incomplete cleanup.
-- [ ] Run the pure controller tests and static gates.
-- [ ] Execute one bounded preflight; require p99 request and bandwidth inputs whose full latency projection is at most 15 ms.
-- [ ] Record evidence and commit the preflight result. Stop here if the latency projection fails.
+- [ ] Emit `logical-sources.arrow` from construction in logical order using bounded batches; bind its filename, role, length, and SHA-256 in the strict manifest without loading it in normal serving.
+- [ ] Freeze the 1M geometry at 128 roots, 4,096 leaves, 32,768 training rows, and 512-row pages.
+- [ ] Run 32 development queries against ten exact truth IDs each through the no-page diagnostic. Require 320/320 containment, exactly 16 selected pages, at most 3,145,728 selected-page bytes, at most 65,536 scanned codes, at most 1,024 rows in any leaf, and zero page reads.
+- [ ] Use one `causality` Spot worker with the original-session monitor and immediate termination. Stop all later latency/corpus work on failure.
+- [ ] Record the claim-ineligible terminal and commit the evidence.
 
-### Task 5: Qualify 100K, then scale conditionally
+### Task 5: Measure Express, qualify 100K, then scale conditionally
 
 **Files:**
 - Modify: `scripts/run_v30_s3_campaign.py`
 - Modify: `scripts/test_run_v30_s3_campaign.py`
+- Create: `scripts/run_v32_s3_express_preflight.py`
+- Create: `scripts/test_run_v32_s3_express_preflight.py`
 - Modify after each terminal: `docs/research/publication-v3-attempt-ledger.md`
 
 **Interfaces:**
 - Consumes: V32 manifest, exact Standard/Express page identities, and the passing latency profile.
 - Produces: authenticated quality, latency, throughput, memory, and cleanup evidence.
 
+- [ ] TDD a 16-object same-AZ S3 Express microbenchmark; require a measured full-latency projection at most 15 ms before an end-to-end cell.
 - [ ] Add campaign REDs for the fixed 8/64/12,288/16 arm, tier/AZ binding, quality gates, latency gates, and immediate Spot termination.
 - [ ] Implement the minimal V32 campaign boundary and make the focused controller tests GREEN.
 - [ ] Run one 100K Express-backed end-to-end cell; require 320/320, 32/32 perfect, p99 at most 15 ms, process CPU p99 at most 64 ms, and RSS at most 3 GiB.
 - [ ] If and only if 100K passes, run the disjoint 9.99M cohort with the same frozen source and gates.
+- [ ] Before release qualification, require at least 1,000 query-blind held-out queries and 10,000 frozen truth IDs; never promote from the 32 development queries.
 - [ ] If and only if 9.99M passes, run 100M Spot construction and serving qualification, then one full repository assurance gate.
 - [ ] Commit every terminal ledger entry and freeze production defaults only after all gates pass.
-
