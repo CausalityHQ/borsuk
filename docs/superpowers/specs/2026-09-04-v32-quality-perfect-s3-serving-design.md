@@ -145,15 +145,25 @@ ladder on that cohort.
 The preflight represents the exact 100M scale-sensitive cardinalities without
 allocating an artificial 100M-row corpus: 1,024 roots, 65,536 trained parents,
 163,192 routing microleaves, and 208,334 pages are resident, while only the
-exact arm scan slice (at most 262,144 deterministic codes) and one 480-row
-authenticated Arrow body are materialized. The body is reused as immutable
-input to the 16-page decode/rerank kernel; no S3 or corpus object is read. Each
+exact arm scan slice (at most 262,144 deterministic codes) and sixteen distinct
+480-row authenticated Arrow bodies are materialized. The bodies have disjoint
+source ordinals so the production ownership check and approximately 3 MiB of
+page working set remain in the measured decode/rerank kernel; no S3 or corpus
+object is read. Each
 arm therefore executes its exact root filtering, eligible-centroid scoring,
 query-table construction, PQ scan, bounded candidate reduction, page reduction,
 Arrow validation, and exact rerank work without disguising a full-corpus scan.
+The partial code planes preserve instruction counts but not the 100M plane's
+DRAM/TLB locality. This is therefore a fail-fast screen: a failure rejects an
+arm, while a pass only permits the authenticated scale leg and is not
+transferable 100M CPU evidence.
 An initial 128-sample probe may reject early only when every measured total CPU
-sample exceeds 64 ms. Otherwise the authoritative run uses 1,024 warmups and
-10,000 raw observations. Arm 64 runs first; wider arms run only while a smaller
+sample exceeds 64 ms. Otherwise the full screen uses 1,024 warmups and
+10,000 raw observations over a fixed deterministic, digest-bound query cohort
+without query reuse. Outer query elapsed and whole-process CPU clocks are
+recorded independently; stage totals may not exceed outer elapsed, and all
+unattributed elapsed is explicit. Probe and screen statuses are distinct. Arm
+64 runs first; wider arms run only while a smaller
 arm remains within the compute gates. Receipts preserve every raw nanosecond
 sample and the stage decomposition; synthetic evidence may reject an arm but
 cannot qualify recall or release.

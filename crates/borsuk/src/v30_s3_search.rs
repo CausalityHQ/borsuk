@@ -10,7 +10,10 @@ use crate::{
     BorsukError, Result, V27Hierarchy, V27HierarchyArtifacts, V27PageIdentity,
     decode_v27_hierarchy,
     v27_s3_page::visit_v27_page_rows,
-    v30_s3_layout::{V30Layout, V30LayoutArtifacts, V32PageLocation, decode_v30_layout_artifacts},
+    v30_s3_layout::{
+        V30Layout, V30LayoutArtifacts, V32PageLocation, V32RoutingRange,
+        decode_v30_layout_artifacts,
+    },
     v30_s3_pq::{
         V30CodePlanes, V30PqArtifacts, V30PqCodebook, V30PqWidth, V30QueryTable,
         decode_v30_pq_artifacts,
@@ -28,7 +31,7 @@ const V32_COMPUTE_GATE_NS: u64 = 12_000_000;
 #[doc(hidden)]
 pub enum V32CpuPreflightMode {
     Probe,
-    Authoritative,
+    Screen,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,7 +49,9 @@ pub struct V32CpuPreflightShape {
     pub high_width_codes: usize,
     pub candidate_depth: usize,
     pub selected_pages: usize,
+    pub page_bodies: usize,
     pub page_rows: usize,
+    pub candidate_storage: usize,
     pub maximum_materialized_bytes: u64,
 }
 
@@ -59,7 +64,7 @@ pub struct V32CpuPreflightSample {
     pub pq_scan_ns: u64,
     pub candidate_page_reduce_ns: u64,
     pub decode_rerank_ns: u64,
-    pub compute_elapsed_ns: u64,
+    pub query_elapsed_ns: u64,
     pub process_cpu_ns: u64,
 }
 
@@ -68,6 +73,9 @@ pub struct V32CpuPreflightSample {
 pub struct V32CpuPreflightSamples {
     pub mode: V32CpuPreflightMode,
     pub warmups: usize,
+    pub query_count: usize,
+    pub query_seed: u64,
+    pub query_sha256: String,
     pub observations: Vec<V32CpuPreflightSample>,
 }
 
@@ -97,10 +105,10 @@ pub fn v32_cpu_preflight_shape(leaf_beam: usize) -> Result<V32CpuPreflightShape>
         u64::try_from(high_width_codes)
             .map_err(|_| invalid("V32 CPU preflight shape overflows"))?
             * 48,
-        12_288_u64
+        45_056_u64
             * u64::try_from(std::mem::size_of::<Candidate>())
                 .map_err(|_| invalid("V32 CPU preflight shape overflows"))?,
-        196_608,
+        16 * 196_608,
     ];
     let maximum_materialized_bytes = terms.into_iter().try_fold(0_u64, |total, term| {
         total
@@ -120,7 +128,9 @@ pub fn v32_cpu_preflight_shape(leaf_beam: usize) -> Result<V32CpuPreflightShape>
         high_width_codes,
         candidate_depth: 12_288,
         selected_pages: 16,
+        page_bodies: 16,
         page_rows: 480,
+        candidate_storage: 45_056,
         maximum_materialized_bytes,
     })
 }
@@ -144,13 +154,22 @@ pub fn canonical_v32_cpu_preflight_receipt(
     }
     let expected_samples = match samples.mode {
         V32CpuPreflightMode::Probe => 128,
-        V32CpuPreflightMode::Authoritative => 10_000,
+        V32CpuPreflightMode::Screen => 10_000,
     };
     let expected_warmups = match samples.mode {
         V32CpuPreflightMode::Probe => 0,
-        V32CpuPreflightMode::Authoritative => 1_024,
+        V32CpuPreflightMode::Screen => 1_024,
     };
-    if samples.warmups != expected_warmups || samples.observations.len() != expected_samples {
+    if samples.warmups != expected_warmups
+        || samples.observations.len() != expected_samples
+        || samples.query_count != expected_samples
+        || samples.query_seed != 0x243f_6a88_85a3_08d3
+        || samples.query_sha256.len() != 64
+        || !samples
+            .query_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
         return Err(invalid("V32 CPU preflight sample count differs"));
     }
     for sample in &samples.observations {
@@ -171,7 +190,7 @@ pub fn canonical_v32_cpu_preflight_receipt(
                 .checked_add(value)
                 .ok_or_else(|| invalid("V32 CPU preflight sample overflows"))
         })?;
-        if stage_total != sample.compute_elapsed_ns || sample.process_cpu_ns == 0 {
+        if stage_total > sample.query_elapsed_ns || sample.process_cpu_ns == 0 {
             return Err(invalid("V32 CPU preflight sample differs"));
         }
     }
@@ -182,11 +201,11 @@ pub fn canonical_v32_cpu_preflight_receipt(
             .map(|sample| sample.process_cpu_ns),
         expected_samples,
     )?;
-    let compute_p99_ns = v32_cpu_p99(
+    let query_elapsed_p99_ns = v32_cpu_p99(
         samples
             .observations
             .iter()
-            .map(|sample| sample.compute_elapsed_ns),
+            .map(|sample| sample.query_elapsed_ns),
         expected_samples,
     )?;
     let mut failed_gates = Vec::new();
@@ -200,8 +219,8 @@ pub fn canonical_v32_cpu_preflight_receipt(
                 failed_gates.push("total-cpu");
             }
         }
-        V32CpuPreflightMode::Authoritative => {
-            if compute_p99_ns > V32_COMPUTE_GATE_NS {
+        V32CpuPreflightMode::Screen => {
+            if query_elapsed_p99_ns > V32_COMPUTE_GATE_NS {
                 failed_gates.push("compute");
             }
             if process_cpu_p99_ns > V32_CPU_GATE_NS {
@@ -213,39 +232,55 @@ pub fn canonical_v32_cpu_preflight_receipt(
         .observations
         .iter()
         .map(|sample| {
+            let stage_total = sample.root_filter_ns
+                + sample.microleaf_score_ns
+                + sample.query_table_ns
+                + sample.pq_scan_ns
+                + sample.candidate_page_reduce_ns
+                + sample.decode_rerank_ns;
             serde_json::json!({
                 "candidate_page_reduce_ns": sample.candidate_page_reduce_ns,
-                "compute_elapsed_ns": sample.compute_elapsed_ns,
                 "decode_rerank_ns": sample.decode_rerank_ns,
                 "microleaf_score_ns": sample.microleaf_score_ns,
                 "pq_scan_ns": sample.pq_scan_ns,
+                "process_cpu_ns": sample.process_cpu_ns,
+                "query_elapsed_ns": sample.query_elapsed_ns,
                 "query_table_ns": sample.query_table_ns,
                 "root_filter_ns": sample.root_filter_ns,
-                "process_cpu_ns": sample.process_cpu_ns,
+                "unattributed_ns": sample.query_elapsed_ns - stage_total,
             })
         })
         .collect::<Vec<_>>();
     let mode = match samples.mode {
         V32CpuPreflightMode::Probe => "probe",
-        V32CpuPreflightMode::Authoritative => "authoritative",
+        V32CpuPreflightMode::Screen => "screen",
     };
-    let status = if failed_gates.is_empty() {
-        "continue"
-    } else {
-        "failed"
+    let status = match (samples.mode, failed_gates.is_empty()) {
+        (V32CpuPreflightMode::Probe, true) => "probe-continue",
+        (V32CpuPreflightMode::Probe, false) => "probe-failed",
+        (V32CpuPreflightMode::Screen, true) => "screen-continue",
+        (V32CpuPreflightMode::Screen, false) => "screen-failed",
+    };
+    let gates_enforced = match samples.mode {
+        V32CpuPreflightMode::Probe => vec!["total-cpu"],
+        V32CpuPreflightMode::Screen => vec!["compute", "total-cpu"],
     };
     let value = serde_json::json!({
         "claim_eligible": false,
-        "compute_p99_ns": compute_p99_ns,
         "failed_gates": failed_gates,
+        "gates_enforced": gates_enforced,
         "leaf_beam": shape.leaf_beam,
         "mode": mode,
+        "process_cpu_p99_ns": process_cpu_p99_ns,
+        "query_count": samples.query_count,
+        "query_elapsed_p99_ns": query_elapsed_p99_ns,
+        "query_seed": samples.query_seed,
+        "query_sha256": samples.query_sha256,
         "raw_samples": raw_samples,
         "sample_count": expected_samples,
         "scan_codes": shape.scan_codes,
         "schema": "borsuk-v32-cpu-preflight-v1",
         "status": status,
-        "process_cpu_p99_ns": process_cpu_p99_ns,
         "warmups": samples.warmups,
     });
     let mut bytes = serde_json::to_vec(&value)
@@ -558,6 +593,48 @@ fn smallest(mut values: Vec<(f64, usize)>, limit: usize) -> Vec<(f64, usize)> {
     values
 }
 
+fn eligible_v32_routing_leaf_scores(
+    query: &[f32; 96],
+    root_count: usize,
+    selected_roots: &[(f64, usize)],
+    trained_parent_roots: &[u16],
+    routing_leaves: &[V32RoutingRange],
+) -> Result<(Vec<(f64, usize)>, usize)> {
+    if root_count == 0 || selected_roots.is_empty() {
+        return Err(invalid("V32 selected-root authority differs"));
+    }
+    let mut selected = vec![false; root_count];
+    for &(_, root) in selected_roots {
+        let slot = selected
+            .get_mut(root)
+            .ok_or_else(|| invalid("V32 selected-root authority differs"))?;
+        if *slot {
+            return Err(invalid("V32 selected-root authority differs"));
+        }
+        *slot = true;
+    }
+    let mut membership_lookups = 0_usize;
+    let mut scores = Vec::new();
+    for (ordinal, leaf) in routing_leaves.iter().enumerate() {
+        let parent = usize::try_from(leaf.code_parent_leaf_ordinal)
+            .map_err(|_| invalid("V32 routing parent overflows"))?;
+        let root = usize::from(
+            *trained_parent_roots
+                .get(parent)
+                .ok_or_else(|| invalid("V32 routing parent differs"))?,
+        );
+        membership_lookups += 1;
+        let is_selected = selected
+            .get(root)
+            .copied()
+            .ok_or_else(|| invalid("V32 routing root differs"))?;
+        if is_selected {
+            scores.push((centroid_distance(query, &leaf.routing_centroid), ordinal));
+        }
+    }
+    Ok((scores, membership_lookups))
+}
+
 impl V32Router {
     pub fn from_artifacts(
         hierarchy: &V27HierarchyArtifacts,
@@ -799,19 +876,13 @@ impl V32Router {
                 .collect(),
             arm.root_beam,
         );
-        let leaves_eligible = self
-            .layout
-            .leaves()
-            .iter()
-            .enumerate()
-            .filter(|(_, leaf)| {
-                let parent = leaf.code_parent_leaf_ordinal as usize;
-                roots
-                    .iter()
-                    .any(|(_, root)| usize::from(self.hierarchy.leaf_roots[parent]) == *root)
-            })
-            .map(|(ordinal, leaf)| (centroid_distance(&query, &leaf.routing_centroid), ordinal))
-            .collect::<Vec<_>>();
+        let (leaves_eligible, _membership_lookups) = eligible_v32_routing_leaf_scores(
+            &query,
+            self.hierarchy.roots.len(),
+            &roots,
+            &self.hierarchy.leaf_roots,
+            self.layout.leaves(),
+        )?;
         if arm.leaf_beam > leaves_eligible.len() {
             return Err(invalid("V30 leaf beam exceeds selected roots"));
         }
@@ -1078,7 +1149,8 @@ mod tests {
     use super::{
         BoundedCandidates, Candidate, ExactTopK, V32CpuPreflightMode, V32CpuPreflightSample,
         V32CpuPreflightSamples, V32Index, V32Match, V32PageStore, V32Router, V32RoutingTargetStage,
-        V32SearchArm, V32SearchPhase, canonical_v32_cpu_preflight_receipt, v32_cpu_preflight_shape,
+        V32SearchArm, V32SearchPhase, canonical_v32_cpu_preflight_receipt,
+        eligible_v32_routing_leaf_scores, v32_cpu_preflight_shape,
     };
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
@@ -1833,11 +1905,33 @@ mod tests {
             assert_eq!(shape.high_width_codes, high_codes);
             assert_eq!(shape.candidate_depth, 12_288);
             assert_eq!(shape.selected_pages, 16);
+            assert_eq!(shape.page_bodies, 16);
             assert_eq!(shape.page_rows, 480);
+            assert_eq!(shape.candidate_storage, 45_056);
             assert!(shape.maximum_materialized_bytes <= 100 * 1_024 * 1_024);
         }
         assert!(v32_cpu_preflight_shape(32).is_err());
         assert!(v32_cpu_preflight_shape(512).is_err());
+    }
+
+    #[test]
+    fn v32_cpu_preflight_root_membership_is_one_bounded_lookup_per_microleaf() {
+        // Break caught: filtering every routing microleaf linearly scans the
+        // selected-root beam, multiplying 100M-scale routing work by 64.
+        let (hierarchy, _base, _high, layout, _codes, _pages) = components();
+        let query = [1.0 / 96.0_f32.sqrt(); 96];
+        let (scores, membership_lookups) = eligible_v32_routing_leaf_scores(
+            &query,
+            hierarchy.roots.len(),
+            &[(0.0, 0)],
+            &hierarchy.leaf_roots,
+            layout.leaves(),
+        )
+        .unwrap();
+        assert_eq!(membership_lookups, layout.leaves().len());
+        assert_eq!(scores.len(), 2);
+        assert_eq!(scores[0].1, 0);
+        assert_eq!(scores[1].1, 1);
     }
 
     #[test]
@@ -1852,12 +1946,16 @@ mod tests {
             pq_scan_ns: 20_000_000,
             candidate_page_reduce_ns: 5_000_000,
             decode_rerank_ns: 10_000_001,
-            compute_elapsed_ns: 65_000_001,
+            query_elapsed_ns: 66_000_000,
             process_cpu_ns: 70_000_001,
         };
         let samples = V32CpuPreflightSamples {
             mode: V32CpuPreflightMode::Probe,
             warmups: 0,
+            query_count: 128,
+            query_seed: 0x243f_6a88_85a3_08d3,
+            query_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+                .to_owned(),
             observations: vec![sample; 128],
         };
         let bytes =
@@ -1867,15 +1965,18 @@ mod tests {
         assert_eq!(value["claim_eligible"], false);
         assert_eq!(value["mode"], "probe");
         assert_eq!(value["sample_count"], 128);
-        assert_eq!(value["status"], "failed");
+        assert_eq!(value["status"], "probe-failed");
         assert_eq!(value["failed_gates"], serde_json::json!(["total-cpu"]));
-        assert_eq!(value["compute_p99_ns"], 65_000_001_u64);
+        assert_eq!(value["gates_enforced"], serde_json::json!(["total-cpu"]));
+        assert_eq!(value["query_elapsed_p99_ns"], 66_000_000_u64);
         assert_eq!(value["process_cpu_p99_ns"], 70_000_001_u64);
+        assert_eq!(value["raw_samples"][0]["unattributed_ns"], 999_999);
         assert_eq!(value["raw_samples"][0]["pq_scan_ns"], 20_000_000);
+        assert_eq!(value["query_count"], 128);
         assert_eq!(bytes.last(), Some(&b'\n'));
 
         let mut drifted = samples;
-        drifted.observations[0].compute_elapsed_ns -= 1;
+        drifted.observations[0].query_elapsed_ns = 65_000_000;
         assert!(
             canonical_v32_cpu_preflight_receipt(&v32_cpu_preflight_shape(64).unwrap(), &drifted,)
                 .is_err()

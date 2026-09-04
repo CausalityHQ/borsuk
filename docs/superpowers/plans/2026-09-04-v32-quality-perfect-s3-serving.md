@@ -236,21 +236,25 @@ logical-source/page evidence are citable; no intermediate schema is retained.
 - Produces: a doc-hidden `run_v32_cpu_preflight` boundary used only by the thin
   example. Its exact shape is 1,024 roots, 65,536 trained parents, 163,192
   routing microleaves, 208,334 page identities, one deterministic scan slice,
-  and one authenticated 480-row Arrow body; it has no object-store or corpus
-  input.
+  and sixteen authenticated 480-row Arrow bodies with disjoint source ordinals;
+  it has no object-store or corpus input.
 
 - [ ] Add scalar differential REDs for root/microleaf distance, both PQ widths,
   f16 ties, subnormals, reversed blocks, and per-page exact top-ten merge.
 - [ ] Add REDs for exact 100M cardinalities, scan slices 65,536/131,072/262,144,
   five-percent high-width codes, distinct-parent table construction, bounded
-  12,288 candidates, 16-page reduction, 480-row Arrow validation/rerank, and a
-  canonical claim-ineligible receipt containing raw total/stage CPU samples.
+  12,288 candidates with the real 45,056-entry prune buffer, 16-page reduction,
+  sixteen disjoint 480-row Arrow bodies, and a canonical claim-ineligible
+  receipt containing raw outer-elapsed/process-CPU/stage samples, explicit
+  unattributed time, and a deterministic query-cohort digest.
 - [ ] Implement the preflight using the production root filter, centroid/PQ
   scoring, bounded candidate reducer, page reducer, Arrow validator, and exact
   top-ten merge. Materialize no 100M-row code plane: allocate only the exact
-  scan slice and reuse one immutable authenticated page body across the 16
-  decode/rerank inputs. A reduced-shape unit fixture must prove identical work
-  accounting without timing assertions.
+  scan slice and sixteen immutable authenticated page bodies across the 16
+  decode/rerank inputs. Treat this cache-local slice as rejection-only; only the
+  later authenticated scale leg supplies transferable CPU evidence. A
+  reduced-shape unit fixture must prove identical work accounting without
+  timing assertions.
 - [ ] Cache one query table per distinct `code_parent_leaf_ordinal`, scan
   contiguous code blocks without per-block allocation, and use the repository's
   runtime-detected fused SIMD backend with a scalar oracle.
