@@ -62,6 +62,23 @@ class V30ArmObservation:
 
 
 @dataclass(frozen=True)
+class V30ServingEvidence:
+    """Bounded CPU and page-read work from one V30 query cohort."""
+
+    cpu_p99_ms: float
+    get_count: int
+    encoded_bytes: int
+
+
+@dataclass(frozen=True)
+class V30S3LatencyProfile:
+    """Injected same-region cold-request tail and concurrent throughput."""
+
+    request_p99_ms: float
+    aggregate_bytes_per_second: int
+
+
+@dataclass(frozen=True)
 class Pq8Model:
     """One deterministic fixed-partition eight-bit residual quantizer."""
 
@@ -1005,6 +1022,42 @@ def finalize_reproduction_result(
 def _nearest_rank(values: list[int], numerator: int, denominator: int) -> int:
     index = max(0, (len(values) * numerator + denominator - 1) // denominator - 1)
     return sorted(values)[index]
+
+
+def project_v30_s3_latency(
+    evidence: V30ServingEvidence,
+    profile: V30S3LatencyProfile,
+) -> dict[str, object]:
+    """Project one cold concurrent page wave without sleeping or hiding transfer."""
+
+    if (
+        type(evidence.cpu_p99_ms) not in {int, float}
+        or not math.isfinite(float(evidence.cpu_p99_ms))
+        or evidence.cpu_p99_ms < 0
+        or type(evidence.get_count) is not int
+        or not 1 <= evidence.get_count <= PAGE_COUNT
+        or type(evidence.encoded_bytes) is not int
+        or not 0 < evidence.encoded_bytes <= MAX_ENCODED_BYTES
+        or type(profile.request_p99_ms) not in {int, float}
+        or not math.isfinite(float(profile.request_p99_ms))
+        or profile.request_p99_ms < 0
+        or type(profile.aggregate_bytes_per_second) is not int
+        or profile.aggregate_bytes_per_second <= 0
+    ):
+        raise ValueError("V30 S3 latency projection authority differs")
+    transfer_ms = evidence.encoded_bytes / profile.aggregate_bytes_per_second * 1_000.0
+    return {
+        "cpu_p99_ms": float(evidence.cpu_p99_ms),
+        "encoded_bytes": evidence.encoded_bytes,
+        "get_count": evidence.get_count,
+        "model": "cold-concurrent-wave-plus-transfer-and-cpu",
+        "projected_p99_ms": float(evidence.cpu_p99_ms)
+        + float(profile.request_p99_ms)
+        + transfer_ms,
+        "request_p99_ms": float(profile.request_p99_ms),
+        "request_waves": 1,
+        "transfer_ms": transfer_ms,
+    }
 
 
 def simulate_concurrent_get_latency_ns(waves: tuple[tuple[int, ...], ...]) -> dict[str, object]:

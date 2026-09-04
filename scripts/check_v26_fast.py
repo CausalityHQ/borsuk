@@ -32,6 +32,39 @@ def python_contract_command(python_executable: str) -> list[str]:
     ]
 
 
+def v30_python_contract_command() -> list[str]:
+    """Return the pinned offline V30 quality and S3 projection contracts."""
+
+    return [
+        "uv",
+        "run",
+        "--offline",
+        "--python",
+        "3.12",
+        "--with-requirements",
+        "scripts/requirements-format-bench.txt",
+        "python",
+        "-m",
+        "unittest",
+        "scripts.test_run_v30_variable_rate_reproduction",
+    ]
+
+
+def v30_rust_contract_command() -> list[str]:
+    """Return the focused V30 construction, routing, and exact-rerank gate."""
+
+    return [
+        "cargo",
+        "test",
+        "-p",
+        "borsuk",
+        "--lib",
+        "v30_s3_",
+        "--",
+        "--nocapture",
+    ]
+
+
 def smoke_commands(python_executable: str) -> list[list[str]]:
     """Return the seconds-long contract gate used during implementation."""
     return [
@@ -46,6 +79,8 @@ def smoke_commands(python_executable: str) -> list[list[str]]:
             "--",
             "--nocapture",
         ],
+        v30_python_contract_command(),
+        v30_rust_contract_command(),
         ["cargo", "fmt", "--all", "--", "--check"],
         ["git", "diff", "--check"],
     ]
@@ -86,6 +121,8 @@ def affected_commands(python_executable: str) -> list[list[str]]:
             "--",
             "--nocapture",
         ],
+        v30_python_contract_command(),
+        v30_rust_contract_command(),
         ["cargo", "fmt", "--all", "--", "--check"],
         ["git", "diff", "--check"],
     ]

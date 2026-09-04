@@ -15,6 +15,8 @@ from scripts.run_v30_variable_rate_reproduction import (
     ArtifactAuthority,
     V30ArmObservation,
     V30ConstructionInputs,
+    V30S3LatencyProfile,
+    V30ServingEvidence,
     build_base_page_layout,
     build_reproduction_result,
     encode_pq8,
@@ -26,6 +28,7 @@ from scripts.run_v30_variable_rate_reproduction import (
     load_frozen_reproduction,
     parse_args,
     pq8_replacement_geometry,
+    project_v30_s3_latency,
     reduce_page_candidates,
     select_high_fidelity,
     simulate_concurrent_get_latency_ns,
@@ -279,6 +282,26 @@ class V30VariableRateReproductionTests(unittest.TestCase):
         self.assertEqual(projection["maximum_ns"], max(max(wave) for wave in waves))
         self.assertLess(projection["p99_ns"], sum(waves[-1]))
         self.assertEqual(projection["model"], "concurrent-max-no-sleep")
+
+    def test_v30_fast_s3_projection_combines_cpu_request_tail_and_page_bytes(self) -> None:
+        # Break caught: the fast gate ignores two megabytes of page transfer, assumes
+        # a warm cache, or models ten concurrent GETs as ten serial round trips.
+        projection = project_v30_s3_latency(
+            V30ServingEvidence(
+                cpu_p99_ms=15.0,
+                get_count=10,
+                encoded_bytes=1_986_668,
+            ),
+            V30S3LatencyProfile(
+                request_p99_ms=50.0,
+                aggregate_bytes_per_second=100_000_000,
+            ),
+        )
+        self.assertEqual(projection["request_waves"], 1)
+        self.assertEqual(projection["get_count"], 10)
+        self.assertAlmostEqual(projection["transfer_ms"], 19.86668)
+        self.assertAlmostEqual(projection["projected_p99_ms"], 84.86668)
+        self.assertEqual(projection["model"], "cold-concurrent-wave-plus-transfer-and-cpu")
 
     def test_v30_reproduction_pq8_training_and_adc_are_deterministic(self) -> None:
         # Break caught: the bounded reproduction uses a different codebook seed, silently
