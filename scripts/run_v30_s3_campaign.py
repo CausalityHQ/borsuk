@@ -299,6 +299,8 @@ def _construction_script(plan: V30ConstructionPlan) -> str:
             "--execute",
             "--corpus-manifest-s3",
             plan.corpus_manifest_uri,
+            "--s3-region",
+            "eu-central-1",
             "--corpus-manifest-sha256",
             plan.corpus_manifest_sha256,
             "--corpus-manifest-bytes",

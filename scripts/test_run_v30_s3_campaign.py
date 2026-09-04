@@ -154,6 +154,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
             self.assertIn("v30_s3_build", script)
             self.assertIn("s3://authority/deep-10m/corpus.json", script)
+            self.assertIn("--s3-region eu-central-1", script)
             self.assertIn("--training-rows 262144", script)
             self.assertNotIn("test.parquet", script)
             self.assertNotIn("neighbors.parquet", script)

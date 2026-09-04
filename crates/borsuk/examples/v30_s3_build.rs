@@ -26,6 +26,7 @@ use url::Url;
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
     corpus_manifest_s3: String,
+    s3_region: String,
     corpus_manifest_sha256: String,
     corpus_manifest_bytes: u64,
     source_commit: String,
@@ -86,6 +87,7 @@ fn parse_args(values: Vec<String>) -> Result<Args, String> {
     }
     let args = Args {
         corpus_manifest_s3: take(&mut map, "corpus-manifest-s3")?,
+        s3_region: take(&mut map, "s3-region")?,
         corpus_manifest_sha256: take(&mut map, "corpus-manifest-sha256")?,
         corpus_manifest_bytes: number(&mut map, "corpus-manifest-bytes")?,
         source_commit: take(&mut map, "source-commit")?,
@@ -99,6 +101,7 @@ fn parse_args(values: Vec<String>) -> Result<Args, String> {
     };
     if !map.is_empty()
         || !args.corpus_manifest_s3.starts_with("s3://")
+        || args.s3_region != "eu-central-1"
         || !args.output_s3_prefix.starts_with("s3://")
         || !args.output_s3_prefix.ends_with('/')
         || args.corpus_manifest_sha256.len() != 64
@@ -667,7 +670,8 @@ fn main() {
         .and_then(|args| {
             let url = Url::parse(&args.corpus_manifest_s3)
                 .map_err(|_| invalid("V30 build corpus manifest URI differs"))?;
-            let (store, _) = object_store::parse_url_opts(&url, Vec::<(String, String)>::new())?;
+            let (store, _) =
+                object_store::parse_url_opts(&url, [("aws_region", args.s3_region.as_str())])?;
             execute_with_store(args, Arc::from(store))
         });
     match result {
@@ -705,6 +709,8 @@ mod tests {
             "--execute",
             "--corpus-manifest-s3",
             "s3://bucket/deep-10m/corpus.json",
+            "--s3-region",
+            "eu-central-1",
             "--corpus-manifest-sha256",
             &digest,
             "--corpus-manifest-bytes",
@@ -735,6 +741,7 @@ mod tests {
     fn v30_s3_build_requires_one_explicit_query_blind_s3_construction() {
         let parsed = parse_args(args()).unwrap();
         assert_eq!(parsed.expected_rows, 9_990_000);
+        assert_eq!(parsed.s3_region, "eu-central-1");
         assert_eq!(parsed.training_rows, 262_144);
         assert_eq!(parsed.page_rows, 512);
         assert_eq!(
@@ -794,6 +801,7 @@ mod tests {
         let scratch = directory.path().join("scratch");
         let args = Args {
             corpus_manifest_s3: "s3://bucket/corpus.json".to_owned(),
+            s3_region: "eu-central-1".to_owned(),
             corpus_manifest_sha256: format!("{:x}", Sha256::digest(&manifest)),
             corpus_manifest_bytes: manifest.len() as u64,
             source_commit: "b701eada33a5d6782f9ebb0adaac5fd7573da40f".to_owned(),
