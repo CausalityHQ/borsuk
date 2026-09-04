@@ -1,5 +1,7 @@
 # V31 Uncertainty-Cover PQ Routing Design
 
+> **Status:** Superseded before production implementation by the residual-correction falsifier. Hard reconstruction intervals overlap too broadly at 24-byte PQ8 and are retained only as diagnostic observability, not as a page-admission mechanism.
+
 ## Decision
 
 V31 replaces the rejected single-page-centroid production router with a

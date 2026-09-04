@@ -1,5 +1,7 @@
 # V31 Uncertainty-Cover PQ Routing Implementation Plan
 
+> **Status:** Superseded before execution by `2026-09-04-v31-residual-correction-falsifier.md`. Do not implement this 10+6 lower-bound page allocator.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Recover exact 320/320 recall on the fast 100K Deep Image gate while retaining bounded resident metadata and at most sixteen small S3 pages.
