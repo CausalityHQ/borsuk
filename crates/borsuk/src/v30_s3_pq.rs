@@ -473,6 +473,7 @@ impl V30Fidelity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct V30CodePlanes {
+    logical_rows: usize,
     fidelity: V30Fidelity,
     base: Vec<u8>,
     high: Vec<u8>,
@@ -485,13 +486,27 @@ impl V30CodePlanes {
         base: Vec<u8>,
         high: Vec<u8>,
     ) -> Result<Self> {
-        let fidelity = V30Fidelity::from_high_words(logical_rows, high_bits)?;
-        if base.len() != (logical_rows - fidelity.high_count()) * V30PqWidth::Base24.bytes()
+        Self::from_packed_window(logical_rows, logical_rows, high_bits, base, high)
+    }
+
+    pub(crate) fn from_packed_window(
+        logical_rows: usize,
+        materialized_rows: usize,
+        high_bits: Vec<u32>,
+        base: Vec<u8>,
+        high: Vec<u8>,
+    ) -> Result<Self> {
+        if logical_rows < materialized_rows {
+            return Err(invalid("V30 packed code plane logical cardinality differs"));
+        }
+        let fidelity = V30Fidelity::from_high_words(materialized_rows, high_bits)?;
+        if base.len() != (materialized_rows - fidelity.high_count()) * V30PqWidth::Base24.bytes()
             || high.len() != fidelity.high_count() * V30PqWidth::High48.bytes()
         {
             return Err(invalid("V30 packed code plane cardinality differs"));
         }
         Ok(Self {
+            logical_rows,
             fidelity,
             base,
             high,
@@ -499,6 +514,10 @@ impl V30CodePlanes {
     }
 
     pub(crate) fn logical_rows(&self) -> usize {
+        self.logical_rows
+    }
+
+    pub(crate) fn materialized_rows(&self) -> usize {
         self.fidelity.logical_rows
     }
 
@@ -575,6 +594,7 @@ pub(crate) fn encode_v30_planes(
         }
     }
     Ok(V30CodePlanes {
+        logical_rows: fidelity.logical_rows,
         fidelity,
         base,
         high,
@@ -955,6 +975,7 @@ pub(crate) fn encode_v30_pq_artifacts(
     if base_codebook.width != V30PqWidth::Base24
         || high_codebook.width != V30PqWidth::High48
         || planes.logical_rows() == 0
+        || planes.materialized_rows() != planes.logical_rows()
         || planes.high_rows() * 20 != planes.logical_rows()
     {
         return Err(invalid("V30 PQ8 artifact authority differs"));
@@ -1056,6 +1077,7 @@ pub fn decode_v30_pq_artifacts(artifacts: &V30PqArtifacts) -> Result<V30DecodedP
         base_codebook,
         high_codebook,
         planes: V30CodePlanes {
+            logical_rows,
             fidelity,
             base,
             high,
@@ -1068,9 +1090,9 @@ mod tests {
     use arrow_array::Array as _;
 
     use super::{
-        V30Fidelity, V30PqCodebook, V30PqWidth, V30QueryTable, decode_v30_pq_artifacts,
-        encode_v30_code, encode_v30_planes, encode_v30_pq_artifacts, fit_v30_codebook,
-        project_v30_resident_bytes, score_v30_codes, score_v30_transposed_block,
+        V30CodePlanes, V30Fidelity, V30PqCodebook, V30PqWidth, V30QueryTable,
+        decode_v30_pq_artifacts, encode_v30_code, encode_v30_planes, encode_v30_pq_artifacts,
+        fit_v30_codebook, project_v30_resident_bytes, score_v30_codes, score_v30_transposed_block,
     };
 
     fn codebook(width: V30PqWidth) -> V30PqCodebook {
@@ -1155,6 +1177,46 @@ mod tests {
         assert_eq!(planes.encoded_code_bytes(), 19 * 24 + 48);
         assert_eq!(planes.base_packed().len(), 19 * 24);
         assert_eq!(planes.high_packed().len(), 48);
+    }
+
+    #[test]
+    fn v32_cpu_preflight_code_window_declares_100m_but_cannot_escape_or_serialize() {
+        let mut high_bits = vec![0_u32; 4];
+        high_bits[0] = 0b11;
+        let base = vec![0_u8; 38 * V30PqWidth::Base24.bytes()];
+        let high = vec![0_u8; 2 * V30PqWidth::High48.bytes()];
+        let window = V30CodePlanes::from_packed_window(
+            100_000_000,
+            40,
+            high_bits.clone(),
+            base.clone(),
+            high.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(window.logical_rows(), 100_000_000);
+        assert_eq!(window.materialized_rows(), 40);
+        assert!(window.code(39).is_ok());
+        assert!(window.code(40).is_err());
+        assert!(
+            encode_v30_pq_artifacts(
+                &codebook(V30PqWidth::Base24),
+                &codebook(V30PqWidth::High48),
+                &window,
+            )
+            .is_err()
+        );
+
+        let full = V30CodePlanes::from_packed(40, high_bits, base, high).unwrap();
+        assert_eq!(full.materialized_rows(), 40);
+        assert!(
+            encode_v30_pq_artifacts(
+                &codebook(V30PqWidth::Base24),
+                &codebook(V30PqWidth::High48),
+                &full,
+            )
+            .is_ok()
+        );
     }
 
     #[test]

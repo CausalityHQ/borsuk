@@ -187,6 +187,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             source_rows=1_000_000,
             query_start=0,
             query_count=32,
+            root_beam=8,
             leaf_beam=64,
         )
 
@@ -326,6 +327,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("value['serving']['page_locations']", script)
             self.assertIn("--source-rows 1000000", script)
             self.assertIn("--query-count 32", script)
+            self.assertIn("--root-beam 8", script)
             self.assertIn("--leaf-beam 64", script)
             self.assertIn("rss_limit_bytes=3221225472", script)
             self.assertIn("wall_seconds=3600", script)
@@ -336,6 +338,10 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertNotIn("aws s3 cp --recursive", script)
             self.assertNotIn("pages/", script)
             self.assertIn("kill -TERM -- \"-$child\"", script)
+        wider_roots = build_v32_containment_spot_specs(
+            replace(self.containment(), root_beam=16), self.targets()
+        )
+        self.assertIn("--root-beam 16", wider_roots[0]["UserData"])
 
     def test_v32_rank_envelope_runs_the_frozen_100k_geometry_before_1m(self) -> None:
         construction = replace(

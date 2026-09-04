@@ -38,6 +38,7 @@ class V32ContainmentPlan:
     source_rows: int
     query_start: int
     query_count: int
+    root_beam: int
     leaf_beam: int
 
 
@@ -119,7 +120,9 @@ def _read_scale_manifest(plan: V32ContainmentPlan) -> tuple[int, int, int, int]:
         or scan_budget is None
     ):
         raise ValueError("V32 containment scale geometry differs")
-    maximum_leaves_eligible = 8 * layout["maximum_routing_leaves_per_root"]
+    if plan.root_beam not in {8, 16, 32}:
+        raise ValueError("V32 containment root beam differs")
+    maximum_leaves_eligible = plan.root_beam * layout["maximum_routing_leaves_per_root"]
     return maximum_routing_leaf_rows, maximum_leaves_eligible, plan.leaf_beam, scan_budget
 
 
@@ -136,6 +139,7 @@ def _read_truth(
         or type(plan.query_start) is not int
         or plan.query_start < 0
         or plan.query_count != QUERY_COUNT
+        or plan.root_beam not in {8, 16, 32}
         or type(truth_bytes) is not bytes
         or len(truth_bytes) != plan.truth.encoded_bytes
         or hashlib.sha256(truth_bytes).hexdigest() != plan.truth.sha256
@@ -232,7 +236,7 @@ def _commands(
         "--query-count",
         "1",
         "--root-beam",
-        "8",
+        str(plan.root_beam),
         "--leaf-beam",
         str(leaf_beam),
         "--candidate-depth",
@@ -347,7 +351,10 @@ def _diagnostics(
                 rank is not None and (type(rank) is not int or rank < 0)
                 for rank in optional_ranks
             )
-            or (item["stage"] == "selected-page" and item["candidate_rank"] is None)
+            or (
+                item["stage"] == "selected-page"
+                and not item["reciprocal_rank_selected"]
+            )
         ):
             raise ValueError("V32 containment diagnostic value differs")
     if {item["logical"] for item in diagnostics} != set(truth):
@@ -476,10 +483,12 @@ def run_v32_no_page_containment(
         "maximum_selected_page_bytes": maximum_selected_page_bytes,
         "minimum_containment_ppm": minimum,
         "logical_sources_sha256": plan.logical_sources.sha256,
+        "leaf_beam": leaf_beam,
         "page_body_reads": 0,
         "perfect_queries": perfect,
         "query_count": QUERY_COUNT,
         "query_sha256": plan.query.sha256,
+        "root_beam": plan.root_beam,
         "samples": samples,
         "schema_version": 1,
         "selected_page_hits": total_hits,
@@ -535,6 +544,7 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--source-rows", type=int, required=True)
     parser.add_argument("--query-start", type=int, required=True)
     parser.add_argument("--query-count", type=int, required=True)
+    parser.add_argument("--root-beam", type=int, required=True)
     parser.add_argument("--leaf-beam", type=int, required=True)
     args = parser.parse_args(arguments)
     plan = V32ContainmentPlan(
@@ -557,6 +567,7 @@ def main(arguments: list[str] | None = None) -> int:
         source_rows=args.source_rows,
         query_start=args.query_start,
         query_count=args.query_count,
+        root_beam=args.root_beam,
         leaf_beam=args.leaf_beam,
     )
     truth = args.truth_parquet.read_bytes()

@@ -165,7 +165,6 @@ struct Manifest {
     page_key_suffix: String,
     page_locations: (String, V30LayoutArtifactIdentity),
     page_prefixes: V32PagePrefixes,
-    routing_root_beam: usize,
     routing_arms: Vec<(usize, u64)>,
     routing_candidate_depth: usize,
     routing_page_count: usize,
@@ -386,7 +385,6 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
         page_key_suffix: disk.page_key_suffix,
         page_locations,
         page_prefixes,
-        routing_root_beam: disk.routing.root_beam,
         routing_arms: disk
             .routing
             .arms
@@ -833,8 +831,7 @@ fn run_batch<S: V32PageStore>(
 }
 
 fn manifest_arm(args: &Args, manifest: &Manifest) -> borsuk::Result<V32SearchArm> {
-    if args.root_beam != manifest.routing_root_beam
-        || args.candidate_depth != manifest.routing_candidate_depth
+    if args.candidate_depth != manifest.routing_candidate_depth
         || args.page_count != manifest.routing_page_count
     {
         return Err(invalid("V30 qualifier routing manifest differs"));
@@ -1118,7 +1115,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
             Some(_) => query_count != 1,
             None => query_count != 32,
         }
-        || root_beam != 8
+        || !matches!(root_beam, 8 | 16 | 32)
         || !matches!(leaf_beam, 64 | 128 | 256)
         || candidate_depth != 12_288
         || page_count != 16
@@ -1494,6 +1491,35 @@ mod tests {
     }
 
     #[test]
+    fn v32_s3_qualify_root_beam_ladder_is_runtime_not_construction_authority() {
+        // Break caught: a page-free containment rerun cannot widen only the
+        // cheap root frontier because the build manifest freezes root beam 8.
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("manifest.json");
+        let bytes = manifest_bytes();
+        fs::write(&path, &bytes).unwrap();
+        let manifest = read_manifest(&ArtifactArg {
+            path,
+            sha256: format!("{:x}", Sha256::digest(&bytes)),
+            encoded_bytes: bytes.len() as u64,
+        })
+        .unwrap();
+        for root_beam in [8, 16, 32] {
+            let mut values = arguments();
+            let position = values
+                .iter()
+                .position(|value| value == "--root-beam")
+                .unwrap();
+            values[position + 1] = root_beam.to_string();
+            let parsed = parse_args(values).unwrap();
+            assert_eq!(
+                manifest_arm(&parsed, &manifest).unwrap().root_beam,
+                root_beam
+            );
+        }
+    }
+
+    #[test]
     fn v32_s3_qualify_manifest_ladder_pairs_are_exact_for_diagnostics_and_serving() {
         // Break caught: diagnostic containment can run an arm outside the
         // authenticated ladder, or construction preselects only one rung.
@@ -1713,7 +1739,6 @@ mod tests {
             "s3://bucket/v30/build-a0001/pages/"
         );
         assert_eq!(manifest.page_prefixes.express(), None);
-        assert_eq!(manifest.routing_root_beam, 8);
         assert_eq!(
             manifest.routing_arms,
             [(64, 65_536), (128, 131_072), (256, 262_144)]

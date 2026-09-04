@@ -136,6 +136,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
                 source_rows=source_rows,
                 query_start=64,
                 query_count=32,
+                root_beam=8,
                 leaf_beam=64,
             ),
             truth,
@@ -229,9 +230,16 @@ class V32NoPageContainmentTests(unittest.TestCase):
             commands = build_v32_containment_commands(plan, truth)
             with self.assertRaisesRegex(ValueError, "scale geometry"):
                 build_v32_containment_commands(replace(plan, leaf_beam=192), truth)
+            wider_roots = build_v32_containment_commands(
+                replace(plan, root_beam=16), truth
+            )
         self.assertEqual(
             {command[command.index("--leaf-beam") + 1] for command in commands},
             {"128"},
+        )
+        self.assertEqual(
+            {command[command.index("--root-beam") + 1] for command in wider_roots},
+            {"16"},
         )
 
     def test_v32_containment_clamps_leaf_beam_to_the_selected_root_frontier(self) -> None:
@@ -260,6 +268,8 @@ class V32NoPageContainmentTests(unittest.TestCase):
         self.assertEqual(value["maximum_leaves_eligible"], 73)
         self.assertEqual(value["maximum_leaves_scanned"], 73)
         self.assertEqual(value["selected_page_hits"], 320)
+        self.assertEqual(value["root_beam"], 8)
+        self.assertEqual(value["leaf_beam"], 256)
 
     def test_v32_100k_rank_evidence_caps_candidates_at_scanned_population(self) -> None:
         # Break caught: the 100K rank-envelope leg is rejected because its root
@@ -316,6 +326,40 @@ class V32NoPageContainmentTests(unittest.TestCase):
         self.assertEqual(value["status"], "failed")
         self.assertEqual(value["failed_gates"], ["perfect-containment"])
         self.assertFalse(value["claim_eligible"])
+
+    def test_v32_containment_counts_a_selected_page_after_candidate_pruning(self) -> None:
+        # Break caught: the reducer reports a false miss when another retained
+        # row selects the physical page containing a pruned truth row.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, truth = self.fixture(Path(temporary))
+            results = {
+                query: self.diagnostic(query, miss=query == 75)
+                for query in range(64, 96)
+            }
+            recovered = json.loads(results[75])
+            recovered["diagnostics"][-1]["stage"] = "selected-page"
+            recovered["diagnostics"][-1]["first_unique_page_rank"] = 9
+            recovered["diagnostics"][-1]["reciprocal_rank_selected"] = True
+            results[75] = (
+                json.dumps(
+                    recovered,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+                + b"\n"
+            )
+            payload = run_v32_no_page_containment(
+                plan,
+                truth,
+                invoke=lambda command: results[
+                    int(command[command.index("--query-start") + 1])
+                ],
+            )
+        value = json.loads(payload)
+        self.assertEqual(value["selected_page_hits"], 320)
+        self.assertEqual(value["failed_gates"], [])
+        self.assertEqual(value["status"], "passed")
 
     def test_v32_containment_rejects_diagnostic_or_identity_drift(self) -> None:
         # Break caught: malformed/noncanonical router evidence or a different

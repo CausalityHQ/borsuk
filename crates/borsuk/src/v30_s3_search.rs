@@ -7,13 +7,14 @@ use std::{
 use bytes::Bytes;
 use half::f16;
 use rayon::prelude::*;
+use sha2::{Digest, Sha256};
 
 use crate::{
-    BorsukError, Result, V27Hierarchy, V27HierarchyArtifacts, V27PageIdentity,
+    BorsukError, Result, V27Hierarchy, V27HierarchyArtifacts, V27PageIdentity, V27PageRow,
     decode_v27_hierarchy,
     v27_s3_page::visit_v27_page_rows,
     v30_s3_layout::{
-        V30Layout, V30LayoutArtifacts, V32PageLocation, V32RoutingRange,
+        V30Layout, V30LayoutArtifacts, V30PageRange, V32PageLocation, V32RoutingRange,
         decode_v30_layout_artifacts,
     },
     v30_s3_pq::{
@@ -65,6 +66,25 @@ pub struct V32CpuPreflightSample {
     pub exact_rerank_ns: u64,
     pub query_elapsed_ns: u64,
     pub process_cpu_ns: u64,
+    pub work: V32CpuPreflightWork,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V32CpuPreflightWork {
+    pub roots_scored: usize,
+    pub leaves_eligible: usize,
+    pub leaves_scanned: usize,
+    pub query_table_pairs_built: usize,
+    pub peak_query_table_pairs_live: usize,
+    pub codes_scanned: u64,
+    pub candidates_retained: usize,
+    pub pages_considered: usize,
+    pub selected_pages: usize,
+    pub get_count: usize,
+    pub encoded_bytes: u64,
+    pub decoded_rows: usize,
+    pub unique_rows: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,6 +154,232 @@ pub fn v32_cpu_preflight_shape(leaf_beam: usize) -> Result<V32CpuPreflightShape>
     })
 }
 
+struct V32CpuPreflightStore {
+    bodies: BTreeMap<u32, Bytes>,
+}
+
+impl V32PageStore for V32CpuPreflightStore {
+    fn read_wave(&self, pages: &[V27PageIdentity]) -> Result<Vec<Bytes>> {
+        pages
+            .iter()
+            .map(|page| {
+                self.bodies
+                    .get(&page.ordinal)
+                    .cloned()
+                    .ok_or_else(|| invalid("V32 CPU preflight page differs"))
+            })
+            .collect()
+    }
+}
+
+fn v32_cpu_preflight_index(shape: &V32CpuPreflightShape) -> Result<V32Index<V32CpuPreflightStore>> {
+    if *shape != v32_cpu_preflight_shape(shape.leaf_beam)? {
+        return Err(invalid("V32 CPU preflight shape differs"));
+    }
+    let unit = f16::from_f32(1.0 / 96.0_f32.sqrt());
+    let leaf_roots = (0..shape.trained_parents)
+        .map(|parent| {
+            u16::try_from(parent % shape.roots)
+                .map_err(|_| invalid("V32 CPU preflight root ordinal overflows"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let hierarchy = V27Hierarchy {
+        roots: vec![[unit; 96]; shape.roots],
+        leaves: vec![[unit; 96]; shape.trained_parents],
+        leaf_roots,
+    };
+
+    let mut bodies = BTreeMap::new();
+    let mut pages = Vec::with_capacity(shape.page_identities);
+    let mut logical_start = 0_u64;
+    for ordinal in 0..shape.page_identities {
+        let row_count = (shape.source_rows - logical_start).min(shape.page_rows as u64) as u16;
+        let identity = if ordinal < shape.selected_pages {
+            let rows = (logical_start..logical_start + u64::from(row_count))
+                .map(|source_ordinal| V27PageRow {
+                    source_ordinal,
+                    vector: [0.25 + source_ordinal as f32 / 100_000.0; 96],
+                })
+                .collect::<Vec<_>>();
+            let (identity, bytes) = crate::encode_v27_page(
+                u32::try_from(ordinal)
+                    .map_err(|_| invalid("V32 CPU preflight page ordinal overflows"))?,
+                row_count,
+                0,
+                &rows,
+            )?;
+            bodies.insert(identity.ordinal, Bytes::from(bytes));
+            identity
+        } else {
+            V27PageIdentity {
+                ordinal: u32::try_from(ordinal)
+                    .map_err(|_| invalid("V32 CPU preflight page ordinal overflows"))?,
+                sha256: format!("{:064x}", ordinal + 1),
+                encoded_bytes: 1,
+                primary_rows: row_count,
+                replica_rows: 0,
+            }
+        };
+        pages.push(V30PageRange::from_legacy(
+            logical_start,
+            row_count,
+            &identity,
+        )?);
+        logical_start += u64::from(row_count);
+    }
+    if logical_start != shape.source_rows {
+        return Err(invalid("V32 CPU preflight page coverage differs"));
+    }
+
+    let fixed_rows = 256_u64 * 1_024;
+    let tail_leaves = shape
+        .routing_microleaves
+        .checked_sub(256)
+        .ok_or_else(|| invalid("V32 CPU preflight leaf shape differs"))?;
+    let tail_rows = shape
+        .source_rows
+        .checked_sub(fixed_rows)
+        .ok_or_else(|| invalid("V32 CPU preflight leaf shape differs"))?;
+    let tail_base = tail_rows / tail_leaves as u64;
+    let tail_remainder = tail_rows % tail_leaves as u64;
+    let eligible_leaves = shape
+        .routing_microleaves
+        .checked_mul(shape.root_beam)
+        .ok_or_else(|| invalid("V32 CPU preflight leaf shape overflows"))?
+        .div_ceil(shape.roots);
+    let eligible_parents = shape
+        .trained_parents
+        .checked_mul(shape.root_beam)
+        .ok_or_else(|| invalid("V32 CPU preflight parent shape overflows"))?
+        / shape.roots;
+    let ineligible_parents = shape
+        .trained_parents
+        .checked_sub(eligible_parents)
+        .ok_or_else(|| invalid("V32 CPU preflight parent shape differs"))?;
+    let ineligible_roots = shape
+        .roots
+        .checked_sub(shape.root_beam)
+        .ok_or_else(|| invalid("V32 CPU preflight root shape differs"))?;
+    let mut leaves = Vec::with_capacity(shape.routing_microleaves);
+    let mut logical_start = 0_u64;
+    for ordinal in 0..shape.routing_microleaves {
+        let row_count = if ordinal < 256 {
+            1_024
+        } else {
+            tail_base + u64::from((ordinal - 256) < tail_remainder as usize)
+        };
+        let logical_end = logical_start
+            .checked_add(row_count)
+            .ok_or_else(|| invalid("V32 CPU preflight leaf coverage overflows"))?;
+        let page_start = logical_start / shape.page_rows as u64;
+        let page_end = logical_end.div_ceil(shape.page_rows as u64);
+        let code_parent = if ordinal < eligible_leaves {
+            let slot = ordinal.saturating_mul(eligible_parents) / eligible_leaves;
+            (slot / shape.root_beam) * shape.roots + slot % shape.root_beam
+        } else {
+            let slot = (ordinal - eligible_leaves) % ineligible_parents;
+            (slot / ineligible_roots) * shape.roots + shape.root_beam + slot % ineligible_roots
+        };
+        leaves.push(V32RoutingRange {
+            leaf_ordinal: u32::try_from(ordinal)
+                .map_err(|_| invalid("V32 CPU preflight leaf ordinal overflows"))?,
+            code_parent_leaf_ordinal: u32::try_from(code_parent)
+                .map_err(|_| invalid("V32 CPU preflight parent ordinal overflows"))?,
+            routing_centroid: [unit; 96],
+            logical_start,
+            row_count,
+            page_start: u32::try_from(page_start)
+                .map_err(|_| invalid("V32 CPU preflight page ordinal overflows"))?,
+            page_count: u32::try_from(page_end - page_start)
+                .map_err(|_| invalid("V32 CPU preflight page count overflows"))?,
+        });
+        logical_start = logical_end;
+    }
+    let layout = V30Layout::new(shape.source_rows, leaves, pages)?;
+
+    let materialized_rows = usize::try_from(shape.materialized_code_rows)
+        .map_err(|_| invalid("V32 CPU preflight code rows overflow"))?;
+    let mut high_bits = vec![0_u32; materialized_rows.div_ceil(128) * 4];
+    for logical in 0..shape.high_width_codes {
+        high_bits[logical / 32] |= 1 << (logical % 32);
+    }
+    let codes = V30CodePlanes::from_packed_window(
+        usize::try_from(shape.source_rows)
+            .map_err(|_| invalid("V32 CPU preflight source rows overflow"))?,
+        materialized_rows,
+        high_bits,
+        vec![0; (materialized_rows - shape.high_width_codes) * V30PqWidth::Base24.bytes()],
+        vec![0; shape.high_width_codes * V30PqWidth::High48.bytes()],
+    )?;
+    let base = V30PqCodebook::new(
+        V30PqWidth::Base24,
+        vec![0.0; V30PqWidth::Base24.subquantizers() * 256 * V30PqWidth::Base24.dimensions()],
+    )?;
+    let high = V30PqCodebook::new(
+        V30PqWidth::High48,
+        vec![0.0; V30PqWidth::High48.subquantizers() * 256 * V30PqWidth::High48.dimensions()],
+    )?;
+    let router = V32Router::new(hierarchy, base, high, layout, codes)?;
+    V32Index::new(
+        router,
+        V32CpuPreflightStore { bodies },
+        V32SearchArm {
+            root_beam: shape.root_beam,
+            leaf_beam: shape.leaf_beam,
+            scan_budget: shape.scan_codes,
+            candidate_depth: shape.candidate_depth,
+            page_count: shape.selected_pages,
+        },
+    )
+}
+
+fn v32_cpu_preflight_query(seed: u64, ordinal: usize) -> [f32; 96] {
+    let mut state = seed.wrapping_add(ordinal as u64);
+    std::array::from_fn(|_| {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut value = state;
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^= value >> 31;
+        ((value >> 40) as f32 / (1_u32 << 24) as f32) * 2.0 - 1.0
+    })
+}
+
+#[doc(hidden)]
+pub fn run_v32_cpu_preflight(mode: V32CpuPreflightMode, leaf_beam: usize) -> Result<Vec<u8>> {
+    let shape = v32_cpu_preflight_shape(leaf_beam)?;
+    let index = v32_cpu_preflight_index(&shape)?;
+    let (warmups, query_count) = match mode {
+        V32CpuPreflightMode::Probe => (0, 128),
+        V32CpuPreflightMode::Screen => (1_024, 10_000),
+    };
+    let query_seed = 0x243f_6a88_85a3_08d3;
+    for ordinal in 0..warmups {
+        index.search(&v32_cpu_preflight_query(query_seed, ordinal), 10)?;
+    }
+    let mut query_digest = Sha256::new();
+    let mut observations = Vec::with_capacity(query_count);
+    for ordinal in 0..query_count {
+        let query = v32_cpu_preflight_query(query_seed, warmups + ordinal);
+        for value in query {
+            query_digest.update(value.to_le_bytes());
+        }
+        let (_, sample) = index.cpu_preflight_observation(&query, 10)?;
+        observations.push(sample);
+    }
+    canonical_v32_cpu_preflight_receipt(
+        &shape,
+        &V32CpuPreflightSamples {
+            mode,
+            warmups,
+            query_count,
+            query_seed,
+            query_sha256: format!("{:x}", query_digest.finalize()),
+            observations,
+        },
+    )
+}
+
 fn v32_cpu_p99(values: impl Iterator<Item = u64>, length: usize) -> Result<u64> {
     let mut values = values.collect::<Vec<_>>();
     if values.len() != length || values.is_empty() {
@@ -141,6 +387,39 @@ fn v32_cpu_p99(values: impl Iterator<Item = u64>, length: usize) -> Result<u64> 
     }
     values.sort_unstable();
     Ok(values[length.saturating_mul(99).div_ceil(100) - 1])
+}
+
+fn v32_cpu_preflight_expected_work(shape: &V32CpuPreflightShape) -> Result<V32CpuPreflightWork> {
+    let leaves_eligible = shape
+        .routing_microleaves
+        .checked_mul(shape.root_beam)
+        .ok_or_else(|| invalid("V32 CPU preflight leaf shape overflows"))?
+        .div_ceil(shape.roots);
+    let eligible_parents = shape
+        .trained_parents
+        .checked_mul(shape.root_beam)
+        .ok_or_else(|| invalid("V32 CPU preflight parent shape overflows"))?
+        / shape.roots;
+    let query_table_pairs_built = (shape.leaf_beam - 1)
+        .checked_mul(eligible_parents)
+        .ok_or_else(|| invalid("V32 CPU preflight table shape overflows"))?
+        / leaves_eligible
+        + 1;
+    Ok(V32CpuPreflightWork {
+        roots_scored: shape.roots,
+        leaves_eligible,
+        leaves_scanned: shape.leaf_beam,
+        query_table_pairs_built,
+        peak_query_table_pairs_live: 1,
+        codes_scanned: shape.scan_codes,
+        candidates_retained: shape.candidate_depth,
+        pages_considered: shape.selected_pages,
+        selected_pages: shape.selected_pages,
+        get_count: shape.page_bodies,
+        encoded_bytes: 3_117_216,
+        decoded_rows: shape.selected_pages * shape.page_rows,
+        unique_rows: shape.selected_pages * shape.page_rows,
+    })
 }
 
 #[doc(hidden)]
@@ -186,7 +465,10 @@ pub fn canonical_v32_cpu_preflight_receipt(
                 .checked_add(value)
                 .ok_or_else(|| invalid("V32 CPU preflight sample overflows"))
         })?;
-        if stage_total > sample.query_elapsed_ns || sample.process_cpu_ns == 0 {
+        if stage_total > sample.query_elapsed_ns
+            || sample.process_cpu_ns == 0
+            || sample.work != v32_cpu_preflight_expected_work(shape)?
+        {
             return Err(invalid("V32 CPU preflight sample differs"));
         }
     }
@@ -236,6 +518,21 @@ pub fn canonical_v32_cpu_preflight_receipt(
                 "query_elapsed_ns": sample.query_elapsed_ns,
                 "routing_ns": sample.routing_ns,
                 "unattributed_ns": sample.query_elapsed_ns - stage_total,
+                "work": {
+                    "candidates_retained": sample.work.candidates_retained,
+                    "codes_scanned": sample.work.codes_scanned,
+                    "decoded_rows": sample.work.decoded_rows,
+                    "encoded_bytes": sample.work.encoded_bytes,
+                    "get_count": sample.work.get_count,
+                    "leaves_eligible": sample.work.leaves_eligible,
+                    "leaves_scanned": sample.work.leaves_scanned,
+                    "pages_considered": sample.work.pages_considered,
+                    "peak_query_table_pairs_live": sample.work.peak_query_table_pairs_live,
+                    "query_table_pairs_built": sample.work.query_table_pairs_built,
+                    "roots_scored": sample.work.roots_scored,
+                    "selected_pages": sample.work.selected_pages,
+                    "unique_rows": sample.work.unique_rows,
+                },
             })
         })
         .collect::<Vec<_>>();
@@ -254,21 +551,30 @@ pub fn canonical_v32_cpu_preflight_receipt(
         V32CpuPreflightMode::Screen => vec!["compute", "total-cpu"],
     };
     let value = serde_json::json!({
+        "candidate_storage": shape.candidate_storage,
         "claim_eligible": false,
+        "eligible_routing_microleaves": v32_cpu_preflight_expected_work(shape)?.leaves_eligible,
         "failed_gates": failed_gates,
         "gates_enforced": gates_enforced,
         "leaf_beam": shape.leaf_beam,
         "mode": mode,
+        "page_identities": shape.page_identities,
         "process_cpu_p99_ns": process_cpu_p99_ns,
+        "projected_materialized_bytes": shape.maximum_materialized_bytes,
         "query_count": samples.query_count,
         "query_elapsed_p99_ns": query_elapsed_p99_ns,
         "query_seed": samples.query_seed,
         "query_sha256": samples.query_sha256,
         "raw_samples": raw_samples,
+        "root_beam": shape.root_beam,
+        "roots": shape.roots,
+        "routing_microleaves": shape.routing_microleaves,
         "sample_count": expected_samples,
         "scan_codes": shape.scan_codes,
         "schema": "borsuk-v32-cpu-preflight-v1",
+        "selected_pages": shape.selected_pages,
         "status": status,
+        "trained_parents": shape.trained_parents,
         "warmups": samples.warmups,
     });
     let mut bytes = serde_json::to_vec(&value)
@@ -927,14 +1233,14 @@ impl V32Router {
                     .leaf_for_logical(*logical)
                     .ok_or_else(|| invalid("V32 routing diagnostic leaf differs"))?;
                 let candidate_rank = candidate_ranks.get(logical).copied();
-                let stage = if !selected_leaves.contains(&routing_leaf.leaf_ordinal) {
+                let stage = if selected_pages.contains(&page.identity.ordinal) {
+                    V32RoutingTargetStage::SelectedPage
+                } else if !selected_leaves.contains(&routing_leaf.leaf_ordinal) {
                     V32RoutingTargetStage::LeafFrontier
                 } else if candidate_rank.is_none() {
                     V32RoutingTargetStage::CandidateRetention
-                } else if !selected_pages.contains(&page.identity.ordinal) {
-                    V32RoutingTargetStage::PageReducer
                 } else {
-                    V32RoutingTargetStage::SelectedPage
+                    V32RoutingTargetStage::PageReducer
                 };
                 Ok(V32RoutingTargetReport {
                     logical: *logical,
@@ -1175,6 +1481,21 @@ impl<S: V32PageStore> V32Index<S> {
         let process_cpu_ns = process_cpu_time_ns()?
             .checked_sub(cpu_started)
             .ok_or_else(|| invalid("V32 process CPU clock moved backwards"))?;
+        let work = V32CpuPreflightWork {
+            roots_scored: result.work.routing.roots_scored,
+            leaves_eligible: result.work.routing.leaves_eligible,
+            leaves_scanned: result.work.routing.leaves_scanned,
+            query_table_pairs_built: result.work.routing.query_table_pairs_built,
+            peak_query_table_pairs_live: result.work.routing.peak_query_table_pairs_live,
+            codes_scanned: result.work.routing.codes_scanned,
+            candidates_retained: result.work.routing.candidates_retained,
+            pages_considered: result.work.routing.pages_considered,
+            selected_pages: result.work.routing.selected_pages,
+            get_count: result.work.get_count,
+            encoded_bytes: result.work.encoded_bytes,
+            decoded_rows: result.work.decoded_rows,
+            unique_rows: result.work.unique_rows,
+        };
         Ok((
             result,
             V32CpuPreflightSample {
@@ -1186,6 +1507,7 @@ impl<S: V32PageStore> V32Index<S> {
                     .ok_or_else(|| invalid("V32 rerank timing boundary is missing"))?,
                 query_elapsed_ns,
                 process_cpu_ns,
+                work,
             },
         ))
     }
@@ -1259,7 +1581,8 @@ mod tests {
         BoundedCandidates, Candidate, ExactTopK, V32CpuPreflightMode, V32CpuPreflightSample,
         V32CpuPreflightSamples, V32Index, V32Match, V32PageStore, V32Router, V32RoutingTargetStage,
         V32SearchArm, V32SearchPhase, canonical_v32_cpu_preflight_receipt,
-        eligible_v32_routing_leaf_scores, exact_rerank_pages, smallest, v32_cpu_preflight_shape,
+        eligible_v32_routing_leaf_scores, exact_rerank_pages, smallest,
+        v32_cpu_preflight_expected_work, v32_cpu_preflight_index, v32_cpu_preflight_shape,
     };
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
@@ -1551,6 +1874,29 @@ mod tests {
                 .sum::<u64>(),
             12_020
         );
+    }
+
+    #[test]
+    fn v32_s3_search_containment_counts_a_selected_page_after_candidate_pruning() {
+        // Break caught: page containment is understated when a truth row is
+        // pruned from the PQ candidate heap but another row selects its page,
+        // whose exact rerank would still recover the truth row.
+        let reports = diagnostic_router()
+            .diagnose_logicals(
+                &[0.2; 96],
+                V32SearchArm {
+                    root_beam: 1,
+                    leaf_beam: 1,
+                    scan_budget: 65_536,
+                    candidate_depth: 11,
+                    page_count: 11,
+                },
+                &[11],
+            )
+            .unwrap();
+        assert_eq!(reports[0].candidate_rank, None);
+        assert_eq!(reports[0].page_ordinal, 10);
+        assert_eq!(reports[0].stage, V32RoutingTargetStage::SelectedPage);
     }
 
     #[test]
@@ -2109,6 +2455,35 @@ mod tests {
     }
 
     #[test]
+    fn v32_cpu_preflight_full_shape_runs_one_production_observation() {
+        // Break caught: the cardinality receipt is disconnected from the real
+        // router/page validator/exact reranker or allocates a 100M-row plane.
+        let shape = v32_cpu_preflight_shape(64).unwrap();
+        let index = v32_cpu_preflight_index(&shape).unwrap();
+        let (result, sample) = index
+            .cpu_preflight_observation(&[1.0 / 96.0_f32.sqrt(); 96], 10)
+            .unwrap();
+        assert_eq!(result.work.routing.roots_scored, 1_024);
+        assert_eq!(result.work.routing.leaves_eligible, 10_200);
+        assert_eq!(result.work.routing.leaves_scanned, 64);
+        assert_eq!(result.work.routing.query_table_pairs_built, 26);
+        assert_eq!(result.work.routing.codes_scanned, 65_536);
+        assert_eq!(result.work.routing.candidates_retained, 12_288);
+        assert_eq!(result.work.get_count, 16);
+        assert_eq!(result.work.encoded_bytes, 3_117_216);
+        assert_eq!(result.work.decoded_rows, 16 * 480);
+        assert_eq!(result.work.unique_rows, 16 * 480);
+        assert_eq!(result.matches.len(), 10);
+        assert!(sample.routing_ns > 0);
+        assert!(sample.page_load_ns > 0);
+        assert!(sample.exact_rerank_ns > 0);
+        assert_eq!(
+            sample.work,
+            v32_cpu_preflight_expected_work(&shape).unwrap()
+        );
+    }
+
+    #[test]
     fn v32_cpu_preflight_root_membership_is_one_bounded_lookup_per_microleaf() {
         // Break caught: filtering every routing microleaf linearly scans the
         // selected-root beam, multiplying 100M-scale routing work by 64.
@@ -2199,6 +2574,7 @@ mod tests {
             exact_rerank_ns: 20_000_001,
             query_elapsed_ns: 66_000_000,
             process_cpu_ns: 70_000_001,
+            work: v32_cpu_preflight_expected_work(&v32_cpu_preflight_shape(64).unwrap()).unwrap(),
         };
         let samples = V32CpuPreflightSamples {
             mode: V32CpuPreflightMode::Probe,
@@ -2225,7 +2601,30 @@ mod tests {
         assert_eq!(value["raw_samples"][0]["routing_ns"], 40_000_000);
         assert_eq!(value["raw_samples"][0]["page_load_ns"], 5_000_000);
         assert_eq!(value["raw_samples"][0]["exact_rerank_ns"], 20_000_001);
+        assert_eq!(value["raw_samples"][0]["work"]["roots_scored"], 1_024);
+        assert_eq!(value["raw_samples"][0]["work"]["leaves_eligible"], 10_200);
+        assert_eq!(value["raw_samples"][0]["work"]["leaves_scanned"], 64);
+        assert_eq!(
+            value["raw_samples"][0]["work"]["query_table_pairs_built"],
+            26
+        );
+        assert_eq!(value["raw_samples"][0]["work"]["codes_scanned"], 65_536);
+        assert_eq!(value["raw_samples"][0]["work"]["get_count"], 16);
         assert_eq!(value["query_count"], 128);
+        assert_eq!(value["root_beam"], 64);
+        assert_eq!(value["roots"], 1_024);
+        assert_eq!(value["trained_parents"], 65_536);
+        assert_eq!(value["routing_microleaves"], 163_192);
+        assert_eq!(value["eligible_routing_microleaves"], 10_200);
+        assert_eq!(value["page_identities"], 208_334);
+        assert_eq!(value["selected_pages"], 16);
+        assert_eq!(value["candidate_storage"], 45_056);
+        assert_eq!(
+            value["projected_materialized_bytes"],
+            v32_cpu_preflight_shape(64)
+                .unwrap()
+                .maximum_materialized_bytes
+        );
         assert_eq!(bytes.last(), Some(&b'\n'));
 
         let mut drifted = samples;

@@ -95,6 +95,7 @@ class V32ContainmentSpotPlan:
     source_rows: int
     query_start: int
     query_count: int
+    root_beam: int
     leaf_beam: int
 
 
@@ -244,6 +245,7 @@ def _validate_containment(plan: V32ContainmentSpotPlan) -> None:
         or type(plan.query_start) is not int
         or plan.query_start < 0
         or plan.query_count != 32
+        or plan.root_beam not in {8, 16, 32}
         or plan.leaf_beam not in {64, 128, 256}
     ):
         raise ValueError("V32 containment authority differs")
@@ -585,6 +587,7 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
         f" --source-rows {plan.source_rows}"
         f" --query-start {plan.query_start}"
         f" --query-count {plan.query_count}"
+        f" --root-beam {plan.root_beam}"
         f" --leaf-beam {plan.leaf_beam}"
     )
     return "\n".join(
