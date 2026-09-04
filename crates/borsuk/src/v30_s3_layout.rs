@@ -26,6 +26,7 @@ use crate::{
 };
 
 const MAX_PAGE_ROWS: u16 = 512;
+const MAX_GEOMETRIC_LEAF_ROWS: usize = 65_536;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -325,6 +326,147 @@ impl V30LayoutRecord {
         }
         Ok(())
     }
+}
+
+fn validate_v30_geometric_leaf_row_count(row_count: usize) -> Result<()> {
+    if row_count == 0 || row_count > MAX_GEOMETRIC_LEAF_ROWS {
+        return Err(invalid("V30 geometric leaf row count differs"));
+    }
+    Ok(())
+}
+
+fn normalized_v30_centroid(rows: &[V30LayoutRecord]) -> Result<[f32; 96]> {
+    let mut centroid = [0.0_f32; 96];
+    for row in rows {
+        for (sum, value) in centroid.iter_mut().zip(row.vector) {
+            *sum += value;
+        }
+    }
+    let squared_norm = centroid.iter().map(|value| value * value).sum::<f32>();
+    if !squared_norm.is_finite() || squared_norm <= 0.0 {
+        return Err(invalid("V30 geometric centroid differs"));
+    }
+    let inverse_norm = squared_norm.sqrt().recip();
+    for value in &mut centroid {
+        *value *= inverse_norm;
+    }
+    Ok(centroid)
+}
+
+fn v30_cosine(vector: &[f32; 96], centroid: &[f32; 96]) -> Result<f32> {
+    let squared_norm = vector.iter().map(|value| value * value).sum::<f32>();
+    if !squared_norm.is_finite() || squared_norm <= 0.0 {
+        return Err(invalid("V30 geometric vector norm differs"));
+    }
+    let similarity = vector
+        .iter()
+        .zip(centroid)
+        .map(|(value, center)| value * center)
+        .sum::<f32>()
+        * squared_norm.sqrt().recip();
+    if !similarity.is_finite() {
+        return Err(invalid("V30 geometric similarity differs"));
+    }
+    Ok(similarity)
+}
+
+fn split_v30_geometric_rows(
+    mut rows: Vec<V30LayoutRecord>,
+    left_size: usize,
+) -> Result<(Vec<V30LayoutRecord>, Vec<V30LayoutRecord>)> {
+    if left_size == 0 || left_size >= rows.len() {
+        return Err(invalid("V30 geometric split cardinality differs"));
+    }
+    rows.sort_unstable_by_key(|row| row.source_ordinal);
+    let mut left_centroid = normalized_v30_centroid(&rows[..1])?;
+    let farthest = rows
+        .iter()
+        .enumerate()
+        .map(|(ordinal, row)| Ok((ordinal, v30_cosine(&row.vector, &left_centroid)?)))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .min_by(|left, right| {
+            left.1.total_cmp(&right.1).then_with(|| {
+                rows[left.0]
+                    .source_ordinal
+                    .cmp(&rows[right.0].source_ordinal)
+            })
+        })
+        .map(|entry| entry.0)
+        .ok_or_else(|| invalid("V30 geometric farthest seed is missing"))?;
+    let mut right_centroid = normalized_v30_centroid(&rows[farthest..=farthest])?;
+    let sort_by_margin = |rows: &mut [V30LayoutRecord],
+                          left_centroid: &[f32; 96],
+                          right_centroid: &[f32; 96]|
+     -> Result<()> {
+        let mut ranked = rows
+            .iter()
+            .cloned()
+            .map(|row| {
+                let margin = v30_cosine(&row.vector, right_centroid)?
+                    - v30_cosine(&row.vector, left_centroid)?;
+                Ok((margin, row))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ranked.sort_unstable_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.source_ordinal.cmp(&right.1.source_ordinal))
+        });
+        for (target, (_, row)) in rows.iter_mut().zip(ranked) {
+            *target = row;
+        }
+        Ok(())
+    };
+    for _ in 0..4 {
+        sort_by_margin(&mut rows, &left_centroid, &right_centroid)?;
+        left_centroid = normalized_v30_centroid(&rows[..left_size])?;
+        right_centroid = normalized_v30_centroid(&rows[left_size..])?;
+    }
+    sort_by_margin(&mut rows, &left_centroid, &right_centroid)?;
+    let right = rows.split_off(left_size);
+    Ok((rows, right))
+}
+
+fn partition_v30_geometric_group(
+    rows: Vec<V30LayoutRecord>,
+    page_count: usize,
+) -> Result<Vec<Vec<V30LayoutRecord>>> {
+    if page_count == 1 {
+        return Ok(vec![rows]);
+    }
+    let base = rows.len() / page_count;
+    let remainder = rows.len() % page_count;
+    let left_pages = page_count / 2;
+    let left_size = left_pages * base + remainder.min(left_pages);
+    let (left, right) = split_v30_geometric_rows(rows, left_size)?;
+    let mut pages = partition_v30_geometric_group(left, left_pages)?;
+    pages.extend(partition_v30_geometric_group(
+        right,
+        page_count - left_pages,
+    )?);
+    Ok(pages)
+}
+
+fn partition_v30_leaf_pages(
+    mut rows: Vec<V30LayoutRecord>,
+    page_rows: usize,
+) -> Result<Vec<Vec<V30LayoutRecord>>> {
+    validate_v30_geometric_leaf_row_count(rows.len())?;
+    if page_rows == 0 || page_rows > usize::from(MAX_PAGE_ROWS) {
+        return Err(invalid("V30 geometric page rows differ"));
+    }
+    rows.sort_unstable_by_key(|row| row.source_ordinal);
+    let leaf = rows[0].leaf_ordinal;
+    let mut sources = BTreeSet::new();
+    for row in &rows {
+        row.validate()?;
+        if row.leaf_ordinal != leaf || !sources.insert(row.source_ordinal) {
+            return Err(invalid("V30 geometric leaf authority differs"));
+        }
+    }
+    let page_count = rows.len().div_ceil(page_rows);
+    partition_v30_geometric_group(rows, page_count)
 }
 
 #[derive(Debug)]
@@ -1735,7 +1877,8 @@ mod tests {
         V30ConstructionBuilder, V30ConstructionConfig, V30FidelitySelectionConfig, V30Layout,
         V30LayoutBuildConfig, V30LayoutBuilder, V30LayoutRecord, V30LeafRange, V30PageRange,
         V30PageSink, V30Scratch, decode_v30_layout_artifacts, encode_v30_layout_artifacts,
-        select_v30_high_fidelity, sort_v30_layout_records,
+        partition_v30_leaf_pages, select_v30_high_fidelity, sort_v30_layout_records,
+        validate_v30_geometric_leaf_row_count,
     };
     use crate::{
         V27Hierarchy, V27HierarchyConfig, V27PageIdentity, V27PageRow, decode_v27_page,
@@ -1841,6 +1984,112 @@ mod tests {
                 .insert(format!("page-{:08}", identity.ordinal), bytes.to_vec());
             Ok(())
         }
+    }
+
+    fn geometric_rows() -> Vec<V30LayoutRecord> {
+        (0_u64..16)
+            .map(|source_ordinal| {
+                let cluster = usize::try_from(source_ordinal / 4).unwrap();
+                let mut vector = [0.0_f32; 96];
+                vector[cluster] = 1.0;
+                V30LayoutRecord {
+                    leaf_ordinal: 0,
+                    source_ordinal,
+                    base_code: vec![(source_ordinal % 4) as u8; 24],
+                    high_code: None,
+                    vector,
+                }
+            })
+            .collect()
+    }
+
+    fn page_sources(pages: &[Vec<V30LayoutRecord>]) -> Vec<Vec<u64>> {
+        pages
+            .iter()
+            .map(|page| page.iter().map(|row| row.source_ordinal).collect())
+            .collect()
+    }
+
+    fn within_page_dispersion(pages: &[Vec<V30LayoutRecord>]) -> f32 {
+        pages
+            .iter()
+            .map(|page| {
+                page.iter()
+                    .enumerate()
+                    .flat_map(|(left, row)| {
+                        page[left + 1..].iter().map(move |other| {
+                            1.0 - row
+                                .vector
+                                .iter()
+                                .zip(other.vector.iter())
+                                .map(|(left, right)| left * right)
+                                .sum::<f32>()
+                        })
+                    })
+                    .sum::<f32>()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn v30_s3_layout_geometric_pages_are_balanced_local_and_deterministic() {
+        // Break caught: arbitrary PQ centroid labels, rather than residual geometry,
+        // determine which exact vectors share one immutable S3 page.
+        let rows = geometric_rows();
+        let first = partition_v30_leaf_pages(rows.clone(), 4).unwrap();
+        let second = partition_v30_leaf_pages(rows.iter().cloned().rev().collect(), 4).unwrap();
+        assert_eq!(page_sources(&first), page_sources(&second));
+        assert_eq!(first.len(), 4);
+        assert!(first.iter().all(|page| page.len() == 4));
+        assert!(
+            first
+                .iter()
+                .all(|page| { page.windows(2).all(|pair| pair[0].vector == pair[1].vector) })
+        );
+        assert_eq!(
+            first
+                .iter()
+                .flatten()
+                .map(|row| row.source_ordinal)
+                .collect::<std::collections::BTreeSet<_>>(),
+            (0_u64..16).collect()
+        );
+
+        let mut lexicographic = rows;
+        lexicographic.sort_unstable_by(|left, right| left.key().cmp(&right.key()));
+        let lexicographic = lexicographic
+            .chunks(4)
+            .map(<[V30LayoutRecord]>::to_vec)
+            .collect::<Vec<_>>();
+        assert_eq!(within_page_dispersion(&first), 0.0);
+        assert_eq!(within_page_dispersion(&lexicographic), 24.0);
+    }
+
+    #[test]
+    fn v30_s3_layout_geometric_pages_reject_invalid_vectors_and_leaf_overflow() {
+        // Break caught: one malformed or pathological leaf defeats the construction
+        // memory bound or makes balanced cosine partitioning non-deterministic.
+        assert!(partition_v30_leaf_pages(Vec::new(), 4).is_err());
+        assert!(partition_v30_leaf_pages(geometric_rows(), 0).is_err());
+
+        let mut mixed_leaf = geometric_rows();
+        mixed_leaf[15].leaf_ordinal = 1;
+        assert!(partition_v30_leaf_pages(mixed_leaf, 4).is_err());
+
+        let mut duplicate = geometric_rows();
+        duplicate[15].source_ordinal = duplicate[14].source_ordinal;
+        assert!(partition_v30_leaf_pages(duplicate, 4).is_err());
+
+        let mut non_finite = geometric_rows();
+        non_finite[0].vector[0] = f32::NAN;
+        assert!(partition_v30_leaf_pages(non_finite, 4).is_err());
+
+        let mut zero = geometric_rows();
+        zero[0].vector = [0.0; 96];
+        assert!(partition_v30_leaf_pages(zero, 4).is_err());
+
+        assert!(validate_v30_geometric_leaf_row_count(65_536).is_ok());
+        assert!(validate_v30_geometric_leaf_row_count(65_537).is_err());
     }
 
     #[test]
