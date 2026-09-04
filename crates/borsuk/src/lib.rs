@@ -198,6 +198,11 @@ mod v27_s3_search;
 mod v28_s3_layout;
 mod v28_s3_pq;
 mod v28_s3_search;
+#[allow(
+    dead_code,
+    reason = "V30 variable-rate codec is wired into layout in the next planned slice"
+)]
+mod v30_s3_pq;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[allow(
