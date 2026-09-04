@@ -4,7 +4,7 @@
 
 **Goal:** Reproduce the archived variable-rate result, then replace the experimental V28 format with the smallest authenticated hierarchical PQ index that exact-reranks ten immutable S3 Arrow pages.
 
-**Architecture:** First compare the four plausible PQ4/PQ8 additive/replacement interpretations on the frozen 100K fixture because the historical evaluator was not preserved. If an arm reproduces the archived boundary, retain V28's query-independent hierarchy and primary-only page ownership, persist a 24-byte base code for every row plus a compact 24-byte refinement for the exact five-percent error tail when the additive arm wins, fetch ten pages once, and exact-rerank their f32 vectors.
+**Architecture:** First reproduce the archived 24-byte/48-byte PQ8 replacement arm on the frozen 100K fixture because the historical evaluator was not preserved. If it matches, retain V28's query-independent hierarchy and primary-only page ownership, persist one compact code per row selected by an exact five-percent fidelity bitmap, fetch ten pages once, and exact-rerank their f32 vectors.
 
 **Tech Stack:** Rust 2024, Rayon, `borsuk-fma`, Apache Arrow IPC, Parquet, SHA-256, Python 3.12 controllers, AWS S3/EC2 Spot profile `causality`.
 
@@ -16,10 +16,10 @@
 - Exact vectors and IDs remain only in immutable S3 Arrow pages; serving never stages the full corpus.
 - Persistent tables use Parquet, typed serving artifacts use Arrow IPC, and authority/result objects use sorted compact JSON plus LF.
 - No production codec is selected until Task 0 reproduces the archived result; only the winning fixed interpretation may proceed.
-- The expected additive interpretation stores a 24-byte PQ4 base for every row plus a compact 24-byte PQ4 refinement for exactly 50,000 ppm, producing structured 8-bit combinations for refined rows.
+- The reproduction candidate uses 24-by-4D and 48-by-2D PQ8 codebooks with 256 centroids; exactly 50,000 ppm of rows replace 24 base bytes with 48 high-fidelity bytes.
 - Hierarchy scale is fixed by row count: 16/256 at 100K, 1,024/32,768 at 9.99M, and 1,024/65,536 at 100M; pages contain at most 512 rows.
 - Query work is at most 1,000,000 codes, 12,288 retained candidates, ten pages, one read wave, and 4,587,520 page bytes.
-- The provisional additive 100-million-row resident projection must equal 2,642,995,248 bytes and runtime peak RSS must stay below 3,221,225,472 bytes.
+- The provisional replacement 100-million-row resident projection must equal 2,630,588,896 bytes and runtime peak RSS must stay below 3,221,225,472 bytes.
 - Construction has no query, truth, prior-result, page-read, or D3 capability.
 - Run focused selectors and the 100K gate while iterating; run strict Clippy and the full workspace suite once at the release checkpoint.
 
@@ -34,14 +34,14 @@
 
 **Interfaces:**
 - Consumes: exact registered 100K construction Arrow pages, query/truth Parquet, source identity, and an output prefix.
-- Produces: canonical `V30ReproductionResult` plus Parquet per-query evidence for four fixed arms.
+- Produces: canonical `V30ReproductionResult` plus Parquet per-query evidence for fixed 0/5/10/20-percent PQ8 replacement arms.
 
 - [ ] **Step 1: Write authority REDs.** Require exact URI/SHA-256/length identities, 100,000 unique rows, 32 fixed queries with 320 truth memberships, 16 roots, 256 leaves, 512-row pages, no query/truth capability during training, and no complete-corpus persistence outside the disposable worker.
-- [ ] **Step 2: Write interpretation REDs.** Fix PQ4 additive, PQ4 replacement, PQ8 additive, and PQ8 replacement. Require the same deterministic training sample, hierarchy, pages, base-error selection, leaf beam 64, candidate depth 12,288, and ten-page reducer for every arm.
+- [ ] **Step 2: Write interpretation REDs.** Fix 24-by-4D/256-centroid base PQ8 and 48-by-2D/256-centroid replacement PQ8. Require the same deterministic training sample, hierarchy, base-code page order, base-error selection, leaf beam 64, candidate depth 12,288, and ten-page reducer for 0/5/10/20-percent arms.
 - [ ] **Step 3: Write result REDs.** Independently recompute hits, aggregate/minimum/perfect counts, work, bytes, and memory components from Parquet evidence. Require claim-ineligible canonical JSON and fail closed if no arm reaches 319/320, 900,000 minimum, and 31/32 perfect.
 - [ ] **Step 4: Run the focused RED.** Run `python3 -m unittest scripts.test_run_v30_variable_rate_reproduction`; accept missing controller/evaluator symbols only, then implement the minimum deterministic evaluator.
 - [ ] **Step 5: Run the bounded Spot reproduction once.** Use `causality` Spot, stream only the 46.8-MB frozen pages plus small query/truth objects, upload result/evidence/terminal, and terminate. Do not tune from per-query misses.
-- [ ] **Step 6: Freeze or reject.** If exactly one smallest arm reproduces the boundary, update this plan's Task 1 codec names from its authenticated receipt and commit the evaluator/evidence. Otherwise reject V30 and do not implement Tasks 1-6.
+- [ ] **Step 6: Freeze or reject.** If the five-percent arm reproduces the boundary and is the smallest passing arm, freeze its authenticated receipt and commit the evaluator/evidence. Otherwise reject V30 and do not implement Tasks 1-6.
 
 ### Task 1: Add variable-rate residual code authority
 
@@ -50,14 +50,16 @@
 - Modify: `crates/borsuk/src/lib.rs`
 
 **Interfaces:**
-- Consumes: normalized `[f32; 96]` leaf residuals and the existing `Pq4BlockScorer` backend.
-- Produces after Task 0 freezes the additive arm: `V30PqCodebooks`, `V30BaseBlock`, `V30RefinementBlock`, `V30RefinementMap`, `V30AdcCalibration`, `fit_v30_codebooks`, `encode_v30_codes`, `score_v30_leaf`, `encode_v30_pq_artifacts`, and `decode_v30_pq_artifacts`.
+- Consumes: normalized `[f32; 96]` leaf residuals and a new fixed-width
+  256-centroid ADC backend whose scalar and optimized paths share exact lookup
+  tables and reduction order.
+- Produces after Task 0 passes: `V30PqCodebooks`, `V30BaseBlock`, `V30HighBlock`, `V30Fidelity`, `fit_v30_codebooks`, `encode_v30_codes`, `score_v30_leaf`, `encode_v30_pq_artifacts`, and `decode_v30_pq_artifacts`.
 
-- [ ] **Step 1: Write the codec REDs.** Add `v30_s3_pq_` unit tests requiring 48 two-dimensional base and refinement subquantizers, 24-byte packed rows, deterministic centroid/source ties, exact-zero residual support, non-finite rejection, and exact five-percent selection by reversed base reconstruction error then source ordinal. Require every row in the base plane and only refined logical positions in the compact refinement plane.
-- [ ] **Step 2: Lock scoring and memory arithmetic in RED.** Differential-test calibrated base PQ4 scalar/SIMD scoring and scalar 256-combination refined scoring in the same f32 domain. Require `project_v30_resident_bytes(100_000_000, 50_000) == 2_642_995_248` with literal component checks; reject per-leaf refinement padding, every other fraction/width, overflow, or zero rows.
+- [ ] **Step 1: Write the codec REDs.** Add `v30_s3_pq_` unit tests requiring 24 four-dimensional and 48 two-dimensional subquantizers with 256 centroids, 24/48-byte rows, deterministic centroid/source ties, exact-zero residual support, non-finite rejection, and exact five-percent selection by reversed base reconstruction error then source ordinal. Require each logical position to map to exactly one compact plane.
+- [ ] **Step 2: Lock scoring and memory arithmetic in RED.** Differential-test scalar and optimized 256-entry-table scoring for both widths in the same f32 domain. Require `project_v30_resident_bytes(100_000_000, 50_000) == 2_630_588_896` with literal component checks; reject per-leaf plane padding, every other fraction/width, overflow, or zero rows.
 - [ ] **Step 3: Lock Arrow authority in RED.** Require exact schemas for both codebooks, base blocks, fidelity bitmap/rank offsets, and high blocks; mutate role, digest, length, row count, width, nullability, field names, offsets, padding, fidelity cardinality, and dependency bindings.
 - [ ] **Step 4: Run the focused RED.** Run `cargo test -p borsuk --lib v30_s3_pq_ -- --nocapture`; require only unresolved V30 symbols and at least six selected tests.
-- [ ] **Step 5: Implement the minimal codec.** Reuse the existing fixed-order PQ4 base training/scorer. Train refinement centroids on base reconstruction residuals, globally pack sparse refinement blocks, and score refined rows from exact 256-combination f32 tables. Store no zero-filled placeholders and expose no compatibility dispatch.
+- [ ] **Step 5: Implement the minimal codec.** Implement deterministic 256-centroid training for both widths, globally pack mutually exclusive planes, and use bounded 256-entry query tables. Store no zero-filled placeholders and expose no compatibility dispatch.
 - [ ] **Step 6: Run GREEN and commit.** Run the identical selector, `cargo fmt --all -- --check`, and `git diff --check`; commit only `v30_s3_pq.rs` and `lib.rs`.
 
 ### Task 2: Build one-owner variable-rate pages with bounded external selection
@@ -72,7 +74,7 @@
 
 - [ ] **Step 1: Write the construction REDs.** Require one primary owner per source ordinal, complete source union, leaf-residual encoding, exact five-percent high-error selection, deterministic cutoff ties, and merge order `(leaf,base_code,refined_desc,refinement_code,source)`.
 - [ ] **Step 2: Prove bounded construction in RED.** Feed more rows than the configured memory limit, require sorted spill runs, bound resident records and merge heads, forbid a corpus-sized vector/code/error collection, and require scratch cleanup after success and injected failure.
-- [ ] **Step 3: Lock page/offset authority in RED.** Require pages of at most 1,024 rows; monotone base/high block, fidelity-rank, leaf, and page offsets; code-position-to-page equality at every first/last boundary; and exact Arrow/Parquet schema/digest/length bindings.
+- [ ] **Step 3: Lock page/offset authority in RED.** Require pages of at most 512 rows; monotone base/high block, fidelity-rank, leaf, and page offsets; code-position-to-page equality at every first/last boundary; and exact Arrow/Parquet schema/digest/length bindings.
 - [ ] **Step 4: Run the focused RED.** Run `cargo test -p borsuk --lib v30_s3_layout_ -- --nocapture`; require missing V30 layout symbols only.
 - [ ] **Step 5: Implement the bounded builder.** Use fixed records and external runs, a bounded error-selection pass, and one deterministic merge that emits code artifacts and page bodies in the same order. Do not retain or emit a row-to-page array.
 - [ ] **Step 6: Run GREEN and commit.** Run the identical selector, formatting, and diff-check; commit only `v30_s3_layout.rs` and `lib.rs`.

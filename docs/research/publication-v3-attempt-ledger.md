@@ -2869,10 +2869,13 @@ observation remains 996,875-ppm aggregate recall, 900,000-ppm minimum recall,
 
 Post-run reproducibility review found that the variable-rate result and
 terminal did not preserve the evaluator, its input manifest, or the exact code
-composition. The `PQ8`/`refinement` labels and exact 25.2-byte average are
-consistent with a 24-byte PQ4 base plus a sparse 24-byte residual refinement,
-but the result alone cannot distinguish that from a replacement 48-byte code;
-the committed V28 codec implements neither measured interpretation. The
+composition. The surrounding ladders establish that the variable-rate
+zero-percent arm exactly matches the separate 24-byte PQ8 residual arm, while
+the separately tested additive-PQ arm regressed. The `PQ8` label, exact
+25.2-byte average, and quality progression therefore identify a 24-byte/48-byte
+PQ8 replacement as the credible interpretation, but it still requires exact
+reproduction because its evaluator was not preserved. The committed V28 codec
+implements PQ4 rather than that measured interpretation. The
 2,625,266,208-byte projection also increases by exactly the refinement payload
 and does not expose bitmap, rank, sparse-range, or framing components. The arm
 is therefore a promising historical observation, not a production candidate.
@@ -2880,6 +2883,6 @@ The failed f16 sidecar does not settle this question: that sidecar used a
 different 981,250-ppm page-selection baseline and did not alter approximate
 candidate/page ordering, whereas a residual refinement would alter that
 ordering before page selection.
-V30 must first reproduce fixed PQ4/PQ8 additive/replacement interpretations on
-the same burned fixture with committed code and complete authority, then freeze
-one smallest matching arm before any untouched-cohort run.
+V30 must first reproduce the fixed PQ8 replacement interpretation on the same
+burned fixture with committed code and complete authority, then freeze its
+smallest passing arm before any untouched-cohort run.
