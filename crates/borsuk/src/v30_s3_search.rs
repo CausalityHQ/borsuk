@@ -59,6 +59,7 @@ pub struct V30RoutingTargetReport {
     pub page_ordinal: u32,
     pub candidate_rank: Option<usize>,
     pub stage: V30RoutingTargetStage,
+    pub reciprocal_rank_selected: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -272,6 +273,29 @@ impl V30Router {
             .enumerate()
             .map(|(rank, candidate)| (candidate.logical, rank))
             .collect::<std::collections::BTreeMap<_, _>>();
+        let mut reciprocal_rank_scores = std::collections::BTreeMap::<u32, u64>::new();
+        for (rank, candidate) in details.ranked_candidates.iter().enumerate() {
+            let page = self
+                .layout
+                .page_for_logical(candidate.logical)
+                .ok_or_else(|| invalid("V30 routing diagnostic page differs"))?;
+            let weight = 1_000_000_000_000_u64 / (rank as u64 + 1);
+            let score = reciprocal_rank_scores
+                .entry(page.identity.ordinal)
+                .or_default();
+            *score = score
+                .checked_add(weight)
+                .ok_or_else(|| invalid("V30 routing diagnostic rank score overflows"))?;
+        }
+        let mut reciprocal_ranked_pages = reciprocal_rank_scores.into_iter().collect::<Vec<_>>();
+        reciprocal_ranked_pages.sort_unstable_by(|left, right| {
+            right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0))
+        });
+        let reciprocal_rank_selected = reciprocal_ranked_pages
+            .into_iter()
+            .take(arm.page_count)
+            .map(|(page, _)| page)
+            .collect::<std::collections::BTreeSet<_>>();
         let selected_pages = details
             .selection
             .pages
@@ -301,6 +325,8 @@ impl V30Router {
                     page_ordinal: page.identity.ordinal,
                     candidate_rank,
                     stage,
+                    reciprocal_rank_selected: reciprocal_rank_selected
+                        .contains(&page.identity.ordinal),
                 })
             })
             .collect()
@@ -646,22 +672,23 @@ mod tests {
             leaves: vec![[unit; 96], [-unit; 96]],
             leaf_roots: vec![0, 0],
         };
-        let pages = (0..60_u32)
-            .map(|ordinal| V30PageRange {
-                leaf_ordinal: u32::from(ordinal >= 30),
-                logical_start: u64::from(ordinal),
-                row_count: 1,
-                identity: encode_v27_page(
-                    ordinal,
-                    1,
-                    0,
-                    &[V27PageRow {
-                        source_ordinal: u64::from(ordinal),
-                        vector: [0.2 + ordinal as f32 / 1_000.0; 96],
-                    }],
-                )
-                .unwrap()
-                .0,
+        let pages = (0..10_u32)
+            .map(|ordinal| (ordinal, 0, u64::from(ordinal), 1))
+            .chain((10..20_u32).map(|ordinal| (ordinal, 0, 10 + u64::from(ordinal - 10) * 2, 2)))
+            .chain((20..50_u32).map(|ordinal| (ordinal, 1, 30 + u64::from(ordinal - 20), 1)))
+            .map(|(ordinal, leaf_ordinal, logical_start, row_count)| {
+                let rows = (logical_start..logical_start + u64::from(row_count))
+                    .map(|source_ordinal| V27PageRow {
+                        source_ordinal,
+                        vector: [0.2 + source_ordinal as f32 / 1_000.0; 96],
+                    })
+                    .collect::<Vec<_>>();
+                V30PageRange {
+                    leaf_ordinal,
+                    logical_start,
+                    row_count,
+                    identity: encode_v27_page(ordinal, row_count, 0, &rows).unwrap().0,
+                }
             })
             .collect();
         let layout = V30Layout::new(
@@ -672,13 +699,13 @@ mod tests {
                     logical_start: 0,
                     row_count: 30,
                     page_start: 0,
-                    page_count: 30,
+                    page_count: 20,
                 },
                 V30LeafRange {
                     leaf_ordinal: 1,
                     logical_start: 30,
                     row_count: 30,
-                    page_start: 30,
+                    page_start: 20,
                     page_count: 30,
                 },
             ],
@@ -713,8 +740,10 @@ mod tests {
         assert_eq!(reports[0].candidate_rank, Some(0));
         assert_eq!(reports[1].stage, V30RoutingTargetStage::PageReducer);
         assert_eq!(reports[1].candidate_rank, Some(15));
+        assert!(reports[1].reciprocal_rank_selected);
         assert_eq!(reports[2].stage, V30RoutingTargetStage::CandidateRetention);
         assert_eq!(reports[2].candidate_rank, None);
+        assert!(!reports[2].reciprocal_rank_selected);
         assert_eq!(reports[3].stage, V30RoutingTargetStage::LeafFrontier);
         assert_eq!(reports[3].candidate_rank, None);
         assert_eq!(
