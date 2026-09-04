@@ -254,6 +254,43 @@ def build_v30_corpus_manifest(source_bytes: bytes, *, expected_rows: int) -> byt
     )
 
 
+def _monitored_command(command: str, *, rss_limit_bytes: int, wall_seconds: int) -> list[str]:
+    if rss_limit_bytes <= 0 or wall_seconds <= 0 or "\n" in command:
+        raise ValueError("V30 monitored command differs")
+    return [
+        f"rss_limit_bytes={rss_limit_bytes}",
+        f"wall_seconds={wall_seconds}",
+        "swap_limit_bytes=268435456",
+        "swap_start_kib=$(awk '/^SwapTotal:/ {total=$2} /^SwapFree:/ {free=$2} END {print total-free}' /proc/meminfo)",
+        f'setsid {command} >"$root/TERMINAL.json" 2>>"$root/worker.log" &',
+        "child=$!",
+        "started=$(date +%s)",
+        "stop_reason=",
+        "while kill -0 \"$child\" 2>/dev/null; do",
+        "  rss_bytes=$(ps -eo pgid=,rss= | awk -v group=\"$child\" '$1 == group {total += $2} END {printf \"%.0f\", total * 1024}')",
+        "  psi_full_avg10=$(awk '/^full / {for (i=1;i<=NF;i++) if ($i ~ /^avg10=/) {split($i,a,\"=\"); print a[2]}}' /proc/pressure/memory)",
+        "  swap_now_kib=$(awk '/^SwapTotal:/ {total=$2} /^SwapFree:/ {free=$2} END {print total-free}' /proc/meminfo)",
+        "  swap_bytes=$(( (swap_now_kib - swap_start_kib) * 1024 ))",
+        "  (( swap_bytes < 0 )) && swap_bytes=0",
+        "  progress=$(( $(date +%s) - started ))",
+        "  printf '{\"progress\":%d,\"psi_full_avg10\":%s,\"rss_bytes\":%d,\"state\":\"running\",\"swap_bytes\":%d}\\n' \"$progress\" \"$psi_full_avg10\" \"$rss_bytes\" \"$swap_bytes\" >\"$root/HEARTBEAT.json\"",
+        "  aws s3api put-object --bucket \"$output_bucket\" --key \"${output_key}HEARTBEAT.json\" --body \"$root/HEARTBEAT.json\" --checksum-algorithm SHA256 >/dev/null",
+        "  if (( rss_bytes > rss_limit_bytes || swap_bytes > swap_limit_bytes || progress > wall_seconds )) || awk -v pressure=\"$psi_full_avg10\" 'BEGIN {exit !(pressure > 0.50)}'; then",
+        "    stop_reason=resource-stop",
+        "    kill -TERM -- \"-$child\" 2>/dev/null || true",
+        "    break",
+        "  fi",
+        "  sleep 30",
+        "done",
+        "set +e",
+        "wait \"$child\"",
+        "child_status=$?",
+        "set -e",
+        "[[ -z \"$stop_reason\" ]] || exit 75",
+        "(( child_status == 0 )) || exit \"$child_status\"",
+    ]
+
+
 def _construction_script(plan: V30ConstructionPlan) -> str:
     output_bucket, output_key = _split_s3(plan.output_prefix)
     command = _shell(
@@ -313,7 +350,7 @@ def _construction_script(plan: V30ConstructionPlan) -> str:
             f'test "$(cat .borsuk-source-commit)" = {plan.source_commit}',
             "/root/.cargo/bin/cargo build --release --locked -p borsuk --example v30_s3_build",
             "install -D -m 0555 target/release/examples/v30_s3_build /opt/borsuk/v30_s3_build",
-            f"{command} > /run/v30/TERMINAL.json",
+            *_monitored_command(command, rss_limit_bytes=192 * 1024**3, wall_seconds=14_400),
             'put_once "$root/worker.log" worker.log',
             'put_once "$root/TERMINAL.json" TERMINAL.json',
             "terminal=complete",
@@ -415,7 +452,11 @@ def _evaluation_script(plan: V30EvaluationPlan) -> str:
             "  test \"$(stat -c %s \"$root/resident/$file\")\" -eq \"$size\"",
             "  printf '%s  %s\\n' \"$sha\" \"$root/resident/$file\" | sha256sum --check --status",
             "done <\"$root/resident.tsv\"",
-            f"{command.replace('python3 ', '/opt/borsuk/venv/bin/python ', 1)} >\"$root/TERMINAL.json\"",
+            *_monitored_command(
+                command.replace("python3 ", "/opt/borsuk/venv/bin/python ", 1),
+                rss_limit_bytes=3 * 1024**3,
+                wall_seconds=7_200,
+            ),
             'put_once "$root/worker.log" worker.log',
             'put_once "$root/TERMINAL.json" TERMINAL.json',
             "terminal=complete",
@@ -466,6 +507,133 @@ def build_v30_evaluation_spot_specs(
     return tuple(_spec(target, script) for target in targets)
 
 
+def _optional_s3_bytes(client: object, bucket: str, key: str) -> bytes | None:
+    try:
+        response = client.get_object(Bucket=bucket, Key=key)
+    except Exception as error:
+        response = getattr(error, "response", {})
+        code = response.get("Error", {}).get("Code") if type(response) is dict else None
+        if isinstance(error, KeyError) or code in {"NoSuchKey", "404"}:
+            return None
+        raise
+    body = response.get("Body") if type(response) is dict else None
+    value = body.read() if body is not None else None
+    if type(value) is not bytes:
+        raise ValueError("V30 S3 object body differs")
+    return value
+
+
+def execute_v30_spot_phase(
+    *,
+    plan: V30ConstructionPlan | V30EvaluationPlan,
+    targets: tuple[SpotTarget, ...],
+    ec2_client: object,
+    s3_client: object,
+    sleep: Callable[[int], None],
+    wall_observations: int,
+) -> bytes:
+    """Launch and monitor exactly one construction or evaluation Spot phase."""
+    if isinstance(plan, V30ConstructionPlan):
+        specs = build_v30_construction_spot_specs(plan, targets)
+        rss_limit_bytes = 192 * 1024**3
+    elif isinstance(plan, V30EvaluationPlan):
+        specs = build_v30_evaluation_spot_specs(plan, targets)
+        rss_limit_bytes = 3 * 1024**3
+    else:
+        raise TypeError("V30 Spot plan type differs")
+    bucket_name, prefix = _split_s3(plan.output_prefix)
+    polls = 0
+
+    def launch(spec: dict[str, object]) -> str:
+        try:
+            response = ec2_client.run_instances(**spec)
+        except Exception as error:
+            detail = getattr(error, "response", {})
+            code = detail.get("Error", {}).get("Code") if type(detail) is dict else None
+            if code == "InsufficientInstanceCapacity":
+                raise RuntimeError("InsufficientInstanceCapacity") from error
+            raise
+        instances = response.get("Instances") if type(response) is dict else None
+        if type(instances) is not list or len(instances) != 1:
+            raise ValueError("V30 Spot launch receipt differs")
+        instance_id = instances[0].get("InstanceId")
+        if type(instance_id) is not str:
+            raise ValueError("V30 Spot instance receipt differs")
+        return instance_id
+
+    def observe(instance_id: str) -> V30Observation:
+        nonlocal polls
+        polls += 1
+        reservations = ec2_client.describe_instances(InstanceIds=[instance_id]).get(
+            "Reservations", []
+        )
+        try:
+            state = reservations[0]["Instances"][0]["State"]["Name"]
+        except (IndexError, KeyError, TypeError) as error:
+            raise ValueError("V30 Spot instance state differs") from error
+        statuses = ec2_client.describe_instance_status(
+            InstanceIds=[instance_id], IncludeAllInstances=True
+        ).get("InstanceStatuses", [])
+        status = statuses[0] if statuses else {}
+        system_status = status.get("SystemStatus", {}).get("Status", "initializing")
+        instance_status = status.get("InstanceStatus", {}).get("Status", "initializing")
+        terminal = _optional_s3_bytes(s3_client, bucket_name, prefix + "TERMINAL.json")
+        if terminal is None:
+            terminal = _optional_s3_bytes(s3_client, bucket_name, prefix + "FAILED.json")
+        heartbeat = (
+            None
+            if terminal is not None
+            else _optional_s3_bytes(s3_client, bucket_name, prefix + "HEARTBEAT.json")
+        )
+        if heartbeat is None:
+            rss_bytes = 0
+            psi = 0.0
+            swap_bytes = 0
+            progress = polls
+        else:
+            try:
+                value = json.loads(heartbeat)
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError("V30 heartbeat JSON differs") from error
+            if (
+                type(value) is not dict
+                or set(value)
+                != {"progress", "psi_full_avg10", "rss_bytes", "state", "swap_bytes"}
+                or value["state"] != "running"
+                or type(value["progress"]) is not int
+                or type(value["rss_bytes"]) is not int
+                or type(value["swap_bytes"]) is not int
+                or type(value["psi_full_avg10"]) not in {int, float}
+            ):
+                raise ValueError("V30 heartbeat schema differs")
+            rss_bytes = value["rss_bytes"]
+            psi = float(value["psi_full_avg10"])
+            swap_bytes = value["swap_bytes"]
+            progress = value["progress"]
+        return V30Observation(
+            state,
+            system_status,
+            instance_status,
+            rss_bytes,
+            psi,
+            swap_bytes,
+            progress,
+            terminal,
+        )
+
+    return monitor_v30_original_attempt(
+        launch=launch,
+        specs=specs,
+        observe=observe,
+        terminate=lambda instance_id: ec2_client.terminate_instances(
+            InstanceIds=[instance_id]
+        ),
+        sleep=sleep,
+        wall_observations=wall_observations,
+        rss_limit_bytes=rss_limit_bytes,
+    )
+
+
 def monitor_v30_original_attempt(
     *,
     launch: Callable[[dict[str, object]], str],
@@ -497,7 +665,7 @@ def monitor_v30_original_attempt(
     try:
         for _ in range(wall_observations):
             observation = observe(instance_id)
-            if observation.system_status != "ok" or observation.instance_status != "ok":
+            if observation.system_status not in {"ok", "initializing"} or observation.instance_status not in {"ok", "initializing"}:
                 raise RuntimeError("V30 Spot health differs")
             if (
                 observation.rss_bytes < 0

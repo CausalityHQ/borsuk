@@ -1,4 +1,5 @@
 import json
+import subprocess
 import unittest
 
 from scripts.run_v30_s3_campaign import (
@@ -9,6 +10,7 @@ from scripts.run_v30_s3_campaign import (
     build_v30_construction_spot_specs,
     build_v30_corpus_manifest,
     build_v30_evaluation_spot_specs,
+    execute_v30_spot_phase,
     monitor_v30_original_attempt,
 )
 
@@ -146,6 +148,10 @@ class V30SpotCampaignTests(unittest.TestCase):
         self.assertEqual([spec["Placement"]["AvailabilityZone"] for spec in specs], ["eu-central-1a", "eu-central-1b"])
         for spec in specs:
             script = spec["UserData"]
+            syntax = subprocess.run(
+                ["bash", "-n"], input=script, text=True, capture_output=True
+            )
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
             self.assertIn("v30_s3_build", script)
             self.assertIn("s3://authority/deep-10m/corpus.json", script)
             self.assertIn("--training-rows 262144", script)
@@ -158,10 +164,18 @@ class V30SpotCampaignTests(unittest.TestCase):
                 "install -D -m 0555 target/release/examples/v30_s3_build /opt/borsuk/v30_s3_build",
                 script,
             )
+            self.assertIn("setsid /opt/borsuk/v30_s3_build", script)
+            self.assertIn("rss_limit_bytes=206158430208", script)
+            self.assertIn("HEARTBEAT.json", script)
+            self.assertIn("kill -TERM -- \"-$child\"", script)
 
         evaluation = build_v30_evaluation_spot_specs(self.evaluation(), self.targets())
         for spec in evaluation:
             script = spec["UserData"]
+            syntax = subprocess.run(
+                ["bash", "-n"], input=script, text=True, capture_output=True
+            )
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
             self.assertIn("v30_s3_qualify", script)
             self.assertIn("run_v30_untouched_quality.py", script)
             self.assertIn("test.parquet", script)
@@ -179,6 +193,12 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("uv venv --python 3.12 /opt/borsuk/venv", script)
             self.assertIn("/opt/borsuk/venv/bin/python", script)
             self.assertNotIn("python3 -m pip install", script)
+            self.assertIn(
+                "setsid /opt/borsuk/venv/bin/python scripts/run_v30_untouched_quality.py",
+                script,
+            )
+            self.assertIn("rss_limit_bytes=3221225472", script)
+            self.assertIn("HEARTBEAT.json", script)
 
     def test_v30_evaluation_page_namespace_is_derived_from_manifest(self) -> None:
         plan = self.evaluation()
@@ -297,6 +317,71 @@ class V30SpotCampaignTests(unittest.TestCase):
                 wall_observations=10,
                 rss_limit_bytes=3 * 1024**3,
             )
+
+    def test_v30_campaign_executes_real_client_boundary_and_reads_exact_terminal(self) -> None:
+        class Ec2:
+            def __init__(self) -> None:
+                self.launched: list[dict[str, object]] = []
+                self.terminated: list[str] = []
+
+            def run_instances(self, **spec: object) -> dict[str, object]:
+                self.launched.append(spec)
+                return {"Instances": [{"InstanceId": "i-original"}]}
+
+            def describe_instances(self, **_request: object) -> dict[str, object]:
+                return {
+                    "Reservations": [
+                        {"Instances": [{"State": {"Name": "running"}}]}
+                    ]
+                }
+
+            def describe_instance_status(self, **_request: object) -> dict[str, object]:
+                return {
+                    "InstanceStatuses": [
+                        {
+                            "SystemStatus": {"Status": "ok"},
+                            "InstanceStatus": {"Status": "ok"},
+                        }
+                    ]
+                }
+
+            def terminate_instances(self, **request: object) -> None:
+                self.terminated.extend(request["InstanceIds"])
+
+        class Body:
+            def __init__(self, value: bytes) -> None:
+                self.value = value
+
+            def read(self) -> bytes:
+                return self.value
+
+        class S3:
+            def get_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
+                self.last = (Bucket, Key)
+                if Key.endswith("TERMINAL.json"):
+                    return {
+                        "Body": Body(
+                            b'{"claim_eligible":false,"status":"passed"}\n'
+                        )
+                    }
+                raise KeyError(Key)
+
+        ec2 = Ec2()
+        s3 = S3()
+        terminal = execute_v30_spot_phase(
+            plan=self.reduced_construction(),
+            targets=self.targets(),
+            ec2_client=ec2,
+            s3_client=s3,
+            sleep=lambda _seconds: None,
+            wall_observations=2,
+        )
+        self.assertEqual(
+            terminal, b'{"claim_eligible":false,"status":"passed"}\n'
+        )
+        self.assertEqual(len(ec2.launched), 1)
+        self.assertEqual(ec2.terminated, ["i-original"])
+        self.assertEqual(s3.last, ("authority", "v30/build-100k-a0001/TERMINAL.json"))
 
 
 if __name__ == "__main__":
