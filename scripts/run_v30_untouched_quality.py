@@ -180,7 +180,10 @@ def run_v30_untouched_quality(
     parsed = _batch_results(invoke(commands[0]), expected_pages=plan.page_count)
     if any(
         work["roots_scored"] <= 0
-        or work["leaves_scored"] < plan.leaf_beam
+        or work["leaves_scanned"] != plan.leaf_beam
+        or work["leaves_eligible"] < work["leaves_scanned"]
+        or not 1 <= work["query_table_pairs_built"] <= work["leaves_scanned"]
+        or work["peak_query_table_pairs_live"] != 1
         or not 0 < work["codes_scanned"] <= 1_000_000
         or work["candidates_retained"] != 12_288
         or not plan.page_count <= work["pages_considered"] <= 12_288

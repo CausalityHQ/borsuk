@@ -58,8 +58,11 @@ class V30ReducedQualityTests(unittest.TestCase):
                 "routing": {
                     "candidates_retained": 12_288,
                     "codes_scanned": 39_612,
-                    "leaves_scored": 64,
+                    "leaves_eligible": 64,
+                    "leaves_scanned": 64,
                     "pages_considered": 10,
+                    "peak_query_table_pairs_live": 1,
+                    "query_table_pairs_built": 4,
                     "roots_scored": 16,
                     "selected_pages": 10,
                 },

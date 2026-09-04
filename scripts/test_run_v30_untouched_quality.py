@@ -103,8 +103,11 @@ class V30UntouchedQualityTests(unittest.TestCase):
                 "routing": {
                     "candidates_retained": 12_288,
                     "codes_scanned": 900_000,
-                    "leaves_scored": 64,
+                    "leaves_eligible": 64,
+                    "leaves_scanned": 64,
                     "pages_considered": page_count,
+                    "peak_query_table_pairs_live": 1,
+                    "query_table_pairs_built": 4,
                     "roots_scored": 1_024,
                     "selected_pages": page_count,
                 },
