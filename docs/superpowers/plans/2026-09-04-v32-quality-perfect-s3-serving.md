@@ -227,22 +227,40 @@ logical-source/page evidence are citable; no intermediate schema is retained.
 **Files:**
 - Modify: `crates/borsuk/src/v30_s3_search.rs`
 - Modify: `crates/borsuk/src/v30_s3_pq.rs`
-- Modify: the focused Rust benchmark/test modules in those files
+- Create: `crates/borsuk/examples/v32_cpu_preflight.rs`
+- Modify: the focused Rust test modules in those files
 
 **Interfaces:**
 - Produces: allocation-free block PQ scoring, cached per-parent query tables,
   parallel deterministic page reranking, and a canonical in-memory CPU receipt.
+- Produces: a doc-hidden `run_v32_cpu_preflight` boundary used only by the thin
+  example. Its exact shape is 1,024 roots, 65,536 trained parents, 163,192
+  routing microleaves, 208,334 page identities, one deterministic scan slice,
+  and one authenticated 480-row Arrow body; it has no object-store or corpus
+  input.
 
 - [ ] Add scalar differential REDs for root/microleaf distance, both PQ widths,
   f16 ties, subnormals, reversed blocks, and per-page exact top-ten merge.
+- [ ] Add REDs for exact 100M cardinalities, scan slices 65,536/131,072/262,144,
+  five-percent high-width codes, distinct-parent table construction, bounded
+  12,288 candidates, 16-page reduction, 480-row Arrow validation/rerank, and a
+  canonical claim-ineligible receipt containing raw total/stage CPU samples.
+- [ ] Implement the preflight using the production root filter, centroid/PQ
+  scoring, bounded candidate reducer, page reducer, Arrow validator, and exact
+  top-ten merge. Materialize no 100M-row code plane: allocate only the exact
+  scan slice and reuse one immutable authenticated page body across the 16
+  decode/rerank inputs. A reduced-shape unit fixture must prove identical work
+  accounting without timing assertions.
 - [ ] Cache one query table per distinct `code_parent_leaf_ordinal`, scan
   contiguous code blocks without per-block allocation, and use the repository's
   runtime-detected fused SIMD backend with a scalar oracle.
 - [ ] Exact-rerank the 16 already-authenticated decoded pages in parallel,
   producing one deterministic top ten per page and a stable `(distance,
   source_ordinal)` final merge. Do not parallelize S3 authority checks.
-- [ ] Run a pinned memory-resident benchmark with 1,024 warmups and at least
-  10,000 raw observations for each surviving scan arm. Persist canonical raw-ns
+- [ ] Run arm 64 first in a pinned process. A 128-sample probe may reject only
+  when every total CPU sample exceeds 64 ms; otherwise run 1,024 warmups and
+  exactly 10,000 raw observations. Continue serially through arms 128 and 256
+  only while the preceding arm stays within the gates. Persist canonical raw-ns
   evidence and require routing plus decode/rerank no-load p99 at most 12 ms and
   total process CPU p99 at most 64 ms. Then run the identical path at fixed
   1,000-query/s offered load with 64 concurrent clients, including queueing and

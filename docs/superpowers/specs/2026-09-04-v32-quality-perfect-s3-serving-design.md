@@ -142,6 +142,22 @@ smallest surviving budget with 320/320 containment. That choice is then frozen
 for the disjoint 9.99M and 100M cohorts. A cohort failure does not reopen the
 ladder on that cohort.
 
+The preflight represents the exact 100M scale-sensitive cardinalities without
+allocating an artificial 100M-row corpus: 1,024 roots, 65,536 trained parents,
+163,192 routing microleaves, and 208,334 pages are resident, while only the
+exact arm scan slice (at most 262,144 deterministic codes) and one 480-row
+authenticated Arrow body are materialized. The body is reused as immutable
+input to the 16-page decode/rerank kernel; no S3 or corpus object is read. Each
+arm therefore executes its exact root filtering, eligible-centroid scoring,
+query-table construction, PQ scan, bounded candidate reduction, page reduction,
+Arrow validation, and exact rerank work without disguising a full-corpus scan.
+An initial 128-sample probe may reject early only when every measured total CPU
+sample exceeds 64 ms. Otherwise the authoritative run uses 1,024 warmups and
+10,000 raw observations. Arm 64 runs first; wider arms run only while a smaller
+arm remains within the compute gates. Receipts preserve every raw nanosecond
+sample and the stage decomposition; synthetic evidence may reject an arm but
+cannot qualify recall or release.
+
 Scale does not preserve a fixed fraction of corpus codes; locality rank is the
 quantity being tested. After the routing-microleaf implementation exists, a
 page-free V32 build and containment diagnostic first run on the authenticated
