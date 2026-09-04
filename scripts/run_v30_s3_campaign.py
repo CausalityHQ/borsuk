@@ -600,7 +600,7 @@ def execute_v30_spot_phase(
             rss_bytes = 0
             psi = 0.0
             swap_bytes = 0
-            progress = polls
+            progress = 0
         else:
             try:
                 value = json.loads(heartbeat)

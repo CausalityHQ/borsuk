@@ -345,7 +345,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             def describe_instances(self, **_request: object) -> dict[str, object]:
                 return {
                     "Reservations": [
-                        {"Instances": [{"State": {"Name": "terminated"}}]}
+                        {"Instances": [{"State": {"Name": "running"}}]}
                     ]
                 }
 
@@ -370,12 +370,22 @@ class V30SpotCampaignTests(unittest.TestCase):
                 return self.value
 
         class S3:
+            terminal_requests = 0
+
             def get_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
                 self.last = (Bucket, Key)
                 if Key.endswith("TERMINAL.json"):
+                    self.terminal_requests += 1
+                    if self.terminal_requests >= 3:
+                        return {
+                            "Body": Body(
+                                b'{"claim_eligible":false,"status":"passed"}\n'
+                            )
+                        }
+                if Key.endswith("HEARTBEAT.json") and self.terminal_requests == 2:
                     return {
                         "Body": Body(
-                            b'{"claim_eligible":false,"status":"passed"}\n'
+                            b'{"progress":0,"psi_full_avg10":0.0,"rss_bytes":1000,"state":"running","swap_bytes":0}\n'
                         )
                     }
                 raise KeyError(Key)
@@ -388,7 +398,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             ec2_client=ec2,
             s3_client=s3,
             sleep=lambda _seconds: None,
-            wall_observations=2,
+            wall_observations=4,
         )
         self.assertEqual(
             terminal, b'{"claim_eligible":false,"status":"passed"}\n'
