@@ -136,6 +136,7 @@ def _validate_construction(plan: V30ConstructionPlan) -> None:
         or geometry
         not in {
             (100_000, 16, 256, 8_192, 512),
+            (100_000, 16, 256, 8_192, 128),
             (9_990_000, 1_024, 32_768, 262_144, 512),
         }
     ):

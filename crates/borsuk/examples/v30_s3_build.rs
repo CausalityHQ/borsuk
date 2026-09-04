@@ -619,6 +619,9 @@ fn execute_with_store(args: Args, store: Arc<dyn ObjectStore>) -> borsuk::Result
             },
             "layout": {
                 "leaf_ranges": disk_artifact("leaf-ranges.arrow", &artifacts.layout.leaf_ranges.role, &artifacts.layout.leaf_ranges.sha256, artifacts.layout.leaf_ranges.encoded_bytes),
+                "maximum_leaf_rows": artifacts.maximum_leaf_rows,
+                "packing_algorithm": "balanced-cosine-v1",
+                "page_rows": args.page_rows,
                 "page_ranges": disk_artifact("page-offsets.parquet", &artifacts.layout.page_ranges.role, &artifacts.layout.page_ranges.sha256, artifacts.layout.page_ranges.encoded_bytes),
                 "source_rows": artifacts.source_rows,
             },
@@ -836,6 +839,16 @@ mod tests {
             assert_eq!(
                 manifest["source"]["corpus_manifest_sha256"],
                 corpus_manifest_sha
+            );
+            assert_eq!(
+                manifest["layout"]["packing_algorithm"],
+                "balanced-cosine-v1"
+            );
+            assert_eq!(manifest["layout"]["page_rows"], 32);
+            assert!(
+                manifest["layout"]["maximum_leaf_rows"]
+                    .as_u64()
+                    .is_some_and(|rows| (1..=320).contains(&rows))
             );
             store
                 .get(&Path::from(

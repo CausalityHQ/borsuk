@@ -1070,12 +1070,21 @@ pub struct V30ConstructionArtifacts {
     pub pages: Vec<V27PageIdentity>,
     pub source_rows: u64,
     pub training_rows: u64,
+    pub maximum_leaf_rows: u64,
 }
 
 impl V30ConstructedIndex {
     #[doc(hidden)]
     pub fn into_artifacts(self) -> Result<V30ConstructionArtifacts> {
         let source_rows = self.layout.layout.source_rows();
+        let maximum_leaf_rows = self
+            .layout
+            .layout
+            .leaves()
+            .iter()
+            .map(|leaf| leaf.row_count)
+            .max()
+            .ok_or_else(|| invalid("V30 construction leaf population is missing"))?;
         let pages = self
             .layout
             .layout
@@ -1095,6 +1104,7 @@ impl V30ConstructedIndex {
             source_rows,
             training_rows: u64::try_from(self.training_rows)
                 .map_err(|_| invalid("V30 construction training rows overflow"))?,
+            maximum_leaf_rows,
         })
     }
 }

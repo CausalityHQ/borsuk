@@ -136,7 +136,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             roots=16,
             leaves=256,
             training_rows=8_192,
-            page_rows=512,
+            page_rows=128,
         )
 
     def test_v30_campaign_separates_query_blind_construction_from_evaluation(self) -> None:
@@ -145,6 +145,7 @@ class V30SpotCampaignTests(unittest.TestCase):
         )
         self.assertIn("--expected-rows 100000", reduced[0]["UserData"])
         self.assertIn("--roots 16", reduced[0]["UserData"])
+        self.assertIn("--page-rows 128", reduced[0]["UserData"])
         specs = build_v30_construction_spot_specs(self.construction(), self.targets())
         self.assertEqual([spec["Placement"]["AvailabilityZone"] for spec in specs], ["eu-central-1a", "eu-central-1b"])
         for spec in specs:
