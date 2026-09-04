@@ -19,6 +19,7 @@ use crate::{
 const MAX_SCANNED_CODES: u64 = 1_000_000;
 const MAX_CANDIDATES: usize = 12_288;
 const MAX_SELECTED_PAGES: usize = 16;
+const CANDIDATE_PRUNE_WINDOW: usize = 32_768;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[doc(hidden)]
@@ -228,6 +229,46 @@ impl Ord for Candidate {
 impl PartialOrd for Candidate {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+struct BoundedCandidates {
+    limit: usize,
+    values: Vec<Candidate>,
+}
+
+impl BoundedCandidates {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            values: Vec::with_capacity(limit + CANDIDATE_PRUNE_WINDOW),
+        }
+    }
+
+    fn insert(&mut self, candidate: Candidate) {
+        self.values.push(candidate);
+        if self.values.len() == self.limit + CANDIDATE_PRUNE_WINDOW {
+            self.prune();
+        }
+    }
+
+    fn prune(&mut self) {
+        if self.values.len() > self.limit {
+            self.values
+                .select_nth_unstable_by(self.limit, Candidate::cmp);
+            self.values.truncate(self.limit);
+        }
+    }
+
+    #[cfg(test)]
+    fn storage_len(&self) -> usize {
+        self.values.len()
+    }
+
+    fn finish(mut self) -> Vec<Candidate> {
+        self.prune();
+        self.values.sort_unstable();
+        self.values
     }
 }
 
@@ -491,7 +532,7 @@ impl V30Router {
             .iter()
             .map(|(_, leaf)| *leaf as u32)
             .collect::<Vec<_>>();
-        let mut candidates = BinaryHeap::with_capacity(arm.candidate_depth + 1);
+        let mut candidates = BoundedCandidates::new(arm.candidate_depth);
         let mut base = Vec::with_capacity(32);
         let mut base_slots = Vec::with_capacity(32);
         let mut high = Vec::with_capacity(32);
@@ -542,21 +583,11 @@ impl V30Router {
                         score: scores[(logical - block_start) as usize],
                         logical,
                     };
-                    if candidates.len() < arm.candidate_depth {
-                        candidates.push(candidate);
-                    } else if candidates.peek().is_some_and(|worst| candidate < *worst) {
-                        candidates.pop();
-                        candidates.push(candidate);
-                    }
+                    candidates.insert(candidate);
                 }
             }
         }
-        let mut ranked = candidates.into_vec();
-        ranked.sort_unstable_by(|left, right| {
-            left.score
-                .total_cmp(&right.score)
-                .then_with(|| left.logical.cmp(&right.logical))
-        });
+        let ranked = candidates.finish();
         let mut seen = std::collections::BTreeSet::new();
         let mut pages = Vec::with_capacity(arm.page_count);
         for candidate in &ranked {
@@ -699,8 +730,8 @@ mod tests {
     use half::f16;
 
     use super::{
-        ExactTopK, V30Index, V30Match, V30PageStore, V30Router, V30RoutingTargetStage,
-        V30SearchArm, V30SearchPhase,
+        BoundedCandidates, Candidate, ExactTopK, V30Index, V30Match, V30PageStore, V30Router,
+        V30RoutingTargetStage, V30SearchArm, V30SearchPhase,
     };
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
@@ -973,6 +1004,32 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn v30_s3_search_candidate_retention_matches_full_sort_and_stays_bounded() {
+        // Break caught: routing pays heap-maintenance cost for every scanned row,
+        // changes the registered (score, logical) order, or buffers a full scan.
+        const LIMIT: usize = 257;
+        const PRUNE_WINDOW: usize = 32_768;
+        let input = (0..100_000_u64)
+            .rev()
+            .map(|logical| Candidate {
+                score: ((logical * 17) % 4_099) as f32 / 37.0,
+                logical,
+            })
+            .collect::<Vec<_>>();
+        let mut expected = input.clone();
+        expected.sort_unstable();
+        expected.truncate(LIMIT);
+
+        let mut retained = BoundedCandidates::new(LIMIT);
+        for candidate in input {
+            retained.insert(candidate);
+            assert!(retained.storage_len() <= LIMIT + PRUNE_WINDOW);
+        }
+
+        assert_eq!(retained.finish(), expected);
     }
 
     struct MemoryStore {
