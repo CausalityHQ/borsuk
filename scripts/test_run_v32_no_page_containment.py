@@ -148,6 +148,8 @@ class V32NoPageContainmentTests(unittest.TestCase):
         miss: bool = False,
         candidates_retained: int = 12_288,
         codes_scanned: int | None = None,
+        leaves_eligible: int = 128,
+        leaves_scanned: int = 64,
     ) -> bytes:
         diagnostics = []
         for rank in range(10):
@@ -160,7 +162,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     "logical": (query_ordinal * 100 + rank + 1) % 1_000_000,
                     "page_ordinal": query_ordinal * 10 + rank,
                     "reciprocal_rank_selected": selected,
-                    "routing_leaf_rank": query_ordinal % 128 + 1,
+                    "routing_leaf_rank": query_ordinal % leaves_scanned + 1,
                     "stage": "selected-page" if selected else "candidate-retention",
                 }
             )
@@ -178,8 +180,8 @@ class V32NoPageContainmentTests(unittest.TestCase):
                             if codes_scanned is None
                             else codes_scanned
                         ),
-                        "leaves_eligible": 128,
-                        "leaves_scanned": 128,
+                        "leaves_eligible": leaves_eligible,
+                        "leaves_scanned": leaves_scanned,
                         "pages_considered": 20,
                         "peak_query_table_pairs_live": 1,
                         "query_table_pairs_built": 1,
@@ -232,6 +234,33 @@ class V32NoPageContainmentTests(unittest.TestCase):
             {"128"},
         )
 
+    def test_v32_containment_clamps_leaf_beam_to_the_selected_root_frontier(self) -> None:
+        # Break caught: the Rust router correctly clamps a wider beam to a
+        # smaller selected-root frontier, but the independent reducer rejects
+        # that bounded work before it can classify containment.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, truth = self.fixture(Path(temporary))
+            plan = replace(plan, leaf_beam=256)
+            results = {
+                query: self.diagnostic(
+                    query,
+                    leaves_eligible=73,
+                    leaves_scanned=73,
+                )
+                for query in range(64, 96)
+            }
+            payload = run_v32_no_page_containment(
+                plan,
+                truth,
+                invoke=lambda command: results[
+                    int(command[command.index("--query-start") + 1])
+                ],
+            )
+        value = json.loads(payload)
+        self.assertEqual(value["maximum_leaves_eligible"], 73)
+        self.assertEqual(value["maximum_leaves_scanned"], 73)
+        self.assertEqual(value["selected_page_hits"], 320)
+
     def test_v32_100k_rank_evidence_caps_candidates_at_scanned_population(self) -> None:
         # Break caught: the 100K rank-envelope leg is rejected because its root
         # frontier contains fewer than the serving maximum of 12,288 rows.
@@ -278,8 +307,8 @@ class V32NoPageContainmentTests(unittest.TestCase):
         self.assertEqual(value["page_body_reads"], 0)
         self.assertEqual(value["maximum_codes_scanned"], 40_095)
         self.assertEqual(value["maximum_leaves_eligible"], 128)
-        self.assertEqual(value["maximum_leaves_scanned"], 128)
-        self.assertEqual(value["maximum_truth_microleaf_rank"], 96)
+        self.assertEqual(value["maximum_leaves_scanned"], 64)
+        self.assertEqual(value["maximum_truth_microleaf_rank"], 32)
         self.assertEqual(value["maximum_query_table_pairs_built"], 1)
         self.assertEqual(value["maximum_peak_query_table_pairs_live"], 1)
         self.assertEqual(value["maximum_routing_leaf_rows"], 1_024)
