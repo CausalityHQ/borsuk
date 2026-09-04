@@ -200,6 +200,11 @@ mod v28_s3_pq;
 mod v28_s3_search;
 #[allow(
     dead_code,
+    reason = "V30 layout authority is wired into its bounded builder in the next planned slice"
+)]
+mod v30_s3_layout;
+#[allow(
+    dead_code,
     reason = "V30 variable-rate codec is wired into layout in the next planned slice"
 )]
 mod v30_s3_pq;
