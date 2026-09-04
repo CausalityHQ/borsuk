@@ -10,13 +10,16 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from scripts.build_v30_reduced_truth import build_v30_reduced_truth
+from scripts.build_v30_reduced_truth import (
+    build_v30_reduced_truth,
+    build_v32_streaming_prefix_truth,
+)
 
 
-def embeddings(rows: int) -> bytes:
+def embeddings(rows: int, *, start: int = 0) -> bytes:
     values = np.zeros((rows, 96), dtype=np.float32)
     for row in range(rows):
-        values[row, row % 96] = 1.0
+        values[row, (start + row) % 96] = 1.0
     child = pa.field("element", pa.float32(), nullable=False)
     array = pa.FixedSizeListArray.from_arrays(
         pa.array(values.reshape(-1), type=pa.float32()), 96
@@ -30,6 +33,206 @@ def embeddings(rows: int) -> bytes:
 
 
 class V30ReducedTruthTests(unittest.TestCase):
+    def test_v32_prefix_truth_streams_authenticated_shards_without_page_inputs(self) -> None:
+        shards = [embeddings(64, start=0), embeddings(64, start=64)]
+        manifest = {
+            "dataset_id": "deep-image-96",
+            "schema_version": 1,
+            "shards": [
+                {
+                    "encoded_bytes": len(payload),
+                    "physical_row_count": 64,
+                    "row_count": 64 if ordinal == 0 else 36,
+                    "row_start": ordinal * 64,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "uri": f"s3://frozen/train-{ordinal}.parquet",
+                }
+                for ordinal, payload in enumerate(shards)
+            ],
+            "source_rows": 100,
+        }
+        manifest_bytes = (
+            json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        )
+        query = embeddings(64)
+        requested: list[str] = []
+
+        def fetch(uri: str) -> bytes:
+            requested.append(uri)
+            return shards[int(uri.removesuffix(".parquet").rsplit("-", 1)[1])]
+
+        truth, receipt = build_v32_streaming_prefix_truth(
+            manifest_bytes,
+            corpus_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+            corpus_manifest_bytes=len(manifest_bytes),
+            expected_source_rows=100,
+            expected_shard_count=2,
+            query_parquet=query,
+            query_sha256=hashlib.sha256(query).hexdigest(),
+            query_bytes=len(query),
+            query_start=0,
+            query_count=32,
+            fetch=fetch,
+        )
+        self.assertEqual(
+            requested,
+            ["s3://frozen/train-0.parquet", "s3://frozen/train-1.parquet"],
+        )
+        rows = pq.read_table(pa.BufferReader(truth))["neighbors_id"].to_pylist()
+        self.assertEqual(rows[0][:2], [0, 96])
+        value = json.loads(receipt)
+        self.assertEqual(value["source_rows"], 100)
+        self.assertEqual(value["shards_read"], 2)
+        self.assertEqual(value["corpus_shards"], manifest["shards"])
+        self.assertEqual(value["truth_sha256"], hashlib.sha256(truth).hexdigest())
+        self.assertEqual(
+            value["truth_ids_sha256"],
+            hashlib.sha256(np.asarray(rows, dtype="<i8").tobytes()).hexdigest(),
+        )
+        self.assertGreater(value["rank_10_11_tie_queries"], 0)
+        self.assertFalse(value["claim_eligible"])
+
+    def test_v32_prefix_truth_matches_monolithic_ids_and_is_deterministic(self) -> None:
+        shards = [embeddings(64, start=0), embeddings(64, start=64)]
+        manifest = {
+            "dataset_id": "deep-image-96",
+            "schema_version": 1,
+            "shards": [
+                {
+                    "encoded_bytes": len(payload),
+                    "physical_row_count": 64,
+                    "row_count": 64 if ordinal == 0 else 36,
+                    "row_start": ordinal * 64,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "uri": f"s3://frozen/train-{ordinal}.parquet",
+                }
+                for ordinal, payload in enumerate(shards)
+            ],
+            "source_rows": 100,
+        }
+        manifest_bytes = (
+            json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        )
+        corpus = embeddings(100)
+        query = embeddings(64)
+        arguments = dict(
+            corpus_manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+            corpus_manifest_bytes=len(manifest_bytes),
+            expected_source_rows=100,
+            expected_shard_count=2,
+            query_parquet=query,
+            query_sha256=hashlib.sha256(query).hexdigest(),
+            query_bytes=len(query),
+            query_start=0,
+            query_count=32,
+            fetch=lambda uri: shards[
+                int(uri.removesuffix(".parquet").rsplit("-", 1)[1])
+            ],
+        )
+        first_truth, first_receipt = build_v32_streaming_prefix_truth(
+            manifest_bytes, **arguments
+        )
+        second_truth, second_receipt = build_v32_streaming_prefix_truth(
+            manifest_bytes, **arguments
+        )
+        monolithic_truth, _ = build_v30_reduced_truth(
+            corpus,
+            corpus_sha256=hashlib.sha256(corpus).hexdigest(),
+            corpus_bytes=len(corpus),
+            physical_rows=100,
+            source_rows=100,
+            query_parquet=query,
+            query_sha256=hashlib.sha256(query).hexdigest(),
+            query_bytes=len(query),
+            query_start=0,
+            query_count=32,
+        )
+        def ids(payload: bytes) -> list[list[int]]:
+            return pq.read_table(pa.BufferReader(payload))["neighbors_id"].to_pylist()
+
+        self.assertEqual(ids(first_truth), ids(monolithic_truth))
+        self.assertEqual(first_truth, second_truth)
+        self.assertEqual(first_receipt, second_receipt)
+
+    def test_v32_prefix_truth_rejects_geometry_and_duplicate_shard_roles(self) -> None:
+        shard = embeddings(64)
+        manifest = {
+            "dataset_id": "deep-image-96",
+            "schema_version": 1,
+            "shards": [
+                {
+                    "encoded_bytes": len(shard),
+                    "physical_row_count": 64,
+                    "row_count": 32,
+                    "row_start": ordinal * 32,
+                    "sha256": hashlib.sha256(shard).hexdigest(),
+                    "uri": "s3://frozen/duplicate.parquet",
+                }
+                for ordinal in range(2)
+            ],
+            "source_rows": 64,
+        }
+        payload = json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        query = embeddings(64)
+        arguments = dict(
+            corpus_manifest_sha256=hashlib.sha256(payload).hexdigest(),
+            corpus_manifest_bytes=len(payload),
+            expected_source_rows=64,
+            expected_shard_count=2,
+            query_parquet=query,
+            query_sha256=hashlib.sha256(query).hexdigest(),
+            query_bytes=len(query),
+            query_start=0,
+            query_count=32,
+            fetch=lambda _uri: shard,
+        )
+        with self.assertRaisesRegex(ValueError, "shard role authority"):
+            build_v32_streaming_prefix_truth(payload, **arguments)
+        unique = json.loads(payload)
+        unique["shards"][1]["uri"] = "s3://frozen/other.parquet"
+        unique_payload = (
+            json.dumps(unique, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        )
+        arguments["corpus_manifest_sha256"] = hashlib.sha256(unique_payload).hexdigest()
+        arguments["corpus_manifest_bytes"] = len(unique_payload)
+        arguments["expected_source_rows"] = 65
+        with self.assertRaisesRegex(ValueError, "expected geometry"):
+            build_v32_streaming_prefix_truth(unique_payload, **arguments)
+
+    def test_v32_prefix_truth_rejects_manifest_or_shard_authority_drift(self) -> None:
+        shard = embeddings(64)
+        manifest = {
+            "dataset_id": "deep-image-96",
+            "schema_version": 1,
+            "shards": [
+                {
+                    "encoded_bytes": len(shard),
+                    "physical_row_count": 64,
+                    "row_count": 64,
+                    "row_start": 0,
+                    "sha256": "0" * 64,
+                    "uri": "s3://frozen/train.parquet",
+                }
+            ],
+            "source_rows": 64,
+        }
+        payload = json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        query = embeddings(64)
+        with self.assertRaisesRegex(ValueError, "shard byte authority"):
+            build_v32_streaming_prefix_truth(
+                payload,
+                corpus_manifest_sha256=hashlib.sha256(payload).hexdigest(),
+                corpus_manifest_bytes=len(payload),
+                expected_source_rows=64,
+                expected_shard_count=1,
+                query_parquet=query,
+                query_sha256=hashlib.sha256(query).hexdigest(),
+                query_bytes=len(query),
+                query_start=0,
+                query_count=32,
+                fetch=lambda _uri: shard,
+            )
+
     def test_v30_reduced_truth_direct_cli_writes_only_named_outputs(self) -> None:
         corpus = embeddings(128)
         query = embeddings(64)

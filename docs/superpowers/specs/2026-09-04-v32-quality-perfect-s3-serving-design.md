@@ -99,7 +99,13 @@ gate is a query-blind 1,000,000-row construction with 128 roots, 4,096 leaves,
 diagnostic then requires 320/320 truth IDs to be contained by the selected 16
 pages while reading zero page bodies. It also requires at most 3,145,728
 selected-page bytes, at most 65,536 scanned codes, and at most 1,024 rows
-in any leaf. Failure stops before any page-latency measurement.
+in any leaf. The published 9.99-million-row neighbor table is not valid truth
+for this prefix. A separate query-enabled preparation phase therefore streams
+the same six authenticated corpus shards one at a time, computes exact top-10
+neighbors for the fixed 32 queries with deterministic distance/source-ordinal
+ties, and persists only a canonical 32-row Parquet truth artifact and receipt.
+It receives no construction or page capability and never materializes the
+complete prefix. Failure stops before any page-latency measurement.
 
 Only perfect 1M containment permits a 16-object same-AZ S3 Express
 microbenchmark using already-selected page objects; it is not a corpus copy.

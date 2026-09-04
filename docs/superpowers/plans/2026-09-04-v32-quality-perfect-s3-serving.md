@@ -89,6 +89,7 @@
 
 - [ ] Emit `logical-sources.arrow` from construction in logical order using bounded batches; bind its filename, role, length, and SHA-256 in the strict manifest without loading it in normal serving.
 - [ ] Freeze the 1M geometry at 128 roots, 4,096 leaves, 32,768 training rows, and 512-row pages.
+- [ ] In a separate query-enabled, page-blind Spot phase, stream the six authenticated prefix shards one at a time and freeze exact deterministic top-10 Parquet truth for the 32 development queries; do not reuse the incompatible 9.99M neighbor table.
 - [ ] Run 32 development queries against ten exact truth IDs each through the no-page diagnostic. Require 320/320 containment, exactly 16 selected pages, at most 3,145,728 selected-page bytes, at most 65,536 scanned codes, at most 1,024 rows in any leaf, and zero page reads.
 - [ ] Use one `causality` Spot worker with the original-session monitor and immediate termination. Stop all later latency/corpus work on failure.
 - [ ] Record the claim-ineligible terminal and commit the evidence.
