@@ -118,6 +118,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             source_rows=9_990_000,
             query_start=64,
             query_count=32,
+            page_count=16,
         )
 
     def reduced_construction(self) -> V30ConstructionPlan:
@@ -198,6 +199,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("--s3-page-prefix s3://authority/v30/build-a0001/pages", script)
             self.assertIn("--query-start 64", script)
             self.assertIn("--query-count 32", script)
+            self.assertIn("--page-count 16", script)
             self.assertNotIn("--construction-manifest-s3", script)
             self.assertNotIn("corpus.json", script)
             self.assertNotIn("v30_s3_build", script)

@@ -65,6 +65,7 @@ class V30EvaluationPlan:
     source_rows: int
     query_start: int
     query_count: int
+    page_count: int
 
 
 @dataclass(frozen=True)
@@ -167,6 +168,7 @@ def _validate_evaluation(plan: V30EvaluationPlan) -> None:
         or plan.source_rows not in {100_000, 9_990_000}
         or plan.query_start < 0
         or plan.query_count != 32
+        or not 1 <= plan.page_count <= 16
     ):
         raise ValueError("V30 evaluation authority differs")
 
@@ -397,6 +399,8 @@ def _evaluation_script(plan: V30EvaluationPlan) -> str:
             str(plan.query_start),
             "--query-count",
             str(plan.query_count),
+            "--page-count",
+            str(plan.page_count),
         ]
     )
     output_bucket, output_key = _split_s3(plan.output_prefix)
