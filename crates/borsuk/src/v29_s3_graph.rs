@@ -9,7 +9,10 @@ use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder}
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{BorsukError, Result};
+use crate::{
+    BorsukError, Result,
+    v28_s3_search::{V28PageSelection, V28Router, V28SearchArm},
+};
 
 const GRAPH_AUTHORITY_KEY: &str = "borsuk.v29.authority";
 const GRAPH_DIGEST_KEY: &str = "borsuk.v29.graph_sha256";
@@ -402,6 +405,44 @@ pub(crate) fn select_v29_graph_pages(
         evidence_pages: evidence_pages.len(),
         edge_visits,
     })
+}
+
+pub(crate) fn select_v29_graph_page_identities(
+    router: &V28Router,
+    graph: &V29PageGraph,
+    query: &[f32; 96],
+    arm: V28SearchArm,
+) -> Result<V28PageSelection> {
+    if graph.authority.page_count as usize != router.layout.pages.len() {
+        return Err(invalid("V29 graph layout page count differs"));
+    }
+    let evidence = router.rank_page_evidence(query, arm)?;
+    let evidence_ordinals = evidence
+        .pages
+        .iter()
+        .map(|page| page.ordinal)
+        .collect::<Vec<_>>();
+    let selected = select_v29_graph_pages(graph, &evidence_ordinals)?;
+    let identities = router
+        .layout
+        .pages
+        .iter()
+        .map(|page| (page.identity.ordinal, &page.identity))
+        .collect::<BTreeMap<_, _>>();
+    let pages = selected
+        .pages
+        .into_iter()
+        .map(|ordinal| {
+            identities
+                .get(&ordinal)
+                .map(|identity| (*identity).clone())
+                .ok_or_else(|| invalid("V29 graph page identity differs"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut work = evidence.work;
+    work.pages_considered = evidence.pages.len();
+    work.selected_pages = pages.len();
+    Ok(V28PageSelection { pages, work })
 }
 
 #[cfg(test)]
