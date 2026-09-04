@@ -298,6 +298,34 @@ pub(crate) struct V30Fidelity {
 }
 
 impl V30Fidelity {
+    pub(crate) fn from_high_words(logical_rows: usize, high_bits: Vec<u32>) -> Result<Self> {
+        let groups = logical_rows.div_ceil(FIDELITY_GROUP_ROWS);
+        if logical_rows == 0 || high_bits.len() != groups * FIDELITY_WORDS_PER_GROUP {
+            return Err(invalid("V30 fidelity storage differs"));
+        }
+        if (logical_rows..groups * FIDELITY_GROUP_ROWS).any(|logical| {
+            high_bits[logical / u32::BITS as usize] & (1 << (logical % u32::BITS as usize)) != 0
+        }) {
+            return Err(invalid("V30 fidelity padding differs"));
+        }
+        let mut rank = 0_u32;
+        let rank_checkpoints = high_bits
+            .chunks_exact(FIDELITY_WORDS_PER_GROUP)
+            .map(|words| {
+                let checkpoint = rank;
+                rank = rank
+                    .checked_add(words.iter().map(|word| word.count_ones()).sum::<u32>())
+                    .ok_or_else(|| invalid("V30 fidelity rank overflows"))?;
+                Ok(checkpoint)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            logical_rows,
+            high_bits,
+            rank_checkpoints,
+        })
+    }
+
     pub(crate) fn from_errors(errors: &[f32], fraction_ppm: u32) -> Result<Self> {
         if errors.is_empty()
             || ![0, 50_000, 100_000, 200_000].contains(&fraction_ppm)
@@ -330,22 +358,7 @@ impl V30Fidelity {
                 high_bits[word] |= 1 << (logical % u32::BITS as usize);
             }
         }
-        let mut rank = 0_u32;
-        let rank_checkpoints = high_bits
-            .chunks_exact(FIDELITY_WORDS_PER_GROUP)
-            .map(|words| {
-                let checkpoint = rank;
-                rank = rank
-                    .checked_add(words.iter().map(|word| word.count_ones()).sum::<u32>())
-                    .ok_or_else(|| invalid("V30 fidelity rank overflows"))?;
-                Ok(checkpoint)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Self {
-            logical_rows: errors.len(),
-            high_bits,
-            rank_checkpoints,
-        })
+        Self::from_high_words(errors.len(), high_bits)
     }
 
     pub(crate) fn high_count(&self) -> usize {

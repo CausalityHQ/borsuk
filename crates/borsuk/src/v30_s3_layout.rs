@@ -1,4 +1,9 @@
-use std::{io::Cursor, sync::Arc};
+use std::{
+    cmp::Ordering,
+    collections::BinaryHeap,
+    io::{Cursor, Read, Write},
+    sync::Arc,
+};
 
 use arrow_array::{Array, RecordBatch, StringArray, UInt16Array, UInt32Array, UInt64Array};
 use arrow_ipc::{
@@ -11,12 +16,281 @@ use bytes::Bytes;
 use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
 use sha2::{Digest, Sha256};
 
-use crate::{BorsukError, Result, V27PageIdentity};
+use crate::{BorsukError, Result, V27PageIdentity, v30_s3_pq::V30Fidelity};
 
 const MAX_PAGE_ROWS: u16 = 512;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V30FidelitySelectionConfig {
+    pub(crate) sort_memory_rows: usize,
+    pub(crate) fidelity_ppm: u32,
+}
+
+pub(crate) trait V30Scratch {
+    fn write_scratch(
+        &mut self,
+        key: &str,
+        write: &mut dyn FnMut(&mut dyn Write) -> Result<()>,
+    ) -> Result<()>;
+    fn open_scratch(&self, key: &str) -> Result<Box<dyn Read + Send>>;
+    fn remove_scratch(&mut self, key: &str) -> Result<()>;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ErrorHeapEntry {
+    error: f32,
+    source: u64,
+    run: usize,
+}
+
+impl PartialEq for ErrorHeapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.error.to_bits() == other.error.to_bits()
+            && self.source == other.source
+            && self.run == other.run
+    }
+}
+
+impl Eq for ErrorHeapEntry {}
+
+impl Ord for ErrorHeapEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.error
+            .total_cmp(&other.error)
+            .then_with(|| other.source.cmp(&self.source))
+            .then_with(|| other.run.cmp(&self.run))
+    }
+}
+
+impl PartialOrd for ErrorHeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourceHeapEntry {
+    source: u64,
+    run: usize,
+}
+
+impl Ord for SourceHeapEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .source
+            .cmp(&self.source)
+            .then_with(|| other.run.cmp(&self.run))
+    }
+}
+
+impl PartialOrd for SourceHeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn scratch_io<T>(result: std::io::Result<T>) -> Result<T> {
+    result.map_err(|error| invalid(&format!("V30 fidelity scratch I/O failed: {error}")))
+}
+
+fn read_error(reader: &mut dyn Read) -> Result<Option<(f32, u64)>> {
+    let mut bytes = [0_u8; 12];
+    match scratch_io(reader.read(&mut bytes[..1]))? {
+        0 => return Ok(None),
+        1 => scratch_io(reader.read_exact(&mut bytes[1..]))?,
+        _ => unreachable!("one-byte reads cannot return more than one byte"),
+    }
+    Ok(Some((
+        f32::from_bits(u32::from_le_bytes(bytes[..4].try_into().unwrap())),
+        u64::from_le_bytes(bytes[4..].try_into().unwrap()),
+    )))
+}
+
+fn read_source(reader: &mut dyn Read) -> Result<Option<u64>> {
+    let mut bytes = [0_u8; 8];
+    match scratch_io(reader.read(&mut bytes[..1]))? {
+        0 => return Ok(None),
+        1 => scratch_io(reader.read_exact(&mut bytes[1..]))?,
+        _ => unreachable!("one-byte reads cannot return more than one byte"),
+    }
+    Ok(Some(u64::from_le_bytes(bytes)))
+}
+
+fn flush_error_run<S: V30Scratch>(
+    scratch: &mut S,
+    keys: &mut Vec<String>,
+    buffer: &mut Vec<(f32, u64)>,
+) -> Result<()> {
+    if buffer.is_empty() {
+        return Ok(());
+    }
+    buffer.sort_unstable_by(|left, right| {
+        right
+            .0
+            .total_cmp(&left.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    let key = format!("v30-fidelity-error-{:08}", keys.len());
+    let mut write = |output: &mut dyn Write| {
+        for (error, source) in buffer.iter() {
+            scratch_io(output.write_all(&error.to_bits().to_le_bytes()))?;
+            scratch_io(output.write_all(&source.to_le_bytes()))?;
+        }
+        Ok(())
+    };
+    scratch.write_scratch(&key, &mut write)?;
+    keys.push(key);
+    buffer.clear();
+    Ok(())
+}
+
+fn flush_source_run<S: V30Scratch>(
+    scratch: &mut S,
+    keys: &mut Vec<String>,
+    buffer: &mut Vec<u64>,
+) -> Result<()> {
+    if buffer.is_empty() {
+        return Ok(());
+    }
+    buffer.sort_unstable();
+    let key = format!("v30-fidelity-selected-{:08}", keys.len());
+    let mut write = |output: &mut dyn Write| {
+        for source in buffer.iter() {
+            scratch_io(output.write_all(&source.to_le_bytes()))?;
+        }
+        Ok(())
+    };
+    scratch.write_scratch(&key, &mut write)?;
+    keys.push(key);
+    buffer.clear();
+    Ok(())
+}
+
+pub(crate) fn select_v30_high_fidelity<I, S>(
+    errors: I,
+    config: V30FidelitySelectionConfig,
+    scratch: &mut S,
+) -> Result<V30Fidelity>
+where
+    I: IntoIterator<Item = (u64, f32)>,
+    S: V30Scratch,
+{
+    if config.sort_memory_rows == 0 || config.fidelity_ppm != 50_000 {
+        return Err(invalid("V30 fidelity selection configuration differs"));
+    }
+    let mut error_keys = Vec::new();
+    let mut selected_keys = Vec::new();
+    let result = (|| {
+        let mut buffer = Vec::with_capacity(config.sort_memory_rows);
+        let mut source_rows = 0_u64;
+        for (source, error) in errors {
+            if source != source_rows || !error.is_finite() || error < 0.0 {
+                return Err(invalid("V30 fidelity error authority differs"));
+            }
+            buffer.push((error, source));
+            source_rows += 1;
+            if buffer.len() == config.sort_memory_rows {
+                flush_error_run(scratch, &mut error_keys, &mut buffer)?;
+            }
+        }
+        flush_error_run(scratch, &mut error_keys, &mut buffer)?;
+        if source_rows == 0 || error_keys.len() > 32 {
+            return Err(invalid("V30 fidelity merge head bound differs"));
+        }
+        let selected_rows = source_rows
+            .checked_mul(u64::from(config.fidelity_ppm))
+            .and_then(|value| value.checked_div(1_000_000))
+            .ok_or_else(|| invalid("V30 fidelity selection count overflows"))?;
+        if selected_rows == 0 {
+            return Err(invalid("V30 fidelity selection population differs"));
+        }
+
+        let mut readers = error_keys
+            .iter()
+            .map(|key| scratch.open_scratch(key))
+            .collect::<Result<Vec<_>>>()?;
+        let mut heap = BinaryHeap::new();
+        for (run, reader) in readers.iter_mut().enumerate() {
+            if let Some((error, source)) = read_error(reader.as_mut())? {
+                heap.push(ErrorHeapEntry { error, source, run });
+            }
+        }
+        let mut selected = Vec::with_capacity(config.sort_memory_rows);
+        for _ in 0..selected_rows {
+            let entry = heap
+                .pop()
+                .ok_or_else(|| invalid("V30 fidelity error merge ended early"))?;
+            selected.push(entry.source);
+            if selected.len() == config.sort_memory_rows {
+                flush_source_run(scratch, &mut selected_keys, &mut selected)?;
+            }
+            if let Some((error, source)) = read_error(readers[entry.run].as_mut())? {
+                heap.push(ErrorHeapEntry {
+                    error,
+                    source,
+                    run: entry.run,
+                });
+            }
+        }
+        flush_source_run(scratch, &mut selected_keys, &mut selected)?;
+        drop(readers);
+        if selected_keys.len() > 32 {
+            return Err(invalid("V30 fidelity selected merge head bound differs"));
+        }
+
+        let mut readers = selected_keys
+            .iter()
+            .map(|key| scratch.open_scratch(key))
+            .collect::<Result<Vec<_>>>()?;
+        let mut heap = BinaryHeap::new();
+        for (run, reader) in readers.iter_mut().enumerate() {
+            if let Some(source) = read_source(reader.as_mut())? {
+                heap.push(SourceHeapEntry { source, run });
+            }
+        }
+        let logical_rows = usize::try_from(source_rows)
+            .map_err(|_| invalid("V30 fidelity source rows overflow"))?;
+        let groups = logical_rows.div_ceil(128);
+        let mut high_bits = vec![0_u32; groups * 4];
+        let mut previous = None;
+        let mut emitted = 0_u64;
+        while let Some(entry) = heap.pop() {
+            if previous.is_some_and(|value| entry.source <= value) || entry.source >= source_rows {
+                return Err(invalid("V30 fidelity selected source order differs"));
+            }
+            previous = Some(entry.source);
+            let source = usize::try_from(entry.source)
+                .map_err(|_| invalid("V30 fidelity source ordinal overflows"))?;
+            high_bits[source / 32] |= 1 << (source % 32);
+            emitted += 1;
+            if let Some(source) = read_source(readers[entry.run].as_mut())? {
+                heap.push(SourceHeapEntry {
+                    source,
+                    run: entry.run,
+                });
+            }
+        }
+        if emitted != selected_rows {
+            return Err(invalid("V30 fidelity selected row count differs"));
+        }
+        V30Fidelity::from_high_words(logical_rows, high_bits)
+    })();
+
+    let mut cleanup_error = None;
+    for key in error_keys.iter().chain(&selected_keys).rev() {
+        if let Err(error) = scratch.remove_scratch(key) {
+            cleanup_error.get_or_insert(error);
+        }
+    }
+    match (result, cleanup_error) {
+        (Err(error), _) => Err(error),
+        (Ok(_), Some(error)) => Err(error),
+        (Ok(value), None) => Ok(value),
+    }
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -385,9 +659,14 @@ pub(crate) fn decode_v30_layout_artifacts(artifacts: &V30LayoutArtifacts) -> Res
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::BTreeMap,
+        io::{Cursor, Read, Write},
+    };
+
     use super::{
-        V30Layout, V30LeafRange, V30PageRange, decode_v30_layout_artifacts,
-        encode_v30_layout_artifacts,
+        V30FidelitySelectionConfig, V30Layout, V30LeafRange, V30PageRange, V30Scratch,
+        decode_v30_layout_artifacts, encode_v30_layout_artifacts, select_v30_high_fidelity,
     };
     use crate::V27PageIdentity;
 
@@ -428,6 +707,35 @@ mod tests {
             vec![page(0, 0, 0, 3), page(1, 0, 3, 2), page(2, 1, 5, 3)],
         )
         .unwrap()
+    }
+
+    #[derive(Default)]
+    struct Scratch {
+        runs: BTreeMap<String, Vec<u8>>,
+        peak_write: usize,
+    }
+
+    impl V30Scratch for Scratch {
+        fn write_scratch(
+            &mut self,
+            key: &str,
+            write: &mut dyn FnMut(&mut dyn Write) -> crate::Result<()>,
+        ) -> crate::Result<()> {
+            let mut bytes = Vec::new();
+            write(&mut bytes)?;
+            self.peak_write = self.peak_write.max(bytes.len());
+            self.runs.insert(key.to_owned(), bytes);
+            Ok(())
+        }
+
+        fn open_scratch(&self, key: &str) -> crate::Result<Box<dyn Read + Send>> {
+            Ok(Box::new(Cursor::new(self.runs[key].clone())))
+        }
+
+        fn remove_scratch(&mut self, key: &str) -> crate::Result<()> {
+            self.runs.remove(key);
+            Ok(())
+        }
     }
 
     #[test]
@@ -490,5 +798,65 @@ mod tests {
         let mut binding = artifacts;
         binding.source_rows += 1;
         assert!(decode_v30_layout_artifacts(&binding).is_err());
+    }
+
+    #[test]
+    fn v30_s3_layout_external_fidelity_selection_is_exact_bounded_and_cleans_scratch() {
+        // Break caught: construction retains every error/selected ID, chooses ties
+        // nondeterministically, or leaves spill data behind after the exact 5% merge.
+        let errors = (0..130_u64)
+            .map(|source| (source, ((source * 17) % 31) as f32))
+            .collect::<Vec<_>>();
+        let mut expected = errors.clone();
+        expected.sort_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        let expected = expected
+            .into_iter()
+            .take(6)
+            .map(|entry| entry.0)
+            .collect::<Vec<_>>();
+
+        let mut scratch = Scratch::default();
+        let fidelity = select_v30_high_fidelity(
+            errors,
+            V30FidelitySelectionConfig {
+                sort_memory_rows: 7,
+                fidelity_ppm: 50_000,
+            },
+            &mut scratch,
+        )
+        .unwrap();
+        assert_eq!(fidelity.high_count(), 6);
+        assert_eq!(
+            (0..130)
+                .filter(|source| fidelity.is_high(*source).unwrap())
+                .map(|source| source as u64)
+                .collect::<Vec<_>>(),
+            {
+                let mut values = expected;
+                values.sort_unstable();
+                values
+            }
+        );
+        assert!(scratch.peak_write <= 7 * 12);
+        assert!(scratch.runs.is_empty());
+
+        let mut scratch = Scratch::default();
+        assert!(
+            select_v30_high_fidelity(
+                vec![(0, 1.0), (2, 2.0)],
+                V30FidelitySelectionConfig {
+                    sort_memory_rows: 1,
+                    fidelity_ppm: 50_000,
+                },
+                &mut scratch,
+            )
+            .is_err()
+        );
+        assert!(scratch.runs.is_empty());
     }
 }
