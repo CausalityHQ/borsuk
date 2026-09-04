@@ -1,4 +1,7 @@
-use std::{cmp::Ordering, collections::BinaryHeap};
+use std::{
+    cmp::Ordering,
+    collections::{BinaryHeap, HashSet},
+};
 
 use half::f16;
 
@@ -84,6 +87,81 @@ pub trait V30PageStore: Send + Sync {
 pub struct V30Match {
     pub source_ordinal: u64,
     pub squared_distance: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExactCandidate {
+    source_ordinal: u64,
+    squared_distance: f64,
+}
+
+impl PartialEq for ExactCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.squared_distance.to_bits() == other.squared_distance.to_bits()
+            && self.source_ordinal == other.source_ordinal
+    }
+}
+
+impl Eq for ExactCandidate {}
+
+impl Ord for ExactCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.squared_distance
+            .total_cmp(&other.squared_distance)
+            .then_with(|| self.source_ordinal.cmp(&other.source_ordinal))
+    }
+}
+
+impl PartialOrd for ExactCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+struct ExactTopK {
+    limit: usize,
+    candidates: BinaryHeap<ExactCandidate>,
+}
+
+impl ExactTopK {
+    fn new(limit: usize) -> Result<Self> {
+        if limit == 0 || limit > 10 {
+            return Err(invalid("V30 result count differs"));
+        }
+        Ok(Self {
+            limit,
+            candidates: BinaryHeap::with_capacity(limit + 1),
+        })
+    }
+
+    fn insert(&mut self, value: V30Match) {
+        let candidate = ExactCandidate {
+            source_ordinal: value.source_ordinal,
+            squared_distance: value.squared_distance,
+        };
+        if self.candidates.len() < self.limit {
+            self.candidates.push(candidate);
+        } else if self
+            .candidates
+            .peek()
+            .is_some_and(|worst| candidate < *worst)
+        {
+            self.candidates.pop();
+            self.candidates.push(candidate);
+        }
+    }
+
+    fn finish(self) -> Vec<V30Match> {
+        let mut values = self.candidates.into_vec();
+        values.sort_unstable();
+        values
+            .into_iter()
+            .map(|value| V30Match {
+                source_ordinal: value.source_ordinal,
+                squared_distance: value.squared_distance,
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -530,8 +608,13 @@ impl<S: V30PageStore> V30Index<S> {
             return Err(invalid("V30 page byte bound differs"));
         }
         let mut decoded_rows = 0_usize;
-        let mut seen = std::collections::BTreeSet::new();
-        let mut matches = Vec::new();
+        let expected_rows = selection.pages.iter().try_fold(0_usize, |total, page| {
+            total
+                .checked_add(usize::from(page.primary_rows) + usize::from(page.replica_rows))
+                .ok_or_else(|| invalid("V30 selected row count overflows"))
+        })?;
+        let mut seen = HashSet::with_capacity(expected_rows);
+        let mut matches = ExactTopK::new(k)?;
         for (identity, body) in selection.pages.iter().zip(bodies) {
             let page = crate::decode_v27_page(identity, &body)?;
             decoded_rows = decoded_rows
@@ -553,22 +636,17 @@ impl<S: V30PageStore> V30Index<S> {
                 if !squared_distance.is_finite() {
                     return Err(invalid("V30 exact distance differs"));
                 }
-                matches.push(V30Match {
+                matches.insert(V30Match {
                     source_ordinal: row.source_ordinal,
                     squared_distance,
                 });
             }
         }
-        if matches.len() < k {
+        if seen.len() < k {
             return Err(invalid("V30 exact candidate count differs"));
         }
-        matches.sort_unstable_by(|left, right| {
-            left.squared_distance
-                .total_cmp(&right.squared_distance)
-                .then_with(|| left.source_ordinal.cmp(&right.source_ordinal))
-        });
-        let unique_rows = matches.len();
-        matches.truncate(k);
+        let unique_rows = seen.len();
+        let matches = matches.finish();
         Ok(V30SearchResult {
             matches,
             work: V30SearchWork {
@@ -594,7 +672,9 @@ mod tests {
 
     use half::f16;
 
-    use super::{V30Index, V30PageStore, V30Router, V30RoutingTargetStage, V30SearchArm};
+    use super::{
+        ExactTopK, V30Index, V30Match, V30PageStore, V30Router, V30RoutingTargetStage, V30SearchArm,
+    };
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
         v30_s3_layout::{V30Layout, V30LeafRange, V30PageRange, encode_v30_layout_artifacts},
@@ -833,6 +913,38 @@ mod tests {
                     },
                 )
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn v30_s3_search_exact_rerank_retains_only_k_with_distance_identity_ties() {
+        // Break caught: exact reranking allocates and sorts every decoded row,
+        // or changes the registered (distance, source ordinal) total order.
+        let mut top = ExactTopK::new(3).unwrap();
+        for (source_ordinal, squared_distance) in
+            [(8, 0.5), (3, 0.25), (7, 0.5), (1, 0.75), (2, 0.25)]
+        {
+            top.insert(V30Match {
+                source_ordinal,
+                squared_distance,
+            });
+        }
+        assert_eq!(
+            top.finish(),
+            vec![
+                V30Match {
+                    source_ordinal: 2,
+                    squared_distance: 0.25,
+                },
+                V30Match {
+                    source_ordinal: 3,
+                    squared_distance: 0.25,
+                },
+                V30Match {
+                    source_ordinal: 7,
+                    squared_distance: 0.5,
+                },
+            ]
         );
     }
 

@@ -301,18 +301,12 @@ struct ObjectPageStore {
     store: Arc<dyn ObjectStore>,
     prefix: ObjectPath,
     suffix: String,
+    runtime: Arc<tokio::runtime::Runtime>,
 }
 
 impl V30PageStore for ObjectPageStore {
     fn read_wave(&self, pages: &[borsuk::V27PageIdentity]) -> borsuk::Result<Vec<Vec<u8>>> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|source| BorsukError::Io {
-                path: PathBuf::from("tokio-runtime"),
-                source,
-            })?;
-        runtime.block_on(async {
+        self.runtime.block_on(async {
             let reads = pages.iter().map(|page| {
                 let store = Arc::clone(&self.store);
                 let path = ObjectPath::from(format!(
@@ -538,17 +532,7 @@ fn read_query(argument: &ArtifactArg, query_row: usize) -> borsuk::Result<[f32; 
     Err(invalid("V30 qualifier query row differs"))
 }
 
-fn run_search<S: V30PageStore>(
-    router: V30Router,
-    store: S,
-    arm: V30SearchArm,
-    query: &[f32; 96],
-    k: usize,
-) -> borsuk::Result<V30SearchResult> {
-    V30Index::new(router, store, arm)?.search(query, k)
-}
-
-fn run_batch<S: V30PageStore + Clone>(
+fn run_batch<S: V30PageStore>(
     router: V30Router,
     store: S,
     arm: V30SearchArm,
@@ -558,6 +542,7 @@ fn run_batch<S: V30PageStore + Clone>(
     k: usize,
 ) -> borsuk::Result<Vec<u8>> {
     let mut results = Vec::with_capacity(query_count);
+    let index = V30Index::new(router, store, arm)?;
     let query_end = query_start
         .checked_add(query_count)
         .ok_or_else(|| invalid("V30 qualifier query range overflows"))?;
@@ -565,7 +550,7 @@ fn run_batch<S: V30PageStore + Clone>(
         let query_vector = read_query(query, query_row)?;
         let cpu_before = process_cpu_nanoseconds()?;
         let started = Instant::now();
-        let result = run_search(router.clone(), store.clone(), arm, &query_vector, k)?;
+        let result = index.search(&query_vector, k)?;
         let elapsed_ns = u64::try_from(started.elapsed().as_nanos())
             .map_err(|_| invalid("V30 qualifier elapsed time overflows"))?;
         let process_cpu_ns = process_cpu_nanoseconds()?
@@ -697,12 +682,22 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
             });
             let (store, prefix) = parse_url_opts(&url, options)?;
             let store: Arc<dyn ObjectStore> = store.into();
+            let runtime = Arc::new(
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|source| BorsukError::Io {
+                        path: PathBuf::from("tokio-runtime"),
+                        source,
+                    })?,
+            );
             run_batch(
                 router,
                 ObjectPageStore {
                     store,
                     prefix,
                     suffix: manifest.page_key_suffix,
+                    runtime,
                 },
                 arm,
                 &args.query,
@@ -845,7 +840,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{fs, path::PathBuf, sync::Arc};
 
     use borsuk::{
         V27PageIdentity, V30Match, V30PageStore, V30RoutingTargetReport, V30RoutingTargetStage,
@@ -855,8 +850,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        Args, ArtifactArg, LocalPageStore, PageSource, diagnostic_bytes, execute, parse_args,
-        peak_rss_bytes, process_cpu_nanoseconds, read_manifest, result_bytes,
+        Args, ArtifactArg, LocalPageStore, ObjectPageStore, PageSource, diagnostic_bytes, execute,
+        parse_args, peak_rss_bytes, process_cpu_nanoseconds, read_manifest, result_bytes,
+        run_batch,
     };
 
     fn arguments() -> Vec<String> {
@@ -922,6 +918,42 @@ mod tests {
         let peak = peak_rss_bytes().unwrap();
         assert!(peak > 0);
         assert_eq!(peak % 1024, 0);
+    }
+
+    struct NonClonePageStore;
+
+    impl V30PageStore for NonClonePageStore {
+        fn read_wave(&self, _pages: &[V27PageIdentity]) -> borsuk::Result<Vec<Vec<u8>>> {
+            unreachable!("compile-only batch ownership contract")
+        }
+    }
+
+    #[test]
+    fn v30_s3_qualify_batch_reuses_one_index_without_cloning_router_or_store() {
+        // Break caught: every query clones the resident router/store and builds
+        // a fresh index instead of reusing one immutable serving instance.
+        let _runner = run_batch::<NonClonePageStore>;
+    }
+
+    #[test]
+    fn v30_s3_qualify_object_store_reuses_one_runtime_across_read_waves() {
+        // Break caught: every S3 query builds and tears down a Tokio runtime,
+        // adding scheduler setup to the measured serving CPU path.
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+        );
+        let store = ObjectPageStore {
+            store: Arc::new(object_store::memory::InMemory::new()),
+            prefix: object_store::path::Path::from("pages"),
+            suffix: ".arrow".to_owned(),
+            runtime: Arc::clone(&runtime),
+        };
+        assert!(store.read_wave(&[]).unwrap().is_empty());
+        assert!(store.read_wave(&[]).unwrap().is_empty());
+        assert_eq!(Arc::strong_count(&runtime), 2);
     }
 
     #[test]
