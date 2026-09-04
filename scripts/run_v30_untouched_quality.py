@@ -109,9 +109,15 @@ def build_qualifier_commands(plan: V30UntouchedPlan) -> tuple[tuple[str, ...], .
         "--s3-page-prefix",
         plan.page_s3_prefix,
     )
-    return tuple(
-        common + ("--query-row", str(row)) + arm
-        for row in range(plan.query_start, plan.query_start + plan.query_count)
+    return (
+        common
+        + (
+            "--query-start",
+            str(plan.query_start),
+            "--query-count",
+            str(plan.query_count),
+        )
+        + arm,
     )
 
 
@@ -123,6 +129,30 @@ def _read_exact(artifact: LocalArtifact) -> bytes:
     ):
         raise ValueError("V30 untouched artifact bytes differ")
     return data
+
+
+def _batch_results(payload: bytes) -> tuple[tuple[tuple[int, ...], dict[str, int]], ...]:
+    if type(payload) is not bytes or not payload.endswith(b"\n") or b"\n" in payload[:-1]:
+        raise ValueError("V30 batch result canonical bytes differ")
+    value = json.loads(payload)
+    expected = json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+    if (
+        payload != expected
+        or type(value) is not dict
+        or set(value) != {"claim_eligible", "results", "schema_version"}
+        or value["claim_eligible"] is not False
+        or value["schema_version"] != 1
+        or type(value["results"]) is not list
+        or len(value["results"]) != QUERY_COUNT
+    ):
+        raise ValueError("V30 batch result authority differs")
+    return tuple(
+        _query_result(
+            json.dumps(result, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+            + b"\n"
+        )
+        for result in value["results"]
+    )
 
 
 def run_v30_untouched_quality(
@@ -140,7 +170,7 @@ def run_v30_untouched_quality(
         query_start=plan.query_start,
         source_rows=plan.source_rows,
     )
-    parsed = tuple(_query_result(invoke(command)) for command in commands)
+    parsed = _batch_results(invoke(commands[0]))
     hits = tuple(
         len(frozenset(matches) & truth[ordinal])
         for ordinal, (matches, _work) in enumerate(parsed)

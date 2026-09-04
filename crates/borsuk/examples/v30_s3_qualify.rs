@@ -35,7 +35,8 @@ struct Args {
     manifest: ArtifactArg,
     artifact_dir: PathBuf,
     query: ArtifactArg,
-    query_row: usize,
+    query_start: usize,
+    query_count: usize,
     root_beam: usize,
     leaf_beam: usize,
     candidate_depth: usize,
@@ -273,6 +274,7 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
     })
 }
 
+#[derive(Clone)]
 struct LocalPageStore {
     directory: PathBuf,
     suffix: String,
@@ -292,6 +294,7 @@ impl V30PageStore for LocalPageStore {
     }
 }
 
+#[derive(Clone)]
 struct ObjectPageStore {
     store: Arc<dyn ObjectStore>,
     prefix: ObjectPath,
@@ -513,6 +516,46 @@ fn run_search<S: V30PageStore>(
     V30Index::new(router, store, arm)?.search(query, k)
 }
 
+fn run_batch<S: V30PageStore + Clone>(
+    router: V30Router,
+    store: S,
+    arm: V30SearchArm,
+    query: &ArtifactArg,
+    query_start: usize,
+    query_count: usize,
+    k: usize,
+) -> borsuk::Result<Vec<u8>> {
+    let mut results = Vec::with_capacity(query_count);
+    let query_end = query_start
+        .checked_add(query_count)
+        .ok_or_else(|| invalid("V30 qualifier query range overflows"))?;
+    for query_row in query_start..query_end {
+        let query_vector = read_query(query, query_row)?;
+        let cpu_before = process_cpu_nanoseconds()?;
+        let started = Instant::now();
+        let result = run_search(router.clone(), store.clone(), arm, &query_vector, k)?;
+        let elapsed_ns = u64::try_from(started.elapsed().as_nanos())
+            .map_err(|_| invalid("V30 qualifier elapsed time overflows"))?;
+        let process_cpu_ns = process_cpu_nanoseconds()?
+            .checked_sub(cpu_before)
+            .ok_or_else(|| invalid("V30 qualifier process CPU regressed"))?;
+        let bytes = result_bytes(&result, process_cpu_ns, elapsed_ns, peak_rss_bytes()?)?;
+        results.push(
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map_err(|_| invalid("V30 qualifier batch result differs"))?,
+        );
+    }
+    let value = serde_json::json!({
+        "claim_eligible": false,
+        "results": results,
+        "schema_version": 1,
+    });
+    let mut bytes = serde_json::to_vec(&canonical(value))
+        .map_err(|_| invalid("V30 qualifier batch serialization failed"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
     let manifest = read_manifest(&args.manifest)?;
     let hierarchy_bytes = manifest
@@ -581,26 +624,25 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
         page_ranges_parquet: layout_bytes[1].clone(),
     };
     let router = V30Router::from_artifacts(&hierarchy, &pq, &layout)?;
-    let query = read_query(&args.query, args.query_row)?;
     let arm = V30SearchArm {
         root_beam: args.root_beam,
         leaf_beam: args.leaf_beam,
         candidate_depth: args.candidate_depth,
         page_count: args.page_count,
     };
-    let cpu_before = process_cpu_nanoseconds()?;
-    let started = Instant::now();
-    let result = match args.page_source {
-        PageSource::Local(directory) => run_search(
+    match args.page_source {
+        PageSource::Local(directory) => run_batch(
             router,
             LocalPageStore {
                 directory,
                 suffix: manifest.page_key_suffix,
             },
             arm,
-            &query,
+            &args.query,
+            args.query_start,
+            args.query_count,
             args.k,
-        )?,
+        ),
         PageSource::S3(uri) => {
             let url = Url::parse(&uri).map_err(|_| invalid("V30 qualifier S3 URI differs"))?;
             let options = std::env::vars().filter(|(key, _)| {
@@ -614,7 +656,7 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
             });
             let (store, prefix) = parse_url_opts(&url, options)?;
             let store: Arc<dyn ObjectStore> = store.into();
-            run_search(
+            run_batch(
                 router,
                 ObjectPageStore {
                     store,
@@ -622,17 +664,13 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                     suffix: manifest.page_key_suffix,
                 },
                 arm,
-                &query,
+                &args.query,
+                args.query_start,
+                args.query_count,
                 args.k,
-            )?
+            )
         }
-    };
-    let elapsed_ns = u64::try_from(started.elapsed().as_nanos())
-        .map_err(|_| invalid("V30 qualifier elapsed time overflows"))?;
-    let process_cpu_ns = process_cpu_nanoseconds()?
-        .checked_sub(cpu_before)
-        .ok_or_else(|| invalid("V30 qualifier process CPU regressed"))?;
-    result_bytes(&result, process_cpu_ns, elapsed_ns, peak_rss_bytes()?)
+    }
 }
 
 fn take(values: &mut BTreeMap<String, String>, name: &str) -> Result<String, String> {
@@ -705,7 +743,8 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
     let manifest = artifact(&mut values, "manifest")?;
     let artifact_dir = PathBuf::from(take(&mut values, "artifact-dir")?);
     let query = artifact(&mut values, "query")?;
-    let query_row = number(&mut values, "query-row")?;
+    let query_start = number(&mut values, "query-start")?;
+    let query_count = number(&mut values, "query-count")?;
     let root_beam = number(&mut values, "root-beam")?;
     let leaf_beam = number(&mut values, "leaf-beam")?;
     let candidate_depth = number(&mut values, "candidate-depth")?;
@@ -720,6 +759,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
     };
     if !artifact_dir.is_absolute()
         || root_beam == 0
+        || query_count != 32
         || leaf_beam == 0
         || candidate_depth == 0
         || candidate_depth > 12_288
@@ -735,7 +775,8 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         manifest,
         artifact_dir,
         query,
-        query_row,
+        query_start,
+        query_count,
         root_beam,
         leaf_beam,
         candidate_depth,
@@ -778,8 +819,10 @@ mod tests {
             &"2".repeat(64),
             "--query-bytes",
             "4003585",
-            "--query-row",
+            "--query-start",
             "0",
+            "--query-count",
+            "32",
             "--root-beam",
             "8",
             "--leaf-beam",
@@ -831,7 +874,8 @@ mod tests {
         assert_eq!(parsed.manifest.path, PathBuf::from("/tmp/manifest.json"));
         assert_eq!(parsed.manifest.sha256, "1".repeat(64));
         assert_eq!(parsed.query.sha256, "2".repeat(64));
-        assert_eq!(parsed.query_row, 0);
+        assert_eq!(parsed.query_start, 0);
+        assert_eq!(parsed.query_count, 32);
         assert_eq!(parsed.page_count, 10);
         assert_eq!(
             parsed.page_source,
@@ -1061,7 +1105,8 @@ mod tests {
                 sha256: "f".repeat(64),
                 encoded_bytes: 1,
             },
-            query_row: 0,
+            query_start: 0,
+            query_count: 32,
             root_beam: 1,
             leaf_beam: 1,
             candidate_depth: 1,

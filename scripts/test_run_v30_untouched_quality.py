@@ -110,24 +110,21 @@ class V30UntouchedQualityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             plan, results = self.fixture(Path(temporary))
             commands = build_qualifier_commands(plan)
-            self.assertEqual(len(commands), 32)
-            self.assertEqual(
-                [int(command[command.index("--query-row") + 1]) for command in commands],
-                list(range(64, 96)),
-            )
+            self.assertEqual(len(commands), 1)
+            self.assertEqual(int(commands[0][commands[0].index("--query-start") + 1]), 64)
+            self.assertEqual(int(commands[0][commands[0].index("--query-count") + 1]), 32)
             self.assertTrue(all("--s3-page-prefix" in command for command in commands))
             self.assertTrue(all("--construction-manifest-s3" not in command for command in commands))
 
-            seen: list[int] = []
+            seen: list[tuple[str, ...]] = []
 
             def invoke(command: tuple[str, ...]) -> bytes:
-                row = int(command[command.index("--query-row") + 1])
-                seen.append(row)
-                return results[row]
+                seen.append(command)
+                return self.batch(results)
 
             payload = run_v30_untouched_quality(plan, invoke=invoke)
             value = json.loads(payload)
-            self.assertEqual(seen, list(range(64, 96)))
+            self.assertEqual(seen, [commands[0]])
             self.assertEqual(value["aggregate_recall_ppm"], 996_875)
             self.assertEqual(value["floor_compliance_ppm"], 1_000_000)
             self.assertEqual(value["minimum_recall_ppm"], 900_000)
@@ -154,14 +151,21 @@ class V30UntouchedQualityTests(unittest.TestCase):
             failed = json.loads(
                 run_v30_untouched_quality(
                     plan,
-                    invoke=lambda command: over_memory[
-                        int(command[command.index("--query-row") + 1])
-                    ],
+                    invoke=lambda _command: self.batch(over_memory),
                 )
             )
             self.assertEqual(failed["status"], "failed")
             self.assertEqual(failed["failed_gates"], ["peak-rss"])
             self.assertFalse(failed["claim_eligible"])
+
+    @staticmethod
+    def batch(results: dict[int, bytes]) -> bytes:
+        value = {
+            "claim_eligible": False,
+            "results": [json.loads(results[row]) for row in sorted(results)],
+            "schema_version": 1,
+        }
+        return json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
 
 
 if __name__ == "__main__":
