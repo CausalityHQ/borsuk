@@ -171,6 +171,9 @@ class V30SpotCampaignTests(unittest.TestCase):
             source_archive_uri="s3://authority/source.tar.zst",
             source_archive_sha256="b" * 64,
             source_archive_bytes=1_000_000,
+            qualifier_binary_uri="s3://authority/v30_s3_qualify",
+            qualifier_binary_sha256="1" * 64,
+            qualifier_binary_bytes=12_000_000,
             construction_manifest_uri="s3://authority/v32/build-1m-a0001/manifest.json",
             construction_manifest_sha256="c" * 64,
             construction_manifest_bytes=8_000,
@@ -310,6 +313,12 @@ class V30SpotCampaignTests(unittest.TestCase):
             )
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
             self.assertIn("run_v32_no_page_containment.py", script)
+            self.assertIn("s3://authority/v30_s3_qualify", script)
+            self.assertIn("1" * 64, script)
+            self.assertIn("12000000", script)
+            self.assertIn('chmod 0555 /opt/borsuk/v30_s3_qualify', script)
+            self.assertNotIn("cargo build", script)
+            self.assertNotIn("rustup", script)
             self.assertIn("logical-sources.arrow", script)
             self.assertIn("value['layout']['routing_ranges']", script)
             self.assertNotIn("value['layout']['leaf_ranges']", script)
