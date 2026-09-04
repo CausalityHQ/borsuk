@@ -33,7 +33,6 @@ struct Args {
     expected_rows: u64,
     roots: usize,
     leaves: usize,
-    routing_leaf_beam: usize,
     training_rows: usize,
     page_rows: usize,
     output_s3_prefix: String,
@@ -95,7 +94,6 @@ fn parse_args(values: Vec<String>) -> Result<Args, String> {
         expected_rows: number(&mut map, "expected-rows")?,
         roots: number(&mut map, "roots")?,
         leaves: number(&mut map, "leaves")?,
-        routing_leaf_beam: number(&mut map, "routing-leaf-beam")?,
         training_rows: number(&mut map, "training-rows")?,
         page_rows: number(&mut map, "page-rows")?,
         output_s3_prefix: take(&mut map, "output-s3-prefix")?,
@@ -123,9 +121,6 @@ fn parse_args(values: Vec<String>) -> Result<Args, String> {
         || !args.roots.is_power_of_two()
         || !args.leaves.is_power_of_two()
         || !args.leaves.is_multiple_of(args.roots)
-        || args.routing_leaf_beam == 0
-        || args.routing_leaf_beam > args.leaves
-        || args.routing_leaf_beam > 512
         || args.training_rows < args.leaves.saturating_mul(2)
         || args.page_rows == 0
         || args.page_rows > 512
@@ -761,8 +756,6 @@ mod tests {
             "1024",
             "--leaves",
             "32768",
-            "--routing-leaf-beam",
-            "512",
             "--training-rows",
             "262144",
             "--page-rows",
@@ -789,7 +782,14 @@ mod tests {
             "b701eada33a5d6782f9ebb0adaac5fd7573da40f"
         );
 
-        for forbidden in ["--query", "--truth", "--latest", "--legacy", "--d3"] {
+        for forbidden in [
+            "--query",
+            "--truth",
+            "--latest",
+            "--legacy",
+            "--d3",
+            "--routing-leaf-beam",
+        ] {
             let mut values = args();
             values.extend([forbidden.to_owned(), "value".to_owned()]);
             assert!(parse_args(values).is_err(), "accepted {forbidden}");
@@ -848,7 +848,6 @@ mod tests {
             expected_rows: 320,
             roots: 2,
             leaves: 4,
-            routing_leaf_beam: 4,
             training_rows: 256,
             page_rows: 32,
             output_s3_prefix: "s3://bucket/v30/build-a0001/".to_owned(),

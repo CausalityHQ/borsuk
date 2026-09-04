@@ -203,6 +203,15 @@ fn valid_digest(digest: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn tier_store_options(tier: V32ServingTier) -> Vec<(String, String)> {
+    match tier {
+        V32ServingTier::Standard => Vec::new(),
+        V32ServingTier::Express => {
+            vec![("aws_s3_express".to_owned(), "true".to_owned())]
+        }
+    }
+}
+
 fn disk_identity(
     artifact: DiskArtifact,
     role: &str,
@@ -721,9 +730,6 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
         encoded_bytes: manifest.page_locations.1.encoded_bytes,
         parquet: page_location_bytes,
     })?;
-    if page_locations.len() != manifest.routing_page_count {
-        return Err(invalid("V30 qualifier page-location count differs"));
-    }
     let hierarchy_bytes = manifest
         .hierarchy
         .iter()
@@ -790,6 +796,7 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
         page_ranges_parquet: layout_bytes[1].clone(),
     };
     let router = V32Router::from_artifacts(&hierarchy, &pq, &layout)?;
+    router.validate_page_locations(&page_locations)?;
     if args.root_beam != manifest.routing_root_beam
         || args.leaf_beam != manifest.routing_leaf_beam
         || args.candidate_depth != manifest.routing_candidate_depth
@@ -843,15 +850,17 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
             }) {
                 return Err(invalid("V30 qualifier S3 bucket authority differs"));
             }
-            let options = std::env::vars().filter(|(key, _)| {
-                matches!(
-                    key.as_str(),
-                    "AWS_ACCESS_KEY_ID"
-                        | "AWS_SECRET_ACCESS_KEY"
-                        | "AWS_SESSION_TOKEN"
-                        | "AWS_REGION"
-                )
-            });
+            let options = std::env::vars()
+                .filter(|(key, _)| {
+                    matches!(
+                        key.as_str(),
+                        "AWS_ACCESS_KEY_ID"
+                            | "AWS_SECRET_ACCESS_KEY"
+                            | "AWS_SESSION_TOKEN"
+                            | "AWS_REGION"
+                    )
+                })
+                .chain(tier_store_options(tier));
             let (store, _) = parse_url_opts(first, options)?;
             let store: Arc<dyn ObjectStore> = store.into();
             let paths = urls
@@ -1176,6 +1185,17 @@ mod tests {
         let mut drifted = page;
         drifted.sha256.replace_range(0..1, "b");
         assert!(store.read_wave(&[drifted]).is_err());
+    }
+
+    #[test]
+    fn v32_s3_qualify_enables_express_session_auth_only_for_express_tier() {
+        // Break caught: an Express directory-bucket URI is sent through the
+        // Standard S3 signer/endpoint path and fails before the microbenchmark.
+        assert_eq!(super::tier_store_options(V32ServingTier::Standard), []);
+        assert_eq!(
+            super::tier_store_options(V32ServingTier::Express),
+            [("aws_s3_express".to_owned(), "true".to_owned())]
+        );
     }
 
     #[test]

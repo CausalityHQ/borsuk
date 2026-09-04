@@ -9,7 +9,7 @@ use crate::{
     BorsukError, Result, V27Hierarchy, V27HierarchyArtifacts, V27PageIdentity,
     decode_v27_hierarchy,
     v27_s3_page::visit_v27_page_rows,
-    v30_s3_layout::{V30Layout, V30LayoutArtifacts, decode_v30_layout_artifacts},
+    v30_s3_layout::{V30Layout, V30LayoutArtifacts, V32PageLocation, decode_v30_layout_artifacts},
     v30_s3_pq::{
         V30CodePlanes, V30PqArtifacts, V30PqCodebook, V30PqWidth, V30QueryTable,
         decode_v30_pq_artifacts,
@@ -19,6 +19,7 @@ use crate::{
 const MAX_SCANNED_CODES: u64 = 1_000_000;
 const MAX_CANDIDATES: usize = 12_288;
 const MAX_SELECTED_PAGES: usize = 16;
+const MAX_PAGE_BYTES: u64 = 3_145_728;
 const CANDIDATE_PRUNE_WINDOW: usize = 32_768;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -355,6 +356,23 @@ impl V32Router {
         })
     }
 
+    #[doc(hidden)]
+    pub fn validate_page_locations(&self, locations: &[V32PageLocation]) -> Result<()> {
+        if locations.len() != self.layout.pages().len()
+            || locations
+                .iter()
+                .zip(self.layout.pages())
+                .any(|(location, page)| {
+                    location.page_ordinal != page.identity.ordinal
+                        || location.sha256 != page.identity.sha256
+                        || location.encoded_bytes != page.identity.encoded_bytes
+                })
+        {
+            return Err(invalid("V32 page locations do not match layout"));
+        }
+        Ok(())
+    }
+
     fn validate_arm(&self, arm: V32SearchArm) -> Result<()> {
         if arm.root_beam == 0
             || arm.root_beam > self.hierarchy.roots.len()
@@ -659,7 +677,7 @@ impl<S: V32PageStore> V32Index<S> {
                 .checked_add(body.len() as u64)
                 .ok_or_else(|| invalid("V30 page byte count overflows"))
         })?;
-        if encoded_bytes > 4_587_520 {
+        if encoded_bytes > MAX_PAGE_BYTES {
             return Err(invalid("V30 page byte bound differs"));
         }
         let mut decoded_rows = 0_usize;
@@ -772,7 +790,6 @@ mod tests {
                 leaf_ordinal: u32::from(ordinal >= 10),
                 logical_start: ordinal as u64 * 2,
                 row_count: 2,
-                centroid: [f16::from_f32(1.0 / 96.0_f32.sqrt()).to_bits(); 96],
                 identity: identity.clone(),
             })
             .collect::<Vec<_>>();
@@ -836,7 +853,6 @@ mod tests {
                     leaf_ordinal,
                     logical_start,
                     row_count,
-                    centroid: [unit.to_bits(); 96],
                     identity: encode_v27_page(ordinal, row_count, 0, &rows).unwrap().0,
                 }
             })
@@ -933,6 +949,32 @@ mod tests {
         assert_eq!(selection.work.codes_scanned, 20);
         assert_eq!(selection.work.candidates_retained, 20);
         assert_eq!(selection.work.selected_pages, 10);
+    }
+
+    #[test]
+    fn v32_s3_search_binds_full_page_location_table_before_selecting_sixteen() {
+        // Break caught: the full corpus page-location table is confused with
+        // the per-query 16-page budget, or identity drift is deferred to GET.
+        let (hierarchy, base, high, layout, codes, _) = components();
+        let locations = layout
+            .pages()
+            .iter()
+            .map(|page| crate::v30_s3_layout::V32PageLocation {
+                page_ordinal: page.identity.ordinal,
+                sha256: page.identity.sha256.clone(),
+                encoded_bytes: page.identity.encoded_bytes,
+                standard_uri: format!("s3://durable/pages/{}.arrow", page.identity.sha256),
+                express_uri: None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(locations.len(), 20);
+        let router = V32Router::new(hierarchy, base, high, layout, codes).unwrap();
+        router.validate_page_locations(&locations).unwrap();
+
+        let mut drifted = locations;
+        drifted[17].encoded_bytes += 1;
+        assert!(router.validate_page_locations(&drifted).is_err());
+        assert!(router.validate_page_locations(&drifted[..16]).is_err());
     }
 
     #[test]
@@ -1131,6 +1173,37 @@ mod tests {
                 .matches
                 .windows(2)
                 .all(|pair| { pair[0].squared_distance < pair[1].squared_distance })
+        );
+    }
+
+    struct OversizedStore;
+
+    impl V32PageStore for OversizedStore {
+        fn read_wave(&self, pages: &[V27PageIdentity]) -> crate::Result<Vec<Vec<u8>>> {
+            Ok(pages.iter().map(|_| vec![0; 314_573]).collect())
+        }
+    }
+
+    #[test]
+    fn v32_s3_search_rejects_more_than_three_mib_before_page_decode() {
+        // Break caught: sixteen maximum-size pages exceed the serving byte
+        // budget even though each page independently satisfies its row cap.
+        let (router, _) = router();
+        let index = V32Index::new(
+            router,
+            OversizedStore,
+            V32SearchArm {
+                root_beam: 1,
+                leaf_beam: 2,
+                candidate_depth: 20,
+                page_count: 10,
+            },
+        )
+        .unwrap();
+        let error = index.search(&[0.2; 96], 10).unwrap_err().to_string();
+        assert!(
+            error.contains("page byte bound"),
+            "unexpected error: {error}"
         );
     }
 
