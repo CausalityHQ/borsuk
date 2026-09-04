@@ -815,7 +815,6 @@ impl V32Router {
         if arm.root_beam == 0
             || arm.root_beam > self.hierarchy.roots.len()
             || arm.leaf_beam == 0
-            || arm.leaf_beam > self.layout.leaves().len()
             || !matches!(
                 (arm.leaf_beam, arm.scan_budget),
                 (1..64, 65_536) | (64, 65_536) | (128, 131_072) | (256, 262_144)
@@ -994,12 +993,9 @@ impl V32Router {
             &self.hierarchy.leaf_roots,
             self.layout.leaves(),
         )?;
-        if arm.leaf_beam > leaves_eligible.len() {
-            return Err(invalid("V30 leaf beam exceeds selected roots"));
-        }
         let leaves_eligible_count = leaves_eligible.len();
         let ranked_leaves = smallest(leaves_eligible, leaves_eligible_count);
-        let mut selected_leaf_count = arm.leaf_beam;
+        let mut selected_leaf_count = arm.leaf_beam.min(ranked_leaves.len());
         let mut codes_scanned =
             ranked_leaves[..selected_leaf_count]
                 .iter()
@@ -1806,6 +1802,29 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn v32_s3_search_clamps_leaf_beam_to_complete_selected_root_frontier() {
+        // Break caught: a maximum serving beam is treated as an exact required
+        // leaf count and rejects a selected-root frontier that is smaller.
+        let (router, _) = router();
+        let selection = router
+            .select_pages(
+                &[0.2; 96],
+                V32SearchArm {
+                    root_beam: 1,
+                    leaf_beam: 64,
+                    scan_budget: 65_536,
+                    candidate_depth: 20,
+                    page_count: 10,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(selection.work.leaves_eligible, 2);
+        assert_eq!(selection.work.leaves_scanned, 2);
+        assert_eq!(selection.work.codes_scanned, 40);
     }
 
     #[test]
