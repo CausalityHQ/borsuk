@@ -1,6 +1,7 @@
 import json
 import subprocess
 import unittest
+from dataclasses import replace
 
 from scripts.run_v30_s3_campaign import (
     SpotTarget,
@@ -96,7 +97,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             roots=1_024,
             leaves=32_768,
             training_rows=262_144,
-            page_rows=512,
+            page_rows=480,
         )
 
     def evaluation(self) -> V30EvaluationPlan:
@@ -157,7 +158,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             roots=128,
             leaves=4_096,
             training_rows=32_768,
-            page_rows=512,
+            page_rows=480,
         )
 
     def containment(self) -> V32ContainmentSpotPlan:
@@ -180,6 +181,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             source_rows=1_000_000,
             query_start=0,
             query_count=32,
+            leaf_beam=64,
         )
 
     def test_v30_campaign_separates_query_blind_construction_from_evaluation(self) -> None:
@@ -190,6 +192,7 @@ class V30SpotCampaignTests(unittest.TestCase):
         self.assertIn("--roots 16", reduced[0]["UserData"])
         self.assertIn("--page-rows 128", reduced[0]["UserData"])
         self.assertNotIn("--routing-leaf-beam", reduced[0]["UserData"])
+        self.assertNotIn("--routing-scan-budget", reduced[0]["UserData"])
         containment = build_v30_construction_spot_specs(
             self.containment_construction(), self.targets()
         )
@@ -197,7 +200,9 @@ class V30SpotCampaignTests(unittest.TestCase):
         self.assertIn("--roots 128", containment[0]["UserData"])
         self.assertIn("--leaves 4096", containment[0]["UserData"])
         self.assertIn("--training-rows 32768", containment[0]["UserData"])
-        self.assertIn("--page-rows 512", containment[0]["UserData"])
+        self.assertIn("--page-rows 480", containment[0]["UserData"])
+        self.assertNotIn("--routing-leaf-beam", containment[0]["UserData"])
+        self.assertNotIn("--routing-scan-budget", containment[0]["UserData"])
         specs = build_v30_construction_spot_specs(self.construction(), self.targets())
         self.assertEqual([spec["Placement"]["AvailabilityZone"] for spec in specs], ["eu-central-1a", "eu-central-1b"])
         for spec in specs:
@@ -211,6 +216,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("--s3-region eu-central-1", script)
             self.assertIn("--training-rows 262144", script)
             self.assertNotIn("--routing-leaf-beam", script)
+            self.assertNotIn("--routing-scan-budget", script)
             self.assertNotIn("test.parquet", script)
             self.assertNotIn("neighbors.parquet", script)
             self.assertNotIn("v30_s3_qualify", script)
@@ -289,10 +295,13 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
             self.assertIn("run_v32_no_page_containment.py", script)
             self.assertIn("logical-sources.arrow", script)
+            self.assertIn("value['layout']['routing_ranges']", script)
+            self.assertNotIn("value['layout']['leaf_ranges']", script)
             self.assertIn("value['diagnostics']['logical_sources']", script)
             self.assertIn("value['serving']['page_locations']", script)
             self.assertIn("--source-rows 1000000", script)
             self.assertIn("--query-count 32", script)
+            self.assertIn("--leaf-beam 64", script)
             self.assertIn("rss_limit_bytes=3221225472", script)
             self.assertIn("wall_seconds=3600", script)
             self.assertIn("HEARTBEAT.json", script)
@@ -302,6 +311,37 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertNotIn("aws s3 cp --recursive", script)
             self.assertNotIn("pages/", script)
             self.assertIn("kill -TERM -- \"-$child\"", script)
+
+    def test_v32_rank_envelope_runs_the_frozen_100k_geometry_before_1m(self) -> None:
+        construction = replace(
+            self.containment_construction(),
+            attempt_id="v30-deep-100k-envelope-build-a0001",
+            corpus_manifest_uri="s3://authority/deep-100k/corpus.json",
+            output_prefix="s3://authority/v32/build-100k-envelope-a0001/",
+            expected_rows=100_000,
+        )
+        construction_specs = build_v30_construction_spot_specs(
+            construction, self.targets()
+        )
+        self.assertIn("--expected-rows 100000", construction_specs[0]["UserData"])
+        self.assertIn("--roots 128", construction_specs[0]["UserData"])
+        self.assertIn("--leaves 4096", construction_specs[0]["UserData"])
+        self.assertIn("--training-rows 32768", construction_specs[0]["UserData"])
+        self.assertIn("--page-rows 480", construction_specs[0]["UserData"])
+
+        containment = replace(
+            self.containment(),
+            attempt_id="v32-deep-100k-envelope-containment-a0001",
+            construction_manifest_uri=(
+                "s3://authority/v32/build-100k-envelope-a0001/manifest.json"
+            ),
+            output_prefix="s3://authority/v32/containment-100k-envelope-a0001/",
+            source_rows=100_000,
+        )
+        containment_specs = build_v32_containment_spot_specs(
+            containment, self.targets()
+        )
+        self.assertIn("--source-rows 100000", containment_specs[0]["UserData"])
 
     def test_v30_campaign_does_not_classify_preheartbeat_bootstrap_as_stalled(self) -> None:
         observations = iter(

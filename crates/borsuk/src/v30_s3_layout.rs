@@ -5,7 +5,10 @@ use std::{
     sync::Arc,
 };
 
-use arrow_array::{Array, RecordBatch, StringArray, UInt16Array, UInt32Array, UInt64Array};
+use arrow_array::{
+    Array, ArrayRef, FixedSizeBinaryArray, FixedSizeListArray, Float16Array, RecordBatch,
+    StringArray, UInt16Array, UInt32Array, UInt64Array,
+};
 use arrow_ipc::{
     MetadataVersion,
     reader::FileReader,
@@ -26,9 +29,14 @@ use crate::{
     },
 };
 
-const MAX_PAGE_ROWS: u16 = 512;
+const MAX_PAGE_ROWS: u16 = 480;
+const MAX_ENCODED_PAGE_BYTES: u64 = 196_608;
+#[cfg(test)]
 const MAX_GEOMETRIC_LEAF_ROWS: usize = 65_536;
 const MAX_PAGES_PER_LEAF: u32 = 64;
+const MAX_ROUTING_MICROLEAF_ROWS: usize = 1_024;
+const MAX_CODE_PARENT_ROWS: usize = 131_072;
+const MAX_RESIDENT_BYTES: u64 = 3 * 1_024 * 1_024 * 1_024;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -330,6 +338,7 @@ impl V30LayoutRecord {
     }
 }
 
+#[cfg(test)]
 fn validate_v30_geometric_leaf_row_count(row_count: usize) -> Result<()> {
     if row_count == 0 || row_count > MAX_GEOMETRIC_LEAF_ROWS {
         return Err(invalid("V30 geometric leaf row count differs"));
@@ -446,6 +455,7 @@ fn partition_v30_geometric_group(
     Ok(pages)
 }
 
+#[cfg(test)]
 fn partition_v30_leaf_pages(
     mut rows: Vec<V30LayoutRecord>,
     page_rows: usize,
@@ -465,6 +475,89 @@ fn partition_v30_leaf_pages(
     }
     let page_count = rows.len().div_ceil(page_rows);
     partition_v30_geometric_group(rows, page_count)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct V32RoutingMicroleaf {
+    routing_leaf_ordinal: u32,
+    code_parent_leaf_ordinal: u32,
+    routing_centroid: [half::f16; 96],
+    rows: Vec<V30LayoutRecord>,
+}
+
+fn validate_v32_code_parent_population(row_count: u64) -> Result<()> {
+    if row_count > MAX_CODE_PARENT_ROWS as u64 {
+        return Err(invalid("V32 code parent population differs"));
+    }
+    Ok(())
+}
+
+fn v32_raw_population_centroid(rows: &[V30LayoutRecord]) -> Result<[half::f16; 96]> {
+    if rows.is_empty() {
+        return Err(invalid("V32 routing centroid population differs"));
+    }
+    let mut sums = [0.0_f64; 96];
+    for row in rows {
+        for (sum, value) in sums.iter_mut().zip(row.vector) {
+            *sum += f64::from(value);
+        }
+    }
+    let centroid = std::array::from_fn(|dimension| {
+        half::f16::from_f32((sums[dimension] / rows.len() as f64) as f32)
+    });
+    let squared_norm = centroid
+        .iter()
+        .map(|value| {
+            let value = f32::from(*value);
+            value * value
+        })
+        .sum::<f32>();
+    if !squared_norm.is_finite() || squared_norm <= 0.0 {
+        return Err(invalid("V32 routing centroid differs"));
+    }
+    Ok(centroid)
+}
+
+fn partition_v32_routing_microleaves(
+    mut rows: Vec<V30LayoutRecord>,
+    code_parent_leaf_ordinal: u32,
+    first_routing_leaf_ordinal: u32,
+) -> Result<Vec<V32RoutingMicroleaf>> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    validate_v32_code_parent_population(
+        u64::try_from(rows.len()).map_err(|_| invalid("V32 code parent population overflows"))?,
+    )?;
+    rows.sort_unstable_by_key(|row| row.source_ordinal);
+    let mut sources = BTreeSet::new();
+    for row in &rows {
+        row.validate()?;
+        if row.leaf_ordinal != code_parent_leaf_ordinal || !sources.insert(row.source_ordinal) {
+            return Err(invalid("V32 routing parent authority differs"));
+        }
+    }
+    let microleaf_count = rows.len().div_ceil(MAX_ROUTING_MICROLEAF_ROWS);
+    let groups = partition_v30_geometric_group(rows, microleaf_count)?;
+    groups
+        .into_iter()
+        .enumerate()
+        .map(|(offset, rows)| {
+            if rows.is_empty() || rows.len() > MAX_ROUTING_MICROLEAF_ROWS {
+                return Err(invalid("V32 routing microleaf population differs"));
+            }
+            let offset =
+                u32::try_from(offset).map_err(|_| invalid("V32 routing leaf ordinal overflows"))?;
+            Ok(V32RoutingMicroleaf {
+                routing_leaf_ordinal: first_routing_leaf_ordinal
+                    .checked_add(offset)
+                    .ok_or_else(|| invalid("V32 routing leaf ordinal overflows"))?,
+                code_parent_leaf_ordinal,
+                routing_centroid: v32_raw_population_centroid(&rows)?,
+                rows,
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -871,7 +964,7 @@ pub trait V30PageSink {
     ) -> Result<()>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct V30BuiltLayout {
     pub(crate) layout: V30Layout,
     pub(crate) codes: V30CodePlanes,
@@ -880,17 +973,17 @@ pub(crate) struct V30BuiltLayout {
 struct V30LayoutAssembler<'a, S> {
     sink: &'a mut S,
     page_rows: usize,
-    leaf_count: u32,
     current_leaf: Option<u32>,
+    current_code_parent_leaf: Option<u32>,
+    current_routing_centroid: Option<[half::f16; 96]>,
     leaf_logical_start: u64,
-    leaf_page_start: u32,
     logical_rows: u64,
     high_rows: u64,
     high_bits: Vec<u32>,
     base_codes: Vec<u8>,
     high_codes: Vec<u8>,
     page_buffer: Vec<V27PageRow>,
-    leaves: Vec<V30LeafRange>,
+    leaves: Vec<V32RoutingRange>,
     pages: Vec<V30PageRange>,
 }
 
@@ -908,15 +1001,15 @@ impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
             .checked_sub(u64::from(row_count))
             .ok_or_else(|| invalid("V30 layout page start underflows"))?;
         let (identity, bytes) = encode_v27_page(ordinal, row_count, 0, &self.page_buffer)?;
+        if identity.encoded_bytes > MAX_ENCODED_PAGE_BYTES {
+            return Err(invalid("V32 encoded page byte bound differs"));
+        }
         self.sink.write_page(&identity, &bytes, &self.page_buffer)?;
-        self.pages.push(V30PageRange {
-            leaf_ordinal: self
-                .current_leaf
-                .ok_or_else(|| invalid("V30 layout page leaf is missing"))?,
+        self.pages.push(V30PageRange::from_legacy(
             logical_start,
             row_count,
-            identity,
-        });
+            &identity,
+        )?);
         self.page_buffer.clear();
         Ok(())
     }
@@ -925,47 +1018,64 @@ impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
         let Some(leaf_ordinal) = self.current_leaf else {
             return Ok(());
         };
-        self.flush_page()?;
         let row_count = self
             .logical_rows
             .checked_sub(self.leaf_logical_start)
             .ok_or_else(|| invalid("V30 leaf row count underflows"))?;
-        let page_count = u32::try_from(self.pages.len())
-            .ok()
-            .and_then(|count| count.checked_sub(self.leaf_page_start))
+        let page_rows =
+            u64::try_from(self.page_rows).map_err(|_| invalid("V30 layout page rows overflow"))?;
+        let page_start = u32::try_from(self.leaf_logical_start / page_rows)
+            .map_err(|_| invalid("V30 leaf page start overflows"))?;
+        let page_end = u32::try_from(
+            self.logical_rows
+                .checked_sub(1)
+                .ok_or_else(|| invalid("V30 leaf page range underflows"))?
+                / page_rows,
+        )
+        .map_err(|_| invalid("V30 leaf page end overflows"))?;
+        let page_count = page_end
+            .checked_sub(page_start)
+            .and_then(|count| count.checked_add(1))
             .ok_or_else(|| invalid("V30 leaf page count overflows"))?;
         if leaf_ordinal != self.leaves.len() as u32 || row_count == 0 || page_count == 0 {
             return Err(invalid("V30 layout leaf population differs"));
         }
-        self.leaves.push(V30LeafRange {
+        self.leaves.push(V32RoutingRange {
             leaf_ordinal,
+            code_parent_leaf_ordinal: self
+                .current_code_parent_leaf
+                .ok_or_else(|| invalid("V32 code parent leaf is missing"))?,
+            routing_centroid: self
+                .current_routing_centroid
+                .ok_or_else(|| invalid("V32 routing centroid is missing"))?,
             logical_start: self.leaf_logical_start,
             row_count,
-            page_start: self.leaf_page_start,
+            page_start,
             page_count,
         });
         Ok(())
     }
 
-    fn push(&mut self, record: V30LayoutRecord) -> Result<()> {
-        if record.leaf_ordinal >= self.leaf_count {
-            return Err(invalid("V30 layout leaf ordinal differs"));
+    fn begin_routing_leaf(
+        &mut self,
+        routing_leaf_ordinal: u32,
+        code_parent_leaf_ordinal: u32,
+        routing_centroid: [half::f16; 96],
+    ) -> Result<()> {
+        self.finish_leaf()?;
+        if routing_leaf_ordinal != self.leaves.len() as u32 {
+            return Err(invalid("V32 routing leaf ordinal differs"));
         }
+        self.current_leaf = Some(routing_leaf_ordinal);
+        self.current_code_parent_leaf = Some(code_parent_leaf_ordinal);
+        self.current_routing_centroid = Some(routing_centroid);
+        self.leaf_logical_start = self.logical_rows;
+        Ok(())
+    }
+
+    fn push(&mut self, record: V30LayoutRecord) -> Result<()> {
         if self.current_leaf != Some(record.leaf_ordinal) {
-            self.finish_leaf()?;
-            while self.leaves.len() < record.leaf_ordinal as usize {
-                self.leaves.push(V30LeafRange {
-                    leaf_ordinal: self.leaves.len() as u32,
-                    logical_start: self.logical_rows,
-                    row_count: 0,
-                    page_start: self.pages.len() as u32,
-                    page_count: 0,
-                });
-            }
-            self.current_leaf = Some(record.leaf_ordinal);
-            self.leaf_logical_start = self.logical_rows;
-            self.leaf_page_start = u32::try_from(self.pages.len())
-                .map_err(|_| invalid("V30 layout page count overflows"))?;
+            return Err(invalid("V32 routing record leaf differs"));
         }
         let logical = usize::try_from(self.logical_rows)
             .map_err(|_| invalid("V30 layout logical rows overflow"))?;
@@ -993,18 +1103,7 @@ impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
 
     fn finish(mut self, fidelity_ppm: u32) -> Result<V30BuiltLayout> {
         self.finish_leaf()?;
-        while self.leaves.len() < self.leaf_count as usize {
-            self.leaves.push(V30LeafRange {
-                leaf_ordinal: self.leaves.len() as u32,
-                logical_start: self.logical_rows,
-                row_count: 0,
-                page_start: self.pages.len() as u32,
-                page_count: 0,
-            });
-        }
-        if self.leaves.len() != self.leaf_count as usize {
-            return Err(invalid("V30 layout leaf coverage differs"));
-        }
+        self.flush_page()?;
         let expected_high = self
             .logical_rows
             .checked_mul(u64::from(fidelity_ppm))
@@ -1027,19 +1126,36 @@ impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
     }
 }
 
-fn flush_v30_geometric_leaf<S: V30PageSink>(
+fn flush_v32_routing_parent<S: V30PageSink>(
     assembler: &mut V30LayoutAssembler<'_, S>,
     rows: &mut Vec<V30LayoutRecord>,
+    next_routing_leaf_ordinal: &mut u32,
 ) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
-    for page in partition_v30_leaf_pages(std::mem::take(rows), assembler.page_rows)? {
-        for record in page {
+    let code_parent_leaf_ordinal = rows[0].leaf_ordinal;
+    let microleaves = partition_v32_routing_microleaves(
+        std::mem::take(rows),
+        code_parent_leaf_ordinal,
+        *next_routing_leaf_ordinal,
+    )?;
+    let emitted = u32::try_from(microleaves.len())
+        .map_err(|_| invalid("V32 routing leaf count overflows"))?;
+    for microleaf in microleaves {
+        assembler.begin_routing_leaf(
+            microleaf.routing_leaf_ordinal,
+            microleaf.code_parent_leaf_ordinal,
+            microleaf.routing_centroid,
+        )?;
+        for mut record in microleaf.rows {
+            record.leaf_ordinal = microleaf.routing_leaf_ordinal;
             assembler.push(record)?;
         }
-        assembler.flush_page()?;
     }
+    *next_routing_leaf_ordinal = next_routing_leaf_ordinal
+        .checked_add(emitted)
+        .ok_or_else(|| invalid("V32 routing leaf count overflows"))?;
     Ok(())
 }
 
@@ -1075,16 +1191,69 @@ pub struct V30ConstructionArtifacts {
     pub pq: V30PqArtifacts,
     pub layout: V30LayoutArtifacts,
     pub pages: Vec<V27PageIdentity>,
+    pub page_row_counts: Vec<u16>,
     pub source_rows: u64,
     pub training_rows: u64,
-    pub maximum_leaf_rows: u64,
+    pub maximum_code_parent_rows: u64,
+    pub maximum_routing_leaf_rows: u64,
+    pub maximum_routing_leaves_per_root: u64,
+    pub projected_resident_bytes: u64,
+}
+
+fn projected_v32_resident_bytes(
+    source_rows: u64,
+    roots: usize,
+    code_parents: usize,
+    routing_leaves: usize,
+    pages: usize,
+) -> Result<u64> {
+    let high_rows = source_rows
+        .checked_mul(50_000)
+        .and_then(|rows| rows.checked_div(1_000_000))
+        .ok_or_else(|| invalid("V32 resident fidelity rows overflow"))?;
+    let base_rows = source_rows
+        .checked_sub(high_rows)
+        .ok_or_else(|| invalid("V32 resident base rows underflow"))?;
+    let bitmap_words = source_rows.div_ceil(128);
+    let terms = [
+        base_rows.checked_mul(24),
+        high_rows.checked_mul(48),
+        bitmap_words.checked_mul(16),
+        u64::try_from(roots)
+            .ok()
+            .and_then(|count| count.checked_mul(194)),
+        u64::try_from(code_parents)
+            .ok()
+            .and_then(|count| count.checked_mul(194)),
+        u64::try_from(routing_leaves)
+            .ok()
+            .and_then(|count| count.checked_mul(224)),
+        u64::try_from(pages).ok().and_then(|count| {
+            let per_page = u64::try_from(
+                std::mem::size_of::<V30PageRange>() + std::mem::size_of::<V32PageLocation>(),
+            )
+            .ok()?;
+            count.checked_mul(per_page)
+        }),
+        Some(24 * 256 * 4 * 4 + 48 * 256 * 2 * 4),
+    ];
+    let total = terms.into_iter().try_fold(0_u64, |total, term| {
+        let term = term.ok_or_else(|| invalid("V32 resident projection overflows"))?;
+        total
+            .checked_add(term)
+            .ok_or_else(|| invalid("V32 resident projection overflows"))
+    })?;
+    if total > MAX_RESIDENT_BYTES {
+        return Err(invalid("V32 resident projection exceeds three GiB"));
+    }
+    Ok(total)
 }
 
 impl V30ConstructedIndex {
     #[doc(hidden)]
     pub fn into_artifacts(self) -> Result<V30ConstructionArtifacts> {
         let source_rows = self.layout.layout.source_rows();
-        let maximum_leaf_rows = self
+        let maximum_routing_leaf_rows = self
             .layout
             .layout
             .leaves()
@@ -1092,12 +1261,52 @@ impl V30ConstructedIndex {
             .map(|leaf| leaf.row_count)
             .max()
             .ok_or_else(|| invalid("V30 construction leaf population is missing"))?;
+        let mut code_parent_rows = vec![0_u64; self.hierarchy.leaves.len()];
+        let mut routing_leaves_per_root = vec![0_u64; self.hierarchy.roots.len()];
+        for leaf in self.layout.layout.leaves() {
+            let parent = usize::try_from(leaf.code_parent_leaf_ordinal)
+                .map_err(|_| invalid("V32 code parent ordinal overflows"))?;
+            let rows = code_parent_rows
+                .get_mut(parent)
+                .ok_or_else(|| invalid("V32 code parent authority differs"))?;
+            *rows = rows
+                .checked_add(leaf.row_count)
+                .ok_or_else(|| invalid("V32 code parent population overflows"))?;
+            validate_v32_code_parent_population(*rows)?;
+            let root = usize::from(self.hierarchy.leaf_roots[parent]);
+            let fanout = routing_leaves_per_root
+                .get_mut(root)
+                .ok_or_else(|| invalid("V32 routing root authority differs"))?;
+            *fanout = fanout
+                .checked_add(1)
+                .ok_or_else(|| invalid("V32 routing root fan-out overflows"))?;
+        }
+        let maximum_code_parent_rows = code_parent_rows.into_iter().max().unwrap_or(0);
+        let maximum_routing_leaves_per_root =
+            routing_leaves_per_root.into_iter().max().unwrap_or(0);
+        if maximum_code_parent_rows == 0 || maximum_routing_leaves_per_root == 0 {
+            return Err(invalid("V32 routing population evidence is missing"));
+        }
+        let projected_resident_bytes = projected_v32_resident_bytes(
+            source_rows,
+            self.hierarchy.roots.len(),
+            self.hierarchy.leaves.len(),
+            self.layout.layout.leaves().len(),
+            self.layout.layout.pages().len(),
+        )?;
         let pages = self
             .layout
             .layout
             .pages()
             .iter()
-            .map(|page| page.identity.clone())
+            .map(V30PageRange::identity)
+            .collect();
+        let page_row_counts = self
+            .layout
+            .layout
+            .pages()
+            .iter()
+            .map(|page| page.row_count)
             .collect();
         let hierarchy = encode_v27_hierarchy(&self.hierarchy)?;
         let pq =
@@ -1108,10 +1317,14 @@ impl V30ConstructedIndex {
             pq,
             layout,
             pages,
+            page_row_counts,
             source_rows,
             training_rows: u64::try_from(self.training_rows)
                 .map_err(|_| invalid("V30 construction training rows overflow"))?,
-            maximum_leaf_rows,
+            maximum_code_parent_rows,
+            maximum_routing_leaf_rows,
+            maximum_routing_leaves_per_root,
+            projected_resident_bytes,
         })
     }
 }
@@ -1286,12 +1499,16 @@ impl V30ConstructionBuilder {
                 .collect::<Result<Vec<[f32; 96]>>>()?;
             let base_codebook = fit_v30_codebook(&residuals, V30PqWidth::Base24)?;
             let high_codebook = fit_v30_codebook(&residuals, V30PqWidth::High48)?;
+            let mut preflight_corpus = CorpusIter {
+                reader: scratch.open_scratch(CORPUS_KEY)?,
+                error: None,
+            };
             let mut corpus = CorpusIter {
                 reader: scratch.open_scratch(CORPUS_KEY)?,
                 error: None,
             };
             let layout = V30LayoutBuilder::build_from_corpus(
-                &mut corpus,
+                (&mut preflight_corpus, &mut corpus),
                 &hierarchy,
                 &base_codebook,
                 &high_codebook,
@@ -1303,6 +1520,9 @@ impl V30ConstructionBuilder {
                 scratch,
                 pages,
             )?;
+            if let Some(error) = preflight_corpus.error {
+                return Err(error);
+            }
             if let Some(error) = corpus.error {
                 return Err(error);
             }
@@ -1387,8 +1607,8 @@ impl Iterator for PreparedLayoutIter<'_> {
 }
 
 impl V30LayoutBuilder {
-    pub(crate) fn build_from_corpus<I, S, P>(
-        rows: I,
+    pub(crate) fn build_from_corpus<I, J, S, P>(
+        passes: (I, J),
         hierarchy: &V27Hierarchy,
         base_codebook: &V30PqCodebook,
         high_codebook: &V30PqCodebook,
@@ -1398,9 +1618,11 @@ impl V30LayoutBuilder {
     ) -> Result<V30BuiltLayout>
     where
         I: IntoIterator<Item = V27PageRow>,
+        J: IntoIterator<Item = V27PageRow>,
         S: V30Scratch,
         P: V30PageSink,
     {
+        let (preflight_rows, rows) = passes;
         if hierarchy.leaves.len() > u32::MAX as usize
             || base_codebook.width() != V30PqWidth::Base24
             || high_codebook.width() != V30PqWidth::High48
@@ -1409,14 +1631,54 @@ impl V30LayoutBuilder {
         }
         let leaf_count = u32::try_from(hierarchy.leaves.len())
             .map_err(|_| invalid("V30 layout hierarchy size overflows"))?;
-        let mut rows = rows.into_iter();
         let mut source_rows = 0_u64;
-        let mut write = |output: &mut dyn Write| {
+        let mut parent_counts = vec![0_u64; hierarchy.leaves.len()];
+        let mut root_counts = vec![0_u64; hierarchy.roots.len()];
+        for row in preflight_rows {
+            if row.source_ordinal != source_rows {
+                return Err(invalid("V30 layout corpus source order differs"));
+            }
+            let leaf_ordinal = assign_v30_leaf(&row.vector, hierarchy)?;
+            let parent_count = parent_counts
+                .get_mut(leaf_ordinal as usize)
+                .ok_or_else(|| invalid("V32 assigned code parent differs"))?;
+            *parent_count = parent_count
+                .checked_add(1)
+                .ok_or_else(|| invalid("V32 code parent population overflows"))?;
+            validate_v32_code_parent_population(*parent_count)?;
+            let root_ordinal = *hierarchy
+                .leaf_roots
+                .get(leaf_ordinal as usize)
+                .ok_or_else(|| invalid("V32 assigned code parent differs"))?;
+            let root_count = root_counts
+                .get_mut(root_ordinal as usize)
+                .ok_or_else(|| invalid("V32 assigned root differs"))?;
+            *root_count = root_count
+                .checked_add(1)
+                .ok_or_else(|| invalid("V32 root population overflows"))?;
+            source_rows = source_rows
+                .checked_add(1)
+                .ok_or_else(|| invalid("V30 layout corpus rows overflow"))?;
+        }
+        if source_rows == 0 {
+            return Err(invalid("V30 layout corpus rows differ"));
+        }
+
+        let mut rows = rows.into_iter();
+        let mut prepared_parent_counts = vec![0_u64; hierarchy.leaves.len()];
+        let mut source_rows = 0_u64;
+        let mut write_prepared = |output: &mut dyn Write| {
             for row in rows.by_ref() {
                 if row.source_ordinal != source_rows {
                     return Err(invalid("V30 layout corpus source order differs"));
                 }
                 let leaf_ordinal = assign_v30_leaf(&row.vector, hierarchy)?;
+                let count = prepared_parent_counts
+                    .get_mut(leaf_ordinal as usize)
+                    .ok_or_else(|| invalid("V32 assigned code parent differs"))?;
+                *count = count
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("V32 code parent population overflows"))?;
                 let residual = std::array::from_fn(|dimension| {
                     row.vector[dimension]
                         - f32::from(hierarchy.leaves[leaf_ordinal as usize][dimension])
@@ -1434,14 +1696,20 @@ impl V30LayoutBuilder {
                         base_error,
                     },
                 )?;
-                source_rows += 1;
+                source_rows = source_rows
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("V30 layout corpus rows overflow"))?;
             }
-            if source_rows == 0 {
-                return Err(invalid("V30 layout corpus rows differ"));
+            if source_rows == 0 || prepared_parent_counts != parent_counts {
+                return Err(invalid("V32 population preflight differs"));
             }
             Ok(())
         };
-        scratch.write_scratch(PREPARED_KEY, &mut write)?;
+        let prepared = scratch.write_scratch(PREPARED_KEY, &mut write_prepared);
+        if let Err(error) = prepared {
+            let _ = scratch.remove_scratch(PREPARED_KEY);
+            return Err(error);
+        }
         let result = (|| {
             let mut errors = PreparedErrorIter {
                 reader: scratch.open_scratch(PREPARED_KEY)?,
@@ -1505,10 +1773,10 @@ impl V30LayoutBuilder {
         let mut assembler = V30LayoutAssembler {
             sink: pages,
             page_rows: config.page_rows,
-            leaf_count,
             current_leaf: None,
+            current_code_parent_leaf: None,
+            current_routing_centroid: None,
             leaf_logical_start: 0,
-            leaf_page_start: 0,
             logical_rows: 0,
             high_rows: 0,
             high_bits: Vec::new(),
@@ -1519,18 +1787,30 @@ impl V30LayoutBuilder {
             pages: Vec::new(),
         };
         let mut leaf_rows = Vec::new();
+        let mut next_routing_leaf_ordinal = 0_u32;
         sort_v30_layout_records(records, config.sort_memory_rows, scratch, &mut |record| {
+            if record.leaf_ordinal >= leaf_count {
+                return Err(invalid("V30 layout leaf ordinal differs"));
+            }
             if leaf_rows
                 .first()
                 .is_some_and(|first: &V30LayoutRecord| first.leaf_ordinal != record.leaf_ordinal)
             {
-                flush_v30_geometric_leaf(&mut assembler, &mut leaf_rows)?;
+                flush_v32_routing_parent(
+                    &mut assembler,
+                    &mut leaf_rows,
+                    &mut next_routing_leaf_ordinal,
+                )?;
             }
-            validate_v30_geometric_leaf_row_count(leaf_rows.len() + 1)?;
+            validate_v32_code_parent_population((leaf_rows.len() + 1) as u64)?;
             leaf_rows.push(record);
             Ok(())
         })?;
-        flush_v30_geometric_leaf(&mut assembler, &mut leaf_rows)?;
+        flush_v32_routing_parent(
+            &mut assembler,
+            &mut leaf_rows,
+            &mut next_routing_leaf_ordinal,
+        )?;
         assembler.finish(config.fidelity_ppm)
     }
 }
@@ -1542,97 +1822,156 @@ fn valid_digest(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V30LeafRange {
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V32RoutingRange {
     pub(crate) leaf_ordinal: u32,
+    pub(crate) code_parent_leaf_ordinal: u32,
+    pub(crate) routing_centroid: [half::f16; 96],
     pub(crate) logical_start: u64,
     pub(crate) row_count: u64,
     pub(crate) page_start: u32,
     pub(crate) page_count: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V30PageRange {
-    pub(crate) leaf_ordinal: u32,
-    pub(crate) logical_start: u64,
-    pub(crate) row_count: u16,
-    pub(crate) identity: V27PageIdentity,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V30PageIdentity {
+    pub(crate) ordinal: u32,
+    pub(crate) sha256: [u8; 32],
+    pub(crate) encoded_bytes: u64,
+    pub(crate) primary_rows: u16,
+    pub(crate) replica_rows: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl V30PageIdentity {
+    fn from_legacy(identity: &V27PageIdentity) -> Result<Self> {
+        Ok(Self {
+            ordinal: identity.ordinal,
+            sha256: digest_bytes(&identity.sha256)?,
+            encoded_bytes: identity.encoded_bytes,
+            primary_rows: identity.primary_rows,
+            replica_rows: identity.replica_rows,
+        })
+    }
+
+    pub(crate) fn sha256_hex(self) -> String {
+        digest_hex(&self.sha256)
+    }
+
+    fn legacy(self) -> V27PageIdentity {
+        V27PageIdentity {
+            ordinal: self.ordinal,
+            sha256: self.sha256_hex(),
+            encoded_bytes: self.encoded_bytes,
+            primary_rows: self.primary_rows,
+            replica_rows: self.replica_rows,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V30PageRange {
+    pub(crate) logical_start: u64,
+    pub(crate) row_count: u16,
+    pub(crate) identity: V30PageIdentity,
+}
+
+impl V30PageRange {
+    pub(crate) fn from_legacy(
+        logical_start: u64,
+        row_count: u16,
+        identity: &V27PageIdentity,
+    ) -> Result<Self> {
+        Ok(Self {
+            logical_start,
+            row_count,
+            identity: V30PageIdentity::from_legacy(identity)?,
+        })
+    }
+
+    pub(crate) fn identity(&self) -> V27PageIdentity {
+        self.identity.legacy()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct V30Layout {
     source_rows: u64,
-    leaves: Vec<V30LeafRange>,
+    leaves: Vec<V32RoutingRange>,
     pages: Vec<V30PageRange>,
 }
 
 impl V30Layout {
     pub(crate) fn new(
         source_rows: u64,
-        leaves: Vec<V30LeafRange>,
+        leaves: Vec<V32RoutingRange>,
         pages: Vec<V30PageRange>,
     ) -> Result<Self> {
         if source_rows == 0 || leaves.is_empty() || pages.is_empty() {
             return Err(invalid("V30 layout coverage differs"));
         }
+        let mut next_page_logical = 0_u64;
+        for (ordinal, page) in pages.iter().enumerate() {
+            if page.identity.ordinal != ordinal as u32
+                || page.logical_start != next_page_logical
+                || page.row_count == 0
+                || page.row_count > MAX_PAGE_ROWS
+                || page.identity.primary_rows != page.row_count
+                || page.identity.replica_rows != 0
+                || page.identity.encoded_bytes == 0
+                || page.identity.encoded_bytes > MAX_ENCODED_PAGE_BYTES
+            {
+                return Err(invalid("V30 page range authority differs"));
+            }
+            next_page_logical = next_page_logical
+                .checked_add(u64::from(page.row_count))
+                .ok_or_else(|| invalid("V30 page range overflows"))?;
+        }
+        if next_page_logical != source_rows {
+            return Err(invalid("V30 page source coverage differs"));
+        }
+
         let mut next_logical = 0_u64;
-        let mut next_page = 0_u32;
         for (ordinal, leaf) in leaves.iter().enumerate() {
+            let centroid_squared_norm = leaf
+                .routing_centroid
+                .iter()
+                .map(|value| {
+                    let value = f32::from(*value);
+                    value * value
+                })
+                .sum::<f32>();
             if leaf.leaf_ordinal != ordinal as u32
                 || leaf.logical_start != next_logical
-                || leaf.page_start != next_page
-                || (leaf.row_count == 0) != (leaf.page_count == 0)
+                || leaf.row_count == 0
+                || leaf.row_count > MAX_ROUTING_MICROLEAF_ROWS as u64
+                || leaf.page_count == 0
                 || leaf.page_count > MAX_PAGES_PER_LEAF
+                || !centroid_squared_norm.is_finite()
+                || centroid_squared_norm <= 0.0
             {
                 return Err(invalid("V30 leaf range authority differs"));
             }
-            let page_end = leaf
-                .page_start
-                .checked_add(leaf.page_count)
-                .and_then(|value| usize::try_from(value).ok())
-                .ok_or_else(|| invalid("V30 leaf page range overflows"))?;
-            let page_start = usize::try_from(leaf.page_start)
-                .map_err(|_| invalid("V30 leaf page range overflows"))?;
-            if page_end > pages.len() {
-                return Err(invalid("V30 leaf page range differs"));
-            }
-            let mut leaf_next = leaf.logical_start;
-            for page in &pages[page_start..page_end] {
-                if page.leaf_ordinal != leaf.leaf_ordinal
-                    || page.logical_start != leaf_next
-                    || page.row_count == 0
-                    || page.row_count > MAX_PAGE_ROWS
-                    || page.identity.primary_rows != page.row_count
-                    || page.identity.replica_rows != 0
-                    || page.identity.encoded_bytes == 0
-                    || !valid_digest(&page.identity.sha256)
-                {
-                    return Err(invalid("V30 page range authority differs"));
-                }
-                leaf_next = leaf_next
-                    .checked_add(u64::from(page.row_count))
-                    .ok_or_else(|| invalid("V30 page range overflows"))?;
-            }
-            if leaf
+            let leaf_end = leaf
                 .logical_start
                 .checked_add(leaf.row_count)
-                .is_none_or(|end| leaf_next != end)
+                .ok_or_else(|| invalid("V30 leaf range overflows"))?;
+            let page_start = pages.partition_point(|page| {
+                page.logical_start + u64::from(page.row_count) <= leaf.logical_start
+            });
+            let page_end = if leaf.row_count == 0 {
+                page_start
+            } else {
+                pages.partition_point(|page| page.logical_start < leaf_end)
+            };
+            if usize::try_from(leaf.page_start).ok() != Some(page_start)
+                || usize::try_from(leaf.page_count).ok() != Some(page_end - page_start)
             {
                 return Err(invalid("V30 leaf page coverage differs"));
             }
-            next_logical = leaf_next;
-            next_page = leaf
-                .page_start
-                .checked_add(leaf.page_count)
-                .ok_or_else(|| invalid("V30 page count overflows"))?;
+            next_logical = leaf_end;
         }
-        if next_logical != source_rows || usize::try_from(next_page).ok() != Some(pages.len()) {
+        if next_logical != source_rows {
             return Err(invalid("V30 layout source coverage differs"));
-        }
-        for (ordinal, page) in pages.iter().enumerate() {
-            if page.identity.ordinal != ordinal as u32 {
-                return Err(invalid("V30 page ordinal differs"));
-            }
         }
         Ok(Self {
             source_rows,
@@ -1645,12 +1984,24 @@ impl V30Layout {
         self.source_rows
     }
 
-    pub(crate) fn leaves(&self) -> &[V30LeafRange] {
+    pub(crate) fn leaves(&self) -> &[V32RoutingRange] {
         &self.leaves
     }
 
     pub(crate) fn pages(&self) -> &[V30PageRange] {
         &self.pages
+    }
+
+    pub(crate) fn leaf_for_logical(&self, logical: u64) -> Option<&V32RoutingRange> {
+        if logical >= self.source_rows {
+            return None;
+        }
+        let index = self
+            .leaves
+            .partition_point(|leaf| leaf.logical_start <= logical)
+            .checked_sub(1)?;
+        let leaf = &self.leaves[index];
+        (logical < leaf.logical_start + leaf.row_count).then_some(leaf)
     }
 
     pub(crate) fn page_for_logical(&self, logical: u64) -> Option<&V30PageRange> {
@@ -1695,22 +2046,84 @@ pub enum V32ServingTier {
 #[doc(hidden)]
 pub struct V32PageLocation {
     pub page_ordinal: u32,
-    pub sha256: String,
+    pub sha256: [u8; 32],
     pub encoded_bytes: u64,
-    pub standard_uri: String,
-    pub express_uri: Option<String>,
+    pub row_count: u16,
 }
 
 impl V32PageLocation {
     #[doc(hidden)]
-    pub fn uri(&self, tier: V32ServingTier) -> Result<&str> {
-        match tier {
-            V32ServingTier::Standard => Ok(&self.standard_uri),
-            V32ServingTier::Express => self
-                .express_uri
-                .as_deref()
-                .ok_or_else(|| invalid("V32 Express page location is missing")),
+    pub fn from_hex(
+        page_ordinal: u32,
+        sha256: &str,
+        encoded_bytes: u64,
+        row_count: u16,
+    ) -> Result<Self> {
+        Ok(Self {
+            page_ordinal,
+            sha256: digest_bytes(sha256)?,
+            encoded_bytes,
+            row_count,
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn sha256_hex(&self) -> String {
+        digest_hex(&self.sha256)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V32PagePrefixes {
+    standard: String,
+    express: Option<String>,
+}
+
+impl V32PagePrefixes {
+    #[doc(hidden)]
+    pub fn new(standard: String, express: Option<String>) -> Result<Self> {
+        fn valid_prefix(value: &str, express: bool) -> bool {
+            let Ok(url) = Url::parse(value) else {
+                return false;
+            };
+            url.scheme() == "s3"
+                && url
+                    .host_str()
+                    .is_some_and(|host| express == host.ends_with("--x-s3"))
+                && url.path().ends_with("/pages/")
+                && url.query().is_none()
+                && url.fragment().is_none()
         }
+        if !valid_prefix(&standard, false)
+            || express
+                .as_deref()
+                .is_some_and(|value| !valid_prefix(value, true) || value == standard)
+        {
+            return Err(invalid("V32 page prefix differs"));
+        }
+        Ok(Self { standard, express })
+    }
+
+    #[doc(hidden)]
+    pub fn standard(&self) -> &str {
+        &self.standard
+    }
+
+    #[doc(hidden)]
+    pub fn express(&self) -> Option<&str> {
+        self.express.as_deref()
+    }
+
+    #[doc(hidden)]
+    pub fn uri(&self, location: &V32PageLocation, tier: V32ServingTier) -> Result<String> {
+        let prefix = match tier {
+            V32ServingTier::Standard => self.standard(),
+            V32ServingTier::Express => self
+                .express()
+                .ok_or_else(|| invalid("V32 Express page prefix is missing"))?,
+        };
+        Ok(format!("{prefix}{}.arrow", location.sha256_hex()))
     }
 }
 
@@ -1726,10 +2139,9 @@ pub struct V32PageLocationsArtifact {
 fn page_location_schema() -> Schema {
     Schema::new(vec![
         Field::new("page_ordinal", DataType::UInt32, false),
-        Field::new("sha256", DataType::Utf8, false),
-        Field::new("encoded_bytes", DataType::UInt64, false),
-        Field::new("standard_uri", DataType::Utf8, false),
-        Field::new("express_uri", DataType::Utf8, true),
+        Field::new("sha256", DataType::FixedSizeBinary(32), false),
+        Field::new("encoded_bytes", DataType::UInt32, false),
+        Field::new("row_count", DataType::UInt16, false),
     ])
 }
 
@@ -1737,35 +2149,35 @@ fn validate_v32_page_locations(locations: &[V32PageLocation]) -> Result<()> {
     if locations.is_empty() {
         return Err(invalid("V32 page locations are empty"));
     }
-    let mut uris = BTreeSet::new();
     for (ordinal, location) in locations.iter().enumerate() {
-        let standard = Url::parse(&location.standard_uri)
-            .map_err(|_| invalid("V32 Standard page URI differs"))?;
         if location.page_ordinal != ordinal as u32
-            || !valid_digest(&location.sha256)
             || location.encoded_bytes == 0
-            || standard.scheme() != "s3"
-            || standard.host_str().is_none()
-            || standard.path() == "/"
-            || !uris.insert(location.standard_uri.as_str())
+            || location.encoded_bytes > MAX_ENCODED_PAGE_BYTES
+            || location.row_count == 0
+            || location.row_count > MAX_PAGE_ROWS
         {
-            return Err(invalid("V32 Standard page location differs"));
-        }
-        if let Some(uri) = &location.express_uri {
-            let express = Url::parse(uri).map_err(|_| invalid("V32 Express page URI differs"))?;
-            if express.scheme() != "s3"
-                || express
-                    .host_str()
-                    .is_none_or(|host| !host.ends_with("--x-s3"))
-                || express.path() == "/"
-                || uri == &location.standard_uri
-                || !uris.insert(uri)
-            {
-                return Err(invalid("V32 Express page location differs"));
-            }
+            return Err(invalid("V32 page location differs"));
         }
     }
     Ok(())
+}
+
+fn digest_bytes(value: &str) -> Result<[u8; 32]> {
+    if !valid_digest(value) {
+        return Err(invalid("V32 page digest differs"));
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, slot) in bytes.iter_mut().enumerate() {
+        let start = index * 2;
+        let pair = &value.as_bytes()[start..start + 2];
+        *slot = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16)
+            .map_err(|_| invalid("V32 page digest differs"))?;
+    }
+    Ok(bytes)
+}
+
+fn digest_hex(value: &[u8]) -> String {
+    value.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[doc(hidden)]
@@ -1779,21 +2191,16 @@ pub fn encode_v32_page_locations(
             Arc::new(UInt32Array::from_iter_values(
                 locations.iter().map(|location| location.page_ordinal),
             )),
-            Arc::new(StringArray::from_iter_values(
-                locations.iter().map(|location| location.sha256.as_str()),
-            )),
-            Arc::new(UInt64Array::from_iter_values(
-                locations.iter().map(|location| location.encoded_bytes),
-            )),
-            Arc::new(StringArray::from_iter_values(
+            Arc::new(FixedSizeBinaryArray::try_from_iter(
+                locations.iter().map(|location| location.sha256.as_slice()),
+            )?),
+            Arc::new(UInt32Array::from_iter_values(
                 locations
                     .iter()
-                    .map(|location| location.standard_uri.as_str()),
+                    .map(|location| u32::try_from(location.encoded_bytes).unwrap()),
             )),
-            Arc::new(StringArray::from_iter(
-                locations
-                    .iter()
-                    .map(|location| location.express_uri.as_deref()),
+            Arc::new(UInt16Array::from_iter_values(
+                locations.iter().map(|location| location.row_count),
             )),
         ],
     )?;
@@ -1829,24 +2236,26 @@ pub fn decode_v32_page_locations(
     let mut locations = Vec::new();
     for batch in builder.build()? {
         let batch = batch?;
-        if batch.columns()[..4]
+        if batch
+            .columns()
             .iter()
             .any(|column| column.null_count() != 0)
         {
             return Err(invalid("V32 page location nullability differs"));
         }
         let ordinals = column::<UInt32Array>(&batch, 0)?;
-        let digests = column::<StringArray>(&batch, 1)?;
-        let lengths = column::<UInt64Array>(&batch, 2)?;
-        let standard = column::<StringArray>(&batch, 3)?;
-        let express = column::<StringArray>(&batch, 4)?;
+        let digests = column::<FixedSizeBinaryArray>(&batch, 1)?;
+        let lengths = column::<UInt32Array>(&batch, 2)?;
+        let row_counts = column::<UInt16Array>(&batch, 3)?;
         for row in 0..batch.num_rows() {
             locations.push(V32PageLocation {
                 page_ordinal: ordinals.value(row),
-                sha256: digests.value(row).to_owned(),
-                encoded_bytes: lengths.value(row),
-                standard_uri: standard.value(row).to_owned(),
-                express_uri: (!express.is_null(row)).then(|| express.value(row).to_owned()),
+                sha256: digests
+                    .value(row)
+                    .try_into()
+                    .map_err(|_| invalid("V32 page digest width differs"))?,
+                encoded_bytes: u64::from(lengths.value(row)),
+                row_count: row_counts.value(row),
             });
         }
     }
@@ -1856,7 +2265,16 @@ pub fn decode_v32_page_locations(
 
 fn leaf_schema() -> Schema {
     Schema::new(vec![
-        Field::new("leaf_ordinal", DataType::UInt32, false),
+        Field::new("routing_leaf_ordinal", DataType::UInt32, false),
+        Field::new("code_parent_leaf_ordinal", DataType::UInt32, false),
+        Field::new(
+            "routing_centroid",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Float16, false)),
+                96,
+            ),
+            false,
+        ),
         Field::new("logical_start", DataType::UInt64, false),
         Field::new("row_count", DataType::UInt64, false),
         Field::new("page_start", DataType::UInt32, false),
@@ -1864,9 +2282,21 @@ fn leaf_schema() -> Schema {
     ])
 }
 
+fn routing_centroid_array(leaves: &[V32RoutingRange]) -> Result<ArrayRef> {
+    Ok(Arc::new(FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float16, false)),
+        96,
+        Arc::new(Float16Array::from_iter_values(
+            leaves
+                .iter()
+                .flat_map(|leaf| leaf.routing_centroid.iter().copied()),
+        )),
+        None,
+    )?))
+}
+
 fn page_schema() -> Schema {
     Schema::new(vec![
-        Field::new("leaf_ordinal", DataType::UInt32, false),
         Field::new("page_ordinal", DataType::UInt32, false),
         Field::new("logical_start", DataType::UInt64, false),
         Field::new("row_count", DataType::UInt16, false),
@@ -1897,6 +2327,13 @@ pub(crate) fn encode_v30_layout_artifacts(layout: &V30Layout) -> Result<V30Layou
             Arc::new(UInt32Array::from_iter_values(
                 layout.leaves.iter().map(|leaf| leaf.leaf_ordinal),
             )),
+            Arc::new(UInt32Array::from_iter_values(
+                layout
+                    .leaves
+                    .iter()
+                    .map(|leaf| leaf.code_parent_leaf_ordinal),
+            )),
+            routing_centroid_array(&layout.leaves)?,
             Arc::new(UInt64Array::from_iter_values(
                 layout.leaves.iter().map(|leaf| leaf.logical_start),
             )),
@@ -1927,9 +2364,6 @@ pub(crate) fn encode_v30_layout_artifacts(layout: &V30Layout) -> Result<V30Layou
         Arc::new(page_schema()),
         vec![
             Arc::new(UInt32Array::from_iter_values(
-                layout.pages.iter().map(|page| page.leaf_ordinal),
-            )),
-            Arc::new(UInt32Array::from_iter_values(
                 layout.pages.iter().map(|page| page.identity.ordinal),
             )),
             Arc::new(UInt64Array::from_iter_values(
@@ -1939,10 +2373,7 @@ pub(crate) fn encode_v30_layout_artifacts(layout: &V30Layout) -> Result<V30Layou
                 layout.pages.iter().map(|page| page.row_count),
             )),
             Arc::new(StringArray::from_iter_values(
-                layout
-                    .pages
-                    .iter()
-                    .map(|page| page.identity.sha256.as_str()),
+                layout.pages.iter().map(|page| page.identity.sha256_hex()),
             )),
             Arc::new(UInt64Array::from_iter_values(
                 layout.pages.iter().map(|page| page.identity.encoded_bytes),
@@ -1963,8 +2394,8 @@ pub(crate) fn encode_v30_layout_artifacts(layout: &V30Layout) -> Result<V30Layou
     }
     Ok(V30LayoutArtifacts {
         source_rows: layout.source_rows,
-        leaf_ranges: identity("v30-leaf-ranges-arrow", &leaf_ranges_arrow),
-        page_ranges: identity("v30-page-ranges-parquet", &page_ranges_parquet),
+        leaf_ranges: identity("v32-routing-ranges-arrow", &leaf_ranges_arrow),
+        page_ranges: identity("v32-page-ranges-parquet", &page_ranges_parquet),
         leaf_ranges_arrow,
         page_ranges_parquet,
     })
@@ -1993,12 +2424,12 @@ pub fn decode_v30_layout_artifacts(artifacts: &V30LayoutArtifacts) -> Result<V30
     authenticate(
         &artifacts.leaf_ranges,
         &artifacts.leaf_ranges_arrow,
-        "v30-leaf-ranges-arrow",
+        "v32-routing-ranges-arrow",
     )?;
     authenticate(
         &artifacts.page_ranges,
         &artifacts.page_ranges_parquet,
-        "v30-page-ranges-parquet",
+        "v32-page-ranges-parquet",
     )?;
     let mut leaf_reader = FileReader::try_new(Cursor::new(&artifacts.leaf_ranges_arrow), None)?;
     if leaf_reader.schema().as_ref() != &leaf_schema() {
@@ -2016,13 +2447,27 @@ pub fn decode_v30_layout_artifacts(artifacts: &V30LayoutArtifacts) -> Result<V30
         return Err(invalid("V30 leaf range batch differs"));
     }
     let leaf_ordinals = column::<UInt32Array>(&leaf_batch, 0)?;
-    let logical_starts = column::<UInt64Array>(&leaf_batch, 1)?;
-    let row_counts = column::<UInt64Array>(&leaf_batch, 2)?;
-    let page_starts = column::<UInt32Array>(&leaf_batch, 3)?;
-    let page_counts = column::<UInt32Array>(&leaf_batch, 4)?;
+    let code_parent_leaf_ordinals = column::<UInt32Array>(&leaf_batch, 1)?;
+    let routing_centroids = column::<FixedSizeListArray>(&leaf_batch, 2)?;
+    let routing_centroid_values = routing_centroids
+        .values()
+        .as_any()
+        .downcast_ref::<Float16Array>()
+        .ok_or_else(|| invalid("V32 routing centroid values differ"))?;
+    if routing_centroid_values.null_count() != 0 {
+        return Err(invalid("V32 routing centroid nullability differs"));
+    }
+    let logical_starts = column::<UInt64Array>(&leaf_batch, 3)?;
+    let row_counts = column::<UInt64Array>(&leaf_batch, 4)?;
+    let page_starts = column::<UInt32Array>(&leaf_batch, 5)?;
+    let page_counts = column::<UInt32Array>(&leaf_batch, 6)?;
     let leaves = (0..leaf_batch.num_rows())
-        .map(|row| V30LeafRange {
+        .map(|row| V32RoutingRange {
             leaf_ordinal: leaf_ordinals.value(row),
+            code_parent_leaf_ordinal: code_parent_leaf_ordinals.value(row),
+            routing_centroid: std::array::from_fn(|dimension| {
+                routing_centroid_values.value(row * 96 + dimension)
+            }),
             logical_start: logical_starts.value(row),
             row_count: row_counts.value(row),
             page_start: page_starts.value(row),
@@ -2046,27 +2491,25 @@ pub fn decode_v30_layout_artifacts(artifacts: &V30LayoutArtifacts) -> Result<V30
         {
             return Err(invalid("V30 page range nullability differs"));
         }
-        let leaf_ordinals = column::<UInt32Array>(&batch, 0)?;
-        let page_ordinals = column::<UInt32Array>(&batch, 1)?;
-        let logical_starts = column::<UInt64Array>(&batch, 2)?;
-        let row_counts = column::<UInt16Array>(&batch, 3)?;
-        let digests = column::<StringArray>(&batch, 4)?;
-        let lengths = column::<UInt64Array>(&batch, 5)?;
-        let primary_rows = column::<UInt16Array>(&batch, 6)?;
-        let replica_rows = column::<UInt16Array>(&batch, 7)?;
+        let page_ordinals = column::<UInt32Array>(&batch, 0)?;
+        let logical_starts = column::<UInt64Array>(&batch, 1)?;
+        let row_counts = column::<UInt16Array>(&batch, 2)?;
+        let digests = column::<StringArray>(&batch, 3)?;
+        let lengths = column::<UInt64Array>(&batch, 4)?;
+        let primary_rows = column::<UInt16Array>(&batch, 5)?;
+        let replica_rows = column::<UInt16Array>(&batch, 6)?;
         for row in 0..batch.num_rows() {
-            pages.push(V30PageRange {
-                leaf_ordinal: leaf_ordinals.value(row),
-                logical_start: logical_starts.value(row),
-                row_count: row_counts.value(row),
-                identity: V27PageIdentity {
+            pages.push(V30PageRange::from_legacy(
+                logical_starts.value(row),
+                row_counts.value(row),
+                &V27PageIdentity {
                     ordinal: page_ordinals.value(row),
                     sha256: digests.value(row).to_owned(),
                     encoded_bytes: lengths.value(row),
                     primary_rows: primary_rows.value(row),
                     replica_rows: replica_rows.value(row),
                 },
-            });
+            )?);
         }
     }
     V30Layout::new(artifacts.source_rows, leaves, pages)
@@ -2085,11 +2528,12 @@ mod tests {
 
     use super::{
         V30ConstructionBuilder, V30ConstructionConfig, V30FidelitySelectionConfig, V30Layout,
-        V30LayoutBuildConfig, V30LayoutBuilder, V30LayoutRecord, V30LeafRange, V30PageRange,
-        V30PageSink, V30Scratch, V32PageLocation, V32ServingTier, decode_v30_layout_artifacts,
-        decode_v32_page_locations, encode_v30_layout_artifacts, encode_v32_page_locations,
-        partition_v30_leaf_pages, select_v30_high_fidelity, sort_v30_layout_records,
-        validate_v30_geometric_leaf_row_count,
+        V30LayoutBuildConfig, V30LayoutBuilder, V30LayoutRecord, V30PageRange, V30PageSink,
+        V30Scratch, V32PageLocation, V32PagePrefixes, V32RoutingRange, V32ServingTier,
+        decode_v30_layout_artifacts, decode_v32_page_locations, encode_v30_layout_artifacts,
+        encode_v32_page_locations, partition_v30_leaf_pages, partition_v32_routing_microleaves,
+        projected_v32_resident_bytes, select_v30_high_fidelity, sort_v30_layout_records,
+        validate_v30_geometric_leaf_row_count, validate_v32_code_parent_population,
     };
     use crate::{
         V27Hierarchy, V27HierarchyConfig, V27PageIdentity, V27PageRow, decode_v27_page,
@@ -2097,34 +2541,54 @@ mod tests {
     };
     use half::f16;
 
-    fn page(ordinal: u32, leaf_ordinal: u32, logical_start: u64, rows: u16) -> V30PageRange {
-        V30PageRange {
-            leaf_ordinal,
+    fn page(ordinal: u32, _leaf_ordinal: u32, logical_start: u64, rows: u16) -> V30PageRange {
+        V30PageRange::from_legacy(
             logical_start,
-            row_count: rows,
-            identity: V27PageIdentity {
+            rows,
+            &V27PageIdentity {
                 ordinal,
                 sha256: format!("{ordinal:064x}"),
                 encoded_bytes: 1_000 + u64::from(ordinal),
                 primary_rows: rows,
                 replica_rows: 0,
             },
-        }
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn v32_page_ranges_are_fixed_width_resident_authority() {
+        // Break caught: every resident page range owns a heap-allocated digest
+        // even though the authenticated digest is exactly 32 bytes.
+        assert!(!std::mem::needs_drop::<V30PageRange>());
+        assert_eq!(std::mem::size_of::<V30PageRange>(), 64);
+        assert_eq!(std::mem::size_of::<V32PageLocation>(), 48);
+
+        let range = page(7, 0, 21, 3);
+        assert_eq!(range.identity().ordinal, 7);
+        assert_eq!(range.identity().sha256, format!("{:064x}", 7));
+        assert_eq!(range.identity().encoded_bytes, 1_007);
+        assert_eq!(range.identity().primary_rows, 3);
+        assert_eq!(range.identity().replica_rows, 0);
     }
 
     fn layout() -> V30Layout {
         V30Layout::new(
             8,
             vec![
-                V30LeafRange {
+                V32RoutingRange {
                     leaf_ordinal: 0,
+                    code_parent_leaf_ordinal: 0,
+                    routing_centroid: [f16::from_f32(1.0); 96],
                     logical_start: 0,
                     row_count: 5,
                     page_start: 0,
                     page_count: 2,
                 },
-                V30LeafRange {
+                V32RoutingRange {
                     leaf_ordinal: 1,
+                    code_parent_leaf_ordinal: 1,
+                    routing_centroid: [f16::from_f32(1.0); 96],
                     logical_start: 5,
                     row_count: 3,
                     page_start: 2,
@@ -2138,37 +2602,46 @@ mod tests {
 
     #[test]
     fn v32_s3_layout_page_locations_bind_byte_identical_standard_and_express_objects() {
-        // Break caught: serving discovers page locations, silently falls back
-        // between tiers, or permits the Express replica to change page bytes.
+        // Break caught: serving stores one heap URI per page instead of compact
+        // identities, discovers prefixes, or silently falls back between tiers.
         let locations = vec![
             V32PageLocation {
                 page_ordinal: 0,
-                sha256: "1".repeat(64),
+                sha256: [0x11; 32],
                 encoded_bytes: 1001,
-                standard_uri: "s3://durable/pages/one.arrow".to_owned(),
-                express_uri: Some("s3://hot--euc1-az1--x-s3/pages/one.arrow".to_owned()),
+                row_count: 480,
             },
             V32PageLocation {
                 page_ordinal: 1,
-                sha256: "2".repeat(64),
+                sha256: [0x22; 32],
                 encoded_bytes: 1002,
-                standard_uri: "s3://durable/pages/two.arrow".to_owned(),
-                express_uri: None,
+                row_count: 17,
             },
         ];
         let artifact = encode_v32_page_locations(&locations).unwrap();
         let decoded = decode_v32_page_locations(&artifact).unwrap();
+        let prefixes = V32PagePrefixes::new(
+            "s3://durable/pages/".to_owned(),
+            Some("s3://hot--euc1-az1--x-s3/pages/".to_owned()),
+        )
+        .unwrap();
 
         assert_eq!(decoded, locations);
         assert_eq!(
-            decoded[0].uri(V32ServingTier::Standard).unwrap(),
-            "s3://durable/pages/one.arrow"
+            prefixes.uri(&decoded[0], V32ServingTier::Standard).unwrap(),
+            format!("s3://durable/pages/{}.arrow", "1".repeat(64))
         );
         assert_eq!(
-            decoded[0].uri(V32ServingTier::Express).unwrap(),
-            "s3://hot--euc1-az1--x-s3/pages/one.arrow"
+            prefixes.uri(&decoded[0], V32ServingTier::Express).unwrap(),
+            format!("s3://hot--euc1-az1--x-s3/pages/{}.arrow", "1".repeat(64))
         );
-        assert!(decoded[1].uri(V32ServingTier::Express).is_err());
+        assert!(!artifact.parquet.windows(5).any(|window| window == b"s3://"));
+        assert!(
+            V32PagePrefixes::new("s3://durable/pages/".to_owned(), None)
+                .unwrap()
+                .uri(&decoded[1], V32ServingTier::Express)
+                .is_err()
+        );
 
         let mut corrupted = artifact;
         corrupted.parquet[0] ^= 1;
@@ -2178,6 +2651,7 @@ mod tests {
     #[derive(Default)]
     struct Scratch {
         runs: BTreeMap<String, Vec<u8>>,
+        writes: Vec<String>,
         peak_write: usize,
         open_now: Arc<AtomicUsize>,
         peak_open: Arc<AtomicUsize>,
@@ -2209,6 +2683,7 @@ mod tests {
             let mut bytes = Vec::new();
             write(&mut bytes)?;
             self.peak_write = self.peak_write.max(bytes.len());
+            self.writes.push(key.to_owned());
             self.runs.insert(key.to_owned(), bytes);
             Ok(())
         }
@@ -2256,6 +2731,268 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    fn v32_skewed_parent_rows(row_count: u64) -> Vec<V30LayoutRecord> {
+        (0..row_count)
+            .map(|source_ordinal| {
+                let mut vector = [0.0_f32; 96];
+                vector[0] = if source_ordinal.is_multiple_of(2) {
+                    2.0
+                } else {
+                    4.0
+                };
+                vector[1] = 1.0 + (source_ordinal % 17) as f32 / 32.0;
+                V30LayoutRecord {
+                    leaf_ordinal: 7,
+                    source_ordinal,
+                    base_code: vec![(source_ordinal % 251) as u8; 24],
+                    high_code: None,
+                    vector,
+                }
+            })
+            .collect()
+    }
+
+    fn raw_mean_f16(rows: &[V30LayoutRecord]) -> [f16; 96] {
+        let mut sums = [0.0_f64; 96];
+        for row in rows {
+            for (sum, value) in sums.iter_mut().zip(row.vector) {
+                *sum += f64::from(value);
+            }
+        }
+        std::array::from_fn(|dimension| f16::from_f32((sums[dimension] / rows.len() as f64) as f32))
+    }
+
+    #[test]
+    fn v32_routing_microleaf_splits_skewed_parent_at_1024() {
+        // Break caught: a trained leaf's skewed full-corpus population reaches page
+        // construction unchanged, recreating the observed 2,930-row 1M failure.
+        let rows = v32_skewed_parent_rows(1_025);
+        let reversed = rows.iter().cloned().rev().collect::<Vec<_>>();
+        let first = partition_v32_routing_microleaves(rows, 7, 11).unwrap();
+        let second = partition_v32_routing_microleaves(reversed, 7, 11).unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 2);
+        assert_eq!(
+            first
+                .iter()
+                .map(|microleaf| microleaf.rows.len())
+                .sum::<usize>(),
+            1_025
+        );
+        assert!(
+            first
+                .iter()
+                .all(|microleaf| !microleaf.rows.is_empty() && microleaf.rows.len() <= 1_024)
+        );
+        assert_eq!(
+            first
+                .iter()
+                .map(|microleaf| microleaf.routing_leaf_ordinal)
+                .collect::<Vec<_>>(),
+            vec![11, 12]
+        );
+        assert!(
+            first
+                .iter()
+                .all(|microleaf| microleaf.code_parent_leaf_ordinal == 7)
+        );
+        assert!(
+            first
+                .iter()
+                .all(|microleaf| { microleaf.routing_centroid == raw_mean_f16(&microleaf.rows) })
+        );
+        assert_eq!(
+            first
+                .iter()
+                .flat_map(|microleaf| microleaf.rows.iter().map(|row| row.source_ordinal))
+                .collect::<std::collections::BTreeSet<_>>(),
+            (0_u64..1_025).collect()
+        );
+    }
+
+    #[test]
+    fn v32_routing_microleaf_uses_full_population_raw_mean_and_omits_empty_parent() {
+        // Break caught: an unsplit routing leaf reuses a normalized training
+        // centroid, or an empty trained parent emits a phantom routing row.
+        let rows = v32_skewed_parent_rows(3);
+        let expected = raw_mean_f16(&rows);
+        let routed = partition_v32_routing_microleaves(rows, 7, 19).unwrap();
+        assert_eq!(routed.len(), 1);
+        assert_eq!(routed[0].routing_centroid, expected);
+        assert_ne!(f32::from(expected[0]), 1.0);
+        assert!(
+            partition_v32_routing_microleaves(Vec::new(), 8, 20)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn v32_routing_microleaf_count_preflight_rejects_parent_overflow_without_rows() {
+        // Break caught: the builder discovers an oversized trained parent only
+        // after allocating its records and encoding PQ codes.
+        assert!(validate_v32_code_parent_population(0).is_ok());
+        assert!(validate_v32_code_parent_population(131_072).is_ok());
+        assert!(validate_v32_code_parent_population(131_073).is_err());
+        assert!(validate_v32_code_parent_population(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn v32_routing_microleaf_resident_projection_uses_complete_100m_geometry() {
+        assert_eq!(
+            projected_v32_resident_bytes(100_000_000, 1_024, 65_536, 163_192, 208_334).unwrap(),
+            2_605_497_664
+        );
+        assert!(
+            projected_v32_resident_bytes(130_000_000, 1_024, 65_536, 200_000, 270_834).is_err()
+        );
+    }
+
+    #[test]
+    fn v32_routing_microleaf_duplicate_geometry_is_deterministic_and_bounded() {
+        // Break caught: identical high-dimensional vectors make the geometric
+        // split empty, unstable, or larger than the routing population cap.
+        let mut rows = v32_skewed_parent_rows(2_049);
+        for row in &mut rows {
+            row.vector = [2.0; 96];
+        }
+        let reversed = rows.iter().cloned().rev().collect::<Vec<_>>();
+        let first = partition_v32_routing_microleaves(rows, 7, 31).unwrap();
+        let second = partition_v32_routing_microleaves(reversed, 7, 31).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 3);
+        assert!(first.iter().all(|microleaf| microleaf.rows.len() <= 1_024));
+        assert_eq!(
+            first
+                .iter()
+                .map(|microleaf| microleaf.rows.len())
+                .sum::<usize>(),
+            2_049
+        );
+    }
+
+    #[test]
+    fn v32_routing_microleaf_layout_packs_pages_across_parent_boundaries() {
+        // Break caught: finishing a routing range flushes a short S3 object and
+        // makes request count scale with leaf tails rather than corpus rows.
+        let records = (0_u64..600)
+            .map(|source_ordinal| {
+                let mut vector = [0.0_f32; 96];
+                vector[(source_ordinal % 3) as usize] = 1.0;
+                V30LayoutRecord {
+                    leaf_ordinal: u32::from(source_ordinal >= 300),
+                    source_ordinal,
+                    base_code: vec![(source_ordinal % 251) as u8; 24],
+                    high_code: source_ordinal
+                        .is_multiple_of(20)
+                        .then(|| vec![(source_ordinal % 251) as u8; 48]),
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut scratch = Scratch::default();
+        let mut pages = Scratch::default();
+        let built = V30LayoutBuilder::build(
+            records,
+            2,
+            V30LayoutBuildConfig {
+                page_rows: 480,
+                sort_memory_rows: 97,
+                fidelity_ppm: 50_000,
+            },
+            &mut scratch,
+            &mut pages,
+        )
+        .unwrap();
+
+        assert_eq!(built.layout.leaves().len(), 2);
+        assert_eq!(built.layout.pages().len(), 2);
+        assert_eq!(built.layout.pages()[0].row_count, 480);
+        assert_eq!(built.layout.pages()[1].row_count, 120);
+        assert_eq!(built.layout.leaves()[0].page_start, 0);
+        assert_eq!(built.layout.leaves()[0].page_count, 1);
+        assert_eq!(built.layout.leaves()[1].page_start, 0);
+        assert_eq!(built.layout.leaves()[1].page_count, 2);
+        assert_eq!(built.codes.logical_rows(), 600);
+    }
+
+    #[test]
+    fn v32_routing_microleaf_builder_splits_oversized_trained_parent() {
+        // Break caught: the standalone partition helper is correct but the real
+        // sorted layout builder still emits one trained leaf as one routing leaf.
+        let records = (0_u64..1_025)
+            .map(|source_ordinal| {
+                let mut vector = [0.0_f32; 96];
+                vector[0] = if source_ordinal.is_multiple_of(2) {
+                    2.0
+                } else {
+                    4.0
+                };
+                vector[1] = 1.0 + (source_ordinal % 17) as f32 / 32.0;
+                V30LayoutRecord {
+                    leaf_ordinal: 0,
+                    source_ordinal,
+                    base_code: vec![(source_ordinal % 251) as u8; 24],
+                    high_code: (source_ordinal < 51)
+                        .then(|| vec![(source_ordinal % 251) as u8; 48]),
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut scratch = Scratch::default();
+        let mut pages = Scratch::default();
+        let built = V30LayoutBuilder::build(
+            records,
+            1,
+            V30LayoutBuildConfig {
+                page_rows: 480,
+                sort_memory_rows: 113,
+                fidelity_ppm: 50_000,
+            },
+            &mut scratch,
+            &mut pages,
+        )
+        .unwrap();
+
+        assert_eq!(built.layout.leaves().len(), 2);
+        assert!(
+            built
+                .layout
+                .leaves()
+                .iter()
+                .all(|leaf| leaf.row_count <= 1_024)
+        );
+        assert!(
+            built
+                .layout
+                .leaves()
+                .iter()
+                .all(|leaf| leaf.code_parent_leaf_ordinal == 0)
+        );
+        assert!(built.layout.leaves().iter().all(|leaf| {
+            leaf.routing_centroid
+                .iter()
+                .map(|value| {
+                    let value = f32::from(*value);
+                    value * value
+                })
+                .sum::<f32>()
+                > 0.0
+        }));
+        assert_eq!(
+            built
+                .layout
+                .leaves()
+                .iter()
+                .map(|leaf| leaf.row_count)
+                .sum::<u64>(),
+            1_025
+        );
+        assert_eq!(built.layout.pages().len(), 3);
+        assert_eq!(built.codes.logical_rows(), 1_025);
     }
 
     fn page_sources(pages: &[Vec<V30LayoutRecord>]) -> Vec<Vec<u64>> {
@@ -2370,8 +3107,10 @@ mod tests {
         assert!(
             V30Layout::new(
                 513,
-                vec![V30LeafRange {
+                vec![V32RoutingRange {
                     leaf_ordinal: 0,
+                    code_parent_leaf_ordinal: 0,
+                    routing_centroid: [f16::from_f32(1.0); 96],
                     logical_start: 0,
                     row_count: 513,
                     page_start: 0,
@@ -2389,8 +3128,8 @@ mod tests {
         // before its complete-byte identity, or page/leaf coverage is not rechecked.
         let layout = layout();
         let artifacts = encode_v30_layout_artifacts(&layout).unwrap();
-        assert_eq!(artifacts.leaf_ranges.role, "v30-leaf-ranges-arrow");
-        assert_eq!(artifacts.page_ranges.role, "v30-page-ranges-parquet");
+        assert_eq!(artifacts.leaf_ranges.role, "v32-routing-ranges-arrow");
+        assert_eq!(artifacts.page_ranges.role, "v32-page-ranges-parquet");
         assert_eq!(decode_v30_layout_artifacts(&artifacts).unwrap(), layout);
 
         let mut digest = artifacts.clone();
@@ -2509,9 +3248,9 @@ mod tests {
     }
 
     #[test]
-    fn v30_s3_layout_builder_emits_one_owner_bounded_arrow_pages_and_aligned_codes() {
-        // Break caught: construction stages exact vectors outside bounded pages,
-        // crosses a leaf boundary, duplicates an owner, or misaligns fidelity ranks.
+    fn v30_s3_layout_builder_emits_global_bounded_arrow_pages_and_aligned_codes() {
+        // Break caught: construction stages exact vectors outside globally packed
+        // bounded pages or misaligns fidelity ranks across a routing boundary.
         let rows = 1_030_u64;
         let input = (0..rows)
             .map(|source| V30LayoutRecord {
@@ -2528,7 +3267,7 @@ mod tests {
             input,
             2,
             V30LayoutBuildConfig {
-                page_rows: 512,
+                page_rows: 480,
                 sort_memory_rows: 17,
                 fidelity_ppm: 50_000,
             },
@@ -2542,16 +3281,18 @@ mod tests {
         assert_eq!(built.layout.leaves()[0].row_count, 700);
         assert_eq!(built.layout.leaves()[0].page_count, 2);
         assert_eq!(built.layout.leaves()[1].row_count, 330);
-        assert_eq!(built.layout.leaves()[1].page_count, 1);
+        assert_eq!(built.layout.leaves()[1].page_start, 1);
+        assert_eq!(built.layout.leaves()[1].page_count, 2);
         assert_eq!(built.codes.logical_rows(), rows as usize);
         assert_eq!(built.codes.high_rows(), 51);
         assert_eq!(built.codes.base_rows(), rows as usize - 51);
 
         let mut source_union = BTreeMap::new();
         for page in built.layout.pages() {
-            assert!(page.row_count <= 512);
+            assert!(page.row_count <= 480);
+            assert!(page.identity.encoded_bytes <= 196_608);
             let bytes = &pages.runs[&format!("page-{:08}", page.identity.ordinal)];
-            let decoded = decode_v27_page(&page.identity, bytes).unwrap();
+            let decoded = decode_v27_page(&page.identity(), bytes).unwrap();
             assert_eq!(decoded.rows.len(), usize::from(page.row_count));
             for row in decoded.rows {
                 assert!(source_union.insert(row.source_ordinal, ()).is_none());
@@ -2605,7 +3346,7 @@ mod tests {
         let mut sources = BTreeMap::new();
         for page in built.layout.pages() {
             let bytes = &pages.runs[&format!("page-{:08}", page.identity.ordinal)];
-            let decoded = decode_v27_page(&page.identity, bytes).unwrap();
+            let decoded = decode_v27_page(&page.identity(), bytes).unwrap();
             assert_eq!(decoded.rows.len(), 8);
             assert!(
                 decoded
@@ -2681,7 +3422,6 @@ mod tests {
                 .map(|field| field.name().as_str())
                 .collect::<Vec<_>>(),
             [
-                "leaf_ordinal",
                 "page_ordinal",
                 "logical_start",
                 "row_count",
@@ -2707,8 +3447,10 @@ mod tests {
         assert!(
             V30Layout::new(
                 65,
-                vec![V30LeafRange {
+                vec![V32RoutingRange {
                     leaf_ordinal: 0,
+                    code_parent_leaf_ordinal: 0,
+                    routing_centroid: [f16::from_f32(1.0); 96],
                     logical_start: 0,
                     row_count: 65,
                     page_start: 0,
@@ -2733,17 +3475,19 @@ mod tests {
         let high = V30PqCodebook::new(V30PqWidth::High48, vec![0.0; 48 * 256 * 2]).unwrap();
         let consumed = Arc::new(AtomicUsize::new(0));
         let seen = consumed.clone();
-        let rows = (0..100_u64).map(move |source_ordinal| {
-            seen.fetch_add(1, Ordering::SeqCst);
-            V27PageRow {
-                source_ordinal,
-                vector: [if source_ordinal < 50 { 0.25 } else { 1.25 }; 96],
-            }
-        });
+        let rows = (0..100_u64)
+            .map(move |source_ordinal| {
+                seen.fetch_add(1, Ordering::SeqCst);
+                V27PageRow {
+                    source_ordinal,
+                    vector: [if source_ordinal < 50 { 0.25 } else { 1.25 }; 96],
+                }
+            })
+            .collect::<Vec<_>>();
         let mut scratch = Scratch::default();
         let mut pages = Scratch::default();
         let built = V30LayoutBuilder::build_from_corpus(
-            rows,
+            (rows.clone(), rows),
             &hierarchy,
             &base,
             &high,
@@ -2810,6 +3554,12 @@ mod tests {
         assert_eq!(built.high_codebook.width(), V30PqWidth::High48);
         assert_eq!(built.layout.layout.source_rows(), 320);
         assert_eq!(built.layout.codes.high_rows(), 16);
+        assert!(
+            !scratch
+                .writes
+                .iter()
+                .any(|key| key == "v32-layout-assigned")
+        );
         assert!(scratch.runs.is_empty());
         assert!(!pages.runs.is_empty());
     }

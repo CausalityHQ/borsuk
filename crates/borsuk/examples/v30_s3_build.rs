@@ -13,7 +13,8 @@ use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, V27HierarchyConfig, V27PageIdentity, V27PageRow, V30ConstructionBuilder,
-    V30ConstructionConfig, V30PageSink, V30Scratch, V32PageLocation, encode_v32_page_locations,
+    V30ConstructionConfig, V30PageSink, V30Scratch, V32PageLocation, V32PagePrefixes,
+    encode_v32_page_locations,
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -124,7 +125,7 @@ fn parse_args(values: Vec<String>) -> Result<Args, String> {
         || !args.leaves.is_multiple_of(args.roots)
         || args.training_rows < args.leaves.saturating_mul(2)
         || args.page_rows == 0
-        || args.page_rows > 512
+        || args.page_rows > 480
         || !args.scratch_dir.is_absolute()
     {
         return Err(argument_error("authority or numeric bound differs"));
@@ -436,16 +437,17 @@ impl V30Scratch for FileScratch {
         write: &mut dyn FnMut(&mut dyn Write) -> borsuk::Result<()>,
     ) -> borsuk::Result<()> {
         let path = self.directory.join(key);
-        let mut file = File::create(&path).map_err(|source| io_error(&path, source))?;
-        write(&mut file)?;
-        file.flush().map_err(|source| io_error(&path, source))
+        let file = File::create(&path).map_err(|source| io_error(&path, source))?;
+        let mut writer = BufWriter::new(file);
+        write(&mut writer)?;
+        writer.flush().map_err(|source| io_error(&path, source))
     }
 
     fn open_scratch(&self, key: &str) -> borsuk::Result<Box<dyn Read + Send>> {
         let path = self.directory.join(key);
-        Ok(Box::new(
+        Ok(Box::new(BufReader::new(
             File::open(&path).map_err(|source| io_error(&path, source))?,
-        ))
+        )))
     }
 
     fn remove_scratch(&mut self, key: &str) -> borsuk::Result<()> {
@@ -739,27 +741,25 @@ fn execute_with_store(args: Args, store: Arc<dyn ObjectStore>) -> borsuk::Result
         put_bytes(
             &runtime,
             &store,
-            format!("{output_path}leaf-ranges.arrow"),
+            format!("{output_path}routing-ranges.arrow"),
             artifacts.layout.leaf_ranges_arrow.clone(),
         )?;
         put_bytes(
             &runtime,
             &store,
-            format!("{output_path}page-offsets.parquet"),
+            format!("{output_path}page-ranges.parquet"),
             artifacts.layout.page_ranges_parquet.clone(),
         )?;
         let page_locations = artifacts
             .pages
             .iter()
-            .map(|page| V32PageLocation {
-                page_ordinal: page.ordinal,
-                sha256: page.sha256.clone(),
-                encoded_bytes: page.encoded_bytes,
-                standard_uri: format!("{}pages/{}.arrow", args.output_s3_prefix, page.sha256),
-                express_uri: None,
+            .zip(&artifacts.page_row_counts)
+            .map(|(page, &row_count)| {
+                V32PageLocation::from_hex(page.ordinal, &page.sha256, page.encoded_bytes, row_count)
             })
-            .collect::<Vec<_>>();
+            .collect::<borsuk::Result<Vec<_>>>()?;
         let page_locations = encode_v32_page_locations(&page_locations)?;
+        let page_prefixes = V32PagePrefixes::new(format!("{}pages/", args.output_s3_prefix), None)?;
         put_bytes(
             &runtime,
             &store,
@@ -805,26 +805,33 @@ fn execute_with_store(args: Args, store: Arc<dyn ObjectStore>) -> borsuk::Result
                 "roots": disk_artifact("roots.arrow", &artifacts.hierarchy.roots.role, &artifacts.hierarchy.roots.sha256, artifacts.hierarchy.roots.encoded_bytes),
             },
             "layout": {
-                "leaf_ranges": disk_artifact("leaf-ranges.arrow", &artifacts.layout.leaf_ranges.role, &artifacts.layout.leaf_ranges.sha256, artifacts.layout.leaf_ranges.encoded_bytes),
-                "maximum_leaf_rows": artifacts.maximum_leaf_rows,
-                "packing_algorithm": "balanced-geometric-v1",
+                "routing_ranges": disk_artifact("routing-ranges.arrow", &artifacts.layout.leaf_ranges.role, &artifacts.layout.leaf_ranges.sha256, artifacts.layout.leaf_ranges.encoded_bytes),
+                "maximum_code_parent_rows": artifacts.maximum_code_parent_rows,
+                "maximum_routing_leaf_rows": artifacts.maximum_routing_leaf_rows,
+                "maximum_routing_leaves_per_root": artifacts.maximum_routing_leaves_per_root,
+                "packing_algorithm": "routing-microleaf-global-v1",
                 "page_rows": args.page_rows,
-                "page_ranges": disk_artifact("page-offsets.parquet", &artifacts.layout.page_ranges.role, &artifacts.layout.page_ranges.sha256, artifacts.layout.page_ranges.encoded_bytes),
+                "page_ranges": disk_artifact("page-ranges.parquet", &artifacts.layout.page_ranges.role, &artifacts.layout.page_ranges.sha256, artifacts.layout.page_ranges.encoded_bytes),
+                "projected_resident_bytes": artifacts.projected_resident_bytes,
                 "source_rows": artifacts.source_rows,
             },
             "page_key_suffix": ".arrow",
             "pq": {"artifacts": pq},
             "routing": {
-                "algorithm": "hierarchical-residual-pq-v1",
+                "algorithm": "hierarchical-routing-microleaf-pq-v1",
+                "arms": [
+                    {"leaf_beam": 64, "maximum_scanned_codes": 65_536},
+                    {"leaf_beam": 128, "maximum_scanned_codes": 131_072},
+                    {"leaf_beam": 256, "maximum_scanned_codes": 262_144},
+                ],
                 "candidate_depth": 12_288,
-                "leaf_beam": 64,
-                "maximum_scanned_codes": 1_000_000,
-                "maximum_pages_per_leaf": 64,
                 "page_count": 16,
                 "root_beam": 8,
             },
             "serving": {
+                "express_page_prefix": page_prefixes.express(),
                 "page_locations": disk_artifact("page-locations.parquet", &page_locations.role, &page_locations.sha256, page_locations.encoded_bytes),
+                "standard_page_prefix": page_prefixes.standard(),
             },
             "schema_version": 3,
             "source": {
@@ -929,7 +936,7 @@ mod tests {
             "--training-rows",
             "262144",
             "--page-rows",
-            "512",
+            "480",
             "--output-s3-prefix",
             "s3://bucket/v30/build-a0001/",
             "--scratch-dir",
@@ -946,20 +953,13 @@ mod tests {
         assert_eq!(parsed.expected_rows, 9_990_000);
         assert_eq!(parsed.s3_region, "eu-central-1");
         assert_eq!(parsed.training_rows, 262_144);
-        assert_eq!(parsed.page_rows, 512);
+        assert_eq!(parsed.page_rows, 480);
         assert_eq!(
             parsed.source_commit,
             "b701eada33a5d6782f9ebb0adaac5fd7573da40f"
         );
 
-        for forbidden in [
-            "--query",
-            "--truth",
-            "--latest",
-            "--legacy",
-            "--d3",
-            "--routing-leaf-beam",
-        ] {
+        for forbidden in ["--query", "--truth", "--latest", "--legacy", "--d3"] {
             let mut values = args();
             values.extend([forbidden.to_owned(), "value".to_owned()]);
             assert!(parse_args(values).is_err(), "accepted {forbidden}");
@@ -967,6 +967,20 @@ mod tests {
         let mut duplicate = args();
         duplicate.extend(["--roots".to_owned(), "1024".to_owned()]);
         assert!(parse_args(duplicate).is_err());
+
+        let mut over_cap = args();
+        let page_rows = over_cap
+            .iter()
+            .position(|value| value == "--page-rows")
+            .unwrap();
+        over_cap[page_rows + 1] = "481".to_owned();
+        assert!(parse_args(over_cap).is_err());
+
+        for obsolete in ["--routing-leaf-beam", "--routing-scan-budget"] {
+            let mut values = args();
+            values.extend([obsolete.to_owned(), "64".to_owned()]);
+            assert!(parse_args(values).is_err(), "accepted {obsolete}");
+        }
     }
 
     #[test]
@@ -1049,23 +1063,32 @@ mod tests {
             );
             assert_eq!(
                 manifest["layout"]["packing_algorithm"],
-                "balanced-geometric-v1"
+                "routing-microleaf-global-v1"
             );
             assert_eq!(manifest["layout"]["page_rows"], 32);
+            assert!(manifest["layout"].get("routing_ranges").is_some());
+            assert!(manifest["layout"].get("leaf_ranges").is_none());
             assert_eq!(manifest["schema_version"], 3);
             assert_eq!(
                 manifest["routing"],
                 serde_json::json!({
-                    "algorithm": "hierarchical-residual-pq-v1",
+                    "algorithm": "hierarchical-routing-microleaf-pq-v1",
+                    "arms": [
+                        {"leaf_beam": 64, "maximum_scanned_codes": 65536},
+                        {"leaf_beam": 128, "maximum_scanned_codes": 131072},
+                        {"leaf_beam": 256, "maximum_scanned_codes": 262144},
+                    ],
                     "candidate_depth": 12288,
-                    "leaf_beam": 64,
-                    "maximum_scanned_codes": 1000000,
                     "root_beam": 8,
-                    "maximum_pages_per_leaf": 64,
                     "page_count": 16,
                 })
             );
             let location = &manifest["serving"]["page_locations"];
+            assert_eq!(
+                manifest["serving"]["standard_page_prefix"],
+                "s3://bucket/v30/build-a0001/pages/"
+            );
+            assert!(manifest["serving"]["express_page_prefix"].is_null());
             assert_eq!(location["file"], "page-locations.parquet");
             assert_eq!(location["role"], "v32-page-locations-parquet");
             let location_bytes = store
@@ -1126,18 +1149,28 @@ mod tests {
                     .iter()
                     .map(|field| field.name().as_str())
                     .collect::<Vec<_>>(),
-                [
-                    "page_ordinal",
-                    "sha256",
-                    "encoded_bytes",
-                    "standard_uri",
-                    "express_uri",
-                ]
+                ["page_ordinal", "sha256", "encoded_bytes", "row_count",]
             );
             assert!(
-                manifest["layout"]["maximum_leaf_rows"]
+                manifest["layout"]["maximum_routing_leaf_rows"]
                     .as_u64()
                     .is_some_and(|rows| (1..=320).contains(&rows))
+            );
+            assert!(manifest["layout"].get("maximum_leaf_rows").is_none());
+            assert!(
+                manifest["layout"]["maximum_code_parent_rows"]
+                    .as_u64()
+                    .is_some_and(|rows| (1..=131_072).contains(&rows))
+            );
+            assert!(
+                manifest["layout"]["maximum_routing_leaves_per_root"]
+                    .as_u64()
+                    .is_some_and(|leaves| leaves > 0)
+            );
+            assert!(
+                manifest["layout"]["projected_resident_bytes"]
+                    .as_u64()
+                    .is_some_and(|bytes| bytes < 3 * 1024 * 1024 * 1024)
             );
             store
                 .get(&Path::from(
@@ -1148,6 +1181,24 @@ mod tests {
                 .await
                 .unwrap();
         });
+    }
+
+    #[test]
+    fn v32_s3_build_keeps_scientific_arm_selection_out_of_query_blind_construction() {
+        // Break caught: query-blind construction accepts or selects one
+        // scientific arm instead of publishing the fixed evaluation ladder.
+        parse_args(args()).unwrap();
+
+        let mut different_scale = args();
+        let expected_rows = different_scale
+            .iter()
+            .position(|value| value == "--expected-rows")
+            .unwrap();
+        different_scale[expected_rows + 1] = "1000000".to_owned();
+        assert_eq!(
+            parse_args(different_scale).unwrap().expected_rows,
+            1_000_000
+        );
     }
 
     #[test]

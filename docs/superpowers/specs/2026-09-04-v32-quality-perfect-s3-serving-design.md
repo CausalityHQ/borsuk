@@ -76,12 +76,13 @@ stream is packed into consecutive 480-row pages, so adjacent microleaves may
 share a page and no per-microleaf tail consumes an extra request slot.
 
 The serving-location table is a strict Parquet artifact with one row per page:
-`page_ordinal:uint32`, `sha256:string`, `encoded_bytes:uint64`,
-`standard_uri:string`, and nullable `express_uri:string`. A copied Express
-object must be byte-identical to the Standard object and retain the same
-SHA-256 and length. The reader accepts exactly one selected tier per request;
-it never silently falls back across tiers because that would make latency and
-availability evidence ambiguous.
+`page_ordinal:uint32`, `sha256:fixed_size_binary[32]`,
+`encoded_bytes:uint32`, and `row_count:uint16`. Standard and optional Express
+page prefixes are authenticated once in the manifest, rather than repeated in
+every resident row. A copied Express object must be byte-identical to the
+Standard object and retain the same SHA-256 and length. The reader accepts
+exactly one selected tier per request; it never silently falls back across
+tiers because that would make latency and availability evidence ambiguous.
 
 Construction also emits `logical-sources.arrow`, a diagnostic-only Arrow IPC
 permutation from router logical ordinal to source ordinal. Its exact SHA-256,
@@ -143,6 +144,12 @@ quantity being tested. After the routing-microleaf implementation exists, a
 page-free V32 build and containment diagnostic first run on the authenticated
 100K development cohort with frozen geometry 128 roots, 4,096 trained leaves,
 and root beam 8. The same diagnostic then runs on the 1M development cohort.
+The 100K leg is rank-evidence-only: when the complete selected-root frontier
+contains fewer than the serving maximum of 12,288 rows, its effective retained
+candidate depth is exactly `min(12,288, codes_scanned)`. It still requires 16
+selected pages, 320/320 truth containment, and zero page reads. This bounded
+shortfall does not alter the complete eligible-microleaf ordering from which
+truth ranks are measured, and the 1M and serving legs retain the 12,288 target.
 Those two newly produced maximum truth-microleaf ranks define a preregistered
 two-point power envelope:
 `alpha = max(0, ln(rank_1m / rank_100k) / ln(10))` and
@@ -200,8 +207,8 @@ ordinal; Standard/Express URI prefixes occur once in the manifest rather than
 as heap strings per page. Roots, trained leaves, microleaf/page ranges, compact
 page locations, and any cache must keep the complete projection below 3 GiB.
 Using 194 bytes per trained leaf, 224 per routing microleaf, 64 per page range,
-and 48 per page location gives a conservative subtotal of 2,605,102,400 bytes
-including codes and bitmap, leaving 616,123,072 bytes below 3 GiB for roots,
+and 48 per page location gives a conservative subtotal of 2,605,497,664 bytes
+including codes and bitmap, leaving 615,727,808 bytes below 3 GiB for roots,
 codebooks, Arrow alignment, allocator overhead, and the explicitly bounded
 cache. The implementation computes this projection with checked integers from
 the actual schema widths and rejects overflow or a total above 3 GiB.

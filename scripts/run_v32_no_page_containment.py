@@ -38,6 +38,7 @@ class V32ContainmentPlan:
     source_rows: int
     query_start: int
     query_count: int
+    leaf_beam: int
 
 
 def _digest(value: str) -> bool:
@@ -54,7 +55,7 @@ def _validate_artifact(artifact: LocalArtifact) -> None:
         raise ValueError("V32 containment artifact authority differs")
 
 
-def _read_scale_manifest(plan: V32ContainmentPlan) -> int:
+def _read_scale_manifest(plan: V32ContainmentPlan) -> tuple[int, int, int, int]:
     _validate_artifact(plan.manifest)
     payload = plan.manifest.path.read_bytes()
     if (
@@ -74,30 +75,52 @@ def _read_scale_manifest(plan: V32ContainmentPlan) -> int:
     )
     layout = value.get("layout") if type(value) is dict else None
     routing = value.get("routing") if type(value) is dict else None
-    maximum_leaf_rows = (
-        layout.get("maximum_leaf_rows") if type(layout) is dict else None
+    maximum_routing_leaf_rows = (
+        layout.get("maximum_routing_leaf_rows") if type(layout) is dict else None
     )
-    expected_routing = {
-        "algorithm": "hierarchical-residual-pq-v1",
-        "candidate_depth": 12_288,
-        "leaf_beam": 64,
-        "maximum_pages_per_leaf": 64,
-        "maximum_scanned_codes": 1_000_000,
-        "page_count": 16,
-        "root_beam": 8,
+    routing_keys = {
+        "algorithm",
+        "arms",
+        "candidate_depth",
+        "page_count",
+        "root_beam",
     }
+    arms = routing.get("arms") if type(routing) is dict else None
+    expected_arms = [
+        {"leaf_beam": 64, "maximum_scanned_codes": 65_536},
+        {"leaf_beam": 128, "maximum_scanned_codes": 131_072},
+        {"leaf_beam": 256, "maximum_scanned_codes": 262_144},
+    ]
+    scan_budget = {
+        64: 65_536,
+        128: 131_072,
+        256: 262_144,
+    }.get(plan.leaf_beam)
     if (
         payload != expected
         or type(layout) is not dict
         or type(routing) is not dict
         or layout.get("source_rows") != plan.source_rows
-        or layout.get("page_rows") != 512
-        or type(maximum_leaf_rows) is not int
-        or not 1 <= maximum_leaf_rows <= 32_768
-        or routing != expected_routing
+        or layout.get("page_rows") != 480
+        or type(maximum_routing_leaf_rows) is not int
+        or not 1 <= maximum_routing_leaf_rows <= 1_024
+        or type(layout.get("maximum_code_parent_rows")) is not int
+        or not 1 <= layout["maximum_code_parent_rows"] <= 131_072
+        or type(layout.get("maximum_routing_leaves_per_root")) is not int
+        or layout["maximum_routing_leaves_per_root"] <= 0
+        or type(layout.get("projected_resident_bytes")) is not int
+        or not 1 <= layout["projected_resident_bytes"] <= 3 * 1_024 * 1_024 * 1_024
+        or set(routing) != routing_keys
+        or routing.get("algorithm") != "hierarchical-routing-microleaf-pq-v1"
+        or routing.get("candidate_depth") != 12_288
+        or routing.get("page_count") != 16
+        or routing.get("root_beam") != 8
+        or arms != expected_arms
+        or scan_budget is None
     ):
         raise ValueError("V32 containment scale geometry differs")
-    return maximum_leaf_rows
+    maximum_leaves_eligible = 8 * layout["maximum_routing_leaves_per_root"]
+    return maximum_routing_leaf_rows, maximum_leaves_eligible, plan.leaf_beam, scan_budget
 
 
 def _read_truth(
@@ -109,7 +132,7 @@ def _read_truth(
     if (
         not plan.qualifier.is_absolute()
         or not plan.artifact_dir.is_absolute()
-        or plan.source_rows != 1_000_000
+        or plan.source_rows not in {100_000, 1_000_000}
         or type(plan.query_start) is not int
         or plan.query_start < 0
         or plan.query_count != QUERY_COUNT
@@ -187,6 +210,7 @@ def _commands(
     plan: V32ContainmentPlan,
     truth: tuple[tuple[int, ...], ...],
     source_to_logical: tuple[int, ...],
+    leaf_beam: int,
 ) -> tuple[tuple[str, ...], ...]:
     common = (
         str(plan.qualifier),
@@ -210,7 +234,7 @@ def _commands(
         "--root-beam",
         "8",
         "--leaf-beam",
-        "64",
+        str(leaf_beam),
         "--candidate-depth",
         "12288",
         "--page-count",
@@ -235,13 +259,18 @@ def build_v32_containment_commands(
 ) -> tuple[tuple[str, ...], ...]:
     """Build one no-page diagnostic invocation per frozen query."""
 
-    _read_scale_manifest(plan)
+    _, _, leaf_beam, _ = _read_scale_manifest(plan)
     truth = _read_truth(plan, truth_bytes)
-    return _commands(plan, truth, _read_logical_sources(plan))
+    return _commands(plan, truth, _read_logical_sources(plan), leaf_beam)
 
 
 def _diagnostics(
-    payload: bytes, query_ordinal: int, truth: tuple[int, ...]
+    payload: bytes,
+    query_ordinal: int,
+    truth: tuple[int, ...],
+    maximum_leaves_eligible: int,
+    leaf_beam: int,
+    scan_budget: int,
 ) -> tuple[list[dict[str, object]], dict[str, int]]:
     if type(payload) is not bytes or not payload.endswith(b"\n") or b"\n" in payload[:-1]:
         raise ValueError("V32 containment diagnostic canonical bytes differ")
@@ -282,6 +311,7 @@ def _diagnostics(
         "logical",
         "page_ordinal",
         "reciprocal_rank_selected",
+        "routing_leaf_rank",
         "stage",
     }
     stages = {"leaf-frontier", "candidate-retention", "page-reducer", "selected-page"}
@@ -301,6 +331,17 @@ def _diagnostics(
             or item["leaf_ordinal"] < 0
             or item["page_ordinal"] < 0
             or type(item["reciprocal_rank_selected"]) is not bool
+            or (
+                item["routing_leaf_rank"] is not None
+                and (
+                    type(item["routing_leaf_rank"]) is not int
+                    or item["routing_leaf_rank"] < 1
+                )
+            )
+            or (
+                item["routing_leaf_rank"] is None
+                and item["stage"] != "leaf-frontier"
+            )
             or item["stage"] not in stages
             or any(
                 rank is not None and (type(rank) is not int or rank < 0)
@@ -315,8 +356,11 @@ def _diagnostics(
     routing_keys = {
         "candidates_retained",
         "codes_scanned",
-        "leaves_scored",
+        "leaves_eligible",
+        "leaves_scanned",
         "pages_considered",
+        "peak_query_table_pairs_live",
+        "query_table_pairs_built",
         "roots_scored",
         "selected_page_bytes",
         "selected_pages",
@@ -325,15 +369,25 @@ def _diagnostics(
         type(routing) is not dict
         or set(routing) != routing_keys
         or any(type(item) is not int or item < 0 for item in routing.values())
-        or routing["candidates_retained"] != 12_288
-        or not 12_288 <= routing["codes_scanned"] <= 1_000_000
-        or routing["leaves_scored"] != 64
+        or not 1 <= routing["codes_scanned"] <= scan_budget
+        or routing["candidates_retained"]
+        != min(12_288, routing["codes_scanned"])
+        or not leaf_beam <= routing["leaves_scanned"] <= routing["leaves_eligible"]
+        or routing["leaves_eligible"] > maximum_leaves_eligible
+        or routing["peak_query_table_pairs_live"] != 1
+        or not 1 <= routing["query_table_pairs_built"] <= routing["leaves_scanned"]
         or routing["roots_scored"] != 128
         or not 16 <= routing["pages_considered"] <= 12_288
         or routing["selected_pages"] != 16
         or routing["selected_page_bytes"] == 0
     ):
         raise ValueError("V32 containment routing work differs")
+    if any(
+        item["routing_leaf_rank"] is not None
+        and item["routing_leaf_rank"] > routing["leaves_eligible"]
+        for item in diagnostics
+    ):
+        raise ValueError("V32 containment diagnostic value differs")
     return diagnostics, routing
 
 
@@ -345,12 +399,18 @@ def run_v32_no_page_containment(
 ) -> bytes:
     """Run and independently reduce the page-free scale containment gate."""
 
-    maximum_leaf_rows = _read_scale_manifest(plan)
+    (
+        maximum_routing_leaf_rows,
+        maximum_leaves_eligible,
+        leaf_beam,
+        scan_budget,
+    ) = _read_scale_manifest(plan)
     truth = _read_truth(plan, truth_bytes)
     source_to_logical = _read_logical_sources(plan)
-    commands = _commands(plan, truth, source_to_logical)
+    commands = _commands(plan, truth, source_to_logical, leaf_beam)
     samples = []
     routing_work = []
+    truth_microleaf_ranks = []
     losses: Counter[str] = Counter()
     for offset, (command, logicals) in enumerate(zip(commands, truth, strict=True)):
         query_ordinal = plan.query_start + offset
@@ -358,8 +418,16 @@ def run_v32_no_page_containment(
             invoke(command),
             query_ordinal,
             tuple(source_to_logical[source] for source in logicals),
+            maximum_leaves_eligible,
+            leaf_beam,
+            scan_budget,
         )
         routing_work.append(routing)
+        truth_microleaf_ranks.extend(
+            item["routing_leaf_rank"]
+            for item in diagnostics
+            if item["routing_leaf_rank"] is not None
+        )
         hits = sum(item["stage"] == "selected-page" for item in diagnostics)
         losses.update(
             str(item["stage"])
@@ -376,12 +444,20 @@ def run_v32_no_page_containment(
         work["selected_page_bytes"] for work in routing_work
     )
     maximum_codes_scanned = max(work["codes_scanned"] for work in routing_work)
+    maximum_leaves_eligible = max(work["leaves_eligible"] for work in routing_work)
+    maximum_leaves_scanned = max(work["leaves_scanned"] for work in routing_work)
+    maximum_query_table_pairs_built = max(
+        work["query_table_pairs_built"] for work in routing_work
+    )
+    maximum_peak_query_table_pairs_live = max(
+        work["peak_query_table_pairs_live"] for work in routing_work
+    )
     if maximum_selected_page_bytes > 3_145_728:
         failed.append("selected-page-bytes")
-    if maximum_codes_scanned > 65_536:
+    if maximum_codes_scanned > scan_budget:
         failed.append("maximum-codes-scanned")
-    if maximum_leaf_rows > 1_024:
-        failed.append("maximum-leaf-rows")
+    if maximum_routing_leaf_rows > 1_024:
+        failed.append("maximum-routing-leaf-rows")
     value = {
         "aggregate_containment_ppm": aggregate,
         "claim_eligible": False,
@@ -389,7 +465,12 @@ def run_v32_no_page_containment(
         "losses_by_stage": dict(sorted(losses.items())),
         "manifest_sha256": plan.manifest.sha256,
         "maximum_codes_scanned": maximum_codes_scanned,
-        "maximum_leaf_rows": maximum_leaf_rows,
+        "maximum_leaves_eligible": maximum_leaves_eligible,
+        "maximum_leaves_scanned": maximum_leaves_scanned,
+        "maximum_truth_microleaf_rank": max(truth_microleaf_ranks, default=None),
+        "maximum_query_table_pairs_built": maximum_query_table_pairs_built,
+        "maximum_peak_query_table_pairs_live": maximum_peak_query_table_pairs_live,
+        "maximum_routing_leaf_rows": maximum_routing_leaf_rows,
         "maximum_selected_page_bytes": maximum_selected_page_bytes,
         "minimum_containment_ppm": minimum,
         "logical_sources_sha256": plan.logical_sources.sha256,
@@ -452,6 +533,7 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--source-rows", type=int, required=True)
     parser.add_argument("--query-start", type=int, required=True)
     parser.add_argument("--query-count", type=int, required=True)
+    parser.add_argument("--leaf-beam", type=int, required=True)
     args = parser.parse_args(arguments)
     plan = V32ContainmentPlan(
         qualifier=args.qualifier,
@@ -473,6 +555,7 @@ def main(arguments: list[str] | None = None) -> int:
         source_rows=args.source_rows,
         query_start=args.query_start,
         query_count=args.query_count,
+        leaf_beam=args.leaf_beam,
     )
     truth = args.truth_parquet.read_bytes()
     payload = run_v32_no_page_containment(plan, truth, invoke=_invoke)

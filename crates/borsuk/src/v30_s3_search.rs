@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BinaryHeap, HashSet},
+    collections::{BTreeMap, BinaryHeap, HashSet},
 };
 
 use bytes::Bytes;
@@ -17,7 +17,6 @@ use crate::{
     },
 };
 
-const MAX_SCANNED_CODES: u64 = 1_000_000;
 const MAX_CANDIDATES: usize = 12_288;
 const MAX_SELECTED_PAGES: usize = 16;
 const MAX_PAGE_BYTES: u64 = 3_145_728;
@@ -28,6 +27,7 @@ const CANDIDATE_PRUNE_WINDOW: usize = 32_768;
 pub struct V32SearchArm {
     pub root_beam: usize,
     pub leaf_beam: usize,
+    pub scan_budget: u64,
     pub candidate_depth: usize,
     pub page_count: usize,
 }
@@ -36,7 +36,10 @@ pub struct V32SearchArm {
 #[doc(hidden)]
 pub struct V32RoutingWork {
     pub roots_scored: usize,
-    pub leaves_scored: usize,
+    pub leaves_eligible: usize,
+    pub leaves_scanned: usize,
+    pub query_table_pairs_built: usize,
+    pub peak_query_table_pairs_live: usize,
     pub codes_scanned: u64,
     pub candidates_retained: usize,
     pub pages_considered: usize,
@@ -73,6 +76,7 @@ pub struct V32RoutingTargetReport {
     pub logical: u64,
     pub leaf_ordinal: u32,
     pub page_ordinal: u32,
+    pub routing_leaf_rank: Option<usize>,
     pub candidate_rank: Option<usize>,
     pub first_unique_page_rank: Option<usize>,
     pub stage: V32RoutingTargetStage,
@@ -216,6 +220,7 @@ struct Candidate {
 struct RoutingDetails {
     selection: V32PageSelection,
     selected_leaves: Vec<u32>,
+    ranked_leaves: Vec<u32>,
     ranked_candidates: Vec<Candidate>,
 }
 
@@ -348,7 +353,11 @@ impl V32Router {
         if hierarchy.roots.is_empty()
             || hierarchy.leaves.is_empty()
             || hierarchy.leaf_roots.len() != hierarchy.leaves.len()
-            || hierarchy.leaves.len() != layout.leaves().len()
+            || layout.leaves().iter().any(|leaf| {
+                usize::try_from(leaf.code_parent_leaf_ordinal)
+                    .ok()
+                    .is_none_or(|parent| parent >= hierarchy.leaves.len())
+            })
             || layout.source_rows() != codes.logical_rows() as u64
             || base_codebook.width() != V30PqWidth::Base24
             || high_codebook.width() != V30PqWidth::High48
@@ -374,6 +383,7 @@ impl V32Router {
                     location.page_ordinal != page.identity.ordinal
                         || location.sha256 != page.identity.sha256
                         || location.encoded_bytes != page.identity.encoded_bytes
+                        || location.row_count != page.row_count
                 })
         {
             return Err(invalid("V32 page locations do not match layout"));
@@ -385,7 +395,11 @@ impl V32Router {
         if arm.root_beam == 0
             || arm.root_beam > self.hierarchy.roots.len()
             || arm.leaf_beam == 0
-            || arm.leaf_beam > self.hierarchy.leaves.len()
+            || arm.leaf_beam > self.layout.leaves().len()
+            || !matches!(
+                (arm.leaf_beam, arm.scan_budget),
+                (1..64, 65_536) | (64, 65_536) | (128, 131_072) | (256, 262_144)
+            )
             || arm.candidate_depth == 0
             || arm.candidate_depth > MAX_CANDIDATES
             || arm.page_count == 0
@@ -432,6 +446,12 @@ impl V32Router {
         }
         let details = self.routing_details(query, arm, &|_| {})?;
         let selection = details.selection.clone();
+        let routing_leaf_ranks = details
+            .ranked_leaves
+            .iter()
+            .enumerate()
+            .map(|(rank, &leaf)| (leaf, rank + 1))
+            .collect::<std::collections::BTreeMap<_, _>>();
         let selected_leaves = details
             .selected_leaves
             .into_iter()
@@ -483,8 +503,12 @@ impl V32Router {
                     .layout
                     .page_for_logical(*logical)
                     .ok_or_else(|| invalid("V30 routing diagnostic page differs"))?;
+                let routing_leaf = self
+                    .layout
+                    .leaf_for_logical(*logical)
+                    .ok_or_else(|| invalid("V32 routing diagnostic leaf differs"))?;
                 let candidate_rank = candidate_ranks.get(logical).copied();
-                let stage = if !selected_leaves.contains(&page.leaf_ordinal) {
+                let stage = if !selected_leaves.contains(&routing_leaf.leaf_ordinal) {
                     V32RoutingTargetStage::LeafFrontier
                 } else if candidate_rank.is_none() {
                     V32RoutingTargetStage::CandidateRetention
@@ -495,8 +519,9 @@ impl V32Router {
                 };
                 Ok(V32RoutingTargetReport {
                     logical: *logical,
-                    leaf_ordinal: page.leaf_ordinal,
+                    leaf_ordinal: routing_leaf.leaf_ordinal,
                     page_ordinal: page.identity.ordinal,
+                    routing_leaf_rank: routing_leaf_ranks.get(&routing_leaf.leaf_ordinal).copied(),
                     candidate_rank,
                     first_unique_page_rank: first_unique_page_ranks
                         .get(&page.identity.ordinal)
@@ -542,91 +567,127 @@ impl V32Router {
                 .collect(),
             arm.root_beam,
         );
-        let leaves_scored = self
-            .hierarchy
-            .leaves
+        let leaves_eligible = self
+            .layout
+            .leaves()
             .iter()
             .enumerate()
-            .filter(|(leaf, _)| {
+            .filter(|(_, leaf)| {
+                let parent = leaf.code_parent_leaf_ordinal as usize;
                 roots
                     .iter()
-                    .any(|(_, root)| usize::from(self.hierarchy.leaf_roots[*leaf]) == *root)
+                    .any(|(_, root)| usize::from(self.hierarchy.leaf_roots[parent]) == *root)
             })
-            .map(|(ordinal, centroid)| (centroid_distance(&query, centroid), ordinal))
+            .map(|(ordinal, leaf)| (centroid_distance(&query, &leaf.routing_centroid), ordinal))
             .collect::<Vec<_>>();
-        if arm.leaf_beam > leaves_scored.len() {
+        if arm.leaf_beam > leaves_eligible.len() {
             return Err(invalid("V30 leaf beam exceeds selected roots"));
         }
-        let leaves_scored_count = leaves_scored.len();
-        let leaves = smallest(leaves_scored, arm.leaf_beam);
-        let codes_scanned = leaves.iter().try_fold(0_u64, |total, (_, leaf)| {
-            total
-                .checked_add(self.layout.leaves()[*leaf].row_count)
-                .ok_or_else(|| invalid("V30 scanned-code count overflows"))
-        })?;
-        if codes_scanned > MAX_SCANNED_CODES || arm.candidate_depth > codes_scanned as usize {
+        let leaves_eligible_count = leaves_eligible.len();
+        let ranked_leaves = smallest(leaves_eligible, leaves_eligible_count);
+        let mut selected_leaf_count = arm.leaf_beam;
+        let mut codes_scanned =
+            ranked_leaves[..selected_leaf_count]
+                .iter()
+                .try_fold(0_u64, |total, (_, leaf)| {
+                    total
+                        .checked_add(self.layout.leaves()[*leaf].row_count)
+                        .ok_or_else(|| invalid("V30 scanned-code count overflows"))
+                })?;
+        while codes_scanned < arm.candidate_depth as u64
+            && selected_leaf_count < ranked_leaves.len()
+        {
+            codes_scanned = codes_scanned
+                .checked_add(self.layout.leaves()[ranked_leaves[selected_leaf_count].1].row_count)
+                .ok_or_else(|| invalid("V30 scanned-code count overflows"))?;
+            selected_leaf_count += 1;
+        }
+        if codes_scanned > arm.scan_budget {
             return Err(invalid("V30 scanned-code bound differs"));
         }
+        let candidate_depth = arm.candidate_depth.min(
+            usize::try_from(codes_scanned)
+                .map_err(|_| invalid("V30 scanned-code count overflows"))?,
+        );
+        let leaves = &ranked_leaves[..selected_leaf_count];
 
         let selected_leaves = leaves
             .iter()
             .map(|(_, leaf)| *leaf as u32)
             .collect::<Vec<_>>();
-        let mut candidates = BoundedCandidates::new(arm.candidate_depth);
+        let ranked_leaf_ordinals = ranked_leaves
+            .iter()
+            .map(|(_, leaf)| *leaf as u32)
+            .collect::<Vec<_>>();
+        let mut candidates = BoundedCandidates::new(candidate_depth);
         let mut base = Vec::with_capacity(32);
         let mut base_slots = Vec::with_capacity(32);
         let mut high = Vec::with_capacity(32);
         let mut high_slots = Vec::with_capacity(32);
         let mut base_scores = [0.0_f32; 32];
         let mut high_scores = [0.0_f32; 32];
+        let mut leaves_by_parent = BTreeMap::<usize, Vec<usize>>::new();
         for (_, leaf) in leaves {
-            let range = &self.layout.leaves()[leaf];
-            observer(range.leaf_ordinal);
+            let range = &self.layout.leaves()[*leaf];
+            let code_parent = range.code_parent_leaf_ordinal as usize;
+            leaves_by_parent.entry(code_parent).or_default().push(*leaf);
+        }
+        let mut query_table_pairs_live = 0_usize;
+        let mut peak_query_table_pairs_live = 0_usize;
+        for (code_parent, parent_leaves) in &leaves_by_parent {
             let residual = std::array::from_fn(|dimension| {
-                query[dimension] - f32::from(self.hierarchy.leaves[leaf][dimension])
+                query[dimension] - f32::from(self.hierarchy.leaves[*code_parent][dimension])
             });
             let base_table = V30QueryTable::new(&self.base_codebook, &residual)?;
             let high_table = V30QueryTable::new(&self.high_codebook, &residual)?;
-            let range_end = range.logical_start + range.row_count;
-            for block_start in (range.logical_start..range_end).step_by(32) {
-                let block_end = range_end.min(block_start + 32);
-                base.clear();
-                base_slots.clear();
-                high.clear();
-                high_slots.clear();
-                for logical in block_start..block_end {
-                    let slot = usize::try_from(logical - block_start)
-                        .map_err(|_| invalid("V30 candidate block offset overflows"))?;
-                    let (width, code) = self.codes.code(logical as usize)?;
-                    match width {
-                        V30PqWidth::Base24 => {
-                            base.push(code);
-                            base_slots.push(slot);
-                        }
-                        V30PqWidth::High48 => {
-                            high.push(code);
-                            high_slots.push(slot);
+            query_table_pairs_live += 1;
+            peak_query_table_pairs_live = peak_query_table_pairs_live.max(query_table_pairs_live);
+            for &leaf in parent_leaves {
+                let range = &self.layout.leaves()[leaf];
+                observer(range.leaf_ordinal);
+                let range_end = range.logical_start + range.row_count;
+                for block_start in (range.logical_start..range_end).step_by(32) {
+                    let block_end = range_end.min(block_start + 32);
+                    base.clear();
+                    base_slots.clear();
+                    high.clear();
+                    high_slots.clear();
+                    for logical in block_start..block_end {
+                        let slot = usize::try_from(logical - block_start)
+                            .map_err(|_| invalid("V30 candidate block offset overflows"))?;
+                        let (width, code) = self.codes.code(logical as usize)?;
+                        match width {
+                            V30PqWidth::Base24 => {
+                                base.push(code);
+                                base_slots.push(slot);
+                            }
+                            V30PqWidth::High48 => {
+                                high.push(code);
+                                high_slots.push(slot);
+                            }
                         }
                     }
-                }
-                let mut scores = [0.0_f32; 32];
-                base_table.score_block_into(&base, &mut base_scores[..base.len()])?;
-                high_table.score_block_into(&high, &mut high_scores[..high.len()])?;
-                for (&slot, &score) in base_slots.iter().zip(&base_scores) {
-                    scores[slot] = score;
-                }
-                for (&slot, &score) in high_slots.iter().zip(&high_scores) {
-                    scores[slot] = score;
-                }
-                for logical in block_start..block_end {
-                    let candidate = Candidate {
-                        score: scores[(logical - block_start) as usize],
-                        logical,
-                    };
-                    candidates.insert(candidate);
+                    let mut scores = [0.0_f32; 32];
+                    base_table.score_block_into(&base, &mut base_scores[..base.len()])?;
+                    high_table.score_block_into(&high, &mut high_scores[..high.len()])?;
+                    for (&slot, &score) in base_slots.iter().zip(&base_scores) {
+                        scores[slot] = score;
+                    }
+                    for (&slot, &score) in high_slots.iter().zip(&high_scores) {
+                        scores[slot] = score;
+                    }
+                    for logical in block_start..block_end {
+                        let candidate = Candidate {
+                            score: scores[(logical - block_start) as usize],
+                            logical,
+                        };
+                        candidates.insert(candidate);
+                    }
                 }
             }
+            query_table_pairs_live -= 1;
         }
+        debug_assert_eq!(query_table_pairs_live, 0);
         let ranked = candidates.finish();
         let mut seen = std::collections::BTreeSet::new();
         let mut pages = Vec::with_capacity(arm.page_count);
@@ -636,7 +697,7 @@ impl V32Router {
                 .page_for_logical(candidate.logical)
                 .ok_or_else(|| invalid("V30 candidate page mapping differs"))?;
             if seen.insert(page.identity.ordinal) {
-                pages.push(page.identity.clone());
+                pages.push(page.identity());
                 if pages.len() == arm.page_count {
                     break;
                 }
@@ -650,14 +711,18 @@ impl V32Router {
                 pages,
                 work: V32RoutingWork {
                     roots_scored: self.hierarchy.roots.len(),
-                    leaves_scored: leaves_scored_count,
+                    leaves_eligible: leaves_eligible_count,
+                    leaves_scanned: selected_leaf_count,
+                    query_table_pairs_built: leaves_by_parent.len(),
+                    peak_query_table_pairs_live,
                     codes_scanned,
-                    candidates_retained: arm.candidate_depth,
+                    candidates_retained: candidate_depth,
                     pages_considered: seen.len(),
                     selected_pages: arm.page_count,
                 },
             },
             selected_leaves,
+            ranked_leaves: ranked_leaf_ordinals,
             ranked_candidates: ranked,
         })
     }
@@ -689,6 +754,14 @@ impl<S: V32PageStore> V32Index<S> {
         let query = normalized(query)?;
         let selection = self.router.select_pages(&query, self.arm)?;
         observer(V32SearchPhase::RoutingComplete)?;
+        let authorized_bytes = selection.pages.iter().try_fold(0_u64, |total, page| {
+            total
+                .checked_add(page.encoded_bytes)
+                .ok_or_else(|| invalid("V30 page byte count overflows"))
+        })?;
+        if authorized_bytes > MAX_PAGE_BYTES {
+            return Err(invalid("V30 page byte bound differs"));
+        }
         let bodies = self.store.read_wave(&selection.pages)?;
         if bodies.len() != selection.pages.len() {
             return Err(invalid("V30 page wave cardinality differs"));
@@ -776,7 +849,7 @@ mod tests {
     };
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
-        v30_s3_layout::{V30Layout, V30LeafRange, V30PageRange, encode_v30_layout_artifacts},
+        v30_s3_layout::{V30Layout, V30PageRange, V32RoutingRange, encode_v30_layout_artifacts},
         v30_s3_pq::{V30CodePlanes, V30PqCodebook, V30PqWidth, encode_v30_pq_artifacts},
     };
 
@@ -809,25 +882,26 @@ mod tests {
         let pages = bodies
             .iter()
             .enumerate()
-            .map(|(ordinal, (identity, _))| V30PageRange {
-                leaf_ordinal: u32::from(ordinal >= 10),
-                logical_start: ordinal as u64 * 2,
-                row_count: 2,
-                identity: identity.clone(),
+            .map(|(ordinal, (identity, _))| {
+                V30PageRange::from_legacy(ordinal as u64 * 2, 2, identity).unwrap()
             })
             .collect::<Vec<_>>();
         let layout = V30Layout::new(
             40,
             vec![
-                V30LeafRange {
+                V32RoutingRange {
                     leaf_ordinal: 0,
+                    code_parent_leaf_ordinal: 0,
+                    routing_centroid: [unit; 96],
                     logical_start: 0,
                     row_count: 20,
                     page_start: 0,
                     page_count: 10,
                 },
-                V30LeafRange {
+                V32RoutingRange {
                     leaf_ordinal: 1,
+                    code_parent_leaf_ordinal: 1,
+                    routing_centroid: [-unit; 96],
                     logical_start: 20,
                     row_count: 20,
                     page_start: 10,
@@ -854,6 +928,83 @@ mod tests {
         )
     }
 
+    #[test]
+    fn v32_routing_microleaf_router_ranks_routing_centroids_but_uses_code_parent() {
+        // Break caught: routing ordinals are treated as trained PQ-parent
+        // ordinals, or sibling routing centroids are ignored by the frontier.
+        let unit = f16::from_f32(1.0 / 96.0_f32.sqrt());
+        let hierarchy = V27Hierarchy {
+            roots: vec![[unit; 96]],
+            leaves: vec![[unit; 96]],
+            leaf_roots: vec![0],
+        };
+        let bodies = [[0.25; 96], [-0.25; 96]]
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, vector)| {
+                encode_v27_page(
+                    ordinal as u32,
+                    1,
+                    0,
+                    &[V27PageRow {
+                        source_ordinal: ordinal as u64,
+                        vector,
+                    }],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let layout = V30Layout::new(
+            2,
+            vec![
+                V32RoutingRange {
+                    leaf_ordinal: 0,
+                    code_parent_leaf_ordinal: 0,
+                    routing_centroid: [unit; 96],
+                    logical_start: 0,
+                    row_count: 1,
+                    page_start: 0,
+                    page_count: 1,
+                },
+                V32RoutingRange {
+                    leaf_ordinal: 1,
+                    code_parent_leaf_ordinal: 0,
+                    routing_centroid: [-unit; 96],
+                    logical_start: 1,
+                    row_count: 1,
+                    page_start: 1,
+                    page_count: 1,
+                },
+            ],
+            bodies
+                .iter()
+                .enumerate()
+                .map(|(ordinal, (identity, _))| {
+                    V30PageRange::from_legacy(ordinal as u64, 1, identity).unwrap()
+                })
+                .collect(),
+        )
+        .unwrap();
+        let codes = V30CodePlanes::from_packed(2, vec![0; 4], vec![0; 48], vec![]).unwrap();
+        let base = V30PqCodebook::new(V30PqWidth::Base24, vec![0.0; 24 * 256 * 4]).unwrap();
+        let high = V30PqCodebook::new(V30PqWidth::High48, vec![0.0; 48 * 256 * 2]).unwrap();
+        let router = V32Router::new(hierarchy, base, high, layout, codes).unwrap();
+        let selection = router
+            .select_pages(
+                &[-1.0; 96],
+                V32SearchArm {
+                    root_beam: 1,
+                    leaf_beam: 1,
+                    scan_budget: 65_536,
+                    candidate_depth: 1,
+                    page_count: 1,
+                },
+            )
+            .unwrap();
+        assert_eq!(selection.pages[0].ordinal, 1);
+        assert_eq!(selection.work.codes_scanned, 1);
+    }
+
     fn diagnostic_router() -> V32Router {
         let unit = f16::from_f32(1.0 / 96.0_f32.sqrt());
         let hierarchy = V27Hierarchy {
@@ -865,33 +1016,37 @@ mod tests {
             .map(|ordinal| (ordinal, 0, u64::from(ordinal), 1))
             .chain((10..20_u32).map(|ordinal| (ordinal, 0, 10 + u64::from(ordinal - 10) * 2, 2)))
             .chain((20..50_u32).map(|ordinal| (ordinal, 1, 30 + u64::from(ordinal - 20), 1)))
-            .map(|(ordinal, leaf_ordinal, logical_start, row_count)| {
+            .map(|(ordinal, _leaf_ordinal, logical_start, row_count)| {
                 let rows = (logical_start..logical_start + u64::from(row_count))
                     .map(|source_ordinal| V27PageRow {
                         source_ordinal,
                         vector: [0.2 + source_ordinal as f32 / 1_000.0; 96],
                     })
                     .collect::<Vec<_>>();
-                V30PageRange {
-                    leaf_ordinal,
+                V30PageRange::from_legacy(
                     logical_start,
                     row_count,
-                    identity: encode_v27_page(ordinal, row_count, 0, &rows).unwrap().0,
-                }
+                    &encode_v27_page(ordinal, row_count, 0, &rows).unwrap().0,
+                )
+                .unwrap()
             })
             .collect();
         let layout = V30Layout::new(
             60,
             vec![
-                V30LeafRange {
+                V32RoutingRange {
                     leaf_ordinal: 0,
+                    code_parent_leaf_ordinal: 0,
+                    routing_centroid: [unit; 96],
                     logical_start: 0,
                     row_count: 30,
                     page_start: 0,
                     page_count: 20,
                 },
-                V30LeafRange {
+                V32RoutingRange {
                     leaf_ordinal: 1,
+                    code_parent_leaf_ordinal: 1,
+                    routing_centroid: [-unit; 96],
                     logical_start: 30,
                     row_count: 30,
                     page_start: 20,
@@ -918,6 +1073,7 @@ mod tests {
                 V32SearchArm {
                     root_beam: 1,
                     leaf_beam: 1,
+                    scan_budget: 65_536,
                     candidate_depth: 20,
                     page_count: 10,
                 },
@@ -926,17 +1082,21 @@ mod tests {
             .unwrap();
         assert_eq!(reports.len(), 4);
         assert_eq!(reports[0].stage, V32RoutingTargetStage::SelectedPage);
+        assert_eq!(reports[0].routing_leaf_rank, Some(1));
         assert_eq!(reports[0].candidate_rank, Some(0));
         assert_eq!(reports[0].first_unique_page_rank, Some(0));
         assert_eq!(reports[1].stage, V32RoutingTargetStage::PageReducer);
+        assert_eq!(reports[1].routing_leaf_rank, Some(1));
         assert_eq!(reports[1].candidate_rank, Some(15));
         assert_eq!(reports[1].first_unique_page_rank, Some(12));
         assert!(reports[1].reciprocal_rank_selected);
         assert_eq!(reports[2].stage, V32RoutingTargetStage::CandidateRetention);
+        assert_eq!(reports[2].routing_leaf_rank, Some(1));
         assert_eq!(reports[2].candidate_rank, None);
         assert_eq!(reports[2].first_unique_page_rank, None);
         assert!(!reports[2].reciprocal_rank_selected);
         assert_eq!(reports[3].stage, V32RoutingTargetStage::LeafFrontier);
+        assert_eq!(reports[3].routing_leaf_rank, Some(2));
         assert_eq!(reports[3].candidate_rank, None);
         assert_eq!(reports[3].first_unique_page_rank, None);
         assert_eq!(
@@ -958,6 +1118,7 @@ mod tests {
                 V32SearchArm {
                     root_beam: 1,
                     leaf_beam: 1,
+                    scan_budget: 65_536,
                     candidate_depth: 20,
                     page_count: 10,
                 },
@@ -990,6 +1151,7 @@ mod tests {
                 V32SearchArm {
                     root_beam: 1,
                     leaf_beam: 1,
+                    scan_budget: 65_536,
                     candidate_depth: 20,
                     page_count: 10,
                 },
@@ -998,10 +1160,35 @@ mod tests {
 
         assert_eq!(selection.pages.len(), 10);
         assert_eq!(selection.work.roots_scored, 1);
-        assert_eq!(selection.work.leaves_scored, 2);
+        assert_eq!(selection.work.leaves_eligible, 2);
+        assert_eq!(selection.work.leaves_scanned, 1);
         assert_eq!(selection.work.codes_scanned, 20);
         assert_eq!(selection.work.candidates_retained, 20);
         assert_eq!(selection.work.selected_pages, 10);
+    }
+
+    #[test]
+    fn v32_s3_search_reuses_one_live_query_table_pair_across_code_parents() {
+        // Break caught: a per-query parent map retained one 72 KiB base/high
+        // table pair per selected parent, multiplying transient memory by the
+        // beam and concurrent-query count.
+        let (hierarchy, base, high, layout, codes, _) = components();
+        let router = V32Router::new(hierarchy, base, high, layout, codes).unwrap();
+        let selection = router
+            .select_pages(
+                &[0.2; 96],
+                V32SearchArm {
+                    root_beam: 1,
+                    leaf_beam: 2,
+                    scan_budget: 65_536,
+                    candidate_depth: 40,
+                    page_count: 16,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(selection.work.query_table_pairs_built, 2);
+        assert_eq!(selection.work.peak_query_table_pairs_live, 1);
     }
 
     #[test]
@@ -1012,12 +1199,14 @@ mod tests {
         let locations = layout
             .pages()
             .iter()
-            .map(|page| crate::v30_s3_layout::V32PageLocation {
-                page_ordinal: page.identity.ordinal,
-                sha256: page.identity.sha256.clone(),
-                encoded_bytes: page.identity.encoded_bytes,
-                standard_uri: format!("s3://durable/pages/{}.arrow", page.identity.sha256),
-                express_uri: None,
+            .map(|page| {
+                crate::v30_s3_layout::V32PageLocation::from_hex(
+                    page.identity.ordinal,
+                    &page.identity.sha256_hex(),
+                    page.identity.encoded_bytes,
+                    page.row_count,
+                )
+                .unwrap()
             })
             .collect::<Vec<_>>();
         assert_eq!(locations.len(), 20);
@@ -1042,6 +1231,7 @@ mod tests {
                 V32SearchArm {
                     root_beam: 1,
                     leaf_beam: 1,
+                    scan_budget: 65_536,
                     candidate_depth: 20,
                     page_count: 10,
                 },
@@ -1057,11 +1247,112 @@ mod tests {
             (0..10).collect::<Vec<_>>()
         );
         assert_eq!(selection.work.roots_scored, 1);
-        assert_eq!(selection.work.leaves_scored, 2);
+        assert_eq!(selection.work.leaves_eligible, 2);
+        assert_eq!(selection.work.leaves_scanned, 1);
         assert_eq!(selection.work.codes_scanned, 20);
         assert_eq!(selection.work.candidates_retained, 20);
         assert_eq!(selection.work.selected_pages, 10);
         assert_eq!(*visited.lock().unwrap(), vec![0]);
+    }
+
+    #[test]
+    fn v32_routing_microleaf_caps_rank_only_candidate_depth_at_eligible_population() {
+        // Break caught: the frozen 100K rank-evidence cohort has fewer than
+        // 12,288 rows below its root frontier and is rejected before emitting
+        // truth-microleaf ranks, or extension scans beyond the complete
+        // eligible frontier.
+        let unit = f16::from_f32(1.0 / 96.0_f32.sqrt());
+        let hierarchy = V27Hierarchy {
+            roots: vec![[unit; 96]],
+            leaves: vec![[unit; 96]],
+            leaf_roots: vec![0],
+        };
+        let leaves = (0..120_u32)
+            .map(|ordinal| {
+                let logical_start = u64::from(ordinal) * 100;
+                let page_start = u32::try_from(logical_start / 480).unwrap();
+                let page_end = u32::try_from((logical_start + 99) / 480).unwrap();
+                V32RoutingRange {
+                    leaf_ordinal: ordinal,
+                    code_parent_leaf_ordinal: 0,
+                    routing_centroid: [unit; 96],
+                    logical_start,
+                    row_count: 100,
+                    page_start,
+                    page_count: page_end - page_start + 1,
+                }
+            })
+            .collect();
+        let pages = (0..12_000_u64)
+            .step_by(480)
+            .enumerate()
+            .map(|(ordinal, logical_start)| {
+                let row_count = u16::try_from((12_000 - logical_start).min(480)).unwrap();
+                V30PageRange::from_legacy(
+                    logical_start,
+                    row_count,
+                    &V27PageIdentity {
+                        ordinal: ordinal as u32,
+                        sha256: format!("{:064x}", ordinal + 1),
+                        encoded_bytes: 1_000,
+                        primary_rows: row_count,
+                        replica_rows: 0,
+                    },
+                )
+                .unwrap()
+            })
+            .collect();
+        let layout = V30Layout::new(12_000, leaves, pages).unwrap();
+        let codes = V30CodePlanes::from_packed(
+            12_000,
+            vec![0; 12_000_usize.div_ceil(128) * 4],
+            vec![0; 12_000 * 24],
+            vec![],
+        )
+        .unwrap();
+        let base = V30PqCodebook::new(V30PqWidth::Base24, vec![0.0; 24 * 256 * 4]).unwrap();
+        let high = V30PqCodebook::new(V30PqWidth::High48, vec![0.0; 48 * 256 * 2]).unwrap();
+        let router = V32Router::new(hierarchy, base, high, layout, codes).unwrap();
+        let visited = Mutex::new(Vec::new());
+        let selection = router
+            .select_pages_with_leaf_observer(
+                &[1.0; 96],
+                V32SearchArm {
+                    root_beam: 1,
+                    leaf_beam: 64,
+                    scan_budget: 65_536,
+                    candidate_depth: 12_288,
+                    page_count: 16,
+                },
+                &|leaf| visited.lock().unwrap().push(leaf),
+            )
+            .unwrap();
+        assert_eq!(selection.work.codes_scanned, 12_000);
+        assert_eq!(selection.work.candidates_retained, 12_000);
+        // Break caught: the router reported only the scanned prefix as if it
+        // were the complete eligible frontier, hiding full-sort work.
+        assert_eq!(selection.work.leaves_eligible, 120);
+        assert_eq!(selection.work.leaves_scanned, 120);
+        // Break caught: sibling routing microleaves rebuilt the same base/high
+        // PQ query-table pair once per microleaf instead of once per parent.
+        assert_eq!(selection.work.query_table_pairs_built, 1);
+        assert_eq!(visited.lock().unwrap().len(), 120);
+        assert_eq!(selection.pages.len(), 16);
+
+        assert!(
+            router
+                .select_pages(
+                    &[1.0; 96],
+                    V32SearchArm {
+                        root_beam: 1,
+                        leaf_beam: 64,
+                        scan_budget: 131_072,
+                        candidate_depth: 12_288,
+                        page_count: 16,
+                    },
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -1075,6 +1366,7 @@ mod tests {
                 V32SearchArm {
                     root_beam: 1,
                     leaf_beam: 2,
+                    scan_budget: 65_536,
                     candidate_depth: 32,
                     page_count: 16,
                 },
@@ -1089,6 +1381,7 @@ mod tests {
                     V32SearchArm {
                         root_beam: 1,
                         leaf_beam: 2,
+                        scan_budget: 65_536,
                         candidate_depth: 32,
                         page_count: 17,
                     },
@@ -1189,6 +1482,7 @@ mod tests {
             V32SearchArm {
                 root_beam: 1,
                 leaf_beam: 2,
+                scan_budget: 65_536,
                 candidate_depth: 20,
                 page_count: 10,
             },
@@ -1251,6 +1545,7 @@ mod tests {
             V32SearchArm {
                 root_beam: 1,
                 leaf_beam: 2,
+                scan_budget: 65_536,
                 candidate_depth: 20,
                 page_count: 10,
             },

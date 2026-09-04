@@ -7,8 +7,9 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30LayoutArtifactIdentity,
     V30LayoutArtifacts, V30PqArtifactIdentity, V30PqArtifacts, V32Index, V32PageLocation,
-    V32PageLocationsArtifact, V32PageStore, V32Router, V32RoutingDiagnostic, V32RoutingTargetStage,
-    V32SearchArm, V32SearchPhase, V32SearchResult, V32ServingTier, decode_v32_page_locations,
+    V32PageLocationsArtifact, V32PagePrefixes, V32PageStore, V32Router, V32RoutingDiagnostic,
+    V32RoutingTargetStage, V32SearchArm, V32SearchPhase, V32SearchResult, V32ServingTier,
+    decode_v32_page_locations,
 };
 use bytes::Bytes;
 use futures_util::future::try_join_all;
@@ -50,7 +51,6 @@ struct Args {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DiagnosticRequest {
     logicals: Vec<u64>,
-    arm: V32SearchArm,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,11 +84,14 @@ struct DiskHierarchy {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DiskLayout {
-    leaf_ranges: DiskArtifact,
-    maximum_leaf_rows: u64,
+    maximum_code_parent_rows: u64,
+    maximum_routing_leaf_rows: u64,
+    maximum_routing_leaves_per_root: u64,
     packing_algorithm: String,
     page_ranges: DiskArtifact,
     page_rows: usize,
+    projected_resident_bytes: u64,
+    routing_ranges: DiskArtifact,
     source_rows: u64,
 }
 
@@ -100,12 +103,17 @@ struct DiskPq {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct DiskRoutingArm {
+    leaf_beam: usize,
+    maximum_scanned_codes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DiskRouting {
     algorithm: String,
+    arms: Vec<DiskRoutingArm>,
     candidate_depth: usize,
-    leaf_beam: usize,
-    maximum_pages_per_leaf: usize,
-    maximum_scanned_codes: u64,
     page_count: usize,
     root_beam: usize,
 }
@@ -113,7 +121,9 @@ struct DiskRouting {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DiskServing {
+    express_page_prefix: serde_json::Value,
     page_locations: DiskArtifact,
+    standard_page_prefix: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,8 +164,9 @@ struct Manifest {
     source_rows: u64,
     page_key_suffix: String,
     page_locations: (String, V30LayoutArtifactIdentity),
+    page_prefixes: V32PagePrefixes,
     routing_root_beam: usize,
-    routing_leaf_beam: usize,
+    routing_arms: Vec<(usize, u64)>,
     routing_candidate_depth: usize,
     routing_page_count: usize,
 }
@@ -270,12 +281,16 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
     if disk.schema_version != 3
         || disk.page_key_suffix != ".arrow"
         || disk.layout.source_rows == 0
-        || disk.layout.maximum_leaf_rows == 0
-        || disk.layout.maximum_leaf_rows > disk.layout.source_rows
-        || disk.layout.maximum_leaf_rows > 65_536
-        || disk.layout.packing_algorithm != "balanced-geometric-v1"
+        || disk.layout.maximum_code_parent_rows == 0
+        || disk.layout.maximum_code_parent_rows > 131_072
+        || disk.layout.maximum_routing_leaf_rows == 0
+        || disk.layout.maximum_routing_leaf_rows > 1_024
+        || disk.layout.maximum_routing_leaves_per_root == 0
+        || disk.layout.projected_resident_bytes == 0
+        || disk.layout.projected_resident_bytes > 3 * 1_024 * 1_024 * 1_024
+        || disk.layout.packing_algorithm != "routing-microleaf-global-v1"
         || disk.layout.page_rows == 0
-        || disk.layout.page_rows > 512
+        || disk.layout.page_rows > 480
         || disk.pq.artifacts.len() != 5
         || disk.source.dataset_id != "deep-image-96"
         || disk.source.commit.len() != 40
@@ -287,12 +302,15 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
         || disk.source.corpus_manifest_bytes == 0
         || !valid_digest(&disk.source.corpus_manifest_sha256)
         || !disk.source.corpus_manifest_uri.starts_with("s3://")
-        || disk.routing.algorithm != "hierarchical-residual-pq-v1"
+        || disk.routing.algorithm != "hierarchical-routing-microleaf-pq-v1"
         || disk.routing.root_beam != 8
-        || disk.routing.leaf_beam != 64
         || disk.routing.candidate_depth != 12_288
-        || disk.routing.maximum_scanned_codes != 1_000_000
-        || disk.routing.maximum_pages_per_leaf != 64
+        || disk
+            .routing
+            .arms
+            .iter()
+            .map(|arm| (arm.leaf_beam, arm.maximum_scanned_codes))
+            .ne([(64, 65_536), (128, 131_072), (256, 262_144)])
         || disk.routing.page_count != 16
     {
         return Err(invalid("V30 qualifier manifest constants differ"));
@@ -302,9 +320,18 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
         disk_identity(disk.hierarchy.leaves, "v27-leaves-arrow")?,
     ];
     let layout = vec![
-        disk_identity(disk.layout.leaf_ranges, "v30-leaf-ranges-arrow")?,
-        disk_identity(disk.layout.page_ranges, "v30-page-ranges-parquet")?,
+        disk_identity(disk.layout.routing_ranges, "v32-routing-ranges-arrow")?,
+        disk_identity(disk.layout.page_ranges, "v32-page-ranges-parquet")?,
     ];
+    let express_page_prefix = match &disk.serving.express_page_prefix {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(value) => Some(value.clone()),
+        _ => return Err(invalid("V32 Express page prefix type differs")),
+    };
+    let page_prefixes = V32PagePrefixes::new(
+        disk.serving.standard_page_prefix.clone(),
+        express_page_prefix,
+    )?;
     let page_locations = disk_identity(disk.serving.page_locations, "v32-page-locations-parquet")?;
     let logical_sources = disk_identity(
         disk.diagnostics.logical_sources,
@@ -358,8 +385,14 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
         source_rows: disk.layout.source_rows,
         page_key_suffix: disk.page_key_suffix,
         page_locations,
+        page_prefixes,
         routing_root_beam: disk.routing.root_beam,
-        routing_leaf_beam: disk.routing.leaf_beam,
+        routing_arms: disk
+            .routing
+            .arms
+            .into_iter()
+            .map(|arm| (arm.leaf_beam, arm.maximum_scanned_codes))
+            .collect(),
         routing_candidate_depth: disk.routing.candidate_depth,
         routing_page_count: disk.routing.page_count,
     })
@@ -391,7 +424,7 @@ impl V32PageStore for LocalPageStore {
 struct ObjectPageStore {
     store: Arc<dyn ObjectStore>,
     locations: Arc<Vec<V32PageLocation>>,
-    paths: Arc<Vec<ObjectPath>>,
+    page_prefix: ObjectPath,
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -415,18 +448,17 @@ impl V32PageStore for ObjectPageStore {
                         .locations
                         .get(page.ordinal as usize)
                         .ok_or_else(|| invalid("V30 qualifier page location ordinal differs"))?;
-                    let path = self
-                        .paths
-                        .get(page.ordinal as usize)
-                        .ok_or_else(|| invalid("V30 qualifier page location path differs"))?;
                     if location.page_ordinal != page.ordinal
-                        || location.sha256 != page.sha256
+                        || location.sha256_hex() != page.sha256
                         || location.encoded_bytes != page.encoded_bytes
                     {
                         return Err(invalid("V30 qualifier selected page authority differs"));
                     }
                     let store = Arc::clone(&self.store);
-                    let path = path.clone();
+                    let path = self
+                        .page_prefix
+                        .clone()
+                        .join(format!("{}.arrow", location.sha256_hex()));
                     Ok(async move { Ok::<_, BorsukError>(store.get(&path).await?.bytes().await?) })
                 })
                 .collect::<borsuk::Result<Vec<_>>>()?;
@@ -494,8 +526,11 @@ fn result_bytes(
             "routing": {
                 "candidates_retained": result.work.routing.candidates_retained,
                 "codes_scanned": result.work.routing.codes_scanned,
-                "leaves_scored": result.work.routing.leaves_scored,
+                "leaves_eligible": result.work.routing.leaves_eligible,
+                "leaves_scanned": result.work.routing.leaves_scanned,
                 "pages_considered": result.work.routing.pages_considered,
+                "peak_query_table_pairs_live": result.work.routing.peak_query_table_pairs_live,
+                "query_table_pairs_built": result.work.routing.query_table_pairs_built,
                 "roots_scored": result.work.routing.roots_scored,
                 "selected_pages": result.work.routing.selected_pages,
             },
@@ -542,6 +577,7 @@ fn diagnostic_bytes(
                 "logical": report.logical,
                 "page_ordinal": report.page_ordinal,
                 "reciprocal_rank_selected": report.reciprocal_rank_selected,
+                "routing_leaf_rank": report.routing_leaf_rank,
                 "stage": stage,
             })
         })
@@ -554,8 +590,11 @@ fn diagnostic_bytes(
         "routing": {
             "candidates_retained": work.candidates_retained,
             "codes_scanned": work.codes_scanned,
-            "leaves_scored": work.leaves_scored,
+            "leaves_eligible": work.leaves_eligible,
+            "leaves_scanned": work.leaves_scanned,
             "pages_considered": work.pages_considered,
+            "peak_query_table_pairs_live": work.peak_query_table_pairs_live,
+            "query_table_pairs_built": work.query_table_pairs_built,
             "roots_scored": work.roots_scored,
             "selected_page_bytes": selected_page_bytes,
             "selected_pages": work.selected_pages,
@@ -793,6 +832,27 @@ fn run_batch<S: V32PageStore>(
     Ok(bytes)
 }
 
+fn manifest_arm(args: &Args, manifest: &Manifest) -> borsuk::Result<V32SearchArm> {
+    if args.root_beam != manifest.routing_root_beam
+        || args.candidate_depth != manifest.routing_candidate_depth
+        || args.page_count != manifest.routing_page_count
+    {
+        return Err(invalid("V30 qualifier routing manifest differs"));
+    }
+    let scan_budget = manifest
+        .routing_arms
+        .iter()
+        .find_map(|&(leaf_beam, scan_budget)| (leaf_beam == args.leaf_beam).then_some(scan_budget))
+        .ok_or_else(|| invalid("V30 qualifier routing arm differs"))?;
+    Ok(V32SearchArm {
+        root_beam: args.root_beam,
+        leaf_beam: args.leaf_beam,
+        scan_budget,
+        candidate_depth: args.candidate_depth,
+        page_count: args.page_count,
+    })
+}
+
 fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
     let manifest = read_manifest(&args.manifest)?;
     let page_location_bytes = read_resident(
@@ -874,27 +934,11 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
     };
     let router = V32Router::from_artifacts(&hierarchy, &pq, &layout)?;
     router.validate_page_locations(&page_locations)?;
-    if args.root_beam != manifest.routing_root_beam
-        || args.leaf_beam != manifest.routing_leaf_beam
-        || args.candidate_depth != manifest.routing_candidate_depth
-        || args.page_count != manifest.routing_page_count
-    {
-        return Err(invalid("V30 qualifier routing manifest differs"));
-    }
-    let arm = V32SearchArm {
-        root_beam: args.root_beam,
-        leaf_beam: args.leaf_beam,
-        candidate_depth: args.candidate_depth,
-        page_count: args.page_count,
-    };
+    let arm = manifest_arm(&args, &manifest)?;
     if let Some(diagnostic) = args.diagnostic {
         let query = read_query(&args.query, args.query_start)?;
-        let control = router.select_pages(&query, diagnostic.arm)?;
-        let report = router.diagnose_logicals_with_selection(
-            &query,
-            diagnostic.arm,
-            &diagnostic.logicals,
-        )?;
+        let control = router.select_pages(&query, arm)?;
+        let report = router.diagnose_logicals_with_selection(&query, arm, &diagnostic.logicals)?;
         let truth_independent_selection = control == report.selection;
         return diagnostic_bytes(args.query_start, truth_independent_selection, report);
     }
@@ -912,23 +956,14 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
             args.k,
         ),
         Some(PageSource::Tier(tier)) => {
-            let urls = page_locations
-                .iter()
-                .map(|location| {
-                    Url::parse(location.uri(tier)?)
-                        .map_err(|_| invalid("V30 qualifier S3 URI differs"))
-                })
-                .collect::<borsuk::Result<Vec<_>>>()?;
-            let first = urls
-                .first()
-                .ok_or_else(|| invalid("V30 qualifier page locations are empty"))?;
-            if urls.iter().any(|url| {
-                url.scheme() != first.scheme()
-                    || url.host_str() != first.host_str()
-                    || url.port() != first.port()
-            }) {
-                return Err(invalid("V30 qualifier S3 bucket authority differs"));
-            }
+            let prefix = match tier {
+                V32ServingTier::Standard => manifest.page_prefixes.standard(),
+                V32ServingTier::Express => manifest
+                    .page_prefixes
+                    .express()
+                    .ok_or_else(|| invalid("V32 Express page prefix is missing"))?,
+            };
+            let prefix = Url::parse(prefix).map_err(|_| invalid("V30 qualifier S3 URI differs"))?;
             let options = std::env::vars()
                 .filter(|(key, _)| {
                     matches!(
@@ -940,19 +975,15 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                     )
                 })
                 .chain(tier_store_options(tier));
-            let (store, _) = parse_url_opts(first, options)?;
+            let (store, page_prefix) = parse_url_opts(&prefix, options)?;
             let store: Arc<dyn ObjectStore> = store.into();
-            let paths = urls
-                .iter()
-                .map(|url| ObjectPath::from(url.path().trim_start_matches('/')))
-                .collect::<Vec<_>>();
             let runtime = serving_runtime()?;
             run_batch(
                 router,
                 ObjectPageStore {
                     store,
                     locations: Arc::new(page_locations),
-                    paths: Arc::new(paths),
+                    page_prefix,
                     runtime,
                 },
                 arm,
@@ -1065,17 +1096,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         })
         .transpose()?;
     let diagnostic = diagnostic_logicals
-        .map(|logicals| -> Result<DiagnosticRequest, String> {
-            Ok(DiagnosticRequest {
-                logicals,
-                arm: V32SearchArm {
-                    root_beam,
-                    leaf_beam,
-                    candidate_depth,
-                    page_count,
-                },
-            })
-        })
+        .map(|logicals| -> Result<DiagnosticRequest, String> { Ok(DiagnosticRequest { logicals }) })
         .transpose()?;
     let local = values.remove("local-page-dir").map(PathBuf::from);
     let tier = values
@@ -1098,7 +1119,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
             None => query_count != 32,
         }
         || root_beam != 8
-        || leaf_beam != 64
+        || !matches!(leaf_beam, 64 | 128 | 256)
         || candidate_depth != 12_288
         || page_count != 16
         || k == 0
@@ -1146,9 +1167,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        Args, ArtifactArg, LocalPageStore, ObjectPageStore, PageSource, SearchPhaseTiming,
-        diagnostic_bytes, execute, parse_args, peak_rss_bytes, process_cpu_nanoseconds,
-        read_manifest, read_queries, result_bytes, run_batch,
+        Args, ArtifactArg, DiagnosticRequest, LocalPageStore, ObjectPageStore, PageSource,
+        SearchPhaseTiming, diagnostic_bytes, execute, manifest_arm, parse_args, peak_rss_bytes,
+        process_cpu_nanoseconds, read_manifest, read_queries, result_bytes, run_batch,
     };
 
     fn arguments() -> Vec<String> {
@@ -1279,28 +1300,23 @@ mod tests {
         assert!(runtime.metrics().num_workers() >= 2);
         let object_store: Arc<dyn object_store::ObjectStore> =
             Arc::new(object_store::memory::InMemory::new());
+        let digest = "a".repeat(64);
         runtime
             .block_on(object_store.put(
-                &object_store::path::Path::from("pages/a.arrow"),
+                &object_store::path::Path::from(format!("pages/{digest}.arrow")),
                 bytes::Bytes::from_static(b"abc").into(),
             ))
             .unwrap();
-        let location = V32PageLocation {
-            page_ordinal: 0,
-            sha256: "a".repeat(64),
-            encoded_bytes: 3,
-            standard_uri: "s3://frozen/pages/a.arrow".to_owned(),
-            express_uri: None,
-        };
+        let location = V32PageLocation::from_hex(0, &digest, 3, 1).unwrap();
         let store = ObjectPageStore {
             store: object_store,
             locations: Arc::new(vec![location]),
-            paths: Arc::new(vec![object_store::path::Path::from("pages/a.arrow")]),
+            page_prefix: object_store::path::Path::from("pages"),
             runtime: Arc::clone(&runtime),
         };
         let page = V27PageIdentity {
             ordinal: 0,
-            sha256: "a".repeat(64),
+            sha256: digest,
             encoded_bytes: 3,
             primary_rows: 1,
             replica_rows: 0,
@@ -1335,16 +1351,15 @@ mod tests {
         let runtime = super::serving_runtime().unwrap();
         let memory = object_store::memory::InMemory::new();
         let locations = (0..4_u32)
-            .map(|ordinal| V32PageLocation {
-                page_ordinal: ordinal,
-                sha256: format!("{ordinal:064x}"),
-                encoded_bytes: 1,
-                standard_uri: format!("s3://frozen/pages/{ordinal}.arrow"),
-                express_uri: None,
+            .map(|ordinal| {
+                V32PageLocation::from_hex(ordinal, &format!("{ordinal:064x}"), 1, 1).unwrap()
             })
             .collect::<Vec<_>>();
-        let paths = (0..4_u32)
-            .map(|ordinal| object_store::path::Path::from(format!("pages/{ordinal}.arrow")))
+        let paths = locations
+            .iter()
+            .map(|location| {
+                object_store::path::Path::from(format!("pages/{}.arrow", location.sha256_hex()))
+            })
             .collect::<Vec<_>>();
         for path in &paths {
             runtime
@@ -1360,14 +1375,14 @@ mod tests {
                 },
             )),
             locations: Arc::new(locations.clone()),
-            paths: Arc::new(paths),
+            page_prefix: object_store::path::Path::from("pages"),
             runtime,
         };
         let pages = locations
             .into_iter()
             .map(|location| V27PageIdentity {
                 ordinal: location.page_ordinal,
-                sha256: location.sha256,
+                sha256: location.sha256_hex(),
                 encoded_bytes: location.encoded_bytes,
                 primary_rows: 1,
                 replica_rows: 0,
@@ -1479,6 +1494,49 @@ mod tests {
     }
 
     #[test]
+    fn v32_s3_qualify_manifest_ladder_pairs_are_exact_for_diagnostics_and_serving() {
+        // Break caught: diagnostic containment can run an arm outside the
+        // authenticated ladder, or construction preselects only one rung.
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("manifest.json");
+        let baseline = manifest_bytes();
+        fs::write(&path, &baseline).unwrap();
+        let manifest = read_manifest(&ArtifactArg {
+            path: path.clone(),
+            sha256: format!("{:x}", Sha256::digest(&baseline)),
+            encoded_bytes: baseline.len() as u64,
+        })
+        .unwrap();
+        for (leaf_beam, scan_budget) in [(64, 65_536), (128, 131_072), (256, 262_144)] {
+            let mut diagnostic = parse_args(arguments()).unwrap();
+            diagnostic.leaf_beam = leaf_beam;
+            diagnostic.diagnostic = Some(DiagnosticRequest {
+                logicals: (0..10).collect(),
+            });
+            assert_eq!(
+                manifest_arm(&diagnostic, &manifest).unwrap().scan_budget,
+                scan_budget
+            );
+        }
+        let mut outside = parse_args(arguments()).unwrap();
+        outside.leaf_beam = 192;
+        assert!(manifest_arm(&outside, &manifest).is_err());
+
+        let drifted = String::from_utf8(baseline)
+            .unwrap()
+            .replace("\"leaf_beam\":128", "\"leaf_beam\":127");
+        fs::write(&path, drifted.as_bytes()).unwrap();
+        assert!(
+            read_manifest(&ArtifactArg {
+                path,
+                sha256: format!("{:x}", Sha256::digest(drifted.as_bytes())),
+                encoded_bytes: drifted.len() as u64,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
     fn v32_s3_qualify_diagnostic_output_is_canonical_and_names_the_loss_boundary() {
         // Break caught: the fail-fast diagnostic performs a page read or hides
         // whether routing, candidate retention, or page reduction lost truth.
@@ -1505,7 +1563,10 @@ mod tests {
                     ],
                     work: V32RoutingWork {
                         roots_scored: 16,
-                        leaves_scored: 32,
+                        leaves_eligible: 32,
+                        leaves_scanned: 32,
+                        query_table_pairs_built: 4,
+                        peak_query_table_pairs_live: 1,
                         codes_scanned: 40_000,
                         candidates_retained: 12_288,
                         pages_considered: 20,
@@ -1517,6 +1578,7 @@ mod tests {
                         logical: 25,
                         leaf_ordinal: 3,
                         page_ordinal: 11,
+                        routing_leaf_rank: Some(9),
                         candidate_rank: None,
                         first_unique_page_rank: Some(12),
                         stage: V32RoutingTargetStage::CandidateRetention,
@@ -1526,6 +1588,7 @@ mod tests {
                         logical: 26,
                         leaf_ordinal: 3,
                         page_ordinal: 12,
+                        routing_leaf_rank: Some(9),
                         candidate_rank: Some(7),
                         first_unique_page_rank: Some(4),
                         stage: V32RoutingTargetStage::SelectedPage,
@@ -1537,7 +1600,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             bytes,
-            b"{\"claim_eligible\":false,\"diagnostics\":[{\"candidate_rank\":null,\"first_unique_page_rank\":12,\"leaf_ordinal\":3,\"logical\":25,\"page_ordinal\":11,\"reciprocal_rank_selected\":false,\"stage\":\"candidate-retention\"},{\"candidate_rank\":7,\"first_unique_page_rank\":4,\"leaf_ordinal\":3,\"logical\":26,\"page_ordinal\":12,\"reciprocal_rank_selected\":true,\"stage\":\"selected-page\"}],\"page_body_reads\":0,\"query_ordinal\":7,\"routing\":{\"candidates_retained\":12288,\"codes_scanned\":40000,\"leaves_scored\":32,\"pages_considered\":20,\"roots_scored\":16,\"selected_page_bytes\":300,\"selected_pages\":2},\"schema_version\":3,\"truth_independent_selection\":true}\n"
+            b"{\"claim_eligible\":false,\"diagnostics\":[{\"candidate_rank\":null,\"first_unique_page_rank\":12,\"leaf_ordinal\":3,\"logical\":25,\"page_ordinal\":11,\"reciprocal_rank_selected\":false,\"routing_leaf_rank\":9,\"stage\":\"candidate-retention\"},{\"candidate_rank\":7,\"first_unique_page_rank\":4,\"leaf_ordinal\":3,\"logical\":26,\"page_ordinal\":12,\"reciprocal_rank_selected\":true,\"routing_leaf_rank\":9,\"stage\":\"selected-page\"}],\"page_body_reads\":0,\"query_ordinal\":7,\"routing\":{\"candidates_retained\":12288,\"codes_scanned\":40000,\"leaves_eligible\":32,\"leaves_scanned\":32,\"pages_considered\":20,\"peak_query_table_pairs_live\":1,\"query_table_pairs_built\":4,\"roots_scored\":16,\"selected_page_bytes\":300,\"selected_pages\":2},\"schema_version\":3,\"truth_independent_selection\":true}\n"
         );
     }
 
@@ -1565,17 +1628,23 @@ mod tests {
             concat!(
                 "{{\"diagnostics\":{{\"logical_sources\":{}}},",
                 "\"hierarchy\":{{\"leaves\":{},\"roots\":{}}},",
-                "\"layout\":{{\"leaf_ranges\":{},\"maximum_leaf_rows\":24,",
-                "\"packing_algorithm\":\"balanced-geometric-v1\",\"page_ranges\":{},",
-                "\"page_rows\":128,\"source_rows\":40}},",
+                "\"layout\":{{\"maximum_code_parent_rows\":40,",
+                "\"maximum_routing_leaf_rows\":24,\"maximum_routing_leaves_per_root\":2,",
+                "\"packing_algorithm\":\"routing-microleaf-global-v1\",",
+                "\"page_ranges\":{},\"page_rows\":128,\"projected_resident_bytes\":100000,",
+                "\"routing_ranges\":{},",
+                "\"source_rows\":40}},",
                 "\"page_key_suffix\":\".arrow\",",
                 "\"pq\":{{\"artifacts\":[{},{},{},{},{}]}},",
-                "\"routing\":{{\"algorithm\":\"hierarchical-residual-pq-v1\",",
-                "\"candidate_depth\":12288,\"leaf_beam\":64,",
-                "\"maximum_pages_per_leaf\":64,\"maximum_scanned_codes\":1000000,",
+                "\"routing\":{{\"algorithm\":\"hierarchical-routing-microleaf-pq-v1\",",
+                "\"arms\":[{{\"leaf_beam\":64,\"maximum_scanned_codes\":65536}},",
+                "{{\"leaf_beam\":128,\"maximum_scanned_codes\":131072}},",
+                "{{\"leaf_beam\":256,\"maximum_scanned_codes\":262144}}],",
+                "\"candidate_depth\":12288,",
                 "\"page_count\":16,\"root_beam\":8}},",
                 "\"schema_version\":3,",
-                "\"serving\":{{\"page_locations\":{}}},",
+                "\"serving\":{{\"express_page_prefix\":null,\"page_locations\":{},",
+                "\"standard_page_prefix\":\"s3://bucket/v30/build-a0001/pages/\"}},",
                 "\"source\":{{\"commit\":\"{}\",\"corpus_manifest_bytes\":4096,",
                 "\"corpus_manifest_sha256\":\"{}\",",
                 "\"corpus_manifest_uri\":\"s3://bucket/deep-10m/corpus.json\",",
@@ -1584,8 +1653,8 @@ mod tests {
             artifact("v32-logical-sources-arrow", "logical-sources.arrow", 'c',),
             artifact("v27-leaves-arrow", "leaves.arrow", '2'),
             artifact("v27-roots-arrow", "roots.arrow", '1'),
-            artifact("v30-leaf-ranges-arrow", "leaf-ranges.arrow", '8'),
-            artifact("v30-page-ranges-parquet", "page-ranges.parquet", '9'),
+            artifact("v32-page-ranges-parquet", "page-ranges.parquet", '9'),
+            artifact("v32-routing-ranges-arrow", "routing-ranges.arrow", '8'),
             pq("pq24-codebook", "pq24.arrow", '3', 1, 24, "[]"),
             pq("pq48-codebook", "pq48.arrow", '4', 1, 48, "[]"),
             pq(
@@ -1636,13 +1705,36 @@ mod tests {
         assert_eq!(manifest.source_rows, 40);
         assert_eq!(manifest.hierarchy[0].1.role, "v27-roots-arrow");
         assert_eq!(manifest.pq.len(), 5);
-        assert_eq!(manifest.layout[1].1.role, "v30-page-ranges-parquet");
+        assert_eq!(manifest.layout[1].1.role, "v32-page-ranges-parquet");
         assert_eq!(manifest.page_locations.0, "page-locations.parquet");
         assert_eq!(manifest.page_locations.1.role, "v32-page-locations-parquet");
+        assert_eq!(
+            manifest.page_prefixes.standard(),
+            "s3://bucket/v30/build-a0001/pages/"
+        );
+        assert_eq!(manifest.page_prefixes.express(), None);
         assert_eq!(manifest.routing_root_beam, 8);
-        assert_eq!(manifest.routing_leaf_beam, 64);
+        assert_eq!(
+            manifest.routing_arms,
+            [(64, 65_536), (128, 131_072), (256, 262_144)]
+        );
         assert_eq!(manifest.routing_candidate_depth, 12_288);
         assert_eq!(manifest.routing_page_count, 16);
+
+        let mut missing_prefix: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        missing_prefix["serving"]
+            .as_object_mut()
+            .unwrap()
+            .remove("express_page_prefix");
+        let mut missing_prefix = serde_json::to_vec(&super::canonical(missing_prefix)).unwrap();
+        missing_prefix.push(b'\n');
+        fs::write(&argument.path, &missing_prefix).unwrap();
+        let missing_prefix_argument = ArtifactArg {
+            path: argument.path.clone(),
+            sha256: format!("{:x}", Sha256::digest(&missing_prefix)),
+            encoded_bytes: missing_prefix.len() as u64,
+        };
+        assert!(read_manifest(&missing_prefix_argument).is_err());
 
         let mut corrupted = argument.clone();
         let replacement = if corrupted.sha256.starts_with('f') {
@@ -1710,8 +1802,8 @@ mod tests {
         assert!(read_manifest(&source_argument).is_err());
 
         let packing_drifted = manifest_bytes()
-            .windows(b"balanced-geometric-v1".len())
-            .position(|window| window == b"balanced-geometric-v1")
+            .windows(b"routing-microleaf-global-v1".len())
+            .position(|window| window == b"routing-microleaf-global-v1")
             .unwrap();
         let mut packing_bytes = manifest_bytes();
         packing_bytes[packing_drifted] = b'x';
@@ -1725,8 +1817,8 @@ mod tests {
 
         let mut routing_bytes = manifest_bytes();
         let routing_drifted = routing_bytes
-            .windows(b"hierarchical-residual-pq-v1".len())
-            .position(|window| window == b"hierarchical-residual-pq-v1")
+            .windows(b"hierarchical-routing-microleaf-pq-v1".len())
+            .position(|window| window == b"hierarchical-routing-microleaf-pq-v1")
             .unwrap();
         routing_bytes[routing_drifted] = b'x';
         fs::write(&packing_argument.path, &routing_bytes).unwrap();
@@ -1771,7 +1863,10 @@ mod tests {
             work: V32SearchWork {
                 routing: V32RoutingWork {
                     roots_scored: 16,
-                    leaves_scored: 64,
+                    leaves_eligible: 64,
+                    leaves_scanned: 64,
+                    query_table_pairs_built: 8,
+                    peak_query_table_pairs_live: 1,
                     codes_scanned: 40,
                     candidates_retained: 12,
                     pages_considered: 3,
@@ -1812,7 +1907,7 @@ mod tests {
                 "\"routing_elapsed_ns\":5000000},\"work\":{",
                 "\"decoded_rows\":1,\"encoded_bytes\":3,\"get_count\":1,",
                 "\"routing\":{\"candidates_retained\":12,\"codes_scanned\":40,",
-                "\"leaves_scored\":64,\"pages_considered\":3,\"roots_scored\":16,",
+                "\"leaves_eligible\":64,\"leaves_scanned\":64,\"pages_considered\":3,\"peak_query_table_pairs_live\":1,\"query_table_pairs_built\":8,\"roots_scored\":16,",
                 "\"selected_pages\":1},\"unique_rows\":1}}\n"
             )
         );

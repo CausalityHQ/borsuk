@@ -190,7 +190,10 @@ logical-source/page evidence are citable; no intermediate schema is retained.
   both disjoint scale cohorts.
 - [ ] Before the 1M envelope decision, build the authenticated 100K development
   cohort with frozen 128-root/4,096-trained-leaf/root-beam-8 geometry and run
-  the same page-free 32-query truth containment diagnostic. From its newly
+  the same page-free 32-query truth containment diagnostic. When that complete
+  root frontier contains fewer than 12,288 rows, retain exactly
+  `min(12,288, codes_scanned)` candidates for this rank-evidence-only leg;
+  preserve 16 pages, 320/320 containment, and zero page reads. From its newly
   produced truth-microleaf rank maximum and the 1M maximum, compute the exact
   two-point power envelope in the spec and round each
   scale projection upward to leaf beam 64/128/256. Reject before a disjoint

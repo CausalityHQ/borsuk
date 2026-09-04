@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -49,7 +50,9 @@ class V32NoPageContainmentTests(unittest.TestCase):
         self.assertNotIn(b"--serving-tier", completed.stdout)
         self.assertNotIn(b"--page", completed.stdout)
 
-    def fixture(self, directory: Path) -> tuple[V32ContainmentPlan, bytes]:
+    def fixture(
+        self, directory: Path, *, source_rows: int = 1_000_000
+    ) -> tuple[V32ContainmentPlan, bytes]:
         neighbors = pa.array(
             [[row * 100 + rank for rank in range(10)] for row in range(128)],
             type=pa.list_(pa.field("item", pa.int32(), nullable=False), 10),
@@ -70,16 +73,21 @@ class V32NoPageContainmentTests(unittest.TestCase):
             json.dumps(
                 {
                     "layout": {
-                        "maximum_leaf_rows": 1_024,
-                        "page_rows": 512,
-                        "source_rows": 1_000_000,
+                        "maximum_code_parent_rows": 32_000,
+                        "maximum_routing_leaf_rows": 1_024,
+                        "maximum_routing_leaves_per_root": 64,
+                        "page_rows": 480,
+                        "projected_resident_bytes": 30_000_000,
+                        "source_rows": source_rows,
                     },
                     "routing": {
-                        "algorithm": "hierarchical-residual-pq-v1",
+                        "algorithm": "hierarchical-routing-microleaf-pq-v1",
+                        "arms": [
+                            {"leaf_beam": 64, "maximum_scanned_codes": 65_536},
+                            {"leaf_beam": 128, "maximum_scanned_codes": 131_072},
+                            {"leaf_beam": 256, "maximum_scanned_codes": 262_144},
+                        ],
                         "candidate_depth": 12_288,
-                        "leaf_beam": 64,
-                        "maximum_pages_per_leaf": 64,
-                        "maximum_scanned_codes": 1_000_000,
                         "page_count": 16,
                         "root_beam": 8,
                     },
@@ -94,7 +102,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
         query.write_bytes(b"query")
         logical_sources_path = directory / "logical-sources.arrow"
         logical_sources = pa.array(
-            [(logical - 1) % 1_000_000 for logical in range(1_000_000)],
+            [(logical - 1) % source_rows for logical in range(source_rows)],
             type=pa.uint64(),
         )
         logical_sources_table = pa.Table.from_arrays(
@@ -125,15 +133,22 @@ class V32NoPageContainmentTests(unittest.TestCase):
                 truth=LocalArtifact(
                     truth_path, hashlib.sha256(truth).hexdigest(), len(truth)
                 ),
-                source_rows=1_000_000,
+                source_rows=source_rows,
                 query_start=64,
                 query_count=32,
+                leaf_beam=64,
             ),
             truth,
         )
 
     @staticmethod
-    def diagnostic(query_ordinal: int, *, miss: bool = False) -> bytes:
+    def diagnostic(
+        query_ordinal: int,
+        *,
+        miss: bool = False,
+        candidates_retained: int = 12_288,
+        codes_scanned: int | None = None,
+    ) -> bytes:
         diagnostics = []
         for rank in range(10):
             selected = not (miss and rank == 9)
@@ -145,6 +160,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     "logical": (query_ordinal * 100 + rank + 1) % 1_000_000,
                     "page_ordinal": query_ordinal * 10 + rank,
                     "reciprocal_rank_selected": selected,
+                    "routing_leaf_rank": query_ordinal % 128 + 1,
                     "stage": "selected-page" if selected else "candidate-retention",
                 }
             )
@@ -156,10 +172,17 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     "page_body_reads": 0,
                     "query_ordinal": query_ordinal,
                     "routing": {
-                        "candidates_retained": 12_288,
-                        "codes_scanned": 40_000 + query_ordinal,
-                        "leaves_scored": 64,
+                        "candidates_retained": candidates_retained,
+                        "codes_scanned": (
+                            40_000 + query_ordinal
+                            if codes_scanned is None
+                            else codes_scanned
+                        ),
+                        "leaves_eligible": 128,
+                        "leaves_scanned": 128,
                         "pages_considered": 20,
+                        "peak_query_table_pairs_live": 1,
+                        "query_table_pairs_built": 1,
                         "roots_scored": 128,
                         "selected_page_bytes": 2_900_000,
                         "selected_pages": 16,
@@ -195,6 +218,44 @@ class V32NoPageContainmentTests(unittest.TestCase):
                 ),
             )
 
+    def test_v32_containment_commands_use_the_manifest_routing_ladder(self) -> None:
+        # Break caught: the reducer accepts a wider scale rung but commands keep
+        # sending the 1M-only leaf beam, so the qualifier rejects every query.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, truth = self.fixture(Path(temporary))
+            plan = replace(plan, leaf_beam=128)
+            commands = build_v32_containment_commands(plan, truth)
+            with self.assertRaisesRegex(ValueError, "scale geometry"):
+                build_v32_containment_commands(replace(plan, leaf_beam=192), truth)
+        self.assertEqual(
+            {command[command.index("--leaf-beam") + 1] for command in commands},
+            {"128"},
+        )
+
+    def test_v32_100k_rank_evidence_caps_candidates_at_scanned_population(self) -> None:
+        # Break caught: the 100K rank-envelope leg is rejected because its root
+        # frontier contains fewer than the serving maximum of 12,288 rows.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, truth = self.fixture(Path(temporary), source_rows=100_000)
+            results = {
+                query: self.diagnostic(
+                    query, candidates_retained=6_000, codes_scanned=6_000
+                )
+                for query in range(64, 96)
+            }
+            payload = run_v32_no_page_containment(
+                plan,
+                truth,
+                invoke=lambda command: results[
+                    int(command[command.index("--query-start") + 1])
+                ],
+            )
+        value = json.loads(payload)
+        self.assertEqual(value["source_rows"], 100_000)
+        self.assertEqual(value["selected_page_hits"], 320)
+        self.assertEqual(value["maximum_codes_scanned"], 6_000)
+        self.assertEqual(value["status"], "passed")
+
     def test_v32_containment_recomputes_failure_stage_without_page_bodies(self) -> None:
         # Break caught: a candidate/page miss is hidden behind aggregate recall or
         # a no-page diagnostic is mislabeled as a serving measurement.
@@ -216,7 +277,12 @@ class V32NoPageContainmentTests(unittest.TestCase):
         self.assertEqual(value["losses_by_stage"], {"candidate-retention": 1})
         self.assertEqual(value["page_body_reads"], 0)
         self.assertEqual(value["maximum_codes_scanned"], 40_095)
-        self.assertEqual(value["maximum_leaf_rows"], 1_024)
+        self.assertEqual(value["maximum_leaves_eligible"], 128)
+        self.assertEqual(value["maximum_leaves_scanned"], 128)
+        self.assertEqual(value["maximum_truth_microleaf_rank"], 96)
+        self.assertEqual(value["maximum_query_table_pairs_built"], 1)
+        self.assertEqual(value["maximum_peak_query_table_pairs_live"], 1)
+        self.assertEqual(value["maximum_routing_leaf_rows"], 1_024)
         self.assertEqual(value["maximum_selected_page_bytes"], 2_900_000)
         self.assertEqual(value["status"], "failed")
         self.assertEqual(value["failed_gates"], ["perfect-containment"])
@@ -242,6 +308,36 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     if command[command.index("--query-start") + 1] == "64"
                     else results[int(command[command.index("--query-start") + 1]) - 64],
                 )
+
+            work_drift = json.loads(results[0])
+            work_drift["routing"]["leaves_eligible"] = 513
+            changed_work = (
+                json.dumps(work_drift, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+            with self.assertRaisesRegex(ValueError, "routing work"):
+                run_v32_no_page_containment(
+                    plan,
+                    truth,
+                    invoke=lambda command: changed_work
+                    if command[command.index("--query-start") + 1] == "64"
+                    else results[int(command[command.index("--query-start") + 1]) - 64],
+                )
+
+            rank_drift = json.loads(results[0])
+            rank_drift["diagnostics"][0]["routing_leaf_rank"] = 129
+            changed_rank = (
+                json.dumps(rank_drift, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+            with self.assertRaisesRegex(ValueError, "diagnostic value"):
+                run_v32_no_page_containment(
+                    plan,
+                    truth,
+                    invoke=lambda command: changed_rank
+                    if command[command.index("--query-start") + 1] == "64"
+                    else results[int(command[command.index("--query-start") + 1]) - 64],
+                )
             drift = V32ContainmentPlan(
                 **{
                     **plan.__dict__,
@@ -254,7 +350,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
                 build_v32_containment_commands(drift, truth)
 
             manifest_value = json.loads(plan.manifest.path.read_bytes())
-            manifest_value["layout"]["maximum_leaf_rows"] = 1_025
+            manifest_value["layout"]["maximum_routing_leaf_rows"] = 1_025
             manifest_bytes = (
                 json.dumps(manifest_value, separators=(",", ":"), sort_keys=True).encode()
                 + b"\n"
@@ -270,23 +366,23 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     ),
                 }
             )
-            geometry_payload = run_v32_no_page_containment(
-                geometry_drift,
-                truth,
-                invoke=lambda command: results[
-                    int(command[command.index("--query-start") + 1]) - 64
-                ],
-            )
-            self.assertEqual(
-                json.loads(geometry_payload)["failed_gates"],
-                ["maximum-leaf-rows"],
-            )
+            with self.assertRaisesRegex(ValueError, "scale geometry"):
+                run_v32_no_page_containment(
+                    geometry_drift,
+                    truth,
+                    invoke=lambda _command: self.fail(
+                        "diagnostic ran after routing-range overflow"
+                    ),
+                )
 
             plan.manifest.path.write_bytes(
                 json.dumps(
                     {
                         **manifest_value,
-                        "layout": {**manifest_value["layout"], "maximum_leaf_rows": 1_024},
+                        "layout": {
+                            **manifest_value["layout"],
+                            "maximum_routing_leaf_rows": 1_024,
+                        },
                     },
                     separators=(",", ":"),
                     sort_keys=True,

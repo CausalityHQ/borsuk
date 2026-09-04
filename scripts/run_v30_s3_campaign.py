@@ -89,6 +89,7 @@ class V32ContainmentSpotPlan:
     source_rows: int
     query_start: int
     query_count: int
+    leaf_beam: int
 
 
 @dataclass(frozen=True)
@@ -159,10 +160,10 @@ def _validate_construction(plan: V30ConstructionPlan) -> None:
         or plan.corpus_manifest_bytes <= 0
         or geometry
         not in {
-            (100_000, 16, 256, 8_192, 512),
             (100_000, 16, 256, 8_192, 128),
-            (1_000_000, 128, 4_096, 32_768, 512),
-            (9_990_000, 1_024, 32_768, 262_144, 512),
+            (100_000, 128, 4_096, 32_768, 480),
+            (1_000_000, 128, 4_096, 32_768, 480),
+            (9_990_000, 1_024, 32_768, 262_144, 480),
         }
     ):
         raise ValueError("V30 construction authority differs")
@@ -226,10 +227,11 @@ def _validate_containment(plan: V32ContainmentSpotPlan) -> None:
             for uri, digest, length in artifacts
         )
         or not plan.construction_manifest_uri.endswith("/manifest.json")
-        or plan.source_rows != 1_000_000
+        or plan.source_rows not in {100_000, 1_000_000}
         or type(plan.query_start) is not int
         or plan.query_start < 0
         or plan.query_count != 32
+        or plan.leaf_beam not in {64, 128, 256}
     ):
         raise ValueError("V32 containment authority differs")
 
@@ -512,7 +514,7 @@ def _evaluation_script(plan: V30EvaluationPlan) -> str:
             "import json",
             "from pathlib import Path",
             "value=json.loads(Path('/run/v30/manifest.json').read_bytes())",
-            "items=[value['hierarchy']['roots'],value['hierarchy']['leaves'],value['layout']['leaf_ranges'],value['layout']['page_ranges'],value['serving']['page_locations'],*value['pq']['artifacts']]",
+            "items=[value['hierarchy']['roots'],value['hierarchy']['leaves'],value['layout']['routing_ranges'],value['layout']['page_ranges'],value['serving']['page_locations'],*value['pq']['artifacts']]",
             "for item in items: print(item['file'], item['sha256'], item['encoded_bytes'], sep='\\t')",
             "PY",
             "while IFS=$'\\t' read -r file sha size; do",
@@ -569,6 +571,7 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
         f" --source-rows {plan.source_rows}"
         f" --query-start {plan.query_start}"
         f" --query-count {plan.query_count}"
+        f" --leaf-beam {plan.leaf_beam}"
     )
     return "\n".join(
         [
@@ -615,7 +618,7 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
             "import json",
             "from pathlib import Path",
             "value=json.loads(Path('/run/v32/manifest.json').read_bytes())",
-            "items=[value['hierarchy']['roots'],value['hierarchy']['leaves'],value['layout']['leaf_ranges'],value['layout']['page_ranges'],value['serving']['page_locations'],*value['pq']['artifacts']]",
+            "items=[value['hierarchy']['roots'],value['hierarchy']['leaves'],value['layout']['routing_ranges'],value['layout']['page_ranges'],value['serving']['page_locations'],*value['pq']['artifacts']]",
             "for item in items: print(item['file'], item['sha256'], item['encoded_bytes'], sep='\\t')",
             "logical=value['diagnostics']['logical_sources']",
             "print(logical['file'], logical['sha256'], logical['encoded_bytes'], sep='\\t', file=open('/run/v32/logical.tsv','w'))",
