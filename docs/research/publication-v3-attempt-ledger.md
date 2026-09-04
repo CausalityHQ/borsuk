@@ -2825,3 +2825,45 @@ those Arrow/Parquet page objects from S3 rather than materializing the corpus
 locally. Cold Standard S3 page latency is evaluated separately from CPU search;
 the 15-ms target is a resident-index/hot-cache target unless a lower-latency
 object tier is explicitly qualified.
+
+### Sparse secondary placement and high-error f16 refinement are rejected
+
+Two bounded query-independent V30 spikes tested whether the remaining V28
+compressed-ordering loss could be repaired without widening the ten-page S3
+read boundary. Both used the same burned 100,000-row Deep Image fixture and 32
+queries, streamed 46,761,076 authenticated page bytes, emitted
+`claim_eligible=false`, and left the exact vector corpus only in immutable S3
+page objects. They are diagnostic evidence, not a new persistent format.
+
+The sparse-secondary-placement spike duplicated the rows nearest an alternate
+leaf boundary into code-sorted pages owned by that alternate leaf. At 0/5/10/15
+percent replication it reached 981,250/984,375/987,500/981,250 ppm aggregate
+recall, with 700,000/800,000/900,000/700,000 ppm minimum recall. The best
+ten-percent arm projected 2,732,766,208 resident bytes at 100 million rows but
+recovered only 316/320 hits. The 1,411-byte result has SHA-256
+`7ae18479df657d61ab08e99165827996228783b5998a9bce9ddb5ac0e8c6e098`
+and is preserved at
+`s3://borsuk-bench-453182569524-euc1/research/v30-s3/c0ac66590c834d48d998f51c0af1f8c27d36cb4f/v30-sparse-secondary-replica-20260904T012438Z/result.json`.
+The `causality` Spot worker `i-01803c5a52da68dd7` completed and terminated.
+
+The high-error-refinement spike selected rows solely by their PQ
+reconstruction error and retained normalized f16 vectors for the selected
+0.5/1/2 percent. Every arm remained exactly at the 981,250-ppm baseline with
+700,000-ppm minimum recall and 28/32 perfect queries; the two-percent arm
+projected 2,897,266,208 resident bytes. This proves that the relevant page
+mistakes are not concentrated in the small query-independent tail of largest
+PQ reconstruction errors. The 1,324-byte result has SHA-256
+`e0050a76ded6656e8fd0962e25b99f833630f6e44f9ae978b8e8ba563efbc91b`
+and is preserved at
+`s3://borsuk-bench-453182569524-euc1/research/v30-s3/c0ac66590c834d48d998f51c0af1f8c27d36cb4f/v30-high-error-f16-20260904T013000Z/result.json`.
+The `causality` Spot worker `i-0151a8668ae0ed8b3` completed and terminated.
+
+Neither representation proceeds to production. Together with the earlier V28
+ladder, these results close sparse physical replication, small high-error exact
+sidecars, page-count expansion, page graphs, OPQ, additive PQ, multiview PQ,
+radius routing, and alternate page-score aggregation on this burned fixture.
+The retained production candidate remains the smallest query-independent
+variable-rate residual arm: 996,875-ppm aggregate recall, 900,000-ppm minimum
+recall, 31/32 perfect queries, ten pages, and a 2,625,266,208-byte 100-million-
+row projection. Further selection must use a fresh larger cohort rather than
+tuning the single burned miss.
