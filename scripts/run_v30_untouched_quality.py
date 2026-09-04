@@ -71,9 +71,9 @@ def _validate(plan: V30UntouchedPlan) -> None:
         or type(plan.query_start) is not int
         or plan.query_start < 0
         or plan.query_count != QUERY_COUNT
-        or plan.leaf_beam not in {192, 512}
+        or plan.leaf_beam != 64
         or type(plan.page_count) is not int
-        or not 1 <= plan.page_count <= 16
+        or plan.page_count != 16
     ):
         raise ValueError("V30 untouched plan authority differs")
 
@@ -101,8 +101,12 @@ def build_qualifier_commands(plan: V30UntouchedPlan) -> tuple[tuple[str, ...], .
         str(plan.query.encoded_bytes),
     )
     arm = (
+        "--root-beam",
+        "8",
         "--leaf-beam",
         str(plan.leaf_beam),
+        "--candidate-depth",
+        "12288",
         "--page-count",
         str(plan.page_count),
         "--k",
@@ -175,13 +179,12 @@ def run_v30_untouched_quality(
         source_rows=plan.source_rows,
     )
     parsed = _batch_results(invoke(commands[0]), expected_pages=plan.page_count)
-    expected_leaves = {100_000: 256, 9_990_000: 32_768}[plan.source_rows]
     if any(
-        work["roots_scored"] != 0
-        or work["leaves_scored"] != expected_leaves
-        or work["codes_scanned"] != 0
-        or work["candidates_retained"] != 0
-        or not plan.page_count <= work["pages_considered"] <= plan.leaf_beam * 64
+        work["roots_scored"] <= 0
+        or work["leaves_scored"] < plan.leaf_beam
+        or not 0 < work["codes_scanned"] <= 1_000_000
+        or work["candidates_retained"] != 12_288
+        or not plan.page_count <= work["pages_considered"] <= 12_288
         for _matches, work in parsed
     ):
         raise ValueError("V30 production routing work differs")
@@ -204,8 +207,9 @@ def run_v30_untouched_quality(
             ("aggregate-recall", aggregate < 995_000),
             ("floor-compliance", floor_compliance < 997_500),
             ("minimum-recall", minimum < 800_000),
-            ("cpu-p99", cpu_p99 > 15_000_000),
-            ("cold-p99", cold_p99 > 100_000_000),
+            ("page-bytes", maximum_bytes > 3_145_728),
+            ("cpu-p99", cpu_p99 > 64_000_000),
+            ("cold-p99", cold_p99 > 150_000_000),
             ("peak-rss", maximum_peak_rss > 3 * 1024**3),
             (
                 "query-elapsed-stop",

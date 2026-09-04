@@ -5,10 +5,9 @@ use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc, time::Instant};
 use arrow_array::{Array, FixedSizeListArray, Float32Array};
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    BorsukError, V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30DiagnosticArm, V30Index,
-    V30LayoutArtifactIdentity, V30LayoutArtifacts, V30PageStore, V30PqArtifactIdentity,
-    V30PqArtifacts, V30Router, V30RoutingTargetReport, V30RoutingTargetStage, V30SearchArm,
-    V30SearchPhase, V30SearchResult,
+    BorsukError, V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30LayoutArtifactIdentity,
+    V30LayoutArtifacts, V30PqArtifactIdentity, V30PqArtifacts, V32Index, V32PageStore, V32Router,
+    V32RoutingTargetReport, V32RoutingTargetStage, V32SearchArm, V32SearchPhase, V32SearchResult,
 };
 use bytes::Bytes;
 use futures_util::future::try_join_all;
@@ -38,7 +37,9 @@ struct Args {
     query: ArtifactArg,
     query_start: usize,
     query_count: usize,
+    root_beam: usize,
     leaf_beam: usize,
+    candidate_depth: usize,
     page_count: usize,
     k: usize,
     page_source: Option<PageSource>,
@@ -48,7 +49,7 @@ struct Args {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DiagnosticRequest {
     logical: u64,
-    arm: V30DiagnosticArm,
+    arm: V32SearchArm,
 }
 
 #[derive(Debug, Deserialize)]
@@ -318,7 +319,7 @@ struct LocalPageStore {
     suffix: String,
 }
 
-impl V30PageStore for LocalPageStore {
+impl V32PageStore for LocalPageStore {
     fn read_wave(&self, pages: &[borsuk::V27PageIdentity]) -> borsuk::Result<Vec<Vec<u8>>> {
         pages
             .iter()
@@ -350,7 +351,7 @@ struct SearchPhaseTiming {
     exact_rerank_elapsed_ns: u64,
 }
 
-impl V30PageStore for ObjectPageStore {
+impl V32PageStore for ObjectPageStore {
     fn read_wave(&self, pages: &[borsuk::V27PageIdentity]) -> borsuk::Result<Vec<Vec<u8>>> {
         self.runtime.block_on(async {
             let reads = pages.iter().map(|page| {
@@ -369,7 +370,7 @@ impl V30PageStore for ObjectPageStore {
 }
 
 fn result_bytes(
-    result: &V30SearchResult,
+    result: &V32SearchResult,
     process_cpu_ns: u64,
     elapsed_ns: u64,
     peak_rss_bytes: u64,
@@ -443,13 +444,13 @@ fn result_bytes(
 
 fn diagnostic_bytes(
     query_ordinal: usize,
-    report: V30RoutingTargetReport,
+    report: V32RoutingTargetReport,
 ) -> borsuk::Result<Vec<u8>> {
     let stage = match report.stage {
-        V30RoutingTargetStage::LeafFrontier => "leaf-frontier",
-        V30RoutingTargetStage::CandidateRetention => "candidate-retention",
-        V30RoutingTargetStage::PageReducer => "page-reducer",
-        V30RoutingTargetStage::SelectedPage => "selected-page",
+        V32RoutingTargetStage::LeafFrontier => "leaf-frontier",
+        V32RoutingTargetStage::CandidateRetention => "candidate-retention",
+        V32RoutingTargetStage::PageReducer => "page-reducer",
+        V32RoutingTargetStage::SelectedPage => "selected-page",
     };
     let value = serde_json::json!({
         "claim_eligible": false,
@@ -598,17 +599,17 @@ fn read_query(argument: &ArtifactArg, query_row: usize) -> borsuk::Result<[f32; 
     Err(invalid("V30 qualifier query row differs"))
 }
 
-fn run_batch<S: V30PageStore>(
-    router: V30Router,
+fn run_batch<S: V32PageStore>(
+    router: V32Router,
     store: S,
-    arm: V30SearchArm,
+    arm: V32SearchArm,
     query: &ArtifactArg,
     query_start: usize,
     query_count: usize,
     k: usize,
 ) -> borsuk::Result<Vec<u8>> {
     let mut results = Vec::with_capacity(query_count);
-    let index = V30Index::new(router, store, arm)?;
+    let index = V32Index::new(router, store, arm)?;
     let query_end = query_start
         .checked_add(query_count)
         .ok_or_else(|| invalid("V30 qualifier query range overflows"))?;
@@ -630,15 +631,15 @@ fn run_batch<S: V30PageStore>(
                 .checked_sub(previous_elapsed_ns)
                 .ok_or_else(|| invalid("V30 qualifier phase elapsed regressed"))?;
             match phase {
-                V30SearchPhase::RoutingComplete => {
+                V32SearchPhase::RoutingComplete => {
                     phases.routing_cpu_ns = cpu_ns;
                     phases.routing_elapsed_ns = elapsed_ns;
                 }
-                V30SearchPhase::PageReadComplete => {
+                V32SearchPhase::PageReadComplete => {
                     phases.page_read_cpu_ns = cpu_ns;
                     phases.page_read_elapsed_ns = elapsed_ns;
                 }
-                V30SearchPhase::ExactRerankComplete => {
+                V32SearchPhase::ExactRerankComplete => {
                     phases.exact_rerank_cpu_ns = cpu_ns;
                     phases.exact_rerank_elapsed_ns = elapsed_ns;
                 }
@@ -742,14 +743,16 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
         leaf_ranges_arrow: layout_bytes[0].clone(),
         page_ranges_parquet: layout_bytes[1].clone(),
     };
-    let router = V30Router::from_artifacts(&hierarchy, &pq, &layout)?;
+    let router = V32Router::from_artifacts(&hierarchy, &pq, &layout)?;
     if args.leaf_beam != manifest.routing_leaf_beam
         || args.page_count != manifest.routing_page_count
     {
         return Err(invalid("V30 qualifier routing manifest differs"));
     }
-    let arm = V30SearchArm {
+    let arm = V32SearchArm {
+        root_beam: args.root_beam,
         leaf_beam: args.leaf_beam,
+        candidate_depth: args.candidate_depth,
         page_count: args.page_count,
     };
     if let Some(diagnostic) = args.diagnostic {
@@ -887,7 +890,9 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
     let query = artifact(&mut values, "query")?;
     let query_start = number(&mut values, "query-start")?;
     let query_count = number(&mut values, "query-count")?;
+    let root_beam = number(&mut values, "root-beam")?;
     let leaf_beam = number(&mut values, "leaf-beam")?;
+    let candidate_depth = number(&mut values, "candidate-depth")?;
     let page_count = number(&mut values, "page-count")?;
     let k = number(&mut values, "k")?;
     let diagnostic_logical = values
@@ -902,10 +907,10 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         .map(|logical| -> Result<DiagnosticRequest, String> {
             Ok(DiagnosticRequest {
                 logical,
-                arm: V30DiagnosticArm {
-                    root_beam: number(&mut values, "root-beam")?,
+                arm: V32SearchArm {
+                    root_beam,
                     leaf_beam,
-                    candidate_depth: number(&mut values, "candidate-depth")?,
+                    candidate_depth,
                     page_count,
                 },
             })
@@ -926,14 +931,10 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
             Some(_) => query_count != 1,
             None => query_count != 32,
         }
-        || leaf_beam == 0
-        || diagnostic.is_some_and(|request| {
-            request.arm.root_beam == 0
-                || request.arm.candidate_depth == 0
-                || request.arm.candidate_depth > 12_288
-        })
-        || page_count == 0
-        || page_count > 16
+        || root_beam != 8
+        || leaf_beam != 64
+        || candidate_depth != 12_288
+        || page_count != 16
         || k == 0
         || k > 10
         || !values.is_empty()
@@ -946,7 +947,9 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         query,
         query_start,
         query_count,
+        root_beam,
         leaf_beam,
+        candidate_depth,
         page_count,
         k,
         page_source,
@@ -959,8 +962,8 @@ mod tests {
     use std::{fs, path::PathBuf, sync::Arc};
 
     use borsuk::{
-        V27PageIdentity, V30Match, V30PageStore, V30RoutingTargetReport, V30RoutingTargetStage,
-        V30RoutingWork, V30SearchResult, V30SearchWork,
+        V27PageIdentity, V32Match, V32PageStore, V32RoutingTargetReport, V32RoutingTargetStage,
+        V32RoutingWork, V32SearchResult, V32SearchWork,
     };
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
@@ -993,8 +996,12 @@ mod tests {
             "0",
             "--query-count",
             "32",
+            "--root-beam",
+            "8",
             "--leaf-beam",
             "64",
+            "--candidate-depth",
+            "12288",
             "--page-count",
             "16",
             "--k",
@@ -1008,7 +1015,7 @@ mod tests {
     }
 
     #[test]
-    fn v30_s3_qualify_process_cpu_clock_resolves_below_the_latency_gate() {
+    fn v32_s3_qualify_process_cpu_clock_resolves_below_the_latency_gate() {
         // Break caught: /proc/self/stat quantizes CPU to 10-ms ticks, making a
         // 15-ms p99 gate alternate between 10 and 20 ms.
         let before = process_cpu_nanoseconds().unwrap();
@@ -1026,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn v30_s3_qualify_reports_process_peak_rss_for_the_release_gate() {
+    fn v32_s3_qualify_reports_process_peak_rss_for_the_release_gate() {
         let peak = peak_rss_bytes().unwrap();
         assert!(peak > 0);
         assert_eq!(peak % 1024, 0);
@@ -1034,21 +1041,21 @@ mod tests {
 
     struct NonClonePageStore;
 
-    impl V30PageStore for NonClonePageStore {
+    impl V32PageStore for NonClonePageStore {
         fn read_wave(&self, _pages: &[V27PageIdentity]) -> borsuk::Result<Vec<Vec<u8>>> {
             unreachable!("compile-only batch ownership contract")
         }
     }
 
     #[test]
-    fn v30_s3_qualify_batch_reuses_one_index_without_cloning_router_or_store() {
+    fn v32_s3_qualify_batch_reuses_one_index_without_cloning_router_or_store() {
         // Break caught: every query clones the resident router/store and builds
         // a fresh index instead of reusing one immutable serving instance.
         let _runner = run_batch::<NonClonePageStore>;
     }
 
     #[test]
-    fn v30_s3_qualify_object_store_reuses_one_runtime_across_read_waves() {
+    fn v32_s3_qualify_object_store_reuses_one_runtime_across_read_waves() {
         // Break caught: every S3 query builds and tears down a Tokio runtime,
         // adding scheduler setup to the measured serving CPU path.
         let runtime = Arc::new(
@@ -1069,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    fn v30_s3_qualify_parser_requires_explicit_authority_and_one_page_source() {
+    fn v32_s3_qualify_parser_requires_explicit_authority_and_one_page_source() {
         // Break caught: qualification discovers latest artifacts, accepts an ETag,
         // or silently switches between local/cache/S3 page bodies.
         let parsed = parse_args(arguments()).unwrap();
@@ -1101,8 +1108,6 @@ mod tests {
             "--legacy",
             "--d3",
             "--page-bucket",
-            "--root-beam",
-            "--candidate-depth",
         ] {
             let mut values = arguments();
             values.extend([forbidden.to_owned(), "value".to_owned()]);
@@ -1128,32 +1133,36 @@ mod tests {
             .position(|value| value == "--query-count")
             .unwrap();
         diagnostic[count + 1] = "1".to_owned();
-        diagnostic.extend([
-            "--diagnose-logical".to_owned(),
-            "25".to_owned(),
-            "--root-beam".to_owned(),
-            "8".to_owned(),
-            "--candidate-depth".to_owned(),
-            "12288".to_owned(),
-        ]);
+        diagnostic.extend(["--diagnose-logical".to_owned(), "25".to_owned()]);
         let parsed = parse_args(diagnostic).unwrap();
         assert_eq!(parsed.diagnostic.unwrap().logical, 25);
         assert_eq!(parsed.page_source, None);
     }
 
     #[test]
-    fn v30_s3_qualify_diagnostic_output_is_canonical_and_names_the_loss_boundary() {
+    fn v32_s3_qualify_requires_the_frozen_pq_arm_for_production() {
+        // Break caught: the serving qualifier silently substitutes centroid
+        // routing or an implicit root/candidate frontier for the proven arm.
+        let parsed = parse_args(arguments()).unwrap();
+        assert_eq!(parsed.root_beam, 8);
+        assert_eq!(parsed.leaf_beam, 64);
+        assert_eq!(parsed.candidate_depth, 12_288);
+        assert_eq!(parsed.page_count, 16);
+    }
+
+    #[test]
+    fn v32_s3_qualify_diagnostic_output_is_canonical_and_names_the_loss_boundary() {
         // Break caught: the fail-fast diagnostic performs a page read or hides
         // whether routing, candidate retention, or page reduction lost truth.
         let bytes = diagnostic_bytes(
             7,
-            V30RoutingTargetReport {
+            V32RoutingTargetReport {
                 logical: 25,
                 leaf_ordinal: 3,
                 page_ordinal: 11,
                 candidate_rank: None,
                 first_unique_page_rank: Some(12),
-                stage: V30RoutingTargetStage::CandidateRetention,
+                stage: V32RoutingTargetStage::CandidateRetention,
                 reciprocal_rank_selected: false,
             },
         )
@@ -1239,7 +1248,7 @@ mod tests {
     }
 
     #[test]
-    fn v30_s3_qualify_manifest_binds_every_resident_artifact_before_use() {
+    fn v32_s3_qualify_manifest_binds_every_resident_artifact_before_use() {
         // Break caught: serving combines hierarchy, PQ, and layout objects from
         // different constructions or discovers an artifact name from storage.
         let directory = tempdir().unwrap();
@@ -1321,7 +1330,7 @@ mod tests {
     }
 
     #[test]
-    fn v30_s3_qualify_local_store_and_stdout_are_content_addressed() {
+    fn v32_s3_qualify_local_store_and_stdout_are_content_addressed() {
         // Break caught: the qualifier discovers page names, performs more than
         // one wave, or emits noncanonical/claim-eligible output.
         let directory = tempdir().unwrap();
@@ -1345,13 +1354,13 @@ mod tests {
         .unwrap();
         assert_eq!(bodies, vec![b"abc".to_vec()]);
 
-        let result = V30SearchResult {
-            matches: vec![V30Match {
+        let result = V32SearchResult {
+            matches: vec![V32Match {
                 source_ordinal: 9,
                 squared_distance: 0.25,
             }],
-            work: V30SearchWork {
-                routing: V30RoutingWork {
+            work: V32SearchWork {
+                routing: V32RoutingWork {
                     roots_scored: 16,
                     leaves_scored: 64,
                     codes_scanned: 40,
@@ -1401,7 +1410,7 @@ mod tests {
     }
 
     #[test]
-    fn v30_s3_qualify_execution_reads_only_explicit_authenticated_artifacts() {
+    fn v32_s3_qualify_execution_reads_only_explicit_authenticated_artifacts() {
         // Break caught: the executable bypasses the serving manifest or begins
         // page access before all resident artifacts and the query authenticate.
         let directory = tempdir().unwrap();
@@ -1422,7 +1431,9 @@ mod tests {
             },
             query_start: 0,
             query_count: 32,
+            root_beam: 1,
             leaf_beam: 1,
+            candidate_depth: 1,
             page_count: 1,
             k: 1,
             page_source: Some(PageSource::Local(directory.path().to_path_buf())),
