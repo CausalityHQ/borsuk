@@ -111,6 +111,42 @@ def quantize_squared_error_u8(
     return codes, steps, decoded
 
 
+def secondary_leaf_ordinals(
+    rows: np.ndarray,
+    primary_leaf: np.ndarray,
+    leaf_centroids: np.ndarray,
+) -> np.ndarray:
+    """Assign each row to its deterministic nearest non-primary leaf."""
+
+    matrix = _matrix(rows, "secondary leaf rows")
+    leaves = _matrix(leaf_centroids, "secondary leaf centroids")
+    if (
+        matrix.shape[1] != leaves.shape[1]
+        or len(leaves) < 2
+        or not isinstance(primary_leaf, np.ndarray)
+        or primary_leaf.shape != (len(matrix),)
+        or not np.issubdtype(primary_leaf.dtype, np.integer)
+        or np.any(primary_leaf < 0)
+        or np.any(primary_leaf >= len(leaves))
+    ):
+        raise ValueError("V31 secondary leaf authority differs")
+    result = np.empty(len(matrix), dtype=np.int32)
+    leaf_squared = np.sum(leaves * leaves, axis=1, dtype=np.float32)
+    leaf_ordinals = np.arange(len(leaves))
+    for start in range(0, len(matrix), 4_096):
+        stop = min(start + 4_096, len(matrix))
+        block = matrix[start:stop]
+        distances = (
+            np.sum(block * block, axis=1, dtype=np.float32)[:, None]
+            + leaf_squared[None, :]
+            - np.float32(2.0) * (block @ leaves.T)
+        )
+        distances[np.arange(stop - start), primary_leaf[start:stop]] = np.inf
+        # np.argmin returns the first leaf ordinal, freezing tie behavior.
+        result[start:stop] = leaf_ordinals[np.argmin(distances, axis=1)]
+    return result
+
+
 def residual_projection_matrix(dimensions: int, bits: int, seed_sha256: str) -> np.ndarray:
     """Return the fixed diagnostic Gaussian matrix derived from immutable authority."""
 
@@ -335,11 +371,16 @@ def evaluate_residual_correction_arms(
     _, _, quantized_squared_error = quantize_squared_error_u8(
         exact_squared_error, primary_leaf
     )
-    pages, row_page, leaf_rows = build_base_page_layout(
+    pages, row_page, _primary_leaf_rows = build_base_page_layout(
         primary_leaf,
         base_codes,
         leaf_count=len(leaf_centroids),
         page_rows=page_rows,
+    )
+    secondary_leaf = secondary_leaf_ordinals(primary, primary_leaf, leaf_centroids)
+    leaf_rows = tuple(
+        np.flatnonzero((primary_leaf == leaf) | (secondary_leaf == leaf))
+        for leaf in range(len(leaf_centroids))
     )
     if (
         type(page_encoded_bytes) is not tuple
@@ -362,8 +403,14 @@ def evaluate_residual_correction_arms(
             (leaf_centroids - query) ** 2, axis=1, dtype=np.float32
         )
         selected_leaves = np.lexsort((leaf_ordinals, leaf_distance))[:leaf_beam]
-        selected_rows = np.concatenate(
-            [leaf_rows[int(leaf)] for leaf in selected_leaves if len(leaf_rows[int(leaf)])]
+        selected_rows = np.unique(
+            np.concatenate(
+                [
+                    leaf_rows[int(leaf)]
+                    for leaf in selected_leaves
+                    if len(leaf_rows[int(leaf)])
+                ]
+            )
         )
         maximum_scanned = max(maximum_scanned, len(selected_rows))
         if len(selected_rows) > MAX_SCANNED_CODES:
@@ -530,6 +577,20 @@ def build_residual_correction_result(
     return json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
 
 
+def validate_residual_scientific_controls(
+    observations: tuple[V31ResidualObservation, ...],
+) -> None:
+    """Reject a scientific run that does not reproduce both frozen controls."""
+
+    if (
+        type(observations) is not tuple
+        or tuple(observation.arm for observation in observations) != ARM_NAMES
+        or sum(observations[0].hits) != 319
+        or sum(observations[-1].hits) != QUERY_COUNT * RECALL_K
+    ):
+        raise ValueError("V31 residual scientific controls differ")
+
+
 def encode_residual_correction_evidence(
     observations: tuple[V31ResidualObservation, ...],
 ) -> bytes:
@@ -655,6 +716,7 @@ def run_residual_correction_falsifier(
         page_encoded_bytes=page_sizes,
         projection_seed_sha256=seed,
     )
+    validate_residual_scientific_controls(observations)
     evidence = encode_residual_correction_evidence(observations)
     result = finalize_residual_correction_result(
         observations,

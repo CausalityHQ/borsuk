@@ -22,11 +22,32 @@ from scripts.run_v31_residual_correction_falsifier import (
     finalize_residual_correction_result,
     quantize_squared_error_u8,
     residual_projection_matrix,
+    secondary_leaf_ordinals,
     select_residual_pages,
+    validate_residual_scientific_controls,
 )
 
 
 class V31ResidualCorrectionTests(unittest.TestCase):
+    def test_v31_secondary_leaf_membership_is_query_independent_and_tie_stable(self) -> None:
+        # Break caught: the falsifier silently scans primary-leaf postings even
+        # though the frozen 320/320 exact control used primary+secondary membership.
+        rows = np.array(
+            [[0.0, 0.0], [2.0, 0.0], [1.0, 0.0], [3.0, 0.0]],
+            dtype=np.float32,
+        )
+        leaves = np.array(
+            [[0.0, 0.0], [2.0, 0.0], [4.0, 0.0]],
+            dtype=np.float32,
+        )
+        primary = np.array([0, 1, 0, 2], dtype=np.int32)
+        np.testing.assert_array_equal(
+            secondary_leaf_ordinals(rows, primary, leaves),
+            np.array([1, 0, 1, 1], dtype=np.int32),
+        )
+        with self.assertRaisesRegex(ValueError, "secondary leaf"):
+            secondary_leaf_ordinals(rows, np.array([0, 1, 0, 3]), leaves)
+
     def test_v31_residual_module_reaches_authority_parser(self) -> None:
         # Break caught: __main__ passes its own module name to the inherited
         # strict parser and fails at a spurious positional argument before authority.
@@ -168,13 +189,42 @@ class V31ResidualCorrectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "arm ordering"):
             build_residual_correction_result(tuple(changed))
 
+    def test_v31_scientific_controls_require_reproduced_and_exact_ceiling(self) -> None:
+        observations = []
+        for arm in ARM_NAMES:
+            hits = [10] * 32
+            if arm == "none":
+                hits[-1] = 9
+            observations.append(
+                V31ResidualObservation(
+                    arm=arm,
+                    hits=tuple(hits),
+                    selected_page_counts=(10,) * 32,
+                    maximum_encoded_bytes=1_000_000,
+                    maximum_scanned_codes=100_000,
+                    maximum_candidates_retained=12_288,
+                )
+            )
+        validate_residual_scientific_controls(tuple(observations))
+        broken = list(observations)
+        broken[-1] = V31ResidualObservation(
+            arm="exact-cross-term",
+            hits=broken[0].hits,
+            selected_page_counts=broken[-1].selected_page_counts,
+            maximum_encoded_bytes=broken[-1].maximum_encoded_bytes,
+            maximum_scanned_codes=broken[-1].maximum_scanned_codes,
+            maximum_candidates_retained=broken[-1].maximum_candidates_retained,
+        )
+        with self.assertRaisesRegex(ValueError, "scientific controls"):
+            validate_residual_scientific_controls(tuple(broken))
+
     def test_v31_evaluator_runs_all_arms_over_one_fixed_layout(self) -> None:
         generator = np.random.Generator(np.random.PCG64(7))
         primary = generator.standard_normal((320, 96), dtype=np.float32)
         primary /= np.linalg.norm(primary, axis=1)[:, None]
         queries = primary[:32].copy()
-        leaves = np.zeros(320, dtype=np.int32)
-        leaf_centroids = np.zeros((1, 96), dtype=np.float32)
+        leaves = (np.arange(320) % 2).astype(np.int32)
+        leaf_centroids = np.zeros((2, 96), dtype=np.float32)
         centroids24 = np.zeros((24, 256, 4), dtype=np.float32)
         centroids48 = np.zeros((48, 256, 2), dtype=np.float32)
         base = Pq8Model(24, 4, centroids24)
@@ -189,7 +239,7 @@ class V31ResidualCorrectionTests(unittest.TestCase):
             base,
             high,
             page_rows=10,
-            leaf_beam=1,
+            leaf_beam=2,
             candidate_depth=320,
             page_encoded_bytes=(1_000,) * 32,
             projection_seed_sha256="4" * 64,

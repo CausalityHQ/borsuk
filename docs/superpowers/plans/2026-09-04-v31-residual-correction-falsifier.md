@@ -33,8 +33,9 @@
 - [x] Add CLI/runner mutation tests proving exact four prerequisite identities,
   page prefix, evidence output, fixed shape/arms, and no local corpus/D3 mode.
 - [x] Reuse only the strict V30 authenticated loader; fit the identical PQ8
-  models, simulate exact persisted arm bytes, and write evidence only after
-  independent final reduction.
+  models, reproduce the primary-plus-nearest-secondary candidate membership
+  used by the frozen exact control, simulate exact persisted arm bytes, and
+  write evidence only after independent final reduction.
 - [x] Run focused tests, the complete V30 reproduction regression, scoped Ruff,
   pycompile, and diff-check. Commit and push the exact source.
 

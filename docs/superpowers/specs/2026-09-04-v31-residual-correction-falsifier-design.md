@@ -28,8 +28,11 @@ at row granularity before reducing rows to pages.
 
 ## Frozen ladder
 
-All arms use the same query-independent base-code page layout, leaf beam 64,
+All arms use the same query-independent base-code page layout, primary plus
+deterministic nearest-secondary leaf membership, leaf beam 64,
 12,288-candidate bound, ten-page limit, exact page rerank, queries, and truth.
+The secondary membership changes candidate discovery only; every row retains
+its single primary physical page.
 
 1. `none`: the reproduction control; it must equal 319/320.
 2. `u8-error`: subtract a per-leaf nearest-u8 estimate of squared error.
