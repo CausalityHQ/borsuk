@@ -417,16 +417,12 @@ def _diagnostics(
             )
             or (
                 item["routing_leaf_rank"] is None
-                and item["stage"] != "leaf-frontier"
+                and item["stage"] not in {"leaf-frontier", "selected-page"}
             )
             or item["stage"] not in stages
             or any(
                 rank is not None and (type(rank) is not int or rank < 0)
                 for rank in optional_ranks
-            )
-            or (
-                item["stage"] == "selected-page"
-                and not item["reciprocal_rank_selected"]
             )
         ):
             raise ValueError("V32 containment diagnostic value differs")

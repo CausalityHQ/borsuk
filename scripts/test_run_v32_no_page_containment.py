@@ -391,7 +391,8 @@ class V32NoPageContainmentTests(unittest.TestCase):
             recovered = json.loads(results[75])
             recovered["diagnostics"][-1]["stage"] = "selected-page"
             recovered["diagnostics"][-1]["first_unique_page_rank"] = 9
-            recovered["diagnostics"][-1]["reciprocal_rank_selected"] = True
+            recovered["diagnostics"][-1]["routing_leaf_rank"] = None
+            recovered["diagnostics"][-1]["reciprocal_rank_selected"] = False
             results[75] = (
                 json.dumps(
                     recovered,
