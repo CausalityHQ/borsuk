@@ -250,6 +250,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("run_v30_untouched_quality.py", script)
             self.assertIn("test.parquet", script)
             self.assertIn("neighbors.parquet", script)
+            self.assertIn("value['serving']['page_locations']", script)
             self.assertIn(
                 "--s3-page-prefix s3://authority/v30/build-a0001/pages", script
             )
@@ -289,6 +290,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("run_v32_no_page_containment.py", script)
             self.assertIn("logical-sources.arrow", script)
             self.assertIn("value['diagnostics']['logical_sources']", script)
+            self.assertIn("value['serving']['page_locations']", script)
             self.assertIn("--source-rows 1000000", script)
             self.assertIn("--query-count 32", script)
             self.assertIn("rss_limit_bytes=3221225472", script)
@@ -300,6 +302,41 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertNotIn("aws s3 cp --recursive", script)
             self.assertNotIn("pages/", script)
             self.assertIn("kill -TERM -- \"-$child\"", script)
+
+    def test_v30_campaign_does_not_classify_preheartbeat_bootstrap_as_stalled(self) -> None:
+        observations = iter(
+            [
+                V30Observation("running", "ok", "ok", 0, 0.0, 0, None, None)
+                for _ in range(25)
+            ]
+            + [
+                V30Observation("running", "ok", "ok", 1_000, 0.0, 0, 1, None),
+                V30Observation(
+                    "stopped",
+                    "ok",
+                    "ok",
+                    1_000,
+                    0.0,
+                    0,
+                    2,
+                    b'{"claim_eligible":false,"status":"passed"}\n',
+                ),
+            ]
+        )
+        terminated: list[str] = []
+        terminal = monitor_v30_original_attempt(
+            launch=lambda _spec: "i-original",
+            specs=build_v30_construction_spot_specs(
+                self.reduced_construction(), self.targets()
+            ),
+            observe=lambda _instance: next(observations),
+            terminate=terminated.append,
+            sleep=lambda _seconds: None,
+            wall_observations=27,
+            rss_limit_bytes=192 * 1024**3,
+        )
+        self.assertEqual(terminal, b'{"claim_eligible":false,"status":"passed"}\n')
+        self.assertEqual(terminated, ["i-original"])
 
     def test_v30_evaluation_page_namespace_is_derived_from_manifest(self) -> None:
         plan = self.evaluation()

@@ -99,7 +99,7 @@ class V30Observation:
     rss_bytes: int
     psi_full_avg10: float
     swap_bytes: int
-    progress: int
+    progress: int | None
     terminal: bytes | None
 
 
@@ -512,7 +512,7 @@ def _evaluation_script(plan: V30EvaluationPlan) -> str:
             "import json",
             "from pathlib import Path",
             "value=json.loads(Path('/run/v30/manifest.json').read_bytes())",
-            "items=[value['hierarchy']['roots'],value['hierarchy']['leaves'],value['layout']['leaf_ranges'],value['layout']['page_ranges'],*value['pq']['artifacts']]",
+            "items=[value['hierarchy']['roots'],value['hierarchy']['leaves'],value['layout']['leaf_ranges'],value['layout']['page_ranges'],value['serving']['page_locations'],*value['pq']['artifacts']]",
             "for item in items: print(item['file'], item['sha256'], item['encoded_bytes'], sep='\\t')",
             "PY",
             "while IFS=$'\\t' read -r file sha size; do",
@@ -615,7 +615,7 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
             "import json",
             "from pathlib import Path",
             "value=json.loads(Path('/run/v32/manifest.json').read_bytes())",
-            "items=[value['hierarchy']['roots'],value['hierarchy']['leaves'],value['layout']['leaf_ranges'],value['layout']['page_ranges'],*value['pq']['artifacts']]",
+            "items=[value['hierarchy']['roots'],value['hierarchy']['leaves'],value['layout']['leaf_ranges'],value['layout']['page_ranges'],value['serving']['page_locations'],*value['pq']['artifacts']]",
             "for item in items: print(item['file'], item['sha256'], item['encoded_bytes'], sep='\\t')",
             "logical=value['diagnostics']['logical_sources']",
             "print(logical['file'], logical['sha256'], logical['encoded_bytes'], sep='\\t', file=open('/run/v32/logical.tsv','w'))",
@@ -789,7 +789,7 @@ def execute_v30_spot_phase(
             rss_bytes = 0
             psi = 0.0
             swap_bytes = 0
-            progress = 0
+            progress = None
         else:
             try:
                 value = json.loads(heartbeat)
@@ -860,7 +860,7 @@ def monitor_v30_original_attempt(
         raise RuntimeError("V30 Spot capacity is unavailable")
     if not instance_id.startswith("i-"):
         raise ValueError("V30 Spot instance identity differs")
-    last_progress = -1
+    last_progress: int | None = None
     stagnant = 0
     try:
         for _ in range(wall_observations):
@@ -893,16 +893,21 @@ def monitor_v30_original_attempt(
                 or not 0.0 <= observation.psi_full_avg10 <= 0.5
                 or observation.swap_bytes < 0
                 or observation.swap_bytes > 256 * 1024**2
-                or observation.progress < last_progress
+                or (
+                    observation.progress is not None
+                    and last_progress is not None
+                    and observation.progress < last_progress
+                )
             ):
                 raise RuntimeError("V30 Spot resource stop")
-            if observation.progress == last_progress:
-                stagnant += 1
-            else:
-                stagnant = 0
-            if stagnant >= 20:
-                raise RuntimeError("V30 Spot progress stop")
-            last_progress = observation.progress
+            if observation.progress is not None:
+                if observation.progress == last_progress:
+                    stagnant += 1
+                else:
+                    stagnant = 0
+                if stagnant >= 20:
+                    raise RuntimeError("V30 Spot progress stop")
+                last_progress = observation.progress
             if observation.state not in {"pending", "running"}:
                 raise RuntimeError("V30 Spot instance stopped without terminal")
             sleep(30)
