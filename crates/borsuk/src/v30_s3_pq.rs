@@ -77,6 +77,10 @@ impl V30PqCodebook {
         }
         Ok(())
     }
+
+    pub(crate) fn width(&self) -> V30PqWidth {
+        self.width
+    }
 }
 
 pub(crate) fn fit_v30_codebook(
@@ -368,6 +372,10 @@ impl V30Fidelity {
             .iter()
             .map(|word| word.count_ones() as usize)
             .sum()
+    }
+
+    pub(crate) fn logical_rows(&self) -> usize {
+        self.logical_rows
     }
 
     pub(crate) fn is_high(&self, logical: usize) -> Result<bool> {

@@ -90,11 +90,10 @@ and high-fidelity residual encodings plus base reconstruction error, and spills
 fixed records under an explicit memory limit. A bounded external selection pass
 finds the exact five-percent error cutoff with source ordinal as the tie break.
 The merge emits logical rows in
-`(leaf_ordinal, base_code, high_fidelity_desc, high_code, source_ordinal)`
-order. It persists a 24-byte base code or a replacement 48-byte high code,
-never both and never a zero-filled placeholder. The transient base code remains
-the layout key for high-fidelity rows so changing fidelity does not change page
-membership.
+`(leaf_ordinal, base_code, source_ordinal)` order. It persists a 24-byte base
+code or a replacement 48-byte high code, never both and never a zero-filled
+placeholder. The transient base code remains the layout key for high-fidelity
+rows, so changing fidelity does not change page membership.
 
 Each leaf is split into pages of at most 512 rows. Every source ordinal has
 one owner and the primary union equals the corpus authority. The same merge

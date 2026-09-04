@@ -17,8 +17,8 @@ use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder}
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BorsukError, Result, V27PageIdentity, V27PageRow, encode_v27_page,
-    v30_s3_pq::{V30CodePlanes, V30Fidelity},
+    BorsukError, Result, V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_page,
+    v30_s3_pq::{V30CodePlanes, V30Fidelity, V30PqCodebook, V30PqWidth, encode_v30_code},
 };
 
 const MAX_PAGE_ROWS: u16 = 512;
@@ -320,6 +320,119 @@ impl V30LayoutRecord {
         }
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct V30PreparedRecord {
+    leaf_ordinal: u32,
+    source_ordinal: u64,
+    base_code: Vec<u8>,
+    high_code: Vec<u8>,
+    vector: [f32; 96],
+    base_error: f32,
+}
+
+const PREPARED_RECORD_BYTES: usize = 4 + 8 + 24 + 48 + 96 * 4 + 4;
+const PREPARED_KEY: &str = "v30-layout-prepared";
+
+fn write_prepared_record(output: &mut dyn Write, record: &V30PreparedRecord) -> Result<()> {
+    if record.base_code.len() != 24
+        || record.high_code.len() != 48
+        || !record.base_error.is_finite()
+        || record.base_error < 0.0
+    {
+        return Err(invalid("V30 prepared layout record differs"));
+    }
+    scratch_io(output.write_all(&record.leaf_ordinal.to_le_bytes()))?;
+    scratch_io(output.write_all(&record.source_ordinal.to_le_bytes()))?;
+    scratch_io(output.write_all(&record.base_code))?;
+    scratch_io(output.write_all(&record.high_code))?;
+    for value in record.vector {
+        scratch_io(output.write_all(&value.to_le_bytes()))?;
+    }
+    scratch_io(output.write_all(&record.base_error.to_le_bytes()))?;
+    Ok(())
+}
+
+fn read_prepared_record(reader: &mut dyn Read) -> Result<Option<V30PreparedRecord>> {
+    let mut bytes = [0_u8; PREPARED_RECORD_BYTES];
+    match scratch_io(reader.read(&mut bytes[..1]))? {
+        0 => return Ok(None),
+        1 => scratch_io(reader.read_exact(&mut bytes[1..]))?,
+        _ => unreachable!("one-byte reads cannot return more than one byte"),
+    }
+    let mut vector = [0.0_f32; 96];
+    for (dimension, value) in vector.iter_mut().enumerate() {
+        let start = 84 + dimension * 4;
+        *value = f32::from_le_bytes(bytes[start..start + 4].try_into().unwrap());
+    }
+    let record = V30PreparedRecord {
+        leaf_ordinal: u32::from_le_bytes(bytes[..4].try_into().unwrap()),
+        source_ordinal: u64::from_le_bytes(bytes[4..12].try_into().unwrap()),
+        base_code: bytes[12..36].to_vec(),
+        high_code: bytes[36..84].to_vec(),
+        vector,
+        base_error: f32::from_le_bytes(bytes[468..472].try_into().unwrap()),
+    };
+    if record.vector.iter().any(|value| !value.is_finite())
+        || record.vector.iter().map(|value| value * value).sum::<f32>() <= 0.0
+        || !record.base_error.is_finite()
+        || record.base_error < 0.0
+    {
+        return Err(invalid("V30 prepared layout record differs"));
+    }
+    Ok(Some(record))
+}
+
+fn v30_centroid_distance(vector: &[f32; 96], centroid: &[half::f16; 96]) -> f64 {
+    vector
+        .iter()
+        .zip(centroid)
+        .map(|(left, right)| {
+            let delta = f64::from(*left) - f64::from(f32::from(*right));
+            delta * delta
+        })
+        .sum()
+}
+
+fn assign_v30_leaf(vector: &[f32; 96], hierarchy: &V27Hierarchy) -> Result<u32> {
+    if hierarchy.roots.is_empty()
+        || hierarchy.leaves.is_empty()
+        || hierarchy.leaf_roots.len() != hierarchy.leaves.len()
+        || vector.iter().any(|value| !value.is_finite())
+        || vector
+            .iter()
+            .map(|value| f64::from(*value) * f64::from(*value))
+            .sum::<f64>()
+            <= 0.0
+    {
+        return Err(invalid("V30 layout hierarchy or vector differs"));
+    }
+    let root = hierarchy
+        .roots
+        .iter()
+        .enumerate()
+        .map(|(ordinal, centroid)| (v30_centroid_distance(vector, centroid), ordinal))
+        .min_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        })
+        .unwrap()
+        .1;
+    hierarchy
+        .leaves
+        .iter()
+        .enumerate()
+        .filter(|(ordinal, _)| usize::from(hierarchy.leaf_roots[*ordinal]) == root)
+        .map(|(ordinal, centroid)| (v30_centroid_distance(vector, centroid), ordinal))
+        .min_by(|left, right| {
+            left.0
+                .total_cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+        })
+        .map(|entry| entry.1 as u32)
+        .ok_or_else(|| invalid("V30 layout root has no leaves"))
 }
 
 const LAYOUT_RECORD_BYTES: usize = 4 + 8 + 24 + 1 + 48 + 96 * 4;
@@ -747,7 +860,165 @@ impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
 
 pub(crate) struct V30LayoutBuilder;
 
+struct PreparedErrorIter {
+    reader: Box<dyn Read + Send>,
+    error: Option<BorsukError>,
+}
+
+impl Iterator for PreparedErrorIter {
+    type Item = (u64, f32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match read_prepared_record(self.reader.as_mut()) {
+            Ok(Some(record)) => Some((record.source_ordinal, record.base_error)),
+            Ok(None) => None,
+            Err(error) => {
+                self.error = Some(error);
+                None
+            }
+        }
+    }
+}
+
+struct PreparedLayoutIter<'a> {
+    reader: Box<dyn Read + Send>,
+    fidelity: &'a V30Fidelity,
+    error: Option<BorsukError>,
+}
+
+impl Iterator for PreparedLayoutIter<'_> {
+    type Item = V30LayoutRecord;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match read_prepared_record(self.reader.as_mut()) {
+            Ok(Some(record)) => {
+                let source = match usize::try_from(record.source_ordinal) {
+                    Ok(source) => source,
+                    Err(_) => {
+                        self.error = Some(invalid("V30 prepared source ordinal overflows"));
+                        return None;
+                    }
+                };
+                let selected = match self.fidelity.is_high(source) {
+                    Ok(selected) => selected,
+                    Err(error) => {
+                        self.error = Some(error);
+                        return None;
+                    }
+                };
+                Some(V30LayoutRecord {
+                    leaf_ordinal: record.leaf_ordinal,
+                    source_ordinal: record.source_ordinal,
+                    base_code: record.base_code,
+                    high_code: selected.then_some(record.high_code),
+                    vector: record.vector,
+                })
+            }
+            Ok(None) => None,
+            Err(error) => {
+                self.error = Some(error);
+                None
+            }
+        }
+    }
+}
+
 impl V30LayoutBuilder {
+    pub(crate) fn build_from_corpus<I, S, P>(
+        rows: I,
+        hierarchy: &V27Hierarchy,
+        base_codebook: &V30PqCodebook,
+        high_codebook: &V30PqCodebook,
+        config: V30LayoutBuildConfig,
+        scratch: &mut S,
+        pages: &mut P,
+    ) -> Result<V30BuiltLayout>
+    where
+        I: IntoIterator<Item = V27PageRow>,
+        S: V30Scratch,
+        P: V30PageSink,
+    {
+        if hierarchy.leaves.len() > u32::MAX as usize
+            || base_codebook.width() != V30PqWidth::Base24
+            || high_codebook.width() != V30PqWidth::High48
+        {
+            return Err(invalid("V30 layout hierarchy size differs"));
+        }
+        let leaf_count = u32::try_from(hierarchy.leaves.len())
+            .map_err(|_| invalid("V30 layout hierarchy size overflows"))?;
+        let mut rows = rows.into_iter();
+        let mut source_rows = 0_u64;
+        let mut write = |output: &mut dyn Write| {
+            for row in rows.by_ref() {
+                if row.source_ordinal != source_rows {
+                    return Err(invalid("V30 layout corpus source order differs"));
+                }
+                let leaf_ordinal = assign_v30_leaf(&row.vector, hierarchy)?;
+                let residual = std::array::from_fn(|dimension| {
+                    row.vector[dimension]
+                        - f32::from(hierarchy.leaves[leaf_ordinal as usize][dimension])
+                });
+                let (base_code, base_error) = encode_v30_code(base_codebook, &residual)?;
+                let (high_code, _) = encode_v30_code(high_codebook, &residual)?;
+                write_prepared_record(
+                    output,
+                    &V30PreparedRecord {
+                        leaf_ordinal,
+                        source_ordinal: row.source_ordinal,
+                        base_code,
+                        high_code,
+                        vector: row.vector,
+                        base_error,
+                    },
+                )?;
+                source_rows += 1;
+            }
+            if source_rows == 0 {
+                return Err(invalid("V30 layout corpus rows differ"));
+            }
+            Ok(())
+        };
+        scratch.write_scratch(PREPARED_KEY, &mut write)?;
+        let result = (|| {
+            let mut errors = PreparedErrorIter {
+                reader: scratch.open_scratch(PREPARED_KEY)?,
+                error: None,
+            };
+            let fidelity = select_v30_high_fidelity(
+                &mut errors,
+                V30FidelitySelectionConfig {
+                    sort_memory_rows: config.sort_memory_rows,
+                    fidelity_ppm: config.fidelity_ppm,
+                },
+                scratch,
+            )?;
+            if let Some(error) = errors.error {
+                return Err(error);
+            }
+            let source_rows = usize::try_from(source_rows)
+                .map_err(|_| invalid("V30 layout corpus rows overflow"))?;
+            if fidelity.logical_rows() != source_rows {
+                return Err(invalid("V30 prepared fidelity rows differ"));
+            }
+            let mut records = PreparedLayoutIter {
+                reader: scratch.open_scratch(PREPARED_KEY)?,
+                fidelity: &fidelity,
+                error: None,
+            };
+            let built = Self::build(&mut records, leaf_count, config, scratch, pages)?;
+            if let Some(error) = records.error {
+                return Err(error);
+            }
+            Ok(built)
+        })();
+        let cleanup = scratch.remove_scratch(PREPARED_KEY);
+        match (result, cleanup) {
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+            (Ok(built), Ok(())) => Ok(built),
+        }
+    }
+
     pub(crate) fn build<I, S, P>(
         records: I,
         leaf_count: u32,
@@ -1172,7 +1443,11 @@ mod tests {
         decode_v30_layout_artifacts, encode_v30_layout_artifacts, select_v30_high_fidelity,
         sort_v30_layout_records,
     };
-    use crate::{V27PageIdentity, decode_v27_page};
+    use crate::{
+        V27Hierarchy, V27PageIdentity, V27PageRow, decode_v27_page,
+        v30_s3_pq::{V30PqCodebook, V30PqWidth},
+    };
+    use half::f16;
 
     fn page(ordinal: u32, leaf_ordinal: u32, logical_start: u64, rows: u16) -> V30PageRange {
         V30PageRange {
@@ -1491,5 +1766,48 @@ mod tests {
         );
         assert!(scratch.runs.is_empty());
         assert_eq!(pages.runs.len(), 3);
+    }
+
+    #[test]
+    fn v30_s3_layout_builder_streams_corpus_once_into_residual_pages() {
+        // Break caught: construction rereads all exact vectors from S3, keeps them
+        // resident, or encodes absolute vectors instead of leaf-local residuals.
+        let hierarchy = V27Hierarchy {
+            roots: vec![[f16::from_f32(0.0); 96]],
+            leaves: vec![[f16::from_f32(0.0); 96], [f16::from_f32(1.0); 96]],
+            leaf_roots: vec![0, 0],
+        };
+        let base = V30PqCodebook::new(V30PqWidth::Base24, vec![0.0; 24 * 256 * 4]).unwrap();
+        let high = V30PqCodebook::new(V30PqWidth::High48, vec![0.0; 48 * 256 * 2]).unwrap();
+        let consumed = Arc::new(AtomicUsize::new(0));
+        let seen = consumed.clone();
+        let rows = (0..100_u64).map(move |source_ordinal| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            V27PageRow {
+                source_ordinal,
+                vector: [if source_ordinal < 50 { 0.25 } else { 1.25 }; 96],
+            }
+        });
+        let mut scratch = Scratch::default();
+        let mut pages = Scratch::default();
+        let built = V30LayoutBuilder::build_from_corpus(
+            rows,
+            &hierarchy,
+            &base,
+            &high,
+            V30LayoutBuildConfig {
+                page_rows: 32,
+                sort_memory_rows: 8,
+                fidelity_ppm: 50_000,
+            },
+            &mut scratch,
+            &mut pages,
+        )
+        .unwrap();
+        assert_eq!(consumed.load(Ordering::SeqCst), 100);
+        assert_eq!(built.layout.source_rows(), 100);
+        assert_eq!(built.layout.leaves().len(), 2);
+        assert_eq!(built.codes.high_rows(), 5);
+        assert!(scratch.runs.is_empty());
     }
 }

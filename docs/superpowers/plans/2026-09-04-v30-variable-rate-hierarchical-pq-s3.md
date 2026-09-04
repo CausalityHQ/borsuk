@@ -72,12 +72,12 @@
 - Consumes: `V27Hierarchy`, `V30PqCodebooks`, the strict V27 Arrow page codec, and an ordered normalized corpus stream.
 - Produces: `V30LayoutBuilder`, `V30LeafRange`, `V30PageRange`, `V30Layout`, `encode_v30_layout_artifacts`, and `decode_v30_layout_artifacts`.
 
-- [ ] **Step 1: Write the construction REDs.** Require one primary owner per source ordinal, complete source union, leaf-residual encoding, exact five-percent high-error selection, deterministic cutoff ties, and merge order `(leaf,base_code,refined_desc,refinement_code,source)`.
-- [ ] **Step 2: Prove bounded construction in RED.** Feed more rows than the configured memory limit, require sorted spill runs, bound resident records and merge heads, forbid a corpus-sized vector/code/error collection, and require scratch cleanup after success and injected failure.
-- [ ] **Step 3: Lock page/offset authority in RED.** Require pages of at most 512 rows; monotone base/high block, fidelity-rank, leaf, and page offsets; code-position-to-page equality at every first/last boundary; and exact Arrow/Parquet schema/digest/length bindings.
-- [ ] **Step 4: Run the focused RED.** Run `cargo test -p borsuk --lib v30_s3_layout_ -- --nocapture`; require missing V30 layout symbols only.
-- [ ] **Step 5: Implement the bounded builder.** Use fixed records and external runs, a bounded error-selection pass, and one deterministic merge that emits code artifacts and page bodies in the same order. Do not retain or emit a row-to-page array.
-- [ ] **Step 6: Run GREEN and commit.** Run the identical selector, formatting, and diff-check; commit only `v30_s3_layout.rs` and `lib.rs`.
+- [x] **Step 1: Write the construction REDs.** Require one primary owner per source ordinal, complete source union, leaf-residual encoding, exact five-percent high-error selection, deterministic cutoff ties, and merge order `(leaf,base_code,source)`; refinement never changes page membership.
+- [x] **Step 2: Prove bounded construction in RED.** Feed more rows than the configured memory limit, require sorted spill runs, bound resident records and merge heads, forbid a corpus-sized vector/code/error collection, and require scratch cleanup after success and injected failure.
+- [x] **Step 3: Lock page/offset authority in RED.** Require pages of at most 512 rows; monotone base/high block, fidelity-rank, leaf, and page offsets; code-position-to-page equality at every first/last boundary; and exact Arrow/Parquet schema/digest/length bindings.
+- [x] **Step 4: Run the focused RED.** Run `cargo test -p borsuk --lib v30_s3_layout_ -- --nocapture`; require missing V30 layout symbols only.
+- [x] **Step 5: Implement the bounded builder.** Use one corpus stream into fixed scratch records, a bounded error-selection pass, and one deterministic multilevel merge that emits code artifacts and page bodies in the same order. Do not retain or emit a row-to-page array.
+- [x] **Step 6: Run GREEN and commit.** Run the identical selector, formatting, and diff-check; commit the exact V30 layout/PQ and plan/spec paths.
 
 ### Task 3: Route and score the mixed-fidelity leaf frontier
 
