@@ -125,10 +125,13 @@ authenticated Standard result measured 144,065,141 ns cold p99, 74,808,007 ns
 process CPU p99, 8,185,812 ns maximum routing elapsed, and 11,159,727 ns
 maximum exact-rerank elapsed. V32 does not relabel that result as 15 ms.
 
-Before every scientific run a metadata-only simulator consumes an injected
-request-p99 and aggregate-throughput profile and computes
-`routing + request_p99 + ceil(bytes / throughput) + decode_rerank`. It rejects
-any arm whose lower-bound projection misses its tier gate. The simulator is a
+Before every scientific run a metadata-only simulator cross-binds measured
+compute and quality fields to a registered terminal SHA-256/length, then
+consumes an injected 16-object-wave p99 and aggregate-throughput profile. The
+wave p99 is the measured maximum of 16 concurrent GETs, not a single-request
+p99; profiles with fewer than 16 parallel GET slots are rejected. It computes
+`routing + wave_p99 + ceil(bytes / throughput) + decode_rerank` and rejects any
+arm whose lower-bound projection misses its tier gate. The simulator is a
 fail-fast estimate; only a same-AZ measured run can pass a release gate.
 
 A memory-resident CPU preflight measures the complete routing/PQ/reducer path

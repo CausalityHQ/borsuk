@@ -67,7 +67,11 @@
   ordinal/length/row fields. Bind Standard/Express URI prefixes once in the
   manifest; reject per-page URI strings so the 100M resident projection does
   not hide heap-string overhead.
-- [ ] Add a pure latency preflight with literal profiles and the frozen formula; require Standard-144ms rejection and an injected qualifying profile pass.
+- [ ] Add a pure latency preflight that cross-binds the observed compute/quality
+  fields to one registered terminal identity. Profiles carry a measured
+  max-of-16 concurrent-GET wave p99, at least 16 parallel slots, and aggregate
+  throughput; require Standard-144ms rejection and keep any injected Express
+  pass claim-ineligible until a same-AZ wave is measured.
 - [ ] Run focused Rust/Python GREEN, Ruff, pycompile, fmt, and diff-check.
 - [ ] Commit the verified authority slice.
 

@@ -18,6 +18,8 @@ EXPRESS_P99_NS = 15_000_000
 class V32LatencyEvidence:
     """Measured compute and exact bounded work from one V32 quality run."""
 
+    terminal_sha256: str
+    terminal_bytes: int
     routing_p99_ns: int
     decode_rerank_p99_ns: int
     get_count: int
@@ -29,10 +31,11 @@ class V32LatencyEvidence:
 
 @dataclass(frozen=True)
 class V32S3LatencyProfile:
-    """Injected one-wave request latency and aggregate transfer throughput."""
+    """Injected measured-wave latency and aggregate transfer throughput."""
 
     tier: str
-    request_p99_ns: int
+    request_wave_p99_ns: int
+    parallel_gets: int
     aggregate_bytes_per_second: int
 
 
@@ -55,6 +58,14 @@ def _nonnegative_integer(value: object) -> bool:
     return type(value) is int and value >= 0
 
 
+def _digest(value: object) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
 def project_v32_s3_latency(
     evidence: V32LatencyEvidence,
     profile: V32S3LatencyProfile,
@@ -62,14 +73,19 @@ def project_v32_s3_latency(
     """Project p99 without sleeping, S3 access, or serializing concurrent RTTs."""
 
     if (
-        not _nonnegative_integer(evidence.routing_p99_ns)
+        not _digest(evidence.terminal_sha256)
+        or type(evidence.terminal_bytes) is not int
+        or evidence.terminal_bytes <= 0
+        or not _nonnegative_integer(evidence.routing_p99_ns)
         or not _nonnegative_integer(evidence.decode_rerank_p99_ns)
         or type(evidence.get_count) is not int
         or evidence.get_count != PAGE_COUNT
         or type(evidence.encoded_bytes) is not int
         or not 0 < evidence.encoded_bytes <= MAX_ENCODED_BYTES
         or profile.tier not in {"standard", "express"}
-        or not _nonnegative_integer(profile.request_p99_ns)
+        or not _nonnegative_integer(profile.request_wave_p99_ns)
+        or type(profile.parallel_gets) is not int
+        or profile.parallel_gets < PAGE_COUNT
         or type(profile.aggregate_bytes_per_second) is not int
         or profile.aggregate_bytes_per_second <= 0
     ):
@@ -81,7 +97,7 @@ def project_v32_s3_latency(
     ) // profile.aggregate_bytes_per_second
     projected_p99_ns = (
         evidence.routing_p99_ns
-        + profile.request_p99_ns
+        + profile.request_wave_p99_ns
         + transfer_ns
         + evidence.decode_rerank_p99_ns
     )
@@ -91,7 +107,7 @@ def project_v32_s3_latency(
         encoded_bytes=evidence.encoded_bytes,
         request_waves=1,
         routing_ns=evidence.routing_p99_ns,
-        request_ns=profile.request_p99_ns,
+        request_ns=profile.request_wave_p99_ns,
         transfer_ns=transfer_ns,
         decode_rerank_ns=evidence.decode_rerank_p99_ns,
         projected_p99_ns=projected_p99_ns,
@@ -100,10 +116,13 @@ def project_v32_s3_latency(
 
 def preflight_v32_s3_latency(
     evidence: V32LatencyEvidence,
+    registered: V32LatencyEvidence,
     profile: V32S3LatencyProfile,
 ) -> bytes:
     """Reject non-perfect or latency-infeasible work before external execution."""
 
+    if evidence != registered:
+        raise ValueError("V32 terminal evidence differs")
     if type(evidence.recall_ppm) is not int or evidence.recall_ppm != PERFECT_RECALL_PPM:
         raise ValueError("V32 aggregate recall gate failed")
     if (
@@ -135,6 +154,8 @@ def preflight_v32_s3_latency(
         "routing_ns": projection.routing_ns,
         "schema": "borsuk-v32-s3-latency-preflight-v1",
         "status": "passed",
+        "terminal_bytes": evidence.terminal_bytes,
+        "terminal_sha256": evidence.terminal_sha256,
         "tier": projection.tier,
         "transfer_ns": projection.transfer_ns,
     }
