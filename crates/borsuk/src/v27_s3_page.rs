@@ -142,7 +142,14 @@ pub fn encode_v27_page(
 }
 
 /// Authenticate and decode one strict immutable Arrow page.
-pub fn decode_v27_page(identity: &V27PageIdentity, bytes: &[u8]) -> Result<V27Page> {
+pub(crate) fn visit_v27_page_rows<F>(
+    identity: &V27PageIdentity,
+    bytes: &[u8],
+    mut visitor: F,
+) -> Result<()>
+where
+    F: FnMut(u64, &[f32; 96]) -> Result<()>,
+{
     if !valid_identity(identity)
         || identity.encoded_bytes != bytes.len() as u64
         || identity.sha256 != format!("{:x}", Sha256::digest(bytes))
@@ -186,24 +193,35 @@ pub fn decode_v27_page(identity: &V27PageIdentity, bytes: &[u8]) -> Result<V27Pa
     if !remainder.is_empty() || vector_rows.len() != batch.num_rows() {
         return Err(invalid("V27 page vector cardinality differs"));
     }
-    let rows = ids
-        .iter()
-        .zip(vector_rows)
-        .map(|(id, vector)| {
-            let id = id.ok_or_else(|| invalid("V27 page ID nullability differs"))?;
-            let source_ordinal = u64::from_le_bytes(
-                id.try_into()
-                    .map_err(|_| invalid("V27 page ID width differs"))?,
-            );
-            Ok(V27PageRow {
-                source_ordinal,
-                vector: *vector,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if !valid_rows(&rows, identity.primary_rows, identity.replica_rows) {
-        return Err(invalid("V27 page row authority differs"));
+    let mut source_ordinals = BTreeSet::new();
+    for (id, vector) in ids.iter().zip(vector_rows) {
+        let id = id.ok_or_else(|| invalid("V27 page ID nullability differs"))?;
+        let source_ordinal = u64::from_le_bytes(
+            id.try_into()
+                .map_err(|_| invalid("V27 page ID width differs"))?,
+        );
+        if !source_ordinals.insert(source_ordinal)
+            || vector.iter().any(|value| !value.is_finite())
+            || vector.iter().map(|value| value * value).sum::<f32>() <= 0.0
+        {
+            return Err(invalid("V27 page row authority differs"));
+        }
+        visitor(source_ordinal, vector)?;
     }
+    Ok(())
+}
+
+/// Authenticate and decode one strict immutable Arrow page.
+pub fn decode_v27_page(identity: &V27PageIdentity, bytes: &[u8]) -> Result<V27Page> {
+    let mut rows =
+        Vec::with_capacity(usize::from(identity.primary_rows) + usize::from(identity.replica_rows));
+    visit_v27_page_rows(identity, bytes, |source_ordinal, vector| {
+        rows.push(V27PageRow {
+            source_ordinal,
+            vector: *vector,
+        });
+        Ok(())
+    })?;
     Ok(V27Page {
         identity: identity.clone(),
         rows,
@@ -212,7 +230,7 @@ pub fn decode_v27_page(identity: &V27PageIdentity, bytes: &[u8]) -> Result<V27Pa
 
 #[cfg(test)]
 mod tests {
-    use super::{V27PageRow, decode_v27_page, encode_v27_page};
+    use super::{V27PageRow, decode_v27_page, encode_v27_page, visit_v27_page_rows};
 
     fn row(source_ordinal: u64, value: f32) -> V27PageRow {
         V27PageRow {
@@ -247,6 +265,25 @@ mod tests {
         let middle = body_drift.len() / 2;
         body_drift[middle] ^= 1;
         assert!(decode_v27_page(&identity, &body_drift).is_err());
+    }
+
+    #[test]
+    fn v27_s3_page_visits_authenticated_arrow_rows_without_materializing_a_page() {
+        // Break caught: serving must allocate and copy every page vector before
+        // exact reranking instead of scoring borrowed Arrow row slices.
+        let rows = vec![row(17, 0.25), row(91, -0.5)];
+        let (identity, bytes) = encode_v27_page(7, 1, 1, &rows).unwrap();
+        let mut visited = Vec::new();
+        visit_v27_page_rows(&identity, &bytes, |source_ordinal, vector| {
+            visited.push((source_ordinal, vector[0]));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(visited, [(17, 0.25), (91, -0.5)]);
+
+        let mut digest_drift = identity.clone();
+        digest_drift.sha256 = "0".repeat(64);
+        assert!(visit_v27_page_rows(&digest_drift, &bytes, |_source, _vector| Ok(())).is_err());
     }
 
     #[test]

@@ -8,6 +8,7 @@ use half::f16;
 use crate::{
     BorsukError, Result, V27Hierarchy, V27HierarchyArtifacts, V27PageIdentity,
     decode_v27_hierarchy,
+    v27_s3_page::visit_v27_page_rows,
     v30_s3_layout::{V30Layout, V30LayoutArtifacts, decode_v30_layout_artifacts},
     v30_s3_pq::{
         V30CodePlanes, V30PqArtifacts, V30PqCodebook, V30PqWidth, V30QueryTable,
@@ -616,16 +617,16 @@ impl<S: V30PageStore> V30Index<S> {
         let mut seen = HashSet::with_capacity(expected_rows);
         let mut matches = ExactTopK::new(k)?;
         for (identity, body) in selection.pages.iter().zip(bodies) {
-            let page = crate::decode_v27_page(identity, &body)?;
             decoded_rows = decoded_rows
-                .checked_add(page.rows.len())
+                .checked_add(
+                    usize::from(identity.primary_rows) + usize::from(identity.replica_rows),
+                )
                 .ok_or_else(|| invalid("V30 decoded row count overflows"))?;
-            for row in page.rows {
-                if !seen.insert(row.source_ordinal) {
+            visit_v27_page_rows(identity, &body, |source_ordinal, vector| {
+                if !seen.insert(source_ordinal) {
                     return Err(invalid("V30 exact row ownership differs"));
                 }
-                let squared_distance = row
-                    .vector
+                let squared_distance = vector
                     .iter()
                     .zip(query)
                     .map(|(left, right)| {
@@ -637,10 +638,11 @@ impl<S: V30PageStore> V30Index<S> {
                     return Err(invalid("V30 exact distance differs"));
                 }
                 matches.insert(V30Match {
-                    source_ordinal: row.source_ordinal,
+                    source_ordinal,
                     squared_distance,
                 });
-            }
+                Ok(())
+            })?;
         }
         if seen.len() < k {
             return Err(invalid("V30 exact candidate count differs"));
