@@ -6,6 +6,7 @@ use std::{
 
 use bytes::Bytes;
 use half::f16;
+use rayon::prelude::*;
 
 use crate::{
     BorsukError, Result, V27Hierarchy, V27HierarchyArtifacts, V27PageIdentity,
@@ -439,6 +440,96 @@ impl ExactTopK {
             })
             .collect()
     }
+}
+
+struct ExactPageRerank {
+    decoded_rows: usize,
+    source_ordinals: Vec<u64>,
+    matches: Vec<V32Match>,
+}
+
+struct ExactRerankResult {
+    decoded_rows: usize,
+    unique_rows: usize,
+    matches: Vec<V32Match>,
+}
+
+fn exact_rerank_pages(
+    pages: &[V27PageIdentity],
+    bodies: &[Bytes],
+    query: &[f32; 96],
+    k: usize,
+) -> Result<ExactRerankResult> {
+    if pages.len() != bodies.len() || pages.is_empty() || pages.len() > MAX_SELECTED_PAGES {
+        return Err(invalid("V30 page wave cardinality differs"));
+    }
+    let page_results = crate::parallel::install(|| {
+        pages
+            .par_iter()
+            .zip(bodies.par_iter())
+            .map(|(identity, body)| {
+                let expected_rows = usize::from(identity.primary_rows)
+                    .checked_add(usize::from(identity.replica_rows))
+                    .ok_or_else(|| invalid("V30 selected row count overflows"))?;
+                let mut source_ordinals = Vec::with_capacity(expected_rows);
+                let mut matches = ExactTopK::new(k)?;
+                visit_v27_page_rows(identity, body, |source_ordinal, vector| {
+                    source_ordinals.push(source_ordinal);
+                    let squared_distance = vector
+                        .iter()
+                        .zip(query)
+                        .map(|(left, right)| {
+                            let delta = f64::from(*left) - f64::from(*right);
+                            delta * delta
+                        })
+                        .sum::<f64>();
+                    if !squared_distance.is_finite() {
+                        return Err(invalid("V30 exact distance differs"));
+                    }
+                    matches.insert(V32Match {
+                        source_ordinal,
+                        squared_distance,
+                    });
+                    Ok(())
+                })?;
+                if source_ordinals.len() != expected_rows {
+                    return Err(invalid("V30 decoded row count differs"));
+                }
+                Ok(ExactPageRerank {
+                    decoded_rows: expected_rows,
+                    source_ordinals,
+                    matches: matches.finish(),
+                })
+            })
+            .collect::<Vec<Result<ExactPageRerank>>>()
+    })
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
+    let decoded_rows = page_results.iter().try_fold(0_usize, |total, page| {
+        total
+            .checked_add(page.decoded_rows)
+            .ok_or_else(|| invalid("V30 decoded row count overflows"))
+    })?;
+    let mut seen = HashSet::with_capacity(decoded_rows);
+    let mut matches = ExactTopK::new(k)?;
+    for page in page_results {
+        for source_ordinal in page.source_ordinals {
+            if !seen.insert(source_ordinal) {
+                return Err(invalid("V30 exact row ownership differs"));
+            }
+        }
+        for value in page.matches {
+            matches.insert(value);
+        }
+    }
+    if seen.len() < k {
+        return Err(invalid("V30 exact candidate count differs"));
+    }
+    Ok(ExactRerankResult {
+        decoded_rows,
+        unique_rows: seen.len(),
+        matches: matches.finish(),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1140,56 +1231,16 @@ impl<S: V32PageStore> V32Index<S> {
         if encoded_bytes > MAX_PAGE_BYTES {
             return Err(invalid("V30 page byte bound differs"));
         }
-        let mut decoded_rows = 0_usize;
-        let expected_rows = selection.pages.iter().try_fold(0_usize, |total, page| {
-            total
-                .checked_add(usize::from(page.primary_rows) + usize::from(page.replica_rows))
-                .ok_or_else(|| invalid("V30 selected row count overflows"))
-        })?;
-        let mut seen = HashSet::with_capacity(expected_rows);
-        let mut matches = ExactTopK::new(k)?;
-        for (identity, body) in selection.pages.iter().zip(bodies) {
-            decoded_rows = decoded_rows
-                .checked_add(
-                    usize::from(identity.primary_rows) + usize::from(identity.replica_rows),
-                )
-                .ok_or_else(|| invalid("V30 decoded row count overflows"))?;
-            visit_v27_page_rows(identity, &body, |source_ordinal, vector| {
-                if !seen.insert(source_ordinal) {
-                    return Err(invalid("V30 exact row ownership differs"));
-                }
-                let squared_distance = vector
-                    .iter()
-                    .zip(query)
-                    .map(|(left, right)| {
-                        let delta = f64::from(*left) - f64::from(right);
-                        delta * delta
-                    })
-                    .sum::<f64>();
-                if !squared_distance.is_finite() {
-                    return Err(invalid("V30 exact distance differs"));
-                }
-                matches.insert(V32Match {
-                    source_ordinal,
-                    squared_distance,
-                });
-                Ok(())
-            })?;
-        }
-        if seen.len() < k {
-            return Err(invalid("V30 exact candidate count differs"));
-        }
-        let unique_rows = seen.len();
-        let matches = matches.finish();
+        let reranked = exact_rerank_pages(&selection.pages, &bodies, &query, k)?;
         observer(V32SearchPhase::ExactRerankComplete)?;
         Ok(V32SearchResult {
-            matches,
+            matches: reranked.matches,
             work: V32SearchWork {
                 routing: selection.work,
                 get_count: selection.pages.len(),
                 encoded_bytes,
-                decoded_rows,
-                unique_rows,
+                decoded_rows: reranked.decoded_rows,
+                unique_rows: reranked.unique_rows,
             },
         })
     }
@@ -1212,7 +1263,7 @@ mod tests {
         BoundedCandidates, Candidate, ExactTopK, V32CpuPreflightMode, V32CpuPreflightSample,
         V32CpuPreflightSamples, V32Index, V32Match, V32PageStore, V32Router, V32RoutingTargetStage,
         V32SearchArm, V32SearchPhase, canonical_v32_cpu_preflight_receipt,
-        eligible_v32_routing_leaf_scores, smallest, v32_cpu_preflight_shape,
+        eligible_v32_routing_leaf_scores, exact_rerank_pages, smallest, v32_cpu_preflight_shape,
     };
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
@@ -1787,6 +1838,68 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn v32_s3_search_exact_rerank_merges_page_local_top_tens_without_order_drift() {
+        // Break caught: independent decoded pages are reranked in one serial
+        // loop, or page-local truncation changes the registered exact
+        // (f64 distance, source ordinal) final order.
+        let bodies = [
+            (0..24_u64).step_by(2).collect::<Vec<_>>(),
+            (1..24_u64).step_by(2).collect::<Vec<_>>(),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(page_ordinal, source_ordinals)| {
+            let rows = source_ordinals
+                .into_iter()
+                .map(|source_ordinal| V27PageRow {
+                    source_ordinal,
+                    vector: [0.2 + source_ordinal as f32 / 1_000.0; 96],
+                })
+                .collect::<Vec<_>>();
+            encode_v27_page(page_ordinal as u32, 12, 0, &rows).unwrap()
+        })
+        .collect::<Vec<_>>();
+        let pages = bodies
+            .iter()
+            .map(|(identity, _)| identity.clone())
+            .collect::<Vec<_>>();
+        let payloads = bodies
+            .iter()
+            .map(|(_, body)| Bytes::copy_from_slice(body))
+            .collect::<Vec<_>>();
+        let query = super::normalized(&[0.2; 96]).unwrap();
+        let mut expected = (0..24_u64)
+            .map(|source_ordinal| {
+                let vector = [0.2 + source_ordinal as f32 / 1_000.0; 96];
+                let squared_distance = vector
+                    .iter()
+                    .zip(query)
+                    .map(|(left, right)| {
+                        let delta = f64::from(*left) - f64::from(right);
+                        delta * delta
+                    })
+                    .sum::<f64>();
+                V32Match {
+                    source_ordinal,
+                    squared_distance,
+                }
+            })
+            .collect::<Vec<_>>();
+        expected.sort_by(|left, right| {
+            left.squared_distance
+                .total_cmp(&right.squared_distance)
+                .then_with(|| left.source_ordinal.cmp(&right.source_ordinal))
+        });
+        expected.truncate(10);
+
+        let reranked = exact_rerank_pages(&pages, &payloads, &query, 10).unwrap();
+
+        assert_eq!(reranked.decoded_rows, 24);
+        assert_eq!(reranked.unique_rows, 24);
+        assert_eq!(reranked.matches, expected);
     }
 
     #[test]
