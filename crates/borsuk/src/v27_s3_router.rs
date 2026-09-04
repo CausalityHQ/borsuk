@@ -255,12 +255,21 @@ pub fn fit_v27_hierarchy(rows: &[V27PageRow], config: &V27HierarchyConfig) -> Re
     let mut leaves = Vec::with_capacity(config.leaves);
     let mut leaf_roots = Vec::with_capacity(config.leaves);
     for root in 0..config.roots {
-        let members = normalized
+        let mut members = normalized
             .iter()
             .zip(&root_assignments)
             .filter(|(_, assignment)| **assignment == root)
             .map(|(row, _)| *row)
             .collect::<Vec<_>>();
+        let minimum = leaves_per_root.saturating_mul(2);
+        if members.len() < minimum {
+            let population = members.len();
+            if population == 0 {
+                return Err(invalid("V27 hierarchy root population differs"));
+            }
+            let own_members = members.clone();
+            members.extend((population..minimum).map(|index| own_members[index % population]));
+        }
         let (children, _) = train_level(
             &pool,
             &members,
@@ -624,5 +633,34 @@ mod tests {
         assert_eq!(hierarchy.leaves.len(), 4);
         assert_eq!(hierarchy.leaf_roots, vec![0; 4]);
         assert_eq!(f32::from(hierarchy.roots[0][0]), 0.25);
+    }
+
+    #[test]
+    fn v27_s3_router_expands_underfull_roots_from_only_their_own_members() {
+        // Break caught: every underfull root cloned and sorted the complete
+        // training sample, then silently trained its leaves on other roots.
+        let identical = (0..32)
+            .map(|source_ordinal| V27PageRow {
+                source_ordinal,
+                vector: [0.25; 96],
+            })
+            .collect::<Vec<_>>();
+        let underfull = V27HierarchyConfig {
+            roots: 8,
+            leaves: 16,
+            iterations: 1,
+            seed: 7,
+            worker_count: 2,
+            batch_rows: 8,
+        };
+        let hierarchy = fit_v27_hierarchy(&identical, &underfull).unwrap();
+        assert_eq!(hierarchy.roots.len(), 8);
+        assert_eq!(hierarchy.leaves.len(), 16);
+        assert!(
+            hierarchy
+                .leaves
+                .iter()
+                .all(|leaf| leaf[0] == half::f16::from_f32(0.25))
+        );
     }
 }

@@ -119,15 +119,21 @@
 ### Task 5: Qualify one untouched 9.99M candidate on Spot
 
 **Files:**
+- Create: `crates/borsuk/examples/v30_s3_build.rs`
+- Modify: `crates/borsuk/src/v27_s3_router.rs`
+- Modify: `crates/borsuk/src/v30_s3_layout.rs`
+- Modify: `crates/borsuk/src/lib.rs`
 - Create: `scripts/run_v30_s3_campaign.py`
 - Create: `scripts/test_run_v30_s3_campaign.py`
+- Create: `scripts/run_v30_untouched_quality.py`
+- Create: `scripts/test_run_v30_untouched_quality.py`
 - Modify after terminal evidence: `docs/research/publication-v3-attempt-ledger.md`
 
 **Interfaces:**
 - Consumes: the committed V30 source/binary, frozen construction manifest, ordered training Parquet shards, untouched query/truth ordinals, and exact S3 output prefix.
 - Produces: immutable construction, quality, CPU, cold-S3, resource, and terminal receipts.
 
-- [ ] **Step 1: Write campaign REDs.** Require `causality` Spot, one attempt per cell, interruption discard/restart rules, 30-second health observations, RSS/PSI/swap/wall stops, exact terminal upload, and immediate instance termination.
+- [x] **Step 1: Write campaign REDs.** Require `causality` Spot, one attempt per cell, interruption discard/restart rules, 30-second health observations, RSS/PSI/swap/wall stops, exact terminal upload, and immediate instance termination.
 - [ ] **Step 2: Implement and verify the launcher.** Run `python3 -m unittest scripts.test_run_v30_s3_campaign`, pinned Ruff, `py_compile`, and diff-check. The launcher must stage only registered objects and must not download the complete vector corpus to the controller/devbox.
 - [ ] **Step 3: Construct once without evaluation capability.** Stream ordered training Parquet shards on one disposable builder, emit content-addressed Arrow/Parquet/page artifacts, verify exact source union/fidelity count/projection, upload terminal, and terminate.
 - [ ] **Step 4: Evaluate one untouched cohort.** On a fresh Spot worker, run the exact frozen arm once. Require 995,000-ppm aggregate recall, 997,500-ppm floor compliance, 800,000-ppm minimum, ten pages, bounded work/bytes/RSS, 15-ms CPU p99, 100-ms cold-S3 p99, and no cold sample above 150 ms.

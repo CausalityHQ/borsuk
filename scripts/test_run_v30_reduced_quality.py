@@ -10,23 +10,21 @@ from scripts.run_v30_reduced_quality import reduce_v30_quality
 
 class V30ReducedQualityTests(unittest.TestCase):
     def truth_bytes(self) -> bytes:
-        table = pa.table(
-            {
-                "query_ordinal": pa.array(
-                    [query for query in range(32) for _ in range(10)],
-                    type=pa.uint16(),
-                ),
-                "source_ordinal": pa.array(
-                    [query * 100 + neighbor for query in range(32) for neighbor in range(10)],
-                    type=pa.uint64(),
-                ),
-            },
-            schema=pa.schema(
+        neighbors = pa.array(
+            [
                 [
-                    pa.field("query_ordinal", pa.uint16(), nullable=False),
-                    pa.field("source_ordinal", pa.uint64(), nullable=False),
+                    (query - 64) * 100 + neighbor
+                    if query >= 64
+                    else 100_000 + query * 10 + neighbor
+                    for neighbor in range(10)
                 ]
-            ),
+                for query in range(96)
+            ],
+            type=pa.list_(pa.field("item", pa.int32(), nullable=False), 10),
+        )
+        table = pa.Table.from_arrays(
+            [neighbors],
+            schema=pa.schema([pa.field("neighbors_id", neighbors.type, nullable=False)]),
         )
         sink = pa.BufferOutputStream()
         pq.write_table(table, sink)
@@ -42,6 +40,11 @@ class V30ReducedQualityTests(unittest.TestCase):
                 for rank, source in enumerate(sources)
             ],
             "schema_version": 1,
+            "timing": {
+                "elapsed_ns": 42_000_000 + query,
+                "peak_rss_bytes": 1_500_000_000 + query,
+                "process_cpu_ns": 7_500_000 + query,
+            },
             "work": {
                 "decoded_rows": 4096,
                 "encoded_bytes": 1_986_668,
@@ -71,7 +74,8 @@ class V30ReducedQualityTests(unittest.TestCase):
             results,
             truth,
             truth_sha256=hashlib.sha256(truth).hexdigest(),
-            cpu_p99_ms=15.0,
+            truth_query_start=64,
+            source_rows=9_990_000,
             request_p50_ms=10.0,
             request_p95_ms=25.0,
             request_p99_ms=50.0,
@@ -83,9 +87,11 @@ class V30ReducedQualityTests(unittest.TestCase):
         self.assertEqual(value["perfect_queries"], 31)
         self.assertEqual(value["maximum_codes_scanned"], 39_612)
         self.assertEqual(value["maximum_get_count"], 10)
-        self.assertAlmostEqual(value["projected_cold_s3_p50_ms"], 44.86668)
-        self.assertAlmostEqual(value["projected_cold_s3_p95_ms"], 59.86668)
-        self.assertAlmostEqual(value["projected_cold_s3_p99_ms"], 84.86668)
+        self.assertEqual(value["measured_process_cpu_p99_ns"], 7_500_031)
+        self.assertEqual(value["measured_cold_p99_ns"], 42_000_031)
+        self.assertAlmostEqual(value["projected_cold_s3_p50_ms"], 37.366711)
+        self.assertAlmostEqual(value["projected_cold_s3_p95_ms"], 52.366711)
+        self.assertAlmostEqual(value["projected_cold_s3_p99_ms"], 77.366711)
         self.assertEqual(value["status"], "pass")
         self.assertFalse(value["claim_eligible"])
         self.assertEqual(
@@ -101,7 +107,8 @@ class V30ReducedQualityTests(unittest.TestCase):
                 tuple(failing),
                 truth,
                 truth_sha256=hashlib.sha256(truth).hexdigest(),
-                cpu_p99_ms=15.0,
+                truth_query_start=64,
+                source_rows=9_990_000,
                 request_p50_ms=10.0,
                 request_p95_ms=25.0,
                 request_p99_ms=50.0,
@@ -113,7 +120,8 @@ class V30ReducedQualityTests(unittest.TestCase):
                 results,
                 truth,
                 truth_sha256=hashlib.sha256(truth).hexdigest(),
-                cpu_p99_ms=15.0,
+                truth_query_start=64,
+                source_rows=9_990_000,
                 request_p50_ms=10.0,
                 request_p95_ms=25.0,
                 request_p99_ms=80.0,

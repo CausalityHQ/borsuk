@@ -1,6 +1,6 @@
 //! Explicit authenticated local/S3 qualification boundary for the V30 page index.
 
-use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc, time::Instant};
 
 use arrow_array::{Array, FixedSizeListArray, Float32Array};
 use arrow_schema::{DataType, Field, Schema};
@@ -88,12 +88,23 @@ struct DiskPq {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct DiskSource {
+    commit: String,
+    corpus_manifest_bytes: u64,
+    corpus_manifest_sha256: String,
+    corpus_manifest_uri: String,
+    dataset_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DiskManifest {
     hierarchy: DiskHierarchy,
     layout: DiskLayout,
     page_key_suffix: String,
     pq: DiskPq,
     schema_version: u8,
+    source: DiskSource,
 }
 
 #[derive(Debug)]
@@ -194,6 +205,16 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
         || disk.page_key_suffix != ".arrow"
         || disk.layout.source_rows == 0
         || disk.pq.artifacts.len() != 5
+        || disk.source.dataset_id != "deep-image-96"
+        || disk.source.commit.len() != 40
+        || !disk
+            .source
+            .commit
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || disk.source.corpus_manifest_bytes == 0
+        || !valid_digest(&disk.source.corpus_manifest_sha256)
+        || !disk.source.corpus_manifest_uri.starts_with("s3://")
     {
         return Err(invalid("V30 qualifier manifest constants differ"));
     }
@@ -302,7 +323,12 @@ impl V30PageStore for ObjectPageStore {
     }
 }
 
-fn result_bytes(result: &V30SearchResult) -> borsuk::Result<Vec<u8>> {
+fn result_bytes(
+    result: &V30SearchResult,
+    process_cpu_ns: u64,
+    elapsed_ns: u64,
+    peak_rss_bytes: u64,
+) -> borsuk::Result<Vec<u8>> {
     if result
         .matches
         .iter()
@@ -324,6 +350,11 @@ fn result_bytes(result: &V30SearchResult) -> borsuk::Result<Vec<u8>> {
         "claim_eligible": false,
         "matches": matches,
         "schema_version": 1,
+        "timing": {
+            "elapsed_ns": elapsed_ns,
+            "peak_rss_bytes": peak_rss_bytes,
+            "process_cpu_ns": process_cpu_ns,
+        },
         "work": {
             "decoded_rows": result.work.decoded_rows,
             "encoded_bytes": result.work.encoded_bytes,
@@ -343,6 +374,56 @@ fn result_bytes(result: &V30SearchResult) -> borsuk::Result<Vec<u8>> {
         .map_err(|_| invalid("V30 qualifier result serialization failed"))?;
     bytes.push(b'\n');
     Ok(bytes)
+}
+
+fn process_cpu_nanoseconds() -> borsuk::Result<u64> {
+    let task_root = PathBuf::from("/proc/self/task");
+    let tasks = fs::read_dir(&task_root).map_err(|source| BorsukError::Io {
+        path: task_root.clone(),
+        source,
+    })?;
+    let mut total = 0_u64;
+    for task in tasks {
+        let path = task
+            .map_err(|source| BorsukError::Io {
+                path: task_root.clone(),
+                source,
+            })?
+            .path()
+            .join("schedstat");
+        let schedstat = match fs::read_to_string(&path) {
+            Ok(value) => value,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(source) => return Err(BorsukError::Io { path, source }),
+        };
+        let value = schedstat
+            .split_whitespace()
+            .next()
+            .ok_or_else(|| invalid("V30 qualifier process CPU differs"))?
+            .parse::<u64>()
+            .map_err(|_| invalid("V30 qualifier process CPU differs"))?;
+        total = total
+            .checked_add(value)
+            .ok_or_else(|| invalid("V30 qualifier process CPU overflows"))?;
+    }
+    Ok(total)
+}
+
+fn peak_rss_bytes() -> borsuk::Result<u64> {
+    let status = fs::read_to_string("/proc/self/status")
+        .map_err(|_| invalid("V30 qualifier process RSS status differs"))?;
+    let line = status
+        .lines()
+        .find(|line| line.starts_with("VmHWM:"))
+        .ok_or_else(|| invalid("V30 qualifier process RSS field differs"))?;
+    let kib = line
+        .split_ascii_whitespace()
+        .nth(1)
+        .ok_or_else(|| invalid("V30 qualifier process RSS value differs"))?
+        .parse::<u64>()
+        .map_err(|_| invalid("V30 qualifier process RSS value differs"))?;
+    kib.checked_mul(1024)
+        .ok_or_else(|| invalid("V30 qualifier process RSS overflows"))
 }
 
 fn read_resident(
@@ -507,6 +588,8 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
         candidate_depth: args.candidate_depth,
         page_count: args.page_count,
     };
+    let cpu_before = process_cpu_nanoseconds()?;
+    let started = Instant::now();
     let result = match args.page_source {
         PageSource::Local(directory) => run_search(
             router,
@@ -544,7 +627,12 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
             )?
         }
     };
-    result_bytes(&result)
+    let elapsed_ns = u64::try_from(started.elapsed().as_nanos())
+        .map_err(|_| invalid("V30 qualifier elapsed time overflows"))?;
+    let process_cpu_ns = process_cpu_nanoseconds()?
+        .checked_sub(cpu_before)
+        .ok_or_else(|| invalid("V30 qualifier process CPU regressed"))?;
+    result_bytes(&result, process_cpu_ns, elapsed_ns, peak_rss_bytes()?)
 }
 
 fn take(values: &mut BTreeMap<String, String>, name: &str) -> Result<String, String> {
@@ -668,8 +756,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        Args, ArtifactArg, LocalPageStore, PageSource, execute, parse_args, read_manifest,
-        result_bytes,
+        Args, ArtifactArg, LocalPageStore, PageSource, execute, parse_args, peak_rss_bytes,
+        process_cpu_nanoseconds, read_manifest, result_bytes,
     };
 
     fn arguments() -> Vec<String> {
@@ -708,6 +796,31 @@ mod tests {
         .into_iter()
         .map(ToOwned::to_owned)
         .collect()
+    }
+
+    #[test]
+    fn v30_s3_qualify_process_cpu_clock_resolves_below_the_latency_gate() {
+        // Break caught: /proc/self/stat quantizes CPU to 10-ms ticks, making a
+        // 15-ms p99 gate alternate between 10 and 20 ms.
+        let before = process_cpu_nanoseconds().unwrap();
+        let started = std::time::Instant::now();
+        let mut value = 1_u64;
+        let after = loop {
+            value = std::hint::black_box(value.wrapping_mul(6364136223846793005));
+            let observed = process_cpu_nanoseconds().unwrap();
+            if observed > before || started.elapsed().as_millis() >= 100 {
+                break observed;
+            }
+        };
+        assert!(after > before);
+        assert!(after - before < 15_000_000);
+    }
+
+    #[test]
+    fn v30_s3_qualify_reports_process_peak_rss_for_the_release_gate() {
+        let peak = peak_rss_bytes().unwrap();
+        assert!(peak > 0);
+        assert_eq!(peak % 1024, 0);
     }
 
     #[test]
@@ -773,7 +886,11 @@ mod tests {
                 "\"layout\":{{\"leaf_ranges\":{},\"page_ranges\":{},\"source_rows\":40}},",
                 "\"page_key_suffix\":\".arrow\",",
                 "\"pq\":{{\"artifacts\":[{},{},{},{},{}]}},",
-                "\"schema_version\":1}}\n"
+                "\"schema_version\":1,",
+                "\"source\":{{\"commit\":\"{}\",\"corpus_manifest_bytes\":4096,",
+                "\"corpus_manifest_sha256\":\"{}\",",
+                "\"corpus_manifest_uri\":\"s3://bucket/deep-10m/corpus.json\",",
+                "\"dataset_id\":\"deep-image-96\"}}}}\n"
             ),
             artifact("v27-leaves-arrow", "leaves.arrow", '2'),
             artifact("v27-roots-arrow", "roots.arrow", '1'),
@@ -805,6 +922,8 @@ mod tests {
                 48,
                 &format!(r#"["{high_sha}"]"#),
             ),
+            "b701eada33a5d6782f9ebb0adaac5fd7573da40f",
+            "a".repeat(64),
         )
         .into_bytes()
     }
@@ -845,6 +964,20 @@ mod tests {
             ..argument
         };
         assert!(read_manifest(&drifted_argument).is_err());
+
+        let mut source_drifted = manifest_bytes();
+        let source_offset = source_drifted
+            .windows(40)
+            .position(|window| window == b"b701eada33a5d6782f9ebb0adaac5fd7573da40f")
+            .unwrap();
+        source_drifted[source_offset] = b'z';
+        fs::write(&drifted_argument.path, &source_drifted).unwrap();
+        let source_argument = ArtifactArg {
+            sha256: format!("{:x}", Sha256::digest(&source_drifted)),
+            encoded_bytes: source_drifted.len() as u64,
+            ..drifted_argument
+        };
+        assert!(read_manifest(&source_argument).is_err());
     }
 
     #[test]
@@ -893,10 +1026,13 @@ mod tests {
             },
         };
         assert_eq!(
-            String::from_utf8(result_bytes(&result).unwrap()).unwrap(),
+            String::from_utf8(result_bytes(&result, 7_500_000, 42_000_000, 123_456_000).unwrap(),)
+                .unwrap(),
             concat!(
                 "{\"claim_eligible\":false,\"matches\":[{\"source_ordinal\":9,",
-                "\"squared_distance\":0.25}],\"schema_version\":1,\"work\":{",
+                "\"squared_distance\":0.25}],\"schema_version\":1,",
+                "\"timing\":{\"elapsed_ns\":42000000,\"peak_rss_bytes\":123456000,",
+                "\"process_cpu_ns\":7500000},\"work\":{",
                 "\"decoded_rows\":1,\"encoded_bytes\":3,\"get_count\":1,",
                 "\"routing\":{\"candidates_retained\":12,\"codes_scanned\":40,",
                 "\"leaves_scored\":64,\"pages_considered\":3,\"roots_scored\":16,",

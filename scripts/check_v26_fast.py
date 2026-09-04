@@ -48,6 +48,8 @@ def v30_python_contract_command() -> list[str]:
         "unittest",
         "scripts.test_run_v30_variable_rate_reproduction",
         "scripts.test_run_v30_reduced_quality",
+        "scripts.test_run_v30_untouched_quality",
+        "scripts.test_run_v30_s3_campaign",
     ]
 
 
@@ -82,6 +84,22 @@ def v30_qualifier_contract_command() -> list[str]:
     ]
 
 
+def v30_builder_contract_command() -> list[str]:
+    """Return the focused streaming S3 construction boundary gate."""
+
+    return [
+        "cargo",
+        "test",
+        "-p",
+        "borsuk",
+        "--example",
+        "v30_s3_build",
+        "v30_s3_build_",
+        "--",
+        "--nocapture",
+    ]
+
+
 def smoke_commands(python_executable: str) -> list[list[str]]:
     """Return the seconds-long contract gate used during implementation."""
     return [
@@ -98,6 +116,7 @@ def smoke_commands(python_executable: str) -> list[list[str]]:
         ],
         v30_python_contract_command(),
         v30_rust_contract_command(),
+        v30_builder_contract_command(),
         v30_qualifier_contract_command(),
         ["cargo", "fmt", "--all", "--", "--check"],
         ["git", "diff", "--check"],
@@ -141,6 +160,7 @@ def affected_commands(python_executable: str) -> list[list[str]]:
         ],
         v30_python_contract_command(),
         v30_rust_contract_command(),
+        v30_builder_contract_command(),
         v30_qualifier_contract_command(),
         ["cargo", "fmt", "--all", "--", "--check"],
         ["git", "diff", "--check"],

@@ -195,28 +195,16 @@ pub use v27_s3_build::{
     encode_v27_layout, encode_v27_page_manifest,
 };
 mod v27_s3_search;
-mod v28_s3_layout;
-mod v28_s3_pq;
-mod v28_s3_search;
-#[allow(
-    dead_code,
-    reason = "V30 layout authority is wired into its bounded builder in the next planned slice"
-)]
 mod v30_s3_layout;
-#[allow(
-    dead_code,
-    reason = "V30 variable-rate codec is wired into layout in the next planned slice"
-)]
 mod v30_s3_pq;
-#[allow(
-    dead_code,
-    reason = "V30 bounded router is wired incrementally by the committed plan"
-)]
 mod v30_s3_search;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]
-pub use v30_s3_layout::{V30LayoutArtifactIdentity, V30LayoutArtifacts};
+pub use v30_s3_layout::{
+    V30ConstructedIndex, V30ConstructionArtifacts, V30ConstructionBuilder, V30ConstructionConfig,
+    V30LayoutArtifactIdentity, V30LayoutArtifacts, V30PageSink, V30Scratch,
+};
 #[doc(hidden)]
 pub use v30_s3_pq::{V30PqArtifactIdentity, V30PqArtifacts};
 #[doc(hidden)]

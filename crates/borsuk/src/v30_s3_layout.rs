@@ -17,10 +17,11 @@ use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder}
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BorsukError, Result, V27Hierarchy, V27HierarchyConfig, V27PageIdentity, V27PageRow,
-    encode_v27_page, fit_v27_hierarchy,
+    BorsukError, Result, V27Hierarchy, V27HierarchyArtifacts, V27HierarchyConfig, V27PageIdentity,
+    V27PageRow, encode_v27_hierarchy, encode_v27_page, fit_v27_hierarchy,
     v30_s3_pq::{
-        V30CodePlanes, V30Fidelity, V30PqCodebook, V30PqWidth, encode_v30_code, fit_v30_codebook,
+        V30CodePlanes, V30Fidelity, V30PqArtifacts, V30PqCodebook, V30PqWidth, encode_v30_code,
+        encode_v30_pq_artifacts, fit_v30_codebook,
     },
 };
 
@@ -36,7 +37,8 @@ pub(crate) struct V30FidelitySelectionConfig {
     pub(crate) fidelity_ppm: u32,
 }
 
-pub(crate) trait V30Scratch {
+#[doc(hidden)]
+pub trait V30Scratch {
     fn write_scratch(
         &mut self,
         key: &str,
@@ -719,7 +721,8 @@ pub(crate) struct V30LayoutBuildConfig {
     pub(crate) fidelity_ppm: u32,
 }
 
-pub(crate) trait V30PageSink {
+#[doc(hidden)]
+pub trait V30PageSink {
     fn write_page(&mut self, identity: &V27PageIdentity, bytes: &[u8]) -> Result<()>;
 }
 
@@ -805,6 +808,15 @@ impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
         }
         if self.current_leaf != Some(record.leaf_ordinal) {
             self.finish_leaf()?;
+            while self.leaves.len() < record.leaf_ordinal as usize {
+                self.leaves.push(V30LeafRange {
+                    leaf_ordinal: self.leaves.len() as u32,
+                    logical_start: self.logical_rows,
+                    row_count: 0,
+                    page_start: self.pages.len() as u32,
+                    page_count: 0,
+                });
+            }
             self.current_leaf = Some(record.leaf_ordinal);
             self.leaf_logical_start = self.logical_rows;
             self.leaf_page_start = u32::try_from(self.pages.len())
@@ -836,6 +848,15 @@ impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
 
     fn finish(mut self, fidelity_ppm: u32) -> Result<V30BuiltLayout> {
         self.finish_leaf()?;
+        while self.leaves.len() < self.leaf_count as usize {
+            self.leaves.push(V30LeafRange {
+                leaf_ordinal: self.leaves.len() as u32,
+                logical_start: self.logical_rows,
+                row_count: 0,
+                page_start: self.pages.len() as u32,
+                page_count: 0,
+            });
+        }
         if self.leaves.len() != self.leaf_count as usize {
             return Err(invalid("V30 layout leaf coverage differs"));
         }
@@ -867,21 +888,61 @@ const CORPUS_KEY: &str = "v30-normalized-corpus";
 const CORPUS_RECORD_BYTES: usize = 8 + 96 * 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct V30ConstructionConfig {
-    pub(crate) hierarchy: V27HierarchyConfig,
-    pub(crate) training_rows: usize,
-    pub(crate) page_rows: usize,
-    pub(crate) sort_memory_rows: usize,
-    pub(crate) fidelity_ppm: u32,
+#[doc(hidden)]
+pub struct V30ConstructionConfig {
+    pub hierarchy: V27HierarchyConfig,
+    pub training_rows: usize,
+    pub page_rows: usize,
+    pub sort_memory_rows: usize,
+    pub fidelity_ppm: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct V30ConstructedIndex {
-    pub(crate) hierarchy: V27Hierarchy,
-    pub(crate) base_codebook: V30PqCodebook,
-    pub(crate) high_codebook: V30PqCodebook,
-    pub(crate) layout: V30BuiltLayout,
-    pub(crate) training_rows: usize,
+#[doc(hidden)]
+pub struct V30ConstructedIndex {
+    hierarchy: V27Hierarchy,
+    base_codebook: V30PqCodebook,
+    high_codebook: V30PqCodebook,
+    layout: V30BuiltLayout,
+    training_rows: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[doc(hidden)]
+pub struct V30ConstructionArtifacts {
+    pub hierarchy: V27HierarchyArtifacts,
+    pub pq: V30PqArtifacts,
+    pub layout: V30LayoutArtifacts,
+    pub pages: Vec<V27PageIdentity>,
+    pub source_rows: u64,
+    pub training_rows: u64,
+}
+
+impl V30ConstructedIndex {
+    #[doc(hidden)]
+    pub fn into_artifacts(self) -> Result<V30ConstructionArtifacts> {
+        let source_rows = self.layout.layout.source_rows();
+        let pages = self
+            .layout
+            .layout
+            .pages()
+            .iter()
+            .map(|page| page.identity.clone())
+            .collect();
+        let hierarchy = encode_v27_hierarchy(&self.hierarchy)?;
+        let pq =
+            encode_v30_pq_artifacts(&self.base_codebook, &self.high_codebook, &self.layout.codes)?;
+        let layout = encode_v30_layout_artifacts(&self.layout.layout)?;
+        Ok(V30ConstructionArtifacts {
+            hierarchy,
+            pq,
+            layout,
+            pages,
+            source_rows,
+            training_rows: u64::try_from(self.training_rows)
+                .map_err(|_| invalid("V30 construction training rows overflow"))?,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -981,10 +1042,12 @@ impl Iterator for CorpusIter {
     }
 }
 
-pub(crate) struct V30ConstructionBuilder;
+#[doc(hidden)]
+pub struct V30ConstructionBuilder;
 
 impl V30ConstructionBuilder {
-    pub(crate) fn build<I, S, P>(
+    #[doc(hidden)]
+    pub fn build<I, S, P>(
         rows: I,
         config: V30ConstructionConfig,
         scratch: &mut S,
@@ -1336,9 +1399,8 @@ impl V30Layout {
         for (ordinal, leaf) in leaves.iter().enumerate() {
             if leaf.leaf_ordinal != ordinal as u32
                 || leaf.logical_start != next_logical
-                || leaf.row_count == 0
                 || leaf.page_start != next_page
-                || leaf.page_count == 0
+                || (leaf.row_count == 0) != (leaf.page_count == 0)
             {
                 return Err(invalid("V30 leaf range authority differs"));
             }

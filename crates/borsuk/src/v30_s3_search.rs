@@ -273,18 +273,46 @@ impl V30Router {
             });
             let base_table = V30QueryTable::new(&self.base_codebook, &residual)?;
             let high_table = V30QueryTable::new(&self.high_codebook, &residual)?;
-            for logical in range.logical_start..range.logical_start + range.row_count {
-                let (width, code) = self.codes.code(logical as usize)?;
-                let score = match width {
-                    V30PqWidth::Base24 => base_table.score(code)?,
-                    V30PqWidth::High48 => high_table.score(code)?,
-                };
-                let candidate = Candidate { score, logical };
-                if candidates.len() < arm.candidate_depth {
-                    candidates.push(candidate);
-                } else if candidates.peek().is_some_and(|worst| candidate < *worst) {
-                    candidates.pop();
-                    candidates.push(candidate);
+            let range_end = range.logical_start + range.row_count;
+            for block_start in (range.logical_start..range_end).step_by(32) {
+                let block_end = range_end.min(block_start + 32);
+                let mut base = Vec::with_capacity(32);
+                let mut base_slots = Vec::with_capacity(32);
+                let mut high = Vec::with_capacity(32);
+                let mut high_slots = Vec::with_capacity(32);
+                for logical in block_start..block_end {
+                    let slot = usize::try_from(logical - block_start)
+                        .map_err(|_| invalid("V30 candidate block offset overflows"))?;
+                    let (width, code) = self.codes.code(logical as usize)?;
+                    match width {
+                        V30PqWidth::Base24 => {
+                            base.push(code);
+                            base_slots.push(slot);
+                        }
+                        V30PqWidth::High48 => {
+                            high.push(code);
+                            high_slots.push(slot);
+                        }
+                    }
+                }
+                let mut scores = [0.0_f32; 32];
+                for (slot, score) in base_slots.into_iter().zip(base_table.score_block(&base)?) {
+                    scores[slot] = score;
+                }
+                for (slot, score) in high_slots.into_iter().zip(high_table.score_block(&high)?) {
+                    scores[slot] = score;
+                }
+                for logical in block_start..block_end {
+                    let candidate = Candidate {
+                        score: scores[(logical - block_start) as usize],
+                        logical,
+                    };
+                    if candidates.len() < arm.candidate_depth {
+                        candidates.push(candidate);
+                    } else if candidates.peek().is_some_and(|worst| candidate < *worst) {
+                        candidates.pop();
+                        candidates.push(candidate);
+                    }
                 }
             }
         }

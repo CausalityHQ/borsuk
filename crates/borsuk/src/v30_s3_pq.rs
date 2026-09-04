@@ -17,7 +17,9 @@ use crate::{BorsukError, Result};
 
 const DIMENSIONS: usize = 96;
 const CENTROIDS: usize = 256;
+#[cfg(test)]
 const REGISTERED_ROWS: u64 = 100_000_000;
+#[cfg(test)]
 const REGISTERED_FIDELITY_PPM: u32 = 50_000;
 const BLOCK_ROWS: usize = 32;
 const FIDELITY_GROUP_ROWS: usize = 128;
@@ -49,6 +51,7 @@ impl V30PqWidth {
         DIMENSIONS / self.subquantizers()
     }
 
+    #[cfg(test)]
     pub(crate) const fn centroids(self) -> usize {
         CENTROIDS
     }
@@ -241,22 +244,27 @@ impl V30QueryTable {
         })
     }
 
-    pub(crate) fn score(&self, code: &[u8]) -> Result<f32> {
-        if code.len() != self.width.bytes() {
-            return Err(invalid("V30 PQ8 scoring code width differs"));
+    pub(crate) fn score_block(&self, codes: &[&[u8]]) -> Result<Vec<f32>> {
+        if codes.len() > BLOCK_ROWS || codes.iter().any(|code| code.len() != self.width.bytes()) {
+            return Err(invalid("V30 PQ8 scoring block differs"));
         }
-        let score = code
+        let mut scores = vec![0.0_f32; codes.len()];
+        for subquantizer in 0..self.width.subquantizers() {
+            for (row, code) in codes.iter().enumerate() {
+                scores[row] += self.tables[subquantizer][usize::from(code[subquantizer])];
+            }
+        }
+        if scores
             .iter()
-            .enumerate()
-            .map(|(subquantizer, centroid)| self.tables[subquantizer][usize::from(*centroid)])
-            .sum::<f32>();
-        if !score.is_finite() || score < 0.0 {
+            .any(|score| !score.is_finite() || *score < 0.0)
+        {
             return Err(invalid("V30 PQ8 score differs"));
         }
-        Ok(score)
+        Ok(scores)
     }
 }
 
+#[cfg(test)]
 pub(crate) fn score_v30_codes(
     codebook: &V30PqCodebook,
     codes: &[Vec<u8>],
@@ -287,6 +295,7 @@ pub(crate) fn score_v30_codes(
     Ok(scores)
 }
 
+#[cfg(test)]
 pub(crate) fn score_v30_transposed_block(
     codebook: &V30PqCodebook,
     transposed: &[u8],
@@ -361,6 +370,7 @@ impl V30Fidelity {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn from_errors(errors: &[f32], fraction_ppm: u32) -> Result<Self> {
         if errors.is_empty()
             || ![0, 50_000, 100_000, 200_000].contains(&fraction_ppm)
@@ -442,14 +452,17 @@ impl V30Fidelity {
             + (words[word_in_group] & lower_mask).count_ones() as usize)
     }
 
+    #[cfg(test)]
     pub(crate) fn high_bit_words(&self) -> &[u32] {
         &self.high_bits
     }
 
+    #[cfg(test)]
     pub(crate) fn rank_checkpoints(&self) -> &[u32] {
         &self.rank_checkpoints
     }
 
+    #[cfg(test)]
     pub(crate) fn resident_bytes(&self) -> usize {
         (self.high_bits.len() + self.rank_checkpoints.len()) * size_of::<u32>()
     }
@@ -494,14 +507,17 @@ impl V30CodePlanes {
         self.high.len() / V30PqWidth::High48.bytes()
     }
 
+    #[cfg(test)]
     pub(crate) fn encoded_code_bytes(&self) -> usize {
         self.base.len() + self.high.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn base_packed(&self) -> &[u8] {
         &self.base
     }
 
+    #[cfg(test)]
     pub(crate) fn high_packed(&self) -> &[u8] {
         &self.high
     }
@@ -527,6 +543,7 @@ impl V30CodePlanes {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn encode_v30_planes(
     base_codes: &[Vec<u8>],
     high_codes: &[Vec<u8>],
@@ -561,6 +578,7 @@ pub(crate) fn encode_v30_planes(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn project_v30_resident_bytes(rows: u64, fidelity_ppm: u32) -> Result<u64> {
     if rows != REGISTERED_ROWS || fidelity_ppm != REGISTERED_FIDELITY_PPM {
         return Err(invalid("V30 resident projection authority differs"));
@@ -1047,9 +1065,9 @@ mod tests {
     use arrow_array::Array as _;
 
     use super::{
-        V30Fidelity, V30PqCodebook, V30PqWidth, decode_v30_pq_artifacts, encode_v30_code,
-        encode_v30_planes, encode_v30_pq_artifacts, fit_v30_codebook, project_v30_resident_bytes,
-        score_v30_codes, score_v30_transposed_block,
+        V30Fidelity, V30PqCodebook, V30PqWidth, V30QueryTable, decode_v30_pq_artifacts,
+        encode_v30_code, encode_v30_planes, encode_v30_pq_artifacts, fit_v30_codebook,
+        project_v30_resident_bytes, score_v30_codes, score_v30_transposed_block,
     };
 
     fn codebook(width: V30PqWidth) -> V30PqCodebook {
@@ -1201,6 +1219,16 @@ mod tests {
             .collect::<Vec<_>>();
         let query = std::array::from_fn(|dimension| (dimension as f32 - 47.0) / 31.0);
         let expected = score_v30_codes(&book, &codes, &query).unwrap();
+        let table = V30QueryTable::new(&book, &query).unwrap();
+        let references = codes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let serving = table.score_block(&references).unwrap();
+        assert_eq!(serving.len(), expected.len());
+        assert!(
+            serving
+                .iter()
+                .zip(&expected)
+                .all(|(actual, expected)| actual.to_bits() == expected.to_bits())
+        );
         let mut transposed = vec![0_u8; 24 * 32];
         for (row, code) in codes.iter().enumerate() {
             for (subquantizer, value) in code.iter().enumerate() {

@@ -1,0 +1,164 @@
+import hashlib
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from scripts.run_v30_untouched_quality import (
+    LocalArtifact,
+    V30UntouchedPlan,
+    build_qualifier_commands,
+    run_v30_untouched_quality,
+)
+
+
+class V30UntouchedQualityTests(unittest.TestCase):
+    def test_v30_untouched_direct_script_reaches_the_closed_cli(self) -> None:
+        # Break caught: the Spot worker executes this file directly, but an
+        # absolute package import fails before parsing any registered input.
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).with_name("run_v30_untouched_quality.py")),
+                "--help",
+            ],
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+        self.assertIn(b"--s3-page-prefix", completed.stdout)
+
+    def fixture(self, directory: Path) -> tuple[V30UntouchedPlan, dict[int, bytes]]:
+        neighbors = pa.array(
+            [[row * 100 + rank for rank in range(10)] for row in range(128)],
+            type=pa.list_(pa.field("item", pa.int32(), nullable=False), 10),
+        )
+        table = pa.Table.from_arrays(
+            [neighbors],
+            schema=pa.schema([pa.field("neighbors_id", neighbors.type, nullable=False)]),
+        )
+        truth_path = directory / "neighbors.parquet"
+        pq.write_table(table, truth_path)
+        truth = truth_path.read_bytes()
+        query_path = directory / "test.parquet"
+        query_path.write_bytes(b"query")
+        manifest_path = directory / "manifest.json"
+        manifest_path.write_bytes(b"manifest")
+        plan = V30UntouchedPlan(
+            qualifier=Path("/opt/borsuk/v30_s3_qualify"),
+            manifest=LocalArtifact(
+                manifest_path, hashlib.sha256(b"manifest").hexdigest(), 8
+            ),
+            artifact_dir=directory / "resident",
+            query=LocalArtifact(
+                query_path, hashlib.sha256(b"query").hexdigest(), 5
+            ),
+            truth=LocalArtifact(
+                truth_path, hashlib.sha256(truth).hexdigest(), len(truth)
+            ),
+            page_s3_prefix="s3://authority/v30/build-a0001/pages",
+            source_rows=9_990_000,
+            query_start=64,
+            query_count=32,
+        )
+        results = {
+            row: self.result(row, miss=row == 75) for row in range(64, 96)
+        }
+        return plan, results
+
+    def result(self, query_row: int, *, miss: bool) -> bytes:
+        sources = [query_row * 100 + rank for rank in range(10)]
+        if miss:
+            sources[-1] = 9_000_000
+        value = {
+            "claim_eligible": False,
+            "matches": [
+                {"source_ordinal": source, "squared_distance": float(rank)}
+                for rank, source in enumerate(sources)
+            ],
+            "schema_version": 1,
+            "timing": {
+                "elapsed_ns": 8_000_000 + query_row,
+                "peak_rss_bytes": 2_000_000_000 + query_row,
+                "process_cpu_ns": 12_000_000 + query_row,
+            },
+            "work": {
+                "decoded_rows": 4_000,
+                "encoded_bytes": 2_000_000,
+                "get_count": 10,
+                "routing": {
+                    "candidates_retained": 12_288,
+                    "codes_scanned": 900_000,
+                    "leaves_scored": 64,
+                    "pages_considered": 10,
+                    "roots_scored": 1_024,
+                    "selected_pages": 10,
+                },
+                "unique_rows": 4_000,
+            },
+        }
+        return json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+
+    def test_v30_untouched_runner_uses_real_qualifier_for_only_the_sealed_rows(self) -> None:
+        # Break caught: the campaign invokes nonexistent qualifier flags or
+        # evaluates a burned/discovered query range instead of the sealed 32 rows.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, results = self.fixture(Path(temporary))
+            commands = build_qualifier_commands(plan)
+            self.assertEqual(len(commands), 32)
+            self.assertEqual(
+                [int(command[command.index("--query-row") + 1]) for command in commands],
+                list(range(64, 96)),
+            )
+            self.assertTrue(all("--s3-page-prefix" in command for command in commands))
+            self.assertTrue(all("--construction-manifest-s3" not in command for command in commands))
+
+            seen: list[int] = []
+
+            def invoke(command: tuple[str, ...]) -> bytes:
+                row = int(command[command.index("--query-row") + 1])
+                seen.append(row)
+                return results[row]
+
+            payload = run_v30_untouched_quality(plan, invoke=invoke)
+            value = json.loads(payload)
+            self.assertEqual(seen, list(range(64, 96)))
+            self.assertEqual(value["aggregate_recall_ppm"], 996_875)
+            self.assertEqual(value["floor_compliance_ppm"], 1_000_000)
+            self.assertEqual(value["minimum_recall_ppm"], 900_000)
+            self.assertEqual(value["perfect_queries"], 31)
+            self.assertEqual(len(value["samples"]), 32)
+            self.assertEqual(value["samples"][11]["query_ordinal"], 75)
+            self.assertEqual(value["samples"][11]["hits"], 9)
+            self.assertEqual(value["maximum_codes_scanned"], 900_000)
+            self.assertEqual(value["maximum_encoded_bytes"], 2_000_000)
+            self.assertEqual(value["maximum_get_count"], 10)
+            self.assertEqual(value["measured_process_cpu_p99_ns"], 12_000_095)
+            self.assertEqual(value["measured_cold_p99_ns"], 8_000_095)
+            self.assertEqual(value["maximum_peak_rss_bytes"], 2_000_000_095)
+            self.assertEqual(value["status"], "passed")
+            self.assertFalse(value["claim_eligible"])
+
+            over_memory = dict(results)
+            bad = json.loads(over_memory[64])
+            bad["timing"]["peak_rss_bytes"] = 3 * 1024**3 + 1
+            over_memory[64] = (
+                json.dumps(bad, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+            with self.assertRaisesRegex(ValueError, "qualification gates"):
+                run_v30_untouched_quality(
+                    plan,
+                    invoke=lambda command: over_memory[
+                        int(command[command.index("--query-row") + 1])
+                    ],
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()
