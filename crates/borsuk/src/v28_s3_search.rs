@@ -173,14 +173,6 @@ impl V28Router {
         self.select_pages_with_leaf_observer(query, arm, &|_| {})
     }
 
-    pub(crate) fn rank_page_evidence(
-        &self,
-        query: &[f32; 96],
-        arm: V28SearchArm,
-    ) -> Result<V28PageSelection> {
-        self.rank_page_evidence_with_leaf_observer(query, arm, 128, &|_| {})
-    }
-
     fn validate_arm(&self, arm: V28SearchArm) -> Result<()> {
         if arm.root_beam == 0
             || arm.root_beam > self.hierarchy.roots.len()
@@ -220,23 +212,7 @@ impl V28Router {
     where
         F: Fn(u32),
     {
-        self.rank_page_evidence_with_leaf_observer(query, arm, arm.page_count, observer)
-    }
-
-    fn rank_page_evidence_with_leaf_observer<F>(
-        &self,
-        query: &[f32; 96],
-        arm: V28SearchArm,
-        evidence_limit: usize,
-        observer: &F,
-    ) -> Result<V28PageSelection>
-    where
-        F: Fn(u32),
-    {
         self.validate_arm(arm)?;
-        if !(arm.page_count..=128).contains(&evidence_limit) {
-            return Err(invalid("V28 page evidence bound differs"));
-        }
         let query = normalized(query)?;
         let roots = smallest(
             self.hierarchy
@@ -312,12 +288,12 @@ impl V28Router {
                 .ok_or_else(|| invalid("V28 candidate page mapping differs"))?;
             if seen.insert(page.identity.ordinal) {
                 pages.push(page.identity.clone());
-                if pages.len() == evidence_limit {
+                if pages.len() == arm.page_count {
                     break;
                 }
             }
         }
-        if pages.len() < arm.page_count {
+        if pages.len() != arm.page_count {
             return Err(invalid("V28 selected page cardinality differs"));
         }
         Ok(V28PageSelection {
@@ -414,7 +390,7 @@ impl<S: V28PageStore> V28Index<S> {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeMap, BTreeSet},
+        collections::BTreeMap,
         io::{Cursor, Read, Write},
         sync::{
             Mutex,
@@ -429,10 +405,6 @@ mod tests {
         V27Hierarchy, V27PageIdentity, V27PageRow, V27PageSink,
         v28_s3_layout::{V28LayoutBuilder, V28LayoutConfig},
         v28_s3_pq::{V28PqCodebook, V28PqWidth},
-        v29_s3_graph::{
-            V29BoundaryRow, V29GraphAuthority, build_v29_page_graph,
-            select_v29_graph_page_identities,
-        },
     };
 
     #[derive(Default)]
@@ -598,94 +570,6 @@ mod tests {
         let first = router.select_pages(&vector(0.5, 0.5), arm).unwrap();
         let second = router.select_pages(&vector(0.5, 0.5), arm).unwrap();
         assert_eq!(first, second);
-    }
-
-    #[test]
-    fn v29_s3_select_v28_exposes_bounded_unique_page_evidence() {
-        let router = fixture();
-        let evidence = router
-            .rank_page_evidence(
-                &vector(0.5, 0.5),
-                V28SearchArm {
-                    root_beam: 2,
-                    leaf_beam: 4,
-                    candidate_depth: 128,
-                    page_count: 10,
-                },
-            )
-            .unwrap();
-        assert!((10..=128).contains(&evidence.pages.len()));
-        assert_eq!(
-            evidence.pages.len(),
-            evidence
-                .pages
-                .iter()
-                .map(|page| page.ordinal)
-                .collect::<BTreeSet<_>>()
-                .len()
-        );
-        assert_eq!(evidence.work.candidates_retained, 128);
-    }
-
-    #[test]
-    fn v29_s3_select_maps_graph_frontier_to_one_ten_page_wave() {
-        let router = fixture();
-        let arm = V28SearchArm {
-            root_beam: 2,
-            leaf_beam: 4,
-            candidate_depth: 128,
-            page_count: 10,
-        };
-        let evidence = router.rank_page_evidence(&vector(0.5, 0.5), arm).unwrap();
-        let mut leaf_pages = vec![Vec::new(); router.layout.leaves.len()];
-        for page in &router.layout.pages {
-            leaf_pages[page.leaf_ordinal as usize].push(page.identity.ordinal);
-        }
-        let authority = V29GraphAuthority {
-            source_commit: "1".repeat(40),
-            source_archive_sha256: "2".repeat(64),
-            hierarchy_sha256: "3".repeat(64),
-            layout_sha256: "4".repeat(64),
-            code_sha256: "5".repeat(64),
-            page_roster_sha256: "6".repeat(64),
-            page_count: router.layout.pages.len() as u32,
-            degree: 16,
-        };
-        let seed = evidence.pages[0].ordinal;
-        let first_frontier_leaf =
-            router.layout.pages[evidence.pages[8].ordinal as usize].leaf_ordinal;
-        let second_frontier_leaf =
-            router.layout.pages[evidence.pages[9].ordinal as usize].leaf_ordinal;
-        let graph = build_v29_page_graph(
-            authority,
-            &leaf_pages,
-            &[
-                V29BoundaryRow {
-                    source_ordinal: 0,
-                    physical_page: seed,
-                    alternate_leaf: first_frontier_leaf,
-                },
-                V29BoundaryRow {
-                    source_ordinal: 1,
-                    physical_page: seed,
-                    alternate_leaf: second_frontier_leaf,
-                },
-            ],
-        )
-        .unwrap();
-        let selected =
-            select_v29_graph_page_identities(&router, &graph, &vector(0.5, 0.5), arm).unwrap();
-        assert_eq!(selected.pages.len(), 10);
-        assert_eq!(selected.work.selected_pages, 10);
-        assert_eq!(
-            selected
-                .pages
-                .iter()
-                .map(|page| page.ordinal)
-                .collect::<BTreeSet<_>>()
-                .len(),
-            10
-        );
     }
 
     #[test]

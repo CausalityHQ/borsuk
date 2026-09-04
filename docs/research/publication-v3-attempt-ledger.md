@@ -2767,3 +2767,61 @@ They are preserved under
 The builder terminated immediately after evidence publication. This assurance
 closes the repository-quality checkpoint only; it does not relax the explicit
 100-million-row fan-out, package, object-store, D3, or competitor-claim fences.
+
+### V28 secondary-leaf control isolates compressed ranking loss; V29 page graph is rejected
+
+Source `dbd878b2f77a8702585cc52b0aa59a9b237367c2` evaluated the V28
+hierarchical S3 layout on the burned 100,000-row Deep Image development
+fixture (32 queries, 512 rows per page, 323 materialized pages, and 46,761,076
+construction bytes streamed). The variable-rate 24-byte PQ8 arm reached
+996,875-ppm aggregate recall, 900,000-ppm minimum recall, and 31/32 perfect
+queries with a five-percent refinement fraction. Its projected 100-million-row
+resident footprint was 2,625,266,208 bytes. The 1,295-byte claim-ineligible
+result has SHA-256
+`4689f66fab78b74b91e3c96ae91516f8647dcd8248a27a8bb7c077c12660f663`
+and is preserved at
+`s3://borsuk-bench-453182569524-euc1/research/v28-s3/dbd878b2f77a8702585cc52b0aa59a9b237367c2/v28-leaf-variable-rate-pq8-20260904T000800Z/result.json`.
+
+A query-independent secondary-leaf candidate route did not change compressed
+quality: its best arm also reached 996,875/900,000 ppm and 31/32 perfect
+queries, while increasing the projected resident footprint to 3,025,528,356
+bytes. The sole missing neighbor was query 30, source row 75,809: primary leaf
+209, secondary leaf 52, physical page 266. Under the secondary route the row
+was present at candidate and first-page-evidence rank 82, proving that the
+hierarchy and page layout contained it before the ten-page cutoff. The
+1,367-byte result has SHA-256
+`30d7821d714865ceba51a7c5b8416319f00fd144f5f1e7570f6629a56a22a3b0`
+and is preserved at
+`s3://borsuk-bench-453182569524-euc1/research/v28-s3/dbd878b2f77a8702585cc52b0aa59a9b237367c2/v28-secondary-leaf-pq8-diagnostic-20260904T005000Z/result.json`.
+
+The exact-distance control over the identical secondary-leaf candidates
+reached 1,000,000-ppm aggregate and minimum recall with 32/32 perfect queries,
+at the same ten-page serving boundary. Its 1,317-byte result has SHA-256
+`61c08c078b0113b25afd1475a194168ec1ea00db70bb07366781b16bc71d09e0`
+and is preserved at
+`s3://borsuk-bench-453182569524-euc1/research/v28-s3/dbd878b2f77a8702585cc52b0aa59a9b237367c2/v28-secondary-leaf-exact-control-20260904T003500Z/result.json`.
+This is a causal diagnosis: the remaining miss is caused by compressed
+candidate ordering, not by failure to explore the relevant region or by the
+fixed page budget. It does not authorize query-trained routing or a quality
+claim on the burned cohort.
+
+V29 tested a query-independent degree-16 page graph derived from the secondary
+leaf incidence, using eight routed seeds plus two frontier pages in one fetch
+wave. It regressed to 987,500-ppm aggregate recall, 800,000-ppm minimum recall,
+and 29/32 perfect queries. The 1,299-byte claim-ineligible result has SHA-256
+`a7c729004f385d6060360dfd6c77d0a84b1897e11fede415568b52707b008bf6`
+and is preserved at
+`s3://borsuk-bench-453182569524-euc1/research/v28-s3/dbd878b2f77a8702585cc52b0aa59a9b237367c2/v29-boundary-page-graph-20260904T013000Z/result.json`.
+V29 is rejected and removed from the current pre-release production tree. Its
+immutable result remains negative evidence. No 100-million-row scale run,
+sealed-query run, D3 campaign, or competitor claim is authorized by these
+burned 100,000-row experiments.
+
+The next candidate must preserve the successful query-independent hierarchy
+and exact S3 page boundary while improving compressed ordering. It must be
+screened first on small immutable fixtures, keep the resident projection below
+3 GiB at 100 million rows, select exactly a bounded page set, and read only
+those Arrow/Parquet page objects from S3 rather than materializing the corpus
+locally. Cold Standard S3 page latency is evaluated separately from CPU search;
+the 15-ms target is a resident-index/hot-cache target unless a lower-latency
+object tier is explicitly qualified.
