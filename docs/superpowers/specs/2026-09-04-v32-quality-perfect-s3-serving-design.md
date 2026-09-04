@@ -160,9 +160,11 @@ transferable 100M CPU evidence.
 An initial 128-sample probe may reject early only when every measured total CPU
 sample exceeds 64 ms. Otherwise the full screen uses 1,024 warmups and
 10,000 raw observations over a fixed deterministic, digest-bound query cohort
-without query reuse. Outer query elapsed and whole-process CPU clocks are
-recorded independently; stage totals may not exceed outer elapsed, and all
-unattributed elapsed is explicit. Probe and screen statuses are distinct. Arm
+without query reuse. Outer query elapsed and safe POSIX whole-process CPU clocks
+are recorded independently. The only stage boundaries are the ones exposed by
+the production query itself: routing, in-memory page load, and exact rerank;
+their total may not exceed outer elapsed, and all unattributed elapsed is
+explicit. Probe and screen statuses are distinct. Arm
 64 runs first; wider arms run only while a smaller
 arm remains within the compute gates. Receipts preserve every raw nanosecond
 sample and the stage decomposition; synthetic evidence may reject an arm but

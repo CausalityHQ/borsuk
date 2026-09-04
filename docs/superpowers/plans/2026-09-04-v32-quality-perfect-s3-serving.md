@@ -247,6 +247,9 @@ logical-source/page evidence are citable; no intermediate schema is retained.
   sixteen disjoint 480-row Arrow bodies, and a canonical claim-ineligible
   receipt containing raw outer-elapsed/process-CPU/stage samples, explicit
   unattributed time, and a deterministic query-cohort digest.
+- [ ] Time the production query exactly once per observation using its existing
+  routing/page-read/rerank callbacks. Use a safe process-CPU clock; do not add
+  unsafe FFI, synthetic sub-stage timers, or a benchmark-only search path.
 - [ ] Implement the preflight using the production root filter, centroid/PQ
   scoring, bounded candidate reducer, page reducer, Arrow validator, and exact
   top-ten merge. Materialize no 100M-row code plane: allocate only the exact

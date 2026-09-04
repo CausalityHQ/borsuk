@@ -382,6 +382,7 @@ dependencies = [
  "parquet",
  "rayon",
  "regex",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

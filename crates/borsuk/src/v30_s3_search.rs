@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BinaryHeap, HashSet},
+    time::{Duration, Instant},
 };
 
 use bytes::Bytes;
@@ -58,12 +59,9 @@ pub struct V32CpuPreflightShape {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct V32CpuPreflightSample {
-    pub root_filter_ns: u64,
-    pub microleaf_score_ns: u64,
-    pub query_table_ns: u64,
-    pub pq_scan_ns: u64,
-    pub candidate_page_reduce_ns: u64,
-    pub decode_rerank_ns: u64,
+    pub routing_ns: u64,
+    pub page_load_ns: u64,
+    pub exact_rerank_ns: u64,
     pub query_elapsed_ns: u64,
     pub process_cpu_ns: u64,
 }
@@ -174,12 +172,9 @@ pub fn canonical_v32_cpu_preflight_receipt(
     }
     for sample in &samples.observations {
         let stage_total = [
-            sample.root_filter_ns,
-            sample.microleaf_score_ns,
-            sample.query_table_ns,
-            sample.pq_scan_ns,
-            sample.candidate_page_reduce_ns,
-            sample.decode_rerank_ns,
+            sample.routing_ns,
+            sample.page_load_ns,
+            sample.exact_rerank_ns,
         ]
         .into_iter()
         .try_fold(0_u64, |total, value| {
@@ -232,21 +227,13 @@ pub fn canonical_v32_cpu_preflight_receipt(
         .observations
         .iter()
         .map(|sample| {
-            let stage_total = sample.root_filter_ns
-                + sample.microleaf_score_ns
-                + sample.query_table_ns
-                + sample.pq_scan_ns
-                + sample.candidate_page_reduce_ns
-                + sample.decode_rerank_ns;
+            let stage_total = sample.routing_ns + sample.page_load_ns + sample.exact_rerank_ns;
             serde_json::json!({
-                "candidate_page_reduce_ns": sample.candidate_page_reduce_ns,
-                "decode_rerank_ns": sample.decode_rerank_ns,
-                "microleaf_score_ns": sample.microleaf_score_ns,
-                "pq_scan_ns": sample.pq_scan_ns,
+                "exact_rerank_ns": sample.exact_rerank_ns,
+                "page_load_ns": sample.page_load_ns,
                 "process_cpu_ns": sample.process_cpu_ns,
                 "query_elapsed_ns": sample.query_elapsed_ns,
-                "query_table_ns": sample.query_table_ns,
-                "root_filter_ns": sample.root_filter_ns,
+                "routing_ns": sample.routing_ns,
                 "unattributed_ns": sample.query_elapsed_ns - stage_total,
             })
         })
@@ -557,6 +544,28 @@ fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
 }
 
+fn duration_ns(duration: Duration) -> Result<u64> {
+    u64::try_from(duration.as_nanos()).map_err(|_| invalid("V32 CPU clock overflows"))
+}
+
+#[cfg(unix)]
+fn process_cpu_time_ns() -> Result<u64> {
+    let value = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
+    let seconds =
+        u64::try_from(value.tv_sec).map_err(|_| invalid("V32 process CPU clock differs"))?;
+    let nanoseconds =
+        u64::try_from(value.tv_nsec).map_err(|_| invalid("V32 process CPU clock differs"))?;
+    seconds
+        .checked_mul(1_000_000_000)
+        .and_then(|total| total.checked_add(nanoseconds))
+        .ok_or_else(|| invalid("V32 process CPU clock overflows"))
+}
+
+#[cfg(not(unix))]
+fn process_cpu_time_ns() -> Result<u64> {
+    Err(invalid("V32 process CPU clock is unavailable"))
+}
+
 fn normalized(query: &[f32; 96]) -> Result<[f32; 96]> {
     if query.iter().any(|value| !value.is_finite()) {
         return Err(invalid("V30 query is non-finite"));
@@ -584,12 +593,23 @@ fn centroid_distance(query: &[f32; 96], centroid: &[f16; 96]) -> f64 {
 }
 
 fn smallest(mut values: Vec<(f64, usize)>, limit: usize) -> Vec<(f64, usize)> {
+    let compare = |left: &(f64, usize), right: &(f64, usize)| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    };
+    if limit == 0 {
+        return Vec::new();
+    }
+    if limit < values.len() {
+        values.select_nth_unstable_by(limit, compare);
+        values.truncate(limit);
+    }
     values.sort_unstable_by(|left, right| {
         left.0
             .total_cmp(&right.0)
             .then_with(|| left.1.cmp(&right.1))
     });
-    values.truncate(limit);
     values
 }
 
@@ -1042,6 +1062,48 @@ impl<S: V32PageStore> V32Index<S> {
     }
 
     #[doc(hidden)]
+    pub fn cpu_preflight_observation(
+        &self,
+        query: &[f32; 96],
+        k: usize,
+    ) -> Result<(V32SearchResult, V32CpuPreflightSample)> {
+        let query_started = Instant::now();
+        let cpu_started = process_cpu_time_ns()?;
+        let mut previous = query_started;
+        let mut routing_ns = None;
+        let mut page_load_ns = None;
+        let mut exact_rerank_ns = None;
+        let result = self.search_observed(query, k, |phase| {
+            let now = Instant::now();
+            let elapsed = duration_ns(now.duration_since(previous))?;
+            previous = now;
+            match phase {
+                V32SearchPhase::RoutingComplete => routing_ns = Some(elapsed),
+                V32SearchPhase::PageReadComplete => page_load_ns = Some(elapsed),
+                V32SearchPhase::ExactRerankComplete => exact_rerank_ns = Some(elapsed),
+            }
+            Ok(())
+        })?;
+        let query_elapsed_ns = duration_ns(query_started.elapsed())?;
+        let process_cpu_ns = process_cpu_time_ns()?
+            .checked_sub(cpu_started)
+            .ok_or_else(|| invalid("V32 process CPU clock moved backwards"))?;
+        Ok((
+            result,
+            V32CpuPreflightSample {
+                routing_ns: routing_ns
+                    .ok_or_else(|| invalid("V32 routing timing boundary is missing"))?,
+                page_load_ns: page_load_ns
+                    .ok_or_else(|| invalid("V32 page timing boundary is missing"))?,
+                exact_rerank_ns: exact_rerank_ns
+                    .ok_or_else(|| invalid("V32 rerank timing boundary is missing"))?,
+                query_elapsed_ns,
+                process_cpu_ns,
+            },
+        ))
+    }
+
+    #[doc(hidden)]
     pub fn search_observed<F>(
         &self,
         query: &[f32; 96],
@@ -1150,7 +1212,7 @@ mod tests {
         BoundedCandidates, Candidate, ExactTopK, V32CpuPreflightMode, V32CpuPreflightSample,
         V32CpuPreflightSamples, V32Index, V32Match, V32PageStore, V32Router, V32RoutingTargetStage,
         V32SearchArm, V32SearchPhase, canonical_v32_cpu_preflight_receipt,
-        eligible_v32_routing_leaf_scores, v32_cpu_preflight_shape,
+        eligible_v32_routing_leaf_scores, smallest, v32_cpu_preflight_shape,
     };
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
@@ -1935,17 +1997,74 @@ mod tests {
     }
 
     #[test]
+    fn v32_cpu_preflight_partial_root_selection_preserves_total_tie_order() {
+        // Break caught: replacing the full root sort changes deterministic
+        // `(distance, ordinal)` selection at the beam boundary.
+        let values = vec![(2.0, 8), (1.0, 7), (1.0, 3), (0.5, 9), (1.0, 1)];
+        assert_eq!(
+            smallest(values.clone(), 3),
+            vec![(0.5, 9), (1.0, 1), (1.0, 3)]
+        );
+        assert_eq!(smallest(values.clone(), values.len()), {
+            let mut expected = values;
+            expected.sort_unstable_by(|left, right| {
+                left.0
+                    .partial_cmp(&right.0)
+                    .unwrap()
+                    .then_with(|| left.1.cmp(&right.1))
+            });
+            expected
+        });
+        assert!(smallest(vec![(1.0, 0)], 0).is_empty());
+    }
+
+    #[test]
+    fn v32_cpu_preflight_observation_times_the_production_query_boundary_once() {
+        // Break caught: the fast gate times a benchmark-only kernel, omits page
+        // validation/rerank, or executes the production search more than once.
+        let (router, bodies) = router();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let store = MemoryStore {
+            calls: calls.clone(),
+            bodies: bodies
+                .into_iter()
+                .map(|(identity, bytes)| (identity.ordinal, Bytes::from(bytes)))
+                .collect(),
+        };
+        let index = V32Index::new(
+            router,
+            store,
+            V32SearchArm {
+                root_beam: 1,
+                leaf_beam: 2,
+                scan_budget: 65_536,
+                candidate_depth: 20,
+                page_count: 10,
+            },
+        )
+        .unwrap();
+        let (result, sample) = index.cpu_preflight_observation(&[0.2; 96], 10).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(result.work.get_count, 10);
+        assert!(sample.routing_ns > 0);
+        assert!(sample.page_load_ns > 0);
+        assert!(sample.exact_rerank_ns > 0);
+        assert!(
+            sample.routing_ns + sample.page_load_ns + sample.exact_rerank_ns
+                <= sample.query_elapsed_ns
+        );
+        assert!(sample.process_cpu_ns > 0);
+    }
+
+    #[test]
     fn v32_cpu_preflight_receipt_recomputes_probe_samples_and_stops_early() {
         // Break caught: an optimistic summary drops raw samples or labels a
         // synthetic probe as qualifying evidence after every observation has
         // already exceeded the 64 ms process-CPU gate.
         let sample = V32CpuPreflightSample {
-            root_filter_ns: 10_000_000,
-            microleaf_score_ns: 10_000_000,
-            query_table_ns: 10_000_000,
-            pq_scan_ns: 20_000_000,
-            candidate_page_reduce_ns: 5_000_000,
-            decode_rerank_ns: 10_000_001,
+            routing_ns: 40_000_000,
+            page_load_ns: 5_000_000,
+            exact_rerank_ns: 20_000_001,
             query_elapsed_ns: 66_000_000,
             process_cpu_ns: 70_000_001,
         };
@@ -1971,7 +2090,9 @@ mod tests {
         assert_eq!(value["query_elapsed_p99_ns"], 66_000_000_u64);
         assert_eq!(value["process_cpu_p99_ns"], 70_000_001_u64);
         assert_eq!(value["raw_samples"][0]["unattributed_ns"], 999_999);
-        assert_eq!(value["raw_samples"][0]["pq_scan_ns"], 20_000_000);
+        assert_eq!(value["raw_samples"][0]["routing_ns"], 40_000_000);
+        assert_eq!(value["raw_samples"][0]["page_load_ns"], 5_000_000);
+        assert_eq!(value["raw_samples"][0]["exact_rerank_ns"], 20_000_001);
         assert_eq!(value["query_count"], 128);
         assert_eq!(bytes.last(), Some(&b'\n'));
 
