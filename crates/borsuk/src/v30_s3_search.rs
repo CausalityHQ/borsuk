@@ -58,6 +58,7 @@ pub struct V30RoutingTargetReport {
     pub leaf_ordinal: u32,
     pub page_ordinal: u32,
     pub candidate_rank: Option<usize>,
+    pub first_unique_page_rank: Option<usize>,
     pub stage: V30RoutingTargetStage,
     pub reciprocal_rank_selected: bool,
 }
@@ -273,12 +274,17 @@ impl V30Router {
             .enumerate()
             .map(|(rank, candidate)| (candidate.logical, rank))
             .collect::<std::collections::BTreeMap<_, _>>();
+        let mut first_unique_page_ranks = std::collections::BTreeMap::<u32, usize>::new();
         let mut reciprocal_rank_scores = std::collections::BTreeMap::<u32, u64>::new();
         for (rank, candidate) in details.ranked_candidates.iter().enumerate() {
             let page = self
                 .layout
                 .page_for_logical(candidate.logical)
                 .ok_or_else(|| invalid("V30 routing diagnostic page differs"))?;
+            let next_unique_rank = first_unique_page_ranks.len();
+            first_unique_page_ranks
+                .entry(page.identity.ordinal)
+                .or_insert(next_unique_rank);
             let weight = 1_000_000_000_000_u64 / (rank as u64 + 1);
             let score = reciprocal_rank_scores
                 .entry(page.identity.ordinal)
@@ -324,6 +330,9 @@ impl V30Router {
                     leaf_ordinal: page.leaf_ordinal,
                     page_ordinal: page.identity.ordinal,
                     candidate_rank,
+                    first_unique_page_rank: first_unique_page_ranks
+                        .get(&page.identity.ordinal)
+                        .copied(),
                     stage,
                     reciprocal_rank_selected: reciprocal_rank_selected
                         .contains(&page.identity.ordinal),
@@ -738,14 +747,18 @@ mod tests {
         assert_eq!(reports.len(), 4);
         assert_eq!(reports[0].stage, V30RoutingTargetStage::SelectedPage);
         assert_eq!(reports[0].candidate_rank, Some(0));
+        assert_eq!(reports[0].first_unique_page_rank, Some(0));
         assert_eq!(reports[1].stage, V30RoutingTargetStage::PageReducer);
         assert_eq!(reports[1].candidate_rank, Some(15));
+        assert_eq!(reports[1].first_unique_page_rank, Some(12));
         assert!(reports[1].reciprocal_rank_selected);
         assert_eq!(reports[2].stage, V30RoutingTargetStage::CandidateRetention);
         assert_eq!(reports[2].candidate_rank, None);
+        assert_eq!(reports[2].first_unique_page_rank, None);
         assert!(!reports[2].reciprocal_rank_selected);
         assert_eq!(reports[3].stage, V30RoutingTargetStage::LeafFrontier);
         assert_eq!(reports[3].candidate_rank, None);
+        assert_eq!(reports[3].first_unique_page_rank, None);
         assert_eq!(
             reports
                 .iter()

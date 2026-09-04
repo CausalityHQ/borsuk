@@ -395,6 +395,7 @@ fn diagnostic_bytes(
         "claim_eligible": false,
         "diagnostic": {
             "candidate_rank": report.candidate_rank,
+            "first_unique_page_rank": report.first_unique_page_rank,
             "leaf_ordinal": report.leaf_ordinal,
             "logical": report.logical,
             "page_ordinal": report.page_ordinal,
@@ -988,6 +989,7 @@ mod tests {
                 leaf_ordinal: 3,
                 page_ordinal: 11,
                 candidate_rank: None,
+                first_unique_page_rank: Some(12),
                 stage: V30RoutingTargetStage::CandidateRetention,
                 reciprocal_rank_selected: false,
             },
@@ -995,7 +997,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             bytes,
-            b"{\"claim_eligible\":false,\"diagnostic\":{\"candidate_rank\":null,\"leaf_ordinal\":3,\"logical\":25,\"page_ordinal\":11,\"reciprocal_rank_selected\":false,\"stage\":\"candidate-retention\"},\"query_ordinal\":7,\"schema_version\":1}\n"
+            b"{\"claim_eligible\":false,\"diagnostic\":{\"candidate_rank\":null,\"first_unique_page_rank\":12,\"leaf_ordinal\":3,\"logical\":25,\"page_ordinal\":11,\"reciprocal_rank_selected\":false,\"stage\":\"candidate-retention\"},\"query_ordinal\":7,\"schema_version\":1}\n"
         );
     }
 
