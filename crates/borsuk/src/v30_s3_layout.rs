@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::BinaryHeap,
+    collections::{BTreeSet, BinaryHeap},
     io::{Cursor, Read, Write},
     sync::Arc,
 };
@@ -282,6 +282,306 @@ where
 
     let mut cleanup_error = None;
     for key in error_keys.iter().chain(&selected_keys).rev() {
+        if let Err(error) = scratch.remove_scratch(key) {
+            cleanup_error.get_or_insert(error);
+        }
+    }
+    match (result, cleanup_error) {
+        (Err(error), _) => Err(error),
+        (Ok(_), Some(error)) => Err(error),
+        (Ok(value), None) => Ok(value),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V30LayoutRecord {
+    pub(crate) leaf_ordinal: u32,
+    pub(crate) source_ordinal: u64,
+    pub(crate) base_code: Vec<u8>,
+    pub(crate) high_code: Option<Vec<u8>>,
+    pub(crate) vector: [f32; 96],
+}
+
+impl V30LayoutRecord {
+    pub(crate) fn key(&self) -> (u32, &[u8], u64) {
+        (self.leaf_ordinal, &self.base_code, self.source_ordinal)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.base_code.len() != 24
+            || self.high_code.as_ref().is_some_and(|code| code.len() != 48)
+            || self.vector.iter().any(|value| !value.is_finite())
+            || self.vector.iter().map(|value| value * value).sum::<f32>() <= 0.0
+        {
+            return Err(invalid("V30 layout record authority differs"));
+        }
+        Ok(())
+    }
+}
+
+const LAYOUT_RECORD_BYTES: usize = 4 + 8 + 24 + 1 + 48 + 96 * 4;
+const MAX_MERGE_FAN_IN: usize = 32;
+
+fn write_layout_record(output: &mut dyn Write, record: &V30LayoutRecord) -> Result<()> {
+    record.validate()?;
+    scratch_io(output.write_all(&record.leaf_ordinal.to_le_bytes()))?;
+    scratch_io(output.write_all(&record.source_ordinal.to_le_bytes()))?;
+    scratch_io(output.write_all(&record.base_code))?;
+    scratch_io(output.write_all(&[u8::from(record.high_code.is_some())]))?;
+    if let Some(code) = &record.high_code {
+        scratch_io(output.write_all(code))?;
+    } else {
+        scratch_io(output.write_all(&[0_u8; 48]))?;
+    }
+    for value in record.vector {
+        scratch_io(output.write_all(&value.to_le_bytes()))?;
+    }
+    Ok(())
+}
+
+fn read_layout_record(reader: &mut dyn Read) -> Result<Option<V30LayoutRecord>> {
+    let mut bytes = [0_u8; LAYOUT_RECORD_BYTES];
+    match scratch_io(reader.read(&mut bytes[..1]))? {
+        0 => return Ok(None),
+        1 => scratch_io(reader.read_exact(&mut bytes[1..]))?,
+        _ => unreachable!("one-byte reads cannot return more than one byte"),
+    }
+    let leaf_ordinal = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+    let source_ordinal = u64::from_le_bytes(bytes[4..12].try_into().unwrap());
+    let base_code = bytes[12..36].to_vec();
+    let high_code = match bytes[36] {
+        0 if bytes[37..85].iter().all(|value| *value == 0) => None,
+        1 => Some(bytes[37..85].to_vec()),
+        _ => return Err(invalid("V30 layout scratch fidelity differs")),
+    };
+    let mut vector = [0.0_f32; 96];
+    for (dimension, value) in vector.iter_mut().enumerate() {
+        let start = 85 + dimension * 4;
+        *value = f32::from_le_bytes(bytes[start..start + 4].try_into().unwrap());
+    }
+    let record = V30LayoutRecord {
+        leaf_ordinal,
+        source_ordinal,
+        base_code,
+        high_code,
+        vector,
+    };
+    record.validate()?;
+    Ok(Some(record))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LayoutHeapEntry {
+    leaf_ordinal: u32,
+    base_code: Vec<u8>,
+    source_ordinal: u64,
+    run: usize,
+}
+
+impl Ord for LayoutHeapEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .leaf_ordinal
+            .cmp(&self.leaf_ordinal)
+            .then_with(|| other.base_code.cmp(&self.base_code))
+            .then_with(|| other.source_ordinal.cmp(&self.source_ordinal))
+            .then_with(|| other.run.cmp(&self.run))
+    }
+}
+
+impl PartialOrd for LayoutHeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn flush_layout_run<S: V30Scratch>(
+    scratch: &mut S,
+    live: &mut BTreeSet<String>,
+    buffer: &mut Vec<V30LayoutRecord>,
+    level: usize,
+    ordinal: usize,
+) -> Result<String> {
+    buffer.sort_unstable_by(|left, right| left.key().cmp(&right.key()));
+    let key = format!("v30-layout-{level:02}-{ordinal:08}");
+    let mut write = |output: &mut dyn Write| {
+        for record in buffer.iter() {
+            write_layout_record(output, record)?;
+        }
+        Ok(())
+    };
+    scratch.write_scratch(&key, &mut write)?;
+    live.insert(key.clone());
+    buffer.clear();
+    Ok(key)
+}
+
+fn open_layout_merge<S: V30Scratch>(
+    scratch: &S,
+    keys: &[String],
+) -> Result<(
+    Vec<Box<dyn Read + Send>>,
+    Vec<Option<V30LayoutRecord>>,
+    BinaryHeap<LayoutHeapEntry>,
+)> {
+    if keys.is_empty() || keys.len() > MAX_MERGE_FAN_IN {
+        return Err(invalid("V30 layout merge fan-in differs"));
+    }
+    let mut readers = keys
+        .iter()
+        .map(|key| scratch.open_scratch(key))
+        .collect::<Result<Vec<_>>>()?;
+    let mut current = Vec::with_capacity(readers.len());
+    let mut heap = BinaryHeap::new();
+    for (run, reader) in readers.iter_mut().enumerate() {
+        let record = read_layout_record(reader.as_mut())?;
+        if let Some(record) = &record {
+            heap.push(LayoutHeapEntry {
+                leaf_ordinal: record.leaf_ordinal,
+                base_code: record.base_code.clone(),
+                source_ordinal: record.source_ordinal,
+                run,
+            });
+        }
+        current.push(record);
+    }
+    Ok((readers, current, heap))
+}
+
+fn drain_layout_merge(
+    readers: &mut [Box<dyn Read + Send>],
+    current: &mut [Option<V30LayoutRecord>],
+    heap: &mut BinaryHeap<LayoutHeapEntry>,
+    consume: &mut dyn FnMut(V30LayoutRecord) -> Result<()>,
+) -> Result<()> {
+    let mut previous = None::<(u32, Vec<u8>, u64)>;
+    while let Some(entry) = heap.pop() {
+        let record = current[entry.run]
+            .take()
+            .ok_or_else(|| invalid("V30 layout merge record differs"))?;
+        if record.key()
+            != (
+                entry.leaf_ordinal,
+                entry.base_code.as_slice(),
+                entry.source_ordinal,
+            )
+        {
+            return Err(invalid("V30 layout merge heap differs"));
+        }
+        let key = (
+            record.leaf_ordinal,
+            record.base_code.clone(),
+            record.source_ordinal,
+        );
+        if previous.as_ref().is_some_and(|previous| previous >= &key) {
+            return Err(invalid("V30 layout merge order differs"));
+        }
+        previous = Some(key);
+        consume(record)?;
+        current[entry.run] = read_layout_record(readers[entry.run].as_mut())?;
+        if let Some(next) = &current[entry.run] {
+            heap.push(LayoutHeapEntry {
+                leaf_ordinal: next.leaf_ordinal,
+                base_code: next.base_code.clone(),
+                source_ordinal: next.source_ordinal,
+                run: entry.run,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn consolidate_layout_group<S: V30Scratch>(
+    scratch: &mut S,
+    live: &mut BTreeSet<String>,
+    keys: &[String],
+    level: usize,
+    ordinal: usize,
+) -> Result<String> {
+    let (mut readers, mut current, mut heap) = open_layout_merge(scratch, keys)?;
+    let output_key = format!("v30-layout-{level:02}-{ordinal:08}");
+    let mut write = |output: &mut dyn Write| {
+        drain_layout_merge(&mut readers, &mut current, &mut heap, &mut |record| {
+            write_layout_record(output, &record)
+        })
+    };
+    scratch.write_scratch(&output_key, &mut write)?;
+    drop(readers);
+    live.insert(output_key.clone());
+    for key in keys {
+        scratch.remove_scratch(key)?;
+        live.remove(key);
+    }
+    Ok(output_key)
+}
+
+pub(crate) fn sort_v30_layout_records<I, S>(
+    records: I,
+    sort_memory_rows: usize,
+    scratch: &mut S,
+    consume: &mut dyn FnMut(V30LayoutRecord) -> Result<()>,
+) -> Result<()>
+where
+    I: IntoIterator<Item = V30LayoutRecord>,
+    S: V30Scratch,
+{
+    if sort_memory_rows == 0 {
+        return Err(invalid("V30 layout sort memory differs"));
+    }
+    let mut live = BTreeSet::new();
+    let result = (|| {
+        let mut buffer = Vec::with_capacity(sort_memory_rows);
+        let mut keys = Vec::new();
+        let mut source_rows = 0_u64;
+        for record in records {
+            record.validate()?;
+            if record.source_ordinal != source_rows {
+                return Err(invalid("V30 layout source order differs"));
+            }
+            source_rows += 1;
+            buffer.push(record);
+            if buffer.len() == sort_memory_rows {
+                let ordinal = keys.len();
+                keys.push(flush_layout_run(
+                    scratch,
+                    &mut live,
+                    &mut buffer,
+                    0,
+                    ordinal,
+                )?);
+            }
+        }
+        if !buffer.is_empty() {
+            let ordinal = keys.len();
+            keys.push(flush_layout_run(
+                scratch,
+                &mut live,
+                &mut buffer,
+                0,
+                ordinal,
+            )?);
+        }
+        if source_rows == 0 {
+            return Err(invalid("V30 layout source rows differ"));
+        }
+        let mut level = 1;
+        while keys.len() > MAX_MERGE_FAN_IN {
+            let mut next = Vec::new();
+            for (ordinal, group) in keys.chunks(MAX_MERGE_FAN_IN).enumerate() {
+                next.push(consolidate_layout_group(
+                    scratch, &mut live, group, level, ordinal,
+                )?);
+            }
+            keys = next;
+            level += 1;
+        }
+        let (mut readers, mut current, mut heap) = open_layout_merge(scratch, &keys)?;
+        drain_layout_merge(&mut readers, &mut current, &mut heap, consume)?;
+        drop(readers);
+        Ok(())
+    })();
+    let mut cleanup_error = None;
+    for key in live.iter().rev() {
         if let Err(error) = scratch.remove_scratch(key) {
             cleanup_error.get_or_insert(error);
         }
@@ -662,11 +962,16 @@ mod tests {
     use std::{
         collections::BTreeMap,
         io::{Cursor, Read, Write},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use super::{
-        V30FidelitySelectionConfig, V30Layout, V30LeafRange, V30PageRange, V30Scratch,
-        decode_v30_layout_artifacts, encode_v30_layout_artifacts, select_v30_high_fidelity,
+        V30FidelitySelectionConfig, V30Layout, V30LayoutRecord, V30LeafRange, V30PageRange,
+        V30Scratch, decode_v30_layout_artifacts, encode_v30_layout_artifacts,
+        select_v30_high_fidelity, sort_v30_layout_records,
     };
     use crate::V27PageIdentity;
 
@@ -713,6 +1018,25 @@ mod tests {
     struct Scratch {
         runs: BTreeMap<String, Vec<u8>>,
         peak_write: usize,
+        open_now: Arc<AtomicUsize>,
+        peak_open: Arc<AtomicUsize>,
+    }
+
+    struct TrackedReader {
+        inner: Cursor<Vec<u8>>,
+        open_now: Arc<AtomicUsize>,
+    }
+
+    impl Read for TrackedReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.inner.read(buffer)
+        }
+    }
+
+    impl Drop for TrackedReader {
+        fn drop(&mut self) {
+            self.open_now.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 
     impl V30Scratch for Scratch {
@@ -729,7 +1053,12 @@ mod tests {
         }
 
         fn open_scratch(&self, key: &str) -> crate::Result<Box<dyn Read + Send>> {
-            Ok(Box::new(Cursor::new(self.runs[key].clone())))
+            let open = self.open_now.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak_open.fetch_max(open, Ordering::SeqCst);
+            Ok(Box::new(TrackedReader {
+                inner: Cursor::new(self.runs[key].clone()),
+                open_now: self.open_now.clone(),
+            }))
         }
 
         fn remove_scratch(&mut self, key: &str) -> crate::Result<()> {
@@ -857,6 +1186,45 @@ mod tests {
             )
             .is_err()
         );
+        assert!(scratch.runs.is_empty());
+    }
+
+    #[test]
+    fn v30_s3_layout_external_merge_caps_fan_in_and_preserves_base_only_order() {
+        // Break caught: the final layout opens every spill at once, sorts by the
+        // high-fidelity payload, or loses/duplicates a source during consolidation.
+        let input = (0..130_u64)
+            .map(|source| V30LayoutRecord {
+                leaf_ordinal: ((source * 7) % 5) as u32,
+                source_ordinal: source,
+                base_code: vec![(source % 11) as u8; 24],
+                high_code: source.is_multiple_of(20).then(|| vec![source as u8; 48]),
+                vector: [source as f32 + 1.0; 96],
+            })
+            .collect::<Vec<_>>();
+        let mut scratch = Scratch::default();
+        let mut output = Vec::new();
+        sort_v30_layout_records(input.clone(), 3, &mut scratch, &mut |record| {
+            output.push(record);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(output.len(), input.len());
+        assert!(output.windows(2).all(|pair| pair[0].key() < pair[1].key()));
+        assert_eq!(
+            output
+                .iter()
+                .map(|record| record.source_ordinal)
+                .collect::<std::collections::BTreeSet<_>>(),
+            (0..130).collect()
+        );
+        assert!(scratch.peak_open.load(Ordering::SeqCst) <= 32);
+        assert_eq!(scratch.open_now.load(Ordering::SeqCst), 0);
+        assert!(scratch.runs.is_empty());
+
+        let mut duplicate = input;
+        duplicate[17].source_ordinal = duplicate[16].source_ordinal;
+        assert!(sort_v30_layout_records(duplicate, 3, &mut scratch, &mut |_| Ok(())).is_err());
         assert!(scratch.runs.is_empty());
     }
 }
