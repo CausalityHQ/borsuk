@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from scripts.build_v30_reduced_truth import (
+    _normalize_like_v30,
     build_v30_reduced_truth,
     build_v32_streaming_prefix_truth,
 )
@@ -82,6 +83,17 @@ class V30ReducedTruthTests(unittest.TestCase):
         self.assertEqual(rows[0][:2], [0, 96])
         value = json.loads(receipt)
         self.assertEqual(value["source_rows"], 100)
+        self.assertEqual(value["schema"], "borsuk-v32-prefix-truth-v2")
+        self.assertEqual(value["query_start"], 0)
+        self.assertEqual(value["query_count"], 32)
+        self.assertEqual(value["corpus_manifest_bytes"], len(manifest_bytes))
+        self.assertEqual(value["truth_row_semantics"], "window-relative")
+        self.assertEqual(value["truth_id_space"], "source-ordinal")
+        self.assertEqual(value["top_k"], 10)
+        self.assertEqual(value["distance"], "squared-l2-f64-fixed-dimension-order")
+        self.assertEqual(value["corpus_normalization"], "f64-l2-once-to-f32")
+        self.assertEqual(value["query_normalization"], "f64-l2-twice-to-f32")
+        self.assertEqual(value["tie_break"], "source-ordinal-ascending")
         self.assertEqual(value["shards_read"], 2)
         self.assertEqual(value["corpus_shards"], manifest["shards"])
         self.assertEqual(value["truth_sha256"], hashlib.sha256(truth).hexdigest())
@@ -91,6 +103,25 @@ class V30ReducedTruthTests(unittest.TestCase):
         )
         self.assertGreater(value["rank_10_11_tie_queries"], 0)
         self.assertFalse(value["claim_eligible"])
+
+    def test_v32_normalization_matches_the_frozen_v30_float_contract(self) -> None:
+        values = np.zeros((2, 96), dtype=np.float32)
+        values[0, 0] = np.float32(0.9999)
+        generated = np.random.default_rng(1).normal(size=(365, 96)).astype(np.float32)
+        values[1] = generated[364] * np.float32(
+            1.0 / np.linalg.norm(generated[364].astype(np.float64))
+        )
+        once = _normalize_like_v30(values)
+        twice = _normalize_like_v30(once)
+        for source, normalized in zip(values, once, strict=True):
+            norm = sum(float(value) * float(value) for value in source) ** 0.5
+            expected = np.asarray([float(value) / norm for value in source], dtype=np.float32)
+            np.testing.assert_array_equal(normalized, expected)
+        for source, normalized in zip(once, twice, strict=True):
+            norm = sum(float(value) * float(value) for value in source) ** 0.5
+            expected = np.asarray([float(value) / norm for value in source], dtype=np.float32)
+            np.testing.assert_array_equal(normalized, expected)
+        self.assertFalse(np.array_equal(once[1], twice[1]))
 
     def test_v32_prefix_truth_matches_monolithic_ids_and_is_deterministic(self) -> None:
         shards = [embeddings(64, start=0), embeddings(64, start=64)]

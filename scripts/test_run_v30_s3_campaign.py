@@ -183,6 +183,9 @@ class V30SpotCampaignTests(unittest.TestCase):
             truth_uri="s3://authority/deep-image/neighbors.parquet",
             truth_sha256="e" * 64,
             truth_bytes=500_000,
+            truth_receipt_uri="s3://authority/deep-image/truth-receipt.json",
+            truth_receipt_sha256="f" * 64,
+            truth_receipt_bytes=2_000,
             output_prefix="s3://authority/v32/containment-1m-a0001/",
             source_rows=1_000_000,
             query_start=0,
@@ -327,6 +330,9 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("value['serving']['page_locations']", script)
             self.assertIn("--source-rows 1000000", script)
             self.assertIn("--query-count 32", script)
+            self.assertIn("--truth-receipt /run/v32/truth-receipt.json", script)
+            self.assertIn("s3://authority/deep-image/truth-receipt.json", script)
+            self.assertIn("f" * 64, script)
             self.assertIn("--root-beam 8", script)
             self.assertIn("--leaf-beam 64", script)
             self.assertIn("rss_limit_bytes=3221225472", script)

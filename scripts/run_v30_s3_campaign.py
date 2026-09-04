@@ -91,6 +91,9 @@ class V32ContainmentSpotPlan:
     truth_uri: str
     truth_sha256: str
     truth_bytes: int
+    truth_receipt_uri: str
+    truth_receipt_sha256: str
+    truth_receipt_bytes: int
     output_prefix: str
     source_rows: int
     query_start: int
@@ -233,6 +236,11 @@ def _validate_containment(plan: V32ContainmentSpotPlan) -> None:
         ),
         (plan.query_uri, plan.query_sha256, plan.query_bytes),
         (plan.truth_uri, plan.truth_sha256, plan.truth_bytes),
+        (
+            plan.truth_receipt_uri,
+            plan.truth_receipt_sha256,
+            plan.truth_receipt_bytes,
+        ),
     )
     if (
         not plan.attempt_id.startswith("v32-")
@@ -584,6 +592,9 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
         " --truth-parquet /run/v32/neighbors.parquet"
         f" --truth-sha256 {shlex.quote(plan.truth_sha256)}"
         f" --truth-bytes {plan.truth_bytes}"
+        " --truth-receipt /run/v32/truth-receipt.json"
+        f" --truth-receipt-sha256 {shlex.quote(plan.truth_receipt_sha256)}"
+        f" --truth-receipt-bytes {plan.truth_receipt_bytes}"
         f" --source-rows {plan.source_rows}"
         f" --query-start {plan.query_start}"
         f" --query-count {plan.query_count}"
@@ -626,12 +637,15 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
             f"aws s3 cp --only-show-errors {shlex.quote(plan.construction_manifest_uri)} \"$root/manifest.json\"",
             f"aws s3 cp --only-show-errors {shlex.quote(plan.query_uri)} \"$root/test.parquet\"",
             f"aws s3 cp --only-show-errors {shlex.quote(plan.truth_uri)} \"$root/neighbors.parquet\"",
+            f"aws s3 cp --only-show-errors {shlex.quote(plan.truth_receipt_uri)} \"$root/truth-receipt.json\"",
             f'test "$(stat -c %s "$root/manifest.json")" -eq {plan.construction_manifest_bytes}',
             f"printf '%s  %s\\n' {plan.construction_manifest_sha256} \"$root/manifest.json\" | sha256sum --check --status",
             f'test "$(stat -c %s "$root/test.parquet")" -eq {plan.query_bytes}',
             f"printf '%s  %s\\n' {plan.query_sha256} \"$root/test.parquet\" | sha256sum --check --status",
             f'test "$(stat -c %s "$root/neighbors.parquet")" -eq {plan.truth_bytes}',
             f"printf '%s  %s\\n' {plan.truth_sha256} \"$root/neighbors.parquet\" | sha256sum --check --status",
+            f'test "$(stat -c %s "$root/truth-receipt.json")" -eq {plan.truth_receipt_bytes}',
+            f"printf '%s  %s\\n' {plan.truth_receipt_sha256} \"$root/truth-receipt.json\" | sha256sum --check --status",
             "python3 - <<'PY' >\"$root/resident.tsv\"",
             "import json",
             "from pathlib import Path",

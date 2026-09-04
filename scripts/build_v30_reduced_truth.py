@@ -38,6 +38,22 @@ def _matrix(payload: bytes, *, role: str, physical_rows: int) -> np.ndarray:
     return matrix
 
 
+def _normalize_like_v30(matrix: np.ndarray) -> np.ndarray:
+    """Apply V30's ordered float64 L2 normalization and float32 cast."""
+
+    if matrix.ndim != 2 or matrix.shape[1] != 96 or matrix.dtype != np.float32:
+        raise ValueError("V32 prefix truth normalization shape differs")
+    values = matrix.astype(np.float64)
+    squared_norms = np.zeros(len(values), dtype=np.float64)
+    for dimension in range(96):
+        component = values[:, dimension]
+        squared_norms += component * component
+    norms = np.sqrt(squared_norms)
+    if not np.isfinite(norms).all() or np.any(norms <= 0.0):
+        raise ValueError("V32 prefix truth normalization norm differs")
+    return np.asarray(values / norms[:, None], dtype=np.float32)
+
+
 def _truth_parquet(truth: list[list[int]]) -> bytes:
     child = pa.field("item", pa.int64(), nullable=False)
     flat = pa.array(np.asarray(truth, dtype=np.int64).reshape(-1), type=pa.int64())
@@ -148,7 +164,8 @@ def build_v32_streaming_prefix_truth(
     queries = _matrix(query_parquet, role="query", physical_rows=query_rows)
     if query_start + query_count > query_rows:
         raise ValueError("V32 prefix truth query range differs")
-    queries = queries[query_start : query_start + query_count]
+    queries = _normalize_like_v30(queries[query_start : query_start + query_count])
+    queries = _normalize_like_v30(queries)
     best_distances = np.full((query_count, 11), np.inf, dtype=np.float64)
     best_ordinals = np.full((query_count, 11), np.iinfo(np.int64).max, dtype=np.int64)
     next_row = 0
@@ -186,9 +203,9 @@ def build_v32_streaming_prefix_truth(
             or hashlib.sha256(payload).hexdigest() != shard["sha256"]
         ):
             raise ValueError("V32 prefix truth shard byte authority differs")
-        corpus = _matrix(
+        corpus = _normalize_like_v30(_matrix(
             payload, role="corpus", physical_rows=shard["physical_row_count"]
-        )[: shard["row_count"]]
+        )[: shard["row_count"]])
         distances = _exact_distance_matrix(corpus, queries)
         for query_index in range(query_count):
             shard_count = min(11, len(corpus))
@@ -212,21 +229,31 @@ def build_v32_streaming_prefix_truth(
     receipt = json.dumps(
         {
             "claim_eligible": False,
+            "corpus_manifest_bytes": corpus_manifest_bytes,
             "corpus_manifest_sha256": corpus_manifest_sha256,
+            "corpus_normalization": "f64-l2-once-to-f32",
             "corpus_shards": manifest["shards"],
+            "distance": "squared-l2-f64-fixed-dimension-order",
             "query_count": query_count,
+            "query_bytes": query_bytes,
+            "query_normalization": "f64-l2-twice-to-f32",
             "query_sha256": query_sha256,
             "query_start": query_start,
             "rank_10_11_tie_queries": int(
                 np.count_nonzero(best_distances[:, 9] == best_distances[:, 10])
             ),
             "shards_read": len(manifest["shards"]),
+            "schema": "borsuk-v32-prefix-truth-v2",
             "source_rows": manifest["source_rows"],
             "status": "passed",
+            "tie_break": "source-ordinal-ascending",
+            "top_k": 10,
             "truth_bytes": len(truth),
+            "truth_id_space": "source-ordinal",
             "truth_ids_sha256": hashlib.sha256(
                 np.asarray(truth_ids, dtype="<i8").tobytes()
             ).hexdigest(),
+            "truth_row_semantics": "window-relative",
             "truth_sha256": hashlib.sha256(truth).hexdigest(),
         },
         allow_nan=False,

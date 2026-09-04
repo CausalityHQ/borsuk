@@ -58,7 +58,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
                 [((64 + row) * 100 + rank) for rank in range(10)]
                 for row in range(32)
             ],
-            type=pa.list_(pa.field("item", pa.int32(), nullable=False), 10),
+            type=pa.list_(pa.field("item", pa.int64(), nullable=False), 10),
         )
         truth_path = directory / "neighbors.parquet"
         pq.write_table(
@@ -94,6 +94,10 @@ class V32NoPageContainmentTests(unittest.TestCase):
                         "page_count": 16,
                         "root_beam": 8,
                     },
+                    "source": {
+                        "corpus_manifest_bytes": 1_938,
+                        "corpus_manifest_sha256": "c" * 64,
+                    },
                 },
                 separators=(",", ":"),
                 sort_keys=True,
@@ -101,6 +105,46 @@ class V32NoPageContainmentTests(unittest.TestCase):
             + b"\n"
         )
         manifest.write_bytes(manifest_bytes)
+        truth_rows = pq.read_table(pa.BufferReader(truth))["neighbors_id"].to_pylist()
+        truth_ids = b"".join(
+            logical.to_bytes(8, "little", signed=True)
+            for row in truth_rows
+            for logical in row
+        )
+        truth_receipt_path = directory / "truth-receipt.json"
+        truth_receipt = (
+            json.dumps(
+                {
+                    "claim_eligible": False,
+                    "corpus_manifest_bytes": 1_938,
+                    "corpus_manifest_sha256": "c" * 64,
+                    "corpus_normalization": "f64-l2-once-to-f32",
+                    "corpus_shards": [{"role": "fixture"}],
+                    "distance": "squared-l2-f64-fixed-dimension-order",
+                    "query_bytes": 5,
+                    "query_count": 32,
+                    "query_normalization": "f64-l2-twice-to-f32",
+                    "query_sha256": hashlib.sha256(b"query").hexdigest(),
+                    "query_start": 64,
+                    "rank_10_11_tie_queries": 0,
+                    "schema": "borsuk-v32-prefix-truth-v2",
+                    "shards_read": 1,
+                    "source_rows": source_rows,
+                    "status": "passed",
+                    "tie_break": "source-ordinal-ascending",
+                    "top_k": 10,
+                    "truth_bytes": len(truth),
+                    "truth_id_space": "source-ordinal",
+                    "truth_ids_sha256": hashlib.sha256(truth_ids).hexdigest(),
+                    "truth_row_semantics": "window-relative",
+                    "truth_sha256": hashlib.sha256(truth).hexdigest(),
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+            + b"\n"
+        )
+        truth_receipt_path.write_bytes(truth_receipt)
         query = directory / "test.parquet"
         query.write_bytes(b"query")
         logical_sources_path = directory / "logical-sources.arrow"
@@ -135,6 +179,11 @@ class V32NoPageContainmentTests(unittest.TestCase):
                 ),
                 truth=LocalArtifact(
                     truth_path, hashlib.sha256(truth).hexdigest(), len(truth)
+                ),
+                truth_receipt=LocalArtifact(
+                    truth_receipt_path,
+                    hashlib.sha256(truth_receipt).hexdigest(),
+                    len(truth_receipt),
                 ),
                 source_rows=source_rows,
                 query_start=64,
@@ -424,6 +473,41 @@ class V32NoPageContainmentTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "truth byte authority"):
                 build_v32_containment_commands(drift, truth)
+
+            receipt_value = json.loads(plan.truth_receipt.path.read_bytes())
+            receipt_value["query_start"] = 0
+            receipt_bytes = (
+                json.dumps(receipt_value, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+            plan.truth_receipt.path.write_bytes(receipt_bytes)
+            receipt_drift = V32ContainmentPlan(
+                **{
+                    **plan.__dict__,
+                    "truth_receipt": LocalArtifact(
+                        plan.truth_receipt.path,
+                        hashlib.sha256(receipt_bytes).hexdigest(),
+                        len(receipt_bytes),
+                    ),
+                }
+            )
+            with self.assertRaisesRegex(ValueError, "truth receipt authority"):
+                run_v32_no_page_containment(
+                    receipt_drift,
+                    truth,
+                    invoke=lambda _command: self.fail(
+                        "diagnostic ran after truth receipt drift"
+                    ),
+                )
+
+            plan.truth_receipt.path.write_bytes(
+                json.dumps(
+                    {**receipt_value, "query_start": 64},
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+                + b"\n"
+            )
 
             manifest_value = json.loads(plan.manifest.path.read_bytes())
             manifest_value["layout"]["maximum_routing_leaf_rows"] = 1_025

@@ -35,6 +35,7 @@ class V32ContainmentPlan:
     query: LocalArtifact
     logical_sources: LocalArtifact
     truth: LocalArtifact
+    truth_receipt: LocalArtifact
     source_rows: int
     query_start: int
     query_count: int
@@ -132,6 +133,7 @@ def _read_truth(
     _validate_artifact(plan.manifest)
     _validate_artifact(plan.query)
     _validate_artifact(plan.truth)
+    _validate_artifact(plan.truth_receipt)
     if (
         not plan.qualifier.is_absolute()
         or not plan.artifact_dir.is_absolute()
@@ -152,16 +154,13 @@ def _read_truth(
     if table.schema.names != ["neighbors_id"] or table.num_rows != QUERY_COUNT:
         raise ValueError("V32 containment truth schema differs")
     field = table.schema.field("neighbors_id")
-    item = (
-        field.type.value_field
-        if pa.types.is_list(field.type) or pa.types.is_fixed_size_list(field.type)
-        else None
-    )
+    item = field.type.value_field if pa.types.is_fixed_size_list(field.type) else None
     if (
         field.nullable
         or item is None
         or item.nullable
-        or not (pa.types.is_int32(item.type) or pa.types.is_int64(item.type))
+        or not pa.types.is_int64(item.type)
+        or field.type.list_size != RECALL_K
     ):
         raise ValueError("V32 containment truth schema differs")
     rows = table.column("neighbors_id").to_pylist()
@@ -178,7 +177,78 @@ def _read_truth(
         ):
             raise ValueError("V32 containment truth membership differs")
         result.append(tuple(row[:RECALL_K]))
+    _read_truth_receipt(plan, truth_bytes, result)
     return tuple(result)
+
+
+def _read_truth_receipt(
+    plan: V32ContainmentPlan,
+    truth_bytes: bytes,
+    truth: list[tuple[int, ...]],
+) -> None:
+    payload = plan.truth_receipt.path.read_bytes()
+    if (
+        len(payload) != plan.truth_receipt.encoded_bytes
+        or hashlib.sha256(payload).hexdigest() != plan.truth_receipt.sha256
+        or not payload.endswith(b"\n")
+        or b"\n" in payload[:-1]
+    ):
+        raise ValueError("V32 containment truth receipt byte authority differs")
+    try:
+        receipt = json.loads(payload)
+        manifest = json.loads(plan.manifest.path.read_bytes())
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("V32 containment truth receipt JSON differs") from error
+    expected = json.dumps(
+        receipt, allow_nan=False, separators=(",", ":"), sort_keys=True
+    ).encode() + b"\n"
+    source = manifest.get("source") if type(manifest) is dict else None
+    keys = {
+        "claim_eligible", "corpus_manifest_bytes", "corpus_manifest_sha256",
+        "corpus_normalization", "corpus_shards", "distance", "query_bytes",
+        "query_count", "query_normalization", "query_sha256", "query_start",
+        "rank_10_11_tie_queries", "schema", "shards_read", "source_rows",
+        "status", "tie_break", "top_k", "truth_bytes", "truth_id_space",
+        "truth_ids_sha256", "truth_row_semantics", "truth_sha256",
+    }
+    truth_ids = b"".join(
+        logical.to_bytes(8, "little", signed=True)
+        for row in truth
+        for logical in row
+    )
+    shards = receipt.get("corpus_shards") if type(receipt) is dict else None
+    if (
+        payload != expected
+        or type(receipt) is not dict
+        or set(receipt) != keys
+        or receipt["schema"] != "borsuk-v32-prefix-truth-v2"
+        or receipt["claim_eligible"] is not False
+        or receipt["status"] != "passed"
+        or receipt["truth_row_semantics"] != "window-relative"
+        or receipt["truth_id_space"] != "source-ordinal"
+        or receipt["top_k"] != RECALL_K
+        or receipt["distance"] != "squared-l2-f64-fixed-dimension-order"
+        or receipt["corpus_normalization"] != "f64-l2-once-to-f32"
+        or receipt["query_normalization"] != "f64-l2-twice-to-f32"
+        or receipt["tie_break"] != "source-ordinal-ascending"
+        or receipt["query_sha256"] != plan.query.sha256
+        or receipt["query_bytes"] != plan.query.encoded_bytes
+        or receipt["query_start"] != plan.query_start
+        or receipt["query_count"] != plan.query_count
+        or receipt["source_rows"] != plan.source_rows
+        or receipt["truth_sha256"] != plan.truth.sha256
+        or receipt["truth_bytes"] != len(truth_bytes)
+        or receipt["truth_ids_sha256"] != hashlib.sha256(truth_ids).hexdigest()
+        or type(receipt["rank_10_11_tie_queries"]) is not int
+        or not 0 <= receipt["rank_10_11_tie_queries"] <= QUERY_COUNT
+        or type(shards) is not list
+        or not shards
+        or receipt["shards_read"] != len(shards)
+        or type(source) is not dict
+        or receipt["corpus_manifest_sha256"] != source.get("corpus_manifest_sha256")
+        or receipt["corpus_manifest_bytes"] != source.get("corpus_manifest_bytes")
+    ):
+        raise ValueError("V32 containment truth receipt authority differs")
 
 
 def _read_logical_sources(plan: V32ContainmentPlan) -> tuple[int, ...]:
@@ -490,14 +560,16 @@ def run_v32_no_page_containment(
         "page_body_reads": 0,
         "perfect_queries": perfect,
         "query_count": QUERY_COUNT,
+        "query_start": plan.query_start,
         "query_sha256": plan.query.sha256,
         "root_beam": plan.root_beam,
         "samples": samples,
-        "schema_version": 1,
+        "schema_version": 2,
         "selected_page_hits": total_hits,
         "source_rows": plan.source_rows,
         "status": "passed" if not failed else "failed",
         "truth_sha256": plan.truth.sha256,
+        "truth_receipt_sha256": plan.truth_receipt.sha256,
     }
     return json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
 
@@ -544,6 +616,9 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--truth-parquet", type=Path, required=True)
     parser.add_argument("--truth-sha256", required=True)
     parser.add_argument("--truth-bytes", type=int, required=True)
+    parser.add_argument("--truth-receipt", type=Path, required=True)
+    parser.add_argument("--truth-receipt-sha256", required=True)
+    parser.add_argument("--truth-receipt-bytes", type=int, required=True)
     parser.add_argument("--source-rows", type=int, required=True)
     parser.add_argument("--query-start", type=int, required=True)
     parser.add_argument("--query-count", type=int, required=True)
@@ -566,6 +641,11 @@ def main(arguments: list[str] | None = None) -> int:
         ),
         truth=LocalArtifact(
             args.truth_parquet, args.truth_sha256, args.truth_bytes
+        ),
+        truth_receipt=LocalArtifact(
+            args.truth_receipt,
+            args.truth_receipt_sha256,
+            args.truth_receipt_bytes,
         ),
         source_rows=args.source_rows,
         query_start=args.query_start,
