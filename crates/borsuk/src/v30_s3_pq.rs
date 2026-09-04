@@ -244,11 +244,14 @@ impl V30QueryTable {
         })
     }
 
-    pub(crate) fn score_block(&self, codes: &[&[u8]]) -> Result<Vec<f32>> {
-        if codes.len() > BLOCK_ROWS || codes.iter().any(|code| code.len() != self.width.bytes()) {
+    pub(crate) fn score_block_into(&self, codes: &[&[u8]], scores: &mut [f32]) -> Result<()> {
+        if codes.len() > BLOCK_ROWS
+            || scores.len() != codes.len()
+            || codes.iter().any(|code| code.len() != self.width.bytes())
+        {
             return Err(invalid("V30 PQ8 scoring block differs"));
         }
-        let mut scores = vec![0.0_f32; codes.len()];
+        scores.fill(0.0);
         for subquantizer in 0..self.width.subquantizers() {
             for (row, code) in codes.iter().enumerate() {
                 scores[row] += self.tables[subquantizer][usize::from(code[subquantizer])];
@@ -260,7 +263,7 @@ impl V30QueryTable {
         {
             return Err(invalid("V30 PQ8 score differs"));
         }
-        Ok(scores)
+        Ok(())
     }
 }
 
@@ -1221,7 +1224,11 @@ mod tests {
         let expected = score_v30_codes(&book, &codes, &query).unwrap();
         let table = V30QueryTable::new(&book, &query).unwrap();
         let references = codes.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let serving = table.score_block(&references).unwrap();
+        let mut in_place = [f32::INFINITY; 32];
+        table
+            .score_block_into(&references, &mut in_place[..references.len()])
+            .unwrap();
+        let serving = &in_place[..references.len()];
         assert_eq!(serving.len(), expected.len());
         assert!(
             serving

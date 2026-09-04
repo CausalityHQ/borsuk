@@ -265,6 +265,12 @@ impl V30Router {
         }
 
         let mut candidates = BinaryHeap::with_capacity(arm.candidate_depth + 1);
+        let mut base = Vec::with_capacity(32);
+        let mut base_slots = Vec::with_capacity(32);
+        let mut high = Vec::with_capacity(32);
+        let mut high_slots = Vec::with_capacity(32);
+        let mut base_scores = [0.0_f32; 32];
+        let mut high_scores = [0.0_f32; 32];
         for (_, leaf) in leaves {
             let range = &self.layout.leaves()[leaf];
             observer(range.leaf_ordinal);
@@ -276,10 +282,10 @@ impl V30Router {
             let range_end = range.logical_start + range.row_count;
             for block_start in (range.logical_start..range_end).step_by(32) {
                 let block_end = range_end.min(block_start + 32);
-                let mut base = Vec::with_capacity(32);
-                let mut base_slots = Vec::with_capacity(32);
-                let mut high = Vec::with_capacity(32);
-                let mut high_slots = Vec::with_capacity(32);
+                base.clear();
+                base_slots.clear();
+                high.clear();
+                high_slots.clear();
                 for logical in block_start..block_end {
                     let slot = usize::try_from(logical - block_start)
                         .map_err(|_| invalid("V30 candidate block offset overflows"))?;
@@ -296,10 +302,12 @@ impl V30Router {
                     }
                 }
                 let mut scores = [0.0_f32; 32];
-                for (slot, score) in base_slots.into_iter().zip(base_table.score_block(&base)?) {
+                base_table.score_block_into(&base, &mut base_scores[..base.len()])?;
+                high_table.score_block_into(&high, &mut high_scores[..high.len()])?;
+                for (&slot, &score) in base_slots.iter().zip(&base_scores) {
                     scores[slot] = score;
                 }
-                for (slot, score) in high_slots.into_iter().zip(high_table.score_block(&high)?) {
+                for (&slot, &score) in high_slots.iter().zip(&high_scores) {
                     scores[slot] = score;
                 }
                 for logical in block_start..block_end {
