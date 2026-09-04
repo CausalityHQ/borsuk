@@ -3,12 +3,13 @@
 use std::{
     collections::BTreeMap,
     fs::{self, File},
-    io::{Read, Write},
+    io::{BufReader, BufWriter, Read, Write},
     path::{Path as FsPath, PathBuf},
     sync::Arc,
 };
 
-use arrow_array::{Array, FixedSizeListArray, Float32Array};
+use arrow_array::{Array, ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt64Array};
+use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, V27HierarchyConfig, V27PageIdentity, V27PageRow, V30ConstructionBuilder,
@@ -459,8 +460,34 @@ struct S3PageSink {
     prefix: String,
 }
 
+struct LogicalSourcePageSink {
+    inner: S3PageSink,
+    source_writer: BufWriter<File>,
+}
+
+impl V30PageSink for LogicalSourcePageSink {
+    fn write_page(
+        &mut self,
+        identity: &V27PageIdentity,
+        bytes: &[u8],
+        rows: &[V27PageRow],
+    ) -> borsuk::Result<()> {
+        for row in rows {
+            self.source_writer
+                .write_all(&row.source_ordinal.to_le_bytes())
+                .map_err(|source| io_error(FsPath::new("logical-sources.raw"), source))?;
+        }
+        self.inner.write_page(identity, bytes, rows)
+    }
+}
+
 impl V30PageSink for S3PageSink {
-    fn write_page(&mut self, identity: &V27PageIdentity, bytes: &[u8]) -> borsuk::Result<()> {
+    fn write_page(
+        &mut self,
+        identity: &V27PageIdentity,
+        bytes: &[u8],
+        _rows: &[V27PageRow],
+    ) -> borsuk::Result<()> {
         let path = Path::from(format!("{}pages/{}.arrow", self.prefix, identity.sha256));
         self.runtime.block_on(async {
             self.store
@@ -485,6 +512,115 @@ fn put_bytes(
             .map(|_| ())
             .map_err(BorsukError::from)
     })
+}
+
+fn encode_logical_sources(
+    raw_path: &FsPath,
+    arrow_path: &FsPath,
+    source_rows: u64,
+    batch_rows: usize,
+) -> borsuk::Result<()> {
+    let expected_rows = usize::try_from(source_rows)
+        .map_err(|_| invalid("V32 logical source row count overflows"))?;
+    if expected_rows == 0 || batch_rows == 0 {
+        return Err(invalid("V32 logical source row count differs"));
+    }
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "source_ordinal",
+        DataType::UInt64,
+        false,
+    )]));
+    let input = File::open(raw_path).map_err(|source| io_error(raw_path, source))?;
+    let output = File::create(arrow_path).map_err(|source| io_error(arrow_path, source))?;
+    let mut reader = BufReader::new(input);
+    let mut writer =
+        FileWriter::try_new(BufWriter::new(output), &schema).map_err(BorsukError::from)?;
+    let mut seen = vec![0_u8; expected_rows.div_ceil(u8::BITS as usize)];
+    let mut ordinals = Vec::with_capacity(batch_rows.min(expected_rows));
+    for _ in 0..expected_rows {
+        let mut encoded = [0_u8; u64::BITS as usize / u8::BITS as usize];
+        reader
+            .read_exact(&mut encoded)
+            .map_err(|source| io_error(raw_path, source))?;
+        let ordinal = u64::from_le_bytes(encoded);
+        let index = usize::try_from(ordinal)
+            .ok()
+            .filter(|index| *index < expected_rows)
+            .ok_or_else(|| invalid("V32 logical source permutation differs"))?;
+        let mask = 1_u8 << (index % u8::BITS as usize);
+        if seen[index / u8::BITS as usize] & mask != 0 {
+            return Err(invalid("V32 logical source permutation differs"));
+        }
+        seen[index / u8::BITS as usize] |= mask;
+        ordinals.push(ordinal);
+        if ordinals.len() == batch_rows {
+            write_logical_source_batch(&mut writer, &schema, std::mem::take(&mut ordinals))?;
+            ordinals = Vec::with_capacity(batch_rows.min(expected_rows));
+        }
+    }
+    if !ordinals.is_empty() {
+        write_logical_source_batch(&mut writer, &schema, ordinals)?;
+    }
+    let mut extra = [0_u8; 1];
+    if reader
+        .read(&mut extra)
+        .map_err(|source| io_error(raw_path, source))?
+        != 0
+    {
+        return Err(invalid("V32 logical source row count differs"));
+    }
+    writer.finish().map_err(BorsukError::from)
+}
+
+fn write_logical_source_batch<W: Write>(
+    writer: &mut FileWriter<W>,
+    schema: &Arc<Schema>,
+    ordinals: Vec<u64>,
+) -> borsuk::Result<()> {
+    let batch = RecordBatch::try_new(
+        Arc::clone(schema),
+        vec![Arc::new(UInt64Array::from(ordinals)) as ArrayRef],
+    )
+    .map_err(BorsukError::from)?;
+    writer.write(&batch).map_err(BorsukError::from)
+}
+
+fn put_file(
+    runtime: &Runtime,
+    store: &Arc<dyn ObjectStore>,
+    object: String,
+    file_path: &FsPath,
+) -> borsuk::Result<(String, u64)> {
+    let mut file = File::open(file_path).map_err(|source| io_error(file_path, source))?;
+    let mut upload = runtime
+        .block_on(store.put_multipart(&Path::from(object)))
+        .map_err(BorsukError::from)?;
+    let mut digest = Sha256::new();
+    let mut encoded_bytes = 0_u64;
+    let mut buffer = vec![0_u8; 8 * 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|source| io_error(file_path, source))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        encoded_bytes = encoded_bytes
+            .checked_add(read as u64)
+            .ok_or_else(|| invalid("V32 logical source byte count overflows"))?;
+        if let Err(error) = runtime
+            .block_on(upload.put_part(PutPayload::from(Bytes::copy_from_slice(&buffer[..read]))))
+        {
+            let _ = runtime.block_on(upload.abort());
+            return Err(BorsukError::from(error));
+        }
+    }
+    if let Err(error) = runtime.block_on(upload.complete()) {
+        let _ = runtime.block_on(upload.abort());
+        return Err(BorsukError::from(error));
+    }
+    Ok((format!("{:x}", digest.finalize()), encoded_bytes))
 }
 
 fn execute_with_store(args: Args, store: Arc<dyn ObjectStore>) -> borsuk::Result<Vec<u8>> {
@@ -515,10 +651,18 @@ fn execute_with_store(args: Args, store: Arc<dyn ObjectStore>) -> borsuk::Result
         };
         let output_path = object_path(&args.output_s3_prefix)?.to_string();
         let output_path = format!("{}/", output_path.trim_end_matches('/'));
-        let mut pages = S3PageSink {
-            runtime: Arc::clone(&runtime),
-            store: Arc::clone(&store),
-            prefix: output_path.clone(),
+        let logical_sources_raw = args.scratch_dir.join("logical-sources.raw");
+        let logical_sources_arrow = args.scratch_dir.join("logical-sources.arrow");
+        let mut pages = LogicalSourcePageSink {
+            inner: S3PageSink {
+                runtime: Arc::clone(&runtime),
+                store: Arc::clone(&store),
+                prefix: output_path.clone(),
+            },
+            source_writer: BufWriter::new(
+                File::create(&logical_sources_raw)
+                    .map_err(|source| io_error(&logical_sources_raw, source))?,
+            ),
         };
         let built = V30ConstructionBuilder::build(
             &mut rows,
@@ -545,6 +689,23 @@ fn execute_with_store(args: Args, store: Arc<dyn ObjectStore>) -> borsuk::Result
             return Err(error);
         }
         let artifacts = built?.into_artifacts()?;
+        pages
+            .source_writer
+            .flush()
+            .map_err(|source| io_error(&logical_sources_raw, source))?;
+        drop(pages);
+        encode_logical_sources(
+            &logical_sources_raw,
+            &logical_sources_arrow,
+            artifacts.source_rows,
+            1_000_000,
+        )?;
+        let (logical_sources_sha256, logical_sources_bytes) = put_file(
+            &runtime,
+            &store,
+            format!("{output_path}logical-sources.arrow"),
+            &logical_sources_arrow,
+        )?;
         let hierarchy_files = [
             (
                 "roots.arrow",
@@ -631,6 +792,14 @@ fn execute_with_store(args: Args, store: Arc<dyn ObjectStore>) -> borsuk::Result
             })
             .collect::<Vec<_>>();
         let manifest_bytes = canonical_bytes(serde_json::json!({
+            "diagnostics": {
+                "logical_sources": disk_artifact(
+                    "logical-sources.arrow",
+                    "v32-logical-sources-arrow",
+                    &logical_sources_sha256,
+                    logical_sources_bytes,
+                ),
+            },
             "hierarchy": {
                 "leaves": disk_artifact("leaves.arrow", &artifacts.hierarchy.leaves.role, &artifacts.hierarchy.leaves.sha256, artifacts.hierarchy.leaves.encoded_bytes),
                 "roots": disk_artifact("roots.arrow", &artifacts.hierarchy.roots.role, &artifacts.hierarchy.roots.sha256, artifacts.hierarchy.roots.encoded_bytes),
@@ -725,7 +894,8 @@ fn main() {
 mod tests {
     use std::{fs, io::Cursor, sync::Arc};
 
-    use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch};
+    use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt64Array};
+    use arrow_ipc::reader::FileReader;
     use arrow_schema::{DataType, Field, Schema};
     use bytes::Bytes;
     use object_store::{ObjectStore, ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
@@ -910,6 +1080,40 @@ mod tests {
                 location["sha256"],
                 format!("{:x}", Sha256::digest(&location_bytes))
             );
+            let logical_sources = &manifest["diagnostics"]["logical_sources"];
+            assert_eq!(logical_sources["file"], "logical-sources.arrow");
+            assert_eq!(logical_sources["role"], "v32-logical-sources-arrow");
+            let logical_source_bytes = store
+                .get(&Path::from("v30/build-a0001/logical-sources.arrow"))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            assert_eq!(logical_sources["encoded_bytes"], logical_source_bytes.len());
+            assert_eq!(
+                logical_sources["sha256"],
+                format!("{:x}", Sha256::digest(&logical_source_bytes))
+            );
+            let reader = FileReader::try_new(Cursor::new(logical_source_bytes), None).unwrap();
+            assert_eq!(
+                reader.schema().as_ref(),
+                &Schema::new(vec![Field::new("source_ordinal", DataType::UInt64, false)])
+            );
+            let mut source_rows = 0;
+            let mut source_set = std::collections::BTreeSet::new();
+            for batch in reader {
+                let batch = batch.unwrap();
+                let sources = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .unwrap();
+                source_rows += sources.len();
+                source_set.extend(sources.iter());
+            }
+            assert_eq!(source_rows, 320);
+            assert_eq!(source_set, (0_u64..320).map(Some).collect());
             let builder = ParquetRecordBatchReaderBuilder::try_new(location_bytes).unwrap();
             assert_eq!(
                 builder.metadata().file_metadata().num_rows(),

@@ -118,6 +118,12 @@ struct DiskServing {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct DiskDiagnostics {
+    logical_sources: DiskArtifact,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DiskSource {
     commit: String,
     corpus_manifest_bytes: u64,
@@ -129,6 +135,7 @@ struct DiskSource {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DiskManifest {
+    diagnostics: DiskDiagnostics,
     hierarchy: DiskHierarchy,
     layout: DiskLayout,
     page_key_suffix: String,
@@ -299,6 +306,13 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
         disk_identity(disk.layout.page_ranges, "v30-page-ranges-parquet")?,
     ];
     let page_locations = disk_identity(disk.serving.page_locations, "v32-page-locations-parquet")?;
+    let logical_sources = disk_identity(
+        disk.diagnostics.logical_sources,
+        "v32-logical-sources-arrow",
+    )?;
+    if logical_sources.0 != "logical-sources.arrow" {
+        return Err(invalid("V32 logical source manifest authority differs"));
+    }
     let roles = [
         "pq24-codebook",
         "pq48-codebook",
@@ -1539,7 +1553,8 @@ mod tests {
         let high_sha = "4".repeat(64);
         format!(
             concat!(
-                "{{\"hierarchy\":{{\"leaves\":{},\"roots\":{}}},",
+                "{{\"diagnostics\":{{\"logical_sources\":{}}},",
+                "\"hierarchy\":{{\"leaves\":{},\"roots\":{}}},",
                 "\"layout\":{{\"leaf_ranges\":{},\"maximum_leaf_rows\":24,",
                 "\"packing_algorithm\":\"balanced-geometric-v1\",\"page_ranges\":{},",
                 "\"page_rows\":128,\"source_rows\":40}},",
@@ -1556,6 +1571,7 @@ mod tests {
                 "\"corpus_manifest_uri\":\"s3://bucket/deep-10m/corpus.json\",",
                 "\"dataset_id\":\"deep-image-96\"}}}}\n"
             ),
+            artifact("v32-logical-sources-arrow", "logical-sources.arrow", 'c',),
             artifact("v27-leaves-arrow", "leaves.arrow", '2'),
             artifact("v27-roots-arrow", "roots.arrow", '1'),
             artifact("v30-leaf-ranges-arrow", "leaf-ranges.arrow", '8'),
@@ -1626,6 +1642,34 @@ mod tests {
         };
         corrupted.sha256.replace_range(0..1, replacement);
         assert!(read_manifest(&corrupted).is_err());
+
+        let mut logical_source_drifted = bytes.clone();
+        let logical_source_offset = logical_source_drifted
+            .windows(b"v32-logical-sources-arrow".len())
+            .position(|window| window == b"v32-logical-sources-arrow")
+            .unwrap();
+        logical_source_drifted[logical_source_offset] = b'x';
+        fs::write(&argument.path, &logical_source_drifted).unwrap();
+        let logical_source_argument = ArtifactArg {
+            path: argument.path.clone(),
+            sha256: format!("{:x}", Sha256::digest(&logical_source_drifted)),
+            encoded_bytes: logical_source_drifted.len() as u64,
+        };
+        assert!(read_manifest(&logical_source_argument).is_err());
+
+        let logical_source_name_drifted = manifest_bytes()
+            .windows(b"logical-sources.arrow".len())
+            .position(|window| window == b"logical-sources.arrow")
+            .unwrap();
+        let mut logical_source_name_bytes = manifest_bytes();
+        logical_source_name_bytes[logical_source_name_drifted] = b'x';
+        fs::write(&logical_source_argument.path, &logical_source_name_bytes).unwrap();
+        let logical_source_name_argument = ArtifactArg {
+            path: logical_source_argument.path.clone(),
+            sha256: format!("{:x}", Sha256::digest(&logical_source_name_bytes)),
+            encoded_bytes: logical_source_name_bytes.len() as u64,
+        };
+        assert!(read_manifest(&logical_source_name_argument).is_err());
 
         let drifted = bytes
             .windows(b"pq24-codebook".len())

@@ -863,7 +863,12 @@ pub(crate) struct V30LayoutBuildConfig {
 
 #[doc(hidden)]
 pub trait V30PageSink {
-    fn write_page(&mut self, identity: &V27PageIdentity, bytes: &[u8]) -> Result<()>;
+    fn write_page(
+        &mut self,
+        identity: &V27PageIdentity,
+        bytes: &[u8],
+        rows: &[V27PageRow],
+    ) -> Result<()>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -903,7 +908,7 @@ impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
             .checked_sub(u64::from(row_count))
             .ok_or_else(|| invalid("V30 layout page start underflows"))?;
         let (identity, bytes) = encode_v27_page(ordinal, row_count, 0, &self.page_buffer)?;
-        self.sink.write_page(&identity, &bytes)?;
+        self.sink.write_page(&identity, &bytes, &self.page_buffer)?;
         self.pages.push(V30PageRange {
             leaf_ordinal: self
                 .current_leaf
@@ -2224,7 +2229,12 @@ mod tests {
     }
 
     impl V30PageSink for Scratch {
-        fn write_page(&mut self, identity: &V27PageIdentity, bytes: &[u8]) -> crate::Result<()> {
+        fn write_page(
+            &mut self,
+            identity: &V27PageIdentity,
+            bytes: &[u8],
+            _rows: &[V27PageRow],
+        ) -> crate::Result<()> {
             self.runs
                 .insert(format!("page-{:08}", identity.ordinal), bytes.to_vec());
             Ok(())
