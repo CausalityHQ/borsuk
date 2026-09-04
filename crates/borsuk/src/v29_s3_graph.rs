@@ -331,11 +331,84 @@ pub(crate) fn decode_v29_page_graph(
     Ok(graph)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V29GraphPageSelection {
+    pub(crate) seed_pages: Vec<u32>,
+    pub(crate) frontier_pages: Vec<u32>,
+    pub(crate) pages: Vec<u32>,
+    pub(crate) evidence_pages: usize,
+    pub(crate) edge_visits: usize,
+}
+
+pub(crate) fn select_v29_graph_pages(
+    graph: &V29PageGraph,
+    evidence_pages: &[u32],
+) -> Result<V29GraphPageSelection> {
+    validate_graph(graph)?;
+    if !(8..=128).contains(&evidence_pages.len())
+        || evidence_pages
+            .iter()
+            .any(|page| *page >= graph.authority.page_count)
+        || evidence_pages
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != evidence_pages.len()
+    {
+        return Err(invalid("V29 graph evidence differs"));
+    }
+    let seed_pages = evidence_pages[..8].to_vec();
+    let seed_set = seed_pages.iter().copied().collect::<BTreeSet<_>>();
+    let mut scores = BTreeMap::<u32, u64>::new();
+    let mut edge_visits = 0_usize;
+    for (rank, page) in evidence_pages.iter().copied().enumerate() {
+        let reciprocal_rank = (1_u64 << 24) / (rank as u64 + 1);
+        for &(neighbor, vote) in graph.neighbors(page) {
+            edge_visits = edge_visits
+                .checked_add(1)
+                .ok_or_else(|| invalid("V29 graph edge work overflows"))?;
+            if edge_visits > 2_048 {
+                return Err(invalid("V29 graph edge work differs"));
+            }
+            if seed_set.contains(&neighbor) {
+                continue;
+            }
+            let contribution = u64::from(vote)
+                .checked_mul(reciprocal_rank)
+                .ok_or_else(|| invalid("V29 graph score overflows"))?;
+            let score = scores.entry(neighbor).or_default();
+            *score = score
+                .checked_add(contribution)
+                .ok_or_else(|| invalid("V29 graph score overflows"))?;
+        }
+    }
+    let mut ranked = scores.into_iter().collect::<Vec<_>>();
+    ranked.sort_unstable_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    let frontier_pages = ranked
+        .into_iter()
+        .take(2)
+        .map(|(page, _)| page)
+        .collect::<Vec<_>>();
+    if frontier_pages.len() != 2 {
+        return Err(invalid("V29 graph frontier cardinality differs"));
+    }
+    let mut pages = seed_pages.clone();
+    pages.extend(frontier_pages.iter().copied());
+    Ok(V29GraphPageSelection {
+        seed_pages,
+        frontier_pages,
+        pages,
+        evidence_pages: evidence_pages.len(),
+        edge_visits,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         V29BoundaryRow, V29GraphAuthority, build_v29_page_graph, decode_v29_page_graph,
-        encode_v29_page_graph,
+        encode_v29_page_graph, select_v29_graph_pages,
     };
 
     fn authority() -> V29GraphAuthority {
@@ -454,5 +527,75 @@ mod tests {
         let mut overlap = authority();
         overlap.layout_sha256 = overlap.code_sha256.clone();
         assert!(build_v29_page_graph(overlap, &[vec![0, 1], vec![2, 3]], &[valid]).is_err());
+    }
+
+    fn selection_graph() -> super::V29PageGraph {
+        let mut graph_authority = authority();
+        graph_authority.page_count = 12;
+        let leaf_pages = (0..12).map(|page| vec![page]).collect::<Vec<_>>();
+        let mut rows = Vec::new();
+        for source_ordinal in 0..10 {
+            rows.push(V29BoundaryRow {
+                source_ordinal,
+                physical_page: 0,
+                alternate_leaf: 8,
+            });
+        }
+        for source_ordinal in 10..19 {
+            rows.push(V29BoundaryRow {
+                source_ordinal,
+                physical_page: 1,
+                alternate_leaf: 9,
+            });
+        }
+        build_v29_page_graph(graph_authority, &leaf_pages, &rows).unwrap()
+    }
+
+    #[test]
+    fn v29_s3_select_promotes_two_boundary_pages_from_bounded_evidence() {
+        let selection =
+            select_v29_graph_pages(&selection_graph(), &[0, 1, 2, 3, 4, 5, 6, 7, 10, 11]).unwrap();
+        assert_eq!(selection.seed_pages, vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(selection.frontier_pages, vec![8, 9]);
+        assert_eq!(selection.pages, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(selection.evidence_pages, 10);
+        assert_eq!(selection.edge_visits, 2);
+    }
+
+    #[test]
+    fn v29_s3_select_is_deterministic_and_breaks_equal_votes_by_page() {
+        let mut graph_authority = authority();
+        graph_authority.page_count = 12;
+        let leaf_pages = (0..12).map(|page| vec![page]).collect::<Vec<_>>();
+        let graph = build_v29_page_graph(
+            graph_authority,
+            &leaf_pages,
+            &[
+                V29BoundaryRow {
+                    source_ordinal: 0,
+                    physical_page: 0,
+                    alternate_leaf: 9,
+                },
+                V29BoundaryRow {
+                    source_ordinal: 1,
+                    physical_page: 0,
+                    alternate_leaf: 8,
+                },
+            ],
+        )
+        .unwrap();
+        let first = select_v29_graph_pages(&graph, &[0, 1, 2, 3, 4, 5, 6, 7]).unwrap();
+        let second = select_v29_graph_pages(&graph, &[0, 1, 2, 3, 4, 5, 6, 7]).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.frontier_pages, vec![8, 9]);
+    }
+
+    #[test]
+    fn v29_s3_select_rejects_unbounded_duplicate_or_incomplete_evidence() {
+        let graph = selection_graph();
+        assert!(select_v29_graph_pages(&graph, &[0, 1, 2, 3, 4, 5, 6]).is_err());
+        assert!(select_v29_graph_pages(&graph, &[0, 1, 2, 3, 4, 5, 6, 6]).is_err());
+        let too_many = (0..129).map(|page| page % 12).collect::<Vec<_>>();
+        assert!(select_v29_graph_pages(&graph, &too_many).is_err());
     }
 }
