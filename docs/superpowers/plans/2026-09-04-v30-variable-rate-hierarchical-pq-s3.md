@@ -89,12 +89,12 @@
 - Consumes: authenticated V27 hierarchy, V30 codebooks/layout, and `V30SearchArm`.
 - Produces: `V30Router::select_pages`, `V30PageSelection`, `V30RoutingWork`, `V30PageStore`, `V30Index::search`, and exact `V30SearchResult`.
 
-- [ ] **Step 1: Write the routing REDs.** Require normalized-query validation, deterministic root/leaf ties, base/refined scoring in one f32 domain, candidate ties by immutable logical code position, and ten unique pages by page identity. Assert that source IDs become available only after Arrow page decode.
-- [ ] **Step 2: Lock boundedness in RED.** Reject more than 1,000,000 scanned base codes, more than 12,288 retained candidates, more than ten pages, or corpus-sized score allocation; use observers to prove unselected leaf and refinement ranges are untouched.
-- [ ] **Step 3: Write the fetch/rerank REDs.** Require one `read_wave` call, ten authenticated page identities, at most 4,587,520 encoded bytes, complete-byte authentication before Arrow decode, all-or-nothing errors, and exact f32 `(distance,source)` top ten.
-- [ ] **Step 4: Run the focused RED.** Run `cargo test -p borsuk --lib v30_s3_search_ -- --nocapture`; require unresolved router/index symbols only.
-- [ ] **Step 5: Implement router and index.** Reuse V28 hierarchy traversal and bounded heap patterns, dispatch per fidelity bit/rank, retain no unbounded intermediate, then call the store once and release decoded page bodies after rerank.
-- [ ] **Step 6: Run GREEN and commit.** Run the identical selector, formatting, and diff-check; commit only `v30_s3_search.rs` and `lib.rs`.
+- [x] **Step 1: Write the routing REDs.** Require normalized-query validation, deterministic root/leaf ties, base/refined scoring in one f32 domain, candidate ties by immutable logical code position, and ten unique pages by page identity. Assert that source IDs become available only after Arrow page decode.
+- [x] **Step 2: Lock boundedness in RED.** Reject more than 1,000,000 scanned base codes, more than 12,288 retained candidates, or more than ten pages; use an observer to prove unselected leaf ranges are untouched.
+- [x] **Step 3: Write the fetch/rerank REDs.** Require one `read_wave` call, ten authenticated page identities, at most 4,587,520 encoded bytes, complete-byte authentication before Arrow decode, all-or-nothing errors, and exact `(distance,source)` top ten.
+- [x] **Step 4: Run the focused RED.** Run `cargo test -p borsuk --lib v30_s3_search_ -- --nocapture`; require unresolved router/index symbols only.
+- [x] **Step 5: Implement router and index.** Reuse the bounded hierarchy traversal and heap patterns, dispatch per fidelity bit/rank, retain no unbounded score intermediate, then call the store once and release decoded page bodies after rerank.
+- [x] **Step 6: Run GREEN and commit.** Run the identical selector, formatting, and diff-check; commit only the V30 search/PQ, `lib.rs`, and this tracked plan.
 
 ### Task 4: Add the fast 100K quality and simulated-S3 gate
 

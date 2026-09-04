@@ -228,6 +228,35 @@ fn query_tables(
     Ok(tables)
 }
 
+pub(crate) struct V30QueryTable {
+    width: V30PqWidth,
+    tables: Vec<[f32; CENTROIDS]>,
+}
+
+impl V30QueryTable {
+    pub(crate) fn new(codebook: &V30PqCodebook, query: &[f32; DIMENSIONS]) -> Result<Self> {
+        Ok(Self {
+            width: codebook.width,
+            tables: query_tables(codebook, query)?,
+        })
+    }
+
+    pub(crate) fn score(&self, code: &[u8]) -> Result<f32> {
+        if code.len() != self.width.bytes() {
+            return Err(invalid("V30 PQ8 scoring code width differs"));
+        }
+        let score = code
+            .iter()
+            .enumerate()
+            .map(|(subquantizer, centroid)| self.tables[subquantizer][usize::from(*centroid)])
+            .sum::<f32>();
+        if !score.is_finite() || score < 0.0 {
+            return Err(invalid("V30 PQ8 score differs"));
+        }
+        Ok(score)
+    }
+}
+
 pub(crate) fn score_v30_codes(
     codebook: &V30PqCodebook,
     codes: &[Vec<u8>],
