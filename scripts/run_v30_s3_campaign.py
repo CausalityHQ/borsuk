@@ -615,7 +615,7 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
             f'test "$(cat .borsuk-source-commit)" = {plan.source_commit}',
             f"aws s3 cp --only-show-errors {shlex.quote(plan.qualifier_binary_uri)} /opt/borsuk/v30_s3_qualify",
             f'test "$(stat -c %s /opt/borsuk/v30_s3_qualify)" -eq {plan.qualifier_binary_bytes}',
-            f"printf '%s  %s\n' {plan.qualifier_binary_sha256} /opt/borsuk/v30_s3_qualify | sha256sum --check --status",
+            f"printf '%s  %s\\n' {plan.qualifier_binary_sha256} /opt/borsuk/v30_s3_qualify | sha256sum --check --status",
             "chmod 0555 /opt/borsuk/v30_s3_qualify",
             "curl -LsSf https://astral.sh/uv/0.8.17/install.sh | sh",
             "/root/.local/bin/uv venv --python 3.12 /opt/borsuk/venv",
