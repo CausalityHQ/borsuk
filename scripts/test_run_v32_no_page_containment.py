@@ -384,35 +384,43 @@ class V32NoPageContainmentTests(unittest.TestCase):
         # row selects the physical page containing a pruned truth row.
         with tempfile.TemporaryDirectory() as temporary:
             plan, truth = self.fixture(Path(temporary))
-            results = {
-                query: self.diagnostic(query, miss=query == 75)
-                for query in range(64, 96)
-            }
-            recovered = json.loads(results[75])
-            recovered["diagnostics"][-1]["stage"] = "selected-page"
-            recovered["diagnostics"][-1]["first_unique_page_rank"] = 9
-            recovered["diagnostics"][-1]["routing_leaf_rank"] = None
-            recovered["diagnostics"][-1]["reciprocal_rank_selected"] = False
-            results[75] = (
-                json.dumps(
-                    recovered,
-                    allow_nan=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ).encode()
-                + b"\n"
-            )
-            payload = run_v32_no_page_containment(
-                plan,
-                truth,
-                invoke=lambda command: results[
-                    int(command[command.index("--query-start") + 1])
-                ],
-            )
-        value = json.loads(payload)
-        self.assertEqual(value["selected_page_hits"], 320)
-        self.assertEqual(value["failed_gates"], [])
-        self.assertEqual(value["status"], "passed")
+            cases = ((76, False), (None, True), (None, False))
+            for routing_leaf_rank, reciprocal_rank_selected in cases:
+                with self.subTest(
+                    routing_leaf_rank=routing_leaf_rank,
+                    reciprocal_rank_selected=reciprocal_rank_selected,
+                ):
+                    results = {
+                        query: self.diagnostic(query, miss=query == 75)
+                        for query in range(64, 96)
+                    }
+                    recovered = json.loads(results[75])
+                    recovered["diagnostics"][-1]["stage"] = "selected-page"
+                    recovered["diagnostics"][-1]["first_unique_page_rank"] = 9
+                    recovered["diagnostics"][-1]["routing_leaf_rank"] = routing_leaf_rank
+                    recovered["diagnostics"][-1]["reciprocal_rank_selected"] = (
+                        reciprocal_rank_selected
+                    )
+                    results[75] = (
+                        json.dumps(
+                            recovered,
+                            allow_nan=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode()
+                        + b"\n"
+                    )
+                    payload = run_v32_no_page_containment(
+                        plan,
+                        truth,
+                        invoke=lambda command, results=results: results[
+                            int(command[command.index("--query-start") + 1])
+                        ],
+                    )
+                    value = json.loads(payload)
+                    self.assertEqual(value["selected_page_hits"], 320)
+                    self.assertEqual(value["failed_gates"], [])
+                    self.assertEqual(value["status"], "passed")
 
     def test_v32_containment_rejects_diagnostic_or_identity_drift(self) -> None:
         # Break caught: malformed/noncanonical router evidence or a different
