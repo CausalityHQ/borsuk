@@ -772,6 +772,7 @@ mod tests {
                 leaf_ordinal: u32::from(ordinal >= 10),
                 logical_start: ordinal as u64 * 2,
                 row_count: 2,
+                centroid: [f16::from_f32(1.0 / 96.0_f32.sqrt()).to_bits(); 96],
                 identity: identity.clone(),
             })
             .collect::<Vec<_>>();
@@ -835,6 +836,7 @@ mod tests {
                     leaf_ordinal,
                     logical_start,
                     row_count,
+                    centroid: [unit.to_bits(); 96],
                     identity: encode_v27_page(ordinal, row_count, 0, &rows).unwrap().0,
                 }
             })

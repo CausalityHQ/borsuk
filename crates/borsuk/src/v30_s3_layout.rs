@@ -5,7 +5,10 @@ use std::{
     sync::Arc,
 };
 
-use arrow_array::{Array, RecordBatch, StringArray, UInt16Array, UInt32Array, UInt64Array};
+use arrow_array::{
+    Array, FixedSizeListArray, Float16Array, RecordBatch, StringArray, UInt16Array, UInt32Array,
+    UInt64Array,
+};
 use arrow_ipc::{
     MetadataVersion,
     reader::FileReader,
@@ -13,6 +16,7 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
+use half::f16;
 use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
 use sha2::{Digest, Sha256};
 
@@ -27,6 +31,7 @@ use crate::{
 
 const MAX_PAGE_ROWS: u16 = 512;
 const MAX_GEOMETRIC_LEAF_ROWS: usize = 65_536;
+const MAX_PAGES_PER_LEAF: u32 = 64;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -888,6 +893,27 @@ struct V30LayoutAssembler<'a, S> {
 }
 
 impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
+    fn page_centroid(&self) -> Result<[u16; 96]> {
+        let mut sum = [0.0_f64; 96];
+        for row in &self.page_buffer {
+            for (total, value) in sum.iter_mut().zip(row.vector) {
+                if !value.is_finite() {
+                    return Err(invalid("V30 page centroid input differs"));
+                }
+                *total += f64::from(value);
+            }
+        }
+        let norm = sum.iter().map(|value| value * value).sum::<f64>().sqrt();
+        if !norm.is_finite() || norm == 0.0 {
+            return Err(invalid("V30 page centroid norm differs"));
+        }
+        let centroid = std::array::from_fn(|dimension| f16::from_f64(sum[dimension] / norm));
+        if centroid.iter().any(|value| !value.is_finite()) {
+            return Err(invalid("V30 page centroid differs"));
+        }
+        Ok(centroid.map(f16::to_bits))
+    }
+
     fn flush_page(&mut self) -> Result<()> {
         if self.page_buffer.is_empty() {
             return Ok(());
@@ -900,6 +926,7 @@ impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
             .logical_rows
             .checked_sub(u64::from(row_count))
             .ok_or_else(|| invalid("V30 layout page start underflows"))?;
+        let centroid = self.page_centroid()?;
         let (identity, bytes) = encode_v27_page(ordinal, row_count, 0, &self.page_buffer)?;
         self.sink.write_page(&identity, &bytes)?;
         self.pages.push(V30PageRange {
@@ -908,6 +935,7 @@ impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
                 .ok_or_else(|| invalid("V30 layout page leaf is missing"))?,
             logical_start,
             row_count,
+            centroid,
             identity,
         });
         self.page_buffer.clear();
@@ -1549,6 +1577,7 @@ pub(crate) struct V30PageRange {
     pub(crate) leaf_ordinal: u32,
     pub(crate) logical_start: u64,
     pub(crate) row_count: u16,
+    pub(crate) centroid: [u16; 96],
     pub(crate) identity: V27PageIdentity,
 }
 
@@ -1575,6 +1604,7 @@ impl V30Layout {
                 || leaf.logical_start != next_logical
                 || leaf.page_start != next_page
                 || (leaf.row_count == 0) != (leaf.page_count == 0)
+                || leaf.page_count > MAX_PAGES_PER_LEAF
             {
                 return Err(invalid("V30 leaf range authority differs"));
             }
@@ -1598,6 +1628,15 @@ impl V30Layout {
                     || page.identity.replica_rows != 0
                     || page.identity.encoded_bytes == 0
                     || !valid_digest(&page.identity.sha256)
+                    || page
+                        .centroid
+                        .iter()
+                        .map(|value| f16::from_bits(*value))
+                        .any(|value| !value.is_finite())
+                    || page
+                        .centroid
+                        .iter()
+                        .all(|value| f16::from_bits(*value).to_f32() == 0.0)
                 {
                     return Err(invalid("V30 page range authority differs"));
                 }
@@ -1696,6 +1735,14 @@ fn page_schema() -> Schema {
         Field::new("encoded_bytes", DataType::UInt64, false),
         Field::new("primary_rows", DataType::UInt16, false),
         Field::new("replica_rows", DataType::UInt16, false),
+        Field::new(
+            "centroid",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Float16, false)),
+                96,
+            ),
+            false,
+        ),
     ])
 }
 
@@ -1745,6 +1792,17 @@ pub(crate) fn encode_v30_layout_artifacts(layout: &V30Layout) -> Result<V30Layou
         writer.finish()?;
     }
 
+    let centroid_values = layout
+        .pages
+        .iter()
+        .flat_map(|page| page.centroid.map(f16::from_bits))
+        .collect::<Vec<_>>();
+    let centroids = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float16, false)),
+        96,
+        Arc::new(Float16Array::from_iter_values(centroid_values)),
+        None,
+    )?;
     let page_batch = RecordBatch::try_new(
         Arc::new(page_schema()),
         vec![
@@ -1775,6 +1833,7 @@ pub(crate) fn encode_v30_layout_artifacts(layout: &V30Layout) -> Result<V30Layou
             Arc::new(UInt16Array::from_iter_values(
                 layout.pages.iter().map(|page| page.identity.replica_rows),
             )),
+            Arc::new(centroids),
         ],
     )?;
     let mut page_ranges_parquet = Vec::new();
@@ -1876,11 +1935,26 @@ pub fn decode_v30_layout_artifacts(artifacts: &V30LayoutArtifacts) -> Result<V30
         let lengths = column::<UInt64Array>(&batch, 5)?;
         let primary_rows = column::<UInt16Array>(&batch, 6)?;
         let replica_rows = column::<UInt16Array>(&batch, 7)?;
+        let centroids = column::<FixedSizeListArray>(&batch, 8)?;
+        if centroids.values().null_count() != 0 {
+            return Err(invalid("V30 page centroid nullability differs"));
+        }
+        let centroid_values = centroids
+            .values()
+            .as_any()
+            .downcast_ref::<Float16Array>()
+            .ok_or_else(|| invalid("V30 page centroid column differs"))?;
         for row in 0..batch.num_rows() {
+            let start = row * 96;
+            let centroid: [u16; 96] = centroid_values.values()[start..start + 96]
+                .try_into()
+                .map(|values: [f16; 96]| values.map(f16::to_bits))
+                .map_err(|_| invalid("V30 page centroid width differs"))?;
             pages.push(V30PageRange {
                 leaf_ordinal: leaf_ordinals.value(row),
                 logical_start: logical_starts.value(row),
                 row_count: row_counts.value(row),
+                centroid,
                 identity: V27PageIdentity {
                     ordinal: page_ordinals.value(row),
                     sha256: digests.value(row).to_owned(),
@@ -1923,6 +1997,7 @@ mod tests {
             leaf_ordinal,
             logical_start,
             row_count: rows,
+            centroid: [f16::from_f32(1.0 / 96.0_f32.sqrt()).to_bits(); 96],
             identity: V27PageIdentity {
                 ordinal,
                 sha256: format!("{ordinal:064x}"),
@@ -2410,6 +2485,85 @@ mod tests {
         assert_eq!(logical, 32);
         assert_eq!(sources.len(), 32);
         assert!(scratch.runs.is_empty());
+    }
+
+    #[test]
+    fn v30_s3_layout_page_centroid_is_derived_and_authenticated() {
+        // Break caught: page routing metadata is absent, derived from PQ labels
+        // instead of exact page members, or lost in the Parquet round trip.
+        let rows = (0_u64..16)
+            .map(|source_ordinal| {
+                let dimension = usize::from(source_ordinal >= 8);
+                let mut vector = [0.0_f32; 96];
+                vector[dimension] = 1.0;
+                V30LayoutRecord {
+                    leaf_ordinal: 0,
+                    source_ordinal,
+                    base_code: vec![(15 - source_ordinal) as u8; 24],
+                    high_code: None,
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut scratch = Scratch::default();
+        let mut pages = Scratch::default();
+        let built = V30LayoutBuilder::build(
+            rows,
+            1,
+            V30LayoutBuildConfig {
+                page_rows: 8,
+                sort_memory_rows: 3,
+                fidelity_ppm: 50_000,
+            },
+            &mut scratch,
+            &mut pages,
+        )
+        .unwrap();
+        assert_eq!(built.layout.pages().len(), 2);
+        for page in built.layout.pages() {
+            let decoded = decode_v27_page(
+                &page.identity,
+                &pages.runs[&format!("page-{:08}", page.identity.ordinal)],
+            )
+            .unwrap();
+            let dimension = usize::from(decoded.rows[0].vector[1] == 1.0);
+            assert_eq!(f16::from_bits(page.centroid[dimension]), f16::from_f32(1.0));
+            assert!(
+                page.centroid
+                    .iter()
+                    .enumerate()
+                    .all(|(index, value)| index == dimension
+                        || f16::from_bits(*value).to_f32() == 0.0)
+            );
+        }
+        let artifacts = encode_v30_layout_artifacts(&built.layout).unwrap();
+        assert_eq!(
+            decode_v30_layout_artifacts(&artifacts).unwrap(),
+            built.layout
+        );
+    }
+
+    #[test]
+    fn v30_s3_layout_page_centroid_rejects_leaf_page_overflow() {
+        // Break caught: one imbalanced leaf expands a bounded 512-leaf frontier
+        // into an unbounded page-centroid scan.
+        let pages = (0..65_u32)
+            .map(|ordinal| page(ordinal, 0, u64::from(ordinal), 1))
+            .collect::<Vec<_>>();
+        assert!(
+            V30Layout::new(
+                65,
+                vec![V30LeafRange {
+                    leaf_ordinal: 0,
+                    logical_start: 0,
+                    row_count: 65,
+                    page_start: 0,
+                    page_count: 65,
+                }],
+                pages,
+            )
+            .is_err()
+        );
     }
 
     #[test]
