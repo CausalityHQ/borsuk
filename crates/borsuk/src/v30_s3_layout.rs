@@ -395,13 +395,12 @@ fn split_v30_geometric_rows(
         .map(|entry| entry.0)
         .ok_or_else(|| invalid("V30 geometric farthest seed is missing"))?;
     let mut right_centroid = normalized_v30_centroid(&rows[farthest..=farthest])?;
-    let sort_by_margin = |rows: &mut [V30LayoutRecord],
+    let sort_by_margin = |rows: Vec<V30LayoutRecord>,
                           left_centroid: &[f32; 96],
                           right_centroid: &[f32; 96]|
-     -> Result<()> {
+     -> Result<Vec<V30LayoutRecord>> {
         let mut ranked = rows
-            .iter()
-            .cloned()
+            .into_iter()
             .map(|row| {
                 let margin = v30_cosine(&row.vector, right_centroid)?
                     - v30_cosine(&row.vector, left_centroid)?;
@@ -413,17 +412,14 @@ fn split_v30_geometric_rows(
                 .total_cmp(&right.0)
                 .then_with(|| left.1.source_ordinal.cmp(&right.1.source_ordinal))
         });
-        for (target, (_, row)) in rows.iter_mut().zip(ranked) {
-            *target = row;
-        }
-        Ok(())
+        Ok(ranked.into_iter().map(|(_, row)| row).collect())
     };
     for _ in 0..4 {
-        sort_by_margin(&mut rows, &left_centroid, &right_centroid)?;
+        rows = sort_by_margin(rows, &left_centroid, &right_centroid)?;
         left_centroid = normalized_v30_centroid(&rows[..left_size])?;
         right_centroid = normalized_v30_centroid(&rows[left_size..])?;
     }
-    sort_by_margin(&mut rows, &left_centroid, &right_centroid)?;
+    rows = sort_by_margin(rows, &left_centroid, &right_centroid)?;
     let right = rows.split_off(left_size);
     Ok((rows, right))
 }
@@ -1024,6 +1020,22 @@ impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
     }
 }
 
+fn flush_v30_geometric_leaf<S: V30PageSink>(
+    assembler: &mut V30LayoutAssembler<'_, S>,
+    rows: &mut Vec<V30LayoutRecord>,
+) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    for page in partition_v30_leaf_pages(std::mem::take(rows), assembler.page_rows)? {
+        for record in page {
+            assembler.push(record)?;
+        }
+        assembler.flush_page()?;
+    }
+    Ok(())
+}
+
 pub(crate) struct V30LayoutBuilder;
 
 const CORPUS_KEY: &str = "v30-normalized-corpus";
@@ -1489,9 +1501,19 @@ impl V30LayoutBuilder {
             leaves: Vec::with_capacity(leaf_count as usize),
             pages: Vec::new(),
         };
+        let mut leaf_rows = Vec::new();
         sort_v30_layout_records(records, config.sort_memory_rows, scratch, &mut |record| {
-            assembler.push(record)
+            if leaf_rows
+                .first()
+                .is_some_and(|first: &V30LayoutRecord| first.leaf_ordinal != record.leaf_ordinal)
+            {
+                flush_v30_geometric_leaf(&mut assembler, &mut leaf_rows)?;
+            }
+            validate_v30_geometric_leaf_row_count(leaf_rows.len() + 1)?;
+            leaf_rows.push(record);
+            Ok(())
         })?;
+        flush_v30_geometric_leaf(&mut assembler, &mut leaf_rows)?;
         assembler.finish(config.fidelity_ppm)
     }
 }
@@ -2309,6 +2331,75 @@ mod tests {
         );
         assert!(scratch.runs.is_empty());
         assert_eq!(pages.runs.len(), 3);
+    }
+
+    #[test]
+    fn v30_s3_layout_geometric_builder_keeps_codes_offsets_and_pages_aligned() {
+        // Break caught: the builder emits nominal-PQ order, or geometric reordering
+        // separates a logical code/fidelity position from its exact Arrow page row.
+        let rows = (0_u64..32)
+            .map(|source_ordinal| {
+                let cluster = usize::try_from(source_ordinal / 8).unwrap();
+                let mut vector = [0.0_f32; 96];
+                vector[cluster] = 1.0;
+                V30LayoutRecord {
+                    leaf_ordinal: 0,
+                    source_ordinal,
+                    base_code: vec![(source_ordinal % 8) as u8; 24],
+                    high_code: (source_ordinal == 0).then(|| vec![77; 48]),
+                    vector,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut scratch = Scratch::default();
+        let mut pages = Scratch::default();
+        let built = V30LayoutBuilder::build(
+            rows,
+            1,
+            V30LayoutBuildConfig {
+                page_rows: 8,
+                sort_memory_rows: 5,
+                fidelity_ppm: 50_000,
+            },
+            &mut scratch,
+            &mut pages,
+        )
+        .unwrap();
+
+        assert_eq!(built.layout.leaves()[0].row_count, 32);
+        assert_eq!(built.layout.leaves()[0].page_count, 4);
+        let mut logical = 0_usize;
+        let mut sources = BTreeMap::new();
+        for page in built.layout.pages() {
+            let bytes = &pages.runs[&format!("page-{:08}", page.identity.ordinal)];
+            let decoded = decode_v27_page(&page.identity, bytes).unwrap();
+            assert_eq!(decoded.rows.len(), 8);
+            assert!(
+                decoded
+                    .rows
+                    .windows(2)
+                    .all(|pair| pair[0].vector == pair[1].vector)
+            );
+            for row in decoded.rows {
+                let (width, code) = built.codes.code(logical).unwrap();
+                if row.source_ordinal == 0 {
+                    assert_eq!(width, V30PqWidth::High48);
+                    assert_eq!(code, &[77; 48]);
+                } else {
+                    assert_eq!(width, V30PqWidth::Base24);
+                    assert_eq!(code, &[(row.source_ordinal % 8) as u8; 24]);
+                }
+                assert!(
+                    sources
+                        .insert(row.source_ordinal, page.identity.ordinal)
+                        .is_none()
+                );
+                logical += 1;
+            }
+        }
+        assert_eq!(logical, 32);
+        assert_eq!(sources.len(), 32);
+        assert!(scratch.runs.is_empty());
     }
 
     #[test]
