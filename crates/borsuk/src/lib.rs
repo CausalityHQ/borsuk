@@ -203,7 +203,8 @@ pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchAr
 #[doc(hidden)]
 pub use v30_s3_layout::{
     V30ConstructedIndex, V30ConstructionArtifacts, V30ConstructionBuilder, V30ConstructionConfig,
-    V30LayoutArtifactIdentity, V30LayoutArtifacts, V30PageSink, V30Scratch,
+    V30LayoutArtifactIdentity, V30LayoutArtifacts, V30PageSink, V30Scratch, V32PageLocation,
+    V32PageLocationsArtifact, V32ServingTier, decode_v32_page_locations, encode_v32_page_locations,
 };
 #[doc(hidden)]
 pub use v30_s3_pq::{V30PqArtifactIdentity, V30PqArtifacts};

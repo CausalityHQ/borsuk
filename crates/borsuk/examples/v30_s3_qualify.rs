@@ -6,8 +6,10 @@ use arrow_array::{Array, FixedSizeListArray, Float32Array};
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30LayoutArtifactIdentity,
-    V30LayoutArtifacts, V30PqArtifactIdentity, V30PqArtifacts, V32Index, V32PageStore, V32Router,
-    V32RoutingTargetReport, V32RoutingTargetStage, V32SearchArm, V32SearchPhase, V32SearchResult,
+    V30LayoutArtifacts, V30PqArtifactIdentity, V30PqArtifacts, V32Index, V32PageLocation,
+    V32PageLocationsArtifact, V32PageStore, V32Router, V32RoutingTargetReport,
+    V32RoutingTargetStage, V32SearchArm, V32SearchPhase, V32SearchResult, V32ServingTier,
+    decode_v32_page_locations,
 };
 use bytes::Bytes;
 use futures_util::future::try_join_all;
@@ -27,7 +29,7 @@ struct ArtifactArg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PageSource {
     Local(PathBuf),
-    S3(String),
+    Tier(V32ServingTier),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,11 +103,18 @@ struct DiskPq {
 #[serde(deny_unknown_fields)]
 struct DiskRouting {
     algorithm: String,
+    candidate_depth: usize,
     leaf_beam: usize,
     maximum_pages_per_leaf: usize,
-    page_centroid_dimensions: usize,
-    page_centroid_element: String,
+    maximum_scanned_codes: u64,
     page_count: usize,
+    root_beam: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiskServing {
+    page_locations: DiskArtifact,
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,6 +136,7 @@ struct DiskManifest {
     pq: DiskPq,
     routing: DiskRouting,
     schema_version: u8,
+    serving: DiskServing,
     source: DiskSource,
 }
 
@@ -137,7 +147,10 @@ struct Manifest {
     pq: Vec<(String, V30PqArtifactIdentity)>,
     source_rows: u64,
     page_key_suffix: String,
+    page_locations: (String, V30LayoutArtifactIdentity),
+    routing_root_beam: usize,
     routing_leaf_beam: usize,
+    routing_candidate_depth: usize,
     routing_page_count: usize,
 }
 
@@ -226,7 +239,7 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
     }
     let disk: DiskManifest = serde_json::from_value(value)
         .map_err(|_| invalid("V30 qualifier manifest schema differs"))?;
-    if disk.schema_version != 2
+    if disk.schema_version != 3
         || disk.page_key_suffix != ".arrow"
         || disk.layout.source_rows == 0
         || disk.layout.maximum_leaf_rows == 0
@@ -246,12 +259,12 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
         || disk.source.corpus_manifest_bytes == 0
         || !valid_digest(&disk.source.corpus_manifest_sha256)
         || !disk.source.corpus_manifest_uri.starts_with("s3://")
-        || disk.routing.algorithm != "flat-leaf-page-centroid-v1"
-        || disk.routing.leaf_beam == 0
-        || disk.routing.leaf_beam > 512
+        || disk.routing.algorithm != "hierarchical-residual-pq-v1"
+        || disk.routing.root_beam != 8
+        || disk.routing.leaf_beam != 64
+        || disk.routing.candidate_depth != 12_288
+        || disk.routing.maximum_scanned_codes != 1_000_000
         || disk.routing.maximum_pages_per_leaf != 64
-        || disk.routing.page_centroid_dimensions != 96
-        || disk.routing.page_centroid_element != "float16"
         || disk.routing.page_count != 16
     {
         return Err(invalid("V30 qualifier manifest constants differ"));
@@ -264,6 +277,7 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
         disk_identity(disk.layout.leaf_ranges, "v30-leaf-ranges-arrow")?,
         disk_identity(disk.layout.page_ranges, "v30-page-ranges-parquet")?,
     ];
+    let page_locations = disk_identity(disk.serving.page_locations, "v32-page-locations-parquet")?;
     let roles = [
         "pq24-codebook",
         "pq48-codebook",
@@ -308,7 +322,10 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
         pq,
         source_rows: disk.layout.source_rows,
         page_key_suffix: disk.page_key_suffix,
+        page_locations,
+        routing_root_beam: disk.routing.root_beam,
         routing_leaf_beam: disk.routing.leaf_beam,
+        routing_candidate_depth: disk.routing.candidate_depth,
         routing_page_count: disk.routing.page_count,
     })
 }
@@ -336,8 +353,8 @@ impl V32PageStore for LocalPageStore {
 #[derive(Clone)]
 struct ObjectPageStore {
     store: Arc<dyn ObjectStore>,
-    prefix: ObjectPath,
-    suffix: String,
+    locations: Arc<Vec<V32PageLocation>>,
+    paths: Arc<Vec<ObjectPath>>,
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -354,16 +371,30 @@ struct SearchPhaseTiming {
 impl V32PageStore for ObjectPageStore {
     fn read_wave(&self, pages: &[borsuk::V27PageIdentity]) -> borsuk::Result<Vec<Vec<u8>>> {
         self.runtime.block_on(async {
-            let reads = pages.iter().map(|page| {
-                let store = Arc::clone(&self.store);
-                let path = ObjectPath::from(format!(
-                    "{}/{}{}",
-                    self.prefix.as_ref(),
-                    page.sha256,
-                    self.suffix
-                ));
-                async move { Ok::<_, BorsukError>(store.get(&path).await?.bytes().await?.to_vec()) }
-            });
+            let reads = pages
+                .iter()
+                .map(|page| {
+                    let location = self
+                        .locations
+                        .get(page.ordinal as usize)
+                        .ok_or_else(|| invalid("V30 qualifier page location ordinal differs"))?;
+                    let path = self
+                        .paths
+                        .get(page.ordinal as usize)
+                        .ok_or_else(|| invalid("V30 qualifier page location path differs"))?;
+                    if location.page_ordinal != page.ordinal
+                        || location.sha256 != page.sha256
+                        || location.encoded_bytes != page.encoded_bytes
+                    {
+                        return Err(invalid("V30 qualifier selected page authority differs"));
+                    }
+                    let store = Arc::clone(&self.store);
+                    let path = path.clone();
+                    Ok(async move {
+                        Ok::<_, BorsukError>(store.get(&path).await?.bytes().await?.to_vec())
+                    })
+                })
+                .collect::<borsuk::Result<Vec<_>>>()?;
             try_join_all(reads).await
         })
     }
@@ -678,6 +709,21 @@ fn run_batch<S: V32PageStore>(
 
 fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
     let manifest = read_manifest(&args.manifest)?;
+    let page_location_bytes = read_resident(
+        &args.artifact_dir,
+        &manifest.page_locations.0,
+        &manifest.page_locations.1.sha256,
+        manifest.page_locations.1.encoded_bytes,
+    )?;
+    let page_locations = decode_v32_page_locations(&V32PageLocationsArtifact {
+        role: manifest.page_locations.1.role.clone(),
+        sha256: manifest.page_locations.1.sha256.clone(),
+        encoded_bytes: manifest.page_locations.1.encoded_bytes,
+        parquet: page_location_bytes,
+    })?;
+    if page_locations.len() != manifest.routing_page_count {
+        return Err(invalid("V30 qualifier page-location count differs"));
+    }
     let hierarchy_bytes = manifest
         .hierarchy
         .iter()
@@ -744,7 +790,9 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
         page_ranges_parquet: layout_bytes[1].clone(),
     };
     let router = V32Router::from_artifacts(&hierarchy, &pq, &layout)?;
-    if args.leaf_beam != manifest.routing_leaf_beam
+    if args.root_beam != manifest.routing_root_beam
+        || args.leaf_beam != manifest.routing_leaf_beam
+        || args.candidate_depth != manifest.routing_candidate_depth
         || args.page_count != manifest.routing_page_count
     {
         return Err(invalid("V30 qualifier routing manifest differs"));
@@ -777,8 +825,24 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
             args.query_count,
             args.k,
         ),
-        Some(PageSource::S3(uri)) => {
-            let url = Url::parse(&uri).map_err(|_| invalid("V30 qualifier S3 URI differs"))?;
+        Some(PageSource::Tier(tier)) => {
+            let urls = page_locations
+                .iter()
+                .map(|location| {
+                    Url::parse(location.uri(tier)?)
+                        .map_err(|_| invalid("V30 qualifier S3 URI differs"))
+                })
+                .collect::<borsuk::Result<Vec<_>>>()?;
+            let first = urls
+                .first()
+                .ok_or_else(|| invalid("V30 qualifier page locations are empty"))?;
+            if urls.iter().any(|url| {
+                url.scheme() != first.scheme()
+                    || url.host_str() != first.host_str()
+                    || url.port() != first.port()
+            }) {
+                return Err(invalid("V30 qualifier S3 bucket authority differs"));
+            }
             let options = std::env::vars().filter(|(key, _)| {
                 matches!(
                     key.as_str(),
@@ -788,8 +852,12 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                         | "AWS_REGION"
                 )
             });
-            let (store, prefix) = parse_url_opts(&url, options)?;
+            let (store, _) = parse_url_opts(first, options)?;
             let store: Arc<dyn ObjectStore> = store.into();
+            let paths = urls
+                .iter()
+                .map(|url| ObjectPath::from(url.path().trim_start_matches('/')))
+                .collect::<Vec<_>>();
             let runtime = Arc::new(
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -803,8 +871,8 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                 router,
                 ObjectPageStore {
                     store,
-                    prefix,
-                    suffix: manifest.page_key_suffix,
+                    locations: Arc::new(page_locations),
+                    paths: Arc::new(paths),
                     runtime,
                 },
                 arm,
@@ -917,13 +985,18 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         })
         .transpose()?;
     let local = values.remove("local-page-dir").map(PathBuf::from);
-    let s3 = values.remove("s3-page-prefix");
-    let page_source = match (diagnostic, local, s3) {
+    let tier = values
+        .remove("serving-tier")
+        .map(|value| match value.as_str() {
+            "standard" => Ok(V32ServingTier::Standard),
+            "express" => Ok(V32ServingTier::Express),
+            _ => Err(argument_error("--serving-tier value differs")),
+        })
+        .transpose()?;
+    let page_source = match (diagnostic, local, tier) {
         (Some(_), None, None) => None,
         (None, Some(path), None) if path.is_absolute() => Some(PageSource::Local(path)),
-        (None, None, Some(uri)) if uri.starts_with("s3://") && !uri.ends_with('/') => {
-            Some(PageSource::S3(uri))
-        }
+        (None, None, Some(tier)) => Some(PageSource::Tier(tier)),
         _ => return Err(argument_error("exactly one page source is required")),
     };
     if !artifact_dir.is_absolute()
@@ -962,9 +1035,10 @@ mod tests {
     use std::{fs, path::PathBuf, sync::Arc};
 
     use borsuk::{
-        V27PageIdentity, V32Match, V32PageStore, V32RoutingTargetReport, V32RoutingTargetStage,
-        V32RoutingWork, V32SearchResult, V32SearchWork,
+        V27PageIdentity, V32Match, V32PageLocation, V32PageStore, V32RoutingTargetReport,
+        V32RoutingTargetStage, V32RoutingWork, V32SearchResult, V32SearchWork, V32ServingTier,
     };
+    use object_store::ObjectStoreExt;
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
 
@@ -1006,8 +1080,8 @@ mod tests {
             "16",
             "--k",
             "10",
-            "--s3-page-prefix",
-            "s3://frozen/pages",
+            "--serving-tier",
+            "standard",
         ]
         .into_iter()
         .map(ToOwned::to_owned)
@@ -1064,15 +1138,44 @@ mod tests {
                 .build()
                 .unwrap(),
         );
+        let object_store: Arc<dyn object_store::ObjectStore> =
+            Arc::new(object_store::memory::InMemory::new());
+        runtime
+            .block_on(object_store.put(
+                &object_store::path::Path::from("pages/a.arrow"),
+                bytes::Bytes::from_static(b"abc").into(),
+            ))
+            .unwrap();
+        let location = V32PageLocation {
+            page_ordinal: 0,
+            sha256: "a".repeat(64),
+            encoded_bytes: 3,
+            standard_uri: "s3://frozen/pages/a.arrow".to_owned(),
+            express_uri: None,
+        };
         let store = ObjectPageStore {
-            store: Arc::new(object_store::memory::InMemory::new()),
-            prefix: object_store::path::Path::from("pages"),
-            suffix: ".arrow".to_owned(),
+            store: object_store,
+            locations: Arc::new(vec![location]),
+            paths: Arc::new(vec![object_store::path::Path::from("pages/a.arrow")]),
             runtime: Arc::clone(&runtime),
         };
-        assert!(store.read_wave(&[]).unwrap().is_empty());
+        let page = V27PageIdentity {
+            ordinal: 0,
+            sha256: "a".repeat(64),
+            encoded_bytes: 3,
+            primary_rows: 1,
+            replica_rows: 0,
+        };
+        assert_eq!(
+            store.read_wave(std::slice::from_ref(&page)).unwrap(),
+            vec![b"abc".to_vec()]
+        );
         assert!(store.read_wave(&[]).unwrap().is_empty());
         assert_eq!(Arc::strong_count(&runtime), 2);
+
+        let mut drifted = page;
+        drifted.sha256.replace_range(0..1, "b");
+        assert!(store.read_wave(&[drifted]).is_err());
     }
 
     #[test]
@@ -1088,7 +1191,7 @@ mod tests {
         assert_eq!(parsed.page_count, 16);
         assert_eq!(
             parsed.page_source,
-            Some(PageSource::S3("s3://frozen/pages".to_owned()))
+            Some(PageSource::Tier(V32ServingTier::Standard))
         );
 
         let mut expanded = arguments();
@@ -1108,6 +1211,7 @@ mod tests {
             "--legacy",
             "--d3",
             "--page-bucket",
+            "--s3-page-prefix",
         ] {
             let mut values = arguments();
             values.extend([forbidden.to_owned(), "value".to_owned()]);
@@ -1125,7 +1229,7 @@ mod tests {
         let mut diagnostic = arguments();
         let source = diagnostic
             .iter()
-            .position(|value| value == "--s3-page-prefix")
+            .position(|value| value == "--serving-tier")
             .unwrap();
         diagnostic.drain(source..=source + 1);
         let count = diagnostic
@@ -1201,11 +1305,12 @@ mod tests {
                 "\"page_rows\":128,\"source_rows\":40}},",
                 "\"page_key_suffix\":\".arrow\",",
                 "\"pq\":{{\"artifacts\":[{},{},{},{},{}]}},",
-                "\"routing\":{{\"algorithm\":\"flat-leaf-page-centroid-v1\",",
-                "\"leaf_beam\":4,\"maximum_pages_per_leaf\":64,",
-                "\"page_centroid_dimensions\":96,\"page_centroid_element\":\"float16\",",
-                "\"page_count\":16}},",
-                "\"schema_version\":2,",
+                "\"routing\":{{\"algorithm\":\"hierarchical-residual-pq-v1\",",
+                "\"candidate_depth\":12288,\"leaf_beam\":64,",
+                "\"maximum_pages_per_leaf\":64,\"maximum_scanned_codes\":1000000,",
+                "\"page_count\":16,\"root_beam\":8}},",
+                "\"schema_version\":3,",
+                "\"serving\":{{\"page_locations\":{}}},",
                 "\"source\":{{\"commit\":\"{}\",\"corpus_manifest_bytes\":4096,",
                 "\"corpus_manifest_sha256\":\"{}\",",
                 "\"corpus_manifest_uri\":\"s3://bucket/deep-10m/corpus.json\",",
@@ -1241,6 +1346,7 @@ mod tests {
                 48,
                 &format!(r#"["{high_sha}"]"#),
             ),
+            artifact("v32-page-locations-parquet", "page-locations.parquet", 'b',),
             "b701eada33a5d6782f9ebb0adaac5fd7573da40f",
             "a".repeat(64),
         )
@@ -1265,11 +1371,20 @@ mod tests {
         assert_eq!(manifest.hierarchy[0].1.role, "v27-roots-arrow");
         assert_eq!(manifest.pq.len(), 5);
         assert_eq!(manifest.layout[1].1.role, "v30-page-ranges-parquet");
-        assert_eq!(manifest.routing_leaf_beam, 4);
+        assert_eq!(manifest.page_locations.0, "page-locations.parquet");
+        assert_eq!(manifest.page_locations.1.role, "v32-page-locations-parquet");
+        assert_eq!(manifest.routing_root_beam, 8);
+        assert_eq!(manifest.routing_leaf_beam, 64);
+        assert_eq!(manifest.routing_candidate_depth, 12_288);
         assert_eq!(manifest.routing_page_count, 16);
 
         let mut corrupted = argument.clone();
-        corrupted.sha256.replace_range(0..1, "f");
+        let replacement = if corrupted.sha256.starts_with('f') {
+            "e"
+        } else {
+            "f"
+        };
+        corrupted.sha256.replace_range(0..1, replacement);
         assert!(read_manifest(&corrupted).is_err());
 
         let drifted = bytes
@@ -1316,8 +1431,8 @@ mod tests {
 
         let mut routing_bytes = manifest_bytes();
         let routing_drifted = routing_bytes
-            .windows(b"flat-leaf-page-centroid-v1".len())
-            .position(|window| window == b"flat-leaf-page-centroid-v1")
+            .windows(b"hierarchical-residual-pq-v1".len())
+            .position(|window| window == b"hierarchical-residual-pq-v1")
             .unwrap();
         routing_bytes[routing_drifted] = b'x';
         fs::write(&packing_argument.path, &routing_bytes).unwrap();
@@ -1440,7 +1555,10 @@ mod tests {
             diagnostic: None,
         };
         let error = execute(args).unwrap_err().to_string();
-        assert!(error.contains("roots.arrow"), "unexpected error: {error}");
+        assert!(
+            error.contains("page-locations.parquet"),
+            "unexpected error: {error}"
+        );
     }
 }
 

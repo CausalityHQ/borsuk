@@ -12,7 +12,7 @@ use arrow_array::{Array, FixedSizeListArray, Float32Array};
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, V27HierarchyConfig, V27PageIdentity, V27PageRow, V30ConstructionBuilder,
-    V30ConstructionConfig, V30PageSink, V30Scratch,
+    V30ConstructionConfig, V30PageSink, V30Scratch, V32PageLocation, encode_v32_page_locations,
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -592,6 +592,24 @@ fn execute_with_store(args: Args, store: Arc<dyn ObjectStore>) -> borsuk::Result
             format!("{output_path}page-offsets.parquet"),
             artifacts.layout.page_ranges_parquet.clone(),
         )?;
+        let page_locations = artifacts
+            .pages
+            .iter()
+            .map(|page| V32PageLocation {
+                page_ordinal: page.ordinal,
+                sha256: page.sha256.clone(),
+                encoded_bytes: page.encoded_bytes,
+                standard_uri: format!("{}pages/{}.arrow", args.output_s3_prefix, page.sha256),
+                express_uri: None,
+            })
+            .collect::<Vec<_>>();
+        let page_locations = encode_v32_page_locations(&page_locations)?;
+        put_bytes(
+            &runtime,
+            &store,
+            format!("{output_path}page-locations.parquet"),
+            page_locations.parquet.clone(),
+        )?;
         let disk_artifact = |file: &str, role: &str, sha256: &str, encoded_bytes: u64| {
             serde_json::json!({
                 "encoded_bytes": encoded_bytes,
@@ -633,14 +651,18 @@ fn execute_with_store(args: Args, store: Arc<dyn ObjectStore>) -> borsuk::Result
             "page_key_suffix": ".arrow",
             "pq": {"artifacts": pq},
             "routing": {
-                "algorithm": "flat-leaf-page-centroid-v1",
-                "leaf_beam": args.routing_leaf_beam,
+                "algorithm": "hierarchical-residual-pq-v1",
+                "candidate_depth": 12_288,
+                "leaf_beam": 64,
+                "maximum_scanned_codes": 1_000_000,
                 "maximum_pages_per_leaf": 64,
-                "page_centroid_dimensions": 96,
-                "page_centroid_element": "float16",
                 "page_count": 16,
+                "root_beam": 8,
             },
-            "schema_version": 2,
+            "serving": {
+                "page_locations": disk_artifact("page-locations.parquet", &page_locations.role, &page_locations.sha256, page_locations.encoded_bytes),
+            },
+            "schema_version": 3,
             "source": {
                 "commit": args.source_commit,
                 "corpus_manifest_bytes": args.corpus_manifest_bytes,
@@ -712,7 +734,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use bytes::Bytes;
     use object_store::{ObjectStore, ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
-    use parquet::arrow::ArrowWriter;
+    use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
 
@@ -778,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn v30_s3_build_streams_authenticated_shards_and_uploads_only_pages_and_artifacts() {
+    fn v32_s3_build_writes_pq_manifest_and_standard_page_locations() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let parquet = parquet_rows(320);
@@ -861,17 +883,53 @@ mod tests {
                 "balanced-geometric-v1"
             );
             assert_eq!(manifest["layout"]["page_rows"], 32);
-            assert_eq!(manifest["schema_version"], 2);
+            assert_eq!(manifest["schema_version"], 3);
             assert_eq!(
                 manifest["routing"],
                 serde_json::json!({
-                    "algorithm": "flat-leaf-page-centroid-v1",
-                    "leaf_beam": 4,
+                    "algorithm": "hierarchical-residual-pq-v1",
+                    "candidate_depth": 12288,
+                    "leaf_beam": 64,
+                    "maximum_scanned_codes": 1000000,
+                    "root_beam": 8,
                     "maximum_pages_per_leaf": 64,
-                    "page_centroid_dimensions": 96,
-                    "page_centroid_element": "float16",
                     "page_count": 16,
                 })
+            );
+            let location = &manifest["serving"]["page_locations"];
+            assert_eq!(location["file"], "page-locations.parquet");
+            assert_eq!(location["role"], "v32-page-locations-parquet");
+            let location_bytes = store
+                .get(&Path::from("v30/build-a0001/page-locations.parquet"))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            assert_eq!(location["encoded_bytes"], location_bytes.len());
+            assert_eq!(
+                location["sha256"],
+                format!("{:x}", Sha256::digest(&location_bytes))
+            );
+            let builder = ParquetRecordBatchReaderBuilder::try_new(location_bytes).unwrap();
+            assert_eq!(
+                builder.metadata().file_metadata().num_rows(),
+                value["pages"]
+            );
+            assert_eq!(
+                builder
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "page_ordinal",
+                    "sha256",
+                    "encoded_bytes",
+                    "standard_uri",
+                    "express_uri",
+                ]
             );
             assert!(
                 manifest["layout"]["maximum_leaf_rows"]

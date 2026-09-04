@@ -19,6 +19,7 @@ use bytes::Bytes;
 use half::f16;
 use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
 use sha2::{Digest, Sha256};
+use url::Url;
 
 use crate::{
     BorsukError, Result, V27Hierarchy, V27HierarchyArtifacts, V27HierarchyConfig, V27PageIdentity,
@@ -1715,6 +1716,176 @@ pub struct V30LayoutArtifacts {
     pub page_ranges_parquet: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum V32ServingTier {
+    Standard,
+    Express,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V32PageLocation {
+    pub page_ordinal: u32,
+    pub sha256: String,
+    pub encoded_bytes: u64,
+    pub standard_uri: String,
+    pub express_uri: Option<String>,
+}
+
+impl V32PageLocation {
+    #[doc(hidden)]
+    pub fn uri(&self, tier: V32ServingTier) -> Result<&str> {
+        match tier {
+            V32ServingTier::Standard => Ok(&self.standard_uri),
+            V32ServingTier::Express => self
+                .express_uri
+                .as_deref()
+                .ok_or_else(|| invalid("V32 Express page location is missing")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V32PageLocationsArtifact {
+    pub role: String,
+    pub sha256: String,
+    pub encoded_bytes: u64,
+    pub parquet: Vec<u8>,
+}
+
+fn page_location_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("page_ordinal", DataType::UInt32, false),
+        Field::new("sha256", DataType::Utf8, false),
+        Field::new("encoded_bytes", DataType::UInt64, false),
+        Field::new("standard_uri", DataType::Utf8, false),
+        Field::new("express_uri", DataType::Utf8, true),
+    ])
+}
+
+fn validate_v32_page_locations(locations: &[V32PageLocation]) -> Result<()> {
+    if locations.is_empty() {
+        return Err(invalid("V32 page locations are empty"));
+    }
+    let mut uris = BTreeSet::new();
+    for (ordinal, location) in locations.iter().enumerate() {
+        let standard = Url::parse(&location.standard_uri)
+            .map_err(|_| invalid("V32 Standard page URI differs"))?;
+        if location.page_ordinal != ordinal as u32
+            || !valid_digest(&location.sha256)
+            || location.encoded_bytes == 0
+            || standard.scheme() != "s3"
+            || standard.host_str().is_none()
+            || standard.path() == "/"
+            || !uris.insert(location.standard_uri.as_str())
+        {
+            return Err(invalid("V32 Standard page location differs"));
+        }
+        if let Some(uri) = &location.express_uri {
+            let express = Url::parse(uri).map_err(|_| invalid("V32 Express page URI differs"))?;
+            if express.scheme() != "s3"
+                || express
+                    .host_str()
+                    .is_none_or(|host| !host.ends_with("--x-s3"))
+                || express.path() == "/"
+                || uri == &location.standard_uri
+                || !uris.insert(uri)
+            {
+                return Err(invalid("V32 Express page location differs"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[doc(hidden)]
+pub fn encode_v32_page_locations(
+    locations: &[V32PageLocation],
+) -> Result<V32PageLocationsArtifact> {
+    validate_v32_page_locations(locations)?;
+    let batch = RecordBatch::try_new(
+        Arc::new(page_location_schema()),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                locations.iter().map(|location| location.page_ordinal),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                locations.iter().map(|location| location.sha256.as_str()),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                locations.iter().map(|location| location.encoded_bytes),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                locations
+                    .iter()
+                    .map(|location| location.standard_uri.as_str()),
+            )),
+            Arc::new(StringArray::from_iter(
+                locations
+                    .iter()
+                    .map(|location| location.express_uri.as_deref()),
+            )),
+        ],
+    )?;
+    let mut parquet = Vec::new();
+    {
+        let mut writer = ArrowWriter::try_new(&mut parquet, batch.schema(), None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+    }
+    Ok(V32PageLocationsArtifact {
+        role: "v32-page-locations-parquet".to_owned(),
+        sha256: format!("{:x}", Sha256::digest(&parquet)),
+        encoded_bytes: parquet.len() as u64,
+        parquet,
+    })
+}
+
+#[doc(hidden)]
+pub fn decode_v32_page_locations(
+    artifact: &V32PageLocationsArtifact,
+) -> Result<Vec<V32PageLocation>> {
+    if artifact.role != "v32-page-locations-parquet"
+        || artifact.encoded_bytes != artifact.parquet.len() as u64
+        || artifact.sha256 != format!("{:x}", Sha256::digest(&artifact.parquet))
+    {
+        return Err(invalid("V32 page location artifact identity differs"));
+    }
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(&artifact.parquet))?;
+    if builder.schema().as_ref() != &page_location_schema() {
+        return Err(invalid("V32 page location Parquet schema differs"));
+    }
+    let mut locations = Vec::new();
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.columns()[..4]
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V32 page location nullability differs"));
+        }
+        let ordinals = column::<UInt32Array>(&batch, 0)?;
+        let digests = column::<StringArray>(&batch, 1)?;
+        let lengths = column::<UInt64Array>(&batch, 2)?;
+        let standard = column::<StringArray>(&batch, 3)?;
+        let express = column::<StringArray>(&batch, 4)?;
+        for row in 0..batch.num_rows() {
+            locations.push(V32PageLocation {
+                page_ordinal: ordinals.value(row),
+                sha256: digests.value(row).to_owned(),
+                encoded_bytes: lengths.value(row),
+                standard_uri: standard.value(row).to_owned(),
+                express_uri: (!express.is_null(row)).then(|| express.value(row).to_owned()),
+            });
+        }
+    }
+    validate_v32_page_locations(&locations)?;
+    Ok(locations)
+}
+
 fn leaf_schema() -> Schema {
     Schema::new(vec![
         Field::new("leaf_ordinal", DataType::UInt32, false),
@@ -1982,7 +2153,8 @@ mod tests {
     use super::{
         V30ConstructionBuilder, V30ConstructionConfig, V30FidelitySelectionConfig, V30Layout,
         V30LayoutBuildConfig, V30LayoutBuilder, V30LayoutRecord, V30LeafRange, V30PageRange,
-        V30PageSink, V30Scratch, decode_v30_layout_artifacts, encode_v30_layout_artifacts,
+        V30PageSink, V30Scratch, V32PageLocation, V32ServingTier, decode_v30_layout_artifacts,
+        decode_v32_page_locations, encode_v30_layout_artifacts, encode_v32_page_locations,
         partition_v30_leaf_pages, select_v30_high_fidelity, sort_v30_layout_records,
         validate_v30_geometric_leaf_row_count,
     };
@@ -2030,6 +2202,45 @@ mod tests {
             vec![page(0, 0, 0, 3), page(1, 0, 3, 2), page(2, 1, 5, 3)],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn v32_s3_layout_page_locations_bind_byte_identical_standard_and_express_objects() {
+        // Break caught: serving discovers page locations, silently falls back
+        // between tiers, or permits the Express replica to change page bytes.
+        let locations = vec![
+            V32PageLocation {
+                page_ordinal: 0,
+                sha256: "1".repeat(64),
+                encoded_bytes: 1001,
+                standard_uri: "s3://durable/pages/one.arrow".to_owned(),
+                express_uri: Some("s3://hot--euc1-az1--x-s3/pages/one.arrow".to_owned()),
+            },
+            V32PageLocation {
+                page_ordinal: 1,
+                sha256: "2".repeat(64),
+                encoded_bytes: 1002,
+                standard_uri: "s3://durable/pages/two.arrow".to_owned(),
+                express_uri: None,
+            },
+        ];
+        let artifact = encode_v32_page_locations(&locations).unwrap();
+        let decoded = decode_v32_page_locations(&artifact).unwrap();
+
+        assert_eq!(decoded, locations);
+        assert_eq!(
+            decoded[0].uri(V32ServingTier::Standard).unwrap(),
+            "s3://durable/pages/one.arrow"
+        );
+        assert_eq!(
+            decoded[0].uri(V32ServingTier::Express).unwrap(),
+            "s3://hot--euc1-az1--x-s3/pages/one.arrow"
+        );
+        assert!(decoded[1].uri(V32ServingTier::Express).is_err());
+
+        let mut corrupted = artifact;
+        corrupted.parquet[0] ^= 1;
+        assert!(decode_v32_page_locations(&corrupted).is_err());
     }
 
     #[derive(Default)]
