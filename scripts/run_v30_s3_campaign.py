@@ -475,6 +475,17 @@ def _spec(target: SpotTarget, user_data: str) -> dict[str, object]:
         "SecurityGroupIds": [target.security_group_id],
         "IamInstanceProfile": {"Arn": target.instance_profile_arn},
         "Placement": {"AvailabilityZone": target.availability_zone},
+        "BlockDeviceMappings": [
+            {
+                "DeviceName": "/dev/xvda",
+                "Ebs": {
+                    "DeleteOnTermination": True,
+                    "Encrypted": True,
+                    "VolumeSize": 200,
+                    "VolumeType": "gp3",
+                },
+            }
+        ],
         "InstanceInitiatedShutdownBehavior": "terminate",
         "InstanceMarketOptions": {
             "MarketType": "spot",

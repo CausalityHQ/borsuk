@@ -160,6 +160,20 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertNotIn("v30_s3_qualify", script)
             self.assertEqual(spec["InstanceMarketOptions"]["MarketType"], "spot")
             self.assertEqual(spec["InstanceInitiatedShutdownBehavior"], "terminate")
+            self.assertEqual(
+                spec["BlockDeviceMappings"],
+                [
+                    {
+                        "DeviceName": "/dev/xvda",
+                        "Ebs": {
+                            "DeleteOnTermination": True,
+                            "Encrypted": True,
+                            "VolumeSize": 200,
+                            "VolumeType": "gp3",
+                        },
+                    }
+                ],
+            )
             self.assertIn(
                 "install -D -m 0555 target/release/examples/v30_s3_build /opt/borsuk/v30_s3_build",
                 script,
