@@ -161,8 +161,9 @@ def parse_args(arguments: list[str]) -> V30ReproductionPlan:
 
     artifacts: list[ArtifactAuthority] = []
     for role in ARTIFACT_ROLES:
+        encoded_bytes_raw = take(f"{role}-bytes")
         try:
-            encoded_bytes = int(take(f"{role}-bytes"))
+            encoded_bytes = int(encoded_bytes_raw)
         except ValueError as error:
             raise ValueError(f"V30 reproduction --{role}-bytes type differs") from error
         artifacts.append(
@@ -1150,4 +1151,4 @@ def main(arguments: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    raise SystemExit(main(sys.argv[1:]))

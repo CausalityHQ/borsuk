@@ -1,6 +1,9 @@
 import dataclasses
 import hashlib
 import json
+import pathlib
+import subprocess
+import sys
 import unittest
 
 import numpy as np
@@ -446,6 +449,28 @@ class V30VariableRateReproductionTests(unittest.TestCase):
             parse_args([*arguments, "--download-corpus", "/tmp/corpus"])
         with self.assertRaisesRegex(ValueError, "execute"):
             parse_args([value for value in arguments if value != "--execute"])
+
+    def test_v30_reproduction_direct_script_passes_only_the_cli_program_token(self) -> None:
+        # Break caught: __main__ passes its own filename plus the logical program token and
+        # fails before authority parsing or any scientific work can begin.
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(
+                    pathlib.Path(__file__).with_name(
+                        "run_v30_variable_rate_reproduction.py"
+                    )
+                ),
+                "reproduce",
+                "--execute",
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("missing --pages-manifest-bytes", completed.stderr)
+        self.assertNotIn("flag differs", completed.stderr)
 
     def test_v30_reproduction_evidence_is_parquet_and_result_binds_it(self) -> None:
         # Break caught: per-query misses/work disappear into aggregate JSON or the result can be
