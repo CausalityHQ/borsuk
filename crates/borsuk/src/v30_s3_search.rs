@@ -19,6 +19,8 @@ use crate::{
 const MAX_SCANNED_CODES: u64 = 1_000_000;
 const MAX_CANDIDATES: usize = 12_288;
 const MAX_SELECTED_PAGES: usize = 16;
+const MAX_PAGE_CENTROID_LEAVES: usize = 512;
+const MAX_PAGE_CENTROID_CANDIDATES: usize = 32_768;
 const CANDIDATE_PRUNE_WINDOW: usize = 32_768;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +239,78 @@ struct BoundedCandidates {
     values: Vec<Candidate>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ScoreCandidate {
+    score: f64,
+    ordinal: usize,
+}
+
+impl PartialEq for ScoreCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.score.to_bits() == other.score.to_bits() && self.ordinal == other.ordinal
+    }
+}
+
+impl Eq for ScoreCandidate {}
+
+impl Ord for ScoreCandidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.score
+            .total_cmp(&other.score)
+            .then_with(|| self.ordinal.cmp(&other.ordinal))
+    }
+}
+
+impl PartialOrd for ScoreCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+struct BoundedScores {
+    limit: usize,
+    values: BinaryHeap<ScoreCandidate>,
+}
+
+impl BoundedScores {
+    fn new(limit: usize) -> Result<Self> {
+        if limit == 0 {
+            return Err(invalid("V30 score retention bound differs"));
+        }
+        Ok(Self {
+            limit,
+            values: BinaryHeap::with_capacity(limit),
+        })
+    }
+
+    fn insert(&mut self, score: f64, ordinal: usize) -> Result<()> {
+        if !score.is_finite() {
+            return Err(invalid("V30 centroid score differs"));
+        }
+        let candidate = ScoreCandidate { score, ordinal };
+        if self.values.len() < self.limit {
+            self.values.push(candidate);
+        } else if self.values.peek().is_some_and(|worst| candidate < *worst) {
+            self.values.pop();
+            self.values.push(candidate);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn storage_len(&self) -> usize {
+        self.values.len()
+    }
+
+    fn finish(self) -> Vec<(f64, usize)> {
+        self.values
+            .into_sorted_vec()
+            .into_iter()
+            .map(|candidate| (candidate.score, candidate.ordinal))
+            .collect()
+    }
+}
+
 impl BoundedCandidates {
     fn new(limit: usize) -> Self {
         Self {
@@ -297,6 +371,17 @@ fn centroid_distance(query: &[f32; 96], centroid: &[f16; 96]) -> f64 {
         .zip(centroid)
         .map(|(left, right)| {
             let delta = f64::from(*left) - f64::from(f32::from(*right));
+            delta * delta
+        })
+        .sum()
+}
+
+fn page_centroid_distance(query: &[f32; 96], centroid: &[u16; 96]) -> f64 {
+    query
+        .iter()
+        .zip(centroid)
+        .map(|(left, right)| {
+            let delta = f64::from(*left) - f64::from(f16::from_bits(*right).to_f32());
             delta * delta
         })
         .sum()
@@ -371,7 +456,71 @@ impl V30Router {
     }
 
     pub fn select_pages(&self, query: &[f32; 96], arm: V30SearchArm) -> Result<V30PageSelection> {
-        self.select_pages_with_leaf_observer(query, arm, &|_| {})
+        self.validate_arm(arm)?;
+        self.select_pages_by_centroid(query, arm.leaf_beam, arm.page_count)
+    }
+
+    pub(crate) fn select_pages_by_centroid(
+        &self,
+        query: &[f32; 96],
+        leaf_beam: usize,
+        page_count: usize,
+    ) -> Result<V30PageSelection> {
+        if leaf_beam == 0
+            || leaf_beam > MAX_PAGE_CENTROID_LEAVES
+            || leaf_beam > self.hierarchy.leaves.len()
+            || page_count == 0
+            || page_count > MAX_SELECTED_PAGES
+        {
+            return Err(invalid("V30 page centroid arm differs"));
+        }
+        let query = normalized(query)?;
+        let mut leaf_scores = BoundedScores::new(leaf_beam)?;
+        for (ordinal, centroid) in self.hierarchy.leaves.iter().enumerate() {
+            leaf_scores.insert(centroid_distance(&query, centroid), ordinal)?;
+        }
+        let mut page_scores = BoundedScores::new(page_count)?;
+        let mut pages_considered = 0_usize;
+        let leaves = leaf_scores.finish();
+        for (_, leaf_ordinal) in leaves {
+            let leaf = &self.layout.leaves()[leaf_ordinal];
+            let start = usize::try_from(leaf.page_start)
+                .map_err(|_| invalid("V30 page centroid range overflows"))?;
+            let end = leaf
+                .page_start
+                .checked_add(leaf.page_count)
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| invalid("V30 page centroid range overflows"))?;
+            for page_index in start..end {
+                let page = &self.layout.pages()[page_index];
+                page_scores.insert(page_centroid_distance(&query, &page.centroid), page_index)?;
+                pages_considered = pages_considered
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("V30 page centroid candidate count overflows"))?;
+                if pages_considered > MAX_PAGE_CENTROID_CANDIDATES {
+                    return Err(invalid("V30 page centroid candidate bound differs"));
+                }
+            }
+        }
+        if pages_considered < page_count {
+            return Err(invalid("V30 page centroid cardinality differs"));
+        }
+        let pages = page_scores
+            .finish()
+            .into_iter()
+            .map(|(_, page_index)| self.layout.pages()[page_index].identity.clone())
+            .collect();
+        Ok(V30PageSelection {
+            pages,
+            work: V30RoutingWork {
+                roots_scored: 0,
+                leaves_scored: self.hierarchy.leaves.len(),
+                codes_scanned: 0,
+                candidates_retained: 0,
+                pages_considered,
+                selected_pages: page_count,
+            },
+        })
     }
 
     #[doc(hidden)]
@@ -730,8 +879,8 @@ mod tests {
     use half::f16;
 
     use super::{
-        BoundedCandidates, Candidate, ExactTopK, V30Index, V30Match, V30PageStore, V30Router,
-        V30RoutingTargetStage, V30SearchArm, V30SearchPhase,
+        BoundedCandidates, BoundedScores, Candidate, ExactTopK, V30Index, V30Match, V30PageStore,
+        V30Router, V30RoutingTargetStage, V30SearchArm, V30SearchPhase,
     };
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
@@ -869,6 +1018,93 @@ mod tests {
         V30Router::new(hierarchy, base, high, layout, codes).unwrap()
     }
 
+    fn page_centroid_router() -> V30Router {
+        let zero = f16::from_f32(0.0);
+        let one = f16::from_f32(1.0);
+        let mut roots = vec![[zero; 96]; 2];
+        roots[0][0] = one;
+        roots[1][0] = f16::from_f32(-1.0);
+        let mut leaves = vec![[zero; 96]; 4];
+        leaves[0][1] = one;
+        leaves[1][2] = one;
+        leaves[2][3] = one;
+        leaves[3][0] = one;
+        let hierarchy = V27Hierarchy {
+            roots,
+            leaves,
+            leaf_roots: vec![0, 0, 1, 1],
+        };
+        let pages = (0..4_u32)
+            .map(|ordinal| V30PageRange {
+                leaf_ordinal: ordinal,
+                logical_start: u64::from(ordinal),
+                row_count: 1,
+                centroid: hierarchy.leaves[ordinal as usize].map(f16::to_bits),
+                identity: encode_v27_page(
+                    ordinal,
+                    1,
+                    0,
+                    &[V27PageRow {
+                        source_ordinal: u64::from(ordinal),
+                        vector: hierarchy.leaves[ordinal as usize].map(f16::to_f32),
+                    }],
+                )
+                .unwrap()
+                .0,
+            })
+            .collect::<Vec<_>>();
+        let leaves = (0..4_u32)
+            .map(|ordinal| V30LeafRange {
+                leaf_ordinal: ordinal,
+                logical_start: u64::from(ordinal),
+                row_count: 1,
+                page_start: ordinal,
+                page_count: 1,
+            })
+            .collect();
+        let layout = V30Layout::new(4, leaves, pages).unwrap();
+        let codes = V30CodePlanes::from_packed(4, vec![0_u32; 4], vec![0; 4 * 24], vec![]).unwrap();
+        let base = V30PqCodebook::new(V30PqWidth::Base24, vec![0.0; 24 * 256 * 4]).unwrap();
+        let high = V30PqCodebook::new(V30PqWidth::High48, vec![0.0; 48 * 256 * 2]).unwrap();
+        V30Router::new(hierarchy, base, high, layout, codes).unwrap()
+    }
+
+    #[test]
+    fn v30_s3_search_page_centroid_bypasses_root_and_row_pq_loss() {
+        // Break caught: page choice still depends on a root frontier or the
+        // row-level PQ candidate heap after authenticated page centroids exist.
+        let router = page_centroid_router();
+        let mut query = [0.0_f32; 96];
+        query[0] = 1.0;
+        let selection = router.select_pages_by_centroid(&query, 2, 1).unwrap();
+        assert_eq!(selection.pages[0].ordinal, 3);
+        assert_eq!(selection.work.roots_scored, 0);
+        assert_eq!(selection.work.leaves_scored, 4);
+        assert_eq!(selection.work.codes_scanned, 0);
+        assert_eq!(selection.work.candidates_retained, 0);
+        assert_eq!(selection.work.pages_considered, 2);
+        assert_eq!(selection.work.selected_pages, 1);
+    }
+
+    #[test]
+    fn v30_s3_search_page_centroid_heap_is_bounded_and_deterministic() {
+        // Break caught: flat centroid routing allocates and sorts every scored
+        // leaf/page pair instead of retaining only the registered best K.
+        let mut scores = BoundedScores::new(3).unwrap();
+        for (score, ordinal) in [
+            (3.0, 30),
+            (1.0, 12),
+            (2.0, 20),
+            (1.0, 11),
+            (0.5, 40),
+            (1.0, 10),
+        ] {
+            scores.insert(score, ordinal).unwrap();
+            assert!(scores.storage_len() <= 3);
+        }
+        assert_eq!(scores.finish(), vec![(0.5, 40), (1.0, 10), (1.0, 11)]);
+    }
+
     #[test]
     fn v30_s3_search_diagnoses_every_truth_loss_boundary_without_page_reads() {
         // Break caught: a missed truth row is blamed on the hierarchy when it
@@ -907,6 +1143,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             [0, 15, 25, 35]
         );
+    }
+
+    #[test]
+    fn v30_s3_search_page_centroid_is_the_production_selection_path() {
+        // Break caught: the production entry point still uses root routing and
+        // row-PQ candidate reduction while the direct centroid selector passes.
+        let router = page_centroid_router();
+        let mut query = [0.0_f32; 96];
+        query[0] = 1.0;
+        let selection = router
+            .select_pages(
+                &query,
+                V30SearchArm {
+                    root_beam: 1,
+                    leaf_beam: 2,
+                    candidate_depth: 1,
+                    page_count: 1,
+                },
+            )
+            .unwrap();
+        assert_eq!(selection.pages[0].ordinal, 3);
+        assert_eq!(selection.work.roots_scored, 0);
+        assert_eq!(selection.work.leaves_scored, 4);
+        assert_eq!(selection.work.codes_scanned, 0);
+        assert_eq!(selection.work.candidates_retained, 0);
+        assert_eq!(selection.work.pages_considered, 2);
     }
 
     #[test]
