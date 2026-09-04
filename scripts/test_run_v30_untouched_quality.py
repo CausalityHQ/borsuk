@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -63,7 +64,7 @@ class V30UntouchedQualityTests(unittest.TestCase):
                 truth_path, hashlib.sha256(truth).hexdigest(), len(truth)
             ),
             serving_tier="standard",
-            source_rows=9_990_000,
+            source_rows=100_000,
             query_start=64,
             query_count=32,
             leaf_beam=64,
@@ -134,6 +135,17 @@ class V30UntouchedQualityTests(unittest.TestCase):
             self.assertTrue(all("--serving-tier" in command for command in commands))
             self.assertTrue(all("--s3-page-prefix" not in command for command in commands))
             self.assertTrue(all("--construction-manifest-s3" not in command for command in commands))
+
+            wider = build_qualifier_commands(replace(plan, leaf_beam=128))
+            self.assertEqual(
+                int(wider[0][wider[0].index("--leaf-beam") + 1]), 128
+            )
+            with self.assertRaisesRegex(ValueError, "untouched plan authority"):
+                build_qualifier_commands(replace(plan, leaf_beam=512))
+            full = build_qualifier_commands(
+                replace(plan, source_rows=9_990_000, leaf_beam=512)
+            )
+            self.assertEqual(int(full[0][full[0].index("--leaf-beam") + 1]), 512)
 
             seen: list[tuple[str, ...]] = []
 

@@ -66,11 +66,12 @@ def _validate(plan: V30UntouchedPlan) -> None:
         or not plan.artifact_dir.is_absolute()
         or plan.serving_tier not in {"standard", "express"}
         or type(plan.source_rows) is not int
-        or plan.source_rows <= 0
+        or plan.source_rows not in {100_000, 9_990_000}
         or type(plan.query_start) is not int
         or plan.query_start < 0
         or plan.query_count != QUERY_COUNT
-        or plan.leaf_beam != 64
+        or plan.leaf_beam
+        not in ({64, 128, 256} if plan.source_rows == 100_000 else {512})
         or type(plan.page_count) is not int
         or plan.page_count != 16
     ):
