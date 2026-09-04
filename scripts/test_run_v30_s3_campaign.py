@@ -345,7 +345,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             def describe_instances(self, **_request: object) -> dict[str, object]:
                 return {
                     "Reservations": [
-                        {"Instances": [{"State": {"Name": "running"}}]}
+                        {"Instances": [{"State": {"Name": "terminated"}}]}
                     ]
                 }
 
@@ -353,8 +353,8 @@ class V30SpotCampaignTests(unittest.TestCase):
                 return {
                     "InstanceStatuses": [
                         {
-                            "SystemStatus": {"Status": "ok"},
-                            "InstanceStatus": {"Status": "ok"},
+                            "SystemStatus": {"Status": "not-applicable"},
+                            "InstanceStatus": {"Status": "not-applicable"},
                         }
                     ]
                 }

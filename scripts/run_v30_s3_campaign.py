@@ -676,7 +676,27 @@ def monitor_v30_original_attempt(
     try:
         for _ in range(wall_observations):
             observation = observe(instance_id)
-            if observation.system_status not in {"ok", "initializing"} or observation.instance_status not in {"ok", "initializing"}:
+            if observation.terminal is not None:
+                try:
+                    value = json.loads(observation.terminal)
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise ValueError("V30 terminal JSON differs") from error
+                if observation.terminal != json.dumps(
+                    value, sort_keys=True, separators=(",", ":")
+                ).encode() + b"\n":
+                    raise ValueError("V30 terminal canonical bytes differ")
+                if (
+                    type(value) is not dict
+                    or value.get("status") != "passed"
+                    or value.get("claim_eligible") is not False
+                ):
+                    raise RuntimeError("V30 Spot worker failed")
+                return observation.terminal
+            allowed_health = {"ok", "initializing", "not-applicable"}
+            if (
+                observation.system_status not in allowed_health
+                or observation.instance_status not in allowed_health
+            ):
                 raise RuntimeError("V30 Spot health differs")
             if (
                 observation.rss_bytes < 0
@@ -694,22 +714,6 @@ def monitor_v30_original_attempt(
             if stagnant >= 20:
                 raise RuntimeError("V30 Spot progress stop")
             last_progress = observation.progress
-            if observation.terminal is not None:
-                try:
-                    value = json.loads(observation.terminal)
-                except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                    raise ValueError("V30 terminal JSON differs") from error
-                if observation.terminal != json.dumps(
-                    value, sort_keys=True, separators=(",", ":")
-                ).encode() + b"\n":
-                    raise ValueError("V30 terminal canonical bytes differ")
-                if (
-                    type(value) is not dict
-                    or value.get("status") != "passed"
-                    or value.get("claim_eligible") is not False
-                ):
-                    raise RuntimeError("V30 Spot worker failed")
-                return observation.terminal
             if observation.state not in {"pending", "running"}:
                 raise RuntimeError("V30 Spot instance stopped without terminal")
             sleep(30)
