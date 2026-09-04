@@ -79,7 +79,10 @@ struct DiskHierarchy {
 #[serde(deny_unknown_fields)]
 struct DiskLayout {
     leaf_ranges: DiskArtifact,
+    maximum_leaf_rows: u64,
+    packing_algorithm: String,
     page_ranges: DiskArtifact,
+    page_rows: usize,
     source_rows: u64,
 }
 
@@ -207,6 +210,12 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
     if disk.schema_version != 1
         || disk.page_key_suffix != ".arrow"
         || disk.layout.source_rows == 0
+        || disk.layout.maximum_leaf_rows == 0
+        || disk.layout.maximum_leaf_rows > disk.layout.source_rows
+        || disk.layout.maximum_leaf_rows > 65_536
+        || disk.layout.packing_algorithm != "balanced-cosine-v1"
+        || disk.layout.page_rows == 0
+        || disk.layout.page_rows > 512
         || disk.pq.artifacts.len() != 5
         || disk.source.dataset_id != "deep-image-96"
         || disk.source.commit.len() != 40
@@ -1132,7 +1141,9 @@ mod tests {
         format!(
             concat!(
                 "{{\"hierarchy\":{{\"leaves\":{},\"roots\":{}}},",
-                "\"layout\":{{\"leaf_ranges\":{},\"page_ranges\":{},\"source_rows\":40}},",
+                "\"layout\":{{\"leaf_ranges\":{},\"maximum_leaf_rows\":24,",
+                "\"packing_algorithm\":\"balanced-cosine-v1\",\"page_ranges\":{},",
+                "\"page_rows\":128,\"source_rows\":40}},",
                 "\"page_key_suffix\":\".arrow\",",
                 "\"pq\":{{\"artifacts\":[{},{},{},{},{}]}},",
                 "\"schema_version\":1,",
@@ -1227,6 +1238,20 @@ mod tests {
             ..drifted_argument
         };
         assert!(read_manifest(&source_argument).is_err());
+
+        let packing_drifted = manifest_bytes()
+            .windows(b"balanced-cosine-v1".len())
+            .position(|window| window == b"balanced-cosine-v1")
+            .unwrap();
+        let mut packing_bytes = manifest_bytes();
+        packing_bytes[packing_drifted] = b'x';
+        fs::write(&source_argument.path, &packing_bytes).unwrap();
+        let packing_argument = ArtifactArg {
+            sha256: format!("{:x}", Sha256::digest(&packing_bytes)),
+            encoded_bytes: packing_bytes.len() as u64,
+            ..source_argument
+        };
+        assert!(read_manifest(&packing_argument).is_err());
     }
 
     #[test]
