@@ -20,6 +20,8 @@ const CENTROIDS: usize = 256;
 const REGISTERED_ROWS: u64 = 100_000_000;
 const REGISTERED_FIDELITY_PPM: u32 = 50_000;
 const BLOCK_ROWS: usize = 32;
+const FIDELITY_GROUP_ROWS: usize = 128;
+const FIDELITY_WORDS_PER_GROUP: usize = FIDELITY_GROUP_ROWS / u32::BITS as usize;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -290,8 +292,9 @@ pub(crate) fn score_v30_transposed_block(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct V30Fidelity {
-    high: Vec<bool>,
-    high_ranks: Vec<usize>,
+    logical_rows: usize,
+    high_bits: Vec<u32>,
+    rank_checkpoints: Vec<u32>,
 }
 
 impl V30Fidelity {
@@ -319,36 +322,84 @@ impl V30Fidelity {
         for ordinal in order.into_iter().take(count) {
             high[ordinal] = true;
         }
-        let mut rank = 0;
-        let high_ranks = high
-            .iter()
-            .map(|selected| {
-                let current = rank;
-                if *selected {
-                    rank += 1;
-                }
-                current
+        let groups = errors.len().div_ceil(FIDELITY_GROUP_ROWS);
+        let mut high_bits = vec![0_u32; groups * FIDELITY_WORDS_PER_GROUP];
+        for (logical, selected) in high.into_iter().enumerate() {
+            if selected {
+                let word = logical / u32::BITS as usize;
+                high_bits[word] |= 1 << (logical % u32::BITS as usize);
+            }
+        }
+        let mut rank = 0_u32;
+        let rank_checkpoints = high_bits
+            .chunks_exact(FIDELITY_WORDS_PER_GROUP)
+            .map(|words| {
+                let checkpoint = rank;
+                rank = rank
+                    .checked_add(words.iter().map(|word| word.count_ones()).sum::<u32>())
+                    .ok_or_else(|| invalid("V30 fidelity rank overflows"))?;
+                Ok(checkpoint)
             })
-            .collect();
-        Ok(Self { high, high_ranks })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            logical_rows: errors.len(),
+            high_bits,
+            rank_checkpoints,
+        })
     }
 
     pub(crate) fn high_count(&self) -> usize {
-        self.high.iter().filter(|value| **value).count()
+        self.high_bits
+            .iter()
+            .map(|word| word.count_ones() as usize)
+            .sum()
     }
 
     pub(crate) fn is_high(&self, logical: usize) -> Result<bool> {
-        self.high
-            .get(logical)
-            .copied()
-            .ok_or_else(|| invalid("V30 fidelity logical row differs"))
+        if logical >= self.logical_rows {
+            return Err(invalid("V30 fidelity logical row differs"));
+        }
+        let word = logical / u32::BITS as usize;
+        Ok(self.high_bits[word] & (1 << (logical % u32::BITS as usize)) != 0)
     }
 
     pub(crate) fn high_rank(&self, logical: usize) -> Result<usize> {
         if !self.is_high(logical)? {
             return Err(invalid("V30 fidelity row is not high"));
         }
-        Ok(self.high_ranks[logical])
+        self.high_before(logical)
+    }
+
+    fn high_before(&self, logical: usize) -> Result<usize> {
+        if logical >= self.logical_rows {
+            return Err(invalid("V30 fidelity logical row differs"));
+        }
+        let group = logical / FIDELITY_GROUP_ROWS;
+        let within_group = logical % FIDELITY_GROUP_ROWS;
+        let word_in_group = within_group / u32::BITS as usize;
+        let bit = within_group % u32::BITS as usize;
+        let words = &self.high_bits
+            [group * FIDELITY_WORDS_PER_GROUP..(group + 1) * FIDELITY_WORDS_PER_GROUP];
+        let complete = words[..word_in_group]
+            .iter()
+            .map(|word| word.count_ones() as usize)
+            .sum::<usize>();
+        let lower_mask = if bit == 0 { 0 } else { (1_u32 << bit) - 1 };
+        Ok(self.rank_checkpoints[group] as usize
+            + complete
+            + (words[word_in_group] & lower_mask).count_ones() as usize)
+    }
+
+    pub(crate) fn high_bit_words(&self) -> &[u32] {
+        &self.high_bits
+    }
+
+    pub(crate) fn rank_checkpoints(&self) -> &[u32] {
+        &self.rank_checkpoints
+    }
+
+    pub(crate) fn resident_bytes(&self) -> usize {
+        (self.high_bits.len() + self.rank_checkpoints.len()) * size_of::<u32>()
     }
 }
 
@@ -357,12 +408,11 @@ pub(crate) struct V30CodePlanes {
     fidelity: V30Fidelity,
     base: Vec<u8>,
     high: Vec<u8>,
-    base_ranks: Vec<usize>,
 }
 
 impl V30CodePlanes {
     pub(crate) fn logical_rows(&self) -> usize {
-        self.fidelity.high.len()
+        self.fidelity.logical_rows
     }
 
     pub(crate) fn base_rows(&self) -> usize {
@@ -395,10 +445,7 @@ impl V30CodePlanes {
                 .ok_or_else(|| invalid("V30 high code rank differs"))?;
             Ok((V30PqWidth::High48, code))
         } else {
-            let rank = *self
-                .base_ranks
-                .get(logical)
-                .ok_or_else(|| invalid("V30 base rank differs"))?;
+            let rank = logical - self.fidelity.high_before(logical)?;
             let start = rank * V30PqWidth::Base24.bytes();
             let code = self
                 .base
@@ -416,7 +463,7 @@ pub(crate) fn encode_v30_planes(
 ) -> Result<V30CodePlanes> {
     if base_codes.is_empty()
         || base_codes.len() != high_codes.len()
-        || base_codes.len() != fidelity.high.len()
+        || base_codes.len() != fidelity.logical_rows
         || base_codes
             .iter()
             .any(|code| code.len() != V30PqWidth::Base24.bytes())
@@ -429,10 +476,8 @@ pub(crate) fn encode_v30_planes(
     let mut base =
         Vec::with_capacity((base_codes.len() - fidelity.high_count()) * V30PqWidth::Base24.bytes());
     let mut high = Vec::with_capacity(fidelity.high_count() * V30PqWidth::High48.bytes());
-    let mut base_ranks = Vec::with_capacity(base_codes.len());
     for logical in 0..base_codes.len() {
-        base_ranks.push(base.len() / V30PqWidth::Base24.bytes());
-        if fidelity.high[logical] {
+        if fidelity.is_high(logical)? {
             high.extend_from_slice(&high_codes[logical]);
         } else {
             base.extend_from_slice(&base_codes[logical]);
@@ -442,7 +487,6 @@ pub(crate) fn encode_v30_planes(
         fidelity,
         base,
         high,
-        base_ranks,
     })
 }
 
@@ -670,38 +714,43 @@ fn decode_blocks(bytes: &[u8], width: V30PqWidth, row_count: usize) -> Result<Ve
 
 fn fidelity_schema() -> Schema {
     Schema::new(vec![
-        Field::new("word_ordinal", DataType::UInt64, false),
+        Field::new("group_ordinal", DataType::UInt64, false),
         Field::new("valid_rows", DataType::UInt8, false),
-        Field::new("high_bits", DataType::UInt32, false),
-        Field::new("high_before", DataType::UInt64, false),
+        Field::new("high_bits", DataType::FixedSizeBinary(16), false),
+        Field::new("high_before", DataType::UInt32, false),
     ])
 }
 
 fn encode_fidelity(fidelity: &V30Fidelity) -> Result<Vec<u8>> {
-    let words = fidelity.high.len().div_ceil(BLOCK_ROWS);
-    let mut bits = Vec::with_capacity(words);
-    let mut before = Vec::with_capacity(words);
-    let mut count = 0_u64;
-    for word in 0..words {
-        before.push(count);
-        let mut value = 0_u32;
-        for row in 0..(fidelity.high.len() - word * BLOCK_ROWS).min(BLOCK_ROWS) {
-            if fidelity.high[word * BLOCK_ROWS + row] {
-                value |= 1 << row;
-                count += 1;
-            }
-        }
-        bits.push(value);
+    let groups = fidelity.logical_rows.div_ceil(FIDELITY_GROUP_ROWS);
+    if fidelity.high_bits.len() != groups * FIDELITY_WORDS_PER_GROUP
+        || fidelity.rank_checkpoints.len() != groups
+    {
+        return Err(invalid("V30 fidelity storage differs"));
     }
+    let packed_bits = fidelity
+        .high_bits
+        .chunks_exact(FIDELITY_WORDS_PER_GROUP)
+        .map(|words| {
+            words
+                .iter()
+                .flat_map(|word| word.to_le_bytes())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let bits = FixedSizeBinaryArray::try_from_iter(packed_bits.iter().map(Vec::as_slice))?;
     let batch = RecordBatch::try_new(
         Arc::new(fidelity_schema()),
         vec![
-            Arc::new(UInt64Array::from_iter_values(0..words as u64)),
-            Arc::new(UInt8Array::from_iter_values((0..words).map(|word| {
-                u8::try_from((fidelity.high.len() - word * BLOCK_ROWS).min(BLOCK_ROWS)).unwrap()
+            Arc::new(UInt64Array::from_iter_values(0..groups as u64)),
+            Arc::new(UInt8Array::from_iter_values((0..groups).map(|group| {
+                u8::try_from(
+                    (fidelity.logical_rows - group * FIDELITY_GROUP_ROWS).min(FIDELITY_GROUP_ROWS),
+                )
+                .unwrap()
             }))),
-            Arc::new(UInt32Array::from(bits)),
-            Arc::new(UInt64Array::from(before)),
+            Arc::new(bits),
+            Arc::new(UInt32Array::from(fidelity.rank_checkpoints.clone())),
         ],
     )?;
     write_ipc(fidelity_schema(), batch)
@@ -715,8 +764,14 @@ fn decode_fidelity(bytes: &[u8], logical_rows: usize) -> Result<V30Fidelity> {
     let batch = reader
         .next()
         .ok_or_else(|| invalid("V30 fidelity batch is missing"))??;
-    let words = logical_rows.div_ceil(BLOCK_ROWS);
-    if reader.next().is_some() || batch.num_rows() != words {
+    let groups = logical_rows.div_ceil(FIDELITY_GROUP_ROWS);
+    if reader.next().is_some()
+        || batch.num_rows() != groups
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
         return Err(invalid("V30 fidelity cardinality differs"));
     }
     let ordinals = batch
@@ -732,43 +787,43 @@ fn decode_fidelity(bytes: &[u8], logical_rows: usize) -> Result<V30Fidelity> {
     let bits = batch
         .column(2)
         .as_any()
-        .downcast_ref::<UInt32Array>()
+        .downcast_ref::<FixedSizeBinaryArray>()
         .unwrap();
     let before = batch
         .column(3)
         .as_any()
-        .downcast_ref::<UInt64Array>()
+        .downcast_ref::<UInt32Array>()
         .unwrap();
-    let mut high = Vec::with_capacity(logical_rows);
-    let mut count = 0_u64;
-    for word in 0..words {
-        let valid_rows = (logical_rows - word * BLOCK_ROWS).min(BLOCK_ROWS);
-        let value = bits.value(word);
-        if ordinals.value(word) != word as u64
-            || usize::from(valid.value(word)) != valid_rows
-            || before.value(word) != count
-            || (valid_rows < BLOCK_ROWS && value >> valid_rows != 0)
+    let mut high_bits = Vec::with_capacity(groups * FIDELITY_WORDS_PER_GROUP);
+    let mut rank_checkpoints = Vec::with_capacity(groups);
+    let mut count = 0_u32;
+    for group in 0..groups {
+        let valid_rows = (logical_rows - group * FIDELITY_GROUP_ROWS).min(FIDELITY_GROUP_ROWS);
+        let value = bits.value(group);
+        let words = value
+            .chunks_exact(size_of::<u32>())
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        if ordinals.value(group) != group as u64
+            || usize::from(valid.value(group)) != valid_rows
+            || before.value(group) != count
+            || words.len() != FIDELITY_WORDS_PER_GROUP
+            || (valid_rows..FIDELITY_GROUP_ROWS)
+                .any(|row| words[row / u32::BITS as usize] & (1 << (row % u32::BITS as usize)) != 0)
         {
             return Err(invalid("V30 fidelity offsets differ"));
         }
-        for row in 0..valid_rows {
-            let selected = value & (1 << row) != 0;
-            high.push(selected);
-            count += u64::from(selected);
-        }
+        rank_checkpoints.push(count);
+        count = count
+            .checked_add(words.iter().map(|word| word.count_ones()).sum::<u32>())
+            .ok_or_else(|| invalid("V30 fidelity rank overflows"))?;
+        high_bits.extend(words);
     }
-    let mut rank = 0;
-    let high_ranks = high
-        .iter()
-        .map(|selected| {
-            let current = rank;
-            if *selected {
-                rank += 1;
-            }
-            current
-        })
-        .collect();
-    Ok(V30Fidelity { high, high_ranks })
+    Ok(V30Fidelity {
+        logical_rows,
+        high_bits,
+        rank_checkpoints,
+    })
 }
 
 fn identity(
@@ -892,14 +947,6 @@ pub(crate) fn decode_v30_pq_artifacts(artifacts: &V30PqArtifacts) -> Result<V30D
     if fidelity.high_count() != high_rows {
         return Err(invalid("V30 fidelity population differs"));
     }
-    let mut base_ranks = Vec::with_capacity(logical_rows);
-    let mut rank = 0;
-    for selected in &fidelity.high {
-        base_ranks.push(rank);
-        if !selected {
-            rank += 1;
-        }
-    }
     Ok(V30DecodedPqArtifacts {
         base_codebook,
         high_codebook,
@@ -907,7 +954,6 @@ pub(crate) fn decode_v30_pq_artifacts(artifacts: &V30PqArtifacts) -> Result<V30D
             fidelity,
             base,
             high,
-            base_ranks,
         },
     })
 }
@@ -973,6 +1019,11 @@ mod tests {
         assert_eq!(fidelity.high_rank(3).unwrap(), 0);
         assert_eq!(fidelity.high_rank(7).unwrap(), 1);
         assert!(V30Fidelity::from_errors(&errors, 50_001).is_err());
+
+        let dense = V30Fidelity::from_errors(&vec![0.0; 256], 50_000).unwrap();
+        assert_eq!(dense.high_bit_words().len(), 8);
+        assert_eq!(dense.rank_checkpoints().len(), 2);
+        assert_eq!(dense.resident_bytes(), 40);
     }
 
     #[test]
