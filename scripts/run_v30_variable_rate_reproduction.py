@@ -6,8 +6,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -108,12 +110,86 @@ class LoadedReproduction:
     construction_bytes_streamed: int
 
 
+@dataclass(frozen=True)
+class V30ReproductionPlan:
+    """One explicit no-discovery reproduction invocation."""
+
+    artifacts: tuple[ArtifactAuthority, ...]
+    page_prefix: str
+    evidence_parquet: Path
+
+
 def _exact_digest(value: object) -> bool:
     return (
         type(value) is str
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def parse_args(arguments: list[str]) -> V30ReproductionPlan:
+    """Parse the closed one-shot interface; no local corpus path exists."""
+
+    iterator = iter(arguments)
+    if next(iterator, None) is None:
+        raise ValueError("V30 reproduction program is missing")
+    execute = False
+    values: dict[str, str] = {}
+    for flag in iterator:
+        if flag == "--execute":
+            if execute:
+                raise ValueError("V30 reproduction duplicate --execute")
+            execute = True
+            continue
+        if not flag.startswith("--"):
+            raise ValueError("V30 reproduction flag differs")
+        name = flag.removeprefix("--")
+        value = next(iterator, None)
+        if value is None:
+            raise ValueError(f"V30 reproduction --{name} value is missing")
+        if name in values:
+            raise ValueError(f"V30 reproduction duplicate --{name}")
+        values[name] = value
+    if not execute:
+        raise ValueError("V30 reproduction --execute is required")
+
+    def take(name: str) -> str:
+        try:
+            return values.pop(name)
+        except KeyError as error:
+            raise ValueError(f"V30 reproduction missing --{name}") from error
+
+    artifacts: list[ArtifactAuthority] = []
+    for role in ARTIFACT_ROLES:
+        try:
+            encoded_bytes = int(take(f"{role}-bytes"))
+        except ValueError as error:
+            raise ValueError(f"V30 reproduction --{role}-bytes type differs") from error
+        artifacts.append(
+            ArtifactAuthority(
+                role=role,
+                uri=take(f"{role}-uri"),
+                sha256=take(f"{role}-sha256"),
+                encoded_bytes=encoded_bytes,
+            )
+        )
+    page_prefix = take("page-prefix")
+    evidence = Path(take("evidence-parquet"))
+    if values:
+        raise ValueError("V30 reproduction unknown flag")
+    validate_reproduction_authority(
+        tuple(artifacts),
+        source_rows=SOURCE_ROWS,
+        query_count=QUERY_COUNT,
+        truth_memberships=TRUTH_MEMBERSHIPS,
+    )
+    if (
+        not page_prefix.startswith("s3://")
+        or page_prefix.endswith("/")
+        or not evidence.is_absolute()
+    ):
+        raise ValueError("V30 reproduction output boundary differs")
+    return V30ReproductionPlan(tuple(artifacts), page_prefix, evidence)
 
 
 def validate_reproduction_authority(
@@ -581,7 +657,7 @@ def exact_truth(
     ordinals = np.arange(len(primary), dtype=np.int64)
     truth: list[tuple[int, ...]] = []
     for query in queries:
-        distance = np.sum((primary - query) ** 2, axis=1, dtype=np.float32)
+        distance = np.float32(2.0) - np.float32(2.0) * (primary @ query)
         picked = np.argpartition(distance, recall_k - 1)[:recall_k]
         ordered = picked[np.lexsort((ordinals[picked], distance[picked]))]
         truth.append(tuple(int(value) for value in ordered))
@@ -691,8 +767,9 @@ def evaluate_pq8_replacement_arms(
                 page_count=PAGE_COUNT,
             )
             exact_rows = np.concatenate([pages[page] for page in selected_pages])
-            distances = np.sum(
-                (primary[exact_rows] - query) ** 2, axis=1, dtype=np.float32
+            distances = (
+                np.float32(2.0)
+                - np.float32(2.0) * (primary[exact_rows] @ query)
             )
             take = min(RECALL_K, len(exact_rows))
             local = np.argpartition(distances, take - 1)[:take]
@@ -838,6 +915,92 @@ def build_reproduction_result(observations: tuple[V30ArmObservation, ...]) -> by
     return json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
 
 
+def encode_reproduction_evidence(
+    observations: tuple[V30ArmObservation, ...],
+) -> bytes:
+    """Encode raw per-query arm evidence as strict cross-language Parquet."""
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    if (
+        type(observations) is not tuple
+        or tuple(item.fidelity_fraction_ppm for item in observations)
+        != FIDELITY_FRACTIONS_PPM
+    ):
+        raise ValueError("V30 evidence arm ordering differs")
+    rows: list[dict[str, int]] = []
+    for observation in observations:
+        _arm_result(observation)
+        for query_ordinal, (hits, selected_pages) in enumerate(
+            zip(observation.hits, observation.selected_page_counts, strict=True)
+        ):
+            rows.append(
+                {
+                    "fidelity_fraction_ppm": observation.fidelity_fraction_ppm,
+                    "query_ordinal": query_ordinal,
+                    "hits": hits,
+                    "selected_pages": selected_pages,
+                    "maximum_encoded_bytes": observation.maximum_encoded_bytes,
+                    "maximum_scanned_codes": observation.maximum_scanned_codes,
+                }
+            )
+    schema = pa.schema(
+        [
+            pa.field("fidelity_fraction_ppm", pa.uint32(), nullable=False),
+            pa.field("query_ordinal", pa.uint16(), nullable=False),
+            pa.field("hits", pa.uint8(), nullable=False),
+            pa.field("selected_pages", pa.uint8(), nullable=False),
+            pa.field("maximum_encoded_bytes", pa.uint64(), nullable=False),
+            pa.field("maximum_scanned_codes", pa.uint64(), nullable=False),
+        ]
+    )
+    table = pa.Table.from_pylist(rows, schema=schema)
+    sink = pa.BufferOutputStream()
+    pq.write_table(table, sink, compression="zstd", use_dictionary=False)
+    return sink.getvalue().to_pybytes()
+
+
+def finalize_reproduction_result(
+    observations: tuple[V30ArmObservation, ...],
+    artifacts: tuple[ArtifactAuthority, ...],
+    *,
+    construction_bytes_streamed: int,
+    evidence_parquet: bytes,
+) -> bytes:
+    """Bind canonical summary evidence to every immutable input and Parquet bytes."""
+
+    validate_reproduction_authority(
+        artifacts,
+        source_rows=SOURCE_ROWS,
+        query_count=QUERY_COUNT,
+        truth_memberships=TRUTH_MEMBERSHIPS,
+    )
+    expected_evidence = encode_reproduction_evidence(observations)
+    if type(evidence_parquet) is not bytes or evidence_parquet != expected_evidence:
+        raise ValueError("V30 evidence Parquet authority differs")
+    if type(construction_bytes_streamed) is not int or construction_bytes_streamed <= 0:
+        raise ValueError("V30 construction byte count differs")
+    value = json.loads(build_reproduction_result(observations))
+    value.update(
+        {
+            "artifacts": [
+                {
+                    "encoded_bytes": artifact.encoded_bytes,
+                    "role": artifact.role,
+                    "sha256": artifact.sha256,
+                    "uri": artifact.uri,
+                }
+                for artifact in artifacts
+            ],
+            "construction_bytes_streamed": construction_bytes_streamed,
+            "evidence_parquet_bytes": len(evidence_parquet),
+            "evidence_parquet_sha256": hashlib.sha256(evidence_parquet).hexdigest(),
+        }
+    )
+    return json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+
+
 def _nearest_rank(values: list[int], numerator: int, denominator: int) -> int:
     index = max(0, (len(values) * numerator + denominator - 1) // denominator - 1)
     return sorted(values)[index]
@@ -867,3 +1030,124 @@ def simulate_concurrent_get_latency_ns(waves: tuple[tuple[int, ...], ...]) -> di
         "request_count": QUERY_COUNT * PAGE_COUNT,
         "wave_count": QUERY_COUNT,
     }
+
+
+def _encoded_page_sizes(
+    primary: np.ndarray, pages: tuple[np.ndarray, ...]
+) -> tuple[int, ...]:
+    """Materialize only bounded output pages to measure the real Arrow byte envelope."""
+
+    import pyarrow as pa
+    import pyarrow.ipc as ipc
+
+    child = pa.field("element", pa.float32(), nullable=False)
+    schema = pa.schema(
+        [
+            pa.field("id", pa.binary(8), nullable=False),
+            pa.field("vector", pa.list_(child, 96), nullable=False),
+        ]
+    )
+    sizes: list[int] = []
+    for rows in pages:
+        ids = pa.array(
+            [int(row).to_bytes(8, "little") for row in rows], type=pa.binary(8)
+        )
+        vectors = pa.FixedSizeListArray.from_arrays(
+            pa.array(primary[rows].ravel(), type=pa.float32()), 96
+        )
+        table = pa.Table.from_arrays([ids, vectors], schema=schema)
+        sink = pa.BufferOutputStream()
+        with ipc.new_file(sink, schema) as writer:
+            writer.write_table(table)
+        sizes.append(sink.tell())
+    return tuple(sizes)
+
+
+def run_reproduction(
+    plan: V30ReproductionPlan, get_object: Callable[[str], bytes]
+) -> tuple[bytes, bytes]:
+    """Execute the frozen 100K scientific reproduction entirely in worker memory."""
+
+    if type(plan) is not V30ReproductionPlan:
+        raise ValueError("V30 reproduction plan type differs")
+    loaded = load_frozen_reproduction(
+        plan.artifacts,
+        page_prefix=plan.page_prefix,
+        get_object=get_object,
+    )
+    truth = exact_truth(loaded.primary, loaded.queries)
+    residuals = loaded.primary - loaded.leaf_centroids[loaded.primary_leaf]
+    base_model = fit_pq8(residuals, width_bytes=24)
+    high_model = fit_pq8(residuals, width_bytes=48)
+    base_codes, _base_errors = encode_pq8(base_model, residuals)
+    pages, _row_page, _leaf_rows = build_base_page_layout(
+        loaded.primary_leaf,
+        base_codes,
+        leaf_count=len(loaded.leaf_centroids),
+        page_rows=512,
+    )
+    page_sizes = _encoded_page_sizes(loaded.primary, pages)
+    observations = evaluate_pq8_replacement_arms(
+        loaded.primary,
+        loaded.primary_leaf,
+        loaded.leaf_centroids,
+        loaded.queries,
+        truth,
+        base_model,
+        high_model,
+        page_rows=512,
+        leaf_beam=64,
+        candidate_depth=12_288,
+        page_encoded_bytes=page_sizes,
+    )
+    evidence = encode_reproduction_evidence(observations)
+    result = finalize_reproduction_result(
+        observations,
+        plan.artifacts,
+        construction_bytes_streamed=loaded.construction_bytes_streamed,
+        evidence_parquet=evidence,
+    )
+    return result, evidence
+
+
+def _s3_getter() -> Callable[[str], bytes]:
+    import boto3
+    from botocore.config import Config
+
+    client = boto3.client(
+        "s3",
+        region_name="eu-central-1",
+        config=Config(
+            connect_timeout=10,
+            read_timeout=30,
+            retries={"max_attempts": 3, "mode": "standard"},
+        ),
+    )
+
+    def get_object(uri: str) -> bytes:
+        if not uri.startswith("s3://"):
+            raise ValueError("V30 S3 URI differs")
+        bucket, separator, key = uri.removeprefix("s3://").partition("/")
+        if not bucket or not separator or not key:
+            raise ValueError("V30 S3 URI differs")
+        return client.get_object(Bucket=bucket, Key=key)["Body"].read()
+
+    return get_object
+
+
+def main(arguments: list[str]) -> int:
+    """Run one explicit reproduction and emit only canonical result bytes to stdout."""
+
+    try:
+        plan = parse_args(arguments)
+        result, evidence = run_reproduction(plan, _s3_getter())
+        plan.evidence_parquet.write_bytes(evidence)
+        sys.stdout.buffer.write(result)
+    except (OSError, RuntimeError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

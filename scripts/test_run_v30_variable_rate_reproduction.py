@@ -15,10 +15,13 @@ from scripts.run_v30_variable_rate_reproduction import (
     build_base_page_layout,
     build_reproduction_result,
     encode_pq8,
+    encode_reproduction_evidence,
     evaluate_pq8_replacement_arms,
     exact_truth,
+    finalize_reproduction_result,
     fit_pq8,
     load_frozen_reproduction,
+    parse_args,
     pq8_replacement_geometry,
     reduce_page_candidates,
     select_high_fidelity,
@@ -412,6 +415,81 @@ class V30VariableRateReproductionTests(unittest.TestCase):
                 expected_source_rows=64,
                 expected_query_rows=64,
             )
+
+    def test_v30_reproduction_cli_is_explicit_and_has_no_corpus_download_mode(self) -> None:
+        # Break caught: the worker discovers latest artifacts or exposes a persistent/full-corpus
+        # staging option instead of one explicit in-memory S3 stream.
+        arguments = ["reproduce", "--execute"]
+        for artifact in self.artifacts():
+            arguments.extend(
+                [
+                    f"--{artifact.role}-uri",
+                    artifact.uri,
+                    f"--{artifact.role}-sha256",
+                    artifact.sha256,
+                    f"--{artifact.role}-bytes",
+                    str(artifact.encoded_bytes),
+                ]
+            )
+        arguments.extend(
+            [
+                "--page-prefix",
+                "s3://frozen/pages",
+                "--evidence-parquet",
+                "/tmp/evidence.parquet",
+            ]
+        )
+        plan = parse_args(arguments)
+        self.assertEqual(plan.artifacts, self.artifacts())
+        self.assertEqual(plan.page_prefix, "s3://frozen/pages")
+        with self.assertRaisesRegex(ValueError, "unknown"):
+            parse_args([*arguments, "--download-corpus", "/tmp/corpus"])
+        with self.assertRaisesRegex(ValueError, "execute"):
+            parse_args([value for value in arguments if value != "--execute"])
+
+    def test_v30_reproduction_evidence_is_parquet_and_result_binds_it(self) -> None:
+        # Break caught: per-query misses/work disappear into aggregate JSON or the result can be
+        # paired with a different cross-language evidence table.
+        observations = tuple(
+            V30ArmObservation(
+                fidelity_fraction_ppm=fraction,
+                hits=tuple(9 + (query != 11) for query in range(32))
+                if fraction == 50_000
+                else (9,) * 32,
+                selected_page_counts=(10,) * 32,
+                maximum_encoded_bytes=4_000_000,
+                maximum_scanned_codes=100_000,
+            )
+            for fraction in (0, 50_000, 100_000, 200_000)
+        )
+        evidence = encode_reproduction_evidence(observations)
+        table = pq.read_table(pa.BufferReader(evidence))
+        self.assertEqual(table.num_rows, 128)
+        self.assertEqual(
+            table.schema,
+            pa.schema(
+                [
+                    pa.field("fidelity_fraction_ppm", pa.uint32(), nullable=False),
+                    pa.field("query_ordinal", pa.uint16(), nullable=False),
+                    pa.field("hits", pa.uint8(), nullable=False),
+                    pa.field("selected_pages", pa.uint8(), nullable=False),
+                    pa.field("maximum_encoded_bytes", pa.uint64(), nullable=False),
+                    pa.field("maximum_scanned_codes", pa.uint64(), nullable=False),
+                ]
+            ),
+        )
+        result = finalize_reproduction_result(
+            observations,
+            self.artifacts(),
+            construction_bytes_streamed=46_761_076,
+            evidence_parquet=evidence,
+        )
+        value = json.loads(result)
+        self.assertEqual(value["evidence_parquet_sha256"], hashlib.sha256(evidence).hexdigest())
+        self.assertEqual(value["evidence_parquet_bytes"], len(evidence))
+        self.assertEqual(value["construction_bytes_streamed"], 46_761_076)
+        self.assertEqual(len(value["artifacts"]), 4)
+        self.assertEqual(result, json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n")
 
 
 if __name__ == "__main__":
