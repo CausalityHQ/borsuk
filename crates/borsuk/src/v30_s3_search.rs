@@ -14,6 +14,7 @@ use crate::{
 
 const MAX_SCANNED_CODES: u64 = 1_000_000;
 const MAX_CANDIDATES: usize = 12_288;
+const MAX_SELECTED_PAGES: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[doc(hidden)]
@@ -234,7 +235,7 @@ impl V30Router {
             || arm.candidate_depth == 0
             || arm.candidate_depth > MAX_CANDIDATES
             || arm.page_count == 0
-            || arm.page_count > 10
+            || arm.page_count > MAX_SELECTED_PAGES
         {
             return Err(invalid("V30 search arm differs"));
         }
@@ -800,6 +801,39 @@ mod tests {
         assert_eq!(selection.work.candidates_retained, 20);
         assert_eq!(selection.work.selected_pages, 10);
         assert_eq!(*visited.lock().unwrap(), vec![0]);
+    }
+
+    #[test]
+    fn v30_s3_search_allows_sixteen_pages_but_no_wider_arm() {
+        // Break caught: the registered 16-page quality-recovery arm is rejected,
+        // or an unbounded page fanout silently expands S3 work.
+        let (router, _) = router();
+        let selection = router
+            .select_pages(
+                &[0.2; 96],
+                V30SearchArm {
+                    root_beam: 1,
+                    leaf_beam: 2,
+                    candidate_depth: 40,
+                    page_count: 16,
+                },
+            )
+            .unwrap();
+        assert_eq!(selection.pages.len(), 16);
+
+        assert!(
+            router
+                .select_pages(
+                    &[0.2; 96],
+                    V30SearchArm {
+                        root_beam: 1,
+                        leaf_beam: 2,
+                        candidate_depth: 40,
+                        page_count: 17,
+                    },
+                )
+                .is_err()
+        );
     }
 
     struct MemoryStore {

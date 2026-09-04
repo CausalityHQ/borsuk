@@ -820,7 +820,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         || candidate_depth == 0
         || candidate_depth > 12_288
         || page_count == 0
-        || page_count > 10
+        || page_count > 16
         || k == 0
         || k > 10
         || !values.is_empty()
@@ -939,6 +939,16 @@ mod tests {
             parsed.page_source,
             Some(PageSource::S3("s3://frozen/pages".to_owned()))
         );
+
+        let mut expanded = arguments();
+        let page_count = expanded
+            .iter()
+            .position(|value| value == "--page-count")
+            .unwrap();
+        expanded[page_count + 1] = "16".to_owned();
+        assert_eq!(parse_args(expanded.clone()).unwrap().page_count, 16);
+        expanded[page_count + 1] = "17".to_owned();
+        assert!(parse_args(expanded).is_err());
 
         for forbidden in [
             "--latest",
