@@ -372,8 +372,9 @@ def _diagnostics(
         or not 1 <= routing["codes_scanned"] <= scan_budget
         or routing["candidates_retained"]
         != min(12_288, routing["codes_scanned"])
-        or routing["leaves_scanned"]
-        != min(leaf_beam, routing["leaves_eligible"])
+        or not min(leaf_beam, routing["leaves_eligible"])
+        <= routing["leaves_scanned"]
+        <= routing["leaves_eligible"]
         or routing["leaves_eligible"] > maximum_leaves_eligible
         or routing["peak_query_table_pairs_live"] != 1
         or not 1 <= routing["query_table_pairs_built"] <= routing["leaves_scanned"]

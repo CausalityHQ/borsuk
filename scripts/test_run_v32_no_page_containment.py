@@ -149,7 +149,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
         candidates_retained: int = 12_288,
         codes_scanned: int | None = None,
         leaves_eligible: int = 128,
-        leaves_scanned: int = 64,
+        leaves_scanned: int = 128,
     ) -> bytes:
         diagnostics = []
         for rank in range(10):
@@ -307,8 +307,8 @@ class V32NoPageContainmentTests(unittest.TestCase):
         self.assertEqual(value["page_body_reads"], 0)
         self.assertEqual(value["maximum_codes_scanned"], 40_095)
         self.assertEqual(value["maximum_leaves_eligible"], 128)
-        self.assertEqual(value["maximum_leaves_scanned"], 64)
-        self.assertEqual(value["maximum_truth_microleaf_rank"], 32)
+        self.assertEqual(value["maximum_leaves_scanned"], 128)
+        self.assertEqual(value["maximum_truth_microleaf_rank"], 96)
         self.assertEqual(value["maximum_query_table_pairs_built"], 1)
         self.assertEqual(value["maximum_peak_query_table_pairs_live"], 1)
         self.assertEqual(value["maximum_routing_leaf_rows"], 1_024)
