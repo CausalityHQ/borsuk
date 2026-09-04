@@ -2886,3 +2886,44 @@ ordering before page selection.
 V30 must first reproduce the fixed PQ8 replacement interpretation on the same
 burned fixture with committed code and complete authority, then freeze its
 smallest passing arm before any untouched-cohort run.
+
+### V30 reproduces the archived variable-rate PQ8 mechanism exactly
+
+The committed V30 reproduction evaluator at source commit
+`9e1ed2e13b8b6c04cf2084f345983269a2dd6be8` authenticated the frozen V27
+100,000-row page manifest, leaf postings, leaf centroids, and 10,000-row query
+Parquet object, streamed the 46,761,076 bytes of registered Arrow page bodies
+only into one disposable `causality` Spot worker, and independently recomputed
+truth for the first 32 queries. It used the fixed 24-by-4D and 48-by-2D,
+256-centroid PQ8 replacement interpretation with one base-code page layout,
+leaf beam 64, candidate depth 12,288, and exactly ten selected pages.
+
+| refined fraction | hits / 320 | aggregate ppm | minimum ppm | perfect queries |
+|---:|---:|---:|---:|---:|
+| 0% | 318 | 993,750 | 900,000 | 30 / 32 |
+| 5% | 319 | 996,875 | 900,000 | 31 / 32 |
+| 10% | 319 | 996,875 | 900,000 | 31 / 32 |
+| 20% | 319 | 996,875 | 900,000 | 31 / 32 |
+
+These four observations exactly match the archived V28 result. Five percent
+is therefore frozen as the smallest passing reproduction arm; the 24/48-byte
+replacement mechanism, not the earlier committed PQ4 interpretation or the
+separately rejected additive-PQ arm, proceeds to production TDD. The burned
+result remains claim-ineligible and does not authorize a 100-million-row build.
+
+The reproduction's maximum observed selected-page payload was 1,986,668 bytes
+and its maximum selected-leaf scan was 39,612 codes. Whole-worker elapsed time,
+including dependency installation, was 121.394 seconds; peak process RSS was
+281,704 KiB, memory PSI full avg10 remained 0.0, and swap delta was zero. The
+1,765-byte per-query Parquet evidence has SHA-256
+`ad6b92b515efb748ad2627e45a3b57c87f613367b472546575ed2ceac101909e`.
+The 2,415-byte canonical result has SHA-256
+`01e33cf71f571e28c799c2d4ac260b2b5f348c0221204fcc4a84226200510695`
+and is preserved at
+`s3://borsuk-bench-453182569524-euc1/research/v30-s3/9e1ed2e13b8b6c04cf2084f345983269a2dd6be8/v30-pq8-reproduction-20260904T022040Z/result.json`.
+Its canonical terminal is preserved beside it. Spot worker
+`i-09f05e6479860ee03` completed and terminated. A preceding attempt at commit
+`f7f7f941fe4dd66d1082c2e44e37d8a2fef367cd` failed before any page or
+scientific work because the direct CLI passed its filename into the closed
+parser; its failed terminal is preserved, the regression is covered, and its
+worker also terminated.

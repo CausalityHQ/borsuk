@@ -36,12 +36,12 @@
 - Consumes: exact registered 100K construction Arrow pages, query/truth Parquet, source identity, and an output prefix.
 - Produces: canonical `V30ReproductionResult` plus Parquet per-query evidence for fixed 0/5/10/20-percent PQ8 replacement arms.
 
-- [ ] **Step 1: Write authority REDs.** Require exact URI/SHA-256/length identities, 100,000 unique rows, 32 fixed queries with 320 truth memberships, 16 roots, 256 leaves, 512-row pages, no query/truth capability during training, and no complete-corpus persistence outside the disposable worker.
-- [ ] **Step 2: Write interpretation REDs.** Fix 24-by-4D/256-centroid base PQ8 and 48-by-2D/256-centroid replacement PQ8. Require the same deterministic training sample, hierarchy, base-code page order, base-error selection, leaf beam 64, candidate depth 12,288, and ten-page reducer for 0/5/10/20-percent arms.
-- [ ] **Step 3: Write result REDs.** Independently recompute hits, aggregate/minimum/perfect counts, work, bytes, and memory components from Parquet evidence. Require claim-ineligible canonical JSON and fail closed if no arm reaches 319/320, 900,000 minimum, and 31/32 perfect.
-- [ ] **Step 4: Run the focused RED.** Run `python3 -m unittest scripts.test_run_v30_variable_rate_reproduction`; accept missing controller/evaluator symbols only, then implement the minimum deterministic evaluator.
-- [ ] **Step 5: Run the bounded Spot reproduction once.** Use `causality` Spot, stream only the 46.8-MB frozen pages plus small query/truth objects, upload result/evidence/terminal, and terminate. Do not tune from per-query misses.
-- [ ] **Step 6: Freeze or reject.** If the five-percent arm reproduces the boundary and is the smallest passing arm, freeze its authenticated receipt and commit the evaluator/evidence. Otherwise reject V30 and do not implement Tasks 1-6.
+- [x] **Step 1: Write authority REDs.** Require exact URI/SHA-256/length identities, 100,000 unique rows, 32 fixed queries with 320 truth memberships, 16 roots, 256 leaves, 512-row pages, no query/truth capability during training, and no complete-corpus persistence outside the disposable worker.
+- [x] **Step 2: Write interpretation REDs.** Fix 24-by-4D/256-centroid base PQ8 and 48-by-2D/256-centroid replacement PQ8. Require the same deterministic training sample, hierarchy, base-code page order, base-error selection, leaf beam 64, candidate depth 12,288, and ten-page reducer for 0/5/10/20-percent arms.
+- [x] **Step 3: Write result REDs.** Independently recompute hits, aggregate/minimum/perfect counts, work, bytes, and memory components from Parquet evidence. Require claim-ineligible canonical JSON and fail closed if no arm reaches 319/320, 900,000 minimum, and 31/32 perfect.
+- [x] **Step 4: Run the focused RED.** Run `python3 -m unittest scripts.test_run_v30_variable_rate_reproduction`; accept missing controller/evaluator symbols only, then implement the minimum deterministic evaluator.
+- [x] **Step 5: Run the bounded Spot reproduction once.** Use `causality` Spot, stream only the 46.8-MB frozen pages plus small query/truth objects, upload result/evidence/terminal, and terminate. Do not tune from per-query misses.
+- [x] **Step 6: Freeze or reject.** If the five-percent arm reproduces the boundary and is the smallest passing arm, freeze its authenticated receipt and commit the evaluator/evidence. Otherwise reject V30 and do not implement Tasks 1-6.
 
 ### Task 1: Add variable-rate residual code authority
 
