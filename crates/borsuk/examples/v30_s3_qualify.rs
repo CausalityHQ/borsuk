@@ -7,7 +7,8 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30Index,
     V30LayoutArtifactIdentity, V30LayoutArtifacts, V30PageStore, V30PqArtifactIdentity,
-    V30PqArtifacts, V30Router, V30SearchArm, V30SearchResult,
+    V30PqArtifacts, V30Router, V30RoutingTargetReport, V30RoutingTargetStage, V30SearchArm,
+    V30SearchResult,
 };
 use bytes::Bytes;
 use futures_util::future::try_join_all;
@@ -42,7 +43,8 @@ struct Args {
     candidate_depth: usize,
     page_count: usize,
     k: usize,
-    page_source: PageSource,
+    page_source: Option<PageSource>,
+    diagnostic_logical: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -379,6 +381,34 @@ fn result_bytes(
     Ok(bytes)
 }
 
+fn diagnostic_bytes(
+    query_ordinal: usize,
+    report: V30RoutingTargetReport,
+) -> borsuk::Result<Vec<u8>> {
+    let stage = match report.stage {
+        V30RoutingTargetStage::LeafFrontier => "leaf-frontier",
+        V30RoutingTargetStage::CandidateRetention => "candidate-retention",
+        V30RoutingTargetStage::PageReducer => "page-reducer",
+        V30RoutingTargetStage::SelectedPage => "selected-page",
+    };
+    let value = serde_json::json!({
+        "claim_eligible": false,
+        "diagnostic": {
+            "candidate_rank": report.candidate_rank,
+            "leaf_ordinal": report.leaf_ordinal,
+            "logical": report.logical,
+            "page_ordinal": report.page_ordinal,
+            "stage": stage,
+        },
+        "query_ordinal": query_ordinal,
+        "schema_version": 1,
+    });
+    let mut bytes = serde_json::to_vec(&canonical(value))
+        .map_err(|_| invalid("V30 qualifier diagnostic serialization failed"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn process_cpu_nanoseconds() -> borsuk::Result<u64> {
     let task_root = PathBuf::from("/proc/self/task");
     let tasks = fs::read_dir(&task_root).map_err(|source| BorsukError::Io {
@@ -630,8 +660,17 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
         candidate_depth: args.candidate_depth,
         page_count: args.page_count,
     };
+    if let Some(logical) = args.diagnostic_logical {
+        let query = read_query(&args.query, args.query_start)?;
+        let report = router
+            .diagnose_logicals(&query, arm, &[logical])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| invalid("V30 qualifier diagnostic result differs"))?;
+        return diagnostic_bytes(args.query_start, report);
+    }
     match args.page_source {
-        PageSource::Local(directory) => run_batch(
+        Some(PageSource::Local(directory)) => run_batch(
             router,
             LocalPageStore {
                 directory,
@@ -643,7 +682,7 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
             args.query_count,
             args.k,
         ),
-        PageSource::S3(uri) => {
+        Some(PageSource::S3(uri)) => {
             let url = Url::parse(&uri).map_err(|_| invalid("V30 qualifier S3 URI differs"))?;
             let options = std::env::vars().filter(|(key, _)| {
                 matches!(
@@ -670,6 +709,7 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                 args.k,
             )
         }
+        None => Err(invalid("V30 qualifier page source differs")),
     }
 }
 
@@ -750,16 +790,30 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
     let candidate_depth = number(&mut values, "candidate-depth")?;
     let page_count = number(&mut values, "page-count")?;
     let k = number(&mut values, "k")?;
+    let diagnostic_logical = values
+        .remove("diagnose-logical")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| argument_error("--diagnose-logical type differs"))
+        })
+        .transpose()?;
     let local = values.remove("local-page-dir").map(PathBuf::from);
     let s3 = values.remove("s3-page-prefix");
-    let page_source = match (local, s3) {
-        (Some(path), None) if path.is_absolute() => PageSource::Local(path),
-        (None, Some(uri)) if uri.starts_with("s3://") && !uri.ends_with('/') => PageSource::S3(uri),
+    let page_source = match (diagnostic_logical, local, s3) {
+        (Some(_), None, None) => None,
+        (None, Some(path), None) if path.is_absolute() => Some(PageSource::Local(path)),
+        (None, None, Some(uri)) if uri.starts_with("s3://") && !uri.ends_with('/') => {
+            Some(PageSource::S3(uri))
+        }
         _ => return Err(argument_error("exactly one page source is required")),
     };
     if !artifact_dir.is_absolute()
         || root_beam == 0
-        || query_count != 32
+        || match diagnostic_logical {
+            Some(_) => query_count != 1,
+            None => query_count != 32,
+        }
         || leaf_beam == 0
         || candidate_depth == 0
         || candidate_depth > 12_288
@@ -783,6 +837,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         page_count,
         k,
         page_source,
+        diagnostic_logical,
     })
 }
 
@@ -791,14 +846,15 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use borsuk::{
-        V27PageIdentity, V30Match, V30PageStore, V30RoutingWork, V30SearchResult, V30SearchWork,
+        V27PageIdentity, V30Match, V30PageStore, V30RoutingTargetReport, V30RoutingTargetStage,
+        V30RoutingWork, V30SearchResult, V30SearchWork,
     };
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
 
     use super::{
-        Args, ArtifactArg, LocalPageStore, PageSource, execute, parse_args, peak_rss_bytes,
-        process_cpu_nanoseconds, read_manifest, result_bytes,
+        Args, ArtifactArg, LocalPageStore, PageSource, diagnostic_bytes, execute, parse_args,
+        peak_rss_bytes, process_cpu_nanoseconds, read_manifest, result_bytes,
     };
 
     fn arguments() -> Vec<String> {
@@ -879,7 +935,7 @@ mod tests {
         assert_eq!(parsed.page_count, 10);
         assert_eq!(
             parsed.page_source,
-            PageSource::S3("s3://frozen/pages".to_owned())
+            Some(PageSource::S3("s3://frozen/pages".to_owned()))
         );
 
         for forbidden in [
@@ -902,6 +958,43 @@ mod tests {
         let mut both_sources = arguments();
         both_sources.extend(["--local-page-dir".to_owned(), "/tmp/pages".to_owned()]);
         assert!(parse_args(both_sources).is_err());
+
+        let mut diagnostic = arguments();
+        let source = diagnostic
+            .iter()
+            .position(|value| value == "--s3-page-prefix")
+            .unwrap();
+        diagnostic.drain(source..=source + 1);
+        let count = diagnostic
+            .iter()
+            .position(|value| value == "--query-count")
+            .unwrap();
+        diagnostic[count + 1] = "1".to_owned();
+        diagnostic.extend(["--diagnose-logical".to_owned(), "25".to_owned()]);
+        let parsed = parse_args(diagnostic).unwrap();
+        assert_eq!(parsed.diagnostic_logical, Some(25));
+        assert_eq!(parsed.page_source, None);
+    }
+
+    #[test]
+    fn v30_s3_qualify_diagnostic_output_is_canonical_and_names_the_loss_boundary() {
+        // Break caught: the fail-fast diagnostic performs a page read or hides
+        // whether routing, candidate retention, or page reduction lost truth.
+        let bytes = diagnostic_bytes(
+            7,
+            V30RoutingTargetReport {
+                logical: 25,
+                leaf_ordinal: 3,
+                page_ordinal: 11,
+                candidate_rank: None,
+                stage: V30RoutingTargetStage::CandidateRetention,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            bytes,
+            b"{\"claim_eligible\":false,\"diagnostic\":{\"candidate_rank\":null,\"leaf_ordinal\":3,\"logical\":25,\"page_ordinal\":11,\"stage\":\"candidate-retention\"},\"query_ordinal\":7,\"schema_version\":1}\n"
+        );
     }
 
     fn manifest_bytes() -> Vec<u8> {
@@ -1112,7 +1205,8 @@ mod tests {
             candidate_depth: 1,
             page_count: 1,
             k: 1,
-            page_source: PageSource::Local(directory.path().to_path_buf()),
+            page_source: Some(PageSource::Local(directory.path().to_path_buf())),
+            diagnostic_logical: None,
         };
         let error = execute(args).unwrap_err().to_string();
         assert!(error.contains("roots.arrow"), "unexpected error: {error}");

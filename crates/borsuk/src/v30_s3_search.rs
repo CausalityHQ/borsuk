@@ -42,6 +42,25 @@ pub struct V30PageSelection {
     pub work: V30RoutingWork,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum V30RoutingTargetStage {
+    LeafFrontier,
+    CandidateRetention,
+    PageReducer,
+    SelectedPage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V30RoutingTargetReport {
+    pub logical: u64,
+    pub leaf_ordinal: u32,
+    pub page_ordinal: u32,
+    pub candidate_rank: Option<usize>,
+    pub stage: V30RoutingTargetStage,
+}
+
 #[derive(Debug, Clone)]
 #[doc(hidden)]
 pub struct V30Router {
@@ -92,6 +111,12 @@ pub struct V30Index<S> {
 struct Candidate {
     score: f32,
     logical: u64,
+}
+
+struct RoutingDetails {
+    selection: V30PageSelection,
+    selected_leaves: Vec<u32>,
+    ranked_candidates: Vec<Candidate>,
 }
 
 impl PartialEq for Candidate {
@@ -218,12 +243,87 @@ impl V30Router {
         self.select_pages_with_leaf_observer(query, arm, &|_| {})
     }
 
+    #[doc(hidden)]
+    pub fn diagnose_logicals(
+        &self,
+        query: &[f32; 96],
+        arm: V30SearchArm,
+        logicals: &[u64],
+    ) -> Result<Vec<V30RoutingTargetReport>> {
+        let unique = logicals
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        if unique.len() != logicals.len()
+            || logicals
+                .iter()
+                .any(|logical| *logical >= self.layout.source_rows())
+        {
+            return Err(invalid("V30 routing diagnostic target differs"));
+        }
+        let details = self.routing_details(query, arm, &|_| {})?;
+        let selected_leaves = details
+            .selected_leaves
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        let candidate_ranks = details
+            .ranked_candidates
+            .iter()
+            .enumerate()
+            .map(|(rank, candidate)| (candidate.logical, rank))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let selected_pages = details
+            .selection
+            .pages
+            .iter()
+            .map(|page| page.ordinal)
+            .collect::<std::collections::BTreeSet<_>>();
+        logicals
+            .iter()
+            .map(|logical| {
+                let page = self
+                    .layout
+                    .page_for_logical(*logical)
+                    .ok_or_else(|| invalid("V30 routing diagnostic page differs"))?;
+                let candidate_rank = candidate_ranks.get(logical).copied();
+                let stage = if !selected_leaves.contains(&page.leaf_ordinal) {
+                    V30RoutingTargetStage::LeafFrontier
+                } else if candidate_rank.is_none() {
+                    V30RoutingTargetStage::CandidateRetention
+                } else if !selected_pages.contains(&page.identity.ordinal) {
+                    V30RoutingTargetStage::PageReducer
+                } else {
+                    V30RoutingTargetStage::SelectedPage
+                };
+                Ok(V30RoutingTargetReport {
+                    logical: *logical,
+                    leaf_ordinal: page.leaf_ordinal,
+                    page_ordinal: page.identity.ordinal,
+                    candidate_rank,
+                    stage,
+                })
+            })
+            .collect()
+    }
+
     fn select_pages_with_leaf_observer<F>(
         &self,
         query: &[f32; 96],
         arm: V30SearchArm,
         observer: &F,
     ) -> Result<V30PageSelection>
+    where
+        F: Fn(u32),
+    {
+        Ok(self.routing_details(query, arm, observer)?.selection)
+    }
+
+    fn routing_details<F>(
+        &self,
+        query: &[f32; 96],
+        arm: V30SearchArm,
+        observer: &F,
+    ) -> Result<RoutingDetails>
     where
         F: Fn(u32),
     {
@@ -264,6 +364,10 @@ impl V30Router {
             return Err(invalid("V30 scanned-code bound differs"));
         }
 
+        let selected_leaves = leaves
+            .iter()
+            .map(|(_, leaf)| *leaf as u32)
+            .collect::<Vec<_>>();
         let mut candidates = BinaryHeap::with_capacity(arm.candidate_depth + 1);
         let mut base = Vec::with_capacity(32);
         let mut base_slots = Vec::with_capacity(32);
@@ -332,7 +436,7 @@ impl V30Router {
         });
         let mut seen = std::collections::BTreeSet::new();
         let mut pages = Vec::with_capacity(arm.page_count);
-        for candidate in ranked {
+        for candidate in &ranked {
             let page = self
                 .layout
                 .page_for_logical(candidate.logical)
@@ -347,16 +451,20 @@ impl V30Router {
         if pages.len() != arm.page_count {
             return Err(invalid("V30 selected page cardinality differs"));
         }
-        Ok(V30PageSelection {
-            pages,
-            work: V30RoutingWork {
-                roots_scored: self.hierarchy.roots.len(),
-                leaves_scored: leaves_scored_count,
-                codes_scanned,
-                candidates_retained: arm.candidate_depth,
-                pages_considered: seen.len(),
-                selected_pages: arm.page_count,
+        Ok(RoutingDetails {
+            selection: V30PageSelection {
+                pages,
+                work: V30RoutingWork {
+                    roots_scored: self.hierarchy.roots.len(),
+                    leaves_scored: leaves_scored_count,
+                    codes_scanned,
+                    candidates_retained: arm.candidate_depth,
+                    pages_considered: seen.len(),
+                    selected_pages: arm.page_count,
+                },
             },
+            selected_leaves,
+            ranked_candidates: ranked,
         })
     }
 }
@@ -450,7 +558,7 @@ mod tests {
 
     use half::f16;
 
-    use super::{V30Index, V30PageStore, V30Router, V30SearchArm};
+    use super::{V30Index, V30PageStore, V30Router, V30RoutingTargetStage, V30SearchArm};
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
         v30_s3_layout::{V30Layout, V30LeafRange, V30PageRange, encode_v30_layout_artifacts},
@@ -529,6 +637,93 @@ mod tests {
             V30Router::new(hierarchy, base, high, layout, codes).unwrap(),
             bodies,
         )
+    }
+
+    fn diagnostic_router() -> V30Router {
+        let unit = f16::from_f32(1.0 / 96.0_f32.sqrt());
+        let hierarchy = V27Hierarchy {
+            roots: vec![[unit; 96]],
+            leaves: vec![[unit; 96], [-unit; 96]],
+            leaf_roots: vec![0, 0],
+        };
+        let pages = (0..60_u32)
+            .map(|ordinal| V30PageRange {
+                leaf_ordinal: u32::from(ordinal >= 30),
+                logical_start: u64::from(ordinal),
+                row_count: 1,
+                identity: encode_v27_page(
+                    ordinal,
+                    1,
+                    0,
+                    &[V27PageRow {
+                        source_ordinal: u64::from(ordinal),
+                        vector: [0.2 + ordinal as f32 / 1_000.0; 96],
+                    }],
+                )
+                .unwrap()
+                .0,
+            })
+            .collect();
+        let layout = V30Layout::new(
+            60,
+            vec![
+                V30LeafRange {
+                    leaf_ordinal: 0,
+                    logical_start: 0,
+                    row_count: 30,
+                    page_start: 0,
+                    page_count: 30,
+                },
+                V30LeafRange {
+                    leaf_ordinal: 1,
+                    logical_start: 30,
+                    row_count: 30,
+                    page_start: 30,
+                    page_count: 30,
+                },
+            ],
+            pages,
+        )
+        .unwrap();
+        let codes =
+            V30CodePlanes::from_packed(60, vec![0_u32; 4], vec![0; 60 * 24], vec![]).unwrap();
+        let base = V30PqCodebook::new(V30PqWidth::Base24, vec![0.0; 24 * 256 * 4]).unwrap();
+        let high = V30PqCodebook::new(V30PqWidth::High48, vec![0.0; 48 * 256 * 2]).unwrap();
+        V30Router::new(hierarchy, base, high, layout, codes).unwrap()
+    }
+
+    #[test]
+    fn v30_s3_search_diagnoses_every_truth_loss_boundary_without_page_reads() {
+        // Break caught: a missed truth row is blamed on the hierarchy when it
+        // actually survived into PQ candidates or lost only at page reduction.
+        let reports = diagnostic_router()
+            .diagnose_logicals(
+                &[0.2; 96],
+                V30SearchArm {
+                    root_beam: 1,
+                    leaf_beam: 1,
+                    candidate_depth: 20,
+                    page_count: 10,
+                },
+                &[0, 15, 25, 35],
+            )
+            .unwrap();
+        assert_eq!(reports.len(), 4);
+        assert_eq!(reports[0].stage, V30RoutingTargetStage::SelectedPage);
+        assert_eq!(reports[0].candidate_rank, Some(0));
+        assert_eq!(reports[1].stage, V30RoutingTargetStage::PageReducer);
+        assert_eq!(reports[1].candidate_rank, Some(15));
+        assert_eq!(reports[2].stage, V30RoutingTargetStage::CandidateRetention);
+        assert_eq!(reports[2].candidate_rank, None);
+        assert_eq!(reports[3].stage, V30RoutingTargetStage::LeafFrontier);
+        assert_eq!(reports[3].candidate_rank, None);
+        assert_eq!(
+            reports
+                .iter()
+                .map(|report| report.logical)
+                .collect::<Vec<_>>(),
+            [0, 15, 25, 35]
+        );
     }
 
     #[test]
