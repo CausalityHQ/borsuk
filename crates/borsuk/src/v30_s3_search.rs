@@ -648,6 +648,7 @@ pub struct V32RoutingTargetReport {
 #[doc(hidden)]
 pub struct V32RoutingDiagnostic {
     pub selection: V32PageSelection,
+    pub reciprocal_rank_pages: Vec<V27PageIdentity>,
     pub targets: Vec<V32RoutingTargetReport>,
 }
 
@@ -1210,10 +1211,21 @@ impl V32Router {
         reciprocal_ranked_pages.sort_unstable_by(|left, right| {
             right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0))
         });
-        let reciprocal_rank_selected = reciprocal_ranked_pages
-            .into_iter()
+        let reciprocal_rank_pages = reciprocal_ranked_pages
+            .iter()
             .take(arm.page_count)
-            .map(|(page, _)| page)
+            .map(|(page, _)| {
+                self.layout
+                    .pages()
+                    .get(*page as usize)
+                    .filter(|value| value.identity.ordinal == *page)
+                    .map(V30PageRange::identity)
+                    .ok_or_else(|| invalid("V30 routing diagnostic page differs"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let reciprocal_rank_selected = reciprocal_rank_pages
+            .iter()
+            .map(|page| page.ordinal)
             .collect::<std::collections::BTreeSet<_>>();
         let selected_pages = details
             .selection
@@ -1257,7 +1269,11 @@ impl V32Router {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(V32RoutingDiagnostic { selection, targets })
+        Ok(V32RoutingDiagnostic {
+            selection,
+            reciprocal_rank_pages,
+            targets,
+        })
     }
 
     fn select_pages_with_leaf_observer<F>(
@@ -1849,22 +1865,36 @@ mod tests {
     fn v32_s3_search_diagnostic_reports_structural_work_without_page_reads() {
         // Break caught: the fast containment gate reports truth stages but hides
         // a scanned-code or selected-page-byte hard failure until S3 execution.
-        let diagnostic = diagnostic_router()
-            .diagnose_logicals_with_selection(
-                &[0.2; 96],
-                V32SearchArm {
-                    root_beam: 1,
-                    leaf_beam: 1,
-                    scan_budget: 65_536,
-                    candidate_depth: 20,
-                    page_count: 10,
-                },
-                &[0, 15],
-            )
+        let router = diagnostic_router();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 1,
+            scan_budget: 65_536,
+            candidate_depth: 20,
+            page_count: 10,
+        };
+        let diagnostic = router
+            .diagnose_logicals_with_selection(&[0.2; 96], arm, &[0, 15])
             .unwrap();
+        let changed_targets = router
+            .diagnose_logicals_with_selection(&[0.2; 96], arm, &[2, 18])
+            .unwrap();
+        assert_eq!(diagnostic.selection, changed_targets.selection);
+        assert_eq!(
+            diagnostic.reciprocal_rank_pages,
+            changed_targets.reciprocal_rank_pages
+        );
         assert_eq!(diagnostic.targets.len(), 2);
         assert_eq!(diagnostic.selection.work.codes_scanned, 30);
         assert_eq!(diagnostic.selection.pages.len(), 10);
+        assert_eq!(
+            diagnostic
+                .reciprocal_rank_pages
+                .iter()
+                .map(|page| page.ordinal)
+                .collect::<Vec<_>>(),
+            [0, 1, 2, 3, 4, 10, 5, 11, 6, 12]
+        );
         assert_eq!(
             diagnostic
                 .selection

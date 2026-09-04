@@ -551,6 +551,22 @@ fn diagnostic_bytes(
             "V32 diagnostic truth-independent selection differs",
         ));
     }
+    let page_selection = |pages: &[borsuk::V27PageIdentity]| -> borsuk::Result<serde_json::Value> {
+        let selected_page_bytes = pages
+            .iter()
+            .try_fold(0_u64, |total, page| total.checked_add(page.encoded_bytes))
+            .ok_or_else(|| invalid("V32 diagnostic selected bytes overflow"))?;
+        Ok(serde_json::json!({
+            "pages": pages.iter().map(|page| serde_json::json!({
+                "encoded_bytes": page.encoded_bytes,
+                "ordinal": page.ordinal,
+                "sha256": page.sha256,
+            })).collect::<Vec<_>>(),
+            "selected_page_bytes": selected_page_bytes,
+        }))
+    };
+    let first_distinct = page_selection(&diagnostic.selection.pages)?;
+    let reciprocal_rank = page_selection(&diagnostic.reciprocal_rank_pages)?;
     let selected_page_bytes = diagnostic
         .selection
         .pages
@@ -584,6 +600,10 @@ fn diagnostic_bytes(
         "claim_eligible": false,
         "diagnostics": diagnostics,
         "page_body_reads": 0,
+        "page_selections": {
+            "first_distinct": first_distinct,
+            "reciprocal_rank": reciprocal_rank,
+        },
         "query_ordinal": query_ordinal,
         "routing": {
             "candidates_retained": work.candidates_retained,
@@ -597,7 +617,7 @@ fn diagnostic_bytes(
             "selected_page_bytes": selected_page_bytes,
             "selected_pages": work.selected_pages,
         },
-        "schema_version": 3,
+        "schema_version": 4,
         "truth_independent_selection": truth_independent_selection,
     });
     let mut bytes = serde_json::to_vec(&canonical(value))
@@ -1599,6 +1619,22 @@ mod tests {
                         selected_pages: 2,
                     },
                 },
+                reciprocal_rank_pages: vec![
+                    V27PageIdentity {
+                        ordinal: 12,
+                        sha256: "2".repeat(64),
+                        encoded_bytes: 200,
+                        primary_rows: 1,
+                        replica_rows: 0,
+                    },
+                    V27PageIdentity {
+                        ordinal: 13,
+                        sha256: "3".repeat(64),
+                        encoded_bytes: 300,
+                        primary_rows: 1,
+                        replica_rows: 0,
+                    },
+                ],
                 targets: vec![
                     V32RoutingTargetReport {
                         logical: 25,
@@ -1626,7 +1662,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             bytes,
-            b"{\"claim_eligible\":false,\"diagnostics\":[{\"candidate_rank\":null,\"first_unique_page_rank\":12,\"leaf_ordinal\":3,\"logical\":25,\"page_ordinal\":11,\"reciprocal_rank_selected\":false,\"routing_leaf_rank\":9,\"stage\":\"candidate-retention\"},{\"candidate_rank\":7,\"first_unique_page_rank\":4,\"leaf_ordinal\":3,\"logical\":26,\"page_ordinal\":12,\"reciprocal_rank_selected\":true,\"routing_leaf_rank\":9,\"stage\":\"selected-page\"}],\"page_body_reads\":0,\"query_ordinal\":7,\"routing\":{\"candidates_retained\":12288,\"codes_scanned\":40000,\"leaves_eligible\":32,\"leaves_scanned\":32,\"pages_considered\":20,\"peak_query_table_pairs_live\":1,\"query_table_pairs_built\":4,\"roots_scored\":16,\"selected_page_bytes\":300,\"selected_pages\":2},\"schema_version\":3,\"truth_independent_selection\":true}\n"
+            b"{\"claim_eligible\":false,\"diagnostics\":[{\"candidate_rank\":null,\"first_unique_page_rank\":12,\"leaf_ordinal\":3,\"logical\":25,\"page_ordinal\":11,\"reciprocal_rank_selected\":false,\"routing_leaf_rank\":9,\"stage\":\"candidate-retention\"},{\"candidate_rank\":7,\"first_unique_page_rank\":4,\"leaf_ordinal\":3,\"logical\":26,\"page_ordinal\":12,\"reciprocal_rank_selected\":true,\"routing_leaf_rank\":9,\"stage\":\"selected-page\"}],\"page_body_reads\":0,\"page_selections\":{\"first_distinct\":{\"pages\":[{\"encoded_bytes\":100,\"ordinal\":11,\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"encoded_bytes\":200,\"ordinal\":12,\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"}],\"selected_page_bytes\":300},\"reciprocal_rank\":{\"pages\":[{\"encoded_bytes\":200,\"ordinal\":12,\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"},{\"encoded_bytes\":300,\"ordinal\":13,\"sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\"}],\"selected_page_bytes\":500}},\"query_ordinal\":7,\"routing\":{\"candidates_retained\":12288,\"codes_scanned\":40000,\"leaves_eligible\":32,\"leaves_scanned\":32,\"pages_considered\":20,\"peak_query_table_pairs_live\":1,\"query_table_pairs_built\":4,\"roots_scored\":16,\"selected_page_bytes\":300,\"selected_pages\":2},\"schema_version\":4,\"truth_independent_selection\":true}\n"
         );
     }
 

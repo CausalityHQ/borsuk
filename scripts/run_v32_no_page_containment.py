@@ -348,7 +348,11 @@ def _diagnostics(
     maximum_leaves_eligible: int,
     leaf_beam: int,
     scan_budget: int,
-) -> tuple[list[dict[str, object]], dict[str, int]]:
+) -> tuple[
+    list[dict[str, object]],
+    dict[str, int],
+    dict[str, dict[str, object]],
+]:
     if type(payload) is not bytes or not payload.endswith(b"\n") or b"\n" in payload[:-1]:
         raise ValueError("V32 containment diagnostic canonical bytes differ")
     value = json.loads(payload)
@@ -366,13 +370,14 @@ def _diagnostics(
             "claim_eligible",
             "diagnostics",
             "page_body_reads",
+            "page_selections",
             "query_ordinal",
             "routing",
             "schema_version",
             "truth_independent_selection",
         }
         or value["claim_eligible"] is not False
-        or value["schema_version"] != 3
+        or value["schema_version"] != 4
         or value["page_body_reads"] != 0
         or value["truth_independent_selection"] is not True
         or value["query_ordinal"] != query_ordinal
@@ -466,7 +471,54 @@ def _diagnostics(
         for item in diagnostics
     ):
         raise ValueError("V32 containment diagnostic value differs")
-    return diagnostics, routing
+    page_selections = value["page_selections"]
+    if type(page_selections) is not dict or set(page_selections) != {
+        "first_distinct",
+        "reciprocal_rank",
+    }:
+        raise ValueError("V32 containment page selection differs")
+    selected_ordinals: dict[str, set[int]] = {}
+    for name, selection in page_selections.items():
+        if (
+            type(selection) is not dict
+            or set(selection) != {"pages", "selected_page_bytes"}
+            or type(selection["pages"]) is not list
+            or len(selection["pages"]) != routing["selected_pages"]
+            or type(selection["selected_page_bytes"]) is not int
+            or selection["selected_page_bytes"] <= 0
+        ):
+            raise ValueError("V32 containment page selection differs")
+        ordinals: set[int] = set()
+        selected_bytes = 0
+        for page in selection["pages"]:
+            if (
+                type(page) is not dict
+                or set(page) != {"encoded_bytes", "ordinal", "sha256"}
+                or type(page["encoded_bytes"]) is not int
+                or page["encoded_bytes"] <= 0
+                or type(page["ordinal"]) is not int
+                or page["ordinal"] < 0
+                or type(page["sha256"]) is not str
+                or not _digest(page["sha256"])
+                or page["ordinal"] in ordinals
+            ):
+                raise ValueError("V32 containment page selection differs")
+            ordinals.add(page["ordinal"])
+            selected_bytes += page["encoded_bytes"]
+        if selected_bytes != selection["selected_page_bytes"]:
+            raise ValueError("V32 containment page selection differs")
+        selected_ordinals[name] = ordinals
+    if page_selections["first_distinct"]["selected_page_bytes"] != routing[
+        "selected_page_bytes"
+    ] or any(
+        (item["stage"] == "selected-page")
+        != (item["page_ordinal"] in selected_ordinals["first_distinct"])
+        or item["reciprocal_rank_selected"]
+        != (item["page_ordinal"] in selected_ordinals["reciprocal_rank"])
+        for item in diagnostics
+    ):
+        raise ValueError("V32 containment page selection differs")
+    return diagnostics, routing, page_selections
 
 
 def run_v32_no_page_containment(
@@ -487,15 +539,20 @@ def run_v32_no_page_containment(
     source_to_logical = _read_logical_sources(plan)
     commands = _commands(plan, truth, source_to_logical, leaf_beam)
     samples = []
+    queries = []
+    reciprocal_hits_by_query = []
     routing_work = []
     truth_microleaf_ranks = []
     losses: Counter[str] = Counter()
-    for offset, (command, logicals) in enumerate(zip(commands, truth, strict=True)):
+    for offset, (command, source_ordinals) in enumerate(
+        zip(commands, truth, strict=True)
+    ):
         query_ordinal = plan.query_start + offset
-        diagnostics, routing = _diagnostics(
+        logicals = tuple(source_to_logical[source] for source in source_ordinals)
+        diagnostics, routing, page_selections = _diagnostics(
             invoke(command),
             query_ordinal,
-            tuple(source_to_logical[source] for source in logicals),
+            logicals,
             maximum_leaves_eligible,
             leaf_beam,
             scan_budget,
@@ -513,6 +570,43 @@ def run_v32_no_page_containment(
             if item["stage"] != "selected-page"
         )
         samples.append({"hits": hits, "query_ordinal": query_ordinal})
+        targets_by_logical = {item["logical"]: item for item in diagnostics}
+        targets = [
+            {
+                **targets_by_logical[logical],
+                "source_ordinal": source_ordinal,
+                "truth_position": truth_position,
+            }
+            for truth_position, (source_ordinal, logical) in enumerate(
+                zip(source_ordinals, logicals, strict=True)
+            )
+        ]
+        reciprocal_hits = sum(
+            item["reciprocal_rank_selected"] for item in targets
+        )
+        reciprocal_hits_by_query.append(reciprocal_hits)
+        queries.append(
+            {
+                "baseline_hits": hits,
+                "lost_logicals": [
+                    item["logical"]
+                    for item in targets
+                    if item["stage"] == "selected-page"
+                    and not item["reciprocal_rank_selected"]
+                ],
+                "query_ordinal": query_ordinal,
+                "page_selections": page_selections,
+                "reciprocal_rank_hits": reciprocal_hits,
+                "recovered_logicals": [
+                    item["logical"]
+                    for item in targets
+                    if item["stage"] != "selected-page"
+                    and item["reciprocal_rank_selected"]
+                ],
+                "routing": routing,
+                "targets": targets,
+            }
+        )
     total_hits = sum(sample["hits"] for sample in samples)
     aggregate = total_hits * 1_000_000 // (QUERY_COUNT * RECALL_K)
     minimum = min(sample["hits"] for sample in samples) * 1_000_000 // RECALL_K
@@ -536,6 +630,33 @@ def run_v32_no_page_containment(
         failed.append("maximum-codes-scanned")
     if maximum_routing_leaf_rows > 1_024:
         failed.append("maximum-routing-leaf-rows")
+    reciprocal_total_hits = sum(reciprocal_hits_by_query)
+    reciprocal_maximum_selected_page_bytes = max(
+        query["page_selections"]["reciprocal_rank"]["selected_page_bytes"]
+        for query in queries
+    )
+    reciprocal_failed = (
+        []
+        if reciprocal_total_hits == QUERY_COUNT * RECALL_K
+        else ["perfect-containment"]
+    )
+    if reciprocal_maximum_selected_page_bytes > 3_145_728:
+        reciprocal_failed.append("selected-page-bytes")
+    reciprocal_rank = {
+        "aggregate_containment_ppm": reciprocal_total_hits
+        * 1_000_000
+        // (QUERY_COUNT * RECALL_K),
+        "failed_gates": reciprocal_failed,
+        "minimum_containment_ppm": min(reciprocal_hits_by_query)
+        * 1_000_000
+        // RECALL_K,
+        "maximum_selected_page_bytes": reciprocal_maximum_selected_page_bytes,
+        "perfect_queries": sum(
+            hits == RECALL_K for hits in reciprocal_hits_by_query
+        ),
+        "selected_page_hits": reciprocal_total_hits,
+        "status": "passed" if not reciprocal_failed else "failed",
+    }
     value = {
         "aggregate_containment_ppm": aggregate,
         "claim_eligible": False,
@@ -558,9 +679,11 @@ def run_v32_no_page_containment(
         "query_count": QUERY_COUNT,
         "query_start": plan.query_start,
         "query_sha256": plan.query.sha256,
+        "queries": queries,
+        "reciprocal_rank": reciprocal_rank,
         "root_beam": plan.root_beam,
         "samples": samples,
-        "schema_version": 2,
+        "schema_version": 3,
         "selected_page_hits": total_hits,
         "source_rows": plan.source_rows,
         "status": "passed" if not failed else "failed",

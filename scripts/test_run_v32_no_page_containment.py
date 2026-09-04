@@ -195,6 +195,43 @@ class V32NoPageContainmentTests(unittest.TestCase):
         )
 
     @staticmethod
+    def refresh_page_selections(value: dict[str, object]) -> None:
+        diagnostics = value["diagnostics"]
+        assert isinstance(diagnostics, list)
+
+        def selection(flag: str) -> dict[str, object]:
+            ordinals = [
+                item["page_ordinal"]
+                for item in diagnostics
+                if (
+                    item["stage"] == "selected-page"
+                    if flag == "first_distinct"
+                    else item["reciprocal_rank_selected"]
+                )
+            ]
+            filler = int(value["query_ordinal"]) * 1_000
+            while len(ordinals) < 16:
+                if filler not in ordinals:
+                    ordinals.append(filler)
+                filler += 1
+            return {
+                "pages": [
+                    {
+                        "encoded_bytes": 181_250,
+                        "ordinal": ordinal,
+                        "sha256": f"{ordinal:064x}",
+                    }
+                    for ordinal in ordinals
+                ],
+                "selected_page_bytes": 2_900_000,
+            }
+
+        value["page_selections"] = {
+            "first_distinct": selection("first_distinct"),
+            "reciprocal_rank": selection("reciprocal_rank"),
+        }
+
+    @staticmethod
     def diagnostic(
         query_ordinal: int,
         *,
@@ -219,32 +256,34 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     "stage": "selected-page" if selected else "candidate-retention",
                 }
             )
+        value = {
+            "claim_eligible": False,
+            "diagnostics": diagnostics,
+            "page_body_reads": 0,
+            "query_ordinal": query_ordinal,
+            "routing": {
+                "candidates_retained": candidates_retained,
+                "codes_scanned": (
+                    40_000 + query_ordinal
+                    if codes_scanned is None
+                    else codes_scanned
+                ),
+                "leaves_eligible": leaves_eligible,
+                "leaves_scanned": leaves_scanned,
+                "pages_considered": 20,
+                "peak_query_table_pairs_live": 1,
+                "query_table_pairs_built": 1,
+                "roots_scored": 128,
+                "selected_page_bytes": 2_900_000,
+                "selected_pages": 16,
+            },
+            "schema_version": 4,
+            "truth_independent_selection": True,
+        }
+        V32NoPageContainmentTests.refresh_page_selections(value)
         return (
             json.dumps(
-                {
-                    "claim_eligible": False,
-                    "diagnostics": diagnostics,
-                    "page_body_reads": 0,
-                    "query_ordinal": query_ordinal,
-                    "routing": {
-                        "candidates_retained": candidates_retained,
-                        "codes_scanned": (
-                            40_000 + query_ordinal
-                            if codes_scanned is None
-                            else codes_scanned
-                        ),
-                        "leaves_eligible": leaves_eligible,
-                        "leaves_scanned": leaves_scanned,
-                        "pages_considered": 20,
-                        "peak_query_table_pairs_live": 1,
-                        "query_table_pairs_built": 1,
-                        "roots_scored": 128,
-                        "selected_page_bytes": 2_900_000,
-                        "selected_pages": 16,
-                    },
-                    "schema_version": 3,
-                    "truth_independent_selection": True,
-                },
+                value,
                 allow_nan=False,
                 separators=(",", ":"),
                 sort_keys=True,
@@ -379,6 +418,80 @@ class V32NoPageContainmentTests(unittest.TestCase):
         self.assertEqual(value["failed_gates"], ["perfect-containment"])
         self.assertFalse(value["claim_eligible"])
 
+    def test_v32_containment_preserves_paired_reducer_recoveries_and_losses(self) -> None:
+        # Break caught: the runner collapses validated per-target evidence to a
+        # hit count, so a reciprocal-rank recovery and a different eviction can
+        # produce the same aggregate terminal and become indistinguishable.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, truth = self.fixture(Path(temporary))
+            results = {
+                query: self.diagnostic(query, miss=query == 75)
+                for query in range(64, 96)
+            }
+            recovered = json.loads(results[75])
+            recovered["diagnostics"][-1]["reciprocal_rank_selected"] = True
+            evicted = json.loads(results[76])
+            evicted["diagnostics"][0]["reciprocal_rank_selected"] = False
+            self.refresh_page_selections(recovered)
+            self.refresh_page_selections(evicted)
+            results[75] = (
+                json.dumps(
+                    recovered,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+                + b"\n"
+            )
+            results[76] = (
+                json.dumps(
+                    evicted,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+                + b"\n"
+            )
+            payload = run_v32_no_page_containment(
+                plan,
+                truth,
+                invoke=lambda command: results[
+                    int(command[command.index("--query-start") + 1])
+                ],
+            )
+
+        value = json.loads(payload)
+        self.assertEqual(value["schema_version"], 3)
+        self.assertEqual(value["selected_page_hits"], 319)
+        self.assertEqual(value["reciprocal_rank"]["selected_page_hits"], 319)
+        self.assertEqual(value["reciprocal_rank"]["aggregate_containment_ppm"], 996_875)
+        self.assertEqual(value["reciprocal_rank"]["minimum_containment_ppm"], 900_000)
+        self.assertEqual(value["reciprocal_rank"]["perfect_queries"], 31)
+        self.assertEqual(
+            value["reciprocal_rank"]["maximum_selected_page_bytes"], 2_900_000
+        )
+        query_75 = value["queries"][11]
+        self.assertEqual(query_75["query_ordinal"], 75)
+        self.assertEqual(query_75["baseline_hits"], 9)
+        self.assertEqual(query_75["reciprocal_rank_hits"], 10)
+        self.assertEqual(query_75["recovered_logicals"], [7_510])
+        self.assertEqual(query_75["lost_logicals"], [])
+        self.assertEqual(query_75["targets"][-1]["source_ordinal"], 7_509)
+        self.assertEqual(query_75["targets"][-1]["truth_position"], 9)
+        query_76 = value["queries"][12]
+        self.assertEqual(query_76["query_ordinal"], 76)
+        self.assertEqual(query_76["baseline_hits"], 10)
+        self.assertEqual(query_76["reciprocal_rank_hits"], 9)
+        self.assertEqual(query_76["recovered_logicals"], [])
+        self.assertEqual(query_76["lost_logicals"], [7_601])
+        self.assertEqual(query_76["routing"]["selected_pages"], 16)
+        self.assertEqual(
+            query_76["page_selections"]["reciprocal_rank"]["pages"][0][
+                "ordinal"
+            ],
+            761,
+        )
+
     def test_v32_containment_counts_a_selected_page_after_candidate_pruning(self) -> None:
         # Break caught: the reducer reports a false miss when another retained
         # row selects the physical page containing a pruned truth row.
@@ -401,6 +514,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     recovered["diagnostics"][-1]["reciprocal_rank_selected"] = (
                         reciprocal_rank_selected
                     )
+                    self.refresh_page_selections(recovered)
                     results[75] = (
                         json.dumps(
                             recovered,
