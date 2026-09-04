@@ -58,6 +58,14 @@ pub enum V30RoutingTargetStage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[doc(hidden)]
+pub enum V30SearchPhase {
+    RoutingComplete,
+    PageReadComplete,
+    ExactRerankComplete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
 pub struct V30RoutingTargetReport {
     pub logical: u64,
     pub leaf_ordinal: u32,
@@ -591,15 +599,30 @@ impl<S: V30PageStore> V30Index<S> {
     }
 
     pub fn search(&self, query: &[f32; 96], k: usize) -> Result<V30SearchResult> {
+        self.search_observed(query, k, |_phase| Ok(()))
+    }
+
+    #[doc(hidden)]
+    pub fn search_observed<F>(
+        &self,
+        query: &[f32; 96],
+        k: usize,
+        mut observer: F,
+    ) -> Result<V30SearchResult>
+    where
+        F: FnMut(V30SearchPhase) -> Result<()>,
+    {
         if k == 0 || k > 10 {
             return Err(invalid("V30 result count differs"));
         }
         let query = normalized(query)?;
         let selection = self.router.select_pages(&query, self.arm)?;
+        observer(V30SearchPhase::RoutingComplete)?;
         let bodies = self.store.read_wave(&selection.pages)?;
         if bodies.len() != selection.pages.len() {
             return Err(invalid("V30 page wave cardinality differs"));
         }
+        observer(V30SearchPhase::PageReadComplete)?;
         let encoded_bytes = bodies.iter().try_fold(0_u64, |total, body| {
             total
                 .checked_add(body.len() as u64)
@@ -649,6 +672,7 @@ impl<S: V30PageStore> V30Index<S> {
         }
         let unique_rows = seen.len();
         let matches = matches.finish();
+        observer(V30SearchPhase::ExactRerankComplete)?;
         Ok(V30SearchResult {
             matches,
             work: V30SearchWork {
@@ -675,7 +699,8 @@ mod tests {
     use half::f16;
 
     use super::{
-        ExactTopK, V30Index, V30Match, V30PageStore, V30Router, V30RoutingTargetStage, V30SearchArm,
+        ExactTopK, V30Index, V30Match, V30PageStore, V30Router, V30RoutingTargetStage,
+        V30SearchArm, V30SearchPhase,
     };
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
@@ -989,7 +1014,21 @@ mod tests {
             },
         )
         .unwrap();
-        let result = index.search(&[0.2; 96], 10).unwrap();
+        let mut phases = Vec::new();
+        let result = index
+            .search_observed(&[0.2; 96], 10, |phase| {
+                phases.push(phase);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            phases,
+            [
+                V30SearchPhase::RoutingComplete,
+                V30SearchPhase::PageReadComplete,
+                V30SearchPhase::ExactRerankComplete,
+            ]
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(result.work.get_count, 10);
         assert_eq!(result.work.decoded_rows, 20);

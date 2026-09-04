@@ -83,11 +83,17 @@ class V30UntouchedQualityTests(unittest.TestCase):
                 {"source_ordinal": source, "squared_distance": float(rank)}
                 for rank, source in enumerate(sources)
             ],
-            "schema_version": 1,
+            "schema_version": 2,
             "timing": {
                 "elapsed_ns": 8_000_000 + query_row,
+                "exact_rerank_cpu_ns": 3_000_000 + query_row,
+                "exact_rerank_elapsed_ns": 3_000_000 + query_row,
+                "page_read_cpu_ns": 1_000_000 + query_row,
+                "page_read_elapsed_ns": 2_000_000 + query_row,
                 "peak_rss_bytes": 2_000_000_000 + query_row,
                 "process_cpu_ns": 12_000_000 + query_row,
+                "routing_cpu_ns": 4_000_000 + query_row,
+                "routing_elapsed_ns": 2_500_000 + query_row,
             },
             "work": {
                 "decoded_rows": 4_000,
@@ -140,6 +146,12 @@ class V30UntouchedQualityTests(unittest.TestCase):
             self.assertEqual(value["maximum_get_count"], 16)
             self.assertEqual(value["measured_process_cpu_p99_ns"], 12_000_095)
             self.assertEqual(value["measured_cold_p99_ns"], 8_000_095)
+            self.assertEqual(value["maximum_routing_cpu_ns"], 4_000_095)
+            self.assertEqual(value["maximum_page_read_cpu_ns"], 1_000_095)
+            self.assertEqual(value["maximum_exact_rerank_cpu_ns"], 3_000_095)
+            self.assertEqual(value["maximum_routing_elapsed_ns"], 2_500_095)
+            self.assertEqual(value["maximum_page_read_elapsed_ns"], 2_000_095)
+            self.assertEqual(value["maximum_exact_rerank_elapsed_ns"], 3_000_095)
             self.assertEqual(value["maximum_peak_rss_bytes"], 2_000_000_095)
             self.assertEqual(value["status"], "passed")
             self.assertFalse(value["claim_eligible"])
@@ -166,7 +178,7 @@ class V30UntouchedQualityTests(unittest.TestCase):
         value = {
             "claim_eligible": False,
             "results": [json.loads(results[row]) for row in sorted(results)],
-            "schema_version": 1,
+            "schema_version": 2,
         }
         return json.dumps(value, separators=(",", ":"), sort_keys=True).encode() + b"\n"
 

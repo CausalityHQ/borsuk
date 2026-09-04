@@ -97,7 +97,7 @@ def _query_result(
         "work",
     }:
         raise ValueError("V30 query result canonical bytes differ")
-    if value["claim_eligible"] is not False or type(value["schema_version"]) is not int or value["schema_version"] != 1:
+    if value["claim_eligible"] is not False or type(value["schema_version"]) is not int or value["schema_version"] != 2:
         raise ValueError("V30 query result constants differ")
     matches = value["matches"]
     if type(matches) is not list or len(matches) != RECALL_K:
@@ -119,10 +119,33 @@ def _query_result(
     if len(set(sources)) != RECALL_K:
         raise ValueError("V30 match identity differs")
     timing = value["timing"]
+    phase_cpu_keys = (
+        "routing_cpu_ns",
+        "page_read_cpu_ns",
+        "exact_rerank_cpu_ns",
+    )
+    phase_elapsed_keys = (
+        "routing_elapsed_ns",
+        "page_read_elapsed_ns",
+        "exact_rerank_elapsed_ns",
+    )
     if (
         type(timing) is not dict
-        or set(timing) != {"elapsed_ns", "peak_rss_bytes", "process_cpu_ns"}
+        or set(timing)
+        != {
+            "elapsed_ns",
+            "exact_rerank_cpu_ns",
+            "exact_rerank_elapsed_ns",
+            "page_read_cpu_ns",
+            "page_read_elapsed_ns",
+            "peak_rss_bytes",
+            "process_cpu_ns",
+            "routing_cpu_ns",
+            "routing_elapsed_ns",
+        }
         or any(type(timing[key]) is not int or timing[key] < 0 for key in timing)
+        or sum(timing[key] for key in phase_cpu_keys) > timing["process_cpu_ns"]
+        or sum(timing[key] for key in phase_elapsed_keys) > timing["elapsed_ns"]
     ):
         raise ValueError("V30 query timing differs")
     work = value["work"]
@@ -162,6 +185,7 @@ def _query_result(
         "elapsed_ns": timing["elapsed_ns"],
         "peak_rss_bytes": timing["peak_rss_bytes"],
         "process_cpu_ns": timing["process_cpu_ns"],
+        **{key: timing[key] for key in phase_cpu_keys + phase_elapsed_keys},
     }
 
 

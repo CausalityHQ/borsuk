@@ -146,7 +146,7 @@ def _batch_results(
         or type(value) is not dict
         or set(value) != {"claim_eligible", "results", "schema_version"}
         or value["claim_eligible"] is not False
-        or value["schema_version"] != 1
+        or value["schema_version"] != 2
         or type(value["results"]) is not list
         or len(value["results"]) != QUERY_COUNT
     ):
@@ -215,6 +215,20 @@ def run_v30_untouched_quality(
         "maximum_codes_scanned": maximum_codes,
         "maximum_encoded_bytes": maximum_bytes,
         "maximum_get_count": maximum_gets,
+        "maximum_routing_cpu_ns": max(work["routing_cpu_ns"] for _matches, work in parsed),
+        "maximum_page_read_cpu_ns": max(work["page_read_cpu_ns"] for _matches, work in parsed),
+        "maximum_exact_rerank_cpu_ns": max(
+            work["exact_rerank_cpu_ns"] for _matches, work in parsed
+        ),
+        "maximum_routing_elapsed_ns": max(
+            work["routing_elapsed_ns"] for _matches, work in parsed
+        ),
+        "maximum_page_read_elapsed_ns": max(
+            work["page_read_elapsed_ns"] for _matches, work in parsed
+        ),
+        "maximum_exact_rerank_elapsed_ns": max(
+            work["exact_rerank_elapsed_ns"] for _matches, work in parsed
+        ),
         "maximum_peak_rss_bytes": maximum_peak_rss,
         "measured_cold_p99_ns": cold_p99,
         "measured_process_cpu_p99_ns": cpu_p99,
@@ -223,7 +237,7 @@ def run_v30_untouched_quality(
         "query_count": QUERY_COUNT,
         "query_sha256": plan.query.sha256,
         "query_start": plan.query_start,
-        "schema_version": 1,
+        "schema_version": 2,
         "samples": [
             {
                 "candidates_retained": work["candidates_retained"],
@@ -234,6 +248,12 @@ def run_v30_untouched_quality(
                 "hits": hits[ordinal],
                 "matched_source_ordinals": list(matches),
                 "process_cpu_ns": work["process_cpu_ns"],
+                "routing_cpu_ns": work["routing_cpu_ns"],
+                "page_read_cpu_ns": work["page_read_cpu_ns"],
+                "exact_rerank_cpu_ns": work["exact_rerank_cpu_ns"],
+                "routing_elapsed_ns": work["routing_elapsed_ns"],
+                "page_read_elapsed_ns": work["page_read_elapsed_ns"],
+                "exact_rerank_elapsed_ns": work["exact_rerank_elapsed_ns"],
                 "peak_rss_bytes": work["peak_rss_bytes"],
                 "query_ordinal": plan.query_start + ordinal,
                 "recall_ppm": hits[ordinal] * 1_000_000 // RECALL_K,

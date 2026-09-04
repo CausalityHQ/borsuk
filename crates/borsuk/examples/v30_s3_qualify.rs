@@ -8,7 +8,7 @@ use borsuk::{
     BorsukError, V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30Index,
     V30LayoutArtifactIdentity, V30LayoutArtifacts, V30PageStore, V30PqArtifactIdentity,
     V30PqArtifacts, V30Router, V30RoutingTargetReport, V30RoutingTargetStage, V30SearchArm,
-    V30SearchResult,
+    V30SearchPhase, V30SearchResult,
 };
 use bytes::Bytes;
 use futures_util::future::try_join_all;
@@ -304,6 +304,16 @@ struct ObjectPageStore {
     runtime: Arc<tokio::runtime::Runtime>,
 }
 
+#[derive(Clone, Copy, Default)]
+struct SearchPhaseTiming {
+    routing_cpu_ns: u64,
+    page_read_cpu_ns: u64,
+    exact_rerank_cpu_ns: u64,
+    routing_elapsed_ns: u64,
+    page_read_elapsed_ns: u64,
+    exact_rerank_elapsed_ns: u64,
+}
+
 impl V30PageStore for ObjectPageStore {
     fn read_wave(&self, pages: &[borsuk::V27PageIdentity]) -> borsuk::Result<Vec<Vec<u8>>> {
         self.runtime.block_on(async {
@@ -327,6 +337,7 @@ fn result_bytes(
     process_cpu_ns: u64,
     elapsed_ns: u64,
     peak_rss_bytes: u64,
+    phases: SearchPhaseTiming,
 ) -> borsuk::Result<Vec<u8>> {
     if result
         .matches
@@ -345,14 +356,33 @@ fn result_bytes(
             })
         })
         .collect::<Vec<_>>();
+    let phase_cpu_ns = phases
+        .routing_cpu_ns
+        .checked_add(phases.page_read_cpu_ns)
+        .and_then(|value| value.checked_add(phases.exact_rerank_cpu_ns))
+        .ok_or_else(|| invalid("V30 qualifier phase CPU overflows"))?;
+    let phase_elapsed_ns = phases
+        .routing_elapsed_ns
+        .checked_add(phases.page_read_elapsed_ns)
+        .and_then(|value| value.checked_add(phases.exact_rerank_elapsed_ns))
+        .ok_or_else(|| invalid("V30 qualifier phase elapsed overflows"))?;
+    if phase_cpu_ns > process_cpu_ns || phase_elapsed_ns > elapsed_ns {
+        return Err(invalid("V30 qualifier phase timing differs"));
+    }
     let value = serde_json::json!({
         "claim_eligible": false,
         "matches": matches,
-        "schema_version": 1,
+        "schema_version": 2,
         "timing": {
             "elapsed_ns": elapsed_ns,
+            "exact_rerank_cpu_ns": phases.exact_rerank_cpu_ns,
+            "exact_rerank_elapsed_ns": phases.exact_rerank_elapsed_ns,
+            "page_read_cpu_ns": phases.page_read_cpu_ns,
+            "page_read_elapsed_ns": phases.page_read_elapsed_ns,
             "peak_rss_bytes": peak_rss_bytes,
             "process_cpu_ns": process_cpu_ns,
+            "routing_cpu_ns": phases.routing_cpu_ns,
+            "routing_elapsed_ns": phases.routing_elapsed_ns,
         },
         "work": {
             "decoded_rows": result.work.decoded_rows,
@@ -550,13 +580,49 @@ fn run_batch<S: V30PageStore>(
         let query_vector = read_query(query, query_row)?;
         let cpu_before = process_cpu_nanoseconds()?;
         let started = Instant::now();
-        let result = index.search(&query_vector, k)?;
+        let mut previous_cpu_ns = cpu_before;
+        let mut previous_elapsed_ns = 0_u64;
+        let mut phases = SearchPhaseTiming::default();
+        let result = index.search_observed(&query_vector, k, |phase| {
+            let current_cpu_ns = process_cpu_nanoseconds()?;
+            let current_elapsed_ns = u64::try_from(started.elapsed().as_nanos())
+                .map_err(|_| invalid("V30 qualifier phase elapsed time overflows"))?;
+            let cpu_ns = current_cpu_ns
+                .checked_sub(previous_cpu_ns)
+                .ok_or_else(|| invalid("V30 qualifier phase CPU regressed"))?;
+            let elapsed_ns = current_elapsed_ns
+                .checked_sub(previous_elapsed_ns)
+                .ok_or_else(|| invalid("V30 qualifier phase elapsed regressed"))?;
+            match phase {
+                V30SearchPhase::RoutingComplete => {
+                    phases.routing_cpu_ns = cpu_ns;
+                    phases.routing_elapsed_ns = elapsed_ns;
+                }
+                V30SearchPhase::PageReadComplete => {
+                    phases.page_read_cpu_ns = cpu_ns;
+                    phases.page_read_elapsed_ns = elapsed_ns;
+                }
+                V30SearchPhase::ExactRerankComplete => {
+                    phases.exact_rerank_cpu_ns = cpu_ns;
+                    phases.exact_rerank_elapsed_ns = elapsed_ns;
+                }
+            }
+            previous_cpu_ns = current_cpu_ns;
+            previous_elapsed_ns = current_elapsed_ns;
+            Ok(())
+        })?;
         let elapsed_ns = u64::try_from(started.elapsed().as_nanos())
             .map_err(|_| invalid("V30 qualifier elapsed time overflows"))?;
         let process_cpu_ns = process_cpu_nanoseconds()?
             .checked_sub(cpu_before)
             .ok_or_else(|| invalid("V30 qualifier process CPU regressed"))?;
-        let bytes = result_bytes(&result, process_cpu_ns, elapsed_ns, peak_rss_bytes()?)?;
+        let bytes = result_bytes(
+            &result,
+            process_cpu_ns,
+            elapsed_ns,
+            peak_rss_bytes()?,
+            phases,
+        )?;
         results.push(
             serde_json::from_slice::<serde_json::Value>(&bytes)
                 .map_err(|_| invalid("V30 qualifier batch result differs"))?,
@@ -565,7 +631,7 @@ fn run_batch<S: V30PageStore>(
     let value = serde_json::json!({
         "claim_eligible": false,
         "results": results,
-        "schema_version": 1,
+        "schema_version": 2,
     });
     let mut bytes = serde_json::to_vec(&canonical(value))
         .map_err(|_| invalid("V30 qualifier batch serialization failed"))?;
@@ -850,9 +916,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        Args, ArtifactArg, LocalPageStore, ObjectPageStore, PageSource, diagnostic_bytes, execute,
-        parse_args, peak_rss_bytes, process_cpu_nanoseconds, read_manifest, result_bytes,
-        run_batch,
+        Args, ArtifactArg, LocalPageStore, ObjectPageStore, PageSource, SearchPhaseTiming,
+        diagnostic_bytes, execute, parse_args, peak_rss_bytes, process_cpu_nanoseconds,
+        read_manifest, result_bytes, run_batch,
     };
 
     fn arguments() -> Vec<String> {
@@ -1209,13 +1275,32 @@ mod tests {
             },
         };
         assert_eq!(
-            String::from_utf8(result_bytes(&result, 7_500_000, 42_000_000, 123_456_000).unwrap(),)
+            String::from_utf8(
+                result_bytes(
+                    &result,
+                    7_500_000,
+                    42_000_000,
+                    123_456_000,
+                    SearchPhaseTiming {
+                        routing_cpu_ns: 1_000_000,
+                        page_read_cpu_ns: 2_000_000,
+                        exact_rerank_cpu_ns: 3_000_000,
+                        routing_elapsed_ns: 5_000_000,
+                        page_read_elapsed_ns: 20_000_000,
+                        exact_rerank_elapsed_ns: 10_000_000,
+                    },
+                )
                 .unwrap(),
+            )
+            .unwrap(),
             concat!(
                 "{\"claim_eligible\":false,\"matches\":[{\"source_ordinal\":9,",
-                "\"squared_distance\":0.25}],\"schema_version\":1,",
-                "\"timing\":{\"elapsed_ns\":42000000,\"peak_rss_bytes\":123456000,",
-                "\"process_cpu_ns\":7500000},\"work\":{",
+                "\"squared_distance\":0.25}],\"schema_version\":2,",
+                "\"timing\":{\"elapsed_ns\":42000000,\"exact_rerank_cpu_ns\":3000000,",
+                "\"exact_rerank_elapsed_ns\":10000000,\"page_read_cpu_ns\":2000000,",
+                "\"page_read_elapsed_ns\":20000000,\"peak_rss_bytes\":123456000,",
+                "\"process_cpu_ns\":7500000,\"routing_cpu_ns\":1000000,",
+                "\"routing_elapsed_ns\":5000000},\"work\":{",
                 "\"decoded_rows\":1,\"encoded_bytes\":3,\"get_count\":1,",
                 "\"routing\":{\"candidates_retained\":12,\"codes_scanned\":40,",
                 "\"leaves_scored\":64,\"pages_considered\":3,\"roots_scored\":16,",

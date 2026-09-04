@@ -39,11 +39,17 @@ class V30ReducedQualityTests(unittest.TestCase):
                 {"source_ordinal": source, "squared_distance": float(rank)}
                 for rank, source in enumerate(sources)
             ],
-            "schema_version": 1,
+            "schema_version": 2,
             "timing": {
                 "elapsed_ns": 42_000_000 + query,
+                "exact_rerank_cpu_ns": 3_000_000 + query,
+                "exact_rerank_elapsed_ns": 10_000_000 + query,
+                "page_read_cpu_ns": 1_000_000 + query,
+                "page_read_elapsed_ns": 20_000_000 + query,
                 "peak_rss_bytes": 1_500_000_000 + query,
                 "process_cpu_ns": 7_500_000 + query,
+                "routing_cpu_ns": 2_000_000 + query,
+                "routing_elapsed_ns": 5_000_000 + query,
             },
             "work": {
                 "decoded_rows": 4096,
