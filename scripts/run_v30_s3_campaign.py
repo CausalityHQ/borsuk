@@ -196,7 +196,7 @@ def _validate_evaluation(plan: V30EvaluationPlan) -> None:
         or plan.source_rows not in {100_000, 9_990_000}
         or plan.query_start < 0
         or plan.query_count != 32
-        or plan.leaf_beam != {100_000: 192, 9_990_000: 512}[plan.source_rows]
+        or plan.leaf_beam != {100_000: 64, 9_990_000: 512}[plan.source_rows]
         or not 1 <= plan.page_count <= 16
     ):
         raise ValueError("V30 evaluation authority differs")

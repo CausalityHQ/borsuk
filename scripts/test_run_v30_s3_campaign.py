@@ -389,6 +389,22 @@ class V30SpotCampaignTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "evaluation authority"):
             build_v30_evaluation_spot_specs(drifted, self.targets())
 
+    def test_v32_100k_evaluation_uses_the_first_registered_leaf_arm(self) -> None:
+        plan = replace(
+            self.evaluation(),
+            attempt_id="v30-deep-100k-v32-eval-a0001",
+            construction_manifest_uri=(
+                "s3://authority/v32/build-100k-a0001/manifest.json"
+            ),
+            page_s3_prefix="s3://authority/v32/build-100k-a0001/pages",
+            output_prefix="s3://authority/v32/eval-100k-a0001/",
+            source_rows=100_000,
+            query_start=0,
+            leaf_beam=64,
+        )
+        specs = build_v30_evaluation_spot_specs(plan, self.targets())
+        self.assertIn("--leaf-beam 64", specs[0]["UserData"])
+
     def test_v30_campaign_preserves_one_original_terminal_and_always_terminates(self) -> None:
         launched: list[str] = []
         sleeps: list[int] = []
