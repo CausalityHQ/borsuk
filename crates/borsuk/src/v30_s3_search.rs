@@ -26,6 +26,13 @@ const CANDIDATE_PRUNE_WINDOW: usize = 32_768;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct V30SearchArm {
+    pub leaf_beam: usize,
+    pub page_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V30DiagnosticArm {
     pub root_beam: usize,
     pub leaf_beam: usize,
     pub candidate_depth: usize,
@@ -441,6 +448,17 @@ impl V30Router {
     }
 
     fn validate_arm(&self, arm: V30SearchArm) -> Result<()> {
+        if arm.leaf_beam == 0
+            || arm.leaf_beam > self.hierarchy.leaves.len()
+            || arm.page_count == 0
+            || arm.page_count > MAX_SELECTED_PAGES
+        {
+            return Err(invalid("V30 search arm differs"));
+        }
+        Ok(())
+    }
+
+    fn validate_diagnostic_arm(&self, arm: V30DiagnosticArm) -> Result<()> {
         if arm.root_beam == 0
             || arm.root_beam > self.hierarchy.roots.len()
             || arm.leaf_beam == 0
@@ -450,7 +468,7 @@ impl V30Router {
             || arm.page_count == 0
             || arm.page_count > MAX_SELECTED_PAGES
         {
-            return Err(invalid("V30 search arm differs"));
+            return Err(invalid("V30 diagnostic arm differs"));
         }
         Ok(())
     }
@@ -527,7 +545,7 @@ impl V30Router {
     pub fn diagnose_logicals(
         &self,
         query: &[f32; 96],
-        arm: V30SearchArm,
+        arm: V30DiagnosticArm,
         logicals: &[u64],
     ) -> Result<Vec<V30RoutingTargetReport>> {
         let unique = logicals
@@ -619,10 +637,11 @@ impl V30Router {
             .collect()
     }
 
+    #[cfg(test)]
     fn select_pages_with_leaf_observer<F>(
         &self,
         query: &[f32; 96],
-        arm: V30SearchArm,
+        arm: V30DiagnosticArm,
         observer: &F,
     ) -> Result<V30PageSelection>
     where
@@ -634,13 +653,13 @@ impl V30Router {
     fn routing_details<F>(
         &self,
         query: &[f32; 96],
-        arm: V30SearchArm,
+        arm: V30DiagnosticArm,
         observer: &F,
     ) -> Result<RoutingDetails>
     where
         F: Fn(u32),
     {
-        self.validate_arm(arm)?;
+        self.validate_diagnostic_arm(arm)?;
         let query = normalized(query)?;
         let roots = smallest(
             self.hierarchy
@@ -879,8 +898,8 @@ mod tests {
     use half::f16;
 
     use super::{
-        BoundedCandidates, BoundedScores, Candidate, ExactTopK, V30Index, V30Match, V30PageStore,
-        V30Router, V30RoutingTargetStage, V30SearchArm, V30SearchPhase,
+        BoundedCandidates, BoundedScores, Candidate, ExactTopK, V30DiagnosticArm, V30Index,
+        V30Match, V30PageStore, V30Router, V30RoutingTargetStage, V30SearchArm, V30SearchPhase,
     };
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
@@ -1112,7 +1131,7 @@ mod tests {
         let reports = diagnostic_router()
             .diagnose_logicals(
                 &[0.2; 96],
-                V30SearchArm {
+                V30DiagnosticArm {
                     root_beam: 1,
                     leaf_beam: 1,
                     candidate_depth: 20,
@@ -1156,9 +1175,7 @@ mod tests {
             .select_pages(
                 &query,
                 V30SearchArm {
-                    root_beam: 1,
                     leaf_beam: 2,
-                    candidate_depth: 1,
                     page_count: 1,
                 },
             )
@@ -1180,7 +1197,7 @@ mod tests {
         let selection = router
             .select_pages_with_leaf_observer(
                 &[0.2; 96],
-                V30SearchArm {
+                V30DiagnosticArm {
                     root_beam: 1,
                     leaf_beam: 1,
                     candidate_depth: 20,
@@ -1214,9 +1231,7 @@ mod tests {
             .select_pages(
                 &[0.2; 96],
                 V30SearchArm {
-                    root_beam: 1,
                     leaf_beam: 2,
-                    candidate_depth: 40,
                     page_count: 16,
                 },
             )
@@ -1228,9 +1243,7 @@ mod tests {
                 .select_pages(
                     &[0.2; 96],
                     V30SearchArm {
-                        root_beam: 1,
                         leaf_beam: 2,
-                        candidate_depth: 40,
                         page_count: 17,
                     },
                 )
@@ -1328,9 +1341,7 @@ mod tests {
             router,
             store,
             V30SearchArm {
-                root_beam: 1,
                 leaf_beam: 2,
-                candidate_depth: 40,
                 page_count: 10,
             },
         )

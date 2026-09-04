@@ -39,6 +39,7 @@ class V30UntouchedPlan:
     source_rows: int
     query_start: int
     query_count: int
+    leaf_beam: int
     page_count: int
 
 
@@ -70,6 +71,7 @@ def _validate(plan: V30UntouchedPlan) -> None:
         or type(plan.query_start) is not int
         or plan.query_start < 0
         or plan.query_count != QUERY_COUNT
+        or plan.leaf_beam not in {192, 512}
         or type(plan.page_count) is not int
         or not 1 <= plan.page_count <= 16
     ):
@@ -99,12 +101,8 @@ def build_qualifier_commands(plan: V30UntouchedPlan) -> tuple[tuple[str, ...], .
         str(plan.query.encoded_bytes),
     )
     arm = (
-        "--root-beam",
-        "8",
         "--leaf-beam",
-        "64",
-        "--candidate-depth",
-        "12288",
+        str(plan.leaf_beam),
         "--page-count",
         str(plan.page_count),
         "--k",
@@ -177,6 +175,16 @@ def run_v30_untouched_quality(
         source_rows=plan.source_rows,
     )
     parsed = _batch_results(invoke(commands[0]), expected_pages=plan.page_count)
+    expected_leaves = {100_000: 256, 9_990_000: 32_768}[plan.source_rows]
+    if any(
+        work["roots_scored"] != 0
+        or work["leaves_scored"] != expected_leaves
+        or work["codes_scanned"] != 0
+        or work["candidates_retained"] != 0
+        or not plan.page_count <= work["pages_considered"] <= plan.leaf_beam * 64
+        for _matches, work in parsed
+    ):
+        raise ValueError("V30 production routing work differs")
     hits = tuple(
         len(frozenset(matches) & truth[ordinal])
         for ordinal, (matches, _work) in enumerate(parsed)
@@ -295,6 +303,7 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--query-start", type=int, required=True)
     parser.add_argument("--query-count", type=int, required=True)
     parser.add_argument("--page-count", type=int, required=True)
+    parser.add_argument("--leaf-beam", type=int, required=True)
     args = parser.parse_args(arguments)
     plan = V30UntouchedPlan(
         qualifier=args.qualifier,
@@ -308,6 +317,7 @@ def main(arguments: list[str] | None = None) -> int:
         source_rows=args.source_rows,
         query_start=args.query_start,
         query_count=args.query_count,
+        leaf_beam=args.leaf_beam,
         page_count=args.page_count,
     )
     sys.stdout.buffer.write(run_v30_untouched_quality(plan, invoke=_invoke))

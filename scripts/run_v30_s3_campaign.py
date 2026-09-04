@@ -40,6 +40,7 @@ class V30ConstructionPlan:
     expected_rows: int
     roots: int
     leaves: int
+    routing_leaf_beam: int
     training_rows: int
     page_rows: int
 
@@ -65,6 +66,7 @@ class V30EvaluationPlan:
     source_rows: int
     query_start: int
     query_count: int
+    leaf_beam: int
     page_count: int
 
 
@@ -139,6 +141,8 @@ def _validate_construction(plan: V30ConstructionPlan) -> None:
             (100_000, 16, 256, 8_192, 128),
             (9_990_000, 1_024, 32_768, 262_144, 512),
         }
+        or plan.routing_leaf_beam
+        != {100_000: 192, 9_990_000: 512}[plan.expected_rows]
     ):
         raise ValueError("V30 construction authority differs")
 
@@ -169,6 +173,7 @@ def _validate_evaluation(plan: V30EvaluationPlan) -> None:
         or plan.source_rows not in {100_000, 9_990_000}
         or plan.query_start < 0
         or plan.query_count != 32
+        or plan.leaf_beam != {100_000: 192, 9_990_000: 512}[plan.source_rows]
         or not 1 <= plan.page_count <= 16
     ):
         raise ValueError("V30 evaluation authority differs")
@@ -316,6 +321,8 @@ def _construction_script(plan: V30ConstructionPlan) -> str:
             str(plan.roots),
             "--leaves",
             str(plan.leaves),
+            "--routing-leaf-beam",
+            str(plan.routing_leaf_beam),
             "--training-rows",
             str(plan.training_rows),
             "--page-rows",
@@ -400,6 +407,8 @@ def _evaluation_script(plan: V30EvaluationPlan) -> str:
             str(plan.query_start),
             "--query-count",
             str(plan.query_count),
+            "--leaf-beam",
+            str(plan.leaf_beam),
             "--page-count",
             str(plan.page_count),
         ]

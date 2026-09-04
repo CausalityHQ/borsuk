@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc, time::Instant};
 use arrow_array::{Array, FixedSizeListArray, Float32Array};
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
-    BorsukError, V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30Index,
+    BorsukError, V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30DiagnosticArm, V30Index,
     V30LayoutArtifactIdentity, V30LayoutArtifacts, V30PageStore, V30PqArtifactIdentity,
     V30PqArtifacts, V30Router, V30RoutingTargetReport, V30RoutingTargetStage, V30SearchArm,
     V30SearchPhase, V30SearchResult,
@@ -38,13 +38,17 @@ struct Args {
     query: ArtifactArg,
     query_start: usize,
     query_count: usize,
-    root_beam: usize,
     leaf_beam: usize,
-    candidate_depth: usize,
     page_count: usize,
     k: usize,
     page_source: Option<PageSource>,
-    diagnostic_logical: Option<u64>,
+    diagnostic: Option<DiagnosticRequest>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DiagnosticRequest {
+    logical: u64,
+    arm: V30DiagnosticArm,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,6 +98,17 @@ struct DiskPq {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct DiskRouting {
+    algorithm: String,
+    leaf_beam: usize,
+    maximum_pages_per_leaf: usize,
+    page_centroid_dimensions: usize,
+    page_centroid_element: String,
+    page_count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DiskSource {
     commit: String,
     corpus_manifest_bytes: u64,
@@ -109,6 +124,7 @@ struct DiskManifest {
     layout: DiskLayout,
     page_key_suffix: String,
     pq: DiskPq,
+    routing: DiskRouting,
     schema_version: u8,
     source: DiskSource,
 }
@@ -120,6 +136,8 @@ struct Manifest {
     pq: Vec<(String, V30PqArtifactIdentity)>,
     source_rows: u64,
     page_key_suffix: String,
+    routing_leaf_beam: usize,
+    routing_page_count: usize,
 }
 
 fn argument_error(message: &str) -> String {
@@ -207,13 +225,13 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
     }
     let disk: DiskManifest = serde_json::from_value(value)
         .map_err(|_| invalid("V30 qualifier manifest schema differs"))?;
-    if disk.schema_version != 1
+    if disk.schema_version != 2
         || disk.page_key_suffix != ".arrow"
         || disk.layout.source_rows == 0
         || disk.layout.maximum_leaf_rows == 0
         || disk.layout.maximum_leaf_rows > disk.layout.source_rows
         || disk.layout.maximum_leaf_rows > 65_536
-        || disk.layout.packing_algorithm != "balanced-cosine-v1"
+        || disk.layout.packing_algorithm != "balanced-geometric-v1"
         || disk.layout.page_rows == 0
         || disk.layout.page_rows > 512
         || disk.pq.artifacts.len() != 5
@@ -227,6 +245,13 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
         || disk.source.corpus_manifest_bytes == 0
         || !valid_digest(&disk.source.corpus_manifest_sha256)
         || !disk.source.corpus_manifest_uri.starts_with("s3://")
+        || disk.routing.algorithm != "flat-leaf-page-centroid-v1"
+        || disk.routing.leaf_beam == 0
+        || disk.routing.leaf_beam > 512
+        || disk.routing.maximum_pages_per_leaf != 64
+        || disk.routing.page_centroid_dimensions != 96
+        || disk.routing.page_centroid_element != "float16"
+        || disk.routing.page_count != 16
     {
         return Err(invalid("V30 qualifier manifest constants differ"));
     }
@@ -282,6 +307,8 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
         pq,
         source_rows: disk.layout.source_rows,
         page_key_suffix: disk.page_key_suffix,
+        routing_leaf_beam: disk.routing.leaf_beam,
+        routing_page_count: disk.routing.page_count,
     })
 }
 
@@ -716,16 +743,19 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
         page_ranges_parquet: layout_bytes[1].clone(),
     };
     let router = V30Router::from_artifacts(&hierarchy, &pq, &layout)?;
+    if args.leaf_beam != manifest.routing_leaf_beam
+        || args.page_count != manifest.routing_page_count
+    {
+        return Err(invalid("V30 qualifier routing manifest differs"));
+    }
     let arm = V30SearchArm {
-        root_beam: args.root_beam,
         leaf_beam: args.leaf_beam,
-        candidate_depth: args.candidate_depth,
         page_count: args.page_count,
     };
-    if let Some(logical) = args.diagnostic_logical {
+    if let Some(diagnostic) = args.diagnostic {
         let query = read_query(&args.query, args.query_start)?;
         let report = router
-            .diagnose_logicals(&query, arm, &[logical])?
+            .diagnose_logicals(&query, diagnostic.arm, &[diagnostic.logical])?
             .into_iter()
             .next()
             .ok_or_else(|| invalid("V30 qualifier diagnostic result differs"))?;
@@ -857,9 +887,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
     let query = artifact(&mut values, "query")?;
     let query_start = number(&mut values, "query-start")?;
     let query_count = number(&mut values, "query-count")?;
-    let root_beam = number(&mut values, "root-beam")?;
     let leaf_beam = number(&mut values, "leaf-beam")?;
-    let candidate_depth = number(&mut values, "candidate-depth")?;
     let page_count = number(&mut values, "page-count")?;
     let k = number(&mut values, "k")?;
     let diagnostic_logical = values
@@ -870,9 +898,22 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
                 .map_err(|_| argument_error("--diagnose-logical type differs"))
         })
         .transpose()?;
+    let diagnostic = diagnostic_logical
+        .map(|logical| -> Result<DiagnosticRequest, String> {
+            Ok(DiagnosticRequest {
+                logical,
+                arm: V30DiagnosticArm {
+                    root_beam: number(&mut values, "root-beam")?,
+                    leaf_beam,
+                    candidate_depth: number(&mut values, "candidate-depth")?,
+                    page_count,
+                },
+            })
+        })
+        .transpose()?;
     let local = values.remove("local-page-dir").map(PathBuf::from);
     let s3 = values.remove("s3-page-prefix");
-    let page_source = match (diagnostic_logical, local, s3) {
+    let page_source = match (diagnostic, local, s3) {
         (Some(_), None, None) => None,
         (None, Some(path), None) if path.is_absolute() => Some(PageSource::Local(path)),
         (None, None, Some(uri)) if uri.starts_with("s3://") && !uri.ends_with('/') => {
@@ -881,14 +922,16 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         _ => return Err(argument_error("exactly one page source is required")),
     };
     if !artifact_dir.is_absolute()
-        || root_beam == 0
-        || match diagnostic_logical {
+        || match diagnostic {
             Some(_) => query_count != 1,
             None => query_count != 32,
         }
         || leaf_beam == 0
-        || candidate_depth == 0
-        || candidate_depth > 12_288
+        || diagnostic.is_some_and(|request| {
+            request.arm.root_beam == 0
+                || request.arm.candidate_depth == 0
+                || request.arm.candidate_depth > 12_288
+        })
         || page_count == 0
         || page_count > 16
         || k == 0
@@ -903,13 +946,11 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         query,
         query_start,
         query_count,
-        root_beam,
         leaf_beam,
-        candidate_depth,
         page_count,
         k,
         page_source,
-        diagnostic_logical,
+        diagnostic,
     })
 }
 
@@ -952,14 +993,10 @@ mod tests {
             "0",
             "--query-count",
             "32",
-            "--root-beam",
-            "8",
             "--leaf-beam",
             "64",
-            "--candidate-depth",
-            "12288",
             "--page-count",
-            "10",
+            "16",
             "--k",
             "10",
             "--s3-page-prefix",
@@ -1041,7 +1078,7 @@ mod tests {
         assert_eq!(parsed.query.sha256, "2".repeat(64));
         assert_eq!(parsed.query_start, 0);
         assert_eq!(parsed.query_count, 32);
-        assert_eq!(parsed.page_count, 10);
+        assert_eq!(parsed.page_count, 16);
         assert_eq!(
             parsed.page_source,
             Some(PageSource::S3("s3://frozen/pages".to_owned()))
@@ -1064,6 +1101,8 @@ mod tests {
             "--legacy",
             "--d3",
             "--page-bucket",
+            "--root-beam",
+            "--candidate-depth",
         ] {
             let mut values = arguments();
             values.extend([forbidden.to_owned(), "value".to_owned()]);
@@ -1089,9 +1128,16 @@ mod tests {
             .position(|value| value == "--query-count")
             .unwrap();
         diagnostic[count + 1] = "1".to_owned();
-        diagnostic.extend(["--diagnose-logical".to_owned(), "25".to_owned()]);
+        diagnostic.extend([
+            "--diagnose-logical".to_owned(),
+            "25".to_owned(),
+            "--root-beam".to_owned(),
+            "8".to_owned(),
+            "--candidate-depth".to_owned(),
+            "12288".to_owned(),
+        ]);
         let parsed = parse_args(diagnostic).unwrap();
-        assert_eq!(parsed.diagnostic_logical, Some(25));
+        assert_eq!(parsed.diagnostic.unwrap().logical, 25);
         assert_eq!(parsed.page_source, None);
     }
 
@@ -1142,11 +1188,15 @@ mod tests {
             concat!(
                 "{{\"hierarchy\":{{\"leaves\":{},\"roots\":{}}},",
                 "\"layout\":{{\"leaf_ranges\":{},\"maximum_leaf_rows\":24,",
-                "\"packing_algorithm\":\"balanced-cosine-v1\",\"page_ranges\":{},",
+                "\"packing_algorithm\":\"balanced-geometric-v1\",\"page_ranges\":{},",
                 "\"page_rows\":128,\"source_rows\":40}},",
                 "\"page_key_suffix\":\".arrow\",",
                 "\"pq\":{{\"artifacts\":[{},{},{},{},{}]}},",
-                "\"schema_version\":1,",
+                "\"routing\":{{\"algorithm\":\"flat-leaf-page-centroid-v1\",",
+                "\"leaf_beam\":4,\"maximum_pages_per_leaf\":64,",
+                "\"page_centroid_dimensions\":96,\"page_centroid_element\":\"float16\",",
+                "\"page_count\":16}},",
+                "\"schema_version\":2,",
                 "\"source\":{{\"commit\":\"{}\",\"corpus_manifest_bytes\":4096,",
                 "\"corpus_manifest_sha256\":\"{}\",",
                 "\"corpus_manifest_uri\":\"s3://bucket/deep-10m/corpus.json\",",
@@ -1206,6 +1256,8 @@ mod tests {
         assert_eq!(manifest.hierarchy[0].1.role, "v27-roots-arrow");
         assert_eq!(manifest.pq.len(), 5);
         assert_eq!(manifest.layout[1].1.role, "v30-page-ranges-parquet");
+        assert_eq!(manifest.routing_leaf_beam, 4);
+        assert_eq!(manifest.routing_page_count, 16);
 
         let mut corrupted = argument.clone();
         corrupted.sha256.replace_range(0..1, "f");
@@ -1240,8 +1292,8 @@ mod tests {
         assert!(read_manifest(&source_argument).is_err());
 
         let packing_drifted = manifest_bytes()
-            .windows(b"balanced-cosine-v1".len())
-            .position(|window| window == b"balanced-cosine-v1")
+            .windows(b"balanced-geometric-v1".len())
+            .position(|window| window == b"balanced-geometric-v1")
             .unwrap();
         let mut packing_bytes = manifest_bytes();
         packing_bytes[packing_drifted] = b'x';
@@ -1252,6 +1304,20 @@ mod tests {
             ..source_argument
         };
         assert!(read_manifest(&packing_argument).is_err());
+
+        let mut routing_bytes = manifest_bytes();
+        let routing_drifted = routing_bytes
+            .windows(b"flat-leaf-page-centroid-v1".len())
+            .position(|window| window == b"flat-leaf-page-centroid-v1")
+            .unwrap();
+        routing_bytes[routing_drifted] = b'x';
+        fs::write(&packing_argument.path, &routing_bytes).unwrap();
+        let routing_argument = ArtifactArg {
+            sha256: format!("{:x}", Sha256::digest(&routing_bytes)),
+            encoded_bytes: routing_bytes.len() as u64,
+            ..packing_argument
+        };
+        assert!(read_manifest(&routing_argument).is_err());
     }
 
     #[test]
@@ -1356,13 +1422,11 @@ mod tests {
             },
             query_start: 0,
             query_count: 32,
-            root_beam: 1,
             leaf_beam: 1,
-            candidate_depth: 1,
             page_count: 1,
             k: 1,
             page_source: Some(PageSource::Local(directory.path().to_path_buf())),
-            diagnostic_logical: None,
+            diagnostic: None,
         };
         let error = execute(args).unwrap_err().to_string();
         assert!(error.contains("roots.arrow"), "unexpected error: {error}");

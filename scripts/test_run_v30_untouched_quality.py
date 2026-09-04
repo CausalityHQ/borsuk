@@ -66,6 +66,7 @@ class V30UntouchedQualityTests(unittest.TestCase):
             source_rows=9_990_000,
             query_start=64,
             query_count=32,
+            leaf_beam=512,
             page_count=16,
         )
         results = {
@@ -100,11 +101,11 @@ class V30UntouchedQualityTests(unittest.TestCase):
                 "encoded_bytes": 2_000_000,
                 "get_count": page_count,
                 "routing": {
-                    "candidates_retained": 12_288,
-                    "codes_scanned": 900_000,
-                    "leaves_scored": 64,
+                    "candidates_retained": 0,
+                    "codes_scanned": 0,
+                    "leaves_scored": 32_768,
                     "pages_considered": page_count,
-                    "roots_scored": 1_024,
+                    "roots_scored": 0,
                     "selected_pages": page_count,
                 },
                 "unique_rows": 4_000,
@@ -122,6 +123,9 @@ class V30UntouchedQualityTests(unittest.TestCase):
             self.assertEqual(int(commands[0][commands[0].index("--query-start") + 1]), 64)
             self.assertEqual(int(commands[0][commands[0].index("--query-count") + 1]), 32)
             self.assertEqual(int(commands[0][commands[0].index("--page-count") + 1]), 16)
+            self.assertEqual(int(commands[0][commands[0].index("--leaf-beam") + 1]), 512)
+            self.assertNotIn("--root-beam", commands[0])
+            self.assertNotIn("--candidate-depth", commands[0])
             self.assertTrue(all("--s3-page-prefix" in command for command in commands))
             self.assertTrue(all("--construction-manifest-s3" not in command for command in commands))
 
@@ -141,7 +145,7 @@ class V30UntouchedQualityTests(unittest.TestCase):
             self.assertEqual(len(value["samples"]), 32)
             self.assertEqual(value["samples"][11]["query_ordinal"], 75)
             self.assertEqual(value["samples"][11]["hits"], 9)
-            self.assertEqual(value["maximum_codes_scanned"], 900_000)
+            self.assertEqual(value["maximum_codes_scanned"], 0)
             self.assertEqual(value["maximum_encoded_bytes"], 2_000_000)
             self.assertEqual(value["maximum_get_count"], 16)
             self.assertEqual(value["measured_process_cpu_p99_ns"], 12_000_095)
@@ -172,6 +176,19 @@ class V30UntouchedQualityTests(unittest.TestCase):
             self.assertEqual(failed["status"], "failed")
             self.assertEqual(failed["failed_gates"], ["peak-rss"])
             self.assertFalse(failed["claim_eligible"])
+
+            legacy_work = dict(results)
+            legacy = json.loads(legacy_work[64])
+            legacy["work"]["routing"]["roots_scored"] = 1
+            legacy_work[64] = (
+                json.dumps(legacy, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+            with self.assertRaisesRegex(ValueError, "production routing work"):
+                run_v30_untouched_quality(
+                    plan,
+                    invoke=lambda _command: self.batch(legacy_work),
+                )
 
     @staticmethod
     def batch(results: dict[int, bytes]) -> bytes:

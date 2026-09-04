@@ -93,6 +93,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             expected_rows=9_990_000,
             roots=1_024,
             leaves=32_768,
+            routing_leaf_beam=512,
             training_rows=262_144,
             page_rows=512,
         )
@@ -118,6 +119,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             source_rows=9_990_000,
             query_start=64,
             query_count=32,
+            leaf_beam=512,
             page_count=16,
         )
 
@@ -135,6 +137,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             expected_rows=100_000,
             roots=16,
             leaves=256,
+            routing_leaf_beam=192,
             training_rows=8_192,
             page_rows=128,
         )
@@ -146,6 +149,7 @@ class V30SpotCampaignTests(unittest.TestCase):
         self.assertIn("--expected-rows 100000", reduced[0]["UserData"])
         self.assertIn("--roots 16", reduced[0]["UserData"])
         self.assertIn("--page-rows 128", reduced[0]["UserData"])
+        self.assertIn("--routing-leaf-beam 192", reduced[0]["UserData"])
         specs = build_v30_construction_spot_specs(self.construction(), self.targets())
         self.assertEqual([spec["Placement"]["AvailabilityZone"] for spec in specs], ["eu-central-1a", "eu-central-1b"])
         for spec in specs:
@@ -158,6 +162,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("s3://authority/deep-10m/corpus.json", script)
             self.assertIn("--s3-region eu-central-1", script)
             self.assertIn("--training-rows 262144", script)
+            self.assertIn("--routing-leaf-beam 512", script)
             self.assertNotIn("test.parquet", script)
             self.assertNotIn("neighbors.parquet", script)
             self.assertNotIn("v30_s3_qualify", script)
@@ -201,6 +206,9 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("--query-start 64", script)
             self.assertIn("--query-count 32", script)
             self.assertIn("--page-count 16", script)
+            self.assertIn("--leaf-beam 512", script)
+            self.assertNotIn("--root-beam", script)
+            self.assertNotIn("--candidate-depth", script)
             self.assertNotIn("--construction-manifest-s3", script)
             self.assertNotIn("corpus.json", script)
             self.assertNotIn("v30_s3_build", script)

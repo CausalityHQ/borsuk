@@ -33,6 +33,7 @@ struct Args {
     expected_rows: u64,
     roots: usize,
     leaves: usize,
+    routing_leaf_beam: usize,
     training_rows: usize,
     page_rows: usize,
     output_s3_prefix: String,
@@ -94,6 +95,7 @@ fn parse_args(values: Vec<String>) -> Result<Args, String> {
         expected_rows: number(&mut map, "expected-rows")?,
         roots: number(&mut map, "roots")?,
         leaves: number(&mut map, "leaves")?,
+        routing_leaf_beam: number(&mut map, "routing-leaf-beam")?,
         training_rows: number(&mut map, "training-rows")?,
         page_rows: number(&mut map, "page-rows")?,
         output_s3_prefix: take(&mut map, "output-s3-prefix")?,
@@ -121,6 +123,9 @@ fn parse_args(values: Vec<String>) -> Result<Args, String> {
         || !args.roots.is_power_of_two()
         || !args.leaves.is_power_of_two()
         || !args.leaves.is_multiple_of(args.roots)
+        || args.routing_leaf_beam == 0
+        || args.routing_leaf_beam > args.leaves
+        || args.routing_leaf_beam > 512
         || args.training_rows < args.leaves.saturating_mul(2)
         || args.page_rows == 0
         || args.page_rows > 512
@@ -620,14 +625,22 @@ fn execute_with_store(args: Args, store: Arc<dyn ObjectStore>) -> borsuk::Result
             "layout": {
                 "leaf_ranges": disk_artifact("leaf-ranges.arrow", &artifacts.layout.leaf_ranges.role, &artifacts.layout.leaf_ranges.sha256, artifacts.layout.leaf_ranges.encoded_bytes),
                 "maximum_leaf_rows": artifacts.maximum_leaf_rows,
-                "packing_algorithm": "balanced-cosine-v1",
+                "packing_algorithm": "balanced-geometric-v1",
                 "page_rows": args.page_rows,
                 "page_ranges": disk_artifact("page-offsets.parquet", &artifacts.layout.page_ranges.role, &artifacts.layout.page_ranges.sha256, artifacts.layout.page_ranges.encoded_bytes),
                 "source_rows": artifacts.source_rows,
             },
             "page_key_suffix": ".arrow",
             "pq": {"artifacts": pq},
-            "schema_version": 1,
+            "routing": {
+                "algorithm": "flat-leaf-page-centroid-v1",
+                "leaf_beam": args.routing_leaf_beam,
+                "maximum_pages_per_leaf": 64,
+                "page_centroid_dimensions": 96,
+                "page_centroid_element": "float16",
+                "page_count": 16,
+            },
+            "schema_version": 2,
             "source": {
                 "commit": args.source_commit,
                 "corpus_manifest_bytes": args.corpus_manifest_bytes,
@@ -726,6 +739,8 @@ mod tests {
             "1024",
             "--leaves",
             "32768",
+            "--routing-leaf-beam",
+            "512",
             "--training-rows",
             "262144",
             "--page-rows",
@@ -811,6 +826,7 @@ mod tests {
             expected_rows: 320,
             roots: 2,
             leaves: 4,
+            routing_leaf_beam: 4,
             training_rows: 256,
             page_rows: 32,
             output_s3_prefix: "s3://bucket/v30/build-a0001/".to_owned(),
@@ -842,9 +858,21 @@ mod tests {
             );
             assert_eq!(
                 manifest["layout"]["packing_algorithm"],
-                "balanced-cosine-v1"
+                "balanced-geometric-v1"
             );
             assert_eq!(manifest["layout"]["page_rows"], 32);
+            assert_eq!(manifest["schema_version"], 2);
+            assert_eq!(
+                manifest["routing"],
+                serde_json::json!({
+                    "algorithm": "flat-leaf-page-centroid-v1",
+                    "leaf_beam": 4,
+                    "maximum_pages_per_leaf": 64,
+                    "page_centroid_dimensions": 96,
+                    "page_centroid_element": "float16",
+                    "page_count": 16,
+                })
+            );
             assert!(
                 manifest["layout"]["maximum_leaf_rows"]
                     .as_u64()
