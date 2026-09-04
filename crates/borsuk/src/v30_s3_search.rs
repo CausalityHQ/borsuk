@@ -21,6 +21,238 @@ const MAX_CANDIDATES: usize = 12_288;
 const MAX_SELECTED_PAGES: usize = 16;
 const MAX_PAGE_BYTES: u64 = 3_145_728;
 const CANDIDATE_PRUNE_WINDOW: usize = 32_768;
+const V32_CPU_GATE_NS: u64 = 64_000_000;
+const V32_COMPUTE_GATE_NS: u64 = 12_000_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum V32CpuPreflightMode {
+    Probe,
+    Authoritative,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V32CpuPreflightShape {
+    pub source_rows: u64,
+    pub roots: usize,
+    pub trained_parents: usize,
+    pub routing_microleaves: usize,
+    pub page_identities: usize,
+    pub root_beam: usize,
+    pub leaf_beam: usize,
+    pub scan_codes: u64,
+    pub materialized_code_rows: u64,
+    pub high_width_codes: usize,
+    pub candidate_depth: usize,
+    pub selected_pages: usize,
+    pub page_rows: usize,
+    pub maximum_materialized_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V32CpuPreflightSample {
+    pub root_filter_ns: u64,
+    pub microleaf_score_ns: u64,
+    pub query_table_ns: u64,
+    pub pq_scan_ns: u64,
+    pub candidate_page_reduce_ns: u64,
+    pub decode_rerank_ns: u64,
+    pub compute_elapsed_ns: u64,
+    pub process_cpu_ns: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V32CpuPreflightSamples {
+    pub mode: V32CpuPreflightMode,
+    pub warmups: usize,
+    pub observations: Vec<V32CpuPreflightSample>,
+}
+
+#[doc(hidden)]
+pub fn v32_cpu_preflight_shape(leaf_beam: usize) -> Result<V32CpuPreflightShape> {
+    let scan_codes = match leaf_beam {
+        64 => 65_536_u64,
+        128 => 131_072,
+        256 => 262_144,
+        _ => return Err(invalid("V32 CPU preflight arm differs")),
+    };
+    let high_width_codes = usize::try_from(scan_codes.div_ceil(20))
+        .map_err(|_| invalid("V32 CPU preflight shape overflows"))?;
+    let base_width_codes = usize::try_from(scan_codes)
+        .map_err(|_| invalid("V32 CPU preflight shape overflows"))?
+        .checked_sub(high_width_codes)
+        .ok_or_else(|| invalid("V32 CPU preflight shape overflows"))?;
+    let terms = [
+        1_024_u64 * 96 * 2,
+        65_536_u64 * 96 * 2,
+        163_192_u64 * 224,
+        208_334_u64 * 112,
+        scan_codes.div_ceil(8),
+        u64::try_from(base_width_codes)
+            .map_err(|_| invalid("V32 CPU preflight shape overflows"))?
+            * 24,
+        u64::try_from(high_width_codes)
+            .map_err(|_| invalid("V32 CPU preflight shape overflows"))?
+            * 48,
+        12_288_u64
+            * u64::try_from(std::mem::size_of::<Candidate>())
+                .map_err(|_| invalid("V32 CPU preflight shape overflows"))?,
+        196_608,
+    ];
+    let maximum_materialized_bytes = terms.into_iter().try_fold(0_u64, |total, term| {
+        total
+            .checked_add(term)
+            .ok_or_else(|| invalid("V32 CPU preflight shape overflows"))
+    })?;
+    Ok(V32CpuPreflightShape {
+        source_rows: 100_000_000,
+        roots: 1_024,
+        trained_parents: 65_536,
+        routing_microleaves: 163_192,
+        page_identities: 208_334,
+        root_beam: 64,
+        leaf_beam,
+        scan_codes,
+        materialized_code_rows: scan_codes,
+        high_width_codes,
+        candidate_depth: 12_288,
+        selected_pages: 16,
+        page_rows: 480,
+        maximum_materialized_bytes,
+    })
+}
+
+fn v32_cpu_p99(values: impl Iterator<Item = u64>, length: usize) -> Result<u64> {
+    let mut values = values.collect::<Vec<_>>();
+    if values.len() != length || values.is_empty() {
+        return Err(invalid("V32 CPU preflight sample count differs"));
+    }
+    values.sort_unstable();
+    Ok(values[length.saturating_mul(99).div_ceil(100) - 1])
+}
+
+#[doc(hidden)]
+pub fn canonical_v32_cpu_preflight_receipt(
+    shape: &V32CpuPreflightShape,
+    samples: &V32CpuPreflightSamples,
+) -> Result<Vec<u8>> {
+    if *shape != v32_cpu_preflight_shape(shape.leaf_beam)? {
+        return Err(invalid("V32 CPU preflight shape differs"));
+    }
+    let expected_samples = match samples.mode {
+        V32CpuPreflightMode::Probe => 128,
+        V32CpuPreflightMode::Authoritative => 10_000,
+    };
+    let expected_warmups = match samples.mode {
+        V32CpuPreflightMode::Probe => 0,
+        V32CpuPreflightMode::Authoritative => 1_024,
+    };
+    if samples.warmups != expected_warmups || samples.observations.len() != expected_samples {
+        return Err(invalid("V32 CPU preflight sample count differs"));
+    }
+    for sample in &samples.observations {
+        let stage_total = [
+            sample.root_filter_ns,
+            sample.microleaf_score_ns,
+            sample.query_table_ns,
+            sample.pq_scan_ns,
+            sample.candidate_page_reduce_ns,
+            sample.decode_rerank_ns,
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, value| {
+            if value == 0 {
+                return Err(invalid("V32 CPU preflight sample differs"));
+            }
+            total
+                .checked_add(value)
+                .ok_or_else(|| invalid("V32 CPU preflight sample overflows"))
+        })?;
+        if stage_total != sample.compute_elapsed_ns || sample.process_cpu_ns == 0 {
+            return Err(invalid("V32 CPU preflight sample differs"));
+        }
+    }
+    let process_cpu_p99_ns = v32_cpu_p99(
+        samples
+            .observations
+            .iter()
+            .map(|sample| sample.process_cpu_ns),
+        expected_samples,
+    )?;
+    let compute_p99_ns = v32_cpu_p99(
+        samples
+            .observations
+            .iter()
+            .map(|sample| sample.compute_elapsed_ns),
+        expected_samples,
+    )?;
+    let mut failed_gates = Vec::new();
+    match samples.mode {
+        V32CpuPreflightMode::Probe => {
+            if samples
+                .observations
+                .iter()
+                .all(|sample| sample.process_cpu_ns > V32_CPU_GATE_NS)
+            {
+                failed_gates.push("total-cpu");
+            }
+        }
+        V32CpuPreflightMode::Authoritative => {
+            if compute_p99_ns > V32_COMPUTE_GATE_NS {
+                failed_gates.push("compute");
+            }
+            if process_cpu_p99_ns > V32_CPU_GATE_NS {
+                failed_gates.push("total-cpu");
+            }
+        }
+    }
+    let raw_samples = samples
+        .observations
+        .iter()
+        .map(|sample| {
+            serde_json::json!({
+                "candidate_page_reduce_ns": sample.candidate_page_reduce_ns,
+                "compute_elapsed_ns": sample.compute_elapsed_ns,
+                "decode_rerank_ns": sample.decode_rerank_ns,
+                "microleaf_score_ns": sample.microleaf_score_ns,
+                "pq_scan_ns": sample.pq_scan_ns,
+                "query_table_ns": sample.query_table_ns,
+                "root_filter_ns": sample.root_filter_ns,
+                "process_cpu_ns": sample.process_cpu_ns,
+            })
+        })
+        .collect::<Vec<_>>();
+    let mode = match samples.mode {
+        V32CpuPreflightMode::Probe => "probe",
+        V32CpuPreflightMode::Authoritative => "authoritative",
+    };
+    let status = if failed_gates.is_empty() {
+        "continue"
+    } else {
+        "failed"
+    };
+    let value = serde_json::json!({
+        "claim_eligible": false,
+        "compute_p99_ns": compute_p99_ns,
+        "failed_gates": failed_gates,
+        "leaf_beam": shape.leaf_beam,
+        "mode": mode,
+        "raw_samples": raw_samples,
+        "sample_count": expected_samples,
+        "scan_codes": shape.scan_codes,
+        "schema": "borsuk-v32-cpu-preflight-v1",
+        "status": status,
+        "process_cpu_p99_ns": process_cpu_p99_ns,
+        "warmups": samples.warmups,
+    });
+    let mut bytes = serde_json::to_vec(&value)
+        .map_err(|_| invalid("V32 CPU preflight receipt serialization failed"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[doc(hidden)]
@@ -844,8 +1076,9 @@ mod tests {
     use half::f16;
 
     use super::{
-        BoundedCandidates, Candidate, ExactTopK, V32Index, V32Match, V32PageStore, V32Router,
-        V32RoutingTargetStage, V32SearchArm, V32SearchPhase,
+        BoundedCandidates, Candidate, ExactTopK, V32CpuPreflightMode, V32CpuPreflightSample,
+        V32CpuPreflightSamples, V32Index, V32Match, V32PageStore, V32Router, V32RoutingTargetStage,
+        V32SearchArm, V32SearchPhase, canonical_v32_cpu_preflight_receipt, v32_cpu_preflight_shape,
     };
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
@@ -1574,5 +1807,78 @@ mod tests {
         let mut corrupted = hierarchy_artifacts.clone();
         corrupted.roots_bytes[0] ^= 1;
         assert!(V32Router::from_artifacts(&corrupted, &pq_artifacts, &layout_artifacts).is_err());
+    }
+
+    #[test]
+    fn v32_cpu_preflight_projects_exact_100m_cardinality_with_only_the_scan_slice() {
+        // Break caught: the cheap CPU gate benchmarks 100K metadata or allocates
+        // a 100M-row code plane instead of isolating the scale-sensitive routing
+        // cardinality and the exact bounded arm work.
+        let expected = [
+            (64, 65_536_u64, 3_277_usize),
+            (128, 131_072, 6_554),
+            (256, 262_144, 13_108),
+        ];
+        for (leaf_beam, scan_codes, high_codes) in expected {
+            let shape = v32_cpu_preflight_shape(leaf_beam).unwrap();
+            assert_eq!(shape.source_rows, 100_000_000);
+            assert_eq!(shape.roots, 1_024);
+            assert_eq!(shape.trained_parents, 65_536);
+            assert_eq!(shape.routing_microleaves, 163_192);
+            assert_eq!(shape.page_identities, 208_334);
+            assert_eq!(shape.root_beam, 64);
+            assert_eq!(shape.leaf_beam, leaf_beam);
+            assert_eq!(shape.scan_codes, scan_codes);
+            assert_eq!(shape.materialized_code_rows, scan_codes);
+            assert_eq!(shape.high_width_codes, high_codes);
+            assert_eq!(shape.candidate_depth, 12_288);
+            assert_eq!(shape.selected_pages, 16);
+            assert_eq!(shape.page_rows, 480);
+            assert!(shape.maximum_materialized_bytes <= 100 * 1_024 * 1_024);
+        }
+        assert!(v32_cpu_preflight_shape(32).is_err());
+        assert!(v32_cpu_preflight_shape(512).is_err());
+    }
+
+    #[test]
+    fn v32_cpu_preflight_receipt_recomputes_probe_samples_and_stops_early() {
+        // Break caught: an optimistic summary drops raw samples or labels a
+        // synthetic probe as qualifying evidence after every observation has
+        // already exceeded the 64 ms process-CPU gate.
+        let sample = V32CpuPreflightSample {
+            root_filter_ns: 10_000_000,
+            microleaf_score_ns: 10_000_000,
+            query_table_ns: 10_000_000,
+            pq_scan_ns: 20_000_000,
+            candidate_page_reduce_ns: 5_000_000,
+            decode_rerank_ns: 10_000_001,
+            compute_elapsed_ns: 65_000_001,
+            process_cpu_ns: 70_000_001,
+        };
+        let samples = V32CpuPreflightSamples {
+            mode: V32CpuPreflightMode::Probe,
+            warmups: 0,
+            observations: vec![sample; 128],
+        };
+        let bytes =
+            canonical_v32_cpu_preflight_receipt(&v32_cpu_preflight_shape(64).unwrap(), &samples)
+                .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["claim_eligible"], false);
+        assert_eq!(value["mode"], "probe");
+        assert_eq!(value["sample_count"], 128);
+        assert_eq!(value["status"], "failed");
+        assert_eq!(value["failed_gates"], serde_json::json!(["total-cpu"]));
+        assert_eq!(value["compute_p99_ns"], 65_000_001_u64);
+        assert_eq!(value["process_cpu_p99_ns"], 70_000_001_u64);
+        assert_eq!(value["raw_samples"][0]["pq_scan_ns"], 20_000_000);
+        assert_eq!(bytes.last(), Some(&b'\n'));
+
+        let mut drifted = samples;
+        drifted.observations[0].compute_elapsed_ns -= 1;
+        assert!(
+            canonical_v32_cpu_preflight_receipt(&v32_cpu_preflight_shape(64).unwrap(), &drifted,)
+                .is_err()
+        );
     }
 }
