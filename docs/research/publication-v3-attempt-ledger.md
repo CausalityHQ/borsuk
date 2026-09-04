@@ -2927,3 +2927,39 @@ Its canonical terminal is preserved beside it. Spot worker
 scientific work because the direct CLI passed its filename into the closed
 parser; its failed terminal is preserved, the regression is covered, and its
 worker also terminated.
+
+### V30 flat leaf-to-page-centroid routing is rejected at 100K
+
+Source `0b796e97224d89b2c47bb15b3495770d556d2658` replaced the production
+root/PQ candidate router with an exact scan of all resident leaf centroids,
+followed by a bounded scan of geometric page centroids owned by the best 192
+leaves. The query path selected exactly 16 pages and performed exact reranking
+only inside the downloaded Arrow pages. It did not download or materialize the
+corpus. The query-independent construction produced 907 pages from the frozen
+100,000-row Deep Image development fixture; its 2,752-byte manifest has
+SHA-256 `36f410fdaf6cab3a107b7851ea8a1e74c436154e20698c49518cafa2551a56cc`.
+
+The sealed 32-query evaluation reached 273/320 hits: 853,125-ppm aggregate
+Recall@10, 300,000-ppm minimum recall, 843,750-ppm floor compliance, and 15/32
+perfect queries. It therefore failed the 995,000-ppm aggregate,
+800,000-ppm minimum, 997,500-ppm floor-compliance, and 31/32 perfect-query
+quality gates. This rejects a single-centroid-per-page ranking signal for the
+geometric layout; no 100-million-row build is authorized.
+
+Routing metadata work itself was small: maximum routing elapsed time was
+255,522 ns, maximum routing CPU time was 10,002,430 ns, no row PQ codes were
+scanned, and no row candidates were retained. Every query issued 16 Standard
+S3 GETs. Maximum encoded page bytes were 794,728; page-read elapsed time reached
+235,442,397 ns; measured cold p99 was 238,803,273 ns; and measured process CPU
+p99 was 51,523,314 ns. Peak process RSS was 28,139,520 bytes, memory PSI was
+zero, and swap was zero. Thus resident routing memory and S3 byte volume pass,
+but both page discrimination and the 16-request physical layout fail the
+quality/latency objective.
+
+The 16,286-byte canonical terminal is preserved at
+`s3://borsuk-bench-453182569524-euc1/research/v30-hierarchical-pq/0b796e97224d89b2c47bb15b3495770d556d2658/attempts/v30-deep-100k-page-centroid-eval-20260904T110707Z-a0001/TERMINAL.json`.
+The construction and evaluation Spot instances
+`i-0cdaad818c8d04746` and `i-028a02199fe1eae4a` published terminal evidence
+and terminated. The next bounded experiment must add a distribution-sensitive
+page signal rather than merely increasing the page-centroid beam. D3, a
+100-million-row build, and competitor claims remain fenced.
