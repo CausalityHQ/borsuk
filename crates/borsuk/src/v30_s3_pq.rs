@@ -310,7 +310,9 @@ impl V30Fidelity {
         }
         let mut rank = 0_u32;
         let rank_checkpoints = high_bits
-            .chunks_exact(FIDELITY_WORDS_PER_GROUP)
+            .as_chunks::<FIDELITY_WORDS_PER_GROUP>()
+            .0
+            .iter()
             .map(|words| {
                 let checkpoint = rank;
                 rank = rank
@@ -424,6 +426,25 @@ pub(crate) struct V30CodePlanes {
 }
 
 impl V30CodePlanes {
+    pub(crate) fn from_packed(
+        logical_rows: usize,
+        high_bits: Vec<u32>,
+        base: Vec<u8>,
+        high: Vec<u8>,
+    ) -> Result<Self> {
+        let fidelity = V30Fidelity::from_high_words(logical_rows, high_bits)?;
+        if base.len() != (logical_rows - fidelity.high_count()) * V30PqWidth::Base24.bytes()
+            || high.len() != fidelity.high_count() * V30PqWidth::High48.bytes()
+        {
+            return Err(invalid("V30 packed code plane cardinality differs"));
+        }
+        Ok(Self {
+            fidelity,
+            base,
+            high,
+        })
+    }
+
     pub(crate) fn logical_rows(&self) -> usize {
         self.fidelity.logical_rows
     }
@@ -743,7 +764,9 @@ fn encode_fidelity(fidelity: &V30Fidelity) -> Result<Vec<u8>> {
     }
     let packed_bits = fidelity
         .high_bits
-        .chunks_exact(FIDELITY_WORDS_PER_GROUP)
+        .as_chunks::<FIDELITY_WORDS_PER_GROUP>()
+        .0
+        .iter()
         .map(|words| {
             words
                 .iter()
@@ -814,8 +837,10 @@ fn decode_fidelity(bytes: &[u8], logical_rows: usize) -> Result<V30Fidelity> {
         let valid_rows = (logical_rows - group * FIDELITY_GROUP_ROWS).min(FIDELITY_GROUP_ROWS);
         let value = bits.value(group);
         let words = value
-            .chunks_exact(size_of::<u32>())
-            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .as_chunks::<{ size_of::<u32>() }>()
+            .0
+            .iter()
+            .map(|bytes| u32::from_le_bytes(*bytes))
             .collect::<Vec<_>>();
         if ordinals.value(group) != group as u64
             || usize::from(valid.value(group)) != valid_rows

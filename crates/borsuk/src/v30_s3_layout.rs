@@ -16,7 +16,10 @@ use bytes::Bytes;
 use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder};
 use sha2::{Digest, Sha256};
 
-use crate::{BorsukError, Result, V27PageIdentity, v30_s3_pq::V30Fidelity};
+use crate::{
+    BorsukError, Result, V27PageIdentity, V27PageRow, encode_v27_page,
+    v30_s3_pq::{V30CodePlanes, V30Fidelity},
+};
 
 const MAX_PAGE_ROWS: u16 = 512;
 
@@ -378,6 +381,10 @@ struct LayoutHeapEntry {
     run: usize,
 }
 
+type LayoutReaders = Vec<Box<dyn Read + Send>>;
+type LayoutHeads = Vec<Option<V30LayoutRecord>>;
+type LayoutHeap = BinaryHeap<LayoutHeapEntry>;
+
 impl Ord for LayoutHeapEntry {
     fn cmp(&self, other: &Self) -> Ordering {
         other
@@ -419,11 +426,7 @@ fn flush_layout_run<S: V30Scratch>(
 fn open_layout_merge<S: V30Scratch>(
     scratch: &S,
     keys: &[String],
-) -> Result<(
-    Vec<Box<dyn Read + Send>>,
-    Vec<Option<V30LayoutRecord>>,
-    BinaryHeap<LayoutHeapEntry>,
-)> {
+) -> Result<(LayoutReaders, LayoutHeads, LayoutHeap)> {
     if keys.is_empty() || keys.len() > MAX_MERGE_FAN_IN {
         return Err(invalid("V30 layout merge fan-in differs"));
     }
@@ -590,6 +593,201 @@ where
         (Err(error), _) => Err(error),
         (Ok(_), Some(error)) => Err(error),
         (Ok(value), None) => Ok(value),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V30LayoutBuildConfig {
+    pub(crate) page_rows: usize,
+    pub(crate) sort_memory_rows: usize,
+    pub(crate) fidelity_ppm: u32,
+}
+
+pub(crate) trait V30PageSink {
+    fn write_page(&mut self, identity: &V27PageIdentity, bytes: &[u8]) -> Result<()>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V30BuiltLayout {
+    pub(crate) layout: V30Layout,
+    pub(crate) codes: V30CodePlanes,
+}
+
+struct V30LayoutAssembler<'a, S> {
+    sink: &'a mut S,
+    page_rows: usize,
+    leaf_count: u32,
+    current_leaf: Option<u32>,
+    leaf_logical_start: u64,
+    leaf_page_start: u32,
+    logical_rows: u64,
+    high_rows: u64,
+    high_bits: Vec<u32>,
+    base_codes: Vec<u8>,
+    high_codes: Vec<u8>,
+    page_buffer: Vec<V27PageRow>,
+    leaves: Vec<V30LeafRange>,
+    pages: Vec<V30PageRange>,
+}
+
+impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
+    fn flush_page(&mut self) -> Result<()> {
+        if self.page_buffer.is_empty() {
+            return Ok(());
+        }
+        let ordinal = u32::try_from(self.pages.len())
+            .map_err(|_| invalid("V30 layout page count overflows"))?;
+        let row_count = u16::try_from(self.page_buffer.len())
+            .map_err(|_| invalid("V30 layout page rows overflow"))?;
+        let logical_start = self
+            .logical_rows
+            .checked_sub(u64::from(row_count))
+            .ok_or_else(|| invalid("V30 layout page start underflows"))?;
+        let (identity, bytes) = encode_v27_page(ordinal, row_count, 0, &self.page_buffer)?;
+        self.sink.write_page(&identity, &bytes)?;
+        self.pages.push(V30PageRange {
+            leaf_ordinal: self
+                .current_leaf
+                .ok_or_else(|| invalid("V30 layout page leaf is missing"))?,
+            logical_start,
+            row_count,
+            identity,
+        });
+        self.page_buffer.clear();
+        Ok(())
+    }
+
+    fn finish_leaf(&mut self) -> Result<()> {
+        let Some(leaf_ordinal) = self.current_leaf else {
+            return Ok(());
+        };
+        self.flush_page()?;
+        let row_count = self
+            .logical_rows
+            .checked_sub(self.leaf_logical_start)
+            .ok_or_else(|| invalid("V30 leaf row count underflows"))?;
+        let page_count = u32::try_from(self.pages.len())
+            .ok()
+            .and_then(|count| count.checked_sub(self.leaf_page_start))
+            .ok_or_else(|| invalid("V30 leaf page count overflows"))?;
+        if leaf_ordinal != self.leaves.len() as u32 || row_count == 0 || page_count == 0 {
+            return Err(invalid("V30 layout leaf population differs"));
+        }
+        self.leaves.push(V30LeafRange {
+            leaf_ordinal,
+            logical_start: self.leaf_logical_start,
+            row_count,
+            page_start: self.leaf_page_start,
+            page_count,
+        });
+        Ok(())
+    }
+
+    fn push(&mut self, record: V30LayoutRecord) -> Result<()> {
+        if record.leaf_ordinal >= self.leaf_count {
+            return Err(invalid("V30 layout leaf ordinal differs"));
+        }
+        if self.current_leaf != Some(record.leaf_ordinal) {
+            self.finish_leaf()?;
+            self.current_leaf = Some(record.leaf_ordinal);
+            self.leaf_logical_start = self.logical_rows;
+            self.leaf_page_start = u32::try_from(self.pages.len())
+                .map_err(|_| invalid("V30 layout page count overflows"))?;
+        }
+        let logical = usize::try_from(self.logical_rows)
+            .map_err(|_| invalid("V30 layout logical rows overflow"))?;
+        let word = logical / u32::BITS as usize;
+        if self.high_bits.len() <= word {
+            self.high_bits.push(0);
+        }
+        if let Some(high_code) = record.high_code {
+            self.high_bits[word] |= 1 << (logical % u32::BITS as usize);
+            self.high_codes.extend_from_slice(&high_code);
+            self.high_rows += 1;
+        } else {
+            self.base_codes.extend_from_slice(&record.base_code);
+        }
+        self.logical_rows += 1;
+        self.page_buffer.push(V27PageRow {
+            source_ordinal: record.source_ordinal,
+            vector: record.vector,
+        });
+        if self.page_buffer.len() == self.page_rows {
+            self.flush_page()?;
+        }
+        Ok(())
+    }
+
+    fn finish(mut self, fidelity_ppm: u32) -> Result<V30BuiltLayout> {
+        self.finish_leaf()?;
+        if self.leaves.len() != self.leaf_count as usize {
+            return Err(invalid("V30 layout leaf coverage differs"));
+        }
+        let expected_high = self
+            .logical_rows
+            .checked_mul(u64::from(fidelity_ppm))
+            .and_then(|value| value.checked_div(1_000_000))
+            .ok_or_else(|| invalid("V30 layout fidelity count overflows"))?;
+        if self.high_rows != expected_high {
+            return Err(invalid("V30 layout fidelity cardinality differs"));
+        }
+        let logical_rows = usize::try_from(self.logical_rows)
+            .map_err(|_| invalid("V30 layout logical rows overflow"))?;
+        self.high_bits.resize(logical_rows.div_ceil(128) * 4, 0);
+        let codes = V30CodePlanes::from_packed(
+            logical_rows,
+            self.high_bits,
+            self.base_codes,
+            self.high_codes,
+        )?;
+        let layout = V30Layout::new(self.logical_rows, self.leaves, self.pages)?;
+        Ok(V30BuiltLayout { layout, codes })
+    }
+}
+
+pub(crate) struct V30LayoutBuilder;
+
+impl V30LayoutBuilder {
+    pub(crate) fn build<I, S, P>(
+        records: I,
+        leaf_count: u32,
+        config: V30LayoutBuildConfig,
+        scratch: &mut S,
+        pages: &mut P,
+    ) -> Result<V30BuiltLayout>
+    where
+        I: IntoIterator<Item = V30LayoutRecord>,
+        S: V30Scratch,
+        P: V30PageSink,
+    {
+        if leaf_count == 0
+            || config.page_rows == 0
+            || config.page_rows > usize::from(MAX_PAGE_ROWS)
+            || config.sort_memory_rows == 0
+            || config.fidelity_ppm != 50_000
+        {
+            return Err(invalid("V30 layout builder configuration differs"));
+        }
+        let mut assembler = V30LayoutAssembler {
+            sink: pages,
+            page_rows: config.page_rows,
+            leaf_count,
+            current_leaf: None,
+            leaf_logical_start: 0,
+            leaf_page_start: 0,
+            logical_rows: 0,
+            high_rows: 0,
+            high_bits: Vec::new(),
+            base_codes: Vec::new(),
+            high_codes: Vec::new(),
+            page_buffer: Vec::with_capacity(config.page_rows),
+            leaves: Vec::with_capacity(leaf_count as usize),
+            pages: Vec::new(),
+        };
+        sort_v30_layout_records(records, config.sort_memory_rows, scratch, &mut |record| {
+            assembler.push(record)
+        })?;
+        assembler.finish(config.fidelity_ppm)
     }
 }
 
@@ -969,11 +1167,12 @@ mod tests {
     };
 
     use super::{
-        V30FidelitySelectionConfig, V30Layout, V30LayoutRecord, V30LeafRange, V30PageRange,
-        V30Scratch, decode_v30_layout_artifacts, encode_v30_layout_artifacts,
-        select_v30_high_fidelity, sort_v30_layout_records,
+        V30FidelitySelectionConfig, V30Layout, V30LayoutBuildConfig, V30LayoutBuilder,
+        V30LayoutRecord, V30LeafRange, V30PageRange, V30PageSink, V30Scratch,
+        decode_v30_layout_artifacts, encode_v30_layout_artifacts, select_v30_high_fidelity,
+        sort_v30_layout_records,
     };
-    use crate::V27PageIdentity;
+    use crate::{V27PageIdentity, decode_v27_page};
 
     fn page(ordinal: u32, leaf_ordinal: u32, logical_start: u64, rows: u16) -> V30PageRange {
         V30PageRange {
@@ -1063,6 +1262,14 @@ mod tests {
 
         fn remove_scratch(&mut self, key: &str) -> crate::Result<()> {
             self.runs.remove(key);
+            Ok(())
+        }
+    }
+
+    impl V30PageSink for Scratch {
+        fn write_page(&mut self, identity: &V27PageIdentity, bytes: &[u8]) -> crate::Result<()> {
+            self.runs
+                .insert(format!("page-{:08}", identity.ordinal), bytes.to_vec());
             Ok(())
         }
     }
@@ -1226,5 +1433,63 @@ mod tests {
         duplicate[17].source_ordinal = duplicate[16].source_ordinal;
         assert!(sort_v30_layout_records(duplicate, 3, &mut scratch, &mut |_| Ok(())).is_err());
         assert!(scratch.runs.is_empty());
+    }
+
+    #[test]
+    fn v30_s3_layout_builder_emits_one_owner_bounded_arrow_pages_and_aligned_codes() {
+        // Break caught: construction stages exact vectors outside bounded pages,
+        // crosses a leaf boundary, duplicates an owner, or misaligns fidelity ranks.
+        let rows = 1_030_u64;
+        let input = (0..rows)
+            .map(|source| V30LayoutRecord {
+                leaf_ordinal: u32::from(source >= 700),
+                source_ordinal: source,
+                base_code: vec![(source % 251) as u8; 24],
+                high_code: (source < 51).then(|| vec![(source % 239) as u8; 48]),
+                vector: [source as f32 + 1.0; 96],
+            })
+            .collect::<Vec<_>>();
+        let mut scratch = Scratch::default();
+        let mut pages = Scratch::default();
+        let built = V30LayoutBuilder::build(
+            input,
+            2,
+            V30LayoutBuildConfig {
+                page_rows: 512,
+                sort_memory_rows: 17,
+                fidelity_ppm: 50_000,
+            },
+            &mut scratch,
+            &mut pages,
+        )
+        .unwrap();
+
+        assert_eq!(built.layout.source_rows(), rows);
+        assert_eq!(built.layout.leaves().len(), 2);
+        assert_eq!(built.layout.leaves()[0].row_count, 700);
+        assert_eq!(built.layout.leaves()[0].page_count, 2);
+        assert_eq!(built.layout.leaves()[1].row_count, 330);
+        assert_eq!(built.layout.leaves()[1].page_count, 1);
+        assert_eq!(built.codes.logical_rows(), rows as usize);
+        assert_eq!(built.codes.high_rows(), 51);
+        assert_eq!(built.codes.base_rows(), rows as usize - 51);
+
+        let mut source_union = BTreeMap::new();
+        for page in built.layout.pages() {
+            assert!(page.row_count <= 512);
+            let bytes = &pages.runs[&format!("page-{:08}", page.identity.ordinal)];
+            let decoded = decode_v27_page(&page.identity, bytes).unwrap();
+            assert_eq!(decoded.rows.len(), usize::from(page.row_count));
+            for row in decoded.rows {
+                assert!(source_union.insert(row.source_ordinal, ()).is_none());
+            }
+        }
+        assert_eq!(source_union.len(), rows as usize);
+        assert_eq!(
+            source_union.keys().copied().collect::<Vec<_>>(),
+            (0..rows).collect::<Vec<_>>()
+        );
+        assert!(scratch.runs.is_empty());
+        assert_eq!(pages.runs.len(), 3);
     }
 }
