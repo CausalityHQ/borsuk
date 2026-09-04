@@ -54,7 +54,10 @@ class V32NoPageContainmentTests(unittest.TestCase):
         self, directory: Path, *, source_rows: int = 1_000_000
     ) -> tuple[V32ContainmentPlan, bytes]:
         neighbors = pa.array(
-            [[row * 100 + rank for rank in range(10)] for row in range(128)],
+            [
+                [((64 + row) * 100 + rank) for rank in range(10)]
+                for row in range(32)
+            ],
             type=pa.list_(pa.field("item", pa.int32(), nullable=False), 10),
         )
         truth_path = directory / "neighbors.parquet"

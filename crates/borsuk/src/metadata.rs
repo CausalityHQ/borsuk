@@ -1035,6 +1035,10 @@ struct IndexBuilder {
     /// Paths dropped because they exceeded the distinct-value budget or the path
     /// budget; any predicate touching them is declined.
     dropped: std::collections::BTreeSet<String>,
+    /// A literal metadata key containing `.` is indistinguishable from a
+    /// nested traversal after path flattening. Disable the segment index in
+    /// that case so it cannot claim an inexact answer.
+    disabled: bool,
 }
 
 impl IndexBuilder {
@@ -1042,10 +1046,20 @@ impl IndexBuilder {
         Self {
             paths: BTreeMap::new(),
             dropped: std::collections::BTreeSet::new(),
+            disabled: false,
         }
     }
 
+    fn disable(&mut self) {
+        self.paths.clear();
+        self.dropped.clear();
+        self.disabled = true;
+    }
+
     fn record(&mut self, path: &str, key: IndexKey, row: u32, contains: bool) {
+        if self.disabled {
+            return;
+        }
         if self.dropped.contains(path) {
             return;
         }
@@ -1086,6 +1100,9 @@ impl MetadataIndex {
         for (row, meta) in rows.into_iter().enumerate() {
             let row = row as u32;
             row_count = row + 1;
+            if metadata_has_literal_dotted_key(meta) {
+                builder.disable();
+            }
             for (key, value) in meta {
                 index_value(&mut builder, key, value, row);
             }
@@ -1247,6 +1264,13 @@ impl MetadataIndex {
         }
         Ok(Self { row_count, paths })
     }
+}
+
+fn metadata_has_literal_dotted_key(metadata: &Metadata) -> bool {
+    metadata.iter().any(|(key, value)| {
+        key.contains('.')
+            || matches!(value, MetaValue::Map(child) if metadata_has_literal_dotted_key(child))
+    })
 }
 
 fn index_value(builder: &mut IndexBuilder, path: &str, value: &MetaValue, row: u32) {
@@ -1849,6 +1873,35 @@ mod tests {
                 .matching_rows(&parse(r#"{"genre":{"$exists":true}}"#))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn index_declines_literal_dotted_key_collisions_with_nested_paths() {
+        let literal = Metadata::from([(
+            "artist.city".to_string(),
+            MetaValue::Str("paris".to_string()),
+        )]);
+        let nested = Metadata::from([(
+            "artist".to_string(),
+            MetaValue::Map(Metadata::from([(
+                "city".to_string(),
+                MetaValue::Str("paris".to_string()),
+            )])),
+        )]);
+        let rows = [literal, nested];
+        let filter = parse(r#"{"artist.city":"paris"}"#);
+        let brute: Vec<u32> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, metadata)| filter.matches(metadata))
+            .map(|(row, _)| row as u32)
+            .collect();
+        assert_eq!(brute, vec![1]);
+
+        let index = MetadataIndex::from_rows(rows.iter());
+        assert!(index.matching_rows(&filter).is_none());
+        let restored = MetadataIndex::from_bytes(&index.to_bytes()).unwrap();
+        assert!(restored.matching_rows(&filter).is_none());
     }
 
     #[test]

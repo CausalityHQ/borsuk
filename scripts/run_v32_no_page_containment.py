@@ -146,7 +146,10 @@ def _read_truth(
     ):
         raise ValueError("V32 containment truth byte authority differs")
     table = pq.read_table(pa.BufferReader(truth_bytes))
-    if table.schema.names != ["neighbors_id"] or table.num_rows < plan.query_start + QUERY_COUNT:
+    # Prefix truth is already materialized for the registered query window.
+    # Its rows are local offsets 0..31; `query_start` continues to address the
+    # corresponding rows in the full query Parquet artifact.
+    if table.schema.names != ["neighbors_id"] or table.num_rows != QUERY_COUNT:
         raise ValueError("V32 containment truth schema differs")
     field = table.schema.field("neighbors_id")
     item = (
@@ -161,7 +164,7 @@ def _read_truth(
         or not (pa.types.is_int32(item.type) or pa.types.is_int64(item.type))
     ):
         raise ValueError("V32 containment truth schema differs")
-    rows = table.column("neighbors_id").slice(plan.query_start, QUERY_COUNT).to_pylist()
+    rows = table.column("neighbors_id").to_pylist()
     result: list[tuple[int, ...]] = []
     for row in rows:
         if (
