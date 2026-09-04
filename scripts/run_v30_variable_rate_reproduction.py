@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
+
+import numpy as np
 
 SOURCE_ROWS = 100_000
 QUERY_COUNT = 32
@@ -55,6 +59,55 @@ class V30ArmObservation:
     maximum_scanned_codes: int
 
 
+@dataclass(frozen=True)
+class Pq8Model:
+    """One deterministic fixed-partition eight-bit residual quantizer."""
+
+    width_bytes: int
+    dimensions_per_subquantizer: int
+    centroids: np.ndarray
+
+    def score(self, codes: np.ndarray, query_residual: np.ndarray) -> np.ndarray:
+        """Compute ADC squared distances with one fixed f32 reduction order."""
+
+        if (
+            not isinstance(codes, np.ndarray)
+            or codes.dtype != np.uint8
+            or codes.ndim != 2
+            or codes.shape[1] != self.width_bytes
+            or not isinstance(query_residual, np.ndarray)
+            or query_residual.dtype != np.float32
+            or query_residual.shape
+            != (self.width_bytes * self.dimensions_per_subquantizer,)
+            or not np.isfinite(query_residual).all()
+        ):
+            raise ValueError("V30 PQ8 score input differs")
+        scores = np.zeros(len(codes), dtype=np.float32)
+        for subquantizer in range(self.width_bytes):
+            start = subquantizer * self.dimensions_per_subquantizer
+            query_part = query_residual[
+                start : start + self.dimensions_per_subquantizer
+            ]
+            table = np.sum(
+                (self.centroids[subquantizer] - query_part) ** 2,
+                axis=1,
+                dtype=np.float32,
+            )
+            scores += table[codes[:, subquantizer]]
+        return scores
+
+
+@dataclass(frozen=True)
+class LoadedReproduction:
+    """Authenticated bounded corpus/query state resident only in a worker process."""
+
+    primary: np.ndarray
+    primary_leaf: np.ndarray
+    leaf_centroids: np.ndarray
+    queries: np.ndarray
+    construction_bytes_streamed: int
+
+
 def _exact_digest(value: object) -> bool:
     return (
         type(value) is str
@@ -98,6 +151,252 @@ def validate_reproduction_authority(
         raise ValueError("V30 reproduction frozen shape differs")
 
 
+def _authenticated_object(
+    authority: ArtifactAuthority, get_object: Callable[[str], bytes]
+) -> bytes:
+    body = get_object(authority.uri)
+    if (
+        type(body) is not bytes
+        or len(body) != authority.encoded_bytes
+        or hashlib.sha256(body).hexdigest() != authority.sha256
+    ):
+        raise ValueError(f"V30 {authority.role} byte authority differs")
+    return body
+
+
+def _normalize_rows(rows: np.ndarray, role: str) -> np.ndarray:
+    if rows.dtype != np.float32:
+        rows = rows.astype(np.float32)
+    if rows.ndim != 2 or rows.shape[1] != 96 or not np.isfinite(rows).all():
+        raise ValueError(f"V30 {role} values differ")
+    norms = np.linalg.norm(rows, axis=1)
+    if np.any(~np.isfinite(norms)) or np.any(norms <= 0):
+        raise ValueError(f"V30 {role} norms differ")
+    return rows / norms[:, None]
+
+
+def load_frozen_reproduction(
+    artifacts: tuple[ArtifactAuthority, ...],
+    *,
+    page_prefix: str,
+    get_object: Callable[[str], bytes],
+    expected_source_rows: int = SOURCE_ROWS,
+    expected_query_rows: int = 10_000,
+) -> LoadedReproduction:
+    """Stream and authenticate the frozen reduced corpus without local persistence."""
+
+    import pyarrow as pa
+    import pyarrow.ipc as ipc
+    import pyarrow.parquet as pq
+
+    if (
+        type(artifacts) is not tuple
+        or tuple(artifact.role for artifact in artifacts) != ARTIFACT_ROLES
+        or type(page_prefix) is not str
+        or not page_prefix.startswith("s3://")
+        or page_prefix.endswith("/")
+        or not callable(get_object)
+        or type(expected_source_rows) is not int
+        or expected_source_rows <= 0
+        or type(expected_query_rows) is not int
+        or expected_query_rows < QUERY_COUNT
+    ):
+        raise ValueError("V30 frozen reproduction request differs")
+    bodies = {
+        artifact.role: _authenticated_object(artifact, get_object)
+        for artifact in artifacts
+    }
+    manifest_bytes = bodies["pages-manifest"]
+    if not manifest_bytes.endswith(b"\n") or manifest_bytes.endswith(b"\n\n"):
+        raise ValueError("V30 page manifest newline differs")
+    try:
+        manifest = json.loads(manifest_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("V30 page manifest JSON differs") from error
+    canonical = json.dumps(
+        manifest, allow_nan=False, separators=(",", ":"), sort_keys=True
+    ).encode() + b"\n"
+    if canonical != manifest_bytes or set(manifest) != {
+        "pages",
+        "primary_rows",
+        "replica_rows",
+        "schema_version",
+        "source_rows",
+        "stored_rows",
+    }:
+        raise ValueError("V30 page manifest authority differs")
+    pages = manifest["pages"]
+    if (
+        type(manifest["schema_version"]) is not int
+        or manifest["schema_version"] != 1
+        or type(manifest["source_rows"]) is not int
+        or manifest["source_rows"] != expected_source_rows
+        or type(manifest["primary_rows"]) is not int
+        or manifest["primary_rows"] != expected_source_rows
+        or type(manifest["replica_rows"]) is not int
+        or manifest["replica_rows"] < 0
+        or type(manifest["stored_rows"]) is not int
+        or manifest["stored_rows"]
+        != manifest["primary_rows"] + manifest["replica_rows"]
+        or type(pages) is not list
+        or not pages
+    ):
+        raise ValueError("V30 page manifest shape differs")
+    for ordinal, page in enumerate(pages):
+        if (
+            type(page) is not dict
+            or set(page)
+            != {
+                "encoded_bytes",
+                "ordinal",
+                "primary_rows",
+                "replica_rows",
+                "sha256",
+            }
+            or type(page["ordinal"]) is not int
+            or page["ordinal"] != ordinal
+            or not _exact_digest(page["sha256"])
+            or type(page["encoded_bytes"]) is not int
+            or page["encoded_bytes"] <= 0
+            or type(page["primary_rows"]) is not int
+            or page["primary_rows"] <= 0
+            or type(page["replica_rows"]) is not int
+            or page["replica_rows"] < 0
+            or page["primary_rows"] + page["replica_rows"] > 1_024
+        ):
+            raise ValueError("V30 page reference differs")
+    posting_schema = pa.schema(
+        [
+            pa.field("leaf_ordinal", pa.uint32(), nullable=False),
+            pa.field("page_ordinal", pa.uint32(), nullable=False),
+            pa.field("page_sha256", pa.string(), nullable=False),
+            pa.field("encoded_bytes", pa.uint64(), nullable=False),
+            pa.field("primary_rows", pa.uint16(), nullable=False),
+            pa.field("replica_rows", pa.uint16(), nullable=False),
+        ]
+    )
+    postings_file = pq.ParquetFile(pa.BufferReader(bodies["leaf-postings"]))
+    if postings_file.schema_arrow != posting_schema or postings_file.metadata.num_rows != len(pages):
+        raise ValueError("V30 leaf postings schema differs")
+    postings = postings_file.read()
+    if any(column.null_count for column in postings.columns):
+        raise ValueError("V30 leaf postings nullability differs")
+    page_ordinals = postings["page_ordinal"].to_numpy()
+    leaf_ordinals = postings["leaf_ordinal"].to_numpy()
+    if sorted(int(value) for value in page_ordinals) != list(range(len(pages))):
+        raise ValueError("V30 leaf postings ordinals differ")
+    page_leaf = np.empty(len(pages), dtype=np.int32)
+    for row in range(len(pages)):
+        page = int(page_ordinals[row])
+        reference = pages[page]
+        if (
+            postings["page_sha256"][row].as_py() != reference["sha256"]
+            or int(postings["encoded_bytes"][row].as_py()) != reference["encoded_bytes"]
+            or int(postings["primary_rows"][row].as_py()) != reference["primary_rows"]
+            or int(postings["replica_rows"][row].as_py()) != reference["replica_rows"]
+        ):
+            raise ValueError("V30 leaf postings binding differs")
+        page_leaf[page] = int(leaf_ordinals[row])
+    leaf_child = pa.field("element", pa.float16(), nullable=False)
+    leaf_schema = pa.schema(
+        [
+            pa.field("root_ordinal", pa.uint16(), nullable=False),
+            pa.field("centroid", pa.list_(leaf_child, 96), nullable=False),
+        ]
+    )
+    leaf_reader = ipc.open_file(pa.BufferReader(bodies["leaf-centroids"]))
+    if leaf_reader.schema != leaf_schema or leaf_reader.num_record_batches != 1:
+        raise ValueError("V30 leaf centroid schema differs")
+    leaf_table = leaf_reader.read_all()
+    if any(column.null_count for column in leaf_table.columns):
+        raise ValueError("V30 leaf centroid nullability differs")
+    leaf_values = (
+        leaf_table["centroid"].combine_chunks().values.to_numpy(zero_copy_only=False)
+    )
+    leaf_centroids = _normalize_rows(
+        leaf_values.reshape(-1, 96).astype(np.float32), "leaf centroid"
+    )
+    if np.any(page_leaf < 0) or np.any(page_leaf >= len(leaf_centroids)):
+        raise ValueError("V30 leaf postings range differs")
+    query_child = pa.field("element", pa.float32(), nullable=False)
+    query_schema = pa.schema(
+        [pa.field("emb", pa.list_(query_child, 96), nullable=False)]
+    )
+    query_file = pq.ParquetFile(pa.BufferReader(bodies["query-parquet"]))
+    if query_file.schema_arrow != query_schema or query_file.metadata.num_rows != expected_query_rows:
+        raise ValueError("V30 query Parquet schema differs")
+    query_table = query_file.read(columns=["emb"])
+    if query_table["emb"].null_count:
+        raise ValueError("V30 query Parquet nullability differs")
+    query_values = (
+        query_table["emb"].combine_chunks().values.to_numpy(zero_copy_only=False)
+    )
+    queries = _normalize_rows(
+        query_values.reshape(-1, 96)[:QUERY_COUNT].astype(np.float32), "query"
+    )
+    page_child = pa.field("element", pa.float32(), nullable=False)
+    page_schema = pa.schema(
+        [
+            pa.field("id", pa.binary(8), nullable=False),
+            pa.field("vector", pa.list_(page_child, 96), nullable=False),
+        ]
+    )
+    primary = np.empty((expected_source_rows, 96), dtype=np.float32)
+    primary_leaf = np.empty(expected_source_rows, dtype=np.int32)
+    seen = np.zeros(expected_source_rows, dtype=np.bool_)
+    construction_bytes = 0
+    for reference in pages:
+        body = get_object(f"{page_prefix}/{reference['sha256']}.arrow")
+        if (
+            type(body) is not bytes
+            or len(body) != reference["encoded_bytes"]
+            or hashlib.sha256(body).hexdigest() != reference["sha256"]
+        ):
+            raise ValueError("V30 page byte authority differs")
+        construction_bytes += len(body)
+        reader = ipc.open_file(pa.BufferReader(body))
+        if reader.schema != page_schema or reader.num_record_batches != 1:
+            raise ValueError("V30 page Arrow schema differs")
+        table = reader.read_all()
+        if (
+            table.num_rows != reference["primary_rows"] + reference["replica_rows"]
+            or any(column.null_count for column in table.columns)
+        ):
+            raise ValueError("V30 page Arrow rows differ")
+        ids = np.array(
+            [int.from_bytes(value.as_py(), "little") for value in table["id"]],
+            dtype=np.int64,
+        )
+        vectors = _normalize_rows(
+            table["vector"]
+            .combine_chunks()
+            .values.to_numpy(zero_copy_only=False)
+            .reshape(-1, 96)
+            .astype(np.float32),
+            "page",
+        )
+        count = reference["primary_rows"]
+        primary_ids = ids[:count]
+        if (
+            np.any(primary_ids < 0)
+            or np.any(primary_ids >= expected_source_rows)
+            or seen[primary_ids].any()
+        ):
+            raise ValueError("V30 primary page union differs")
+        primary[primary_ids] = vectors[:count]
+        primary_leaf[primary_ids] = page_leaf[reference["ordinal"]]
+        seen[primary_ids] = True
+    if not seen.all():
+        raise ValueError("V30 primary page union differs")
+    return LoadedReproduction(
+        primary=primary,
+        primary_leaf=primary_leaf,
+        leaf_centroids=leaf_centroids,
+        queries=queries,
+        construction_bytes_streamed=construction_bytes,
+    )
+
+
 def pq8_replacement_geometry() -> dict[str, int]:
     """Return the single preregistered replacement interpretation."""
 
@@ -111,6 +410,313 @@ def pq8_replacement_geometry() -> dict[str, int]:
         "high_subquantizers": 48,
         "high_width_bytes": 48,
     }
+
+
+def _validate_pq8_matrix(rows: np.ndarray) -> None:
+    if (
+        not isinstance(rows, np.ndarray)
+        or rows.dtype != np.float32
+        or rows.ndim != 2
+        or not rows.size
+        or not np.isfinite(rows).all()
+    ):
+        raise ValueError("V30 PQ8 matrix differs")
+
+
+def _nearest_centroids(
+    values: np.ndarray, centroids: np.ndarray, *, batch_rows: int
+) -> np.ndarray:
+    assignments = np.empty(len(values), dtype=np.int64)
+    for start in range(0, len(values), batch_rows):
+        batch = values[start : start + batch_rows]
+        distances = np.sum(
+            (batch[:, None, :] - centroids[None, :, :]) ** 2,
+            axis=2,
+            dtype=np.float32,
+        )
+        assignments[start : start + len(batch)] = np.argmin(distances, axis=1)
+    return assignments
+
+
+def fit_pq8(
+    residuals: np.ndarray,
+    *,
+    width_bytes: int,
+    centroid_count: int = 256,
+    sample_size: int = 8_192,
+    iterations: int = 4,
+    batch_rows: int = 4_096,
+) -> Pq8Model:
+    """Fit deterministic evenly sampled PQ8 codebooks with bounded batches."""
+
+    _validate_pq8_matrix(residuals)
+    if (
+        type(width_bytes) is not int
+        or width_bytes <= 0
+        or residuals.shape[1] % width_bytes
+        or type(centroid_count) is not int
+        or not 1 <= centroid_count <= 256
+        or type(sample_size) is not int
+        or sample_size < centroid_count
+        or type(iterations) is not int
+        or iterations <= 0
+        or type(batch_rows) is not int
+        or batch_rows <= 0
+    ):
+        raise ValueError("V30 PQ8 geometry differs")
+    dimensions = residuals.shape[1] // width_bytes
+    count = min(sample_size, len(residuals))
+    if count < centroid_count:
+        raise ValueError("V30 PQ8 training sample differs")
+    sample_ordinals = np.arange(count, dtype=np.int64) * len(residuals) // count
+    sample = residuals[sample_ordinals]
+    books = np.empty((width_bytes, centroid_count, dimensions), dtype=np.float32)
+    for subquantizer in range(width_bytes):
+        start = subquantizer * dimensions
+        values = sample[:, start : start + dimensions]
+        centers = values[
+            np.arange(centroid_count, dtype=np.int64) * count // centroid_count
+        ].copy()
+        for _ in range(iterations):
+            assignments = _nearest_centroids(values, centers, batch_rows=batch_rows)
+            for centroid in range(centroid_count):
+                members = values[assignments == centroid]
+                if len(members):
+                    centers[centroid] = np.mean(members, axis=0, dtype=np.float32)
+        books[subquantizer] = centers
+    return Pq8Model(
+        width_bytes=width_bytes,
+        dimensions_per_subquantizer=dimensions,
+        centroids=books,
+    )
+
+
+def encode_pq8(
+    model: Pq8Model, residuals: np.ndarray, *, batch_rows: int = 4_096
+) -> tuple[np.ndarray, np.ndarray]:
+    """Encode residuals and return exact base reconstruction error."""
+
+    _validate_pq8_matrix(residuals)
+    if (
+        type(model) is not Pq8Model
+        or residuals.shape[1]
+        != model.width_bytes * model.dimensions_per_subquantizer
+        or type(batch_rows) is not int
+        or batch_rows <= 0
+    ):
+        raise ValueError("V30 PQ8 encode input differs")
+    codes = np.empty((len(residuals), model.width_bytes), dtype=np.uint8)
+    errors = np.zeros(len(residuals), dtype=np.float32)
+    for subquantizer in range(model.width_bytes):
+        start = subquantizer * model.dimensions_per_subquantizer
+        values = residuals[:, start : start + model.dimensions_per_subquantizer]
+        assignments = _nearest_centroids(
+            values, model.centroids[subquantizer], batch_rows=batch_rows
+        )
+        codes[:, subquantizer] = assignments.astype(np.uint8)
+        reconstructed = model.centroids[subquantizer, assignments]
+        errors += np.sum(
+            (values - reconstructed) ** 2, axis=1, dtype=np.float32
+        )
+    return codes, errors
+
+
+def build_base_page_layout(
+    primary_leaf: np.ndarray,
+    base_codes: np.ndarray,
+    *,
+    leaf_count: int,
+    page_rows: int,
+) -> tuple[tuple[np.ndarray, ...], np.ndarray, dict[int, np.ndarray]]:
+    """Build one-owner pages once from leaf and transient base-code order."""
+
+    if (
+        not isinstance(primary_leaf, np.ndarray)
+        or primary_leaf.ndim != 1
+        or not isinstance(base_codes, np.ndarray)
+        or base_codes.dtype != np.uint8
+        or base_codes.ndim != 2
+        or len(primary_leaf) != len(base_codes)
+        or type(leaf_count) is not int
+        or leaf_count <= 0
+        or np.any(primary_leaf < 0)
+        or np.any(primary_leaf >= leaf_count)
+        or type(page_rows) is not int
+        or not 1 <= page_rows <= 512
+    ):
+        raise ValueError("V30 base page layout input differs")
+    ordinals = np.arange(len(primary_leaf), dtype=np.int64)
+    keys: list[np.ndarray] = [ordinals]
+    keys.extend(base_codes[:, index] for index in range(base_codes.shape[1] - 1, -1, -1))
+    keys.append(primary_leaf)
+    order = np.lexsort(tuple(keys))
+    pages: list[np.ndarray] = []
+    row_page = np.full(len(primary_leaf), -1, dtype=np.int32)
+    leaf_rows: dict[int, np.ndarray] = {}
+    for leaf in range(leaf_count):
+        rows = order[primary_leaf[order] == leaf]
+        leaf_rows[leaf] = rows
+        for start in range(0, len(rows), page_rows):
+            chunk = rows[start : start + page_rows]
+            row_page[chunk] = len(pages)
+            pages.append(chunk)
+    if np.any(row_page < 0) or sorted(np.concatenate(pages).tolist()) != list(range(len(primary_leaf))):
+        raise ValueError("V30 base page ownership differs")
+    return tuple(pages), row_page, leaf_rows
+
+
+def exact_truth(
+    primary: np.ndarray, queries: np.ndarray, *, recall_k: int = RECALL_K
+) -> tuple[tuple[int, ...], ...]:
+    """Compute deterministic exact squared-L2 truth over the bounded corpus."""
+
+    _validate_pq8_matrix(primary)
+    _validate_pq8_matrix(queries)
+    if (
+        primary.shape[1] != queries.shape[1]
+        or type(recall_k) is not int
+        or not 1 <= recall_k <= len(primary)
+    ):
+        raise ValueError("V30 truth input differs")
+    ordinals = np.arange(len(primary), dtype=np.int64)
+    truth: list[tuple[int, ...]] = []
+    for query in queries:
+        distance = np.sum((primary - query) ** 2, axis=1, dtype=np.float32)
+        picked = np.argpartition(distance, recall_k - 1)[:recall_k]
+        ordered = picked[np.lexsort((ordinals[picked], distance[picked]))]
+        truth.append(tuple(int(value) for value in ordered))
+    return tuple(truth)
+
+
+def evaluate_pq8_replacement_arms(
+    primary: np.ndarray,
+    primary_leaf: np.ndarray,
+    leaf_centroids: np.ndarray,
+    queries: np.ndarray,
+    truth: tuple[tuple[int, ...], ...],
+    base_model: Pq8Model,
+    high_model: Pq8Model,
+    *,
+    page_rows: int,
+    leaf_beam: int,
+    candidate_depth: int,
+    page_encoded_bytes: tuple[int, ...],
+) -> tuple[V30ArmObservation, ...]:
+    """Evaluate fixed replacement fractions over one immutable base-code page layout."""
+
+    _validate_pq8_matrix(primary)
+    _validate_pq8_matrix(leaf_centroids)
+    _validate_pq8_matrix(queries)
+    if (
+        queries.shape != (QUERY_COUNT, primary.shape[1])
+        or leaf_centroids.shape[1] != primary.shape[1]
+        or primary_leaf.shape != (len(primary),)
+        or type(truth) is not tuple
+        or len(truth) != QUERY_COUNT
+        or any(
+            type(neighbors) is not tuple
+            or len(neighbors) != RECALL_K
+            or len(set(neighbors)) != RECALL_K
+            or any(type(row) is not int or not 0 <= row < len(primary) for row in neighbors)
+            for neighbors in truth
+        )
+        or type(base_model) is not Pq8Model
+        or type(high_model) is not Pq8Model
+        or base_model.width_bytes * base_model.dimensions_per_subquantizer
+        != primary.shape[1]
+        or high_model.width_bytes * high_model.dimensions_per_subquantizer
+        != primary.shape[1]
+        or type(leaf_beam) is not int
+        or not 1 <= leaf_beam <= len(leaf_centroids)
+        or type(candidate_depth) is not int
+        or not 1 <= candidate_depth <= MAX_CANDIDATE_DEPTH
+    ):
+        raise ValueError("V30 replacement evaluation input differs")
+    residuals = primary - leaf_centroids[primary_leaf]
+    base_codes, base_errors = encode_pq8(base_model, residuals)
+    high_codes, _high_errors = encode_pq8(high_model, residuals)
+    pages, row_page, leaf_rows = build_base_page_layout(
+        primary_leaf,
+        base_codes,
+        leaf_count=len(leaf_centroids),
+        page_rows=page_rows,
+    )
+    if (
+        type(page_encoded_bytes) is not tuple
+        or len(page_encoded_bytes) != len(pages)
+        or any(type(value) is not int or value <= 0 for value in page_encoded_bytes)
+    ):
+        raise ValueError("V30 page byte authority differs")
+    leaf_ordinals = np.arange(len(leaf_centroids), dtype=np.int64)
+    observations: list[V30ArmObservation] = []
+    for fraction_ppm in FIDELITY_FRACTIONS_PPM:
+        high_mask = np.zeros(len(primary), dtype=np.bool_)
+        high_mask[list(select_high_fidelity(base_errors.tolist(), fraction_ppm))] = True
+        hits: list[int] = []
+        selected_page_counts: list[int] = []
+        maximum_bytes = 0
+        maximum_scanned = 0
+        for query_index, query in enumerate(queries):
+            leaf_distance = np.sum(
+                (leaf_centroids - query) ** 2, axis=1, dtype=np.float32
+            )
+            selected_leaves = np.lexsort((leaf_ordinals, leaf_distance))[:leaf_beam]
+            ranked_rows: list[tuple[float, int]] = []
+            scanned = 0
+            for leaf in selected_leaves:
+                rows = leaf_rows[int(leaf)]
+                if not len(rows):
+                    continue
+                scanned += len(rows)
+                query_residual = query - leaf_centroids[leaf]
+                base_rows = rows[~high_mask[rows]]
+                high_rows = rows[high_mask[rows]]
+                if len(base_rows):
+                    scores = base_model.score(base_codes[base_rows], query_residual)
+                    ranked_rows.extend(
+                        (float(score), int(row))
+                        for score, row in zip(scores, base_rows, strict=True)
+                    )
+                if len(high_rows):
+                    scores = high_model.score(high_codes[high_rows], query_residual)
+                    ranked_rows.extend(
+                        (float(score), int(row))
+                        for score, row in zip(scores, high_rows, strict=True)
+                    )
+            depth = min(candidate_depth, len(ranked_rows))
+            selected_pages = reduce_page_candidates(
+                ranked_rows,
+                row_page,
+                candidate_depth=depth,
+                page_count=PAGE_COUNT,
+            )
+            exact_rows = np.concatenate([pages[page] for page in selected_pages])
+            distances = np.sum(
+                (primary[exact_rows] - query) ** 2, axis=1, dtype=np.float32
+            )
+            take = min(RECALL_K, len(exact_rows))
+            local = np.argpartition(distances, take - 1)[:take]
+            ordered = local[
+                np.lexsort((exact_rows[local], distances[local]))
+            ]
+            matches = set(int(exact_rows[item]) for item in ordered)
+            hits.append(len(matches & set(truth[query_index])))
+            selected_page_counts.append(len(selected_pages))
+            maximum_bytes = max(
+                maximum_bytes,
+                sum(page_encoded_bytes[page] for page in selected_pages),
+            )
+            maximum_scanned = max(maximum_scanned, scanned)
+        observations.append(
+            V30ArmObservation(
+                fidelity_fraction_ppm=fraction_ppm,
+                hits=tuple(hits),
+                selected_page_counts=tuple(selected_page_counts),
+                maximum_encoded_bytes=maximum_bytes,
+                maximum_scanned_codes=maximum_scanned,
+            )
+        )
+    return tuple(observations)
 
 
 def select_high_fidelity(errors: list[float], fraction_ppm: int) -> tuple[int, ...]:
@@ -147,7 +753,12 @@ def reduce_page_candidates(
         raise ValueError("V30 candidate depth differs")
     if type(page_count) is not int or page_count != PAGE_COUNT:
         raise ValueError("V30 page count differs")
-    if type(row_pages) is not tuple or any(type(page) is not int or page < 0 for page in row_pages):
+    if isinstance(row_pages, np.ndarray):
+        if row_pages.ndim != 1 or not np.issubdtype(row_pages.dtype, np.integer) or np.any(row_pages < 0):
+            raise ValueError("V30 row page authority differs")
+    elif type(row_pages) is not tuple or any(
+        type(page) is not int or page < 0 for page in row_pages
+    ):
         raise ValueError("V30 row page authority differs")
     checked: list[tuple[float, int]] = []
     for score, row in ranked_rows:
@@ -162,7 +773,7 @@ def reduce_page_candidates(
     selected: list[int] = []
     seen: set[int] = set()
     for _score, row in sorted(checked, key=lambda item: (item[0], item[1]))[:candidate_depth]:
-        page = row_pages[row]
+        page = int(row_pages[row])
         if page not in seen:
             seen.add(page)
             selected.append(page)

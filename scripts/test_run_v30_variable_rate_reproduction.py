@@ -1,12 +1,24 @@
 import dataclasses
+import hashlib
 import json
 import unittest
+
+import numpy as np
+import pyarrow as pa
+import pyarrow.ipc as ipc
+import pyarrow.parquet as pq
 
 from scripts.run_v30_variable_rate_reproduction import (
     ArtifactAuthority,
     V30ArmObservation,
     V30ConstructionInputs,
+    build_base_page_layout,
     build_reproduction_result,
+    encode_pq8,
+    evaluate_pq8_replacement_arms,
+    exact_truth,
+    fit_pq8,
+    load_frozen_reproduction,
     pq8_replacement_geometry,
     reduce_page_candidates,
     select_high_fidelity,
@@ -33,6 +45,115 @@ class V30VariableRateReproductionTests(unittest.TestCase):
                 )
             )
         )
+
+    def frozen_fixture(self) -> tuple[tuple[ArtifactAuthority, ...], dict[str, bytes]]:
+        objects: dict[str, bytes] = {}
+        pages = []
+        postings = []
+        for page in range(4):
+            ordinals = np.arange(page * 16, (page + 1) * 16, dtype=np.uint64)
+            vectors = np.zeros((16, 96), dtype=np.float32)
+            vectors[np.arange(16), ordinals % 96] = 1.0
+            ids = pa.array([int(value).to_bytes(8, "little") for value in ordinals], type=pa.binary(8))
+            child = pa.field("element", pa.float32(), nullable=False)
+            vector_array = pa.FixedSizeListArray.from_arrays(
+                pa.array(vectors.ravel(), type=pa.float32()), 96
+            )
+            table = pa.Table.from_arrays(
+                [ids, vector_array],
+                schema=pa.schema(
+                    [
+                        pa.field("id", pa.binary(8), nullable=False),
+                        pa.field("vector", pa.list_(child, 96), nullable=False),
+                    ]
+                ),
+            )
+            sink = pa.BufferOutputStream()
+            with ipc.new_file(sink, table.schema) as writer:
+                writer.write_table(table)
+            body = sink.getvalue().to_pybytes()
+            digest = hashlib.sha256(body).hexdigest()
+            objects[f"s3://frozen/pages/{digest}.arrow"] = body
+            pages.append(
+                {
+                    "encoded_bytes": len(body),
+                    "ordinal": page,
+                    "primary_rows": 16,
+                    "replica_rows": 0,
+                    "sha256": digest,
+                }
+            )
+            postings.append((page // 2, page, digest, len(body), 16, 0))
+        manifest = {
+            "pages": pages,
+            "primary_rows": 64,
+            "replica_rows": 0,
+            "schema_version": 1,
+            "source_rows": 64,
+            "stored_rows": 64,
+        }
+        manifest_bytes = json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        posting_schema = pa.schema(
+            [
+                pa.field("leaf_ordinal", pa.uint32(), nullable=False),
+                pa.field("page_ordinal", pa.uint32(), nullable=False),
+                pa.field("page_sha256", pa.string(), nullable=False),
+                pa.field("encoded_bytes", pa.uint64(), nullable=False),
+                pa.field("primary_rows", pa.uint16(), nullable=False),
+                pa.field("replica_rows", pa.uint16(), nullable=False),
+            ]
+        )
+        posting_table = pa.Table.from_pylist(
+            [dict(zip(posting_schema.names, row, strict=True)) for row in postings],
+            schema=posting_schema,
+        )
+        posting_sink = pa.BufferOutputStream()
+        pq.write_table(posting_table, posting_sink)
+        posting_bytes = posting_sink.getvalue().to_pybytes()
+        leaf_child = pa.field("element", pa.float16(), nullable=False)
+        leaf_vectors = np.zeros((2, 96), dtype=np.float16)
+        leaf_vectors[:, :2] = np.eye(2, dtype=np.float16)
+        leaf_table = pa.Table.from_arrays(
+            [
+                pa.array([0, 0], type=pa.uint16()),
+                pa.FixedSizeListArray.from_arrays(
+                    pa.array(leaf_vectors.ravel(), type=pa.float16()), 96
+                ),
+            ],
+            schema=pa.schema(
+                [
+                    pa.field("root_ordinal", pa.uint16(), nullable=False),
+                    pa.field("centroid", pa.list_(leaf_child, 96), nullable=False),
+                ]
+            ),
+        )
+        leaf_sink = pa.BufferOutputStream()
+        with ipc.new_file(leaf_sink, leaf_table.schema) as writer:
+            writer.write_table(leaf_table)
+        leaf_bytes = leaf_sink.getvalue().to_pybytes()
+        query_child = pa.field("element", pa.float32(), nullable=False)
+        query_vectors = np.zeros((64, 96), dtype=np.float32)
+        query_vectors[np.arange(64), np.arange(64)] = 1.0
+        query_table = pa.Table.from_arrays(
+            [pa.FixedSizeListArray.from_arrays(pa.array(query_vectors.ravel()), 96)],
+            schema=pa.schema([pa.field("emb", pa.list_(query_child, 96), nullable=False)]),
+        )
+        query_sink = pa.BufferOutputStream()
+        pq.write_table(query_table, query_sink)
+        query_bytes = query_sink.getvalue().to_pybytes()
+        role_bytes = {
+            "pages-manifest": manifest_bytes,
+            "leaf-postings": posting_bytes,
+            "leaf-centroids": leaf_bytes,
+            "query-parquet": query_bytes,
+        }
+        artifacts = []
+        for role in ("pages-manifest", "leaf-postings", "leaf-centroids", "query-parquet"):
+            uri = f"s3://frozen/{role}"
+            body = role_bytes[role]
+            objects[uri] = body
+            artifacts.append(ArtifactAuthority(role, uri, hashlib.sha256(body).hexdigest(), len(body)))
+        return tuple(artifacts), objects
 
     def test_v30_reproduction_authority_is_exact_and_construction_has_no_eval_capability(
         self,
@@ -152,6 +273,145 @@ class V30VariableRateReproductionTests(unittest.TestCase):
         self.assertEqual(projection["maximum_ns"], max(max(wave) for wave in waves))
         self.assertLess(projection["p99_ns"], sum(waves[-1]))
         self.assertEqual(projection["model"], "concurrent-max-no-sleep")
+
+    def test_v30_reproduction_pq8_training_and_adc_are_deterministic(self) -> None:
+        # Break caught: the bounded reproduction uses a different codebook seed, silently
+        # changes PQ geometry, or compares raw width-specific scores.
+        rows = np.array(
+            [[float((row + dimension) % 7) for dimension in range(8)] for row in range(16)],
+            dtype=np.float32,
+        )
+        first = fit_pq8(
+            rows,
+            width_bytes=2,
+            centroid_count=4,
+            sample_size=8,
+            iterations=2,
+            batch_rows=5,
+        )
+        second = fit_pq8(
+            rows,
+            width_bytes=2,
+            centroid_count=4,
+            sample_size=8,
+            iterations=2,
+            batch_rows=5,
+        )
+        np.testing.assert_array_equal(first.centroids, second.centroids)
+        codes, reconstruction_error = encode_pq8(first, rows, batch_rows=3)
+        self.assertEqual(codes.shape, (16, 2))
+        self.assertEqual(codes.dtype, np.uint8)
+        self.assertTrue(np.isfinite(reconstruction_error).all())
+        query = rows[5]
+        scores = first.score(codes, query)
+        expected = np.zeros(len(rows), dtype=np.float32)
+        for subquantizer in range(2):
+            start = subquantizer * 4
+            centers = first.centroids[subquantizer]
+            expected += ((centers[codes[:, subquantizer]] - query[start : start + 4]) ** 2).sum(axis=1)
+        np.testing.assert_array_equal(scores, expected)
+
+    def test_v30_reproduction_page_layout_is_base_only_and_one_owner(self) -> None:
+        # Break caught: changing the high-fidelity population changes page membership or
+        # construction emits duplicate/missing owners.
+        primary_leaf = np.array([1, 0, 1, 0, 1, 0, 1, 0], dtype=np.int32)
+        base_codes = np.array([[7 - row, row % 3] for row in range(8)], dtype=np.uint8)
+        pages, row_page, leaf_rows = build_base_page_layout(
+            primary_leaf,
+            base_codes,
+            leaf_count=2,
+            page_rows=2,
+        )
+        self.assertEqual(len(pages), 4)
+        self.assertEqual(sorted(np.concatenate(pages).tolist()), list(range(8)))
+        self.assertEqual(sorted(np.concatenate(tuple(leaf_rows.values())).tolist()), list(range(8)))
+        for page_ordinal, rows in enumerate(pages):
+            self.assertTrue(np.all(row_page[rows] == page_ordinal))
+            self.assertEqual(len(set(primary_leaf[rows].tolist())), 1)
+
+    def test_v30_reproduction_evaluates_all_arms_over_one_fixed_page_layout(self) -> None:
+        # Break caught: diagnostic arms rebuild pages, use approximate truth, or fetch more
+        # than ten bounded exact-vector pages before reranking.
+        rows = np.zeros((64, 8), dtype=np.float32)
+        for row in range(64):
+            rows[row, row % 8] = 1.0
+            rows[row] += np.float32(row / 10_000)
+            rows[row] /= np.linalg.norm(rows[row])
+        queries = rows[:32].copy()
+        leaves = np.zeros((1, 8), dtype=np.float32)
+        primary_leaf = np.zeros(64, dtype=np.int32)
+        residuals = rows.copy()
+        base = fit_pq8(
+            residuals,
+            width_bytes=2,
+            centroid_count=4,
+            sample_size=32,
+            iterations=2,
+        )
+        high = fit_pq8(
+            residuals,
+            width_bytes=4,
+            centroid_count=4,
+            sample_size=32,
+            iterations=2,
+        )
+        truth = exact_truth(rows, queries)
+        observations = evaluate_pq8_replacement_arms(
+            rows,
+            primary_leaf,
+            leaves,
+            queries,
+            truth,
+            base,
+            high,
+            page_rows=2,
+            leaf_beam=1,
+            candidate_depth=64,
+            page_encoded_bytes=(100,) * 32,
+        )
+        self.assertEqual(
+            tuple(observation.fidelity_fraction_ppm for observation in observations),
+            (0, 50_000, 100_000, 200_000),
+        )
+        for observation in observations:
+            self.assertEqual(observation.selected_page_counts, (10,) * 32)
+            self.assertEqual(observation.maximum_encoded_bytes, 1_000)
+            self.assertEqual(observation.maximum_scanned_codes, 64)
+
+    def test_v30_reproduction_streams_strict_arrow_pages_from_exact_s3_authority(self) -> None:
+        # Break caught: the worker lists/discovers pages, accepts schema drift, or persists a
+        # local corpus instead of authenticating each bounded Arrow object into memory.
+        artifacts, objects = self.frozen_fixture()
+        calls: list[str] = []
+
+        def get_object(uri: str) -> bytes:
+            calls.append(uri)
+            return objects[uri]
+
+        loaded = load_frozen_reproduction(
+            artifacts,
+            page_prefix="s3://frozen/pages",
+            get_object=get_object,
+            expected_source_rows=64,
+            expected_query_rows=64,
+        )
+        self.assertEqual(loaded.primary.shape, (64, 96))
+        self.assertEqual(loaded.queries.shape, (32, 96))
+        self.assertEqual(loaded.leaf_centroids.shape, (2, 96))
+        self.assertEqual(sorted(np.unique(loaded.primary_leaf).tolist()), [0, 1])
+        self.assertEqual(len(calls), 8)
+        self.assertEqual(set(calls), set(objects))
+        broken = dict(objects)
+        page_uri = next(uri for uri in broken if uri.endswith(".arrow"))
+        broken[page_uri] = broken[page_uri][:-1] + bytes([broken[page_uri][-1] ^ 1])
+        with self.assertRaisesRegex(ValueError, "page byte authority"):
+            load_frozen_reproduction(
+                artifacts,
+                page_prefix="s3://frozen/pages",
+                get_object=broken.__getitem__,
+                expected_source_rows=64,
+                expected_query_rows=64,
+            )
 
 
 if __name__ == "__main__":
