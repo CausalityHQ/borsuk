@@ -196,6 +196,12 @@ class V30SpotCampaignTests(unittest.TestCase):
         self.assertIn("--page-rows 128", reduced[0]["UserData"])
         self.assertNotIn("--routing-leaf-beam", reduced[0]["UserData"])
         self.assertNotIn("--routing-scan-budget", reduced[0]["UserData"])
+        serving_geometry = build_v30_construction_spot_specs(
+            replace(self.reduced_construction(), page_rows=480), self.targets()
+        )
+        self.assertIn("--roots 16", serving_geometry[0]["UserData"])
+        self.assertIn("--leaves 256", serving_geometry[0]["UserData"])
+        self.assertIn("--page-rows 480", serving_geometry[0]["UserData"])
         containment = build_v30_construction_spot_specs(
             self.containment_construction(), self.targets()
         )
