@@ -154,20 +154,27 @@ def run_v30_untouched_quality(
     maximum_bytes = max(work["encoded_bytes"] for _matches, work in parsed)
     maximum_codes = max(work["codes_scanned"] for _matches, work in parsed)
     maximum_gets = max(work["get_count"] for _matches, work in parsed)
-    if (
-        aggregate < 995_000
-        or floor_compliance < 997_500
-        or minimum < 800_000
-        or cpu_p99 > 15_000_000
-        or cold_p99 > 100_000_000
-        or maximum_peak_rss > 3 * 1024**3
-        or max(work["elapsed_ns"] for _matches, work in parsed) > 150_000_000
-    ):
-        raise ValueError("V30 untouched qualification gates failed")
+    failed_gates = [
+        name
+        for name, failed in (
+            ("aggregate-recall", aggregate < 995_000),
+            ("floor-compliance", floor_compliance < 997_500),
+            ("minimum-recall", minimum < 800_000),
+            ("cpu-p99", cpu_p99 > 15_000_000),
+            ("cold-p99", cold_p99 > 100_000_000),
+            ("peak-rss", maximum_peak_rss > 3 * 1024**3),
+            (
+                "query-elapsed-stop",
+                max(work["elapsed_ns"] for _matches, work in parsed) > 150_000_000,
+            ),
+        )
+        if failed
+    ]
     value = {
         "aggregate_recall_ppm": aggregate,
         "claim_eligible": False,
         "floor_compliance_ppm": floor_compliance,
+        "failed_gates": failed_gates,
         "manifest_sha256": plan.manifest.sha256,
         "maximum_codes_scanned": maximum_codes,
         "maximum_encoded_bytes": maximum_bytes,
@@ -199,7 +206,7 @@ def run_v30_untouched_quality(
             for ordinal, (matches, work) in enumerate(parsed)
         ],
         "source_rows": plan.source_rows,
-        "status": "passed",
+        "status": "failed" if failed_gates else "passed",
         "truth_sha256": plan.truth.sha256,
     }
     return json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"

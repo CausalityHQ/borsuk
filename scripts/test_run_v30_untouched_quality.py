@@ -151,13 +151,17 @@ class V30UntouchedQualityTests(unittest.TestCase):
                 json.dumps(bad, separators=(",", ":"), sort_keys=True).encode()
                 + b"\n"
             )
-            with self.assertRaisesRegex(ValueError, "qualification gates"):
+            failed = json.loads(
                 run_v30_untouched_quality(
                     plan,
                     invoke=lambda command: over_memory[
                         int(command[command.index("--query-row") + 1])
                     ],
                 )
+            )
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(failed["failed_gates"], ["peak-rss"])
+            self.assertFalse(failed["claim_eligible"])
 
 
 if __name__ == "__main__":
