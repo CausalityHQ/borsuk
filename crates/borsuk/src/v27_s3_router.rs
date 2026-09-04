@@ -124,35 +124,9 @@ fn distance(left: &[f32; 96], right: &[f32; 96]) -> f64 {
 }
 
 fn choose_initial(rows: &[(u64, [f32; 96])], count: usize, seed: u64) -> Vec<[f32; 96]> {
-    let first = rows
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, row)| (splitmix64(row.0 ^ seed), row.0))
-        .map(|(index, _)| index)
-        .unwrap();
-    let mut selected = vec![first];
-    while selected.len() < count {
-        let next = rows
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !selected.contains(index))
-            .map(|(index, row)| {
-                let nearest = selected
-                    .iter()
-                    .map(|selected| distance(&row.1, &rows[*selected].1))
-                    .fold(f64::INFINITY, f64::min);
-                (index, nearest, row.0)
-            })
-            .max_by(|left, right| {
-                left.1
-                    .total_cmp(&right.1)
-                    .then_with(|| right.2.cmp(&left.2))
-            })
-            .map(|entry| entry.0)
-            .unwrap();
-        selected.push(next);
-    }
-    selected.into_iter().map(|index| rows[index].1).collect()
+    let mut ordered = rows.iter().collect::<Vec<_>>();
+    ordered.sort_unstable_by_key(|row| (splitmix64(row.0 ^ seed), row.0));
+    ordered[..count].iter().map(|row| row.1).collect()
 }
 
 fn train_level(
@@ -496,6 +470,7 @@ pub fn decode_v27_hierarchy(
 
 #[cfg(test)]
 mod tests {
+    use super::{choose_initial, splitmix64};
     use crate::{
         V27_LEAF_CENTROIDS, V27_LEAVES_PER_ROOT, V27_ROOT_CENTROIDS, V27HierarchyConfig,
         V27PageRow, decode_v27_hierarchy, encode_v27_hierarchy, fit_v27_hierarchy,
@@ -525,6 +500,24 @@ mod tests {
             worker_count,
             batch_rows: 8,
         }
+    }
+
+    #[test]
+    fn v27_s3_router_initializes_centroids_from_the_bounded_hash_order() {
+        // Break caught: farthest-first initialization repeatedly scans the growing selected set
+        // and becomes effectively quadratic before the 32,768-leaf untouched qualification.
+        let rows = rows()
+            .into_iter()
+            .map(|row| (row.source_ordinal, row.vector))
+            .collect::<Vec<_>>();
+        let seed = 0x6a09_e667_f3bc_c909;
+        let selected = choose_initial(&rows, 8, seed);
+        let mut expected = rows.iter().collect::<Vec<_>>();
+        expected.sort_unstable_by_key(|row| (splitmix64(row.0 ^ seed), row.0));
+        assert_eq!(
+            selected,
+            expected[..8].iter().map(|row| row.1).collect::<Vec<_>>()
+        );
     }
 
     #[test]

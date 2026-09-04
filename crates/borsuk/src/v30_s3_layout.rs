@@ -17,8 +17,11 @@ use parquet::arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder}
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BorsukError, Result, V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_page,
-    v30_s3_pq::{V30CodePlanes, V30Fidelity, V30PqCodebook, V30PqWidth, encode_v30_code},
+    BorsukError, Result, V27Hierarchy, V27HierarchyConfig, V27PageIdentity, V27PageRow,
+    encode_v27_page, fit_v27_hierarchy,
+    v30_s3_pq::{
+        V30CodePlanes, V30Fidelity, V30PqCodebook, V30PqWidth, encode_v30_code, fit_v30_codebook,
+    },
 };
 
 const MAX_PAGE_ROWS: u16 = 512;
@@ -860,6 +863,232 @@ impl<S: V30PageSink> V30LayoutAssembler<'_, S> {
 
 pub(crate) struct V30LayoutBuilder;
 
+const CORPUS_KEY: &str = "v30-normalized-corpus";
+const CORPUS_RECORD_BYTES: usize = 8 + 96 * 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct V30ConstructionConfig {
+    pub(crate) hierarchy: V27HierarchyConfig,
+    pub(crate) training_rows: usize,
+    pub(crate) page_rows: usize,
+    pub(crate) sort_memory_rows: usize,
+    pub(crate) fidelity_ppm: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V30ConstructedIndex {
+    pub(crate) hierarchy: V27Hierarchy,
+    pub(crate) base_codebook: V30PqCodebook,
+    pub(crate) high_codebook: V30PqCodebook,
+    pub(crate) layout: V30BuiltLayout,
+    pub(crate) training_rows: usize,
+}
+
+#[derive(Debug)]
+struct TrainingRow {
+    hash: u64,
+    row: V27PageRow,
+}
+
+impl PartialEq for TrainingRow {
+    fn eq(&self, other: &Self) -> bool {
+        (self.hash, self.row.source_ordinal) == (other.hash, other.row.source_ordinal)
+    }
+}
+
+impl Eq for TrainingRow {}
+
+impl Ord for TrainingRow {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.hash, self.row.source_ordinal).cmp(&(other.hash, other.row.source_ordinal))
+    }
+}
+
+impl PartialOrd for TrainingRow {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn construction_hash(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
+fn normalize_construction_row(mut row: V27PageRow) -> Result<V27PageRow> {
+    if row.vector.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("V30 construction corpus value differs"));
+    }
+    let norm = row
+        .vector
+        .iter()
+        .map(|value| f64::from(*value) * f64::from(*value))
+        .sum::<f64>()
+        .sqrt();
+    if !norm.is_finite() || norm <= 0.0 {
+        return Err(invalid("V30 construction corpus norm differs"));
+    }
+    for value in &mut row.vector {
+        *value = (f64::from(*value) / norm) as f32;
+    }
+    Ok(row)
+}
+
+fn write_corpus_row(output: &mut dyn Write, row: &V27PageRow) -> Result<()> {
+    scratch_io(output.write_all(&row.source_ordinal.to_le_bytes()))?;
+    for value in row.vector {
+        scratch_io(output.write_all(&value.to_le_bytes()))?;
+    }
+    Ok(())
+}
+
+fn read_corpus_row(reader: &mut dyn Read) -> Result<Option<V27PageRow>> {
+    let mut bytes = [0_u8; CORPUS_RECORD_BYTES];
+    match scratch_io(reader.read(&mut bytes[..1]))? {
+        0 => return Ok(None),
+        1 => scratch_io(reader.read_exact(&mut bytes[1..]))?,
+        _ => unreachable!("one-byte reads cannot return more than one byte"),
+    }
+    let mut vector = [0.0_f32; 96];
+    for (dimension, value) in vector.iter_mut().enumerate() {
+        let start = 8 + dimension * 4;
+        *value = f32::from_le_bytes(bytes[start..start + 4].try_into().unwrap());
+    }
+    Ok(Some(V27PageRow {
+        source_ordinal: u64::from_le_bytes(bytes[..8].try_into().unwrap()),
+        vector,
+    }))
+}
+
+struct CorpusIter {
+    reader: Box<dyn Read + Send>,
+    error: Option<BorsukError>,
+}
+
+impl Iterator for CorpusIter {
+    type Item = V27PageRow;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match read_corpus_row(self.reader.as_mut()) {
+            Ok(row) => row,
+            Err(error) => {
+                self.error = Some(error);
+                None
+            }
+        }
+    }
+}
+
+pub(crate) struct V30ConstructionBuilder;
+
+impl V30ConstructionBuilder {
+    pub(crate) fn build<I, S, P>(
+        rows: I,
+        config: V30ConstructionConfig,
+        scratch: &mut S,
+        pages: &mut P,
+    ) -> Result<V30ConstructedIndex>
+    where
+        I: IntoIterator<Item = V27PageRow>,
+        S: V30Scratch,
+        P: V30PageSink,
+    {
+        let minimum_training = config.hierarchy.leaves.saturating_mul(2).max(256);
+        if config.training_rows < minimum_training
+            || config.page_rows == 0
+            || config.sort_memory_rows == 0
+            || config.fidelity_ppm != 50_000
+        {
+            return Err(invalid("V30 construction configuration differs"));
+        }
+        let seed = config.hierarchy.seed;
+        let mut sample = BinaryHeap::with_capacity(config.training_rows + 1);
+        let mut source_rows = 0_u64;
+        let mut rows = rows.into_iter();
+        let mut write = |output: &mut dyn Write| {
+            for row in rows.by_ref() {
+                if row.source_ordinal != source_rows {
+                    return Err(invalid("V30 construction corpus source order differs"));
+                }
+                let row = normalize_construction_row(row)?;
+                write_corpus_row(output, &row)?;
+                sample.push(TrainingRow {
+                    hash: construction_hash(row.source_ordinal ^ seed),
+                    row,
+                });
+                if sample.len() > config.training_rows {
+                    sample.pop();
+                }
+                source_rows += 1;
+            }
+            Ok(())
+        };
+        if let Err(error) = scratch.write_scratch(CORPUS_KEY, &mut write) {
+            let _ = scratch.remove_scratch(CORPUS_KEY);
+            return Err(error);
+        }
+        let result = (|| {
+            let training_rows = u64::try_from(config.training_rows)
+                .map_err(|_| invalid("V30 construction training rows overflow"))?;
+            if source_rows < training_rows || sample.len() != config.training_rows {
+                return Err(invalid("V30 construction training population differs"));
+            }
+            let mut training = sample
+                .into_iter()
+                .map(|entry| entry.row)
+                .collect::<Vec<_>>();
+            training.sort_unstable_by_key(|row| row.source_ordinal);
+            let hierarchy = fit_v27_hierarchy(&training, &config.hierarchy)?;
+            let residuals = training
+                .iter()
+                .map(|row| {
+                    let leaf = assign_v30_leaf(&row.vector, &hierarchy)? as usize;
+                    Ok(std::array::from_fn(|dimension| {
+                        row.vector[dimension] - f32::from(hierarchy.leaves[leaf][dimension])
+                    }))
+                })
+                .collect::<Result<Vec<[f32; 96]>>>()?;
+            let base_codebook = fit_v30_codebook(&residuals, V30PqWidth::Base24)?;
+            let high_codebook = fit_v30_codebook(&residuals, V30PqWidth::High48)?;
+            let mut corpus = CorpusIter {
+                reader: scratch.open_scratch(CORPUS_KEY)?,
+                error: None,
+            };
+            let layout = V30LayoutBuilder::build_from_corpus(
+                &mut corpus,
+                &hierarchy,
+                &base_codebook,
+                &high_codebook,
+                V30LayoutBuildConfig {
+                    page_rows: config.page_rows,
+                    sort_memory_rows: config.sort_memory_rows,
+                    fidelity_ppm: config.fidelity_ppm,
+                },
+                scratch,
+                pages,
+            )?;
+            if let Some(error) = corpus.error {
+                return Err(error);
+            }
+            Ok(V30ConstructedIndex {
+                hierarchy,
+                base_codebook,
+                high_codebook,
+                layout,
+                training_rows: training.len(),
+            })
+        })();
+        let cleanup = scratch.remove_scratch(CORPUS_KEY);
+        match (result, cleanup) {
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+            (Ok(built), Ok(())) => Ok(built),
+        }
+    }
+}
+
 struct PreparedErrorIter {
     reader: Box<dyn Read + Send>,
     error: Option<BorsukError>,
@@ -1441,13 +1670,13 @@ mod tests {
     };
 
     use super::{
-        V30FidelitySelectionConfig, V30Layout, V30LayoutBuildConfig, V30LayoutBuilder,
-        V30LayoutRecord, V30LeafRange, V30PageRange, V30PageSink, V30Scratch,
-        decode_v30_layout_artifacts, encode_v30_layout_artifacts, select_v30_high_fidelity,
-        sort_v30_layout_records,
+        V30ConstructionBuilder, V30ConstructionConfig, V30FidelitySelectionConfig, V30Layout,
+        V30LayoutBuildConfig, V30LayoutBuilder, V30LayoutRecord, V30LeafRange, V30PageRange,
+        V30PageSink, V30Scratch, decode_v30_layout_artifacts, encode_v30_layout_artifacts,
+        select_v30_high_fidelity, sort_v30_layout_records,
     };
     use crate::{
-        V27Hierarchy, V27PageIdentity, V27PageRow, decode_v27_page,
+        V27Hierarchy, V27HierarchyConfig, V27PageIdentity, V27PageRow, decode_v27_page,
         v30_s3_pq::{V30PqCodebook, V30PqWidth},
     };
     use half::f16;
@@ -1812,5 +2041,56 @@ mod tests {
         assert_eq!(built.layout.leaves().len(), 2);
         assert_eq!(built.codes.high_rows(), 5);
         assert!(scratch.runs.is_empty());
+    }
+
+    #[test]
+    fn v30_s3_construction_streams_once_and_trains_without_query_authority() {
+        // Break caught: the production builder rereads the remote corpus, retains every exact
+        // vector, or requires query/truth input while fitting hierarchy and residual codebooks.
+        let consumed = Arc::new(AtomicUsize::new(0));
+        let seen = consumed.clone();
+        let rows = (0..320_u64).map(move |source_ordinal| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            let mut vector = [0.0_f32; 96];
+            vector[source_ordinal as usize % 96] = 1.0;
+            vector[(source_ordinal as usize * 7 + 1) % 96] =
+                0.25 + (source_ordinal % 17) as f32 / 100.0;
+            V27PageRow {
+                source_ordinal,
+                vector,
+            }
+        });
+        let mut scratch = Scratch::default();
+        let mut pages = Scratch::default();
+        let built = V30ConstructionBuilder::build(
+            rows,
+            V30ConstructionConfig {
+                hierarchy: V27HierarchyConfig {
+                    roots: 2,
+                    leaves: 4,
+                    iterations: 1,
+                    seed: 0x6a09_e667_f3bc_c909,
+                    worker_count: 2,
+                    batch_rows: 32,
+                },
+                training_rows: 256,
+                page_rows: 32,
+                sort_memory_rows: 32,
+                fidelity_ppm: 50_000,
+            },
+            &mut scratch,
+            &mut pages,
+        )
+        .unwrap();
+        assert_eq!(consumed.load(Ordering::SeqCst), 320);
+        assert_eq!(built.training_rows, 256);
+        assert_eq!(built.hierarchy.roots.len(), 2);
+        assert_eq!(built.hierarchy.leaves.len(), 4);
+        assert_eq!(built.base_codebook.width(), V30PqWidth::Base24);
+        assert_eq!(built.high_codebook.width(), V30PqWidth::High48);
+        assert_eq!(built.layout.layout.source_rows(), 320);
+        assert_eq!(built.layout.codes.high_rows(), 16);
+        assert!(scratch.runs.is_empty());
+        assert!(!pages.runs.is_empty());
     }
 }
