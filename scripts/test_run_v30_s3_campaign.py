@@ -107,6 +107,9 @@ class V30SpotCampaignTests(unittest.TestCase):
             source_archive_uri="s3://authority/source.tar.zst",
             source_archive_sha256="b" * 64,
             source_archive_bytes=1_000_000,
+            qualifier_binary_uri="s3://authority/v30_s3_qualify",
+            qualifier_binary_sha256="1" * 64,
+            qualifier_binary_bytes=12_000_000,
             construction_manifest_uri="s3://authority/v30/build-a0001/manifest.json",
             construction_manifest_sha256="d" * 64,
             construction_manifest_bytes=8_000,
@@ -253,6 +256,9 @@ class V30SpotCampaignTests(unittest.TestCase):
             )
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
             self.assertIn("v30_s3_qualify", script)
+            self.assertIn("s3://authority/v30_s3_qualify", script)
+            self.assertIn("1" * 64, script)
+            self.assertIn("12000000", script)
             self.assertIn("run_v30_untouched_quality.py", script)
             self.assertIn("test.parquet", script)
             self.assertIn("neighbors.parquet", script)
@@ -268,10 +274,9 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertNotIn("--construction-manifest-s3", script)
             self.assertNotIn("corpus.json", script)
             self.assertNotIn("v30_s3_build", script)
-            self.assertIn(
-                "install -D -m 0555 target/release/examples/v30_s3_qualify /opt/borsuk/v30_s3_qualify",
-                script,
-            )
+            self.assertNotIn("cargo build", script)
+            self.assertNotIn("rustup", script)
+            self.assertIn('chmod 0555 /opt/borsuk/v30_s3_qualify', script)
             self.assertIn("uv venv --python 3.12 /opt/borsuk/venv", script)
             self.assertIn("/opt/borsuk/venv/bin/python", script)
             self.assertNotIn("python3 -m pip install", script)
@@ -282,6 +287,12 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("rss_limit_bytes=3221225472", script)
             self.assertIn("HEARTBEAT.json", script)
             self.assertIn("kill -TERM -- \"-$child\"", script)
+
+        wider = build_v30_evaluation_spot_specs(
+            replace(self.evaluation(), source_rows=100_000, leaf_beam=256),
+            self.targets(),
+        )
+        self.assertIn("--leaf-beam 256", wider[0]["UserData"])
 
     def test_v32_containment_spot_reads_resident_artifacts_but_no_page_body(self) -> None:
         specs = build_v32_containment_spot_specs(self.containment(), self.targets())

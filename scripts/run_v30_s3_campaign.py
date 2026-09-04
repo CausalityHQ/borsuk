@@ -51,6 +51,9 @@ class V30EvaluationPlan:
     source_archive_uri: str
     source_archive_sha256: str
     source_archive_bytes: int
+    qualifier_binary_uri: str
+    qualifier_binary_sha256: str
+    qualifier_binary_bytes: int
     construction_manifest_uri: str
     construction_manifest_sha256: str
     construction_manifest_bytes: int
@@ -179,6 +182,11 @@ def _validate_evaluation(plan: V30EvaluationPlan) -> None:
         plan.output_prefix,
     )
     artifacts = (
+        (
+            plan.qualifier_binary_uri,
+            plan.qualifier_binary_sha256,
+            plan.qualifier_binary_bytes,
+        ),
         (plan.construction_manifest_uri, plan.construction_manifest_sha256, plan.construction_manifest_bytes),
         (plan.query_uri, plan.query_sha256, plan.query_bytes),
         (plan.truth_uri, plan.truth_sha256, plan.truth_bytes),
@@ -191,7 +199,8 @@ def _validate_evaluation(plan: V30EvaluationPlan) -> None:
         or plan.source_rows not in {100_000, 9_990_000}
         or plan.query_start < 0
         or plan.query_count != 32
-        or plan.leaf_beam != {100_000: 64, 9_990_000: 512}[plan.source_rows]
+        or plan.leaf_beam
+        not in ({64, 128, 256} if plan.source_rows == 100_000 else {512})
         or not 1 <= plan.page_count <= 16
     ):
         raise ValueError("V30 evaluation authority differs")
@@ -483,16 +492,17 @@ def _evaluation_script(plan: V30EvaluationPlan) -> str:
             "put_once() { aws s3api put-object --bucket \"$output_bucket\" --key \"$output_key$2\" --body \"$1\" --if-none-match '*' --checksum-algorithm SHA256 >/dev/null; }",
             "finish() { status=$?; trap - EXIT; set +e; if [[ \"$terminal\" != complete ]]; then printf '{\"claim_eligible\":false,\"status\":\"failed\",\"worker_status\":%d}\\n' \"$status\" >\"$root/FAILED.json\"; put_once \"$root/worker.log\" worker.log || true; put_once \"$root/FAILED.json\" FAILED.json || true; fi; shutdown -h now; }",
             "trap finish EXIT",
-            "dnf install -y gcc gcc-c++ python3-pip tar zstd",
-            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable",
+            "dnf install -y python3-pip tar zstd",
             f"aws s3 cp --only-show-errors {shlex.quote(plan.source_archive_uri)} \"$archive\"",
             f'test "$(stat -c %s "$archive")" -eq {plan.source_archive_bytes}',
             f"printf '%s  %s\\n' {plan.source_archive_sha256} \"$archive\" | sha256sum --check --status",
             'tar --zstd -xf "$archive" -C "$source_dir"',
             'cd "$source_dir"',
             f'test "$(cat .borsuk-source-commit)" = {plan.source_commit}',
-            "/root/.cargo/bin/cargo build --release --locked -p borsuk --example v30_s3_qualify",
-            "install -D -m 0555 target/release/examples/v30_s3_qualify /opt/borsuk/v30_s3_qualify",
+            f"aws s3 cp --only-show-errors {shlex.quote(plan.qualifier_binary_uri)} /opt/borsuk/v30_s3_qualify",
+            f'test "$(stat -c %s /opt/borsuk/v30_s3_qualify)" -eq {plan.qualifier_binary_bytes}',
+            f"printf '%s  %s\\n' {plan.qualifier_binary_sha256} /opt/borsuk/v30_s3_qualify | sha256sum --check --status",
+            "chmod 0555 /opt/borsuk/v30_s3_qualify",
             "curl -LsSf https://astral.sh/uv/0.8.17/install.sh | sh",
             "/root/.local/bin/uv venv --python 3.12 /opt/borsuk/venv",
             "/root/.local/bin/uv pip install --python /opt/borsuk/venv/bin/python --requirement scripts/requirements-format-bench.txt",
