@@ -55,12 +55,12 @@
   tables and reduction order.
 - Produces after Task 0 passes: `V30PqCodebooks`, `V30BaseBlock`, `V30HighBlock`, `V30Fidelity`, `fit_v30_codebooks`, `encode_v30_codes`, `score_v30_leaf`, `encode_v30_pq_artifacts`, and `decode_v30_pq_artifacts`.
 
-- [ ] **Step 1: Write the codec REDs.** Add `v30_s3_pq_` unit tests requiring 24 four-dimensional and 48 two-dimensional subquantizers with 256 centroids, 24/48-byte rows, deterministic centroid/source ties, exact-zero residual support, non-finite rejection, and exact five-percent selection by reversed base reconstruction error then source ordinal. Require each logical position to map to exactly one compact plane.
-- [ ] **Step 2: Lock scoring and memory arithmetic in RED.** Differential-test scalar and optimized 256-entry-table scoring for both widths in the same f32 domain. Require `project_v30_resident_bytes(100_000_000, 50_000) == 2_630_588_896` with literal component checks; reject per-leaf plane padding, every other fraction/width, overflow, or zero rows.
-- [ ] **Step 3: Lock Arrow authority in RED.** Require exact schemas for both codebooks, base blocks, fidelity bitmap/rank offsets, and high blocks; mutate role, digest, length, row count, width, nullability, field names, offsets, padding, fidelity cardinality, and dependency bindings.
-- [ ] **Step 4: Run the focused RED.** Run `cargo test -p borsuk --lib v30_s3_pq_ -- --nocapture`; require only unresolved V30 symbols and at least six selected tests.
-- [ ] **Step 5: Implement the minimal codec.** Implement deterministic 256-centroid training for both widths, globally pack mutually exclusive planes, and use bounded 256-entry query tables. Store no zero-filled placeholders and expose no compatibility dispatch.
-- [ ] **Step 6: Run GREEN and commit.** Run the identical selector, `cargo fmt --all -- --check`, and `git diff --check`; commit only `v30_s3_pq.rs` and `lib.rs`.
+- [x] **Step 1: Write the codec REDs.** Add `v30_s3_pq_` unit tests requiring 24 four-dimensional and 48 two-dimensional subquantizers with 256 centroids, 24/48-byte rows, deterministic centroid/source ties, exact-zero residual support, non-finite rejection, and exact five-percent selection by reversed base reconstruction error then source ordinal. Require each logical position to map to exactly one compact plane.
+- [x] **Step 2: Lock scoring and memory arithmetic in RED.** Differential-test scalar and optimized 256-entry-table scoring for both widths in the same f32 domain. Require `project_v30_resident_bytes(100_000_000, 50_000) == 2_630_588_896` with literal component checks; reject per-leaf plane padding, every other fraction/width, overflow, or zero rows.
+- [x] **Step 3: Lock Arrow authority in RED.** Require exact schemas for both codebooks, base blocks, fidelity bitmap/rank offsets, and high blocks; mutate role, digest, length, row count, width, nullability, field names, offsets, padding, fidelity cardinality, and dependency bindings.
+- [x] **Step 4: Run the focused RED.** Run `cargo test -p borsuk --lib v30_s3_pq_ -- --nocapture`; require only unresolved V30 symbols and at least six selected tests.
+- [x] **Step 5: Implement the minimal codec.** Implement deterministic 256-centroid training for both widths, globally pack mutually exclusive planes, and use bounded 256-entry query tables. Store no zero-filled placeholders and expose no compatibility dispatch.
+- [x] **Step 6: Run GREEN and commit.** Run the identical selector, `cargo fmt --all -- --check`, and `git diff --check`; commit only `v30_s3_pq.rs` and `lib.rs`.
 
 ### Task 2: Build one-owner variable-rate pages with bounded external selection
 
@@ -109,12 +109,12 @@
 - Consumes: explicit local Arrow/Parquet authority paths, an explicit S3 bucket/key roster or injected local store, and the frozen V30 arm.
 - Produces: canonical per-query results/work, exact recall evidence, and injected request/throughput latency projections.
 
-- [ ] **Step 1: Write example/controller REDs.** Require explicit artifacts and identities, exact burned 32-query ordinals for regression and a preregistered disjoint untouched range for qualification, no latest/prefix discovery, no ETag digest, no legacy/version flags, no D3 surface, canonical stdout, and cleanup on every terminal.
-- [ ] **Step 2: Write the fail-fast quality RED.** Recompute all 320 truth memberships independently; require at least 319 hits, 900,000-ppm minimum recall, 31 perfect queries, ten GETs, bounded bytes/work/memory, and injected Standard-S3 p50/p95/p99 decomposition without sleeping.
-- [ ] **Step 3: Run the narrow REDs.** Run `cargo test -p borsuk --example v30_s3_qualify v30_ -- --nocapture` and `python3 -m unittest scripts.test_run_v30_reduced_quality`; require only missing V30 example/controller boundaries.
-- [ ] **Step 4: Implement the thin boundaries.** Keep scientific scoring in Rust, use Python only for exact orchestration/evidence, and keep page bodies in Arrow with query/truth tables in Parquet.
-- [ ] **Step 5: Add the fast selector.** Add only V30 focused Rust tests and controller contracts to `check_v26_fast.py`; ensure ordinary per-edit execution does not run full workspace tests or access AWS.
-- [ ] **Step 6: Run GREEN and commit.** Run the complete controller file, example/library selectors, scoped Ruff, `py_compile`, formatting, and diff-check; commit only Task 4 paths.
+- [x] **Step 1: Write example/controller REDs.** Require explicit artifacts and identities, exact burned 32-query ordinals for regression and a preregistered disjoint untouched range for qualification, no latest/prefix discovery, no ETag digest, no legacy/version flags, no D3 surface, canonical stdout, and cleanup on every terminal.
+- [x] **Step 2: Write the fail-fast quality RED.** Recompute all 320 truth memberships independently; require at least 319 hits, 900,000-ppm minimum recall, 31 perfect queries, ten GETs, bounded bytes/work/memory, and injected Standard-S3 p50/p95/p99 decomposition without sleeping.
+- [x] **Step 3: Run the narrow REDs.** Run `cargo test -p borsuk --example v30_s3_qualify v30_ -- --nocapture` and `python3 -m unittest scripts.test_run_v30_reduced_quality`; require only missing V30 example/controller boundaries.
+- [x] **Step 4: Implement the thin boundaries.** Keep scientific scoring in Rust, use Python only for exact orchestration/evidence, and keep page bodies in Arrow with query/truth tables in Parquet.
+- [x] **Step 5: Add the fast selector.** Add only V30 focused Rust tests and controller contracts to `check_v26_fast.py`; ensure ordinary per-edit execution does not run full workspace tests or access AWS.
+- [x] **Step 6: Run GREEN and commit.** Run the complete controller file, example/library selectors, scoped Ruff, `py_compile`, formatting, and diff-check; commit only Task 4 paths.
 
 ### Task 5: Qualify one untouched 9.99M candidate on Spot
 

@@ -1194,19 +1194,21 @@ impl V30Layout {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V30LayoutArtifactIdentity {
-    pub(crate) role: String,
-    pub(crate) sha256: String,
-    pub(crate) encoded_bytes: u64,
+#[doc(hidden)]
+pub struct V30LayoutArtifactIdentity {
+    pub role: String,
+    pub sha256: String,
+    pub encoded_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V30LayoutArtifacts {
-    pub(crate) source_rows: u64,
-    pub(crate) leaf_ranges: V30LayoutArtifactIdentity,
-    pub(crate) page_ranges: V30LayoutArtifactIdentity,
-    pub(crate) leaf_ranges_arrow: Vec<u8>,
-    pub(crate) page_ranges_parquet: Vec<u8>,
+#[doc(hidden)]
+pub struct V30LayoutArtifacts {
+    pub source_rows: u64,
+    pub leaf_ranges: V30LayoutArtifactIdentity,
+    pub page_ranges: V30LayoutArtifactIdentity,
+    pub leaf_ranges_arrow: Vec<u8>,
+    pub page_ranges_parquet: Vec<u8>,
 }
 
 fn leaf_schema() -> Schema {
@@ -1343,7 +1345,8 @@ fn column<T: Array + 'static>(batch: &RecordBatch, index: usize) -> Result<&T> {
         .ok_or_else(|| invalid("V30 layout column differs"))
 }
 
-pub(crate) fn decode_v30_layout_artifacts(artifacts: &V30LayoutArtifacts) -> Result<V30Layout> {
+#[doc(hidden)]
+pub fn decode_v30_layout_artifacts(artifacts: &V30LayoutArtifacts) -> Result<V30Layout> {
     authenticate(
         &artifacts.leaf_ranges,
         &artifacts.leaf_ranges_arrow,

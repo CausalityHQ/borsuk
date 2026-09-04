@@ -215,6 +215,15 @@ mod v30_s3_pq;
 mod v30_s3_search;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
+#[doc(hidden)]
+pub use v30_s3_layout::{V30LayoutArtifactIdentity, V30LayoutArtifacts};
+#[doc(hidden)]
+pub use v30_s3_pq::{V30PqArtifactIdentity, V30PqArtifacts};
+#[doc(hidden)]
+pub use v30_s3_search::{
+    V30Index, V30Match, V30PageSelection, V30PageStore, V30Router, V30RoutingWork, V30SearchArm,
+    V30SearchResult, V30SearchWork,
+};
 #[allow(
     dead_code,
     reason = "V24 pseudoquery qualification is wired incrementally by the committed plan"

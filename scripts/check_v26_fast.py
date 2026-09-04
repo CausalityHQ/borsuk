@@ -47,6 +47,7 @@ def v30_python_contract_command() -> list[str]:
         "-m",
         "unittest",
         "scripts.test_run_v30_variable_rate_reproduction",
+        "scripts.test_run_v30_reduced_quality",
     ]
 
 
@@ -60,6 +61,22 @@ def v30_rust_contract_command() -> list[str]:
         "borsuk",
         "--lib",
         "v30_s3_",
+        "--",
+        "--nocapture",
+    ]
+
+
+def v30_qualifier_contract_command() -> list[str]:
+    """Return the focused authenticated local/S3 qualifier boundary gate."""
+
+    return [
+        "cargo",
+        "test",
+        "-p",
+        "borsuk",
+        "--example",
+        "v30_s3_qualify",
+        "v30_s3_qualify_",
         "--",
         "--nocapture",
     ]
@@ -81,6 +98,7 @@ def smoke_commands(python_executable: str) -> list[list[str]]:
         ],
         v30_python_contract_command(),
         v30_rust_contract_command(),
+        v30_qualifier_contract_command(),
         ["cargo", "fmt", "--all", "--", "--check"],
         ["git", "diff", "--check"],
     ]
@@ -123,6 +141,7 @@ def affected_commands(python_executable: str) -> list[list[str]]:
         ],
         v30_python_contract_command(),
         v30_rust_contract_command(),
+        v30_qualifier_contract_command(),
         ["cargo", "fmt", "--all", "--", "--check"],
         ["git", "diff", "--check"],
     ]

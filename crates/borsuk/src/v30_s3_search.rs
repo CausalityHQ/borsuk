@@ -3,40 +3,48 @@ use std::{cmp::Ordering, collections::BinaryHeap};
 use half::f16;
 
 use crate::{
-    BorsukError, Result, V27Hierarchy, V27PageIdentity,
-    v30_s3_layout::V30Layout,
-    v30_s3_pq::{V30CodePlanes, V30PqCodebook, V30PqWidth, V30QueryTable},
+    BorsukError, Result, V27Hierarchy, V27HierarchyArtifacts, V27PageIdentity,
+    decode_v27_hierarchy,
+    v30_s3_layout::{V30Layout, V30LayoutArtifacts, decode_v30_layout_artifacts},
+    v30_s3_pq::{
+        V30CodePlanes, V30PqArtifacts, V30PqCodebook, V30PqWidth, V30QueryTable,
+        decode_v30_pq_artifacts,
+    },
 };
 
 const MAX_SCANNED_CODES: u64 = 1_000_000;
 const MAX_CANDIDATES: usize = 12_288;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct V30SearchArm {
-    pub(crate) root_beam: usize,
-    pub(crate) leaf_beam: usize,
-    pub(crate) candidate_depth: usize,
-    pub(crate) page_count: usize,
+#[doc(hidden)]
+pub struct V30SearchArm {
+    pub root_beam: usize,
+    pub leaf_beam: usize,
+    pub candidate_depth: usize,
+    pub page_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct V30RoutingWork {
-    pub(crate) roots_scored: usize,
-    pub(crate) leaves_scored: usize,
-    pub(crate) codes_scanned: u64,
-    pub(crate) candidates_retained: usize,
-    pub(crate) pages_considered: usize,
-    pub(crate) selected_pages: usize,
+#[doc(hidden)]
+pub struct V30RoutingWork {
+    pub roots_scored: usize,
+    pub leaves_scored: usize,
+    pub codes_scanned: u64,
+    pub candidates_retained: usize,
+    pub pages_considered: usize,
+    pub selected_pages: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V30PageSelection {
-    pub(crate) pages: Vec<V27PageIdentity>,
-    pub(crate) work: V30RoutingWork,
+#[doc(hidden)]
+pub struct V30PageSelection {
+    pub pages: Vec<V27PageIdentity>,
+    pub work: V30RoutingWork,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct V30Router {
+#[doc(hidden)]
+pub struct V30Router {
     hierarchy: V27Hierarchy,
     base_codebook: V30PqCodebook,
     high_codebook: V30PqCodebook,
@@ -44,32 +52,37 @@ pub(crate) struct V30Router {
     codes: V30CodePlanes,
 }
 
-pub(crate) trait V30PageStore: Send + Sync {
+#[doc(hidden)]
+pub trait V30PageStore: Send + Sync {
     fn read_wave(&self, pages: &[V27PageIdentity]) -> Result<Vec<Vec<u8>>>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct V30Match {
-    pub(crate) source_ordinal: u64,
-    pub(crate) squared_distance: f64,
+#[doc(hidden)]
+pub struct V30Match {
+    pub source_ordinal: u64,
+    pub squared_distance: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V30SearchWork {
-    pub(crate) routing: V30RoutingWork,
-    pub(crate) get_count: usize,
-    pub(crate) encoded_bytes: u64,
-    pub(crate) decoded_rows: usize,
-    pub(crate) unique_rows: usize,
+#[doc(hidden)]
+pub struct V30SearchWork {
+    pub routing: V30RoutingWork,
+    pub get_count: usize,
+    pub encoded_bytes: u64,
+    pub decoded_rows: usize,
+    pub unique_rows: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct V30SearchResult {
-    pub(crate) matches: Vec<V30Match>,
-    pub(crate) work: V30SearchWork,
+#[doc(hidden)]
+pub struct V30SearchResult {
+    pub matches: Vec<V30Match>,
+    pub work: V30SearchWork,
 }
 
-pub(crate) struct V30Index<S> {
+#[doc(hidden)]
+pub struct V30Index<S> {
     router: V30Router,
     store: S,
     arm: V30SearchArm,
@@ -144,6 +157,22 @@ fn smallest(mut values: Vec<(f64, usize)>, limit: usize) -> Vec<(f64, usize)> {
 }
 
 impl V30Router {
+    pub fn from_artifacts(
+        hierarchy: &V27HierarchyArtifacts,
+        pq: &V30PqArtifacts,
+        layout: &V30LayoutArtifacts,
+    ) -> Result<Self> {
+        let hierarchy = decode_v27_hierarchy(
+            &hierarchy.roots,
+            &hierarchy.roots_bytes,
+            &hierarchy.leaves,
+            &hierarchy.leaves_bytes,
+        )?;
+        let (base_codebook, high_codebook, codes) = decode_v30_pq_artifacts(pq)?.into_parts();
+        let layout = decode_v30_layout_artifacts(layout)?;
+        Self::new(hierarchy, base_codebook, high_codebook, layout, codes)
+    }
+
     pub(crate) fn new(
         hierarchy: V27Hierarchy,
         base_codebook: V30PqCodebook,
@@ -185,11 +214,7 @@ impl V30Router {
         Ok(())
     }
 
-    pub(crate) fn select_pages(
-        &self,
-        query: &[f32; 96],
-        arm: V30SearchArm,
-    ) -> Result<V30PageSelection> {
+    pub fn select_pages(&self, query: &[f32; 96], arm: V30SearchArm) -> Result<V30PageSelection> {
         self.select_pages_with_leaf_observer(query, arm, &|_| {})
     }
 
@@ -301,12 +326,12 @@ impl V30Router {
 }
 
 impl<S: V30PageStore> V30Index<S> {
-    pub(crate) fn new(router: V30Router, store: S, arm: V30SearchArm) -> Result<Self> {
+    pub fn new(router: V30Router, store: S, arm: V30SearchArm) -> Result<Self> {
         router.validate_arm(arm)?;
         Ok(Self { router, store, arm })
     }
 
-    pub(crate) fn search(&self, query: &[f32; 96], k: usize) -> Result<V30SearchResult> {
+    pub fn search(&self, query: &[f32; 96], k: usize) -> Result<V30SearchResult> {
         if k == 0 || k > 10 {
             return Err(invalid("V30 result count differs"));
         }
@@ -391,15 +416,25 @@ mod tests {
 
     use super::{V30Index, V30PageStore, V30Router, V30SearchArm};
     use crate::{
-        V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_page,
-        v30_s3_layout::{V30Layout, V30LeafRange, V30PageRange},
-        v30_s3_pq::{V30CodePlanes, V30PqCodebook, V30PqWidth},
+        V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
+        v30_s3_layout::{V30Layout, V30LeafRange, V30PageRange, encode_v30_layout_artifacts},
+        v30_s3_pq::{V30CodePlanes, V30PqCodebook, V30PqWidth, encode_v30_pq_artifacts},
     };
 
-    fn router() -> (V30Router, Vec<(V27PageIdentity, Vec<u8>)>) {
+    type Components = (
+        V27Hierarchy,
+        V30PqCodebook,
+        V30PqCodebook,
+        V30Layout,
+        V30CodePlanes,
+        Vec<(V27PageIdentity, Vec<u8>)>,
+    );
+
+    fn components() -> Components {
+        let unit = f16::from_f32(1.0 / 96.0_f32.sqrt());
         let hierarchy = V27Hierarchy {
-            roots: vec![[f16::from_f32(0.0); 96]],
-            leaves: vec![[f16::from_f32(0.0); 96], [f16::from_f32(1.0); 96]],
+            roots: vec![[unit; 96]],
+            leaves: vec![[unit; 96], [-unit; 96]],
             leaf_roots: vec![0, 0],
         };
         let bodies = (0..20_u32)
@@ -449,6 +484,11 @@ mod tests {
             V30CodePlanes::from_packed(40, high_bits, vec![0; 38 * 24], vec![0; 2 * 48]).unwrap();
         let base = V30PqCodebook::new(V30PqWidth::Base24, vec![0.0; 24 * 256 * 4]).unwrap();
         let high = V30PqCodebook::new(V30PqWidth::High48, vec![0.0; 48 * 256 * 2]).unwrap();
+        (hierarchy, base, high, layout, codes, bodies)
+    }
+
+    fn router() -> (V30Router, Vec<(V27PageIdentity, Vec<u8>)>) {
+        let (hierarchy, base, high, layout, codes, bodies) = components();
         (
             V30Router::new(hierarchy, base, high, layout, codes).unwrap(),
             bodies,
@@ -547,5 +587,23 @@ mod tests {
                 .windows(2)
                 .all(|pair| { pair[0].squared_distance < pair[1].squared_distance })
         );
+    }
+
+    #[test]
+    fn v30_s3_search_authenticates_all_routing_artifacts_before_use() {
+        // Break caught: serving decodes a role before full-byte authentication or
+        // accepts hierarchy/PQ/layout objects from different constructions.
+        let (hierarchy, base, high, layout, codes, _) = components();
+        let hierarchy_artifacts = encode_v27_hierarchy(&hierarchy).unwrap();
+        let pq_artifacts = encode_v30_pq_artifacts(&base, &high, &codes).unwrap();
+        let layout_artifacts = encode_v30_layout_artifacts(&layout).unwrap();
+        let router =
+            V30Router::from_artifacts(&hierarchy_artifacts, &pq_artifacts, &layout_artifacts)
+                .unwrap();
+        assert_eq!(router.layout.source_rows(), 40);
+
+        let mut corrupted = hierarchy_artifacts.clone();
+        corrupted.roots_bytes[0] ^= 1;
+        assert!(V30Router::from_artifacts(&corrupted, &pq_artifacts, &layout_artifacts).is_err());
     }
 }

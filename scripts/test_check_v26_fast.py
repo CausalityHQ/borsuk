@@ -13,7 +13,7 @@ class V26FastGateTests(unittest.TestCase):
         commands = check_v26_fast.smoke_commands(sys.executable)
 
         rendered = [" ".join(command) for command in commands]
-        self.assertEqual(len(commands), 6)
+        self.assertEqual(len(commands), 7)
         self.assertEqual(
             rendered[0],
             (
@@ -29,12 +29,17 @@ class V26FastGateTests(unittest.TestCase):
             "python -m unittest scripts.test_run_v30_variable_rate_reproduction",
             rendered[2],
         )
+        self.assertIn("scripts.test_run_v30_reduced_quality", rendered[2])
         self.assertEqual(
             rendered[3],
             "cargo test -p borsuk --lib v30_s3_ -- --nocapture",
         )
-        self.assertEqual(rendered[4], "cargo fmt --all -- --check")
-        self.assertEqual(rendered[5], "git diff --check")
+        self.assertEqual(
+            rendered[4],
+            "cargo test -p borsuk --example v30_s3_qualify v30_s3_qualify_ -- --nocapture",
+        )
+        self.assertEqual(rendered[5], "cargo fmt --all -- --check")
+        self.assertEqual(rendered[6], "git diff --check")
         self.assertFalse(any("--workspace" in command for command in rendered))
         self.assertFalse(any("--all-targets" in command for command in rendered))
 
@@ -42,7 +47,7 @@ class V26FastGateTests(unittest.TestCase):
         commands = check_v26_fast.affected_commands(sys.executable)
 
         rendered = [" ".join(command) for command in commands]
-        self.assertEqual(len(commands), 8)
+        self.assertEqual(len(commands), 9)
         self.assertEqual(
             rendered[0],
             (
@@ -64,12 +69,17 @@ class V26FastGateTests(unittest.TestCase):
             "python -m unittest scripts.test_run_v30_variable_rate_reproduction",
             rendered[4],
         )
+        self.assertIn("scripts.test_run_v30_reduced_quality", rendered[4])
         self.assertEqual(
             rendered[5],
             "cargo test -p borsuk --lib v30_s3_ -- --nocapture",
         )
-        self.assertEqual(rendered[6], "cargo fmt --all -- --check")
-        self.assertEqual(rendered[7], "git diff --check")
+        self.assertEqual(
+            rendered[6],
+            "cargo test -p borsuk --example v30_s3_qualify v30_s3_qualify_ -- --nocapture",
+        )
+        self.assertEqual(rendered[7], "cargo fmt --all -- --check")
+        self.assertEqual(rendered[8], "git diff --check")
         self.assertFalse(any("--workspace" in command for command in rendered))
         self.assertFalse(any("--all-targets" in command for command in rendered))
 

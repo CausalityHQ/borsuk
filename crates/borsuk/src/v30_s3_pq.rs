@@ -582,19 +582,21 @@ pub(crate) fn project_v30_resident_bytes(rows: u64, fidelity_ppm: u32) -> Result
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V30PqArtifactIdentity {
-    role: String,
-    sha256: String,
-    encoded_bytes: u64,
-    row_count: u64,
-    width_bytes: u8,
-    dependencies: Vec<String>,
+#[doc(hidden)]
+pub struct V30PqArtifactIdentity {
+    pub role: String,
+    pub sha256: String,
+    pub encoded_bytes: u64,
+    pub row_count: u64,
+    pub width_bytes: u8,
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V30PqArtifacts {
-    identities: Vec<V30PqArtifactIdentity>,
-    bytes: Vec<Vec<u8>>,
+#[doc(hidden)]
+pub struct V30PqArtifacts {
+    pub identities: Vec<V30PqArtifactIdentity>,
+    pub bytes: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -602,6 +604,12 @@ pub(crate) struct V30DecodedPqArtifacts {
     base_codebook: V30PqCodebook,
     high_codebook: V30PqCodebook,
     planes: V30CodePlanes,
+}
+
+impl V30DecodedPqArtifacts {
+    pub(crate) fn into_parts(self) -> (V30PqCodebook, V30PqCodebook, V30CodePlanes) {
+        (self.base_codebook, self.high_codebook, self.planes)
+    }
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -967,7 +975,8 @@ pub(crate) fn encode_v30_pq_artifacts(
     Ok(V30PqArtifacts { identities, bytes })
 }
 
-pub(crate) fn decode_v30_pq_artifacts(artifacts: &V30PqArtifacts) -> Result<V30DecodedPqArtifacts> {
+#[doc(hidden)]
+pub fn decode_v30_pq_artifacts(artifacts: &V30PqArtifacts) -> Result<V30DecodedPqArtifacts> {
     let roles = [
         "pq24-codebook",
         "pq48-codebook",
