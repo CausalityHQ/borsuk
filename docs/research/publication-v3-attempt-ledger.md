@@ -2963,3 +2963,48 @@ The construction and evaluation Spot instances
 and terminated. The next bounded experiment must add a distribution-sensitive
 page signal rather than merely increasing the page-centroid beam. D3, a
 100-million-row build, and competitor claims remain fenced.
+
+### The retained 16-page PQ route is quality-perfect; residual correction is stopped
+
+Read-only recovery of the earlier bounded-candidate terminal at source
+`2bce312c1bc7759efc1e540e2787750775ff85e8` establishes the shortest current
+quality path. The original leaf/PQ route with 16 parallel page reads reached
+320/320 hits, 1,000,000-ppm aggregate and minimum recall, 1,000,000-ppm floor
+compliance, and 32/32 perfect queries on the frozen 100,000-row, 32-query Deep
+Image development cell. It scanned at most 33,001 codes and fetched at most
+2,928,808 encoded page bytes. Its 16,889-byte terminal has SHA-256
+`f7ca28d37e1fe1d2cc08790d7155980bdeede8b6ce8fd78faf8635373ca2641f`
+and is preserved at
+`s3://borsuk-bench-453182569524-euc1/research/v30-hierarchical-pq/2bce312c1bc7759efc1e540e2787750775ff85e8/attempts/v30-deep-100k-pages16-bounded-candidates-20260904T084718Z-a0002/TERMINAL.json`.
+
+That cell failed performance, not quality: process CPU p99 was 74,808,007 ns
+and Standard S3 cold p99 was 144,065,141 ns. Maximum routing, page-read, and
+exact-rerank elapsed times were respectively 8,185,812, 127,003,602, and
+11,159,727 ns. Peak RSS was 28,602,368 bytes. The next production work must
+therefore restore this quality-perfect candidate route and reduce object-store
+and decode overhead; it must not replace the routing signal with the rejected
+single-page-centroid route.
+
+V31 source `a72ffc0089b09d5d6d2e2302d28493dfeb74603a` then tested residual
+corrections over the primary-leaf-only frontier. The uncorrected and exact
+cross-term controls both reached 319/320, while u8 error norm, sign8, sign16,
+and exact error norm reached respectively 316/320, 267/320, 294/320, and
+316/320. The 2,771-byte claim-ineligible result has SHA-256
+`450a46dd274af89b2d5a17e04addbc8f3650083eb67accf49f9a62108b1d9b37`
+and is preserved under
+`s3://borsuk-bench-453182569524-euc1/research/v31-residual-correction/a72ffc0089b09d5d6d2e2302d28493dfeb74603a/attempts/v31-deep-100k-residual-20260904T114126Z-a0001/`.
+Because the exact control did not reproduce the historical secondary-route
+ceiling, this is negative evidence for that primary-only frontier rather than
+a valid rejection of all residual correction.
+
+A follow-up at source `9cf2dfbd472725b571d84dc8cc82cd5f77bab340`
+added a reconstructed nearest-secondary membership, but the committed
+scientific-control check rejected it before publishing arm evidence because
+the old exact-control evaluator and membership authority were not preserved.
+Its failed terminal is under
+`s3://borsuk-bench-453182569524-euc1/research/v31-residual-correction/9cf2dfbd472725b571d84dc8cc82cd5f77bab340/attempts/v31-deep-100k-residual-20260904T114757Z-a0002/`.
+Both Spot workers, `i-0248cd98b37fabd3e` and `i-05515c0c17f2d246c`, are
+terminated. No further reconstruction or residual-correction run is warranted:
+the directly preserved 16-page route already closes quality, and the release
+path is now latency/throughput engineering. D3 and 100-million-row work remain
+fenced until that path passes fast performance gates.
