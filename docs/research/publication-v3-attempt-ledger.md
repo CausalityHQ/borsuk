@@ -4283,3 +4283,34 @@ S3 transfers or latency. The receipt is `claim_eligible=false`, uses the burned
 paid run. Next test a preregistered low-rank rotated ellipsoid that adds bounded
 cross-dimensional covariance to the diagonal control, then apply this same
 six-second replay without changing the PQ/page parameters.
+
+### V33 reconstructed-row oracle preserves the diagonal miss
+
+Source `005fba6f7ca2e0d821678691c4068879d88eb245` added the first
+query-independent bracket before any persisted rotated-covariance format. The
+release diagnostic binary was9,994,512B, SHA256
+`9755c967ca5434334c1cb43f4d1ed5067e37615d7a968611542826a5795a0411`.
+It authenticated the frozen roots, leaves, routing ranges, page ranges, two
+codebooks, base/fidelity/high code planes,178-group directory and the exact V33
+frontier receipt before reconstructing rows. All ten resident artifact lengths
+and SHA256 digests matched their registered identities. It read27,965,150B of
+hierarchy/layout/PQ artifacts plus384,840B of group metadata and the existing
+5,937,815B frontier; it read zero exact corpus vectors and zero page bodies.
+
+For the sole diagonal miss, query6160, exact reconstructed-row minimum distance
+ranked its ten required groups1,2,5,6,4,17,4,1,6,7. The unchanged longest
+complete-group prefix admitted all ten under64 groups and262,144 rows, selecting
+259,927 rows. Therefore `all_required_selected=true`: PQ reconstruction retains
+the missing owner, while the diagonal group summary loses it. This rejects the
+hypothesis that reconstruction fidelity makes the current summary family
+incapable, and permits the preregistered full-covariance ceiling. It does not
+qualify a router or reopen the131,072-row gate.
+
+The one scientific process exited0 in5s with no pressure stop. Monitor sampling
+observed18,936KiB process-group RSS, memory PSI full avg10=0, and no swap-free
+change. The629B canonical claim-ineligible receipt has SHA256
+`bcede623686b8de34b57f7793ced0ae5ed115d70eb4ecbfaf4905508b115f153`
+and is retained at
+`/tmp/v33-reconstructed-oracle-005fba6f7ca2e0d821678691c4068879d88eb245.json`.
+The explicit scratch directory and its ten named inputs were removed after PID
+clearance. No AWS compute instance or D3 run was launched.
