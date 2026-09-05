@@ -4365,3 +4365,54 @@ a deployable full-covariance format, held-out quality result, latency claim or
 ladder, with rank2 primary and ranks1/4 diagnostic, and require it to preserve
 the same owner/query gate before unchanged PQ/page replay. D3 and production
 defaults remain fenced.
+
+### V33 rank-two rotated ellipsoid misses one exposed owner
+
+Source `be0a2d61dd8d7538700160536376ba3c83e5e23f` implemented the frozen
+nested rank-one/two/four covariance ladder after the complete-covariance
+ceiling passed. One full symmetric eigendecomposition is ordered by descending
+eigenvalue, repeated eigenspaces use deterministic coordinate-axis projection,
+and eigenvector signs use the largest-magnitude coordinate with lowest-dimension
+ties. Each leaf persists one f32 mean, diagonal, four principal directions and
+eigenvalues, and rank-specific residual diagonals in uncompressed Arrow IPC.
+The artifact is SHA256-authenticated, decoded, and validated before any query
+or truth bytes are opened. Scoring recomputes the non-orthogonal trace-square
+cross terms from those decoded factors and reduces leaves by minimum within
+each storage group. Rank two was fixed as primary before execution; ranks one
+and four remained diagnostics.
+
+The release binary is10,477,536B, SHA256
+`92baefed7c25f62a72e528c36a65ed6f9fa9aa18b18380a7a39d0fdf138e869e`.
+It authenticated the same34,287,805B of hierarchy/layout/PQ, group and frontier
+inputs as the full-covariance ceiling, with zero exact corpus or vector-page
+reads. The persisted4,141-row Arrow summary is14,937,394B, SHA256
+`0a08e946d4fe62074f70c1e396474345414af715d05c20f9065f6aa9af858b7c`.
+Two boot attempts terminated before science because the instances lacked the
+private-bucket IAM profile. Attempt `a0003` explicitly attached
+`borsuk-bench-profile` to causality Spot `c7g.4xlarge` instance
+`i-0532ec9b543c84415` in `eu-central-1c`. Its sole process exited0 in40s;
+five-second monitoring observed536,068,096B peak process-group RSS, memory PSI
+full avg10=0, and zero swap growth. The instance was confirmed terminated.
+
+| Frozen arm | Owners | Perfect queries | Required groups p50/p95/max | Required rows p50/p95/max | Gate |
+|---|---:|---:|---:|---:|---|
+|Fine-leaf centroid control|1,277/1,280|125/128|5/27/81|28,479/149,663/452,236|control|
+|Rank one diagnostic|1,280/1,280|128/128|5/30/45|28,479/172,492/261,952|fail: worse p95 frontier|
+|Rank two primary|1,279/1,280|127/128|5/24/49|28,674/139,118/279,373|fail: one owner and worse p50/max|
+|Rank four diagnostic|1,280/1,280|128/128|5/21/43|27,792/121,896/242,638|diagnostic pass only|
+
+The rank-two miss is query4127: one truth owner ranked49, so reaching it
+requires279,373 rows, beyond the frozen262,144-row limit. Rank four preserves
+all owners and improves the centroid p50/p95/max frontier, but it cannot be
+promoted after observing this burned result. The164,161B canonical
+`claim_eligible=false` receipt has SHA256
+`7d9b91a14b8a2c400371032fc16390f31037fd631951c81c62de84d6c9850f51`
+and is preserved with the Arrow summary, registration, progress and terminal
+under
+`s3://borsuk-bench-453182569524-euc1/research/v33-shape-aware-group-routing/be0a2d61dd8d7538700160536376ba3c83e5e23f/attempts/v33-deep-1m-low-rank-covariance-ladder-a0003/`.
+
+Disposition: reject the preregistered rank-two compact ellipsoid and do not
+replay PQ/pages or open fresh data. The result shows that two correlated axes
+are insufficient while four may be viable, but rank four requires a new
+query-independent preregistration and memory/latency decision rather than
+outcome selection. D3, production defaults and paid scale claims remain fenced.
