@@ -3960,3 +3960,53 @@ registered RSS/PSI/swap-growth/wall guards did not fire. No code payload,
 vector-page or corpus-body reads occurred and no EC2 instance was launched.
 Disposition: claim_eligible=false, reject this naive layout and resolve
 routing selectivity/code locality before a100M campaign.
+
+### V32 fixed root64 metadata falsifier: inclusion and row cost pass
+
+Following the naive code-block rejection, Astra proposed selecting exactly
+the nearest64 coarse roots and scoring all their descendant codes, with no
+microleaf pruning. Before implementation, the fixed hypothesis required all
+recorded truth owners within64 roots and at most524288 rows per query;
+no truncation, root skipping or root-count tuning was permitted.
+
+An exact-SHA read of the preceding two terminals found all1280 observed
+target owners within64 (maximum rank60). One bounded metadata-only driver
+then authenticated query, roots, code-parent leaves and routing ranges:
+four GETs totaling5,698,334B. It followed the actual ownership chain
+`routing_range.code_parent_leaf_ordinal -> hierarchy.leaves.root_ordinal`,
+not routing-leaf ordinal indexing. Source-matched double query normalization,
+ordered f64 distances to f16 centroids and root-ordinal ties reproduced
+all1280 owner identities and one-based root ranks before cost reporting.
+
+All128 queries fit the frozen row budget:425,822..503,541 codes,
+mean467,969.8125, zero failures. Every selected root contributes all its
+routing ranges. Mixed-width byte cost, candidate retention, final page
+containment, S3 latency and throughput were not measured by this driver.
+Combining the burned/prospective windows here is access-cost accounting,
+not independent128-query quality qualification. Astra checked the saved
+result digest and driver after execution and confirmed this interpretation.
+
+Source checkpoint `288e865cb689f5ce1c1427d3ab95053a24744d2c`.
+Result38,875B SHA256
+`b52247dae73a0ea641f3507de83f7eb2b0b8c94c4958fcd684b2f788bbf44e3c`;
+driver8,180B SHA256
+`24257961b246740d13a0ba87909f5e6cace580707ead528fcf6930d8730b4ee7`.
+Both are preserved under
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/288e865cb689f5ce1c1427d3ab95053a24744d2c/evidence/root64-cost-b52247da/`
+with basenames `borsuk-root64-cost-288e865c.json` and `.py` respectively.
+Original command exited0; wall421,578,262ns, peak RSS144,310,272B.
+RSS/PSI/swap-growth/wall guards did not fire. Zero PQ code, vector-page or
+corpus reads; no EC2 instance was launched.
+
+Next fixed diagnostic: root64/all descendants,524288 hard pre-score row cap,
+12288 retained candidates and64-page projection, preserving each code's
+existing code-parent residual centroid. Use a distinct diagnostic identity;
+do not change serving defaults or call it global1536. Verify selected-root
+membership, deterministic ties, exact cap boundaries, code-score equality,
+reference16/64 projection and no-page capability before one no-page replay
+on the128 now-exposed queries. Inclusion alone does not prove retention.
+
+This is not100M qualification. Keeping128 roots at100M would average781250
+rows per root, already above the whole scan budget. A deployable follow-up
+requires construction-time bounded root populations and renewed quality
+evidence; the1M metadata result does not establish that future hierarchy.
