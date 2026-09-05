@@ -92,6 +92,49 @@ def fixture():
 
 
 class PageBudgetLadderTests(unittest.TestCase):
+    def test_expanded_frontier_recomputes_coverage_and_rejects_old_scope(self):
+        from scripts.run_v32_no_page_containment import validate_expanded_frontier
+
+        value, truths, mapping, registry = fixture()
+        value["schema_version"] = 12
+        for query in value["queries"]:
+            query["current"]["routing"].update(
+                global_leaf_limit=1536,
+                scan_budget=524288,
+                leaves_scanned=1536,
+                codes_scanned=360482,
+            )
+
+        def validate(payload):
+            return validate_expanded_frontier(
+                canonical(payload),
+                query_start=1024,
+                truth_logicals=truths,
+                logical_pages=mapping,
+                registered_pages=registry,
+                maximum_leaves_eligible=4096,
+                root_beam=8,
+            )
+
+        result = validate(value)
+        self.assertEqual(result["contained_truth_counts"], [256, 288, 320])
+        with self.assertRaises(ValueError):
+            self.validate(value, truths, mapping, registry)
+        for field, wrong in [
+            ("global_leaf_limit", 768),
+            ("scan_budget", 262144),
+            ("codes_scanned", 524289),
+            ("leaves_scanned", 1537),
+        ]:
+            bad = copy.deepcopy(value)
+            bad["queries"][0]["current"]["routing"][field] = wrong
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate(bad)
+        bad = copy.deepcopy(value)
+        bad["queries"][0]["cells"][2]["contained_truth_count"] = 9
+        with self.assertRaises(ValueError):
+            validate(bad)
+
     def validate(self, value, truths, mapping, registry):
         from scripts.run_v32_no_page_containment import validate_page_budget_ladder
 
@@ -288,6 +331,7 @@ class PageLadderRunnerTests(unittest.TestCase):
 
         from scripts.run_v32_no_page_containment import (
             LocalArtifact,
+            run_expanded_frontier_replay,
             run_page_budget_ladder,
         )
 
@@ -466,6 +510,28 @@ class PageLadderRunnerTests(unittest.TestCase):
             self.assertNotIn("--virtual-geometric-pages", calls[0])
             self.assertNotIn("--serving-tier", calls[0])
             self.assertEqual(result["manifest_sha256"], plan.manifest.sha256)
+            expanded = json.loads(payload)
+            expanded["schema_version"] = 12
+            for query in expanded["queries"]:
+                query["current"]["routing"].update(
+                    global_leaf_limit=1536,
+                    scan_budget=524288,
+                    leaves_scanned=1536,
+                    codes_scanned=360482,
+                )
+            payload = canonical(expanded)
+            calls.clear()
+            result = json.loads(run_expanded_frontier_replay(plan, invoke=invoke))
+            self.assertEqual(result["schema"], "borsuk-v32-expanded-frontier-v1")
+            self.assertEqual(
+                result["summary"]["contained_truth_counts"], [320, 320, 320]
+            )
+            self.assertEqual(len(calls), 1)
+            self.assertIn("--expanded-frontier-replay", calls[0])
+            self.assertNotIn("--page-budget-ladder", calls[0])
+            self.assertEqual(
+                calls[0][calls[0].index("--global-leaf-limit") + 1], "1536"
+            )
             plan.query.path.write_bytes(b"wrong")
             calls.clear()
             with self.assertRaises(ValueError):

@@ -3744,3 +3744,43 @@ Stop on failed recovery and diagnose, with no physical page reads. A successful
 replay would explain this failure, not qualify general recall; freeze it before
 evaluating the still-unexecuted7168 window. Implementation and execution of
 that explanatory cell remain pending at this checkpoint.
+
+### V32 expanded-frontier explanatory replay preregistration
+
+The next cell fixes global leaf limit1536, whole-leaf code ceiling524288,
+candidate depth12288, reference capture16 pages and first-distinct physical
+page projections16/32/64. Only64 is the recovery decision; the smaller
+projections remain explanatory, not a tuning ladder. Serving defaults remain
+unchanged. The explicit `--expanded-frontier-replay` diagnostic has schema12;
+the independent Python runner authenticates the original construction plan
+before requesting these overrides and rejects old-scope evidence.
+
+Replay all three completed windows4096,5120,6144 (32 queries each), using the
+exact v3 truth Parquet and receipts bound by the broader terminal SHA256
+`5313f81f18aaf08fae1dadb80a25207fa497f05435b2e99d7b03a2be0ebc6daa`.
+Use the same query, index, ordered distance arithmetic and candidate/page
+tie rules. Do not inspect or run the7168 window in this explanatory attempt.
+Do not regenerate truth or fetch corpus shards or vector-page bodies. The
+resident routing/PQ artifacts and small frozen references are sufficient.
+
+Record each query's retained candidate rank, first-distinct page rank, all
+loss stages, exact scanned leaves/codes, selected page identities/bytes and
+new capture digest, plus phase CPU/wall and process RSS. The changed bounds
+must not be represented as capture parity with the old768-leaf experiment.
+The primary recovery check is960/960 truth-page containment, including the
+known query6160/logical411202 counterexample. Even full recovery is burned-set
+explanation, not measured reranked recall or independent quality qualification.
+If a neighbor remains missing, preserve its precise stage and stop this path
+for diagnosis; do not widen candidates/pages/frontier or launch a ladder.
+
+Run one causality Spot attempt with an authenticated release binary built
+from the verified source, CPU affinity and worker count recorded. Bound the
+scientific process group to3GiB RSS, full memory PSI avg10<=0.5, swap growth
+<=256MiB and300s wall; bound setup/build/whole attempt to1800s. Preserve the
+original terminal or registered stop, upload immutable evidence and terminate
+the owned instance immediately. No restart after a scientific terminal or
+pressure stop. A Spot interruption is separately recorded and any replacement
+requires a new attempt identity, never a partial measurement merge. No serving
+benchmark,100M run or production-default change is authorized by a positive
+result alone: first freeze the explanatory result and run the prospectively
+held window, retaining the prior-dataset-exposure caveat.

@@ -1627,6 +1627,36 @@ impl V32Router {
         })
     }
 
+    /// Capture the fixed explanatory frontier without expanding serving arms.
+    /// This replay performs no page reads and is not a serving qualification.
+    #[doc(hidden)]
+    pub fn capture_expanded_global_replay(
+        &self,
+        query: &[f32; 96],
+        arm: V32SearchArm,
+    ) -> Result<V32CandidateReplay<'_>> {
+        self.validate_arm(arm)?;
+        if arm.leaf_beam != 256
+            || arm.scan_budget != 262_144
+            || arm.candidate_depth != 12_288
+            || arm.page_count != 16
+        {
+            return Err(invalid("V32 expanded replay reference arm differs"));
+        }
+        let arm = V32SearchArm {
+            leaf_beam: 512,
+            scan_budget: 524_288,
+            ..arm
+        };
+        let details = self.routing_details_with_global_limit(query, arm, Some(1536), &|_| {})?;
+        Ok(V32CandidateReplay {
+            router: self,
+            query: *query,
+            arm,
+            details,
+        })
+    }
+
     fn diagnose_virtual_replay(
         &self,
         replay: &V32CandidateReplay<'_>,
@@ -1912,6 +1942,7 @@ impl V32Router {
     where
         F: Fn(u32),
     {
+        self.validate_arm(arm)?;
         self.routing_details_with_global_limit(query, arm, None, observer)
     }
 
@@ -1928,6 +1959,7 @@ impl V32Router {
         if !(1..=768).contains(&leaf_limit) {
             return Err(invalid("V32 global routing leaf limit differs"));
         }
+        self.validate_arm(arm)?;
         self.routing_details_with_global_limit(query, arm, Some(leaf_limit), observer)
     }
 
@@ -1941,7 +1973,6 @@ impl V32Router {
     where
         F: Fn(u32),
     {
-        self.validate_arm(arm)?;
         let query = normalized(query)?;
         let leaves_eligible = if global_leaf_limit.is_some() {
             self.layout
@@ -3325,6 +3356,181 @@ mod tests {
         assert_eq!(
             global.reciprocal_rank_pages,
             changed_truth.reciprocal_rank_pages
+        );
+    }
+
+    #[test]
+    fn v32_expanded_replay_reaches_later_leaves_without_changing_serving_limits() {
+        // Break: explanatory replay silently keeps the serving frontier, changes
+        // tied candidate/page ordering, or expands the ordinary serving API.
+        let (hierarchy, base, high, _, _, _) = components();
+        let pages = (0..1600_u32)
+            .map(|ordinal| {
+                let rows = [0_u64, 1].map(|offset| V27PageRow {
+                    source_ordinal: u64::from(ordinal) * 2 + offset,
+                    vector: [0.2; 96],
+                });
+                let (identity, _) = encode_v27_page(ordinal, 2, 0, &rows).unwrap();
+                V30PageRange::from_legacy(u64::from(ordinal) * 2, 2, &identity).unwrap()
+            })
+            .collect();
+        let ranges = (0..1600_u32)
+            .map(|leaf| V32RoutingRange {
+                leaf_ordinal: leaf,
+                code_parent_leaf_ordinal: 0,
+                routing_centroid: hierarchy.leaves[0],
+                logical_start: u64::from(leaf) * 2,
+                row_count: 2,
+                page_start: leaf,
+                page_count: 1,
+            })
+            .collect();
+        let layout = V30Layout::new(3200, ranges, pages).unwrap();
+        let codes =
+            V30CodePlanes::from_packed(3200, vec![0; 100], vec![0; 3200 * 24], vec![]).unwrap();
+        let router = V32Router::new(hierarchy, base, high, layout, codes).unwrap();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 256,
+            scan_budget: 262_144,
+            candidate_depth: 12_288,
+            page_count: 16,
+        };
+        let query = [0.2; 96];
+        let normal = router.capture_global_replay(&query, arm, 768).unwrap();
+        let expanded = router.capture_expanded_global_replay(&query, arm).unwrap();
+        let report = expanded.diagnose(&[2998, 3072]).unwrap();
+        assert_eq!(report.global_leaf_limit, Some(1536));
+        assert_eq!(report.scan_budget, 524_288);
+        assert_eq!(report.selection.work.leaves_scanned, 1536);
+        assert_eq!(report.selection.work.codes_scanned, 3072);
+        assert_eq!(report.stop_reason, V32RoutingStopReason::LeafLimit);
+        assert_eq!(report.targets[0].candidate_rank, Some(2998));
+        assert!(report.targets[0].page_in_retained_pool);
+        assert_eq!(report.targets[1].stage, V32RoutingTargetStage::LeafFrontier);
+        assert_ne!(expanded.sha256(), normal.sha256());
+        assert_eq!(
+            expanded
+                .physical_page_prefix(64)
+                .unwrap()
+                .iter()
+                .map(|page| page.ordinal)
+                .collect::<Vec<_>>(),
+            (0..64).collect::<Vec<_>>()
+        );
+        assert!(router.capture_global_replay(&query, arm, 1536).is_err());
+        assert!(
+            router
+                .select_pages(
+                    &query,
+                    V32SearchArm {
+                        leaf_beam: 512,
+                        scan_budget: 524_288,
+                        ..arm
+                    }
+                )
+                .is_err()
+        );
+        for invalid in [
+            V32SearchArm {
+                candidate_depth: 1024,
+                ..arm
+            },
+            V32SearchArm {
+                page_count: 64,
+                ..arm
+            },
+            V32SearchArm {
+                leaf_beam: 128,
+                scan_budget: 131_072,
+                ..arm
+            },
+            V32SearchArm {
+                root_beam: 0,
+                ..arm
+            },
+        ] {
+            assert!(
+                router
+                    .capture_expanded_global_replay(&query, invalid)
+                    .is_err()
+            );
+        }
+        assert!(
+            router
+                .capture_expanded_global_replay(&[f32::NAN; 96], arm)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn v32_expanded_replay_honors_the_larger_whole_leaf_code_ceiling() {
+        // Break: keeping the old code cap, overshooting the new cap, or
+        // skipping an unaffordable leaf to cherry-pick a later one-row leaf.
+        let (mut hierarchy, base, high, _, _, _) = components();
+        hierarchy.leaves = vec![hierarchy.leaves[0]; 5];
+        hierarchy.leaf_roots = vec![0; 5];
+        let mut pages = Vec::new();
+        let mut ranges = Vec::new();
+        let mut logical = 0_u64;
+        for leaf in 0..514_u32 {
+            let row_count = if leaf == 513 { 1 } else { 1024 };
+            let page_start = pages.len() as u32;
+            for offset in (0..row_count).step_by(256) {
+                let rows = (row_count - offset).min(256) as u16;
+                let ordinal = pages.len() as u32;
+                // Routing needs authenticated metadata, never a page body.
+                let identity = V27PageIdentity {
+                    ordinal,
+                    sha256: format!("{:064x}", ordinal + 1),
+                    encoded_bytes: 110_000,
+                    primary_rows: rows,
+                    replica_rows: 0,
+                };
+                pages.push(V30PageRange::from_legacy(logical + offset, rows, &identity).unwrap());
+            }
+            ranges.push(V32RoutingRange {
+                leaf_ordinal: leaf,
+                code_parent_leaf_ordinal: leaf / 128,
+                routing_centroid: hierarchy.leaves[0],
+                logical_start: logical,
+                row_count,
+                page_start,
+                page_count: pages.len() as u32 - page_start,
+            });
+            logical += row_count;
+        }
+        assert_eq!(logical, 525_313);
+        let layout = V30Layout::new(logical, ranges, pages).unwrap();
+        let rows = logical as usize;
+        let codes = V30CodePlanes::from_packed(
+            rows,
+            vec![0; rows.div_ceil(128) * 4],
+            vec![0; rows * 24],
+            vec![],
+        )
+        .unwrap();
+        let router = V32Router::new(hierarchy, base, high, layout, codes).unwrap();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 256,
+            scan_budget: 262_144,
+            candidate_depth: 12_288,
+            page_count: 16,
+        };
+        let replay = router
+            .capture_expanded_global_replay(&[0.2; 96], arm)
+            .unwrap();
+        let report = replay.diagnose(&[524_288, 525_312]).unwrap();
+        assert_eq!(report.selection.work.codes_scanned, 524_288);
+        assert_eq!(report.selection.work.leaves_scanned, 512);
+        assert_eq!(report.stop_reason, V32RoutingStopReason::ScanBudget);
+        assert_eq!(report.next_leaf_rows, Some(1024));
+        assert!(
+            report
+                .targets
+                .iter()
+                .all(|target| !target.page_in_scanned_pool)
         );
     }
 

@@ -64,6 +64,7 @@ enum GlobalLayoutMode {
     Control,
     Treatment,
     PageBudget,
+    ExpandedFrontier,
 }
 
 #[derive(Debug, Deserialize)]
@@ -881,21 +882,47 @@ fn virtual_geometric_batch_diagnostic_bytes(
     Ok(bytes)
 }
 
+type PageBudgetRows = Vec<(
+    usize,
+    String,
+    V32RoutingDiagnostic,
+    Vec<borsuk::V27PageIdentity>,
+)>;
+
 fn page_budget_ladder_bytes(
     query_start: usize,
-    diagnostics: Vec<(
-        usize,
-        String,
-        V32RoutingDiagnostic,
-        Vec<borsuk::V27PageIdentity>,
-    )>,
+    diagnostics: PageBudgetRows,
 ) -> borsuk::Result<Vec<u8>> {
+    frontier_page_budget_bytes(query_start, diagnostics, false)
+}
+
+fn expanded_frontier_bytes(
+    query_start: usize,
+    diagnostics: PageBudgetRows,
+) -> borsuk::Result<Vec<u8>> {
+    frontier_page_budget_bytes(query_start, diagnostics, true)
+}
+
+fn frontier_page_budget_bytes(
+    query_start: usize,
+    diagnostics: PageBudgetRows,
+    expanded: bool,
+) -> borsuk::Result<Vec<u8>> {
+    let (leaf_limit, scan_budget, schema) = if expanded {
+        (1536, 524_288, 12)
+    } else {
+        (768, 262_144, 11)
+    };
     if diagnostics.len() != 32 {
         return Err(invalid("V32 page ladder batch cardinality differs"));
     }
     let mut queries = Vec::with_capacity(32);
     for (offset, (ordinal, hash, current, prefix)) in diagnostics.into_iter().enumerate() {
         if query_start.checked_add(offset) != Some(ordinal)
+            || current.global_leaf_limit != Some(leaf_limit)
+            || current.scan_budget != scan_budget
+            || current.selection.work.codes_scanned > scan_budget
+            || current.selection.work.leaves_scanned > leaf_limit
             || !valid_digest(&hash)
             || current.targets.len() != 10
             || current.selection.pages.len() != 16
@@ -934,7 +961,7 @@ fn page_budget_ladder_bytes(
             })
             .collect::<Vec<_>>();
         let current: serde_json::Value =
-            serde_json::from_slice(&diagnostic_bytes(ordinal, true, Some(768), current)?)
+            serde_json::from_slice(&diagnostic_bytes(ordinal, true, Some(leaf_limit), current)?)
                 .map_err(|_| invalid("V32 page ladder current diagnostic differs"))?;
         queries.push(serde_json::json!({
             "query_ordinal": ordinal,
@@ -944,7 +971,7 @@ fn page_budget_ladder_bytes(
         }));
     }
     let mut bytes = serde_json::to_vec(&canonical(serde_json::json!({
-        "schema_version": 11,
+        "schema_version": schema,
         "query_start": query_start,
         "claim_eligible": false,
         "page_body_reads": 0,
@@ -1085,7 +1112,7 @@ fn global_resource_bytes(
         object
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
-        Some(9..=11)
+        Some(9..=12)
     ) || object.contains_key("resources")
     {
         return Err(invalid("V32 global resource schema differs"));
@@ -1600,9 +1627,18 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
             let queries = read_queries(&args.query, args.query_start, args.query_count)?;
             let replays = queries
                 .iter()
-                .map(|query| router.capture_global_replay(query, arm, 768))
+                .map(|query| {
+                    if mode == GlobalLayoutMode::ExpandedFrontier {
+                        router.capture_expanded_global_replay(query, arm)
+                    } else {
+                        router.capture_global_replay(query, arm, 768)
+                    }
+                })
                 .collect::<borsuk::Result<Vec<_>>>()?;
-            if mode == GlobalLayoutMode::PageBudget {
+            if matches!(
+                mode,
+                GlobalLayoutMode::PageBudget | GlobalLayoutMode::ExpandedFrontier
+            ) {
                 let rows = replays
                     .iter()
                     .zip(requests)
@@ -1615,7 +1651,11 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                         ))
                     })
                     .collect::<borsuk::Result<Vec<_>>>()?;
-                return with_resources(page_budget_ladder_bytes(args.query_start, rows)?);
+                return with_resources(if mode == GlobalLayoutMode::ExpandedFrontier {
+                    expanded_frontier_bytes(args.query_start, rows)?
+                } else {
+                    page_budget_ladder_bytes(args.query_start, rows)?
+                });
             }
             if mode == GlobalLayoutMode::Control {
                 let controls = replays
@@ -1841,6 +1881,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         if flag == "--global-replay-control"
             || flag == "--global-geometric-pages"
             || flag == "--page-budget-ladder"
+            || flag == "--expanded-frontier-replay"
         {
             if global_layout_mode.is_some() {
                 return Err(argument_error("duplicate global layout phase"));
@@ -1849,6 +1890,8 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
                 GlobalLayoutMode::Control
             } else if flag == "--page-budget-ladder" {
                 GlobalLayoutMode::PageBudget
+            } else if flag == "--expanded-frontier-replay" {
+                GlobalLayoutMode::ExpandedFrontier
             } else {
                 GlobalLayoutMode::Treatment
             });
@@ -1929,7 +1972,12 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
             "--serving-global-leaf-limit authority differs",
         ));
     }
-    if global_leaf_limit.is_some_and(|limit| limit != 768)
+    let expected_global_limit = if global_layout_mode == Some(GlobalLayoutMode::ExpandedFrontier) {
+        1536
+    } else {
+        768
+    };
+    if global_leaf_limit.is_some_and(|limit| limit != expected_global_limit)
         || (global_leaf_limit.is_some()
             && diagnostic_logicals.is_none()
             && diagnostic_batch.is_none())
@@ -1938,8 +1986,12 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
             && (global_leaf_limit.is_none() || diagnostic_batch.is_none()))
         || (virtual_geometric_pages && global_layout_mode.is_some())
         || (global_layout_mode.is_some() && k != 10)
-        || (global_layout_mode.is_some_and(|mode| mode != GlobalLayoutMode::PageBudget)
-            && query_start != 64)
+        || (global_layout_mode.is_some_and(|mode| {
+            !matches!(
+                mode,
+                GlobalLayoutMode::PageBudget | GlobalLayoutMode::ExpandedFrontier
+            )
+        }) && query_start != 64)
     {
         return Err(argument_error("--global-leaf-limit value differs"));
     }
@@ -2267,6 +2319,74 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn v32_expanded_frontier_cli_is_explicit_and_has_no_page_capability() {
+        let mut values = virtual_batch_arguments();
+        *values.last_mut().unwrap() = "--expanded-frontier-replay".into();
+        let start = values.iter().position(|s| s == "--query-start").unwrap();
+        values[start + 1] = "6144".into();
+        let limit = values
+            .iter()
+            .position(|s| s == "--global-leaf-limit")
+            .unwrap();
+        values[limit + 1] = "1536".into();
+        let parsed = parse_args(values.clone()).unwrap();
+        assert_eq!(
+            parsed.diagnostic.unwrap().global_layout_mode,
+            Some(super::GlobalLayoutMode::ExpandedFrontier)
+        );
+        for flags in [
+            vec!["--page-budget-ladder"],
+            vec!["--expanded-frontier-replay"],
+            vec!["--serving-tier", "standard"],
+            vec!["--local-page-dir", "/tmp/pages"],
+        ] {
+            let mut bad = values.clone();
+            bad.extend(flags.into_iter().map(str::to_owned));
+            assert!(parse_args(bad).is_err());
+        }
+        values[limit + 1] = "768".into();
+        assert!(parse_args(values).is_err());
+    }
+
+    #[test]
+    fn v32_expanded_frontier_result_binds_the_experimental_limits() {
+        let mut diagnostic = virtual_diagnostic_fixture().current;
+        diagnostic.global_leaf_limit = Some(1536);
+        diagnostic.scan_budget = 524_288;
+        diagnostic.selection.work.leaves_scanned = 1536;
+        diagnostic.selection.work.codes_scanned = 360_482;
+        let mut prefix = diagnostic.selection.pages.clone();
+        for ordinal in 16..64 {
+            let mut page = prefix[0].clone();
+            page.ordinal = ordinal;
+            page.sha256 = format!("{ordinal:064x}");
+            prefix.push(page);
+        }
+        let rows = (6144..6176)
+            .map(|ordinal| (ordinal, "a".repeat(64), diagnostic.clone(), prefix.clone()))
+            .collect::<Vec<_>>();
+        let bytes = super::expanded_frontier_bytes(6144, rows.clone()).unwrap();
+        let bytes = super::global_resource_bytes(&bytes, 1000, 900, 800).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema_version"], 12);
+        assert_eq!(value["claim_eligible"], false);
+        assert_eq!(value["page_body_reads"], 0);
+        assert_eq!(value["queries"][0]["cells"][2]["selected_page_count"], 64);
+        assert!(super::page_budget_ladder_bytes(6144, rows.clone()).is_err());
+        for mutation in 0..4 {
+            let mut bad = rows.clone();
+            match mutation {
+                0 => bad[0].2.global_leaf_limit = Some(768),
+                1 => bad[0].2.scan_budget = 262_144,
+                2 => bad[0].2.selection.work.codes_scanned = 524_289,
+                3 => bad[0].2.selection.work.leaves_scanned = 1537,
+                _ => unreachable!(),
+            }
+            assert!(super::expanded_frontier_bytes(6144, bad).is_err());
+        }
     }
 
     #[test]

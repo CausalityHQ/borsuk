@@ -1124,6 +1124,24 @@ def run_page_budget_ladder(
     invoke: Callable[[tuple[str, ...]], bytes],
 ) -> bytes:
     """Authenticate local references, invoke once, and independently check coverage."""
+    return _run_frontier_replay(plan, invoke=invoke, expanded=False)
+
+
+def run_expanded_frontier_replay(
+    plan: V32ContainmentPlan,
+    *,
+    invoke: Callable[[tuple[str, ...]], bytes],
+) -> bytes:
+    """Replay the fixed expanded frontier against the original construction plan."""
+    return _run_frontier_replay(plan, invoke=invoke, expanded=True)
+
+
+def _run_frontier_replay(
+    plan: V32ContainmentPlan,
+    *,
+    invoke: Callable[[tuple[str, ...]], bytes],
+    expanded: bool,
+) -> bytes:
     if (
         plan.source_rows != 1_000_000
         or plan.query_count != 32
@@ -1164,10 +1182,18 @@ def run_page_budget_ladder(
     (command,) = _commands(
         plan, truth, source_to_logical, leaf_beam, page_budget_ladder=True
     )
+    if expanded:
+        arguments = list(command)
+        arguments[arguments.index("--global-leaf-limit") + 1] = "1536"
+        arguments[arguments.index("--page-budget-ladder")] = (
+            "--expanded-frontier-replay"
+        )
+        command = tuple(arguments)
     del source_to_logical
     payload = invoke(command)
-    summary = validate_page_budget_ladder(
+    summary = _validate_page_budget_ladder(
         payload,
+        expanded=expanded,
         query_start=plan.query_start,
         truth_logicals=logical_truth,
         logical_pages=mapping,
@@ -1177,7 +1203,9 @@ def run_page_budget_ladder(
     )
     return _canonical_bytes(
         dict(
-            schema="borsuk-v32-page-budget-ladder-v1",
+            schema="borsuk-v32-expanded-frontier-v1"
+            if expanded
+            else "borsuk-v32-page-budget-ladder-v1",
             claim_eligible=False,
             metric="truth-page-containment-not-reranked-recall",
             page_body_reads=0,
@@ -1312,6 +1340,52 @@ def validate_page_budget_ladder(
     maximum_leaves_eligible: int,
     root_beam: int,
 ) -> dict[str, object]:
+    return _validate_page_budget_ladder(
+        payload,
+        query_start=query_start,
+        truth_logicals=truth_logicals,
+        logical_pages=logical_pages,
+        registered_pages=registered_pages,
+        maximum_leaves_eligible=maximum_leaves_eligible,
+        root_beam=root_beam,
+        expanded=False,
+    )
+
+
+def validate_expanded_frontier(
+    payload: bytes,
+    *,
+    query_start: int,
+    truth_logicals: tuple[tuple[int, ...], ...],
+    logical_pages: dict[int, int],
+    registered_pages: dict[int, dict[str, object]],
+    maximum_leaves_eligible: int,
+    root_beam: int,
+) -> dict[str, object]:
+    """Independently check the fixed 1536-leaf/524288-code explanatory replay."""
+    return _validate_page_budget_ladder(
+        payload,
+        query_start=query_start,
+        truth_logicals=truth_logicals,
+        logical_pages=logical_pages,
+        registered_pages=registered_pages,
+        maximum_leaves_eligible=maximum_leaves_eligible,
+        root_beam=root_beam,
+        expanded=True,
+    )
+
+
+def _validate_page_budget_ladder(
+    payload: bytes,
+    *,
+    query_start: int,
+    truth_logicals: tuple[tuple[int, ...], ...],
+    logical_pages: dict[int, int],
+    registered_pages: dict[int, dict[str, object]],
+    maximum_leaves_eligible: int,
+    root_beam: int,
+    expanded: bool,
+) -> dict[str, object]:
     """Validate coverage only; callers authenticate truth and index registries first.
 
     The producer's replay digest identifies its capture, not an independent
@@ -1334,7 +1408,7 @@ def validate_page_budget_ladder(
         }
         or payload != _canonical_bytes(value)
         or type(value["schema_version"]) is not int
-        or value["schema_version"] != 11
+        or value["schema_version"] != (12 if expanded else 11)
         or type(value["query_start"]) is not int
         or value["query_start"] != query_start
         or value["claim_eligible"] is not False
@@ -1374,9 +1448,9 @@ def validate_page_budget_ladder(
             query_start + offset,
             truth,
             maximum_leaves_eligible,
-            256,
-            262144,
-            768,
+            512 if expanded else 256,
+            524288 if expanded else 262144,
+            1536 if expanded else 768,
             root_beam,
         )
         if any(logical_pages.get(t["logical"]) != t["page_ordinal"] for t in targets):
