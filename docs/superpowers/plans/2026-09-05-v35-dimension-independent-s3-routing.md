@@ -83,15 +83,15 @@
 
 **Interfaces:**
 - Consumes: bounded source-row blocks, `V35Dimensions`, source-ordinal training sample, and deterministic seed.
-- Produces: `V35Projection`, `train_v35_pca`, `build_v35_srht`, `project_v35_query_scalar`, and `project_v35_query_simd`.
+- Produces: `V35Projection`, `V35ProjectionTrainingSpec`, `V35ProjectionLimits`, `train_v35_pca`, `build_v35_srht`, `encode_v35_projection_arrow`, `decode_v35_projection_arrow`, `project_v35_query_scalar`, and `project_v35_query_simd`.
 
 - [ ] **Step 1: Write projection authority REDs**
 
-  Require exact Arrow field order/nullability for basis coefficients, deterministic source-ordinal sample membership, stable signs, orthonormality within a literal f64 tolerance, exact checksum, dimension binding, finite inputs, and canonical signed zero. Reject query/truth roles in the training request.
+  Require exactly one Arrow record batch with `D` rows and one non-null `coefficients: FixedSizeList<item: Float32 not null, M>` field in source-major order. Require deterministic source-ordinal sample membership, stable post-f32 signs, canonical positive zero, decoded f32 Gram element error at most `5e-4`, exact logical checksum, complete-file SHA-256, dimension/source/sample/seed/trainer binding, finite inputs, and allocation admission before decode. The logical checksum covers a domain tag, arm, `D`, `M`, seed, an empty sample slot for the control, the complete training descriptor, and source-major little-endian f32 bits. Reject query/truth roles in the construction capability and reject unknown/missing metadata, extra batches, transposed layout, nullability/type drift, or encoded/decoded duplicates outside the declared limit. Require both arms to have the same decoded numeric byte count and ensure every downstream projection uses only the decoded f32 basis after the training f64 state is dropped.
 
 - [ ] **Step 2: Write scalar/SIMD differential REDs**
 
-  For every supported `D` and `M`, compare architecture-specific SIMD to increasing-dimension scalar f64 authority on zeros, subnormals, alternating magnitudes, random finite vectors, and maximum safe finite values. Require a registered error envelope and identical nonfinite rejection. Record backend identity; never silently substitute a different scientific kernel.
+  For every supported `D` and `M`, compare architecture-specific SIMD to increasing-dimension scalar f64 authority on zeros, subnormals, alternating magnitudes, cancellation, random finite vectors, and maximum finite f32 values. Store coefficients source-major, widen coefficient/query f32 values before multiplication, vectorize across output coordinates, and require bit-identical f64 outputs with no horizontal source-dimension reduction. Require identical wrong-length/nonfinite rejection and canonical positive zero. Record backend identity; never silently substitute a different scientific kernel.
 
 - [ ] **Step 3: Run RED**
 
@@ -101,11 +101,13 @@
 
 - [ ] **Step 4: Implement streaming PCA and SRHT control**
 
-  Read one registered source-ordinal sample object in bounded blocks, use deterministic randomized SVD/PCA, canonicalize direction signs, and serialize one f32 basis. Implement SRHT with a registered padding rule. Sample extraction, when needed, is a separately receipted streaming pass; generation encoding is one subsequent full source pass. Do not allocate `D*D` covariance or expose queries to training.
+  Read one registered source-ordinal sample in blocks of at most 2,048 rows and implement uncentered streamed second-moment subspace iteration with `ell=min(D,M+16)`, a domain-separated Rademacher sketch, one initial application, exactly two iterations, and fixed-order Rayleigh--Ritz: exactly four registered-sample passes. Consume unique ordinals in increasing order; parallelize independent columns, not ordinal reductions. Canonicalize repeated eigenspaces and rank-deficient completion from increasing source axes; never emit a zero row. Sample extraction, when needed, is a separately receipted streaming pass; generation encoding is one subsequent full source pass. Do not allocate `D*D`, retain `sample_rows*D`, or expose queries/truth to training.
+
+  Implement `srht-prefix-orthonormalized-v1` by generating seeded restricted Hadamard candidates directly in a seeded full-row permutation and accepting them after two increasing-row/increasing-coordinate f64 modified-Gram--Schmidt passes. The dependence threshold is exactly `1e-12`; record skipped row indices and fail rather than changing seeds if `M` rows cannot be accepted. Persist the resulting dense source-major f32 basis and apply the same decoded-basis validation and query kernel as PCA. Do not claim standard SRHT embedding guarantees.
 
 - [ ] **Step 5: Implement fused kernels and run GREEN**
 
-  Provide AVX2/FMA and NEON/FMA paths where available, scalar authority otherwise for tests only, and measured backend receipts. Run focused tests, affected Clippy, fmt, and diff-check; then commit and fast-forward push.
+  Provide AVX2/FMA and NEON/FMA paths that vectorize independent outputs while each lane consumes source dimensions in identical order; scalar authority remains a test/control path only. Serving applies `Pq` without PCA-mean subtraction or implicit normalization. Encode/decode the strict Arrow basis, authenticate the projection descriptor/checksum and complete-file identity, then run focused tests, affected Clippy, fmt, and diff-check; commit and fast-forward push.
 
 ### Task 3: Persist Compact Quantized Leaf Patches
 

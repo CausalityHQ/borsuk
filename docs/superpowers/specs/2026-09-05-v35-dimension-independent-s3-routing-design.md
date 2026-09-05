@@ -56,10 +56,44 @@ exactly once. The persistent format accepts any positive `D` for which
 dimensions are qualification bands, not hard-coded API bounds.
 
 The primary basis is deterministic randomized SVD/PCA trained from a fixed,
-source-ordinal sample. A structured SRHT projection with the same `M`, bytes,
-training visibility, and routing controls is the non-learned control. Queries
-are projected once with deterministic dimension order and an architecture-
-specific SIMD kernel differential-tested against scalar f64 authority.
+source-ordinal sample. The non-learned control is
+`srht-prefix-orthonormalized-v1`: seeded restricted Hadamard candidates are
+accepted in a seeded permutation and orthonormalized in two fixed-order f64
+modified-Gram--Schmidt passes. This is not an unmodified padded SRHT: truncating
+zero-padded Hadamard rows does not preserve orthogonality when `D` is not a
+power of two. Both arms persist the same dense source-major `D*M` f32 basis and
+use the same query kernel, bytes, training visibility, and routing controls.
+
+PCA uses the uncentered second moment, `ell=min(D,M+16)`, a domain-separated
+Rademacher sketch, one initial streamed covariance-operator application,
+exactly two subspace iterations, and a fixed-order Rayleigh--Ritz solve: four
+passes over the registered sample in total. The uncentered objective directly
+maximizes captured norm energy for the later complement term. Training consumes
+unique sample ordinals in increasing order, caps `B` at 2,048 rows, and uses
+memory `O(D*ell + ell*ell + B*D)` independent of sample population. Repeated eigenspaces and rank deficiency are completed
+deterministically by projecting source axes in increasing coordinate order;
+zero basis rows are forbidden. Sample selection, seeds, pass count, block
+limit, eigensolver/pivot order, eigenvalue-cluster tolerance, trainer identity,
+and arithmetic policy are authenticated metadata.
+
+Training and serving both use the same linear, uncentered geometry: `z=Pq` and
+`y=Px`. V35 performs no implicit normalization or mean subtraction. After the
+single f64-to-f32 basis rounding, the training basis is dropped. Every later
+consumer uses only decoded f32 coefficients. Authority is that decoded basis widened to f64 and an
+increasing-source-dimension ordered sum. SIMD vectorizes across output
+coordinates, never across source-coordinate reductions, and must return
+bit-identical f64 projected coordinates to scalar authority. Queries with the
+wrong length or any nonfinite input are rejected identically.
+
+The basis artifact is one Arrow batch with exactly `D` rows and one non-null
+`coefficients: FixedSizeList<item: Float32 not null, M>` field. Row order is
+source-coordinate order. The decoded Gram matrix must satisfy
+`abs(G[i,j]-delta[i,j]) <= 5e-4`. Direction signs are canonicalized before the
+single f32 rounding by making the lowest-coordinate maximum-absolute
+coefficient positive; every zero is positive zero. A logical SHA-256 binds a
+domain tag, arm, `D`, `M`, seed, sample identity (empty for the control), exact
+training descriptor, and source-major little-endian f32 bits. The Arrow object
+also has its independent complete-byte SHA-256.
 
 ### Compact projected leaf patches
 
@@ -75,7 +109,7 @@ Each leaf stores one or two projected patches. Each patch contains:
 - a leaf ordinal; exact format, projection, training-sample, and
   source-generation bindings live once in the authenticated generation header.
 
-For normalized query `q`, let `z=Pq` and
+For a finite source query `q` under the registered `none` normalization, let `z=Pq` and
 `E_q=max(0,||q||^2-||z||^2)`. Each patch stores `E_l`, the ordered f64 mean of
 the same omitted-energy expression over its construction rows, rounded once to
 f32. Decoded scoring is exactly
@@ -89,7 +123,9 @@ bound is squared distance from `sqrt(E_q)` to
 not a reconstruction of omitted coordinates. SIMD produces a conservative
 score interval; disjoint intervals order directly and overlapping intervals
 fall back to the increasing-dimension f64 scorer. Canonical receipts contain
-the f64 authority score. A two-patch arm is
+the f64 authority score. Because the persisted f32 basis is only approximately
+orthonormal, `E_q` is the explicitly clamped stored heuristic rather than a
+claim of exact geometric residual energy. A two-patch arm is
 eligible only against an equal-byte extra-centroid control. The development
 matrix therefore compares one patch, two patches, equal-byte centroids, and
 the SRHT control under identical group, row, byte, and page budgets.
