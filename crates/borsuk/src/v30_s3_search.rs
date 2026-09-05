@@ -1030,6 +1030,8 @@ pub struct V32SearchWork {
 pub struct V32SearchResult {
     pub matches: Vec<V32Match>,
     pub work: V32SearchWork,
+    pub candidate_replay_sha256: Option<String>,
+    pub requested_pages: Vec<V27PageIdentity>,
 }
 
 #[doc(hidden)]
@@ -1037,6 +1039,7 @@ pub struct V32Index<S> {
     router: V32Router,
     store: S,
     arm: V32SearchArm,
+    global_leaf_limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2088,7 +2091,28 @@ impl V32Router {
 impl<S: V32PageStore> V32Index<S> {
     pub fn new(router: V32Router, store: S, arm: V32SearchArm) -> Result<Self> {
         router.validate_arm(arm)?;
-        Ok(Self { router, store, arm })
+        Ok(Self {
+            router,
+            store,
+            arm,
+            global_leaf_limit: None,
+        })
+    }
+
+    /// Serve original physical pages using the diagnostic's global-prefix route.
+    #[doc(hidden)]
+    pub fn new_global_prefix(
+        router: V32Router,
+        store: S,
+        arm: V32SearchArm,
+        leaf_limit: usize,
+    ) -> Result<Self> {
+        if !(1..=768).contains(&leaf_limit) {
+            return Err(invalid("V32 global routing leaf limit differs"));
+        }
+        let mut index = Self::new(router, store, arm)?;
+        index.global_leaf_limit = Some(leaf_limit);
+        Ok(index)
     }
 
     pub fn search(&self, query: &[f32; 96], k: usize) -> Result<V32SearchResult> {
@@ -2166,8 +2190,20 @@ impl<S: V32PageStore> V32Index<S> {
         if k == 0 || k > 10 {
             return Err(invalid("V30 result count differs"));
         }
+        let (selection, candidate_replay_sha256) = if let Some(limit) = self.global_leaf_limit {
+            // Preserve the original query bytes used by the diagnostic. Rerank
+            // normalization is separate and must not be fed back into routing.
+            let replay = self.router.capture_global_replay(query, self.arm, limit)?;
+            let hash = replay.sha256();
+            (replay.details.selection, Some(hash))
+        } else {
+            // Keep the existing root-route behavior independently qualified.
+            (
+                self.router.select_pages(&normalized(query)?, self.arm)?,
+                None,
+            )
+        };
         let query = normalized(query)?;
-        let selection = self.router.select_pages(&query, self.arm)?;
         observer(V32SearchPhase::RoutingComplete)?;
         let authorized_bytes = selection.pages.iter().try_fold(0_u64, |total, page| {
             total
@@ -2194,6 +2230,7 @@ impl<S: V32PageStore> V32Index<S> {
         observer(V32SearchPhase::ExactRerankComplete)?;
         Ok(V32SearchResult {
             matches: reranked.matches,
+            candidate_replay_sha256,
             work: V32SearchWork {
                 routing: selection.work,
                 get_count: selection.pages.len(),
@@ -2201,6 +2238,7 @@ impl<S: V32PageStore> V32Index<S> {
                 decoded_rows: reranked.decoded_rows,
                 unique_rows: reranked.unique_rows,
             },
+            requested_pages: selection.pages,
         })
     }
 }
@@ -3400,6 +3438,87 @@ mod tests {
     }
 
     struct OversizedStore;
+
+    #[test]
+    fn v32_global_serving_matches_replay_and_reads_one_exact_wave() {
+        // Break: serving substitutes root routing, normalizes routing twice,
+        // changes page order, or performs an extra read/routing pass.
+        struct RecordingStore {
+            requests: Arc<Mutex<Vec<Vec<V27PageIdentity>>>>,
+            bodies: BTreeMap<u32, Bytes>,
+        }
+        impl V32PageStore for RecordingStore {
+            fn read_wave(&self, pages: &[V27PageIdentity]) -> crate::Result<Vec<Bytes>> {
+                self.requests.lock().unwrap().push(pages.to_vec());
+                Ok(pages
+                    .iter()
+                    .map(|page| self.bodies[&page.ordinal].clone())
+                    .collect())
+            }
+        }
+        let (router, bodies) = router();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 1,
+            scan_budget: 65_536,
+            candidate_depth: 40,
+            page_count: 16,
+        };
+        let query = std::array::from_fn(|i| 0.11 + i as f32 / 173.0);
+        let replay = router.capture_global_replay(&query, arm, 2).unwrap();
+        let expected = replay.details.selection.clone();
+        let expected_hash = replay.sha256();
+        assert_ne!(
+            expected_hash,
+            router
+                .capture_global_replay(&super::normalized(&query).unwrap(), arm, 2)
+                .unwrap()
+                .sha256()
+        );
+        assert_eq!(expected.pages.len(), 16);
+        assert_eq!(expected.work.leaves_scanned, 2);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let store = RecordingStore {
+            requests: requests.clone(),
+            bodies: bodies
+                .into_iter()
+                .map(|(page, body)| (page.ordinal, Bytes::from(body)))
+                .collect(),
+        };
+        let index = V32Index::new_global_prefix(router, store, arm, 2).unwrap();
+        let result = index.search(&query, 10).unwrap();
+        assert_eq!(*requests.lock().unwrap(), vec![expected.pages.clone()]);
+        assert_eq!(result.requested_pages, expected.pages);
+        assert_eq!(result.work.routing, expected.work);
+        assert_eq!(
+            result.candidate_replay_sha256.as_deref(),
+            Some(expected_hash.as_str())
+        );
+        assert_eq!(result.work.get_count, 16);
+        assert_eq!(result.work.decoded_rows, 32);
+        assert_eq!(result.matches.len(), 10);
+    }
+
+    #[test]
+    fn v32_global_serving_rejects_invalid_limit_before_reads() {
+        for limit in [0, 769, usize::MAX] {
+            let (router, _) = router();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let store = MemoryStore {
+                calls: calls.clone(),
+                bodies: BTreeMap::new(),
+            };
+            let arm = V32SearchArm {
+                root_beam: 1,
+                leaf_beam: 1,
+                scan_budget: 65_536,
+                candidate_depth: 40,
+                page_count: 16,
+            };
+            assert!(V32Index::new_global_prefix(router, store, arm, limit).is_err());
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+    }
 
     impl V32PageStore for OversizedStore {
         fn read_wave(&self, pages: &[V27PageIdentity]) -> crate::Result<Vec<Bytes>> {

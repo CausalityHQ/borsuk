@@ -47,6 +47,7 @@ struct Args {
     k: usize,
     page_source: Option<PageSource>,
     diagnostic: Option<DiagnosticRequest>,
+    serving_global_leaf_limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -476,6 +477,104 @@ impl V32PageStore for ObjectPageStore {
             try_join_all(reads).await
         })
     }
+}
+
+fn global_serving_configuration() -> serde_json::Value {
+    serde_json::json!({"global_leaf_limit":768,"scan_budget":262144,"candidate_depth":12288,"page_count":16,"k":10})
+}
+
+fn global_serving_batch_bytes(results: Vec<serde_json::Value>) -> borsuk::Result<Vec<u8>> {
+    if results.len() != 32
+        || results.iter().any(|r| {
+            r["schema_version"] != 3
+                || r["routing_scope"] != "global"
+                || r["configuration"] != global_serving_configuration()
+                || r["claim_eligible"] != false
+        })
+    {
+        return Err(invalid("V32 global serving batch authority differs"));
+    }
+    let mut bytes = serde_json::to_vec(&canonical(serde_json::json!({
+        "schema_version":3,"claim_eligible":false,"routing_scope":"global",
+        "configuration":global_serving_configuration(),"results":results,
+    })))
+    .map_err(|_| invalid("V32 global serving batch serialization differs"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn global_serving_result_bytes(
+    result: &V32SearchResult,
+    process_cpu_ns: u64,
+    elapsed_ns: u64,
+    peak_rss_bytes: u64,
+    phases: SearchPhaseTiming,
+    leaf_limit: usize,
+) -> borsuk::Result<Vec<u8>> {
+    let hash = result
+        .candidate_replay_sha256
+        .as_deref()
+        .filter(|hash| valid_digest(hash))
+        .ok_or_else(|| invalid("V32 global serving replay evidence missing"))?;
+    let pages = &result.requested_pages;
+    let work = &result.work;
+    let row_count = pages
+        .iter()
+        .map(|p| usize::from(p.primary_rows) + usize::from(p.replica_rows))
+        .sum::<usize>();
+    let bytes = pages
+        .iter()
+        .try_fold(0_u64, |sum, p| sum.checked_add(p.encoded_bytes));
+    if leaf_limit != 768
+        || pages.len() != 16
+        || work.get_count != 16
+        || work.routing.selected_pages != 16
+        || result.matches.len() != 10
+        || work.routing.codes_scanned > 262144
+        || work.routing.codes_scanned < work.routing.candidates_retained as u64
+        || !(16..=12288).contains(&work.routing.candidates_retained)
+        || !(1..=768).contains(&work.routing.leaves_scanned)
+        || work.routing.leaves_eligible < work.routing.leaves_scanned
+        || work.routing.pages_considered < 16
+        || work.decoded_rows != row_count
+        || work.unique_rows != row_count
+        || bytes != Some(work.encoded_bytes)
+        || work.encoded_bytes > 3145728
+        || pages.iter().any(|p| {
+            !valid_digest(&p.sha256)
+                || p.encoded_bytes == 0
+                || p.primary_rows == 0
+                || p.replica_rows != 0
+        })
+        || pages
+            .iter()
+            .map(|p| p.ordinal)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != 16
+        || result
+            .matches
+            .iter()
+            .map(|m| m.source_ordinal)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != 10
+    {
+        return Err(invalid("V32 global serving leaf limit differs"));
+    }
+    let bytes = result_bytes(result, process_cpu_ns, elapsed_ns, peak_rss_bytes, phases)?;
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| invalid("V32 global serving JSON differs"))?;
+    value["schema_version"] = serde_json::json!(3);
+    value["routing_scope"] = serde_json::json!("global");
+    value["global_leaf_limit"] = serde_json::json!(leaf_limit);
+    value["candidate_replay_sha256"] = serde_json::json!(hash);
+    value["requested_pages"] = serde_json::json!(pages);
+    value["configuration"] = global_serving_configuration();
+    let mut bytes = serde_json::to_vec(&canonical(value))
+        .map_err(|_| invalid("V32 global serving serialization differs"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 fn result_bytes(
@@ -1138,10 +1237,15 @@ fn read_query(argument: &ArtifactArg, query_row: usize) -> borsuk::Result<[f32; 
         .ok_or_else(|| invalid("V30 qualifier query row differs"))
 }
 
+struct ServingArm {
+    arm: V32SearchArm,
+    global_leaf_limit: Option<usize>,
+}
+
 fn run_batch<S: V32PageStore>(
     router: V32Router,
     store: S,
-    arm: V32SearchArm,
+    serving: ServingArm,
     query: &ArtifactArg,
     query_start: usize,
     query_count: usize,
@@ -1149,7 +1253,10 @@ fn run_batch<S: V32PageStore>(
 ) -> borsuk::Result<Vec<u8>> {
     let queries = read_queries(query, query_start, query_count)?;
     let mut results = Vec::with_capacity(query_count);
-    let index = V32Index::new(router, store, arm)?;
+    let index = match serving.global_leaf_limit {
+        Some(limit) => V32Index::new_global_prefix(router, store, serving.arm, limit)?,
+        None => V32Index::new(router, store, serving.arm)?,
+    };
     for query_vector in queries {
         let cpu_before = process_cpu_nanoseconds()?;
         let started = Instant::now();
@@ -1189,23 +1296,32 @@ fn run_batch<S: V32PageStore>(
         let process_cpu_ns = process_cpu_nanoseconds()?
             .checked_sub(cpu_before)
             .ok_or_else(|| invalid("V30 qualifier process CPU regressed"))?;
-        let bytes = result_bytes(
-            &result,
-            process_cpu_ns,
-            elapsed_ns,
-            peak_rss_bytes()?,
-            phases,
-        )?;
+        let bytes = match serving.global_leaf_limit {
+            Some(limit) => global_serving_result_bytes(
+                &result,
+                process_cpu_ns,
+                elapsed_ns,
+                peak_rss_bytes()?,
+                phases,
+                limit,
+            )?,
+            None => result_bytes(
+                &result,
+                process_cpu_ns,
+                elapsed_ns,
+                peak_rss_bytes()?,
+                phases,
+            )?,
+        };
         results.push(
             serde_json::from_slice::<serde_json::Value>(&bytes)
                 .map_err(|_| invalid("V30 qualifier batch result differs"))?,
         );
     }
-    let value = serde_json::json!({
-        "claim_eligible": false,
-        "results": results,
-        "schema_version": 2,
-    });
+    if serving.global_leaf_limit.is_some() {
+        return global_serving_batch_bytes(results);
+    }
+    let value = serde_json::json!({"claim_eligible": false,"results": results,"schema_version": 2});
     let mut bytes = serde_json::to_vec(&canonical(value))
         .map_err(|_| invalid("V30 qualifier batch serialization failed"))?;
     bytes.push(b'\n');
@@ -1223,6 +1339,16 @@ fn manifest_arm(args: &Args, manifest: &Manifest) -> borsuk::Result<V32SearchArm
         .iter()
         .find_map(|&(leaf_beam, scan_budget)| (leaf_beam == args.leaf_beam).then_some(scan_budget))
         .ok_or_else(|| invalid("V30 qualifier routing arm differs"))?;
+    if args.serving_global_leaf_limit.is_some()
+        && (args.serving_global_leaf_limit != Some(768)
+            || args.leaf_beam != 256
+            || scan_budget != 262144
+            || args.candidate_depth != 12288
+            || args.page_count != 16
+            || args.k != 10)
+    {
+        return Err(invalid("V32 global serving configured budget differs"));
+    }
     Ok(V32SearchArm {
         root_beam: args.root_beam,
         leaf_beam: args.leaf_beam,
@@ -1450,7 +1576,10 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                 directory,
                 suffix: manifest.page_key_suffix,
             },
-            arm,
+            ServingArm {
+                arm,
+                global_leaf_limit: args.serving_global_leaf_limit,
+            },
             &args.query,
             args.query_start,
             args.query_count,
@@ -1487,7 +1616,10 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                     page_prefix,
                     runtime,
                 },
-                arm,
+                ServingArm {
+                    arm,
+                    global_leaf_limit: args.serving_global_leaf_limit,
+                },
                 &args.query,
                 args.query_start,
                 args.query_count,
@@ -1628,6 +1760,25 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
                 .map_err(|_| argument_error("--global-leaf-limit type differs"))
         })
         .transpose()?;
+    let serving_global_leaf_limit = values
+        .remove("serving-global-leaf-limit")
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|_| argument_error("--serving-global-leaf-limit type differs"))
+        })
+        .transpose()?;
+    if serving_global_leaf_limit.is_some_and(|limit| limit != 768)
+        || (serving_global_leaf_limit.is_some()
+            && (diagnostic_logicals.is_some()
+                || diagnostic_batch.is_some()
+                || global_leaf_limit.is_some()
+                || leaf_beam != 256))
+    {
+        return Err(argument_error(
+            "--serving-global-leaf-limit authority differs",
+        ));
+    }
     if global_leaf_limit.is_some_and(|limit| limit != 768)
         || (global_leaf_limit.is_some()
             && diagnostic_logicals.is_none()
@@ -1702,6 +1853,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         k,
         page_source,
         diagnostic,
+        serving_global_leaf_limit,
     })
 }
 
@@ -1802,6 +1954,29 @@ mod tests {
             "768".to_owned(),
         ]);
         values
+    }
+
+    #[test]
+    fn v32_global_serving_cli_is_explicit_and_truth_free() {
+        let mut values = arguments();
+        let leaf = values.iter().position(|v| v == "--leaf-beam").unwrap();
+        values[leaf + 1] = "256".into();
+        values.extend(["--serving-global-leaf-limit".into(), "768".into()]);
+        let parsed = parse_args(values.clone()).unwrap();
+        assert_eq!(parsed.serving_global_leaf_limit, Some(768));
+        assert!(parsed.diagnostic.is_none());
+        assert_eq!(
+            parsed.page_source,
+            Some(PageSource::Tier(borsuk::V32ServingTier::Standard))
+        );
+        for bad in ["0", "769", "-1", "oops"] {
+            let mut changed = values.clone();
+            *changed.last_mut().unwrap() = bad.into();
+            assert!(parse_args(changed).is_err());
+        }
+        let mut mixed = global_diagnostic_arguments();
+        mixed.extend(["--serving-global-leaf-limit".into(), "768".into()]);
+        assert!(parse_args(mixed).is_err());
     }
 
     fn virtual_batch_arguments() -> Vec<String> {
@@ -2496,6 +2671,9 @@ mod tests {
             );
         }
         let mut outside = parse_args(arguments()).unwrap();
+        outside.serving_global_leaf_limit = Some(768);
+        assert!(manifest_arm(&outside, &manifest).is_err());
+        outside.serving_global_leaf_limit = None;
         outside.leaf_beam = 192;
         assert!(manifest_arm(&outside, &manifest).is_err());
 
@@ -2943,7 +3121,9 @@ mod tests {
         .unwrap();
         assert_eq!(bodies, vec![b"abc".to_vec()]);
 
-        let result = V32SearchResult {
+        let mut result = V32SearchResult {
+            requested_pages: vec![page.clone()],
+            candidate_replay_sha256: None,
             matches: vec![V32Match {
                 source_ordinal: 9,
                 squared_distance: 0.25,
@@ -2999,6 +3179,76 @@ mod tests {
                 "\"selected_pages\":1},\"unique_rows\":1}}\n"
             )
         );
+        result.candidate_replay_sha256 = Some("a".repeat(64));
+        assert!(
+            super::global_serving_result_bytes(
+                &result,
+                100,
+                100,
+                1000,
+                SearchPhaseTiming::default(),
+                768
+            )
+            .is_err()
+        );
+        result.matches = (0..10)
+            .map(|i| V32Match {
+                source_ordinal: i,
+                squared_distance: i as f64 / 10.0,
+            })
+            .collect();
+        result.requested_pages = (0..16)
+            .map(|i| {
+                let mut p = page.clone();
+                p.ordinal = i;
+                p.primary_rows = 2;
+                p.sha256 = format!("{:064x}", i + 1);
+                p
+            })
+            .collect();
+        result.work.get_count = 16;
+        result.work.encoded_bytes = 48;
+        result.work.decoded_rows = 32;
+        result.work.unique_rows = 32;
+        result.work.routing.selected_pages = 16;
+        result.work.routing.candidates_retained = 32;
+        result.work.routing.pages_considered = 16;
+        let bytes = super::global_serving_result_bytes(
+            &result,
+            100,
+            100,
+            1000,
+            SearchPhaseTiming::default(),
+            768,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["routing_scope"], "global");
+        assert_eq!(value["global_leaf_limit"], 768);
+        assert_eq!(value["candidate_replay_sha256"], "a".repeat(64));
+        assert_eq!(value["requested_pages"].as_array().unwrap().len(), 16);
+        assert_eq!(value["configuration"]["scan_budget"], 262144);
+        let mut rows = vec![value.clone(); 32];
+        let batch = super::global_serving_batch_bytes(rows.clone()).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&batch).unwrap()["schema_version"],
+            3
+        );
+        rows[3]["schema_version"] = serde_json::json!(2);
+        assert!(super::global_serving_batch_bytes(rows).is_err());
+        result.candidate_replay_sha256 = None;
+        assert!(
+            super::global_serving_result_bytes(
+                &result,
+                100,
+                100,
+                1000,
+                SearchPhaseTiming::default(),
+                768
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -3030,6 +3280,7 @@ mod tests {
             k: 1,
             page_source: Some(PageSource::Local(directory.path().to_path_buf())),
             diagnostic: None,
+            serving_global_leaf_limit: None,
         };
         let error = execute(args).unwrap_err().to_string();
         assert!(
