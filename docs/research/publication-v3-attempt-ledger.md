@@ -3403,3 +3403,53 @@ work only through phase/liveness/health markers, not partial quality output.
 No automatic restart after scientific failure. The former15ms cold-S3 target
 is not a release gate; measured end-to-end latency, tail latency, throughput,
 recall and request/byte cost must be disclosed together.
+
+### V32 fixed page-budget replication: terminal containment result
+
+The original `v32-deep-1m-page-ladder-b2116971-a0001` completed on Spot
+`i-0d2f8fa53df3419f7`, c7g.4xlarge, eu-central-1b. The controller exited0 and
+confirmed termination; no restart. Source and preregistration remain those
+above. Source archive8,243,286B SHA256
+`4b89decce6f0c9c813ae8d81ddc5775d90149f165853ca975d5bfd1a88d57538`;
+Rust1.98.0 arm64 release qualifier21,947,896B SHA256
+`0178830f70d6bda69372508581eac1b7c4bd725143d36e85ca8aaab6c91e3367`.
+The attempt prefix is
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/b21169715f36315395622352d0a6cd7b6f5f7f08/attempts/v32-deep-1m-page-ladder-b2116971-a0001/`.
+`TERMINAL.json`815,871B SHA256
+`b5f5434073b46d40693929621579ae5034a1f89aa6c76298f1d5f1b757ac52c0`
+preserves the32-query raw diagnostic, input identities, corrected-v3 truth
+bindings, binary provenance and independently validated summary.
+
+| Requested pages | Contained truth /320 | Aggregate containment | Minimum query | Perfect queries /32 | Logical GETs if served | Mean encoded bytes/query |
+| --- | --- | --- | --- | --- | --- | --- |
+| 16 | 302 | 94.375% | 6/10 | 22 | 512 | 3,117,216 |
+| 32 | 319 | 99.6875% | 9/10 | 31 | 1,024 | 6,234,432 |
+| 64 | 320 | 100% | 10/10 | 32 | 2,048 | 12,468,864 |
+
+All actual prefix counts equal their requested caps. Exact aggregate bytes are
+99,750,912 /199,501,824 /399,003,648. After terminal, the controller-side check
+recomputed every sample's hits from target-page membership, each byte sum from
+physical identities, all totals/minima/perfect-query counts, and unique counts.
+No vector-page GET was executed; the table's GET counts describe the physical
+prefixes **if served**, not measured S3 operations. This is not reranked recall.
+
+Corrected reference truth required six registered corpus-shard reads totaling
+402,965,152B, streamed without saving corpus shards. All20 input reads totaled
+442,984,572B including metadata, query and logical-source/reference authority.
+Reference truth wall time21,159,661,468ns; whole worker25,603,885,975ns. Bootstrap
+and compilation are outside that worker time. One32-query diagnostic phase
+reports CPU1,459,893,883ns and wall1,461,320,381ns, including input/capture/hash/
+diagnosis/serialization work: neither routing-only nor end-to-end S3 latency.
+Qualifier peak RSS100,827,136B. Fourteen2s process-group samples peak at
+583,516,160B, full PSI avg10=0, swap growth0. `monitor.jsonl`1,240B SHA256
+`44ef3e14d37513b754de5e0da8335db41a1a9a8c9cd3a70e86fe7f080dda0444`;
+sampled RSS is not an exact group high-water mark.
+
+Decision under the preregistered rule:64 is the smallest tested budget with
+perfect containment on this cohort. Implement an explicit bounded64-page
+serving arm and separately register its real-S3 comparison against16 pages.
+Do not retune candidate generation or test intermediate budgets on this cohort,
+and do not declare64 a default or claim100M/1B scale, sustainable throughput,
+perfect general recall, or release qualification. The fourfold page-byte cost
+must be measured against the recovered truth before promotion. The cohort's
+prior-exposure caveat and claim-ineligible status remain unchanged.
