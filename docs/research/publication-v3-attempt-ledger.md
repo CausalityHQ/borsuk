@@ -3784,3 +3784,74 @@ requires a new attempt identity, never a partial measurement merge. No serving
 benchmark,100M run or production-default change is authorized by a positive
 result alone: first freeze the explanatory result and run the prospectively
 held window, retaining the prior-dataset-exposure caveat.
+
+### V32 expanded-frontier explanatory result: recovery with higher CPU
+
+Source and preregistration `1ee31efb081d9b5bb432b93a87aea442341243bb`
+implemented the diagnostic-only boundary. TDD missing-API REDs preceded the
+implementation; affected search42/42, qualifier29/29 and Python34/34 tests
+passed, as did targeted Clippy, Ruff, formatting, syntax and docs checks.
+Astra independently reviewed the code and the one-shot controller before
+execution. Normal serving limits were not changed.
+
+One causality Spot c7g.4xlarge in eu-central-1b, instance
+`i-0d8d7fc51e1784c3e`, completed and was confirmed terminated. Original
+controller session23730 exited0; no restart. Evidence prefix:
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/1ee31efb081d9b5bb432b93a87aea442341243bb/attempts/v32-deep-1m-expanded-1ee31efb-a0001/`.
+
+`TERMINAL.json`2,436,745B SHA256
+`f78754e0453d939a2c44a7dfeb332bf08e274264f12a48c706994171c2d00950`
+binds all three complete windows, exact inputs, source and build identity.
+Source archive8,260,523B SHA256
+`3c770a90cc60749356a51abd292307a60b4f8af5f98e5e4314eef12d0c099a7e`;
+release qualifier21,953,280B SHA256
+`65da0ce4652b112d033ae50c7162e4d1bb08904daa366eaf1cabeef62f13ce01`.
+Build used Rust1.98.0/aarch64 release; diagnostic affinityCPU0 and
+`BORSUK_CPU_THREADS=1` were explicit. The terminal appeared after the
+controller's227-second liveness sample; build/setup time is not query latency.
+
+| Query start | 16-page hits/320 | 32-page hits/320 | 64-page hits/320 | Minimum64 containment |
+|---|---:|---:|---:|---:|
+|4096|308|318|320|10/10|
+|5120|318|320|320|10/10|
+|6144|311|319|320|10/10|
+
+All960/960 truth pages were contained at64, with96/96 perfect queries.
+For the previous query6160/logical411202 miss, leaf1711 remains global rank1500
+(one-based). It now enters the scanned pool at360,482 codes, survives at
+candidate rank56 (zero-based), and its page856 is first-distinct rank39
+(the40th page). The nested reference16 diagnostic still calls it a
+page-reducer miss; the independently checked64-page projection recovers it.
+The frontier was the old obstruction, not candidate retention. Across all96
+queries, scanned codes315,293..421,521 exactly match the metadata prediction.
+
+Whole diagnostic CPU totals for the three32-query windows were
+2,599,840,384 /2,579,883,146 /2,579,825,514ns:80.828635875ms/query overall,
+versus about44.79ms in the earlier768-leaf diagnostic (+80.46%). This includes
+diagnostic work/reductions and serialization; it is not routing-only CPU,
+S3 request latency, paired throughput or an uncertainty-qualified speed claim.
+Worker wall12,722,205,962ns included reference downloads and validation.
+Qualifier peak RSS100,798,464B. Seven2-second monitor samples showed process
+group peak277,028,864B, full PSI0 and swap growth0. `monitor.jsonl`616B SHA256
+`dbb32315aaa3131129450c5883ed00ca8a3dd1b0229479f6f82bfdf9640de5d0`.
+
+Input downloads42,479,861B comprised routing metadata/PQ and frozen references;
+there were zero corpus-shard reads and zero vector-page reads. The query/truth
+identities were unchanged. After terminal, a separate bounded read-only check
+authenticated the exact query, manifest, logical-source and page-range files,
+all three prior truth/receipt/Arrow batches, and revalidated every result field
+against the terminal without invoking the qualifier. All three matched;
+explicit scratch cleanup and path absence were confirmed.
+
+Disposition: burned-set recovery only, claim_eligible=false. Do not call it
+measured reranked recall, general perfect quality, or100M qualification. Astra
+confirmed the next fixed cell is7168..7199 with the same configuration and
+v3 truth; no candidate/page/frontier tuning after its outcome. Thereafter,
+perform metadata-only code-block access tracing before a provider rewrite or
+100M launch. A read-only scaling audit identifies resident all-row PQ and
+global all-leaf scoring as separate unresolved limits: at5% high fidelity,
+PQ resident bytes alone project to2,535,625,000 at100M and25,356,250,000 at1B,
+and the current borrowed-artifact decoder also retains encoded inputs while
+allocating decoded planes. Fixed scan/page limits do not bound that loading
+cost or the number of centroids scored. These are code-derived projections,
+not measured large-scale results.
