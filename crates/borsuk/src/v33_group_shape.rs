@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{BorsukError, Result};
+use crate::{
+    BorsukError, Result,
+    v30_s3_pq::{V30CodePlanes, V30PqCodebook, V30PqReconstructor, V30PqWidth},
+};
 
 const DIMENSIONS: usize = 96;
 
@@ -13,6 +16,93 @@ struct V33LeafPopulation {
     routing_leaf_ordinal: u32,
     group_ordinal: u32,
     rows: Vec<(u64, [f32; DIMENSIONS])>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct V33RoutingRange {
+    routing_leaf_ordinal: u32,
+    code_parent_leaf_ordinal: u32,
+    logical_start: u64,
+    row_count: u64,
+}
+
+fn reconstruct_v33_leaf_populations(
+    base_codebook: &V30PqCodebook,
+    high_codebook: &V30PqCodebook,
+    codes: &V30CodePlanes,
+    code_parent_centers: &[[f32; DIMENSIONS]],
+    ranges: &[V33RoutingRange],
+    group_of_code_parent: &[u32],
+) -> Result<Vec<V33LeafPopulation>> {
+    if base_codebook.width() != V30PqWidth::Base24
+        || high_codebook.width() != V30PqWidth::High48
+        || ranges.is_empty()
+        || code_parent_centers.is_empty()
+        || code_parent_centers.len() != group_of_code_parent.len()
+        || code_parent_centers
+            .iter()
+            .flatten()
+            .any(|value| !value.is_finite())
+    {
+        return Err(invalid("V33 PQ reconstruction authority differs"));
+    }
+    let base = V30PqReconstructor::new(base_codebook)?;
+    let high = V30PqReconstructor::new(high_codebook)?;
+    let mut logical_start = 0_u64;
+    let mut populations = Vec::with_capacity(ranges.len());
+    for (expected_ordinal, range) in ranges.iter().enumerate() {
+        if range.routing_leaf_ordinal != expected_ordinal as u32
+            || range.logical_start != logical_start
+            || range.row_count == 0
+        {
+            return Err(invalid("V33 routing range authority differs"));
+        }
+        let parent = usize::try_from(range.code_parent_leaf_ordinal)
+            .map_err(|_| invalid("V33 code parent ordinal overflows"))?;
+        let center = code_parent_centers
+            .get(parent)
+            .ok_or_else(|| invalid("V33 code parent ordinal differs"))?;
+        let group_ordinal = *group_of_code_parent
+            .get(parent)
+            .ok_or_else(|| invalid("V33 code parent group differs"))?;
+        let end = range
+            .logical_start
+            .checked_add(range.row_count)
+            .ok_or_else(|| invalid("V33 routing range overflows"))?;
+        let mut rows = Vec::with_capacity(
+            usize::try_from(range.row_count)
+                .map_err(|_| invalid("V33 routing population overflows"))?,
+        );
+        for logical in range.logical_start..end {
+            let logical_index =
+                usize::try_from(logical).map_err(|_| invalid("V33 logical ordinal overflows"))?;
+            let (width, code) = codes.code(logical_index)?;
+            let residual = match width {
+                V30PqWidth::Base24 => base.reconstruct(code)?,
+                V30PqWidth::High48 => high.reconstruct(code)?,
+            };
+            let mut reconstructed = [0.0_f32; DIMENSIONS];
+            for dimension in 0..DIMENSIONS {
+                reconstructed[dimension] = center[dimension] + residual[dimension];
+            }
+            if reconstructed.iter().any(|value| !value.is_finite()) {
+                return Err(invalid("V33 reconstructed row is nonfinite"));
+            }
+            rows.push((logical, reconstructed));
+        }
+        populations.push(V33LeafPopulation {
+            routing_leaf_ordinal: range.routing_leaf_ordinal,
+            group_ordinal,
+            rows,
+        });
+        logical_start = end;
+    }
+    if logical_start != codes.logical_rows() as u64
+        || codes.materialized_rows() != codes.logical_rows()
+    {
+        return Err(invalid("V33 reconstructed logical coverage differs"));
+    }
+    Ok(populations)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -293,15 +383,81 @@ fn select_v33_group_prefix(
 #[cfg(test)]
 mod tests {
     use super::{
-        V33GroupPopulation, V33LeafPopulation, V33ShapeArm, rank_v33_groups, score_v33_leaf,
-        select_v33_group_prefix, summarize_v33_leaf, v33_shape_control_bytes,
+        V33GroupPopulation, V33LeafPopulation, V33RoutingRange, V33ShapeArm, rank_v33_groups,
+        reconstruct_v33_leaf_populations, score_v33_leaf, select_v33_group_prefix,
+        summarize_v33_leaf, v33_shape_control_bytes,
     };
+    use crate::v30_s3_pq::{V30CodePlanes, V30PqCodebook, V30PqWidth};
 
     fn row(logical_ordinal: u64, first: f32, second: f32) -> (u64, [f32; 96]) {
         let mut values = [0.0; 96];
         values[0] = first;
         values[1] = second;
         (logical_ordinal, values)
+    }
+
+    fn codebook(width: V30PqWidth, label: u8, value: f32) -> V30PqCodebook {
+        let dimensions = width.dimensions();
+        let mut values = vec![0.0; width.subquantizers() * width.centroids() * dimensions];
+        for subquantizer in 0..width.subquantizers() {
+            let start = (subquantizer * width.centroids() + usize::from(label)) * dimensions;
+            values[start..start + dimensions].fill(value);
+        }
+        V30PqCodebook::new(width, values).unwrap()
+    }
+
+    #[test]
+    fn v33_group_shape_reconstruction_uses_fidelity_width_and_code_parent() {
+        let base = codebook(V30PqWidth::Base24, 1, 0.5);
+        let high = codebook(V30PqWidth::High48, 2, 1.5);
+        let codes =
+            V30CodePlanes::from_packed(2, vec![0b10, 0, 0, 0], vec![1; 24], vec![2; 48]).unwrap();
+        let mut parent_centers = vec![[0.0; 96]; 2];
+        parent_centers[0].fill(2.0);
+        parent_centers[1].fill(4.0);
+        let ranges = [
+            V33RoutingRange {
+                routing_leaf_ordinal: 0,
+                code_parent_leaf_ordinal: 0,
+                logical_start: 0,
+                row_count: 1,
+            },
+            V33RoutingRange {
+                routing_leaf_ordinal: 1,
+                code_parent_leaf_ordinal: 1,
+                logical_start: 1,
+                row_count: 1,
+            },
+        ];
+        let reconstructed = reconstruct_v33_leaf_populations(
+            &base,
+            &high,
+            &codes,
+            &parent_centers,
+            &ranges,
+            &[7, 9],
+        )
+        .unwrap();
+        assert_eq!(reconstructed.len(), 2);
+        assert_eq!(reconstructed[0].group_ordinal, 7);
+        assert_eq!(reconstructed[0].rows[0].1, [2.5; 96]);
+        assert_eq!(reconstructed[1].group_ordinal, 9);
+        assert_eq!(reconstructed[1].rows[0].1, [5.5; 96]);
+        assert!(reconstructed[1].rows[0].1.iter().sum::<f32>() > 1.0);
+
+        let mut overlapping = ranges;
+        overlapping[1].logical_start = 0;
+        assert!(
+            reconstruct_v33_leaf_populations(
+                &base,
+                &high,
+                &codes,
+                &parent_centers,
+                &overlapping,
+                &[7, 9],
+            )
+            .is_err()
+        );
     }
 
     #[test]
