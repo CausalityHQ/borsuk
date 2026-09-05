@@ -65,6 +65,7 @@ enum GlobalLayoutMode {
     Treatment,
     PageBudget,
     ExpandedFrontier,
+    Root64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -893,36 +894,47 @@ fn page_budget_ladder_bytes(
     query_start: usize,
     diagnostics: PageBudgetRows,
 ) -> borsuk::Result<Vec<u8>> {
-    frontier_page_budget_bytes(query_start, diagnostics, false)
+    frontier_page_budget_bytes(query_start, diagnostics, false, None)
 }
 
 fn expanded_frontier_bytes(
     query_start: usize,
     diagnostics: PageBudgetRows,
 ) -> borsuk::Result<Vec<u8>> {
-    frontier_page_budget_bytes(query_start, diagnostics, true)
+    frontier_page_budget_bytes(query_start, diagnostics, true, None)
+}
+
+fn root64_frontier_bytes(
+    query_start: usize,
+    diagnostics: PageBudgetRows,
+    roots: Vec<Vec<u16>>,
+) -> borsuk::Result<Vec<u8>> {
+    frontier_page_budget_bytes(query_start, diagnostics, false, Some(roots))
 }
 
 fn frontier_page_budget_bytes(
     query_start: usize,
     diagnostics: PageBudgetRows,
     expanded: bool,
+    whole_roots: Option<Vec<Vec<u16>>>,
 ) -> borsuk::Result<Vec<u8>> {
-    let (leaf_limit, scan_budget, schema) = if expanded {
-        (1536, 524_288, 12)
+    let (leaf_limit, scan_budget, schema) = if whole_roots.is_some() {
+        (None, 524_288, 13)
+    } else if expanded {
+        (Some(1536), 524_288, 12)
     } else {
-        (768, 262_144, 11)
+        (Some(768), 262_144, 11)
     };
-    if diagnostics.len() != 32 {
+    if diagnostics.len() != 32 || whole_roots.as_ref().is_some_and(|roots| roots.len() != 32) {
         return Err(invalid("V32 page ladder batch cardinality differs"));
     }
     let mut queries = Vec::with_capacity(32);
     for (offset, (ordinal, hash, current, prefix)) in diagnostics.into_iter().enumerate() {
         if query_start.checked_add(offset) != Some(ordinal)
-            || current.global_leaf_limit != Some(leaf_limit)
+            || current.global_leaf_limit != leaf_limit
             || current.scan_budget != scan_budget
             || current.selection.work.codes_scanned > scan_budget
-            || current.selection.work.leaves_scanned > leaf_limit
+            || leaf_limit.is_some_and(|limit| current.selection.work.leaves_scanned > limit)
             || !valid_digest(&hash)
             || current.targets.len() != 10
             || current.selection.pages.len() != 16
@@ -931,6 +943,24 @@ fn frontier_page_budget_bytes(
             || prefix[..16] != current.selection.pages
         {
             return Err(invalid("V32 page ladder authority differs"));
+        }
+        if let Some(roots) = &whole_roots {
+            let selected = &roots[offset];
+            let unique = selected
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>();
+            if selected.len() != 64
+                || unique.len() != 64
+                || selected
+                    .iter()
+                    .any(|root| usize::from(*root) >= current.selection.work.roots_scored)
+                || current.selection.work.leaves_scanned == 0
+                || current.selection.work.leaves_scanned != current.selection.work.leaves_eligible
+                || current.selection.work.codes_scanned == 0
+            {
+                return Err(invalid("V32 whole-root authority differs"));
+            }
         }
         let mut ordinals = std::collections::BTreeSet::new();
         if prefix.iter().any(|page| {
@@ -961,14 +991,18 @@ fn frontier_page_budget_bytes(
             })
             .collect::<Vec<_>>();
         let current: serde_json::Value =
-            serde_json::from_slice(&diagnostic_bytes(ordinal, true, Some(leaf_limit), current)?)
+            serde_json::from_slice(&diagnostic_bytes(ordinal, true, leaf_limit, current)?)
                 .map_err(|_| invalid("V32 page ladder current diagnostic differs"))?;
-        queries.push(serde_json::json!({
+        let mut entry = serde_json::json!({
             "query_ordinal": ordinal,
             "candidate_replay_sha256": hash,
             "current": current,
             "cells": cells,
-        }));
+        });
+        if let Some(roots) = &whole_roots {
+            entry["selected_root_ordinals"] = serde_json::json!(roots[offset]);
+        }
+        queries.push(entry);
     }
     let mut bytes = serde_json::to_vec(&canonical(serde_json::json!({
         "schema_version": schema,
@@ -1112,7 +1146,7 @@ fn global_resource_bytes(
         object
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
-        Some(9..=12)
+        Some(9..=13)
     ) || object.contains_key("resources")
     {
         return Err(invalid("V32 global resource schema differs"));
@@ -1628,7 +1662,9 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
             let replays = queries
                 .iter()
                 .map(|query| {
-                    if mode == GlobalLayoutMode::ExpandedFrontier {
+                    if mode == GlobalLayoutMode::Root64 {
+                        router.capture_root64_replay(query, arm)
+                    } else if mode == GlobalLayoutMode::ExpandedFrontier {
                         router.capture_expanded_global_replay(query, arm)
                     } else {
                         router.capture_global_replay(query, arm, 768)
@@ -1637,7 +1673,9 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                 .collect::<borsuk::Result<Vec<_>>>()?;
             if matches!(
                 mode,
-                GlobalLayoutMode::PageBudget | GlobalLayoutMode::ExpandedFrontier
+                GlobalLayoutMode::PageBudget
+                    | GlobalLayoutMode::ExpandedFrontier
+                    | GlobalLayoutMode::Root64
             ) {
                 let rows = replays
                     .iter()
@@ -1651,7 +1689,18 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                         ))
                     })
                     .collect::<borsuk::Result<Vec<_>>>()?;
-                return with_resources(if mode == GlobalLayoutMode::ExpandedFrontier {
+                return with_resources(if mode == GlobalLayoutMode::Root64 {
+                    let roots = replays
+                        .iter()
+                        .map(|replay| {
+                            replay
+                                .whole_root_ordinals()
+                                .map(<[u16]>::to_vec)
+                                .ok_or_else(|| invalid("V32 whole-root capture missing"))
+                        })
+                        .collect::<borsuk::Result<Vec<_>>>()?;
+                    root64_frontier_bytes(args.query_start, rows, roots)?
+                } else if mode == GlobalLayoutMode::ExpandedFrontier {
                     expanded_frontier_bytes(args.query_start, rows)?
                 } else {
                     page_budget_ladder_bytes(args.query_start, rows)?
@@ -1882,6 +1931,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
             || flag == "--global-geometric-pages"
             || flag == "--page-budget-ladder"
             || flag == "--expanded-frontier-replay"
+            || flag == "--root64-replay"
         {
             if global_layout_mode.is_some() {
                 return Err(argument_error("duplicate global layout phase"));
@@ -1892,6 +1942,8 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
                 GlobalLayoutMode::PageBudget
             } else if flag == "--expanded-frontier-replay" {
                 GlobalLayoutMode::ExpandedFrontier
+            } else if flag == "--root64-replay" {
+                GlobalLayoutMode::Root64
             } else {
                 GlobalLayoutMode::Treatment
             });
@@ -1977,19 +2029,23 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
     } else {
         768
     };
-    if global_leaf_limit.is_some_and(|limit| limit != expected_global_limit)
+    let root64 = global_layout_mode == Some(GlobalLayoutMode::Root64);
+    if (root64 && global_leaf_limit.is_some())
+        || global_leaf_limit.is_some_and(|limit| limit != expected_global_limit)
         || (global_leaf_limit.is_some()
             && diagnostic_logicals.is_none()
             && diagnostic_batch.is_none())
         || diagnostic_logicals.is_some() && diagnostic_batch.is_some()
         || ((virtual_geometric_pages || global_layout_mode.is_some())
-            && (global_leaf_limit.is_none() || diagnostic_batch.is_none()))
+            && ((!root64 && global_leaf_limit.is_none()) || diagnostic_batch.is_none()))
         || (virtual_geometric_pages && global_layout_mode.is_some())
         || (global_layout_mode.is_some() && k != 10)
         || (global_layout_mode.is_some_and(|mode| {
             !matches!(
                 mode,
-                GlobalLayoutMode::PageBudget | GlobalLayoutMode::ExpandedFrontier
+                GlobalLayoutMode::PageBudget
+                    | GlobalLayoutMode::ExpandedFrontier
+                    | GlobalLayoutMode::Root64
             )
         }) && query_start != 64)
     {
@@ -2319,6 +2375,86 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn v32_root64_cli_rejects_leaf_frontier_and_page_capabilities() {
+        // Break: root replay inherits a leaf cutoff or accepts serving access.
+        let mut values = virtual_batch_arguments();
+        *values.last_mut().unwrap() = "--root64-replay".into();
+        let limit = values
+            .iter()
+            .position(|s| s == "--global-leaf-limit")
+            .unwrap();
+        values.drain(limit..limit + 2);
+        let start = values.iter().position(|s| s == "--query-start").unwrap();
+        values[start + 1] = "7168".into();
+        let parsed = parse_args(values.clone()).unwrap();
+        assert_eq!(
+            parsed.diagnostic.unwrap().global_layout_mode,
+            Some(super::GlobalLayoutMode::Root64)
+        );
+        for flags in [
+            vec!["--global-leaf-limit", "768"],
+            vec!["--root64-replay"],
+            vec!["--expanded-frontier-replay"],
+            vec!["--serving-tier", "standard"],
+            vec!["--local-page-dir", "/tmp/pages"],
+        ] {
+            let mut bad = values.clone();
+            bad.extend(flags.into_iter().map(str::to_owned));
+            assert!(parse_args(bad).is_err());
+        }
+    }
+
+    #[test]
+    fn v32_root64_result_binds_complete_root_population_and_cap() {
+        // Break: root scope becomes a global cutoff or silently prunes children.
+        let mut diagnostic = virtual_diagnostic_fixture().current;
+        diagnostic.global_leaf_limit = None;
+        diagnostic.scan_budget = 524_288;
+        diagnostic.selection.work.roots_scored = 128;
+        diagnostic.selection.work.leaves_eligible = 2000;
+        diagnostic.selection.work.leaves_scanned = 2000;
+        diagnostic.selection.work.codes_scanned = 480_000;
+        let mut prefix = diagnostic.selection.pages.clone();
+        for ordinal in 16..64 {
+            let mut page = prefix[0].clone();
+            page.ordinal = ordinal;
+            page.sha256 = format!("{ordinal:064x}");
+            prefix.push(page);
+        }
+        let rows = (7168..7200)
+            .map(|ordinal| (ordinal, "a".repeat(64), diagnostic.clone(), prefix.clone()))
+            .collect::<Vec<_>>();
+        let roots = vec![(0..64_u16).collect::<Vec<_>>(); 32];
+        let bytes = super::root64_frontier_bytes(7168, rows.clone(), roots.clone()).unwrap();
+        let bytes = super::global_resource_bytes(&bytes, 1000, 900, 800).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema_version"], 13);
+        assert_eq!(value["claim_eligible"], false);
+        assert_eq!(value["page_body_reads"], 0);
+        assert_eq!(
+            value["queries"][0]["selected_root_ordinals"],
+            serde_json::json!((0..64).collect::<Vec<_>>())
+        );
+        assert_eq!(value["queries"][0]["cells"][2]["selected_page_count"], 64);
+        for mutation in 0..6 {
+            let mut bad = rows.clone();
+            let mut bad_roots = roots.clone();
+            match mutation {
+                0 => bad[0].2.global_leaf_limit = Some(1536),
+                1 => bad[0].2.selection.work.codes_scanned = 524_289,
+                2 => bad[0].2.selection.work.leaves_scanned = 1999,
+                3 => {
+                    bad_roots[0].pop();
+                }
+                4 => bad_roots[0][1] = bad_roots[0][0],
+                5 => bad_roots[0][0] = 128,
+                _ => unreachable!(),
+            }
+            assert!(super::root64_frontier_bytes(7168, bad, bad_roots).is_err());
+        }
     }
 
     #[test]

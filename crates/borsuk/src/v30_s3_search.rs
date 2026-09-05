@@ -703,6 +703,12 @@ pub struct V32CandidateReplay<'a> {
 }
 
 impl V32CandidateReplay<'_> {
+    /// Ordered whole-root scope, absent for ordinary and global-leaf replays.
+    #[doc(hidden)]
+    pub fn whole_root_ordinals(&self) -> Option<&[u16]> {
+        self.details.whole_roots.as_deref()
+    }
+
     /// Project a bounded first-distinct physical-page prefix without rerouting.
     /// The requested cap is not a guarantee: a short candidate pool yields
     /// fewer pages. Callers must record both cap and actual count. No page body
@@ -3589,7 +3595,13 @@ mod tests {
             });
         }
         let layout = V30Layout::new(256, ranges, pages).unwrap();
-        let codes = V30CodePlanes::from_packed(256, vec![0; 8], vec![0; 256 * 24], vec![]).unwrap();
+        let codes = V30CodePlanes::from_packed(
+            256,
+            vec![0xaaaa_aaaa; 8],
+            vec![0; 128 * 24],
+            vec![0; 128 * 48],
+        )
+        .unwrap();
         let router = V32Router::new(hierarchy, base, high, layout, codes).unwrap();
         let arm = V32SearchArm {
             root_beam: 1,
@@ -3603,6 +3615,26 @@ mod tests {
         assert_eq!(replay.details.selection.work.leaves_scanned, 128);
         assert_eq!(replay.details.selection.work.query_table_pairs_built, 128);
         assert_eq!(replay.details.selected_leaves, (0..128).collect::<Vec<_>>());
+        assert_eq!(
+            replay.whole_root_ordinals().unwrap(),
+            &(0..64_u16).collect::<Vec<_>>()
+        );
+        let normalized = super::normalized(&[0.2; 96]).unwrap();
+        for candidate in &replay.details.ranked_candidates {
+            let parent = candidate.logical as usize;
+            let residual = std::array::from_fn(|d| {
+                normalized[d] - f32::from(router.hierarchy.leaves[parent][d])
+            });
+            let (width, code) = router.codes.code(parent).unwrap();
+            let book = match width {
+                V30PqWidth::Base24 => &router.base_codebook,
+                V30PqWidth::High48 => &router.high_codebook,
+            };
+            let table = crate::v30_s3_pq::V30QueryTable::new(book, &residual).unwrap();
+            let mut expected = [0.0];
+            table.score_block_into(&[code], &mut expected).unwrap();
+            assert_eq!(candidate.score.to_bits(), expected[0].to_bits());
+        }
         let logicals = replay
             .details
             .ranked_candidates
@@ -3634,6 +3666,10 @@ mod tests {
         );
         let global = router.capture_global_replay(&[0.2; 96], arm, 256).unwrap();
         assert_ne!(replay.sha256(), global.sha256());
+        assert!(global.whole_root_ordinals().is_none());
+        let mut altered = router.capture_root64_replay(&[0.2; 96], arm).unwrap();
+        altered.details.whole_roots.as_mut().unwrap().swap(0, 1);
+        assert_ne!(replay.sha256(), altered.sha256());
         assert!(
             router
                 .select_pages(
