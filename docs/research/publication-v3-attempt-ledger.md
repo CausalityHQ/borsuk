@@ -4010,3 +4010,64 @@ This is not100M qualification. Keeping128 roots at100M would average781250
 rows per root, already above the whole scan budget. A deployable follow-up
 requires construction-time bounded root populations and renewed quality
 evidence; the1M metadata result does not establish that future hierarchy.
+
+### V32 fixed root64 replay: containment preserved, CPU increases
+
+The preregistered whole-root diagnostic ran once on causality Spot
+`i-03f9545b737b2f6d3` (c7g.4xlarge,eu-central-1b), source
+`f8f5519554080ce2f17b43b8fc106a41de07ccfa`. Original controller exited0
+after confirming the instance terminated; no scientific restart occurred.
+All four windows4096/5120/6144/7168 were already exposed. This is a
+containment/layout falsifier, not independent recall qualification.
+
+| Query start |16-page hits /320|32-page hits /320|64-page hits /320|
+|---|---:|---:|---:|
+|4096|308|318|320|
+|5120|318|320|320|
+|6144|311|319|320|
+|7168|311|316|320|
+
+All128 queries retain all10 target pages at64; these aggregates exactly
+match the preceding expanded-frontier results. The implementation selects
+the nearest64 roots and every descendant, retaining the original code-parent
+residual centroids and12288 candidates. No microleaf pruning, partial-root
+truncation, vector-page reads or reference-corpus GETs occurred. The saved
+schema13 output was independently revalidated against authenticated roots,
+code-parent leaves, routing ranges, query Parquet, logical mapping and frozen
+truth/receipt/Arrow inputs without executing the PQ diagnostic again.
+Every regenerated root-scope/coverage/authority receipt matched; verifier
+exited0 and explicitly cleared its temporary files and directory.
+
+Codes scanned425,822..503,541 (mean467,969.8125); routing ranges
+scanned2048..2073; code-parent query-table pairs built2024..2038, with
+peak live pairs1. The128-query prior expanded diagnostic averaged
+80.8550042109375ms CPU/query; this replay is19.654465% higher.
+
+Diagnostic phase CPU by window was3,095,244,684 /3,077,093,650 /
+3,111,273,985 /3,099,955,407ns, totaling12,383,567,726ns or
+96.746622859375ms/query. These include diagnostic reductions/serialization,
+not just routing, and exclude S3 serving. Whole worker wall19,200,259,674ns;
+qualifier maximum reported RSS100,786,176B. The11 two-second monitor samples
+peaked at310,075,392B process-group RSS, PSI full avg10=0 and swap growth0.
+The300-second science/1800-second attempt and memory guards did not fire.
+Resident/reference input downloads totaled43,303,945B; this experimental
+resident-PQ replay does not implement selective root-object downloads yet.
+
+Terminal3,279,782B SHA256
+`1a4bdc15e9775625f39fc8a30e2ff3f30c70217c181ad675eaf74be1aeed697a`;
+monitor972B SHA256
+`532fd34ae7b5deeaa05aebb855ae3e708cbea8f6110465af789676600dae0a1f`.
+Source archive8,272,869B SHA256
+`765a710e48924bd40ffb898d8b7d17664ec2e4b292c7ca43d812933737e0937c`;
+release qualifier21,962,200B SHA256
+`acbbcc6d6f8d9c28dcfa44033c8f05d20ef2963048f8fd0740711f041ea3c090`.
+Rust1.98.0 aarch64 release, CPU affinity0, `BORSUK_CPU_THREADS=1`.
+Registration, controller, build template, worker, source, binary, per-window
+results and terminal are preserved under
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/f8f5519554080ce2f17b43b8fc106a41de07ccfa/attempts/v32-deep-1m-root64-f8f55195-a0001/`.
+
+Disposition: whole-root grouping preserves the observed containment but
+increases diagnostic CPU. It supports evaluating a less fragmented code
+layout, not claiming lower measured S3 latency, QPS, write throughput or
+100M scalability. Bounded root populations, actual selective code fetches,
+CPU profiling and independent quality qualification remain required.
