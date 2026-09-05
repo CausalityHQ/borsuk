@@ -24,8 +24,8 @@ use crate::{
 };
 
 const MAX_CANDIDATES: usize = 12_288;
-const MAX_SELECTED_PAGES: usize = 16;
-const MAX_PAGE_BYTES: u64 = 3_145_728;
+const MAX_SELECTED_PAGES: usize = 64;
+const MAX_ENCODED_PAGE_BYTES: u64 = 196_608;
 const CANDIDATE_PRUNE_WINDOW: usize = 32_768;
 const V32_CPU_GATE_NS: u64 = 64_000_000;
 const V32_COMPUTE_GATE_NS: u64 = 12_000_000;
@@ -1072,6 +1072,8 @@ pub struct V32SearchWork {
 pub struct V32SearchResult {
     pub matches: Vec<V32Match>,
     pub work: V32SearchWork,
+    /// Global-route reference capture digest (at most sixteen pages), before
+    /// projecting the actual serving prefix in `requested_pages`.
     pub candidate_replay_sha256: Option<String>,
     pub requested_pages: Vec<V27PageIdentity>,
 }
@@ -2242,9 +2244,23 @@ impl<S: V32PageStore> V32Index<S> {
         let (selection, candidate_replay_sha256) = if let Some(limit) = self.global_leaf_limit {
             // Preserve the original query bytes used by the diagnostic. Rerank
             // normalization is separate and must not be fed back into routing.
-            let replay = self.router.capture_global_replay(query, self.arm, limit)?;
+            let capture_arm = V32SearchArm {
+                page_count: self.arm.page_count.min(16),
+                ..self.arm
+            };
+            let replay = self
+                .router
+                .capture_global_replay(query, capture_arm, limit)?;
             let hash = replay.sha256();
-            (replay.details.selection, Some(hash))
+            let pages = replay.physical_page_prefix(self.arm.page_count)?;
+            if pages.len() != self.arm.page_count {
+                return Err(invalid("V30 selected page cardinality differs"));
+            }
+            let mut selection = replay.details.selection;
+            selection.work.selected_pages = pages.len();
+            selection.work.pages_considered = pages.len();
+            selection.pages = pages;
+            (selection, Some(hash))
         } else {
             // Keep the existing root-route behavior independently qualified.
             (
@@ -2259,7 +2275,8 @@ impl<S: V32PageStore> V32Index<S> {
                 .checked_add(page.encoded_bytes)
                 .ok_or_else(|| invalid("V30 page byte count overflows"))
         })?;
-        if authorized_bytes > MAX_PAGE_BYTES {
+        let maximum_page_bytes = self.arm.page_count as u64 * MAX_ENCODED_PAGE_BYTES;
+        if authorized_bytes > maximum_page_bytes {
             return Err(invalid("V30 page byte bound differs"));
         }
         let bodies = self.store.read_wave(&selection.pages)?;
@@ -2272,7 +2289,7 @@ impl<S: V32PageStore> V32Index<S> {
                 .checked_add(body.len() as u64)
                 .ok_or_else(|| invalid("V30 page byte count overflows"))
         })?;
-        if encoded_bytes > MAX_PAGE_BYTES {
+        if encoded_bytes > maximum_page_bytes {
             return Err(invalid("V30 page byte bound differs"));
         }
         let reranked = exact_rerank_pages(&selection.pages, &bodies, &query, k)?;
@@ -2392,6 +2409,138 @@ mod tests {
             V32Router::new(hierarchy, base, high, layout, codes).unwrap(),
             bodies,
         )
+    }
+
+    #[test]
+    fn v32_serving_page_budget_short_pool_fails_before_reading() {
+        // Break: a short candidate pool silently serves a partial64-page arm.
+        let (router, bodies) = router();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let store = MemoryStore {
+            calls: calls.clone(),
+            bodies: bodies
+                .into_iter()
+                .map(|(identity, body)| (identity.ordinal, Bytes::from(body)))
+                .collect(),
+        };
+        let index = V32Index::new_global_prefix(
+            router,
+            store,
+            V32SearchArm {
+                root_beam: 1,
+                leaf_beam: 2,
+                scan_budget: 65536,
+                candidate_depth: 40,
+                page_count: 64,
+            },
+            2,
+        )
+        .unwrap();
+        assert!(index.search(&[0.2; 96], 10).is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn v32_serving_page_budget_reads_and_reranks_one_bounded_64_page_wave() {
+        // Break: the serving route still caps sixteen pages/3MiB, changes the
+        // captured prefix, omits reranking later pages, or loses exact tie order.
+        let (hierarchy, base, high, _, _, _) = components();
+        let bodies = (0..80_u32)
+            .map(|ordinal| {
+                let rows = (0..128_u64)
+                    .map(|offset| V27PageRow {
+                        source_ordinal: u64::from(ordinal) * 128 + offset,
+                        vector: [0.2; 96],
+                    })
+                    .collect::<Vec<_>>();
+                encode_v27_page(ordinal, 128, 0, &rows).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let pages = bodies
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (identity, _))| {
+                V30PageRange::from_legacy(ordinal as u64 * 128, 128, identity).unwrap()
+            })
+            .collect();
+        let ranges = (0..10_u32)
+            .map(|leaf| V32RoutingRange {
+                leaf_ordinal: leaf,
+                code_parent_leaf_ordinal: leaf / 5,
+                routing_centroid: hierarchy.leaves[(leaf / 5) as usize],
+                logical_start: u64::from(leaf) * 1024,
+                row_count: 1024,
+                page_start: leaf * 8,
+                page_count: 8,
+            })
+            .collect();
+        let layout = V30Layout::new(10240, ranges, pages).unwrap();
+        let codes =
+            V30CodePlanes::from_packed(10240, vec![0; 320], vec![0; 10240 * 24], vec![]).unwrap();
+        let router = V32Router::new(hierarchy, base, high, layout, codes).unwrap();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 64,
+            scan_budget: 65536,
+            candidate_depth: 10240,
+            page_count: 16,
+        };
+        let replay = router.capture_global_replay(&[0.2; 96], arm, 10).unwrap();
+        let expected = replay.physical_page_prefix(64).unwrap();
+        let expected_bytes = expected.iter().map(|p| p.encoded_bytes).sum::<u64>();
+        assert!(expected_bytes > 3_145_728);
+        let counts = replay.pq_work();
+        let reference_hash = replay.sha256();
+        let widened = V32SearchArm {
+            page_count: 64,
+            ..arm
+        };
+        let wide_replay = router
+            .capture_global_replay(&[0.2; 96], widened, 10)
+            .unwrap();
+        assert_eq!(wide_replay.details.selection.pages, expected);
+        assert_eq!(wide_replay.pq_work(), counts);
+        assert!(
+            router
+                .validate_arm(V32SearchArm {
+                    page_count: 65,
+                    ..arm
+                })
+                .is_err()
+        );
+        assert!(
+            router
+                .validate_arm(V32SearchArm {
+                    page_count: 0,
+                    ..arm
+                })
+                .is_err()
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let store = MemoryStore {
+            calls: calls.clone(),
+            bodies: bodies
+                .into_iter()
+                .map(|(identity, body)| (identity.ordinal, Bytes::from(body)))
+                .collect(),
+        };
+        let index = V32Index::new_global_prefix(router, store, widened, 10).unwrap();
+        let result = index.search(&[0.2; 96], 10).unwrap();
+        assert_eq!(result.candidate_replay_sha256, Some(reference_hash));
+        assert_eq!(result.requested_pages, expected);
+        assert_eq!(result.work.get_count, 64);
+        assert_eq!(result.work.encoded_bytes, expected_bytes);
+        assert_eq!(result.work.decoded_rows, 8192);
+        assert_eq!(result.work.unique_rows, 8192);
+        assert_eq!(
+            result
+                .matches
+                .iter()
+                .map(|m| m.source_ordinal)
+                .collect::<Vec<_>>(),
+            (0..10).collect::<Vec<_>>()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

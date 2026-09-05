@@ -228,6 +228,45 @@ class GlobalReplayAuthorityTests(unittest.TestCase):
 
 
 class GlobalServingTests(unittest.TestCase):
+    def test_serving_page_budget_binds_reference_capture_and_actual_64(self):
+        # Break: accepting stale schema3 or confusing the reference16 capture
+        # with actual64 reads lets the experiment understate cost or mix arms.
+        value, expected, pages = self.fixture(page_count=64)
+        self.validate(value, expected, pages)
+        for mutation in range(5):
+            bad = copy.deepcopy(value)
+            if mutation == 0:
+                bad["configuration"]["capture_page_count"] = 64
+            elif mutation == 1:
+                bad["results"][0]["work"]["get_count"] = 16
+            elif mutation == 2:
+                bad["results"][1]["configuration"] = dict(
+                    bad["configuration"], page_count=16
+                )
+            elif mutation == 3:
+                bad["schema_version"] = 3
+            else:
+                bad["results"][0]["work"]["routing"].update(
+                    candidates_retained=16, codes_scanned=16
+                )
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                self.validate(bad, expected, pages)
+
+    def test_serving_page_budget_rejects_oversized_individual_page(self):
+        # A coherent registry/receipt rewrite must not turn the aggregate
+        # wave allowance into an allowance for one oversized physical page.
+        value, expected, pages = self.fixture(page_count=64)
+        self.validate(value, expected, pages)
+        first = pages[0]
+        pages = (
+            GlobalPageIdentity(first.ordinal, first.sha256, 1000000, 2, 0),
+        ) + pages[1:]
+        for row in value["results"]:
+            row["requested_pages"][0]["encoded_bytes"] = 1000000
+            row["work"]["encoded_bytes"] = 1000000 + 63 * 100
+        with self.assertRaisesRegex(ValueError, "page values"):
+            self.validate(value, expected, pages)
+
     def test_summary_preserves_failed_recall_and_empirical_latency(self):
         from scripts.v32_global_serving import summarize_global_serving_batch
 
@@ -291,26 +330,27 @@ class GlobalServingTests(unittest.TestCase):
                     truth=truth,
                 )
 
-    def fixture(self):
+    def fixture(self, page_count=16):
         config = {
             "global_leaf_limit": 768,
             "scan_budget": 262144,
             "candidate_depth": 12288,
-            "page_count": 16,
+            "capture_page_count": 16,
+            "page_count": page_count,
             "k": 10,
         }
         pages = tuple(
-            GlobalPageIdentity(i, f"{i + 1:064x}", 100, 2, 0) for i in range(16)
+            GlobalPageIdentity(i, f"{i + 1:064x}", 100, 2, 0) for i in range(page_count)
         )
         expected = tuple(
-            GlobalQueryExpectation(i, f"{i + 100:064x}", tuple(range(16)))
+            GlobalQueryExpectation(i, f"{i + 100:064x}", tuple(range(page_count)))
             for i in range(64, 96)
         )
         rows = []
         for query in expected:
             rows.append(
                 {
-                    "schema_version": 3,
+                    "schema_version": 4,
                     "claim_eligible": False,
                     "routing_scope": "global",
                     "global_leaf_limit": 768,
@@ -333,10 +373,10 @@ class GlobalServingTests(unittest.TestCase):
                         "exact_rerank_cpu_ns": 15,
                     },
                     "work": {
-                        "decoded_rows": 32,
-                        "unique_rows": 32,
-                        "encoded_bytes": 1600,
-                        "get_count": 16,
+                        "decoded_rows": page_count * 2,
+                        "unique_rows": page_count * 2,
+                        "encoded_bytes": page_count * 100,
+                        "get_count": page_count,
                         "routing": {
                             "roots_scored": 1,
                             "leaves_eligible": 2,
@@ -345,15 +385,15 @@ class GlobalServingTests(unittest.TestCase):
                             "peak_query_table_pairs_live": 1,
                             "codes_scanned": 64,
                             "candidates_retained": 64,
-                            "pages_considered": 16,
-                            "selected_pages": 16,
+                            "pages_considered": page_count,
+                            "selected_pages": page_count,
                         },
                     },
                 }
             )
         return (
             {
-                "schema_version": 3,
+                "schema_version": 4,
                 "claim_eligible": False,
                 "routing_scope": "global",
                 "configuration": config,

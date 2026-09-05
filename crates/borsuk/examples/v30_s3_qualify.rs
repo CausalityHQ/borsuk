@@ -480,24 +480,29 @@ impl V32PageStore for ObjectPageStore {
     }
 }
 
-fn global_serving_configuration() -> serde_json::Value {
-    serde_json::json!({"global_leaf_limit":768,"scan_budget":262144,"candidate_depth":12288,"page_count":16,"k":10})
+fn global_serving_configuration(page_count: usize) -> serde_json::Value {
+    serde_json::json!({"global_leaf_limit":768,"scan_budget":262144,"candidate_depth":12288,"capture_page_count":16,"page_count":page_count,"k":10})
 }
 
 fn global_serving_batch_bytes(results: Vec<serde_json::Value>) -> borsuk::Result<Vec<u8>> {
-    if results.len() != 32
+    let count = results
+        .first()
+        .and_then(|r| r["configuration"]["page_count"].as_u64())
+        .unwrap_or(0);
+    if !matches!(count, 16 | 64)
+        || results.len() != 32
         || results.iter().any(|r| {
-            r["schema_version"] != 3
+            r["schema_version"] != 4
                 || r["routing_scope"] != "global"
-                || r["configuration"] != global_serving_configuration()
+                || r["configuration"] != global_serving_configuration(count as usize)
                 || r["claim_eligible"] != false
         })
     {
         return Err(invalid("V32 global serving batch authority differs"));
     }
     let mut bytes = serde_json::to_vec(&canonical(serde_json::json!({
-        "schema_version":3,"claim_eligible":false,"routing_scope":"global",
-        "configuration":global_serving_configuration(),"results":results,
+        "schema_version":4,"claim_eligible":false,"routing_scope":"global",
+        "configuration":global_serving_configuration(count as usize),"results":results,
     })))
     .map_err(|_| invalid("V32 global serving batch serialization differs"))?;
     bytes.push(b'\n');
@@ -527,23 +532,24 @@ fn global_serving_result_bytes(
         .iter()
         .try_fold(0_u64, |sum, p| sum.checked_add(p.encoded_bytes));
     if leaf_limit != 768
-        || pages.len() != 16
-        || work.get_count != 16
-        || work.routing.selected_pages != 16
+        || !matches!(pages.len(), 16 | 64)
+        || work.get_count != pages.len()
+        || work.routing.selected_pages != pages.len()
         || result.matches.len() != 10
         || work.routing.codes_scanned > 262144
         || work.routing.codes_scanned < work.routing.candidates_retained as u64
-        || !(16..=12288).contains(&work.routing.candidates_retained)
+        || !(pages.len()..=12288).contains(&work.routing.candidates_retained)
         || !(1..=768).contains(&work.routing.leaves_scanned)
         || work.routing.leaves_eligible < work.routing.leaves_scanned
-        || work.routing.pages_considered < 16
+        || work.routing.pages_considered < pages.len()
         || work.decoded_rows != row_count
         || work.unique_rows != row_count
         || bytes != Some(work.encoded_bytes)
-        || work.encoded_bytes > 3145728
+        || work.encoded_bytes > pages.len() as u64 * 196608
         || pages.iter().any(|p| {
             !valid_digest(&p.sha256)
                 || p.encoded_bytes == 0
+                || p.encoded_bytes > 196608
                 || p.primary_rows == 0
                 || p.replica_rows != 0
         })
@@ -552,7 +558,7 @@ fn global_serving_result_bytes(
             .map(|p| p.ordinal)
             .collect::<std::collections::BTreeSet<_>>()
             .len()
-            != 16
+            != pages.len()
         || result
             .matches
             .iter()
@@ -566,12 +572,12 @@ fn global_serving_result_bytes(
     let bytes = result_bytes(result, process_cpu_ns, elapsed_ns, peak_rss_bytes, phases)?;
     let mut value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|_| invalid("V32 global serving JSON differs"))?;
-    value["schema_version"] = serde_json::json!(3);
+    value["schema_version"] = serde_json::json!(4);
     value["routing_scope"] = serde_json::json!("global");
     value["global_leaf_limit"] = serde_json::json!(leaf_limit);
     value["candidate_replay_sha256"] = serde_json::json!(hash);
     value["requested_pages"] = serde_json::json!(pages);
-    value["configuration"] = global_serving_configuration();
+    value["configuration"] = global_serving_configuration(pages.len());
     let mut bytes = serde_json::to_vec(&canonical(value))
         .map_err(|_| invalid("V32 global serving serialization differs"))?;
     bytes.push(b'\n');
@@ -1452,7 +1458,8 @@ fn run_batch<S: V32PageStore>(
 
 fn manifest_arm(args: &Args, manifest: &Manifest) -> borsuk::Result<V32SearchArm> {
     if args.candidate_depth != manifest.routing_candidate_depth
-        || args.page_count != manifest.routing_page_count
+        || (args.serving_global_leaf_limit.is_none()
+            && args.page_count != manifest.routing_page_count)
     {
         return Err(invalid("V30 qualifier routing manifest differs"));
     }
@@ -1466,7 +1473,7 @@ fn manifest_arm(args: &Args, manifest: &Manifest) -> borsuk::Result<V32SearchArm
             || args.leaf_beam != 256
             || scan_budget != 262144
             || args.candidate_depth != 12288
-            || args.page_count != 16
+            || !matches!(args.page_count, 16 | 64)
             || args.k != 10)
     {
         return Err(invalid("V32 global serving configured budget differs"));
@@ -1978,7 +1985,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         || !matches!(leaf_beam, 64 | 128 | 256)
         || (global_leaf_limit.is_some() && leaf_beam != 256)
         || candidate_depth != 12_288
-        || page_count != 16
+        || (page_count != 16 && !(serving_global_leaf_limit == Some(768) && page_count == 64))
         || k == 0
         || k > 10
         || !values.is_empty()
@@ -2146,6 +2153,120 @@ mod tests {
             "--virtual-geometric-pages".to_owned(),
         ]);
         values
+    }
+
+    #[test]
+    fn v32_serving_page_budget_cli_binds_explicit_global_16_or_64() {
+        // Break: widening a serving page budget is rejected by construction
+        // defaults, or accidentally widens a diagnostic/root-only invocation.
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("manifest.json");
+        let bytes = manifest_bytes();
+        fs::write(&path, &bytes).unwrap();
+        let manifest = read_manifest(&ArtifactArg {
+            path,
+            sha256: format!("{:x}", Sha256::digest(&bytes)),
+            encoded_bytes: bytes.len() as u64,
+        })
+        .unwrap();
+        let mut values = arguments();
+        let leaf = values.iter().position(|v| v == "--leaf-beam").unwrap();
+        values[leaf + 1] = "256".into();
+        let pages = values.iter().position(|v| v == "--page-count").unwrap();
+        values[pages + 1] = "64".into();
+        assert!(parse_args(values.clone()).is_err());
+        values.extend(["--serving-global-leaf-limit".into(), "768".into()]);
+        let parsed = parse_args(values.clone()).unwrap();
+        assert_eq!(manifest_arm(&parsed, &manifest).unwrap().page_count, 64);
+        for count in [0, 17, 32, 65] {
+            let mut bad = values.clone();
+            bad[pages + 1] = count.to_string();
+            assert!(parse_args(bad).is_err());
+        }
+    }
+
+    #[test]
+    fn v32_serving_page_budget_receipt_uses_actual_arm_and_rejects_mixed_batch() {
+        // Break: 64-page costs are mislabeled16, or a batch silently mixes arms.
+        let fixture = virtual_diagnostic_fixture();
+        let mut work = fixture.current.selection.work;
+        work.pages_considered = 64;
+        work.selected_pages = 64;
+        let result = V32SearchResult {
+            requested_pages: (0..64)
+                .map(|ordinal| V27PageIdentity {
+                    ordinal,
+                    sha256: format!("{:064x}", ordinal + 1),
+                    encoded_bytes: 196000,
+                    primary_rows: 480,
+                    replica_rows: 0,
+                })
+                .collect(),
+            candidate_replay_sha256: Some("a".repeat(64)),
+            matches: (0..10)
+                .map(|source_ordinal| V32Match {
+                    source_ordinal,
+                    squared_distance: source_ordinal as f64 / 10.0,
+                })
+                .collect(),
+            work: V32SearchWork {
+                routing: work,
+                get_count: 64,
+                encoded_bytes: 12_544_000,
+                decoded_rows: 30720,
+                unique_rows: 30720,
+            },
+        };
+        let bytes = super::global_serving_result_bytes(
+            &result,
+            100,
+            100,
+            1000,
+            SearchPhaseTiming::default(),
+            768,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["configuration"]["page_count"], 64);
+        assert_eq!(value["configuration"]["capture_page_count"], 16);
+        assert_eq!(value["schema_version"], 4);
+        assert_eq!(value["work"]["encoded_bytes"], 12_544_000);
+        let mut rows = vec![value.clone(); 32];
+        let batch = super::global_serving_batch_bytes(rows.clone()).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&batch).unwrap()["configuration"]["page_count"],
+            64
+        );
+        rows[1]["configuration"]["page_count"] = serde_json::json!(16);
+        assert!(super::global_serving_batch_bytes(rows).is_err());
+        let mut bad = result;
+        let original_routing = bad.work.routing;
+        bad.work.routing.candidates_retained = 16;
+        bad.work.routing.codes_scanned = 16;
+        assert!(
+            super::global_serving_result_bytes(
+                &bad,
+                100,
+                100,
+                1000,
+                SearchPhaseTiming::default(),
+                768
+            )
+            .is_err()
+        );
+        bad.work.routing = original_routing;
+        bad.work.get_count = 16;
+        assert!(
+            super::global_serving_result_bytes(
+                &bad,
+                100,
+                100,
+                1000,
+                SearchPhaseTiming::default(),
+                768
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -3550,7 +3671,7 @@ mod tests {
         )
         .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["schema_version"], 4);
         assert_eq!(value["routing_scope"], "global");
         assert_eq!(value["global_leaf_limit"], 768);
         assert_eq!(value["candidate_replay_sha256"], "a".repeat(64));
@@ -3560,7 +3681,7 @@ mod tests {
         let batch = super::global_serving_batch_bytes(rows.clone()).unwrap();
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&batch).unwrap()["schema_version"],
-            3
+            4
         );
         rows[3]["schema_version"] = serde_json::json!(2);
         assert!(super::global_serving_batch_bytes(rows).is_err());

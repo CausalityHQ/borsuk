@@ -16,7 +16,7 @@ _CONFIG = {
     "global_leaf_limit": 768,
     "scan_budget": 262144,
     "candidate_depth": 12288,
-    "page_count": 16,
+    "capture_page_count": 16,
     "k": 10,
 }
 _TIMING = {
@@ -324,7 +324,7 @@ def _page(value: object) -> None:
     _require(
         _integer(value["ordinal"], 0, 2**32 - 1)
         and _digest(value["sha256"])
-        and _integer(value["encoded_bytes"], 1, 3145728)
+        and _integer(value["encoded_bytes"], 1, 196608)
         and _integer(value["primary_rows"], 1, 480)
         and type(value["replica_rows"]) is int
         and value["replica_rows"] == 0,
@@ -332,9 +332,10 @@ def _page(value: object) -> None:
     )
 
 
-def _configuration(value: object) -> bool:
-    return _keys(value, set(_CONFIG)) and all(
-        type(value[k]) is int and value[k] == n for k, n in _CONFIG.items()
+def _configuration(value: object, page_count: int) -> bool:
+    expected = dict(_CONFIG, page_count=page_count)
+    return _keys(value, set(expected)) and all(
+        type(value[k]) is int and value[k] == n for k, n in expected.items()
     )
 
 
@@ -362,6 +363,7 @@ def validate_global_serving_batch(
         _require(page.ordinal not in registry, "expected page uniqueness")
         registry[page.ordinal] = value
     start = None
+    page_count = None
     for query in expected:
         _require(
             type(query) is GlobalQueryExpectation
@@ -370,11 +372,14 @@ def validate_global_serving_batch(
             "expected query",
         )
         start = query.query_ordinal if start is None else start
+        _require(type(query.page_ordinals) is tuple, "expected page sequence")
+        page_count = len(query.page_ordinals) if page_count is None else page_count
         _require(
             type(query.page_ordinals) is tuple
-            and len(query.page_ordinals) == 16
+            and page_count in (16, 64)
+            and len(query.page_ordinals) == page_count
             and all(_integer(p) and p in registry for p in query.page_ordinals)
-            and len(set(query.page_ordinals)) == 16,
+            and len(set(query.page_ordinals)) == page_count,
             "expected page sequence",
         )
     _require(
@@ -394,10 +399,10 @@ def validate_global_serving_batch(
             },
         )
         and type(batch["schema_version"]) is int
-        and batch["schema_version"] == 3
+        and batch["schema_version"] == 4
         and batch["claim_eligible"] is False
         and batch["routing_scope"] == "global"
-        and _configuration(batch["configuration"])
+        and _configuration(batch["configuration"], page_count)
         and type(batch["results"]) is list
         and len(batch["results"]) == 32,
         "batch authority",
@@ -418,12 +423,12 @@ def validate_global_serving_batch(
         _require(
             _keys(row, row_keys)
             and type(row["schema_version"]) is int
-            and row["schema_version"] == 3
+            and row["schema_version"] == 4
             and row["claim_eligible"] is False
             and row["routing_scope"] == "global"
             and type(row["global_leaf_limit"]) is int
             and row["global_leaf_limit"] == 768
-            and _configuration(row["configuration"]),
+            and _configuration(row["configuration"], page_count),
             "row authority",
         )
         _require(
@@ -431,7 +436,7 @@ def validate_global_serving_batch(
             "replay identity",
         )
         actual = row["requested_pages"]
-        _require(type(actual) is list and len(actual) == 16, "page cardinality")
+        _require(type(actual) is list and len(actual) == page_count, "page cardinality")
         for page, ordinal in zip(actual, query.page_ordinals, strict=True):
             _page(page)
             _require(page == registry[ordinal], "registered page identity")
@@ -500,10 +505,10 @@ def validate_global_serving_batch(
             "work types",
         )
         _require(
-            work["get_count"] == routing["selected_pages"] == 16
+            work["get_count"] == routing["selected_pages"] == page_count
             and work["encoded_bytes"]
             == sum(p["encoded_bytes"] for p in actual)
-            <= 3145728
+            <= page_count * 196608
             and work["decoded_rows"]
             == work["unique_rows"]
             == sum(p["primary_rows"] for p in actual),
@@ -514,11 +519,11 @@ def validate_global_serving_batch(
             and 1 <= routing["leaves_scanned"] <= min(768, routing["leaves_eligible"])
             and 1 <= routing["query_table_pairs_built"] <= routing["leaves_scanned"]
             and routing["peak_query_table_pairs_live"] == 1
-            and 16
+            and page_count
             <= routing["candidates_retained"]
             == min(12288, routing["codes_scanned"])
             and routing["codes_scanned"] <= min(262144, source_rows)
-            and routing["pages_considered"] == 16,
+            and routing["pages_considered"] == page_count,
             "routing bounds",
         )
     return batch
