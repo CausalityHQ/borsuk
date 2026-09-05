@@ -4100,3 +4100,40 @@ roots and is a new routing representation, not a pure splitting comparison.
 Its output is throwaway feasibility evidence; it does not qualify unseen
 recall,100M scaling, S3 latency or write throughput. Only a metadata pass
 would justify another fixed PQ replay using unchanged residual code parents.
+
+### Bounded-group metadata result: fixed nearest64 hypothesis rejected
+
+Preregistration/source `b3c43de347513a6ae9fb9c475ff2a66efa1f8ba3`.
+The directory was frozen before query outcomes:178 groups,384,840B,
+SHA256 `1cd77b268304bc4d36acf9f4beb402ccabc3ec0b1ebde316d2dd7f3a2cdcc995`.
+The original one-shot exited0 with scientific `passed=false`; no retry.
+All1280 original owner/root-rank checks matched. Nearest64 bounded groups
+excluded one target in one of128 queries: query6160, logical411202,
+group75. Thus1279/1280 target inclusions and127/128 fully included queries
+do not satisfy the frozen all-target gate. No PQ replay or beam adjustment
+followed. This is exposed-query inclusion evidence, not measured ANN recall.
+
+Selected populations342,859..377,891 (mean359,519.7578125) all passed the
+524288-row cap. Whole driver wall855,571,483ns, maximum RSS168,869,888B;
+registered pressure/swap/wall checks did not fire. Four authenticated
+metadata GETs totaled5,698,334B, with zero PQ-code, page or corpus reads.
+No EC2 instance was launched. Input bytes were not persisted; the frozen
+directory, result, driver and literal test/helper remain evidence artifacts.
+
+Result105,427B SHA256
+`f0f0b93567448b665d5e8269eb6e670fe325135a140dfe6daef37deb7502e022`;
+driver10,086B SHA256
+`3546b22516f650cd68ab9cff8d347fdb958626c325423afd9be4f95417fc417e`;
+helper3,791B SHA256
+`c20535fb4b6142f59257e30b788bfd750c118dc2f53037ab4c710ff472412fd5`;
+six-test file2,594B SHA256
+`2c5e4475882c960b54e2257f00ae15b3dd9b0d6ac2861243fab8275e300f44c1`.
+The helper had missing-module RED then6/6 literal GREEN, and Astra reviewed
+the fixed algorithm/helper and final authenticated driver before execution.
+These artifacts are preserved under
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/b3c43de347513a6ae9fb9c475ff2a66efa1f8ba3/evidence/bounded-groups-f0f0b935/`.
+
+Disposition: reject this fixed weighted-mean bounded-group router under its
+preregistered inclusion gate. Reduced scan work does not compensate for
+the miss. This does not establish that all bounded-object hierarchies fail,
+and no production layout or compatibility behavior was changed.
