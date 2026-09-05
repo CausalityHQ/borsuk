@@ -1229,6 +1229,68 @@ impl V32Router {
         })
     }
 
+    /// Build the preregistered one-million-row global diagnostic ownership map.
+    #[doc(hidden)]
+    pub fn global_geometric_page_layout(
+        &self,
+        logical_sources: &[u64],
+    ) -> Result<V32VirtualPageLayout> {
+        if self.layout.source_rows() != 1_000_000 {
+            return Err(invalid("V32 global scientific shape differs"));
+        }
+        self.global_geometric_page_layout_with_capacity(logical_sources, 480)
+    }
+
+    fn global_geometric_page_layout_with_capacity(
+        &self,
+        logical_sources: &[u64],
+        page_rows: usize,
+    ) -> Result<V32VirtualPageLayout> {
+        let count = usize::try_from(self.layout.source_rows())
+            .map_err(|_| invalid("V32 global row count overflows"))?;
+        if count == 0 || count > 1_000_000 || logical_sources.len() != count {
+            return Err(invalid("V32 global logical-source cardinality differs"));
+        }
+        let base = V30PqReconstructor::new(&self.base_codebook)?;
+        let high = V30PqReconstructor::new(&self.high_codebook)?;
+        let mut vectors = Vec::with_capacity(count);
+        for leaf in self.layout.leaves() {
+            let centroid = self
+                .hierarchy
+                .leaves
+                .get(leaf.code_parent_leaf_ordinal as usize)
+                .ok_or_else(|| invalid("V32 global code parent differs"))?;
+            let end = leaf
+                .logical_start
+                .checked_add(leaf.row_count)
+                .ok_or_else(|| invalid("V32 global leaf range overflows"))?;
+            for logical in leaf.logical_start..end {
+                if logical != vectors.len() as u64 {
+                    return Err(invalid("V32 global logical coverage differs"));
+                }
+                let (width, code) = self.codes.code(vectors.len())?;
+                let reconstructor = match width {
+                    V30PqWidth::Base24 => &base,
+                    V30PqWidth::High48 => &high,
+                };
+                let residual = reconstructor.reconstruct(code)?;
+                let vector = std::array::from_fn(|dimension| {
+                    residual[dimension] + f32::from(centroid[dimension])
+                });
+                vectors.push(normalized(&vector)?);
+            }
+        }
+        if vectors.len() != count {
+            return Err(invalid("V32 global logical coverage differs"));
+        }
+        let global =
+            crate::v32_global_pages::global_balanced_pages(&vectors, logical_sources, page_rows)?;
+        Ok(V32VirtualPageLayout {
+            page_owners: global.owners,
+            page_row_counts: global.row_counts,
+        })
+    }
+
     pub fn virtual_geometric_page_layout(
         &self,
         logical_sources: &[u64],
@@ -2288,6 +2350,80 @@ mod tests {
         let base = V30PqCodebook::new(V30PqWidth::Base24, vec![0.0; 24 * 256 * 4]).unwrap();
         let high = V30PqCodebook::new(V30PqWidth::High48, vec![0.0; 48 * 256 * 2]).unwrap();
         V32Router::new(hierarchy, base, high, layout, codes).unwrap()
+    }
+
+    #[test]
+    fn v32_global_layout_crosses_microleaves_without_losing_ownership() {
+        // Break: accidentally reusing the microleaf-exclusive partitioner.
+        let mut router = diagnostic_router();
+        router.hierarchy.leaves[1] = router.hierarchy.leaves[0];
+        let sources = (0_u64..60).collect::<Vec<_>>();
+        let layout = router
+            .global_geometric_page_layout_with_capacity(&sources, 8)
+            .unwrap();
+        assert_eq!(layout.page_row_counts(), &[8, 8, 8, 8, 7, 7, 7, 7]);
+        assert_eq!(layout.page_for_logical(29).unwrap(), 3);
+        assert_eq!(layout.page_for_logical(30).unwrap(), 3);
+        assert_eq!(layout.page_count(), 8);
+        assert!(
+            router
+                .global_geometric_page_layout_with_capacity(&sources[..59], 8)
+                .is_err()
+        );
+        let mut duplicate = sources.clone();
+        duplicate[59] = 58;
+        assert!(
+            router
+                .global_geometric_page_layout_with_capacity(&duplicate, 8)
+                .is_err()
+        );
+        // The public scientific entry point must not silently run a reduced shape.
+        assert!(router.global_geometric_page_layout(&sources).is_err());
+    }
+
+    #[test]
+    fn v32_global_layout_preserves_replay_and_truth_blind_selection() {
+        // Break: changing candidate order/work or using truth to choose pages.
+        let mut router = diagnostic_router();
+        router.hierarchy.leaves[1] = router.hierarchy.leaves[0];
+        let sources = (0_u64..60).collect::<Vec<_>>();
+        let global = router
+            .global_geometric_page_layout_with_capacity(&sources, 4)
+            .unwrap();
+        let old = router.virtual_geometric_page_layout(&sources, 4).unwrap();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 1,
+            scan_budget: 65_536,
+            candidate_depth: 60,
+            page_count: 10,
+        };
+        let run = |truth: &[u64], layout: &super::V32VirtualPageLayout| {
+            router
+                .diagnose_logicals_with_virtual_geometric_global_prefix(
+                    &[0.2; 96], arm, 2, truth, layout,
+                )
+                .unwrap()
+        };
+        let current = run(&[0, 31], &old);
+        let treatment = run(&[0, 31], &global);
+        let changed_truth = run(&[4, 59], &global);
+        assert_eq!(current.current, treatment.current);
+        assert_eq!(
+            current.candidate_replay_sha256,
+            treatment.candidate_replay_sha256
+        );
+        assert_eq!(current.routing_work, treatment.routing_work);
+        assert_eq!(treatment.virtual_pages, changed_truth.virtual_pages);
+        assert_eq!(
+            treatment.candidate_replay_sha256,
+            changed_truth.candidate_replay_sha256
+        );
+        assert_ne!(
+            treatment.virtual_layout_sha256,
+            current.virtual_layout_sha256
+        );
+        assert_eq!(treatment.virtual_pages_at_eight.len(), 8);
     }
 
     #[test]

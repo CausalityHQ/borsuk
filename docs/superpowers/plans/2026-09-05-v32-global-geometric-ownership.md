@@ -49,6 +49,12 @@ pub(crate) fn global_balanced_pages(
 
 ### Task 2: Reconstruction and immutable replay
 
+Checkpoint: router reconstruction/ownership API is implemented; intended
+missing-method RED then2/2 GREEN. Existing virtual-layout/reconstruction
+regressions7/7 GREEN. Complete control-first batch envelope and explicit replay
+reuse across the two process phases are still pending; this checkpoint does not
+authorize science.
+
 **Files:** `crates/borsuk/src/v30_s3_search.rs`, `crates/borsuk/examples/v30_s3_qualify.rs`.
 
 **Interfaces:** Router method `global_geometric_page_layout(&self, logical_sources: &[u64]) -> Result<V32VirtualPageLayout>` reconstructs exactly1M once and calls Task1. Internal candidate replay is extracted from existing routing-details path, not regenerated separately for each reducer. Dedicated diagnostic mode uses algorithm identity `v32-global-balanced-cosine-v1` and preserves current control mode.
