@@ -72,6 +72,55 @@ pub struct V35LeafPatch {
     omitted_energy: f32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+/// One- or two-patch routing arm under an exact resident byte envelope.
+pub struct V35LeafPatchArm {
+    patches: Vec<V35LeafPatch>,
+    encoded_bytes: usize,
+}
+
+impl V35LeafPatchArm {
+    /// Number of independently scored patches.
+    pub fn patch_count(&self) -> usize {
+        self.patches.len()
+    }
+
+    /// Exact admitted resident bytes including every fixed envelope.
+    pub fn encoded_bytes(&self) -> usize {
+        self.encoded_bytes
+    }
+
+    /// Sum of patch populations; equal to the parent leaf population.
+    pub fn total_population(&self) -> u32 {
+        self.patches.iter().map(V35LeafPatch::population).sum()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Equal-byte f32 extra-centroid control for a patch arm.
+pub struct V35EqualByteCentroidControl {
+    dimensions: V35Dimensions,
+    centers: Vec<Vec<f32>>,
+    encoded_bytes: usize,
+}
+
+impl V35EqualByteCentroidControl {
+    /// Number of f32 centers admitted by the matched patch budget.
+    pub fn centroid_count(&self) -> usize {
+        self.centers.len()
+    }
+
+    /// Canonically ordered f32 centers.
+    pub fn centers(&self) -> &[Vec<f32>] {
+        &self.centers
+    }
+
+    /// Exact matched resident byte envelope.
+    pub fn encoded_bytes(&self) -> usize {
+        self.encoded_bytes
+    }
+}
+
 impl V35LeafPatch {
     /// Dense generation-local leaf ordinal.
     pub fn leaf_ordinal(&self) -> u32 {
@@ -573,6 +622,204 @@ pub fn build_v35_leaf_patch(request: &V35LeafPatchBuildRequest) -> Result<V35Lea
         spectral_bound,
         omitted_energy,
     })
+}
+
+fn validate_patch_count(patch_count: u8) -> Result<usize> {
+    if !matches!(patch_count, 1 | 2) {
+        return Err(invalid("V35 patch arm count differs"));
+    }
+    Ok(usize::from(patch_count))
+}
+
+fn split_projected_rows(
+    request: &V35LeafPatchBuildRequest,
+    parts: usize,
+) -> Result<Vec<Vec<usize>>> {
+    let routing = usize::from(request.dimensions.routing);
+    if request.projected_rows.is_empty() || parts == 0 || parts > request.projected_rows.len() {
+        return Err(invalid("V35 patch control split differs"));
+    }
+    let mut groups = vec![(0..request.projected_rows.len()).collect::<Vec<_>>()];
+    while groups.len() < parts {
+        let mut choice = None::<(f64, usize, usize)>;
+        for (group_ordinal, group) in groups.iter().enumerate() {
+            if group.len() < 2 {
+                continue;
+            }
+            for dimension in 0..routing {
+                let mean = group.iter().fold(0.0_f64, |sum, row| {
+                    sum + f64::from(request.projected_rows[*row][dimension])
+                }) / group.len() as f64;
+                let weighted_variance = group.iter().fold(0.0_f64, |sum, row| {
+                    let delta = f64::from(request.projected_rows[*row][dimension]) - mean;
+                    delta.mul_add(delta, sum)
+                });
+                let candidate = (weighted_variance, group_ordinal, dimension);
+                if choice.is_none_or(|current| {
+                    candidate.0.total_cmp(&current.0).is_gt()
+                        || (candidate.0.to_bits() == current.0.to_bits()
+                            && (candidate.1, candidate.2) < (current.1, current.2))
+                }) {
+                    choice = Some(candidate);
+                }
+            }
+        }
+        let (_, group_ordinal, dimension) =
+            choice.ok_or_else(|| invalid("V35 patch control cannot split population"))?;
+        let mut ordered = groups.remove(group_ordinal);
+        ordered.sort_by(|left, right| {
+            request.projected_rows[*left][dimension]
+                .total_cmp(&request.projected_rows[*right][dimension])
+                .then_with(|| {
+                    request.projected_rows[*left]
+                        .iter()
+                        .zip(&request.projected_rows[*right])
+                        .find_map(|(a, b)| {
+                            let ordering = a.total_cmp(b);
+                            (!ordering.is_eq()).then_some(ordering)
+                        })
+                        .unwrap_or_else(|| left.cmp(right))
+                })
+        });
+        let right = ordered.split_off(ordered.len() / 2);
+        groups.insert(group_ordinal, right);
+        groups.insert(group_ordinal, ordered);
+    }
+    Ok(groups)
+}
+
+fn subgroup_request(
+    request: &V35LeafPatchBuildRequest,
+    rows: &[usize],
+) -> V35LeafPatchBuildRequest {
+    V35LeafPatchBuildRequest {
+        assignment_max: request.assignment_max,
+        assignment_min: request.assignment_min,
+        dimensions: request.dimensions,
+        group_ordinal: request.group_ordinal,
+        leaf_ordinal: request.leaf_ordinal,
+        logical_start: request.logical_start,
+        omitted_energies: rows
+            .iter()
+            .map(|row| request.omitted_energies[*row])
+            .collect(),
+        projected_rows: rows
+            .iter()
+            .map(|row| request.projected_rows[*row].clone())
+            .collect(),
+    }
+}
+
+/// Build one or two patches using the registered deterministic variance split.
+pub fn build_v35_leaf_patch_arm(
+    request: &V35LeafPatchBuildRequest,
+    patch_count: u8,
+) -> Result<V35LeafPatchArm> {
+    let patch_count = validate_patch_count(patch_count)?;
+    let groups = split_projected_rows(request, patch_count)?;
+    let patches = groups
+        .iter()
+        .map(|rows| build_v35_leaf_patch(&subgroup_request(request, rows)))
+        .collect::<Result<Vec<_>>>()?;
+    let encoded_bytes = patches
+        .iter()
+        .try_fold(0_usize, |sum, patch| {
+            sum.checked_add(patch.encoded_numeric_bytes())
+        })
+        .ok_or_else(|| invalid("V35 patch arm bytes overflow"))?;
+    Ok(V35LeafPatchArm {
+        patches,
+        encoded_bytes,
+    })
+}
+
+/// Score a patch arm by its minimum exact decoded scalar patch score.
+pub fn score_v35_leaf_patch_arm(
+    arm: &V35LeafPatchArm,
+    projected_query: &[f64],
+    query_omitted_energy: f64,
+) -> Result<f64> {
+    arm.patches.iter().try_fold(f64::INFINITY, |best, patch| {
+        Ok(best.min(score_v35_leaf_patch(
+            patch,
+            projected_query,
+            query_omitted_energy,
+        )?))
+    })
+}
+
+/// Build the exact-byte-matched f32 extra-centroid control.
+pub fn build_v35_equal_byte_centroid_control(
+    request: &V35LeafPatchBuildRequest,
+    patch_count: u8,
+) -> Result<V35EqualByteCentroidControl> {
+    let patch_count = validate_patch_count(patch_count)?;
+    let groups = split_projected_rows(request, patch_count * 2)?;
+    let routing = usize::from(request.dimensions.routing);
+    let mut centers = groups
+        .iter()
+        .map(|rows| {
+            (0..routing)
+                .map(|dimension| {
+                    (rows.iter().fold(0.0_f64, |sum, row| {
+                        sum + f64::from(request.projected_rows[*row][dimension])
+                    }) / rows.len() as f64) as f32
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    centers.sort_by(|left, right| {
+        left.iter()
+            .zip(right)
+            .find_map(|(a, b)| {
+                let ordering = a.total_cmp(b);
+                (!ordering.is_eq()).then_some(ordering)
+            })
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let encoded_bytes = patch_count
+        .checked_mul(
+            routing
+                .checked_mul(8)
+                .and_then(|value| value.checked_add(128))
+                .ok_or_else(|| invalid("V35 centroid control bytes overflow"))?,
+        )
+        .ok_or_else(|| invalid("V35 centroid control bytes overflow"))?;
+    Ok(V35EqualByteCentroidControl {
+        dimensions: request.dimensions,
+        centers,
+        encoded_bytes,
+    })
+}
+
+/// Score the equal-byte centroid control by minimum projected squared L2.
+pub fn score_v35_equal_byte_centroid_control(
+    control: &V35EqualByteCentroidControl,
+    projected_query: &[f64],
+) -> Result<f64> {
+    if projected_query.len() != usize::from(control.dimensions.routing)
+        || projected_query.iter().any(|value| !value.is_finite())
+    {
+        return Err(invalid("V35 centroid control query differs"));
+    }
+    control
+        .centers
+        .iter()
+        .try_fold(f64::INFINITY, |best, center| {
+            let distance =
+                projected_query
+                    .iter()
+                    .zip(center)
+                    .fold(0.0_f64, |sum, (query, value)| {
+                        let delta = *query - f64::from(*value);
+                        delta.mul_add(delta, sum)
+                    });
+            if distance.is_finite() {
+                Ok(best.min(distance))
+            } else {
+                Err(invalid("V35 centroid control score differs"))
+            }
+        })
 }
 
 /// Evaluate the exact increasing-dimension f64 stored-patch heuristic.

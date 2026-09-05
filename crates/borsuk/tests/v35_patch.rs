@@ -1,8 +1,9 @@
 //! V35 compact projected leaf-patch contracts.
 
 use borsuk::{
-    V35Dimensions, V35LeafPatchBuildRequest, build_v35_leaf_patch, project_v35_leaf_moment_bytes,
-    score_v35_leaf_patch,
+    V35Dimensions, V35LeafPatchBuildRequest, build_v35_equal_byte_centroid_control,
+    build_v35_leaf_patch, build_v35_leaf_patch_arm, project_v35_leaf_moment_bytes,
+    score_v35_equal_byte_centroid_control, score_v35_leaf_patch, score_v35_leaf_patch_arm,
 };
 
 fn request(rows: Vec<Vec<f32>>, omitted: Vec<f64>) -> V35LeafPatchBuildRequest {
@@ -268,4 +269,75 @@ fn v35_patch_finite_subnormal_plane_quantizes_to_zero() {
     let patch = build_v35_leaf_patch(&request(vec![row], vec![0.0])).unwrap();
     assert_eq!(patch.mean_scale(), 0.0);
     assert!(patch.mean_codes().iter().all(|code| *code == 0));
+}
+
+#[test]
+fn v35_patch_two_mode_arm_and_equal_byte_centroids_share_exact_budget() {
+    // Break caught: a two-patch arm gets hidden bytes, a different leaf
+    // population, or a cheaper centroid comparator.
+    let rows = (0..32)
+        .map(|ordinal| {
+            let mut row = vec![0.0_f32; 64];
+            row[0] = if ordinal < 16 { -20.0 } else { 20.0 };
+            row[1] = (ordinal % 16) as f32 / 16.0;
+            row
+        })
+        .collect::<Vec<_>>();
+    let build = request(rows, vec![0.0; 32]);
+    let one = build_v35_leaf_patch_arm(&build, 1).unwrap();
+    let two = build_v35_leaf_patch_arm(&build, 2).unwrap();
+    let one_centroids = build_v35_equal_byte_centroid_control(&build, 1).unwrap();
+    let two_centroids = build_v35_equal_byte_centroid_control(&build, 2).unwrap();
+
+    assert_eq!(one.patch_count(), 1);
+    assert_eq!(two.patch_count(), 2);
+    assert_eq!(one.encoded_bytes(), 8 * 64 + 128);
+    assert_eq!(two.encoded_bytes(), 2 * (8 * 64 + 128));
+    assert_eq!(one_centroids.centroid_count(), 2);
+    assert_eq!(two_centroids.centroid_count(), 4);
+    assert_eq!(one_centroids.encoded_bytes(), one.encoded_bytes());
+    assert_eq!(two_centroids.encoded_bytes(), two.encoded_bytes());
+    assert_eq!(two.total_population(), 32);
+
+    for coordinate in [-20.0, 20.0] {
+        let mut query = vec![0.0_f64; 64];
+        query[0] = coordinate;
+        assert!(
+            score_v35_leaf_patch_arm(&one, &query, 0.0)
+                .unwrap()
+                .is_finite()
+        );
+        assert!(
+            score_v35_leaf_patch_arm(&two, &query, 0.0)
+                .unwrap()
+                .is_finite()
+        );
+        assert!(score_v35_equal_byte_centroid_control(&two_centroids, &query).unwrap() >= 0.0);
+    }
+}
+
+#[test]
+fn v35_patch_control_split_is_deterministic_and_rejects_budget_drift() {
+    // Break caught: row arrival order changes the variance split, or controls
+    // compare different admitted bytes/dimensions.
+    let rows = (0_usize..16)
+        .map(|ordinal| {
+            let mut row = vec![0.0_f32; 64];
+            row[0] = if ordinal.is_multiple_of(2) { -4.0 } else { 4.0 };
+            row[1] = if ordinal < 8 { -4.0 } else { 4.0 };
+            row
+        })
+        .collect::<Vec<_>>();
+    let forward = request(rows.clone(), vec![0.0; rows.len()]);
+    let mut reversed_rows = rows;
+    reversed_rows.reverse();
+    let reverse = request(reversed_rows, vec![0.0; 16]);
+    let left = build_v35_equal_byte_centroid_control(&forward, 2).unwrap();
+    let right = build_v35_equal_byte_centroid_control(&reverse, 2).unwrap();
+    assert_eq!(left.centers(), right.centers());
+
+    assert!(build_v35_leaf_patch_arm(&forward, 0).is_err());
+    assert!(build_v35_leaf_patch_arm(&forward, 3).is_err());
+    assert!(build_v35_equal_byte_centroid_control(&forward, 0).is_err());
+    assert!(build_v35_equal_byte_centroid_control(&forward, 3).is_err());
 }

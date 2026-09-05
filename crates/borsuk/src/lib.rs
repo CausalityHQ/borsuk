@@ -258,8 +258,10 @@ pub use v35_authority::{
 };
 #[doc(hidden)]
 pub use v35_patch::{
-    V35LeafPatch, V35LeafPatchBuildRequest, build_v35_leaf_patch, project_v35_leaf_moment_bytes,
-    score_v35_leaf_patch,
+    V35EqualByteCentroidControl, V35LeafPatch, V35LeafPatchArm, V35LeafPatchBuildRequest,
+    build_v35_equal_byte_centroid_control, build_v35_leaf_patch, build_v35_leaf_patch_arm,
+    project_v35_leaf_moment_bytes, score_v35_equal_byte_centroid_control, score_v35_leaf_patch,
+    score_v35_leaf_patch_arm,
 };
 #[doc(hidden)]
 pub use v35_projection::{
