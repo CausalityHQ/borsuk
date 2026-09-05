@@ -97,6 +97,22 @@ class GroupProxyTests(unittest.TestCase):
                 iterations=10,
             )
 
+    def test_materializer_preserves_sparse_populated_parent_ordinals(self):
+        from scripts.v33_group_proxy import ParentSummary, materialize_group_proxies
+
+        parents = (
+            ParentSummary(1, 20, (0.0, 2.0)),
+            ParentSummary(3, 40, (8.0, 2.0)),
+        )
+        groups = materialize_group_proxies(
+            ((0, 60, (1, 3)),),
+            parents,
+            prototype_count=3,
+            iterations=10,
+        )
+        self.assertEqual(groups[0].rows, 60)
+        self.assertEqual(len(groups[0].prototypes), 2)
+
     def test_three_prototypes_are_deterministic_and_population_weighted(self):
         from scripts.v33_group_proxy import ParentSummary, build_group_prototypes
 

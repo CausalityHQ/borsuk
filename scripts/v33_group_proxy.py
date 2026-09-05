@@ -133,8 +133,7 @@ def materialize_group_proxies(groups, parents, *, prototype_count, iterations):
 
     parents = tuple(sorted(parents, key=lambda parent: parent.ordinal))
     _validate_parents(parents)
-    if tuple(parent.ordinal for parent in parents) != tuple(range(len(parents))):
-        raise ValueError("parent ordinals are not dense")
+    parent_by_ordinal = {parent.ordinal: parent for parent in parents}
     seen = set()
     materialized = []
     for expected_ordinal, group in enumerate(groups):
@@ -149,13 +148,13 @@ def materialize_group_proxies(groups, parents, *, prototype_count, iterations):
             or tuple(sorted(parent_ordinals)) != parent_ordinals
             or any(
                 type(parent) is not int
-                or not 0 <= parent < len(parents)
+                or parent not in parent_by_ordinal
                 or parent in seen
                 for parent in parent_ordinals
             )
         ):
             raise ValueError("group partition authority differs")
-        members = tuple(parents[parent] for parent in parent_ordinals)
+        members = tuple(parent_by_ordinal[parent] for parent in parent_ordinals)
         if sum(parent.rows for parent in members) != rows:
             raise ValueError("group population differs")
         seen.update(parent_ordinals)
@@ -170,7 +169,7 @@ def materialize_group_proxies(groups, parents, *, prototype_count, iterations):
                 ),
             )
         )
-    if seen != set(range(len(parents))):
+    if seen != set(parent_by_ordinal):
         raise ValueError("group partition is not exhaustive")
     return tuple(materialized)
 

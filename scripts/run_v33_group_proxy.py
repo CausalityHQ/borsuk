@@ -138,9 +138,9 @@ def _load_authority(args):
             centroid=tuple(float(value) for value in parent_centers[ordinal]),
         )
         for ordinal in range(4096)
+        if parent_rows[ordinal] > 0
     )
-    if any(parent.rows <= 0 for parent in parents):
-        raise ValueError("V33 empty parent differs")
+    populated_parents = {parent.ordinal for parent in parents}
 
     directory = _canonical_json(_read(args.directory, "directory"), "directory")
     if (
@@ -179,7 +179,7 @@ def _load_authority(args):
         for ordinal, group in enumerate(directory["groups"])
         for parent in group["parents"]
     }
-    if set(group_of_parent) != set(range(4096)):
+    if set(group_of_parent) != populated_parents:
         raise ValueError("V33 group parent coverage differs")
 
     query_raw = _read(args.query, "query")
