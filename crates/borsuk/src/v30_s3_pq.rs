@@ -268,11 +268,102 @@ fn query_tables(
     Ok(tables)
 }
 
+/// Query-local distance cache. The immutable codebook is checked once, not once
+/// for each parent. Parent changes invalidate every cached entry.
+pub(crate) struct V30LazyQueryTable<'a> {
+    codebook: &'a V30PqCodebook,
+    max_abs_centroid: f64,
+    query: [f32; DIMENSIONS],
+    tables: Vec<[f32; CENTROIDS]>,
+    valid: Vec<[u64; 4]>,
+    ready: bool,
+}
+
+impl<'a> V30LazyQueryTable<'a> {
+    pub(crate) fn new(codebook: &'a V30PqCodebook) -> Result<Self> {
+        codebook.validate()?;
+        Ok(Self {
+            codebook,
+            max_abs_centroid: codebook
+                .centroids
+                .iter()
+                .map(|v| f64::from(v.abs()))
+                .fold(0.0, f64::max),
+            query: [0.0; DIMENSIONS],
+            tables: vec![[0.0; CENTROIDS]; codebook.width.subquantizers()],
+            valid: vec![[0; 4]; codebook.width.subquantizers()],
+            ready: false,
+        })
+    }
+
+    pub(crate) fn begin_parent(&mut self, query: &[f32; DIMENSIONS]) -> Result<()> {
+        self.ready = false;
+        self.valid.fill([0; 4]);
+        if query.iter().any(|value| !value.is_finite()) {
+            return Err(invalid("V30 PQ8 scoring input differs"));
+        }
+        let max_abs_query = query.iter().map(|v| f64::from(v.abs())).fold(0.0, f64::max);
+        let bound = max_abs_query + self.max_abs_centroid;
+        // Conservative certification of all distances, including entries never
+        // visited by the codes. The margin covers f32 rounding. Uncertified
+        // inputs retain the eager path's rejection of unused overflowing entries.
+        if DIMENSIONS as f64 * bound * bound > f64::from(f32::MAX) / 4.0 {
+            self.tables = query_tables(self.codebook, query)?;
+            self.valid.fill([u64::MAX; 4]);
+        }
+        self.query = *query;
+        self.ready = true;
+        Ok(())
+    }
+
+    pub(crate) fn score_block_into(&mut self, codes: &[&[u8]], scores: &mut [f32]) -> Result<()> {
+        let width = self.codebook.width;
+        if !self.ready
+            || codes.len() > BLOCK_ROWS
+            || scores.len() != codes.len()
+            || codes.iter().any(|code| code.len() != width.bytes())
+        {
+            return Err(invalid("V30 PQ8 scoring block differs"));
+        }
+        scores.fill(0.0);
+        let dimensions = width.dimensions();
+        for subquantizer in 0..width.subquantizers() {
+            for (row, code) in codes.iter().enumerate() {
+                let centroid = usize::from(code[subquantizer]);
+                let word = centroid / 64;
+                let bit = 1_u64 << (centroid % 64);
+                if self.valid[subquantizer][word] & bit == 0 {
+                    let vector_start = subquantizer * dimensions;
+                    let centroid_start = (subquantizer * CENTROIDS + centroid) * dimensions;
+                    self.tables[subquantizer][centroid] = (0..dimensions)
+                        .map(|dimension| {
+                            let delta = self.query[vector_start + dimension]
+                                - self.codebook.centroids[centroid_start + dimension];
+                            delta * delta
+                        })
+                        .sum::<f32>();
+                    self.valid[subquantizer][word] |= bit;
+                }
+                scores[row] += self.tables[subquantizer][centroid];
+            }
+        }
+        if scores
+            .iter()
+            .any(|score| !score.is_finite() || *score < 0.0)
+        {
+            return Err(invalid("V30 PQ8 score differs"));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 pub(crate) struct V30QueryTable {
     width: V30PqWidth,
     tables: Vec<[f32; CENTROIDS]>,
 }
 
+#[cfg(test)]
 impl V30QueryTable {
     pub(crate) fn new(codebook: &V30PqCodebook, query: &[f32; DIMENSIONS]) -> Result<Self> {
         Ok(Self {
@@ -1144,6 +1235,86 @@ mod tests {
             }
         }
         V30PqCodebook::new(width, centroids).unwrap()
+    }
+
+    #[test]
+    fn v32_lazy_pq_matches_eager_bits_across_codewords_and_parents() {
+        // Catches changed reduction order, missing entries, and stale parent caches.
+        for width in [V30PqWidth::Base24, V30PqWidth::High48] {
+            let book = codebook(width);
+            let mut lazy = super::V30LazyQueryTable::new(&book).unwrap();
+            for parent in [0_i32, 7, -3, 0] {
+                let query =
+                    std::array::from_fn(|d| (d as f32 - 48.0) / 257.0 + parent as f32 / 11.0);
+                let eager = V30QueryTable::new(&book, &query).unwrap();
+                lazy.begin_parent(&query).unwrap();
+                for first in (0..256).step_by(32) {
+                    let codes = (first..first + 32)
+                        .map(|row| {
+                            (0..width.bytes())
+                                .map(|s| ((row + s) % 256) as u8)
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>();
+                    let refs = codes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+                    let mut expected = [0.0_f32; 32];
+                    eager.score_block_into(&refs, &mut expected).unwrap();
+                    for _ in 0..2 {
+                        let mut actual = [0.0_f32; 32];
+                        lazy.score_block_into(&refs, &mut actual).unwrap();
+                        assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn v32_lazy_pq_rejects_unused_overflow_and_preserves_finite_fallback() {
+        // Eager rejects overflowing unvisited centroids: lazy must not silently accept them.
+        for width in [V30PqWidth::Base24, V30PqWidth::High48] {
+            let mut values = vec![0.0_f32; 96 * 256];
+            values[255 * width.dimensions()] = f32::MAX;
+            let book = V30PqCodebook::new(width, values).unwrap();
+            assert!(V30QueryTable::new(&book, &[0.0; 96]).is_err());
+            let mut lazy = super::V30LazyQueryTable::new(&book).unwrap();
+            assert!(lazy.begin_parent(&[0.0; 96]).is_err());
+            let code = vec![0_u8; width.bytes()];
+            assert!(lazy.score_block_into(&[&code], &mut [0.0]).is_err());
+
+            let book = V30PqCodebook::new(width, vec![1.0e19; 96 * 256]).unwrap();
+            let mut lazy = super::V30LazyQueryTable::new(&book).unwrap();
+            lazy.begin_parent(&[1.0e19; 96]).unwrap();
+            let mut actual = [1.0];
+            lazy.score_block_into(&[&code], &mut actual).unwrap();
+            assert_eq!(actual, [0.0]);
+            assert!(lazy.begin_parent(&[-1.0e19; 96]).is_err());
+            assert!(lazy.score_block_into(&[&code], &mut actual).is_err());
+        }
+    }
+
+    #[test]
+    fn v32_lazy_pq_requires_valid_parent_and_block() {
+        // Catches uninitialized scoring, stale state after errors, and malformed block acceptance.
+        for width in [V30PqWidth::Base24, V30PqWidth::High48] {
+            let book = V30PqCodebook::new(width, vec![0.0; 96 * 256]).unwrap();
+            let mut lazy = super::V30LazyQueryTable::new(&book).unwrap();
+            let code = vec![0; width.bytes()];
+            assert!(lazy.score_block_into(&[&code], &mut [0.0]).is_err());
+            lazy.begin_parent(&[-0.0; 96]).unwrap();
+            let mut score = [1.0_f32];
+            lazy.score_block_into(&[&code], &mut score).unwrap();
+            assert_eq!(score[0].to_bits(), 0.0_f32.to_bits());
+            assert!(lazy.score_block_into(&[&code[..1]], &mut score).is_err());
+            assert!(lazy.score_block_into(&[&code], &mut []).is_err());
+            assert!(
+                lazy.score_block_into(&vec![code.as_slice(); 33], &mut [0.0; 33])
+                    .is_err()
+            );
+            lazy.score_block_into(&[], &mut []).unwrap();
+            assert!(lazy.begin_parent(&[f32::NAN; 96]).is_err());
+            assert!(lazy.score_block_into(&[&code], &mut score).is_err());
+        }
     }
 
     #[test]

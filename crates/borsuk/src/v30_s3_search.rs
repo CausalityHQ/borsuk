@@ -18,8 +18,8 @@ use crate::{
         V32RoutingRange, decode_v30_layout_artifacts, partition_v30_leaf_pages,
     },
     v30_s3_pq::{
-        V30CodePlanes, V30PqArtifacts, V30PqCodebook, V30PqReconstructor, V30PqWidth,
-        V30QueryTable, decode_v30_pq_artifacts,
+        V30CodePlanes, V30LazyQueryTable, V30PqArtifacts, V30PqCodebook, V30PqReconstructor,
+        V30PqWidth, decode_v30_pq_artifacts,
     },
 };
 
@@ -1989,12 +1989,14 @@ impl V32Router {
         }
         let mut query_table_pairs_live = 0_usize;
         let mut peak_query_table_pairs_live = 0_usize;
+        let mut base_table = V30LazyQueryTable::new(&self.base_codebook)?;
+        let mut high_table = V30LazyQueryTable::new(&self.high_codebook)?;
         for (code_parent, parent_leaves) in &leaves_by_parent {
             let residual = std::array::from_fn(|dimension| {
                 query[dimension] - f32::from(self.hierarchy.leaves[*code_parent][dimension])
             });
-            let base_table = V30QueryTable::new(&self.base_codebook, &residual)?;
-            let high_table = V30QueryTable::new(&self.high_codebook, &residual)?;
+            base_table.begin_parent(&residual)?;
+            high_table.begin_parent(&residual)?;
             query_table_pairs_live += 1;
             peak_query_table_pairs_live = peak_query_table_pairs_live.max(query_table_pairs_live);
             for &leaf in parent_leaves {
@@ -2343,6 +2345,108 @@ mod tests {
             V32Router::new(hierarchy, base, high, layout, codes).unwrap(),
             bodies,
         )
+    }
+
+    #[test]
+    fn v32_lazy_pq_routing_preserves_eager_candidates_pages_and_replay() {
+        // Independent exhaustive eager scoring catches changed residuals,
+        // mixed-width placement, parent cache reuse and candidate tie ordering.
+        let (hierarchy, _, _, layout, _, _) = components();
+        let base = V30PqCodebook::new(
+            V30PqWidth::Base24,
+            (0..96 * 256)
+                .map(|i| (i % 271) as f32 / 277.0 - 0.5)
+                .collect(),
+        )
+        .unwrap();
+        let high = V30PqCodebook::new(
+            V30PqWidth::High48,
+            (0..96 * 256)
+                .map(|i| (i % 263) as f32 / 269.0 - 0.5)
+                .collect(),
+        )
+        .unwrap();
+        let codes = V30CodePlanes::from_packed(
+            40,
+            vec![3, 0, 0, 0],
+            (0..38 * 24).map(|i| (i % 256) as u8).collect(),
+            (0..2 * 48).map(|i| (255 - i % 256) as u8).collect(),
+        )
+        .unwrap();
+        let router = V32Router::new(hierarchy, base, high, layout, codes).unwrap();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 2,
+            scan_budget: 65_536,
+            candidate_depth: 40,
+            page_count: 16,
+        };
+        for sign in [-1.0_f32, 1.0] {
+            let query = std::array::from_fn(|d| sign * (d as f32 - 37.0) / 101.0);
+            let normalized = super::normalized(&query).unwrap();
+            let replay = router.capture_global_replay(&query, arm, 2).unwrap();
+            let mut expected = Vec::new();
+            for parent in 0..2 {
+                let residual = std::array::from_fn(|d| {
+                    normalized[d] - f32::from(router.hierarchy.leaves[parent][d])
+                });
+                let base =
+                    crate::v30_s3_pq::V30QueryTable::new(&router.base_codebook, &residual).unwrap();
+                let high =
+                    crate::v30_s3_pq::V30QueryTable::new(&router.high_codebook, &residual).unwrap();
+                for logical in parent * 20..(parent + 1) * 20 {
+                    let (width, code) = router.codes.code(logical).unwrap();
+                    let mut score = [0.0];
+                    match width {
+                        V30PqWidth::Base24 => base.score_block_into(&[code], &mut score),
+                        V30PqWidth::High48 => high.score_block_into(&[code], &mut score),
+                    }
+                    .unwrap();
+                    expected.push(super::Candidate {
+                        logical: logical as u64,
+                        score: score[0],
+                    });
+                }
+            }
+            expected.sort_by(|a, b| {
+                a.score
+                    .total_cmp(&b.score)
+                    .then_with(|| a.logical.cmp(&b.logical))
+            });
+            assert_eq!(
+                replay
+                    .details
+                    .ranked_candidates
+                    .iter()
+                    .map(|c| (c.logical, c.score.to_bits()))
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|c| (c.logical, c.score.to_bits()))
+                    .collect::<Vec<_>>()
+            );
+            let mut pages = Vec::new();
+            for candidate in &expected {
+                let identity = router
+                    .layout
+                    .page_for_logical(candidate.logical)
+                    .unwrap()
+                    .identity();
+                if !pages.contains(&identity) {
+                    pages.push(identity);
+                }
+                if pages.len() == 16 {
+                    break;
+                }
+            }
+            assert_eq!(replay.details.selection.pages, pages);
+            let mut eager_replay = replay.clone();
+            eager_replay.details.ranked_candidates = expected;
+            eager_replay.details.selection.pages = pages;
+            assert_eq!(eager_replay.sha256(), replay.sha256());
+            assert_eq!(replay.details.selection.work.query_table_pairs_built, 2);
+            assert_eq!(replay.details.selection.work.peak_query_table_pairs_live, 1);
+        }
     }
 
     #[test]
