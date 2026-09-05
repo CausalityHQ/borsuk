@@ -4232,3 +4232,54 @@ swap remained250MiB. Disposition: reject fixed three-parent groups as a
 qualifying router at131,072 rows. Continue only with preregistered analytic
 moment/diagonal shape arms and a same-byte finer-cell control before any fresh
 cohort, production layout,100M campaign, or paid D3 work.
+
+### V33 diagonal shape frontier and resident PQ/page replay
+
+The exposed-query shape ladder increased its fixed complete-group row budget to
+262,144 only as a mechanism diagnostic. The diagonal-moment arm, which stores a
+center plus one variance per dimension, contained1,279/1,280 truth owners and
+127/128 complete queries. Its sole miss remained query6160, whose required
+owner group ranked66. Selected populations were254,860..262,129 rows (mean
+259,115.5234375) across43..49 groups (mean45.7890625). This is an axis-aligned
+ellipsoidal ranking heuristic, not a Euclidean exclusion certificate or a
+holdout claim.
+
+The cross-language v2 frontier receipt was regenerated from source
+`52094252a611f6c89ddfa95fc33765627b952cc7`. It is5,937,815B, SHA256
+`470f7c95a965572feec11cd1b0d24e73bf1d8c1456a75117b8bf6796e091db6b`,
+and binds each query vector, ten truth logical identities and the query-only
+selected routing leaves. Construction took46.18s wall, peaked at224,556KiB
+RSS and swapped zero pages. It read six authenticated metadata/query objects,
+zero corpus rows and zero page bodies.
+
+Source `b47006c5ccec20356b7e4211c23107dfa433c80f` then replayed that exact
+frontier through the unchanged V32 24/48-byte PQ scorer,12,288-candidate heap
+and physical-page reducers. A short retained page pool is recorded rather than
+padded: queries6171 and7173 exposed60 and62 unique pages. The original replay
+completed once in6.03s wall for128 queries, peaked at133,952KiB RSS, swapped
+zero pages, and read27,965,150B of authenticated resident hierarchy/layout/PQ
+artifacts. It fetched zero vector pages and zero corpus rows. Result359,069B
+SHA256 `b4e9760f19db6cb590063023235458799f095a1efe2f88c345f6705dddc37d19`.
+
+| Truth-free reducer | Pages | Truth rows/1,280 | Perfect queries/128 | Minimum query hits/10 | Mean projected page bytes/query |
+|---|---:|---:|---:|---:|---:|
+|First distinct|16|1,248|105|6|3,116,205.375|
+|First distinct|32|1,273|123|7|6,233,421.375|
+|First distinct|48|1,276|125|8|9,350,637.375|
+|First distinct|64 cap|1,279|127|9|12,457,710.28125|
+|Reciprocal rank|16|1,215|86|5|3,117,216|
+|Reciprocal rank|32|1,268|119|7|6,232,410.75|
+|Reciprocal rank|48|1,272|123|7|9,348,616.125|
+|Reciprocal rank|64 cap|1,275|123|9|12,456,699.65625|
+
+All1,279 frontier-contained truth rows survived PQ candidate retention. Thus PQ
+introduced no additional loss at this fixed candidate depth; the sole64-page
+miss is the existing shape-routing miss. First-distinct selection dominates the
+tested reciprocal-rank alternative. At32 pages it loses six additional truth
+rows relative to the frontier, so32-page deployment is not yet quality-safe.
+Projected bytes come from authenticated page identities; they are not measured
+S3 transfers or latency. The receipt is `claim_eligible=false`, uses the burned
+128-query cohort, and does not authorize production defaults,100M scaling or a
+paid run. Next test a preregistered low-rank rotated ellipsoid that adds bounded
+cross-dimensional covariance to the diagonal control, then apply this same
+six-second replay without changing the PQ/page parameters.
