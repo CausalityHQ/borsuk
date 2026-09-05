@@ -268,6 +268,18 @@ fn query_tables(
     Ok(tables)
 }
 
+/// Measured distance-table computation, separate from logical parent counts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V32PqTableWork {
+    /// Entries computed, including all entries of a successful eager fallback.
+    pub entries_evaluated: u64,
+    /// Code lookups served from an already computed entry.
+    pub cache_hits: u64,
+    /// Successful complete table fills for uncertified extreme inputs.
+    pub eager_fallbacks: u64,
+}
+
 /// Query-local distance cache. The immutable codebook is checked once, not once
 /// for each parent. Parent changes invalidate every cached entry.
 pub(crate) struct V30LazyQueryTable<'a> {
@@ -277,6 +289,7 @@ pub(crate) struct V30LazyQueryTable<'a> {
     tables: Vec<[f32; CENTROIDS]>,
     valid: Vec<[u64; 4]>,
     ready: bool,
+    work: V32PqTableWork,
 }
 
 impl<'a> V30LazyQueryTable<'a> {
@@ -293,7 +306,12 @@ impl<'a> V30LazyQueryTable<'a> {
             tables: vec![[0.0; CENTROIDS]; codebook.width.subquantizers()],
             valid: vec![[0; 4]; codebook.width.subquantizers()],
             ready: false,
+            work: V32PqTableWork::default(),
         })
+    }
+
+    pub(crate) fn work(&self) -> V32PqTableWork {
+        self.work
     }
 
     pub(crate) fn begin_parent(&mut self, query: &[f32; DIMENSIONS]) -> Result<()> {
@@ -310,6 +328,8 @@ impl<'a> V30LazyQueryTable<'a> {
         if DIMENSIONS as f64 * bound * bound > f64::from(f32::MAX) / 4.0 {
             self.tables = query_tables(self.codebook, query)?;
             self.valid.fill([u64::MAX; 4]);
+            self.work.entries_evaluated += (self.codebook.width.subquantizers() * CENTROIDS) as u64;
+            self.work.eager_fallbacks += 1;
         }
         self.query = *query;
         self.ready = true;
@@ -343,6 +363,9 @@ impl<'a> V30LazyQueryTable<'a> {
                         })
                         .sum::<f32>();
                     self.valid[subquantizer][word] |= bit;
+                    self.work.entries_evaluated += 1;
+                } else {
+                    self.work.cache_hits += 1;
                 }
                 scores[row] += self.tables[subquantizer][centroid];
             }
@@ -1290,6 +1313,48 @@ mod tests {
             assert_eq!(actual, [0.0]);
             assert!(lazy.begin_parent(&[-1.0e19; 96]).is_err());
             assert!(lazy.score_block_into(&[&code], &mut actual).is_err());
+        }
+    }
+
+    #[test]
+    fn v32_lazy_pq_work_counts_actual_entries_hits_and_fallbacks() {
+        // Catches counting logical parent resets as eager computation, counting
+        // repeated lookups as evaluations, or omitting fallback's full table.
+        for width in [V30PqWidth::Base24, V30PqWidth::High48] {
+            let book = V30PqCodebook::new(width, vec![0.0; 96 * 256]).unwrap();
+            let mut lazy = super::V30LazyQueryTable::new(&book).unwrap();
+            let zero = vec![0; width.bytes()];
+            let one = vec![1; width.bytes()];
+            lazy.begin_parent(&[0.0; 96]).unwrap();
+            assert_eq!(lazy.work().entries_evaluated, 0);
+            lazy.score_block_into(&[&zero, &zero], &mut [0.0; 2])
+                .unwrap();
+            lazy.score_block_into(&[&zero, &zero], &mut [0.0; 2])
+                .unwrap();
+            lazy.score_block_into(&[&one], &mut [0.0]).unwrap();
+            lazy.begin_parent(&[1.0; 96]).unwrap();
+            lazy.score_block_into(&[&zero], &mut [0.0]).unwrap();
+            let expected = match width {
+                V30PqWidth::Base24 => 72,
+                V30PqWidth::High48 => 144,
+            };
+            assert_eq!(lazy.work().entries_evaluated, expected);
+            assert_eq!(lazy.work().cache_hits, expected);
+            assert_eq!(lazy.work().eager_fallbacks, 0);
+
+            let book = V30PqCodebook::new(width, vec![1.0e19; 96 * 256]).unwrap();
+            let mut lazy = super::V30LazyQueryTable::new(&book).unwrap();
+            lazy.begin_parent(&[1.0e19; 96]).unwrap();
+            lazy.score_block_into(&[&zero], &mut [0.0]).unwrap();
+            assert_eq!(lazy.work().eager_fallbacks, 1);
+            assert_eq!(
+                lazy.work().entries_evaluated,
+                match width {
+                    V30PqWidth::Base24 => 6144,
+                    V30PqWidth::High48 => 12288,
+                }
+            );
+            assert_eq!(lazy.work().cache_hits, width.bytes() as u64);
         }
     }
 

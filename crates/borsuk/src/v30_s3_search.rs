@@ -19,7 +19,7 @@ use crate::{
     },
     v30_s3_pq::{
         V30CodePlanes, V30LazyQueryTable, V30PqArtifacts, V30PqCodebook, V30PqReconstructor,
-        V30PqWidth, decode_v30_pq_artifacts,
+        V30PqWidth, V32PqTableWork, decode_v30_pq_artifacts,
     },
 };
 
@@ -682,6 +682,16 @@ pub struct V32Router {
     codes: V30CodePlanes,
 }
 
+/// Implementation work measured separately from stable logical routing work.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct V32PqEvaluationWork {
+    /// Base-width computation and reuse across all visited parents.
+    pub base: V32PqTableWork,
+    /// High-width computation and reuse across all visited parents.
+    pub high: V32PqTableWork,
+}
+
 /// An immutable candidate population captured without a truth or virtual layout.
 #[derive(Clone)]
 #[doc(hidden)]
@@ -693,6 +703,12 @@ pub struct V32CandidateReplay<'a> {
 }
 
 impl V32CandidateReplay<'_> {
+    /// Explanatory implementation counters, deliberately outside the candidate
+    /// replay digest so eager/lazy implementations can prove identical routing.
+    pub fn pq_work(&self) -> V32PqEvaluationWork {
+        self.details.pq_work
+    }
+
     /// Bind ordered candidates, routing work and stop metadata, excluding truth.
     pub fn sha256(&self) -> String {
         let mut digest = Sha256::new();
@@ -1050,6 +1066,7 @@ struct Candidate {
 
 #[derive(Clone)]
 struct RoutingDetails {
+    pq_work: V32PqEvaluationWork,
     selection: V32PageSelection,
     selected_leaves: Vec<u32>,
     ranked_leaves: Vec<u32>,
@@ -2064,6 +2081,10 @@ impl V32Router {
             return Err(invalid("V30 selected page cardinality differs"));
         }
         Ok(RoutingDetails {
+            pq_work: V32PqEvaluationWork {
+                base: base_table.work(),
+                high: high_table.work(),
+            },
             selection: V32PageSelection {
                 pages,
                 work: V32RoutingWork {
@@ -2345,6 +2366,30 @@ mod tests {
             V32Router::new(hierarchy, base, high, layout, codes).unwrap(),
             bodies,
         )
+    }
+
+    #[test]
+    fn v32_lazy_pq_work_replay_reports_each_width_without_changing_logical_work() {
+        let (router, _) = router();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 2,
+            scan_budget: 65_536,
+            candidate_depth: 40,
+            page_count: 16,
+        };
+        let replay = router.capture_global_replay(&[0.2; 96], arm, 2).unwrap();
+        let work = replay.pq_work();
+        // 38 base rows across two parents; two high rows within the first parent.
+        // All codes are zero, so each parent computes only one entry/subquantizer.
+        assert_eq!(work.base.entries_evaluated, 48);
+        assert_eq!(work.base.cache_hits, 864);
+        assert_eq!(work.high.entries_evaluated, 48);
+        assert_eq!(work.high.cache_hits, 48);
+        assert_eq!(work.base.eager_fallbacks, 0);
+        assert_eq!(work.high.eager_fallbacks, 0);
+        assert_eq!(replay.details.selection.work.query_table_pairs_built, 2);
+        assert_eq!(replay.details.selection.work.peak_query_table_pairs_live, 1);
     }
 
     #[test]
