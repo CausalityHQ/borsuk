@@ -4071,3 +4071,32 @@ increases diagnostic CPU. It supports evaluating a less fragmented code
 layout, not claiming lower measured S3 latency, QPS, write throughput or
 100M scalability. Bounded root populations, actual selective code fetches,
 CPU profiling and independent quality qualification remain required.
+
+### Preregistered bounded-group metadata spike after root64
+
+Before any new query outcome, freeze one query-independent partition of
+the authenticated4096 code parents within their existing128 roots. Parent
+weights are the sum of their routing-range rows; verify the1M total and
+ownership, exclude zero-weight parents, and reject any parent above8192.
+Code parents remain indivisible. For each oversized group, compute a
+weighted f64 mean followed by weighted squared deviations, each accumulated
+in increasing parent ordinal from exact f16-to-f64 centroids. Select the
+maximum-variance coordinate, ties smallest dimension. Sort by that
+coordinate then parent ordinal; choose the nonempty cut minimizing integer
+`abs(2*left_rows-total_rows)`, ties smallest cut, then recurse left/right
+until every group has at most8192 rows. Assign terminal group IDs sorted by
+`(root_ordinal,minimum_parent_ordinal)` and recompute weighted means in
+parent order. No normalization or f16 rounding of group representatives.
+Require each occupied parent exactly once and reject nonfinite metadata.
+
+Freeze the directory and its digest before loading query outcomes. Use the
+same source-matched double-normalized query vectors and ordered f64 squared
+distance; select nearest64 groups, ties group ordinal. The fixed128 exposed
+queries4096/5120/6144/7168 must include every recorded target's owner group.
+Any exclusion rejects this fixed hypothesis before PQ replay; no beam sweep,
+representative adjustment or page fetch follows. Selected rows are bounded
+by524288 by construction. This changes representatives even for unsplit
+roots and is a new routing representation, not a pure splitting comparison.
+Its output is throwaway feasibility evidence; it does not qualify unseen
+recall,100M scaling, S3 latency or write throughput. Only a metadata pass
+would justify another fixed PQ replay using unchanged residual code parents.
