@@ -8,13 +8,22 @@ import math
 import sys
 from pathlib import Path
 
-from scripts.v33_group_proxy import (
-    GroupProxy,
-    ParentSummary,
-    materialize_group_proxies,
-    rank_groups,
-    select_group_prefix,
-)
+if __package__:
+    from scripts.v33_group_proxy import (
+        GroupProxy,
+        ParentSummary,
+        materialize_group_proxies,
+        rank_groups,
+        select_group_prefix,
+    )
+else:
+    from v33_group_proxy import (  # type: ignore[no-redef]
+        GroupProxy,
+        ParentSummary,
+        materialize_group_proxies,
+        rank_groups,
+        select_group_prefix,
+    )
 
 EXPECTED_DIGESTS = {
     "directory": "1cd77b268304bc4d36acf9f4beb402ccabc3ec0b1ebde316d2dd7f3a2cdcc995",
@@ -63,7 +72,13 @@ def _load_authority(args):
     import numpy as np
     import pyarrow as pa
 
-    from scripts.build_v30_reduced_truth import _matrix, _normalize_like_v30
+    if __package__:
+        from scripts.build_v30_reduced_truth import _matrix, _normalize_like_v30
+    else:
+        from build_v30_reduced_truth import (  # type: ignore[no-redef]
+            _matrix,
+            _normalize_like_v30,
+        )
 
     vector = pa.list_(pa.field("element", pa.float16(), nullable=False), 96)
     leaves = _arrow_table(

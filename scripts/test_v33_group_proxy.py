@@ -1,12 +1,52 @@
 """Contracts for the metadata-only V33 group-prototype falsifier."""
 
 import math
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 
 class GroupProxyTests(unittest.TestCase):
+    def test_driver_supports_direct_script_execution(self):
+        repository = Path(__file__).resolve().parents[1]
+        driver = repository / "scripts/run_v33_group_proxy.py"
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = str(Path(temporary) / "missing")
+            Path(missing).write_bytes(b"")
+            command = [
+                "uv",
+                "run",
+                "--offline",
+                "--python",
+                "3.12",
+                "--with-requirements",
+                "scripts/requirements-format-bench.txt",
+                "python",
+                str(driver),
+            ]
+            from scripts.run_v33_group_proxy import EXPECTED_DIGESTS
+
+            for role in EXPECTED_DIGESTS:
+                command.extend(("--" + role.replace("_", "-"), missing))
+            command.extend(
+                (
+                    "--output",
+                    str(Path(temporary) / "result.json"),
+                    "--execute-group-proxy",
+                )
+            )
+            completed = subprocess.run(
+                command,
+                cwd=repository,
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("V33 leaves byte authority differs", completed.stderr)
+            self.assertNotIn("ModuleNotFoundError", completed.stderr)
+
     def test_driver_cli_requires_each_local_role_once_and_explicit_execution(self):
         from scripts.run_v33_group_proxy import EXPECTED_DIGESTS, parse_args
 
