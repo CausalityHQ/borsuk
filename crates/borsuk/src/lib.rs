@@ -205,6 +205,7 @@ mod v33_group_shape;
 mod v34_rank4;
 mod v34_route;
 mod v35_authority;
+mod v35_projection;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]
@@ -253,6 +254,13 @@ pub use v34_route::{
 pub use v35_authority::{
     V35ArtifactIdentity, V35Dimensions, V35GenerationManifest, V35ProjectionArm, V35RemoteCodeRate,
     V35ServingProjection, project_v35_serving_memory, validate_v35_manifest,
+};
+#[doc(hidden)]
+pub use v35_projection::{
+    V35ProjectedQuery, V35Projection, V35ProjectionBackend, V35ProjectionBlockVisitor,
+    V35ProjectionLimits, V35ProjectionSampleSource, V35ProjectionTrainingSpec, build_v35_srht,
+    decode_v35_projection_arrow, encode_v35_projection_arrow, project_v35_query_scalar,
+    project_v35_query_simd, train_v35_pca,
 };
 #[allow(
     dead_code,

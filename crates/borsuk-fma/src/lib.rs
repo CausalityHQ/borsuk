@@ -82,6 +82,63 @@ impl FusedDot8x12 {
     }
 }
 
+/// Detected four-output f64 fused projection kernel.
+#[derive(Debug, Clone, Copy)]
+pub struct FusedProjection4 {
+    backend: FmaBackend,
+}
+
+impl FusedProjection4 {
+    /// Detect and freeze the available fused projection backend.
+    pub fn detect() -> Result<Self, FmaUnavailable> {
+        FusedDot8x12::detect().map(|kernel| Self {
+            backend: kernel.backend(),
+        })
+    }
+
+    /// The exact backend frozen by [`Self::detect`].
+    pub fn backend(self) -> FmaBackend {
+        self.backend
+    }
+
+    /// Project four adjacent outputs from source-major f32 coefficients.
+    ///
+    /// Every f64 lane consumes source dimensions in increasing order. Invalid
+    /// shapes return `None` before entering the architecture-specific kernel.
+    #[inline]
+    pub fn project_source_major(
+        self,
+        basis: &[f32],
+        query: &[f32],
+        routing: usize,
+        output: usize,
+    ) -> Option<[f64; 4]> {
+        if routing == 0
+            || !routing.is_multiple_of(4)
+            || output.checked_add(4)? > routing
+            || basis.len() != query.len().checked_mul(routing)?
+        {
+            return None;
+        }
+        match self.backend {
+            #[cfg(target_arch = "aarch64")]
+            FmaBackend::Aarch64NeonFma => {
+                // SAFETY: detection proved NEON availability; shape checks
+                // prove all source-major coefficient accesses are in bounds.
+                Some(unsafe { aarch64_project4(basis, query, routing, output) })
+            }
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            FmaBackend::X86AvxFma => {
+                // SAFETY: detection proved AVX+FMA availability; shape checks
+                // prove all source-major coefficient accesses are in bounds.
+                Some(unsafe { x86_project4(basis, query, routing, output) })
+            }
+            #[allow(unreachable_patterns)]
+            _ => unreachable!("a fused projection kernel cannot contain a foreign backend"),
+        }
+    }
+}
+
 /// Compute the registered eight-lane by twelve-step fused dot product.
 ///
 /// Each lane starts at positive zero, consumes dimensions `lane * 12 + step`
@@ -344,10 +401,77 @@ unsafe fn x86_dot(left: &[f32; 96], right: &[f32; 96]) -> f32 {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn aarch64_project4(
+    basis: &[f32],
+    query: &[f32],
+    routing: usize,
+    output: usize,
+) -> [f64; 4] {
+    use std::arch::aarch64::{vdupq_n_f64, vfmaq_f64, vld1q_f64, vst1q_f64};
+
+    // SAFETY: the public wrapper validated all slice and block bounds; local
+    // arrays provide complete two-lane loads and output stores.
+    unsafe {
+        let mut low = vdupq_n_f64(0.0);
+        let mut high = vdupq_n_f64(0.0);
+        for (dimension, value) in query.iter().enumerate() {
+            let start = dimension * routing + output;
+            let coefficients = [
+                f64::from(basis[start]),
+                f64::from(basis[start + 1]),
+                f64::from(basis[start + 2]),
+                f64::from(basis[start + 3]),
+            ];
+            let scalar = vdupq_n_f64(f64::from(*value));
+            low = vfmaq_f64(low, vld1q_f64(coefficients.as_ptr()), scalar);
+            high = vfmaq_f64(high, vld1q_f64(coefficients.as_ptr().add(2)), scalar);
+        }
+        let mut result = [0.0_f64; 4];
+        vst1q_f64(result.as_mut_ptr(), low);
+        vst1q_f64(result.as_mut_ptr().add(2), high);
+        result
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx,fma")]
+unsafe fn x86_project4(basis: &[f32], query: &[f32], routing: usize, output: usize) -> [f64; 4] {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::{_mm256_fmadd_pd, _mm256_loadu_pd, _mm256_set1_pd, _mm256_storeu_pd};
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::{_mm256_fmadd_pd, _mm256_loadu_pd, _mm256_set1_pd, _mm256_storeu_pd};
+
+    // SAFETY: the public wrapper validated all slice and block bounds; local
+    // arrays provide complete four-lane loads and output stores.
+    unsafe {
+        let mut accumulator = _mm256_set1_pd(0.0);
+        for (dimension, value) in query.iter().enumerate() {
+            let start = dimension * routing + output;
+            let coefficients = [
+                f64::from(basis[start]),
+                f64::from(basis[start + 1]),
+                f64::from(basis[start + 2]),
+                f64::from(basis[start + 3]),
+            ];
+            accumulator = _mm256_fmadd_pd(
+                _mm256_loadu_pd(coefficients.as_ptr()),
+                _mm256_set1_pd(f64::from(*value)),
+                accumulator,
+            );
+        }
+        let mut result = [0.0_f64; 4];
+        _mm256_storeu_pd(result.as_mut_ptr(), accumulator);
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        FusedDot8x12, Pq4Backend, Pq4BlockScorer, fused_dot_8x12, pq4_scalar_block_scores,
+        FusedDot8x12, FusedProjection4, Pq4Backend, Pq4BlockScorer, fused_dot_8x12,
+        pq4_scalar_block_scores,
     };
 
     fn scalar(left: &[f32; 96], right: &[f32; 96]) -> f32 {
@@ -376,6 +500,46 @@ mod tests {
         let right = [1.0_f32; 96];
         let (actual, _) = fused_dot_8x12(&left, &right).unwrap();
         assert_eq!(actual.to_bits(), scalar(&left, &right).to_bits());
+    }
+
+    #[test]
+    fn fused_projection_four_outputs_match_increasing_source_scalar_bits() {
+        let source = 97;
+        let routing = 64;
+        let basis = (0..source * routing)
+            .map(|index| ((index * 37 % 251) as f32 - 125.0) / 257.0)
+            .collect::<Vec<_>>();
+        let query = (0..source)
+            .map(|index| ((index * 19 % 113) as f32 - 56.0) / 127.0)
+            .collect::<Vec<_>>();
+        let kernel = FusedProjection4::detect().unwrap();
+        for output in (0..routing).step_by(4) {
+            let actual = kernel
+                .project_source_major(&basis, &query, routing, output)
+                .unwrap();
+            let expected = std::array::from_fn::<_, 4, _>(|lane| {
+                (0..source).fold(0.0_f64, |sum, dimension| {
+                    f64::from(basis[dimension * routing + output + lane])
+                        .mul_add(f64::from(query[dimension]), sum)
+                })
+            });
+            assert!(
+                actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(left, right)| left.to_bits() == right.to_bits())
+            );
+        }
+        assert!(
+            kernel
+                .project_source_major(&basis[..basis.len() - 1], &query, routing, 0)
+                .is_none()
+        );
+        assert!(
+            kernel
+                .project_source_major(&basis, &query, routing, routing - 3)
+                .is_none()
+        );
     }
 
     #[test]
