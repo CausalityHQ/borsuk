@@ -4137,3 +4137,49 @@ Disposition: reject this fixed weighted-mean bounded-group router under its
 preregistered inclusion gate. Reduced scan work does not compensate for
 the miss. This does not establish that all bounded-object hierarchies fail,
 and no production layout or compatibility behavior was changed.
+
+### Root-preserving bounded storage accounting: exact population retained
+
+Keep the successful root64 router unchanged; use the178 bounded groups
+only as storage chunks, fetching every group belonging to each selected
+root. Unlike the rejected group-centroid router, no group representative
+participates in selection. One metadata-only accounting run authenticated
+the root64 terminal and frozen group directory plus routing ranges,
+code-parent ownership and PQ fidelity. It verified unique exhaustive parent
+membership, each group population and the exact sorted logical-range union
+for all128 queries, not merely equal row counts.
+
+| Same root64 logical population |Minimum|Maximum|Mean per query|
+|---|---:|---:|---:|
+|Bounded group object count|76|89|83.8984375|
+|Useful24/48-byte code payload|11,220,720|12,924,480|12,090,384.75|
+|Fragmented block object count|203|243|226.6015625|
+|Fragmented fetched code payload|13,275,360|15,897,120|14,822,971.875|
+
+The fragmented comparison uses the same root64 rows, not the preceding
+global1536 population. Thus the earlier approximately292 requests/19.1MB
+is not the paired baseline here. Both accounting models exclude Arrow
+envelopes, compression, caches and request retries. Counts are hypothetical
+object GETs, not measured latency. Base/high rows average432,173.59375 /
+35,796.21875, with425,822..503,541 total rows as in the root64 replay.
+No new PQ scoring or quality evaluation was performed.
+
+Source `6baecd7366d7b1904f33ff0796d57a034604357f`;
+result199,238B SHA256
+`414bebb83694b6a4a34892a5fc7fe9b61d6450f6dfcb55f61c9fcac9e3f5c155`.
+The literal accounting helper had missing-module RED then3/3 GREEN;
+Astra reviewed the helper and driver before the original one-shot run.
+Original exit0; three metadata GETs2,059,646B, wall2,023,352,032ns,
+maximum RSS111,939,584B. Pressure/swap/wall guards did not fire; zero
+code/page/corpus reads and no EC2 launch. Driver9,121B SHA256
+`14f044a425013abd2900a6b54a47c83cc0966b585b7fe95bc6eb5d5138f4ee88`;
+accounting helper2,286B SHA256
+`11ac995f9e352838e811f5bd8d10e2cb15ada1eeefe15e1dacd1256562f58ff4`;
+test1,812B SHA256
+`24a63d073143e13716d7e7a982be6d146329d6127d0a7bfc153e4aeef46d5bd5`.
+The result and driver/helpers/tests are preserved under
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/6baecd7366d7b1904f33ff0796d57a034604357f/evidence/group-storage-414bebb8/`.
+Disposition: the request reduction merits a bounded streaming-code reader
+prototype, provided actual object envelopes and deterministic candidate
+equivalence are verified. This does not solve the separately unqualified
+100M routing geometry and does not alter serving defaults.
