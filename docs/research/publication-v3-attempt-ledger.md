@@ -3092,6 +3092,13 @@ pages, maximum ten. This rejects this frozen eight-page cell, not all global
 layouts or a separately preregistered larger page budget. No tuning or100M
 escalation follows this result. Astra failure analysis was requested.
 
+Read-only explanatory aggregation of the stored16-page selections gives307/320,
+minimum8/10,24/32 perfect, versus original308/320,minimum7/10,23/32 perfect:
+neither dominates. A truth-only within-layout oracle summing the largest eight
+truth-page occupancies gives312/320. Thus eight misses are structurally forced
+at8 pages;37 additional misses separate the observed275 from that oracle.
+This oracle is not a deployable selection rule and does not authorize tuning.
+
 The317,286-byte canonical terminal is at
 `s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/572b344a346adceb8d29b1d1d35c9f000eaa8370/attempts/v32-deep-1m-global-ownership-572b344a-a0001/TERMINAL.json`,
 SHA-256 `f621b215b4821d3bd8e957c2ffff358fea9d545ff6be9767af5ffcb4b89ccbaf`.
