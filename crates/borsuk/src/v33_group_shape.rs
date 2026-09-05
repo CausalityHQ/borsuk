@@ -2543,7 +2543,8 @@ mod tests {
         summarize_v33_leaf, v33_reconstructed_group_for_logical, v33_shape_control_bytes,
     };
     use crate::{
-        V27Hierarchy, build_v34_rank4_generation_from_v33, encode_v27_hierarchy,
+        V27Hierarchy, build_v34_rank4_generation_from_v33, decode_v34_rank4_arrow,
+        encode_v27_hierarchy, encode_v34_rank4_arrow, score_v34_rank4_leaf,
         v30_s3_layout::{
             V30Layout, V30PageIdentity, V30PageRange, V32RoutingRange, encode_v30_layout_artifacts,
         },
@@ -3076,6 +3077,58 @@ mod tests {
                 }
             }
         }
+
+        let (arrow, identity) = encode_v34_rank4_arrow(
+            &v34,
+            "s3://borsuk-v34-test/generations/authenticated-rank4.arrow",
+            &"11".repeat(32),
+            &"22".repeat(32),
+            &"33".repeat(32),
+        )
+        .unwrap();
+        let decoded = decode_v34_rank4_arrow(&arrow, &identity).unwrap();
+        let query = std::array::from_fn(|dimension| dimension as f32 / 97.0);
+        for (actual, expected) in decoded
+            .leaves()
+            .iter()
+            .zip(v33.groups.iter().flat_map(|group| group.leaves.iter()))
+        {
+            let expected_score = low_rank_moment_score(
+                &expected.mean,
+                &expected.residuals[2],
+                &expected.directions,
+                &expected.eigenvalues,
+                expected.population,
+                &query,
+            )
+            .unwrap();
+            let actual_score = score_v34_rank4_leaf(actual, &query).unwrap();
+            assert!(
+                (actual_score - expected_score).abs() <= 1.0e-12 * expected_score.abs().max(1.0)
+            );
+        }
+        let expected_order = rank_v33_low_rank_covariance_groups(&v33, 4, &query).unwrap();
+        let mut group_scores = std::collections::BTreeMap::<u32, f64>::new();
+        for leaf in decoded.leaves() {
+            let score = score_v34_rank4_leaf(leaf, &query).unwrap();
+            group_scores
+                .entry(leaf.group_ordinal())
+                .and_modify(|current| *current = current.min(score))
+                .or_insert(score);
+        }
+        let mut actual_order = group_scores.into_iter().collect::<Vec<_>>();
+        actual_order.sort_by(|left, right| {
+            left.1
+                .total_cmp(&right.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        assert_eq!(
+            actual_order
+                .into_iter()
+                .map(|(group, _)| group)
+                .collect::<Vec<_>>(),
+            expected_order
+        );
     }
 
     #[test]

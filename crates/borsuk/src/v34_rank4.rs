@@ -1,4 +1,19 @@
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    io::Cursor,
+    sync::Arc,
+};
+
+use arrow_array::{
+    Array, FixedSizeListArray, Float32Array, Float64Array, RecordBatch, UInt32Array, UInt64Array,
+};
+use arrow_ipc::{
+    MetadataVersion,
+    reader::FileReader,
+    writer::{FileWriter, IpcWriteOptions},
+};
+use arrow_schema::{DataType, Field, Schema};
+use sha2::{Digest, Sha256};
 
 use crate::{
     BorsukError, Result, V33GroupShapeBuildRequest, v33_group_shape::build_v33_rank4_leaf_snapshots,
@@ -7,6 +22,12 @@ use crate::{
 const V34_DIMENSIONS: usize = 96;
 const V34_COMPONENTS: usize = 4;
 const MIB: u64 = 1_048_576;
+const V34_METRIC: &str = "squared-l2";
+const V34_NORMALIZATION: &str = "none";
+const V34_SCORER_VERSION: &str = "v34-rank4-gaussian-lower-tail-v1";
+const V34_MANIFEST_KEY: &str = "borsuk.v34.rank4.manifest";
+const V34_MAX_LEAVES: usize = 414_100;
+const V34_MAX_ARROW_BYTES: usize = 1_040 * 1_048_576;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -130,6 +151,31 @@ pub struct V34Rank4Generation {
     leaves: Vec<V34Rank4Leaf>,
     logical_rows: u64,
     group_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Complete immutable identity and upstream bindings for one V34 Arrow generation.
+pub struct V34Rank4ArtifactIdentity {
+    /// Immutable object URI.
+    pub uri: String,
+    /// SHA-256 of the complete Arrow IPC bytes.
+    pub sha256: String,
+    /// Complete Arrow IPC byte length.
+    pub length: u64,
+    /// Source-archive SHA-256.
+    pub source_archive_sha256: String,
+    /// Reconstruction-authority SHA-256.
+    pub reconstruction_sha256: String,
+    /// Codebook-authority SHA-256.
+    pub codebooks_sha256: String,
+    /// Exact final metric.
+    pub metric: String,
+    /// Exact vector dimensions.
+    pub dimensions: u32,
+    /// Exact normalization policy.
+    pub normalization: String,
+    /// Frozen scorer version.
+    pub scorer_version: String,
 }
 
 impl V34Rank4Generation {
@@ -387,6 +433,16 @@ pub fn build_v34_rank4_generation(
     let mut logical_rows = 0_u64;
     let mut groups = BTreeSet::new();
     for (ordinal, input) in inputs.iter_mut().enumerate() {
+        if input
+            .mean
+            .iter()
+            .chain(input.residual_diagonal.iter())
+            .chain(input.eigenvalues.iter())
+            .chain(input.directions.iter().flatten())
+            .any(|value| !value.is_finite())
+        {
+            return Err(invalid("V34 rank-four raw leaf is nonfinite"));
+        }
         canonicalize_v34_leaf_zeroes(input);
         if input.leaf_ordinal != ordinal as u32 || input.logical_start != logical_rows {
             return Err(invalid("V34 rank-four leaf ordering differs"));
@@ -485,6 +541,674 @@ pub fn score_v34_rank4_leaf(leaf: &V34Rank4Leaf, query: &[f32; V34_DIMENSIONS]) 
         return Err(invalid("V34 rank-four score differs"));
     }
     Ok(score)
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn v34_rank4_manifest(identity: &V34Rank4ArtifactIdentity) -> Result<String> {
+    let values = BTreeMap::from([
+        (
+            "codebooks_sha256",
+            serde_json::Value::String(identity.codebooks_sha256.clone()),
+        ),
+        ("dimensions", serde_json::Value::from(identity.dimensions)),
+        ("metric", serde_json::Value::String(identity.metric.clone())),
+        (
+            "normalization",
+            serde_json::Value::String(identity.normalization.clone()),
+        ),
+        (
+            "reconstruction_sha256",
+            serde_json::Value::String(identity.reconstruction_sha256.clone()),
+        ),
+        (
+            "scorer_version",
+            serde_json::Value::String(identity.scorer_version.clone()),
+        ),
+        (
+            "source_archive_sha256",
+            serde_json::Value::String(identity.source_archive_sha256.clone()),
+        ),
+        ("uri", serde_json::Value::String(identity.uri.clone())),
+    ]);
+    serde_json::to_string(&values).map_err(|_| invalid("V34 rank-four artifact manifest differs"))
+}
+
+fn v34_vector_type() -> DataType {
+    DataType::FixedSizeList(
+        Arc::new(Field::new("element", DataType::Float32, false)),
+        V34_DIMENSIONS as i32,
+    )
+}
+
+fn v34_directions_type() -> DataType {
+    DataType::FixedSizeList(
+        Arc::new(Field::new("direction", v34_vector_type(), false)),
+        V34_COMPONENTS as i32,
+    )
+}
+
+fn v34_rank4_arrow_schema(identity: &V34Rank4ArtifactIdentity) -> Result<Schema> {
+    let fields = vec![
+        Field::new("leaf_ordinal", DataType::UInt32, false),
+        Field::new("group_ordinal", DataType::UInt32, false),
+        Field::new("logical_start", DataType::UInt64, false),
+        Field::new("population", DataType::UInt32, false),
+        Field::new("mean", v34_vector_type(), false),
+        Field::new("residual_diagonal", v34_vector_type(), false),
+        Field::new(
+            "eigenvalues",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("element", DataType::Float32, false)),
+                V34_COMPONENTS as i32,
+            ),
+            false,
+        ),
+        Field::new("directions", v34_directions_type(), false),
+        Field::new("population_factor", DataType::Float64, false),
+        Field::new("trace", DataType::Float64, false),
+        Field::new("trace_square", DataType::Float64, false),
+        Field::new("spectral_bound", DataType::Float64, false),
+    ];
+    Ok(Schema::new_with_metadata(
+        fields,
+        HashMap::from([(V34_MANIFEST_KEY.to_owned(), v34_rank4_manifest(identity)?)]),
+    ))
+}
+
+fn v34_vector_array<'a>(
+    values: impl Iterator<Item = &'a [f32; V34_DIMENSIONS]>,
+) -> Result<Arc<FixedSizeListArray>> {
+    let flat = values
+        .flat_map(|value| value.iter().copied())
+        .collect::<Vec<_>>();
+    Ok(Arc::new(FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float32, false)),
+        V34_DIMENSIONS as i32,
+        Arc::new(Float32Array::from(flat)),
+        None,
+    )?))
+}
+
+fn validate_v34_artifact_identity(identity: &V34Rank4ArtifactIdentity) -> Result<()> {
+    if !identity.uri.starts_with("s3://")
+        || !valid_sha256(&identity.sha256)
+        || !valid_sha256(&identity.source_archive_sha256)
+        || !valid_sha256(&identity.reconstruction_sha256)
+        || !valid_sha256(&identity.codebooks_sha256)
+        || identity.length == 0
+        || identity.metric != V34_METRIC
+        || identity.dimensions != V34_DIMENSIONS as u32
+        || identity.normalization != V34_NORMALIZATION
+        || identity.scorer_version != V34_SCORER_VERSION
+    {
+        return Err(invalid("V34 rank-four artifact identity differs"));
+    }
+    Ok(())
+}
+
+fn validate_v34_ipc_field(field: arrow_ipc::Field<'_>, expected: &Field) -> Result<()> {
+    if field.name() != Some(expected.name().as_str())
+        || field.nullable()
+        || field.dictionary().is_some()
+        || field
+            .custom_metadata()
+            .is_some_and(|values| !values.is_empty())
+    {
+        return Err(invalid("V34 rank-four IPC field differs"));
+    }
+    let children = match expected.data_type() {
+        DataType::UInt32 | DataType::UInt64 => {
+            let integer = field
+                .type_as_int()
+                .ok_or_else(|| invalid("V34 rank-four IPC integer differs"))?;
+            let width = if expected.data_type() == &DataType::UInt32 {
+                32
+            } else {
+                64
+            };
+            if integer.bitWidth() != width || integer.is_signed() {
+                return Err(invalid("V34 rank-four IPC integer differs"));
+            }
+            Vec::new()
+        }
+        DataType::Float32 | DataType::Float64 => {
+            let floating = field
+                .type_as_floating_point()
+                .ok_or_else(|| invalid("V34 rank-four IPC float differs"))?;
+            let precision = if expected.data_type() == &DataType::Float32 {
+                arrow_ipc::Precision::SINGLE
+            } else {
+                arrow_ipc::Precision::DOUBLE
+            };
+            if floating.precision() != precision {
+                return Err(invalid("V34 rank-four IPC float differs"));
+            }
+            Vec::new()
+        }
+        DataType::FixedSizeList(child, width) => {
+            if field
+                .type_as_fixed_size_list()
+                .is_none_or(|list| list.listSize() != *width)
+            {
+                return Err(invalid("V34 rank-four IPC fixed list differs"));
+            }
+            vec![child.as_ref()]
+        }
+        _ => return Err(invalid("V34 rank-four IPC type differs")),
+    };
+    let actual_children = field.children();
+    if actual_children.map_or(0, |values| values.len()) != children.len() {
+        return Err(invalid("V34 rank-four IPC children differ"));
+    }
+    for (index, child) in children.iter().enumerate() {
+        validate_v34_ipc_field(
+            actual_children
+                .ok_or_else(|| invalid("V34 rank-four IPC child is missing"))?
+                .get(index),
+            child,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_v34_ipc_schema(schema: arrow_ipc::Schema<'_>, expected: &Schema) -> Result<()> {
+    if schema.endianness() != arrow_ipc::Endianness::Little
+        || schema.features().is_some_and(|values| !values.is_empty())
+    {
+        return Err(invalid("V34 rank-four IPC schema features differ"));
+    }
+    let metadata = schema
+        .custom_metadata()
+        .ok_or_else(|| invalid("V34 rank-four IPC manifest is missing"))?;
+    let expected_manifest = expected
+        .metadata()
+        .get(V34_MANIFEST_KEY)
+        .ok_or_else(|| invalid("V34 rank-four IPC manifest differs"))?;
+    if metadata.len() != 1
+        || metadata.get(0).key() != Some(V34_MANIFEST_KEY)
+        || metadata.get(0).value() != Some(expected_manifest.as_str())
+    {
+        return Err(invalid("V34 rank-four IPC manifest differs"));
+    }
+    let fields = schema
+        .fields()
+        .ok_or_else(|| invalid("V34 rank-four IPC fields are missing"))?;
+    if fields.len() != expected.fields().len() {
+        return Err(invalid("V34 rank-four IPC field count differs"));
+    }
+    for (index, expected_field) in expected.fields().iter().enumerate() {
+        validate_v34_ipc_field(fields.get(index), expected_field)?;
+    }
+    Ok(())
+}
+
+fn validate_v34_ipc_envelope(bytes: &[u8], expected_schema: &Schema) -> Result<()> {
+    if bytes.len() < 18
+        || bytes.len() > V34_MAX_ARROW_BYTES
+        || !bytes.starts_with(b"ARROW1\0\0")
+        || !bytes.ends_with(b"ARROW1")
+    {
+        return Err(invalid("V34 rank-four IPC magic or length differs"));
+    }
+    let trailer = bytes.len() - 10;
+    let footer_len = u32::from_le_bytes(
+        bytes[trailer..trailer + 4]
+            .try_into()
+            .map_err(|_| invalid("V34 rank-four IPC footer length differs"))?,
+    ) as usize;
+    let footer_start = trailer
+        .checked_sub(footer_len)
+        .filter(|offset| *offset >= 8)
+        .ok_or_else(|| invalid("V34 rank-four IPC footer extent differs"))?;
+    let footer = arrow_ipc::root_as_footer(&bytes[footer_start..trailer])
+        .map_err(|_| invalid("V34 rank-four IPC footer differs"))?;
+    validate_v34_ipc_schema(
+        footer
+            .schema()
+            .ok_or_else(|| invalid("V34 rank-four IPC footer schema is missing"))?,
+        expected_schema,
+    )?;
+    if footer
+        .dictionaries()
+        .is_some_and(|values| !values.is_empty())
+    {
+        return Err(invalid("V34 rank-four IPC dictionaries are forbidden"));
+    }
+    let blocks = footer
+        .recordBatches()
+        .ok_or_else(|| invalid("V34 rank-four IPC batch is missing"))?;
+    if blocks.len() != 1 {
+        return Err(invalid("V34 rank-four IPC batch count differs"));
+    }
+    let block = blocks.get(0);
+    let block_offset = usize::try_from(block.offset())
+        .map_err(|_| invalid("V34 rank-four IPC batch offset differs"))?;
+    let metadata_len = usize::try_from(block.metaDataLength())
+        .map_err(|_| invalid("V34 rank-four IPC batch metadata differs"))?;
+    let body_len = usize::try_from(block.bodyLength())
+        .map_err(|_| invalid("V34 rank-four IPC batch body differs"))?;
+    let body_start = block_offset
+        .checked_add(metadata_len)
+        .ok_or_else(|| invalid("V34 rank-four IPC batch extent overflows"))?;
+    let body_end = body_start
+        .checked_add(body_len)
+        .ok_or_else(|| invalid("V34 rank-four IPC batch extent overflows"))?;
+    if block_offset < 8 || metadata_len < 8 || body_end > footer_start {
+        return Err(invalid("V34 rank-four IPC batch extent differs"));
+    }
+
+    let parse_message = |start: usize, end: usize| {
+        let metadata = bytes
+            .get(start..end)
+            .ok_or_else(|| invalid("V34 rank-four IPC message extent differs"))?;
+        if metadata.len() < 4 {
+            return Err(invalid("V34 rank-four IPC message is truncated"));
+        }
+        let prefix = if metadata.starts_with(&[255; 4]) {
+            8
+        } else {
+            4
+        };
+        let length_bytes = metadata
+            .get(prefix - 4..prefix)
+            .ok_or_else(|| invalid("V34 rank-four IPC message length differs"))?;
+        let message_len = u32::from_le_bytes(
+            length_bytes
+                .try_into()
+                .map_err(|_| invalid("V34 rank-four IPC message length differs"))?,
+        ) as usize;
+        let message_end = prefix
+            .checked_add(message_len)
+            .filter(|value| *value <= metadata.len())
+            .ok_or_else(|| invalid("V34 rank-four IPC message extent differs"))?;
+        arrow_ipc::root_as_message(&metadata[prefix..message_end])
+            .map_err(|_| invalid("V34 rank-four IPC message differs"))
+    };
+
+    let leading = parse_message(8, block_offset)?;
+    if leading.bodyLength() != 0 {
+        return Err(invalid("V34 rank-four IPC leading schema body differs"));
+    }
+    validate_v34_ipc_schema(
+        leading
+            .header_as_schema()
+            .ok_or_else(|| invalid("V34 rank-four IPC leading schema is missing"))?,
+        expected_schema,
+    )?;
+
+    let record_message = parse_message(block_offset, body_start)?;
+    let record = record_message
+        .header_as_record_batch()
+        .ok_or_else(|| invalid("V34 rank-four IPC record differs"))?;
+    let rows = usize::try_from(record.length())
+        .map_err(|_| invalid("V34 rank-four IPC row count differs"))?;
+    if !(1..=V34_MAX_LEAVES).contains(&rows)
+        || record.compression().is_some()
+        || usize::try_from(record_message.bodyLength()).ok() != Some(body_len)
+    {
+        return Err(invalid("V34 rank-four IPC record authority differs"));
+    }
+    let nodes = record
+        .nodes()
+        .ok_or_else(|| invalid("V34 rank-four IPC nodes are missing"))?;
+    let expected_nodes = [
+        rows,
+        rows,
+        rows,
+        rows,
+        rows,
+        rows * V34_DIMENSIONS,
+        rows,
+        rows * V34_DIMENSIONS,
+        rows,
+        rows * V34_COMPONENTS,
+        rows,
+        rows * V34_COMPONENTS,
+        rows * V34_COMPONENTS * V34_DIMENSIONS,
+        rows,
+        rows,
+        rows,
+        rows,
+    ];
+    if nodes.len() != expected_nodes.len() {
+        return Err(invalid("V34 rank-four IPC node count differs"));
+    }
+    for (node, expected) in nodes.iter().zip(expected_nodes) {
+        if usize::try_from(node.length()).ok() != Some(expected) || node.null_count() != 0 {
+            return Err(invalid("V34 rank-four IPC node shape differs"));
+        }
+    }
+    let buffers = record
+        .buffers()
+        .ok_or_else(|| invalid("V34 rank-four IPC buffers are missing"))?;
+    if buffers.len() != 29 {
+        return Err(invalid("V34 rank-four IPC buffer count differs"));
+    }
+    let body = &bytes[body_start..body_end];
+    let mut slices = Vec::with_capacity(buffers.len());
+    let mut previous_end = 0_usize;
+    for buffer in buffers {
+        let start = usize::try_from(buffer.offset())
+            .map_err(|_| invalid("V34 rank-four IPC buffer offset differs"))?;
+        let length = usize::try_from(buffer.length())
+            .map_err(|_| invalid("V34 rank-four IPC buffer length differs"))?;
+        let end = start
+            .checked_add(length)
+            .ok_or_else(|| invalid("V34 rank-four IPC buffer extent overflows"))?;
+        if start < previous_end {
+            return Err(invalid("V34 rank-four IPC buffers overlap"));
+        }
+        slices.push(
+            body.get(start..end)
+                .ok_or_else(|| invalid("V34 rank-four IPC buffer extent differs"))?,
+        );
+        previous_end = end;
+    }
+    for (index, count) in [
+        (0, rows),
+        (2, rows),
+        (4, rows),
+        (6, rows),
+        (8, rows),
+        (9, rows * V34_DIMENSIONS),
+        (11, rows),
+        (12, rows * V34_DIMENSIONS),
+        (14, rows),
+        (15, rows * V34_COMPONENTS),
+        (17, rows),
+        (18, rows * V34_COMPONENTS),
+        (19, rows * V34_COMPONENTS * V34_DIMENSIONS),
+        (21, rows),
+        (23, rows),
+        (25, rows),
+        (27, rows),
+    ] {
+        if !slices[index].is_empty()
+            && (slices[index].len() != count.div_ceil(8)
+                || (0..count).any(|bit| slices[index][bit / 8] & (1 << (bit % 8)) == 0))
+        {
+            return Err(invalid("V34 rank-four IPC null bitmap differs"));
+        }
+    }
+    for (index, length) in [
+        (1, rows * 4),
+        (3, rows * 4),
+        (5, rows * 8),
+        (7, rows * 4),
+        (10, rows * V34_DIMENSIONS * 4),
+        (13, rows * V34_DIMENSIONS * 4),
+        (16, rows * V34_COMPONENTS * 4),
+        (20, rows * V34_COMPONENTS * V34_DIMENSIONS * 4),
+        (22, rows * 8),
+        (24, rows * 8),
+        (26, rows * 8),
+        (28, rows * 8),
+    ] {
+        if slices[index].len() != length {
+            return Err(invalid("V34 rank-four IPC value length differs"));
+        }
+    }
+    Ok(())
+}
+
+/// Encode one immutable rank-four-only Arrow IPC generation.
+pub fn encode_v34_rank4_arrow(
+    generation: &V34Rank4Generation,
+    uri: &str,
+    source_archive_sha256: &str,
+    reconstruction_sha256: &str,
+    codebooks_sha256: &str,
+) -> Result<(Vec<u8>, V34Rank4ArtifactIdentity)> {
+    let mut identity = V34Rank4ArtifactIdentity {
+        uri: uri.to_owned(),
+        sha256: "0".repeat(64),
+        length: 1,
+        source_archive_sha256: source_archive_sha256.to_owned(),
+        reconstruction_sha256: reconstruction_sha256.to_owned(),
+        codebooks_sha256: codebooks_sha256.to_owned(),
+        metric: V34_METRIC.to_owned(),
+        dimensions: V34_DIMENSIONS as u32,
+        normalization: V34_NORMALIZATION.to_owned(),
+        scorer_version: V34_SCORER_VERSION.to_owned(),
+    };
+    validate_v34_artifact_identity(&identity)?;
+    if generation.leaves.is_empty() {
+        return Err(invalid("V34 rank-four artifact generation is empty"));
+    }
+    let schema = v34_rank4_arrow_schema(&identity)?;
+    let eigenvalues = Arc::new(FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float32, false)),
+        V34_COMPONENTS as i32,
+        Arc::new(Float32Array::from(
+            generation
+                .leaves
+                .iter()
+                .flat_map(|leaf| leaf.eigenvalues)
+                .collect::<Vec<_>>(),
+        )),
+        None,
+    )?);
+    let direction_vectors = FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float32, false)),
+        V34_DIMENSIONS as i32,
+        Arc::new(Float32Array::from(
+            generation
+                .leaves
+                .iter()
+                .flat_map(|leaf| leaf.directions.iter().flatten().copied())
+                .collect::<Vec<_>>(),
+        )),
+        None,
+    )?;
+    let directions = Arc::new(FixedSizeListArray::try_new(
+        Arc::new(Field::new("direction", v34_vector_type(), false)),
+        V34_COMPONENTS as i32,
+        Arc::new(direction_vectors),
+        None,
+    )?);
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                generation.leaves.iter().map(|leaf| leaf.leaf_ordinal),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                generation.leaves.iter().map(|leaf| leaf.group_ordinal),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                generation.leaves.iter().map(|leaf| leaf.logical_start),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                generation.leaves.iter().map(|leaf| leaf.population),
+            )),
+            v34_vector_array(generation.leaves.iter().map(|leaf| &leaf.mean))?,
+            v34_vector_array(generation.leaves.iter().map(|leaf| &leaf.residual_diagonal))?,
+            eigenvalues,
+            directions,
+            Arc::new(Float64Array::from_iter_values(
+                generation.leaves.iter().map(|leaf| leaf.population_factor),
+            )),
+            Arc::new(Float64Array::from_iter_values(
+                generation.leaves.iter().map(|leaf| leaf.trace),
+            )),
+            Arc::new(Float64Array::from_iter_values(
+                generation.leaves.iter().map(|leaf| leaf.trace_square),
+            )),
+            Arc::new(Float64Array::from_iter_values(
+                generation.leaves.iter().map(|leaf| leaf.spectral_bound),
+            )),
+        ],
+    )?;
+    let mut bytes = Vec::new();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, &schema, options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    identity.length = u64::try_from(bytes.len())
+        .map_err(|_| invalid("V34 rank-four artifact length overflows"))?;
+    identity.sha256 = format!("{:x}", Sha256::digest(&bytes));
+    Ok((bytes, identity))
+}
+
+fn v34_fixed_vector(list: &FixedSizeListArray, row: usize) -> Result<[f32; V34_DIMENSIONS]> {
+    let child_values = list.value(row);
+    let child = child_values
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| invalid("V34 rank-four Arrow vector differs"))?;
+    if child.null_count() != 0 {
+        return Err(invalid("V34 rank-four Arrow vector null differs"));
+    }
+    child
+        .values()
+        .to_vec()
+        .try_into()
+        .map_err(|_| invalid("V34 rank-four Arrow vector width differs"))
+}
+
+/// Authenticate and decode one rank-four-only Arrow IPC generation.
+pub fn decode_v34_rank4_arrow(
+    bytes: &[u8],
+    identity: &V34Rank4ArtifactIdentity,
+) -> Result<V34Rank4Generation> {
+    validate_v34_artifact_identity(identity)?;
+    if identity.length != bytes.len() as u64
+        || format!("{:x}", Sha256::digest(bytes)) != identity.sha256
+    {
+        return Err(invalid("V34 rank-four artifact bytes differ"));
+    }
+    let expected_schema = v34_rank4_arrow_schema(identity)?;
+    validate_v34_ipc_envelope(bytes, &expected_schema)?;
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.schema().as_ref() != &expected_schema {
+        return Err(invalid("V34 rank-four Arrow schema differs"));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V34 rank-four Arrow batch is missing"))?;
+    if reader.next().is_some()
+        || batch.num_rows() == 0
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid("V34 rank-four Arrow batch differs"));
+    }
+    let u32_column = |index: usize| {
+        batch
+            .column(index)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V34 rank-four Arrow integer differs"))
+    };
+    let u64_column = |index: usize| {
+        batch
+            .column(index)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V34 rank-four Arrow integer differs"))
+    };
+    let list_column = |index: usize| {
+        batch
+            .column(index)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V34 rank-four Arrow list differs"))
+    };
+    let float64_column = |index: usize| {
+        batch
+            .column(index)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .ok_or_else(|| invalid("V34 rank-four Arrow scalar differs"))
+    };
+    let leaf_ordinals = u32_column(0)?;
+    let group_ordinals = u32_column(1)?;
+    let logical_starts = u64_column(2)?;
+    let populations = u32_column(3)?;
+    let means = list_column(4)?;
+    let residuals = list_column(5)?;
+    let eigenvalue_lists = list_column(6)?;
+    let direction_lists = list_column(7)?;
+    let population_factors = float64_column(8)?;
+    let traces = float64_column(9)?;
+    let trace_squares = float64_column(10)?;
+    let spectral_bounds = float64_column(11)?;
+    let mut inputs = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        let eigenvalue_values = eigenvalue_lists.value(row);
+        let eigenvalue_array = eigenvalue_values
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("V34 rank-four Arrow eigenvalues differ"))?;
+        if eigenvalue_array.null_count() != 0 {
+            return Err(invalid("V34 rank-four Arrow eigenvalue null differs"));
+        }
+        let eigenvalues = eigenvalue_array
+            .values()
+            .to_vec()
+            .try_into()
+            .map_err(|_| invalid("V34 rank-four Arrow eigenvalue width differs"))?;
+        let row_direction_values = direction_lists.value(row);
+        let row_directions = row_direction_values
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V34 rank-four Arrow directions differ"))?;
+        if row_directions.null_count() != 0 {
+            return Err(invalid("V34 rank-four Arrow direction null differs"));
+        }
+        let mut directions = [[0.0_f32; V34_DIMENSIONS]; V34_COMPONENTS];
+        for (component, direction) in directions.iter_mut().enumerate() {
+            *direction = v34_fixed_vector(row_directions, component)?;
+        }
+        let input = V34Rank4LeafInput {
+            leaf_ordinal: leaf_ordinals.value(row),
+            group_ordinal: group_ordinals.value(row),
+            logical_start: logical_starts.value(row),
+            population: populations.value(row),
+            mean: v34_fixed_vector(means, row)?,
+            residual_diagonal: v34_fixed_vector(residuals, row)?,
+            eigenvalues,
+            directions,
+        };
+        if input
+            .mean
+            .iter()
+            .chain(input.residual_diagonal.iter())
+            .chain(input.eigenvalues.iter())
+            .chain(input.directions.iter().flatten())
+            .any(|value| *value == 0.0 && value.to_bits() != 0)
+            || (0..V34_COMPONENTS).any(|component| {
+                input.eigenvalues[component] == 0.0
+                    && input.directions[component]
+                        .iter()
+                        .any(|value| value.to_bits() != 0)
+            })
+        {
+            return Err(invalid("V34 rank-four persisted zero authority differs"));
+        }
+        inputs.push(input);
+    }
+    let generation = build_v34_rank4_generation(inputs)?;
+    for (row, leaf) in generation.leaves.iter().enumerate() {
+        if population_factors.value(row).to_bits() != leaf.population_factor.to_bits()
+            || traces.value(row).to_bits() != leaf.trace.to_bits()
+            || trace_squares.value(row).to_bits() != leaf.trace_square.to_bits()
+            || spectral_bounds.value(row).to_bits() != leaf.spectral_bound.to_bits()
+        {
+            return Err(invalid("V34 rank-four Arrow cached moments differ"));
+        }
+    }
+    Ok(generation)
 }
 
 /// Project fixed 100M serving memory and exhaustive directional work.

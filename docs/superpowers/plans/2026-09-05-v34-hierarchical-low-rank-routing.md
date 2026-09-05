@@ -108,6 +108,9 @@
 
 **Files:**
 - Modify: `crates/borsuk/src/v34_rank4.rs`
+- Modify: `crates/borsuk/src/v33_group_shape.rs`
+- Modify: `crates/borsuk/src/lib.rs`
+- Modify: `crates/borsuk/tests/v34_rank4.rs`
 
 **Interfaces:**
 - Consumes: `V34Rank4Generation`.
@@ -123,7 +126,7 @@
 
 - [ ] **Step 2: Run the narrow RED**
 
-  Run: `cargo test -p borsuk --lib v34_rank4_arrow_ -- --nocapture`
+  Run: `cargo test -p borsuk --test v34_rank4 v34_rank4_arrow_ -- --nocapture`
 
   Expected: only the missing encoder/decoder boundary fails.
 
@@ -143,8 +146,10 @@
 
 - [ ] **Step 5: Run GREEN, fmt, and diff-check**
 
-  Run the `v34_rank4_arrow_` and `v34_rank4_reference_` filters serially, then
-  `cargo fmt --all -- --check` and `git diff --check`.
+  Run the integration-target `v34_rank4_arrow_` filter and the exact
+  `v33_group_shape::tests::v34_rank4_from_v33_binds_authenticated_reconstruction_and_rank_four`
+  reference node serially, then `cargo fmt --all -- --check` and
+  `git diff --check`.
 
 - [ ] **Step 6: Commit and push the artifact slice**
 

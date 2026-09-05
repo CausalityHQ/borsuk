@@ -237,8 +237,9 @@ pub use v33_group_shape::{
 };
 #[doc(hidden)]
 pub use v34_rank4::{
-    V34Rank4Generation, V34Rank4Leaf, V34Rank4LeafInput, V34ServingMemoryProjection,
-    build_v34_rank4_generation, build_v34_rank4_generation_from_v33, project_v34_serving_memory,
+    V34Rank4ArtifactIdentity, V34Rank4Generation, V34Rank4Leaf, V34Rank4LeafInput,
+    V34ServingMemoryProjection, build_v34_rank4_generation, build_v34_rank4_generation_from_v33,
+    decode_v34_rank4_arrow, encode_v34_rank4_arrow, project_v34_serving_memory,
     score_v34_rank4_leaf,
 };
 #[allow(
