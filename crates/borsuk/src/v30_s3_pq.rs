@@ -86,6 +86,28 @@ impl V30PqCodebook {
     }
 }
 
+pub(crate) fn reconstruct_v30_code(
+    codebook: &V30PqCodebook,
+    code: &[u8],
+) -> Result<[f32; DIMENSIONS]> {
+    codebook.validate()?;
+    if code.len() != codebook.width.bytes() {
+        return Err(invalid("V30 PQ8 reconstruction code width differs"));
+    }
+    let dimensions = codebook.width.dimensions();
+    let mut reconstructed = [0.0_f32; DIMENSIONS];
+    for (subquantizer, &centroid) in code.iter().enumerate() {
+        let source = (subquantizer * CENTROIDS + usize::from(centroid)) * dimensions;
+        let destination = subquantizer * dimensions;
+        reconstructed[destination..destination + dimensions]
+            .copy_from_slice(&codebook.centroids[source..source + dimensions]);
+    }
+    if reconstructed.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("V30 PQ8 reconstruction differs"));
+    }
+    Ok(reconstructed)
+}
+
 pub(crate) fn fit_v30_codebook(
     rows: &[[f32; DIMENSIONS]],
     width: V30PqWidth,
@@ -1092,7 +1114,8 @@ mod tests {
     use super::{
         V30CodePlanes, V30Fidelity, V30PqCodebook, V30PqWidth, V30QueryTable,
         decode_v30_pq_artifacts, encode_v30_code, encode_v30_planes, encode_v30_pq_artifacts,
-        fit_v30_codebook, project_v30_resident_bytes, score_v30_codes, score_v30_transposed_block,
+        fit_v30_codebook, project_v30_resident_bytes, reconstruct_v30_code, score_v30_codes,
+        score_v30_transposed_block,
     };
 
     fn codebook(width: V30PqWidth) -> V30PqCodebook {
@@ -1132,6 +1155,37 @@ mod tests {
             invalid[7] = f32::NAN;
             assert!(encode_v30_code(&book, &invalid).is_err());
         }
+    }
+
+    #[test]
+    fn v32_virtual_geometric_reconstruction_matches_literal_centroids() {
+        for width in [V30PqWidth::Base24, V30PqWidth::High48] {
+            let book = codebook(width);
+            let code = (0..width.bytes())
+                .map(|subquantizer| (subquantizer * 7 % 251) as u8)
+                .collect::<Vec<_>>();
+            let reconstructed = reconstruct_v30_code(&book, &code).unwrap();
+            for subquantizer in 0..width.subquantizers() {
+                for dimension in 0..width.dimensions() {
+                    let output = subquantizer * width.dimensions() + dimension;
+                    let expected =
+                        f32::from(code[subquantizer]) / 256.0 + dimension as f32 / 4096.0;
+                    assert_eq!(reconstructed[output].to_bits(), expected.to_bits());
+                }
+            }
+            assert_eq!(reconstruct_v30_code(&book, &code).unwrap(), reconstructed);
+        }
+    }
+
+    #[test]
+    fn v32_virtual_geometric_reconstruction_rejects_width_and_nonfinite_state() {
+        let book = codebook(V30PqWidth::Base24);
+        assert!(reconstruct_v30_code(&book, &[0; 23]).is_err());
+        assert!(reconstruct_v30_code(&book, &[0; 25]).is_err());
+
+        let mut invalid = book;
+        invalid.centroids[0] = f32::NAN;
+        assert!(reconstruct_v30_code(&invalid, &[0; 24]).is_err());
     }
 
     #[test]
