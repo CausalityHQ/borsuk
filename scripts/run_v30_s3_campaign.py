@@ -100,6 +100,7 @@ class V32ContainmentSpotPlan:
     query_count: int
     root_beam: int
     leaf_beam: int
+    global_leaf_limit: int | None = None
 
 
 @dataclass(frozen=True)
@@ -255,6 +256,10 @@ def _validate_containment(plan: V32ContainmentSpotPlan) -> None:
         or plan.query_count != 32
         or plan.root_beam not in {8, 16, 32}
         or plan.leaf_beam not in {64, 128, 256}
+        or (
+            plan.global_leaf_limit is not None
+            and (plan.global_leaf_limit != 768 or plan.leaf_beam != 256)
+        )
     ):
         raise ValueError("V32 containment authority differs")
 
@@ -562,31 +567,32 @@ def _evaluation_script(plan: V30EvaluationPlan) -> str:
 def _containment_script(plan: V32ContainmentSpotPlan) -> str:
     manifest_prefix = plan.construction_manifest_uri.removesuffix("manifest.json")
     output_bucket, output_key = _split_s3(plan.output_prefix)
-    command = _shell(
-        [
-            "/opt/borsuk/venv/bin/python",
-            "scripts/run_v32_no_page_containment.py",
-            "--execute",
-            "--qualifier",
-            "/opt/borsuk/v30_s3_qualify",
-            "--manifest",
-            "/run/v32/manifest.json",
-            "--manifest-sha256",
-            plan.construction_manifest_sha256,
-            "--manifest-bytes",
-            str(plan.construction_manifest_bytes),
-            "--artifact-dir",
-            "/run/v32/resident",
-            "--query-parquet",
-            "/run/v32/test.parquet",
-            "--query-sha256",
-            plan.query_sha256,
-            "--query-bytes",
-            str(plan.query_bytes),
-            "--logical-sources-arrow",
-            "/run/v32/resident/logical-sources.arrow",
-        ]
-    ) + (
+    command_words = [
+        "/opt/borsuk/venv/bin/python",
+        "scripts/run_v32_no_page_containment.py",
+        "--execute",
+        "--qualifier",
+        "/opt/borsuk/v30_s3_qualify",
+        "--manifest",
+        "/run/v32/manifest.json",
+        "--manifest-sha256",
+        plan.construction_manifest_sha256,
+        "--manifest-bytes",
+        str(plan.construction_manifest_bytes),
+        "--artifact-dir",
+        "/run/v32/resident",
+        "--query-parquet",
+        "/run/v32/test.parquet",
+        "--query-sha256",
+        plan.query_sha256,
+        "--query-bytes",
+        str(plan.query_bytes),
+        "--logical-sources-arrow",
+        "/run/v32/resident/logical-sources.arrow",
+    ]
+    if plan.global_leaf_limit is not None:
+        command_words.extend(["--global-leaf-limit", str(plan.global_leaf_limit)])
+    command = _shell(command_words) + (
         ' --logical-sources-sha256 "$logical_sha"'
         ' --logical-sources-bytes "$logical_size"'
         " --truth-parquet /run/v32/neighbors.parquet"
@@ -796,16 +802,19 @@ def execute_v30_spot_phase(
             raise ValueError("V30 Spot instance receipt differs")
         return instance_id
 
-    def observe(instance_id: str) -> V30Observation:
-        nonlocal polls
-        polls += 1
+    def instance_state(instance_id: str) -> str:
         reservations = ec2_client.describe_instances(InstanceIds=[instance_id]).get(
             "Reservations", []
         )
         try:
-            state = reservations[0]["Instances"][0]["State"]["Name"]
+            return reservations[0]["Instances"][0]["State"]["Name"]
         except (IndexError, KeyError, TypeError) as error:
             raise ValueError("V30 Spot instance state differs") from error
+
+    def observe(instance_id: str) -> V30Observation:
+        nonlocal polls
+        polls += 1
+        state = instance_state(instance_id)
         statuses = ec2_client.describe_instance_status(
             InstanceIds=[instance_id], IncludeAllInstances=True
         ).get("InstanceStatuses", [])
@@ -863,6 +872,7 @@ def execute_v30_spot_phase(
         terminate=lambda instance_id: ec2_client.terminate_instances(
             InstanceIds=[instance_id]
         ),
+        observe_termination=instance_state,
         sleep=sleep,
         wall_observations=wall_observations,
         rss_limit_bytes=rss_limit_bytes,
@@ -875,6 +885,7 @@ def monitor_v30_original_attempt(
     specs: tuple[dict[str, object], ...],
     observe: Callable[[str], V30Observation],
     terminate: Callable[[str], None],
+    observe_termination: Callable[[str], str],
     sleep: Callable[[int], None],
     wall_observations: int,
     rss_limit_bytes: int,
@@ -949,3 +960,12 @@ def monitor_v30_original_attempt(
         raise TimeoutError("V30 Spot attempt exceeded wall stop")
     finally:
         terminate(instance_id)
+        for observation_index in range(40):
+            state = observe_termination(instance_id)
+            if state == "terminated":
+                break
+            if state not in {"pending", "running", "stopping", "shutting-down"}:
+                raise RuntimeError("V30 Spot termination state differs")
+            if observation_index == 39:
+                raise TimeoutError("V30 Spot termination exceeded wall stop")
+            sleep(15)

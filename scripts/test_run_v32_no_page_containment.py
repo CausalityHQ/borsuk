@@ -240,6 +240,10 @@ class V32NoPageContainmentTests(unittest.TestCase):
         codes_scanned: int | None = None,
         leaves_eligible: int = 128,
         leaves_scanned: int = 128,
+        global_scope: bool = False,
+        stop_reason: str | None = None,
+        next_leaf_rows: int | None = None,
+        scan_budget: int = 65_536,
     ) -> bytes:
         diagnostics = []
         for rank in range(10):
@@ -248,11 +252,21 @@ class V32NoPageContainmentTests(unittest.TestCase):
                 {
                     "candidate_rank": rank if selected else None,
                     "first_unique_page_rank": rank if selected else None,
+                    "global_routing_leaf_rank": rank + 1,
                     "leaf_ordinal": query_ordinal,
                     "logical": (query_ordinal * 100 + rank + 1) % 1_000_000,
+                    "owner_root_ordinal": query_ordinal % 128,
+                    "owner_root_rank": query_ordinal % 8 + 1,
+                    "page_in_retained_pool": selected,
+                    "page_in_scanned_pool": True,
                     "page_ordinal": query_ordinal * 10 + rank,
+                    "page_selected": selected,
                     "reciprocal_rank_selected": selected,
-                    "routing_leaf_rank": query_ordinal % leaves_scanned + 1,
+                    "routing_leaf_rank": (
+                        rank + 1
+                        if global_scope
+                        else query_ordinal % leaves_scanned + 1
+                    ),
                     "stage": "selected-page" if selected else "candidate-retention",
                 }
             )
@@ -268,16 +282,23 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     if codes_scanned is None
                     else codes_scanned
                 ),
+                "global_leaf_limit": 768 if global_scope else None,
                 "leaves_eligible": leaves_eligible,
                 "leaves_scanned": leaves_scanned,
+                "next_leaf_rows": next_leaf_rows,
                 "pages_considered": 20,
                 "peak_query_table_pairs_live": 1,
                 "query_table_pairs_built": 1,
                 "roots_scored": 128,
+                "scan_budget": scan_budget,
+                "scope": "global" if global_scope else "root-gated",
                 "selected_page_bytes": 2_900_000,
                 "selected_pages": 16,
+                "stop_reason": stop_reason
+                or ("leaf-limit" if global_scope else "root-gated"),
+                "total_routing_leaves": 4_096,
             },
-            "schema_version": 4,
+            "schema_version": 5,
             "truth_independent_selection": True,
         }
         V32NoPageContainmentTests.refresh_page_selections(value)
@@ -333,6 +354,198 @@ class V32NoPageContainmentTests(unittest.TestCase):
             {"16"},
         )
 
+    def test_v32_containment_global_prefix_is_exact_and_truth_independent(self) -> None:
+        # Break caught: the no-page falsifier claims root-independent coverage
+        # while invoking the old root gate or silently widening after a miss.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, truth = self.fixture(Path(temporary))
+            plan = replace(plan, leaf_beam=256, global_leaf_limit=768)
+            commands = build_v32_containment_commands(plan, truth)
+            results = {
+                query: self.diagnostic(
+                    query,
+                    codes_scanned=220_000,
+                    leaves_eligible=4_096,
+                    leaves_scanned=768,
+                    global_scope=True,
+                    scan_budget=262_144,
+                )
+                for query in range(64, 96)
+            }
+            payload = run_v32_no_page_containment(
+                plan,
+                truth,
+                invoke=lambda command: results[
+                    int(command[command.index("--query-start") + 1])
+                ],
+            )
+        self.assertTrue(all("--global-leaf-limit" in command for command in commands))
+        self.assertEqual(
+            {command[command.index("--global-leaf-limit") + 1] for command in commands},
+            {"768"},
+        )
+        value = json.loads(payload)
+        self.assertEqual(value["routing_scope"], "global")
+        self.assertEqual(value["global_leaf_limit"], 768)
+        self.assertEqual(value["maximum_leaves_eligible"], 4_096)
+        self.assertEqual(value["maximum_leaves_scanned"], 768)
+        self.assertEqual(value["maximum_codes_scanned"], 220_000)
+        self.assertEqual(value["selected_page_hits"], 320)
+
+    def test_v32_containment_global_prefix_proof_and_rank_domains_are_strict(self) -> None:
+        # Break caught: rooted eligible counts reject a valid global rank, or a
+        # global run claims a short prefix without a leaf-limit/code-cap proof.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, truth = self.fixture(Path(temporary))
+            with self.assertRaisesRegex(ValueError, "root beam"):
+                build_v32_containment_commands(
+                    replace(plan, global_leaf_limit=768), truth
+                )
+
+            rooted = {
+                query: self.diagnostic(query) for query in range(64, 96)
+            }
+            changed = json.loads(rooted[64])
+            changed["diagnostics"][0]["global_routing_leaf_rank"] = 3_000
+            rooted[64] = (
+                json.dumps(changed, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+            run_v32_no_page_containment(
+                plan,
+                truth,
+                invoke=lambda command: rooted[
+                    int(command[command.index("--query-start") + 1])
+                ],
+            )
+
+            global_plan = replace(plan, leaf_beam=256, global_leaf_limit=768)
+            valid_global = {
+                query: self.diagnostic(
+                    query,
+                    codes_scanned=220_000,
+                    leaves_eligible=4_096,
+                    leaves_scanned=768,
+                    global_scope=True,
+                    scan_budget=262_144,
+                )
+                for query in range(64, 96)
+            }
+            for field, value in [
+                ("routing_leaf_rank", 2),
+                ("page_in_scanned_pool", False),
+            ]:
+                invalid = dict(valid_global)
+                changed = json.loads(invalid[64])
+                changed["diagnostics"][0][field] = value
+                invalid[64] = (
+                    json.dumps(changed, separators=(",", ":"), sort_keys=True).encode()
+                    + b"\n"
+                )
+                with self.assertRaisesRegex(ValueError, "diagnostic value"):
+                    run_v32_no_page_containment(
+                        global_plan,
+                        truth,
+                        invoke=lambda command, values=invalid: values[
+                            int(command[command.index("--query-start") + 1])
+                        ],
+                    )
+
+            invalid_stop = dict(valid_global)
+            changed = json.loads(invalid_stop[64])
+            changed["routing"]["leaves_scanned"] = 700
+            invalid_stop[64] = (
+                json.dumps(changed, separators=(",", ":"), sort_keys=True).encode()
+                + b"\n"
+            )
+            with self.assertRaisesRegex(ValueError, "routing stop"):
+                run_v32_no_page_containment(
+                    global_plan,
+                    truth,
+                    invoke=lambda command: invalid_stop[
+                        int(command[command.index("--query-start") + 1])
+                    ],
+                )
+
+    def test_v32_containment_global_frontier_rank_matches_scanned_prefix(self) -> None:
+        # Break caught: global diagnostics rank every routing leaf, but the
+        # reducer rejects a legitimate truth page whose ranked leaf lies just
+        # beyond the complete scanned prefix.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, truth = self.fixture(Path(temporary))
+            plan = replace(plan, leaf_beam=256, global_leaf_limit=768)
+            for stop_reason, leaves_scanned, codes_scanned, next_leaf_rows, page_scanned in (
+                ("leaf-limit", 768, 220_000, None, False),
+                ("scan-budget", 700, 220_000, 50_000, True),
+            ):
+                with self.subTest(stop_reason=stop_reason):
+                    results = {
+                        query: self.diagnostic(
+                            query,
+                            codes_scanned=codes_scanned,
+                            leaves_eligible=4_096,
+                            leaves_scanned=leaves_scanned,
+                            global_scope=True,
+                            stop_reason=stop_reason,
+                            next_leaf_rows=next_leaf_rows,
+                            scan_budget=262_144,
+                        )
+                        for query in range(64, 96)
+                    }
+                    frontier = json.loads(results[64])
+                    target = frontier["diagnostics"][-1]
+                    target["candidate_rank"] = None
+                    target["first_unique_page_rank"] = None
+                    target["global_routing_leaf_rank"] = leaves_scanned + 1
+                    target["page_in_retained_pool"] = False
+                    target["page_in_scanned_pool"] = page_scanned
+                    target["page_selected"] = False
+                    target["reciprocal_rank_selected"] = False
+                    target["routing_leaf_rank"] = leaves_scanned + 1
+                    target["stage"] = "leaf-frontier"
+                    self.refresh_page_selections(frontier)
+                    results[64] = (
+                        json.dumps(
+                            frontier,
+                            allow_nan=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode()
+                        + b"\n"
+                    )
+                    payload = run_v32_no_page_containment(
+                        plan,
+                        truth,
+                        invoke=lambda command, values=results: values[
+                            int(command[command.index("--query-start") + 1])
+                        ],
+                    )
+                    value = json.loads(payload)
+                    self.assertEqual(value["losses_by_stage"], {"leaf-frontier": 1})
+                    self.assertEqual(value["selected_page_hits"], 319)
+                    self.assertEqual(value["queries"][0]["targets"][-1]["routing_leaf_rank"], leaves_scanned + 1)
+
+                    forged = json.loads(results[64])
+                    forged["diagnostics"][-1]["routing_leaf_rank"] = leaves_scanned
+                    forged["diagnostics"][-1]["global_routing_leaf_rank"] = leaves_scanned
+                    results[64] = (
+                        json.dumps(
+                            forged,
+                            allow_nan=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode()
+                        + b"\n"
+                    )
+                    with self.assertRaisesRegex(ValueError, "diagnostic value"):
+                        run_v32_no_page_containment(
+                            plan,
+                            truth,
+                            invoke=lambda command, values=results: values[
+                                int(command[command.index("--query-start") + 1])
+                            ],
+                        )
+
     def test_v32_containment_clamps_leaf_beam_to_the_selected_root_frontier(self) -> None:
         # Break caught: the Rust router correctly clamps a wider beam to a
         # smaller selected-root frontier, but the independent reducer rejects
@@ -345,6 +558,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     query,
                     leaves_eligible=73,
                     leaves_scanned=73,
+                    scan_budget=262_144,
                 )
                 for query in range(64, 96)
             }
@@ -461,7 +675,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
             )
 
         value = json.loads(payload)
-        self.assertEqual(value["schema_version"], 3)
+        self.assertEqual(value["schema_version"], 4)
         self.assertEqual(value["selected_page_hits"], 319)
         self.assertEqual(value["reciprocal_rank"]["selected_page_hits"], 319)
         self.assertEqual(value["reciprocal_rank"]["aggregate_containment_ppm"], 996_875)
@@ -510,6 +724,8 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     recovered = json.loads(results[75])
                     recovered["diagnostics"][-1]["stage"] = "selected-page"
                     recovered["diagnostics"][-1]["first_unique_page_rank"] = 9
+                    recovered["diagnostics"][-1]["page_in_retained_pool"] = True
+                    recovered["diagnostics"][-1]["page_selected"] = True
                     recovered["diagnostics"][-1]["routing_leaf_rank"] = routing_leaf_rank
                     recovered["diagnostics"][-1]["reciprocal_rank_selected"] = (
                         reciprocal_rank_selected

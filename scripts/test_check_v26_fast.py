@@ -32,6 +32,7 @@ class V26FastGateTests(unittest.TestCase):
         self.assertIn("scripts.test_run_v30_reduced_quality", rendered[2])
         self.assertIn("scripts.test_run_v30_untouched_quality", rendered[2])
         self.assertIn("scripts.test_run_v30_s3_campaign", rendered[2])
+        self.assertIn("scripts.test_run_v32_no_page_containment", rendered[2])
         self.assertEqual(
             rendered[3],
             "cargo test -p borsuk --lib v30_s3_ -- --nocapture",
@@ -42,7 +43,7 @@ class V26FastGateTests(unittest.TestCase):
         )
         self.assertEqual(
             rendered[5],
-            "cargo test -p borsuk --example v30_s3_qualify v30_s3_qualify_ -- --nocapture",
+            "cargo test -p borsuk --example v30_s3_qualify v32_s3_qualify_ -- --nocapture",
         )
         self.assertEqual(rendered[6], "cargo fmt --all -- --check")
         self.assertEqual(rendered[7], "git diff --check")
@@ -78,6 +79,7 @@ class V26FastGateTests(unittest.TestCase):
         self.assertIn("scripts.test_run_v30_reduced_quality", rendered[4])
         self.assertIn("scripts.test_run_v30_untouched_quality", rendered[4])
         self.assertIn("scripts.test_run_v30_s3_campaign", rendered[4])
+        self.assertIn("scripts.test_run_v32_no_page_containment", rendered[4])
         self.assertEqual(
             rendered[5],
             "cargo test -p borsuk --lib v30_s3_ -- --nocapture",
@@ -88,7 +90,7 @@ class V26FastGateTests(unittest.TestCase):
         )
         self.assertEqual(
             rendered[7],
-            "cargo test -p borsuk --example v30_s3_qualify v30_s3_qualify_ -- --nocapture",
+            "cargo test -p borsuk --example v30_s3_qualify v32_s3_qualify_ -- --nocapture",
         )
         self.assertEqual(rendered[8], "cargo fmt --all -- --check")
         self.assertEqual(rendered[9], "git diff --check")

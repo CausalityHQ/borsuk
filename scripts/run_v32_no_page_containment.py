@@ -41,6 +41,7 @@ class V32ContainmentPlan:
     query_count: int
     root_beam: int
     leaf_beam: int
+    global_leaf_limit: int | None = None
 
 
 def _digest(value: str) -> bool:
@@ -121,9 +122,16 @@ def _read_scale_manifest(plan: V32ContainmentPlan) -> tuple[int, int, int, int]:
         or scan_budget is None
     ):
         raise ValueError("V32 containment scale geometry differs")
-    if plan.root_beam not in {8, 16, 32}:
+    if plan.root_beam not in {8, 16, 32} or (
+        plan.global_leaf_limit is not None
+        and (plan.global_leaf_limit != 768 or plan.leaf_beam != 256)
+    ):
         raise ValueError("V32 containment root beam differs")
-    maximum_leaves_eligible = plan.root_beam * layout["maximum_routing_leaves_per_root"]
+    maximum_leaves_eligible = (
+        128 * layout["maximum_routing_leaves_per_root"]
+        if plan.global_leaf_limit is not None
+        else plan.root_beam * layout["maximum_routing_leaves_per_root"]
+    )
     return maximum_routing_leaf_rows, maximum_leaves_eligible, plan.leaf_beam, scan_budget
 
 
@@ -142,6 +150,7 @@ def _read_truth(
         or plan.query_start < 0
         or plan.query_count != QUERY_COUNT
         or plan.root_beam not in {8, 16, 32}
+        or (plan.global_leaf_limit is not None and plan.global_leaf_limit != 768)
         or type(truth_bytes) is not bytes
         or len(truth_bytes) != plan.truth.encoded_bytes
         or hashlib.sha256(truth_bytes).hexdigest() != plan.truth.sha256
@@ -319,8 +328,14 @@ def _commands(
         "--k",
         "10",
     )
+    scope = (
+        ("--global-leaf-limit", str(plan.global_leaf_limit))
+        if plan.global_leaf_limit is not None
+        else ()
+    )
     return tuple(
         common
+        + scope
         + (
             "--query-start",
             str(plan.query_start + offset),
@@ -348,6 +363,8 @@ def _diagnostics(
     maximum_leaves_eligible: int,
     leaf_beam: int,
     scan_budget: int,
+    global_leaf_limit: int | None,
+    root_beam: int,
 ) -> tuple[
     list[dict[str, object]],
     dict[str, int],
@@ -377,7 +394,7 @@ def _diagnostics(
             "truth_independent_selection",
         }
         or value["claim_eligible"] is not False
-        or value["schema_version"] != 4
+        or value["schema_version"] != 5
         or value["page_body_reads"] != 0
         or value["truth_independent_selection"] is not True
         or value["query_ordinal"] != query_ordinal
@@ -389,9 +406,15 @@ def _diagnostics(
     expected_keys = {
         "candidate_rank",
         "first_unique_page_rank",
+        "global_routing_leaf_rank",
         "leaf_ordinal",
         "logical",
+        "owner_root_ordinal",
+        "owner_root_rank",
+        "page_in_retained_pool",
+        "page_in_scanned_pool",
         "page_ordinal",
+        "page_selected",
         "reciprocal_rank_selected",
         "routing_leaf_rank",
         "stage",
@@ -408,10 +431,19 @@ def _diagnostics(
             or set(item) != expected_keys
             or type(item["logical"]) is not int
             or type(item["leaf_ordinal"]) is not int
+            or type(item["global_routing_leaf_rank"]) is not int
             or type(item["page_ordinal"]) is not int
+            or type(item["owner_root_ordinal"]) is not int
+            or type(item["owner_root_rank"]) is not int
             or item["logical"] < 0
             or item["leaf_ordinal"] < 0
+            or item["global_routing_leaf_rank"] < 1
             or item["page_ordinal"] < 0
+            or item["owner_root_ordinal"] < 0
+            or item["owner_root_rank"] < 1
+            or type(item["page_in_retained_pool"]) is not bool
+            or type(item["page_in_scanned_pool"]) is not bool
+            or type(item["page_selected"]) is not bool
             or type(item["reciprocal_rank_selected"]) is not bool
             or (
                 item["routing_leaf_rank"] is not None
@@ -425,6 +457,22 @@ def _diagnostics(
                 and item["stage"] not in {"leaf-frontier", "selected-page"}
             )
             or item["stage"] not in stages
+            or item["page_in_retained_pool"]
+            != (item["first_unique_page_rank"] is not None)
+            or (item["page_in_retained_pool"] and not item["page_in_scanned_pool"])
+            or (item["page_selected"] and not item["page_in_retained_pool"])
+            or (item["stage"] == "selected-page") != item["page_selected"]
+            or (
+                item["stage"] == "candidate-retention"
+                and (
+                    item["routing_leaf_rank"] is None
+                    or item["candidate_rank"] is not None
+                )
+            )
+            or (
+                item["stage"] == "page-reducer"
+                and item["candidate_rank"] is None
+            )
             or any(
                 rank is not None and (type(rank) is not int or rank < 0)
                 for rank in optional_ranks
@@ -437,25 +485,43 @@ def _diagnostics(
     routing_keys = {
         "candidates_retained",
         "codes_scanned",
+        "global_leaf_limit",
         "leaves_eligible",
         "leaves_scanned",
+        "next_leaf_rows",
         "pages_considered",
         "peak_query_table_pairs_live",
         "query_table_pairs_built",
         "roots_scored",
+        "scan_budget",
+        "scope",
         "selected_page_bytes",
         "selected_pages",
+        "stop_reason",
+        "total_routing_leaves",
     }
     if (
         type(routing) is not dict
         or set(routing) != routing_keys
-        or any(type(item) is not int or item < 0 for item in routing.values())
+        or any(
+            type(routing[key]) is not int or routing[key] < 0
+            for key in routing_keys
+            - {"global_leaf_limit", "next_leaf_rows", "scope", "stop_reason"}
+        )
+        or routing["global_leaf_limit"] != global_leaf_limit
+        or routing["scan_budget"] != scan_budget
+        or routing["scope"]
+        != ("global" if global_leaf_limit is not None else "root-gated")
         or not 1 <= routing["codes_scanned"] <= scan_budget
         or routing["candidates_retained"]
         != min(12_288, routing["codes_scanned"])
-        or not min(leaf_beam, routing["leaves_eligible"])
-        <= routing["leaves_scanned"]
-        <= routing["leaves_eligible"]
+        or not (
+            1 <= routing["leaves_scanned"] <= min(global_leaf_limit, routing["leaves_eligible"])
+            if global_leaf_limit is not None
+            else min(leaf_beam, routing["leaves_eligible"])
+            <= routing["leaves_scanned"]
+            <= routing["leaves_eligible"]
+        )
         or routing["leaves_eligible"] > maximum_leaves_eligible
         or routing["peak_query_table_pairs_live"] != 1
         or not 1 <= routing["query_table_pairs_built"] <= routing["leaves_scanned"]
@@ -463,14 +529,106 @@ def _diagnostics(
         or not 16 <= routing["pages_considered"] <= 12_288
         or routing["selected_pages"] != 16
         or routing["selected_page_bytes"] == 0
+        or (
+            global_leaf_limit is not None
+            and routing["leaves_eligible"] != routing["total_routing_leaves"]
+        )
+        or not 1
+        <= routing["total_routing_leaves"]
+        <= (
+            maximum_leaves_eligible
+            if global_leaf_limit is not None
+            else maximum_leaves_eligible * 128 // root_beam
+        )
     ):
         raise ValueError("V32 containment routing work differs")
+    if global_leaf_limit is None:
+        if routing["stop_reason"] != "root-gated" or routing["next_leaf_rows"] is not None:
+            raise ValueError("V32 containment routing stop differs")
+    elif routing["stop_reason"] == "all-leaves":
+        if routing["leaves_scanned"] != routing["total_routing_leaves"] or routing["next_leaf_rows"] is not None:
+            raise ValueError("V32 containment routing stop differs")
+    elif routing["stop_reason"] == "leaf-limit":
+        if routing["leaves_scanned"] != min(global_leaf_limit, routing["total_routing_leaves"]) or routing["next_leaf_rows"] is not None:
+            raise ValueError("V32 containment routing stop differs")
+    elif routing["stop_reason"] == "scan-budget":
+        if (
+            type(routing["next_leaf_rows"]) is not int
+            or routing["next_leaf_rows"] <= 0
+            or routing["leaves_scanned"] >= min(global_leaf_limit, routing["total_routing_leaves"])
+            or routing["codes_scanned"] + routing["next_leaf_rows"] <= scan_budget
+        ):
+            raise ValueError("V32 containment routing stop differs")
+    else:
+        raise ValueError("V32 containment routing stop differs")
     if any(
         item["routing_leaf_rank"] is not None
         and item["routing_leaf_rank"] > routing["leaves_eligible"]
         for item in diagnostics
     ):
         raise ValueError("V32 containment diagnostic value differs")
+    if any(
+        item["global_routing_leaf_rank"] > routing["total_routing_leaves"]
+        or item["owner_root_ordinal"] >= routing["roots_scored"]
+        or item["owner_root_rank"] > routing["roots_scored"]
+        or (
+            global_leaf_limit is not None
+            and item["routing_leaf_rank"] != item["global_routing_leaf_rank"]
+        )
+        or (
+            global_leaf_limit is None
+            and item["routing_leaf_rank"] is not None
+            and item["owner_root_rank"] > root_beam
+        )
+        for item in diagnostics
+    ):
+        raise ValueError("V32 containment diagnostic value differs")
+    for item in diagnostics:
+        routing_leaf_rank = item["routing_leaf_rank"]
+        candidate_rank = item["candidate_rank"]
+        first_unique_page_rank = item["first_unique_page_rank"]
+        target_leaf_scanned = (
+            routing_leaf_rank is not None
+            and routing_leaf_rank <= routing["leaves_scanned"]
+        )
+        expected_stage = (
+            "selected-page"
+            if item["page_selected"]
+            else "leaf-frontier"
+            if not target_leaf_scanned
+            else "candidate-retention"
+            if candidate_rank is None
+            else "page-reducer"
+        )
+        if (
+            (target_leaf_scanned and not item["page_in_scanned_pool"])
+            or item["stage"] != expected_stage
+            or (
+                candidate_rank is not None
+                and (
+                    not target_leaf_scanned
+                    or not item["page_in_retained_pool"]
+                    or candidate_rank >= routing["candidates_retained"]
+                    or first_unique_page_rank is None
+                    or first_unique_page_rank > candidate_rank
+                )
+            )
+            or (
+                first_unique_page_rank is not None
+                and first_unique_page_rank >= routing["candidates_retained"]
+            )
+            or item["page_selected"]
+            != (
+                first_unique_page_rank is not None
+                and first_unique_page_rank < routing["selected_pages"]
+            )
+            or (
+                routing["candidates_retained"] == routing["codes_scanned"]
+                and target_leaf_scanned
+                and candidate_rank is None
+            )
+        ):
+            raise ValueError("V32 containment diagnostic value differs")
     page_selections = value["page_selections"]
     if type(page_selections) is not dict or set(page_selections) != {
         "first_distinct",
@@ -556,6 +714,8 @@ def run_v32_no_page_containment(
             maximum_leaves_eligible,
             leaf_beam,
             scan_budget,
+            plan.global_leaf_limit,
+            plan.root_beam,
         )
         routing_work.append(routing)
         truth_microleaf_ranks.extend(
@@ -674,6 +834,7 @@ def run_v32_no_page_containment(
         "minimum_containment_ppm": minimum,
         "logical_sources_sha256": plan.logical_sources.sha256,
         "leaf_beam": leaf_beam,
+        "global_leaf_limit": plan.global_leaf_limit,
         "page_body_reads": 0,
         "perfect_queries": perfect,
         "query_count": QUERY_COUNT,
@@ -682,8 +843,9 @@ def run_v32_no_page_containment(
         "queries": queries,
         "reciprocal_rank": reciprocal_rank,
         "root_beam": plan.root_beam,
+        "routing_scope": "global" if plan.global_leaf_limit is not None else "root-gated",
         "samples": samples,
-        "schema_version": 3,
+        "schema_version": 4,
         "selected_page_hits": total_hits,
         "source_rows": plan.source_rows,
         "status": "passed" if not failed else "failed",
@@ -743,6 +905,7 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--query-count", type=int, required=True)
     parser.add_argument("--root-beam", type=int, required=True)
     parser.add_argument("--leaf-beam", type=int, required=True)
+    parser.add_argument("--global-leaf-limit", type=int)
     args = parser.parse_args(arguments)
     plan = V32ContainmentPlan(
         qualifier=args.qualifier,
@@ -771,6 +934,7 @@ def main(arguments: list[str] | None = None) -> int:
         query_count=args.query_count,
         root_beam=args.root_beam,
         leaf_beam=args.leaf_beam,
+        global_leaf_limit=args.global_leaf_limit,
     )
     truth = args.truth_parquet.read_bytes()
     payload = run_v32_no_page_containment(plan, truth, invoke=_invoke)

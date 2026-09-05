@@ -1238,11 +1238,9 @@ mod tests {
 
     #[test]
     fn v30_s3_pq_projection_is_literal_and_below_three_gib() {
-        assert_eq!(
-            project_v30_resident_bytes(100_000_000, 50_000).unwrap(),
-            2_630_588_896
-        );
-        assert!(2_630_588_896_u64 < 3 * 1024 * 1024 * 1024);
+        let projected = project_v30_resident_bytes(100_000_000, 50_000).unwrap();
+        assert_eq!(projected, 2_630_588_896);
+        assert!(projected < 3 * 1024 * 1024 * 1024);
         assert!(project_v30_resident_bytes(100_000_000, 50_001).is_err());
         assert!(project_v30_resident_bytes(0, 50_000).is_err());
     }

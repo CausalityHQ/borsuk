@@ -589,7 +589,9 @@ mod tests {
         }
     }
 
-    fn search_index(truncate: bool) -> (V27SearchIndex<MemoryStore>, Arc<Mutex<Vec<Vec<u32>>>>) {
+    type RecordedPageWaves = Arc<Mutex<Vec<Vec<u32>>>>;
+
+    fn search_index(truncate: bool) -> (V27SearchIndex<MemoryStore>, RecordedPageWaves) {
         let rows = [
             vec![
                 V27PageRow {

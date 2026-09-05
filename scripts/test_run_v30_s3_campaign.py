@@ -348,6 +348,29 @@ class V30SpotCampaignTests(unittest.TestCase):
             replace(self.containment(), root_beam=16), self.targets()
         )
         self.assertIn("--root-beam 16", wider_roots[0]["UserData"])
+        global_prefix = build_v32_containment_spot_specs(
+            replace(
+                self.containment(),
+                leaf_beam=256,
+                global_leaf_limit=768,
+            ),
+            self.targets(),
+        )
+        self.assertIn("--global-leaf-limit 768", global_prefix[0]["UserData"])
+        with self.assertRaisesRegex(ValueError, "containment authority"):
+            build_v32_containment_spot_specs(
+                replace(self.containment(), global_leaf_limit=767),
+                self.targets(),
+            )
+        with self.assertRaisesRegex(ValueError, "containment authority"):
+            build_v32_containment_spot_specs(
+                replace(
+                    self.containment(),
+                    leaf_beam=128,
+                    global_leaf_limit=768,
+                ),
+                self.targets(),
+            )
 
     def test_v32_rank_envelope_runs_the_frozen_100k_geometry_before_1m(self) -> None:
         construction = replace(
@@ -408,6 +431,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             ),
             observe=lambda _instance: next(observations),
             terminate=terminated.append,
+            observe_termination=lambda _instance: "terminated",
             sleep=lambda _seconds: None,
             wall_observations=27,
             rss_limit_bytes=192 * 1024**3,
@@ -446,6 +470,7 @@ class V30SpotCampaignTests(unittest.TestCase):
         launched: list[str] = []
         sleeps: list[int] = []
         terminated: list[str] = []
+        termination_states = iter(["shutting-down", "terminated"])
         observations = iter(
             [
                 V30Observation("running", "ok", "ok", 1_000, 0.0, 0, 1, None),
@@ -468,12 +493,13 @@ class V30SpotCampaignTests(unittest.TestCase):
             specs=build_v30_construction_spot_specs(self.construction(), self.targets()),
             observe=lambda _instance: next(observations),
             terminate=terminated.append,
+            observe_termination=lambda _instance: next(termination_states),
             sleep=sleeps.append,
             wall_observations=10,
             rss_limit_bytes=192 * 1024**3,
         )
         self.assertEqual(launched, ["eu-central-1a"])
-        self.assertEqual(sleeps, [30, 30])
+        self.assertEqual(sleeps, [30, 30, 15])
         self.assertEqual(terminated, ["i-original"])
         self.assertEqual(
             terminal,
@@ -509,6 +535,7 @@ class V30SpotCampaignTests(unittest.TestCase):
                 b'{"claim_eligible":false,"status":"passed"}\n',
             ),
             terminate=terminated.append,
+            observe_termination=lambda _instance: "terminated",
             sleep=lambda _seconds: None,
             wall_observations=1,
             rss_limit_bytes=192 * 1024**3,
@@ -529,6 +556,7 @@ class V30SpotCampaignTests(unittest.TestCase):
                     "running", "impaired", "ok", 1_000, 0.0, 0, 1, None
                 ),
                 terminate=terminated.append,
+                observe_termination=lambda _instance: "terminated",
                 sleep=lambda _seconds: None,
                 wall_observations=10,
                 rss_limit_bytes=192 * 1024**3,
@@ -544,6 +572,7 @@ class V30SpotCampaignTests(unittest.TestCase):
                     "running", "ok", "ok", 3 * 1024**3 + 1, 0.0, 0, 1, None
                 ),
                 terminate=lambda _instance: None,
+                observe_termination=lambda _instance: "terminated",
                 sleep=lambda _seconds: None,
                 wall_observations=10,
                 rss_limit_bytes=3 * 1024**3,
@@ -560,9 +589,10 @@ class V30SpotCampaignTests(unittest.TestCase):
                 return {"Instances": [{"InstanceId": "i-original"}]}
 
             def describe_instances(self, **_request: object) -> dict[str, object]:
+                state = "terminated" if self.terminated else "running"
                 return {
                     "Reservations": [
-                        {"Instances": [{"State": {"Name": "running"}}]}
+                        {"Instances": [{"State": {"Name": state}}]}
                     ]
                 }
 

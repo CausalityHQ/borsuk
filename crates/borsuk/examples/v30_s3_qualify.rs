@@ -8,8 +8,8 @@ use borsuk::{
     BorsukError, V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30LayoutArtifactIdentity,
     V30LayoutArtifacts, V30PqArtifactIdentity, V30PqArtifacts, V32Index, V32PageLocation,
     V32PageLocationsArtifact, V32PagePrefixes, V32PageStore, V32Router, V32RoutingDiagnostic,
-    V32RoutingTargetStage, V32SearchArm, V32SearchPhase, V32SearchResult, V32ServingTier,
-    decode_v32_page_locations,
+    V32RoutingStopReason, V32RoutingTargetStage, V32SearchArm, V32SearchPhase, V32SearchResult,
+    V32ServingTier, decode_v32_page_locations,
 };
 use bytes::Bytes;
 use futures_util::future::try_join_all;
@@ -51,6 +51,7 @@ struct Args {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DiagnosticRequest {
     logicals: Vec<u64>,
+    global_leaf_limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -544,9 +545,10 @@ fn result_bytes(
 fn diagnostic_bytes(
     query_ordinal: usize,
     truth_independent_selection: bool,
+    global_leaf_limit: Option<usize>,
     diagnostic: V32RoutingDiagnostic,
 ) -> borsuk::Result<Vec<u8>> {
-    if !truth_independent_selection {
+    if !truth_independent_selection || diagnostic.global_leaf_limit != global_leaf_limit {
         return Err(invalid(
             "V32 diagnostic truth-independent selection differs",
         ));
@@ -587,9 +589,15 @@ fn diagnostic_bytes(
             serde_json::json!({
                 "candidate_rank": report.candidate_rank,
                 "first_unique_page_rank": report.first_unique_page_rank,
+                "global_routing_leaf_rank": report.global_routing_leaf_rank,
                 "leaf_ordinal": report.leaf_ordinal,
                 "logical": report.logical,
+                "owner_root_ordinal": report.owner_root_ordinal,
+                "owner_root_rank": report.owner_root_rank,
                 "page_ordinal": report.page_ordinal,
+                "page_in_retained_pool": report.page_in_retained_pool,
+                "page_in_scanned_pool": report.page_in_scanned_pool,
+                "page_selected": report.page_selected,
                 "reciprocal_rank_selected": report.reciprocal_rank_selected,
                 "routing_leaf_rank": report.routing_leaf_rank,
                 "stage": stage,
@@ -608,16 +616,27 @@ fn diagnostic_bytes(
         "routing": {
             "candidates_retained": work.candidates_retained,
             "codes_scanned": work.codes_scanned,
+            "global_leaf_limit": diagnostic.global_leaf_limit,
             "leaves_eligible": work.leaves_eligible,
             "leaves_scanned": work.leaves_scanned,
+            "next_leaf_rows": diagnostic.next_leaf_rows,
             "pages_considered": work.pages_considered,
             "peak_query_table_pairs_live": work.peak_query_table_pairs_live,
             "query_table_pairs_built": work.query_table_pairs_built,
             "roots_scored": work.roots_scored,
+            "scan_budget": diagnostic.scan_budget,
+            "scope": if global_leaf_limit.is_some() { "global" } else { "root-gated" },
             "selected_page_bytes": selected_page_bytes,
             "selected_pages": work.selected_pages,
+            "stop_reason": match diagnostic.stop_reason {
+                V32RoutingStopReason::RootGated => "root-gated",
+                V32RoutingStopReason::AllLeaves => "all-leaves",
+                V32RoutingStopReason::LeafLimit => "leaf-limit",
+                V32RoutingStopReason::ScanBudget => "scan-budget",
+            },
+            "total_routing_leaves": diagnostic.total_routing_leaves,
         },
-        "schema_version": 4,
+        "schema_version": 5,
         "truth_independent_selection": truth_independent_selection,
     });
     let mut bytes = serde_json::to_vec(&canonical(value))
@@ -954,10 +973,28 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
     let arm = manifest_arm(&args, &manifest)?;
     if let Some(diagnostic) = args.diagnostic {
         let query = read_query(&args.query, args.query_start)?;
-        let control = router.select_pages(&query, arm)?;
-        let report = router.diagnose_logicals_with_selection(&query, arm, &diagnostic.logicals)?;
+        let (control, report) = if let Some(limit) = diagnostic.global_leaf_limit {
+            let control = router.diagnose_logicals_with_global_prefix(&query, arm, limit, &[])?;
+            let report = router.diagnose_logicals_with_global_prefix(
+                &query,
+                arm,
+                limit,
+                &diagnostic.logicals,
+            )?;
+            (control.selection, report)
+        } else {
+            let control = router.select_pages(&query, arm)?;
+            let report =
+                router.diagnose_logicals_with_selection(&query, arm, &diagnostic.logicals)?;
+            (control, report)
+        };
         let truth_independent_selection = control == report.selection;
-        return diagnostic_bytes(args.query_start, truth_independent_selection, report);
+        return diagnostic_bytes(
+            args.query_start,
+            truth_independent_selection,
+            diagnostic.global_leaf_limit,
+            report,
+        );
     }
     match args.page_source {
         Some(PageSource::Local(directory)) => run_batch(
@@ -1112,8 +1149,26 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
             Ok(logicals)
         })
         .transpose()?;
+    let global_leaf_limit = values
+        .remove("global-leaf-limit")
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|_| argument_error("--global-leaf-limit type differs"))
+        })
+        .transpose()?;
+    if global_leaf_limit.is_some_and(|limit| limit != 768)
+        || (global_leaf_limit.is_some() && diagnostic_logicals.is_none())
+    {
+        return Err(argument_error("--global-leaf-limit value differs"));
+    }
     let diagnostic = diagnostic_logicals
-        .map(|logicals| -> Result<DiagnosticRequest, String> { Ok(DiagnosticRequest { logicals }) })
+        .map(|logicals| -> Result<DiagnosticRequest, String> {
+            Ok(DiagnosticRequest {
+                logicals,
+                global_leaf_limit,
+            })
+        })
         .transpose()?;
     let local = values.remove("local-page-dir").map(PathBuf::from);
     let tier = values
@@ -1137,6 +1192,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         }
         || !matches!(root_beam, 8 | 16 | 32)
         || !matches!(leaf_beam, 64 | 128 | 256)
+        || (global_leaf_limit.is_some() && leaf_beam != 256)
         || candidate_depth != 12_288
         || page_count != 16
         || k == 0
@@ -1173,8 +1229,8 @@ mod tests {
     use arrow_array::{FixedSizeListArray, Float32Array, RecordBatch};
     use borsuk::{
         V27PageIdentity, V32Match, V32PageLocation, V32PageSelection, V32PageStore,
-        V32RoutingDiagnostic, V32RoutingTargetReport, V32RoutingTargetStage, V32RoutingWork,
-        V32SearchResult, V32SearchWork, V32ServingTier,
+        V32RoutingDiagnostic, V32RoutingStopReason, V32RoutingTargetReport, V32RoutingTargetStage,
+        V32RoutingWork, V32SearchResult, V32SearchWork, V32ServingTier,
     };
     use bytes::Bytes;
     use object_store::ObjectStoreExt;
@@ -1185,8 +1241,9 @@ mod tests {
 
     use super::{
         Args, ArtifactArg, DiagnosticRequest, LocalPageStore, ObjectPageStore, PageSource,
-        SearchPhaseTiming, diagnostic_bytes, execute, manifest_arm, parse_args, peak_rss_bytes,
-        process_cpu_nanoseconds, read_manifest, read_queries, result_bytes, run_batch,
+        SearchPhaseTiming, canonical, diagnostic_bytes, execute, manifest_arm, parse_args,
+        peak_rss_bytes, process_cpu_nanoseconds, read_manifest, read_queries, result_bytes,
+        run_batch,
     };
 
     fn arguments() -> Vec<String> {
@@ -1484,6 +1541,44 @@ mod tests {
         );
         assert_eq!(parsed.page_source, None);
 
+        let mut global = arguments();
+        let source = global
+            .iter()
+            .position(|value| value == "--serving-tier")
+            .unwrap();
+        global.drain(source..=source + 1);
+        let count = global
+            .iter()
+            .position(|value| value == "--query-count")
+            .unwrap();
+        global[count + 1] = "1".to_owned();
+        let leaf = global
+            .iter()
+            .position(|value| value == "--leaf-beam")
+            .unwrap();
+        global[leaf + 1] = "256".to_owned();
+        global.extend([
+            "--diagnose-logicals".to_owned(),
+            "0,1,2,3,4,5,6,7,8,9".to_owned(),
+            "--global-leaf-limit".to_owned(),
+            "768".to_owned(),
+        ]);
+        assert_eq!(
+            parse_args(global.clone())
+                .unwrap()
+                .diagnostic
+                .unwrap()
+                .global_leaf_limit,
+            Some(768)
+        );
+        let mut wrong_budget = global;
+        let leaf = wrong_budget
+            .iter()
+            .position(|value| value == "--leaf-beam")
+            .unwrap();
+        wrong_budget[leaf + 1] = "128".to_owned();
+        assert!(parse_args(wrong_budget).is_err());
+
         let mut singular = arguments();
         let source = singular
             .iter()
@@ -1558,6 +1653,7 @@ mod tests {
             diagnostic.leaf_beam = leaf_beam;
             diagnostic.diagnostic = Some(DiagnosticRequest {
                 logicals: (0..10).collect(),
+                global_leaf_limit: None,
             });
             assert_eq!(
                 manifest_arm(&diagnostic, &manifest).unwrap().scan_budget,
@@ -1589,11 +1685,12 @@ mod tests {
         let bytes = diagnostic_bytes(
             7,
             true,
+            None,
             V32RoutingDiagnostic {
                 selection: V32PageSelection {
                     pages: vec![
                         V27PageIdentity {
-                            ordinal: 11,
+                            ordinal: 14,
                             sha256: "1".repeat(64),
                             encoded_bytes: 100,
                             primary_rows: 1,
@@ -1639,30 +1736,125 @@ mod tests {
                     V32RoutingTargetReport {
                         logical: 25,
                         leaf_ordinal: 3,
+                        owner_root_ordinal: 2,
+                        owner_root_rank: 5,
+                        global_routing_leaf_rank: 11,
                         page_ordinal: 11,
                         routing_leaf_rank: Some(9),
                         candidate_rank: None,
                         first_unique_page_rank: Some(12),
+                        page_in_scanned_pool: true,
+                        page_in_retained_pool: true,
+                        page_selected: false,
                         stage: V32RoutingTargetStage::CandidateRetention,
                         reciprocal_rank_selected: false,
                     },
                     V32RoutingTargetReport {
                         logical: 26,
                         leaf_ordinal: 3,
+                        owner_root_ordinal: 2,
+                        owner_root_rank: 5,
+                        global_routing_leaf_rank: 11,
                         page_ordinal: 12,
                         routing_leaf_rank: Some(9),
                         candidate_rank: Some(7),
                         first_unique_page_rank: Some(4),
+                        page_in_scanned_pool: true,
+                        page_in_retained_pool: true,
+                        page_selected: true,
                         stage: V32RoutingTargetStage::SelectedPage,
                         reciprocal_rank_selected: true,
                     },
                 ],
+                total_routing_leaves: 32,
+                scan_budget: 65_536,
+                global_leaf_limit: None,
+                stop_reason: V32RoutingStopReason::RootGated,
+                next_leaf_rows: None,
             },
         )
         .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let mut expected = serde_json::to_vec(&canonical(value.clone())).unwrap();
+        expected.push(b'\n');
+        assert_eq!(bytes, expected);
         assert_eq!(
-            bytes,
-            b"{\"claim_eligible\":false,\"diagnostics\":[{\"candidate_rank\":null,\"first_unique_page_rank\":12,\"leaf_ordinal\":3,\"logical\":25,\"page_ordinal\":11,\"reciprocal_rank_selected\":false,\"routing_leaf_rank\":9,\"stage\":\"candidate-retention\"},{\"candidate_rank\":7,\"first_unique_page_rank\":4,\"leaf_ordinal\":3,\"logical\":26,\"page_ordinal\":12,\"reciprocal_rank_selected\":true,\"routing_leaf_rank\":9,\"stage\":\"selected-page\"}],\"page_body_reads\":0,\"page_selections\":{\"first_distinct\":{\"pages\":[{\"encoded_bytes\":100,\"ordinal\":11,\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"encoded_bytes\":200,\"ordinal\":12,\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"}],\"selected_page_bytes\":300},\"reciprocal_rank\":{\"pages\":[{\"encoded_bytes\":200,\"ordinal\":12,\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"},{\"encoded_bytes\":300,\"ordinal\":13,\"sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\"}],\"selected_page_bytes\":500}},\"query_ordinal\":7,\"routing\":{\"candidates_retained\":12288,\"codes_scanned\":40000,\"leaves_eligible\":32,\"leaves_scanned\":32,\"pages_considered\":20,\"peak_query_table_pairs_live\":1,\"query_table_pairs_built\":4,\"roots_scored\":16,\"selected_page_bytes\":300,\"selected_pages\":2},\"schema_version\":4,\"truth_independent_selection\":true}\n"
+            value,
+            serde_json::json!({
+                "claim_eligible": false,
+                "diagnostics": [
+                    {
+                        "candidate_rank": null,
+                        "first_unique_page_rank": 12,
+                        "global_routing_leaf_rank": 11,
+                        "leaf_ordinal": 3,
+                        "logical": 25,
+                        "owner_root_ordinal": 2,
+                        "owner_root_rank": 5,
+                        "page_in_retained_pool": true,
+                        "page_in_scanned_pool": true,
+                        "page_ordinal": 11,
+                        "page_selected": false,
+                        "reciprocal_rank_selected": false,
+                        "routing_leaf_rank": 9,
+                        "stage": "candidate-retention",
+                    },
+                    {
+                        "candidate_rank": 7,
+                        "first_unique_page_rank": 4,
+                        "global_routing_leaf_rank": 11,
+                        "leaf_ordinal": 3,
+                        "logical": 26,
+                        "owner_root_ordinal": 2,
+                        "owner_root_rank": 5,
+                        "page_in_retained_pool": true,
+                        "page_in_scanned_pool": true,
+                        "page_ordinal": 12,
+                        "page_selected": true,
+                        "reciprocal_rank_selected": true,
+                        "routing_leaf_rank": 9,
+                        "stage": "selected-page",
+                    },
+                ],
+                "page_body_reads": 0,
+                "page_selections": {
+                    "first_distinct": {
+                        "pages": [
+                            {"encoded_bytes": 100, "ordinal": 14, "sha256": "1".repeat(64)},
+                            {"encoded_bytes": 200, "ordinal": 12, "sha256": "2".repeat(64)},
+                        ],
+                        "selected_page_bytes": 300,
+                    },
+                    "reciprocal_rank": {
+                        "pages": [
+                            {"encoded_bytes": 200, "ordinal": 12, "sha256": "2".repeat(64)},
+                            {"encoded_bytes": 300, "ordinal": 13, "sha256": "3".repeat(64)},
+                        ],
+                        "selected_page_bytes": 500,
+                    },
+                },
+                "query_ordinal": 7,
+                "routing": {
+                    "candidates_retained": 12_288,
+                    "codes_scanned": 40_000,
+                    "global_leaf_limit": null,
+                    "leaves_eligible": 32,
+                    "leaves_scanned": 32,
+                    "next_leaf_rows": null,
+                    "pages_considered": 20,
+                    "peak_query_table_pairs_live": 1,
+                    "query_table_pairs_built": 4,
+                    "roots_scored": 16,
+                    "scan_budget": 65_536,
+                    "scope": "root-gated",
+                    "selected_page_bytes": 300,
+                    "selected_pages": 2,
+                    "stop_reason": "root-gated",
+                    "total_routing_leaves": 32,
+                },
+                "schema_version": 5,
+                "truth_independent_selection": true,
+            })
         );
     }
 

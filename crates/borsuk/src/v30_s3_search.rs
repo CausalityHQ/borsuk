@@ -625,6 +625,15 @@ pub enum V32RoutingTargetStage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[doc(hidden)]
+pub enum V32RoutingStopReason {
+    RootGated,
+    AllLeaves,
+    LeafLimit,
+    ScanBudget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[doc(hidden)]
 pub enum V32SearchPhase {
     RoutingComplete,
     PageReadComplete,
@@ -636,10 +645,16 @@ pub enum V32SearchPhase {
 pub struct V32RoutingTargetReport {
     pub logical: u64,
     pub leaf_ordinal: u32,
+    pub owner_root_ordinal: u16,
+    pub owner_root_rank: usize,
+    pub global_routing_leaf_rank: usize,
     pub page_ordinal: u32,
     pub routing_leaf_rank: Option<usize>,
     pub candidate_rank: Option<usize>,
     pub first_unique_page_rank: Option<usize>,
+    pub page_in_scanned_pool: bool,
+    pub page_in_retained_pool: bool,
+    pub page_selected: bool,
     pub stage: V32RoutingTargetStage,
     pub reciprocal_rank_selected: bool,
 }
@@ -650,6 +665,11 @@ pub struct V32RoutingDiagnostic {
     pub selection: V32PageSelection,
     pub reciprocal_rank_pages: Vec<V27PageIdentity>,
     pub targets: Vec<V32RoutingTargetReport>,
+    pub total_routing_leaves: usize,
+    pub scan_budget: u64,
+    pub global_leaf_limit: Option<usize>,
+    pub stop_reason: V32RoutingStopReason,
+    pub next_leaf_rows: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -874,6 +894,11 @@ struct RoutingDetails {
     selected_leaves: Vec<u32>,
     ranked_leaves: Vec<u32>,
     ranked_candidates: Vec<Candidate>,
+    total_routing_leaves: usize,
+    scan_budget: u64,
+    global_leaf_limit: Option<usize>,
+    stop_reason: V32RoutingStopReason,
+    next_leaf_rows: Option<u64>,
 }
 
 impl PartialEq for Candidate {
@@ -1009,6 +1034,39 @@ fn smallest(mut values: Vec<(f64, usize)>, limit: usize) -> Vec<(f64, usize)> {
             .then_with(|| left.1.cmp(&right.1))
     });
     values
+}
+
+fn bounded_global_prefix_rows(
+    ranked_leaf_rows: &[u64],
+    leaf_limit: usize,
+    scan_budget: u64,
+) -> Result<(usize, u64, V32RoutingStopReason, Option<u64>)> {
+    let mut selected = 0_usize;
+    let mut codes = 0_u64;
+    while selected < leaf_limit.min(ranked_leaf_rows.len()) {
+        let next = codes
+            .checked_add(ranked_leaf_rows[selected])
+            .ok_or_else(|| invalid("V30 scanned-code count overflows"))?;
+        if next > scan_budget {
+            break;
+        }
+        codes = next;
+        selected += 1;
+    }
+    if selected == 0 {
+        return Err(invalid("V32 global routing prefix is empty"));
+    }
+    let (reason, next_leaf_rows) = if selected == ranked_leaf_rows.len() {
+        (V32RoutingStopReason::AllLeaves, None)
+    } else if selected == leaf_limit {
+        (V32RoutingStopReason::LeafLimit, None)
+    } else {
+        (
+            V32RoutingStopReason::ScanBudget,
+            Some(ranked_leaf_rows[selected]),
+        )
+    };
+    Ok((selected, codes, reason, next_leaf_rows))
 }
 
 fn eligible_v32_routing_leaf_scores(
@@ -1159,6 +1217,28 @@ impl V32Router {
         arm: V32SearchArm,
         logicals: &[u64],
     ) -> Result<V32RoutingDiagnostic> {
+        let details = self.routing_details(query, arm, &|_| {})?;
+        self.diagnose_logicals_from_details(query, logicals, details)
+    }
+
+    #[doc(hidden)]
+    pub fn diagnose_logicals_with_global_prefix(
+        &self,
+        query: &[f32; 96],
+        arm: V32SearchArm,
+        leaf_limit: usize,
+        logicals: &[u64],
+    ) -> Result<V32RoutingDiagnostic> {
+        let details = self.routing_details_global_prefix(query, arm, leaf_limit, &|_| {})?;
+        self.diagnose_logicals_from_details(query, logicals, details)
+    }
+
+    fn diagnose_logicals_from_details(
+        &self,
+        query: &[f32; 96],
+        logicals: &[u64],
+        details: RoutingDetails,
+    ) -> Result<V32RoutingDiagnostic> {
         let unique = logicals
             .iter()
             .copied()
@@ -1170,7 +1250,33 @@ impl V32Router {
         {
             return Err(invalid("V30 routing diagnostic target differs"));
         }
-        let details = self.routing_details(query, arm, &|_| {})?;
+        let query = normalized(query)?;
+        let root_ranks = smallest(
+            self.hierarchy
+                .roots
+                .iter()
+                .enumerate()
+                .map(|(ordinal, centroid)| (centroid_distance(&query, centroid), ordinal))
+                .collect(),
+            self.hierarchy.roots.len(),
+        )
+        .into_iter()
+        .enumerate()
+        .map(|(rank, (_, root))| (root, rank + 1))
+        .collect::<BTreeMap<_, _>>();
+        let global_routing_leaf_ranks = smallest(
+            self.layout
+                .leaves()
+                .iter()
+                .enumerate()
+                .map(|(ordinal, leaf)| (centroid_distance(&query, &leaf.routing_centroid), ordinal))
+                .collect(),
+            self.layout.leaves().len(),
+        )
+        .into_iter()
+        .enumerate()
+        .map(|(rank, (_, leaf))| (leaf, rank + 1))
+        .collect::<BTreeMap<_, _>>();
         let selection = details.selection.clone();
         let routing_leaf_ranks = details
             .ranked_leaves
@@ -1180,7 +1286,16 @@ impl V32Router {
             .collect::<std::collections::BTreeMap<_, _>>();
         let selected_leaves = details
             .selected_leaves
-            .into_iter()
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let scanned_pages = details
+            .selected_leaves
+            .iter()
+            .flat_map(|leaf| {
+                let range = &self.layout.leaves()[*leaf as usize];
+                range.page_start..range.page_start + range.page_count
+            })
             .collect::<std::collections::BTreeSet<_>>();
         let candidate_ranks = details
             .ranked_candidates
@@ -1213,7 +1328,7 @@ impl V32Router {
         });
         let reciprocal_rank_pages = reciprocal_ranked_pages
             .iter()
-            .take(arm.page_count)
+            .take(selection.pages.len())
             .map(|(page, _)| {
                 self.layout
                     .pages()
@@ -1244,6 +1359,13 @@ impl V32Router {
                     .layout
                     .leaf_for_logical(*logical)
                     .ok_or_else(|| invalid("V32 routing diagnostic leaf differs"))?;
+                let code_parent = usize::try_from(routing_leaf.code_parent_leaf_ordinal)
+                    .map_err(|_| invalid("V32 routing diagnostic parent overflows"))?;
+                let owner_root_ordinal = *self
+                    .hierarchy
+                    .leaf_roots
+                    .get(code_parent)
+                    .ok_or_else(|| invalid("V32 routing diagnostic root differs"))?;
                 let candidate_rank = candidate_ranks.get(logical).copied();
                 let stage = if selected_pages.contains(&page.identity.ordinal) {
                     V32RoutingTargetStage::SelectedPage
@@ -1257,12 +1379,23 @@ impl V32Router {
                 Ok(V32RoutingTargetReport {
                     logical: *logical,
                     leaf_ordinal: routing_leaf.leaf_ordinal,
+                    owner_root_ordinal,
+                    owner_root_rank: *root_ranks
+                        .get(&usize::from(owner_root_ordinal))
+                        .ok_or_else(|| invalid("V32 routing diagnostic root rank differs"))?,
+                    global_routing_leaf_rank: *global_routing_leaf_ranks
+                        .get(&(routing_leaf.leaf_ordinal as usize))
+                        .ok_or_else(|| invalid("V32 routing diagnostic global rank differs"))?,
                     page_ordinal: page.identity.ordinal,
                     routing_leaf_rank: routing_leaf_ranks.get(&routing_leaf.leaf_ordinal).copied(),
                     candidate_rank,
                     first_unique_page_rank: first_unique_page_ranks
                         .get(&page.identity.ordinal)
                         .copied(),
+                    page_in_scanned_pool: scanned_pages.contains(&page.identity.ordinal),
+                    page_in_retained_pool: first_unique_page_ranks
+                        .contains_key(&page.identity.ordinal),
+                    page_selected: selected_pages.contains(&page.identity.ordinal),
                     stage,
                     reciprocal_rank_selected: reciprocal_rank_selected
                         .contains(&page.identity.ordinal),
@@ -1273,6 +1406,11 @@ impl V32Router {
             selection,
             reciprocal_rank_pages,
             targets,
+            total_routing_leaves: details.total_routing_leaves,
+            scan_budget: details.scan_budget,
+            global_leaf_limit: details.global_leaf_limit,
+            stop_reason: details.stop_reason,
+            next_leaf_rows: details.next_leaf_rows,
         })
     }
 
@@ -1297,42 +1435,95 @@ impl V32Router {
     where
         F: Fn(u32),
     {
+        self.routing_details_with_global_limit(query, arm, None, observer)
+    }
+
+    fn routing_details_global_prefix<F>(
+        &self,
+        query: &[f32; 96],
+        arm: V32SearchArm,
+        leaf_limit: usize,
+        observer: &F,
+    ) -> Result<RoutingDetails>
+    where
+        F: Fn(u32),
+    {
+        if !(1..=768).contains(&leaf_limit) {
+            return Err(invalid("V32 global routing leaf limit differs"));
+        }
+        self.routing_details_with_global_limit(query, arm, Some(leaf_limit), observer)
+    }
+
+    fn routing_details_with_global_limit<F>(
+        &self,
+        query: &[f32; 96],
+        arm: V32SearchArm,
+        global_leaf_limit: Option<usize>,
+        observer: &F,
+    ) -> Result<RoutingDetails>
+    where
+        F: Fn(u32),
+    {
         self.validate_arm(arm)?;
         let query = normalized(query)?;
-        let roots = smallest(
-            self.hierarchy
-                .roots
+        let leaves_eligible = if global_leaf_limit.is_some() {
+            self.layout
+                .leaves()
                 .iter()
                 .enumerate()
-                .map(|(ordinal, centroid)| (centroid_distance(&query, centroid), ordinal))
-                .collect(),
-            arm.root_beam,
-        );
-        let (leaves_eligible, _membership_lookups) = eligible_v32_routing_leaf_scores(
-            &query,
-            self.hierarchy.roots.len(),
-            &roots,
-            &self.hierarchy.leaf_roots,
-            self.layout.leaves(),
-        )?;
+                .map(|(ordinal, leaf)| (centroid_distance(&query, &leaf.routing_centroid), ordinal))
+                .collect()
+        } else {
+            let roots = smallest(
+                self.hierarchy
+                    .roots
+                    .iter()
+                    .enumerate()
+                    .map(|(ordinal, centroid)| (centroid_distance(&query, centroid), ordinal))
+                    .collect(),
+                arm.root_beam,
+            );
+            eligible_v32_routing_leaf_scores(
+                &query,
+                self.hierarchy.roots.len(),
+                &roots,
+                &self.hierarchy.leaf_roots,
+                self.layout.leaves(),
+            )?
+            .0
+        };
         let leaves_eligible_count = leaves_eligible.len();
         let ranked_leaves = smallest(leaves_eligible, leaves_eligible_count);
-        let mut selected_leaf_count = arm.leaf_beam.min(ranked_leaves.len());
-        let mut codes_scanned =
-            ranked_leaves[..selected_leaf_count]
-                .iter()
-                .try_fold(0_u64, |total, (_, leaf)| {
-                    total
-                        .checked_add(self.layout.leaves()[*leaf].row_count)
-                        .ok_or_else(|| invalid("V30 scanned-code count overflows"))
-                })?;
-        while codes_scanned < arm.candidate_depth as u64
-            && selected_leaf_count < ranked_leaves.len()
-        {
-            codes_scanned = codes_scanned
-                .checked_add(self.layout.leaves()[ranked_leaves[selected_leaf_count].1].row_count)
-                .ok_or_else(|| invalid("V30 scanned-code count overflows"))?;
-            selected_leaf_count += 1;
+        let (mut selected_leaf_count, mut codes_scanned, stop_reason, next_leaf_rows) =
+            if let Some(limit) = global_leaf_limit {
+                let rows = ranked_leaves
+                    .iter()
+                    .map(|(_, leaf)| self.layout.leaves()[*leaf].row_count)
+                    .collect::<Vec<_>>();
+                bounded_global_prefix_rows(&rows, limit, arm.scan_budget)?
+            } else {
+                let selected = arm.leaf_beam.min(ranked_leaves.len());
+                let codes =
+                    ranked_leaves[..selected]
+                        .iter()
+                        .try_fold(0_u64, |total, (_, leaf)| {
+                            total
+                                .checked_add(self.layout.leaves()[*leaf].row_count)
+                                .ok_or_else(|| invalid("V30 scanned-code count overflows"))
+                        })?;
+                (selected, codes, V32RoutingStopReason::RootGated, None)
+            };
+        if global_leaf_limit.is_none() {
+            while codes_scanned < arm.candidate_depth as u64
+                && selected_leaf_count < ranked_leaves.len()
+            {
+                codes_scanned = codes_scanned
+                    .checked_add(
+                        self.layout.leaves()[ranked_leaves[selected_leaf_count].1].row_count,
+                    )
+                    .ok_or_else(|| invalid("V30 scanned-code count overflows"))?;
+                selected_leaf_count += 1;
+            }
         }
         if codes_scanned > arm.scan_budget {
             return Err(invalid("V30 scanned-code bound differs"));
@@ -1456,6 +1647,11 @@ impl V32Router {
             selected_leaves,
             ranked_leaves: ranked_leaf_ordinals,
             ranked_candidates: ranked,
+            total_routing_leaves: self.layout.leaves().len(),
+            scan_budget: arm.scan_budget,
+            global_leaf_limit,
+            stop_reason,
+            next_leaf_rows,
         })
     }
 }
@@ -1595,10 +1791,11 @@ mod tests {
 
     use super::{
         BoundedCandidates, Candidate, ExactTopK, V32CpuPreflightMode, V32CpuPreflightSample,
-        V32CpuPreflightSamples, V32Index, V32Match, V32PageStore, V32Router, V32RoutingTargetStage,
-        V32SearchArm, V32SearchPhase, canonical_v32_cpu_preflight_receipt,
-        eligible_v32_routing_leaf_scores, exact_rerank_pages, smallest,
-        v32_cpu_preflight_expected_work, v32_cpu_preflight_index, v32_cpu_preflight_shape,
+        V32CpuPreflightSamples, V32Index, V32Match, V32PageStore, V32Router, V32RoutingStopReason,
+        V32RoutingTargetStage, V32SearchArm, V32SearchPhase, bounded_global_prefix_rows,
+        canonical_v32_cpu_preflight_receipt, eligible_v32_routing_leaf_scores, exact_rerank_pages,
+        smallest, v32_cpu_preflight_expected_work, v32_cpu_preflight_index,
+        v32_cpu_preflight_shape,
     };
     use crate::{
         V27Hierarchy, V27PageIdentity, V27PageRow, encode_v27_hierarchy, encode_v27_page,
@@ -1759,11 +1956,19 @@ mod tests {
     }
 
     fn diagnostic_router() -> V32Router {
+        diagnostic_router_with_root_escape(false)
+    }
+
+    fn diagnostic_router_with_root_escape(root_escape: bool) -> V32Router {
         let unit = f16::from_f32(1.0 / 96.0_f32.sqrt());
         let hierarchy = V27Hierarchy {
-            roots: vec![[unit; 96]],
+            roots: if root_escape {
+                vec![[unit; 96], [-unit; 96]]
+            } else {
+                vec![[unit; 96]]
+            },
             leaves: vec![[unit; 96], [-unit; 96]],
-            leaf_roots: vec![0, 0],
+            leaf_roots: vec![0, u16::from(root_escape)],
         };
         let pages = (0..10_u32)
             .map(|ordinal| (ordinal, 0, u64::from(ordinal), 1))
@@ -1799,7 +2004,9 @@ mod tests {
                 V32RoutingRange {
                     leaf_ordinal: 1,
                     code_parent_leaf_ordinal: 1,
-                    routing_centroid: [-unit; 96],
+                    // Deliberately close to the query despite its distant owner
+                    // root, so root-independent enumeration has unique coverage.
+                    routing_centroid: if root_escape { [unit; 96] } else { [-unit; 96] },
                     logical_start: 30,
                     row_count: 30,
                     page_start: 20,
@@ -1903,6 +2110,77 @@ mod tests {
                 .map(|page| page.encoded_bytes)
                 .sum::<u64>(),
             12_020
+        );
+    }
+
+    #[test]
+    fn v32_s3_search_global_prefix_escapes_a_bad_owner_root_without_truth_input() {
+        // Break caught: a globally close routing microleaf is permanently hidden
+        // behind a distant trained root even when the code budget can admit it.
+        let router = diagnostic_router_with_root_escape(true);
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 1,
+            scan_budget: 65_536,
+            candidate_depth: 60,
+            page_count: 16,
+        };
+        let rooted = router
+            .diagnose_logicals_with_selection(&[0.2; 96], arm, &[35])
+            .unwrap();
+        let global = router
+            .diagnose_logicals_with_global_prefix(&[0.2; 96], arm, 2, &[35])
+            .unwrap();
+        let changed_truth = router
+            .diagnose_logicals_with_global_prefix(&[0.2; 96], arm, 2, &[31])
+            .unwrap();
+
+        assert_eq!(rooted.targets[0].stage, V32RoutingTargetStage::LeafFrontier);
+        assert_eq!(rooted.targets[0].routing_leaf_rank, None);
+        assert!(!rooted.targets[0].page_in_scanned_pool);
+        assert!(!rooted.targets[0].page_in_retained_pool);
+        assert!(!rooted.targets[0].page_selected);
+        assert_eq!(global.targets[0].owner_root_ordinal, 1);
+        assert_eq!(global.targets[0].owner_root_rank, 2);
+        assert_eq!(global.targets[0].global_routing_leaf_rank, 2);
+        assert_eq!(global.targets[0].routing_leaf_rank, Some(2));
+        assert_eq!(global.targets[0].candidate_rank, Some(35));
+        assert_eq!(global.targets[0].stage, V32RoutingTargetStage::PageReducer);
+        assert!(global.targets[0].page_in_scanned_pool);
+        assert!(global.targets[0].page_in_retained_pool);
+        assert!(!global.targets[0].page_selected);
+        assert_eq!(global.total_routing_leaves, 2);
+        assert_eq!(global.scan_budget, 65_536);
+        assert_eq!(global.global_leaf_limit, Some(2));
+        assert_eq!(global.stop_reason, V32RoutingStopReason::AllLeaves);
+        assert_eq!(global.next_leaf_rows, None);
+        assert_eq!(global.selection.work.leaves_eligible, 2);
+        assert_eq!(global.selection.work.leaves_scanned, 2);
+        assert_eq!(global.selection.work.codes_scanned, 60);
+        assert_eq!(global.selection, changed_truth.selection);
+        assert_eq!(
+            global.reciprocal_rank_pages,
+            changed_truth.reciprocal_rank_pages
+        );
+    }
+
+    #[test]
+    fn v32_s3_search_global_prefix_budget_boundary_stops_without_skipping() {
+        // Break caught: global routing overshoots the code budget or skips an
+        // oversized next leaf to cherry-pick a later leaf from outside the prefix.
+        let mut exact = vec![1_024_u64; 256];
+        exact.push(1);
+        assert_eq!(
+            bounded_global_prefix_rows(&exact, 768, 262_144).unwrap(),
+            (256, 262_144, V32RoutingStopReason::ScanBudget, Some(1))
+        );
+        assert_eq!(
+            bounded_global_prefix_rows(&[262_143, 2, 1], 768, 262_144).unwrap(),
+            (1, 262_143, V32RoutingStopReason::ScanBudget, Some(2))
+        );
+        assert_eq!(
+            bounded_global_prefix_rows(&vec![1; 769], 768, 262_144).unwrap(),
+            (768, 768, V32RoutingStopReason::LeafLimit, None)
         );
     }
 

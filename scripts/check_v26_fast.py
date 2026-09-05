@@ -50,6 +50,7 @@ def v30_python_contract_command() -> list[str]:
         "scripts.test_run_v30_reduced_quality",
         "scripts.test_run_v30_untouched_quality",
         "scripts.test_run_v30_s3_campaign",
+        "scripts.test_run_v32_no_page_containment",
     ]
 
 
@@ -78,7 +79,7 @@ def v30_qualifier_contract_command() -> list[str]:
         "borsuk",
         "--example",
         "v30_s3_qualify",
-        "v30_s3_qualify_",
+        "v32_s3_qualify_",
         "--",
         "--nocapture",
     ]
