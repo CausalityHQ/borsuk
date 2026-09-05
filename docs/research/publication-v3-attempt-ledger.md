@@ -3354,3 +3354,52 @@ tests passed, including complete prepared-record byte equality with the frozen
 encoder. All21 PQ and22 layout tests, targeted strict library/test Clippy, fmt
 and diff-check passed. Astra reviewed it READY. Write throughput benefit is
 unmeasured and requires a separate encoding/preparation benchmark.
+
+### V32 preregistration: fixed page-budget replication cohort
+
+Registered before obtaining new-cohort truth or diagnostic output. Diagnostic
+source is `b21169715f36315395622352d0a6cd7b6f5f7f08`. Use the unchanged Deep
+Image 1M index built by `1dd90354c3eeb0c24c8839284b9b95dd07a32546`, manifest
+3,642B SHA256 `17c5429da4887b4e2c266326861a6645d53463fe3face91deadcf5cf5dbecb29`.
+Use the same 10,000-row query Parquet, 3,843,448B SHA256
+`296d45828020c1c0b88c6a1d5c822f6283280513b8c58d01cfa961f3a139a5d4`, but select
+exactly ordinals 1024–1055. This is a preregistered evaluation cohort outside
+the documented recent tuning cohort (0–991), **not a globally untouched
+holdout**: earlier whole-dataset evaluations may include these queries.
+
+Freeze root beam8, global leaf limit768, scan budget262,144, candidate depth
+12,288, and k10. Capture each query's candidates once. Evaluate exactly the
+nested first-distinct physical-page prefixes16/32/64 from that same capture;
+record replay SHA, requested and actual counts, complete registered identities,
+exact encoded bytes, per-query truth-page hits, aggregate and minimum
+containment. No adaptive intermediate budgets, altered routing, layout, or
+truth-dependent selection. Exhausted prefixes must be consistent with all
+known target ranks. This is **page containment**, not exact-rerank recall,
+S3 latency, throughput, or a publication-quality sample.
+
+Generate corrected-v3 exact truth for these32 queries by the existing bounded
+query-independent corpus-shard stream and fixed-dimension-order float64
+distance contract. Bind the query/corpus/source-row identities in its receipt;
+translate source IDs through the manifest-authenticated logical-source Arrow.
+The diagnostic reads only authenticated resident metadata/codes, query and
+truth artifacts; it has no page-body capability. Streaming corpus vectors to
+construct reference truth is benchmark preparation, not the serving design.
+Do not persist a local corpus or expand serving downloads to the full dataset.
+
+Decision rule: report all three cells, including failures. If any budget has
+320/320 containment, take the smallest such budget into a separately registered
+real-S3 comparison against16 pages. Do not promote it as a production default
+on containment alone. If64 misses, stop page-budget widening and classify the
+remaining candidate-retention/routing/reducer evidence before changing the
+architecture. No causal guarantee extends beyond this cohort and tested
+candidate population. Release qualification still needs broader independent
+quality, sustainable read/write throughput, memory and scaling evidence.
+
+Execute on causality EC2 Spot with one original attempt, monitored under3GiB
+process-group RSS, full memory PSI avg10<=0.5, swap growth<=256MiB, and a30-minute
+whole-worker cap. Preserve terminal/stop artifacts and exact source/binary/input
+identities; terminate owned compute immediately at terminal. Inspect incomplete
+work only through phase/liveness/health markers, not partial quality output.
+No automatic restart after scientific failure. The former15ms cold-S3 target
+is not a release gate; measured end-to-end latency, tail latency, throughput,
+recall and request/byte cost must be disclosed together.
