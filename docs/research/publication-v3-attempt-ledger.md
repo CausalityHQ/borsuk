@@ -3855,3 +3855,55 @@ and the current borrowed-artifact decoder also retains encoded inputs while
 allocating decoded planes. Fixed scan/page limits do not bound that loading
 cost or the number of centroids scored. These are code-derived projections,
 not measured large-scale results.
+
+### V32 fixed prospective7168 window:320/320 contained, no serving claim
+
+Preregistration `9724f9c750de97f57697bfbc20d1edd1821f5947` froze the expanded
+configuration before running7168..7199. Source remained
+`1ee31efb081d9b5bb432b93a87aea442341243bb`; the exact21,953,280B qualifier
+SHA256 `65da0ce4652b112d033ae50c7162e4d1bb08904daa366eaf1cabeef62f13ce01`
+was reused without rebuilding. Astra reviewed the one-shot runner. No
+frontier, candidate or page parameter was tuned after the preceding result.
+
+Original controller session48450 exited0. One causality Spot c7g.4xlarge in
+eu-central-1b, `i-08b8434d54288b547`, completed and was confirmed terminated.
+Prefix:
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/9724f9c750de97f57697bfbc20d1edd1821f5947/attempts/v32-deep-1m-prospective-9724f9c7-a0001/`.
+`TERMINAL.json`816,052B SHA256
+`c54255e18102a425d740acb7b204bc5215a0325fed5632dae3546571a5cff8cb`.
+
+At16/32/64 pages, contained truth counts were311/316/320 out of320, with
+minimum per-query containment6/10,7/10,10/10. All32 queries were perfect at64.
+Selected encoded bytes totaled99,621,552 /199,372,464 /398,355,276, but no
+vector-page bodies were fetched. Scanned codes328,323..422,404. Whole
+diagnostic CPU2,589,891,495ns, or80.93410921875ms/query; phase wall
+2,588,159,358ns. This is neither S3 latency nor routing-only CPU.
+
+Fresh v3 reference truth streamed exactly six authenticated shards totaling
+402,965,152B, without persisting corpus bodies. Reference construction wall
+21,111,126,250ns; whole worker26,819,777,384ns; all input downloads442,984,572B.
+Truth Parquet SHA256
+`85d7bad04a861e52b85eafae013edd0c8c3b291c0bc757e15a95389ba45ee573`;
+truth receipt SHA256
+`b68204db5b5b660a06f32f60374b1475df2f2eb3f486bf415c56b26e8b31633e`;
+diagnostic Arrow SHA256
+`aee174e27796d8f97212f39577ea892099e39ccd9a4ed96fc742870a2f631d3f`;
+raw diagnostic SHA256
+`c741a1ec7a71d0cfe890126608fb9445545cba4b0b9331800f1a0a20884ac96b`.
+The exact query/index identities remain those of the preceding experiment.
+
+Qualifier peak RSS100,646,912B. Fourteen2-second process-group samples show
+peak594,055,168B, full PSI0 and swap growth0. `monitor.jsonl`1,240B SHA256
+`d34cc15a59c5da9ef2528a3b15e012b73112d99d09bf3f7602923adb2ef2892c`.
+After terminal, independent bounded revalidation authenticated the query,
+manifest, logical-source/page-range artifacts and new truth/receipt/Arrow;
+every result field matched without executing the qualifier. Explicit
+verification scratch deletion and absence were confirmed.
+
+Disposition: this previously unexecuted campaign window passes the frozen
+containment check. Historical dataset exposure still prevents a globally
+untouched holdout claim, and32 queries do not establish general perfect
+recall. Do not pool it with the96 burned queries as an independent128-query
+qualification. No measured expanded-arm S3 serving latency, write-throughput
+or100M result is claimed. The next cheap scaling falsifier is a fixed
+hypothetical row-aligned code-block trace, not an immediate100M launch.
