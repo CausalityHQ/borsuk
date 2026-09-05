@@ -18,8 +18,8 @@ use crate::{
         V32RoutingRange, decode_v30_layout_artifacts, partition_v30_leaf_pages,
     },
     v30_s3_pq::{
-        V30CodePlanes, V30PqArtifacts, V30PqCodebook, V30PqWidth, V30QueryTable,
-        decode_v30_pq_artifacts, reconstruct_v30_code,
+        V30CodePlanes, V30PqArtifacts, V30PqCodebook, V30PqReconstructor, V30PqWidth,
+        V30QueryTable, decode_v30_pq_artifacts,
     },
 };
 
@@ -683,44 +683,65 @@ pub struct V32Router {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V32VirtualPageLayout {
+#[doc(hidden)]
+pub struct V32VirtualPageLayout {
     page_owners: Vec<u32>,
     page_row_counts: Vec<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct V32VirtualRoutingDiagnostic {
-    pub(crate) current: V32RoutingDiagnostic,
-    pub(crate) virtual_pages: Vec<u32>,
-    pub(crate) routing_work: V32RoutingWork,
-    pub(crate) truth_microleaf_count: usize,
-    pub(crate) truth_virtual_page_count: usize,
-    pub(crate) recovered_logicals: Vec<u64>,
-    pub(crate) newly_lost_logicals: Vec<u64>,
+#[doc(hidden)]
+pub struct V32VirtualRoutingDiagnostic {
+    pub current: V32RoutingDiagnostic,
+    pub candidate_replay_sha256: String,
+    pub virtual_pages: Vec<u32>,
+    pub virtual_pages_at_eight: Vec<u32>,
+    pub virtual_target_pages: Vec<u32>,
+    pub virtual_target_selected: Vec<bool>,
+    pub virtual_target_selected_at_eight: Vec<bool>,
+    pub virtual_layout_sha256: String,
+    pub routing_work: V32RoutingWork,
+    pub truth_microleaf_count: usize,
+    pub truth_virtual_page_count: usize,
+    pub recovered_logicals: Vec<u64>,
+    pub newly_lost_logicals: Vec<u64>,
 }
 
 impl V32VirtualPageLayout {
-    pub(crate) fn page_for_logical(&self, logical: u64) -> Result<u32> {
+    fn sha256(&self) -> String {
+        let mut digest = Sha256::new();
+        digest.update(b"borsuk-v32-virtual-page-layout-v1\0");
+        for owner in &self.page_owners {
+            digest.update(owner.to_le_bytes());
+        }
+        digest.update(b"\0row-counts\0");
+        for count in &self.page_row_counts {
+            digest.update(count.to_le_bytes());
+        }
+        format!("{:x}", digest.finalize())
+    }
+
+    pub fn page_for_logical(&self, logical: u64) -> Result<u32> {
         usize::try_from(logical)
             .ok()
             .and_then(|logical| self.page_owners.get(logical).copied())
             .ok_or_else(|| invalid("V32 virtual page logical ordinal differs"))
     }
 
-    pub(crate) fn page_count(&self) -> usize {
+    pub fn page_count(&self) -> usize {
         self.page_row_counts.len()
     }
 
-    pub(crate) fn page_row_counts(&self) -> &[u16] {
+    pub fn page_row_counts(&self) -> &[u16] {
         &self.page_row_counts
     }
 
-    pub(crate) fn truth_page_count(&self, logicals: &[u64]) -> Result<usize> {
+    pub fn truth_page_count(&self, logicals: &[u64]) -> Result<usize> {
         let unique = logicals
             .iter()
             .copied()
             .collect::<std::collections::BTreeSet<_>>();
-        if unique.len() != logicals.len() || logicals.is_empty() {
+        if unique.len() != logicals.len() {
             return Err(invalid("V32 virtual truth logicals differ"));
         }
         logicals
@@ -1208,7 +1229,7 @@ impl V32Router {
         })
     }
 
-    pub(crate) fn virtual_geometric_page_layout(
+    pub fn virtual_geometric_page_layout(
         &self,
         logical_sources: &[u64],
         page_rows: usize,
@@ -1224,6 +1245,8 @@ impl V32Router {
         if logical_sources.len() != logical_rows || source_to_logical.len() != logical_rows {
             return Err(invalid("V32 virtual logical-source authority differs"));
         }
+        let base_reconstructor = V30PqReconstructor::new(&self.base_codebook)?;
+        let high_reconstructor = V30PqReconstructor::new(&self.high_codebook)?;
         let mut page_owners = vec![u32::MAX; logical_rows];
         let mut page_row_counts = Vec::new();
         for leaf in self.layout.leaves() {
@@ -1249,11 +1272,11 @@ impl V32Router {
                     .get(logical_index)
                     .ok_or_else(|| invalid("V32 virtual logical-source authority differs"))?;
                 let (width, code) = self.codes.code(logical_index)?;
-                let codebook = match width {
-                    V30PqWidth::Base24 => &self.base_codebook,
-                    V30PqWidth::High48 => &self.high_codebook,
+                let reconstructor = match width {
+                    V30PqWidth::Base24 => &base_reconstructor,
+                    V30PqWidth::High48 => &high_reconstructor,
                 };
-                let residual = reconstruct_v30_code(codebook, code)?;
+                let residual = reconstructor.reconstruct(code)?;
                 let reconstructed = std::array::from_fn(|dimension| {
                     residual[dimension] + f32::from(parent_centroid[dimension])
                 });
@@ -1295,7 +1318,7 @@ impl V32Router {
                 page_row_counts.push(row_count);
             }
         }
-        if page_owners.iter().any(|owner| *owner == u32::MAX) {
+        if page_owners.contains(&u32::MAX) {
             return Err(invalid("V32 virtual row ownership differs"));
         }
         Ok(V32VirtualPageLayout {
@@ -1379,7 +1402,7 @@ impl V32Router {
         self.diagnose_logicals_from_details(query, logicals, details)
     }
 
-    pub(crate) fn diagnose_logicals_with_virtual_geometric_global_prefix(
+    pub fn diagnose_logicals_with_virtual_geometric_global_prefix(
         &self,
         query: &[f32; 96],
         arm: V32SearchArm,
@@ -1391,6 +1414,21 @@ impl V32Router {
             return Err(invalid("V32 virtual page layout cardinality differs"));
         }
         let details = self.routing_details_global_prefix(query, arm, leaf_limit, &|_| {})?;
+        let mut replay_digest = Sha256::new();
+        replay_digest.update(b"borsuk-v32-candidate-replay-v1\0");
+        for leaf in &details.selected_leaves {
+            replay_digest.update(leaf.to_le_bytes());
+        }
+        replay_digest.update(b"\0ranked-leaves\0");
+        for leaf in &details.ranked_leaves {
+            replay_digest.update(leaf.to_le_bytes());
+        }
+        replay_digest.update(b"\0candidates\0");
+        for candidate in &details.ranked_candidates {
+            replay_digest.update(candidate.logical.to_le_bytes());
+            replay_digest.update(candidate.score.to_bits().to_le_bytes());
+        }
+        let candidate_replay_sha256 = format!("{:x}", replay_digest.finalize());
         let current = self.diagnose_logicals_from_details(query, logicals, details.clone())?;
         let mut seen = std::collections::BTreeSet::new();
         let mut virtual_pages = Vec::with_capacity(arm.page_count);
@@ -1406,7 +1444,15 @@ impl V32Router {
         if virtual_pages.len() != arm.page_count {
             return Err(invalid("V32 virtual selected page cardinality differs"));
         }
+        let virtual_pages_at_eight = virtual_pages.iter().copied().take(8).collect::<Vec<_>>();
+        if virtual_pages_at_eight.len() != 8 {
+            return Err(invalid("V32 virtual eight-page cardinality differs"));
+        }
         let selected = virtual_pages.iter().copied().collect::<BTreeSet<_>>();
+        let selected_at_eight = virtual_pages_at_eight
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
         let truth_microleaf_count = current
             .targets
             .iter()
@@ -1414,11 +1460,23 @@ impl V32Router {
             .collect::<BTreeSet<_>>()
             .len();
         let truth_virtual_page_count = virtual_layout.truth_page_count(logicals)?;
+        let virtual_target_pages = logicals
+            .iter()
+            .map(|logical| virtual_layout.page_for_logical(*logical))
+            .collect::<Result<Vec<_>>>()?;
+        let virtual_target_selected = virtual_target_pages
+            .iter()
+            .map(|page| selected.contains(page))
+            .collect::<Vec<_>>();
+        let virtual_target_selected_at_eight = virtual_target_pages
+            .iter()
+            .map(|page| selected_at_eight.contains(page))
+            .collect::<Vec<_>>();
         let mut recovered_logicals = Vec::new();
         let mut newly_lost_logicals = Vec::new();
         for target in &current.targets {
             let virtual_selected =
-                selected.contains(&virtual_layout.page_for_logical(target.logical)?);
+                selected_at_eight.contains(&virtual_layout.page_for_logical(target.logical)?);
             match (target.page_selected, virtual_selected) {
                 (false, true) => recovered_logicals.push(target.logical),
                 (true, false) => newly_lost_logicals.push(target.logical),
@@ -1426,9 +1484,15 @@ impl V32Router {
             }
         }
         Ok(V32VirtualRoutingDiagnostic {
-            routing_work: details.selection.work.clone(),
+            routing_work: details.selection.work,
             current,
+            candidate_replay_sha256,
             virtual_pages,
+            virtual_pages_at_eight,
+            virtual_target_pages,
+            virtual_target_selected,
+            virtual_target_selected_at_eight,
+            virtual_layout_sha256: virtual_layout.sha256(),
             truth_microleaf_count,
             truth_virtual_page_count,
             recovered_logicals,
@@ -2317,7 +2381,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(replay.current, expected);
+        assert_eq!(replay.virtual_layout_sha256.len(), 64);
+        assert_eq!(replay.candidate_replay_sha256.len(), 64);
         assert_eq!(replay.virtual_pages, (0_u32..10).collect::<Vec<_>>());
+        assert_eq!(
+            replay.virtual_pages_at_eight,
+            (0_u32..8).collect::<Vec<_>>()
+        );
+        assert_eq!(replay.virtual_target_selected_at_eight, vec![true, true]);
         assert_eq!(replay.routing_work, expected.selection.work);
         assert_eq!(replay.truth_microleaf_count, 1);
         assert_eq!(replay.truth_virtual_page_count, 2);
@@ -2360,7 +2431,25 @@ mod tests {
             )
             .unwrap();
         assert_eq!(first.virtual_pages, changed_truth.virtual_pages);
+        assert_eq!(
+            first.virtual_layout_sha256,
+            changed_truth.virtual_layout_sha256
+        );
+        assert_eq!(
+            first.candidate_replay_sha256,
+            changed_truth.candidate_replay_sha256
+        );
+        assert_eq!(
+            first.virtual_pages_at_eight,
+            changed_truth.virtual_pages_at_eight
+        );
         assert_eq!(first.virtual_pages, (0_u32..10).collect::<Vec<_>>());
+        assert_eq!(first.virtual_pages_at_eight, (0_u32..8).collect::<Vec<_>>());
+        assert_eq!(first.virtual_target_selected_at_eight, vec![true, false]);
+        assert_eq!(
+            changed_truth.virtual_target_selected_at_eight,
+            vec![true, false]
+        );
         assert!(first.recovered_logicals.is_empty());
         assert_eq!(first.newly_lost_logicals, vec![15]);
         assert_eq!(changed_truth.newly_lost_logicals, vec![14]);

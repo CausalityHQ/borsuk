@@ -215,7 +215,8 @@ pub use v30_s3_search::{
     V32CpuPreflightWork, V32Index, V32Match, V32PageSelection, V32PageStore, V32Router,
     V32RoutingDiagnostic, V32RoutingStopReason, V32RoutingTargetReport, V32RoutingTargetStage,
     V32RoutingWork, V32SearchArm, V32SearchPhase, V32SearchResult, V32SearchWork,
-    canonical_v32_cpu_preflight_receipt, run_v32_cpu_preflight, v32_cpu_preflight_shape,
+    V32VirtualPageLayout, V32VirtualRoutingDiagnostic, canonical_v32_cpu_preflight_receipt,
+    run_v32_cpu_preflight, v32_cpu_preflight_shape,
 };
 #[allow(
     dead_code,

@@ -1,15 +1,16 @@
 //! Explicit authenticated local/S3 qualification boundary for the V30 page index.
 
-use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc, time::Instant};
+use std::{collections::BTreeMap, fs, io::Cursor, path::PathBuf, sync::Arc, time::Instant};
 
-use arrow_array::{Array, FixedSizeListArray, Float32Array};
+use arrow_array::{Array, FixedSizeListArray, Float32Array, UInt64Array};
+use arrow_ipc::reader::FileReader;
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     BorsukError, V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30LayoutArtifactIdentity,
     V30LayoutArtifacts, V30PqArtifactIdentity, V30PqArtifacts, V32Index, V32PageLocation,
     V32PageLocationsArtifact, V32PagePrefixes, V32PageStore, V32Router, V32RoutingDiagnostic,
     V32RoutingStopReason, V32RoutingTargetStage, V32SearchArm, V32SearchPhase, V32SearchResult,
-    V32ServingTier, decode_v32_page_locations,
+    V32ServingTier, V32VirtualRoutingDiagnostic, decode_v32_page_locations,
 };
 use bytes::Bytes;
 use futures_util::future::try_join_all;
@@ -51,7 +52,9 @@ struct Args {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DiagnosticRequest {
     logicals: Vec<u64>,
+    batch: Option<ArtifactArg>,
     global_leaf_limit: Option<usize>,
+    virtual_geometric_pages: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,6 +168,7 @@ struct Manifest {
     source_rows: u64,
     page_key_suffix: String,
     page_locations: (String, V30LayoutArtifactIdentity),
+    logical_sources: (String, V30LayoutArtifactIdentity),
     page_prefixes: V32PagePrefixes,
     routing_arms: Vec<(usize, u64)>,
     routing_candidate_depth: usize,
@@ -385,6 +389,7 @@ fn read_manifest(argument: &ArtifactArg) -> borsuk::Result<Manifest> {
         source_rows: disk.layout.source_rows,
         page_key_suffix: disk.page_key_suffix,
         page_locations,
+        logical_sources,
         page_prefixes,
         routing_arms: disk
             .routing
@@ -645,6 +650,124 @@ fn diagnostic_bytes(
     Ok(bytes)
 }
 
+fn virtual_geometric_diagnostic_bytes(
+    query_ordinal: usize,
+    truth_independent_selection: bool,
+    global_leaf_limit: usize,
+    diagnostic: V32VirtualRoutingDiagnostic,
+) -> borsuk::Result<Vec<u8>> {
+    if !truth_independent_selection
+        || global_leaf_limit != 768
+        || diagnostic.current.global_leaf_limit != Some(global_leaf_limit)
+        || diagnostic.current.selection.pages.len() != 16
+        || diagnostic.current.selection.work.selected_pages != 16
+        || diagnostic.virtual_pages.len() != 16
+        || diagnostic
+            .virtual_pages
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != 16
+        || diagnostic.virtual_pages_at_eight.len() != 8
+        || diagnostic.virtual_pages_at_eight != diagnostic.virtual_pages[..8]
+        || diagnostic.routing_work != diagnostic.current.selection.work
+        || diagnostic.virtual_target_pages.len() != diagnostic.current.targets.len()
+        || diagnostic.virtual_target_selected.len() != diagnostic.current.targets.len()
+        || diagnostic.virtual_target_selected_at_eight.len() != diagnostic.current.targets.len()
+        || !valid_digest(&diagnostic.candidate_replay_sha256)
+        || !valid_digest(&diagnostic.virtual_layout_sha256)
+    {
+        return Err(invalid("V32 virtual diagnostic target cardinality differs"));
+    }
+    let target_logicals = diagnostic
+        .current
+        .targets
+        .iter()
+        .map(|target| target.logical)
+        .collect::<Vec<_>>();
+    let current_bytes = diagnostic_bytes(
+        query_ordinal,
+        truth_independent_selection,
+        Some(global_leaf_limit),
+        diagnostic.current,
+    )?;
+    let mut value: serde_json::Value = serde_json::from_slice(&current_bytes)
+        .map_err(|_| invalid("V32 virtual diagnostic JSON differs"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| invalid("V32 virtual diagnostic JSON differs"))?;
+    object.insert("schema_version".to_owned(), serde_json::json!(6));
+    object.insert(
+        "virtual_geometric".to_owned(),
+        serde_json::json!({
+            "candidate_replay_sha256": diagnostic.candidate_replay_sha256,
+            "newly_lost_logicals": diagnostic.newly_lost_logicals,
+            "page_body_reads": 0,
+            "page_rows": 480,
+            "projected_selected_bytes": 3_145_728_u64,
+            "projected_selected_bytes_at_eight": 1_572_864_u64,
+            "recovered_logicals": diagnostic.recovered_logicals,
+            "selected_pages": diagnostic.virtual_pages,
+            "selected_pages_at_eight": diagnostic.virtual_pages_at_eight,
+            "targets": target_logicals
+                .into_iter()
+                .zip(diagnostic.virtual_target_pages)
+                .zip(diagnostic.virtual_target_selected)
+                .zip(diagnostic.virtual_target_selected_at_eight)
+                .map(|(((logical, page_ordinal), selected), selected_at_eight)| serde_json::json!({
+                    "logical": logical,
+                    "page_ordinal": page_ordinal,
+                    "selected": selected,
+                    "selected_at_eight": selected_at_eight,
+                }))
+                .collect::<Vec<_>>(),
+            "truth_microleaf_count": diagnostic.truth_microleaf_count,
+            "truth_virtual_page_count": diagnostic.truth_virtual_page_count,
+            "virtual_layout_sha256": diagnostic.virtual_layout_sha256,
+        }),
+    );
+    let mut bytes = serde_json::to_vec(&canonical(value))
+        .map_err(|_| invalid("V32 virtual diagnostic serialization failed"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn virtual_geometric_batch_diagnostic_bytes(
+    global_leaf_limit: usize,
+    diagnostics: Vec<(usize, V32VirtualRoutingDiagnostic)>,
+) -> borsuk::Result<Vec<u8>> {
+    if diagnostics.is_empty() {
+        return Err(invalid("V32 virtual diagnostic batch is empty"));
+    }
+    let mut expected_ordinal = diagnostics[0].0;
+    let mut queries = Vec::with_capacity(diagnostics.len());
+    for (query_ordinal, diagnostic) in diagnostics {
+        if query_ordinal != expected_ordinal {
+            return Err(invalid("V32 virtual diagnostic batch ordering differs"));
+        }
+        let bytes =
+            virtual_geometric_diagnostic_bytes(query_ordinal, true, global_leaf_limit, diagnostic)?;
+        queries.push(
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map_err(|_| invalid("V32 virtual diagnostic batch JSON differs"))?,
+        );
+        expected_ordinal = expected_ordinal
+            .checked_add(1)
+            .ok_or_else(|| invalid("V32 virtual diagnostic batch ordinal overflows"))?;
+    }
+    let value = serde_json::json!({
+        "claim_eligible": false,
+        "page_body_reads": 0,
+        "queries": queries,
+        "schema_version": 7,
+    });
+    let mut bytes = serde_json::to_vec(&canonical(value))
+        .map_err(|_| invalid("V32 virtual diagnostic batch serialization failed"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn process_cpu_nanoseconds() -> borsuk::Result<u64> {
     let task_root = PathBuf::from("/proc/self/task");
     let tasks = fs::read_dir(&task_root).map_err(|source| BorsukError::Io {
@@ -709,6 +832,117 @@ fn read_resident(
         },
         "resident artifact",
     )
+}
+
+fn read_logical_sources(
+    directory: &std::path::Path,
+    artifact: &(String, V30LayoutArtifactIdentity),
+    source_rows: u64,
+) -> borsuk::Result<Vec<u64>> {
+    let bytes = read_resident(
+        directory,
+        &artifact.0,
+        &artifact.1.sha256,
+        artifact.1.encoded_bytes,
+    )?;
+    let expected_schema = Schema::new(vec![Field::new("source_ordinal", DataType::UInt64, false)]);
+    let reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.schema().as_ref() != &expected_schema {
+        return Err(invalid("V32 logical-source Arrow schema differs"));
+    }
+    let mut sources = Vec::new();
+    for batch in reader {
+        let batch = batch?;
+        let values = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V32 logical-source Arrow schema differs"))?;
+        if values.null_count() != 0 {
+            return Err(invalid("V32 logical-source Arrow nullability differs"));
+        }
+        sources.extend((0..values.len()).map(|row| values.value(row)));
+    }
+    let expected_rows = usize::try_from(source_rows)
+        .map_err(|_| invalid("V32 logical-source row count overflows"))?;
+    let unique = sources
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    if sources.len() != expected_rows
+        || unique.len() != expected_rows
+        || unique.first().copied() != Some(0)
+        || unique.last().copied() != source_rows.checked_sub(1)
+    {
+        return Err(invalid("V32 logical-source permutation differs"));
+    }
+    Ok(sources)
+}
+
+fn read_diagnostic_batch(
+    argument: &ArtifactArg,
+    query_start: usize,
+    query_count: usize,
+    source_rows: u64,
+) -> borsuk::Result<Vec<(u64, Vec<u64>)>> {
+    let bytes = read_bytes(argument, "diagnostic batch")?;
+    let child = Arc::new(Field::new("element", DataType::UInt64, false));
+    let expected_schema = Schema::new(vec![
+        Field::new("query_ordinal", DataType::UInt64, false),
+        Field::new("truth_logicals", DataType::FixedSizeList(child, 10), false),
+    ]);
+    let reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.schema().as_ref() != &expected_schema {
+        return Err(invalid("V32 diagnostic batch Arrow schema differs"));
+    }
+    let mut rows = Vec::with_capacity(query_count);
+    for batch in reader {
+        let batch = batch?;
+        if batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+        {
+            return Err(invalid("V32 diagnostic batch nullability differs"));
+        }
+        let ordinals = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V32 diagnostic batch ordinal type differs"))?;
+        let truths = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V32 diagnostic batch truth type differs"))?;
+        let values = truths
+            .values()
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V32 diagnostic batch truth value type differs"))?;
+        for row in 0..batch.num_rows() {
+            let ordinal = ordinals.value(row);
+            let start = row * 10;
+            let logicals = values.values()[start..start + 10].to_vec();
+            let unique = logicals
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>();
+            if ordinal
+                != u64::try_from(query_start + rows.len())
+                    .map_err(|_| invalid("V32 diagnostic batch query ordinal overflows"))?
+                || unique.len() != 10
+                || logicals.iter().any(|logical| *logical >= source_rows)
+            {
+                return Err(invalid("V32 diagnostic batch row authority differs"));
+            }
+            rows.push((ordinal, logicals));
+        }
+    }
+    if rows.len() != query_count {
+        return Err(invalid("V32 diagnostic batch row count differs"));
+    }
+    Ok(rows)
 }
 
 fn query_schema() -> Schema {
@@ -972,6 +1206,46 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
     router.validate_page_locations(&page_locations)?;
     let arm = manifest_arm(&args, &manifest)?;
     if let Some(diagnostic) = args.diagnostic {
+        if diagnostic.virtual_geometric_pages {
+            let limit = diagnostic
+                .global_leaf_limit
+                .ok_or_else(|| invalid("V32 virtual diagnostic global limit is missing"))?;
+            let logical_sources = read_logical_sources(
+                &args.artifact_dir,
+                &manifest.logical_sources,
+                manifest.source_rows,
+            )?;
+            let virtual_layout = router.virtual_geometric_page_layout(&logical_sources, 480)?;
+            let batch = diagnostic
+                .batch
+                .as_ref()
+                .ok_or_else(|| invalid("V32 virtual diagnostic batch is missing"))?;
+            let queries = read_queries(&args.query, args.query_start, args.query_count)?;
+            let requests = read_diagnostic_batch(
+                batch,
+                args.query_start,
+                args.query_count,
+                manifest.source_rows,
+            )?;
+            let diagnostics = queries
+                .iter()
+                .zip(requests)
+                .map(|(query, (query_ordinal, logicals))| {
+                    Ok((
+                        usize::try_from(query_ordinal)
+                            .map_err(|_| invalid("V32 diagnostic query ordinal overflows"))?,
+                        router.diagnose_logicals_with_virtual_geometric_global_prefix(
+                            query,
+                            arm,
+                            limit,
+                            &logicals,
+                            &virtual_layout,
+                        )?,
+                    ))
+                })
+                .collect::<borsuk::Result<Vec<_>>>()?;
+            return virtual_geometric_batch_diagnostic_bytes(limit, diagnostics);
+        }
         let query = read_query(&args.query, args.query_start)?;
         let (control, report) = if let Some(limit) = diagnostic.global_leaf_limit {
             let control = router.diagnose_logicals_with_global_prefix(&query, arm, limit, &[])?;
@@ -1067,10 +1341,10 @@ fn number<T: std::str::FromStr>(
 }
 
 fn artifact(values: &mut BTreeMap<String, String>, role: &str) -> Result<ArtifactArg, String> {
-    let path_flag = if role == "query" {
-        "query-parquet"
-    } else {
-        role
+    let path_flag = match role {
+        "query" => "query-parquet",
+        "diagnostic-batch" => "diagnostic-batch-arrow",
+        _ => role,
     };
     let artifact = ArtifactArg {
         path: PathBuf::from(take(values, path_flag)?),
@@ -1096,6 +1370,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         .next()
         .ok_or_else(|| argument_error("program is missing"))?;
     let mut execute = false;
+    let mut virtual_geometric_pages = false;
     let mut values = BTreeMap::new();
     while let Some(flag) = arguments.next() {
         if flag == "--execute" {
@@ -1103,6 +1378,13 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
                 return Err(argument_error("duplicate --execute"));
             }
             execute = true;
+            continue;
+        }
+        if flag == "--virtual-geometric-pages" {
+            if virtual_geometric_pages {
+                return Err(argument_error("duplicate --virtual-geometric-pages"));
+            }
+            virtual_geometric_pages = true;
             continue;
         }
         let name = flag
@@ -1149,6 +1431,10 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
             Ok(logicals)
         })
         .transpose()?;
+    let diagnostic_batch = values
+        .contains_key("diagnostic-batch-arrow")
+        .then(|| artifact(&mut values, "diagnostic-batch"))
+        .transpose()?;
     let global_leaf_limit = values
         .remove("global-leaf-limit")
         .map(|value| {
@@ -1158,18 +1444,29 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         })
         .transpose()?;
     if global_leaf_limit.is_some_and(|limit| limit != 768)
-        || (global_leaf_limit.is_some() && diagnostic_logicals.is_none())
+        || (global_leaf_limit.is_some()
+            && diagnostic_logicals.is_none()
+            && diagnostic_batch.is_none())
+        || diagnostic_logicals.is_some() && diagnostic_batch.is_some()
+        || (virtual_geometric_pages && (global_leaf_limit.is_none() || diagnostic_batch.is_none()))
     {
         return Err(argument_error("--global-leaf-limit value differs"));
     }
     let diagnostic = diagnostic_logicals
-        .map(|logicals| -> Result<DiagnosticRequest, String> {
-            Ok(DiagnosticRequest {
-                logicals,
-                global_leaf_limit,
-            })
+        .map(|logicals| DiagnosticRequest {
+            logicals,
+            batch: None,
+            global_leaf_limit,
+            virtual_geometric_pages,
         })
-        .transpose()?;
+        .or_else(|| {
+            diagnostic_batch.map(|batch| DiagnosticRequest {
+                logicals: Vec::new(),
+                batch: Some(batch),
+                global_leaf_limit,
+                virtual_geometric_pages,
+            })
+        });
     let local = values.remove("local-page-dir").map(PathBuf::from);
     let tier = values
         .remove("serving-tier")
@@ -1186,7 +1483,8 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         _ => return Err(argument_error("exactly one page source is required")),
     };
     if !artifact_dir.is_absolute()
-        || match diagnostic {
+        || match diagnostic.as_ref() {
+            Some(diagnostic) if diagnostic.batch.is_some() => query_count != 32,
             Some(_) => query_count != 1,
             None => query_count != 32,
         }
@@ -1226,11 +1524,14 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use arrow_array::{FixedSizeListArray, Float32Array, RecordBatch};
+    use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt64Array};
+    use arrow_ipc::writer::FileWriter;
+    use arrow_schema::{DataType, Field, Schema};
     use borsuk::{
         V27PageIdentity, V32Match, V32PageLocation, V32PageSelection, V32PageStore,
         V32RoutingDiagnostic, V32RoutingStopReason, V32RoutingTargetReport, V32RoutingTargetStage,
         V32RoutingWork, V32SearchResult, V32SearchWork, V32ServingTier,
+        V32VirtualRoutingDiagnostic,
     };
     use bytes::Bytes;
     use object_store::ObjectStoreExt;
@@ -1242,8 +1543,9 @@ mod tests {
     use super::{
         Args, ArtifactArg, DiagnosticRequest, LocalPageStore, ObjectPageStore, PageSource,
         SearchPhaseTiming, canonical, diagnostic_bytes, execute, manifest_arm, parse_args,
-        peak_rss_bytes, process_cpu_nanoseconds, read_manifest, read_queries, result_bytes,
-        run_batch,
+        peak_rss_bytes, process_cpu_nanoseconds, read_diagnostic_batch, read_manifest,
+        read_queries, result_bytes, run_batch, virtual_geometric_batch_diagnostic_bytes,
+        virtual_geometric_diagnostic_bytes,
     };
 
     fn arguments() -> Vec<String> {
@@ -1284,6 +1586,248 @@ mod tests {
         .into_iter()
         .map(ToOwned::to_owned)
         .collect()
+    }
+
+    fn global_diagnostic_arguments() -> Vec<String> {
+        let mut values = arguments();
+        let source = values
+            .iter()
+            .position(|value| value == "--serving-tier")
+            .unwrap();
+        values.drain(source..=source + 1);
+        let count = values
+            .iter()
+            .position(|value| value == "--query-count")
+            .unwrap();
+        values[count + 1] = "1".to_owned();
+        let leaf = values
+            .iter()
+            .position(|value| value == "--leaf-beam")
+            .unwrap();
+        values[leaf + 1] = "256".to_owned();
+        values.extend([
+            "--diagnose-logicals".to_owned(),
+            "0,1,2,3,4,5,6,7,8,9".to_owned(),
+            "--global-leaf-limit".to_owned(),
+            "768".to_owned(),
+        ]);
+        values
+    }
+
+    fn virtual_batch_arguments() -> Vec<String> {
+        let mut values = global_diagnostic_arguments();
+        let logicals = values
+            .iter()
+            .position(|value| value == "--diagnose-logicals")
+            .unwrap();
+        values.drain(logicals..=logicals + 1);
+        let count = values
+            .iter()
+            .position(|value| value == "--query-count")
+            .unwrap();
+        values[count + 1] = "32".to_owned();
+        values.extend([
+            "--diagnostic-batch-arrow".to_owned(),
+            "/tmp/v32-diagnostic-batch.arrow".to_owned(),
+            "--diagnostic-batch-sha256".to_owned(),
+            "3".repeat(64),
+            "--diagnostic-batch-bytes".to_owned(),
+            "4096".to_owned(),
+            "--virtual-geometric-pages".to_owned(),
+        ]);
+        values
+    }
+
+    #[test]
+    fn v32_virtual_geometric_qualifier_is_explicit_global_and_page_free() {
+        // Break caught: geometric repacking is silently enabled in serving,
+        // rooted diagnostics, or any mode with a page-body capability.
+        let mut values = virtual_batch_arguments();
+        let parsed = parse_args(values.clone()).unwrap();
+        let diagnostic = parsed.diagnostic.unwrap();
+        assert!(diagnostic.virtual_geometric_pages);
+        assert_eq!(
+            diagnostic.batch.unwrap().path,
+            PathBuf::from("/tmp/v32-diagnostic-batch.arrow")
+        );
+        values.push("--serving-tier".to_owned());
+        values.push("standard".to_owned());
+        assert!(parse_args(values).is_err());
+
+        let mut rooted = arguments();
+        rooted.push("--virtual-geometric-pages".to_owned());
+        assert!(parse_args(rooted).is_err());
+    }
+
+    #[test]
+    fn v32_virtual_geometric_batch_authenticates_exact_query_truth_rows() {
+        // Break caught: the qualifier rebuilds the virtual layout per query or
+        // accepts an unbound/malformed truth batch instead of one authenticated
+        // cross-language request artifact.
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("diagnostic-batch.arrow");
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("query_ordinal", DataType::UInt64, false),
+            Field::new(
+                "truth_logicals",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("element", DataType::UInt64, false)),
+                    10,
+                ),
+                false,
+            ),
+        ]));
+        let truths = FixedSizeListArray::try_new(
+            Arc::new(Field::new("element", DataType::UInt64, false)),
+            10,
+            Arc::new(UInt64Array::from_iter_values(0_u64..320)) as ArrayRef,
+            None,
+        )
+        .unwrap();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from_iter_values(64_u64..96)) as ArrayRef,
+                Arc::new(truths),
+            ],
+        )
+        .unwrap();
+        let mut file = fs::File::create(&path).unwrap();
+        let mut writer = FileWriter::try_new(&mut file, &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+        drop(file);
+        let bytes = fs::read(&path).unwrap();
+        let artifact = ArtifactArg {
+            path,
+            sha256: format!("{:x}", Sha256::digest(&bytes)),
+            encoded_bytes: bytes.len() as u64,
+        };
+        let rows = read_diagnostic_batch(&artifact, 64, 32, 1_000).unwrap();
+        assert_eq!(rows.len(), 32);
+        assert_eq!(rows[0], (64, (0_u64..10).collect::<Vec<_>>()));
+        assert_eq!(rows[31], (95, (310_u64..320).collect::<Vec<_>>()));
+    }
+
+    #[test]
+    fn v32_virtual_geometric_diagnostic_is_canonical_and_exactly_sixteen_pages() {
+        // Break caught: a treatment result omits its causal page-membership
+        // evidence or reports a partial page selection as a valid comparison.
+        let identities = (0..16_u32)
+            .map(|ordinal| V27PageIdentity {
+                ordinal,
+                sha256: format!("{ordinal:064x}"),
+                encoded_bytes: 196_000,
+                primary_rows: 1,
+                replica_rows: 0,
+            })
+            .collect::<Vec<_>>();
+        let targets = (0..10_u64)
+            .map(|logical| V32RoutingTargetReport {
+                logical,
+                leaf_ordinal: logical as u32,
+                owner_root_ordinal: 0,
+                owner_root_rank: 1,
+                global_routing_leaf_rank: logical as usize + 1,
+                page_ordinal: logical as u32,
+                routing_leaf_rank: Some(logical as usize + 1),
+                candidate_rank: Some(logical as usize),
+                first_unique_page_rank: Some(logical as usize),
+                page_in_scanned_pool: true,
+                page_in_retained_pool: true,
+                page_selected: true,
+                stage: V32RoutingTargetStage::SelectedPage,
+                reciprocal_rank_selected: true,
+            })
+            .collect::<Vec<_>>();
+        let work = V32RoutingWork {
+            roots_scored: 128,
+            leaves_eligible: 4_096,
+            leaves_scanned: 768,
+            query_table_pairs_built: 256,
+            peak_query_table_pairs_live: 1,
+            codes_scanned: 230_856,
+            candidates_retained: 12_288,
+            pages_considered: 16,
+            selected_pages: 16,
+        };
+        let diagnostic = V32VirtualRoutingDiagnostic {
+            current: V32RoutingDiagnostic {
+                selection: V32PageSelection {
+                    pages: identities.clone(),
+                    work: work.clone(),
+                },
+                reciprocal_rank_pages: identities,
+                targets,
+                total_routing_leaves: 4_096,
+                scan_budget: 262_144,
+                global_leaf_limit: Some(768),
+                stop_reason: V32RoutingStopReason::LeafLimit,
+                next_leaf_rows: None,
+            },
+            candidate_replay_sha256: "a".repeat(64),
+            virtual_pages: (100_u32..116).collect(),
+            virtual_pages_at_eight: (100_u32..108).collect(),
+            virtual_target_pages: (100_u32..110).collect(),
+            virtual_target_selected: vec![true; 10],
+            virtual_target_selected_at_eight: vec![
+                true, true, true, true, true, true, true, true, false, false,
+            ],
+            virtual_layout_sha256: "b".repeat(64),
+            routing_work: work,
+            truth_microleaf_count: 10,
+            truth_virtual_page_count: 10,
+            recovered_logicals: vec![],
+            newly_lost_logicals: vec![],
+        };
+        let bytes = virtual_geometric_diagnostic_bytes(64, true, 768, diagnostic.clone()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let mut expected = serde_json::to_vec(&canonical(value.clone())).unwrap();
+        expected.push(b'\n');
+        assert_eq!(bytes, expected);
+        assert_eq!(value["schema_version"], 6);
+        assert_eq!(value["page_body_reads"], 0);
+        assert_eq!(value["virtual_geometric"]["page_body_reads"], 0);
+        assert_eq!(
+            value["virtual_geometric"]["candidate_replay_sha256"],
+            "a".repeat(64)
+        );
+        assert_eq!(
+            value["virtual_geometric"]["virtual_layout_sha256"],
+            "b".repeat(64)
+        );
+        assert_eq!(value["virtual_geometric"]["selected_pages"][0], 100);
+        assert_eq!(
+            value["virtual_geometric"]["selected_pages_at_eight"],
+            serde_json::json!([100, 101, 102, 103, 104, 105, 106, 107])
+        );
+        assert_eq!(
+            value["virtual_geometric"]["projected_selected_bytes_at_eight"],
+            1_572_864
+        );
+        assert_eq!(value["virtual_geometric"]["targets"][0]["logical"], 0);
+        assert_eq!(value["virtual_geometric"]["targets"][0]["selected"], true);
+        assert_eq!(
+            value["virtual_geometric"]["targets"][8]["selected_at_eight"],
+            false
+        );
+
+        let batch_bytes = virtual_geometric_batch_diagnostic_bytes(
+            768,
+            vec![(64, diagnostic.clone()), (65, diagnostic.clone())],
+        )
+        .unwrap();
+        let batch_value: serde_json::Value = serde_json::from_slice(&batch_bytes).unwrap();
+        assert_eq!(batch_value["schema_version"], 7);
+        assert_eq!(batch_value["page_body_reads"], 0);
+        assert_eq!(batch_value["queries"].as_array().unwrap().len(), 2);
+        assert_eq!(batch_value["queries"][0]["query_ordinal"], 64);
+        assert_eq!(batch_value["queries"][1]["query_ordinal"], 65);
+
+        let mut incomplete = diagnostic;
+        incomplete.virtual_pages.pop();
+        assert!(virtual_geometric_diagnostic_bytes(64, true, 768, incomplete).is_err());
     }
 
     #[test]
@@ -1653,7 +2197,9 @@ mod tests {
             diagnostic.leaf_beam = leaf_beam;
             diagnostic.diagnostic = Some(DiagnosticRequest {
                 logicals: (0..10).collect(),
+                batch: None,
                 global_leaf_limit: None,
+                virtual_geometric_pages: false,
             });
             assert_eq!(
                 manifest_arm(&diagnostic, &manifest).unwrap().scan_budget,

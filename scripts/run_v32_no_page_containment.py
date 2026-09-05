@@ -42,6 +42,8 @@ class V32ContainmentPlan:
     root_beam: int
     leaf_beam: int
     global_leaf_limit: int | None = None
+    virtual_geometric_pages: bool = False
+    diagnostic_batch: LocalArtifact | None = None
 
 
 def _digest(value: str) -> bool:
@@ -292,12 +294,52 @@ def _read_logical_sources(plan: V32ContainmentPlan) -> tuple[int, ...]:
     return tuple(source_to_logical)
 
 
+def _read_diagnostic_batch(
+    plan: V32ContainmentPlan,
+    truth: tuple[tuple[int, ...], ...],
+    source_to_logical: tuple[int, ...],
+) -> None:
+    artifact = plan.diagnostic_batch
+    if artifact is None:
+        raise ValueError("V32 virtual diagnostic batch authority is missing")
+    _validate_artifact(artifact)
+    payload = artifact.path.read_bytes()
+    if (
+        len(payload) != artifact.encoded_bytes
+        or hashlib.sha256(payload).hexdigest() != artifact.sha256
+    ):
+        raise ValueError("V32 virtual diagnostic batch byte authority differs")
+    try:
+        table = pa.ipc.open_file(pa.BufferReader(payload)).read_all()
+    except pa.ArrowInvalid as error:
+        raise ValueError("V32 virtual diagnostic batch Arrow differs") from error
+    truth_type = pa.list_(pa.field("element", pa.uint64(), nullable=False), RECALL_K)
+    expected_schema = pa.schema(
+        [
+            pa.field("query_ordinal", pa.uint64(), nullable=False),
+            pa.field("truth_logicals", truth_type, nullable=False),
+        ]
+    )
+    if table.schema != expected_schema or table.num_rows != plan.query_count:
+        raise ValueError("V32 virtual diagnostic batch Arrow differs")
+    ordinals = table.column("query_ordinal").to_pylist()
+    logical_rows = table.column("truth_logicals").to_pylist()
+    expected_logicals = [
+        [source_to_logical[source] for source in source_row] for source_row in truth
+    ]
+    if ordinals != list(range(plan.query_start, plan.query_start + plan.query_count)) or (
+        logical_rows != expected_logicals
+    ):
+        raise ValueError("V32 virtual diagnostic batch binding differs")
+
+
 def _commands(
     plan: V32ContainmentPlan,
     truth: tuple[tuple[int, ...], ...],
     source_to_logical: tuple[int, ...],
     leaf_beam: int,
 ) -> tuple[tuple[str, ...], ...]:
+    query_count = plan.query_count if plan.virtual_geometric_pages else 1
     common = (
         str(plan.qualifier),
         "--execute",
@@ -316,7 +358,7 @@ def _commands(
         "--query-bytes",
         str(plan.query.encoded_bytes),
         "--query-count",
-        "1",
+        str(query_count),
         "--root-beam",
         str(plan.root_beam),
         "--leaf-beam",
@@ -333,9 +375,30 @@ def _commands(
         if plan.global_leaf_limit is not None
         else ()
     )
+    virtual = ("--virtual-geometric-pages",) if plan.virtual_geometric_pages else ()
+    if plan.virtual_geometric_pages:
+        batch = plan.diagnostic_batch
+        if batch is None:
+            raise ValueError("V32 virtual diagnostic batch authority is missing")
+        return (
+            common
+            + scope
+            + virtual
+            + (
+                "--query-start",
+                str(plan.query_start),
+                "--diagnostic-batch-arrow",
+                str(batch.path),
+                "--diagnostic-batch-sha256",
+                batch.sha256,
+                "--diagnostic-batch-bytes",
+                str(batch.encoded_bytes),
+            ),
+        )
     return tuple(
         common
         + scope
+        + virtual
         + (
             "--query-start",
             str(plan.query_start + offset),
@@ -679,6 +742,152 @@ def _diagnostics(
     return diagnostics, routing, page_selections
 
 
+def _virtual_diagnostics(
+    payload: bytes,
+    query_ordinal: int,
+    truth: tuple[int, ...],
+    maximum_leaves_eligible: int,
+    leaf_beam: int,
+    scan_budget: int,
+    global_leaf_limit: int,
+    root_beam: int,
+) -> tuple[
+    list[dict[str, object]],
+    dict[str, int],
+    dict[str, dict[str, object]],
+    dict[str, object],
+]:
+    if not payload.endswith(b"\n") or b"\n" in payload[:-1]:
+        raise ValueError("V32 virtual diagnostic canonical bytes differ")
+    value = json.loads(payload)
+    expected = json.dumps(
+        value, allow_nan=False, separators=(",", ":"), sort_keys=True
+    ).encode() + b"\n"
+    if (
+        payload != expected
+        or type(value) is not dict
+        or value.get("schema_version") != 6
+        or "virtual_geometric" not in value
+    ):
+        raise ValueError("V32 virtual diagnostic authority differs")
+    virtual = value.pop("virtual_geometric")
+    value["schema_version"] = 5
+    base = json.dumps(
+        value, allow_nan=False, separators=(",", ":"), sort_keys=True
+    ).encode() + b"\n"
+    diagnostics, routing, page_selections = _diagnostics(
+        base,
+        query_ordinal,
+        truth,
+        maximum_leaves_eligible,
+        leaf_beam,
+        scan_budget,
+        global_leaf_limit,
+        root_beam,
+    )
+    keys = {
+        "candidate_replay_sha256",
+        "newly_lost_logicals",
+        "page_body_reads",
+        "page_rows",
+        "projected_selected_bytes",
+        "projected_selected_bytes_at_eight",
+        "recovered_logicals",
+        "selected_pages",
+        "selected_pages_at_eight",
+        "targets",
+        "truth_microleaf_count",
+        "truth_virtual_page_count",
+        "virtual_layout_sha256",
+    }
+    if (
+        type(virtual) is not dict
+        or set(virtual) != keys
+        or virtual["page_body_reads"] != 0
+        or virtual["page_rows"] != 480
+        or virtual["projected_selected_bytes"] != 3_145_728
+        or virtual["projected_selected_bytes_at_eight"] != 1_572_864
+        or type(virtual["selected_pages"]) is not list
+        or len(virtual["selected_pages"]) != 16
+        or any(type(page) is not int or page < 0 for page in virtual["selected_pages"])
+        or len(set(virtual["selected_pages"])) != 16
+        or virtual["selected_pages_at_eight"] != virtual["selected_pages"][:8]
+        or type(virtual["targets"]) is not list
+        or len(virtual["targets"]) != RECALL_K
+        or not _digest(virtual["candidate_replay_sha256"])
+        or not _digest(virtual["virtual_layout_sha256"])
+    ):
+        raise ValueError("V32 virtual diagnostic layout evidence differs")
+    selected_pages = set(virtual["selected_pages"])
+    selected_pages_at_eight = set(virtual["selected_pages_at_eight"])
+    targets = virtual["targets"]
+    if any(
+        type(target) is not dict
+        or set(target)
+        != {"logical", "page_ordinal", "selected", "selected_at_eight"}
+        or type(target["logical"]) is not int
+        or type(target["page_ordinal"]) is not int
+        or target["page_ordinal"] < 0
+        or type(target["selected"]) is not bool
+        or type(target["selected_at_eight"]) is not bool
+        or target["selected"] != (target["page_ordinal"] in selected_pages)
+        or target["selected_at_eight"]
+        != (target["page_ordinal"] in selected_pages_at_eight)
+        for target in targets
+    ) or [target["logical"] for target in targets] != [
+        target["logical"] for target in diagnostics
+    ]:
+        raise ValueError("V32 virtual diagnostic target evidence differs")
+    expected_recovered = [
+        current["logical"]
+        for current, treatment in zip(diagnostics, targets, strict=True)
+        if not current["page_selected"] and treatment["selected_at_eight"]
+    ]
+    expected_lost = [
+        current["logical"]
+        for current, treatment in zip(diagnostics, targets, strict=True)
+        if current["page_selected"] and not treatment["selected_at_eight"]
+    ]
+    truth_microleaves = len({target["leaf_ordinal"] for target in diagnostics})
+    truth_pages = len({target["page_ordinal"] for target in targets})
+    if (
+        virtual["recovered_logicals"] != expected_recovered
+        or virtual["newly_lost_logicals"] != expected_lost
+        or virtual["truth_microleaf_count"] != truth_microleaves
+        or virtual["truth_virtual_page_count"] != truth_pages
+    ):
+        raise ValueError("V32 virtual diagnostic causal evidence differs")
+    return diagnostics, routing, page_selections, virtual
+
+
+def _virtual_batch_payloads(payload: bytes, query_count: int) -> tuple[bytes, ...]:
+    if not payload.endswith(b"\n") or b"\n" in payload[:-1]:
+        raise ValueError("V32 virtual diagnostic batch canonical bytes differ")
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("V32 virtual diagnostic batch JSON differs") from error
+    expected = json.dumps(
+        value, allow_nan=False, separators=(",", ":"), sort_keys=True
+    ).encode() + b"\n"
+    if (
+        payload != expected
+        or type(value) is not dict
+        or set(value) != {"claim_eligible", "page_body_reads", "queries", "schema_version"}
+        or value["claim_eligible"] is not False
+        or value["page_body_reads"] != 0
+        or value["schema_version"] != 7
+        or type(value["queries"]) is not list
+        or len(value["queries"]) != query_count
+    ):
+        raise ValueError("V32 virtual diagnostic batch authority differs")
+    return tuple(
+        json.dumps(query, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+        + b"\n"
+        for query in value["queries"]
+    )
+
+
 def run_v32_no_page_containment(
     plan: V32ContainmentPlan,
     truth_bytes: bytes,
@@ -695,28 +904,66 @@ def run_v32_no_page_containment(
     ) = _read_scale_manifest(plan)
     truth = _read_truth(plan, truth_bytes)
     source_to_logical = _read_logical_sources(plan)
+    if plan.virtual_geometric_pages:
+        _read_diagnostic_batch(plan, truth, source_to_logical)
     commands = _commands(plan, truth, source_to_logical, leaf_beam)
+    payloads = (
+        _virtual_batch_payloads(invoke(commands[0]), plan.query_count)
+        if plan.virtual_geometric_pages
+        else tuple(invoke(command) for command in commands)
+    )
     samples = []
     queries = []
     reciprocal_hits_by_query = []
     routing_work = []
     truth_microleaf_ranks = []
     losses: Counter[str] = Counter()
-    for offset, (command, source_ordinals) in enumerate(
-        zip(commands, truth, strict=True)
-    ):
+    virtual_hits_by_query: list[int] = []
+    virtual_truth_microleaf_counts: list[int] = []
+    virtual_truth_page_counts: list[int] = []
+    virtual_recovered: list[int] = []
+    virtual_lost: list[int] = []
+    virtual_queries: list[dict[str, object]] = []
+    virtual_layout_sha256: str | None = None
+    for offset, (payload, source_ordinals) in enumerate(zip(payloads, truth, strict=True)):
         query_ordinal = plan.query_start + offset
         logicals = tuple(source_to_logical[source] for source in source_ordinals)
-        diagnostics, routing, page_selections = _diagnostics(
-            invoke(command),
-            query_ordinal,
-            logicals,
-            maximum_leaves_eligible,
-            leaf_beam,
-            scan_budget,
-            plan.global_leaf_limit,
-            plan.root_beam,
-        )
+        if plan.virtual_geometric_pages:
+            if plan.global_leaf_limit is None:
+                raise ValueError("V32 virtual diagnostic global limit is missing")
+            diagnostics, routing, page_selections, virtual = _virtual_diagnostics(
+                payload,
+                query_ordinal,
+                logicals,
+                maximum_leaves_eligible,
+                leaf_beam,
+                scan_budget,
+                plan.global_leaf_limit,
+                plan.root_beam,
+            )
+            virtual_hits_by_query.append(
+                sum(target["selected_at_eight"] for target in virtual["targets"])
+            )
+            virtual_truth_microleaf_counts.append(virtual["truth_microleaf_count"])
+            virtual_truth_page_counts.append(virtual["truth_virtual_page_count"])
+            virtual_recovered.extend(virtual["recovered_logicals"])
+            virtual_lost.extend(virtual["newly_lost_logicals"])
+            if virtual_layout_sha256 is None:
+                virtual_layout_sha256 = virtual["virtual_layout_sha256"]
+            elif virtual_layout_sha256 != virtual["virtual_layout_sha256"]:
+                raise ValueError("V32 virtual diagnostic layout identity differs")
+            virtual_queries.append({"query_ordinal": query_ordinal, **virtual})
+        else:
+            diagnostics, routing, page_selections = _diagnostics(
+                payload,
+                query_ordinal,
+                logicals,
+                maximum_leaves_eligible,
+                leaf_beam,
+                scan_budget,
+                plan.global_leaf_limit,
+                plan.root_beam,
+            )
         routing_work.append(routing)
         truth_microleaf_ranks.extend(
             item["routing_leaf_rank"]
@@ -817,6 +1064,47 @@ def run_v32_no_page_containment(
         "selected_page_hits": reciprocal_total_hits,
         "status": "passed" if not reciprocal_failed else "failed",
     }
+    virtual_geometric = None
+    if plan.virtual_geometric_pages:
+        if total_hits != 308 or minimum != 700_000 or perfect != 23:
+            raise ValueError("V32 virtual diagnostic frozen control differs")
+        if reciprocal_total_hits != 298:
+            raise ValueError("V32 virtual diagnostic reciprocal control differs")
+        virtual_total_hits = sum(virtual_hits_by_query)
+        virtual_minimum = min(virtual_hits_by_query) * 1_000_000 // RECALL_K
+        virtual_failed = []
+        if virtual_total_hits != QUERY_COUNT * RECALL_K:
+            virtual_failed.append("perfect-containment")
+        if virtual_minimum != 1_000_000:
+            virtual_failed.append("minimum-containment")
+        if any(count > 8 for count in virtual_truth_microleaf_counts):
+            virtual_failed.append("microleaf-eight-page-obstruction")
+        if any(count > 8 for count in virtual_truth_page_counts):
+            virtual_failed.append("virtual-eight-page-obstruction")
+        virtual_geometric = {
+            "aggregate_containment_ppm": virtual_total_hits
+            * 1_000_000
+            // (QUERY_COUNT * RECALL_K),
+            "eight_page_microleaf_obstruction_queries": sum(
+                count > 8 for count in virtual_truth_microleaf_counts
+            ),
+            "eight_page_virtual_page_obstruction_queries": sum(
+                count > 8 for count in virtual_truth_page_counts
+            ),
+            "failed_gates": virtual_failed,
+            "maximum_truth_microleaf_count": max(virtual_truth_microleaf_counts),
+            "maximum_truth_virtual_page_count": max(virtual_truth_page_counts),
+            "minimum_containment_ppm": virtual_minimum,
+            "newly_lost_logicals": virtual_lost,
+            "perfect_queries": sum(hits == RECALL_K for hits in virtual_hits_by_query),
+            "projected_selected_page_bytes": 1_572_864,
+            "queries": virtual_queries,
+            "recovered_logicals": virtual_recovered,
+            "selected_page_hits": virtual_total_hits,
+            "selected_pages": 8,
+            "status": "passed" if not virtual_failed else "failed",
+            "virtual_layout_sha256": virtual_layout_sha256,
+        }
     value = {
         "aggregate_containment_ppm": aggregate,
         "claim_eligible": False,
@@ -852,6 +1140,40 @@ def run_v32_no_page_containment(
         "truth_sha256": plan.truth.sha256,
         "truth_receipt_sha256": plan.truth_receipt.sha256,
     }
+    if virtual_geometric is not None:
+        control_keys = {
+            "aggregate_containment_ppm",
+            "failed_gates",
+            "losses_by_stage",
+            "maximum_codes_scanned",
+            "maximum_leaves_eligible",
+            "maximum_leaves_scanned",
+            "maximum_peak_query_table_pairs_live",
+            "maximum_query_table_pairs_built",
+            "maximum_selected_page_bytes",
+            "maximum_truth_microleaf_rank",
+            "minimum_containment_ppm",
+            "perfect_queries",
+            "queries",
+            "reciprocal_rank",
+            "samples",
+            "selected_page_hits",
+            "status",
+        }
+        control = {key: value.pop(key) for key in sorted(control_keys)}
+        value["control"] = control
+        value["aggregate_containment_ppm"] = virtual_geometric[
+            "aggregate_containment_ppm"
+        ]
+        value["failed_gates"] = virtual_geometric["failed_gates"]
+        value["minimum_containment_ppm"] = virtual_geometric[
+            "minimum_containment_ppm"
+        ]
+        value["perfect_queries"] = virtual_geometric["perfect_queries"]
+        value["selected_page_hits"] = virtual_geometric["selected_page_hits"]
+        value["status"] = virtual_geometric["status"]
+        value["virtual_geometric"] = virtual_geometric
+        value["schema_version"] = 6
     return json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
 
 
@@ -906,7 +1228,20 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--root-beam", type=int, required=True)
     parser.add_argument("--leaf-beam", type=int, required=True)
     parser.add_argument("--global-leaf-limit", type=int)
+    parser.add_argument("--virtual-geometric-pages", action="store_true")
+    parser.add_argument("--diagnostic-batch-arrow", type=Path)
+    parser.add_argument("--diagnostic-batch-sha256")
+    parser.add_argument("--diagnostic-batch-bytes", type=int)
     args = parser.parse_args(arguments)
+    batch_values = (
+        args.diagnostic_batch_arrow,
+        args.diagnostic_batch_sha256,
+        args.diagnostic_batch_bytes,
+    )
+    if any(value is not None for value in batch_values) != all(
+        value is not None for value in batch_values
+    ):
+        parser.error("diagnostic batch authority is incomplete")
     plan = V32ContainmentPlan(
         qualifier=args.qualifier,
         manifest=LocalArtifact(
@@ -935,6 +1270,16 @@ def main(arguments: list[str] | None = None) -> int:
         root_beam=args.root_beam,
         leaf_beam=args.leaf_beam,
         global_leaf_limit=args.global_leaf_limit,
+        virtual_geometric_pages=args.virtual_geometric_pages,
+        diagnostic_batch=(
+            LocalArtifact(
+                args.diagnostic_batch_arrow,
+                args.diagnostic_batch_sha256,
+                args.diagnostic_batch_bytes,
+            )
+            if args.diagnostic_batch_arrow is not None
+            else None
+        ),
     )
     truth = args.truth_parquet.read_bytes()
     payload = run_v32_no_page_containment(plan, truth, invoke=_invoke)

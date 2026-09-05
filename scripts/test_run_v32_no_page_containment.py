@@ -47,6 +47,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr.decode())
         self.assertIn(b"--truth-parquet", completed.stdout)
         self.assertIn(b"--artifact-dir", completed.stdout)
+        self.assertIn(b"--diagnostic-batch-arrow", completed.stdout)
         self.assertNotIn(b"--serving-tier", completed.stdout)
         self.assertNotIn(b"--page", completed.stdout)
 
@@ -391,6 +392,192 @@ class V32NoPageContainmentTests(unittest.TestCase):
         self.assertEqual(value["maximum_leaves_scanned"], 768)
         self.assertEqual(value["maximum_codes_scanned"], 220_000)
         self.assertEqual(value["selected_page_hits"], 320)
+
+
+class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
+    @staticmethod
+    def virtual_diagnostic(
+        query_ordinal: int, *, current_misses: int, reciprocal_misses: int
+    ) -> bytes:
+        value = json.loads(
+            V32NoPageContainmentTests.diagnostic(
+                query_ordinal,
+                codes_scanned=230_000,
+                leaves_eligible=4_096,
+                leaves_scanned=768,
+                global_scope=True,
+                scan_budget=262_144,
+            )
+        )
+        if current_misses:
+            for target in value["diagnostics"][-current_misses:]:
+                target["candidate_rank"] = 20 + target["logical"] % 10
+                target["first_unique_page_rank"] = 20 + target["logical"] % 10
+                target["page_in_retained_pool"] = True
+                target["page_selected"] = False
+                target["stage"] = "page-reducer"
+        if reciprocal_misses:
+            for target in value["diagnostics"][-reciprocal_misses:]:
+                target["reciprocal_rank_selected"] = False
+        V32NoPageContainmentTests.refresh_page_selections(value)
+        value["schema_version"] = 6
+        value["virtual_geometric"] = {
+            "candidate_replay_sha256": f"{query_ordinal:064x}",
+            "newly_lost_logicals": [],
+            "page_body_reads": 0,
+            "page_rows": 480,
+            "projected_selected_bytes": 3_145_728,
+            "projected_selected_bytes_at_eight": 1_572_864,
+            "recovered_logicals": [
+                target["logical"]
+                for target in value["diagnostics"]
+                if not target["page_selected"]
+            ],
+            "selected_pages": list(range(100, 116)),
+            "selected_pages_at_eight": list(range(100, 108)),
+            "targets": [
+                {
+                    "logical": item["logical"],
+                    "page_ordinal": 100 + rank % 8,
+                    "selected": True,
+                    "selected_at_eight": True,
+                }
+                for rank, item in enumerate(value["diagnostics"])
+            ],
+            "truth_microleaf_count": 1,
+            "truth_virtual_page_count": 8,
+            "virtual_layout_sha256": "b" * 64,
+        }
+        return (
+            json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+            + b"\n"
+        )
+
+    def test_v32_virtual_geometric_replay_reproduces_control_and_requires_perfect_treatment(
+        self,
+    ) -> None:
+        # Break caught: the virtual-layout treatment runs without reproducing
+        # the frozen 308/320 control or advances with any treatment miss.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, truth = self.fixture(Path(temporary))
+            source_to_logical = {
+                source: logical
+                for logical, source in enumerate(
+                    pa.ipc.open_file(plan.logical_sources.path)
+                    .read_all()
+                    .column("source_ordinal")
+                    .to_pylist()
+                )
+            }
+            truth_rows = pq.read_table(pa.BufferReader(truth)).column(
+                "neighbors_id"
+            ).to_pylist()
+            diagnostic_batch_path = Path(temporary) / "diagnostic-batch.arrow"
+            truth_logicals = pa.array(
+                [
+                    [source_to_logical[source] for source in row]
+                    for row in truth_rows
+                ],
+                type=pa.list_(pa.field("element", pa.uint64(), nullable=False), 10),
+            )
+            diagnostic_batch = pa.Table.from_arrays(
+                [pa.array(range(64, 96), type=pa.uint64()), truth_logicals],
+                schema=pa.schema(
+                    [
+                        pa.field("query_ordinal", pa.uint64(), nullable=False),
+                        pa.field(
+                            "truth_logicals", truth_logicals.type, nullable=False
+                        ),
+                    ]
+                ),
+            )
+            with pa.OSFile(str(diagnostic_batch_path), "wb") as sink:
+                with pa.ipc.new_file(sink, diagnostic_batch.schema) as writer:
+                    writer.write_table(diagnostic_batch)
+            diagnostic_batch_bytes = diagnostic_batch_path.read_bytes()
+            plan = replace(
+                plan,
+                leaf_beam=256,
+                global_leaf_limit=768,
+                virtual_geometric_pages=True,
+                diagnostic_batch=LocalArtifact(
+                    diagnostic_batch_path,
+                    hashlib.sha256(diagnostic_batch_bytes).hexdigest(),
+                    len(diagnostic_batch_bytes),
+                ),
+            )
+            commands = build_v32_containment_commands(plan, truth)
+            results = {
+                query: self.virtual_diagnostic(
+                    query,
+                    current_misses=(
+                        3
+                        if query == 64
+                        else 2
+                        if query == 65
+                        else 1
+                        if query < 73
+                        else 0
+                    ),
+                    reciprocal_misses=(
+                        3
+                        if query == 64
+                        else 2
+                        if query < 72
+                        else 1
+                        if query < 77
+                        else 0
+                    ),
+                )
+                for query in range(64, 96)
+            }
+            batch_payload = (
+                json.dumps(
+                    {
+                        "claim_eligible": False,
+                        "page_body_reads": 0,
+                        "queries": [json.loads(results[query]) for query in range(64, 96)],
+                        "schema_version": 7,
+                    },
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+                + b"\n"
+            )
+            payload = run_v32_no_page_containment(
+                plan,
+                truth,
+                invoke=lambda _command: batch_payload,
+            )
+        self.assertEqual(len(commands), 1)
+        self.assertIn("--diagnostic-batch-arrow", commands[0])
+        self.assertTrue(all("--virtual-geometric-pages" in command for command in commands))
+        value = json.loads(payload)
+        self.assertEqual(value["control"]["selected_page_hits"], 308)
+        self.assertEqual(
+            value["control"]["reciprocal_rank"]["selected_page_hits"], 298
+        )
+        self.assertEqual(value["virtual_geometric"]["selected_page_hits"], 320)
+        self.assertEqual(value["virtual_geometric"]["minimum_containment_ppm"], 1_000_000)
+        self.assertEqual(value["virtual_geometric"]["perfect_queries"], 32)
+        self.assertEqual(value["virtual_geometric"]["failed_gates"], [])
+        self.assertEqual(value["virtual_geometric"]["status"], "passed")
+        self.assertEqual(len(value["virtual_geometric"]["queries"]), 32)
+        self.assertEqual(
+            value["virtual_geometric"]["queries"][0]["query_ordinal"], 64
+        )
+        self.assertEqual(
+            value["virtual_geometric"]["queries"][0]["candidate_replay_sha256"],
+            f"{64:064x}",
+        )
+        self.assertEqual(
+            value["virtual_geometric"]["queries"][0]["virtual_layout_sha256"],
+            "b" * 64,
+        )
+        self.assertEqual(value["failed_gates"], [])
+        self.assertEqual(value["status"], "passed")
+        self.assertEqual(containment_exit_status(payload), 0)
 
     def test_v32_containment_global_prefix_proof_and_rank_domains_are_strict(self) -> None:
         # Break caught: rooted eligible counts reject a valid global rank, or a

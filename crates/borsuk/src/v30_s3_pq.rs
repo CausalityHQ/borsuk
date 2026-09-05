@@ -86,26 +86,41 @@ impl V30PqCodebook {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn reconstruct_v30_code(
     codebook: &V30PqCodebook,
     code: &[u8],
 ) -> Result<[f32; DIMENSIONS]> {
-    codebook.validate()?;
-    if code.len() != codebook.width.bytes() {
-        return Err(invalid("V30 PQ8 reconstruction code width differs"));
+    V30PqReconstructor::new(codebook)?.reconstruct(code)
+}
+
+pub(crate) struct V30PqReconstructor<'a> {
+    codebook: &'a V30PqCodebook,
+}
+
+impl<'a> V30PqReconstructor<'a> {
+    pub(crate) fn new(codebook: &'a V30PqCodebook) -> Result<Self> {
+        codebook.validate()?;
+        Ok(Self { codebook })
     }
-    let dimensions = codebook.width.dimensions();
-    let mut reconstructed = [0.0_f32; DIMENSIONS];
-    for (subquantizer, &centroid) in code.iter().enumerate() {
-        let source = (subquantizer * CENTROIDS + usize::from(centroid)) * dimensions;
-        let destination = subquantizer * dimensions;
-        reconstructed[destination..destination + dimensions]
-            .copy_from_slice(&codebook.centroids[source..source + dimensions]);
+
+    pub(crate) fn reconstruct(&self, code: &[u8]) -> Result<[f32; DIMENSIONS]> {
+        if code.len() != self.codebook.width.bytes() {
+            return Err(invalid("V30 PQ8 reconstruction code width differs"));
+        }
+        let dimensions = self.codebook.width.dimensions();
+        let mut reconstructed = [0.0_f32; DIMENSIONS];
+        for (subquantizer, &centroid) in code.iter().enumerate() {
+            let source = (subquantizer * CENTROIDS + usize::from(centroid)) * dimensions;
+            let destination = subquantizer * dimensions;
+            reconstructed[destination..destination + dimensions]
+                .copy_from_slice(&self.codebook.centroids[source..source + dimensions]);
+        }
+        if reconstructed.iter().any(|value| !value.is_finite()) {
+            return Err(invalid("V30 PQ8 reconstruction differs"));
+        }
+        Ok(reconstructed)
     }
-    if reconstructed.iter().any(|value| !value.is_finite()) {
-        return Err(invalid("V30 PQ8 reconstruction differs"));
-    }
-    Ok(reconstructed)
 }
 
 pub(crate) fn fit_v30_codebook(
@@ -1112,7 +1127,7 @@ mod tests {
     use arrow_array::Array as _;
 
     use super::{
-        V30CodePlanes, V30Fidelity, V30PqCodebook, V30PqWidth, V30QueryTable,
+        V30CodePlanes, V30Fidelity, V30PqCodebook, V30PqReconstructor, V30PqWidth, V30QueryTable,
         decode_v30_pq_artifacts, encode_v30_code, encode_v30_planes, encode_v30_pq_artifacts,
         fit_v30_codebook, project_v30_resident_bytes, reconstruct_v30_code, score_v30_codes,
         score_v30_transposed_block,
@@ -1175,6 +1190,21 @@ mod tests {
             }
             assert_eq!(reconstruct_v30_code(&book, &code).unwrap(), reconstructed);
         }
+    }
+
+    #[test]
+    fn v32_virtual_geometric_reconstruction_checks_codebook_once_before_rows() {
+        // Break caught: virtual layout reconstruction rescans every centroid
+        // for finiteness once per corpus row instead of borrowing one checked
+        // immutable codebook for the complete loop.
+        let book = codebook(V30PqWidth::Base24);
+        let reconstructor = V30PqReconstructor::new(&book).unwrap();
+        let code = (0_u8..24).collect::<Vec<_>>();
+        assert_eq!(
+            reconstructor.reconstruct(&code).unwrap(),
+            reconstruct_v30_code(&book, &code).unwrap()
+        );
+        assert!(reconstructor.reconstruct(&code[..23]).is_err());
     }
 
     #[test]
