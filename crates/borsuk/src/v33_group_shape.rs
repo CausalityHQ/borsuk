@@ -12,8 +12,12 @@ use arrow_schema::{DataType, Field, Schema};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BorsukError, Result,
-    v30_s3_pq::{V30CodePlanes, V30PqCodebook, V30PqReconstructor, V30PqWidth},
+    BorsukError, Result, V27HierarchyArtifacts, decode_v27_hierarchy,
+    v30_s3_layout::{V30LayoutArtifacts, decode_v30_layout_artifacts},
+    v30_s3_pq::{
+        V30CodePlanes, V30PqArtifacts, V30PqCodebook, V30PqReconstructor, V30PqWidth,
+        decode_v30_pq_artifacts,
+    },
 };
 
 const DIMENSIONS: usize = 96;
@@ -160,6 +164,64 @@ struct V33LeafShapeArtifact {
     encoded_bytes: u64,
     row_count: u64,
     arrow: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct V33GroupShapeBuildRequest {
+    hierarchy: V27HierarchyArtifacts,
+    layout: V30LayoutArtifacts,
+    pq: V30PqArtifacts,
+    group_of_code_parent: Vec<u32>,
+    scalar_split_count: usize,
+}
+
+fn build_v33_group_shape_artifact(
+    request: &V33GroupShapeBuildRequest,
+) -> Result<V33LeafShapeArtifact> {
+    let hierarchy = decode_v27_hierarchy(
+        &request.hierarchy.roots,
+        &request.hierarchy.roots_bytes,
+        &request.hierarchy.leaves,
+        &request.hierarchy.leaves_bytes,
+    )?;
+    let layout = decode_v30_layout_artifacts(&request.layout)?;
+    let (base_codebook, high_codebook, codes) = decode_v30_pq_artifacts(&request.pq)?.into_parts();
+    if request.group_of_code_parent.len() != hierarchy.leaves.len()
+        || request.scalar_split_count == 0
+        || layout.source_rows() != codes.logical_rows() as u64
+    {
+        return Err(invalid("V33 shape build authority differs"));
+    }
+    let code_parent_centers = hierarchy
+        .leaves
+        .iter()
+        .map(|center| center.map(f32::from))
+        .collect::<Vec<_>>();
+    let ranges = layout
+        .leaves()
+        .iter()
+        .map(|range| V33RoutingRange {
+            routing_leaf_ordinal: range.leaf_ordinal,
+            code_parent_leaf_ordinal: range.code_parent_leaf_ordinal,
+            logical_start: range.logical_start,
+            row_count: range.row_count,
+        })
+        .collect::<Vec<_>>();
+    let populations = reconstruct_v33_leaf_populations(
+        &base_codebook,
+        &high_codebook,
+        &codes,
+        &code_parent_centers,
+        &ranges,
+        &request.group_of_code_parent,
+    )?;
+    let scalar_split_leaves =
+        select_v33_scalar_split_leaves(&populations, request.scalar_split_count)?;
+    let summaries = populations
+        .iter()
+        .map(summarize_v33_leaf)
+        .collect::<Result<Vec<_>>>()?;
+    encode_v33_leaf_shape_artifact(&summaries, &scalar_split_leaves)
 }
 
 fn v33_shape_control_bytes(leaf_count: usize) -> Result<V33ShapeControlBytes> {
@@ -558,12 +620,18 @@ fn select_v33_group_prefix(
 #[cfg(test)]
 mod tests {
     use super::{
-        V33GroupPopulation, V33LeafPopulation, V33RoutingRange, V33ShapeArm,
-        encode_v33_leaf_shape_artifact, rank_v33_groups, reconstruct_v33_leaf_populations,
-        score_v33_leaf, select_v33_group_prefix, select_v33_scalar_split_leaves,
-        summarize_v33_leaf, v33_shape_control_bytes,
+        V33GroupPopulation, V33GroupShapeBuildRequest, V33LeafPopulation, V33RoutingRange,
+        V33ShapeArm, build_v33_group_shape_artifact, encode_v33_leaf_shape_artifact,
+        rank_v33_groups, reconstruct_v33_leaf_populations, score_v33_leaf, select_v33_group_prefix,
+        select_v33_scalar_split_leaves, summarize_v33_leaf, v33_shape_control_bytes,
     };
-    use crate::v30_s3_pq::{V30CodePlanes, V30PqCodebook, V30PqWidth};
+    use crate::{
+        V27Hierarchy, encode_v27_hierarchy,
+        v30_s3_layout::{
+            V30Layout, V30PageIdentity, V30PageRange, V32RoutingRange, encode_v30_layout_artifacts,
+        },
+        v30_s3_pq::{V30CodePlanes, V30PqCodebook, V30PqWidth, encode_v30_pq_artifacts},
+    };
     use arrow_array::{Array, FixedSizeListArray, Float32Array, UInt32Array};
     use arrow_ipc::reader::FileReader;
     use arrow_schema::{DataType, Field};
@@ -868,5 +936,74 @@ mod tests {
                 .value(96),
             2.0
         );
+    }
+
+    #[test]
+    fn v33_group_shape_authenticated_artifacts_build_query_independent_arrow() {
+        let mut centroid = [half::f16::ZERO; 96];
+        centroid[0] = half::f16::ONE;
+        let hierarchy = encode_v27_hierarchy(&V27Hierarchy {
+            roots: vec![centroid; 256],
+            leaves: vec![centroid; 4_096],
+            leaf_roots: (0..4_096).map(|leaf| (leaf / 16) as u16).collect(),
+        })
+        .unwrap();
+        let layout = V30Layout::new(
+            20,
+            vec![
+                V32RoutingRange {
+                    leaf_ordinal: 0,
+                    code_parent_leaf_ordinal: 0,
+                    routing_centroid: centroid,
+                    logical_start: 0,
+                    row_count: 10,
+                    page_start: 0,
+                    page_count: 1,
+                },
+                V32RoutingRange {
+                    leaf_ordinal: 1,
+                    code_parent_leaf_ordinal: 1,
+                    routing_centroid: centroid,
+                    logical_start: 10,
+                    row_count: 10,
+                    page_start: 0,
+                    page_count: 1,
+                },
+            ],
+            vec![V30PageRange {
+                logical_start: 0,
+                row_count: 20,
+                identity: V30PageIdentity {
+                    ordinal: 0,
+                    sha256: [1; 32],
+                    encoded_bytes: 1,
+                    primary_rows: 20,
+                    replica_rows: 0,
+                },
+            }],
+        )
+        .unwrap();
+        let layout = encode_v30_layout_artifacts(&layout).unwrap();
+        let pq = encode_v30_pq_artifacts(
+            &codebook(V30PqWidth::Base24, 1, 0.5),
+            &codebook(V30PqWidth::High48, 2, 1.5),
+            &V30CodePlanes::from_packed(20, vec![1, 0, 0, 0], vec![1; 19 * 24], vec![2; 48])
+                .unwrap(),
+        )
+        .unwrap();
+        let request = V33GroupShapeBuildRequest {
+            hierarchy,
+            layout,
+            pq,
+            group_of_code_parent: (0..4_096).map(|parent| parent / 2).collect(),
+            scalar_split_count: 1,
+        };
+        let artifact = build_v33_group_shape_artifact(&request).unwrap();
+        assert_eq!(artifact.role, "v33-leaf-shapes-arrow");
+        assert_eq!(artifact.row_count, 2);
+
+        let mut changed = request.clone();
+        changed.pq.bytes[2][0] ^= 1;
+        assert!(build_v33_group_shape_artifact(&changed).is_err());
     }
 }
