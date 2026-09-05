@@ -362,6 +362,29 @@ class V30SpotCampaignTests(unittest.TestCase):
                 replace(self.containment(), global_leaf_limit=767),
                 self.targets(),
             )
+
+    def test_v30_workers_probe_qualifier_before_scientific_downloads(self) -> None:
+        scripts = (
+            build_v30_evaluation_spot_specs(self.evaluation(), self.targets())[0][
+                "UserData"
+            ],
+            build_v32_containment_spot_specs(self.containment(), self.targets())[0][
+                "UserData"
+            ],
+        )
+        for script in scripts:
+            self.assertIn('mkdir -p "$root/resident" "$source_dir" /opt/borsuk', script)
+            authentication = script.index(
+                "printf '%s  %s\\n' " + "1" * 64 + " /opt/borsuk/v30_s3_qualify"
+            )
+            probe = script.index('"$qualifier" >"$root/qualifier-probe.out"')
+            expected_failure = script.index("grep -F -- '--execute is required'")
+            python_setup = script.index("curl -LsSf https://astral.sh/uv/")
+            manifest_download = script.index('manifest.json "$root/manifest.json"')
+            self.assertLess(authentication, probe)
+            self.assertLess(probe, expected_failure)
+            self.assertLess(expected_failure, python_setup)
+            self.assertLess(expected_failure, manifest_download)
         with self.assertRaisesRegex(ValueError, "containment authority"):
             build_v32_containment_spot_specs(
                 replace(
