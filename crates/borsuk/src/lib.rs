@@ -205,6 +205,7 @@ mod v33_group_shape;
 mod v34_rank4;
 mod v34_route;
 mod v35_authority;
+mod v35_patch;
 mod v35_projection;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
@@ -254,6 +255,11 @@ pub use v34_route::{
 pub use v35_authority::{
     V35ArtifactIdentity, V35Dimensions, V35GenerationManifest, V35ProjectionArm, V35RemoteCodeRate,
     V35ServingProjection, project_v35_serving_memory, validate_v35_manifest,
+};
+#[doc(hidden)]
+pub use v35_patch::{
+    V35LeafPatch, V35LeafPatchBuildRequest, build_v35_leaf_patch, project_v35_leaf_moment_bytes,
+    score_v35_leaf_patch,
 };
 #[doc(hidden)]
 pub use v35_projection::{

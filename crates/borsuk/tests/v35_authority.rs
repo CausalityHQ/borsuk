@@ -216,7 +216,8 @@ fn v35_authority_projects_every_resident_generation_and_overflow() {
     two_patches.patches_per_leaf = 2;
     assert!(project_v35_serving_memory(&two_patches).is_err());
     two_patches.leaf_count = 100_000;
-    assert!(project_v35_serving_memory(&two_patches).is_ok());
+    let two_patch_projection = project_v35_serving_memory(&two_patches).unwrap();
+    assert_eq!(two_patch_projection.bytes_per_leaf, 2 * (8 * 192 + 128));
 
     let mut limit_crossing = manifest();
     limit_crossing.dimensions.routing = 128;

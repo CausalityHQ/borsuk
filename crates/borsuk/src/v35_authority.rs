@@ -290,8 +290,8 @@ pub fn project_v35_serving_memory(
     let patches = u64::from(manifest.patches_per_leaf);
     let bytes_per_leaf = routing
         .checked_mul(8)
-        .and_then(|value| value.checked_mul(patches))
         .and_then(|value| value.checked_add(128))
+        .and_then(|value| value.checked_mul(patches))
         .ok_or_else(|| invalid("V35 leaf projection overflows"))?;
     let active_and_retiring_leaf_bytes = manifest
         .leaf_count
