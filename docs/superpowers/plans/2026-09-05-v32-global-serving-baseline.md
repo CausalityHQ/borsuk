@@ -35,7 +35,7 @@ Dataclasses are frozen. Query expectation fields are `query_ordinal`,
   matches, exact expected replay/page equality, recomputed row/bytes, phase sums,
   observed counts within frozen budgets, and explicit global batch schema.
 - [x] Rerun identical six-node GREEN; scoped Ruff/pycompile/diff-check.
-- [ ] Commit verified validator and design.
+- [x] Commit verified validator and design (`34a6ed9f7c5cd3d8a74ca89ec2484342a6ced0a0`).
 
 Review corrections: retain exactly min(12288,codes_scanned), consider exactly
 sixteen distinct pages, and score at least one root. Three mutations reproduced
@@ -46,6 +46,37 @@ also reproduced an OverflowError and now fails at the finite-value boundary.
 
 **Files:** extend `scripts/v32_global_serving.py`, its tests, and the existing
 Spot launcher only after Task1 is accepted.
+
+First bounded substep: `load_global_replay_authority(terminal: bytes,
+manifest: bytes, page_locations: bytes, registration: GlobalReplayRegistration)`
+returns frozen `GlobalReplayAuthority(expected, pages, source_rows, query_start)`.
+Registration independently pins terminal/manifest SHA and byte length, query,
+truth and truth-receipt SHA, source count and query start. Check both byte hashes
+before parsing; the manifest pins page-location Parquet hash and length. Decode
+the Rust four-column nonnullable schema (u32 ordinal, fixed binary32 SHA, u32
+length, u16 rows), contiguous ordinals and total unique source rows. Extract
+original first-distinct page identities from control.queries and replay hashes
+from virtual_geometric.queries, paired by the exact registered32 ordinals. Do
+not take the virtual page selections. Cross-bind query/truth/manifest hashes and
+fixed global configuration. This is an immutable historical evidence projection,
+not a production old-index reader or full science-result revalidation. Exact
+registered terminal bytes root unused historical scientific fields.
+
+- [x] Test byte/hash drift before parse; physical Parquet schema/count/ordinal
+  drift; fixed query order/hash and original-page identity cross-binding.
+- [x] Implement projection only, then run affected tests and scoped static gate.
+  No network, qualifier invocation or page body in this substep. Actual query/
+  truth materialization and executable identity remain the following controller
+  boundary; the projection alone cannot admit a scientific result.
+
+Projection verification: three-node missing-API RED, three-node GREEN, then
+ten total tests including physical-schema/coverage mutations; scoped Ruff,
+py_compile and diff-check GREEN. Astra read-only review READY. Before the next
+quality campaign, independently reproduced a truth distance summation-order
+gap: NumPy axis reduction differs from Rust's sequential f64 accumulation for
+an adversarial near-tie. Correct it under separate TDD and new truth authority;
+preserve all historical truth objects and original control comparisons.
+
 - [ ] Inspect exact terminal/manifest/Parquet layouts and write the bounded
   controller implementation subplan before edits. It must name exact artifact
   roles, URI/SHA/length bindings, output schema and frozen execution command.

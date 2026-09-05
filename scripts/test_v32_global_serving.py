@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import unittest
 from dataclasses import asdict
@@ -8,6 +9,222 @@ from scripts.v32_global_serving import (
     GlobalQueryExpectation,
     validate_global_serving_batch,
 )
+
+
+class GlobalReplayAuthorityTests(unittest.TestCase):
+    def fixture(self):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        from scripts.v32_global_serving import GlobalReplayRegistration
+
+        schema = pa.schema(
+            [
+                pa.field("page_ordinal", pa.uint32(), nullable=False),
+                pa.field("sha256", pa.binary(32), nullable=False),
+                pa.field("encoded_bytes", pa.uint32(), nullable=False),
+                pa.field("row_count", pa.uint16(), nullable=False),
+            ]
+        )
+        table = pa.Table.from_arrays(
+            [
+                pa.array(range(16), type=pa.uint32()),
+                pa.array(
+                    [bytes.fromhex(f"{i + 1:064x}") for i in range(16)],
+                    type=pa.binary(32),
+                ),
+                pa.array([100] * 16, type=pa.uint32()),
+                pa.array([2] * 16, type=pa.uint16()),
+            ],
+            schema=schema,
+        )
+        sink = pa.BufferOutputStream()
+        pq.write_table(table, sink)
+        locations = sink.getvalue().to_pybytes()
+        manifest = {
+            "schema_version": 3,
+            "page_key_suffix": ".arrow",
+            "layout": {"source_rows": 32, "page_rows": 480},
+            "routing": {"candidate_depth": 12288, "page_count": 16, "root_beam": 8},
+            "serving": {
+                "page_locations": {
+                    "role": "v32-page-locations-parquet",
+                    "file": "page-locations.parquet",
+                    "encoded_bytes": len(locations),
+                    "sha256": hashlib.sha256(locations).hexdigest(),
+                }
+            },
+        }
+        manifest_raw = self.encode(manifest)
+        terminal = {
+            "schema_version": 7,
+            "claim_eligible": False,
+            "routing_scope": "global",
+            "layout_algorithm": "v32-global-balanced-cosine-v1",
+            "global_leaf_limit": 768,
+            "root_beam": 8,
+            "leaf_beam": 256,
+            "source_rows": 32,
+            "query_start": 64,
+            "query_count": 32,
+            "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+            "query_sha256": "a" * 64,
+            "truth_sha256": "b" * 64,
+            "truth_receipt_sha256": "c" * 64,
+            "control": {
+                "queries": [
+                    {
+                        "query_ordinal": q,
+                        "page_selections": {
+                            "first_distinct": {
+                                "pages": [
+                                    {
+                                        "ordinal": i,
+                                        "sha256": f"{i + 1:064x}",
+                                        "encoded_bytes": 100,
+                                    }
+                                    for i in range(16)
+                                ],
+                                "selected_page_bytes": 1600,
+                            }
+                        },
+                    }
+                    for q in range(64, 96)
+                ]
+            },
+            "virtual_geometric": {
+                "queries": [
+                    {
+                        "query_ordinal": q,
+                        "candidate_replay_sha256": f"{q + 100:064x}",
+                        "selected_pages": [999],
+                    }
+                    for q in range(64, 96)
+                ]
+            },
+        }
+        terminal_raw = self.encode(terminal)
+        registration = GlobalReplayRegistration(
+            hashlib.sha256(terminal_raw).hexdigest(),
+            len(terminal_raw),
+            hashlib.sha256(manifest_raw).hexdigest(),
+            len(manifest_raw),
+            "a" * 64,
+            "b" * 64,
+            "c" * 64,
+            32,
+            64,
+        )
+        return terminal_raw, manifest_raw, locations, registration
+
+    @staticmethod
+    def encode(value):
+        return json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+    def load(self, parts):
+        from scripts.v32_global_serving import load_global_replay_authority
+
+        return load_global_replay_authority(*parts)
+
+    def test_authenticated_original_pages_not_virtual_pages(self):
+        result = self.load(self.fixture())
+        self.assertEqual(result.source_rows, 32)
+        self.assertEqual(result.query_start, 64)
+        self.assertEqual(len(result.expected), 32)
+        self.assertEqual(result.expected[0].page_ordinals, tuple(range(16)))
+        self.assertEqual(result.expected[0].candidate_replay_sha256, f"{164:064x}")
+        self.assertEqual(sum(p.primary_rows for p in result.pages), 32)
+
+    def test_registered_bytes_are_authenticated_before_projection(self):
+        parts = self.fixture()
+        for index in range(3):
+            with self.subTest(role=index):
+                changed = list(parts)
+                changed[index] += b" "
+                with self.assertRaises(ValueError):
+                    self.load(changed)
+
+    def test_query_pairing_and_original_page_bindings(self):
+        from dataclasses import replace
+
+        parts = self.fixture()
+        for mutate in [
+            lambda t: t.update(query_sha256="d" * 64),
+            lambda t: t["control"]["queries"].reverse(),
+            lambda t: t["virtual_geometric"]["queries"].reverse(),
+            lambda t: t["control"]["queries"][0]["page_selections"]["first_distinct"][
+                "pages"
+            ][0].update(sha256="d" * 64),
+            lambda t: t["control"]["queries"][0]["page_selections"][
+                "first_distinct"
+            ].update(selected_page_bytes=1599),
+        ]:
+            t = json.loads(parts[0])
+            mutate(t)
+            raw = self.encode(t)
+            # Re-root only terminal digest/length to reach internal cross-bind.
+            registered = replace(
+                parts[3],
+                terminal_sha256=hashlib.sha256(raw).hexdigest(),
+                terminal_bytes=len(raw),
+            )
+            with self.assertRaises(ValueError):
+                self.load((raw, parts[1], parts[2], registered))
+
+    def test_page_schema_and_coverage_after_minimal_hash_cascade(self):
+        from dataclasses import replace
+
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        parts = self.fixture()
+        original = pq.read_table(pa.BufferReader(parts[2]))
+        changes = [
+            (
+                "nullable",
+                original.cast(
+                    pa.schema(
+                        [
+                            pa.field(f.name, f.type, nullable=True)
+                            for f in original.schema
+                        ]
+                    )
+                ),
+            ),
+            ("missing", original.slice(0, 15)),
+            ("order", original.take(pa.array(list(reversed(range(16)))))),
+            (
+                "coverage",
+                original.set_column(
+                    3,
+                    original.schema.field(3),
+                    pa.array([3] + [2] * 15, type=pa.uint16()),
+                ),
+            ),
+        ]
+        for name, table in changes:
+            with self.subTest(name=name):
+                sink = pa.BufferOutputStream()
+                pq.write_table(table, sink)
+                pages = sink.getvalue().to_pybytes()
+                manifest = json.loads(parts[1])
+                manifest["serving"]["page_locations"].update(
+                    sha256=hashlib.sha256(pages).hexdigest(), encoded_bytes=len(pages)
+                )
+                manifest_raw = self.encode(manifest)
+                terminal = json.loads(parts[0])
+                terminal["manifest_sha256"] = hashlib.sha256(manifest_raw).hexdigest()
+                terminal_raw = self.encode(terminal)
+                # Cascade only page -> manifest -> terminal byte bindings.
+                registered = replace(
+                    parts[3],
+                    manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(),
+                    manifest_bytes=len(manifest_raw),
+                    terminal_sha256=hashlib.sha256(terminal_raw).hexdigest(),
+                    terminal_bytes=len(terminal_raw),
+                )
+                with self.assertRaises(ValueError):
+                    self.load((terminal_raw, manifest_raw, pages, registered))
 
 
 class GlobalServingTests(unittest.TestCase):

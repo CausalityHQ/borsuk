@@ -7,6 +7,7 @@ valid floating-point lexemes are never reconstructed to establish byte identity.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass
@@ -57,6 +58,208 @@ class GlobalQueryExpectation:
     query_ordinal: int
     candidate_replay_sha256: str
     page_ordinals: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class GlobalReplayRegistration:
+    terminal_sha256: str
+    terminal_bytes: int
+    manifest_sha256: str
+    manifest_bytes: int
+    query_sha256: str
+    truth_sha256: str
+    truth_receipt_sha256: str
+    source_rows: int
+    query_start: int
+
+
+@dataclass(frozen=True)
+class GlobalReplayAuthority:
+    expected: tuple[GlobalQueryExpectation, ...]
+    pages: tuple[GlobalPageIdentity, ...]
+    source_rows: int
+    query_start: int
+
+
+def load_global_replay_authority(
+    terminal: bytes,
+    manifest: bytes,
+    page_locations: bytes,
+    registration: GlobalReplayRegistration,
+) -> GlobalReplayAuthority:
+    """Project pinned historical control evidence, without I/O or page access.
+
+    Registration is external authority, never inferred from these payloads.
+    This authenticates the replay projection, not query/truth materialization.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    _require(type(registration) is GlobalReplayRegistration, "registration type")
+    r = registration
+    _require(
+        all(
+            _digest(v)
+            for v in (
+                r.terminal_sha256,
+                r.manifest_sha256,
+                r.query_sha256,
+                r.truth_sha256,
+                r.truth_receipt_sha256,
+            )
+        )
+        and _integer(r.source_rows, 16, 10**9)
+        and _integer(r.query_start, 0, 2**64 - 33),
+        "registration values",
+    )
+
+    def authenticate(payload, digest, size):
+        _require(
+            type(payload) is bytes
+            and _digest(digest)
+            and _integer(size, 1, 8 * 1024**2)
+            and len(payload) == size
+            and hashlib.sha256(payload).hexdigest() == digest,
+            "artifact bytes",
+        )
+
+    authenticate(terminal, r.terminal_sha256, r.terminal_bytes)
+    authenticate(manifest, r.manifest_sha256, r.manifest_bytes)
+    t, m = _parse(terminal), _parse(manifest)
+    try:
+        _require(
+            type(m["schema_version"]) is int
+            and m["schema_version"] == 3
+            and m["page_key_suffix"] == ".arrow"
+            and type(m["layout"]["source_rows"]) is int
+            and m["layout"]["source_rows"] == r.source_rows
+            and type(m["layout"]["page_rows"]) is int
+            and m["layout"]["page_rows"] == 480,
+            "manifest projection",
+        )
+        for key, value in (
+            ("candidate_depth", 12288),
+            ("page_count", 16),
+            ("root_beam", 8),
+        ):
+            _require(
+                type(m["routing"][key]) is int and m["routing"][key] == value,
+                "manifest route",
+            )
+        location = m["serving"]["page_locations"]
+        _require(
+            _keys(location, {"role", "file", "sha256", "encoded_bytes"})
+            and location["role"] == "v32-page-locations-parquet"
+            and location["file"] == "page-locations.parquet",
+            "page artifact identity",
+        )
+        authenticate(page_locations, location["sha256"], location["encoded_bytes"])
+        for key, value in (
+            ("schema_version", 7),
+            ("global_leaf_limit", 768),
+            ("root_beam", 8),
+            ("leaf_beam", 256),
+            ("source_rows", r.source_rows),
+            ("query_start", r.query_start),
+            ("query_count", 32),
+        ):
+            _require(type(t[key]) is int and t[key] == value, "terminal configuration")
+        _require(
+            t["claim_eligible"] is False
+            and t["routing_scope"] == "global"
+            and t["layout_algorithm"] == "v32-global-balanced-cosine-v1"
+            and t["manifest_sha256"] == r.manifest_sha256
+            and t["query_sha256"] == r.query_sha256
+            and t["truth_sha256"] == r.truth_sha256
+            and t["truth_receipt_sha256"] == r.truth_receipt_sha256,
+            "terminal bindings",
+        )
+        schema = pa.schema(
+            [
+                pa.field("page_ordinal", pa.uint32(), nullable=False),
+                pa.field("sha256", pa.binary(32), nullable=False),
+                pa.field("encoded_bytes", pa.uint32(), nullable=False),
+                pa.field("row_count", pa.uint16(), nullable=False),
+            ]
+        )
+        parquet = pq.ParquetFile(pa.BufferReader(page_locations))
+        _require(
+            parquet.schema_arrow.equals(schema, check_metadata=False)
+            and 16 <= parquet.metadata.num_rows <= r.source_rows,
+            "page Parquet schema",
+        )
+        table = parquet.read()
+        _require(all(column.null_count == 0 for column in table.columns), "page nulls")
+        pages = []
+        for ordinal, item in enumerate(table.to_pylist()):
+            _require(item["page_ordinal"] == ordinal, "page ordinal")
+            page = GlobalPageIdentity(
+                ordinal,
+                item["sha256"].hex(),
+                item["encoded_bytes"],
+                item["row_count"],
+                0,
+            )
+            _page(asdict(page))
+            pages.append(page)
+        _require(sum(p.primary_rows for p in pages) == r.source_rows, "page coverage")
+        control, replay = t["control"]["queries"], t["virtual_geometric"]["queries"]
+        _require(
+            type(control) is list
+            and type(replay) is list
+            and len(control) == len(replay) == 32,
+            "query count",
+        )
+        expected = []
+        for ordinal, (original, captured) in enumerate(
+            zip(control, replay, strict=True), r.query_start
+        ):
+            _require(
+                type(original["query_ordinal"]) is int
+                and original["query_ordinal"] == ordinal
+                and type(captured["query_ordinal"]) is int
+                and captured["query_ordinal"] == ordinal
+                and _digest(captured["candidate_replay_sha256"]),
+                "query pairing",
+            )
+            selection = original["page_selections"]["first_distinct"]
+            _require(
+                type(selection["pages"]) is list and len(selection["pages"]) == 16,
+                "control pages",
+            )
+            ordinals = []
+            for item in selection["pages"]:
+                _require(
+                    _keys(item, {"ordinal", "sha256", "encoded_bytes"})
+                    and _integer(item["ordinal"], 0, len(pages) - 1)
+                    and _integer(item["encoded_bytes"], 1),
+                    "control page schema",
+                )
+                page = pages[item["ordinal"]]
+                _require(
+                    item["sha256"] == page.sha256
+                    and item["encoded_bytes"] == page.encoded_bytes,
+                    "control page identity",
+                )
+                ordinals.append(page.ordinal)
+            _require(
+                len(set(ordinals)) == 16
+                and type(selection["selected_page_bytes"]) is int
+                and selection["selected_page_bytes"]
+                == sum(pages[i].encoded_bytes for i in ordinals)
+                <= 3145728,
+                "control accounting",
+            )
+            expected.append(
+                GlobalQueryExpectation(
+                    ordinal, captured["candidate_replay_sha256"], tuple(ordinals)
+                )
+            )
+        return GlobalReplayAuthority(
+            tuple(expected), tuple(pages), r.source_rows, r.query_start
+        )
+    except (KeyError, TypeError, IndexError, pa.ArrowException) as error:
+        raise ValueError("V32 global serving authority projection differs") from error
 
 
 def _require(condition: bool, boundary: str) -> None:
