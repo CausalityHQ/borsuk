@@ -3653,11 +3653,11 @@ not new measured serving recall. Failed-window64-page bytes398,224,344 differ
 from399,003,648 in each earlier window because physical page sizes differ.
 
 The sole missed target belongs to query6160: logical411202, page856, routing
-leaf1711. Its zero-based global leaf rank is1500, owner root52 ranks60, and it
+leaf1711. Its one-based global leaf rank is1500, owner root52 ranks60, and it
 has no retained-candidate or first-distinct-page rank. Its page is absent from
 both scanned and retained populations. The query stopped at `leaf-limit`:
 768/4141 leaves,186,745/262,144 codes,12,288 retained candidates. Thus more
-physical pages alone cannot recover this miss. Rank1500 requires at least1501
+physical pages alone cannot recover this miss. Rank1500 requires at least1500
 leaves; the cumulative code cost to reach it is not present in this terminal.
 Do not infer that raising the leaf limit alone suffices under the same budget.
 
@@ -3699,3 +3699,48 @@ Recovery on these burned queries would explain the failure, not independently
 qualify it; the unexecuted7168 window remains a prospective check after a new
 configuration is frozen. The separate resident-code memory limitation at1B
 also remains unresolved. Claim eligibility remains false.
+
+### V32 metadata-only frontier-cost explanation
+
+A bounded local cross-language diagnostic reused exact query Parquet and
+manifest-owned routing-ranges Arrow metadata only:4,826,010B, no corpus,
+PQ-code scoring, page bodies or EC2 compute. It reproduced the production
+reader-plus-router normalization (two ordered-f64 passes with f32 casts),
+f16-centroid conversion through f32, ordered96-dimension f64 distance and
+leaf-ordinal tie-breaking. Before deriving new costs it exactly matched all
+96 original scanned-leaf/code counts and all960 recorded target leaf ranks.
+
+Two preflight failures were preserved: an incorrect scratch-script field name
+(`leaf_ordinal` instead of authenticated `routing_leaf_ordinal`) and the rank
+base assumption. Source inspection confirms diagnostic root/leaf ranks are
+one-based; candidate and first-unique-page ranks are zero-based. The preceding
+ledger wording was corrected accordingly. No cost result was accepted before
+the full reproduction gate passed; no production or index data changed.
+
+For query6160 the missed leaf is index1499 / reported rank1500 and needs
+353,435 cumulative codes. A1536-leaf/262144-code intersection stops after1083
+whole leaves /262,080 codes and still excludes it. A1536/524288 intersection
+visits1536 leaves /360,482 codes and reaches it. Across the96 queries, the
+262144-budget cell reaches959/960 target leaves and scans261,213..262,141 codes;
+the524288 cell reaches960/960 and scans315,293..421,521. This is **frontier
+reachability only**, not PQ candidate retention, page containment or recall.
+Whole-leaf stopping neither skips an over-budget leaf nor partially scans it.
+
+Result134,107B SHA256
+`964df481d44b590cc8d8b1497d6cac048b13d54c85fec24337bac7c5d684fc5f`
+is preserved with the exact diagnostic script at
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/63df86a22ff44f99aeaf387665a062cd708c6a18/attempts/v32-frontier-cost-63df86a2-a0001/RESULT.json`.
+It binds the exact broader terminal and input hashes, all per-target inclusive
+prefix costs and both fixed-cell counts. Wall362,869,301ns including bounded
+downloads and parsing; process peak RSS142,028,800B. Runtime checks enforced
+RSS<1GiB and full PSI avg10<=0.5. This is not Rust routing latency.
+
+Astra confirmed the next bounded explanatory cell:1536 leaves,524288 codes,
+12288 retained candidates and first-distinct64 pages, unchanged truth/ranking
+arithmetic for all96 burned queries. No further ladder or page-budget tuning.
+Measure scan CPU and candidate/page-loss stages; changed routing bounds must
+produce newly bound captures rather than claiming old hashes remain equal.
+Stop on failed recovery and diagnose, with no physical page reads. A successful
+replay would explain this failure, not qualify general recall; freeze it before
+evaluating the still-unexecuted7168 window. Implementation and execution of
+that explanatory cell remain pending at this checkpoint.
