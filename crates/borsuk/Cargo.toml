@@ -32,6 +32,7 @@ bytes = "1.11"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 futures-util = "0.3"
 half = "2.7"
+nalgebra = "0.33"
 object_store = { version = "0.14", features = ["aws", "azure", "gcp", "fs"] }
 parquet = { version = "58.3", features = ["async", "object_store"] }
 regex = "1"

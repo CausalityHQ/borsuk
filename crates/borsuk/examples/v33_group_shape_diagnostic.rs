@@ -5,9 +5,11 @@ use std::{collections::BTreeMap, env, fs, path::PathBuf};
 use borsuk::{
     V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30LayoutArtifactIdentity,
     V30LayoutArtifacts, V30PqArtifactIdentity, V30PqArtifacts, V33FullCovarianceCeilingRequest,
-    V33GroupShapeBuildRequest, V33ReconstructedOracleRequest, build_v33_full_covariance_ceiling,
-    build_v33_group_shape_artifact, build_v33_reconstructed_group_oracle,
+    V33GroupShapeBuildRequest, V33LowRankCovarianceLadderRequest, V33ReconstructedOracleRequest,
+    build_v33_full_covariance_ceiling, build_v33_group_shape_artifact,
+    build_v33_low_rank_covariance_ladder, build_v33_reconstructed_group_oracle,
     canonical_v33_full_covariance_ceiling_result_bytes,
+    canonical_v33_low_rank_covariance_ladder_result_bytes,
     canonical_v33_reconstructed_oracle_result_bytes,
 };
 use serde_json::Value;
@@ -24,6 +26,7 @@ enum RunMode {
     GroupShape,
     ReconstructedOracle,
     FullCovarianceCeiling,
+    LowRankCovarianceLadder,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +42,7 @@ struct Args {
     pq_high_codes: PathBuf,
     group_directory: PathBuf,
     frontier: Option<PathBuf>,
+    summary_output: Option<PathBuf>,
     output: PathBuf,
     mode: RunMode,
 }
@@ -403,11 +407,13 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
             "--execute-group-shape"
                 | "--execute-reconstructed-oracle"
                 | "--execute-full-covariance-ceiling"
+                | "--execute-low-rank-covariance-ladder"
         ) {
             let next = match flag.as_str() {
                 "--execute-group-shape" => RunMode::GroupShape,
                 "--execute-reconstructed-oracle" => RunMode::ReconstructedOracle,
                 "--execute-full-covariance-ceiling" => RunMode::FullCovarianceCeiling,
+                "--execute-low-rank-covariance-ladder" => RunMode::LowRankCovarianceLadder,
                 _ => unreachable!(),
             };
             if mode.replace(next).is_some() {
@@ -428,6 +434,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
                 | "--pq-high-codes"
                 | "--group-directory"
                 | "--frontier"
+                | "--summary-output"
                 | "--output"
         ) {
             return Err(format!("unknown flag: {flag}"));
@@ -441,6 +448,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
     }
     let mode = mode.ok_or("an explicit execution mode is required")?;
     let frontier = paths.remove("--frontier");
+    let summary_output = paths.remove("--summary-output");
     let mut take = |flag: &str| {
         paths
             .remove(flag)
@@ -448,6 +456,8 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
     };
     if (mode == RunMode::GroupShape && frontier.is_some())
         || (mode != RunMode::GroupShape && frontier.is_none())
+        || (mode == RunMode::LowRankCovarianceLadder && summary_output.is_none())
+        || (mode != RunMode::LowRankCovarianceLadder && summary_output.is_some())
     {
         return Err("frontier authority differs for execution mode".to_owned());
     }
@@ -463,6 +473,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
         pq_high_codes: take("--pq-high-codes")?,
         group_directory: take("--group-directory")?,
         frontier,
+        summary_output,
         output: take("--output")?,
         mode,
     })
@@ -682,6 +693,38 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             )?;
             fs::write(&args.output, bytes)?;
         }
+        RunMode::LowRankCovarianceLadder => {
+            // Build and persist the query-independent summaries before the
+            // frontier path is opened at all.
+            let ladder = build_v33_low_rank_covariance_ladder(&request)?;
+            fs::write(
+                args.summary_output
+                    .as_ref()
+                    .ok_or("V33 low-rank summary output is required")?,
+                ladder.artifact_arrow(),
+            )?;
+            let frontier = read(args.frontier.as_ref().ok_or("V33 frontier is required")?)?;
+            if frontier.len() as u64 != FRONTIER_BYTES
+                || format!("{:x}", Sha256::digest(&frontier)) != FRONTIER_SHA256
+            {
+                return Err("V33 low-rank covariance frontier byte authority differs".into());
+            }
+            let evidence = parse_full_covariance_frontier(&frontier)?;
+            let bytes = canonical_v33_low_rank_covariance_ladder_result_bytes(
+                &ladder,
+                &V33LowRankCovarianceLadderRequest {
+                    frontier_sha256: FRONTIER_SHA256.to_owned(),
+                    frontier_bytes: FRONTIER_BYTES,
+                    query_ordinals: evidence.query_ordinals,
+                    queries: evidence.queries,
+                    truth_logicals: evidence.truth_logicals,
+                    group_rows,
+                    row_limit: 262_144,
+                    group_limit: 64,
+                },
+            )?;
+            fs::write(&args.output, bytes)?;
+        }
     }
     Ok(())
 }
@@ -878,5 +921,36 @@ mod tests {
             frontier.truth_logicals,
             vec![vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; 2]
         );
+    }
+
+    #[test]
+    fn v33_group_shape_low_rank_ladder_mode_is_explicit_and_exclusive() {
+        // Break caught: the compact ladder has no isolated executable mode or
+        // can be outcome-selected alongside the complete-covariance ceiling.
+        let mut values = valid_args();
+        values.pop();
+        values.extend([
+            "--frontier".to_owned(),
+            "frontier.json".to_owned(),
+            "--summary-output".to_owned(),
+            "low-rank.arrow".to_owned(),
+            "--execute-low-rank-covariance-ladder".to_owned(),
+        ]);
+        let parsed = parse_args(values).unwrap();
+        assert_eq!(parsed.mode, RunMode::LowRankCovarianceLadder);
+        assert_eq!(
+            parsed.summary_output.unwrap().to_string_lossy(),
+            "low-rank.arrow"
+        );
+
+        let mut both = valid_args();
+        both.pop();
+        both.extend([
+            "--frontier".to_owned(),
+            "frontier.json".to_owned(),
+            "--execute-full-covariance-ceiling".to_owned(),
+            "--execute-low-rank-covariance-ladder".to_owned(),
+        ]);
+        assert!(parse_args(both).is_err());
     }
 }

@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, io::Cursor, sync::Arc};
 
 #[cfg(test)]
 use std::collections::BTreeMap;
@@ -7,8 +7,13 @@ use arrow_array::{
     ArrayRef, BooleanArray, FixedSizeListArray, Float32Array, RecordBatch, UInt8Array, UInt32Array,
     UInt64Array,
 };
-use arrow_ipc::{MetadataVersion, writer::FileWriter, writer::IpcWriteOptions};
+use arrow_ipc::{
+    MetadataVersion,
+    reader::FileReader,
+    writer::{FileWriter, IpcWriteOptions},
+};
 use arrow_schema::{DataType, Field, Schema};
+use nalgebra::{DMatrix, SymmetricEigen};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
@@ -255,6 +260,85 @@ pub struct V33FullCovarianceCeiling {
 #[doc(hidden)]
 /// Bound inputs for the canonical complete-covariance ceiling receipt.
 pub struct V33FullCovarianceCeilingRequest {
+    /// Registered SHA-256 of the immutable V33 frontier.
+    pub frontier_sha256: String,
+    /// Registered byte length of the immutable V33 frontier.
+    pub frontier_bytes: u64,
+    /// Strictly increasing frozen query ordinals.
+    pub query_ordinals: Vec<u64>,
+    /// Frozen normalized query vectors in query-ordinal order.
+    pub queries: Vec<[f32; DIMENSIONS]>,
+    /// Ten frozen truth logical ordinals for every query.
+    pub truth_logicals: Vec<Vec<u64>>,
+    /// Exact row population indexed by dense group ordinal.
+    pub group_rows: Vec<u64>,
+    /// Longest-prefix row ceiling.
+    pub row_limit: u64,
+    /// Longest-prefix group ceiling.
+    pub group_limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct V33LowRankCovarianceSummary {
+    ordinal: u32,
+    group_ordinal: u32,
+    logical_start: u64,
+    population: u64,
+    mean: [f32; DIMENSIONS],
+    diagonal: [f32; DIMENSIONS],
+    directions: [[f32; DIMENSIONS]; 4],
+    eigenvalues: [f32; 4],
+    residuals: [[f32; DIMENSIONS]; 3],
+    ranks: [usize; 3],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct V33LowRankCovarianceGroup {
+    ordinal: u32,
+    population: u64,
+    leaves: Vec<V33LowRankCovarianceSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct V33LowRankCovarianceArtifact {
+    sha256: String,
+    encoded_bytes: u64,
+    row_count: u64,
+    arrow: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[doc(hidden)]
+/// Nested f32 rank-one/two/four covariance diagnostics over reconstructed leaves.
+pub struct V33LowRankCovarianceLadder {
+    groups: Vec<V33LowRankCovarianceGroup>,
+    logical_groups: Vec<u32>,
+    artifact_arrow: Vec<u8>,
+    artifact_sha256: String,
+    artifact_encoded_bytes: u64,
+}
+
+impl V33LowRankCovarianceLadder {
+    /// Return the authenticated uncompressed Arrow IPC summary artifact.
+    pub fn artifact_arrow(&self) -> &[u8] {
+        &self.artifact_arrow
+    }
+
+    /// Return the SHA-256 authority for the Arrow IPC summary artifact.
+    pub fn artifact_sha256(&self) -> &str {
+        &self.artifact_sha256
+    }
+
+    /// Return the exact byte length of the Arrow IPC summary artifact.
+    pub fn artifact_encoded_bytes(&self) -> u64 {
+        self.artifact_encoded_bytes
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[doc(hidden)]
+/// Bound inputs for the canonical low-rank covariance ladder receipt.
+pub struct V33LowRankCovarianceLadderRequest {
     /// Registered SHA-256 of the immutable V33 frontier.
     pub frontier_sha256: String,
     /// Registered byte length of the immutable V33 frontier.
@@ -597,6 +681,603 @@ pub fn rank_v33_full_covariance_groups(
     Ok(ranked.into_iter().map(|(_, ordinal)| ordinal).collect())
 }
 
+fn summarize_low_rank_covariance(
+    population: &V33LeafPopulation,
+) -> Result<V33LowRankCovarianceSummary> {
+    if population.rows.is_empty() {
+        return Err(invalid("V33 low-rank population differs"));
+    }
+    let count = population.rows.len() as f64;
+    let mut mean64 = [0.0_f64; DIMENSIONS];
+    for (_, row) in &population.rows {
+        for dimension in 0..DIMENSIONS {
+            mean64[dimension] += f64::from(row[dimension]);
+        }
+    }
+    for value in &mut mean64 {
+        *value /= count;
+    }
+    let mut diagonal64 = [0.0_f64; DIMENSIONS];
+    for (_, row) in &population.rows {
+        for dimension in 0..DIMENSIONS {
+            let delta = f64::from(row[dimension]) - mean64[dimension];
+            diagonal64[dimension] += delta * delta / count;
+        }
+    }
+    let mean = mean64.map(|value| value as f32);
+    let diagonal = diagonal64.map(|value| value as f32);
+    let (directions, eigenvalues, _) = principal_covariance_components(population, 4)?;
+    let directions: [[f32; DIMENSIONS]; 4] = directions
+        .try_into()
+        .map_err(|_| invalid("V33 low-rank direction count differs"))?;
+    let eigenvalues: [f32; 4] = eigenvalues
+        .try_into()
+        .map_err(|_| invalid("V33 low-rank eigenvalue count differs"))?;
+    let ranks = [1_usize, 2, 4];
+    let mut residuals = [[0.0_f32; DIMENSIONS]; 3];
+    for (arm, rank) in ranks.into_iter().enumerate() {
+        for dimension in 0..DIMENSIONS {
+            let explained = (0..rank)
+                .map(|component| {
+                    f64::from(eigenvalues[component])
+                        * f64::from(directions[component][dimension]).powi(2)
+                })
+                .sum::<f64>();
+            let residual = f64::from(diagonal[dimension]) - explained;
+            let tolerance = (f64::from(diagonal[dimension]).abs() * 1.0e-5).max(1.0e-7);
+            if !residual.is_finite() || residual < -tolerance {
+                return Err(invalid("V33 low-rank residual diagonal differs"));
+            }
+            residuals[arm][dimension] = residual.max(0.0) as f32;
+        }
+    }
+    Ok(V33LowRankCovarianceSummary {
+        ordinal: population.routing_leaf_ordinal,
+        group_ordinal: population.group_ordinal,
+        logical_start: population
+            .rows
+            .iter()
+            .map(|(ordinal, _)| *ordinal)
+            .min()
+            .unwrap(),
+        population: population.rows.len() as u64,
+        mean,
+        diagonal,
+        directions,
+        eigenvalues,
+        residuals,
+        ranks,
+    })
+}
+
+fn v33_low_rank_covariance_schema() -> Schema {
+    let vector = || {
+        DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            DIMENSIONS as i32,
+        )
+    };
+    let eigenvalues =
+        DataType::FixedSizeList(Arc::new(Field::new("element", DataType::Float32, false)), 4);
+    Schema::new(vec![
+        Field::new("routing_leaf_ordinal", DataType::UInt32, false),
+        Field::new("group_ordinal", DataType::UInt32, false),
+        Field::new("logical_start", DataType::UInt64, false),
+        Field::new("population", DataType::UInt64, false),
+        Field::new("mean", vector(), false),
+        Field::new("diagonal", vector(), false),
+        Field::new("direction_1", vector(), false),
+        Field::new("direction_2", vector(), false),
+        Field::new("direction_3", vector(), false),
+        Field::new("direction_4", vector(), false),
+        Field::new("eigenvalues", eigenvalues, false),
+        Field::new("residual_rank_1", vector(), false),
+        Field::new("residual_rank_2", vector(), false),
+        Field::new("residual_rank_4", vector(), false),
+    ])
+}
+
+fn encode_v33_low_rank_covariance_artifact(
+    groups: &[V33LowRankCovarianceGroup],
+) -> Result<V33LowRankCovarianceArtifact> {
+    let mut leaves = groups
+        .iter()
+        .flat_map(|group| group.leaves.iter())
+        .collect::<Vec<_>>();
+    leaves.sort_by_key(|leaf| leaf.ordinal);
+    if leaves.is_empty()
+        || leaves
+            .iter()
+            .enumerate()
+            .any(|(ordinal, leaf)| leaf.ordinal != ordinal as u32)
+    {
+        return Err(invalid(
+            "V33 low-rank covariance artifact authority differs",
+        ));
+    }
+    let schema = v33_low_rank_covariance_schema();
+    let eigenvalue_values = Arc::new(Float32Array::from_iter_values(
+        leaves
+            .iter()
+            .flat_map(|leaf| leaf.eigenvalues.iter().copied()),
+    ));
+    let eigenvalues = Arc::new(FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float32, false)),
+        4,
+        eigenvalue_values,
+        None,
+    )?);
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                leaves.iter().map(|leaf| leaf.ordinal),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                leaves.iter().map(|leaf| leaf.group_ordinal),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                leaves.iter().map(|leaf| leaf.logical_start),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                leaves.iter().map(|leaf| leaf.population),
+            )),
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.mean))?,
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.diagonal))?,
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.directions[0]))?,
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.directions[1]))?,
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.directions[2]))?,
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.directions[3]))?,
+            eigenvalues,
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.residuals[0]))?,
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.residuals[1]))?,
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.residuals[2]))?,
+        ],
+    )?;
+    let mut arrow = Vec::new();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut writer = FileWriter::try_new_with_options(&mut arrow, &schema, options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    Ok(V33LowRankCovarianceArtifact {
+        sha256: format!("{:x}", Sha256::digest(&arrow)),
+        encoded_bytes: arrow.len() as u64,
+        row_count: leaves.len() as u64,
+        arrow,
+    })
+}
+
+fn v33_low_rank_vector(
+    batch: &RecordBatch,
+    column: usize,
+    row: usize,
+) -> Result<[f32; DIMENSIONS]> {
+    let list = batch
+        .column(column)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| invalid("V33 low-rank covariance vector differs"))?;
+    let values = list
+        .value(row)
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| invalid("V33 low-rank covariance vector differs"))?
+        .values()
+        .to_vec();
+    let vector: [f32; DIMENSIONS] = values
+        .try_into()
+        .map_err(|_| invalid("V33 low-rank covariance dimension differs"))?;
+    if vector.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("V33 low-rank covariance vector is nonfinite"));
+    }
+    Ok(vector)
+}
+
+fn decode_v33_low_rank_covariance_artifact(
+    artifact: &V33LowRankCovarianceArtifact,
+) -> Result<V33LowRankCovarianceLadder> {
+    if artifact.sha256.len() != 64
+        || artifact.encoded_bytes != artifact.arrow.len() as u64
+        || artifact.row_count == 0
+        || format!("{:x}", Sha256::digest(&artifact.arrow)) != artifact.sha256
+    {
+        return Err(invalid("V33 low-rank covariance artifact identity differs"));
+    }
+    let mut reader = FileReader::try_new(Cursor::new(&artifact.arrow), None)?;
+    if reader.schema().as_ref() != &v33_low_rank_covariance_schema() {
+        return Err(invalid("V33 low-rank covariance artifact schema differs"));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V33 low-rank covariance artifact batch differs"))?;
+    if reader.next().is_some()
+        || batch.num_rows() as u64 != artifact.row_count
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid("V33 low-rank covariance artifact rows differ"));
+    }
+    let u32_column = |column: usize| {
+        batch
+            .column(column)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| invalid("V33 low-rank covariance integer differs"))
+    };
+    let u64_column = |column: usize| {
+        batch
+            .column(column)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| invalid("V33 low-rank covariance integer differs"))
+    };
+    let ordinals = u32_column(0)?;
+    let group_ordinals = u32_column(1)?;
+    let logical_starts = u64_column(2)?;
+    let populations = u64_column(3)?;
+    let eigenvalue_lists = batch
+        .column(10)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .ok_or_else(|| invalid("V33 low-rank covariance eigenvalues differ"))?;
+    let mut summaries = Vec::with_capacity(batch.num_rows());
+    let mut logical_start = 0_u64;
+    let mut logical_groups = Vec::new();
+    for row in 0..batch.num_rows() {
+        let ordinal = ordinals.value(row);
+        let group_ordinal = group_ordinals.value(row);
+        let population = populations.value(row);
+        if ordinal != row as u32 || logical_starts.value(row) != logical_start || population == 0 {
+            return Err(invalid("V33 low-rank covariance artifact ordering differs"));
+        }
+        let eigenvalue_values = eigenvalue_lists.value(row);
+        let eigenvalue_values = eigenvalue_values
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("V33 low-rank covariance eigenvalues differ"))?
+            .values()
+            .to_vec();
+        let eigenvalues: [f32; 4] = eigenvalue_values
+            .try_into()
+            .map_err(|_| invalid("V33 low-rank covariance eigenvalue count differs"))?;
+        let directions = [
+            v33_low_rank_vector(&batch, 6, row)?,
+            v33_low_rank_vector(&batch, 7, row)?,
+            v33_low_rank_vector(&batch, 8, row)?,
+            v33_low_rank_vector(&batch, 9, row)?,
+        ];
+        let residuals = [
+            v33_low_rank_vector(&batch, 11, row)?,
+            v33_low_rank_vector(&batch, 12, row)?,
+            v33_low_rank_vector(&batch, 13, row)?,
+        ];
+        summaries.push(V33LowRankCovarianceSummary {
+            ordinal,
+            group_ordinal,
+            logical_start,
+            population,
+            mean: v33_low_rank_vector(&batch, 4, row)?,
+            diagonal: v33_low_rank_vector(&batch, 5, row)?,
+            directions,
+            eigenvalues,
+            residuals,
+            ranks: [1, 2, 4],
+        });
+        logical_groups.extend(std::iter::repeat_n(group_ordinal, population as usize));
+        logical_start = logical_start
+            .checked_add(population)
+            .ok_or_else(|| invalid("V33 low-rank covariance logical coverage overflows"))?;
+    }
+    let group_count = summaries
+        .iter()
+        .map(|leaf| leaf.group_ordinal)
+        .max()
+        .and_then(|ordinal| usize::try_from(ordinal).ok())
+        .and_then(|ordinal| ordinal.checked_add(1))
+        .ok_or_else(|| invalid("V33 low-rank covariance group authority differs"))?;
+    let mut groups = (0..group_count)
+        .map(|ordinal| V33LowRankCovarianceGroup {
+            ordinal: ordinal as u32,
+            population: 0,
+            leaves: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    for summary in summaries {
+        let group = groups
+            .get_mut(summary.group_ordinal as usize)
+            .ok_or_else(|| invalid("V33 low-rank covariance group authority differs"))?;
+        group.population = group
+            .population
+            .checked_add(summary.population)
+            .ok_or_else(|| invalid("V33 low-rank covariance group population overflows"))?;
+        group.leaves.push(summary);
+    }
+    let ladder = V33LowRankCovarianceLadder {
+        groups,
+        logical_groups,
+        artifact_arrow: artifact.arrow.clone(),
+        artifact_sha256: artifact.sha256.clone(),
+        artifact_encoded_bytes: artifact.encoded_bytes,
+    };
+    validate_v33_low_rank_covariance_ladder(&ladder)?;
+    Ok(ladder)
+}
+
+fn build_low_rank_covariance_ladder_from_populations(
+    populations: Vec<V33LeafPopulation>,
+) -> Result<V33LowRankCovarianceLadder> {
+    if populations.is_empty()
+        || populations
+            .iter()
+            .enumerate()
+            .any(|(ordinal, population)| population.routing_leaf_ordinal != ordinal as u32)
+    {
+        return Err(invalid("V33 low-rank leaf authority differs"));
+    }
+    let logical_count = populations
+        .iter()
+        .try_fold(0_usize, |count, leaf| count.checked_add(leaf.rows.len()))
+        .ok_or_else(|| invalid("V33 low-rank logical coverage overflows"))?;
+    let mut logical_groups = vec![u32::MAX; logical_count];
+    for leaf in &populations {
+        for (logical, _) in &leaf.rows {
+            let logical = usize::try_from(*logical)
+                .map_err(|_| invalid("V33 low-rank logical ordinal overflows"))?;
+            let owner = logical_groups
+                .get_mut(logical)
+                .ok_or_else(|| invalid("V33 low-rank logical coverage differs"))?;
+            if *owner != u32::MAX {
+                return Err(invalid("V33 low-rank logical ownership differs"));
+            }
+            *owner = leaf.group_ordinal;
+        }
+    }
+    if logical_groups.contains(&u32::MAX) {
+        return Err(invalid("V33 low-rank logical coverage differs"));
+    }
+    let summaries = populations
+        .par_iter()
+        .map(summarize_low_rank_covariance)
+        .collect::<Result<Vec<_>>>()?;
+    let group_count = populations
+        .iter()
+        .map(|leaf| leaf.group_ordinal)
+        .max()
+        .and_then(|ordinal| usize::try_from(ordinal).ok())
+        .and_then(|ordinal| ordinal.checked_add(1))
+        .ok_or_else(|| invalid("V33 low-rank group authority differs"))?;
+    let mut groups = (0..group_count)
+        .map(|ordinal| V33LowRankCovarianceGroup {
+            ordinal: ordinal as u32,
+            population: 0,
+            leaves: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    for (leaf, summary) in populations.iter().zip(summaries) {
+        let group = groups
+            .get_mut(
+                usize::try_from(leaf.group_ordinal)
+                    .map_err(|_| invalid("V33 low-rank group ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V33 low-rank group authority differs"))?;
+        group.population = group
+            .population
+            .checked_add(summary.population)
+            .ok_or_else(|| invalid("V33 low-rank group population overflows"))?;
+        group.leaves.push(summary);
+    }
+    if groups
+        .iter()
+        .enumerate()
+        .any(|(ordinal, group)| group.ordinal != ordinal as u32 || group.leaves.is_empty())
+    {
+        return Err(invalid("V33 low-rank group coverage differs"));
+    }
+    let artifact = encode_v33_low_rank_covariance_artifact(&groups)?;
+    let ladder = decode_v33_low_rank_covariance_artifact(&artifact)?;
+    if ladder.logical_groups != logical_groups {
+        return Err(invalid(
+            "V33 low-rank covariance persisted ownership differs",
+        ));
+    }
+    Ok(ladder)
+}
+
+fn validate_v33_low_rank_covariance_ladder(ladder: &V33LowRankCovarianceLadder) -> Result<()> {
+    if ladder.groups.is_empty()
+        || ladder.logical_groups.is_empty()
+        || ladder.artifact_arrow.is_empty()
+        || ladder.artifact_sha256.len() != 64
+        || ladder.artifact_encoded_bytes != ladder.artifact_arrow.len() as u64
+        || format!("{:x}", Sha256::digest(&ladder.artifact_arrow)) != ladder.artifact_sha256
+    {
+        return Err(invalid("V33 low-rank covariance authority differs"));
+    }
+    let mut leaf_ordinals = BTreeSet::new();
+    for (group_ordinal, group) in ladder.groups.iter().enumerate() {
+        if group.ordinal != group_ordinal as u32
+            || group.population == 0
+            || group.leaves.is_empty()
+            || group
+                .leaves
+                .windows(2)
+                .any(|pair| pair[0].ordinal >= pair[1].ordinal)
+            || group
+                .leaves
+                .iter()
+                .try_fold(0_u64, |total, leaf| total.checked_add(leaf.population))
+                != Some(group.population)
+        {
+            return Err(invalid("V33 low-rank covariance group authority differs"));
+        }
+        for leaf in &group.leaves {
+            if !leaf_ordinals.insert(leaf.ordinal)
+                || leaf.group_ordinal != group.ordinal
+                || leaf.population == 0
+                || leaf.ranks != [1, 2, 4]
+                || leaf.mean.iter().any(|value| !value.is_finite())
+                || leaf
+                    .diagonal
+                    .iter()
+                    .any(|value| !value.is_finite() || *value < 0.0)
+                || leaf
+                    .directions
+                    .iter()
+                    .flatten()
+                    .any(|value| !value.is_finite())
+                || leaf
+                    .eigenvalues
+                    .iter()
+                    .any(|value| !value.is_finite() || *value < 0.0)
+                || leaf
+                    .residuals
+                    .iter()
+                    .flatten()
+                    .any(|value| !value.is_finite() || *value < 0.0)
+            {
+                return Err(invalid("V33 low-rank covariance leaf authority differs"));
+            }
+            if leaf.eigenvalues.windows(2).any(|pair| pair[0] < pair[1]) {
+                return Err(invalid("V33 low-rank covariance eigenvalue order differs"));
+            }
+            for component in 0..4 {
+                let norm = leaf.directions[component]
+                    .iter()
+                    .map(|value| f64::from(*value).powi(2))
+                    .sum::<f64>();
+                let mut sign_dimension = 0_usize;
+                let mut sign_magnitude = 0.0_f32;
+                for (dimension, value) in leaf.directions[component].iter().enumerate() {
+                    if value.abs() > sign_magnitude {
+                        sign_dimension = dimension;
+                        sign_magnitude = value.abs();
+                    }
+                }
+                let zero = leaf.eigenvalues[component] == 0.0;
+                if (zero && (norm != 0.0 || sign_magnitude != 0.0))
+                    || (!zero && (norm - 1.0).abs() > 2.0e-5)
+                    || (sign_magnitude > 0.0
+                        && leaf.directions[component][sign_dimension].is_sign_negative())
+                {
+                    return Err(invalid(
+                        "V33 low-rank covariance component authority differs",
+                    ));
+                }
+            }
+            for (arm, rank) in leaf.ranks.into_iter().enumerate() {
+                for dimension in 0..DIMENSIONS {
+                    let reconstructed = f64::from(leaf.residuals[arm][dimension])
+                        + (0..rank)
+                            .map(|component| {
+                                f64::from(leaf.eigenvalues[component])
+                                    * f64::from(leaf.directions[component][dimension]).powi(2)
+                            })
+                            .sum::<f64>();
+                    let diagonal = f64::from(leaf.diagonal[dimension]);
+                    let tolerance = (diagonal.abs() * 2.0e-5).max(2.0e-7);
+                    if (reconstructed - diagonal).abs() > tolerance {
+                        return Err(invalid(
+                            "V33 low-rank covariance diagonal authority differs",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if leaf_ordinals
+        .iter()
+        .copied()
+        .ne((0..leaf_ordinals.len()).map(|ordinal| ordinal as u32))
+        || ladder
+            .logical_groups
+            .iter()
+            .any(|group| usize::try_from(*group).map_or(true, |group| group >= ladder.groups.len()))
+    {
+        return Err(invalid("V33 low-rank covariance coverage differs"));
+    }
+    let mut leaves = ladder
+        .groups
+        .iter()
+        .flat_map(|group| group.leaves.iter())
+        .collect::<Vec<_>>();
+    leaves.sort_by_key(|leaf| leaf.ordinal);
+    let mut logical_start = 0_u64;
+    for leaf in leaves {
+        let end = logical_start
+            .checked_add(leaf.population)
+            .ok_or_else(|| invalid("V33 low-rank covariance logical coverage overflows"))?;
+        if leaf.logical_start != logical_start
+            || ladder
+                .logical_groups
+                .get(logical_start as usize..end as usize)
+                .is_none_or(|groups| groups.iter().any(|group| *group != leaf.group_ordinal))
+        {
+            return Err(invalid("V33 low-rank covariance logical authority differs"));
+        }
+        logical_start = end;
+    }
+    if logical_start as usize != ladder.logical_groups.len() {
+        return Err(invalid("V33 low-rank covariance logical coverage differs"));
+    }
+    Ok(())
+}
+
+/// Build nested rank-one/two/four summaries before opening any query.
+#[doc(hidden)]
+pub fn build_v33_low_rank_covariance_ladder(
+    request: &V33GroupShapeBuildRequest,
+) -> Result<V33LowRankCovarianceLadder> {
+    build_low_rank_covariance_ladder_from_populations(reconstruct_v33_request(request)?)
+}
+
+/// Rank low-rank covariance groups for one fixed diagnostic rank.
+#[doc(hidden)]
+pub fn rank_v33_low_rank_covariance_groups(
+    ladder: &V33LowRankCovarianceLadder,
+    rank: usize,
+    query: &[f32; DIMENSIONS],
+) -> Result<Vec<u32>> {
+    validate_v33_low_rank_covariance_ladder(ladder)?;
+    let arm = [1_usize, 2, 4]
+        .iter()
+        .position(|candidate| *candidate == rank)
+        .ok_or_else(|| invalid("V33 low-rank diagnostic rank differs"))?;
+    if ladder.groups.is_empty() || query.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("V33 low-rank query differs"));
+    }
+    let mut ranked = ladder
+        .groups
+        .iter()
+        .map(|group| {
+            let mut score = f64::INFINITY;
+            for leaf in &group.leaves {
+                score = score.min(low_rank_moment_score(
+                    &leaf.mean,
+                    &leaf.residuals[arm],
+                    &leaf.directions[..rank],
+                    &leaf.eigenvalues[..rank],
+                    leaf.population,
+                    query,
+                )?);
+            }
+            score
+                .is_finite()
+                .then_some((score, group.ordinal))
+                .ok_or_else(|| invalid("V33 low-rank group score differs"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ranked.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    Ok(ranked.into_iter().map(|(_, ordinal)| ordinal).collect())
+}
+
 /// Rank groups by their minimum exact reconstructed-row squared distance.
 #[doc(hidden)]
 pub fn rank_v33_reconstructed_groups(
@@ -869,6 +1550,275 @@ pub fn canonical_v33_full_covariance_ceiling_result_bytes(
     Ok(bytes)
 }
 
+fn rank_v33_fine_leaf_centroid_groups(
+    ladder: &V33LowRankCovarianceLadder,
+    query: &[f32; DIMENSIONS],
+) -> Result<Vec<u32>> {
+    validate_v33_low_rank_covariance_ladder(ladder)?;
+    if query.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("V33 fine-leaf centroid query differs"));
+    }
+    let mut ranked = ladder
+        .groups
+        .iter()
+        .map(|group| {
+            let score = group
+                .leaves
+                .iter()
+                .map(|leaf| squared_distance(&leaf.mean, query))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .min_by(f64::total_cmp)
+                .ok_or_else(|| invalid("V33 fine-leaf centroid group differs"))?;
+            Ok((score, group.ordinal))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ranked.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    Ok(ranked.into_iter().map(|(_, ordinal)| ordinal).collect())
+}
+
+fn v33_nearest_rank(values: &[u64], numerator: usize) -> Result<u64> {
+    if values.is_empty() || numerator == 0 || numerator > 100 {
+        return Err(invalid("V33 covariance frontier percentile differs"));
+    }
+    let mut ordered = values.to_vec();
+    ordered.sort_unstable();
+    let rank = ordered
+        .len()
+        .checked_mul(numerator)
+        .and_then(|value| value.checked_add(99))
+        .map(|value| value / 100)
+        .and_then(|value| value.checked_sub(1))
+        .ok_or_else(|| invalid("V33 covariance frontier percentile overflows"))?;
+    Ok(ordered[rank])
+}
+
+fn v33_covariance_arm_value(
+    ladder: &V33LowRankCovarianceLadder,
+    request: &V33LowRankCovarianceLadderRequest,
+    rank: Option<usize>,
+) -> Result<serde_json::Value> {
+    let query_count = request.query_ordinals.len();
+    let mut records = Vec::with_capacity(query_count);
+    let mut included_owners = 0_usize;
+    let mut perfect_queries = 0_usize;
+    let mut minimum_selected_rows = u64::MAX;
+    let mut maximum_selected_rows = 0_u64;
+    let mut required_rows = Vec::with_capacity(query_count);
+    let mut required_groups = Vec::with_capacity(query_count);
+    for index in 0..query_count {
+        let ranked = if let Some(rank) = rank {
+            rank_v33_low_rank_covariance_groups(ladder, rank, &request.queries[index])?
+        } else {
+            rank_v33_fine_leaf_centroid_groups(ladder, &request.queries[index])?
+        };
+        let mut selected_groups = Vec::new();
+        let mut selected_rows = 0_u64;
+        for group in ranked.iter().copied() {
+            let group_index =
+                usize::try_from(group).map_err(|_| invalid("V33 low-rank rank overflows"))?;
+            let rows = *request
+                .group_rows
+                .get(group_index)
+                .ok_or_else(|| invalid("V33 low-rank rank differs"))?;
+            let next = selected_rows
+                .checked_add(rows)
+                .ok_or_else(|| invalid("V33 low-rank selected rows overflow"))?;
+            if selected_groups.len() == request.group_limit || next > request.row_limit {
+                break;
+            }
+            selected_groups.push(group);
+            selected_rows = next;
+        }
+        if selected_groups.is_empty() {
+            return Err(invalid("V33 low-rank prefix differs"));
+        }
+        minimum_selected_rows = minimum_selected_rows.min(selected_rows);
+        maximum_selected_rows = maximum_selected_rows.max(selected_rows);
+        let selected = selected_groups.iter().copied().collect::<BTreeSet<_>>();
+        let truth_groups = request.truth_logicals[index]
+            .iter()
+            .map(|logical| {
+                let logical = usize::try_from(*logical)
+                    .map_err(|_| invalid("V33 low-rank truth ordinal overflows"))?;
+                ladder
+                    .logical_groups
+                    .get(logical)
+                    .copied()
+                    .ok_or_else(|| invalid("V33 low-rank truth ordinal differs"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let truth_owner_ranks = truth_groups
+            .iter()
+            .map(|owner| {
+                ranked
+                    .iter()
+                    .position(|group| group == owner)
+                    .and_then(|position| position.checked_add(1))
+                    .ok_or_else(|| invalid("V33 low-rank owner rank differs"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let required_group_count = *truth_owner_ranks
+            .iter()
+            .max()
+            .ok_or_else(|| invalid("V33 covariance truth frontier differs"))?;
+        let required_row_count =
+            ranked
+                .iter()
+                .take(required_group_count)
+                .try_fold(0_u64, |rows, group| {
+                    rows.checked_add(request.group_rows[*group as usize])
+                        .ok_or_else(|| invalid("V33 covariance truth frontier overflows"))
+                })?;
+        required_groups.push(required_group_count as u64);
+        required_rows.push(required_row_count);
+        let hits = truth_groups
+            .iter()
+            .filter(|group| selected.contains(group))
+            .count();
+        included_owners += hits;
+        if hits == 10 {
+            perfect_queries += 1;
+        }
+        records.push(serde_json::json!({
+            "hits": hits,
+            "query_ordinal": request.query_ordinals[index],
+            "required_groups": required_group_count,
+            "required_rows": required_row_count,
+            "selected_groups": selected_groups,
+            "selected_rows": selected_rows,
+            "truth_owner_ranks": truth_owner_ranks,
+        }));
+    }
+    let total_owners = query_count
+        .checked_mul(10)
+        .ok_or_else(|| invalid("V33 low-rank owner count overflows"))?;
+    let coverage_passed = included_owners == total_owners && perfect_queries == query_count;
+    Ok(serde_json::json!({
+        "arm": rank.map_or("fine-leaf-centroid".to_owned(), |rank| format!("low-rank-{rank}")),
+        "coverage_passed": coverage_passed,
+        "included_owners": included_owners,
+        "maximum_selected_rows": maximum_selected_rows,
+        "minimum_selected_rows": minimum_selected_rows,
+        "passed": coverage_passed,
+        "perfect_queries": perfect_queries,
+        "query_count": query_count,
+        "rank": rank,
+        "records": records,
+        "required_groups_max": required_groups.iter().copied().max().unwrap(),
+        "required_groups_p50": v33_nearest_rank(&required_groups, 50)?,
+        "required_groups_p95": v33_nearest_rank(&required_groups, 95)?,
+        "required_rows_max": required_rows.iter().copied().max().unwrap(),
+        "required_rows_p50": v33_nearest_rank(&required_rows, 50)?,
+        "required_rows_p95": v33_nearest_rank(&required_rows, 95)?,
+        "total_owners": total_owners,
+    }))
+}
+
+/// Recompute ranks one/two/four and serialize the fixed rank-two-primary receipt.
+#[doc(hidden)]
+pub fn canonical_v33_low_rank_covariance_ladder_result_bytes(
+    ladder: &V33LowRankCovarianceLadder,
+    request: &V33LowRankCovarianceLadderRequest,
+) -> Result<Vec<u8>> {
+    validate_v33_low_rank_covariance_ladder(ladder)?;
+    let query_count = request.query_ordinals.len();
+    if request.frontier_sha256.len() != 64
+        || request
+            .frontier_sha256
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+        || request.frontier_bytes == 0
+        || query_count == 0
+        || request.queries.len() != query_count
+        || request.truth_logicals.len() != query_count
+        || request
+            .query_ordinals
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || request
+            .queries
+            .iter()
+            .flatten()
+            .any(|value| !value.is_finite())
+        || request.truth_logicals.iter().any(|truth| truth.len() != 10)
+        || request.group_rows.len() != ladder.groups.len()
+        || request.group_rows.contains(&0)
+        || request.row_limit == 0
+        || request.group_limit == 0
+    {
+        return Err(invalid("V33 low-rank covariance ladder request differs"));
+    }
+    for (ordinal, group) in ladder.groups.iter().enumerate() {
+        if group.ordinal != ordinal as u32 || group.population != request.group_rows[ordinal] {
+            return Err(invalid("V33 low-rank covariance population differs"));
+        }
+    }
+    let fine_leaf_centroid_control = v33_covariance_arm_value(ladder, request, None)?;
+    let mut arms = [1_usize, 2, 4]
+        .into_iter()
+        .map(|rank| v33_covariance_arm_value(ladder, request, Some(rank)))
+        .collect::<Result<Vec<_>>>()?;
+    for arm in &mut arms {
+        let non_worse = [
+            "required_groups_p50",
+            "required_groups_p95",
+            "required_groups_max",
+            "required_rows_p50",
+            "required_rows_p95",
+            "required_rows_max",
+        ]
+        .into_iter()
+        .all(|field| {
+            arm[field]
+                .as_u64()
+                .zip(fine_leaf_centroid_control[field].as_u64())
+                .is_some_and(|(candidate, control)| candidate <= control)
+        });
+        let coverage_passed = arm["coverage_passed"]
+            .as_bool()
+            .ok_or_else(|| invalid("V33 low-rank coverage result differs"))?;
+        let object = arm
+            .as_object_mut()
+            .ok_or_else(|| invalid("V33 low-rank arm result differs"))?;
+        object.insert("frontier_non_worse".to_owned(), non_worse.into());
+        object.insert("passed".to_owned(), (coverage_passed && non_worse).into());
+    }
+    let passed = arms[1]
+        .get("passed")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| invalid("V33 low-rank primary result differs"))?;
+    let value = serde_json::json!({
+        "arms": arms,
+        "claim_eligible": false,
+        "frontier": {
+            "encoded_bytes": request.frontier_bytes,
+            "role": "v33-group-proxy-result-json",
+            "sha256": request.frontier_sha256,
+        },
+        "fine_leaf_centroid_control": fine_leaf_centroid_control,
+        "group_limit": request.group_limit,
+        "low_rank_summary": {
+            "encoded_bytes": ladder.artifact_encoded_bytes,
+            "role": "v33-low-rank-covariance-arrow",
+            "row_count": ladder.groups.iter().map(|group| group.leaves.len()).sum::<usize>(),
+            "sha256": ladder.artifact_sha256,
+        },
+        "passed": passed,
+        "primary_rank": 2,
+        "row_limit": request.row_limit,
+        "schema": "borsuk-v33-low-rank-covariance-ladder-result-v1",
+    });
+    let mut bytes = serde_json::to_vec(&value)
+        .map_err(|_| invalid("V33 low-rank covariance serialization differs"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 #[cfg(test)]
 fn v33_shape_control_bytes(leaf_count: usize) -> Result<V33ShapeControlBytes> {
     if leaf_count == 0 {
@@ -1132,10 +2082,8 @@ fn select_v33_scalar_split_leaves(
         .collect())
 }
 
-#[cfg(test)]
 type V33PrincipalComponents = (Vec<[f32; DIMENSIONS]>, Vec<f32>, [f32; DIMENSIONS]);
 
-#[cfg(test)]
 fn principal_covariance_components(
     population: &V33LeafPopulation,
     rank: usize,
@@ -1188,100 +2136,114 @@ fn principal_covariance_components(
         .map(|dimension| covariance[dimension * DIMENSIONS + dimension])
         .sum::<f64>();
     let tolerance = (trace * 1.0e-12).max(1.0e-15);
+    let decomposition =
+        SymmetricEigen::new(DMatrix::from_row_slice(DIMENSIONS, DIMENSIONS, &covariance));
+    let mut order = (0..DIMENSIONS).collect::<Vec<_>>();
+    order.sort_by(|left, right| {
+        decomposition.eigenvalues[*right]
+            .total_cmp(&decomposition.eigenvalues[*left])
+            .then_with(|| left.cmp(right))
+    });
+    let mut ordered_values = Vec::with_capacity(DIMENSIONS);
+    let mut ordered_vectors = Vec::<[f64; DIMENSIONS]>::with_capacity(DIMENSIONS);
+    for index in order {
+        let value = decomposition.eigenvalues[index];
+        if !value.is_finite() || value < -tolerance {
+            return Err(invalid("V33 low-rank covariance eigensystem differs"));
+        }
+        ordered_values.push(value.max(0.0));
+        ordered_vectors.push(std::array::from_fn(|dimension| {
+            decomposition.eigenvectors[(dimension, index)]
+        }));
+    }
+
     let mut directions64 = Vec::<[f64; DIMENSIONS]>::with_capacity(rank);
     let mut eigenvalues64 = Vec::<f64>::with_capacity(rank);
-
-    for _ in 0..rank {
-        let mut seed = 0;
-        let mut seed_variance = f64::NEG_INFINITY;
-        for dimension in 0..DIMENSIONS {
-            let explained = directions64
-                .iter()
-                .zip(&eigenvalues64)
-                .map(|(direction, eigenvalue)| {
-                    eigenvalue * direction[dimension] * direction[dimension]
-                })
-                .sum::<f64>();
-            let remaining = covariance[dimension * DIMENSIONS + dimension] - explained;
-            if remaining > seed_variance {
-                seed = dimension;
-                seed_variance = remaining;
-            }
-        }
-        if seed_variance <= tolerance {
+    let mut start = 0_usize;
+    while directions64.len() < rank {
+        if start == DIMENSIONS || ordered_values[start] <= tolerance {
             directions64.push([0.0; DIMENSIONS]);
             eigenvalues64.push(0.0);
             continue;
         }
-
-        let mut direction = [0.0_f64; DIMENSIONS];
-        direction[seed] = 1.0;
-        for _ in 0..64 {
-            let mut next = [0.0_f64; DIMENSIONS];
-            for left in 0..DIMENSIONS {
-                next[left] = (0..DIMENSIONS)
-                    .map(|right| covariance[left * DIMENSIONS + right] * direction[right])
-                    .sum();
+        let mut end = start + 1;
+        while end < DIMENSIONS && (ordered_values[end] - ordered_values[start]).abs() <= tolerance {
+            end += 1;
+        }
+        let cluster_size = end - start;
+        let cluster_value = ordered_values[start..end].iter().sum::<f64>() / cluster_size as f64;
+        let mut canonical = Vec::<[f64; DIMENSIONS]>::with_capacity(cluster_size);
+        for axis in 0..DIMENSIONS {
+            let mut projected = [0.0_f64; DIMENSIONS];
+            for basis in &ordered_vectors[start..end] {
+                let coefficient = basis[axis];
+                for dimension in 0..DIMENSIONS {
+                    projected[dimension] += coefficient * basis[dimension];
+                }
             }
-            for (previous, eigenvalue) in directions64.iter().zip(&eigenvalues64) {
-                let projection = previous
+            for previous in &canonical {
+                let coefficient = projected
                     .iter()
-                    .zip(&direction)
+                    .zip(previous)
                     .map(|(left, right)| left * right)
                     .sum::<f64>();
                 for dimension in 0..DIMENSIONS {
-                    next[dimension] -= eigenvalue * previous[dimension] * projection;
+                    projected[dimension] -= coefficient * previous[dimension];
                 }
             }
-            for previous in &directions64 {
-                let projection = previous
-                    .iter()
-                    .zip(&next)
-                    .map(|(left, right)| left * right)
-                    .sum::<f64>();
-                for dimension in 0..DIMENSIONS {
-                    next[dimension] -= projection * previous[dimension];
-                }
-            }
-            let norm = next.iter().map(|value| value * value).sum::<f64>().sqrt();
+            let norm = projected
+                .iter()
+                .map(|value| value * value)
+                .sum::<f64>()
+                .sqrt();
             if norm <= tolerance {
-                direction = [0.0; DIMENSIONS];
-                break;
+                continue;
             }
-            for value in &mut next {
+            for value in &mut projected {
                 *value /= norm;
             }
-            if let Some(value) = next.iter().find(|value| value.abs() > tolerance)
-                && value.is_sign_negative()
-            {
-                for coordinate in &mut next {
-                    *coordinate = -*coordinate;
+            let mut sign_dimension = 0_usize;
+            let mut sign_magnitude = 0.0_f64;
+            for (dimension, value) in projected.iter().enumerate() {
+                if value.abs() > sign_magnitude {
+                    sign_dimension = dimension;
+                    sign_magnitude = value.abs();
                 }
             }
-            direction = next;
+            if projected[sign_dimension].is_sign_negative() {
+                for value in &mut projected {
+                    *value = -*value;
+                }
+            }
+            canonical.push(projected);
+            if canonical.len() == cluster_size {
+                break;
+            }
         }
-
-        let eigenvalue = if direction.iter().all(|value| *value == 0.0) {
-            0.0
-        } else {
-            let covariance_direction = std::array::from_fn::<_, DIMENSIONS, _>(|left| {
-                (0..DIMENSIONS)
-                    .map(|right| covariance[left * DIMENSIONS + right] * direction[right])
-                    .sum::<f64>()
-            });
-            direction
-                .iter()
-                .zip(covariance_direction)
-                .map(|(left, right)| left * right)
-                .sum::<f64>()
-                .max(0.0)
-        };
-        if eigenvalue <= tolerance {
-            directions64.push([0.0; DIMENSIONS]);
-            eigenvalues64.push(0.0);
-        } else {
+        if canonical.len() != cluster_size {
+            return Err(invalid("V33 low-rank repeated eigenspace differs"));
+        }
+        for direction in canonical {
+            if directions64.len() == rank {
+                break;
+            }
             directions64.push(direction);
-            eigenvalues64.push(eigenvalue);
+            eigenvalues64.push(cluster_value);
+        }
+        start = end;
+    }
+
+    for dimension in 0..DIMENSIONS {
+        let explained = directions64
+            .iter()
+            .zip(&eigenvalues64)
+            .map(|(direction, eigenvalue)| eigenvalue * direction[dimension] * direction[dimension])
+            .sum::<f64>();
+        let diagonal = covariance[dimension * DIMENSIONS + dimension];
+        let residual = diagonal - explained;
+        let diagonal_tolerance = 1.0e-12 * diagonal.abs().max(1.0);
+        if !residual.is_finite() || residual < -diagonal_tolerance {
+            return Err(invalid("V33 low-rank covariance over-explains diagonal"));
         }
     }
 
@@ -1311,7 +2273,6 @@ fn principal_covariance_components(
 /// Query-independent Gaussian distance-moment ranking heuristic for a
 /// diagonal-plus-low-rank covariance. This is not a hard membership test or a
 /// lower bound on exact vector distance.
-#[cfg(test)]
 fn low_rank_moment_score(
     mean: &[f32; DIMENSIONS],
     residual: &[f32; DIMENSIONS],
@@ -1455,7 +2416,6 @@ fn score_v33_leaf(leaf: &V33LeafShape, query: &[f32; DIMENSIONS], arm: V33ShapeA
     Ok(if score == 0.0 { 0.0 } else { score })
 }
 
-#[cfg(test)]
 fn extreme_factor(population: u64) -> f64 {
     if population <= 1 {
         0.0
@@ -1533,17 +2493,19 @@ fn select_v33_group_prefix(
 mod tests {
     use super::{
         V33FullCovarianceCeilingRequest, V33GroupPopulation, V33GroupShapeBuildRequest,
-        V33LeafPopulation, V33ReconstructedOracleRequest, V33RoutingRange, V33ShapeArm,
-        build_full_covariance_ceiling_from_populations, build_v33_full_covariance_ceiling,
-        build_v33_group_shape_artifact, build_v33_reconstructed_group_oracle,
+        V33LeafPopulation, V33LowRankCovarianceLadderRequest, V33ReconstructedOracleRequest,
+        V33RoutingRange, V33ShapeArm, build_full_covariance_ceiling_from_populations,
+        build_v33_full_covariance_ceiling, build_v33_group_shape_artifact,
+        build_v33_low_rank_covariance_ladder, build_v33_reconstructed_group_oracle,
         canonical_v33_full_covariance_ceiling_result_bytes,
+        canonical_v33_low_rank_covariance_ladder_result_bytes,
         canonical_v33_reconstructed_oracle_result_bytes, encode_v33_leaf_shape_artifact,
         full_covariance_group_score, full_covariance_moment_score, low_rank_moment_score,
         principal_covariance_components, rank_v33_full_covariance_groups, rank_v33_groups,
-        rank_v33_reconstructed_groups, reconstruct_v33_leaf_populations, score_v33_leaf,
-        select_v33_group_prefix, select_v33_scalar_split_leaves, summarize_full_covariance,
-        summarize_full_covariance_rows, summarize_v33_leaf, v33_reconstructed_group_for_logical,
-        v33_shape_control_bytes,
+        rank_v33_low_rank_covariance_groups, rank_v33_reconstructed_groups,
+        reconstruct_v33_leaf_populations, score_v33_leaf, select_v33_group_prefix,
+        select_v33_scalar_split_leaves, summarize_full_covariance, summarize_full_covariance_rows,
+        summarize_v33_leaf, v33_reconstructed_group_for_logical, v33_shape_control_bytes,
     };
     use crate::{
         V27Hierarchy, encode_v27_hierarchy,
@@ -1786,6 +2748,87 @@ mod tests {
     }
 
     #[test]
+    fn v33_group_shape_low_rank_direction_sign_uses_largest_coordinate() {
+        // Break caught: sign depends on the first tiny nonzero coordinate,
+        // rather than the registered largest-magnitude coordinate tie-break.
+        let population = V33LeafPopulation {
+            routing_leaf_ordinal: 0,
+            group_ordinal: 0,
+            rows: vec![row(0, -1.0, 2.0), row(1, 1.0, -2.0)],
+        };
+        let (directions, _, _) = principal_covariance_components(&population, 1).unwrap();
+        let direction = directions[0];
+        let largest = direction
+            .iter()
+            .enumerate()
+            .max_by(|left, right| {
+                left.1
+                    .abs()
+                    .total_cmp(&right.1.abs())
+                    .then_with(|| right.0.cmp(&left.0))
+            })
+            .unwrap();
+        assert_eq!(largest.0, 1);
+        assert!(largest.1.is_sign_positive());
+    }
+
+    #[test]
+    fn v33_group_shape_low_rank_repeated_eigenspace_uses_coordinate_order() {
+        // Break caught: equal eigenvalues inherit row order or thread order.
+        let rows = vec![
+            row(0, -1.0, 0.0),
+            row(1, 1.0, 0.0),
+            row(2, 0.0, -1.0),
+            row(3, 0.0, 1.0),
+        ];
+        let population = V33LeafPopulation {
+            routing_leaf_ordinal: 0,
+            group_ordinal: 0,
+            rows: rows.clone(),
+        };
+        let reversed = V33LeafPopulation {
+            routing_leaf_ordinal: 0,
+            group_ordinal: 0,
+            rows: rows.into_iter().rev().collect(),
+        };
+        let first = principal_covariance_components(&population, 2).unwrap();
+        let second = principal_covariance_components(&reversed, 2).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.0[0][0], 1.0);
+        assert_eq!(first.0[1][1], 1.0);
+    }
+
+    #[test]
+    fn v33_group_shape_low_rank_components_are_globally_ordered() {
+        // Break caught: a power seed chosen from the largest diagonal can be
+        // orthogonal to a larger correlated eigenspace.
+        let mut rows = Vec::new();
+        for (ordinal, (start, end, magnitude)) in [(0, 1, 2.5_f32), (1, 5, 2.0), (5, 9, 1.5)]
+            .into_iter()
+            .enumerate()
+        {
+            for sign in [-1.0_f32, 1.0] {
+                let mut value = [0.0_f32; 96];
+                for coordinate in &mut value[start..end] {
+                    *coordinate = sign * magnitude;
+                }
+                rows.push(((ordinal * 2 + usize::from(sign > 0.0)) as u64, value));
+            }
+        }
+        rows.sort_by_key(|(ordinal, _)| *ordinal);
+        let population = V33LeafPopulation {
+            routing_leaf_ordinal: 0,
+            group_ordinal: 0,
+            rows,
+        };
+        let (_, eigenvalues, _) = principal_covariance_components(&population, 4).unwrap();
+        assert!((f64::from(eigenvalues[0]) - 16.0 / 3.0).abs() < 1.0e-5);
+        assert!((f64::from(eigenvalues[1]) - 3.0).abs() < 1.0e-5);
+        assert!((f64::from(eigenvalues[2]) - 25.0 / 12.0).abs() < 1.0e-5);
+        assert!(eigenvalues.windows(2).all(|pair| pair[0] >= pair[1]));
+    }
+
+    #[test]
     fn v33_group_shape_full_covariance_ceiling_couples_rotated_dimensions() {
         // Break caught: the full-covariance ceiling silently drops off-diagonal
         // covariance and reproduces the already-failed diagonal arm.
@@ -1894,6 +2937,152 @@ mod tests {
         let mut invalid = request;
         invalid.queries[0][0] = f32::NAN;
         assert!(canonical_v33_full_covariance_ceiling_result_bytes(&ceiling, &invalid).is_err());
+    }
+
+    #[test]
+    fn v33_group_shape_low_rank_ladder_is_nested_and_preserves_f32_diagonal() {
+        // Break caught: ranks one/two/four are decomposed independently or the
+        // residual diagonal double-counts principal variance after f32 storage.
+        let mut rows = Vec::new();
+        for (ordinal, (x, y, z)) in [
+            (-3.0, -3.0, 1.0),
+            (-1.0, -1.0, -1.0),
+            (1.0, 1.0, -1.0),
+            (3.0, 3.0, 1.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut value = [0.0_f32; 96];
+            value[0] = x;
+            value[1] = y;
+            value[2] = z;
+            rows.push((ordinal as u64, value));
+        }
+        let population = V33LeafPopulation {
+            routing_leaf_ordinal: 0,
+            group_ordinal: 0,
+            rows,
+        };
+        let first =
+            super::build_low_rank_covariance_ladder_from_populations(vec![population.clone()])
+                .unwrap();
+        let second =
+            super::build_low_rank_covariance_ladder_from_populations(vec![population]).unwrap();
+        assert_eq!(first, second);
+        assert!(!first.artifact_arrow().is_empty());
+        assert_eq!(
+            first.artifact_sha256(),
+            format!("{:x}", Sha256::digest(first.artifact_arrow()))
+        );
+        assert_eq!(
+            first.artifact_encoded_bytes(),
+            first.artifact_arrow().len() as u64
+        );
+        let mut corrupted = super::V33LowRankCovarianceArtifact {
+            sha256: first.artifact_sha256().to_owned(),
+            encoded_bytes: first.artifact_encoded_bytes(),
+            row_count: 1,
+            arrow: first.artifact_arrow().to_vec(),
+        };
+        corrupted.arrow[0] ^= 1;
+        assert!(super::decode_v33_low_rank_covariance_artifact(&corrupted).is_err());
+        let leaf = &first.groups[0].leaves[0];
+        assert_eq!(leaf.ranks, [1, 2, 4]);
+        for (arm, rank) in [1_usize, 2, 4].into_iter().enumerate() {
+            for dimension in 0..96 {
+                let reconstructed = f64::from(leaf.residuals[arm][dimension])
+                    + (0..rank)
+                        .map(|component| {
+                            f64::from(leaf.eigenvalues[component])
+                                * f64::from(leaf.directions[component][dimension]).powi(2)
+                        })
+                        .sum::<f64>();
+                assert!(
+                    (reconstructed - f64::from(leaf.diagonal[dimension])).abs() <= 2.0e-6,
+                    "rank={rank} dimension={dimension} reconstructed={reconstructed} diagonal={}",
+                    leaf.diagonal[dimension]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn v33_group_shape_low_rank_ladder_receipt_uses_rank_two_as_frozen_primary() {
+        // Break caught: the outcome selects the best observed rank, or the
+        // receipt trusts arm summaries instead of recomputing every owner.
+        let ladder = build_v33_low_rank_covariance_ladder(&authenticated_shape_request()).unwrap();
+        let mut query = [0.5_f32; 96];
+        query[0] = 1.5;
+        assert_eq!(
+            rank_v33_low_rank_covariance_groups(&ladder, 2, &query).unwrap(),
+            [0, 1]
+        );
+        let request = V33LowRankCovarianceLadderRequest {
+            frontier_sha256: "1".repeat(64),
+            frontier_bytes: 123,
+            query_ordinals: vec![4_096],
+            queries: vec![query],
+            truth_logicals: vec![vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]],
+            group_rows: vec![9, 11],
+            row_limit: 9,
+            group_limit: 2,
+        };
+        let bytes =
+            canonical_v33_low_rank_covariance_ladder_result_bytes(&ladder, &request).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["schema"],
+            "borsuk-v33-low-rank-covariance-ladder-result-v1"
+        );
+        assert_eq!(value["primary_rank"], 2);
+        assert_eq!(
+            value["low_rank_summary"]["sha256"],
+            ladder.artifact_sha256()
+        );
+        assert_eq!(value["arms"].as_array().unwrap().len(), 3);
+        assert_eq!(value["arms"][0]["rank"], 1);
+        assert_eq!(value["arms"][1]["rank"], 2);
+        assert_eq!(value["arms"][2]["rank"], 4);
+        assert_eq!(value["passed"], value["arms"][1]["passed"]);
+        assert_eq!(value["arms"][1]["included_owners"], 9);
+        assert_eq!(value["arms"][1]["perfect_queries"], 0);
+        assert_eq!(
+            value["fine_leaf_centroid_control"]["arm"],
+            "fine-leaf-centroid"
+        );
+        assert!(value["arms"][1]["required_rows_p50"].is_u64());
+        assert!(value["arms"][1]["required_rows_p95"].is_u64());
+        assert!(value["arms"][1]["required_rows_max"].is_u64());
+        assert!(value["arms"][1]["required_groups_p50"].is_u64());
+        assert!(value["arms"][1]["required_groups_p95"].is_u64());
+        assert!(value["arms"][1]["required_groups_max"].is_u64());
+        assert!(value["arms"][1]["frontier_non_worse"].is_boolean());
+        assert_eq!(
+            value["arms"][1]["passed"],
+            serde_json::Value::Bool(
+                value["arms"][1]["coverage_passed"].as_bool().unwrap()
+                    && value["arms"][1]["frontier_non_worse"].as_bool().unwrap()
+            )
+        );
+        assert_eq!(
+            value["arms"][1]["records"][0]["truth_owner_ranks"],
+            serde_json::json!([1, 1, 1, 1, 1, 1, 1, 1, 1, 2])
+        );
+
+        let mut drifted = ladder.clone();
+        drifted.groups[0].leaves[0].residuals[1][0] += 1.0;
+        assert!(canonical_v33_low_rank_covariance_ladder_result_bytes(&drifted, &request).is_err());
+        let mut reordered = ladder.clone();
+        reordered.groups[0].leaves[0].ordinal = u32::MAX;
+        assert!(
+            canonical_v33_low_rank_covariance_ladder_result_bytes(&reordered, &request).is_err()
+        );
+
+        let mut invalid = request;
+        invalid.queries[0][0] = f32::NAN;
+        assert!(canonical_v33_low_rank_covariance_ladder_result_bytes(&ladder, &invalid).is_err());
     }
 
     #[test]
