@@ -57,16 +57,38 @@ assert!(parent.code(4).is_err());
 `decode_v32_code_object(bytes:&[u8],expected_sha256:&str,expected_bytes:usize)->Result<V32CodeObject>`.
 Use the repository SHA256 dependency and exact digest syntax; authenticate before Arrow parse.
 
-- [ ] Stage `v32_code_object_arrow_roundtrip_and_authentication`: encode the Task1 literal fixture; decode with actual SHA/length and compare exact object; wrong digest, wrong length and a single changed byte must fail.
-- [ ] Stage `v32_code_object_arrow_schema_and_resource_rejections`: independently construct fixtures for nullable fields/children, wrong child name/type/width, extra fields/metadata, extra batches, dictionaries/compression, invalid footer/body extents and excessive rows/parents/ranges. Preserve valid hashes to reach semantic gates.
+- [x] Stage `v32_code_object_arrow_roundtrip_and_authentication`: encode the Task1 literal fixture; decode with actual SHA/length and compare exact object; wrong digest, wrong length and a single changed byte must fail.
+- [x] Stage `v32_code_object_arrow_schema_and_resource_rejections`: independently construct fixtures for nullable fields/children, wrong child name/type/width, extra fields/metadata, extra batches, dictionaries/compression, invalid footer/body extents and excessive rows/parents/ranges. Preserve valid hashes to reach semantic gates.
   Include small encoded files declaring more than128 range children or3072
   centroid elements and impossible binary buffer extents; reject before
   materialization, not after trusting declared allocation sizes.
-- [ ] Stage `v32_code_object_arrow_maximum_shape`:32 parents, each256 all-high rows, four64-row ranges each, unique disjoint logical ranges; require encode length<=524288 and decode equality. This checks8192 rows/128 ranges together.
-- [ ] Run the narrow selector for intended RED. Implement exact schema and pre-materialization IPC checks, then owned bounded decode, calling invariant validation at both encode/decode boundaries.
-- [ ] Add an env-gated Rust interchange test writing the literal Arrow fixture to an explicit scratch path and reading a separate Python fixture. Python uses exact spec schema and literal code bytes, verifies Rust values, emits its independent file; Rust checks exact values, not just roundtrip. The Python test invokes only that one Cargo node serially; no network or scientific payloads.
-- [ ] Run codec selector then this single interchange gate in a dependency-complete environment. Preserve terminal evidence and explicit scratch cleanup.
-- [ ] Run targeted library Clippy plus fmt/diff checks; request Astra read-only review of actual diff and test evidence. Repair narrow failing layer only. Commit/push fast-forward after verification; report codec-only completion without implying provider/scalability completion.
+- [x] Stage `v32_code_object_arrow_maximum_shape`:32 parents, each256 all-high rows, four64-row ranges each, unique disjoint logical ranges; require encode length<=524288 and decode equality. This checks8192 rows/128 ranges together.
+- [x] Run the narrow selector for intended RED. Implement exact schema and pre-materialization IPC checks, then owned bounded decode, calling invariant validation at both encode/decode boundaries.
+- [x] Add an env-gated Rust interchange test writing the literal Arrow fixture to an explicit scratch path and reading a separate Python fixture. Python uses exact spec schema and literal code bytes, verifies Rust values, emits its independent file; Rust checks exact values, not just roundtrip. The Python test invokes only that one Cargo node serially; no network or scientific payloads.
+- [x] Run codec selector then this single interchange gate in a dependency-complete environment. Preserve terminal evidence and explicit scratch cleanup.
+- [x] Run targeted library Clippy plus fmt/diff checks; request Astra read-only review of actual diff and test evidence. Repair narrow failing layer only. Commit/push fast-forward after verification; report codec-only completion without implying provider/scalability completion.
+
+## Codec verification checkpoint
+
+The final `v32_code_object_` gate executed8 tests successfully in0.06s;
+the explicit interchange node is ignored in that selector and was separately
+executed by the pinned Python/PyArrow gate (1 Python test invoking exactly1
+Rust test, successful in0.279s). Both directions preserve literal mixed-width
+codes, gapped logical ranges and exact f16 negative-zero/subnormal bits;
+the test asserts temporary-directory removal. Maximum shape encoded to
+405114 bytes, below524288, with8192 all-high rows,32 parents and128 ranges.
+
+Astra identified two concrete decoder issues, each reproduced before repair:
+four malformed raw-schema cases panicked in Arrow conversion; three
+contradictory validity-bit cases were accepted despite declared zero nulls.
+Both now fail closed before materialization. Authenticated buffer/offset,
+node-length/null-count, schema, compression and dictionary mutations also
+reject. Astra's final read-only delta review reported READY.
+
+Strict `cargo clippy --locked -p borsuk --lib --tests -- -D warnings`,
+scoped pinned Ruff, Python syntax, formatting and diff checks passed.
+This checkpoint remains test-gated codec infrastructure: no production
+consumer, S3 performance, write throughput or larger-scale recall claim.
 
 ## Exit and next plan
 

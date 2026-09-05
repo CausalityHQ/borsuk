@@ -53,10 +53,17 @@ Authenticate exact expected SHA256 and length before parsing. Inspect IPC
 footer/message metadata before batch materialization: reject compressed
 record bodies, dictionaries, extra batches, invalid offsets/body extents,
 record count above32 and incompatible schema.
+Validate the raw footer schema before invoking Arrow's general schema
+conversion: missing fields or invalid datatype parameters must return an
+error rather than reach its infallible conversion paths. Require exact
+names, types, nested cardinalities, nonnullability and metadata, with
+little-endian representation and no unrecognized schema features.
 Before materialization also bound nested field-node populations: at most128
 range children,3072 centroid elements and code/bitmap buffer lengths allowed
 by8192 rows. Every buffer extent must lie inside the authenticated body;
 small encoded size alone does not justify trusting declared child lengths.
+When a validity bitmap is present, every used bit must be valid; a declared
+zero null count does not override contradictory bitmap bytes.
 Then validate all decoded
 shape, nullability, ranges, bitmaps and lengths. Encoded512KiB is not a claim
 of total memory use; decoded copies and Arrow metadata are additional bounded
