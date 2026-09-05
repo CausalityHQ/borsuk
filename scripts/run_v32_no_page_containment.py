@@ -523,8 +523,13 @@ def _commands(
     leaf_beam: int,
     *,
     replay_control: bool = False,
+    page_budget_ladder: bool = False,
 ) -> tuple[tuple[str, ...], ...]:
-    geometric = plan.virtual_geometric_pages or plan.global_geometric_pages
+    geometric = (
+        plan.virtual_geometric_pages
+        or plan.global_geometric_pages
+        or page_budget_ladder
+    )
     query_count = plan.query_count if geometric else 1
     common = (
         str(plan.qualifier),
@@ -566,6 +571,8 @@ def _commands(
         virtual = (
             "--global-replay-control" if replay_control else "--global-geometric-pages",
         )
+    if page_budget_ladder:
+        virtual = ("--page-budget-ladder",)
     if geometric:
         batch = plan.diagnostic_batch
         if batch is None:
@@ -1109,6 +1116,190 @@ def _canonical_bytes(value: object) -> bytes:
         ).encode()
         + b"\n"
     )
+
+
+def run_page_budget_ladder(
+    plan: V32ContainmentPlan,
+    *,
+    invoke: Callable[[tuple[str, ...]], bytes],
+) -> bytes:
+    """Authenticate local references, invoke once, and independently check coverage."""
+    if (
+        plan.source_rows != 1_000_000
+        or plan.query_count != 32
+        or plan.global_leaf_limit != 768
+        or plan.leaf_beam != 256
+        or plan.virtual_geometric_pages
+        or plan.global_geometric_pages
+        or plan.governing_terminal is not None
+    ):
+        raise ValueError("V32 page ladder plan differs")
+    _, maximum_leaves, leaf_beam, _ = _read_scale_manifest(plan)
+    truth = _read_truth(plan, plan.truth.path.read_bytes())
+    query = plan.query.path.read_bytes()
+    if (
+        len(query) != plan.query.encoded_bytes
+        or hashlib.sha256(query).hexdigest() != plan.query.sha256
+    ):
+        raise ValueError("V32 page ladder query bytes differ")
+    manifest = json.loads(plan.manifest.path.read_bytes())
+    descriptor = manifest.get("diagnostics", {}).get("logical_sources")
+    expected = dict(
+        file=plan.logical_sources.path.name,
+        role="v32-logical-sources-arrow",
+        sha256=plan.logical_sources.sha256,
+        encoded_bytes=plan.logical_sources.encoded_bytes,
+    )
+    if descriptor != expected:
+        raise ValueError("V32 page ladder logical-source manifest binding differs")
+    source_to_logical = _read_logical_sources(plan)
+    _read_diagnostic_batch(plan, truth, source_to_logical)
+    logical_truth = tuple(tuple(source_to_logical[n] for n in row) for row in truth)
+    mapping, registry = read_page_ladder_registry(
+        plan.manifest,
+        plan.artifact_dir,
+        plan.source_rows,
+        tuple(n for row in logical_truth for n in row),
+    )
+    (command,) = _commands(
+        plan, truth, source_to_logical, leaf_beam, page_budget_ladder=True
+    )
+    del source_to_logical
+    payload = invoke(command)
+    summary = validate_page_budget_ladder(
+        payload,
+        query_start=plan.query_start,
+        truth_logicals=logical_truth,
+        logical_pages=mapping,
+        registered_pages=registry,
+        maximum_leaves_eligible=maximum_leaves,
+        root_beam=plan.root_beam,
+    )
+    return _canonical_bytes(
+        dict(
+            schema="borsuk-v32-page-budget-ladder-v1",
+            claim_eligible=False,
+            metric="truth-page-containment-not-reranked-recall",
+            page_body_reads=0,
+            source_rows=plan.source_rows,
+            query_start=plan.query_start,
+            query_count=plan.query_count,
+            manifest_sha256=plan.manifest.sha256,
+            query_sha256=plan.query.sha256,
+            truth_sha256=plan.truth.sha256,
+            truth_receipt_sha256=plan.truth_receipt.sha256,
+            logical_sources_sha256=plan.logical_sources.sha256,
+            diagnostic_batch_sha256=plan.diagnostic_batch.sha256,
+            diagnostic_sha256=hashlib.sha256(payload).hexdigest(),
+            summary=summary,
+            diagnostic=json.loads(payload),
+        )
+    )
+
+
+def read_page_ladder_registry(
+    manifest: LocalArtifact,
+    artifact_dir: Path,
+    source_rows: int,
+    requested_logicals: tuple[int, ...],
+) -> tuple[dict[int, int], dict[int, dict[str, object]]]:
+    """Authenticate the page-range Parquet; map only requested truth IDs.
+
+    Space is proportional to the page registry plus at most 320 truth IDs,
+    never a dense logical-row-to-page Python mapping.
+    """
+    _validate_artifact(manifest)
+    raw = manifest.path.read_bytes()
+    if (
+        len(raw) != manifest.encoded_bytes
+        or hashlib.sha256(raw).hexdigest() != manifest.sha256
+    ):
+        raise ValueError("V32 page registry manifest bytes differ")
+    value = json.loads(raw)
+    if (
+        raw != _canonical_bytes(value)
+        or type(value) is not dict
+        or not artifact_dir.is_absolute()
+        or type(source_rows) is not int
+        or source_rows <= 0
+        or len(requested_logicals) > 320
+        or any(
+            type(n) is not int or not 0 <= n < source_rows for n in requested_logicals
+        )
+        or type(value.get("layout")) is not dict
+        or type(value["layout"].get("source_rows")) is not int
+        or value["layout"]["source_rows"] != source_rows
+    ):
+        raise ValueError("V32 page registry manifest differs")
+    item = value["layout"].get("page_ranges")
+    if (
+        type(item) is not dict
+        or set(item) != {"file", "role", "sha256", "encoded_bytes"}
+        or item["role"] != "v32-page-ranges-parquet"
+        or type(item["file"]) is not str
+        or not item["file"]
+        or Path(item["file"]).name != item["file"]
+        or item["file"] in {".", ".."}
+        or type(item["sha256"]) is not str
+        or not _digest(item["sha256"])
+        or type(item["encoded_bytes"]) is not int
+        or item["encoded_bytes"] <= 0
+    ):
+        raise ValueError("V32 page registry descriptor differs")
+    path = artifact_dir / item["file"]
+    if path.stat().st_size != item["encoded_bytes"]:
+        raise ValueError("V32 page registry length differs")
+    payload = path.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != item["sha256"]:
+        raise ValueError("V32 page registry digest differs")
+    table = pq.read_table(pa.BufferReader(payload))
+    schema = pa.schema(
+        [
+            pa.field("page_ordinal", pa.uint32(), nullable=False),
+            pa.field("logical_start", pa.uint64(), nullable=False),
+            pa.field("row_count", pa.uint16(), nullable=False),
+            pa.field("sha256", pa.string(), nullable=False),
+            pa.field("encoded_bytes", pa.uint64(), nullable=False),
+            pa.field("primary_rows", pa.uint16(), nullable=False),
+            pa.field("replica_rows", pa.uint16(), nullable=False),
+        ]
+    )
+    if (
+        table.schema != schema
+        or not 1 <= table.num_rows <= source_rows
+        or any(c.null_count for c in table.columns)
+    ):
+        raise ValueError("V32 page registry physical schema differs")
+    wanted = sorted(set(requested_logicals))
+    target_index = 0
+    end = 0
+    mapping, pages = {}, {}
+    for ordinal, row in enumerate(table.to_pylist()):
+        if (
+            row["page_ordinal"] != ordinal
+            or row["logical_start"] != end
+            or not 1 <= row["row_count"] <= 480
+            or row["primary_rows"] != row["row_count"]
+            or row["replica_rows"] != 0
+            or not _digest(row["sha256"])
+            or not 0 < row["encoded_bytes"] <= 196608
+            or end + row["row_count"] > source_rows
+        ):
+            raise ValueError("V32 page registry coverage differs")
+        end += row["row_count"]
+        pages[ordinal] = {
+            "ordinal": ordinal,
+            **{
+                key: row[key]
+                for key in ("sha256", "encoded_bytes", "primary_rows", "replica_rows")
+            },
+        }
+        while target_index < len(wanted) and wanted[target_index] < end:
+            mapping[wanted[target_index]] = ordinal
+            target_index += 1
+    if end != source_rows or target_index != len(wanted):
+        raise ValueError("V32 page registry coverage differs")
+    return mapping, pages
 
 
 def validate_page_budget_ladder(
