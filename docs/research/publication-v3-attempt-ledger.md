@@ -3589,3 +3589,45 @@ recall, sustained throughput or100M/1B memory/scale from this result. The64-page
 arm's fourfold request/byte cost and the cohort's previous ladder exposure
 remain explicit limitations. No additional experiment was started in this
 attempt, and owned compute is terminated.
+
+### V32 broader fixed64 quality falsifier: preregistered stopping rule
+
+Before additional physical serving or throughput harness work, challenge the
+assumption that64 pages suffice beyond the32 examined queries. Freeze source
+`28e60e45d61f1e4e1953366f5581820df8a5954e`, the same1M index/query artifact,
+root beam8/global768/scan262144/candidate12288, and64 as the decision budget.
+Use existing corrected-v3 truth and no-page ladder tooling, not a new router.
+
+Choose four literal nonoverlapping windows in fixed order:4096..4127,
+5120..5151,6144..6175,7168..7199. These starts are fixed before collecting
+their outcomes, not selected from recall results. They do not overlap the
+recent0..1055 cohorts, but historical whole-dataset exposure still prevents
+calling them globally untouched holdouts. No candidate/page-budget tuning,
+window replacement or output-dependent extension is allowed.
+
+On one causality Spot instance, execute the windows serially, at most128
+queries. Authenticate corpus/query/manifest inputs and generate v3 truth for
+each window with the existing bounded streaming builder. At most24 reference
+shard reads /1,611,860,608 corpus bytes across four windows; do not persist
+corpus shards and do not call this serving traffic. Reuse resident setup once.
+No vector-page body GETs. Existing tooling emits16/32/64 diagnostic cells;
+preserve all of them, but only the fixed64 result controls this falsifier.
+
+Stop after the first completed32-query window with any64-page miss. Preserve
+all completed windows, denominator, exact sample evidence and stop reason;
+do not run the remaining windows or quietly restart. Distinguish a target not
+retained as a candidate from one whose true page ranks beyond64, using the
+recorded per-target evidence; disclose any other loss boundary separately.
+All128 passing permits broader physical/concurrency qualification, not a
+universal-recall claim. Any miss is evidence against perfect recall for this
+fixed configuration and requires causal diagnosis before tuning anything.
+
+Same one-original/no-restart lifecycle:3GiB process-group RSS, full PSI
+avg10<=0.5, swap growth<=256MiB,900s scientific wall,1800s whole-attempt cap;
+record source/archive/binary/inputs, terminal or stop receipt and monitor;
+terminate compute on terminal. Inspect only liveness/phase/health while active.
+No fourth-core latency or write benchmark is bundled into this quality attempt.
+Separately, a later multi-core configuration test must explicitly set
+BORSUK_CPU_THREADS and affinity: RAYON_NUM_THREADS does not control BORSUK's
+private pool. Existing parallel reranking must not be reimplemented merely
+because the preceding single-core comparison reported47ms rerank time.
