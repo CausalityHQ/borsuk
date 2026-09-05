@@ -1,4 +1,15 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
+
+use arrow_array::{
+    ArrayRef, BooleanArray, FixedSizeListArray, Float32Array, RecordBatch, UInt8Array, UInt32Array,
+    UInt64Array,
+};
+use arrow_ipc::{MetadataVersion, writer::FileWriter, writer::IpcWriteOptions};
+use arrow_schema::{DataType, Field, Schema};
+use sha2::{Digest, Sha256};
 
 use crate::{
     BorsukError, Result,
@@ -109,10 +120,12 @@ fn reconstruct_v33_leaf_populations(
 struct V33LeafShape {
     routing_leaf_ordinal: u32,
     group_ordinal: u32,
+    logical_start: u64,
     population: u64,
     mean: [f32; DIMENSIONS],
     diagonal_variance: [f32; DIMENSIONS],
     scalar_moment: f32,
+    maximum_radius: f32,
     split_dimension: usize,
     split_centers: [[f32; DIMENSIONS]; 2],
 }
@@ -138,6 +151,15 @@ struct V33ShapeControlBytes {
     scalar_padding_bytes: usize,
     diagonal_summary_bytes: usize,
     diagonal_control_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct V33LeafShapeArtifact {
+    role: &'static str,
+    sha256: String,
+    encoded_bytes: u64,
+    row_count: u64,
+    arrow: Vec<u8>,
 }
 
 fn v33_shape_control_bytes(leaf_count: usize) -> Result<V33ShapeControlBytes> {
@@ -202,10 +224,20 @@ fn summarize_v33_leaf(population: &V33LeafPopulation) -> Result<V33LeafShape> {
         *value /= count;
     }
     let scalar64 = variance64.iter().sum::<f64>();
+    let mut maximum_radius64 = 0.0_f64;
+    for (_, row) in &population.rows {
+        let mut squared = 0.0_f64;
+        for dimension in 0..DIMENSIONS {
+            let delta = f64::from(row[dimension]) - mean64[dimension];
+            squared += delta * delta;
+        }
+        maximum_radius64 = maximum_radius64.max(squared.sqrt());
+    }
     if mean64
         .iter()
         .chain(variance64.iter())
         .chain(std::iter::once(&scalar64))
+        .chain(std::iter::once(&maximum_radius64))
         .any(|value| !value.is_finite())
     {
         return Err(invalid("V33 leaf moment is nonfinite"));
@@ -242,13 +274,154 @@ fn summarize_v33_leaf(population: &V33LeafPopulation) -> Result<V33LeafShape> {
     Ok(V33LeafShape {
         routing_leaf_ordinal: population.routing_leaf_ordinal,
         group_ordinal: population.group_ordinal,
+        logical_start: population
+            .rows
+            .iter()
+            .map(|(ordinal, _)| *ordinal)
+            .min()
+            .unwrap(),
         population: population.rows.len() as u64,
         mean,
         diagonal_variance,
         scalar_moment: scalar64 as f32,
+        maximum_radius: maximum_radius64 as f32,
         split_dimension,
         split_centers,
     })
+}
+
+fn v33_vector_array<'a>(vectors: impl Iterator<Item = &'a [f32; DIMENSIONS]>) -> Result<ArrayRef> {
+    let values = Arc::new(Float32Array::from_iter_values(
+        vectors.flat_map(|vector| vector.iter().copied()),
+    ));
+    Ok(Arc::new(FixedSizeListArray::try_new(
+        Arc::new(Field::new("element", DataType::Float32, false)),
+        DIMENSIONS as i32,
+        values,
+        None,
+    )?))
+}
+
+fn encode_v33_leaf_shape_artifact(
+    leaves: &[V33LeafShape],
+    scalar_split_leaves: &[u32],
+) -> Result<V33LeafShapeArtifact> {
+    if leaves.is_empty()
+        || leaves
+            .iter()
+            .enumerate()
+            .any(|(ordinal, leaf)| leaf.routing_leaf_ordinal != ordinal as u32)
+        || scalar_split_leaves.is_empty()
+        || scalar_split_leaves
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || scalar_split_leaves
+            .iter()
+            .any(|ordinal| usize::try_from(*ordinal).map_or(true, |index| index >= leaves.len()))
+    {
+        return Err(invalid("V33 leaf shape artifact authority differs"));
+    }
+    let selected = scalar_split_leaves.iter().copied().collect::<BTreeSet<_>>();
+    let vector_field = || {
+        DataType::FixedSizeList(
+            Arc::new(Field::new("element", DataType::Float32, false)),
+            DIMENSIONS as i32,
+        )
+    };
+    let schema = Schema::new(vec![
+        Field::new("routing_leaf_ordinal", DataType::UInt32, false),
+        Field::new("group_ordinal", DataType::UInt32, false),
+        Field::new("logical_start", DataType::UInt64, false),
+        Field::new("population", DataType::UInt64, false),
+        Field::new("mean", vector_field(), false),
+        Field::new("diagonal_variance", vector_field(), false),
+        Field::new("scalar_moment", DataType::Float32, false),
+        Field::new("maximum_radius", DataType::Float32, false),
+        Field::new("split_dimension", DataType::UInt8, false),
+        Field::new("split_center_left", vector_field(), false),
+        Field::new("split_center_right", vector_field(), false),
+        Field::new("scalar_split_selected", DataType::Boolean, false),
+    ]);
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(UInt32Array::from_iter_values(
+                leaves.iter().map(|leaf| leaf.routing_leaf_ordinal),
+            )),
+            Arc::new(UInt32Array::from_iter_values(
+                leaves.iter().map(|leaf| leaf.group_ordinal),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                leaves.iter().map(|leaf| leaf.logical_start),
+            )),
+            Arc::new(UInt64Array::from_iter_values(
+                leaves.iter().map(|leaf| leaf.population),
+            )),
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.mean))?,
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.diagonal_variance))?,
+            Arc::new(Float32Array::from_iter_values(
+                leaves.iter().map(|leaf| leaf.scalar_moment),
+            )),
+            Arc::new(Float32Array::from_iter_values(
+                leaves.iter().map(|leaf| leaf.maximum_radius),
+            )),
+            Arc::new(UInt8Array::from_iter_values(leaves.iter().map(|leaf| {
+                u8::try_from(leaf.split_dimension).expect("V33 split dimension fits u8")
+            }))),
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.split_centers[0]))?,
+            v33_vector_array(leaves.iter().map(|leaf| &leaf.split_centers[1]))?,
+            Arc::new(BooleanArray::from(
+                leaves
+                    .iter()
+                    .map(|leaf| selected.contains(&leaf.routing_leaf_ordinal))
+                    .collect::<Vec<_>>(),
+            )),
+        ],
+    )?;
+    let mut arrow = Vec::new();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut writer = FileWriter::try_new_with_options(&mut arrow, &schema, options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    Ok(V33LeafShapeArtifact {
+        role: "v33-leaf-shapes-arrow",
+        sha256: format!("{:x}", Sha256::digest(&arrow)),
+        encoded_bytes: arrow.len() as u64,
+        row_count: leaves.len() as u64,
+        arrow,
+    })
+}
+
+fn select_v33_scalar_split_leaves(
+    populations: &[V33LeafPopulation],
+    additional_centers: usize,
+) -> Result<Vec<u32>> {
+    if additional_centers == 0
+        || populations.is_empty()
+        || populations
+            .iter()
+            .map(|leaf| leaf.routing_leaf_ordinal)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != populations.len()
+    {
+        return Err(invalid("V33 scalar split authority differs"));
+    }
+    let mut splittable = populations
+        .iter()
+        .filter(|leaf| leaf.rows.len() > 1)
+        .map(|leaf| (leaf.rows.len(), leaf.routing_leaf_ordinal))
+        .collect::<Vec<_>>();
+    if splittable.len() < additional_centers {
+        return Err(invalid("V33 scalar split population differs"));
+    }
+    splittable.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    Ok(splittable
+        .into_iter()
+        .take(additional_centers)
+        .map(|(_, ordinal)| ordinal)
+        .collect())
 }
 
 fn squared_distance(left: &[f32; DIMENSIONS], right: &[f32; DIMENSIONS]) -> Result<f64> {
@@ -291,9 +464,11 @@ fn score_v33_leaf(leaf: &V33LeafShape, query: &[f32; DIMENSIONS], arm: V33ShapeA
             let mut moment = 0.0_f64;
             let mut variance_square = 0.0_f64;
             let mut directional = 0.0_f64;
-            for dimension in 0..DIMENSIONS {
-                let variance = f64::from(leaf.diagonal_variance[dimension]);
-                let delta = f64::from(query[dimension]) - f64::from(leaf.mean[dimension]);
+            for ((query_value, mean), variance) in
+                query.iter().zip(&leaf.mean).zip(&leaf.diagonal_variance)
+            {
+                let variance = f64::from(*variance);
+                let delta = f64::from(*query_value) - f64::from(*mean);
                 moment += variance;
                 variance_square += variance * variance;
                 directional += delta * delta * variance;
@@ -383,11 +558,17 @@ fn select_v33_group_prefix(
 #[cfg(test)]
 mod tests {
     use super::{
-        V33GroupPopulation, V33LeafPopulation, V33RoutingRange, V33ShapeArm, rank_v33_groups,
-        reconstruct_v33_leaf_populations, score_v33_leaf, select_v33_group_prefix,
+        V33GroupPopulation, V33LeafPopulation, V33RoutingRange, V33ShapeArm,
+        encode_v33_leaf_shape_artifact, rank_v33_groups, reconstruct_v33_leaf_populations,
+        score_v33_leaf, select_v33_group_prefix, select_v33_scalar_split_leaves,
         summarize_v33_leaf, v33_shape_control_bytes,
     };
     use crate::v30_s3_pq::{V30CodePlanes, V30PqCodebook, V30PqWidth};
+    use arrow_array::{Array, FixedSizeListArray, Float32Array, UInt32Array};
+    use arrow_ipc::reader::FileReader;
+    use arrow_schema::{DataType, Field};
+    use sha2::{Digest, Sha256};
+    use std::io::Cursor;
 
     fn row(logical_ordinal: u64, first: f32, second: f32) -> (u64, [f32; 96]) {
         let mut values = [0.0; 96];
@@ -487,6 +668,10 @@ mod tests {
             score_v33_leaf(&summary, &query, V33ShapeArm::DiagonalMoment).unwrap(),
             diagonal_expected
         );
+        assert_eq!(
+            score_v33_leaf(&summary, &query, V33ShapeArm::SplitCentroid).unwrap(),
+            1.0
+        );
 
         let far_spread = V33LeafPopulation {
             routing_leaf_ordinal: 8,
@@ -528,6 +713,21 @@ mod tests {
         assert_eq!(summary.split_dimension, 0);
         assert_eq!(summary.split_centers[0][0], -1.5);
         assert_eq!(summary.split_centers[1][0], 1.5);
+        assert_eq!(summary.maximum_radius, 2.0);
+
+        let populations = (0..50)
+            .map(|ordinal| V33LeafPopulation {
+                routing_leaf_ordinal: ordinal,
+                group_ordinal: 0,
+                rows: (0..(ordinal + 2))
+                    .map(|row_ordinal| row(u64::from(row_ordinal), row_ordinal as f32, 0.0))
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            select_v33_scalar_split_leaves(&populations, 43).unwrap(),
+            (7_u32..50).rev().collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -582,6 +782,91 @@ mod tests {
                 .filter(|group| selected.contains(group))
                 .count(),
             5
+        );
+    }
+
+    #[test]
+    fn v33_group_shape_arrow_artifact_binds_exact_f32_shape_and_split_set() {
+        let populations = [
+            V33LeafPopulation {
+                routing_leaf_ordinal: 0,
+                group_ordinal: 4,
+                rows: vec![row(0, -1.0, 0.0), row(1, 1.0, 0.0)],
+            },
+            V33LeafPopulation {
+                routing_leaf_ordinal: 1,
+                group_ordinal: 5,
+                rows: vec![row(2, 2.0, 3.0)],
+            },
+        ];
+        let summaries = populations
+            .iter()
+            .map(summarize_v33_leaf)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let artifact = encode_v33_leaf_shape_artifact(&summaries, &[0]).unwrap();
+        assert_eq!(artifact.role, "v33-leaf-shapes-arrow");
+        assert_eq!(artifact.row_count, 2);
+        assert_eq!(artifact.encoded_bytes, artifact.arrow.len() as u64);
+        assert_eq!(
+            artifact.sha256,
+            format!("{:x}", Sha256::digest(&artifact.arrow))
+        );
+        let mut reader = FileReader::try_new(Cursor::new(&artifact.arrow), None).unwrap();
+        let schema = reader.schema();
+        assert_eq!(
+            schema.field(0),
+            &Field::new("routing_leaf_ordinal", DataType::UInt32, false)
+        );
+        assert_eq!(
+            schema.field(4),
+            &Field::new(
+                "mean",
+                DataType::FixedSizeList(
+                    std::sync::Arc::new(Field::new("element", DataType::Float32, false)),
+                    96,
+                ),
+                false,
+            )
+        );
+        assert_eq!(schema.field(5).name(), "diagonal_variance");
+        assert_eq!(schema.field(6).name(), "scalar_moment");
+        assert_eq!(schema.field(7).name(), "maximum_radius");
+        assert_eq!(schema.field(8).name(), "split_dimension");
+        assert_eq!(schema.field(9).name(), "split_center_left");
+        assert_eq!(schema.field(10).name(), "split_center_right");
+        assert_eq!(schema.field(11).name(), "scalar_split_selected");
+        let batch = reader.next().unwrap().unwrap();
+        assert!(reader.next().is_none());
+        assert!(
+            batch
+                .columns()
+                .iter()
+                .all(|column| column.null_count() == 0)
+        );
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .unwrap()
+                .values(),
+            &[0, 1]
+        );
+        let means = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        assert_eq!(means.len(), 2);
+        assert_eq!(
+            means
+                .values()
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .unwrap()
+                .value(96),
+            2.0
         );
     }
 }
