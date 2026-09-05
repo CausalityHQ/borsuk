@@ -63,6 +63,7 @@ struct DiagnosticRequest {
 enum GlobalLayoutMode {
     Control,
     Treatment,
+    PageBudget,
 }
 
 #[derive(Debug, Deserialize)]
@@ -874,6 +875,80 @@ fn virtual_geometric_batch_diagnostic_bytes(
     Ok(bytes)
 }
 
+fn page_budget_ladder_bytes(
+    query_start: usize,
+    diagnostics: Vec<(
+        usize,
+        String,
+        V32RoutingDiagnostic,
+        Vec<borsuk::V27PageIdentity>,
+    )>,
+) -> borsuk::Result<Vec<u8>> {
+    if diagnostics.len() != 32 {
+        return Err(invalid("V32 page ladder batch cardinality differs"));
+    }
+    let mut queries = Vec::with_capacity(32);
+    for (offset, (ordinal, hash, current, prefix)) in diagnostics.into_iter().enumerate() {
+        if query_start.checked_add(offset) != Some(ordinal)
+            || !valid_digest(&hash)
+            || current.targets.len() != 10
+            || current.selection.pages.len() != 16
+            || current.selection.work.selected_pages != 16
+            || !(16..=64).contains(&prefix.len())
+            || prefix[..16] != current.selection.pages
+        {
+            return Err(invalid("V32 page ladder authority differs"));
+        }
+        let mut ordinals = std::collections::BTreeSet::new();
+        if prefix.iter().any(|page| {
+            !ordinals.insert(page.ordinal)
+                || !valid_digest(&page.sha256)
+                || page.encoded_bytes == 0
+                || page.encoded_bytes > 196_608
+        }) {
+            return Err(invalid("V32 page ladder identities differ"));
+        }
+        let cells = [16, 32, 64]
+            .into_iter()
+            .map(|cap| {
+                let pages = &prefix[..cap.min(prefix.len())];
+                let hits = current
+                    .targets
+                    .iter()
+                    .filter(|target| pages.iter().any(|page| page.ordinal == target.page_ordinal))
+                    .count();
+                serde_json::json!({
+                    "requested_pages": cap,
+                    "selected_page_count": pages.len(),
+                    "selected_pages": pages,
+                    "selected_page_bytes": pages.iter().map(|page| page.encoded_bytes).sum::<u64>(),
+                    "contained_truth_count": hits,
+                    "containment_ppm": hits * 100_000,
+                })
+            })
+            .collect::<Vec<_>>();
+        let current: serde_json::Value =
+            serde_json::from_slice(&diagnostic_bytes(ordinal, true, Some(768), current)?)
+                .map_err(|_| invalid("V32 page ladder current diagnostic differs"))?;
+        queries.push(serde_json::json!({
+            "query_ordinal": ordinal,
+            "candidate_replay_sha256": hash,
+            "current": current,
+            "cells": cells,
+        }));
+    }
+    let mut bytes = serde_json::to_vec(&canonical(serde_json::json!({
+        "schema_version": 11,
+        "query_start": query_start,
+        "claim_eligible": false,
+        "page_body_reads": 0,
+        "queries": queries,
+    })))
+    .map_err(|_| invalid("V32 page ladder serialization differs"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn global_replay_control_bytes(
     diagnostics: Vec<(usize, String, V32RoutingDiagnostic)>,
     pq_work: Vec<borsuk::V32PqEvaluationWork>,
@@ -1004,7 +1079,7 @@ fn global_resource_bytes(
         object
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
-        Some(9 | 10)
+        Some(9..=11)
     ) || object.contains_key("resources")
     {
         return Err(invalid("V32 global resource schema differs"));
@@ -1520,6 +1595,21 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                 .iter()
                 .map(|query| router.capture_global_replay(query, arm, 768))
                 .collect::<borsuk::Result<Vec<_>>>()?;
+            if mode == GlobalLayoutMode::PageBudget {
+                let rows = replays
+                    .iter()
+                    .zip(requests)
+                    .map(|(replay, (ordinal, logicals))| {
+                        Ok((
+                            ordinal as usize,
+                            replay.sha256(),
+                            replay.diagnose(&logicals)?,
+                            replay.physical_page_prefix(64)?,
+                        ))
+                    })
+                    .collect::<borsuk::Result<Vec<_>>>()?;
+                return with_resources(page_budget_ladder_bytes(args.query_start, rows)?);
+            }
             if mode == GlobalLayoutMode::Control {
                 let controls = replays
                     .iter()
@@ -1741,12 +1831,17 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
             virtual_geometric_pages = true;
             continue;
         }
-        if flag == "--global-replay-control" || flag == "--global-geometric-pages" {
+        if flag == "--global-replay-control"
+            || flag == "--global-geometric-pages"
+            || flag == "--page-budget-ladder"
+        {
             if global_layout_mode.is_some() {
                 return Err(argument_error("duplicate global layout phase"));
             }
             global_layout_mode = Some(if flag == "--global-replay-control" {
                 GlobalLayoutMode::Control
+            } else if flag == "--page-budget-ladder" {
+                GlobalLayoutMode::PageBudget
             } else {
                 GlobalLayoutMode::Treatment
             });
@@ -1835,7 +1930,9 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         || ((virtual_geometric_pages || global_layout_mode.is_some())
             && (global_leaf_limit.is_none() || diagnostic_batch.is_none()))
         || (virtual_geometric_pages && global_layout_mode.is_some())
-        || (global_layout_mode.is_some() && (query_start != 64 || k != 10))
+        || (global_layout_mode.is_some() && k != 10)
+        || (global_layout_mode.is_some_and(|mode| mode != GlobalLayoutMode::PageBudget)
+            && query_start != 64)
     {
         return Err(argument_error("--global-leaf-limit value differs"));
     }
@@ -2049,6 +2146,116 @@ mod tests {
             "--virtual-geometric-pages".to_owned(),
         ]);
         values
+    }
+
+    #[test]
+    fn v32_page_ladder_cli_accepts_registered_cohort_without_page_access() {
+        // Break: the new replication cohort is silently forced back to q64,
+        // or the no-page diagnostic accepts a serving capability.
+        let mut values = virtual_batch_arguments();
+        *values.last_mut().unwrap() = "--page-budget-ladder".into();
+        let start = values.iter().position(|s| s == "--query-start").unwrap();
+        values[start + 1] = "1024".into();
+        let parsed = parse_args(values.clone()).unwrap();
+        assert_eq!(parsed.query_start, 1024);
+        assert_eq!(
+            parsed.diagnostic.unwrap().global_layout_mode,
+            Some(super::GlobalLayoutMode::PageBudget)
+        );
+        for flags in [
+            vec!["--page-budget-ladder"],
+            vec!["--global-replay-control"],
+            vec!["--serving-tier", "standard"],
+            vec!["--local-page-dir", "/tmp/pages"],
+        ] {
+            let mut bad = values.clone();
+            bad.extend(flags.into_iter().map(str::to_owned));
+            assert!(parse_args(bad).is_err());
+        }
+    }
+
+    #[test]
+    fn v32_page_ladder_serializes_nested_exact_bytes_and_resource_boundary() {
+        // Break: sampled subsets, wrong cohort, duplicate identities or omitted
+        // cells make the cheap gate hide real page-read cost or containment.
+        let fixture = virtual_diagnostic_fixture();
+        let mut prefix = fixture.current.selection.pages.clone();
+        for ordinal in 16..64 {
+            let mut page = prefix[0].clone();
+            page.ordinal = ordinal;
+            page.sha256 = format!("{ordinal:064x}");
+            prefix.push(page);
+        }
+        let rows = (1024..1056)
+            .map(|ordinal| {
+                (
+                    ordinal,
+                    "a".repeat(64),
+                    fixture.current.clone(),
+                    prefix.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let bytes = super::page_budget_ladder_bytes(1024, rows.clone()).unwrap();
+        let bytes = super::global_resource_bytes(&bytes, 123_456, 999, 555).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema_version"], 11);
+        assert_eq!(value["query_start"], 1024);
+        assert_eq!(value["page_body_reads"], 0);
+        for (index, cap) in [16, 32, 64].into_iter().enumerate() {
+            let cell = &value["queries"][0]["cells"][index];
+            assert_eq!(cell["requested_pages"], cap);
+            assert_eq!(cell["selected_page_count"], cap);
+            assert_eq!(cell["selected_page_bytes"], cap * 196_000);
+            assert_eq!(cell["contained_truth_count"], 10);
+            assert_eq!(cell["containment_ppm"], 1_000_000);
+        }
+        for mutation in 0..5 {
+            let mut bad = rows.clone();
+            match mutation {
+                0 => bad[0].0 = 1025,
+                1 => bad[0].1 = "invalid".into(),
+                2 => bad[0].3[17] = bad[0].3[16].clone(),
+                3 => bad[0].3[0].encoded_bytes += 1,
+                4 => {
+                    bad.pop();
+                }
+                _ => unreachable!(),
+            }
+            assert!(super::page_budget_ladder_bytes(1024, bad).is_err());
+        }
+        let short = rows
+            .into_iter()
+            .map(|(o, h, d, p)| (o, h, d, p[..20].to_vec()))
+            .collect();
+        let bytes = super::page_budget_ladder_bytes(1024, short).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["queries"][0]["cells"][2]["requested_pages"], 64);
+        assert_eq!(value["queries"][0]["cells"][2]["selected_page_count"], 20);
+
+        // Two truth pages are outside the first 16: one enters at 32,
+        // the other only at 64. This catches constant/all-hit reporting.
+        let mut diagnostic = fixture.current;
+        for (target_index, page) in [(8, 20), (9, 33)] {
+            let target = &mut diagnostic.targets[target_index];
+            target.page_ordinal = page;
+            target.first_unique_page_rank = Some(page as usize);
+            target.page_selected = false;
+            target.reciprocal_rank_selected = false;
+            target.stage = V32RoutingTargetStage::PageReducer;
+        }
+        let rows = (1024..1056)
+            .map(|ordinal| (ordinal, "a".repeat(64), diagnostic.clone(), prefix.clone()))
+            .collect();
+        let bytes = super::page_budget_ladder_bytes(1024, rows).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        for (index, hits, ppm) in [(0, 8, 800_000), (1, 9, 900_000), (2, 10, 1_000_000)] {
+            assert_eq!(
+                value["queries"][0]["cells"][index]["contained_truth_count"],
+                hits
+            );
+            assert_eq!(value["queries"][0]["cells"][index]["containment_ppm"], ppm);
+        }
     }
 
     #[test]
