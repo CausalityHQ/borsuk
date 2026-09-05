@@ -24,7 +24,7 @@ use crate::{
     BorsukError, Result, V27Hierarchy, V27HierarchyArtifacts, V27HierarchyConfig, V27PageIdentity,
     V27PageRow, encode_v27_hierarchy, encode_v27_page, fit_v27_hierarchy,
     v30_s3_pq::{
-        V30CodePlanes, V30Fidelity, V30PqArtifacts, V30PqCodebook, V30PqWidth, encode_v30_code,
+        V30CodePlanes, V30Fidelity, V30PqArtifacts, V30PqCodebook, V30PqEncoder, V30PqWidth,
         encode_v30_pq_artifacts, fit_v30_codebook,
     },
 };
@@ -1664,6 +1664,8 @@ impl V30LayoutBuilder {
         let mut rows = rows.into_iter();
         let mut prepared_parent_counts = vec![0_u64; hierarchy.leaves.len()];
         let mut source_rows = 0_u64;
+        let base_encoder = V30PqEncoder::new(base_codebook)?;
+        let high_encoder = V30PqEncoder::new(high_codebook)?;
         let mut write_prepared = |output: &mut dyn Write| {
             for row in rows.by_ref() {
                 if row.source_ordinal != source_rows {
@@ -1680,8 +1682,8 @@ impl V30LayoutBuilder {
                     row.vector[dimension]
                         - f32::from(hierarchy.leaves[leaf_ordinal as usize][dimension])
                 });
-                let (base_code, base_error) = encode_v30_code(base_codebook, &residual)?;
-                let (high_code, _) = encode_v30_code(high_codebook, &residual)?;
+                let (base_code, base_error) = base_encoder.encode(&residual)?;
+                let (high_code, _) = high_encoder.encode(&residual)?;
                 write_prepared_record(
                     output,
                     &V30PreparedRecord {
@@ -2648,6 +2650,7 @@ mod tests {
     #[derive(Default)]
     struct Scratch {
         runs: BTreeMap<String, Vec<u8>>,
+        prepared_bytes: Vec<u8>,
         writes: Vec<String>,
         peak_write: usize,
         open_now: Arc<AtomicUsize>,
@@ -2679,6 +2682,9 @@ mod tests {
         ) -> crate::Result<()> {
             let mut bytes = Vec::new();
             write(&mut bytes)?;
+            if key == super::PREPARED_KEY {
+                self.prepared_bytes = bytes.clone();
+            }
             self.peak_write = self.peak_write.max(bytes.len());
             self.writes.push(key.to_owned());
             self.runs.insert(key.to_owned(), bytes);
@@ -3457,6 +3463,77 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn v32_pq_encoder_preparation_matches_frozen_record_bytes() {
+        // Catches wiring the wrong width, parent residual, vector, or row order.
+        let hierarchy = V27Hierarchy {
+            roots: vec![[f16::from_f32(0.0); 96]],
+            leaves: vec![[f16::from_f32(0.0); 96], [f16::from_f32(1.0); 96]],
+            leaf_roots: vec![0, 0],
+        };
+        let book = |width: V30PqWidth| {
+            V30PqCodebook::new(
+                width,
+                (0..width.subquantizers())
+                    .flat_map(|_| {
+                        (0..256).flat_map(|c| {
+                            (0..width.dimensions())
+                                .map(move |d| c as f32 / 256.0 + d as f32 / 4096.0)
+                        })
+                    })
+                    .collect(),
+            )
+            .unwrap()
+        };
+        let base = book(V30PqWidth::Base24);
+        let high = book(V30PqWidth::High48);
+        let rows = (0..32_u64)
+            .map(|source_ordinal| V27PageRow {
+                source_ordinal,
+                vector: [(source_ordinal % 2) as f32 + 0.125 + (source_ordinal / 2) as f32 / 128.0;
+                    96],
+            })
+            .collect::<Vec<_>>();
+        let mut expected = Vec::new();
+        for row in &rows {
+            let leaf_ordinal = (row.source_ordinal % 2) as u32;
+            let residual = [0.125 + (row.source_ordinal / 2) as f32 / 128.0; 96];
+            let (base_code, base_error) =
+                crate::v30_s3_pq::encode_v30_code(&base, &residual).unwrap();
+            let (high_code, _) = crate::v30_s3_pq::encode_v30_code(&high, &residual).unwrap();
+            super::write_prepared_record(
+                &mut expected,
+                &super::V30PreparedRecord {
+                    leaf_ordinal,
+                    source_ordinal: row.source_ordinal,
+                    base_code,
+                    high_code,
+                    vector: row.vector,
+                    base_error,
+                },
+            )
+            .unwrap();
+        }
+        let mut scratch = Scratch::default();
+        let mut pages = Scratch::default();
+        V30LayoutBuilder::build_from_corpus(
+            (rows.clone(), rows),
+            &hierarchy,
+            &base,
+            &high,
+            V30LayoutBuildConfig {
+                page_rows: 8,
+                sort_memory_rows: 4,
+                fidelity_ppm: 50_000,
+            },
+            &mut scratch,
+            &mut pages,
+        )
+        .unwrap();
+        assert_eq!(scratch.prepared_bytes, expected);
+        assert!(scratch.runs.is_empty());
     }
 
     #[test]

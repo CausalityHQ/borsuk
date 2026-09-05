@@ -197,6 +197,58 @@ pub(crate) fn fit_v30_codebook(
     V30PqCodebook::new(width, centroids)
 }
 
+/// One immutable codebook validation for a sequential preparation pass.
+pub(crate) struct V30PqEncoder<'a> {
+    codebook: &'a V30PqCodebook,
+}
+
+impl<'a> V30PqEncoder<'a> {
+    pub(crate) fn new(codebook: &'a V30PqCodebook) -> Result<Self> {
+        codebook.validate()?;
+        Ok(Self { codebook })
+    }
+
+    pub(crate) fn encode(&self, vector: &[f32; DIMENSIONS]) -> Result<(Vec<u8>, f32)> {
+        let codebook = self.codebook;
+        if vector.iter().any(|value| !value.is_finite()) {
+            return Err(invalid("V30 PQ8 residual must be finite"));
+        }
+        let dimensions = codebook.width.dimensions();
+        let mut error = 0.0_f32;
+        let code = (0..codebook.width.subquantizers())
+            .map(|subquantizer| {
+                let vector_start = subquantizer * dimensions;
+                let (distance, centroid) = (0..CENTROIDS)
+                    .map(|centroid| {
+                        let centroid_start = (subquantizer * CENTROIDS + centroid) * dimensions;
+                        let distance = (0..dimensions)
+                            .map(|dimension| {
+                                let delta = vector[vector_start + dimension]
+                                    - codebook.centroids[centroid_start + dimension];
+                                delta * delta
+                            })
+                            .sum::<f32>();
+                        (distance, centroid)
+                    })
+                    .min_by(|left, right| {
+                        left.0
+                            .total_cmp(&right.0)
+                            .then_with(|| left.1.cmp(&right.1))
+                    })
+                    .unwrap();
+                error += distance;
+                centroid as u8
+            })
+            .collect::<Vec<_>>();
+        if !error.is_finite() || error < 0.0 {
+            return Err(invalid("V30 PQ8 reconstruction error differs"));
+        }
+        Ok((code, error))
+    }
+}
+
+// Frozen pre-optimization encoder: independent differential oracle.
+#[cfg(test)]
 pub(crate) fn encode_v30_code(
     codebook: &V30PqCodebook,
     vector: &[f32; DIMENSIONS],
@@ -1258,6 +1310,60 @@ mod tests {
             }
         }
         V30PqCodebook::new(width, centroids).unwrap()
+    }
+
+    #[test]
+    fn v32_pq_encoder_reuse_preserves_frozen_code_and_error_bits() {
+        // Break: caching validation changes arithmetic, ties, or residual checks.
+        for width in [V30PqWidth::Base24, V30PqWidth::High48] {
+            for book in [
+                codebook(width),
+                V30PqCodebook::new(width, vec![0.0; 24_576]).unwrap(),
+            ] {
+                let encoder = super::V30PqEncoder::new(&book).unwrap();
+                for vector in [
+                    [0.0; 96],
+                    [-0.0; 96],
+                    [f32::MIN_POSITIVE; 96],
+                    [1.0e17; 96],
+                    [f32::MAX; 96],
+                    std::array::from_fn(|d| (d as f32 - 48.0) / 257.0),
+                    [f32::NAN; 96],
+                    [f32::INFINITY; 96],
+                ] {
+                    let expected = encode_v30_code(&book, &vector);
+                    let actual = encoder.encode(&vector);
+                    match (expected, actual) {
+                        (Ok((code, error)), Ok((actual_code, actual_error))) => {
+                            assert_eq!(actual_code, code);
+                            assert_eq!(actual_error.to_bits(), error.to_bits());
+                        }
+                        (Err(expected), Err(actual)) => {
+                            assert_eq!(actual.to_string(), expected.to_string())
+                        }
+                        _ => panic!("validated encoder changed acceptance"),
+                    }
+                }
+                // A failed residual must not poison the reusable handle.
+                let (code, error) = encoder.encode(&[0.0; 96]).unwrap();
+                let expected = encode_v30_code(&book, &[0.0; 96]).unwrap();
+                assert_eq!(code, expected.0);
+                assert_eq!(error.to_bits(), expected.1.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn v32_pq_encoder_rejects_invalid_codebook_before_rows() {
+        // Break: a borrowed handle skips its single authority validation.
+        for width in [V30PqWidth::Base24, V30PqWidth::High48] {
+            let mut book = codebook(width);
+            book.centroids[24_575] = f32::NAN;
+            assert!(super::V30PqEncoder::new(&book).is_err());
+            book.centroids[24_575] = 0.0;
+            book.centroids.pop();
+            assert!(super::V30PqEncoder::new(&book).is_err());
+        }
     }
 
     #[test]
