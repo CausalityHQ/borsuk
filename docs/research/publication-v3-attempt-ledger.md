@@ -3078,6 +3078,41 @@ The 715-byte build receipt is at
 This is build evidence only. The next design review must address pages spanning
 microleaves and account for the strict serving-memory projection separately.
 
+### V32 global balanced ownership: frozen eight-page cell rejected
+
+Source `572b344a346adceb8d29b1d1d35c9f000eaa8370` produced one bounded
+global480-row unique-ownership replay on1,000,000 Deep Image rows, burned
+development queries64..95. Candidate replay was unchanged and complete control
+bytes matched the governing terminal before treatment. The old16-page control
+reproduced308/320 hits (962500ppm). The global8-page treatment obtained275/320
+(859375ppm), minimum500000ppm,13/32 perfect queries. Failed gates were
+`perfect-containment`, `minimum-containment`, and
+`virtual-eight-page-obstruction`: six queries' truth spans more than eight new
+pages, maximum ten. This rejects this frozen eight-page cell, not all global
+layouts or a separately preregistered larger page budget. No tuning or100M
+escalation follows this result. Astra failure analysis was requested.
+
+The317,286-byte canonical terminal is at
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/572b344a346adceb8d29b1d1d35c9f000eaa8370/attempts/v32-deep-1m-global-ownership-572b344a-a0001/TERMINAL.json`,
+SHA-256 `f621b215b4821d3bd8e957c2ffff358fea9d545ff6be9767af5ffcb4b89ccbaf`.
+It preserves all input hashes, replay/map evidence and page counts.
+`claim_eligible=false`, zero page-body reads: this is neither measured S3
+latency nor throughput. Control phase wall/CPU were2,815,498,124/2,819,911,452ns;
+treatment22,073,560,291/22,075,685,903ns, excluding resident loading.
+Control VmHWM93,548,544B, treatment500,297,728B, controller228,950,016B;
+the conservative sum729,247,744B passes the2GiB resource gate, not a simultaneous
+peak measurement. Qualifier build finished in2m09s on Spot
+`i-067eafe42e3b28b45`; science ran on Spot `i-0133330710f10393b`.
+Both are confirmed terminated. Original controller exited1 on the scientific
+failed terminal; it was not restarted.
+
+Native binary21,857,168B SHA-256
+`ce9fb4fd2922d4fc17733ae9f123b0c3b399ccc024f51ed7105605c32774b2e1`;
+source archive8,198,015B SHA-256
+`4604db60e06793b762f6d892850cfa30c961fa7fff5fa53bb13eec05652acf23`.
+Both and the715-byte build receipt are under the same source's `authority/`
+prefix (`v30_s3_qualify`, `source.tar.zst`, `qualifier-build.json`).
+
 ### Current latency objective clarification
 
 On2026-09-05 the operator withdrew the hard15ms cold-S3 requirement in favor of
