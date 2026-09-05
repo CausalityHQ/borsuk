@@ -6,12 +6,14 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from scripts.run_v32_no_page_containment import (
     LocalArtifact,
+    RegisteredLocalArtifact,
     V32ContainmentPlan,
     build_v32_containment_commands,
     containment_exit_status,
@@ -395,6 +397,13 @@ class V32NoPageContainmentTests(unittest.TestCase):
 
 
 class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
+    GOVERNING_TERMINAL_URI = (
+        "s3://borsuk-bench-453182569524-euc1/research/"
+        "v32-quality-perfect-s3-serving/af05a46b75212c894fc5208aa768910552ed083d/"
+        "attempts/v32-deep-1m-global-containment-l768-20260905T020228Z-a0001/"
+        "TERMINAL.json"
+    )
+
     @staticmethod
     def virtual_diagnostic(
         query_ordinal: int, *, current_misses: int, reciprocal_misses: int
@@ -531,6 +540,42 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                 )
                 for query in range(64, 96)
             }
+            control_results = {}
+            for query, payload in results.items():
+                control = json.loads(payload)
+                control.pop("virtual_geometric")
+                control["schema_version"] = 5
+                control_results[query] = (
+                    json.dumps(
+                        control,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode()
+                    + b"\n"
+                )
+            governing_terminal_bytes = run_v32_no_page_containment(
+                replace(
+                    plan,
+                    virtual_geometric_pages=False,
+                    diagnostic_batch=None,
+                ),
+                truth,
+                invoke=lambda command: control_results[
+                    int(command[command.index("--query-start") + 1])
+                ],
+            )
+            governing_terminal_path = Path(temporary) / "governing-terminal.json"
+            governing_terminal_path.write_bytes(governing_terminal_bytes)
+            plan = replace(
+                plan,
+                governing_terminal=RegisteredLocalArtifact(
+                    path=governing_terminal_path,
+                    uri=self.GOVERNING_TERMINAL_URI,
+                    sha256=hashlib.sha256(governing_terminal_bytes).hexdigest(),
+                    encoded_bytes=len(governing_terminal_bytes),
+                ),
+            )
             batch_payload = (
                 json.dumps(
                     {
@@ -545,16 +590,35 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                 ).encode()
                 + b"\n"
             )
-            payload = run_v32_no_page_containment(
-                plan,
-                truth,
-                invoke=lambda _command: batch_payload,
-            )
+            with (
+                patch(
+                    "scripts.run_v32_no_page_containment."
+                    "V32_GOVERNING_TERMINAL_SHA256",
+                    hashlib.sha256(governing_terminal_bytes).hexdigest(),
+                ),
+                patch(
+                    "scripts.run_v32_no_page_containment."
+                    "V32_GOVERNING_TERMINAL_BYTES",
+                    len(governing_terminal_bytes),
+                ),
+            ):
+                payload = run_v32_no_page_containment(
+                    plan,
+                    truth,
+                    invoke=lambda _command: batch_payload,
+                )
         self.assertEqual(len(commands), 1)
         self.assertIn("--diagnostic-batch-arrow", commands[0])
         self.assertTrue(all("--virtual-geometric-pages" in command for command in commands))
         value = json.loads(payload)
         self.assertEqual(value["control"]["selected_page_hits"], 308)
+        self.assertEqual(
+            value["governing_terminal_sha256"],
+            hashlib.sha256(governing_terminal_bytes).hexdigest(),
+        )
+        self.assertEqual(
+            value["governing_terminal_uri"], self.GOVERNING_TERMINAL_URI
+        )
         self.assertEqual(
             value["control"]["reciprocal_rank"]["selected_page_hits"], 298
         )
@@ -578,6 +642,98 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
         self.assertEqual(value["failed_gates"], [])
         self.assertEqual(value["status"], "passed")
         self.assertEqual(containment_exit_status(payload), 0)
+
+    def test_v32_virtual_geometric_rejects_governing_terminal_semantic_drift(
+        self,
+    ) -> None:
+        # Break caught: a coherent byte re-root can silently replace the frozen
+        # control query/page/routing evidence with aggregate-equivalent data.
+        with tempfile.TemporaryDirectory() as temporary:
+            plan, truth = self.fixture(Path(temporary))
+            plan = replace(plan, virtual_geometric_pages=True)
+            baseline = {
+                "aggregate_containment_ppm": 962_500,
+                "claim_eligible": False,
+                "failed_gates": ["perfect-containment"],
+                "global_leaf_limit": 768,
+                "leaf_beam": 256,
+                "logical_sources_sha256": plan.logical_sources.sha256,
+                "losses_by_stage": {"page-reducer": 12},
+                "manifest_sha256": plan.manifest.sha256,
+                "maximum_codes_scanned": 230_856,
+                "maximum_leaves_eligible": 4_141,
+                "maximum_leaves_scanned": 768,
+                "maximum_peak_query_table_pairs_live": 1,
+                "maximum_query_table_pairs_built": 767,
+                "maximum_routing_leaf_rows": 1_024,
+                "maximum_selected_page_bytes": 3_117_216,
+                "maximum_truth_microleaf_rank": 625,
+                "minimum_containment_ppm": 700_000,
+                "page_body_reads": 0,
+                "perfect_queries": 23,
+                "queries": [],
+                "query_count": 32,
+                "query_sha256": plan.query.sha256,
+                "query_start": 64,
+                "reciprocal_rank": {
+                    "aggregate_containment_ppm": 931_250,
+                    "failed_gates": ["perfect-containment"],
+                    "maximum_selected_page_bytes": 3_117_216,
+                    "minimum_containment_ppm": 700_000,
+                    "perfect_queries": 20,
+                    "selected_page_hits": 298,
+                    "status": "failed",
+                },
+                "root_beam": 8,
+                "routing_scope": "global",
+                "samples": [],
+                "schema_version": 4,
+                "selected_page_hits": 308,
+                "source_rows": 1_000_000,
+                "status": "failed",
+                "truth_receipt_sha256": plan.truth_receipt.sha256,
+                "truth_sha256": plan.truth.sha256,
+            }
+            payload = (
+                json.dumps(
+                    baseline,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+                + b"\n"
+            )
+            path = Path(temporary) / "governing-terminal.json"
+            path.write_bytes(payload)
+            plan = replace(
+                plan,
+                governing_terminal=RegisteredLocalArtifact(
+                    path=path,
+                    uri=self.GOVERNING_TERMINAL_URI,
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    encoded_bytes=len(payload),
+                ),
+            )
+            with (
+                patch(
+                    "scripts.run_v32_no_page_containment."
+                    "V32_GOVERNING_TERMINAL_SHA256",
+                    hashlib.sha256(payload).hexdigest(),
+                ),
+                patch(
+                    "scripts.run_v32_no_page_containment."
+                    "V32_GOVERNING_TERMINAL_BYTES",
+                    len(payload),
+                ),
+                self.assertRaisesRegex(
+                    ValueError, "governing terminal .* differs"
+                ),
+            ):
+                run_v32_no_page_containment(
+                    plan,
+                    truth,
+                    invoke=lambda _command: b"",
+                )
 
     def test_v32_containment_global_prefix_proof_and_rank_domains_are_strict(self) -> None:
         # Break caught: rooted eligible counts reject a valid global rank, or a

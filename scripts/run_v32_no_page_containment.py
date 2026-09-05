@@ -18,11 +18,29 @@ import pyarrow.parquet as pq
 
 QUERY_COUNT = 32
 RECALL_K = 10
+V32_GOVERNING_TERMINAL_URI = (
+    "s3://borsuk-bench-453182569524-euc1/research/"
+    "v32-quality-perfect-s3-serving/af05a46b75212c894fc5208aa768910552ed083d/"
+    "attempts/v32-deep-1m-global-containment-l768-20260905T020228Z-a0001/"
+    "TERMINAL.json"
+)
+V32_GOVERNING_TERMINAL_SHA256 = (
+    "88226dcc0bc3a6b7034349d95698c0946d500a40b7ba1133bdd418fc5eefb74e"
+)
+V32_GOVERNING_TERMINAL_BYTES = 262_537
 
 
 @dataclass(frozen=True)
 class LocalArtifact:
     path: Path
+    sha256: str
+    encoded_bytes: int
+
+
+@dataclass(frozen=True)
+class RegisteredLocalArtifact:
+    path: Path
+    uri: str
     sha256: str
     encoded_bytes: int
 
@@ -44,6 +62,7 @@ class V32ContainmentPlan:
     global_leaf_limit: int | None = None
     virtual_geometric_pages: bool = False
     diagnostic_batch: LocalArtifact | None = None
+    governing_terminal: RegisteredLocalArtifact | None = None
 
 
 def _digest(value: str) -> bool:
@@ -58,6 +77,137 @@ def _validate_artifact(artifact: LocalArtifact) -> None:
         or artifact.encoded_bytes <= 0
     ):
         raise ValueError("V32 containment artifact authority differs")
+
+
+def _validate_registered_artifact(artifact: RegisteredLocalArtifact) -> None:
+    if (
+        not artifact.path.is_absolute()
+        or not artifact.uri.startswith("s3://")
+        or "//" in artifact.uri[5:]
+        or artifact.uri.endswith("/")
+        or not _digest(artifact.sha256)
+        or type(artifact.encoded_bytes) is not int
+        or artifact.encoded_bytes <= 0
+        or artifact.uri != V32_GOVERNING_TERMINAL_URI
+        or artifact.sha256 != V32_GOVERNING_TERMINAL_SHA256
+        or artifact.encoded_bytes != V32_GOVERNING_TERMINAL_BYTES
+    ):
+        raise ValueError("V32 registered artifact authority differs")
+
+
+def _read_governing_terminal(plan: V32ContainmentPlan) -> tuple[bytes, dict[str, object]]:
+    artifact = plan.governing_terminal
+    if artifact is None:
+        raise ValueError("V32 governing terminal authority is missing")
+    _validate_registered_artifact(artifact)
+    raw = artifact.path.read_bytes()
+    if (
+        len(raw) != artifact.encoded_bytes
+        or hashlib.sha256(raw).hexdigest() != artifact.sha256
+        or not raw.endswith(b"\n")
+        or b"\n" in raw[:-1]
+    ):
+        raise ValueError("V32 governing terminal byte authority differs")
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("V32 governing terminal JSON differs") from error
+    canonical = (
+        json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+        + b"\n"
+    )
+    outer_keys = {
+        "aggregate_containment_ppm",
+        "claim_eligible",
+        "failed_gates",
+        "global_leaf_limit",
+        "leaf_beam",
+        "logical_sources_sha256",
+        "losses_by_stage",
+        "manifest_sha256",
+        "maximum_codes_scanned",
+        "maximum_leaves_eligible",
+        "maximum_leaves_scanned",
+        "maximum_peak_query_table_pairs_live",
+        "maximum_query_table_pairs_built",
+        "maximum_routing_leaf_rows",
+        "maximum_selected_page_bytes",
+        "maximum_truth_microleaf_rank",
+        "minimum_containment_ppm",
+        "page_body_reads",
+        "perfect_queries",
+        "queries",
+        "query_count",
+        "query_sha256",
+        "query_start",
+        "reciprocal_rank",
+        "root_beam",
+        "routing_scope",
+        "samples",
+        "schema_version",
+        "selected_page_hits",
+        "source_rows",
+        "status",
+        "truth_receipt_sha256",
+        "truth_sha256",
+    }
+    query_keys = {
+        "baseline_hits",
+        "lost_logicals",
+        "page_selections",
+        "query_ordinal",
+        "reciprocal_rank_hits",
+        "recovered_logicals",
+        "routing",
+        "targets",
+    }
+    if (
+        raw != canonical
+        or type(value) is not dict
+        or set(value) != outer_keys
+        or value["schema_version"] != 4
+        or value["claim_eligible"] is not False
+        or value["page_body_reads"] != 0
+        or value["query_count"] != QUERY_COUNT
+        or value["query_start"] != plan.query_start
+        or value["source_rows"] != plan.source_rows
+        or value["root_beam"] != plan.root_beam
+        or value["leaf_beam"] != plan.leaf_beam
+        or value["global_leaf_limit"] != plan.global_leaf_limit
+        or value["routing_scope"] != "global"
+        or value["manifest_sha256"] != plan.manifest.sha256
+        or value["logical_sources_sha256"] != plan.logical_sources.sha256
+        or value["query_sha256"] != plan.query.sha256
+        or value["truth_sha256"] != plan.truth.sha256
+        or value["truth_receipt_sha256"] != plan.truth_receipt.sha256
+        or value["selected_page_hits"] != 308
+        or value["aggregate_containment_ppm"] != 962_500
+        or value["minimum_containment_ppm"] != 700_000
+        or value["perfect_queries"] != 23
+        or value["failed_gates"] != ["perfect-containment"]
+        or value["status"] != "failed"
+        or type(value["queries"]) is not list
+        or len(value["queries"]) != QUERY_COUNT
+        or type(value["samples"]) is not list
+        or len(value["samples"]) != QUERY_COUNT
+        or type(value["reciprocal_rank"]) is not dict
+        or value["reciprocal_rank"].get("selected_page_hits") != 298
+    ):
+        raise ValueError("V32 governing terminal authority differs")
+    for offset, query in enumerate(value["queries"]):
+        ordinal = plan.query_start + offset
+        if (
+            type(query) is not dict
+            or set(query) != query_keys
+            or query.get("query_ordinal") != ordinal
+            or type(query.get("targets")) is not list
+            or len(query["targets"]) != RECALL_K
+            or type(query.get("page_selections")) is not dict
+            or set(query["page_selections"]) != {"first_distinct", "reciprocal_rank"}
+            or type(query.get("routing")) is not dict
+        ):
+            raise ValueError("V32 governing terminal query evidence differs")
+    return raw, value
 
 
 def _read_scale_manifest(plan: V32ContainmentPlan) -> tuple[int, int, int, int]:
@@ -904,6 +1054,9 @@ def run_v32_no_page_containment(
     ) = _read_scale_manifest(plan)
     truth = _read_truth(plan, truth_bytes)
     source_to_logical = _read_logical_sources(plan)
+    governing_terminal = (
+        _read_governing_terminal(plan) if plan.virtual_geometric_pages else None
+    )
     if plan.virtual_geometric_pages:
         _read_diagnostic_batch(plan, truth, source_to_logical)
     commands = _commands(plan, truth, source_to_logical, leaf_beam)
@@ -1141,6 +1294,20 @@ def run_v32_no_page_containment(
         "truth_receipt_sha256": plan.truth_receipt.sha256,
     }
     if virtual_geometric is not None:
+        assert governing_terminal is not None
+        assert plan.governing_terminal is not None
+        governing_raw, _governing_value = governing_terminal
+        computed_control = (
+            json.dumps(
+                value,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+            + b"\n"
+        )
+        if computed_control != governing_raw:
+            raise ValueError("V32 governing terminal replay evidence differs")
         control_keys = {
             "aggregate_containment_ppm",
             "failed_gates",
@@ -1162,6 +1329,8 @@ def run_v32_no_page_containment(
         }
         control = {key: value.pop(key) for key in sorted(control_keys)}
         value["control"] = control
+        value["governing_terminal_sha256"] = plan.governing_terminal.sha256
+        value["governing_terminal_uri"] = plan.governing_terminal.uri
         value["aggregate_containment_ppm"] = virtual_geometric[
             "aggregate_containment_ppm"
         ]
@@ -1232,6 +1401,10 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--diagnostic-batch-arrow", type=Path)
     parser.add_argument("--diagnostic-batch-sha256")
     parser.add_argument("--diagnostic-batch-bytes", type=int)
+    parser.add_argument("--governing-terminal", type=Path)
+    parser.add_argument("--governing-terminal-uri")
+    parser.add_argument("--governing-terminal-sha256")
+    parser.add_argument("--governing-terminal-bytes", type=int)
     args = parser.parse_args(arguments)
     batch_values = (
         args.diagnostic_batch_arrow,
@@ -1242,6 +1415,18 @@ def main(arguments: list[str] | None = None) -> int:
         value is not None for value in batch_values
     ):
         parser.error("diagnostic batch authority is incomplete")
+    terminal_values = (
+        args.governing_terminal,
+        args.governing_terminal_uri,
+        args.governing_terminal_sha256,
+        args.governing_terminal_bytes,
+    )
+    if any(value is not None for value in terminal_values) != all(
+        value is not None for value in terminal_values
+    ):
+        parser.error("governing terminal authority is incomplete")
+    if args.virtual_geometric_pages and args.governing_terminal is None:
+        parser.error("virtual geometric pages require a governing terminal")
     plan = V32ContainmentPlan(
         qualifier=args.qualifier,
         manifest=LocalArtifact(
@@ -1278,6 +1463,16 @@ def main(arguments: list[str] | None = None) -> int:
                 args.diagnostic_batch_bytes,
             )
             if args.diagnostic_batch_arrow is not None
+            else None
+        ),
+        governing_terminal=(
+            RegisteredLocalArtifact(
+                args.governing_terminal,
+                args.governing_terminal_uri,
+                args.governing_terminal_sha256,
+                args.governing_terminal_bytes,
+            )
+            if args.governing_terminal is not None
             else None
         ),
     )
