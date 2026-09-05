@@ -190,10 +190,42 @@ pub struct V33GroupShapeBuildRequest {
     pub scalar_split_count: usize,
 }
 
-/// Authenticate the inputs, reconstruct rows, and encode frozen V33 leaf summaries.
-pub fn build_v33_group_shape_artifact(
-    request: &V33GroupShapeBuildRequest,
-) -> Result<V33LeafShapeArtifact> {
+#[derive(Debug, Clone, PartialEq)]
+struct V33ReconstructedGroup {
+    ordinal: u32,
+    rows: Vec<(u64, [f32; DIMENSIONS])>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[doc(hidden)]
+/// Immutable query-free reconstructed-row oracle for mechanism diagnostics.
+pub struct V33ReconstructedGroupOracle {
+    groups: Vec<V33ReconstructedGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[doc(hidden)]
+/// Bound input for the canonical reconstructed-row oracle receipt.
+pub struct V33ReconstructedOracleRequest {
+    /// Registered SHA-256 of the immutable V33 frontier.
+    pub frontier_sha256: String,
+    /// Registered byte length of the immutable V33 frontier.
+    pub frontier_bytes: u64,
+    /// Frozen query ordinal.
+    pub query_ordinal: u64,
+    /// Frozen normalized query vector.
+    pub query: [f32; DIMENSIONS],
+    /// Ten frozen truth logical ordinals, retaining duplicates by owner group.
+    pub truth_logicals: Vec<u64>,
+    /// Exact row population indexed by dense group ordinal.
+    pub group_rows: Vec<u64>,
+    /// Longest-prefix row ceiling.
+    pub row_limit: u64,
+    /// Longest-prefix group ceiling.
+    pub group_limit: usize,
+}
+
+fn reconstruct_v33_request(request: &V33GroupShapeBuildRequest) -> Result<Vec<V33LeafPopulation>> {
     let hierarchy = decode_v27_hierarchy(
         &request.hierarchy.roots,
         &request.hierarchy.roots_bytes,
@@ -223,14 +255,21 @@ pub fn build_v33_group_shape_artifact(
             row_count: range.row_count,
         })
         .collect::<Vec<_>>();
-    let populations = reconstruct_v33_leaf_populations(
+    reconstruct_v33_leaf_populations(
         &base_codebook,
         &high_codebook,
         &codes,
         &code_parent_centers,
         &ranges,
         &request.group_of_code_parent,
-    )?;
+    )
+}
+
+/// Authenticate the inputs, reconstruct rows, and encode frozen V33 leaf summaries.
+pub fn build_v33_group_shape_artifact(
+    request: &V33GroupShapeBuildRequest,
+) -> Result<V33LeafShapeArtifact> {
+    let populations = reconstruct_v33_request(request)?;
     let mut scalar_split_leaves =
         select_v33_scalar_split_leaves(&populations, request.scalar_split_count)?;
     scalar_split_leaves.sort_unstable();
@@ -239,6 +278,178 @@ pub fn build_v33_group_shape_artifact(
         .map(summarize_v33_leaf)
         .collect::<Result<Vec<_>>>()?;
     encode_v33_leaf_shape_artifact(&summaries, &scalar_split_leaves)
+}
+
+/// Build the exact reconstructed-row diagnostic before any query is available.
+#[doc(hidden)]
+pub fn build_v33_reconstructed_group_oracle(
+    request: &V33GroupShapeBuildRequest,
+) -> Result<V33ReconstructedGroupOracle> {
+    let populations = reconstruct_v33_request(request)?;
+    let group_ordinals = populations
+        .iter()
+        .map(|population| population.group_ordinal)
+        .collect::<BTreeSet<_>>();
+    let group_count = group_ordinals
+        .last()
+        .and_then(|ordinal| usize::try_from(*ordinal).ok())
+        .and_then(|ordinal| ordinal.checked_add(1))
+        .ok_or_else(|| invalid("V33 reconstructed oracle group authority differs"))?;
+    let group_count_u32 = u32::try_from(group_count)
+        .map_err(|_| invalid("V33 reconstructed oracle group authority differs"))?;
+    if group_ordinals.iter().copied().ne(0..group_count_u32) {
+        return Err(invalid("V33 reconstructed oracle group authority differs"));
+    }
+    let mut groups = (0..group_count)
+        .map(|ordinal| V33ReconstructedGroup {
+            ordinal: ordinal as u32,
+            rows: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    for population in populations {
+        let group_index = usize::try_from(population.group_ordinal)
+            .map_err(|_| invalid("V33 reconstructed oracle group authority differs"))?;
+        groups[group_index].rows.extend(population.rows);
+    }
+    if groups.iter().any(|group| group.rows.is_empty()) {
+        return Err(invalid("V33 reconstructed oracle group population differs"));
+    }
+    Ok(V33ReconstructedGroupOracle { groups })
+}
+
+/// Rank groups by their minimum exact reconstructed-row squared distance.
+#[doc(hidden)]
+pub fn rank_v33_reconstructed_groups(
+    oracle: &V33ReconstructedGroupOracle,
+    query: &[f32; DIMENSIONS],
+) -> Result<Vec<u32>> {
+    if oracle.groups.is_empty() || query.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("V33 reconstructed oracle query differs"));
+    }
+    let mut ranked = Vec::with_capacity(oracle.groups.len());
+    for group in &oracle.groups {
+        let mut score = f64::INFINITY;
+        for (_, row) in &group.rows {
+            score = score.min(squared_distance(row, query)?);
+        }
+        if !score.is_finite() {
+            return Err(invalid("V33 reconstructed oracle group population differs"));
+        }
+        ranked.push((score, group.ordinal));
+    }
+    ranked.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    Ok(ranked.into_iter().map(|(_, ordinal)| ordinal).collect())
+}
+
+/// Resolve an authenticated logical row to its reconstructed storage group.
+#[doc(hidden)]
+pub fn v33_reconstructed_group_for_logical(
+    oracle: &V33ReconstructedGroupOracle,
+    logical_ordinal: u64,
+) -> Result<u32> {
+    let mut owner = None;
+    for group in &oracle.groups {
+        if group
+            .rows
+            .iter()
+            .any(|(logical, _)| *logical == logical_ordinal)
+            && owner.replace(group.ordinal).is_some()
+        {
+            return Err(invalid("V33 reconstructed logical ownership differs"));
+        }
+    }
+    owner.ok_or_else(|| invalid("V33 reconstructed logical ownership differs"))
+}
+
+/// Recompute and serialize the query-6160 reconstructed-row oracle bracket.
+#[doc(hidden)]
+pub fn canonical_v33_reconstructed_oracle_result_bytes(
+    oracle: &V33ReconstructedGroupOracle,
+    request: &V33ReconstructedOracleRequest,
+) -> Result<Vec<u8>> {
+    if request.frontier_sha256.len() != 64
+        || request
+            .frontier_sha256
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+        || request.frontier_bytes == 0
+        || request.query_ordinal != 6_160
+        || request.query.iter().any(|value| !value.is_finite())
+        || request.truth_logicals.len() != 10
+        || request.group_rows.len() != oracle.groups.len()
+        || request.group_rows.contains(&0)
+        || request.row_limit == 0
+        || request.group_limit == 0
+    {
+        return Err(invalid("V33 reconstructed oracle request differs"));
+    }
+    for (ordinal, group) in oracle.groups.iter().enumerate() {
+        if group.ordinal != ordinal as u32 || request.group_rows[ordinal] != group.rows.len() as u64
+        {
+            return Err(invalid("V33 reconstructed oracle population differs"));
+        }
+    }
+
+    let ranked = rank_v33_reconstructed_groups(oracle, &request.query)?;
+    let required_groups = request
+        .truth_logicals
+        .iter()
+        .map(|logical| v33_reconstructed_group_for_logical(oracle, *logical))
+        .collect::<Result<Vec<_>>>()?;
+    let required_group_ranks = required_groups
+        .iter()
+        .map(|owner| {
+            ranked
+                .iter()
+                .position(|group| group == owner)
+                .and_then(|rank| rank.checked_add(1))
+                .ok_or_else(|| invalid("V33 reconstructed oracle owner rank differs"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut selected_groups = Vec::new();
+    let mut selected_rows = 0_u64;
+    for group in ranked.iter().copied() {
+        let rows = request.group_rows[usize::try_from(group)
+            .map_err(|_| invalid("V33 reconstructed oracle rank differs"))?];
+        let next = selected_rows
+            .checked_add(rows)
+            .ok_or_else(|| invalid("V33 reconstructed oracle selected rows overflow"))?;
+        if selected_groups.len() == request.group_limit || next > request.row_limit {
+            break;
+        }
+        selected_groups.push(group);
+        selected_rows = next;
+    }
+    if selected_groups.is_empty() {
+        return Err(invalid("V33 reconstructed oracle prefix differs"));
+    }
+    let selected = selected_groups.iter().copied().collect::<BTreeSet<_>>();
+    let all_required_selected = required_groups.iter().all(|group| selected.contains(group));
+    let value = serde_json::json!({
+        "all_required_selected": all_required_selected,
+        "claim_eligible": false,
+        "frontier": {
+            "encoded_bytes": request.frontier_bytes,
+            "role": "v33-group-proxy-result-json",
+            "sha256": request.frontier_sha256,
+        },
+        "group_limit": request.group_limit,
+        "query_ordinal": request.query_ordinal,
+        "required_group_ranks": required_group_ranks,
+        "required_groups": required_groups,
+        "row_limit": request.row_limit,
+        "schema": "borsuk-v33-reconstructed-row-oracle-result-v1",
+        "selected_groups": selected_groups,
+        "selected_rows": selected_rows,
+    });
+    let mut bytes = serde_json::to_vec(&value)
+        .map_err(|_| invalid("V33 reconstructed oracle serialization differs"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -505,6 +716,267 @@ fn select_v33_scalar_split_leaves(
 }
 
 #[cfg(test)]
+type V33PrincipalComponents = (Vec<[f32; DIMENSIONS]>, Vec<f32>, [f32; DIMENSIONS]);
+
+#[cfg(test)]
+fn principal_covariance_components(
+    population: &V33LeafPopulation,
+    rank: usize,
+) -> Result<V33PrincipalComponents> {
+    if population.rows.is_empty()
+        || rank == 0
+        || rank > DIMENSIONS
+        || population
+            .rows
+            .iter()
+            .any(|(_, row)| row.iter().any(|value| !value.is_finite()))
+        || population
+            .rows
+            .iter()
+            .map(|(ordinal, _)| *ordinal)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != population.rows.len()
+    {
+        return Err(invalid("V33 low-rank population differs"));
+    }
+
+    let count = population.rows.len() as f64;
+    let mut mean = [0.0_f64; DIMENSIONS];
+    for (_, row) in &population.rows {
+        for dimension in 0..DIMENSIONS {
+            mean[dimension] += f64::from(row[dimension]);
+        }
+    }
+    for value in &mut mean {
+        *value /= count;
+    }
+
+    let mut covariance = vec![0.0_f64; DIMENSIONS * DIMENSIONS];
+    for (_, row) in &population.rows {
+        let delta = std::array::from_fn::<_, DIMENSIONS, _>(|dimension| {
+            f64::from(row[dimension]) - mean[dimension]
+        });
+        for left in 0..DIMENSIONS {
+            for right in 0..DIMENSIONS {
+                covariance[left * DIMENSIONS + right] += delta[left] * delta[right] / count;
+            }
+        }
+    }
+    if covariance.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("V33 low-rank covariance is nonfinite"));
+    }
+
+    let trace = (0..DIMENSIONS)
+        .map(|dimension| covariance[dimension * DIMENSIONS + dimension])
+        .sum::<f64>();
+    let tolerance = (trace * 1.0e-12).max(1.0e-15);
+    let mut directions64 = Vec::<[f64; DIMENSIONS]>::with_capacity(rank);
+    let mut eigenvalues64 = Vec::<f64>::with_capacity(rank);
+
+    for _ in 0..rank {
+        let mut seed = 0;
+        let mut seed_variance = f64::NEG_INFINITY;
+        for dimension in 0..DIMENSIONS {
+            let explained = directions64
+                .iter()
+                .zip(&eigenvalues64)
+                .map(|(direction, eigenvalue)| {
+                    eigenvalue * direction[dimension] * direction[dimension]
+                })
+                .sum::<f64>();
+            let remaining = covariance[dimension * DIMENSIONS + dimension] - explained;
+            if remaining > seed_variance {
+                seed = dimension;
+                seed_variance = remaining;
+            }
+        }
+        if seed_variance <= tolerance {
+            directions64.push([0.0; DIMENSIONS]);
+            eigenvalues64.push(0.0);
+            continue;
+        }
+
+        let mut direction = [0.0_f64; DIMENSIONS];
+        direction[seed] = 1.0;
+        for _ in 0..64 {
+            let mut next = [0.0_f64; DIMENSIONS];
+            for left in 0..DIMENSIONS {
+                next[left] = (0..DIMENSIONS)
+                    .map(|right| covariance[left * DIMENSIONS + right] * direction[right])
+                    .sum();
+            }
+            for (previous, eigenvalue) in directions64.iter().zip(&eigenvalues64) {
+                let projection = previous
+                    .iter()
+                    .zip(&direction)
+                    .map(|(left, right)| left * right)
+                    .sum::<f64>();
+                for dimension in 0..DIMENSIONS {
+                    next[dimension] -= eigenvalue * previous[dimension] * projection;
+                }
+            }
+            for previous in &directions64 {
+                let projection = previous
+                    .iter()
+                    .zip(&next)
+                    .map(|(left, right)| left * right)
+                    .sum::<f64>();
+                for dimension in 0..DIMENSIONS {
+                    next[dimension] -= projection * previous[dimension];
+                }
+            }
+            let norm = next.iter().map(|value| value * value).sum::<f64>().sqrt();
+            if norm <= tolerance {
+                direction = [0.0; DIMENSIONS];
+                break;
+            }
+            for value in &mut next {
+                *value /= norm;
+            }
+            if let Some(value) = next.iter().find(|value| value.abs() > tolerance)
+                && value.is_sign_negative()
+            {
+                for coordinate in &mut next {
+                    *coordinate = -*coordinate;
+                }
+            }
+            direction = next;
+        }
+
+        let eigenvalue = if direction.iter().all(|value| *value == 0.0) {
+            0.0
+        } else {
+            let covariance_direction = std::array::from_fn::<_, DIMENSIONS, _>(|left| {
+                (0..DIMENSIONS)
+                    .map(|right| covariance[left * DIMENSIONS + right] * direction[right])
+                    .sum::<f64>()
+            });
+            direction
+                .iter()
+                .zip(covariance_direction)
+                .map(|(left, right)| left * right)
+                .sum::<f64>()
+                .max(0.0)
+        };
+        if eigenvalue <= tolerance {
+            directions64.push([0.0; DIMENSIONS]);
+            eigenvalues64.push(0.0);
+        } else {
+            directions64.push(direction);
+            eigenvalues64.push(eigenvalue);
+        }
+    }
+
+    let directions = directions64
+        .iter()
+        .map(|direction| direction.map(|value| value as f32))
+        .collect::<Vec<_>>();
+    let eigenvalues = eigenvalues64
+        .iter()
+        .map(|value| *value as f32)
+        .collect::<Vec<_>>();
+    let residual = std::array::from_fn(|dimension| {
+        let explained = directions
+            .iter()
+            .zip(&eigenvalues)
+            .map(|(direction, eigenvalue)| {
+                f64::from(*eigenvalue)
+                    * f64::from(direction[dimension])
+                    * f64::from(direction[dimension])
+            })
+            .sum::<f64>();
+        (covariance[dimension * DIMENSIONS + dimension] - explained).max(0.0) as f32
+    });
+    Ok((directions, eigenvalues, residual))
+}
+
+/// Query-independent Gaussian distance-moment ranking heuristic for a
+/// diagonal-plus-low-rank covariance. This is not a hard membership test or a
+/// lower bound on exact vector distance.
+#[cfg(test)]
+fn low_rank_moment_score(
+    mean: &[f32; DIMENSIONS],
+    residual: &[f32; DIMENSIONS],
+    directions: &[[f32; DIMENSIONS]],
+    eigenvalues: &[f32],
+    population: u64,
+    query: &[f32; DIMENSIONS],
+) -> Result<f64> {
+    if population == 0
+        || directions.len() != eigenvalues.len()
+        || directions.len() > DIMENSIONS
+        || mean.iter().chain(query).any(|value| !value.is_finite())
+        || residual
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        || eigenvalues
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        || directions.iter().flatten().any(|value| !value.is_finite())
+    {
+        return Err(invalid("V33 low-rank score authority differs"));
+    }
+
+    let delta = std::array::from_fn::<_, DIMENSIONS, _>(|dimension| {
+        f64::from(query[dimension]) - f64::from(mean[dimension])
+    });
+    let distance = delta.iter().map(|value| value * value).sum::<f64>();
+    let mut trace = residual.iter().map(|value| f64::from(*value)).sum::<f64>();
+    let mut trace_square = residual
+        .iter()
+        .map(|value| f64::from(*value).powi(2))
+        .sum::<f64>();
+    let mut directional = delta
+        .iter()
+        .zip(residual)
+        .map(|(delta, variance)| delta * delta * f64::from(*variance))
+        .sum::<f64>();
+
+    for (index, (direction, eigenvalue)) in directions.iter().zip(eigenvalues).enumerate() {
+        let eigenvalue = f64::from(*eigenvalue);
+        let norm_square = direction
+            .iter()
+            .map(|value| f64::from(*value).powi(2))
+            .sum::<f64>();
+        let projected_delta = direction
+            .iter()
+            .zip(&delta)
+            .map(|(left, right)| f64::from(*left) * right)
+            .sum::<f64>();
+        trace += eigenvalue * norm_square;
+        directional += eigenvalue * projected_delta * projected_delta;
+        trace_square += 2.0
+            * eigenvalue
+            * direction
+                .iter()
+                .zip(residual)
+                .map(|(component, variance)| f64::from(*variance) * f64::from(*component).powi(2))
+                .sum::<f64>();
+        for (other_direction, other_eigenvalue) in
+            directions.iter().zip(eigenvalues).take(index + 1)
+        {
+            let dot = direction
+                .iter()
+                .zip(other_direction)
+                .map(|(left, right)| f64::from(*left) * f64::from(*right))
+                .sum::<f64>();
+            let product = eigenvalue * f64::from(*other_eigenvalue) * dot * dot;
+            trace_square += if std::ptr::eq(direction, other_direction) {
+                product
+            } else {
+                2.0 * product
+            };
+        }
+    }
+    let variance = 2.0 * trace_square + 4.0 * directional;
+    let score = distance + trace - extreme_factor(population) * variance.max(0.0).sqrt();
+    if !score.is_finite() {
+        return Err(invalid("V33 low-rank score is nonfinite"));
+    }
+    Ok(if score == 0.0 { 0.0 } else { score })
+}
+
 fn squared_distance(left: &[f32; DIMENSIONS], right: &[f32; DIMENSIONS]) -> Result<f64> {
     let mut distance = 0.0_f64;
     for dimension in 0..DIMENSIONS {
@@ -643,10 +1115,14 @@ fn select_v33_group_prefix(
 #[cfg(test)]
 mod tests {
     use super::{
-        V33GroupPopulation, V33GroupShapeBuildRequest, V33LeafPopulation, V33RoutingRange,
-        V33ShapeArm, build_v33_group_shape_artifact, encode_v33_leaf_shape_artifact,
-        rank_v33_groups, reconstruct_v33_leaf_populations, score_v33_leaf, select_v33_group_prefix,
-        select_v33_scalar_split_leaves, summarize_v33_leaf, v33_shape_control_bytes,
+        V33GroupPopulation, V33GroupShapeBuildRequest, V33LeafPopulation,
+        V33ReconstructedOracleRequest, V33RoutingRange, V33ShapeArm,
+        build_v33_group_shape_artifact, build_v33_reconstructed_group_oracle,
+        canonical_v33_reconstructed_oracle_result_bytes, encode_v33_leaf_shape_artifact,
+        low_rank_moment_score, principal_covariance_components, rank_v33_groups,
+        rank_v33_reconstructed_groups, reconstruct_v33_leaf_populations, score_v33_leaf,
+        select_v33_group_prefix, select_v33_scalar_split_leaves, summarize_v33_leaf,
+        v33_reconstructed_group_for_logical, v33_shape_control_bytes,
     };
     use crate::{
         V27Hierarchy, encode_v27_hierarchy,
@@ -676,6 +1152,67 @@ mod tests {
             values[start..start + dimensions].fill(value);
         }
         V30PqCodebook::new(width, values).unwrap()
+    }
+
+    fn authenticated_shape_request() -> V33GroupShapeBuildRequest {
+        let mut centroid = [half::f16::ZERO; 96];
+        centroid[0] = half::f16::ONE;
+        let mut leaves = vec![centroid; 4_096];
+        leaves[1][0] = half::f16::from_f32(10.0);
+        let hierarchy = encode_v27_hierarchy(&V27Hierarchy {
+            roots: vec![centroid; 256],
+            leaves,
+            leaf_roots: (0..4_096).map(|leaf| (leaf / 16) as u16).collect(),
+        })
+        .unwrap();
+        let layout = V30Layout::new(
+            20,
+            vec![
+                V32RoutingRange {
+                    leaf_ordinal: 0,
+                    code_parent_leaf_ordinal: 0,
+                    routing_centroid: centroid,
+                    logical_start: 0,
+                    row_count: 9,
+                    page_start: 0,
+                    page_count: 1,
+                },
+                V32RoutingRange {
+                    leaf_ordinal: 1,
+                    code_parent_leaf_ordinal: 1,
+                    routing_centroid: centroid,
+                    logical_start: 9,
+                    row_count: 11,
+                    page_start: 0,
+                    page_count: 1,
+                },
+            ],
+            vec![V30PageRange {
+                logical_start: 0,
+                row_count: 20,
+                identity: V30PageIdentity {
+                    ordinal: 0,
+                    sha256: [1; 32],
+                    encoded_bytes: 1,
+                    primary_rows: 20,
+                    replica_rows: 0,
+                },
+            }],
+        )
+        .unwrap();
+        V33GroupShapeBuildRequest {
+            hierarchy,
+            layout: encode_v30_layout_artifacts(&layout).unwrap(),
+            pq: encode_v30_pq_artifacts(
+                &codebook(V30PqWidth::Base24, 1, 0.5),
+                &codebook(V30PqWidth::High48, 2, 1.5),
+                &V30CodePlanes::from_packed(20, vec![1, 0, 0, 0], vec![1; 19 * 24], vec![2; 48])
+                    .unwrap(),
+            )
+            .unwrap(),
+            group_of_code_parent: (0..4_096).collect(),
+            scalar_split_count: 2,
+        }
     }
 
     #[test]
@@ -779,6 +1316,116 @@ mod tests {
             signed < 0.0,
             "negative ranking evidence must not be clamped"
         );
+    }
+
+    #[test]
+    fn v33_group_shape_low_rank_covariance_couples_dimensions() {
+        // Break caught: a rotated correlated population is reduced to the
+        // axis-aligned diagonal and cannot distinguish along/across directions.
+        let population = V33LeafPopulation {
+            routing_leaf_ordinal: 0,
+            group_ordinal: 0,
+            rows: vec![row(0, -1.0, -1.0), row(1, 1.0, 1.0)],
+        };
+        let (directions, eigenvalues, residual) =
+            principal_covariance_components(&population, 2).unwrap();
+        let root_half = 0.5_f64.sqrt();
+        assert!((f64::from(directions[0][0]) - root_half).abs() < 1e-6);
+        assert!((f64::from(directions[0][1]) - root_half).abs() < 1e-6);
+        assert!((f64::from(eigenvalues[0]) - 2.0).abs() < 1e-6);
+        assert!(eigenvalues[1].abs() < 1e-6);
+        assert!(residual[0].abs() < 1e-6 && residual[1].abs() < 1e-6);
+
+        let mut query = [0.0_f32; 96];
+        query[0] = 1.0;
+        query[1] = -1.0;
+        let score =
+            low_rank_moment_score(&[0.0; 96], &residual, &directions, &eigenvalues, 2, &query)
+                .unwrap();
+        let expected = 4.0 - (2.0_f64 * 2.0_f64.ln()).sqrt() * 8.0_f64.sqrt();
+        assert!(
+            (score - expected).abs() < 1e-6,
+            "score={score:.12} expected={expected:.12} delta={:.12}",
+            score - expected
+        );
+    }
+
+    #[test]
+    fn v33_group_shape_low_rank_covariance_is_deterministic_when_degenerate() {
+        let population = V33LeafPopulation {
+            routing_leaf_ordinal: 0,
+            group_ordinal: 0,
+            rows: vec![row(0, 2.0, 3.0), row(1, 2.0, 3.0)],
+        };
+        let first = principal_covariance_components(&population, 2).unwrap();
+        let second = principal_covariance_components(&population, 2).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.1, [0.0, 0.0]);
+        assert_eq!(first.2, [0.0; 96]);
+    }
+
+    #[test]
+    fn v33_group_shape_reconstructed_oracle_is_frozen_before_query_ranking() {
+        // Break caught: an approximate shape is promoted without first proving
+        // that the same immutable PQ reconstruction can rank the missed owner.
+        let request = authenticated_shape_request();
+        let oracle = build_v33_reconstructed_group_oracle(&request).unwrap();
+        assert_eq!(v33_reconstructed_group_for_logical(&oracle, 0).unwrap(), 0);
+        assert_eq!(v33_reconstructed_group_for_logical(&oracle, 9).unwrap(), 1);
+        assert!(v33_reconstructed_group_for_logical(&oracle, 20).is_err());
+        let mut query = [0.5_f32; 96];
+        query[0] = 1.5;
+        assert_eq!(
+            rank_v33_reconstructed_groups(&oracle, &query).unwrap(),
+            [0, 1]
+        );
+
+        query[0] = f32::NAN;
+        assert!(rank_v33_reconstructed_groups(&oracle, &query).is_err());
+    }
+
+    #[test]
+    fn v33_group_shape_reconstructed_oracle_receipt_recomputes_prefix_and_bindings() {
+        let oracle = build_v33_reconstructed_group_oracle(&authenticated_shape_request()).unwrap();
+        let mut query = [0.5_f32; 96];
+        query[0] = 1.5;
+        let bytes = canonical_v33_reconstructed_oracle_result_bytes(
+            &oracle,
+            &V33ReconstructedOracleRequest {
+                frontier_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+                    .to_owned(),
+                frontier_bytes: 123,
+                query_ordinal: 6_160,
+                query,
+                truth_logicals: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                group_rows: vec![9, 11],
+                row_limit: 9,
+                group_limit: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["all_required_selected"], false);
+        assert_eq!(
+            value["required_group_ranks"],
+            serde_json::json!([1, 1, 1, 1, 1, 1, 1, 1, 1, 2])
+        );
+        assert_eq!(value["selected_groups"], serde_json::json!([0]));
+        assert_eq!(value["selected_rows"], 9);
+
+        let mut invalid = V33ReconstructedOracleRequest {
+            frontier_sha256: "1".repeat(64),
+            frontier_bytes: 123,
+            query_ordinal: 6_160,
+            query,
+            truth_logicals: vec![0; 10],
+            group_rows: vec![9, 11],
+            row_limit: 9,
+            group_limit: 2,
+        };
+        invalid.group_rows.pop();
+        assert!(canonical_v33_reconstructed_oracle_result_bytes(&oracle, &invalid).is_err());
     }
 
     #[test]
@@ -963,64 +1610,7 @@ mod tests {
 
     #[test]
     fn v33_group_shape_authenticated_artifacts_build_query_independent_arrow() {
-        let mut centroid = [half::f16::ZERO; 96];
-        centroid[0] = half::f16::ONE;
-        let hierarchy = encode_v27_hierarchy(&V27Hierarchy {
-            roots: vec![centroid; 256],
-            leaves: vec![centroid; 4_096],
-            leaf_roots: (0..4_096).map(|leaf| (leaf / 16) as u16).collect(),
-        })
-        .unwrap();
-        let layout = V30Layout::new(
-            20,
-            vec![
-                V32RoutingRange {
-                    leaf_ordinal: 0,
-                    code_parent_leaf_ordinal: 0,
-                    routing_centroid: centroid,
-                    logical_start: 0,
-                    row_count: 9,
-                    page_start: 0,
-                    page_count: 1,
-                },
-                V32RoutingRange {
-                    leaf_ordinal: 1,
-                    code_parent_leaf_ordinal: 1,
-                    routing_centroid: centroid,
-                    logical_start: 9,
-                    row_count: 11,
-                    page_start: 0,
-                    page_count: 1,
-                },
-            ],
-            vec![V30PageRange {
-                logical_start: 0,
-                row_count: 20,
-                identity: V30PageIdentity {
-                    ordinal: 0,
-                    sha256: [1; 32],
-                    encoded_bytes: 1,
-                    primary_rows: 20,
-                    replica_rows: 0,
-                },
-            }],
-        )
-        .unwrap();
-        let layout = encode_v30_layout_artifacts(&layout).unwrap();
-        let pq = encode_v30_pq_artifacts(
-            &codebook(V30PqWidth::Base24, 1, 0.5),
-            &codebook(V30PqWidth::High48, 2, 1.5),
-            &V30CodePlanes::from_packed(20, vec![1, 0, 0, 0], vec![1; 19 * 24], vec![2; 48])
-                .unwrap(),
-        )
-        .unwrap();
-        let request = V33GroupShapeBuildRequest {
-            hierarchy,
-            layout,
-            pq,
-            group_of_code_parent: (0..4_096).map(|parent| parent / 2).collect(),
-            scalar_split_count: 2,
-        };
+        let request = authenticated_shape_request();
         let artifact = build_v33_group_shape_artifact(&request).unwrap();
         assert_eq!(artifact.role, "v33-leaf-shapes-arrow");
         assert_eq!(artifact.row_count, 2);

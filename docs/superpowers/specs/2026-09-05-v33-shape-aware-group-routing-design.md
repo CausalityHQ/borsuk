@@ -124,6 +124,51 @@ control. The sphere diagnostic stores
 `R=max_i(||xhat_i-mu||)` and scores
 `max(0,||q-mu||-R)^2`; it is a lower bound only for reconstructed members.
 
+### Post-diagonal rotated-covariance bracket
+
+The burned 262,144-row mechanism run places 1,279/1,280 truth owners and
+127/128 complete queries in the diagonal-moment prefix. The unchanged PQ
+replay retains every one of those 1,279 owners, and the 64-page first-distinct
+reducer loses no additional owner. The remaining miss is therefore isolated to
+query 6160 routing on this cohort. This does not reopen the stricter 131,072-row
+qualification gate and is not holdout evidence.
+
+Before changing the persisted shape format, run two query-independent
+reconstruction brackets in order:
+
+1. rank query 6160's required groups by their minimum exact reconstructed-row
+   squared distance, using the same authenticated parent centers, fidelity
+   plane and PQ codes. If a required group is outside the actual longest
+   complete-group prefix under 262,144 rows and 64 groups, reject this
+   reconstruction-summary family;
+2. only if that oracle bracket survives, rank with the complete f64 population
+   covariance. If the complete covariance score cannot recover all 1,280
+   owners without losing another owner, reject every truncated low-rank arm.
+
+Neither diagnostic is an arm or a release result. Reconstruction must finish
+and become immutable before a query is opened; truth is joined only after group
+ranking. No exact corpus vector or page body is read.
+
+If both brackets survive, freeze rank two as the primary rotated-covariance
+arm, with ranks one and four as diagnostics. For population covariance `C`,
+ordered eigenpairs `(lambda_k,u_k)`, and rank `r`, persist f32
+
+`Sigma_hat = diag(d) + sum_k lambda_k*u_k*u_k^T`,
+
+where `d_i=max(0,C_ii-sum_k lambda_k*u_ki^2)`. Only roundoff-sized negative
+residuals may be clamped; material negatives fail. This subtraction preserves
+the diagonal instead of double-counting principal variance. With
+`delta=q-mu`, score
+
+`||delta||^2 + tr(Sigma_hat) - sqrt(2*ln(n))*sqrt(2*tr(Sigma_hat^2) + 4*delta^T*Sigma_hat*delta)`.
+
+Compute the trace-square cross term from the decoded stored representation;
+do not assume rounded directions remain orthogonal. Canonicalize eigenvector
+sign by the largest-magnitude coordinate, lowest dimension on ties. Repeated
+eigenspaces require deterministic coordinate-axis projection and ordered
+orthogonalization. This score is a Gaussian moment ranking heuristic, never a
+Mahalanobis membership test or Euclidean exclusion certificate.
+
 The proxy authenticates the exact URI, digest, length, role, and dependency
 binding of all five PQ artifacts from the frozen build manifest and reports
 positive code reads, unlike the preceding metadata-only prototype run. No
@@ -164,8 +209,9 @@ The frozen arm ladder is:
 - `prototype-2` and `prototype-4`: deterministic farthest-first seeds followed
   by a fixed number of assignment/update passes, ties by logical ordinal;
 - `diagonal`: f32 mean and diagonal variance, scored as a ranking feature;
-- `low-rank-4`: f32 mean, four deterministic principal directions and four
-  scales, scored as a ranking feature.
+- `low-rank-2`: f32 mean, residual diagonal, and two deterministic principal
+  directions/eigenvalues, scored as the primary rotated-covariance diagnostic;
+  ranks one and four are nested diagnostics, not outcome-selected alternatives;
 - `projected-interval-16`: one fixed orthonormal projection shared by all groups
   and 16 enclosing min/max intervals per group. The sum of squared distances to
   those intervals is a conservative projected-space bound after decoded
@@ -193,6 +239,17 @@ At roughly 4.14 routing leaves per thousand rows, one f16 residual-moment scalar
 adds about 0.8 MB at 100M and 8.3 MB at 1B. A 96-value int8 diagonal plus scale
 adds about 41 MB and 414 MB. These leaf-level values must be admitted against the
 complete directory and refresh overlap, not in isolation.
+
+At the observed 4,141 leaves per million rows, 100M projects to 414,100 leaves.
+An f32 mean plus residual diagonal costs 768 bytes/leaf, or 318,028,800 bytes.
+Each f32 principal direction plus eigenvalue adds 388 bytes/leaf. Ranks one,
+two, and four therefore cost 478,699,600, 639,370,400, and 960,712,000 bytes of
+numeric payload respectively, before Arrow envelopes, identifiers, the group
+directory, PQ tables, caches, active queries, and refresh overlap. Their added
+dot-product work is about 40M, 80M, and 159M multiply-accumulates per query at
+100M scale. A quality pass at 1M does not qualify this exhaustive leaf scan for
+production latency; production still requires hierarchical pruning under the
+complete sub-3-GiB process bound.
 
 The observed 178 groups per one million rows projects to about 17,800 groups at
 100M and 178,000 at 1B if the distribution is stable; hard validation uses the

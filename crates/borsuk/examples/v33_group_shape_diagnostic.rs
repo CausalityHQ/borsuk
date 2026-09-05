@@ -5,13 +5,23 @@ use std::{collections::BTreeMap, env, fs, path::PathBuf};
 use borsuk::{
     V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30LayoutArtifactIdentity,
     V30LayoutArtifacts, V30PqArtifactIdentity, V30PqArtifacts, V33GroupShapeBuildRequest,
-    build_v33_group_shape_artifact,
+    V33ReconstructedOracleRequest, build_v33_group_shape_artifact,
+    build_v33_reconstructed_group_oracle, canonical_v33_reconstructed_oracle_result_bytes,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 const GROUP_DIRECTORY_SHA256: &str =
     "1cd77b268304bc4d36acf9f4beb402ccabc3ec0b1ebde316d2dd7f3a2cdcc995";
+const FRONTIER_SHA256: &str = "470f7c95a965572feec11cd1b0d24e73bf1d8c1456a75117b8bf6796e091db6b";
+const FRONTIER_BYTES: u64 = 5_937_815;
+const ORACLE_QUERY_ORDINAL: usize = 6_160;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RunMode {
+    GroupShape,
+    ReconstructedOracle,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Args {
@@ -25,19 +35,175 @@ struct Args {
     pq_fidelity: PathBuf,
     pq_high_codes: PathBuf,
     group_directory: PathBuf,
+    frontier: Option<PathBuf>,
     output: PathBuf,
+    mode: RunMode,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ReconstructedOracleFrontier {
+    query_ordinal: usize,
+    query: [f32; 96],
+    truth_logicals: [u64; 10],
+}
+
+fn exact_keys(value: &serde_json::Map<String, Value>, expected: &[&str]) -> bool {
+    value
+        .keys()
+        .map(String::as_str)
+        .eq(expected.iter().copied())
+}
+
+fn parse_reconstructed_oracle_frontier(
+    raw: &[u8],
+) -> Result<ReconstructedOracleFrontier, Box<dyn std::error::Error>> {
+    if raw.last() != Some(&b'\n') {
+        return Err("V33 oracle frontier newline differs".into());
+    }
+    let value: Value = serde_json::from_slice(raw)?;
+    let root = value
+        .as_object()
+        .ok_or("V33 oracle frontier schema differs")?;
+    if !exact_keys(
+        root,
+        &[
+            "arms",
+            "claim_eligible",
+            "code_reads",
+            "corpus_reads",
+            "input_sha256",
+            "page_reads",
+            "passed",
+            "row_limit",
+            "schema",
+        ],
+    ) || root.get("schema").and_then(Value::as_str) != Some("borsuk-v33-group-proxy-result-v2")
+        || root.get("claim_eligible").and_then(Value::as_bool) != Some(false)
+        || root.get("code_reads").and_then(Value::as_u64) != Some(5)
+        || root.get("corpus_reads").and_then(Value::as_u64) != Some(0)
+        || root.get("page_reads").and_then(Value::as_u64) != Some(0)
+        || root.get("row_limit").and_then(Value::as_u64) != Some(262_144)
+    {
+        return Err("V33 oracle frontier authority differs".into());
+    }
+    let arms = root
+        .get("arms")
+        .and_then(Value::as_array)
+        .ok_or("V33 oracle frontier arms differ")?;
+    let mut matching = arms.iter().filter_map(|arm| {
+        let object = arm.as_object()?;
+        (object.get("arm")?.as_str()? == "diagonal-ellipsoid").then_some(object)
+    });
+    let arm = matching.next().ok_or("V33 oracle diagonal arm differs")?;
+    if matching.next().is_some()
+        || !exact_keys(
+            arm,
+            &[
+                "arm",
+                "included_owners",
+                "maximum_selected_rows",
+                "minimum_selected_rows",
+                "passed",
+                "perfect_queries",
+                "query_count",
+                "records",
+                "total_owners",
+            ],
+        )
+    {
+        return Err("V33 oracle diagonal arm schema differs".into());
+    }
+    let records = arm
+        .get("records")
+        .and_then(Value::as_array)
+        .ok_or("V33 oracle records differ")?;
+    let mut matching = records.iter().filter_map(|record| {
+        let object = record.as_object()?;
+        (object.get("query_ordinal")?.as_u64()? == ORACLE_QUERY_ORDINAL as u64).then_some(object)
+    });
+    let record = matching.next().ok_or("V33 oracle query differs")?;
+    if matching.next().is_some()
+        || !exact_keys(
+            record,
+            &[
+                "hits",
+                "query",
+                "query_ordinal",
+                "selected_groups",
+                "selected_routing_leaves",
+                "selected_rows",
+                "truth_logicals",
+                "truth_owner_ranks",
+            ],
+        )
+    {
+        return Err("V33 oracle query schema differs".into());
+    }
+    let query = record
+        .get("query")
+        .and_then(Value::as_array)
+        .ok_or("V33 oracle query vector differs")?;
+    if query.len() != 96 {
+        return Err("V33 oracle query dimension differs".into());
+    }
+    let query: [f32; 96] = query
+        .iter()
+        .map(|value| {
+            let value = value.as_f64().ok_or("V33 oracle query value differs")? as f32;
+            value
+                .is_finite()
+                .then_some(value)
+                .ok_or("V33 oracle query value differs")
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_| "V33 oracle query dimension differs")?;
+    let logicals = record
+        .get("truth_logicals")
+        .and_then(Value::as_array)
+        .ok_or("V33 oracle truth logicals differ")?;
+    if logicals.len() != 10 {
+        return Err("V33 oracle truth count differs".into());
+    }
+    let truth_logicals: [u64; 10] = logicals
+        .iter()
+        .map(|value| value.as_u64().ok_or("V33 oracle truth logical differs"))
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_| "V33 oracle truth count differs")?;
+    if truth_logicals
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        != 10
+    {
+        return Err("V33 oracle truth logicals differ".into());
+    }
+    Ok(ReconstructedOracleFrontier {
+        query_ordinal: ORACLE_QUERY_ORDINAL,
+        query,
+        truth_logicals,
+    })
 }
 
 fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut values = values.into_iter();
     let mut paths = BTreeMap::new();
-    let mut execute = false;
+    let mut mode = None;
     while let Some(flag) = values.next() {
-        if flag == "--execute-group-shape" {
-            if execute {
-                return Err("duplicate execution flag".to_owned());
+        if matches!(
+            flag.as_str(),
+            "--execute-group-shape" | "--execute-reconstructed-oracle"
+        ) {
+            let next = if flag == "--execute-group-shape" {
+                RunMode::GroupShape
+            } else {
+                RunMode::ReconstructedOracle
+            };
+            if mode.replace(next).is_some() {
+                return Err("duplicate execution mode".to_owned());
             }
-            execute = true;
             continue;
         }
         if !matches!(
@@ -52,6 +218,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
                 | "--pq-fidelity"
                 | "--pq-high-codes"
                 | "--group-directory"
+                | "--frontier"
                 | "--output"
         ) {
             return Err(format!("unknown flag: {flag}"));
@@ -63,14 +230,18 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
             return Err(format!("duplicate flag: {flag}"));
         }
     }
-    if !execute {
-        return Err("--execute-group-shape is required".to_owned());
-    }
+    let mode = mode.ok_or("an explicit execution mode is required")?;
+    let frontier = paths.remove("--frontier");
     let mut take = |flag: &str| {
         paths
             .remove(flag)
             .ok_or_else(|| format!("{flag} is required"))
     };
+    if (mode == RunMode::GroupShape && frontier.is_some())
+        || (mode == RunMode::ReconstructedOracle && frontier.is_none())
+    {
+        return Err("frontier authority differs for execution mode".to_owned());
+    }
     Ok(Args {
         roots: take("--roots")?,
         leaves: take("--leaves")?,
@@ -82,7 +253,9 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
         pq_fidelity: take("--pq-fidelity")?,
         pq_high_codes: take("--pq-high-codes")?,
         group_directory: take("--group-directory")?,
+        frontier,
         output: take("--output")?,
+        mode,
     })
 }
 
@@ -131,7 +304,7 @@ fn pq_identity(
     }
 }
 
-fn group_map(bytes: &[u8]) -> Result<Vec<u32>, Box<dyn std::error::Error>> {
+fn group_authority(bytes: &[u8]) -> Result<(Vec<u32>, Vec<u64>), Box<dyn std::error::Error>> {
     if format!("{:x}", Sha256::digest(bytes)) != GROUP_DIRECTORY_SHA256 {
         return Err("V33 group directory byte authority differs".into());
     }
@@ -144,7 +317,14 @@ fn group_map(bytes: &[u8]) -> Result<Vec<u32>, Box<dyn std::error::Error>> {
         return Err("V33 group directory count differs".into());
     }
     let mut mapping = vec![u32::MAX; 4_096];
+    let mut rows = Vec::with_capacity(groups.len());
     for (group, value) in groups.iter().enumerate() {
+        let group_rows = value
+            .get("rows")
+            .and_then(Value::as_u64)
+            .filter(|rows| *rows > 0)
+            .ok_or("V33 group row population differs")?;
+        rows.push(group_rows);
         for parent in value
             .get("parents")
             .and_then(Value::as_array)
@@ -158,12 +338,14 @@ fn group_map(bytes: &[u8]) -> Result<Vec<u32>, Box<dyn std::error::Error>> {
             mapping[parent] = u32::try_from(group)?;
         }
     }
-    Ok(mapping)
+    Ok((mapping, rows))
 }
 
 fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let base_sha = "aa3bef1eefb6ef4670a8c6f73d48941116460d28ae6a552755a38f3776ffe8a8";
     let high_sha = "e2b92db4f8cdb5ab2b352ed491a5b00a47ea94431552b8d7fbf7764f4a29110c";
+    let group_bytes = read(&args.group_directory)?;
+    let (group_of_code_parent, group_rows) = group_authority(&group_bytes)?;
     let request = V33GroupShapeBuildRequest {
         hierarchy: V27HierarchyArtifacts {
             roots: hierarchy_identity(
@@ -231,19 +413,46 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 read(&args.pq_high_codes)?,
             ],
         },
-        group_of_code_parent: group_map(&read(&args.group_directory)?)?,
+        group_of_code_parent,
         scalar_split_count: 43,
     };
-    let artifact = build_v33_group_shape_artifact(&request)?;
-    fs::write(&args.output, &artifact.arrow)?;
-    eprintln!(
-        "role={} rows={} bytes={} sha256={}",
-        artifact.role, artifact.row_count, artifact.encoded_bytes, artifact.sha256
-    );
+    match args.mode {
+        RunMode::GroupShape => {
+            let artifact = build_v33_group_shape_artifact(&request)?;
+            fs::write(&args.output, &artifact.arrow)?;
+            eprintln!(
+                "role={} rows={} bytes={} sha256={}",
+                artifact.role, artifact.row_count, artifact.encoded_bytes, artifact.sha256
+            );
+        }
+        RunMode::ReconstructedOracle => {
+            let frontier = read(args.frontier.as_ref().ok_or("V33 frontier is required")?)?;
+            if frontier.len() as u64 != FRONTIER_BYTES
+                || format!("{:x}", Sha256::digest(&frontier)) != FRONTIER_SHA256
+            {
+                return Err("V33 oracle frontier byte authority differs".into());
+            }
+            let oracle = build_v33_reconstructed_group_oracle(&request)?;
+            let evidence = parse_reconstructed_oracle_frontier(&frontier)?;
+            let bytes = canonical_v33_reconstructed_oracle_result_bytes(
+                &oracle,
+                &V33ReconstructedOracleRequest {
+                    frontier_sha256: FRONTIER_SHA256.to_owned(),
+                    frontier_bytes: FRONTIER_BYTES,
+                    query_ordinal: evidence.query_ordinal as u64,
+                    query: evidence.query,
+                    truth_logicals: evidence.truth_logicals.to_vec(),
+                    group_rows,
+                    row_limit: 262_144,
+                    group_limit: 64,
+                },
+            )?;
+            fs::write(&args.output, bytes)?;
+        }
+    }
     Ok(())
 }
 
-#[cfg(not(test))]
 fn main() {
     let result = parse_args(env::args().skip(1))
         .map_err(Into::into)
@@ -256,7 +465,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_args;
+    use super::{RunMode, parse_args, parse_reconstructed_oracle_frontier};
 
     fn valid_args() -> Vec<String> {
         [
@@ -302,5 +511,76 @@ mod tests {
         let mut forbidden = valid_args();
         forbidden.extend(["--bucket".to_owned(), "forbidden".to_owned()]);
         assert!(parse_args(forbidden).is_err());
+    }
+
+    #[test]
+    fn v33_group_shape_cli_isolates_reconstructed_oracle_mode() {
+        // Break caught: the exact-row bracket either reconstructs twice or
+        // opens query evidence before its immutable population exists.
+        let mut values = valid_args();
+        values.pop();
+        values.extend([
+            "--frontier".to_owned(),
+            "frontier.json".to_owned(),
+            "--execute-reconstructed-oracle".to_owned(),
+        ]);
+        let parsed = parse_args(values).unwrap();
+        assert_eq!(parsed.mode, RunMode::ReconstructedOracle);
+        assert_eq!(parsed.frontier.unwrap().to_string_lossy(), "frontier.json");
+
+        let mut both = valid_args();
+        both.push("--execute-reconstructed-oracle".to_owned());
+        both.extend(["--frontier".to_owned(), "frontier.json".to_owned()]);
+        assert!(parse_args(both).is_err());
+    }
+
+    #[test]
+    fn v33_group_shape_reconstructed_oracle_frontier_is_strict_and_finite() {
+        let mut query = vec![0.0; 96];
+        query[0] = 1.0;
+        let value = serde_json::json!({
+            "arms": [{
+                "arm": "diagonal-ellipsoid",
+                "included_owners": 9,
+                "maximum_selected_rows": 1,
+                "minimum_selected_rows": 1,
+                "passed": false,
+                "perfect_queries": 0,
+                "query_count": 1,
+                "records": [{
+                    "hits": 9,
+                    "query": query,
+                    "query_ordinal": 6160,
+                    "selected_groups": [0],
+                    "selected_routing_leaves": [0],
+                    "selected_rows": 1,
+                    "truth_logicals": [0,1,2,3,4,5,6,7,8,9],
+                    "truth_owner_ranks": [1,1,1,1,1,1,1,1,1,2]
+                }],
+                "total_owners": 10
+            }],
+            "claim_eligible": false,
+            "code_reads": 5,
+            "corpus_reads": 0,
+            "input_sha256": {},
+            "page_reads": 0,
+            "passed": false,
+            "row_limit": 262144,
+            "schema": "borsuk-v33-group-proxy-result-v2"
+        });
+        let mut raw = serde_json::to_vec(&value).unwrap();
+        raw.push(b'\n');
+        let parsed = parse_reconstructed_oracle_frontier(&raw).unwrap();
+        assert_eq!(parsed.query_ordinal, 6160);
+        assert_eq!(parsed.query[0], 1.0);
+        assert_eq!(parsed.truth_logicals, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+        let mut invalid = raw;
+        let offset = invalid
+            .windows(5)
+            .position(|window| window == b"1.0,0")
+            .unwrap();
+        invalid.splice(offset..offset + 3, b"NaN".iter().copied());
+        assert!(parse_reconstructed_oracle_frontier(&invalid).is_err());
     }
 }

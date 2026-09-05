@@ -65,6 +65,33 @@ V32 PQ/page kernels, Python controller, causality Spot.
   replay until a shape arm passes this cheaper explanatory gate.
 - [ ] Record and commit the terminal. Proceed only on a pass.
 
+### Task 1.5: Fail-fast rotated-covariance bracket
+
+**Files:**
+- Modify: `crates/borsuk/src/v33_group_shape.rs`
+- Modify: `crates/borsuk/examples/v33_group_shape_diagnostic.rs`
+- Modify: `docs/superpowers/specs/2026-09-05-v33-shape-aware-group-routing-design.md`
+
+- [ ] RED-test a query-free reconstructed-group oracle whose immutable value is
+  built before query loading, exact group-min row scoring, ordinal ties, and
+  unchanged longest-prefix selection. Report query 6160's required owner ranks
+  and actual prefix; reject the reconstruction-summary family if any owner is
+  outside it.
+- [ ] Only if the reconstructed-row oracle survives, RED-test dense covariance
+  algebra, diagonal preservation, the full-covariance ceiling, correlated and
+  singular populations, deterministic repeated eigenspaces, material-negative
+  rejection, and exact rank-zero diagonal-control reproduction.
+- [ ] Only if the dense ceiling survives, persist nested f32 ranks one, two and
+  four from one deterministic decomposition. Rank two is primary; ranks one
+  and four are diagnostics. Recompute trace terms from decoded factors and run
+  the unchanged 262,144-row/64-group burned mechanism gate once.
+- [ ] Require 1,280/1,280 owners and 128/128 perfect queries without replacing
+  another owner, plus non-worse selected-group/row distributions. Do not tune
+  rank, shrinkage, extreme factor, normalization, grouping, or budgets after
+  observing outcomes. Replay PQ/pages only after this routing gate passes.
+- [ ] Keep every result claim-ineligible. A survivor is frozen before the fresh
+  600-query development split; only that split may choose an arm for holdout.
+
 ### Task 2: Query-independent streaming summary builder
 
 **Files:**
