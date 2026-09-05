@@ -92,6 +92,179 @@ def fixture():
 
 
 class PageBudgetLadderTests(unittest.TestCase):
+    def test_root64_metadata_reads_exact_arrow_query_shape_and_orders_roots(self):
+        # Break: wrong code-parent ownership, centroid arithmetic, or query schema.
+        import numpy as np
+
+        from scripts.run_v32_no_page_containment import root64_metadata_from_bytes
+
+        def arrow(table):
+            stream = pa.BufferOutputStream()
+            with pa.ipc.new_file(stream, table.schema) as writer:
+                writer.write_table(table)
+            return stream.getvalue().to_pybytes()
+
+        half_type = pa.list_(pa.field("element", pa.float16(), nullable=False), 96)
+
+        def centers(n):
+            return pa.FixedSizeListArray.from_arrays(
+                pa.array(np.full(n * 96, 0.1, dtype=np.float16)), type=half_type
+            )
+
+        root_values = np.zeros((128, 96), dtype=np.float16)
+        root_values[np.arange(128), np.arange(128) % 2] = 1
+        root_vectors = pa.FixedSizeListArray.from_arrays(
+            pa.array(root_values.reshape(-1)), type=half_type
+        )
+        roots = pa.Table.from_arrays(
+            [root_vectors],
+            schema=pa.schema([pa.field("centroid", half_type, nullable=False)]),
+        )
+        owners = np.arange(4096, dtype=np.uint16) // 32
+        leaves = pa.Table.from_arrays(
+            [pa.array(owners), centers(4096)],
+            schema=pa.schema(
+                [
+                    pa.field("root_ordinal", pa.uint16(), nullable=False),
+                    pa.field("centroid", half_type, nullable=False),
+                ]
+            ),
+        )
+        counts = np.array([245] * 576 + [244] * 3520, dtype=np.uint64)
+        route_schema = pa.schema(
+            [
+                pa.field("routing_leaf_ordinal", pa.uint32(), nullable=False),
+                pa.field("code_parent_leaf_ordinal", pa.uint32(), nullable=False),
+                pa.field("routing_centroid", half_type, nullable=False),
+                pa.field("logical_start", pa.uint64(), nullable=False),
+                pa.field("row_count", pa.uint64(), nullable=False),
+                pa.field("page_start", pa.uint32(), nullable=False),
+                pa.field("page_count", pa.uint32(), nullable=False),
+            ]
+        )
+        routes = pa.Table.from_arrays(
+            [
+                pa.array(np.arange(4096, dtype=np.uint32)),
+                pa.array(np.arange(4096, dtype=np.uint32)),
+                centers(4096),
+                pa.array(np.cumsum(counts) - counts),
+                pa.array(counts),
+                pa.array(np.arange(4096, dtype=np.uint32)),
+                pa.array(np.ones(4096, dtype=np.uint32)),
+            ],
+            schema=route_schema,
+        )
+        query_type = pa.list_(pa.field("element", pa.float32(), nullable=False), 96)
+        query_values = np.zeros((10000, 96), dtype=np.float32)
+        query_values[:, 1] = 1
+        query_values[1024:1040, 1] = 0
+        query_values[1024:1040, 0] = 1
+        vectors = pa.FixedSizeListArray.from_arrays(
+            pa.array(query_values.reshape(-1)), type=query_type
+        )
+        query = pa.Table.from_arrays(
+            [vectors], schema=pa.schema([pa.field("emb", query_type, nullable=False)])
+        )
+        stream = pa.BufferOutputStream()
+        pq.write_table(query, stream)
+        args = (
+            arrow(roots),
+            arrow(leaves),
+            arrow(routes),
+            stream.getvalue().to_pybytes(),
+        )
+        result = root64_metadata_from_bytes(*args, query_start=1024)
+        even_first = tuple(range(0, 128, 2)) + tuple(range(1, 128, 2))
+        odd_first = tuple(range(1, 128, 2)) + tuple(range(0, 128, 2))
+        self.assertEqual(result.root_orders, (even_first,) * 16 + (odd_first,) * 16)
+        self.assertEqual(result.leaf_owners, tuple(int(n) for n in owners))
+        self.assertEqual(result.leaf_rows, (245,) * 576 + (244,) * 3520)
+        bad_parent = routes.set_column(
+            1, route_schema.field(1), pa.array([4096] * 4096, type=pa.uint32())
+        )
+        with self.assertRaises(ValueError):
+            root64_metadata_from_bytes(
+                args[0], args[1], arrow(bad_parent), args[3], query_start=1024
+            )
+        bad_owner = leaves.set_column(
+            0, leaves.schema.field(0), pa.array([128] * 4096, type=pa.uint16())
+        )
+        with self.assertRaises(ValueError):
+            root64_metadata_from_bytes(
+                args[0], arrow(bad_owner), args[2], args[3], query_start=1024
+            )
+        with self.assertRaises(ValueError):
+            root64_metadata_from_bytes(*args, query_start=9970)
+
+    def test_root64_recomputes_scope_and_rejects_coherent_output_drift(self):
+        # Break: trust producer roots/counts instead of independently derived metadata.
+        from scripts.run_v32_no_page_containment import (
+            Root64Metadata,
+            validate_root64_frontier,
+        )
+
+        value, truths, mapping, registry = fixture()
+        value["schema_version"] = 13
+        metadata = Root64Metadata(
+            root_orders=tuple(tuple(range(128)) for _ in range(32)),
+            leaf_owners=tuple(i // 32 for i in range(4096)),
+            leaf_rows=(245,) * 576 + (244,) * 3520,
+        )
+        for query in value["queries"]:
+            query["selected_root_ordinals"] = list(range(64))
+            query["current"]["routing"].update(
+                global_leaf_limit=None,
+                scan_budget=524288,
+                leaves_eligible=2048,
+                leaves_scanned=2048,
+                codes_scanned=500288,
+                scope="root-gated",
+                stop_reason="root-gated",
+            )
+            for target in query["current"]["diagnostics"]:
+                # All fixture logicals are below141120: first576 leaves have245 rows.
+                leaf = target["logical"] // 245
+                target.update(
+                    leaf_ordinal=leaf,
+                    routing_leaf_rank=leaf + 1,
+                    owner_root_ordinal=leaf // 32,
+                    owner_root_rank=leaf // 32 + 1,
+                )
+
+        def validate(v):
+            return validate_root64_frontier(
+                canonical(v),
+                query_start=1024,
+                truth_logicals=truths,
+                logical_pages=mapping,
+                registered_pages=registry,
+                metadata=metadata,
+            )
+
+        self.assertEqual(validate(value)["contained_truth_counts"], [256, 288, 320])
+        for mutation in range(8):
+            bad = copy.deepcopy(value)
+            q = bad["queries"][0]
+            if mutation == 0:
+                q["selected_root_ordinals"][0], q["selected_root_ordinals"][1] = 1, 0
+            elif mutation == 1:
+                q["current"]["routing"]["codes_scanned"] += 1
+            elif mutation == 2:
+                q["current"]["routing"]["leaves_scanned"] -= 1
+                q["current"]["routing"]["leaves_eligible"] -= 1
+            elif mutation == 3:
+                q["current"]["diagnostics"][0]["owner_root_rank"] += 1
+            elif mutation == 4:
+                q["current"]["diagnostics"][0]["leaf_ordinal"] += 1
+            elif mutation == 5:
+                q["selected_root_ordinals"][0] = False
+            elif mutation == 6:
+                q["current"]["routing"]["global_leaf_limit"] = 1536
+            else:
+                q["cells"][2]["contained_truth_count"] = 9
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                validate(bad)
+
     def test_expanded_frontier_recomputes_coverage_and_rejects_old_scope(self):
         from scripts.run_v32_no_page_containment import validate_expanded_frontier
 

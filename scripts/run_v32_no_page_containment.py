@@ -9,11 +9,13 @@ import resource
 import subprocess
 import sys
 from argparse import ArgumentParser
+from bisect import bisect_right
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -36,6 +38,15 @@ class LocalArtifact:
     path: Path
     sha256: str
     encoded_bytes: int
+
+
+@dataclass(frozen=True)
+class Root64Metadata:
+    """Independent query root orders and complete authenticated leaf population."""
+
+    root_orders: tuple[tuple[int, ...], ...]
+    leaf_owners: tuple[int, ...]
+    leaf_rows: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -1375,6 +1386,189 @@ def validate_expanded_frontier(
     )
 
 
+def root64_metadata_from_bytes(
+    roots_bytes: bytes,
+    leaves_bytes: bytes,
+    routes_bytes: bytes,
+    query_bytes: bytes,
+    *,
+    query_start: int,
+) -> Root64Metadata:
+    """Parse already-authenticated metadata and reproduce ordered root distances."""
+    from scripts.build_v30_reduced_truth import _matrix, _normalize_like_v30
+
+    if type(query_start) is not int or not 0 <= query_start <= 9968:
+        raise ValueError("V32 root64 query range differs")
+    vector = pa.list_(pa.field("element", pa.float16(), nullable=False), 96)
+
+    def read(raw, schema):
+        reader = pa.ipc.open_file(pa.BufferReader(raw))
+        if reader.num_record_batches != 1:
+            raise ValueError("V32 root64 Arrow batch count differs")
+        table = reader.read_all()
+        if table.schema != schema or any(c.null_count for c in table.columns):
+            raise ValueError("V32 root64 Arrow schema differs")
+        return table
+
+    roots = read(roots_bytes, pa.schema([pa.field("centroid", vector, nullable=False)]))
+    leaves = read(
+        leaves_bytes,
+        pa.schema(
+            [
+                pa.field("root_ordinal", pa.uint16(), nullable=False),
+                pa.field("centroid", vector, nullable=False),
+            ]
+        ),
+    )
+    routes = read(
+        routes_bytes,
+        pa.schema(
+            [
+                pa.field("routing_leaf_ordinal", pa.uint32(), nullable=False),
+                pa.field("code_parent_leaf_ordinal", pa.uint32(), nullable=False),
+                pa.field("routing_centroid", vector, nullable=False),
+                pa.field("logical_start", pa.uint64(), nullable=False),
+                pa.field("row_count", pa.uint64(), nullable=False),
+                pa.field("page_start", pa.uint32(), nullable=False),
+                pa.field("page_count", pa.uint32(), nullable=False),
+            ]
+        ),
+    )
+    if roots.num_rows != 128 or leaves.num_rows != 4096 or not routes.num_rows:
+        raise ValueError("V32 root64 hierarchy shape differs")
+    for table, name in [
+        (roots, "centroid"),
+        (leaves, "centroid"),
+        (routes, "routing_centroid"),
+    ]:
+        column = table[name].combine_chunks()
+        if column.values.null_count or not np.isfinite(column.values.to_numpy()).all():
+            raise ValueError("V32 root64 centroid values differ")
+    owners = leaves["root_ordinal"].combine_chunks().to_numpy()
+    parents = routes["code_parent_leaf_ordinal"].combine_chunks().to_numpy()
+    counts = routes["row_count"].combine_chunks().to_numpy().astype(np.uint64)
+    starts = routes["logical_start"].combine_chunks().to_numpy().astype(np.uint64)
+    if (
+        not np.array_equal(owners, np.arange(4096) // 32)
+        or np.any(parents >= 4096)
+        or not np.array_equal(
+            routes["routing_leaf_ordinal"].to_pylist(), np.arange(len(counts))
+        )
+        or np.any((counts == 0) | (counts > 1024))
+        or int(counts.sum()) != 1_000_000
+        or not np.array_equal(starts, np.cumsum(counts) - counts)
+    ):
+        raise ValueError("V32 root64 ownership or row population differs")
+    centers = (
+        roots["centroid"]
+        .combine_chunks()
+        .values.to_numpy()
+        .reshape(128, 96)
+        .astype(np.float32)
+        .astype(np.float64)
+    )
+    queries = _normalize_like_v30(
+        _normalize_like_v30(_matrix(query_bytes, role="query", physical_rows=10000))
+    )
+    orders = []
+    for query in queries[query_start : query_start + 32].astype(np.float64):
+        distances = np.zeros(128, dtype=np.float64)
+        for dimension in range(96):
+            delta = query[dimension] - centers[:, dimension]
+            distances += delta * delta
+        if not np.isfinite(distances).all():
+            raise ValueError("V32 root64 root distances differ")
+        orders.append(tuple(int(n) for n in np.lexsort((np.arange(128), distances))))
+    return Root64Metadata(
+        tuple(orders),
+        tuple(int(n) for n in owners[parents]),
+        tuple(int(n) for n in counts),
+    )
+
+
+def validate_root64_frontier(
+    payload: bytes,
+    *,
+    query_start: int,
+    truth_logicals: tuple[tuple[int, ...], ...],
+    logical_pages: dict[int, int],
+    registered_pages: dict[int, dict[str, object]],
+    metadata: Root64Metadata,
+) -> dict[str, object]:
+    """Recompute root scope from independently authenticated metadata, not output."""
+    if (
+        not isinstance(metadata, Root64Metadata)
+        or len(metadata.root_orders) != 32
+        or not metadata.leaf_rows
+        or len(metadata.leaf_rows) != len(metadata.leaf_owners)
+        or any(type(n) is not int or not 1 <= n <= 1024 for n in metadata.leaf_rows)
+        or sum(metadata.leaf_rows) != 1_000_000
+        or any(type(n) is not int or not 0 <= n < 128 for n in metadata.leaf_owners)
+        or any(
+            len(order) != 128
+            or any(type(n) is not int for n in order)
+            or sorted(order) != list(range(128))
+            for order in metadata.root_orders
+        )
+    ):
+        raise ValueError("V32 root64 metadata differs")
+    return _validate_page_budget_ladder(
+        payload,
+        query_start=query_start,
+        truth_logicals=truth_logicals,
+        logical_pages=logical_pages,
+        registered_pages=registered_pages,
+        maximum_leaves_eligible=len(metadata.leaf_rows),
+        root_beam=64,
+        expanded=False,
+        root_metadata=metadata,
+    )
+
+
+def _check_root64_scope(query, targets, work, metadata, offset):
+    order = metadata.root_orders[offset]
+    expected_roots = list(order[:64])
+    observed = query["selected_root_ordinals"]
+    if (
+        type(observed) is not list
+        or any(type(n) is not int for n in observed)
+        or observed != expected_roots
+    ):
+        raise ValueError("V32 root64 selected roots differ")
+    membership = set(expected_roots)
+    selected = [
+        i for i, owner in enumerate(metadata.leaf_owners) if owner in membership
+    ]
+    rows = sum(metadata.leaf_rows[i] for i in selected)
+    if (
+        rows > 524288
+        or work["codes_scanned"] != rows
+        or work["leaves_scanned"] != len(selected)
+        or work["leaves_eligible"] != len(selected)
+        or work["total_routing_leaves"] != len(metadata.leaf_rows)
+    ):
+        raise ValueError("V32 root64 complete population differs")
+    starts, total = [], 0
+    for count in metadata.leaf_rows:
+        starts.append(total)
+        total += count
+    root_ranks = {root: rank + 1 for rank, root in enumerate(order)}
+    leaf_ranks = {leaf: rank + 1 for rank, leaf in enumerate(selected)}
+    for target in targets:
+        logical = target["logical"]
+        if not 0 <= logical < total:
+            raise ValueError("V32 root64 logical range differs")
+        leaf = bisect_right(starts, logical) - 1
+        owner = metadata.leaf_owners[leaf]
+        if (
+            target["leaf_ordinal"] != leaf
+            or target["owner_root_ordinal"] != owner
+            or target["owner_root_rank"] != root_ranks[owner]
+            or target["routing_leaf_rank"] != leaf_ranks.get(leaf)
+        ):
+            raise ValueError("V32 root64 target scope differs")
+
+
 def _validate_page_budget_ladder(
     payload: bytes,
     *,
@@ -1385,6 +1579,7 @@ def _validate_page_budget_ladder(
     maximum_leaves_eligible: int,
     root_beam: int,
     expanded: bool,
+    root_metadata: Root64Metadata | None = None,
 ) -> dict[str, object]:
     """Validate coverage only; callers authenticate truth and index registries first.
 
@@ -1408,7 +1603,8 @@ def _validate_page_budget_ladder(
         }
         or payload != _canonical_bytes(value)
         or type(value["schema_version"]) is not int
-        or value["schema_version"] != (12 if expanded else 11)
+        or value["schema_version"]
+        != (13 if root_metadata is not None else 12 if expanded else 11)
         or type(value["query_start"]) is not int
         or value["query_start"] != query_start
         or value["claim_eligible"] is not False
@@ -1434,7 +1630,10 @@ def _validate_page_budget_ladder(
             or any(type(n) is not int or n < 0 for n in truth)
             or type(query) is not dict
             or set(query)
-            != {"query_ordinal", "candidate_replay_sha256", "current", "cells"}
+            != (
+                {"query_ordinal", "candidate_replay_sha256", "current", "cells"}
+                | ({"selected_root_ordinals"} if root_metadata is not None else set())
+            )
             or type(query["query_ordinal"]) is not int
             or query["query_ordinal"] != query_start + offset
             or type(query["candidate_replay_sha256"]) is not str
@@ -1448,11 +1647,17 @@ def _validate_page_budget_ladder(
             query_start + offset,
             truth,
             maximum_leaves_eligible,
-            512 if expanded else 256,
-            524288 if expanded else 262144,
-            1536 if expanded else 768,
-            root_beam,
+            maximum_leaves_eligible
+            if root_metadata is not None
+            else 512
+            if expanded
+            else 256,
+            524288 if expanded or root_metadata is not None else 262144,
+            None if root_metadata is not None else 1536 if expanded else 768,
+            64 if root_metadata is not None else root_beam,
         )
+        if root_metadata is not None:
+            _check_root64_scope(query, targets, _work, root_metadata, offset)
         if any(logical_pages.get(t["logical"]) != t["page_ordinal"] for t in targets):
             raise ValueError("V32 page ladder truth ownership differs")
         previous = []
