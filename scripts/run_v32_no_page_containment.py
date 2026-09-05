@@ -1111,6 +1111,174 @@ def _canonical_bytes(value: object) -> bytes:
     )
 
 
+def validate_page_budget_ladder(
+    payload: bytes,
+    *,
+    query_start: int,
+    truth_logicals: tuple[tuple[int, ...], ...],
+    logical_pages: dict[int, int],
+    registered_pages: dict[int, dict[str, object]],
+    maximum_leaves_eligible: int,
+    root_beam: int,
+) -> dict[str, object]:
+    """Validate coverage only; callers authenticate truth and index registries first.
+
+    The producer's replay digest identifies its capture, not an independent
+    reconstruction of ADC scores. No page-read or exact-rerank claim is made.
+    """
+    value = json.loads(payload)
+    if (
+        type(query_start) is not int
+        or query_start < 0
+        or len(truth_logicals) != 32
+        or type(value) is not dict
+        or set(value)
+        != {
+            "schema_version",
+            "query_start",
+            "claim_eligible",
+            "page_body_reads",
+            "queries",
+            "resources",
+        }
+        or payload != _canonical_bytes(value)
+        or type(value["schema_version"]) is not int
+        or value["schema_version"] != 11
+        or type(value["query_start"]) is not int
+        or value["query_start"] != query_start
+        or value["claim_eligible"] is not False
+        or type(value["page_body_reads"]) is not int
+        or value["page_body_reads"] != 0
+        or type(value["queries"]) is not list
+        or len(value["queries"]) != 32
+    ):
+        raise ValueError("V32 page ladder envelope differs")
+    resources = value["resources"]
+    if (
+        type(resources) is not dict
+        or set(resources) != {"peak_rss_bytes", "phase_wall_ns", "phase_cpu_ns"}
+        or any(type(n) is not int or not 0 < n < 2**64 for n in resources.values())
+    ):
+        raise ValueError("V32 page ladder resources differ")
+    totals, byte_totals, minima = [0] * 3, [0] * 3, [1_000_000] * 3
+    for offset, query in enumerate(value["queries"]):
+        truth = truth_logicals[offset]
+        if (
+            len(truth) != 10
+            or len(set(truth)) != 10
+            or any(type(n) is not int or n < 0 for n in truth)
+            or type(query) is not dict
+            or set(query)
+            != {"query_ordinal", "candidate_replay_sha256", "current", "cells"}
+            or type(query["query_ordinal"]) is not int
+            or query["query_ordinal"] != query_start + offset
+            or type(query["candidate_replay_sha256"]) is not str
+            or not _digest(query["candidate_replay_sha256"])
+            or type(query["cells"]) is not list
+            or len(query["cells"]) != 3
+        ):
+            raise ValueError("V32 page ladder query differs")
+        targets, _work, selections = _diagnostics(
+            _canonical_bytes(query["current"]),
+            query_start + offset,
+            truth,
+            maximum_leaves_eligible,
+            256,
+            262144,
+            768,
+            root_beam,
+        )
+        if any(logical_pages.get(t["logical"]) != t["page_ordinal"] for t in targets):
+            raise ValueError("V32 page ladder truth ownership differs")
+        previous = []
+        for index, (cap, cell) in enumerate(
+            zip((16, 32, 64), query["cells"], strict=True)
+        ):
+            if (
+                type(cell) is not dict
+                or set(cell)
+                != {
+                    "requested_pages",
+                    "selected_page_count",
+                    "selected_pages",
+                    "selected_page_bytes",
+                    "contained_truth_count",
+                    "containment_ppm",
+                }
+                or any(type(cell[k]) is not int for k in cell if k != "selected_pages")
+                or cell["requested_pages"] != cap
+                or type(cell["selected_pages"]) is not list
+                or not 16 <= len(cell["selected_pages"]) <= cap
+                or cell["selected_page_count"] != len(cell["selected_pages"])
+            ):
+                raise ValueError("V32 page ladder cell differs")
+            pages = cell["selected_pages"]
+            ordinals = set()
+            for page in pages:
+                if (
+                    type(page) is not dict
+                    or set(page)
+                    != {
+                        "ordinal",
+                        "sha256",
+                        "encoded_bytes",
+                        "primary_rows",
+                        "replica_rows",
+                    }
+                    or any(type(page[k]) is not int for k in page if k != "sha256")
+                    or not 0 <= page["ordinal"] < 2**32
+                    or page["ordinal"] in ordinals
+                    or type(page["sha256"]) is not str
+                    or not _digest(page["sha256"])
+                    or not 0 < page["encoded_bytes"] <= 196608
+                    or not 0 <= page["primary_rows"] <= 480
+                    or page["replica_rows"] != 0
+                    or page != registered_pages.get(page["ordinal"])
+                ):
+                    raise ValueError("V32 page ladder registered page differs")
+                ordinals.add(page["ordinal"])
+            if pages[: len(previous)] != previous or (
+                index and len(previous) < (16, 32, 64)[index - 1] and pages != previous
+            ):
+                raise ValueError("V32 page ladder prefix differs")
+            if (
+                index == 0
+                and [
+                    {k: p[k] for k in ("ordinal", "sha256", "encoded_bytes")}
+                    for p in pages
+                ]
+                != selections["first_distinct"]["pages"]
+            ):
+                raise ValueError("V32 page ladder original selection differs")
+            for target in targets:
+                rank = target["first_unique_page_rank"]
+                if len(pages) < cap and rank is not None and rank >= len(pages):
+                    raise ValueError("V32 page ladder exhausted population differs")
+                if rank is not None and rank < len(pages):
+                    if pages[rank]["ordinal"] != target["page_ordinal"]:
+                        raise ValueError("V32 page ladder target rank differs")
+                elif target["page_ordinal"] in ordinals:
+                    raise ValueError("V32 page ladder target membership differs")
+            hits = sum(logical_pages[n] in ordinals for n in truth)
+            size = sum(p["encoded_bytes"] for p in pages)
+            if (
+                cell["contained_truth_count"] != hits
+                or cell["containment_ppm"] != hits * 100000
+                or cell["selected_page_bytes"] != size
+            ):
+                raise ValueError("V32 page ladder arithmetic differs")
+            totals[index] += hits
+            byte_totals[index] += size
+            minima[index] = min(minima[index], hits * 100000)
+            previous = pages
+    return {
+        "claim_eligible": False,
+        "contained_truth_counts": totals,
+        "selected_page_bytes": byte_totals,
+        "minimum_containment_ppm": minima,
+    }
+
+
 def _global_envelope(payload: bytes, *, treatment: bool) -> dict[str, object]:
     value = json.loads(payload)
     keys = {
