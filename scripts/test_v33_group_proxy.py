@@ -75,6 +75,8 @@ class GroupProxyTests(unittest.TestCase):
                 command.extend(("--" + role.replace("_", "-"), missing))
             command.extend(
                 (
+                    "--row-limit",
+                    "131072",
                     "--output",
                     str(Path(temporary) / "result.json"),
                     "--execute-group-proxy",
@@ -99,9 +101,12 @@ class GroupProxyTests(unittest.TestCase):
             values = []
             for role in EXPECTED_DIGESTS:
                 values.extend(("--" + role.replace("_", "-"), role + ".bin"))
-            values.extend(("--output", output, "--execute-group-proxy"))
+            values.extend(
+                ("--row-limit", "262144", "--output", output, "--execute-group-proxy")
+            )
             parsed = parse_args(values)
             self.assertEqual(parsed.output, output)
+            self.assertEqual(parsed.row_limit, 262144)
             with self.assertRaises(SystemExit):
                 parse_args(values[:-1])
             with self.assertRaises(SystemExit):

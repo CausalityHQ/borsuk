@@ -284,14 +284,14 @@ def _load_authority(args):
     return controls, proxies, tuple(leaf_shapes), tuple(query_authority)
 
 
-def _evaluate(name, groups, queries):
+def _evaluate(name, groups, queries, row_limit):
     records = []
     included = 0
     perfect = 0
     for ordinal, query, owners in queries:
         ranked = rank_groups(groups, query)
         selected = select_group_prefix(
-            groups, ranked, row_limit=131_072, group_limit=64
+            groups, ranked, row_limit=row_limit, group_limit=64
         )
         chosen = set(selected)
         hits = sum(owner in chosen for owner in owners)
@@ -320,14 +320,14 @@ def _evaluate(name, groups, queries):
     }
 
 
-def _evaluate_shape(name, groups, shapes, queries, arm):
+def _evaluate_shape(name, groups, shapes, queries, arm, row_limit):
     records = []
     included = 0
     perfect = 0
     for ordinal, query, owners in queries:
         ranked = rank_shape_groups(shapes, query, arm)
         selected = select_group_prefix(
-            groups, ranked, row_limit=131_072, group_limit=64
+            groups, ranked, row_limit=row_limit, group_limit=64
         )
         chosen = set(selected)
         hits = sum(owner in chosen for owner in owners)
@@ -359,13 +359,29 @@ def _evaluate_shape(name, groups, shapes, queries, arm):
 def run(args):
     controls, proxies, shapes, queries = _load_authority(args)
     arms = (
-        _evaluate("weighted-mean", controls, queries),
-        _evaluate("three-parent-prototype", proxies, queries),
-        _evaluate_shape("fine-leaf-centroid", controls, shapes, queries, "centroid"),
-        _evaluate_shape("scalar-moment", controls, shapes, queries, "scalar-moment"),
-        _evaluate_shape("diagonal-ellipsoid", controls, shapes, queries, "diagonal-moment"),
+        _evaluate("weighted-mean", controls, queries, args.row_limit),
+        _evaluate("three-parent-prototype", proxies, queries, args.row_limit),
         _evaluate_shape(
-            "matched-byte-split-centroid", controls, shapes, queries, "split-centroid"
+            "fine-leaf-centroid", controls, shapes, queries, "centroid", args.row_limit
+        ),
+        _evaluate_shape(
+            "scalar-moment", controls, shapes, queries, "scalar-moment", args.row_limit
+        ),
+        _evaluate_shape(
+            "diagonal-ellipsoid",
+            controls,
+            shapes,
+            queries,
+            "diagonal-moment",
+            args.row_limit,
+        ),
+        _evaluate_shape(
+            "matched-byte-split-centroid",
+            controls,
+            shapes,
+            queries,
+            "split-centroid",
+            args.row_limit,
         ),
     )
     result = {
@@ -376,7 +392,7 @@ def run(args):
         "input_sha256": EXPECTED_DIGESTS,
         "page_reads": 0,
         "passed": any(arm["passed"] for arm in arms),
-        "row_limit": 131_072,
+        "row_limit": args.row_limit,
         "schema": "borsuk-v33-group-proxy-result-v1",
     }
     raw = json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
@@ -392,10 +408,14 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     for role in EXPECTED_DIGESTS:
         parser.add_argument("--" + role.replace("_", "-"), required=True)
+    parser.add_argument(
+        "--row-limit", required=True, type=int, choices=(65_536, 131_072, 262_144)
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--execute-group-proxy", action="store_true", required=True)
     singleton_flags = [
         *("--" + role.replace("_", "-") for role in EXPECTED_DIGESTS),
+        "--row-limit",
         "--output",
         "--execute-group-proxy",
     ]
