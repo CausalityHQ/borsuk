@@ -204,6 +204,7 @@ mod v32_global_pages;
 mod v33_group_shape;
 mod v34_rank4;
 mod v34_route;
+mod v35_authority;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]
@@ -247,6 +248,11 @@ pub use v34_rank4::{
 pub use v34_route::{
     V34GroupStorage, V34RouteBudget, V34RoutePrefix, V34RouteTree, V34SelectedGroup, V34TreeNode,
     bound_v34_node, build_v34_route_tree, exhaustive_v34_route, hierarchical_v34_route,
+};
+#[doc(hidden)]
+pub use v35_authority::{
+    V35ArtifactIdentity, V35Dimensions, V35GenerationManifest, V35ProjectionArm, V35RemoteCodeRate,
+    V35ServingProjection, project_v35_serving_memory, validate_v35_manifest,
 };
 #[allow(
     dead_code,
