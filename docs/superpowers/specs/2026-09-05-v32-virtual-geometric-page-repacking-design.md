@@ -2,6 +2,15 @@
 
 ## Decision
 
+**Disposition:** closed before reconstruction. The authenticated occupancy check
+in the attempt ledger proves q66/q69 require ten/nine microleaf-exclusive pages.
+The next experiment is specified in
+`2026-09-05-v32-global-geometric-ownership-design.md`; this document preserves the
+rejected experiment's contract and does not authorize rerunning it.
+The operator subsequently withdrew the hard15ms cold-S3 target. Latency limits
+below are historical preregistration, not current release requirements; current
+qualification must measure cold/warm latency and read/write throughput.
+
 Before rebuilding any corpus or reading any page body, V32 will replay one
 query-independent physical-layout change over the authenticated one-million-row
 resident artifacts: partition every routing microleaf independently into
@@ -166,8 +175,9 @@ If actual first-distinct-eight fails, preserve the result and reject
 within-microleaf geometric repacking. The next single no-page falsifier is a
 deterministic, capacity-balanced global geometric packing that may cross old
 microleaf/code-parent boundaries, while preserving source-ID ties and the same
-candidate replay. If its eight-page occupancy still fails, unique-owner
-480-row pages are rejected and the following separately preregistered option is
+candidate replay. If its eight-page occupancy still fails, that particular
+unique-owner partition is rejected; this does not disprove every 480-row
+partition. The following separately preregistered option is
 bounded query-blind boundary replication with explicit capacity, deduplication,
 and set-cover feasibility. Do not tune router beams, PQ widths, and page scoring
 again on the burned cohort.

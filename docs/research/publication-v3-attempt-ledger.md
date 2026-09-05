@@ -3051,3 +3051,40 @@ keeps candidate order fixed and changes only page membership. It must first
 reproduce this exact control and then reach 320/320 before any layout is
 materialized. D3, a larger build, sealed-query evaluation, and competitor claims
 remain fenced.
+
+### V32 within-microleaf eight-page repacking fails the occupancy bound
+
+Read-only recomputation from the authenticated 262,537-byte global V32 terminal
+with SHA-256 `88226dcc0bc3a6b7034349d95698c0946d500a40b7ba1133bdd418fc5eefb74e`
+counts distinct `leaf_ordinal` values among each query's ten truth targets.
+For query ordinals 64 through 95, the counts are, in order:
+`5,5,10,8,6,9,6,3,6,5,7,4,8,3,7,3,4,1,5,8,8,4,4,2,5,6,5,8,8,8,5,8`.
+Query 66 requires ten separate microleaves and query 69 requires nine.
+
+Because the proposed repacker forbids a page from crossing a microleaf boundary,
+these two queries cannot recover all ten neighbors in eight page reads under
+that design, regardless of its geometric splitter or page ranking. This closes
+the within-microleaf experiment before reconstruction or replay. It does not
+reject cross-microleaf packing, replication, or every unique-owner layout.
+The cohort remains burned development evidence; no new recall or latency
+measurement is claimed. No page or corpus object was fetched for this check.
+
+The already-started native qualifier build at source
+`a0e232c0d36d319962bd14d1d77941a12ab17db4` completed on Causality Spot instance
+`i-01bc6dc8fd7f206af`, which is confirmed terminated. Its 21,834,408-byte binary
+has SHA-256 `0cb59e347411ca151c7e46109ce49200ec0f96aab2c294f9a5a3acc4e32854bc`.
+The 715-byte build receipt is at
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/a0e232c0d36d319962bd14d1d77941a12ab17db4/authority/qualifier-build.json`.
+This is build evidence only. The next design review must address pages spanning
+microleaves and account for the strict serving-memory projection separately.
+
+### Current latency objective clarification
+
+On2026-09-05 the operator withdrew the hard15ms cold-S3 requirement in favor of
+very low measured latency, high write/read throughput, high recall and scalable
+S3-first storage. Historical failed thresholds and measurements remain unchanged
+as historical evidence. Future qualification reports cold/warm distributions,
+concurrency/QPS, write vectors/s and visibility latency, requests/bytes and write
+amplification; no resident-only replay is relabeled an S3 measurement. The next
+global-layout exact8 diagnostic retains its preregistered cell budget rather
+than changing that budget after observing quality.
