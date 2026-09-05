@@ -703,6 +703,32 @@ pub struct V32CandidateReplay<'a> {
 }
 
 impl V32CandidateReplay<'_> {
+    /// Project a bounded first-distinct physical-page prefix without rerouting.
+    /// The requested cap is not a guarantee: a short candidate pool yields
+    /// fewer pages. Callers must record both cap and actual count. No page body
+    /// or truth is consulted, and captured routing work remains unchanged.
+    pub fn physical_page_prefix(&self, page_count: usize) -> Result<Vec<V27PageIdentity>> {
+        if !(1..=64).contains(&page_count) {
+            return Err(invalid("V32 replay page prefix cap differs"));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut pages = Vec::with_capacity(page_count);
+        for candidate in &self.details.ranked_candidates {
+            let page = self
+                .router
+                .layout
+                .page_for_logical(candidate.logical)
+                .ok_or_else(|| invalid("V32 replay page authority differs"))?;
+            if seen.insert(page.identity.ordinal) {
+                pages.push(page.identity());
+                if pages.len() == page_count {
+                    break;
+                }
+            }
+        }
+        Ok(pages)
+    }
+
     /// Explanatory implementation counters, deliberately outside the candidate
     /// replay digest so eager/lazy implementations can prove identical routing.
     pub fn pq_work(&self) -> V32PqEvaluationWork {
@@ -2366,6 +2392,85 @@ mod tests {
             V32Router::new(hierarchy, base, high, layout, codes).unwrap(),
             bodies,
         )
+    }
+
+    #[test]
+    fn v32_page_prefix_reuses_candidates_and_preserves_nested_physical_authority() {
+        // Break: page-budget comparison reroutes, reorders, repeats pages, or
+        // substitutes estimated sizes instead of authenticated page identities.
+        let (hierarchy, base, high, _, _, _) = components();
+        let pages = (0..80_u32)
+            .map(|ordinal| {
+                let rows = [0_u64, 1].map(|offset| V27PageRow {
+                    source_ordinal: u64::from(ordinal) * 2 + offset,
+                    vector: [0.2 + ordinal as f32 / 1000.0; 96],
+                });
+                let (identity, _) = encode_v27_page(ordinal, 2, 0, &rows).unwrap();
+                V30PageRange::from_legacy(u64::from(ordinal) * 2, 2, &identity).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let ranges = (0..2_u32)
+            .map(|leaf| V32RoutingRange {
+                leaf_ordinal: leaf,
+                code_parent_leaf_ordinal: leaf,
+                routing_centroid: hierarchy.leaves[leaf as usize],
+                logical_start: u64::from(leaf) * 80,
+                row_count: 80,
+                page_start: leaf * 40,
+                page_count: 40,
+            })
+            .collect();
+        let layout = V30Layout::new(160, ranges, pages.clone()).unwrap();
+        let mut fidelity = vec![0; 8];
+        fidelity[0] = 255;
+        let codes =
+            V30CodePlanes::from_packed(160, fidelity, vec![0; 152 * 24], vec![0; 8 * 48]).unwrap();
+        let router = V32Router::new(hierarchy, base, high, layout, codes).unwrap();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 2,
+            scan_budget: 65_536,
+            candidate_depth: 160,
+            page_count: 16,
+        };
+        let replay = router.capture_global_replay(&[0.2; 96], arm, 2).unwrap();
+        let hash = replay.sha256();
+        let work = replay.pq_work();
+        for budget in [16, 32, 64] {
+            let selected = replay.physical_page_prefix(budget).unwrap();
+            assert_eq!(selected.len(), budget);
+            assert_eq!(
+                selected.iter().map(|p| p.ordinal).collect::<Vec<_>>(),
+                (0..budget as u32).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                selected,
+                pages[..budget]
+                    .iter()
+                    .map(V30PageRange::identity)
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(replay.sha256(), hash);
+        assert_eq!(replay.pq_work(), work);
+        assert_eq!(
+            replay.physical_page_prefix(16).unwrap(),
+            replay.details.selection.pages
+        );
+        assert!(replay.physical_page_prefix(0).is_err());
+        assert!(replay.physical_page_prefix(65).is_err());
+        let short = router
+            .capture_global_replay(
+                &[0.2; 96],
+                V32SearchArm {
+                    candidate_depth: 20,
+                    page_count: 8,
+                    ..arm
+                },
+                2,
+            )
+            .unwrap();
+        assert_eq!(short.physical_page_prefix(64).unwrap().len(), 10);
     }
 
     #[test]
