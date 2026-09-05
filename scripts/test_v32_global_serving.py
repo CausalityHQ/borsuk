@@ -228,6 +228,122 @@ class GlobalReplayAuthorityTests(unittest.TestCase):
 
 
 class GlobalServingTests(unittest.TestCase):
+    def test_ladder_projection_pins_bytes_bindings_and_nested_actual_pages(self):
+        # Break: serving expectations are derived from measured output, or
+        # malformed/wrong-cohort ladder evidence silently becomes authority.
+        from scripts.v32_global_serving import (
+            GlobalReplayRegistration,
+            load_page_ladder_serving_authority,
+        )
+
+        _, expected, pages = self.fixture(page_count=64)
+        queries = []
+        for query in expected:
+            queries.append(
+                dict(
+                    query_ordinal=query.query_ordinal,
+                    candidate_replay_sha256=query.candidate_replay_sha256,
+                    current={},
+                    cells=[
+                        dict(
+                            requested_pages=n,
+                            selected_page_count=n,
+                            selected_page_bytes=n * 100,
+                            selected_pages=[asdict(p) for p in pages[:n]],
+                            contained_truth_count=10,
+                            containment_ppm=1000000,
+                        )
+                        for n in (16, 32, 64)
+                    ],
+                )
+            )
+        terminal = dict(
+            schema="borsuk-v32-page-budget-ladder-v1",
+            status="complete",
+            metric="truth-page-containment-not-reranked-recall",
+            claim_eligible=False,
+            page_body_reads=0,
+            source_rows=1000000,
+            query_start=64,
+            query_count=32,
+            manifest_sha256="a" * 64,
+            query_sha256="b" * 64,
+            truth_sha256="c" * 64,
+            truth_receipt_sha256="d" * 64,
+            diagnostic=dict(
+                schema_version=11,
+                claim_eligible=False,
+                page_body_reads=0,
+                query_start=64,
+                queries=queries,
+                resources={},
+            ),
+        )
+
+        def encode(value):
+            return (
+                json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+                + b"\n"
+            )
+
+        def registered(raw):
+            return GlobalReplayRegistration(
+                hashlib.sha256(raw).hexdigest(),
+                len(raw),
+                "a" * 64,
+                3642,
+                "b" * 64,
+                "c" * 64,
+                "d" * 64,
+                1000000,
+                64,
+            )
+
+        raw = encode(terminal)
+        original = registered(raw)
+        for cap in (16, 64):
+            result = load_page_ladder_serving_authority(raw, original, cap)
+            self.assertEqual(result.expected[0].page_ordinals, tuple(range(cap)))
+            self.assertEqual(
+                result.expected[0].candidate_replay_sha256,
+                expected[0].candidate_replay_sha256,
+            )
+            self.assertEqual(result.pages, pages)
+        with self.assertRaises(ValueError):
+            load_page_ladder_serving_authority(raw, original, 32)
+        for mutation in range(8):
+            value = copy.deepcopy(terminal)
+            if mutation == 0:
+                value["query_sha256"] = "e" * 64
+            elif mutation == 1:
+                value["query_start"] = 65
+            elif mutation == 2:
+                value["diagnostic"]["queries"][0]["candidate_replay_sha256"] = "bad"
+            elif mutation == 3:
+                value["diagnostic"]["queries"][0]["cells"][2][
+                    "selected_page_bytes"
+                ] += 1
+            elif mutation == 4:
+                value["diagnostic"]["queries"][0]["cells"][2]["selected_pages"][0][
+                    "sha256"
+                ] = "e" * 64
+            elif mutation == 5:
+                value["diagnostic"]["queries"][0]["cells"][1][
+                    "selected_pages"
+                ].reverse()
+            elif mutation == 6:
+                value["diagnostic"]["queries"].pop()
+            else:
+                value["page_body_reads"] = True
+            changed = encode(value)
+            # Exact-byte authority rejects drift first; re-root just the terminal
+            # digest to reach the separate binding/shape/relational gates.
+            with self.subTest(mutation=mutation):
+                with self.assertRaises(ValueError):
+                    load_page_ladder_serving_authority(changed, original, 64)
+                with self.assertRaises(ValueError):
+                    load_page_ladder_serving_authority(changed, registered(changed), 64)
+
     def test_serving_page_budget_binds_reference_capture_and_actual_64(self):
         # Break: accepting stale schema3 or confusing the reference16 capture
         # with actual64 reads lets the experiment understate cost or mix arms.

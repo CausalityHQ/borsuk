@@ -81,6 +81,144 @@ class GlobalReplayAuthority:
     query_start: int
 
 
+def load_page_ladder_serving_authority(
+    terminal: bytes, registration: GlobalReplayRegistration, page_count: int
+) -> GlobalReplayAuthority:
+    """Project externally pinned, already-validated ladder evidence for serving.
+
+    No I/O, rerouting or regeneration of historical scientific output. The
+    caller separately authenticates manifest/query/truth payloads against the
+    same registration. Exact terminal SHA roots historical capture/page order;
+    this boundary checks its projection, not a new quality claim.
+    """
+    _require(type(registration) is GlobalReplayRegistration, "registration type")
+    r = registration
+    _require(
+        all(
+            _digest(v)
+            for v in (
+                r.terminal_sha256,
+                r.manifest_sha256,
+                r.query_sha256,
+                r.truth_sha256,
+                r.truth_receipt_sha256,
+            )
+        )
+        and _integer(r.terminal_bytes, 1, 8 * 1024**2)
+        and _integer(r.manifest_bytes, 1, 8 * 1024**2)
+        and _integer(r.source_rows, 64, 10**9)
+        and _integer(r.query_start, 0, 2**64 - 33)
+        and type(page_count) is int
+        and page_count in (16, 64),
+        "ladder registration",
+    )
+    _require(
+        type(terminal) is bytes
+        and len(terminal) == r.terminal_bytes
+        and hashlib.sha256(terminal).hexdigest() == r.terminal_sha256,
+        "ladder bytes",
+    )
+    t = _parse(terminal)
+    try:
+        _require(
+            t["schema"] == "borsuk-v32-page-budget-ladder-v1"
+            and t["status"] == "complete"
+            and t["metric"] == "truth-page-containment-not-reranked-recall"
+            and t["claim_eligible"] is False,
+            "ladder terminal",
+        )
+        for key, value in (
+            ("source_rows", r.source_rows),
+            ("query_start", r.query_start),
+            ("query_count", 32),
+            ("page_body_reads", 0),
+        ):
+            _require(type(t[key]) is int and t[key] == value, "ladder configuration")
+        for key in (
+            "manifest_sha256",
+            "query_sha256",
+            "truth_sha256",
+            "truth_receipt_sha256",
+        ):
+            _require(t[key] == getattr(r, key), "ladder bindings")
+        d = t["diagnostic"]
+        for key, value in (
+            ("schema_version", 11),
+            ("query_start", r.query_start),
+            ("page_body_reads", 0),
+        ):
+            _require(type(d[key]) is int and d[key] == value, "ladder diagnostic")
+        _require(
+            d["claim_eligible"] is False
+            and type(d["queries"]) is list
+            and len(d["queries"]) == 32,
+            "ladder queries",
+        )
+        registry, expected = {}, []
+        cell_keys = {
+            "requested_pages",
+            "selected_page_count",
+            "selected_page_bytes",
+            "selected_pages",
+            "contained_truth_count",
+            "containment_ppm",
+        }
+        for ordinal, q in enumerate(d["queries"], r.query_start):
+            _require(
+                type(q["query_ordinal"]) is int
+                and q["query_ordinal"] == ordinal
+                and _digest(q["candidate_replay_sha256"])
+                and type(q["cells"]) is list
+                and len(q["cells"]) == 3,
+                "ladder query",
+            )
+            previous = []
+            selected = None
+            for cap, cell in zip((16, 32, 64), q["cells"], strict=True):
+                _require(
+                    _keys(cell, cell_keys)
+                    and type(cell["requested_pages"]) is int
+                    and cell["requested_pages"] == cap
+                    and type(cell["selected_page_count"]) is int
+                    and cell["selected_page_count"] == cap
+                    and type(cell["selected_pages"]) is list
+                    and len(cell["selected_pages"]) == cap,
+                    "ladder cell",
+                )
+                pages = cell["selected_pages"]
+                for page in pages:
+                    _page(page)
+                    _require(page["ordinal"] < r.source_rows, "ladder page ordinal")
+                    existing = registry.setdefault(page["ordinal"], page)
+                    _require(existing == page, "ladder page identity")
+                _require(
+                    len({p["ordinal"] for p in pages}) == cap
+                    and pages[: len(previous)] == previous
+                    and _integer(cell["selected_page_bytes"], 1, cap * 196608)
+                    and cell["selected_page_bytes"]
+                    == sum(p["encoded_bytes"] for p in pages)
+                    and _integer(cell["contained_truth_count"], 0, 10)
+                    and _integer(cell["containment_ppm"], 0, 1000000)
+                    and cell["containment_ppm"]
+                    == cell["contained_truth_count"] * 100000,
+                    "ladder prefix accounting",
+                )
+                previous = pages
+                if cap == page_count:
+                    selected = tuple(p["ordinal"] for p in pages)
+            expected.append(
+                GlobalQueryExpectation(ordinal, q["candidate_replay_sha256"], selected)
+            )
+        return GlobalReplayAuthority(
+            tuple(expected),
+            tuple(GlobalPageIdentity(**registry[i]) for i in sorted(registry)),
+            r.source_rows,
+            r.query_start,
+        )
+    except (KeyError, TypeError, IndexError) as error:
+        raise ValueError("V32 global serving ladder projection differs") from error
+
+
 def load_global_replay_authority(
     terminal: bytes,
     manifest: bytes,
