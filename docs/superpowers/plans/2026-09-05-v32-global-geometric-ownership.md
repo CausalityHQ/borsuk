@@ -23,6 +23,11 @@
 
 ### Task 1: Compact global balanced splitter
 
+Checkpoint: implemented and Astra-reviewed. Original RED was one unresolved
+`global_balanced_pages` import (exit101). GREEN3/3, then allocation-only refinement
+to preallocate inverse norms and final GREEN3/3 in0.04s (compile56.85s). No full
+suite or scientific execution. Integration into the router remains Task2.
+
 **Files:** Create `crates/borsuk/src/v32_global_pages.rs`; modify module declaration in `crates/borsuk/src/lib.rs`. Tests are in the new module.
 
 **Interfaces:**

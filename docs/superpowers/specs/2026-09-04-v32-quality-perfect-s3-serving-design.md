@@ -1,5 +1,16 @@
 # V32 Quality-Perfect S3 Serving Design
 
+## Current objective amendment (2026-09-05)
+
+The operator withdrew the hard15ms cold-S3 requirement. Timing thresholds below
+remain the historical experimental contract, not a current release veto.
+Qualification now reports measured cold/warm latency, sustainable read/write
+throughput, durability and searchable-visibility delay, recall distributions,
+memory, request/byte amplification and scale. Preserve previous terminal
+classifications; do not retroactively relabel failed frozen experiments.
+See `2026-09-05-v32-global-geometric-ownership-design.md` for the next bounded
+layout experiment and independent production-router/resource qualification.
+
 ## Decision
 
 V32 restores the authenticated row-PQ candidate router that reached 320/320
