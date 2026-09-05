@@ -4183,3 +4183,52 @@ Disposition: the request reduction merits a bounded streaming-code reader
 prototype, provided actual object envelopes and deterministic candidate
 equivalence are verified. This does not solve the separately unqualified
 100M routing geometry and does not alter serving defaults.
+
+### V33 exposed-query group-shape proxy: prototypes improve but do not qualify
+
+Source `a2a301ae148944337f89514e33a34f75f17d30e9` implemented the
+preregistered metadata-only V33 proxy. Two pre-scoring attempts terminated at
+direct-script import and sparse populated-parent authority defects. Both were
+reproduced with focused tests, repaired without changing the frozen scorer or
+budgets, and produced no scientific result. The historical bounded-group
+writer explicitly excludes zero-population parents; the repaired adapter
+preserves the remaining original parent ordinals rather than inventing empty
+representatives. The focused proxy gate is7/7 GREEN, with scoped Ruff,
+`py_compile`, and diff checks GREEN before the scientific attempt.
+
+The sole scoring attempt authenticated six frozen objects totaling9,309,241B:
+the178-group directory, expanded and prospective V32 terminals,4096-parent
+leaf centroids,4141 routing ranges, and10,000-row query Parquet. It combined
+the same128 already-exposed queries and1,280 recorded truth-owner identities;
+therefore it is a burned-set explanatory proxy, not held-out evidence. It read
+zero PQ codes, corpus rows, or page bodies and launched no EC2 instance.
+
+Both arms ranked the178 complete storage groups and admitted the longest
+prefix bounded by64 groups and131,072 logical rows. The control used each
+group's frozen population-weighted centroid. The alternative used up to three
+population-weighted parent prototypes, initialized by deterministic
+farthest-first choice, refined for exactly ten Lloyd iterations, and stored as
+f16. Query outcomes did not influence construction.
+
+| Fixed arm | Owners included | Perfect queries | Missed owners | Selected groups min/median/max | Selected rows min/median/p95/max | Owner rank p50/p95/max |
+|---|---:|---:|---:|---:|---:|---:|
+|Weighted mean|1,255/1,280|115/128|25|20/23/25|123,237/128,646/130,712/131,018|1/11/68|
+|Three parent prototypes|1,265/1,280|115/128|15|20/23/25|123,237/127,651.5/130,749/131,023|1/11/67|
+
+The prototype arm reduced mean selected population from128,288.09375 to
+127,774.7578125 rows and mean truth-owner rank from3.35546875 to3.18359375,
+but still failed13 queries. Thus multimodal representation helps this coarse
+grouping, yet neither arm satisfies the frozen1,280/1,280 owner and128/128
+query gate at the target row budget. No post-outcome prototype-count or budget
+sweep follows.
+
+Canonical result51,033B SHA256
+`d52137c6b9746a95fa4784d4b3e2d2f556c9120c94b8633e1b9ad18c7b1480b6`
+is preserved at
+`s3://borsuk-bench-453182569524-euc1/research/v33-shape-aware-group-routing/a2a301ae148944337f89514e33a34f75f17d30e9/evidence/group-proxy-d52137c6/result.json`.
+It is `claim_eligible=false`; scratch inputs were explicitly removed, the
+process cleared, local memory PSI full avg10 remained0.00 after terminal, and
+swap remained250MiB. Disposition: reject fixed three-parent groups as a
+qualifying router at131,072 rows. Continue only with preregistered analytic
+moment/diagonal shape arms and a same-byte finer-cell control before any fresh
+cohort, production layout,100M campaign, or paid D3 work.
