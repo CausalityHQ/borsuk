@@ -40,11 +40,13 @@ truth-page rank, and final exact result separately.
 
 ## Cheapest metadata-only falsifier
 
-Before reading a corpus vector, reuse the authenticated routing metadata, PQ
-codebooks/codes, 178-group membership, 128 exposed query vectors, and 1,280
-recorded truth-owner identities. Decode PQ residuals only; read no exact vector
-or page body. Freeze these query-independent proxy summaries before loading the
-query/truth roles:
+Before reading a corpus vector, first reuse only authenticated routing metadata,
+178-group membership, 128 exposed query vectors, and 1,280 recorded truth-owner
+identities for the group-centroid/prototype screen. The subsequent leaf-moment
+screen additionally authenticates and reads the two PQ codebooks, base code
+plane, fidelity plane, and high code plane. It decodes PQ residuals but reads no
+exact vector or page body. Freeze every query-independent proxy summary before
+loading the query/truth roles:
 
 - per-leaf mean squared residual radius;
 - per-leaf diagonal residual variance;
@@ -64,6 +66,84 @@ data only when one arm contains 1,280/1,280 owners and all 128 queries within
 131,072 rows, a fourfold target against the 524,288-row control ceiling. A single
 miss or worse median/p95/max frontier rejects that arm with no beam, seed, or
 formula retuning. This is burned explanatory evidence, not a release result.
+
+The first frozen group-level proxy rejected both the weighted-mean control and
+three-parent prototype arm. The next proxy therefore operates at routing-leaf
+resolution. It reconstructs each logical row from exactly one authenticated
+24-byte base or 48-byte high residual code, selected by the fidelity plane, and
+adds the code-parent centroid in f32. It does not normalize the reconstructed
+row. For every routing leaf, process logical rows and dimensions in ordinal
+order, accumulate an f64 population mean and then a second-pass population
+diagonal variance, and round each persisted summary value once to f32. Empty
+code parents have no summary. Query and truth capabilities remain closed until
+all summaries and their SHA-256 identities are frozen.
+
+For a stored leaf mean `mu`, population `n`, query delta `u=q-mu`, squared
+distance `D=sum(u_j^2)`, trace `m=sum(v_j)`, and `a=sqrt(2*ln(n))` (`a=0` for
+`n=1`), freeze these raw signed scores without clamping:
+
+- scalar moment:
+  `D + m - a*sqrt(2*m*m/96 + 4*m*D/96)`;
+- diagonal moment:
+  `D + m - a*sqrt(2*sum(v_j*v_j) + 4*sum(u_j*u_j*v_j))`.
+
+The variance term deliberately includes both Gaussian components,
+`2*trace(Sigma^2)` and `4*u^T*Sigma*u`; dropping the first would ignore radial
+distance variance. There is no beta, epsilon, clamp, per-leaf calibration, or
+exposed-query fit. Negative scores remain ordered evidence rather than being
+collapsed into artificial zero ties. These are Gaussian moment-closure ranking
+heuristics, not Euclidean lower bounds or exact distance distributions. A
+storage group's score is the minimum score of its
+member routing leaves; groups are ordered by `(score,group_ordinal)` and the
+first overflowing complete group ends admission without skipping. The matched
+fine-leaf centroid control uses `D` under the identical reduction. All f64
+reductions retain ordinal order, reject nonfinite intermediates, canonicalize
+signed zero, and use ordinal ties.
+
+Representation gains require equal-byte resolution controls. Shared population
+and group metadata are excluded identically. Scalar summaries cost388 bytes per
+leaf (96 f32 mean values plus one f32 moment); across4,141 leaves, their16,564
+extra bytes fund43 additional384-byte plain centers plus52 padding bytes. Split
+the43 largest nonsingleton leaves, ties leaf ordinal. Diagonal summaries cost768
+bytes per leaf and are compared with exactly two plain centers per leaf. A split
+chooses the maximum-variance coordinate, ties dimension, orders rows by
+`(coordinate,logical_ordinal)`, cuts after `floor(n/2)`, and stores each child
+mean. Singleton diagonal controls duplicate their sole center. Child slots
+inherit the original storage group and require no child directory.
+
+The frozen ladder contains: the historical group mean and three-prototype
+evidence; the raw authenticated routing-leaf centroid; reconstructed leaf mean;
+scalar moment; diagonal moment; scalar 43-split and diagonal two-center
+equal-byte controls. Two report-only diagnostics are the reconstructed-member
+sphere bound and a full reconstructed-row group oracle. The oracle ranks a
+group by its minimum reconstructed member distance and attributes misses that
+no summary of the same reconstruction can reliably explain; it is not an arm
+and cannot pass the program. A moment arm can make a shape-efficiency claim only
+if it beats both its reconstructed-mean baseline and its matched-byte resolution
+control. The sphere diagnostic stores
+`R=max_i(||xhat_i-mu||)` and scores
+`max(0,||q-mu||-R)^2`; it is a lower bound only for reconstructed members.
+
+The proxy authenticates the exact URI, digest, length, role, and dependency
+binding of all five PQ artifacts from the frozen build manifest and reports
+positive code reads, unlike the preceding metadata-only prototype run. No
+summary construction or query scoring may begin until those five identities are
+registered; an absent identity is an authority failure, not permission to infer
+one from a local file or object ETag. Tests
+cover both widths, fidelity replacement/ranks, code-parent reconstruction,
+padding, exhaustive logical coverage, singleton and constant leaves,
+isotropic scalar/diagonal agreement, directional anisotropy, negative scores,
+group-min reduction, duplicate truth-owner groups, exact byte accounting, and
+byte-identical rebuilding. Before f32 persistence, the diagonal identity
+`sum(v_j)=m` must differ by at most `1e-12*max(1,m)` under the ordered f64
+reduction. Count all ten truth identities even when several map
+to one group. Report owner ranks and cumulative rows through each query's last
+required group in addition to budgeted selection. Passing requires1,280/1,280
+owners,128/128 perfect queries, non-worse p50/p95/max frontier against the
+fine-leaf centroid control, and the existing row/group bounds. A
+shape-efficiency claim additionally requires dominance over its equal-byte
+control. Report each miss against the reconstructed-row oracle so failure of
+the approximate population is not mislabeled as failure of the summary shape.
 
 ## Query-independent construction
 
@@ -192,9 +272,11 @@ fixed experiment after the group-shape result.
 
 ## Stop and release gates
 
-Do not implement the V32 selective production reader until the metadata-only
-three-prototype proxy passes and one corpus-derived routing arm has passed the
-sealed group, row, code-byte, page, exact-recall, CPU, and complete memory gates.
+Do not implement the V32 selective production reader until one preregistered
+shape proxy passes its explanatory gate and one corpus-derived routing arm has
+passed the sealed group, row, code-byte, page, exact-recall, CPU, and complete
+memory gates. A rejected proxy remains evidence and advances only to an already
+registered distinct representation; it never authorizes parameter retuning.
 Do not run 100M or 1B until the fresh 1M holdout passes. Use
 `AWS_PROFILE=causality` and Spot for the bounded corpus construction/replay,
 preserve immutable terminal evidence, terminate compute immediately, and never

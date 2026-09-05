@@ -37,20 +37,32 @@ V32 PQ/page kernels, Python controller, causality Spot.
 **Files:**
 - Create: `crates/borsuk/examples/v33_group_proxy_diagnostic.rs`
 
-- [ ] RED-test leaf residual moment and diagonal-moment arithmetic, exact
-  population-weighted group farthest-first initialization with
-  `min(3, parent_count)` representatives, ten Lloyd iterations,
-  f16 quantization, ordinal ties, and the freeze-before-query capability boundary.
-- [ ] Authenticate routing metadata, PQ codebooks/codes, the existing 178 groups,
+- [x] Freeze and execute the metadata-only group-centroid and three-parent
+  prototype screen. Preserve its rejection before opening the PQ-derived arm.
+- [ ] RED-test leaf residual-moment and diagonal-moment arithmetic, the matched
+  fine-leaf centroid control, scalar 43-split and diagonal two-center exact-byte
+  controls, f64 ordered construction with one f32 persistence rounding, ordinal
+  ties, and the freeze-before-query capability boundary. The already-recorded
+  group three-prototype/f16 arm is evidence only and is not rebuilt in this slice.
+- [ ] Authenticate routing metadata, all five PQ artifacts/dependencies, the
+  existing178 groups,
   128 exposed queries, and 1,280 truth-owner identities. Read no exact corpus or
-  page body.
-- [ ] Compare centroid, fixed analytic moment, diagonal moment, three-prototype
-  group minimum, and a same-byte smaller-plain-leaf control. Admit the longest
+  page body. Reconstruct each row from exactly one fidelity-selected residual
+  code plus its code-parent centroid, without normalization; freeze summaries
+  before opening queries.
+- [ ] Compare group centroid, three-prototype evidence, fine-leaf centroid,
+  fixed scalar moment, diagonal moment, and the exact-byte split-center controls
+  registered in the spec. A group's fine score is the minimum of its member
+  leaf scores. Admit the longest
   complete-group prefix within 131,072 rows, capped at 64. Require 1,280/1,280
   owners and 128/128 perfect queries within 131,072 cumulative rows, with
-  p50/p95/max frontier dominance. One miss rejects that arm with no rerun.
-- [ ] Replay 480/240/120/60 logical-row pages from identical candidate order and
-  report fixed page-prefix containment and bytes independently of routing.
+  p50/p95/max frontier dominance against the fine-leaf centroid and matched-byte
+  controls. One miss rejects that arm with no rerun.
+- [ ] Emit the reconstructed-member sphere and full reconstructed-row group
+  oracle as diagnostics only. Attribute every arm miss against the oracle;
+  neither diagnostic participates in arm selection or authorizes a pass.
+- [ ] Report routing containment and cumulative rows only. Defer candidate/page
+  replay until a shape arm passes this cheaper explanatory gate.
 - [ ] Record and commit the terminal. Proceed only on a pass.
 
 ### Task 2: Query-independent streaming summary builder
