@@ -201,6 +201,8 @@ mod v30_s3_search;
 #[cfg(test)]
 mod v32_code_objects;
 mod v32_global_pages;
+#[cfg(test)]
+mod v33_group_shape;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]
