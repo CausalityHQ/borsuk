@@ -202,6 +202,7 @@ mod v30_s3_search;
 mod v32_code_objects;
 mod v32_global_pages;
 mod v33_group_shape;
+mod v34_rank4;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]
@@ -233,6 +234,12 @@ pub use v33_group_shape::{
     canonical_v33_reconstructed_oracle_result_bytes, rank_v33_full_covariance_groups,
     rank_v33_low_rank_covariance_groups, rank_v33_reconstructed_groups,
     v33_reconstructed_group_for_logical,
+};
+#[doc(hidden)]
+pub use v34_rank4::{
+    V34Rank4Generation, V34Rank4Leaf, V34Rank4LeafInput, V34ServingMemoryProjection,
+    build_v34_rank4_generation, build_v34_rank4_generation_from_v33, project_v34_serving_memory,
+    score_v34_rank4_leaf,
 };
 #[allow(
     dead_code,

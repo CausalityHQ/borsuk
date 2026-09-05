@@ -126,8 +126,9 @@ At an observed-density projection of 414,100 leaves for 100M rows:
 - rank-four numeric payload: `414,100*2,320 = 960,712,000 B`;
 - 24-byte leaf identifiers/intervals: `9,938,400 B`;
 - four cached f64 scalars per leaf: `13,251,200 B`;
-- approximately 27,607 tree nodes at a provisional 512-byte cap:
-  `14,134,784 B`.
+- exactly 69,905 nodes for the provisional complete four-level 16-way tree
+  (`1 + 16 + 256 + 4,096 + 65,536`) at a 512-byte cap:
+  `35,791,360 B`.
 
 The count transfer and Arrow envelope are hypotheses checked from actual build
 counts. The complete process, including active and retiring generations,

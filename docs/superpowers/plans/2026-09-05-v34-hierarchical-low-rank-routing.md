@@ -32,11 +32,13 @@
 
 **Files:**
 - Create: `crates/borsuk/src/v34_rank4.rs`
+- Create: `crates/borsuk/tests/v34_rank4.rs`
 - Modify: `crates/borsuk/src/lib.rs`
+- Modify: `crates/borsuk/src/v33_group_shape.rs`
 
 **Interfaces:**
 - Consumes: `V33GroupShapeBuildRequest` and the decoded V33 rank-four reference from `v33_group_shape`.
-- Produces: `V34Rank4Leaf`, `V34Rank4Generation`, `V34ServingMemoryProjection`, `build_v34_rank4_generation`, `score_v34_rank4_leaf`, and `project_v34_serving_memory`.
+- Produces: `V34Rank4Leaf`, `V34Rank4Generation`, `V34ServingMemoryProjection`, `build_v34_rank4_generation`, `build_v34_rank4_generation_from_v33`, `score_v34_rank4_leaf`, and `project_v34_serving_memory`.
 
 - [ ] **Step 1: Write the authority and algebra RED tests**
 
@@ -50,7 +52,7 @@
 
 - [ ] **Step 2: Run the narrow RED**
 
-  Run: `cargo test -p borsuk --lib v34_rank4_ -- --nocapture`
+  Run: `cargo test -p borsuk --test v34_rank4 -- --nocapture`
 
   Expected: compilation fails only because the V34 types and functions are
   absent; no fixture or unrelated compiler failure is accepted.
@@ -60,24 +62,13 @@
   Define the exact serving fields:
 
   ```rust
-  pub struct V34Rank4Leaf {
-      pub leaf_ordinal: u32,
-      pub group_ordinal: u32,
-      pub logical_start: u64,
-      pub population: u32,
-      pub mean: [f32; 96],
-      pub residual_diagonal: [f32; 96],
-      pub eigenvalues: [f32; 4],
-      pub directions: [[f32; 96]; 4],
-      pub population_factor: f64,
-      pub trace: f64,
-      pub trace_square: f64,
-      pub spectral_bound: f64,
-  }
+  pub struct V34Rank4Leaf { /* immutable validated serving state */ }
   ```
 
-  Reuse V33 reconstruction and decomposition during construction, but copy only
-  decoded rank-four serving state. Validate `spectral_bound >= max(d) +
+  Keep fields crate-private and expose immutable getters so callers cannot
+  construct or mutate unauthenticated cached moments. Reuse V33 reconstruction
+  and decomposition through `build_v34_rank4_generation_from_v33`, but copy
+  only decoded rank-four serving state. Validate `spectral_bound >= max(d) +
   sum(lambda_k*dot(v_k,v_k))`. Score with ordered f64 reductions.
 
 - [ ] **Step 4: Add checked memory/work projection**
@@ -89,13 +80,17 @@
   `414_100*2_320 == 960_712_000` and reject totals
   at or above `3*1024*1024*1024` bytes. Report exhaustive directional work as
   `leaf_count*4*96` MACs without claiming it is complete query CPU.
+  Derive the provisional complete 16-way tree through terminal buckets of at
+  most sixteen leaves as `1+16+256+4_096+65_536 == 69_905` nodes, rather than
+  estimating node count from leaf density.
 
 - [ ] **Step 5: Run GREEN and mechanical checks**
 
   Run:
 
   ```bash
-  cargo test -p borsuk --lib v34_rank4_ -- --nocapture
+  cargo test -p borsuk --test v34_rank4 -- --nocapture
+  cargo test -p borsuk --lib v33_group_shape::tests::v34_rank4_from_v33_binds_authenticated_reconstruction_and_rank_four -- --exact --nocapture
   cargo fmt --all -- --check
   git diff --check
   ```
@@ -105,7 +100,8 @@
 
 - [ ] **Step 6: Commit and push the authority slice**
 
-  Commit only `v34_rank4.rs` and `lib.rs`, verify `origin/main` is an ancestor,
+  Commit only `v34_rank4.rs`, `tests/v34_rank4.rs`, `v33_group_shape.rs`,
+  `lib.rs`, and this plan correction; verify `origin/main` is an ancestor,
   push fast-forward to `origin/main`, and record the full SHA.
 
 ### Task 2: Persist a Rank-Four-Only Arrow Generation

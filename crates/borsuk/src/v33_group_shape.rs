@@ -308,6 +308,18 @@ struct V33LowRankCovarianceArtifact {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) struct V33Rank4LeafSnapshot {
+    pub(crate) ordinal: u32,
+    pub(crate) group_ordinal: u32,
+    pub(crate) logical_start: u64,
+    pub(crate) population: u64,
+    pub(crate) mean: [f32; DIMENSIONS],
+    pub(crate) residual: [f32; DIMENSIONS],
+    pub(crate) eigenvalues: [f32; 4],
+    pub(crate) directions: [[f32; DIMENSIONS]; 4],
+}
+
+#[derive(Debug, Clone, PartialEq)]
 #[doc(hidden)]
 /// Nested f32 rank-one/two/four covariance diagnostics over reconstructed leaves.
 pub struct V33LowRankCovarianceLadder {
@@ -1085,6 +1097,29 @@ fn build_low_rank_covariance_ladder_from_populations(
         ));
     }
     Ok(ladder)
+}
+
+pub(crate) fn build_v33_rank4_leaf_snapshots(
+    request: &V33GroupShapeBuildRequest,
+) -> Result<Vec<V33Rank4LeafSnapshot>> {
+    let ladder = build_v33_low_rank_covariance_ladder(request)?;
+    let mut leaves = ladder
+        .groups
+        .iter()
+        .flat_map(|group| group.leaves.iter())
+        .map(|leaf| V33Rank4LeafSnapshot {
+            ordinal: leaf.ordinal,
+            group_ordinal: leaf.group_ordinal,
+            logical_start: leaf.logical_start,
+            population: leaf.population,
+            mean: leaf.mean,
+            residual: leaf.residuals[2],
+            eigenvalues: leaf.eigenvalues,
+            directions: leaf.directions,
+        })
+        .collect::<Vec<_>>();
+    leaves.sort_by_key(|leaf| leaf.ordinal);
+    Ok(leaves)
 }
 
 fn validate_v33_low_rank_covariance_ladder(ladder: &V33LowRankCovarianceLadder) -> Result<()> {
@@ -2508,7 +2543,7 @@ mod tests {
         summarize_v33_leaf, v33_reconstructed_group_for_logical, v33_shape_control_bytes,
     };
     use crate::{
-        V27Hierarchy, encode_v27_hierarchy,
+        V27Hierarchy, build_v34_rank4_generation_from_v33, encode_v27_hierarchy,
         v30_s3_layout::{
             V30Layout, V30PageIdentity, V30PageRange, V32RoutingRange, encode_v30_layout_artifacts,
         },
@@ -3003,6 +3038,42 @@ mod tests {
                     "rank={rank} dimension={dimension} reconstructed={reconstructed} diagonal={}",
                     leaf.diagonal[dimension]
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn v34_rank4_from_v33_binds_authenticated_reconstruction_and_rank_four() {
+        // Break caught: V34 accepts caller-invented leaves instead of deriving
+        // the exact rank-four arm from authenticated V27/V30 artifacts.
+        let request = authenticated_shape_request();
+        let v33 = build_v33_low_rank_covariance_ladder(&request).unwrap();
+        let v34 = build_v34_rank4_generation_from_v33(&request).unwrap();
+        assert_eq!(v34.leaves().len(), 2);
+        assert_eq!(v34.logical_rows(), 20);
+        assert_eq!(v34.group_count(), 2);
+        let expected = v33
+            .groups
+            .iter()
+            .flat_map(|group| group.leaves.iter())
+            .collect::<Vec<_>>();
+        for (actual, expected) in v34.leaves().iter().zip(expected) {
+            assert_eq!(actual.leaf_ordinal(), expected.ordinal);
+            assert_eq!(actual.group_ordinal(), expected.group_ordinal);
+            assert_eq!(actual.logical_start(), expected.logical_start);
+            assert_eq!(u64::from(actual.population()), expected.population);
+            assert_eq!(actual.mean(), &expected.mean);
+            assert_eq!(actual.residual_diagonal(), &expected.residuals[2]);
+            assert_eq!(actual.eigenvalues(), &expected.eigenvalues);
+            for component in 0..4 {
+                if expected.eigenvalues[component] == 0.0 {
+                    assert_eq!(actual.directions()[component], [0.0; 96]);
+                } else {
+                    assert_eq!(
+                        actual.directions()[component],
+                        expected.directions[component]
+                    );
+                }
             }
         }
     }
