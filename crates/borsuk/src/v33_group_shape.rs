@@ -9,6 +9,7 @@ use arrow_array::{
 };
 use arrow_ipc::{MetadataVersion, writer::FileWriter, writer::IpcWriteOptions};
 use arrow_schema::{DataType, Field, Schema};
+use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -225,6 +226,53 @@ pub struct V33ReconstructedOracleRequest {
     pub group_limit: usize,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct V33FullCovarianceSummary {
+    ordinal: u32,
+    population: u64,
+    mean: [f64; DIMENSIONS],
+    covariance: Box<[f64]>,
+    trace: f64,
+    trace_square: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct V33FullCovarianceGroup {
+    ordinal: u32,
+    population: u64,
+    leaves: Vec<V33FullCovarianceSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[doc(hidden)]
+/// Query-independent complete-covariance ceiling over reconstructed groups.
+pub struct V33FullCovarianceCeiling {
+    groups: Vec<V33FullCovarianceGroup>,
+    logical_groups: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[doc(hidden)]
+/// Bound inputs for the canonical complete-covariance ceiling receipt.
+pub struct V33FullCovarianceCeilingRequest {
+    /// Registered SHA-256 of the immutable V33 frontier.
+    pub frontier_sha256: String,
+    /// Registered byte length of the immutable V33 frontier.
+    pub frontier_bytes: u64,
+    /// Strictly increasing frozen query ordinals.
+    pub query_ordinals: Vec<u64>,
+    /// Frozen normalized query vectors in query-ordinal order.
+    pub queries: Vec<[f32; DIMENSIONS]>,
+    /// Ten frozen truth logical ordinals for every query.
+    pub truth_logicals: Vec<Vec<u64>>,
+    /// Exact row population indexed by dense group ordinal.
+    pub group_rows: Vec<u64>,
+    /// Longest-prefix row ceiling.
+    pub row_limit: u64,
+    /// Longest-prefix group ceiling.
+    pub group_limit: usize,
+}
+
 fn reconstruct_v33_request(request: &V33GroupShapeBuildRequest) -> Result<Vec<V33LeafPopulation>> {
     let hierarchy = decode_v27_hierarchy(
         &request.hierarchy.roots,
@@ -315,6 +363,238 @@ pub fn build_v33_reconstructed_group_oracle(
         return Err(invalid("V33 reconstructed oracle group population differs"));
     }
     Ok(V33ReconstructedGroupOracle { groups })
+}
+
+fn summarize_full_covariance_rows(
+    ordinal: u32,
+    rows: &[(u64, [f32; DIMENSIONS])],
+) -> Result<V33FullCovarianceSummary> {
+    if rows.is_empty()
+        || rows
+            .iter()
+            .any(|(_, row)| row.iter().any(|value| !value.is_finite()))
+        || rows
+            .iter()
+            .map(|(logical, _)| *logical)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != rows.len()
+    {
+        return Err(invalid("V33 full covariance population differs"));
+    }
+    let population = rows.len() as u64;
+    let count = population as f64;
+    let mut mean = [0.0_f64; DIMENSIONS];
+    for (_, row) in rows {
+        for dimension in 0..DIMENSIONS {
+            mean[dimension] += f64::from(row[dimension]);
+        }
+    }
+    for value in &mut mean {
+        *value /= count;
+    }
+
+    let mut covariance = vec![0.0_f64; DIMENSIONS * DIMENSIONS];
+    for (_, row) in rows {
+        let delta = std::array::from_fn::<_, DIMENSIONS, _>(|dimension| {
+            f64::from(row[dimension]) - mean[dimension]
+        });
+        for left in 0..DIMENSIONS {
+            for right in left..DIMENSIONS {
+                covariance[left * DIMENSIONS + right] += delta[left] * delta[right] / count;
+            }
+        }
+    }
+    for left in 0..DIMENSIONS {
+        for right in 0..left {
+            covariance[left * DIMENSIONS + right] = covariance[right * DIMENSIONS + left];
+        }
+    }
+    if mean
+        .iter()
+        .chain(&covariance)
+        .any(|value| !value.is_finite())
+    {
+        return Err(invalid("V33 full covariance is nonfinite"));
+    }
+    let trace = (0..DIMENSIONS)
+        .map(|dimension| covariance[dimension * DIMENSIONS + dimension])
+        .sum::<f64>();
+    let trace_square = covariance.iter().map(|value| value * value).sum::<f64>();
+    if !trace.is_finite() || trace < 0.0 || !trace_square.is_finite() || trace_square < 0.0 {
+        return Err(invalid("V33 full covariance moments differ"));
+    }
+    Ok(V33FullCovarianceSummary {
+        ordinal,
+        population,
+        mean,
+        covariance: covariance.into_boxed_slice(),
+        trace,
+        trace_square,
+    })
+}
+
+#[cfg(test)]
+fn summarize_full_covariance(population: &V33LeafPopulation) -> Result<V33FullCovarianceSummary> {
+    summarize_full_covariance_rows(population.group_ordinal, &population.rows)
+}
+
+fn full_covariance_moment_score(
+    summary: &V33FullCovarianceSummary,
+    query: &[f32; DIMENSIONS],
+) -> Result<f64> {
+    if summary.population == 0
+        || summary.covariance.len() != DIMENSIONS * DIMENSIONS
+        || query.iter().any(|value| !value.is_finite())
+    {
+        return Err(invalid("V33 full covariance score authority differs"));
+    }
+    let delta = std::array::from_fn::<_, DIMENSIONS, _>(|dimension| {
+        f64::from(query[dimension]) - summary.mean[dimension]
+    });
+    let squared_mean_distance = delta.iter().map(|value| value * value).sum::<f64>();
+    let mut delta_covariance_delta = 0.0_f64;
+    for left in 0..DIMENSIONS {
+        let projected = (0..DIMENSIONS)
+            .map(|right| summary.covariance[left * DIMENSIONS + right] * delta[right])
+            .sum::<f64>();
+        delta_covariance_delta += delta[left] * projected;
+    }
+    let variance = 2.0 * summary.trace_square + 4.0 * delta_covariance_delta;
+    let tolerance = (summary.trace_square * 1.0e-12).max(1.0e-15);
+    if !squared_mean_distance.is_finite()
+        || !delta_covariance_delta.is_finite()
+        || !variance.is_finite()
+        || variance < -tolerance
+    {
+        return Err(invalid("V33 full covariance score is nonfinite"));
+    }
+    let extreme = (2.0 * (summary.population as f64).ln()).sqrt();
+    let score = squared_mean_distance + summary.trace - extreme * variance.max(0.0).sqrt();
+    if !score.is_finite() {
+        return Err(invalid("V33 full covariance score is nonfinite"));
+    }
+    Ok(score)
+}
+
+/// Build complete reconstructed-group covariance before opening any query.
+#[doc(hidden)]
+pub fn build_v33_full_covariance_ceiling(
+    request: &V33GroupShapeBuildRequest,
+) -> Result<V33FullCovarianceCeiling> {
+    build_full_covariance_ceiling_from_populations(reconstruct_v33_request(request)?)
+}
+
+fn build_full_covariance_ceiling_from_populations(
+    populations: Vec<V33LeafPopulation>,
+) -> Result<V33FullCovarianceCeiling> {
+    if populations.is_empty()
+        || populations
+            .iter()
+            .enumerate()
+            .any(|(ordinal, population)| population.routing_leaf_ordinal != ordinal as u32)
+    {
+        return Err(invalid("V33 full covariance leaf authority differs"));
+    }
+    let logical_count = populations
+        .iter()
+        .try_fold(0_usize, |count, leaf| count.checked_add(leaf.rows.len()))
+        .ok_or_else(|| invalid("V33 full covariance logical coverage overflows"))?;
+    let mut logical_groups = vec![u32::MAX; logical_count];
+    for leaf in &populations {
+        for (logical, _) in &leaf.rows {
+            let logical = usize::try_from(*logical)
+                .map_err(|_| invalid("V33 full covariance logical ordinal overflows"))?;
+            let owner = logical_groups
+                .get_mut(logical)
+                .ok_or_else(|| invalid("V33 full covariance logical coverage differs"))?;
+            if *owner != u32::MAX {
+                return Err(invalid("V33 full covariance logical ownership differs"));
+            }
+            *owner = leaf.group_ordinal;
+        }
+    }
+    if logical_groups.contains(&u32::MAX) {
+        return Err(invalid("V33 full covariance logical coverage differs"));
+    }
+    let summaries = populations
+        .par_iter()
+        .map(|leaf| summarize_full_covariance_rows(leaf.routing_leaf_ordinal, &leaf.rows))
+        .collect::<Result<Vec<_>>>()?;
+    let group_count = populations
+        .iter()
+        .map(|leaf| leaf.group_ordinal)
+        .max()
+        .and_then(|ordinal| usize::try_from(ordinal).ok())
+        .and_then(|ordinal| ordinal.checked_add(1))
+        .ok_or_else(|| invalid("V33 full covariance group authority differs"))?;
+    let mut groups = (0..group_count)
+        .map(|ordinal| V33FullCovarianceGroup {
+            ordinal: ordinal as u32,
+            population: 0,
+            leaves: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    for (leaf, summary) in populations.iter().zip(summaries) {
+        let group = groups
+            .get_mut(
+                usize::try_from(leaf.group_ordinal)
+                    .map_err(|_| invalid("V33 full covariance group ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V33 full covariance group authority differs"))?;
+        group.population = group
+            .population
+            .checked_add(summary.population)
+            .ok_or_else(|| invalid("V33 full covariance group population overflows"))?;
+        group.leaves.push(summary);
+    }
+    if groups
+        .iter()
+        .enumerate()
+        .any(|(ordinal, group)| group.ordinal != ordinal as u32 || group.leaves.is_empty())
+    {
+        return Err(invalid("V33 full covariance group coverage differs"));
+    }
+    Ok(V33FullCovarianceCeiling {
+        groups,
+        logical_groups,
+    })
+}
+
+fn full_covariance_group_score(
+    group: &V33FullCovarianceGroup,
+    query: &[f32; DIMENSIONS],
+) -> Result<f64> {
+    let mut score = f64::INFINITY;
+    for leaf in &group.leaves {
+        score = score.min(full_covariance_moment_score(leaf, query)?);
+    }
+    if !score.is_finite() {
+        return Err(invalid("V33 full covariance group score differs"));
+    }
+    Ok(score)
+}
+
+/// Rank complete-covariance group summaries with ordinal tie breaking.
+#[doc(hidden)]
+pub fn rank_v33_full_covariance_groups(
+    ceiling: &V33FullCovarianceCeiling,
+    query: &[f32; DIMENSIONS],
+) -> Result<Vec<u32>> {
+    if ceiling.groups.is_empty() || query.iter().any(|value| !value.is_finite()) {
+        return Err(invalid("V33 full covariance query differs"));
+    }
+    let mut ranked = ceiling
+        .groups
+        .iter()
+        .map(|group| Ok((full_covariance_group_score(group, query)?, group.ordinal)))
+        .collect::<Result<Vec<_>>>()?;
+    ranked.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    Ok(ranked.into_iter().map(|(_, ordinal)| ordinal).collect())
 }
 
 /// Rank groups by their minimum exact reconstructed-row squared distance.
@@ -448,6 +728,143 @@ pub fn canonical_v33_reconstructed_oracle_result_bytes(
     });
     let mut bytes = serde_json::to_vec(&value)
         .map_err(|_| invalid("V33 reconstructed oracle serialization differs"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+/// Recompute every burned-cohort owner and serialize the complete-covariance ceiling.
+#[doc(hidden)]
+pub fn canonical_v33_full_covariance_ceiling_result_bytes(
+    ceiling: &V33FullCovarianceCeiling,
+    request: &V33FullCovarianceCeilingRequest,
+) -> Result<Vec<u8>> {
+    let query_count = request.query_ordinals.len();
+    if request.frontier_sha256.len() != 64
+        || request
+            .frontier_sha256
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+        || request.frontier_bytes == 0
+        || query_count == 0
+        || request.queries.len() != query_count
+        || request.truth_logicals.len() != query_count
+        || request
+            .query_ordinals
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || request
+            .queries
+            .iter()
+            .flatten()
+            .any(|value| !value.is_finite())
+        || request.truth_logicals.iter().any(|truth| truth.len() != 10)
+        || request.group_rows.len() != ceiling.groups.len()
+        || request.group_rows.contains(&0)
+        || request.row_limit == 0
+        || request.group_limit == 0
+    {
+        return Err(invalid("V33 full covariance ceiling request differs"));
+    }
+    for (ordinal, group) in ceiling.groups.iter().enumerate() {
+        if group.ordinal != ordinal as u32 || group.population != request.group_rows[ordinal] {
+            return Err(invalid("V33 full covariance ceiling population differs"));
+        }
+    }
+
+    let mut records = Vec::with_capacity(query_count);
+    let mut included_owners = 0_usize;
+    let mut perfect_queries = 0_usize;
+    let mut minimum_selected_rows = u64::MAX;
+    let mut maximum_selected_rows = 0_u64;
+    for index in 0..query_count {
+        let ranked = rank_v33_full_covariance_groups(ceiling, &request.queries[index])?;
+        let mut selected_groups = Vec::new();
+        let mut selected_rows = 0_u64;
+        for group in ranked.iter().copied() {
+            let group_index = usize::try_from(group)
+                .map_err(|_| invalid("V33 full covariance rank overflows"))?;
+            let rows = *request
+                .group_rows
+                .get(group_index)
+                .ok_or_else(|| invalid("V33 full covariance rank differs"))?;
+            let next = selected_rows
+                .checked_add(rows)
+                .ok_or_else(|| invalid("V33 full covariance selected rows overflow"))?;
+            if selected_groups.len() == request.group_limit || next > request.row_limit {
+                break;
+            }
+            selected_groups.push(group);
+            selected_rows = next;
+        }
+        if selected_groups.is_empty() {
+            return Err(invalid("V33 full covariance prefix differs"));
+        }
+        minimum_selected_rows = minimum_selected_rows.min(selected_rows);
+        maximum_selected_rows = maximum_selected_rows.max(selected_rows);
+        let selected = selected_groups.iter().copied().collect::<BTreeSet<_>>();
+        let truth_groups = request.truth_logicals[index]
+            .iter()
+            .map(|logical| {
+                let logical = usize::try_from(*logical)
+                    .map_err(|_| invalid("V33 full covariance truth ordinal overflows"))?;
+                ceiling
+                    .logical_groups
+                    .get(logical)
+                    .copied()
+                    .ok_or_else(|| invalid("V33 full covariance truth ordinal differs"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let truth_owner_ranks = truth_groups
+            .iter()
+            .map(|owner| {
+                ranked
+                    .iter()
+                    .position(|group| group == owner)
+                    .and_then(|rank| rank.checked_add(1))
+                    .ok_or_else(|| invalid("V33 full covariance owner rank differs"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let hits = truth_groups
+            .iter()
+            .filter(|group| selected.contains(group))
+            .count();
+        included_owners += hits;
+        if hits == 10 {
+            perfect_queries += 1;
+        }
+        records.push(serde_json::json!({
+            "hits": hits,
+            "query_ordinal": request.query_ordinals[index],
+            "selected_groups": selected_groups,
+            "selected_rows": selected_rows,
+            "truth_owner_ranks": truth_owner_ranks,
+        }));
+    }
+    let total_owners = query_count
+        .checked_mul(10)
+        .ok_or_else(|| invalid("V33 full covariance owner count overflows"))?;
+    let passed = included_owners == total_owners && perfect_queries == query_count;
+    let value = serde_json::json!({
+        "claim_eligible": false,
+        "frontier": {
+            "encoded_bytes": request.frontier_bytes,
+            "role": "v33-group-proxy-result-json",
+            "sha256": request.frontier_sha256,
+        },
+        "group_limit": request.group_limit,
+        "included_owners": included_owners,
+        "maximum_selected_rows": maximum_selected_rows,
+        "minimum_selected_rows": minimum_selected_rows,
+        "passed": passed,
+        "perfect_queries": perfect_queries,
+        "query_count": query_count,
+        "records": records,
+        "row_limit": request.row_limit,
+        "schema": "borsuk-v33-full-covariance-ceiling-result-v1",
+        "total_owners": total_owners,
+    });
+    let mut bytes = serde_json::to_vec(&value)
+        .map_err(|_| invalid("V33 full covariance ceiling serialization differs"))?;
     bytes.push(b'\n');
     Ok(bytes)
 }
@@ -1115,14 +1532,18 @@ fn select_v33_group_prefix(
 #[cfg(test)]
 mod tests {
     use super::{
-        V33GroupPopulation, V33GroupShapeBuildRequest, V33LeafPopulation,
-        V33ReconstructedOracleRequest, V33RoutingRange, V33ShapeArm,
+        V33FullCovarianceCeilingRequest, V33GroupPopulation, V33GroupShapeBuildRequest,
+        V33LeafPopulation, V33ReconstructedOracleRequest, V33RoutingRange, V33ShapeArm,
+        build_full_covariance_ceiling_from_populations, build_v33_full_covariance_ceiling,
         build_v33_group_shape_artifact, build_v33_reconstructed_group_oracle,
+        canonical_v33_full_covariance_ceiling_result_bytes,
         canonical_v33_reconstructed_oracle_result_bytes, encode_v33_leaf_shape_artifact,
-        low_rank_moment_score, principal_covariance_components, rank_v33_groups,
+        full_covariance_group_score, full_covariance_moment_score, low_rank_moment_score,
+        principal_covariance_components, rank_v33_full_covariance_groups, rank_v33_groups,
         rank_v33_reconstructed_groups, reconstruct_v33_leaf_populations, score_v33_leaf,
-        select_v33_group_prefix, select_v33_scalar_split_leaves, summarize_v33_leaf,
-        v33_reconstructed_group_for_logical, v33_shape_control_bytes,
+        select_v33_group_prefix, select_v33_scalar_split_leaves, summarize_full_covariance,
+        summarize_full_covariance_rows, summarize_v33_leaf, v33_reconstructed_group_for_logical,
+        v33_shape_control_bytes,
     };
     use crate::{
         V27Hierarchy, encode_v27_hierarchy,
@@ -1362,6 +1783,117 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.1, [0.0, 0.0]);
         assert_eq!(first.2, [0.0; 96]);
+    }
+
+    #[test]
+    fn v33_group_shape_full_covariance_ceiling_couples_rotated_dimensions() {
+        // Break caught: the full-covariance ceiling silently drops off-diagonal
+        // covariance and reproduces the already-failed diagonal arm.
+        let population = V33LeafPopulation {
+            routing_leaf_ordinal: 0,
+            group_ordinal: 0,
+            rows: vec![row(0, -1.0, -1.0), row(1, 1.0, 1.0)],
+        };
+        let summary = summarize_full_covariance(&population).unwrap();
+        let mut query = [0.0_f32; 96];
+        query[0] = 1.0;
+        query[1] = -1.0;
+        let score = full_covariance_moment_score(&summary, &query).unwrap();
+        let expected = 4.0 - (2.0_f64 * 2.0_f64.ln()).sqrt() * 8.0_f64.sqrt();
+        assert!((score - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn v33_group_shape_full_covariance_reduces_leaf_scores_without_pooling() {
+        // Break caught: rows from distinct routing leaves are pooled into one
+        // storage-group covariance instead of reducing independent leaf scores.
+        let left = V33LeafPopulation {
+            routing_leaf_ordinal: 0,
+            group_ordinal: 0,
+            rows: vec![row(0, -3.0, -3.0), row(1, -1.0, -1.0)],
+        };
+        let right = V33LeafPopulation {
+            routing_leaf_ordinal: 1,
+            group_ordinal: 0,
+            rows: vec![row(2, 1.0, 1.0), row(3, 3.0, 3.0)],
+        };
+        let other = V33LeafPopulation {
+            routing_leaf_ordinal: 2,
+            group_ordinal: 1,
+            rows: vec![row(4, 8.0, 0.0), row(5, 9.0, 0.0)],
+        };
+        let query = row(99, -2.0, -2.0).1;
+        let expected =
+            full_covariance_moment_score(&summarize_full_covariance(&left).unwrap(), &query)
+                .unwrap()
+                .min(
+                    full_covariance_moment_score(
+                        &summarize_full_covariance(&right).unwrap(),
+                        &query,
+                    )
+                    .unwrap(),
+                );
+        let ceiling = build_full_covariance_ceiling_from_populations(vec![
+            left.clone(),
+            right.clone(),
+            other,
+        ])
+        .unwrap();
+        assert_eq!(
+            full_covariance_group_score(&ceiling.groups[0], &query).unwrap(),
+            expected
+        );
+        assert_ne!(
+            full_covariance_moment_score(
+                &summarize_full_covariance_rows(0, &[left.rows, right.rows].concat()).unwrap(),
+                &query,
+            )
+            .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn v33_group_shape_full_covariance_ceiling_receipt_recomputes_every_owner() {
+        // Break caught: the dense ceiling trusts frontier hit/rank fields or
+        // serializes a pass without recomputing the longest complete prefix.
+        let ceiling = build_v33_full_covariance_ceiling(&authenticated_shape_request()).unwrap();
+        let mut query = [0.5_f32; 96];
+        query[0] = 1.5;
+        assert_eq!(
+            rank_v33_full_covariance_groups(&ceiling, &query).unwrap(),
+            [0, 1]
+        );
+        let request = V33FullCovarianceCeilingRequest {
+            frontier_sha256: "1".repeat(64),
+            frontier_bytes: 123,
+            query_ordinals: vec![4_096],
+            queries: vec![query],
+            truth_logicals: vec![vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]],
+            group_rows: vec![9, 11],
+            row_limit: 9,
+            group_limit: 2,
+        };
+        let bytes = canonical_v33_full_covariance_ceiling_result_bytes(&ceiling, &request).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["included_owners"], 9);
+        assert_eq!(value["total_owners"], 10);
+        assert_eq!(value["perfect_queries"], 0);
+        assert_eq!(value["query_count"], 1);
+        assert_eq!(value["passed"], false);
+        assert_eq!(
+            value["records"][0]["selected_groups"],
+            serde_json::json!([0])
+        );
+        assert_eq!(
+            value["records"][0]["truth_owner_ranks"],
+            serde_json::json!([1, 1, 1, 1, 1, 1, 1, 1, 1, 2])
+        );
+
+        let mut invalid = request;
+        invalid.queries[0][0] = f32::NAN;
+        assert!(canonical_v33_full_covariance_ceiling_result_bytes(&ceiling, &invalid).is_err());
     }
 
     #[test]

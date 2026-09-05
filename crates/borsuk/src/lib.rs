@@ -224,9 +224,11 @@ pub use v30_s3_search::{
 };
 #[doc(hidden)]
 pub use v33_group_shape::{
-    V33GroupShapeBuildRequest, V33LeafShapeArtifact, V33ReconstructedGroupOracle,
-    V33ReconstructedOracleRequest, build_v33_group_shape_artifact,
-    build_v33_reconstructed_group_oracle, canonical_v33_reconstructed_oracle_result_bytes,
+    V33FullCovarianceCeiling, V33FullCovarianceCeilingRequest, V33GroupShapeBuildRequest,
+    V33LeafShapeArtifact, V33ReconstructedGroupOracle, V33ReconstructedOracleRequest,
+    build_v33_full_covariance_ceiling, build_v33_group_shape_artifact,
+    build_v33_reconstructed_group_oracle, canonical_v33_full_covariance_ceiling_result_bytes,
+    canonical_v33_reconstructed_oracle_result_bytes, rank_v33_full_covariance_groups,
     rank_v33_reconstructed_groups, v33_reconstructed_group_for_logical,
 };
 #[allow(

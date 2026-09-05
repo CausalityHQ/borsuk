@@ -4,9 +4,11 @@ use std::{collections::BTreeMap, env, fs, path::PathBuf};
 
 use borsuk::{
     V27HierarchyArtifactIdentity, V27HierarchyArtifacts, V30LayoutArtifactIdentity,
-    V30LayoutArtifacts, V30PqArtifactIdentity, V30PqArtifacts, V33GroupShapeBuildRequest,
-    V33ReconstructedOracleRequest, build_v33_group_shape_artifact,
-    build_v33_reconstructed_group_oracle, canonical_v33_reconstructed_oracle_result_bytes,
+    V30LayoutArtifacts, V30PqArtifactIdentity, V30PqArtifacts, V33FullCovarianceCeilingRequest,
+    V33GroupShapeBuildRequest, V33ReconstructedOracleRequest, build_v33_full_covariance_ceiling,
+    build_v33_group_shape_artifact, build_v33_reconstructed_group_oracle,
+    canonical_v33_full_covariance_ceiling_result_bytes,
+    canonical_v33_reconstructed_oracle_result_bytes,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -21,6 +23,7 @@ const ORACLE_QUERY_ORDINAL: usize = 6_160;
 enum RunMode {
     GroupShape,
     ReconstructedOracle,
+    FullCovarianceCeiling,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +48,13 @@ struct ReconstructedOracleFrontier {
     query_ordinal: usize,
     query: [f32; 96],
     truth_logicals: [u64; 10],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FullCovarianceFrontier {
+    query_ordinals: Vec<u64>,
+    queries: Vec<[f32; 96]>,
+    truth_logicals: Vec<Vec<u64>>,
 }
 
 fn exact_keys(value: &serde_json::Map<String, Value>, expected: &[&str]) -> bool {
@@ -187,6 +197,202 @@ fn parse_reconstructed_oracle_frontier(
     })
 }
 
+fn parse_full_covariance_frontier(
+    raw: &[u8],
+) -> Result<FullCovarianceFrontier, Box<dyn std::error::Error>> {
+    if raw.last() != Some(&b'\n') {
+        return Err("V33 full covariance frontier newline differs".into());
+    }
+    let value: Value = serde_json::from_slice(raw)?;
+    let root = value
+        .as_object()
+        .ok_or("V33 full covariance frontier schema differs")?;
+    if !exact_keys(
+        root,
+        &[
+            "arms",
+            "claim_eligible",
+            "code_reads",
+            "corpus_reads",
+            "input_sha256",
+            "page_reads",
+            "passed",
+            "row_limit",
+            "schema",
+        ],
+    ) || root.get("schema").and_then(Value::as_str) != Some("borsuk-v33-group-proxy-result-v2")
+        || root.get("claim_eligible").and_then(Value::as_bool) != Some(false)
+        || root.get("code_reads").and_then(Value::as_u64) != Some(5)
+        || root.get("corpus_reads").and_then(Value::as_u64) != Some(0)
+        || root.get("page_reads").and_then(Value::as_u64) != Some(0)
+        || root.get("row_limit").and_then(Value::as_u64) != Some(262_144)
+    {
+        return Err("V33 full covariance frontier authority differs".into());
+    }
+    let arms = root
+        .get("arms")
+        .and_then(Value::as_array)
+        .ok_or("V33 full covariance frontier arms differ")?;
+    let mut matching = arms.iter().filter_map(|arm| {
+        let object = arm.as_object()?;
+        (object.get("arm")?.as_str()? == "diagonal-ellipsoid").then_some(object)
+    });
+    let arm = matching
+        .next()
+        .ok_or("V33 full covariance diagonal arm differs")?;
+    if matching.next().is_some()
+        || !exact_keys(
+            arm,
+            &[
+                "arm",
+                "included_owners",
+                "maximum_selected_rows",
+                "minimum_selected_rows",
+                "passed",
+                "perfect_queries",
+                "query_count",
+                "records",
+                "total_owners",
+            ],
+        )
+    {
+        return Err("V33 full covariance diagonal arm schema differs".into());
+    }
+    let records = arm
+        .get("records")
+        .and_then(Value::as_array)
+        .filter(|records| !records.is_empty())
+        .ok_or("V33 full covariance records differ")?;
+    let query_count = arm
+        .get("query_count")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or("V33 full covariance query count differs")?;
+    if query_count != records.len()
+        || arm.get("total_owners").and_then(Value::as_u64) != Some((query_count * 10) as u64)
+        || arm.get("included_owners").and_then(Value::as_u64).is_none()
+        || arm.get("perfect_queries").and_then(Value::as_u64).is_none()
+        || arm
+            .get("minimum_selected_rows")
+            .and_then(Value::as_u64)
+            .is_none()
+        || arm
+            .get("maximum_selected_rows")
+            .and_then(Value::as_u64)
+            .is_none()
+        || arm.get("passed").and_then(Value::as_bool).is_none()
+    {
+        return Err("V33 full covariance aggregate schema differs".into());
+    }
+
+    let mut query_ordinals = Vec::with_capacity(query_count);
+    let mut queries = Vec::with_capacity(query_count);
+    let mut truth_logicals = Vec::with_capacity(query_count);
+    for record in records {
+        let record = record
+            .as_object()
+            .ok_or("V33 full covariance record schema differs")?;
+        if !exact_keys(
+            record,
+            &[
+                "hits",
+                "query",
+                "query_ordinal",
+                "selected_groups",
+                "selected_routing_leaves",
+                "selected_rows",
+                "truth_logicals",
+                "truth_owner_ranks",
+            ],
+        ) || record
+            .get("hits")
+            .and_then(Value::as_u64)
+            .filter(|hits| *hits <= 10)
+            .is_none()
+            || record
+                .get("selected_rows")
+                .and_then(Value::as_u64)
+                .filter(|rows| *rows > 0)
+                .is_none()
+            || record
+                .get("selected_groups")
+                .and_then(Value::as_array)
+                .filter(|v| !v.is_empty())
+                .is_none()
+            || record
+                .get("selected_routing_leaves")
+                .and_then(Value::as_array)
+                .filter(|v| !v.is_empty())
+                .is_none()
+            || record
+                .get("truth_owner_ranks")
+                .and_then(Value::as_array)
+                .filter(|v| v.len() == 10)
+                .is_none()
+        {
+            return Err("V33 full covariance record authority differs".into());
+        }
+        let query_ordinal = record
+            .get("query_ordinal")
+            .and_then(Value::as_u64)
+            .ok_or("V33 full covariance query ordinal differs")?;
+        if query_ordinals
+            .last()
+            .is_some_and(|previous| *previous >= query_ordinal)
+        {
+            return Err("V33 full covariance query order differs".into());
+        }
+        let query = record
+            .get("query")
+            .and_then(Value::as_array)
+            .filter(|values| values.len() == 96)
+            .ok_or("V33 full covariance query vector differs")?
+            .iter()
+            .map(|value| {
+                let value = value
+                    .as_f64()
+                    .ok_or("V33 full covariance query value differs")?
+                    as f32;
+                value
+                    .is_finite()
+                    .then_some(value)
+                    .ok_or("V33 full covariance query value differs")
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .map_err(|_| "V33 full covariance query dimension differs")?;
+        let truth = record
+            .get("truth_logicals")
+            .and_then(Value::as_array)
+            .filter(|values| values.len() == 10)
+            .ok_or("V33 full covariance truth count differs")?
+            .iter()
+            .map(|value| {
+                value
+                    .as_u64()
+                    .ok_or("V33 full covariance truth logical differs")
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if truth
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != 10
+        {
+            return Err("V33 full covariance truth logicals differ".into());
+        }
+        query_ordinals.push(query_ordinal);
+        queries.push(query);
+        truth_logicals.push(truth);
+    }
+    Ok(FullCovarianceFrontier {
+        query_ordinals,
+        queries,
+        truth_logicals,
+    })
+}
+
 fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut values = values.into_iter();
     let mut paths = BTreeMap::new();
@@ -194,12 +400,15 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
     while let Some(flag) = values.next() {
         if matches!(
             flag.as_str(),
-            "--execute-group-shape" | "--execute-reconstructed-oracle"
+            "--execute-group-shape"
+                | "--execute-reconstructed-oracle"
+                | "--execute-full-covariance-ceiling"
         ) {
-            let next = if flag == "--execute-group-shape" {
-                RunMode::GroupShape
-            } else {
-                RunMode::ReconstructedOracle
+            let next = match flag.as_str() {
+                "--execute-group-shape" => RunMode::GroupShape,
+                "--execute-reconstructed-oracle" => RunMode::ReconstructedOracle,
+                "--execute-full-covariance-ceiling" => RunMode::FullCovarianceCeiling,
+                _ => unreachable!(),
             };
             if mode.replace(next).is_some() {
                 return Err("duplicate execution mode".to_owned());
@@ -238,7 +447,7 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
             .ok_or_else(|| format!("{flag} is required"))
     };
     if (mode == RunMode::GroupShape && frontier.is_some())
-        || (mode == RunMode::ReconstructedOracle && frontier.is_none())
+        || (mode != RunMode::GroupShape && frontier.is_none())
     {
         return Err("frontier authority differs for execution mode".to_owned());
     }
@@ -449,6 +658,30 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             )?;
             fs::write(&args.output, bytes)?;
         }
+        RunMode::FullCovarianceCeiling => {
+            let frontier = read(args.frontier.as_ref().ok_or("V33 frontier is required")?)?;
+            if frontier.len() as u64 != FRONTIER_BYTES
+                || format!("{:x}", Sha256::digest(&frontier)) != FRONTIER_SHA256
+            {
+                return Err("V33 full covariance frontier byte authority differs".into());
+            }
+            let ceiling = build_v33_full_covariance_ceiling(&request)?;
+            let evidence = parse_full_covariance_frontier(&frontier)?;
+            let bytes = canonical_v33_full_covariance_ceiling_result_bytes(
+                &ceiling,
+                &V33FullCovarianceCeilingRequest {
+                    frontier_sha256: FRONTIER_SHA256.to_owned(),
+                    frontier_bytes: FRONTIER_BYTES,
+                    query_ordinals: evidence.query_ordinals,
+                    queries: evidence.queries,
+                    truth_logicals: evidence.truth_logicals,
+                    group_rows,
+                    row_limit: 262_144,
+                    group_limit: 64,
+                },
+            )?;
+            fs::write(&args.output, bytes)?;
+        }
     }
     Ok(())
 }
@@ -465,7 +698,9 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{RunMode, parse_args, parse_reconstructed_oracle_frontier};
+    use super::{
+        RunMode, parse_args, parse_full_covariance_frontier, parse_reconstructed_oracle_frontier,
+    };
 
     fn valid_args() -> Vec<String> {
         [
@@ -582,5 +817,66 @@ mod tests {
             .unwrap();
         invalid.splice(offset..offset + 3, b"NaN".iter().copied());
         assert!(parse_reconstructed_oracle_frontier(&invalid).is_err());
+    }
+
+    #[test]
+    fn v33_group_shape_full_covariance_mode_consumes_every_frontier_query() {
+        // Break caught: the ceiling reuses only the singled-out oracle query or
+        // is allowed to execute alongside shape construction.
+        let mut values = valid_args();
+        values.pop();
+        values.extend([
+            "--frontier".to_owned(),
+            "frontier.json".to_owned(),
+            "--execute-full-covariance-ceiling".to_owned(),
+        ]);
+        let parsed = parse_args(values).unwrap();
+        assert_eq!(parsed.mode, RunMode::FullCovarianceCeiling);
+
+        let records = [4_096_u64, 5_120_u64]
+            .into_iter()
+            .map(|query_ordinal| {
+                serde_json::json!({
+                    "hits": 10,
+                    "query": vec![0.0; 96],
+                    "query_ordinal": query_ordinal,
+                    "selected_groups": [0],
+                    "selected_routing_leaves": [0],
+                    "selected_rows": 1,
+                    "truth_logicals": [0,1,2,3,4,5,6,7,8,9],
+                    "truth_owner_ranks": [1,1,1,1,1,1,1,1,1,1]
+                })
+            })
+            .collect::<Vec<_>>();
+        let value = serde_json::json!({
+            "arms": [{
+                "arm": "diagonal-ellipsoid",
+                "included_owners": 20,
+                "maximum_selected_rows": 1,
+                "minimum_selected_rows": 1,
+                "passed": true,
+                "perfect_queries": 2,
+                "query_count": 2,
+                "records": records,
+                "total_owners": 20
+            }],
+            "claim_eligible": false,
+            "code_reads": 5,
+            "corpus_reads": 0,
+            "input_sha256": {},
+            "page_reads": 0,
+            "passed": false,
+            "row_limit": 262144,
+            "schema": "borsuk-v33-group-proxy-result-v2"
+        });
+        let mut raw = serde_json::to_vec(&value).unwrap();
+        raw.push(b'\n');
+        let frontier = parse_full_covariance_frontier(&raw).unwrap();
+        assert_eq!(frontier.query_ordinals, [4_096, 5_120]);
+        assert_eq!(frontier.queries.len(), 2);
+        assert_eq!(
+            frontier.truth_logicals,
+            vec![vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; 2]
+        );
     }
 }
