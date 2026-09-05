@@ -201,7 +201,6 @@ mod v30_s3_search;
 #[cfg(test)]
 mod v32_code_objects;
 mod v32_global_pages;
-#[cfg(test)]
 mod v33_group_shape;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
@@ -222,6 +221,10 @@ pub use v30_s3_search::{
     V32RoutingTargetReport, V32RoutingTargetStage, V32RoutingWork, V32SearchArm, V32SearchPhase,
     V32SearchResult, V32SearchWork, V32VirtualPageLayout, V32VirtualRoutingDiagnostic,
     canonical_v32_cpu_preflight_receipt, run_v32_cpu_preflight, v32_cpu_preflight_shape,
+};
+#[doc(hidden)]
+pub use v33_group_shape::{
+    V33GroupShapeBuildRequest, V33LeafShapeArtifact, build_v33_group_shape_artifact,
 };
 #[allow(
     dead_code,

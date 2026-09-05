@@ -1,7 +1,7 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeSet, sync::Arc};
+
+#[cfg(test)]
+use std::collections::BTreeMap;
 
 use arrow_array::{
     ArrayRef, BooleanArray, FixedSizeListArray, Float32Array, RecordBatch, UInt8Array, UInt32Array,
@@ -135,6 +135,7 @@ struct V33LeafShape {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 enum V33ShapeArm {
     Centroid,
     ScalarMoment,
@@ -143,12 +144,14 @@ enum V33ShapeArm {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 struct V33GroupPopulation {
     ordinal: u32,
     rows: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 struct V33ShapeControlBytes {
     scalar_summary_bytes: usize,
     scalar_extra_centers: usize,
@@ -158,24 +161,37 @@ struct V33ShapeControlBytes {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct V33LeafShapeArtifact {
-    role: &'static str,
-    sha256: String,
-    encoded_bytes: u64,
-    row_count: u64,
-    arrow: Vec<u8>,
+/// Authenticated Arrow IPC output of the query-independent V33 shape builder.
+pub struct V33LeafShapeArtifact {
+    /// Stable semantic role.
+    pub role: &'static str,
+    /// SHA-256 of `arrow`.
+    pub sha256: String,
+    /// Complete Arrow IPC length.
+    pub encoded_bytes: u64,
+    /// Number of routing-leaf summaries.
+    pub row_count: u64,
+    /// Complete deterministic Arrow IPC payload.
+    pub arrow: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct V33GroupShapeBuildRequest {
-    hierarchy: V27HierarchyArtifacts,
-    layout: V30LayoutArtifacts,
-    pq: V30PqArtifacts,
-    group_of_code_parent: Vec<u32>,
-    scalar_split_count: usize,
+/// Complete local authenticated input for the query-independent V33 shape builder.
+pub struct V33GroupShapeBuildRequest {
+    /// Frozen V27 hierarchy artifacts.
+    pub hierarchy: V27HierarchyArtifacts,
+    /// Frozen V30 logical layout artifacts.
+    pub layout: V30LayoutArtifacts,
+    /// Frozen five-role V30 PQ artifacts.
+    pub pq: V30PqArtifacts,
+    /// Storage-group ordinal for every code-parent ordinal.
+    pub group_of_code_parent: Vec<u32>,
+    /// Number of largest non-singleton leaves receiving a matched-byte second center.
+    pub scalar_split_count: usize,
 }
 
-fn build_v33_group_shape_artifact(
+/// Authenticate the inputs, reconstruct rows, and encode frozen V33 leaf summaries.
+pub fn build_v33_group_shape_artifact(
     request: &V33GroupShapeBuildRequest,
 ) -> Result<V33LeafShapeArtifact> {
     let hierarchy = decode_v27_hierarchy(
@@ -224,6 +240,7 @@ fn build_v33_group_shape_artifact(
     encode_v33_leaf_shape_artifact(&summaries, &scalar_split_leaves)
 }
 
+#[cfg(test)]
 fn v33_shape_control_bytes(leaf_count: usize) -> Result<V33ShapeControlBytes> {
     if leaf_count == 0 {
         return Err(invalid("V33 shape leaf count differs"));
@@ -486,6 +503,7 @@ fn select_v33_scalar_split_leaves(
         .collect())
 }
 
+#[cfg(test)]
 fn squared_distance(left: &[f32; DIMENSIONS], right: &[f32; DIMENSIONS]) -> Result<f64> {
     let mut distance = 0.0_f64;
     for dimension in 0..DIMENSIONS {
@@ -498,6 +516,7 @@ fn squared_distance(left: &[f32; DIMENSIONS], right: &[f32; DIMENSIONS]) -> Resu
     Ok(if distance == 0.0 { 0.0 } else { distance })
 }
 
+#[cfg(test)]
 fn score_v33_leaf(leaf: &V33LeafShape, query: &[f32; DIMENSIONS], arm: V33ShapeArm) -> Result<f64> {
     if leaf.population == 0
         || query.iter().any(|value| !value.is_finite())
@@ -546,6 +565,7 @@ fn score_v33_leaf(leaf: &V33LeafShape, query: &[f32; DIMENSIONS], arm: V33ShapeA
     Ok(if score == 0.0 { 0.0 } else { score })
 }
 
+#[cfg(test)]
 fn extreme_factor(population: u64) -> f64 {
     if population <= 1 {
         0.0
@@ -554,6 +574,7 @@ fn extreme_factor(population: u64) -> f64 {
     }
 }
 
+#[cfg(test)]
 fn rank_v33_groups(
     leaves: &[V33LeafShape],
     query: &[f32; DIMENSIONS],
@@ -579,6 +600,7 @@ fn rank_v33_groups(
     Ok(ranked.into_iter().map(|(ordinal, _)| ordinal).collect())
 }
 
+#[cfg(test)]
 fn select_v33_group_prefix(
     groups: &[V33GroupPopulation],
     ranked: &[u32],
