@@ -31,7 +31,6 @@ use crate::{
 
 const MAX_PAGE_ROWS: u16 = 480;
 const MAX_ENCODED_PAGE_BYTES: u64 = 196_608;
-#[cfg(test)]
 const MAX_GEOMETRIC_LEAF_ROWS: usize = 65_536;
 const MAX_PAGES_PER_LEAF: u32 = 64;
 const MAX_ROUTING_MICROLEAF_ROWS: usize = 1_024;
@@ -338,7 +337,6 @@ impl V30LayoutRecord {
     }
 }
 
-#[cfg(test)]
 fn validate_v30_geometric_leaf_row_count(row_count: usize) -> Result<()> {
     if row_count == 0 || row_count > MAX_GEOMETRIC_LEAF_ROWS {
         return Err(invalid("V30 geometric leaf row count differs"));
@@ -455,8 +453,7 @@ fn partition_v30_geometric_group(
     Ok(pages)
 }
 
-#[cfg(test)]
-fn partition_v30_leaf_pages(
+pub(crate) fn partition_v30_leaf_pages(
     mut rows: Vec<V30LayoutRecord>,
     page_rows: usize,
 ) -> Result<Vec<Vec<V30LayoutRecord>>> {

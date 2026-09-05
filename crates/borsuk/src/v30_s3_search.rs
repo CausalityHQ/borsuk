@@ -14,12 +14,12 @@ use crate::{
     decode_v27_hierarchy,
     v27_s3_page::visit_v27_page_rows,
     v30_s3_layout::{
-        V30Layout, V30LayoutArtifacts, V30PageRange, V32PageLocation, V32RoutingRange,
-        decode_v30_layout_artifacts,
+        V30Layout, V30LayoutArtifacts, V30LayoutRecord, V30PageRange, V32PageLocation,
+        V32RoutingRange, decode_v30_layout_artifacts, partition_v30_leaf_pages,
     },
     v30_s3_pq::{
         V30CodePlanes, V30PqArtifacts, V30PqCodebook, V30PqWidth, V30QueryTable,
-        decode_v30_pq_artifacts,
+        decode_v30_pq_artifacts, reconstruct_v30_code,
     },
 };
 
@@ -682,6 +682,44 @@ pub struct V32Router {
     codes: V30CodePlanes,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V32VirtualPageLayout {
+    page_owners: Vec<u32>,
+    page_row_counts: Vec<u16>,
+}
+
+impl V32VirtualPageLayout {
+    pub(crate) fn page_for_logical(&self, logical: u64) -> Result<u32> {
+        usize::try_from(logical)
+            .ok()
+            .and_then(|logical| self.page_owners.get(logical).copied())
+            .ok_or_else(|| invalid("V32 virtual page logical ordinal differs"))
+    }
+
+    pub(crate) fn page_count(&self) -> usize {
+        self.page_row_counts.len()
+    }
+
+    pub(crate) fn page_row_counts(&self) -> &[u16] {
+        &self.page_row_counts
+    }
+
+    pub(crate) fn truth_page_count(&self, logicals: &[u64]) -> Result<usize> {
+        let unique = logicals
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        if unique.len() != logicals.len() || logicals.is_empty() {
+            return Err(invalid("V32 virtual truth logicals differ"));
+        }
+        logicals
+            .iter()
+            .map(|logical| self.page_for_logical(*logical))
+            .collect::<Result<std::collections::BTreeSet<_>>>()
+            .map(|pages| pages.len())
+    }
+}
+
 #[doc(hidden)]
 pub trait V32PageStore: Send + Sync {
     fn read_wave(&self, pages: &[V27PageIdentity]) -> Result<Vec<Bytes>>;
@@ -1155,6 +1193,102 @@ impl V32Router {
             high_codebook,
             layout,
             codes,
+        })
+    }
+
+    pub(crate) fn virtual_geometric_page_layout(
+        &self,
+        logical_sources: &[u64],
+        page_rows: usize,
+    ) -> Result<V32VirtualPageLayout> {
+        let logical_rows = usize::try_from(self.layout.source_rows())
+            .map_err(|_| invalid("V32 virtual layout row count overflows"))?;
+        let source_to_logical = logical_sources
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(logical, source)| (source, logical))
+            .collect::<BTreeMap<_, _>>();
+        if logical_sources.len() != logical_rows || source_to_logical.len() != logical_rows {
+            return Err(invalid("V32 virtual logical-source authority differs"));
+        }
+        let mut page_owners = vec![u32::MAX; logical_rows];
+        let mut page_row_counts = Vec::new();
+        for leaf in self.layout.leaves() {
+            let parent = usize::try_from(leaf.code_parent_leaf_ordinal)
+                .map_err(|_| invalid("V32 virtual code parent overflows"))?;
+            let parent_centroid = self
+                .hierarchy
+                .leaves
+                .get(parent)
+                .ok_or_else(|| invalid("V32 virtual code parent differs"))?;
+            let leaf_end = leaf
+                .logical_start
+                .checked_add(leaf.row_count)
+                .ok_or_else(|| invalid("V32 virtual leaf range overflows"))?;
+            let mut rows = Vec::with_capacity(
+                usize::try_from(leaf.row_count)
+                    .map_err(|_| invalid("V32 virtual leaf row count overflows"))?,
+            );
+            for logical in leaf.logical_start..leaf_end {
+                let logical_index = usize::try_from(logical)
+                    .map_err(|_| invalid("V32 virtual logical ordinal overflows"))?;
+                let source_ordinal = *logical_sources
+                    .get(logical_index)
+                    .ok_or_else(|| invalid("V32 virtual logical-source authority differs"))?;
+                let (width, code) = self.codes.code(logical_index)?;
+                let codebook = match width {
+                    V30PqWidth::Base24 => &self.base_codebook,
+                    V30PqWidth::High48 => &self.high_codebook,
+                };
+                let residual = reconstruct_v30_code(codebook, code)?;
+                let reconstructed = std::array::from_fn(|dimension| {
+                    residual[dimension] + f32::from(parent_centroid[dimension])
+                });
+                let vector = normalized(&reconstructed)?;
+                let (base_code, high_code) = match width {
+                    V30PqWidth::Base24 => (code.to_vec(), None),
+                    // The discarded base code is unavailable in resident state
+                    // and irrelevant to geometric partitioning. The exact high
+                    // code remains attached to the diagnostic record.
+                    V30PqWidth::High48 => {
+                        (vec![0; V30PqWidth::Base24.bytes()], Some(code.to_vec()))
+                    }
+                };
+                rows.push(V30LayoutRecord {
+                    leaf_ordinal: leaf.leaf_ordinal,
+                    source_ordinal,
+                    base_code,
+                    high_code,
+                    vector,
+                });
+            }
+            for page in partition_v30_leaf_pages(rows, page_rows)? {
+                let page_ordinal = u32::try_from(page_row_counts.len())
+                    .map_err(|_| invalid("V32 virtual page count overflows"))?;
+                let row_count = u16::try_from(page.len())
+                    .map_err(|_| invalid("V32 virtual page row count overflows"))?;
+                for row in page {
+                    let logical = *source_to_logical
+                        .get(&row.source_ordinal)
+                        .ok_or_else(|| invalid("V32 virtual logical-source authority differs"))?;
+                    let owner = page_owners
+                        .get_mut(logical)
+                        .ok_or_else(|| invalid("V32 virtual logical ordinal differs"))?;
+                    if *owner != u32::MAX {
+                        return Err(invalid("V32 virtual row ownership differs"));
+                    }
+                    *owner = page_ordinal;
+                }
+                page_row_counts.push(row_count);
+            }
+        }
+        if page_owners.iter().any(|owner| *owner == u32::MAX) {
+            return Err(invalid("V32 virtual row ownership differs"));
+        }
+        Ok(V32VirtualPageLayout {
+            page_owners,
+            page_row_counts,
         })
     }
 
@@ -2021,6 +2155,68 @@ mod tests {
         let base = V30PqCodebook::new(V30PqWidth::Base24, vec![0.0; 24 * 256 * 4]).unwrap();
         let high = V30PqCodebook::new(V30PqWidth::High48, vec![0.0; 48 * 256 * 2]).unwrap();
         V32Router::new(hierarchy, base, high, layout, codes).unwrap()
+    }
+
+    #[test]
+    fn v32_virtual_geometric_layout_is_complete_balanced_and_query_blind() {
+        // Break caught: virtual pages continue across routing-microleaf
+        // boundaries or page ownership depends on diagnostic truth.
+        let router = diagnostic_router();
+        let logical_sources = (0_u64..60).collect::<Vec<_>>();
+        let first = router
+            .virtual_geometric_page_layout(&logical_sources, 8)
+            .unwrap();
+        let second = router
+            .virtual_geometric_page_layout(&logical_sources, 8)
+            .unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.page_count(), 8);
+        assert_eq!(first.page_row_counts(), &[8, 8, 7, 7, 8, 8, 7, 7]);
+        assert_eq!(
+            (0_u64..60)
+                .map(|logical| first.page_for_logical(logical).unwrap())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            8
+        );
+        assert!(
+            (0_u64..30)
+                .map(|logical| first.page_for_logical(logical).unwrap())
+                .all(|page| page < 4)
+        );
+        assert!(
+            (30_u64..60)
+                .map(|logical| first.page_for_logical(logical).unwrap())
+                .all(|page| page >= 4)
+        );
+        assert!(first.page_for_logical(60).is_err());
+    }
+
+    #[test]
+    fn v32_virtual_geometric_layout_rejects_source_drift_and_reports_eight_page_obstruction() {
+        // Break caught: the diagnostic accepts a non-bijective logical-source
+        // authority or hides that nine truth pages cannot fit in eight GETs.
+        let router = diagnostic_router();
+        let logical_sources = (0_u64..60).collect::<Vec<_>>();
+        assert!(
+            router
+                .virtual_geometric_page_layout(&logical_sources[..59], 4)
+                .is_err()
+        );
+        let mut duplicate = logical_sources.clone();
+        duplicate[59] = 58;
+        assert!(router.virtual_geometric_page_layout(&duplicate, 4).is_err());
+        let layout = router
+            .virtual_geometric_page_layout(&logical_sources, 4)
+            .unwrap();
+        assert_eq!(layout.page_count(), 16);
+        assert_eq!(
+            layout
+                .truth_page_count(&[0, 4, 8, 12, 16, 20, 24, 27, 30])
+                .unwrap(),
+            9
+        );
+        assert!(layout.truth_page_count(&[0, 0]).is_err());
     }
 
     #[test]
