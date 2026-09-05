@@ -3453,3 +3453,58 @@ and do not declare64 a default or claim100M/1B scale, sustainable throughput,
 perfect general recall, or release qualification. The fourfold page-byte cost
 must be measured against the recovered truth before promotion. The cohort's
 prior-exposure caveat and claim-ineligible status remain unchanged.
+
+### V32 selective S3 page-budget comparison: preregistered protocol
+
+Serving implementation source is
+`a15ba5d772a8420df062d8530b28ede2ad47d736`. The explicit global serving arm
+accepts16 or64 pages without changing routing, scan budget or candidate depth;
+schema4 receipts distinguish the16-page reference capture from actual reads.
+The affected gates passed:40 library search tests,27 qualifier tests,14 Python
+reader tests, targeted strict Clippy, Ruff, formatting and diff checks. Astra's
+read-only delta review is READY after candidate-count and per-page-byte bounds
+were mutation-tested and repaired. These are implementation checks, not serving
+quality or throughput qualification.
+
+Freeze Deep Image1M queries1024..1055, corrected-v3 truth and candidate replay
+from the preceding ladder terminal, exactly815,871B SHA256
+`b5f5434073b46d40693929621579ae5034a1f89aa6c76298f1d5f1b757ac52c0`.
+Authenticate its manifest, query, truth, truth receipt and physical page
+identities before execution. Reuse truth output; no reference corpus GETs or
+truth regeneration in this experiment. The authenticated ladder owns expected
+page order and capture hashes; serving output must match them exactly. Do not
+use current result output to construct its own expected routing authority.
+
+One causality c7g.4xlarge Spot instance, same-region S3 Standard, one release
+binary, CPU0 affinity, fixed single-thread query execution and sequential32-query batches.
+Execute four separate original qualifier processes in fixed order
+A1(16), B1(64), B2(64), A2(16), with no unreported warmup or retry after a failed
+cell. Each process starts a fresh SDK client, reuses connections within its
+batch, has no application page cache and reads only its selected pages.
+S3 service cache state is uncontrolled: do not label this strict cold latency.
+No inspection of partial quality or latency samples while the attempt runs.
+
+Expected logical page GETs:1,024 across A1/A2 and4,096 across B1/B2, total5,120.
+Expected encoded page bytes:997,509,120 across all four batches, excluding
+resident setup inputs and SDK transport/retry overhead. Record those overheads
+separately where observable; logical GET counts are not a claim of wire-level
+request counts. Preserve each raw batch, command, source/archive/binary/input
+identities, per-query phase timings, memory and terminal classification.
+
+Report exact-reranked hits, minimum recall and perfect-query counts for every
+cell, plus empirical median/p95/maximum end-to-end and phase latency, CPU,
+bytes and GETs. No32-sample p99 or sustainable-QPS claim. Confirm exact returned
+identities/distances are stable across same-arm repetitions. B's quality target
+is320/320 with minimum10/10 in both repetitions; any loss relative to frozen
+containment is a reranking/serving correctness investigation, not permission to
+retune on this cohort. Report A unchanged even if it fails. A quality pass for
+B permits broader independent query and concurrency evaluation, not default
+promotion or a100M/1B claim. The extra fourfold page cost remains explicit.
+
+One original controller/instance only, no automatic scientific restart. Stop
+at process-group RSS>3GiB, full memory PSI avg10>0.5, swap growth>256MiB,
+900s scientific wall or1800s whole-attempt wall. Preserve a stop/failure receipt
+and completed cell artifacts; terminate the owned instance at terminal. Setup
+and build time are separate from measured query latency. No15ms cold-S3 gate;
+recall, low practical latency, sustained throughput and bounded scaling all
+remain required for eventual release.
