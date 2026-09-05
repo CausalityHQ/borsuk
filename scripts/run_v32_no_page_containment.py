@@ -1147,11 +1147,70 @@ def run_expanded_frontier_replay(
     return _run_frontier_replay(plan, invoke=invoke, expanded=True)
 
 
+def run_root64_replay(
+    plan: V32ContainmentPlan,
+    *,
+    invoke: Callable[[tuple[str, ...]], bytes],
+) -> bytes:
+    """Authenticate and recompute complete root scope before a single capture."""
+    return _run_frontier_replay(plan, invoke=invoke, expanded=False, root64=True)
+
+
+def _root64_input_metadata(plan, manifest, query):
+    hierarchy = manifest.get("hierarchy")
+    if type(hierarchy) is not dict or set(hierarchy) != {"roots", "leaves"}:
+        raise ValueError("V32 root64 hierarchy authority differs")
+
+    def read(desc, role):
+        if (
+            type(desc) is not dict
+            or set(desc) != {"file", "role", "sha256", "encoded_bytes"}
+            or desc["role"] != role
+            or type(desc["file"]) is not str
+            or Path(desc["file"]).name != desc["file"]
+            or desc["file"] in {"", ".", ".."}
+            or type(desc["sha256"]) is not str
+            or not _digest(desc["sha256"])
+            or type(desc["encoded_bytes"]) is not int
+            or not 0 < desc["encoded_bytes"] <= 4 * 1024**2
+        ):
+            raise ValueError("V32 root64 input descriptor differs")
+        path = plan.artifact_dir / desc["file"]
+        if path.stat().st_size != desc["encoded_bytes"]:
+            raise ValueError("V32 root64 input size differs")
+        raw = path.read_bytes()
+        if (
+            len(raw) != desc["encoded_bytes"]
+            or hashlib.sha256(raw).hexdigest() != desc["sha256"]
+        ):
+            raise ValueError("V32 root64 input checksum differs")
+        return raw
+
+    metadata = root64_metadata_from_bytes(
+        read(hierarchy["roots"], "v27-roots-arrow"),
+        read(hierarchy["leaves"], "v27-leaves-arrow"),
+        read(manifest["layout"].get("routing_ranges"), "v32-routing-ranges-arrow"),
+        query,
+        query_start=plan.query_start,
+    )
+    for order in metadata.root_orders:
+        selected = set(order[:64])
+        rows = sum(
+            n
+            for n, owner in zip(metadata.leaf_rows, metadata.leaf_owners, strict=True)
+            if owner in selected
+        )
+        if rows > 524288:
+            raise ValueError("V32 root64 preflight row budget exceeded")
+    return metadata
+
+
 def _run_frontier_replay(
     plan: V32ContainmentPlan,
     *,
     invoke: Callable[[tuple[str, ...]], bytes],
     expanded: bool,
+    root64: bool = False,
 ) -> bytes:
     if (
         plan.source_rows != 1_000_000
@@ -1172,6 +1231,7 @@ def _run_frontier_replay(
     ):
         raise ValueError("V32 page ladder query bytes differ")
     manifest = json.loads(plan.manifest.path.read_bytes())
+    root_metadata = _root64_input_metadata(plan, manifest, query) if root64 else None
     descriptor = manifest.get("diagnostics", {}).get("logical_sources")
     expected = dict(
         file=plan.logical_sources.path.name,
@@ -1193,7 +1253,13 @@ def _run_frontier_replay(
     (command,) = _commands(
         plan, truth, source_to_logical, leaf_beam, page_budget_ladder=True
     )
-    if expanded:
+    if root64:
+        arguments = list(command)
+        index = arguments.index("--global-leaf-limit")
+        del arguments[index : index + 2]
+        arguments[arguments.index("--page-budget-ladder")] = "--root64-replay"
+        command = tuple(arguments)
+    elif expanded:
         arguments = list(command)
         arguments[arguments.index("--global-leaf-limit") + 1] = "1536"
         arguments[arguments.index("--page-budget-ladder")] = (
@@ -1205,16 +1271,21 @@ def _run_frontier_replay(
     summary = _validate_page_budget_ladder(
         payload,
         expanded=expanded,
+        root_metadata=root_metadata,
         query_start=plan.query_start,
         truth_logicals=logical_truth,
         logical_pages=mapping,
         registered_pages=registry,
-        maximum_leaves_eligible=maximum_leaves,
+        maximum_leaves_eligible=len(root_metadata.leaf_rows)
+        if root_metadata is not None
+        else maximum_leaves,
         root_beam=plan.root_beam,
     )
     return _canonical_bytes(
         dict(
-            schema="borsuk-v32-expanded-frontier-v1"
+            schema="borsuk-v32-root64-replay-v1"
+            if root64
+            else "borsuk-v32-expanded-frontier-v1"
             if expanded
             else "borsuk-v32-page-budget-ladder-v1",
             claim_eligible=False,

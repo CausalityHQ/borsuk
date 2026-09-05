@@ -92,11 +92,9 @@ def fixture():
 
 
 class PageBudgetLadderTests(unittest.TestCase):
-    def test_root64_metadata_reads_exact_arrow_query_shape_and_orders_roots(self):
-        # Break: wrong code-parent ownership, centroid arithmetic, or query schema.
+    @staticmethod
+    def root64_payloads(*, tied=False):
         import numpy as np
-
-        from scripts.run_v32_no_page_containment import root64_metadata_from_bytes
 
         def arrow(table):
             stream = pa.BufferOutputStream()
@@ -112,7 +110,7 @@ class PageBudgetLadderTests(unittest.TestCase):
             )
 
         root_values = np.zeros((128, 96), dtype=np.float16)
-        root_values[np.arange(128), np.arange(128) % 2] = 1
+        root_values[np.arange(128), 0 if tied else np.arange(128) % 2] = 1
         root_vectors = pa.FixedSizeListArray.from_arrays(
             pa.array(root_values.reshape(-1)), type=half_type
         )
@@ -173,6 +171,14 @@ class PageBudgetLadderTests(unittest.TestCase):
             arrow(routes),
             stream.getvalue().to_pybytes(),
         )
+        return args, owners, leaves, routes, arrow
+
+    def test_root64_metadata_reads_exact_arrow_query_shape_and_orders_roots(self):
+        # Break: wrong code-parent ownership, centroid arithmetic, or query schema.
+        from scripts.run_v32_no_page_containment import root64_metadata_from_bytes
+
+        args, owners, leaves, routes, arrow = self.root64_payloads()
+        route_schema = routes.schema
         result = root64_metadata_from_bytes(*args, query_start=1024)
         even_first = tuple(range(0, 128, 2)) + tuple(range(1, 128, 2))
         odd_first = tuple(range(1, 128, 2)) + tuple(range(0, 128, 2))
@@ -506,6 +512,7 @@ class PageLadderRunnerTests(unittest.TestCase):
             LocalArtifact,
             run_expanded_frontier_replay,
             run_page_budget_ladder,
+            run_root64_replay,
         )
 
         with tempfile.TemporaryDirectory() as directory:
@@ -705,6 +712,95 @@ class PageLadderRunnerTests(unittest.TestCase):
             self.assertEqual(
                 calls[0][calls[0].index("--global-leaf-limit") + 1], "1536"
             )
+            # Real metadata and query parsing; update only their dependent hashes.
+            inputs, *_ = PageBudgetLadderTests.root64_payloads(tied=True)
+            manifest_value = json.loads(plan.manifest.path.read_bytes())
+            hierarchy = {}
+            for name, role, raw in zip(
+                ("roots.arrow", "leaves.arrow", "routing-ranges.arrow"),
+                ("v27-roots-arrow", "v27-leaves-arrow", "v32-routing-ranges-arrow"),
+                inputs[:3],
+                strict=True,
+            ):
+                (plan.artifact_dir / name).write_bytes(raw)
+                desc = dict(
+                    file=name,
+                    role=role,
+                    sha256=hashlib.sha256(raw).hexdigest(),
+                    encoded_bytes=len(raw),
+                )
+                if name == "routing-ranges.arrow":
+                    manifest_value["layout"]["routing_ranges"] = desc
+                else:
+                    hierarchy[name.split(".")[0]] = desc
+            manifest_value["hierarchy"] = hierarchy
+            raw_manifest = canonical(manifest_value)
+            plan.manifest.path.write_bytes(raw_manifest)
+            plan.query.path.write_bytes(inputs[3])
+            receipt = json.loads(plan.truth_receipt.path.read_bytes())
+            receipt.update(
+                query_sha256=hashlib.sha256(inputs[3]).hexdigest(),
+                query_bytes=len(inputs[3]),
+            )
+            raw_receipt = canonical(receipt)
+            plan.truth_receipt.path.write_bytes(raw_receipt)
+            plan = replace(
+                plan,
+                manifest=LocalArtifact(
+                    plan.manifest.path,
+                    hashlib.sha256(raw_manifest).hexdigest(),
+                    len(raw_manifest),
+                ),
+                query=LocalArtifact(
+                    plan.query.path,
+                    hashlib.sha256(inputs[3]).hexdigest(),
+                    len(inputs[3]),
+                ),
+                truth_receipt=LocalArtifact(
+                    plan.truth_receipt.path,
+                    hashlib.sha256(raw_receipt).hexdigest(),
+                    len(raw_receipt),
+                ),
+            )
+            root_result = json.loads(payload)
+            root_result["schema_version"] = 13
+            for query in root_result["queries"]:
+                query["selected_root_ordinals"] = list(range(64))
+                query["current"]["routing"].update(
+                    global_leaf_limit=None,
+                    scope="root-gated",
+                    stop_reason="root-gated",
+                    leaves_eligible=2048,
+                    leaves_scanned=2048,
+                    codes_scanned=500288,
+                )
+                for target in query["current"]["diagnostics"]:
+                    leaf = target["logical"] // 245
+                    target.update(
+                        leaf_ordinal=leaf,
+                        routing_leaf_rank=leaf + 1,
+                        owner_root_ordinal=leaf // 32,
+                        owner_root_rank=leaf // 32 + 1,
+                    )
+            payload = canonical(root_result)
+            calls.clear()
+            result = json.loads(run_root64_replay(plan, invoke=invoke))
+            self.assertEqual(result["schema"], "borsuk-v32-root64-replay-v1")
+            self.assertEqual(
+                result["summary"]["contained_truth_counts"], [320, 320, 320]
+            )
+            self.assertEqual(len(calls), 1)
+            self.assertIn("--root64-replay", calls[0])
+            self.assertNotIn("--global-leaf-limit", calls[0])
+            self.assertNotIn("--serving-tier", calls[0])
+            root_path = plan.artifact_dir / "roots.arrow"
+            original_root = root_path.read_bytes()
+            root_path.write_bytes(b"x" + original_root[1:])
+            calls.clear()
+            with self.assertRaises(ValueError):
+                run_root64_replay(plan, invoke=invoke)
+            self.assertEqual(calls, [])
+            root_path.write_bytes(original_root)
             plan.query.path.write_bytes(b"wrong")
             calls.clear()
             with self.assertRaises(ValueError):
