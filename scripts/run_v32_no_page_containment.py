@@ -415,7 +415,7 @@ def _read_truth_receipt(
         payload != expected
         or type(receipt) is not dict
         or set(receipt) != keys
-        or receipt["schema"] != "borsuk-v32-prefix-truth-v2"
+        or receipt["schema"] != "borsuk-v32-prefix-truth-v3"
         or receipt["claim_eligible"] is not False
         or receipt["status"] != "passed"
         or receipt["truth_row_semantics"] != "window-relative"

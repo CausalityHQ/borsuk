@@ -132,7 +132,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     "query_sha256": hashlib.sha256(b"query").hexdigest(),
                     "query_start": 64,
                     "rank_10_11_tie_queries": 0,
-                    "schema": "borsuk-v32-prefix-truth-v2",
+                    "schema": "borsuk-v32-prefix-truth-v3",
                     "shards_read": 1,
                     "source_rows": source_rows,
                     "status": "passed",

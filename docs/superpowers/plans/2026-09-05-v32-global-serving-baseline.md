@@ -77,6 +77,13 @@ gap: NumPy axis reduction differs from Rust's sequential f64 accumulation for
 an adversarial near-tie. Correct it under separate TDD and new truth authority;
 preserve all historical truth objects and original control comparisons.
 
+Controller must separate historical control truth identities (v2 hashes inside
+the immutable replay terminal) from active quality truth (new v3 receipt and
+Parquet). Both bind the same corpus/query/window, but their hashes must not be
+forced equal or overwritten. Frozen replay digest/page sequence is truth-free
+routing evidence; current quality is independently reduced from active truth.
+Report whether old/new truth IDs differ before interpreting recall changes.
+
 - [ ] Inspect exact terminal/manifest/Parquet layouts and write the bounded
   controller implementation subplan before edits. It must name exact artifact
   roles, URI/SHA/length bindings, output schema and frozen execution command.

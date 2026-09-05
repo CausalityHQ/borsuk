@@ -11,7 +11,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from scripts.build_v30_reduced_truth import (
+    _exact_distance_matrix,
     _normalize_like_v30,
+    _shard_top_k,
     build_v30_reduced_truth,
     build_v32_streaming_prefix_truth,
 )
@@ -26,7 +28,8 @@ def embeddings(rows: int, *, start: int = 0) -> bytes:
         pa.array(values.reshape(-1), type=pa.float32()), 96
     )
     table = pa.Table.from_arrays(
-        [array], schema=pa.schema([pa.field("emb", pa.list_(child, 96), nullable=False)])
+        [array],
+        schema=pa.schema([pa.field("emb", pa.list_(child, 96), nullable=False)]),
     )
     sink = pa.BufferOutputStream()
     pq.write_table(table, sink)
@@ -34,7 +37,25 @@ def embeddings(rows: int, *, start: int = 0) -> bytes:
 
 
 class V30ReducedTruthTests(unittest.TestCase):
-    def test_v32_prefix_truth_streams_authenticated_shards_without_page_inputs(self) -> None:
+    def test_exact_distance_matches_serving_dimension_order_at_top_ten_tie(self):
+        # Break: pairwise reduction preserves tiny terms that sequential Rust
+        # accumulation rounds away, changing which tied source enters top ten.
+        query = np.zeros((1, 96), dtype=np.float32)
+        query[0, 0] = 1
+        corpus = np.repeat(query, 11, axis=0)
+        corpus[:2] = 0
+        corpus[:2, 1] = 1
+        corpus[0, 2:] = 2**-27
+        corpus = _normalize_like_v30(corpus)
+        query = _normalize_like_v30(_normalize_like_v30(query))
+        distances = _exact_distance_matrix(corpus, query)[:, 0]
+        self.assertEqual([v.hex() for v in distances[:2]], ["0x1.0000000000000p+1"] * 2)
+        _, ids = _shard_top_k(distances, 0, 10)
+        self.assertEqual(ids.tolist(), [2, 3, 4, 5, 6, 7, 8, 9, 10, 0])
+
+    def test_v32_prefix_truth_streams_authenticated_shards_without_page_inputs(
+        self,
+    ) -> None:
         shards = [embeddings(64, start=0), embeddings(64, start=64)]
         manifest = {
             "dataset_id": "deep-image-96",
@@ -83,7 +104,7 @@ class V30ReducedTruthTests(unittest.TestCase):
         self.assertEqual(rows[0][:2], [0, 96])
         value = json.loads(receipt)
         self.assertEqual(value["source_rows"], 100)
-        self.assertEqual(value["schema"], "borsuk-v32-prefix-truth-v2")
+        self.assertEqual(value["schema"], "borsuk-v32-prefix-truth-v3")
         self.assertEqual(value["query_start"], 0)
         self.assertEqual(value["query_count"], 32)
         self.assertEqual(value["corpus_manifest_bytes"], len(manifest_bytes))
@@ -115,11 +136,15 @@ class V30ReducedTruthTests(unittest.TestCase):
         twice = _normalize_like_v30(once)
         for source, normalized in zip(values, once, strict=True):
             norm = sum(float(value) * float(value) for value in source) ** 0.5
-            expected = np.asarray([float(value) / norm for value in source], dtype=np.float32)
+            expected = np.asarray(
+                [float(value) / norm for value in source], dtype=np.float32
+            )
             np.testing.assert_array_equal(normalized, expected)
         for source, normalized in zip(once, twice, strict=True):
             norm = sum(float(value) * float(value) for value in source) ** 0.5
-            expected = np.asarray([float(value) / norm for value in source], dtype=np.float32)
+            expected = np.asarray(
+                [float(value) / norm for value in source], dtype=np.float32
+            )
             np.testing.assert_array_equal(normalized, expected)
         self.assertFalse(np.array_equal(once[1], twice[1]))
 
@@ -178,6 +203,7 @@ class V30ReducedTruthTests(unittest.TestCase):
             query_start=0,
             query_count=32,
         )
+
         def ids(payload: bytes) -> list[list[int]]:
             return pq.read_table(pa.BufferReader(payload))["neighbors_id"].to_pylist()
 
@@ -203,7 +229,9 @@ class V30ReducedTruthTests(unittest.TestCase):
             ],
             "source_rows": 64,
         }
-        payload = json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        payload = (
+            json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        )
         query = embeddings(64)
         arguments = dict(
             corpus_manifest_sha256=hashlib.sha256(payload).hexdigest(),
@@ -247,7 +275,9 @@ class V30ReducedTruthTests(unittest.TestCase):
             ],
             "source_rows": 64,
         }
-        payload = json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        payload = (
+            json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        )
         query = embeddings(64)
         with self.assertRaisesRegex(ValueError, "shard byte authority"):
             build_v32_streaming_prefix_truth(
@@ -275,17 +305,28 @@ class V30ReducedTruthTests(unittest.TestCase):
                 sys.executable,
                 "scripts/build_v30_reduced_truth.py",
                 "--execute",
-                "--corpus-parquet", str(root / "corpus.parquet"),
-                "--corpus-sha256", hashlib.sha256(corpus).hexdigest(),
-                "--corpus-bytes", str(len(corpus)),
-                "--physical-rows", "128",
-                "--source-rows", "100",
-                "--query-parquet", str(root / "query.parquet"),
-                "--query-sha256", hashlib.sha256(query).hexdigest(),
-                "--query-bytes", str(len(query)),
-                "--query-start", "0",
-                "--query-count", "32",
-                "--truth-output", str(root / "truth.parquet"),
+                "--corpus-parquet",
+                str(root / "corpus.parquet"),
+                "--corpus-sha256",
+                hashlib.sha256(corpus).hexdigest(),
+                "--corpus-bytes",
+                str(len(corpus)),
+                "--physical-rows",
+                "128",
+                "--source-rows",
+                "100",
+                "--query-parquet",
+                str(root / "query.parquet"),
+                "--query-sha256",
+                hashlib.sha256(query).hexdigest(),
+                "--query-bytes",
+                str(len(query)),
+                "--query-start",
+                "0",
+                "--query-count",
+                "32",
+                "--truth-output",
+                str(root / "truth.parquet"),
             ]
             completed = subprocess.run(command, check=False, capture_output=True)
             self.assertEqual(completed.returncode, 0, completed.stderr.decode())

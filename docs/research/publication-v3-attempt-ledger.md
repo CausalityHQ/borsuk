@@ -3130,3 +3130,23 @@ concurrency/QPS, write vectors/s and visibility latency, requests/bytes and writ
 amplification; no resident-only replay is relabeled an S3 measurement. The next
 global-layout exact8 diagnostic retains its preregistered cell budget rather
 than changing that budget after observing quality.
+
+### Exact-truth arithmetic correction before physical global serving
+
+On2026-09-05 Astra's review identified that prefix truth's NumPy axis sum did
+not guarantee the sequential f64 dimension order used by Rust exact reranking.
+A bounded synthetic reproduction confirmed the difference: query e0; source0
+is e1 plus coordinates2..95 equal2^-27; source1 is e1. After the registered
+normalizations, sequential distances are exactly2 for both, while the previous
+axis sum returns `0x1.0000000000009p+1` for source0. With nine zero-distance rows,
+this changes the tenth neighbor from source0 to source1. The regression now
+requires exact distance bits and the source-ordinal tie-break.
+
+The builder now uses separate f64 multiply/add in increasing dimension order;
+new prefix truth receipts use `borsuk-v32-prefix-truth-v3`. Current containment
+execution requires that version. No historical truth object, terminal or
+reported recall is overwritten. This is proof of an arithmetic-contract bug,
+not proof that any frozen Deep Image truth ID differs. Original replay/page
+parity remains a valid historical regression; new quality qualification must
+use newly authenticated v3 truth, with any v2/v3 differences explicitly reported.
+No additional corpus stream or paid run was performed for this diagnosis.

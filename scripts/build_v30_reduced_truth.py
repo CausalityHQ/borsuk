@@ -16,7 +16,9 @@ import pyarrow.parquet as pq
 
 
 def _digest(value: str) -> bool:
-    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+    return len(value) == 64 and all(
+        character in "0123456789abcdef" for character in value
+    )
 
 
 def _matrix(payload: bytes, *, role: str, physical_rows: int) -> np.ndarray:
@@ -60,7 +62,9 @@ def _truth_parquet(truth: list[list[int]]) -> bytes:
     neighbors = pa.FixedSizeListArray.from_arrays(flat, 10)
     table = pa.Table.from_arrays(
         [neighbors],
-        schema=pa.schema([pa.field("neighbors_id", pa.list_(child, 10), nullable=False)]),
+        schema=pa.schema(
+            [pa.field("neighbors_id", pa.list_(child, 10), nullable=False)]
+        ),
     )
     sink = pa.BufferOutputStream()
     pq.write_table(table, sink, compression="zstd", use_dictionary=False)
@@ -75,11 +79,13 @@ def _exact_distance_matrix(corpus: np.ndarray, queries: np.ndarray) -> np.ndarra
         stop = min(start + 4096, len(corpus))
         block = corpus[start:stop].astype(np.float64)
         for query_index, query in enumerate(queries.astype(np.float64)):
-            delta = block - query
-            np.square(delta, out=delta)
-            distances[start:stop, query_index] = np.sum(
-                delta, axis=1, dtype=np.float64
-            )
+            total = np.zeros(stop - start, dtype=np.float64)
+            for dimension in range(96):
+                delta = block[:, dimension] - query[dimension]
+                # Separate multiply/add, sequential dimensions: same contract
+                # as Rust exact_rerank_pages, not NumPy's pairwise axis sum.
+                total += delta * delta
+            distances[start:stop, query_index] = total
     return distances
 
 
@@ -133,7 +139,9 @@ def build_v32_streaming_prefix_truth(
         raise ValueError("V32 prefix truth manifest JSON differs") from error
     if (
         corpus_manifest
-        != json.dumps(manifest, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+        != json.dumps(
+            manifest, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
         + b"\n"
         or type(manifest) is not dict
         or set(manifest) != {"dataset_id", "schema_version", "shards", "source_rows"}
@@ -203,9 +211,11 @@ def build_v32_streaming_prefix_truth(
             or hashlib.sha256(payload).hexdigest() != shard["sha256"]
         ):
             raise ValueError("V32 prefix truth shard byte authority differs")
-        corpus = _normalize_like_v30(_matrix(
-            payload, role="corpus", physical_rows=shard["physical_row_count"]
-        )[: shard["row_count"]])
+        corpus = _normalize_like_v30(
+            _matrix(payload, role="corpus", physical_rows=shard["physical_row_count"])[
+                : shard["row_count"]
+            ]
+        )
         distances = _exact_distance_matrix(corpus, queries)
         for query_index in range(query_count):
             shard_count = min(11, len(corpus))
@@ -222,44 +232,49 @@ def build_v32_streaming_prefix_truth(
             best_distances[query_index] = candidates_distances[order]
             best_ordinals[query_index] = candidates_ordinals[order]
         next_row += shard["row_count"]
-    if next_row != manifest["source_rows"] or np.any(best_ordinals == np.iinfo(np.int64).max):
+    if next_row != manifest["source_rows"] or np.any(
+        best_ordinals == np.iinfo(np.int64).max
+    ):
         raise ValueError("V32 prefix truth shard coverage differs")
     truth_ids = best_ordinals[:, :10]
     truth = _truth_parquet(truth_ids.tolist())
-    receipt = json.dumps(
-        {
-            "claim_eligible": False,
-            "corpus_manifest_bytes": corpus_manifest_bytes,
-            "corpus_manifest_sha256": corpus_manifest_sha256,
-            "corpus_normalization": "f64-l2-once-to-f32",
-            "corpus_shards": manifest["shards"],
-            "distance": "squared-l2-f64-fixed-dimension-order",
-            "query_count": query_count,
-            "query_bytes": query_bytes,
-            "query_normalization": "f64-l2-twice-to-f32",
-            "query_sha256": query_sha256,
-            "query_start": query_start,
-            "rank_10_11_tie_queries": int(
-                np.count_nonzero(best_distances[:, 9] == best_distances[:, 10])
-            ),
-            "shards_read": len(manifest["shards"]),
-            "schema": "borsuk-v32-prefix-truth-v2",
-            "source_rows": manifest["source_rows"],
-            "status": "passed",
-            "tie_break": "source-ordinal-ascending",
-            "top_k": 10,
-            "truth_bytes": len(truth),
-            "truth_id_space": "source-ordinal",
-            "truth_ids_sha256": hashlib.sha256(
-                np.asarray(truth_ids, dtype="<i8").tobytes()
-            ).hexdigest(),
-            "truth_row_semantics": "window-relative",
-            "truth_sha256": hashlib.sha256(truth).hexdigest(),
-        },
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode() + b"\n"
+    receipt = (
+        json.dumps(
+            {
+                "claim_eligible": False,
+                "corpus_manifest_bytes": corpus_manifest_bytes,
+                "corpus_manifest_sha256": corpus_manifest_sha256,
+                "corpus_normalization": "f64-l2-once-to-f32",
+                "corpus_shards": manifest["shards"],
+                "distance": "squared-l2-f64-fixed-dimension-order",
+                "query_count": query_count,
+                "query_bytes": query_bytes,
+                "query_normalization": "f64-l2-twice-to-f32",
+                "query_sha256": query_sha256,
+                "query_start": query_start,
+                "rank_10_11_tie_queries": int(
+                    np.count_nonzero(best_distances[:, 9] == best_distances[:, 10])
+                ),
+                "shards_read": len(manifest["shards"]),
+                "schema": "borsuk-v32-prefix-truth-v3",
+                "source_rows": manifest["source_rows"],
+                "status": "passed",
+                "tie_break": "source-ordinal-ascending",
+                "top_k": 10,
+                "truth_bytes": len(truth),
+                "truth_id_space": "source-ordinal",
+                "truth_ids_sha256": hashlib.sha256(
+                    np.asarray(truth_ids, dtype="<i8").tobytes()
+                ).hexdigest(),
+                "truth_row_semantics": "window-relative",
+                "truth_sha256": hashlib.sha256(truth).hexdigest(),
+            },
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        + b"\n"
+    )
     return truth, receipt
 
 
@@ -301,7 +316,9 @@ def build_v30_reduced_truth(
         or query_count != 32
     ):
         raise ValueError("V30 reduced truth shape differs")
-    corpus = _matrix(corpus_parquet, role="corpus", physical_rows=physical_rows)[:source_rows]
+    corpus = _matrix(corpus_parquet, role="corpus", physical_rows=physical_rows)[
+        :source_rows
+    ]
     query_rows = pq.ParquetFile(pa.BufferReader(query_parquet)).metadata.num_rows
     queries = _matrix(query_parquet, role="query", physical_rows=query_rows)
     if query_start + query_count > len(queries):
@@ -318,27 +335,32 @@ def build_v30_reduced_truth(
     neighbors = pa.FixedSizeListArray.from_arrays(flat, 10)
     table = pa.Table.from_arrays(
         [neighbors],
-        schema=pa.schema([pa.field("neighbors_id", pa.list_(child, 10), nullable=False)]),
+        schema=pa.schema(
+            [pa.field("neighbors_id", pa.list_(child, 10), nullable=False)]
+        ),
     )
     sink = pa.BufferOutputStream()
     pq.write_table(table, sink, compression="zstd", use_dictionary=False)
     truth_bytes = sink.getvalue().to_pybytes()
-    receipt = json.dumps(
-        {
-            "claim_eligible": False,
-            "corpus_sha256": corpus_sha256,
-            "query_count": query_count,
-            "query_sha256": query_sha256,
-            "query_start": query_start,
-            "source_rows": source_rows,
-            "status": "passed",
-            "truth_bytes": len(truth_bytes),
-            "truth_sha256": hashlib.sha256(truth_bytes).hexdigest(),
-        },
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode() + b"\n"
+    receipt = (
+        json.dumps(
+            {
+                "claim_eligible": False,
+                "corpus_sha256": corpus_sha256,
+                "query_count": query_count,
+                "query_sha256": query_sha256,
+                "query_start": query_start,
+                "source_rows": source_rows,
+                "status": "passed",
+                "truth_bytes": len(truth_bytes),
+                "truth_sha256": hashlib.sha256(truth_bytes).hexdigest(),
+            },
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        + b"\n"
+    )
     return truth_bytes, receipt
 
 
