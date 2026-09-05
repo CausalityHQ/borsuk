@@ -3907,3 +3907,56 @@ recall. Do not pool it with the96 burned queries as an independent128-query
 qualification. No measured expanded-arm S3 serving latency, write-throughput
 or100M result is claimed. The next cheap scaling falsifier is a fixed
 hypothetical row-aligned code-block trace, not an immediate100M launch.
+
+### V32 metadata-only code-block trace: naive object-per-block layout rejected
+
+From source `0f72238a40feff412db39dae2ce078dd9d2eef03`, one bounded local
+metadata trace completed as original session79040, exit0. The pure block/rank
+helper had an intended missing-module RED followed by five literal boundary
+tests GREEN; Astra reviewed the driver/helper read-only before execution.
+No production provider or defaults changed. The fixed hypothetical layout
+uses2730 base24-byte rows or1365 high48-byte rows per block:65,520 payload
+bytes per full block, one object per block, no cache or coalescing. Arrow
+envelopes are excluded. Final partial blocks are clipped to actual population.
+
+The trace authenticated the preceding expanded/prospective terminals and
+manifest, downloaded only query/routing/fidelity metadata (three GETs,
+5,057,500B), and matched128 scan counts plus1280 observable target-leaf ranks
+before producing costs. This matches observable evidence, not every unrecorded
+frontier element. Burned and prospective windows are combined only for access
+work accounting, not independent quality qualification. Fidelity rank maps
+each disjoint logical interval into separate base/high row planes; block IDs
+are deduplicated within each query.
+
+| Hypothetical code-plane work/query | Minimum | Maximum | Mean |
+|---|---:|---:|---:|
+| Object GETs |255|323|291.5859375|
+| Useful code payload bytes |8,429,760|10,752,216|9,787,786.6875|
+| Fetched block payload bytes |16,682,400|21,137,760|19,079,878.125|
+| Request rounds at32 in flight |8|11|9.640625|
+
+These are additional to vector-page requests. Request rounds are not latency,
+and this layout is not a universal lower bound for other S3 organizations.
+The whole1M code plane comprises385 such blocks; broad leaf selection touches
+255..323 of them. Moving the current code planes to this naive block layout
+does not solve selective serving: it creates hundreds of GETs and substantial
+read amplification. Do not implement that provider blindly or extrapolate
+these1M costs as measured100M behavior.
+
+Result177,982B SHA256
+`102b970f913086a7ff3890515bd65a6e4b837ac501307a0e61f586c74f6196ce`;
+driver9,358B SHA256
+`5a553692577ee2530206c4cdf402b919f6bde705efcbf94fef5fdde7b4407cbc`;
+helper3,224B SHA256
+`a4efb1dacac1c21ec5b00032f53f10d0c7d0302c2cd024506cfd4fdf8408fee9`;
+tests3,517B SHA256
+`478c37e0def239ee056ce1c938621cfa15362ed332e64a21cd8ec942dc1483d1`.
+All four are preserved under
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/0f72238a40feff412db39dae2ce078dd9d2eef03/evidence/code-block-trace-102b970f/`.
+Result basename `borsuk-code-block-trace-0f72238a.json`; driver has the same
+stem with `.py`; helper/test basenames are `borsuk_code_block_trace.py` and
+`test_borsuk_code_block_trace.py`. Trace wall1,177,525,985ns, peak RSS141,971,456B;
+registered RSS/PSI/swap-growth/wall guards did not fire. No code payload,
+vector-page or corpus-body reads occurred and no EC2 instance was launched.
+Disposition: claim_eligible=false, reject this naive layout and resolve
+routing selectivity/code locality before a100M campaign.
