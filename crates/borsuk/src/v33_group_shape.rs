@@ -231,8 +231,9 @@ pub fn build_v33_group_shape_artifact(
         &ranges,
         &request.group_of_code_parent,
     )?;
-    let scalar_split_leaves =
+    let mut scalar_split_leaves =
         select_v33_scalar_split_leaves(&populations, request.scalar_split_count)?;
+    scalar_split_leaves.sort_unstable();
     let summaries = populations
         .iter()
         .map(summarize_v33_leaf)
@@ -978,7 +979,7 @@ mod tests {
                     code_parent_leaf_ordinal: 0,
                     routing_centroid: centroid,
                     logical_start: 0,
-                    row_count: 10,
+                    row_count: 9,
                     page_start: 0,
                     page_count: 1,
                 },
@@ -986,8 +987,8 @@ mod tests {
                     leaf_ordinal: 1,
                     code_parent_leaf_ordinal: 1,
                     routing_centroid: centroid,
-                    logical_start: 10,
-                    row_count: 10,
+                    logical_start: 9,
+                    row_count: 11,
                     page_start: 0,
                     page_count: 1,
                 },
@@ -1018,7 +1019,7 @@ mod tests {
             layout,
             pq,
             group_of_code_parent: (0..4_096).map(|parent| parent / 2).collect(),
-            scalar_split_count: 1,
+            scalar_split_count: 2,
         };
         let artifact = build_v33_group_shape_artifact(&request).unwrap();
         assert_eq!(artifact.role, "v33-leaf-shapes-arrow");
