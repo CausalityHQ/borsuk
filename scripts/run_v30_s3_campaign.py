@@ -101,6 +101,10 @@ class V32ContainmentSpotPlan:
     root_beam: int
     leaf_beam: int
     global_leaf_limit: int | None = None
+    virtual_geometric_pages: bool = False
+    governing_terminal_uri: str | None = None
+    governing_terminal_sha256: str | None = None
+    governing_terminal_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -243,6 +247,11 @@ def _validate_containment(plan: V32ContainmentSpotPlan) -> None:
             plan.truth_receipt_bytes,
         ),
     )
+    governing = (
+        plan.governing_terminal_uri,
+        plan.governing_terminal_sha256,
+        plan.governing_terminal_bytes,
+    )
     if (
         not plan.attempt_id.startswith("v32-")
         or any(
@@ -260,6 +269,20 @@ def _validate_containment(plan: V32ContainmentSpotPlan) -> None:
             plan.global_leaf_limit is not None
             and (plan.global_leaf_limit != 768 or plan.leaf_beam != 256)
         )
+        or (
+            plan.virtual_geometric_pages
+            and governing
+            != (
+                "s3://borsuk-bench-453182569524-euc1/research/"
+                "v32-quality-perfect-s3-serving/"
+                "af05a46b75212c894fc5208aa768910552ed083d/attempts/"
+                "v32-deep-1m-global-containment-l768-20260905T020228Z-a0001/"
+                "TERMINAL.json",
+                "88226dcc0bc3a6b7034349d95698c0946d500a40b7ba1133bdd418fc5eefb74e",
+                262_537,
+            )
+        )
+        or (not plan.virtual_geometric_pages and any(item is not None for item in governing))
     ):
         raise ValueError("V32 containment authority differs")
 
@@ -599,6 +622,22 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
     ]
     if plan.global_leaf_limit is not None:
         command_words.extend(["--global-leaf-limit", str(plan.global_leaf_limit)])
+    if plan.virtual_geometric_pages:
+        command_words.extend(
+            [
+                "--virtual-geometric-pages",
+                "--diagnostic-batch-arrow",
+                "/run/v32/diagnostic-batch.arrow",
+                "--governing-terminal",
+                "/run/v32/governing-terminal.json",
+                "--governing-terminal-uri",
+                plan.governing_terminal_uri,
+                "--governing-terminal-sha256",
+                plan.governing_terminal_sha256,
+                "--governing-terminal-bytes",
+                str(plan.governing_terminal_bytes),
+            ]
+        )
     command = _shell(command_words) + (
         ' --logical-sources-sha256 "$logical_sha"'
         ' --logical-sources-bytes "$logical_size"'
@@ -614,6 +653,11 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
         f" --root-beam {plan.root_beam}"
         f" --leaf-beam {plan.leaf_beam}"
     )
+    if plan.virtual_geometric_pages:
+        command += (
+            ' --diagnostic-batch-sha256 "$batch_sha"'
+            ' --diagnostic-batch-bytes "$batch_size"'
+        )
     return "\n".join(
         [
             "#!/bin/bash",
@@ -658,6 +702,13 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
             f"aws s3 cp --only-show-errors {shlex.quote(plan.query_uri)} \"$root/test.parquet\"",
             f"aws s3 cp --only-show-errors {shlex.quote(plan.truth_uri)} \"$root/neighbors.parquet\"",
             f"aws s3 cp --only-show-errors {shlex.quote(plan.truth_receipt_uri)} \"$root/truth-receipt.json\"",
+            *(
+                [
+                    f"aws s3 cp --only-show-errors {shlex.quote(plan.governing_terminal_uri)} \"$root/governing-terminal.json\"",
+                ]
+                if plan.virtual_geometric_pages
+                else []
+            ),
             f'test "$(stat -c %s "$root/manifest.json")" -eq {plan.construction_manifest_bytes}',
             f"printf '%s  %s\\n' {plan.construction_manifest_sha256} \"$root/manifest.json\" | sha256sum --check --status",
             f'test "$(stat -c %s "$root/test.parquet")" -eq {plan.query_bytes}',
@@ -666,6 +717,14 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
             f"printf '%s  %s\\n' {plan.truth_sha256} \"$root/neighbors.parquet\" | sha256sum --check --status",
             f'test "$(stat -c %s "$root/truth-receipt.json")" -eq {plan.truth_receipt_bytes}',
             f"printf '%s  %s\\n' {plan.truth_receipt_sha256} \"$root/truth-receipt.json\" | sha256sum --check --status",
+            *(
+                [
+                    f'test "$(stat -c %s "$root/governing-terminal.json")" -eq {plan.governing_terminal_bytes}',
+                    f"printf '%s  %s\\n' {plan.governing_terminal_sha256} \"$root/governing-terminal.json\" | sha256sum --check --status",
+                ]
+                if plan.virtual_geometric_pages
+                else []
+            ),
             "python3 - <<'PY' >\"$root/resident.tsv\"",
             "import json",
             "from pathlib import Path",
@@ -686,6 +745,33 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
             f"aws s3 cp --only-show-errors {shlex.quote(manifest_prefix)}\"$logical_file\" \"$root/resident/logical-sources.arrow\"",
             "test \"$(stat -c %s \"$root/resident/logical-sources.arrow\")\" -eq \"$logical_size\"",
             "printf '%s  %s\\n' \"$logical_sha\" \"$root/resident/logical-sources.arrow\" | sha256sum --check --status",
+            *(
+                [
+                    "/opt/borsuk/venv/bin/python - <<'PY'",
+                    "import numpy as np",
+                    "import pyarrow as pa",
+                    "import pyarrow.parquet as pq",
+                    "logical=pa.ipc.open_file('/run/v32/resident/logical-sources.arrow').read_all().column('source_ordinal').to_numpy(zero_copy_only=False)",
+                    f"assert logical.shape == ({plan.source_rows},)",
+                    "assert logical.dtype == np.uint64",
+                    f"assert int(logical.min()) == 0 and int(logical.max()) == {plan.source_rows - 1}",
+                    "inverse=np.empty(logical.size,dtype=np.uint64)",
+                    "inverse[logical]=np.arange(logical.size,dtype=np.uint64)",
+                    "assert np.array_equal(logical[inverse],np.arange(logical.size,dtype=np.uint64))",
+                    "truth=pq.read_table('/run/v32/neighbors.parquet').column('neighbors_id').to_pylist()",
+                    f"assert len(truth) == {plan.query_count}",
+                    "truth_type=pa.list_(pa.field('element',pa.uint64(),nullable=False),10)",
+                    "truth_logicals=pa.array([[int(inverse[source]) for source in row] for row in truth],type=truth_type)",
+                    f"table=pa.Table.from_arrays([pa.array(range({plan.query_start},{plan.query_start + plan.query_count}),type=pa.uint64()),truth_logicals],schema=pa.schema([pa.field('query_ordinal',pa.uint64(),nullable=False),pa.field('truth_logicals',truth_type,nullable=False)]))",
+                    "with pa.OSFile('/run/v32/diagnostic-batch.arrow','wb') as sink:",
+                    "    with pa.ipc.new_file(sink,table.schema) as writer: writer.write_table(table)",
+                    "PY",
+                    'batch_sha=$(sha256sum "$root/diagnostic-batch.arrow" | cut -d" " -f1)',
+                    'batch_size=$(stat -c %s "$root/diagnostic-batch.arrow")',
+                ]
+                if plan.virtual_geometric_pages
+                else []
+            ),
             *_monitored_command(command, rss_limit_bytes=3 * 1024**3, wall_seconds=3_600),
             'put_once "$root/worker.log" worker.log',
             'put_once "$root/TERMINAL.json" TERMINAL.json',

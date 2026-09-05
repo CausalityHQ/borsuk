@@ -363,6 +363,43 @@ class V30SpotCampaignTests(unittest.TestCase):
                 self.targets(),
             )
 
+    def test_v32_virtual_spot_builds_one_batch_and_binds_governing_terminal(
+        self,
+    ) -> None:
+        # Break caught: the Spot controller reruns 32 independent processes or
+        # accepts treatment without the complete immutable control terminal.
+        plan = replace(
+            self.containment(),
+            leaf_beam=256,
+            global_leaf_limit=768,
+            virtual_geometric_pages=True,
+            governing_terminal_uri=(
+                "s3://borsuk-bench-453182569524-euc1/research/"
+                "v32-quality-perfect-s3-serving/"
+                "af05a46b75212c894fc5208aa768910552ed083d/attempts/"
+                "v32-deep-1m-global-containment-l768-20260905T020228Z-a0001/"
+                "TERMINAL.json"
+            ),
+            governing_terminal_sha256=(
+                "88226dcc0bc3a6b7034349d95698c0946d500a40b7ba1133bdd418fc5eefb74e"
+            ),
+            governing_terminal_bytes=262_537,
+        )
+        script = build_v32_containment_spot_specs(plan, self.targets())[0][
+            "UserData"
+        ]
+        self.assertIn("--virtual-geometric-pages", script)
+        self.assertIn("--diagnostic-batch-arrow /run/v32/diagnostic-batch.arrow", script)
+        self.assertIn("--governing-terminal /run/v32/governing-terminal.json", script)
+        self.assertIn(plan.governing_terminal_uri, script)
+        self.assertIn(plan.governing_terminal_sha256, script)
+        self.assertIn("262537", script)
+        self.assertIn("pa.ipc.new_file", script)
+        self.assertIn("truth_logicals", script)
+        self.assertIn("query_ordinal", script)
+        self.assertNotIn("for query in range(64, 96)", script)
+        self.assertNotIn("pages/", script)
+
     def test_v30_workers_probe_qualifier_before_scientific_downloads(self) -> None:
         scripts = (
             build_v30_evaluation_spot_specs(self.evaluation(), self.targets())[0][
