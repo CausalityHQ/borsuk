@@ -3008,3 +3008,46 @@ terminated. No further reconstruction or residual-correction run is warranted:
 the directly preserved 16-page route already closes quality, and the release
 path is now latency/throughput engineering. D3 and 100-million-row work remain
 fenced until that path passes fast performance gates.
+
+### Global V32 routing contains every one-million-row truth candidate; page reduction fails
+
+Source `af05a46b75212c894fc5208aa768910552ed083d` ran the preregistered
+root-independent diagnostic over the frozen one-million-row Deep Image index
+and query ordinals 64 through 95. It ranked every routing microleaf, admitted at
+most the first 768 subject to the unchanged 262,144-code ceiling, retained the
+best 12,288 row-PQ candidates, and selected exactly 16 distinct pages without
+reading any page body. The maximum observed truth-microleaf rank was 625 and
+the maximum scanned population was 230,856 codes. Every missed truth row was
+therefore inside both the admitted microleaf frontier and retained candidate
+population.
+
+The current first-distinct page reducer recovered 308/320 truth rows:
+962,500-ppm aggregate containment, a 7/10 per-query minimum, and 23/32 perfect
+queries. Reciprocal-rank page aggregation regressed to 298/320. All twelve
+first-distinct misses were classified at the page-reducer boundary. The truth
+sets occupied eight to ten current physical pages per query, so the current
+layout is provably incapable of perfect containment with exactly eight page
+reads for queries occupying nine or ten pages. Sixteen selected pages occupied
+at most 3,117,216 authenticated encoded bytes. Page reads remained exactly zero.
+
+The 262,537-byte canonical terminal has SHA-256
+`88226dcc0bc3a6b7034349d95698c0946d500a40b7ba1133bdd418fc5eefb74e`
+and is preserved at
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/af05a46b75212c894fc5208aa768910552ed083d/attempts/v32-deep-1m-global-containment-l768-20260905T020228Z-a0001/TERMINAL.json`.
+The disposable `causality` Spot worker `i-069be3f1306237791` published this
+scientific-failure terminal and terminated. A preceding attempt failed before
+science because a locally linked executable required a newer glibc than the
+frozen Amazon Linux 2023 worker. A native build on terminated Spot worker
+`i-066b0c09f5993287b` produced the 21,642,672-byte executable with SHA-256
+`371d9a4184f9a3de7283b163e1890434de4ea0605410acabc02d7e93fe2fa624`;
+the controller now probes executable startup before downloading scientific
+inputs.
+
+This result rejects further root-beam, leaf-beam, candidate-depth, and page-score
+tuning on the burned cohort: global routing and candidate retention are not the
+observed cause, and reciprocal-rank aggregation is worse. The next bounded
+experiment is a page-free, query-independent geometric repacking replay that
+keeps candidate order fixed and changes only page membership. It must first
+reproduce this exact control and then reach 320/320 before any layout is
+materialized. D3, a larger build, sealed-query evaluation, and competitor claims
+remain fenced.
