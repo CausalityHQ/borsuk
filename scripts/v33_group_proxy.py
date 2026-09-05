@@ -64,6 +64,31 @@ class OwnerInclusionResult:
     total_owners: int
 
 
+def selected_group_leaves(selected_groups, leaf_groups):
+    """Expand a truth-blind group prefix into exact routing-leaf order."""
+
+    selected_groups = tuple(selected_groups)
+    leaf_groups = tuple(leaf_groups)
+    if (
+        not selected_groups
+        or len(selected_groups) != len(set(selected_groups))
+        or not leaf_groups
+        or any(type(group) is not int or group < 0 for group in leaf_groups)
+        or set(leaf_groups) != set(range(max(leaf_groups) + 1))
+        or any(
+            type(group) is not int or group < 0 or group > max(leaf_groups)
+            for group in selected_groups
+        )
+    ):
+        raise ValueError("selected group leaf authority differs")
+    return tuple(
+        leaf
+        for group in selected_groups
+        for leaf, owner in enumerate(leaf_groups)
+        if owner == group
+    )
+
+
 def _validate_parents(parents):
     if not parents:
         raise ValueError("group has no parents")

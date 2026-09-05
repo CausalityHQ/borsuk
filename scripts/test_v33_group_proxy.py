@@ -250,6 +250,41 @@ class GroupProxyTests(unittest.TestCase):
                 group_limit=2,
             )
 
+    def test_replay_frontier_expands_only_selected_groups_without_truth_input(self):
+        from scripts.v33_group_proxy import selected_group_leaves
+
+        leaf_groups = (2, 0, 1, 0, 2, 1)
+        self.assertEqual(selected_group_leaves((1, 2), leaf_groups), (2, 5, 0, 4))
+        with self.assertRaises(ValueError):
+            selected_group_leaves((1, 1), leaf_groups)
+        with self.assertRaises(ValueError):
+            selected_group_leaves((3,), leaf_groups)
+
+    def test_shape_evaluation_emits_cross_language_replay_frontier(self):
+        from scripts.run_v33_group_proxy import _evaluate_shape
+        from scripts.v33_group_proxy import GroupProxy, LeafShape
+
+        zero = (0.0,) * 96
+        one = (1.0,) * 96
+        groups = (GroupProxy(0, 60, (zero,)), GroupProxy(1, 60, (one,)))
+        shapes = (
+            LeafShape(0, 0, 60, zero, zero, 0.0, (zero, zero), False),
+            LeafShape(1, 1, 60, one, zero, 0.0, (one, one), False),
+        )
+        result = _evaluate_shape(
+            "diagonal-ellipsoid",
+            groups,
+            shapes,
+            ((7, zero, (0,), (42,)),),
+            "diagonal-moment",
+            60,
+            (0, 1),
+        )
+        record = result["records"][0]
+        self.assertEqual(record["query"], list(zero))
+        self.assertEqual(record["truth_logicals"], [42])
+        self.assertEqual(record["selected_routing_leaves"], [0])
+
 
 if __name__ == "__main__":
     unittest.main()

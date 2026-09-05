@@ -17,6 +17,7 @@ if __package__:
         rank_groups,
         rank_shape_groups,
         select_group_prefix,
+        selected_group_leaves,
     )
 else:
     from v33_group_proxy import (  # type: ignore[no-redef]
@@ -27,6 +28,7 @@ else:
         rank_groups,
         rank_shape_groups,
         select_group_prefix,
+        selected_group_leaves,
     )
 
 EXPECTED_DIGESTS = {
@@ -212,6 +214,7 @@ def _load_authority(args):
     if len(shape_rows) != len(row_counts):
         raise ValueError("V33 leaf shape row count differs")
     leaf_shapes = []
+    leaf_groups = []
     for ordinal, record in enumerate(shape_rows):
         expected_group = group_of_parent[int(parent_ordinals[ordinal])]
         if (
@@ -238,6 +241,7 @@ def _load_authority(args):
                 scalar_split_selected=record["scalar_split_selected"],
             )
         )
+        leaf_groups.append(expected_group)
 
     query_raw = _read(args.query, "query")
     queries = _normalize_like_v30(
@@ -267,6 +271,7 @@ def _load_authority(args):
         if len(targets) != 10:
             raise ValueError("V33 truth target count differs")
         owners = []
+        logicals = []
         for target in targets:
             leaf = target["leaf_ordinal"]
             logical = target["logical"]
@@ -278,17 +283,23 @@ def _load_authority(args):
             ):
                 raise ValueError("V33 truth leaf binding differs")
             owners.append(group_of_parent[int(parent_ordinals[leaf])])
+            logicals.append(logical)
         query_authority.append(
-            (ordinal, tuple(float(value) for value in queries[ordinal]), tuple(owners))
+            (
+                ordinal,
+                tuple(float(value) for value in queries[ordinal]),
+                tuple(owners),
+                tuple(logicals),
+            )
         )
-    return controls, proxies, tuple(leaf_shapes), tuple(query_authority)
+    return controls, proxies, tuple(leaf_shapes), tuple(query_authority), tuple(leaf_groups)
 
 
-def _evaluate(name, groups, queries, row_limit):
+def _evaluate(name, groups, queries, row_limit, leaf_groups):
     records = []
     included = 0
     perfect = 0
-    for ordinal, query, owners in queries:
+    for ordinal, query, owners, logicals in queries:
         ranked = rank_groups(groups, query)
         selected = select_group_prefix(
             groups, ranked, row_limit=row_limit, group_limit=64
@@ -301,9 +312,14 @@ def _evaluate(name, groups, queries, row_limit):
         records.append(
             {
                 "hits": hits,
+                "query": list(query),
                 "query_ordinal": ordinal,
                 "selected_groups": list(selected),
+                "selected_routing_leaves": list(
+                    selected_group_leaves(selected, leaf_groups)
+                ),
                 "selected_rows": rows,
+                "truth_logicals": list(logicals),
                 "truth_owner_ranks": [ranked.index(owner) + 1 for owner in owners],
             }
         )
@@ -320,11 +336,11 @@ def _evaluate(name, groups, queries, row_limit):
     }
 
 
-def _evaluate_shape(name, groups, shapes, queries, arm, row_limit):
+def _evaluate_shape(name, groups, shapes, queries, arm, row_limit, leaf_groups):
     records = []
     included = 0
     perfect = 0
-    for ordinal, query, owners in queries:
+    for ordinal, query, owners, logicals in queries:
         ranked = rank_shape_groups(shapes, query, arm)
         selected = select_group_prefix(
             groups, ranked, row_limit=row_limit, group_limit=64
@@ -337,9 +353,14 @@ def _evaluate_shape(name, groups, shapes, queries, arm, row_limit):
         records.append(
             {
                 "hits": hits,
+                "query": list(query),
                 "query_ordinal": ordinal,
                 "selected_groups": list(selected),
+                "selected_routing_leaves": list(
+                    selected_group_leaves(selected, leaf_groups)
+                ),
                 "selected_rows": rows,
+                "truth_logicals": list(logicals),
                 "truth_owner_ranks": [ranked.index(owner) + 1 for owner in owners],
             }
         )
@@ -357,15 +378,29 @@ def _evaluate_shape(name, groups, shapes, queries, arm, row_limit):
 
 
 def run(args):
-    controls, proxies, shapes, queries = _load_authority(args)
+    controls, proxies, shapes, queries, leaf_groups = _load_authority(args)
     arms = (
-        _evaluate("weighted-mean", controls, queries, args.row_limit),
-        _evaluate("three-parent-prototype", proxies, queries, args.row_limit),
-        _evaluate_shape(
-            "fine-leaf-centroid", controls, shapes, queries, "centroid", args.row_limit
+        _evaluate("weighted-mean", controls, queries, args.row_limit, leaf_groups),
+        _evaluate(
+            "three-parent-prototype", proxies, queries, args.row_limit, leaf_groups
         ),
         _evaluate_shape(
-            "scalar-moment", controls, shapes, queries, "scalar-moment", args.row_limit
+            "fine-leaf-centroid",
+            controls,
+            shapes,
+            queries,
+            "centroid",
+            args.row_limit,
+            leaf_groups,
+        ),
+        _evaluate_shape(
+            "scalar-moment",
+            controls,
+            shapes,
+            queries,
+            "scalar-moment",
+            args.row_limit,
+            leaf_groups,
         ),
         _evaluate_shape(
             "diagonal-ellipsoid",
@@ -374,6 +409,7 @@ def run(args):
             queries,
             "diagonal-moment",
             args.row_limit,
+            leaf_groups,
         ),
         _evaluate_shape(
             "matched-byte-split-centroid",
@@ -382,6 +418,7 @@ def run(args):
             queries,
             "split-centroid",
             args.row_limit,
+            leaf_groups,
         ),
     )
     result = {

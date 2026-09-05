@@ -630,6 +630,7 @@ pub enum V32RoutingStopReason {
     AllLeaves,
     LeafLimit,
     ScanBudget,
+    ExplicitLeafSet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -803,6 +804,7 @@ impl V32CandidateReplay<'_> {
             V32RoutingStopReason::AllLeaves => 1,
             V32RoutingStopReason::LeafLimit => 2,
             V32RoutingStopReason::ScanBudget => 3,
+            V32RoutingStopReason::ExplicitLeafSet => 4,
         }]);
         format!("{:x}", digest.finalize())
     }
@@ -1671,6 +1673,130 @@ impl V32Router {
     ) -> Result<V32RoutingDiagnostic> {
         let details = self.routing_details_global_prefix(query, arm, leaf_limit, &|_| {})?;
         self.diagnose_logicals_from_details(query, logicals, details)
+    }
+
+    /// Capture exactly one externally selected, truth-blind routing-leaf set.
+    ///
+    /// This is a query-only diagnostic seam for comparing alternative routing
+    /// geometry while preserving the production PQ candidate and physical-page
+    /// reducers. It performs no page-body reads.
+    #[doc(hidden)]
+    pub fn capture_explicit_leaf_replay(
+        &self,
+        query: &[f32; 96],
+        arm: V32SearchArm,
+        leaves: &[u32],
+    ) -> Result<V32CandidateReplay<'_>> {
+        self.validate_arm(arm)?;
+        let raw_query = *query;
+        let query = normalized(query)?;
+        let unique = leaves.iter().copied().collect::<BTreeSet<_>>();
+        if leaves.is_empty() || unique.len() != leaves.len() {
+            return Err(invalid("V33 explicit routing leaf authority differs"));
+        }
+        let mut codes_scanned = 0_u64;
+        let mut leaves_by_parent = BTreeMap::<usize, Vec<usize>>::new();
+        for &leaf in leaves {
+            let leaf_index = usize::try_from(leaf)
+                .map_err(|_| invalid("V33 explicit routing leaf overflows"))?;
+            let range = self
+                .layout
+                .leaves()
+                .get(leaf_index)
+                .filter(|range| range.leaf_ordinal == leaf)
+                .ok_or_else(|| invalid("V33 explicit routing leaf authority differs"))?;
+            codes_scanned = codes_scanned
+                .checked_add(range.row_count)
+                .ok_or_else(|| invalid("V33 explicit scanned-code count overflows"))?;
+            leaves_by_parent
+                .entry(range.code_parent_leaf_ordinal as usize)
+                .or_default()
+                .push(leaf_index);
+        }
+        if codes_scanned > arm.scan_budget {
+            return Err(invalid("V33 explicit scanned-code bound differs"));
+        }
+        let candidate_depth = arm.candidate_depth.min(
+            usize::try_from(codes_scanned)
+                .map_err(|_| invalid("V33 explicit scanned-code count overflows"))?,
+        );
+        let mut candidates = BoundedCandidates::new(candidate_depth);
+        let mut base_table = V30LazyQueryTable::new(&self.base_codebook)?;
+        let mut high_table = V30LazyQueryTable::new(&self.high_codebook)?;
+        for (code_parent, parent_leaves) in &leaves_by_parent {
+            let rows = parent_leaves
+                .iter()
+                .flat_map(|&leaf| {
+                    let range = &self.layout.leaves()[leaf];
+                    range.logical_start..range.logical_start + range.row_count
+                })
+                .map(|logical| {
+                    self.codes
+                        .code(logical as usize)
+                        .map(|(width, code)| (logical, width, code))
+                });
+            score_parent_codes(
+                &query,
+                &self.hierarchy.leaves[*code_parent],
+                rows,
+                &mut base_table,
+                &mut high_table,
+                &mut candidates,
+            )?;
+        }
+        let ranked = candidates.finish();
+        let mut seen = BTreeSet::new();
+        let mut pages = Vec::with_capacity(arm.page_count);
+        for candidate in &ranked {
+            let page = self
+                .layout
+                .page_for_logical(candidate.logical)
+                .ok_or_else(|| invalid("V33 explicit candidate page mapping differs"))?;
+            if seen.insert(page.identity.ordinal) {
+                pages.push(page.identity());
+                if pages.len() == arm.page_count {
+                    break;
+                }
+            }
+        }
+        if pages.len() != arm.page_count {
+            return Err(invalid("V33 explicit selected page cardinality differs"));
+        }
+        let details = RoutingDetails {
+            whole_roots: None,
+            pq_work: V32PqEvaluationWork {
+                base: base_table.work(),
+                high: high_table.work(),
+            },
+            selection: V32PageSelection {
+                pages,
+                work: V32RoutingWork {
+                    roots_scored: 0,
+                    leaves_eligible: leaves.len(),
+                    leaves_scanned: leaves.len(),
+                    query_table_pairs_built: leaves_by_parent.len(),
+                    peak_query_table_pairs_live: usize::from(!leaves_by_parent.is_empty()),
+                    codes_scanned,
+                    candidates_retained: candidate_depth,
+                    pages_considered: seen.len(),
+                    selected_pages: arm.page_count,
+                },
+            },
+            selected_leaves: leaves.to_vec(),
+            ranked_leaves: leaves.to_vec(),
+            ranked_candidates: ranked,
+            total_routing_leaves: self.layout.leaves().len(),
+            scan_budget: arm.scan_budget,
+            global_leaf_limit: None,
+            stop_reason: V32RoutingStopReason::ExplicitLeafSet,
+            next_leaf_rows: None,
+        };
+        Ok(V32CandidateReplay {
+            router: self,
+            query: raw_query,
+            arm,
+            details,
+        })
     }
 
     pub fn diagnose_logicals_with_virtual_geometric_global_prefix(
@@ -4217,6 +4343,54 @@ mod tests {
         assert_eq!(
             bounded_global_prefix_rows(&vec![1; 769], 768, 262_144).unwrap(),
             (768, 768, V32RoutingStopReason::LeafLimit, None)
+        );
+    }
+
+    #[test]
+    fn v33_explicit_leaf_replay_scores_only_the_truth_blind_shape_frontier() {
+        // Break caught: the V33 shape frontier is silently reranked by the V32
+        // root/centroid router, or its exact PQ/page work is reported as a page
+        // read rather than a query-only replay.
+        let router = diagnostic_router();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 1,
+            scan_budget: 65_536,
+            candidate_depth: 20,
+            page_count: 10,
+        };
+        let replay = router
+            .capture_explicit_leaf_replay(&[0.2; 96], arm, &[1])
+            .unwrap();
+        let replay_sha256 = replay.sha256();
+        let diagnostic = replay.diagnose(&[35]).unwrap();
+        assert_eq!(
+            diagnostic.stop_reason,
+            V32RoutingStopReason::ExplicitLeafSet
+        );
+        assert_eq!(diagnostic.selection.work.roots_scored, 0);
+        assert_eq!(diagnostic.selection.work.leaves_eligible, 1);
+        assert_eq!(diagnostic.selection.work.leaves_scanned, 1);
+        assert_eq!(diagnostic.selection.work.codes_scanned, 30);
+        assert_eq!(diagnostic.selection.work.candidates_retained, 20);
+        assert_eq!(diagnostic.selection.work.selected_pages, 10);
+        assert_eq!(diagnostic.targets[0].global_routing_leaf_rank, 2);
+        assert_eq!(
+            diagnostic.targets[0].stage,
+            V32RoutingTargetStage::SelectedPage
+        );
+        let changed_truth = replay.diagnose(&[36]).unwrap();
+        assert_eq!(replay.sha256(), replay_sha256);
+        assert_eq!(changed_truth.selection, diagnostic.selection);
+        assert!(
+            router
+                .capture_explicit_leaf_replay(&[0.2; 96], arm, &[1, 1])
+                .is_err()
+        );
+        assert!(
+            router
+                .capture_explicit_leaf_replay(&[0.2; 96], arm, &[2])
+                .is_err()
         );
     }
 
