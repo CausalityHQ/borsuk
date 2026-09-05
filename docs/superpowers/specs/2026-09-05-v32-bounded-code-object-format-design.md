@@ -52,7 +52,7 @@ These are format constraints, not claims that every future partition fits.
 Authenticate exact expected SHA256 and length before parsing. Inspect IPC
 footer/message metadata before batch materialization: reject compressed
 record bodies, dictionaries, extra batches, invalid offsets/body extents,
-record count above32 and incompatible schema. Then validate all decoded
+record count above32 and incompatible schema.
 Before materialization also bound nested field-node populations: at most128
 range children,3072 centroid elements and code/bitmap buffer lengths allowed
 by8192 rows. Every buffer extent must lie inside the authenticated body;

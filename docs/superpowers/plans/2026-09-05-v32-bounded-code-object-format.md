@@ -1,6 +1,6 @@
 # V32 bounded code-object format Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the authenticated bounded Arrow code-object codec needed by the subsequent streamed provider.
 
@@ -34,7 +34,7 @@ dead-code lint suppression. This is a verified codec checkpoint, not serving.
 Both parent and object have `validate`; lookups on validated immutable parents
 perform checked local indexing without revalidating the whole object per row.
 
-- [ ] Stage `v32_code_object_parent_local_addressing` test with one parent, ranges(10,2),(20,2), bitmap0b1010, base bytes24*[1] followed by24*[3], high bytes48*[2] followed by48*[4].
+- [x] Stage `v32_code_object_parent_local_addressing` test with one parent, ranges(10,2),(20,2), bitmap0b1010, base bytes24*[1] followed by24*[3], high bytes48*[2] followed by48*[4].
 
 ```rust
 assert_eq!(parent.logical(0)?, 10);
@@ -44,10 +44,10 @@ assert_eq!(parent.code(3)?, (V30PqWidth::High48, &[4_u8;48][..]));
 assert!(parent.code(4).is_err());
 ```
 
-- [ ] Stage `v32_code_object_invariant_rejections` table cases: empty parents/ranges,33 parents,129 ranges,8193 rows, duplicate/out-of-order IDs, zero range, endpoint overflow, within/across-parent overlap, NaN centroid, nonzero padding, short/extra bitmap, short/extra base/high bytes. Include exact-limit valid fixtures.
-- [ ] Run `rtk proxy cargo test -p borsuk --lib v32_code_object_ -- --nocapture`; preserve intended missing-interface RED, correcting only fixture compiler mistakes first.
-- [ ] Implement checked integer arithmetic, ordered range validation and local rank lookup. Use row-bounded bitmap prefix popcounts; map logical IDs by subtracting range counts. Do not materialize per-row code or logical vectors.
-- [ ] Rerun the same selector, inspect every result; format/diff-check, review scope, commit coherent invariant slice. No public export or blanket lint suppression.
+- [x] Stage `v32_code_object_invariant_rejections` table cases: empty parents/ranges,33 parents,129 ranges,8193 rows, duplicate/out-of-order IDs, zero range, endpoint overflow, within/across-parent overlap, NaN centroid, nonzero padding, short/extra bitmap, short/extra base/high bytes. Include exact-limit valid fixtures.
+- [x] Run `rtk proxy cargo test -p borsuk --lib v32_code_object_ -- --nocapture`; preserve intended missing-interface RED, correcting only fixture compiler mistakes first.
+- [x] Implement checked integer arithmetic, ordered range validation and local rank lookup. Use row-bounded bitmap prefix popcounts; map logical IDs by subtracting range counts. Do not materialize per-row code or logical vectors.
+- [x] Rerun the same selector, inspect every result; format/diff-check, review scope, commit coherent invariant slice. No public export or blanket lint suppression.
 
 ## Task2: Authenticated Arrow encoding and interchange
 
