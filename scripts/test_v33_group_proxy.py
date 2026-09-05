@@ -285,6 +285,11 @@ class GroupProxyTests(unittest.TestCase):
         self.assertEqual(record["truth_logicals"], [42])
         self.assertEqual(record["selected_routing_leaves"], [0])
 
+    def test_result_format_marks_cross_language_replay_frontier(self):
+        from scripts.run_v33_group_proxy import RESULT_SCHEMA
+
+        self.assertEqual(RESULT_SCHEMA, "borsuk-v33-group-proxy-result-v2")
+
 
 if __name__ == "__main__":
     unittest.main()

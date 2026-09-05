@@ -41,6 +41,8 @@ EXPECTED_DIGESTS = {
     "shape": "6954ddac2e8dfda76338a9b3c3da278faea80326b29c3427c6aa22753d4e6bea",
 }
 
+RESULT_SCHEMA = "borsuk-v33-group-proxy-result-v2"
+
 
 def _sha256(raw):
     return hashlib.sha256(raw).hexdigest()
@@ -430,7 +432,7 @@ def run(args):
         "page_reads": 0,
         "passed": any(arm["passed"] for arm in arms),
         "row_limit": args.row_limit,
-        "schema": "borsuk-v33-group-proxy-result-v1",
+        "schema": RESULT_SCHEMA,
     }
     raw = json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     raw += b"\n"
