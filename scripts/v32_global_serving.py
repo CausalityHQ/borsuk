@@ -522,3 +522,79 @@ def validate_global_serving_batch(
             "routing bounds",
         )
     return batch
+
+
+def summarize_global_serving_batch(
+    payload: bytes,
+    *,
+    expected: tuple[GlobalQueryExpectation, ...],
+    pages: tuple[GlobalPageIdentity, ...],
+    source_rows: int,
+    truth: tuple[tuple[int, ...], ...],
+) -> dict:
+    """Reduce authenticated query truth and serving rows, including quality failure.
+
+    The caller must authenticate truth and identify the actual serving tier.
+    Neither empirical quantiles nor logical reads claim stable tails or retries.
+    """
+    batch = validate_global_serving_batch(
+        payload, expected=expected, pages=pages, source_rows=source_rows
+    )
+    _require(type(truth) is tuple and len(truth) == 32, "truth cardinality")
+    samples = []
+    for query, row, neighbors in zip(expected, batch["results"], truth, strict=True):
+        _require(
+            type(neighbors) is tuple
+            and len(neighbors) == 10
+            and all(_integer(n, 0, source_rows - 1) for n in neighbors)
+            and len(set(neighbors)) == 10,
+            "truth membership",
+        )
+        hits = len(set(neighbors) & {m["source_ordinal"] for m in row["matches"]})
+        samples.append(
+            {
+                "query_ordinal": query.query_ordinal,
+                "hits": hits,
+                "recall_ppm": hits * 100000,
+            }
+        )
+
+    def empirical(values):
+        ranked = sorted(values)
+        return {
+            "sample_count": 32,
+            "p50": ranked[15],
+            "p95": ranked[30],
+            "maximum": ranked[-1],
+            "total": sum(ranked),
+        }
+
+    total_hits = sum(s["hits"] for s in samples)
+    rows = batch["results"]
+    return {
+        "schema_version": 1,
+        "status": "complete",
+        "claim_eligible": False,
+        "source_rows": source_rows,
+        "query_start": expected[0].query_ordinal,
+        "query_count": 32,
+        "batch_sha256": hashlib.sha256(payload).hexdigest(),
+        "batch_bytes": len(payload),
+        "routing_parity_passed": True,
+        "quality_target_ppm": 1000000,
+        "quality_passed": total_hits == 320,
+        "aggregate_recall_ppm": total_hits * 1000000 // 320,
+        "minimum_recall_ppm": min(s["recall_ppm"] for s in samples),
+        "perfect_queries": sum(s["hits"] == 10 for s in samples),
+        "samples": samples,
+        "timing": {
+            name: empirical([row["timing"][name] for row in rows])
+            for name in sorted(_TIMING - {"peak_rss_bytes"})
+        },
+        "quantile_method": "empirical-nearest-rank-not-stable-tail-estimate",
+        "peak_reported_rss_bytes": max(row["timing"]["peak_rss_bytes"] for row in rows),
+        "logical_page_reads": sum(row["work"]["get_count"] for row in rows),
+        "encoded_bytes": sum(row["work"]["encoded_bytes"] for row in rows),
+        "transport_attempts": None,
+        "rows": rows,
+    }

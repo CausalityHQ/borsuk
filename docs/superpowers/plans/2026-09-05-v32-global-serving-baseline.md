@@ -89,8 +89,26 @@ Report whether old/new truth IDs differ before interpreting recall changes.
   roles, URI/SHA/length bindings, output schema and frozen execution command.
 - [ ] TDD exact artifact graph and32-query physical parity using real loaders;
   malformed authority must prevent invoking the qualifier.
-- [ ] TDD independent recall/timing reduction and terminal preservation; failed
+- [x] TDD independent recall/timing reduction; failed
   quality remains evidence, not an exception that discards metrics.
+
+Reducer interface: `summarize_global_serving_batch(payload, *, expected, pages,
+source_rows, truth)` consumes the pure validator plus preauthenticated32x10
+source-ordinal truth tuples. It returns a dict with execution status complete,
+claim_eligible=false, raw batch SHA/length, per-query hits, aggregate/min recall,
+perfect-query count and exact-recall target outcome. Timing is empirical p50/
+p95/max with n32 and total_ns, not a stable p99/QPS claim. Preserve validated
+rows and sum logical GETs/bytes; transport attempts remain null/unmeasured.
+Tests lock319/320=996875ppm and min900000 while preserving one1000ns outlier
+among31x100ns (p95=100,max1000,total4100). Bad truth type/cardinality/duplicates
+fail before reduction. This reducer does not authenticate truth provenance or
+prove S3 tier; those remain execution-controller responsibilities.
+
+Reducer: two missing-API REDs then two GREEN; full file12/12, scoped Ruff/
+py_compile/docs/diff checks GREEN. Astra read-only review READY. The next
+physical-read run may use the original v2 reference strictly as a historical
+regression with explicit arithmetic caveat; it is not new v3 qualification.
+This allows latency observation without waiting for a corpus truth regeneration.
 - [ ] Test direct CLI and existing Spot lifecycle, review with Astra, commit;
   then register one1M physical-read attempt. Do not claim cold-cache isolation,
   sustainable QPS or write performance from that single batch.

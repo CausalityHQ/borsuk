@@ -228,6 +228,69 @@ class GlobalReplayAuthorityTests(unittest.TestCase):
 
 
 class GlobalServingTests(unittest.TestCase):
+    def test_summary_preserves_failed_recall_and_empirical_latency(self):
+        from scripts.v32_global_serving import summarize_global_serving_batch
+
+        value, expected, pages = self.fixture()
+        value["results"][0]["matches"][0]["source_ordinal"] = 10
+        value["results"][0]["timing"]["elapsed_ns"] = 1000
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        result = summarize_global_serving_batch(
+            raw,
+            expected=expected,
+            pages=pages,
+            source_rows=1000000,
+            truth=tuple(tuple(range(10)) for _ in range(32)),
+        )
+        self.assertEqual(result["status"], "complete")
+        self.assertFalse(result["claim_eligible"])
+        self.assertFalse(result["quality_passed"])
+        self.assertEqual(result["aggregate_recall_ppm"], 996875)
+        self.assertEqual(result["minimum_recall_ppm"], 900000)
+        self.assertEqual(result["perfect_queries"], 31)
+        self.assertEqual(
+            result["timing"]["elapsed_ns"],
+            {
+                "sample_count": 32,
+                "p50": 100,
+                "p95": 100,
+                "maximum": 1000,
+                "total": 4100,
+            },
+        )
+        self.assertEqual(result["logical_page_reads"], 512)
+        self.assertEqual(result["encoded_bytes"], 51200)
+        self.assertIsNone(result["transport_attempts"])
+        self.assertEqual(result["batch_sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(result["rows"], value["results"])
+
+    def test_summary_requires_concrete_unique_truth(self):
+        from scripts.v32_global_serving import summarize_global_serving_batch
+
+        value, expected, pages = self.fixture()
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        valid = tuple(tuple(range(10)) for _ in range(32))
+        self.assertTrue(
+            summarize_global_serving_batch(
+                raw, expected=expected, pages=pages, source_rows=1000000, truth=valid
+            )["quality_passed"]
+        )
+        for truth in (
+            valid[:-1],
+            list(valid),
+            ((False,) + tuple(range(1, 10)),) + valid[1:],
+            ((0,) * 10,) + valid[1:],
+            ((1000000,) + tuple(range(1, 10)),) + valid[1:],
+        ):
+            with self.assertRaises(ValueError):
+                summarize_global_serving_batch(
+                    raw,
+                    expected=expected,
+                    pages=pages,
+                    source_rows=1000000,
+                    truth=truth,
+                )
+
     def fixture(self):
         config = {
             "global_leaf_limit": 768,
