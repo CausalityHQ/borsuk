@@ -4314,3 +4314,54 @@ and is retained at
 `/tmp/v33-reconstructed-oracle-005fba6f7ca2e0d821678691c4068879d88eb245.json`.
 The explicit scratch directory and its ten named inputs were removed after PID
 clearance. No AWS compute instance or D3 run was launched.
+
+### V33 full-covariance ceiling closes the exposed diagonal miss
+
+Source `ce3ebbd378deb8e25b779bec87f1d4201c8e94bf` added the preregistered
+full rotated-covariance ceiling. Construction reconstructs the frozen PQ rows,
+computes a complete f64 population covariance independently for each of4,141
+routing leaves, and reduces leaf scores by minimum within each of178 storage
+groups. Queries are loaded only after this query-independent state is frozen.
+The score is the exact Gaussian distance-moment lower heuristic from the V33
+design; it is not Mahalanobis membership or a Euclidean exclusion certificate.
+Two independent read-only reviews found no remaining Critical/Important
+correctness or scientific-causality blocker after the original pooled-group
+covariance was replaced with the required per-leaf construction.
+
+The release binary is10,216,680B, SHA256
+`cc836c539acef83564cecefd94bfbeb3483ac9548cdfdf8d7690f3c8ed8deee6`.
+The V33 frontier was deterministically regenerated from its authenticated
+small inputs and reproduced exactly at5,937,815B, SHA256
+`470f7c95a965572feec11cd1b0d24e73bf1d8c1456a75117b8bf6796e091db6b`.
+The ceiling authenticated27,965,150B of hierarchy/layout/PQ artifacts,
+384,840B of group metadata and that frontier:34,287,805B total. It read zero
+exact corpus vectors and zero vector-page bodies.
+
+Attempt `a0001` on Amazon Linux terminated before science because the frozen
+Ubuntu-built binary required glibc2.38. Its immutable terminal records exit1,
+zero scientific RSS and no result; no compatibility shim or algorithm change
+was made. Attempt `a0002` used the matching Ubuntu24.04 ARM runtime on one
+causality Spot `c7g.4xlarge` in `eu-central-1c`, instance
+`i-02cc984ebaaa6adef`. The sole scientific process exited0 in15s, and the
+instance was confirmed terminated. Full memory PSI avg10 stayed0.00 and swap
+growth was0. The15-second sampler observed only the initial1,810,432B process
+group RSS because the run completed between samples, so no exact peak-RSS
+claim is made.
+
+The unchanged longest complete-group prefix admitted42..49 groups and
+255,338..262,062 rows (mean259,072.6953125) under the fixed64-group/262,144-row
+caps. All1,280/1,280 truth owners were included and all128/128 queries were
+perfect. The maximum truth-owner group rank was39. For the prior query6160
+counterexample the ten ranks were8,7,11,2,1,29,1,8,2,6; its48 selected groups
+contained259,900 rows. The35,531B canonical claim-ineligible result has SHA256
+`b58a096f3a706d98dd3a10a7f682c2396f98683cc6e79a1634d5354f1cb57974`
+and is preserved with registration, progress, logs and terminal under
+`s3://borsuk-bench-453182569524-euc1/research/v33-shape-aware-group-routing/ce3ebbd378deb8e25b779bec87f1d4201c8e94bf/attempts/v33-deep-1m-full-covariance-ceiling-a0002/`.
+
+Disposition: cross-dimensional covariance is sufficient to repair the exposed
+diagonal failure on this burned cohort. This is a representation ceiling, not
+a deployable full-covariance format, held-out quality result, latency claim or
+100M qualification. Proceed only to the frozen low-rank rotated-ellipsoid
+ladder, with rank2 primary and ranks1/4 diagnostic, and require it to preserve
+the same owner/query gate before unchanged PQ/page replay. D3 and production
+defaults remain fenced.
