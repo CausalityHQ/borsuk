@@ -1130,7 +1130,7 @@ def _global_envelope(payload: bytes, *, treatment: bool) -> dict[str, object]:
         or type(value["page_body_reads"]) is not int
         or value["page_body_reads"] != 0
         or type(value["schema_version"]) is not int
-        or value["schema_version"] != (9 if treatment else 8)
+        or value["schema_version"] != (9 if treatment else 10)
         or type(value["queries"]) is not list
         or len(value["queries"]) != 32
     ):
@@ -1154,7 +1154,7 @@ def _global_control_payloads(
     for ordinal, query in enumerate(value["queries"], 64):
         if (
             type(query) is not dict
-            or set(query) != {"candidate_replay_sha256", "current"}
+            or set(query) != {"candidate_replay_sha256", "current", "pq_work"}
             or type(query["candidate_replay_sha256"]) is not str
             or not _digest(query["candidate_replay_sha256"])
             or type(query["current"]) is not dict
@@ -1162,9 +1162,56 @@ def _global_control_payloads(
             or query["current"]["query_ordinal"] != ordinal
         ):
             raise ValueError("V32 global control replay authority differs")
+        _validate_pq_work(query["pq_work"], query["current"].get("routing"))
         currents.append(_canonical_bytes(query["current"]))
         hashes.append(query["candidate_replay_sha256"])
     return tuple(currents), tuple(hashes)
+
+
+def _validate_pq_work(value: object, routing: object) -> None:
+    if (
+        type(value) is not dict
+        or set(value) != {"base", "high"}
+        or type(routing) is not dict
+    ):
+        raise ValueError("V32 PQ work schema differs")
+    parents = routing.get("query_table_pairs_built")
+    codes = routing.get("codes_scanned")
+    if (
+        type(parents) is not int
+        or not 1 <= parents <= 768
+        or type(codes) is not int
+        or not 1 <= codes <= 262144
+    ):
+        raise ValueError("V32 PQ routing bounds differ")
+    rows = 0
+    for name, width in (("base", 24), ("high", 48)):
+        work = value[name]
+        if type(work) is not dict or set(work) != {
+            "entries_evaluated",
+            "cache_hits",
+            "eager_fallbacks",
+        }:
+            raise ValueError("V32 PQ width schema differs")
+        if any(type(n) is not int or not 0 <= n < 2**64 for n in work.values()):
+            raise ValueError("V32 PQ work integer differs")
+        evaluated, hits, fallbacks = (
+            work["entries_evaluated"],
+            work["cache_hits"],
+            work["eager_fallbacks"],
+        )
+        if (
+            fallbacks > parents
+            or not fallbacks * width * 256 <= evaluated <= parents * width * 256
+            or (evaluated == 0 and hits != 0)
+        ):
+            raise ValueError("V32 PQ work bounds differ")
+        accesses = evaluated - fallbacks * width * 256 + hits
+        if accesses >= 2**64 or accesses % width:
+            raise ValueError("V32 PQ row work differs")
+        rows += accesses // width
+    if rows != codes:
+        raise ValueError("V32 PQ scanned-row work differs")
 
 
 def _global_treatment_payloads(

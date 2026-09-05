@@ -876,12 +876,15 @@ fn virtual_geometric_batch_diagnostic_bytes(
 
 fn global_replay_control_bytes(
     diagnostics: Vec<(usize, String, V32RoutingDiagnostic)>,
+    pq_work: Vec<borsuk::V32PqEvaluationWork>,
 ) -> borsuk::Result<Vec<u8>> {
-    if diagnostics.len() != 32 {
+    if diagnostics.len() != 32 || pq_work.len() != 32 {
         return Err(invalid("V32 global control batch cardinality differs"));
     }
     let mut queries = Vec::with_capacity(32);
-    for (offset, (ordinal, hash, current)) in diagnostics.into_iter().enumerate() {
+    for (offset, ((ordinal, hash, current), pq_work)) in
+        diagnostics.into_iter().zip(pq_work).enumerate()
+    {
         if ordinal != 64 + offset
             || !valid_digest(&hash)
             || current.targets.len() != 10
@@ -890,13 +893,57 @@ fn global_replay_control_bytes(
         {
             return Err(invalid("V32 global control batch authority differs"));
         }
+        let mut scored_rows = 0_u64;
+        let mut counts = serde_json::Map::new();
+        for (name, width, work) in [
+            ("base", 24_u64, pq_work.base),
+            ("high", 48_u64, pq_work.high),
+        ] {
+            let parents = current.selection.work.query_table_pairs_built as u64;
+            let full_entries = width * 256;
+            let fallback_entries = work
+                .eager_fallbacks
+                .checked_mul(full_entries)
+                .ok_or_else(|| invalid("V32 PQ work overflows"))?;
+            let max_entries = parents
+                .checked_mul(full_entries)
+                .ok_or_else(|| invalid("V32 PQ work overflows"))?;
+            if work.eager_fallbacks > parents
+                || work.entries_evaluated > max_entries
+                || (work.entries_evaluated == 0 && work.cache_hits != 0)
+            {
+                return Err(invalid("V32 PQ work bounds differ"));
+            }
+            let accesses = work
+                .entries_evaluated
+                .checked_sub(fallback_entries)
+                .and_then(|n| n.checked_add(work.cache_hits))
+                .ok_or_else(|| invalid("V32 PQ work conservation differs"))?;
+            if accesses % width != 0 {
+                return Err(invalid("V32 PQ row work differs"));
+            }
+            scored_rows = scored_rows
+                .checked_add(accesses / width)
+                .ok_or_else(|| invalid("V32 PQ row work overflows"))?;
+            counts.insert(
+                name.to_owned(),
+                serde_json::json!({
+                    "entries_evaluated": work.entries_evaluated,
+                    "cache_hits": work.cache_hits,
+                    "eager_fallbacks": work.eager_fallbacks,
+                }),
+            );
+        }
+        if scored_rows != current.selection.work.codes_scanned {
+            return Err(invalid("V32 PQ scanned-row work differs"));
+        }
         let bytes = diagnostic_bytes(ordinal, true, Some(768), current)?;
         let current: serde_json::Value = serde_json::from_slice(&bytes)
             .map_err(|_| invalid("V32 global control JSON differs"))?;
-        queries.push(serde_json::json!({"candidate_replay_sha256": hash, "current": current}));
+        queries.push(serde_json::json!({"candidate_replay_sha256": hash, "current": current, "pq_work": counts}));
     }
     let mut bytes = serde_json::to_vec(&canonical(serde_json::json!({
-        "claim_eligible": false, "page_body_reads": 0, "queries": queries, "schema_version": 8,
+        "claim_eligible": false, "page_body_reads": 0, "queries": queries, "schema_version": 10,
     })))
     .map_err(|_| invalid("V32 global control serialization differs"))?;
     bytes.push(b'\n');
@@ -1485,7 +1532,8 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
                         ))
                     })
                     .collect::<borsuk::Result<Vec<_>>>()?;
-                return with_resources(global_replay_control_bytes(controls)?);
+                let pq_work = replays.iter().map(|replay| replay.pq_work()).collect();
+                return with_resources(global_replay_control_bytes(controls, pq_work)?);
             }
             let sources = read_logical_sources(
                 &args.artifact_dir,
@@ -2060,25 +2108,85 @@ mod tests {
     }
 
     #[test]
+    fn v32_global_control_pq_work_binds_counts_without_changing_replay() {
+        // Catches omitted width counters and impossible work receipts. Literal
+        // fixture: 230856 base rows, one distinct entry per subquantizer/parent.
+        let fixture = virtual_diagnostic_fixture();
+        let controls = (64..96)
+            .map(|q| (q, "a".repeat(64), fixture.current.clone()))
+            .collect::<Vec<_>>();
+        let work = borsuk::V32PqEvaluationWork {
+            base: borsuk::V32PqTableWork {
+                entries_evaluated: 6144,
+                cache_hits: 5_534_400,
+                eager_fallbacks: 0,
+            },
+            high: borsuk::V32PqTableWork::default(),
+        };
+        let bytes = super::global_replay_control_bytes(controls.clone(), vec![work; 32]).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema_version"], 10);
+        assert_eq!(
+            value["queries"][0]["candidate_replay_sha256"],
+            "a".repeat(64)
+        );
+        assert_eq!(
+            value["queries"][0]["pq_work"]["base"]["entries_evaluated"],
+            6144
+        );
+        assert_eq!(
+            value["queries"][0]["pq_work"]["base"]["cache_hits"],
+            5_534_400
+        );
+        assert_eq!(
+            value["queries"][0]["pq_work"]["high"]["entries_evaluated"],
+            0
+        );
+        assert_eq!(value["page_body_reads"], 0);
+        assert!(super::global_replay_control_bytes(controls.clone(), vec![work; 31]).is_err());
+        for mutation in 0..4 {
+            let mut wrong = work;
+            match mutation {
+                0 => wrong.base.cache_hits += 1,
+                1 => wrong.base.entries_evaluated = u64::MAX,
+                2 => wrong.high.eager_fallbacks = 257,
+                3 => wrong.base.eager_fallbacks = 2,
+                _ => unreachable!(),
+            }
+            assert!(super::global_replay_control_bytes(controls.clone(), vec![wrong; 32]).is_err());
+        }
+    }
+
+    #[test]
     fn v32_global_layout_envelopes_bind_complete_control_and_geometry() {
         // Break: partial/wrong-order controls or unbounded/inconsistent page map.
         let fixture = virtual_diagnostic_fixture();
         let controls = (64..96)
             .map(|q| (q, "a".repeat(64), fixture.current.clone()))
             .collect::<Vec<_>>();
-        let bytes = super::global_replay_control_bytes(controls.clone()).unwrap();
+        let work = borsuk::V32PqEvaluationWork {
+            base: borsuk::V32PqTableWork {
+                entries_evaluated: 6144,
+                cache_hits: 5_534_400,
+                eager_fallbacks: 0,
+            },
+            high: borsuk::V32PqTableWork::default(),
+        };
+        let bytes = super::global_replay_control_bytes(controls.clone(), vec![work; 32]).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["schema_version"], 8);
+        assert_eq!(value["schema_version"], 10);
         assert_eq!(value["queries"].as_array().unwrap().len(), 32);
         assert_eq!(value["queries"][0]["current"]["query_ordinal"], 64);
         assert_eq!(value["page_body_reads"], 0);
-        assert!(super::global_replay_control_bytes(controls[..31].to_vec()).is_err());
+        assert!(
+            super::global_replay_control_bytes(controls[..31].to_vec(), vec![work; 31]).is_err()
+        );
         let mut reordered = controls.clone();
         reordered.swap(0, 1);
-        assert!(super::global_replay_control_bytes(reordered).is_err());
+        assert!(super::global_replay_control_bytes(reordered, vec![work; 32]).is_err());
         let mut bad_digest = controls;
         bad_digest[0].1 = "not-a-digest".to_owned();
-        assert!(super::global_replay_control_bytes(bad_digest).is_err());
+        assert!(super::global_replay_control_bytes(bad_digest, vec![work; 32]).is_err());
         let treatments = (64..96).map(|q| (q, fixture.clone())).collect::<Vec<_>>();
         let mut counts = vec![480_u16; 1764];
         counts.extend(vec![479; 320]);

@@ -16,6 +16,7 @@ from scripts.run_v32_no_page_containment import (
     LocalArtifact,
     RegisteredLocalArtifact,
     V32ContainmentPlan,
+    _global_control_payloads,
     build_v32_containment_commands,
     containment_exit_status,
     run_v32_no_page_containment,
@@ -670,6 +671,19 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                 {
                     "candidate_replay_sha256": virtual["candidate_replay_sha256"],
                     "current": control,
+                    "pq_work": {
+                        "base": {
+                            "entries_evaluated": 24,
+                            "cache_hits": (control["routing"]["codes_scanned"] - 1)
+                            * 24,
+                            "eager_fallbacks": 0,
+                        },
+                        "high": {
+                            "entries_evaluated": 0,
+                            "cache_hits": 0,
+                            "eager_fallbacks": 0,
+                        },
+                    },
                 }
             )
             treatments.append(treatment)
@@ -678,7 +692,7 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                 "claim_eligible": False,
                 "page_body_reads": 0,
                 "queries": controls,
-                "schema_version": 8,
+                "schema_version": 10,
                 "resources": {
                     "peak_rss_bytes": 10000000,
                     "phase_wall_ns": 900,
@@ -736,6 +750,32 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                 value["resources"]["conservative_peak_rss_bytes"],
                 value["resources"]["controller_peak_rss_bytes"] + 3221225472,
             )
+
+    def test_v32_global_pq_counters_require_conservation_and_current_schema(self):
+        # Break: current CLI receipts are rejected, or inconsistent work is accepted.
+        with self.virtual_fixture() as fixture:
+            control, _ = self.global_payloads(fixture[3])
+            currents, hashes = _global_control_payloads(self.canonical_payload(control))
+            self.assertEqual(len(currents), 32)
+            self.assertEqual(hashes[0], f"{64:064x}")
+            for field, bad in [
+                ("cache_hits", 1),
+                ("entries_evaluated", 2**64),
+                ("eager_fallbacks", 2),
+                ("entries_evaluated", True),
+            ]:
+                changed = json.loads(self.canonical_payload(control))
+                changed["queries"][0]["pq_work"]["base"][field] = bad
+                with self.subTest(field=field, bad=bad), self.assertRaises(ValueError):
+                    _global_control_payloads(self.canonical_payload(changed))
+            changed = json.loads(self.canonical_payload(control))
+            changed["schema_version"] = 8
+            with self.assertRaises(ValueError):
+                _global_control_payloads(self.canonical_payload(changed))
+            changed = json.loads(self.canonical_payload(control))
+            changed["queries"][0]["pq_work"]["high"]["extra"] = 0
+            with self.assertRaises(ValueError):
+                _global_control_payloads(self.canonical_payload(changed))
 
     def test_v32_global_control_precedes_geometry(self):
         # Break: costly geometry runs before exact control validation.
