@@ -11,17 +11,21 @@ from pathlib import Path
 if __package__:
     from scripts.v33_group_proxy import (
         GroupProxy,
+        LeafShape,
         ParentSummary,
         materialize_group_proxies,
         rank_groups,
+        rank_shape_groups,
         select_group_prefix,
     )
 else:
     from v33_group_proxy import (  # type: ignore[no-redef]
         GroupProxy,
+        LeafShape,
         ParentSummary,
         materialize_group_proxies,
         rank_groups,
+        rank_shape_groups,
         select_group_prefix,
     )
 
@@ -32,6 +36,7 @@ EXPECTED_DIGESTS = {
     "prospective_terminal": "c54255e18102a425d740acb7b204bc5215a0325fed5632dae3546571a5cff8cb",
     "query": "296d45828020c1c0b88c6a1d5c822f6283280513b8c58d01cfa961f3a139a5d4",
     "routing_ranges": "29c4c432560e87c5b00b7043426a3aec4886c6838e0e15c1f572771944abf0a6",
+    "shape": "6954ddac2e8dfda76338a9b3c3da278faea80326b29c3427c6aa22753d4e6bea",
 }
 
 
@@ -182,6 +187,58 @@ def _load_authority(args):
     if set(group_of_parent) != populated_parents:
         raise ValueError("V33 group parent coverage differs")
 
+    shape_vector = pa.list_(pa.field("element", pa.float32(), nullable=False), 96)
+    shape = _arrow_table(
+        _read(args.shape, "shape"),
+        pa.schema(
+            [
+                pa.field("routing_leaf_ordinal", pa.uint32(), nullable=False),
+                pa.field("group_ordinal", pa.uint32(), nullable=False),
+                pa.field("logical_start", pa.uint64(), nullable=False),
+                pa.field("population", pa.uint64(), nullable=False),
+                pa.field("mean", shape_vector, nullable=False),
+                pa.field("diagonal_variance", shape_vector, nullable=False),
+                pa.field("scalar_moment", pa.float32(), nullable=False),
+                pa.field("maximum_radius", pa.float32(), nullable=False),
+                pa.field("split_dimension", pa.uint8(), nullable=False),
+                pa.field("split_center_left", shape_vector, nullable=False),
+                pa.field("split_center_right", shape_vector, nullable=False),
+                pa.field("scalar_split_selected", pa.bool_(), nullable=False),
+            ]
+        ),
+        "shape",
+    )
+    shape_rows = shape.to_pylist()
+    if len(shape_rows) != len(row_counts):
+        raise ValueError("V33 leaf shape row count differs")
+    leaf_shapes = []
+    for ordinal, record in enumerate(shape_rows):
+        expected_group = group_of_parent[int(parent_ordinals[ordinal])]
+        if (
+            record["routing_leaf_ordinal"] != ordinal
+            or record["group_ordinal"] != expected_group
+            or record["logical_start"] != int(starts[ordinal])
+            or record["population"] != int(row_counts[ordinal])
+            or not 0 <= record["split_dimension"] < 96
+            or record["maximum_radius"] < 0.0
+        ):
+            raise ValueError("V33 leaf shape binding differs")
+        leaf_shapes.append(
+            LeafShape(
+                ordinal=ordinal,
+                group_ordinal=expected_group,
+                population=record["population"],
+                mean=tuple(record["mean"]),
+                diagonal_variance=tuple(record["diagonal_variance"]),
+                scalar_moment=record["scalar_moment"],
+                split_centers=(
+                    tuple(record["split_center_left"]),
+                    tuple(record["split_center_right"]),
+                ),
+                scalar_split_selected=record["scalar_split_selected"],
+            )
+        )
+
     query_raw = _read(args.query, "query")
     queries = _normalize_like_v30(
         _normalize_like_v30(_matrix(query_raw, role="query", physical_rows=10000))
@@ -224,7 +281,7 @@ def _load_authority(args):
         query_authority.append(
             (ordinal, tuple(float(value) for value in queries[ordinal]), tuple(owners))
         )
-    return controls, proxies, tuple(query_authority)
+    return controls, proxies, tuple(leaf_shapes), tuple(query_authority)
 
 
 def _evaluate(name, groups, queries):
@@ -263,16 +320,58 @@ def _evaluate(name, groups, queries):
     }
 
 
+def _evaluate_shape(name, groups, shapes, queries, arm):
+    records = []
+    included = 0
+    perfect = 0
+    for ordinal, query, owners in queries:
+        ranked = rank_shape_groups(shapes, query, arm)
+        selected = select_group_prefix(
+            groups, ranked, row_limit=131_072, group_limit=64
+        )
+        chosen = set(selected)
+        hits = sum(owner in chosen for owner in owners)
+        rows = sum(groups[group].rows for group in selected)
+        included += hits
+        perfect += hits == len(owners)
+        records.append(
+            {
+                "hits": hits,
+                "query_ordinal": ordinal,
+                "selected_groups": list(selected),
+                "selected_rows": rows,
+                "truth_owner_ranks": [ranked.index(owner) + 1 for owner in owners],
+            }
+        )
+    return {
+        "arm": name,
+        "included_owners": included,
+        "maximum_selected_rows": max(record["selected_rows"] for record in records),
+        "minimum_selected_rows": min(record["selected_rows"] for record in records),
+        "passed": included == 1280 and perfect == 128,
+        "perfect_queries": perfect,
+        "query_count": len(records),
+        "records": records,
+        "total_owners": 1280,
+    }
+
+
 def run(args):
-    controls, proxies, queries = _load_authority(args)
+    controls, proxies, shapes, queries = _load_authority(args)
     arms = (
         _evaluate("weighted-mean", controls, queries),
         _evaluate("three-parent-prototype", proxies, queries),
+        _evaluate_shape("fine-leaf-centroid", controls, shapes, queries, "centroid"),
+        _evaluate_shape("scalar-moment", controls, shapes, queries, "scalar-moment"),
+        _evaluate_shape("diagonal-ellipsoid", controls, shapes, queries, "diagonal-moment"),
+        _evaluate_shape(
+            "matched-byte-split-centroid", controls, shapes, queries, "split-centroid"
+        ),
     )
     result = {
         "arms": arms,
         "claim_eligible": False,
-        "code_reads": 0,
+        "code_reads": 5,
         "corpus_reads": 0,
         "input_sha256": EXPECTED_DIGESTS,
         "page_reads": 0,

@@ -8,6 +8,50 @@ from pathlib import Path
 
 
 class GroupProxyTests(unittest.TestCase):
+    def test_shape_scores_bind_scalar_diagonal_and_split_controls(self):
+        from scripts.v33_group_proxy import (
+            LeafShape,
+            rank_shape_groups,
+            score_leaf_shape,
+        )
+
+        zero = (0.0,) * 96
+        mean = (2.0,) + zero[1:]
+        diagonal = (1.0,) + zero[1:]
+        leaf = LeafShape(
+            ordinal=0,
+            group_ordinal=0,
+            population=2,
+            mean=mean,
+            diagonal_variance=diagonal,
+            scalar_moment=1.0,
+            split_centers=((1.0,) + zero[1:], (3.0,) + zero[1:]),
+            scalar_split_selected=True,
+        )
+        query = (4.0,) + zero[1:]
+        factor = math.sqrt(2.0 * math.log(2.0))
+        self.assertEqual(score_leaf_shape(leaf, query, "centroid"), 4.0)
+        self.assertEqual(score_leaf_shape(leaf, query, "split-centroid"), 1.0)
+        self.assertEqual(
+            score_leaf_shape(leaf, query, "scalar-moment"),
+            5.0 - factor * math.sqrt(18.0 / 96.0),
+        )
+        self.assertEqual(
+            score_leaf_shape(leaf, query, "diagonal-moment"),
+            5.0 - factor * math.sqrt(18.0),
+        )
+        other = LeafShape(
+            ordinal=1,
+            group_ordinal=1,
+            population=1,
+            mean=(5.0,) + zero[1:],
+            diagonal_variance=zero,
+            scalar_moment=0.0,
+            split_centers=((5.0,) + zero[1:], (5.0,) + zero[1:]),
+            scalar_split_selected=False,
+        )
+        self.assertEqual(rank_shape_groups((other, leaf), query, "diagonal-moment"), (0, 1))
+
     def test_driver_supports_direct_script_execution(self):
         repository = Path(__file__).resolve().parents[1]
         driver = repository / "scripts/run_v33_group_proxy.py"

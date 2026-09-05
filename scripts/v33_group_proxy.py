@@ -43,6 +43,18 @@ class GroupProxy:
 
 
 @dataclass(frozen=True)
+class LeafShape:
+    ordinal: int
+    group_ordinal: int
+    population: int
+    mean: tuple[float, ...]
+    diagonal_variance: tuple[float, ...]
+    scalar_moment: float
+    split_centers: tuple[tuple[float, ...], tuple[float, ...]]
+    scalar_split_selected: bool
+
+
+@dataclass(frozen=True)
 class OwnerInclusionResult:
     included_owners: int
     maximum_rows: int
@@ -211,6 +223,67 @@ def rank_groups(groups, query):
         score = min(_distance(query, prototype) for prototype in group.prototypes)
         ranked.append((score, group.ordinal))
     return tuple(ordinal for _, ordinal in sorted(ranked))
+
+
+def score_leaf_shape(leaf, query, arm):
+    if (
+        type(leaf.ordinal) is not int
+        or leaf.ordinal < 0
+        or type(leaf.group_ordinal) is not int
+        or leaf.group_ordinal < 0
+        or type(leaf.population) is not int
+        or leaf.population <= 0
+        or len(leaf.mean) != 96
+        or len(leaf.diagonal_variance) != 96
+        or len(query) != 96
+        or type(leaf.scalar_split_selected) is not bool
+        or not math.isfinite(leaf.scalar_moment)
+        or leaf.scalar_moment < 0.0
+        or any(not math.isfinite(value) or value < 0.0 for value in leaf.diagonal_variance)
+    ):
+        raise ValueError("leaf shape authority differs")
+    distance = _distance(leaf.mean, query)
+    factor = math.sqrt(2.0 * math.log(leaf.population)) if leaf.population > 1 else 0.0
+    if arm == "centroid":
+        return distance
+    if arm == "split-centroid":
+        centers = leaf.split_centers if leaf.scalar_split_selected else (leaf.mean,)
+        return min(_distance(center, query) for center in centers)
+    if arm == "scalar-moment":
+        variance = (
+            2.0 * leaf.scalar_moment * leaf.scalar_moment / 96.0
+            + 4.0 * leaf.scalar_moment * distance / 96.0
+        )
+        return distance + leaf.scalar_moment - factor * math.sqrt(variance)
+    if arm == "diagonal-moment":
+        variance_square = 0.0
+        directional = 0.0
+        for query_value, mean, variance in zip(
+            query, leaf.mean, leaf.diagonal_variance, strict=True
+        ):
+            variance_square += variance * variance
+            directional += (query_value - mean) ** 2 * variance
+        return (
+            distance
+            + leaf.scalar_moment
+            - factor * math.sqrt(2.0 * variance_square + 4.0 * directional)
+        )
+    raise ValueError("leaf shape arm differs")
+
+
+def rank_shape_groups(leaves, query, arm):
+    leaves = tuple(leaves)
+    if not leaves:
+        raise ValueError("leaf shape set is empty")
+    scores = {}
+    seen = set()
+    for leaf in leaves:
+        if leaf.ordinal in seen:
+            raise ValueError("leaf shape ordinal differs")
+        seen.add(leaf.ordinal)
+        score = score_leaf_shape(leaf, query, arm)
+        scores[leaf.group_ordinal] = min(scores.get(leaf.group_ordinal, score), score)
+    return tuple(group for group, _ in sorted(scores.items(), key=lambda item: (item[1], item[0])))
 
 
 def select_group_prefix(groups, ranked, *, row_limit, group_limit):
