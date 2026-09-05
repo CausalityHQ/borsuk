@@ -1182,6 +1182,67 @@ impl BoundedCandidates {
     }
 }
 
+/// Score borrowed rows using the same parent residual and bounded ADC kernel
+/// irrespective of whether codes are resident or decoded from a bounded object.
+fn score_parent_codes<'a>(
+    query: &[f32; 96],
+    centroid: &[f16; 96],
+    mut rows: impl Iterator<Item = Result<(u64, V30PqWidth, &'a [u8])>>,
+    base_table: &mut V30LazyQueryTable<'_>,
+    high_table: &mut V30LazyQueryTable<'_>,
+    candidates: &mut BoundedCandidates,
+) -> Result<()> {
+    let residual = std::array::from_fn(|d| query[d] - f32::from(centroid[d]));
+    base_table.begin_parent(&residual)?;
+    high_table.begin_parent(&residual)?;
+    let mut base: [&[u8]; 32] = [&[]; 32];
+    let mut high: [&[u8]; 32] = [&[]; 32];
+    let mut base_slots = [0_usize; 32];
+    let mut high_slots = [0_usize; 32];
+    let mut base_scores = [0.0_f32; 32];
+    let mut high_scores = [0.0_f32; 32];
+    let mut logicals = [0_u64; 32];
+    let mut scores = [0.0_f32; 32];
+    loop {
+        let (mut count, mut base_count, mut high_count) = (0, 0, 0);
+        for row in rows.by_ref().take(32) {
+            let (logical, width, code) = row?;
+            logicals[count] = logical;
+            match width {
+                V30PqWidth::Base24 => {
+                    base[base_count] = code;
+                    base_slots[base_count] = count;
+                    base_count += 1;
+                }
+                V30PqWidth::High48 => {
+                    high[high_count] = code;
+                    high_slots[high_count] = count;
+                    high_count += 1;
+                }
+            }
+            count += 1;
+        }
+        if count == 0 {
+            break;
+        }
+        base_table.score_block_into(&base[..base_count], &mut base_scores[..base_count])?;
+        high_table.score_block_into(&high[..high_count], &mut high_scores[..high_count])?;
+        for i in 0..base_count {
+            scores[base_slots[i]] = base_scores[i];
+        }
+        for i in 0..high_count {
+            scores[high_slots[i]] = high_scores[i];
+        }
+        for i in 0..count {
+            candidates.insert(Candidate {
+                logical: logicals[i],
+                score: scores[i],
+            });
+        }
+    }
+    Ok(())
+}
+
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
 }
@@ -2143,12 +2204,6 @@ impl V32Router {
             .map(|(_, leaf)| *leaf as u32)
             .collect::<Vec<_>>();
         let mut candidates = BoundedCandidates::new(candidate_depth);
-        let mut base = Vec::with_capacity(32);
-        let mut base_slots = Vec::with_capacity(32);
-        let mut high = Vec::with_capacity(32);
-        let mut high_slots = Vec::with_capacity(32);
-        let mut base_scores = [0.0_f32; 32];
-        let mut high_scores = [0.0_f32; 32];
         let mut leaves_by_parent = BTreeMap::<usize, Vec<usize>>::new();
         for (_, leaf) in leaves {
             let range = &self.layout.leaves()[*leaf];
@@ -2160,56 +2215,28 @@ impl V32Router {
         let mut base_table = V30LazyQueryTable::new(&self.base_codebook)?;
         let mut high_table = V30LazyQueryTable::new(&self.high_codebook)?;
         for (code_parent, parent_leaves) in &leaves_by_parent {
-            let residual = std::array::from_fn(|dimension| {
-                query[dimension] - f32::from(self.hierarchy.leaves[*code_parent][dimension])
-            });
-            base_table.begin_parent(&residual)?;
-            high_table.begin_parent(&residual)?;
             query_table_pairs_live += 1;
             peak_query_table_pairs_live = peak_query_table_pairs_live.max(query_table_pairs_live);
-            for &leaf in parent_leaves {
-                let range = &self.layout.leaves()[leaf];
-                observer(range.leaf_ordinal);
-                let range_end = range.logical_start + range.row_count;
-                for block_start in (range.logical_start..range_end).step_by(32) {
-                    let block_end = range_end.min(block_start + 32);
-                    base.clear();
-                    base_slots.clear();
-                    high.clear();
-                    high_slots.clear();
-                    for logical in block_start..block_end {
-                        let slot = usize::try_from(logical - block_start)
-                            .map_err(|_| invalid("V30 candidate block offset overflows"))?;
-                        let (width, code) = self.codes.code(logical as usize)?;
-                        match width {
-                            V30PqWidth::Base24 => {
-                                base.push(code);
-                                base_slots.push(slot);
-                            }
-                            V30PqWidth::High48 => {
-                                high.push(code);
-                                high_slots.push(slot);
-                            }
-                        }
-                    }
-                    let mut scores = [0.0_f32; 32];
-                    base_table.score_block_into(&base, &mut base_scores[..base.len()])?;
-                    high_table.score_block_into(&high, &mut high_scores[..high.len()])?;
-                    for (&slot, &score) in base_slots.iter().zip(&base_scores) {
-                        scores[slot] = score;
-                    }
-                    for (&slot, &score) in high_slots.iter().zip(&high_scores) {
-                        scores[slot] = score;
-                    }
-                    for logical in block_start..block_end {
-                        let candidate = Candidate {
-                            score: scores[(logical - block_start) as usize],
-                            logical,
-                        };
-                        candidates.insert(candidate);
-                    }
-                }
-            }
+            let rows = parent_leaves
+                .iter()
+                .flat_map(|&leaf| {
+                    let range = &self.layout.leaves()[leaf];
+                    observer(range.leaf_ordinal);
+                    range.logical_start..range.logical_start + range.row_count
+                })
+                .map(|logical| {
+                    self.codes
+                        .code(logical as usize)
+                        .map(|(width, code)| (logical, width, code))
+                });
+            score_parent_codes(
+                &query,
+                &self.hierarchy.leaves[*code_parent],
+                rows,
+                &mut base_table,
+                &mut high_table,
+                &mut candidates,
+            )?;
             query_table_pairs_live -= 1;
         }
         debug_assert_eq!(query_table_pairs_live, 0);
@@ -2768,6 +2795,306 @@ mod tests {
         assert_eq!(work.high.eager_fallbacks, 0);
         assert_eq!(replay.details.selection.work.query_table_pairs_built, 2);
         assert_eq!(replay.details.selection.work.peak_query_table_pairs_live, 1);
+    }
+
+    #[test]
+    fn v32_borrowed_parent_scorer_matches_scalar() {
+        use crate::v30_s3_pq::{V30LazyQueryTable, V30QueryTable};
+        let base = V30PqCodebook::new(
+            V30PqWidth::Base24,
+            (0..96 * 256)
+                .map(|i| (i % 271) as f32 / 277.0 - 0.5)
+                .collect(),
+        )
+        .unwrap();
+        let high = V30PqCodebook::new(
+            V30PqWidth::High48,
+            (0..96 * 256)
+                .map(|i| (i % 263) as f32 / 269.0 - 0.5)
+                .collect(),
+        )
+        .unwrap();
+        let query = super::normalized(&[0.2; 96]).unwrap();
+        let centroid = [f16::from_f32(0.03125); 96];
+        let residual = std::array::from_fn(|d| query[d] - f32::from(centroid[d]));
+        let eager_base = V30QueryTable::new(&base, &residual).unwrap();
+        let eager_high = V30QueryTable::new(&high, &residual).unwrap();
+        let rows = (0..17_u64)
+            .chain(100..157)
+            .map(|logical| {
+                let width = if logical % 3 == 1 {
+                    V30PqWidth::High48
+                } else {
+                    V30PqWidth::Base24
+                };
+                (
+                    logical,
+                    width,
+                    vec![(logical % 7) as u8; if width == V30PqWidth::Base24 { 24 } else { 48 }],
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut expected = Vec::new();
+        for (logical, width, code) in &rows {
+            let mut score = [0.0];
+            match width {
+                V30PqWidth::Base24 => eager_base.score_block_into(&[code], &mut score),
+                V30PqWidth::High48 => eager_high.score_block_into(&[code], &mut score),
+            }
+            .unwrap();
+            expected.push(Candidate {
+                logical: *logical,
+                score: score[0],
+            });
+        }
+        expected.sort_by(|a, b| {
+            a.score
+                .total_cmp(&b.score)
+                .then_with(|| a.logical.cmp(&b.logical))
+        });
+        expected.truncate(40);
+        let mut actual = BoundedCandidates::new(40);
+        let mut lazy_base = V30LazyQueryTable::new(&base).unwrap();
+        let mut lazy_high = V30LazyQueryTable::new(&high).unwrap();
+        super::score_parent_codes(
+            &query,
+            &centroid,
+            rows.iter()
+                .map(|(logical, width, code)| Ok((*logical, *width, code.as_slice()))),
+            &mut lazy_base,
+            &mut lazy_high,
+            &mut actual,
+        )
+        .unwrap();
+        assert_eq!(actual.finish(), expected); // Candidate equality compares score bits.
+    }
+
+    #[test]
+    fn v32_borrowed_parent_scorer_object_delivery_is_equivalent() {
+        use crate::v30_s3_pq::{V30LazyQueryTable, V30QueryTable};
+        use crate::v32_code_objects::{
+            V32CodeObject, V32CodeRange, V32ParentCodes, decode_v32_code_object,
+            encode_v32_code_object,
+        };
+        use sha2::{Digest, Sha256};
+        let unit = f16::from_f32(1.0_f32 / 96.0_f32.sqrt());
+        let hierarchy = V27Hierarchy {
+            roots: vec![[unit; 96], [-unit; 96]],
+            leaves: vec![
+                [unit; 96],
+                [-unit; 96],
+                std::array::from_fn(|d| if d % 2 == 0 { unit } else { -unit }),
+                std::array::from_fn(|d| if d % 2 == 0 { -unit } else { unit }),
+            ],
+            leaf_roots: vec![0, 0, 1, 1],
+        };
+        let pages = (0..128_u32)
+            .map(|ordinal| {
+                let rows =
+                    [u64::from(ordinal) * 2, u64::from(ordinal) * 2 + 1].map(|source_ordinal| {
+                        V27PageRow {
+                            source_ordinal,
+                            vector: [0.2; 96],
+                        }
+                    });
+                let (identity, _) = encode_v27_page(ordinal, 2, 0, &rows).unwrap();
+                V30PageRange::from_legacy(u64::from(ordinal) * 2, 2, &identity).unwrap()
+            })
+            .collect();
+        let ranges = (0..8_u32)
+            .map(|ordinal| V32RoutingRange {
+                leaf_ordinal: ordinal,
+                code_parent_leaf_ordinal: ordinal % 4,
+                routing_centroid: hierarchy.leaves[(ordinal % 4) as usize],
+                logical_start: u64::from(ordinal) * 32,
+                row_count: 32,
+                page_start: ordinal * 16,
+                page_count: 16,
+            })
+            .collect();
+        let layout = V30Layout::new(256, ranges, pages).unwrap();
+        let mut high_bits = vec![0_u32; 8];
+        let (mut base_bytes, mut high_bytes) = (Vec::new(), Vec::new());
+        for logical in 0..256_usize {
+            if logical % 3 == 1 {
+                high_bits[logical / 32] |= 1 << (logical % 32);
+                high_bytes.extend_from_slice(&[(logical % 7) as u8; 48]);
+            } else {
+                base_bytes.extend_from_slice(&[(logical % 7) as u8; 24]);
+            }
+        }
+        let codes = V30CodePlanes::from_packed(256, high_bits, base_bytes, high_bytes).unwrap();
+        let base = V30PqCodebook::new(
+            V30PqWidth::Base24,
+            (0..96 * 256)
+                .map(|i| (i % 271) as f32 / 277.0 - 0.5)
+                .collect(),
+        )
+        .unwrap();
+        let high = V30PqCodebook::new(
+            V30PqWidth::High48,
+            (0..96 * 256)
+                .map(|i| (i % 263) as f32 / 269.0 - 0.5)
+                .collect(),
+        )
+        .unwrap();
+        let router = V32Router::new(hierarchy, base, high, layout, codes).unwrap();
+        let query = [0.2_f32; 96];
+        let normalized = super::normalized(&query).unwrap();
+        let arm = V32SearchArm {
+            root_beam: 2,
+            leaf_beam: 8,
+            scan_budget: 65536,
+            candidate_depth: 256,
+            page_count: 64,
+        };
+        let replay = router.capture_global_replay(&query, arm, 8).unwrap();
+        let mut expected = Vec::new();
+        let mut parents = Vec::new();
+        for parent in 0..4_usize {
+            let centroid = router.hierarchy.leaves[parent];
+            let residual = std::array::from_fn(|d| normalized[d] - f32::from(centroid[d]));
+            let eager_base = V30QueryTable::new(&router.base_codebook, &residual).unwrap();
+            let eager_high = V30QueryTable::new(&router.high_codebook, &residual).unwrap();
+            let ranges = vec![
+                V32CodeRange {
+                    logical_start: (parent * 32) as u64,
+                    row_count: 32,
+                },
+                V32CodeRange {
+                    logical_start: ((parent + 4) * 32) as u64,
+                    row_count: 32,
+                },
+            ];
+            let mut p = V32ParentCodes {
+                code_parent_ordinal: parent as u32,
+                centroid,
+                ranges,
+                high_bits: vec![0; 8],
+                base_codes: vec![],
+                high_codes: vec![],
+            };
+            let logicals =
+                (parent * 32..parent * 32 + 32).chain((parent + 4) * 32..(parent + 4) * 32 + 32);
+            for (local, logical) in logicals.enumerate() {
+                let (width, code) = router.codes.code(logical).unwrap();
+                let mut score = [0.0];
+                match width {
+                    V30PqWidth::Base24 => {
+                        p.base_codes.extend_from_slice(code);
+                        eager_base.score_block_into(&[code], &mut score).unwrap();
+                    }
+                    V30PqWidth::High48 => {
+                        p.high_bits[local / 8] |= 1 << (local % 8);
+                        p.high_codes.extend_from_slice(code);
+                        eager_high.score_block_into(&[code], &mut score).unwrap();
+                    }
+                }
+                expected.push(Candidate {
+                    logical: logical as u64,
+                    score: score[0],
+                });
+            }
+            parents.push(p);
+        }
+        expected.sort_by(|a, b| {
+            a.score
+                .total_cmp(&b.score)
+                .then_with(|| a.logical.cmp(&b.logical))
+        });
+        assert_eq!(replay.details.ranked_candidates, expected);
+        let encoded = encode_v32_code_object(&V32CodeObject { parents }).unwrap();
+        let decoded = decode_v32_code_object(
+            &encoded,
+            &format!("{:x}", Sha256::digest(&encoded)),
+            encoded.len(),
+        )
+        .unwrap();
+        for order in [[0, 1, 2, 3], [3, 2, 1, 0], [1, 3, 0, 2]] {
+            let mut candidates = BoundedCandidates::new(256);
+            let mut base = V30LazyQueryTable::new(&router.base_codebook).unwrap();
+            let mut high = V30LazyQueryTable::new(&router.high_codebook).unwrap();
+            for index in order {
+                let p = &decoded.parents[index];
+                super::score_parent_codes(
+                    &normalized,
+                    &p.centroid,
+                    p.cursor().unwrap().map(Ok),
+                    &mut base,
+                    &mut high,
+                    &mut candidates,
+                )
+                .unwrap();
+            }
+            let actual = candidates.finish();
+            assert_eq!(actual, expected);
+            let mut seen = std::collections::BTreeSet::new();
+            let pages = actual
+                .iter()
+                .filter_map(|candidate| {
+                    let page = router
+                        .layout
+                        .page_for_logical(candidate.logical)
+                        .unwrap()
+                        .identity();
+                    seen.insert(page.ordinal).then_some(page)
+                })
+                .collect::<Vec<_>>();
+            for count in [16, 64] {
+                assert_eq!(&pages[..count], replay.physical_page_prefix(count).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn v32_borrowed_parent_scorer_propagates_errors_and_checks_both_widths() {
+        use crate::v30_s3_pq::V30LazyQueryTable;
+        let base = V30PqCodebook::new(V30PqWidth::Base24, vec![0.0; 96 * 256]).unwrap();
+        let high = V30PqCodebook::new(V30PqWidth::High48, vec![0.0; 96 * 256]).unwrap();
+        let query = super::normalized(&[0.2; 96]).unwrap();
+        for invalid_length in [false, true] {
+            let mut base_table = V30LazyQueryTable::new(&base).unwrap();
+            let mut high_table = V30LazyQueryTable::new(&high).unwrap();
+            let mut candidates = BoundedCandidates::new(40);
+            let rows = (0..34).map(|logical| {
+                if logical == 33 {
+                    if invalid_length {
+                        Ok((logical, V30PqWidth::Base24, &[0_u8; 23][..]))
+                    } else {
+                        Err(super::invalid("injected row read failure"))
+                    }
+                } else {
+                    Ok((logical, V30PqWidth::Base24, &[0_u8; 24][..]))
+                }
+            });
+            assert!(
+                super::score_parent_codes(
+                    &query,
+                    &[f16::ZERO; 96],
+                    rows,
+                    &mut base_table,
+                    &mut high_table,
+                    &mut candidates
+                )
+                .is_err()
+            );
+        }
+        let overflowing_high =
+            V30PqCodebook::new(V30PqWidth::High48, vec![f32::MAX; 96 * 256]).unwrap();
+        let mut base_table = V30LazyQueryTable::new(&base).unwrap();
+        let mut high_table = V30LazyQueryTable::new(&overflowing_high).unwrap();
+        let mut candidates = BoundedCandidates::new(1);
+        assert!(
+            super::score_parent_codes(
+                &query,
+                &[f16::ZERO; 96],
+                std::iter::once(Ok((0, V30PqWidth::Base24, &[0_u8; 24][..]))),
+                &mut base_table,
+                &mut high_table,
+                &mut candidates
+            )
+            .is_err()
+        );
     }
 
     #[test]

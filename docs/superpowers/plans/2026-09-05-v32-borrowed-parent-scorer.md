@@ -68,10 +68,28 @@ fn score_parent_codes<'a>(
 ) -> Result<()>
 ```
 
-- [ ] Stage `v32_borrowed_parent_scorer_matches_scalar`: use existing coherent small codebook fixtures; enumerate scalar base/high ADC per logical row using original residual centroid, sort `(score.total_cmp,logical)`, truncate to the same candidate depth. Assert exact score bits and IDs from the missing helper. Include mixed widths/gaps/ties and33+ rows.
-- [ ] Run `rtk proxy cargo test -p borsuk --lib v32_borrowed_parent_scorer_ -- --nocapture` for missing-helper RED.
-- [ ] Extract the existing loop into the declared helper: begin both tables, take32 fallible borrowed rows into fixed logical/score arrays and reused base/high refs/slot buffers; score, restore slots and insert. Propagate row/table errors without a partial successful result.
-- [ ] Replace resident inner loop with a fallible adapter over selected leaf ranges and `self.codes.code`, retaining range-entry observer invocation. Keep one scratch pair outside the parent loop and existing work accounting.
-- [ ] Add `v32_borrowed_parent_scorer_object_delivery_is_equivalent`: materialize only a coherent synthetic parent family into Arrow, decode/cursor/map(Ok), compare complete candidate bits/IDs against resident rows and independently scored rows. Use64+ pages, two roots/multiple parents, original distinct centroids; compare16/64 physical page prefixes and reversed whole-parent delivery.
-- [ ] Run the narrow scorer gate, then existing `v32_root64_` and `v32_s3_search_reuses_one_live_query_table_pair` gates. Fix the failing layer only, with regression tests for any discovered bug.
-- [ ] Run affected library checks and strict scoped Clippy, fmt/diff; request Astra read-only review; commit/push the verified slice fast-forward. Do not claim global code-plane residency has been removed.
+- [x] Stage `v32_borrowed_parent_scorer_matches_scalar`: use existing coherent small codebook fixtures; enumerate scalar base/high ADC per logical row using original residual centroid, sort `(score.total_cmp,logical)`, truncate to the same candidate depth. Assert exact score bits and IDs from the missing helper. Include mixed widths/gaps/ties and33+ rows.
+- [x] Run `rtk proxy cargo test -p borsuk --lib v32_borrowed_parent_scorer_ -- --nocapture` for missing-helper RED.
+- [x] Extract the existing loop into the declared helper: begin both tables, take32 fallible borrowed rows into fixed logical/score arrays and reused base/high refs/slot buffers; score, restore slots and insert. Propagate row/table errors without a partial successful result.
+- [x] Replace resident inner loop with a fallible adapter over selected leaf ranges and `self.codes.code`, retaining range-entry observer invocation. Keep one scratch pair outside the parent loop and existing work accounting.
+- [x] Add `v32_borrowed_parent_scorer_object_delivery_is_equivalent`: materialize only a coherent synthetic parent family into Arrow, decode/cursor/map(Ok), compare complete candidate bits/IDs against resident rows and independently scored rows. Use64+ pages, two roots/multiple parents, original distinct centroids; compare16/64 physical page prefixes and reversed whole-parent delivery.
+- [x] Run the narrow scorer gate, then existing `v32_root64_` and `v32_s3_search_reuses_one_live_query_table_pair` gates. Fix the failing layer only, with regression tests for any discovered bug.
+- [x] Run affected library checks and strict scoped Clippy, fmt/diff; request Astra read-only review; commit/push the verified slice fast-forward. Do not claim global code-plane residency has been removed.
+
+## Shared scorer checkpoint
+
+Missing-helper RED was the sole E0425. After extraction, one missing borrow
+at the resident callsite was corrected; the final scorer gate passed3/3 in
+0.05s. The independent eager test scores74 mixed-width/gapped rows and
+compares40 retained candidates exactly. The object test uses256 rows,
+two roots/four original parents and128 physical pages; three whole-parent
+delivery orders agree with eager and production resident candidates and
+physical16/64-page prefixes. Error tests cover a row-read failure and short
+code after a complete32-row block, plus unused high-width overflow rejection.
+
+Existing root64 tests passed3/3, lazy-PQ tests6/6 and serving/search tests17/17.
+Strict scoped library/test Clippy passed; Astra read-only review reported
+READY. Blocks may cross leaf boundaries, so the next leaf's entry observer
+can run before the prior partial block is scored, while traversal order and
+the observer's range-entry contract remain unchanged. No S3 latency, write
+throughput or new dataset-scale result is asserted by these unit gates.
