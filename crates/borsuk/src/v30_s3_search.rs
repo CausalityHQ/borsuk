@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BinaryHeap, HashSet},
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -688,6 +688,17 @@ pub(crate) struct V32VirtualPageLayout {
     page_row_counts: Vec<u16>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V32VirtualRoutingDiagnostic {
+    pub(crate) current: V32RoutingDiagnostic,
+    pub(crate) virtual_pages: Vec<u32>,
+    pub(crate) routing_work: V32RoutingWork,
+    pub(crate) truth_microleaf_count: usize,
+    pub(crate) truth_virtual_page_count: usize,
+    pub(crate) recovered_logicals: Vec<u64>,
+    pub(crate) newly_lost_logicals: Vec<u64>,
+}
+
 impl V32VirtualPageLayout {
     pub(crate) fn page_for_logical(&self, logical: u64) -> Result<u32> {
         usize::try_from(logical)
@@ -927,6 +938,7 @@ struct Candidate {
     logical: u64,
 }
 
+#[derive(Clone)]
 struct RoutingDetails {
     selection: V32PageSelection,
     selected_leaves: Vec<u32>,
@@ -1365,6 +1377,63 @@ impl V32Router {
     ) -> Result<V32RoutingDiagnostic> {
         let details = self.routing_details_global_prefix(query, arm, leaf_limit, &|_| {})?;
         self.diagnose_logicals_from_details(query, logicals, details)
+    }
+
+    pub(crate) fn diagnose_logicals_with_virtual_geometric_global_prefix(
+        &self,
+        query: &[f32; 96],
+        arm: V32SearchArm,
+        leaf_limit: usize,
+        logicals: &[u64],
+        virtual_layout: &V32VirtualPageLayout,
+    ) -> Result<V32VirtualRoutingDiagnostic> {
+        if virtual_layout.page_owners.len() != self.codes.logical_rows() {
+            return Err(invalid("V32 virtual page layout cardinality differs"));
+        }
+        let details = self.routing_details_global_prefix(query, arm, leaf_limit, &|_| {})?;
+        let current = self.diagnose_logicals_from_details(query, logicals, details.clone())?;
+        let mut seen = std::collections::BTreeSet::new();
+        let mut virtual_pages = Vec::with_capacity(arm.page_count);
+        for candidate in &details.ranked_candidates {
+            let page = virtual_layout.page_for_logical(candidate.logical)?;
+            if seen.insert(page) {
+                virtual_pages.push(page);
+                if virtual_pages.len() == arm.page_count {
+                    break;
+                }
+            }
+        }
+        if virtual_pages.len() != arm.page_count {
+            return Err(invalid("V32 virtual selected page cardinality differs"));
+        }
+        let selected = virtual_pages.iter().copied().collect::<BTreeSet<_>>();
+        let truth_microleaf_count = current
+            .targets
+            .iter()
+            .map(|target| target.leaf_ordinal)
+            .collect::<BTreeSet<_>>()
+            .len();
+        let truth_virtual_page_count = virtual_layout.truth_page_count(logicals)?;
+        let mut recovered_logicals = Vec::new();
+        let mut newly_lost_logicals = Vec::new();
+        for target in &current.targets {
+            let virtual_selected =
+                selected.contains(&virtual_layout.page_for_logical(target.logical)?);
+            match (target.page_selected, virtual_selected) {
+                (false, true) => recovered_logicals.push(target.logical),
+                (true, false) => newly_lost_logicals.push(target.logical),
+                _ => {}
+            }
+        }
+        Ok(V32VirtualRoutingDiagnostic {
+            routing_work: details.selection.work.clone(),
+            current,
+            virtual_pages,
+            truth_microleaf_count,
+            truth_virtual_page_count,
+            recovered_logicals,
+            newly_lost_logicals,
+        })
     }
 
     fn diagnose_logicals_from_details(
@@ -2217,6 +2286,84 @@ mod tests {
             9
         );
         assert!(layout.truth_page_count(&[0, 0]).is_err());
+    }
+
+    #[test]
+    fn v32_virtual_geometric_replay_preserves_candidate_order_and_current_control() {
+        // Break caught: virtual replay silently rescored candidates or changed
+        // the authenticated current-layout control while swapping page owners.
+        let router = diagnostic_router();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 1,
+            scan_budget: 65_536,
+            candidate_depth: 60,
+            page_count: 10,
+        };
+        let logical_sources = (0_u64..60).collect::<Vec<_>>();
+        let layout = router
+            .virtual_geometric_page_layout(&logical_sources, 4)
+            .unwrap();
+        let expected = router
+            .diagnose_logicals_with_global_prefix(&[0.2; 96], arm, 2, &[0, 15])
+            .unwrap();
+        let replay = router
+            .diagnose_logicals_with_virtual_geometric_global_prefix(
+                &[0.2; 96],
+                arm,
+                2,
+                &[0, 15],
+                &layout,
+            )
+            .unwrap();
+        assert_eq!(replay.current, expected);
+        assert_eq!(replay.virtual_pages, (0_u32..10).collect::<Vec<_>>());
+        assert_eq!(replay.routing_work, expected.selection.work);
+        assert_eq!(replay.truth_microleaf_count, 1);
+        assert_eq!(replay.truth_virtual_page_count, 2);
+        assert_eq!(replay.recovered_logicals, vec![15]);
+        assert!(replay.newly_lost_logicals.is_empty());
+    }
+
+    #[test]
+    fn v32_virtual_geometric_replay_selects_pages_before_truth_and_counts_losses() {
+        // Break caught: truth changes selected virtual pages, or treatment
+        // reports only recoveries while hiding rows lost by the new layout.
+        let (router, _) = router();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 2,
+            scan_budget: 65_536,
+            candidate_depth: 40,
+            page_count: 10,
+        };
+        let logical_sources = (0_u64..40).collect::<Vec<_>>();
+        let layout = router
+            .virtual_geometric_page_layout(&logical_sources, 1)
+            .unwrap();
+        let first = router
+            .diagnose_logicals_with_virtual_geometric_global_prefix(
+                &[0.2; 96],
+                arm,
+                2,
+                &[0, 15],
+                &layout,
+            )
+            .unwrap();
+        let changed_truth = router
+            .diagnose_logicals_with_virtual_geometric_global_prefix(
+                &[0.2; 96],
+                arm,
+                2,
+                &[1, 14],
+                &layout,
+            )
+            .unwrap();
+        assert_eq!(first.virtual_pages, changed_truth.virtual_pages);
+        assert_eq!(first.virtual_pages, (0_u32..10).collect::<Vec<_>>());
+        assert!(first.recovered_logicals.is_empty());
+        assert_eq!(first.newly_lost_logicals, vec![15]);
+        assert_eq!(changed_truth.newly_lost_logicals, vec![14]);
     }
 
     #[test]
