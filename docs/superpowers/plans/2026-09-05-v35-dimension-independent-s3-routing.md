@@ -129,9 +129,12 @@
   Require byte-accounted one-patch, two-patch, and equal-byte centroid arms on the identical leaf layout. Recursive patch split uses population-weighted projected variance with dimension/ordinal ties. The centroid control uses f32 centers, the same recursive split, and minimum-center-distance scoring inside an exact equal-byte envelope. A two-patch result cannot be compared against a cheaper control. SRHT and PCA generations cannot share an identity.
 
   Pin one 192-wide triangular f64 co-moment to
-  `192*193/2*8 == 148_224` bytes and require resident moment state to be at most
-  `worker_count*148_224` plus the declared row/merge buffers. A reader that
-  exposes a second leaf per worker must fail before allocation.
+  `192*193/2*8 == 148_224` bytes. Pin the post-accumulation exact eigensolver
+  workspace separately to `2*M*M*8 + 4*M*8 == 595_968` bytes at M=192, or
+  `9_535_488` bytes for sixteen workers; the packed and dense co-moments must
+  not be simultaneously owned. Both terms fit the declared construction
+  runtime/allocator reservation. A reader that exposes a second leaf per
+  worker must fail before allocation.
 
 - [ ] **Step 3: Run RED**
 

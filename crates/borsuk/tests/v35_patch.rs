@@ -1,10 +1,25 @@
 //! V35 compact projected leaf-patch contracts.
 
-use borsuk::{
-    V35Dimensions, V35LeafPatchBuildRequest, build_v35_equal_byte_centroid_control,
-    build_v35_leaf_patch, build_v35_leaf_patch_arm, project_v35_leaf_moment_bytes,
-    score_v35_equal_byte_centroid_control, score_v35_leaf_patch, score_v35_leaf_patch_arm,
+use std::{io::Cursor, sync::Arc};
+
+use arrow_array::{
+    Array, Float32Array, Float64Array, RecordBatch, UInt8Array, UInt32Array, UInt64Array,
 };
+use arrow_ipc::{
+    MetadataVersion,
+    reader::FileReader,
+    writer::{FileWriter, IpcWriteOptions},
+};
+use arrow_schema::{DataType, Field, Schema};
+use borsuk::{
+    V35ArtifactIdentity, V35Dimensions, V35LeafPatchBuildRequest, V35Projection,
+    V35RoutingGenerationLimits, build_v35_equal_byte_centroid_control, build_v35_leaf_patch,
+    build_v35_leaf_patch_arm, build_v35_routing_generation, build_v35_srht,
+    decode_v35_generation_arrow, encode_v35_generation_arrow, project_v35_leaf_moment_bytes,
+    project_v35_leaf_seal_workspace_bytes, score_v35_equal_byte_centroid_control,
+    score_v35_leaf_patch, score_v35_leaf_patch_arm,
+};
+use sha2::{Digest, Sha256};
 
 fn request(rows: Vec<Vec<f32>>, omitted: Vec<f64>) -> V35LeafPatchBuildRequest {
     V35LeafPatchBuildRequest {
@@ -94,8 +109,14 @@ fn v35_patch_quantizes_once_and_recomputes_cached_moments_from_decoded_planes() 
     assert_eq!(patch.omitted_energy(), 4.375);
     assert_eq!(project_v35_leaf_moment_bytes(192).unwrap(), 148_224);
     assert_eq!(project_v35_leaf_moment_bytes(64).unwrap(), 16_640);
+    assert_eq!(project_v35_leaf_seal_workspace_bytes(192).unwrap(), 595_968);
+    assert_eq!(
+        16 * project_v35_leaf_seal_workspace_bytes(192).unwrap(),
+        9_535_488
+    );
     assert!(project_v35_leaf_moment_bytes(0).is_err());
     assert!(project_v35_leaf_moment_bytes(193).is_err());
+    assert!(project_v35_leaf_seal_workspace_bytes(193).is_err());
 }
 
 #[test]
@@ -128,10 +149,14 @@ fn v35_patch_rejects_nonfinite_shape_and_leaf_bound_violations() {
     too_many.projected_rows = vec![vec![0.0; 64]; 257];
     too_many.omitted_energies = vec![0.0; 257];
     assert!(build_v35_leaf_patch(&too_many).is_err());
+    assert!(build_v35_leaf_patch_arm(&too_many, 2).is_err());
+    assert!(build_v35_equal_byte_centroid_control(&too_many, 1).is_err());
 
     let mut wrong_width = coherent.clone();
     wrong_width.projected_rows[0].pop();
     assert!(build_v35_leaf_patch(&wrong_width).is_err());
+    assert!(build_v35_leaf_patch_arm(&wrong_width, 1).is_err());
+    assert!(build_v35_equal_byte_centroid_control(&wrong_width, 1).is_err());
 
     let mut nonfinite = coherent.clone();
     nonfinite.projected_rows[0][63] = f32::NAN;
@@ -340,4 +365,302 @@ fn v35_patch_control_split_is_deterministic_and_rejects_budget_drift() {
     assert!(build_v35_leaf_patch_arm(&forward, 3).is_err());
     assert!(build_v35_equal_byte_centroid_control(&forward, 0).is_err());
     assert!(build_v35_equal_byte_centroid_control(&forward, 3).is_err());
+
+    let mut tied = request(
+        vec![vec![0.0; 64], vec![0.0; 64], vec![0.0; 64], vec![0.0; 64]],
+        vec![0.0; 4],
+    );
+    tied.projected_rows[0][1] = 0.1;
+    tied.projected_rows[1][1] = 0.2;
+    tied.projected_rows[2][1] = -0.2;
+    tied.projected_rows[3][0] = 1.0;
+    let ordinal_tied = build_v35_equal_byte_centroid_control(&tied, 1).unwrap();
+    assert_eq!(ordinal_tied.centers()[0][0], 0.0);
+    assert!((ordinal_tied.centers()[0][1] - 0.15).abs() <= f32::EPSILON);
+}
+
+fn digest(byte: u8) -> String {
+    format!("{byte:02x}").repeat(32)
+}
+
+fn reroot(bytes: &[u8], identity: &V35ArtifactIdentity) -> V35ArtifactIdentity {
+    let mut rerooted = identity.clone();
+    rerooted.length = bytes.len() as u64;
+    rerooted.digest = format!("{:x}", Sha256::digest(bytes));
+    rerooted
+}
+
+fn rewrite_generation_batch(
+    bytes: &[u8],
+    mutate: impl FnOnce(&RecordBatch) -> RecordBatch,
+    duplicate: bool,
+) -> Vec<u8> {
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None).unwrap();
+    let schema = reader.schema();
+    let batch = reader.next().unwrap().unwrap();
+    assert!(reader.next().is_none());
+    let rewritten = mutate(&batch);
+    let mut output = Vec::new();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
+    let mut writer =
+        FileWriter::try_new_with_options(&mut output, schema.as_ref(), options).unwrap();
+    writer.write(&rewritten).unwrap();
+    if duplicate {
+        writer.write(&rewritten).unwrap();
+    }
+    writer.finish().unwrap();
+    drop(writer);
+    output
+}
+
+fn generation_fixture() -> (V35Projection, Vec<u8>, V35ArtifactIdentity) {
+    let dimensions = V35Dimensions {
+        source: 64,
+        routing: 64,
+    };
+    let projection = build_v35_srht(dimensions, 91).unwrap();
+    let leaves = (0..3_u32)
+        .map(|leaf| {
+            let mut build = request(
+                vec![vec![leaf as f32; 64], vec![leaf as f32 + 1.0; 64]],
+                vec![0.0, 0.5],
+            );
+            build.dimensions = dimensions;
+            build.leaf_ordinal = leaf;
+            build.group_ordinal = leaf;
+            build.logical_start = u64::from(leaf) * 2;
+            build_v35_leaf_patch_arm(&build, 1).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let generation =
+        build_v35_routing_generation(&projection, "deep-image-100m", &digest(0x31), leaves)
+            .unwrap();
+    let (bytes, identity) = encode_v35_generation_arrow(
+        &generation,
+        "active-routing",
+        "s3://borsuk-v35/routing.arrow",
+    )
+    .unwrap();
+    (projection, bytes, identity)
+}
+
+#[test]
+fn v35_patch_generation_arrow_round_trips_strict_bounded_columnar_authority() {
+    // Break caught: routing patches can allocate before authentication, lose
+    // projection/source identity, or retain Vec-per-leaf serving storage.
+    let (projection, bytes, identity) = generation_fixture();
+    let dimensions = projection.dimensions();
+    let limits = V35RoutingGenerationLimits {
+        maximum_encoded_bytes: bytes.len() as u64,
+        maximum_leaf_count: 3,
+        maximum_numeric_bytes: 3 * (8 * 64 + 128),
+        maximum_peak_codec_bytes: 2 * bytes.len() as u64,
+    };
+    let decoded = decode_v35_generation_arrow(
+        &bytes,
+        &identity,
+        &projection,
+        "deep-image-100m",
+        &digest(0x31),
+        limits,
+    )
+    .unwrap();
+    assert_eq!(decoded.leaf_count(), 3);
+    assert_eq!(decoded.patches_per_leaf(), 1);
+    assert_eq!(decoded.dimensions(), dimensions);
+    assert_eq!(decoded.projection_checksum(), projection.checksum());
+    assert_eq!(decoded.source_id(), "deep-image-100m");
+    assert_eq!(decoded.source_archive_sha256(), digest(0x31));
+    assert_eq!(decoded.resident_numeric_bytes(), 3 * (8 * 64 + 128));
+    assert!(decoded.is_columnar_serving());
+
+    let mut bad_identity = identity.clone();
+    bad_identity.digest = digest(0x99);
+    assert!(
+        decode_v35_generation_arrow(
+            &bytes,
+            &bad_identity,
+            &projection,
+            "deep-image-100m",
+            &digest(0x31),
+            limits,
+        )
+        .is_err()
+    );
+    let too_small = V35RoutingGenerationLimits {
+        maximum_encoded_bytes: bytes.len() as u64 - 1,
+        ..limits
+    };
+    assert!(
+        decode_v35_generation_arrow(
+            &bytes,
+            &identity,
+            &projection,
+            "deep-image-100m",
+            &digest(0x31),
+            too_small,
+        )
+        .is_err()
+    );
+    let too_small_peak = V35RoutingGenerationLimits {
+        maximum_peak_codec_bytes: 2 * bytes.len() as u64 - 1,
+        ..limits
+    };
+    assert!(
+        decode_v35_generation_arrow(
+            &bytes,
+            &identity,
+            &projection,
+            "deep-image-100m",
+            &digest(0x31),
+            too_small_peak,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn v35_patch_generation_rejects_schema_order_cache_and_projection_drift() {
+    // Break caught: valid-looking re-rooted Arrow mutations bypass structural,
+    // cached-moment, or projection-representation authority.
+    let (projection, bytes, identity) = generation_fixture();
+    let limits = V35RoutingGenerationLimits {
+        maximum_encoded_bytes: u64::MAX,
+        maximum_leaf_count: 3,
+        maximum_numeric_bytes: 3 * (8 * 64 + 128),
+        maximum_peak_codec_bytes: u64::MAX,
+    };
+    let decode = |candidate: &[u8], registered: &V35ArtifactIdentity, basis: &V35Projection| {
+        decode_v35_generation_arrow(
+            candidate,
+            registered,
+            basis,
+            "deep-image-100m",
+            &digest(0x31),
+            limits,
+        )
+    };
+
+    let cached = rewrite_generation_batch(
+        &bytes,
+        |batch| {
+            let mut columns = batch.columns().to_vec();
+            let trace = batch
+                .column(13)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap();
+            let mut values = trace.values().to_vec();
+            values[0] += 1.0;
+            columns[13] = Arc::new(Float64Array::from(values));
+            RecordBatch::try_new(batch.schema(), columns).unwrap()
+        },
+        false,
+    );
+    assert!(decode(&cached, &reroot(&cached, &identity), &projection).is_err());
+
+    let negative_zero = rewrite_generation_batch(
+        &bytes,
+        |batch| {
+            let mut columns = batch.columns().to_vec();
+            let omitted = batch
+                .column(17)
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .unwrap();
+            let mut values = omitted.values().to_vec();
+            values[0] = -0.0;
+            columns[17] = Arc::new(Float32Array::from(values));
+            RecordBatch::try_new(batch.schema(), columns).unwrap()
+        },
+        false,
+    );
+    assert!(
+        decode(
+            &negative_zero,
+            &reroot(&negative_zero, &identity),
+            &projection,
+        )
+        .is_err()
+    );
+
+    let reordered = rewrite_generation_batch(
+        &bytes,
+        |batch| {
+            let mut columns = batch.columns().to_vec();
+            let ordinals = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .unwrap();
+            let mut values = ordinals.values().to_vec();
+            values.swap(0, 1);
+            columns[0] = Arc::new(UInt32Array::from(values));
+            RecordBatch::try_new(batch.schema(), columns).unwrap()
+        },
+        false,
+    );
+    assert!(decode(&reordered, &reroot(&reordered, &identity), &projection).is_err());
+
+    let gapped_rows = rewrite_generation_batch(
+        &bytes,
+        |batch| {
+            let mut columns = batch.columns().to_vec();
+            let logical_starts = batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
+            let mut values = logical_starts.values().to_vec();
+            values[1] += 1;
+            columns[2] = Arc::new(UInt64Array::from(values));
+            RecordBatch::try_new(batch.schema(), columns).unwrap()
+        },
+        false,
+    );
+    assert!(decode(&gapped_rows, &reroot(&gapped_rows, &identity), &projection,).is_err());
+
+    let duplicate = rewrite_generation_batch(&bytes, Clone::clone, true);
+    assert!(decode(&duplicate, &reroot(&duplicate, &identity), &projection).is_err());
+
+    let mut reader = FileReader::try_new(Cursor::new(&bytes), None).unwrap();
+    let batch = reader.next().unwrap().unwrap();
+    let mut fields = batch.schema().fields().to_vec();
+    fields.push(Arc::new(Field::new("extra", DataType::UInt8, false)));
+    let schema = Arc::new(Schema::new_with_metadata(
+        fields,
+        batch.schema().metadata().clone(),
+    ));
+    let mut columns = batch.columns().to_vec();
+    columns.push(Arc::new(UInt8Array::from(vec![0; batch.num_rows()])));
+    let extra_batch = RecordBatch::try_new(schema.clone(), columns).unwrap();
+    let mut extra = Vec::new();
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
+    let mut writer =
+        FileWriter::try_new_with_options(&mut extra, schema.as_ref(), options).unwrap();
+    writer.write(&extra_batch).unwrap();
+    writer.finish().unwrap();
+    drop(writer);
+    assert!(decode(&extra, &reroot(&extra, &identity), &projection).is_err());
+
+    let other_projection = build_v35_srht(projection.dimensions(), 92).unwrap();
+    assert!(decode(&bytes, &identity, &other_projection).is_err());
+
+    let mut first = request(vec![vec![0.0; 64]; 2], vec![0.0; 2]);
+    first.dimensions = projection.dimensions();
+    first.leaf_ordinal = 0;
+    first.group_ordinal = 0;
+    first.logical_start = 0;
+    let mut second = first.clone();
+    second.leaf_ordinal = 1;
+    second.group_ordinal = 1;
+    second.logical_start = 3;
+    let gapped = vec![
+        build_v35_leaf_patch_arm(&first, 1).unwrap(),
+        build_v35_leaf_patch_arm(&second, 1).unwrap(),
+    ];
+    assert!(
+        build_v35_routing_generation(&projection, "deep-image-100m", &digest(0x31), gapped,)
+            .is_err()
+    );
 }

@@ -148,6 +148,15 @@ and 268,435,456 B unallocated headroom: `2,792,129,536 B`. The manifest
 computes every term with checked integer arithmetic and rejects a total at or
 above `3,221,225,472 B`.
 
+Construction keeps one packed upper-triangular f64 co-moment per live worker:
+`192*193/2*8 = 148,224 B`. Sealing transitions that allocation to the dense
+workspace required by the exact symmetric eigensolver; packed and dense
+co-moments are not simultaneously owned. The explicit conservative seal
+workspace is `2*M*M*8 + 4*M*8`, or `595,968 B` at M=192 and `9,535,488 B`
+for sixteen workers. This construction-only workspace is inside the declared
+runtime/allocator reservation and never enters serving RSS. A reader exposing
+a second live leaf to one worker still fails before allocation.
+
 The prose arithmetic above is explanatory; the canonical receipt records the
 component vector and checked sum. Tests pin the exact sum
 `2,792,129,536 B`, leaving `429,095,936 B` below 3 GiB. A two-patch 192-wide
