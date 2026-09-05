@@ -19,7 +19,9 @@ from scripts.run_v30_s3_campaign import (
 
 
 class V30SpotCampaignTests(unittest.TestCase):
-    def test_v30_corpus_manifest_selects_only_a_query_blind_training_prefix(self) -> None:
+    def test_v30_corpus_manifest_selects_only_a_query_blind_training_prefix(
+        self,
+    ) -> None:
         source = {
             "dataset_id": "deep-image-96",
             "ordered_inputs": [
@@ -72,6 +74,7 @@ class V30SpotCampaignTests(unittest.TestCase):
         )
         self.assertEqual(payload[-1:], b"\n")
         self.assertNotIn(b"query", payload)
+
     def targets(self) -> tuple[SpotTarget, ...]:
         return (
             SpotTarget(
@@ -194,7 +197,9 @@ class V30SpotCampaignTests(unittest.TestCase):
             leaf_beam=64,
         )
 
-    def test_v30_campaign_separates_query_blind_construction_from_evaluation(self) -> None:
+    def test_v30_campaign_separates_query_blind_construction_from_evaluation(
+        self,
+    ) -> None:
         reduced = build_v30_construction_spot_specs(
             self.reduced_construction(), self.targets()
         )
@@ -220,7 +225,10 @@ class V30SpotCampaignTests(unittest.TestCase):
         self.assertNotIn("--routing-leaf-beam", containment[0]["UserData"])
         self.assertNotIn("--routing-scan-budget", containment[0]["UserData"])
         specs = build_v30_construction_spot_specs(self.construction(), self.targets())
-        self.assertEqual([spec["Placement"]["AvailabilityZone"] for spec in specs], ["eu-central-1a", "eu-central-1b"])
+        self.assertEqual(
+            [spec["Placement"]["AvailabilityZone"] for spec in specs],
+            ["eu-central-1a", "eu-central-1b"],
+        )
         for spec in specs:
             script = spec["UserData"]
             syntax = subprocess.run(
@@ -259,7 +267,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("setsid /opt/borsuk/v30_s3_build", script)
             self.assertIn("rss_limit_bytes=206158430208", script)
             self.assertIn("HEARTBEAT.json", script)
-            self.assertIn("kill -TERM -- \"-$child\"", script)
+            self.assertIn('kill -TERM -- "-$child"', script)
 
         evaluation = build_v30_evaluation_spot_specs(self.evaluation(), self.targets())
         for spec in evaluation:
@@ -289,7 +297,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertNotIn("v30_s3_build", script)
             self.assertNotIn("cargo build", script)
             self.assertNotIn("rustup", script)
-            self.assertIn('chmod 0555 /opt/borsuk/v30_s3_qualify', script)
+            self.assertIn("chmod 0555 /opt/borsuk/v30_s3_qualify", script)
             self.assertIn("uv venv --python 3.12 /opt/borsuk/venv", script)
             self.assertIn("/opt/borsuk/venv/bin/python", script)
             self.assertNotIn("python3 -m pip install", script)
@@ -299,7 +307,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             )
             self.assertIn("rss_limit_bytes=3221225472", script)
             self.assertIn("HEARTBEAT.json", script)
-            self.assertIn("kill -TERM -- \"-$child\"", script)
+            self.assertIn('kill -TERM -- "-$child"', script)
 
         wider = build_v30_evaluation_spot_specs(
             replace(self.evaluation(), source_rows=100_000, leaf_beam=256),
@@ -307,7 +315,9 @@ class V30SpotCampaignTests(unittest.TestCase):
         )
         self.assertIn("--leaf-beam 256", wider[0]["UserData"])
 
-    def test_v32_containment_spot_reads_resident_artifacts_but_no_page_body(self) -> None:
+    def test_v32_containment_spot_reads_resident_artifacts_but_no_page_body(
+        self,
+    ) -> None:
         specs = build_v32_containment_spot_specs(self.containment(), self.targets())
         self.assertEqual(len(specs), 2)
         for spec in specs:
@@ -320,7 +330,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertIn("s3://authority/v30_s3_qualify", script)
             self.assertIn("1" * 64, script)
             self.assertIn("12000000", script)
-            self.assertIn('chmod 0555 /opt/borsuk/v30_s3_qualify', script)
+            self.assertIn("chmod 0555 /opt/borsuk/v30_s3_qualify", script)
             self.assertNotIn("cargo build", script)
             self.assertNotIn("rustup", script)
             self.assertIn("logical-sources.arrow", script)
@@ -343,7 +353,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             self.assertNotIn("run_v30_untouched_quality.py", script)
             self.assertNotIn("aws s3 cp --recursive", script)
             self.assertNotIn("pages/", script)
-            self.assertIn("kill -TERM -- \"-$child\"", script)
+            self.assertIn('kill -TERM -- "-$child"', script)
         wider_roots = build_v32_containment_spot_specs(
             replace(self.containment(), root_beam=16), self.targets()
         )
@@ -363,12 +373,8 @@ class V30SpotCampaignTests(unittest.TestCase):
                 self.targets(),
             )
 
-    def test_v32_virtual_spot_builds_one_batch_and_binds_governing_terminal(
-        self,
-    ) -> None:
-        # Break caught: the Spot controller reruns 32 independent processes or
-        # accepts treatment without the complete immutable control terminal.
-        plan = replace(
+    def virtual_containment(self):
+        return replace(
             self.containment(),
             leaf_beam=256,
             global_leaf_limit=768,
@@ -385,11 +391,47 @@ class V30SpotCampaignTests(unittest.TestCase):
             ),
             governing_terminal_bytes=262_537,
         )
-        script = build_v32_containment_spot_specs(plan, self.targets())[0][
-            "UserData"
-        ]
+
+    def test_v32_global_spot_freezes_mode_shape_and_resource_envelope(self):
+        # Break: running the retired leaf-only mode or an unregistered shape/cap.
+        plan = replace(
+            self.virtual_containment(),
+            virtual_geometric_pages=False,
+            global_geometric_pages=True,
+            query_start=64,
+        )
+        script = build_v32_containment_spot_specs(plan, self.targets())[0]["UserData"]
+        self.assertIn("--global-geometric-pages", script)
+        self.assertNotIn("--virtual-geometric-pages", script)
+        self.assertIn("rss_limit_bytes=2147483648", script)
+        self.assertIn("wall_seconds=7200", script)
+        self.assertTrue("shutdown --poweroff +180" in script, "global safety shutdown must leave bootstrap/upload margin")
+        self.assertIn(plan.governing_terminal_uri, script)
+        completed = subprocess.run(
+            ["bash", "-n"], input=script, text=True, capture_output=True
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        for drift in (
+            {"source_rows": 100_000},
+            {"query_start": 0},
+            {"global_leaf_limit": None},
+            {"virtual_geometric_pages": True},
+            {"governing_terminal_bytes": 1},
+        ):
+            with self.subTest(drift=drift), self.assertRaises(ValueError):
+                build_v32_containment_spot_specs(replace(plan, **drift), self.targets())
+
+    def test_v32_virtual_spot_builds_one_batch_and_binds_governing_terminal(
+        self,
+    ) -> None:
+        # Break caught: the Spot controller reruns 32 independent processes or
+        # accepts treatment without the complete immutable control terminal.
+        plan = self.virtual_containment()
+        script = build_v32_containment_spot_specs(plan, self.targets())[0]["UserData"]
         self.assertIn("--virtual-geometric-pages", script)
-        self.assertIn("--diagnostic-batch-arrow /run/v32/diagnostic-batch.arrow", script)
+        self.assertIn(
+            "--diagnostic-batch-arrow /run/v32/diagnostic-batch.arrow", script
+        )
         self.assertIn("--governing-terminal /run/v32/governing-terminal.json", script)
         self.assertIn(plan.governing_terminal_uri, script)
         self.assertIn(plan.governing_terminal_sha256, script)
@@ -463,7 +505,9 @@ class V30SpotCampaignTests(unittest.TestCase):
         )
         self.assertIn("--source-rows 100000", containment_specs[0]["UserData"])
 
-    def test_v30_campaign_does_not_classify_preheartbeat_bootstrap_as_stalled(self) -> None:
+    def test_v30_campaign_does_not_classify_preheartbeat_bootstrap_as_stalled(
+        self,
+    ) -> None:
         observations = iter(
             [
                 V30Observation("running", "ok", "ok", 0, 0.0, 0, None, None)
@@ -526,7 +570,9 @@ class V30SpotCampaignTests(unittest.TestCase):
         specs = build_v30_evaluation_spot_specs(plan, self.targets())
         self.assertIn("--leaf-beam 64", specs[0]["UserData"])
 
-    def test_v30_campaign_preserves_one_original_terminal_and_always_terminates(self) -> None:
+    def test_v30_campaign_preserves_one_original_terminal_and_always_terminates(
+        self,
+    ) -> None:
         launched: list[str] = []
         sleeps: list[int] = []
         terminated: list[str] = []
@@ -548,9 +594,12 @@ class V30SpotCampaignTests(unittest.TestCase):
             ]
         )
         terminal = monitor_v30_original_attempt(
-            launch=lambda spec: launched.append(spec["Placement"]["AvailabilityZone"])
-            or "i-original",
-            specs=build_v30_construction_spot_specs(self.construction(), self.targets()),
+            launch=lambda spec: (
+                launched.append(spec["Placement"]["AvailabilityZone"]) or "i-original"
+            ),
+            specs=build_v30_construction_spot_specs(
+                self.construction(), self.targets()
+            ),
             observe=lambda _instance: next(observations),
             terminate=terminated.append,
             observe_termination=lambda _instance: next(termination_states),
@@ -604,14 +653,20 @@ class V30SpotCampaignTests(unittest.TestCase):
         self.assertEqual(terminated, ["i-original"])
         self.assertEqual(terminal, b'{"claim_eligible":false,"status":"passed"}\n')
 
-    def test_v30_campaign_rejects_failed_health_and_terminal_without_retry(self) -> None:
+    def test_v30_campaign_rejects_failed_health_and_terminal_without_retry(
+        self,
+    ) -> None:
         launched: list[str] = []
         terminated: list[str] = []
         with self.assertRaisesRegex(RuntimeError, "health"):
             monitor_v30_original_attempt(
-                launch=lambda spec: launched.append(spec["Placement"]["AvailabilityZone"])
-                or "i-original",
-                specs=build_v30_construction_spot_specs(self.construction(), self.targets()),
+                launch=lambda spec: (
+                    launched.append(spec["Placement"]["AvailabilityZone"])
+                    or "i-original"
+                ),
+                specs=build_v30_construction_spot_specs(
+                    self.construction(), self.targets()
+                ),
                 observe=lambda _instance: V30Observation(
                     "running", "impaired", "ok", 1_000, 0.0, 0, 1, None
                 ),
@@ -627,7 +682,9 @@ class V30SpotCampaignTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "resource"):
             monitor_v30_original_attempt(
                 launch=lambda _spec: "i-original",
-                specs=build_v30_evaluation_spot_specs(self.evaluation(), self.targets()),
+                specs=build_v30_evaluation_spot_specs(
+                    self.evaluation(), self.targets()
+                ),
                 observe=lambda _instance: V30Observation(
                     "running", "ok", "ok", 3 * 1024**3 + 1, 0.0, 0, 1, None
                 ),
@@ -638,7 +695,9 @@ class V30SpotCampaignTests(unittest.TestCase):
                 rss_limit_bytes=3 * 1024**3,
             )
 
-    def test_v30_campaign_executes_real_client_boundary_and_reads_exact_terminal(self) -> None:
+    def test_v30_campaign_executes_real_client_boundary_and_reads_exact_terminal(
+        self,
+    ) -> None:
         class Ec2:
             def __init__(self) -> None:
                 self.launched: list[dict[str, object]] = []
@@ -650,11 +709,7 @@ class V30SpotCampaignTests(unittest.TestCase):
 
             def describe_instances(self, **_request: object) -> dict[str, object]:
                 state = "terminated" if self.terminated else "running"
-                return {
-                    "Reservations": [
-                        {"Instances": [{"State": {"Name": state}}]}
-                    ]
-                }
+                return {"Reservations": [{"Instances": [{"State": {"Name": state}}]}]}
 
             def describe_instance_status(self, **_request: object) -> dict[str, object]:
                 return {
@@ -707,9 +762,7 @@ class V30SpotCampaignTests(unittest.TestCase):
             sleep=lambda _seconds: None,
             wall_observations=4,
         )
-        self.assertEqual(
-            terminal, b'{"claim_eligible":false,"status":"passed"}\n'
-        )
+        self.assertEqual(terminal, b'{"claim_eligible":false,"status":"passed"}\n')
         self.assertEqual(len(ec2.launched), 1)
         self.assertEqual(ec2.terminated, ["i-original"])
         self.assertEqual(s3.last, ("authority", "v30/build-100k-a0001/TERMINAL.json"))

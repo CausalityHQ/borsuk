@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -22,7 +23,9 @@ from scripts.run_v32_no_page_containment import (
 
 
 class V32NoPageContainmentTests(unittest.TestCase):
-    def test_v32_containment_exit_status_fails_closed_on_scientific_rejection(self) -> None:
+    def test_v32_containment_exit_status_fails_closed_on_scientific_rejection(
+        self,
+    ) -> None:
         self.assertEqual(
             containment_exit_status(b'{"failed_gates":[],"status":"passed"}\n'),
             0,
@@ -34,7 +37,9 @@ class V32NoPageContainmentTests(unittest.TestCase):
             2,
         )
 
-    def test_v32_containment_direct_script_exposes_only_resident_diagnostics(self) -> None:
+    def test_v32_containment_direct_script_exposes_only_resident_diagnostics(
+        self,
+    ) -> None:
         # Break caught: the Spot boundary is not directly executable or grows a
         # page-source flag that permits scientific page reads in the fast gate.
         completed = subprocess.run(
@@ -57,10 +62,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
         self, directory: Path, *, source_rows: int = 1_000_000
     ) -> tuple[V32ContainmentPlan, bytes]:
         neighbors = pa.array(
-            [
-                [((64 + row) * 100 + rank) for rank in range(10)]
-                for row in range(32)
-            ],
+            [[((64 + row) * 100 + rank) for rank in range(10)] for row in range(32)],
             type=pa.list_(pa.field("item", pa.int64(), nullable=False), 10),
         )
         truth_path = directory / "neighbors.parquet"
@@ -157,9 +159,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
         )
         logical_sources_table = pa.Table.from_arrays(
             [logical_sources],
-            schema=pa.schema(
-                [pa.field("source_ordinal", pa.uint64(), nullable=False)]
-            ),
+            schema=pa.schema([pa.field("source_ordinal", pa.uint64(), nullable=False)]),
         )
         with pa.OSFile(str(logical_sources_path), "wb") as sink:
             with pa.ipc.new_file(sink, logical_sources_table.schema) as writer:
@@ -266,9 +266,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
                     "page_selected": selected,
                     "reciprocal_rank_selected": selected,
                     "routing_leaf_rank": (
-                        rank + 1
-                        if global_scope
-                        else query_ordinal % leaves_scanned + 1
+                        rank + 1 if global_scope else query_ordinal % leaves_scanned + 1
                     ),
                     "stage": "selected-page" if selected else "candidate-retention",
                 }
@@ -281,9 +279,7 @@ class V32NoPageContainmentTests(unittest.TestCase):
             "routing": {
                 "candidates_retained": candidates_retained,
                 "codes_scanned": (
-                    40_000 + query_ordinal
-                    if codes_scanned is None
-                    else codes_scanned
+                    40_000 + query_ordinal if codes_scanned is None else codes_scanned
                 ),
                 "global_leaf_limit": 768 if global_scope else None,
                 "leaves_eligible": leaves_eligible,
@@ -315,7 +311,9 @@ class V32NoPageContainmentTests(unittest.TestCase):
             + b"\n"
         )
 
-    def test_v32_containment_uses_ten_truth_rows_per_query_and_no_page_source(self) -> None:
+    def test_v32_containment_uses_ten_truth_rows_per_query_and_no_page_source(
+        self,
+    ) -> None:
         # Break caught: scale diagnosis reloads the resident index once per truth
         # row or accidentally issues page GETs before containment is known.
         with tempfile.TemporaryDirectory() as temporary:
@@ -458,15 +456,14 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
             "virtual_layout_sha256": "b" * 64,
         }
         return (
-            json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+            json.dumps(
+                value, allow_nan=False, separators=(",", ":"), sort_keys=True
+            ).encode()
             + b"\n"
         )
 
-    def test_v32_virtual_geometric_replay_reproduces_control_and_requires_perfect_treatment(
-        self,
-    ) -> None:
-        # Break caught: the virtual-layout treatment runs without reproducing
-        # the frozen 308/320 control or advances with any treatment miss.
+    @contextmanager
+    def virtual_fixture(self, *, spread_leaves=False):
         with tempfile.TemporaryDirectory() as temporary:
             plan, truth = self.fixture(Path(temporary))
             source_to_logical = {
@@ -478,15 +475,12 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                     .to_pylist()
                 )
             }
-            truth_rows = pq.read_table(pa.BufferReader(truth)).column(
-                "neighbors_id"
-            ).to_pylist()
+            truth_rows = (
+                pq.read_table(pa.BufferReader(truth)).column("neighbors_id").to_pylist()
+            )
             diagnostic_batch_path = Path(temporary) / "diagnostic-batch.arrow"
             truth_logicals = pa.array(
-                [
-                    [source_to_logical[source] for source in row]
-                    for row in truth_rows
-                ],
+                [[source_to_logical[source] for source in row] for row in truth_rows],
                 type=pa.list_(pa.field("element", pa.uint64(), nullable=False), 10),
             )
             diagnostic_batch = pa.Table.from_arrays(
@@ -494,9 +488,7 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                 schema=pa.schema(
                     [
                         pa.field("query_ordinal", pa.uint64(), nullable=False),
-                        pa.field(
-                            "truth_logicals", truth_logicals.type, nullable=False
-                        ),
+                        pa.field("truth_logicals", truth_logicals.type, nullable=False),
                     ]
                 ),
             )
@@ -541,6 +533,15 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                 for query in range(64, 96)
             }
             control_results = {}
+            if spread_leaves:
+                for ordinal, payload in results.items():
+                    value = json.loads(payload)
+                    for rank, target in enumerate(value["diagnostics"]):
+                        target["leaf_ordinal"] = rank
+                        target["routing_leaf_rank"] = rank + 1
+                        target["global_routing_leaf_rank"] = rank + 1
+                    value["virtual_geometric"]["truth_microleaf_count"] = 10
+                    results[ordinal] = self.canonical_payload(value)
             for query, payload in results.items():
                 control = json.loads(payload)
                 control.pop("virtual_geometric")
@@ -581,7 +582,9 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                     {
                         "claim_eligible": False,
                         "page_body_reads": 0,
-                        "queries": [json.loads(results[query]) for query in range(64, 96)],
+                        "queries": [
+                            json.loads(results[query]) for query in range(64, 96)
+                        ],
                         "schema_version": 7,
                     },
                     allow_nan=False,
@@ -592,45 +595,56 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
             )
             with (
                 patch(
-                    "scripts.run_v32_no_page_containment."
-                    "V32_GOVERNING_TERMINAL_SHA256",
+                    "scripts.run_v32_no_page_containment.V32_GOVERNING_TERMINAL_SHA256",
                     hashlib.sha256(governing_terminal_bytes).hexdigest(),
                 ),
                 patch(
-                    "scripts.run_v32_no_page_containment."
-                    "V32_GOVERNING_TERMINAL_BYTES",
+                    "scripts.run_v32_no_page_containment.V32_GOVERNING_TERMINAL_BYTES",
                     len(governing_terminal_bytes),
                 ),
             ):
-                payload = run_v32_no_page_containment(
+                yield (
                     plan,
                     truth,
-                    invoke=lambda _command: batch_payload,
+                    commands,
+                    results,
+                    governing_terminal_bytes,
+                    batch_payload,
                 )
+
+    def test_v32_virtual_geometric_replay_reproduces_control_and_requires_perfect_treatment(
+        self,
+    ) -> None:
+        # Break caught: missing exact frozen control or advancing a treatment miss.
+        with self.virtual_fixture() as fixture:
+            plan, truth, commands, _results, governing_terminal_bytes, batch_payload = (
+                fixture
+            )
+            payload = run_v32_no_page_containment(
+                plan, truth, invoke=lambda _command: batch_payload
+            )
         self.assertEqual(len(commands), 1)
         self.assertIn("--diagnostic-batch-arrow", commands[0])
-        self.assertTrue(all("--virtual-geometric-pages" in command for command in commands))
+        self.assertTrue(
+            all("--virtual-geometric-pages" in command for command in commands)
+        )
         value = json.loads(payload)
         self.assertEqual(value["control"]["selected_page_hits"], 308)
         self.assertEqual(
             value["governing_terminal_sha256"],
             hashlib.sha256(governing_terminal_bytes).hexdigest(),
         )
-        self.assertEqual(
-            value["governing_terminal_uri"], self.GOVERNING_TERMINAL_URI
-        )
-        self.assertEqual(
-            value["control"]["reciprocal_rank"]["selected_page_hits"], 298
-        )
+        self.assertEqual(value["governing_terminal_uri"], self.GOVERNING_TERMINAL_URI)
+        self.assertEqual(value["control"]["reciprocal_rank"]["selected_page_hits"], 298)
         self.assertEqual(value["virtual_geometric"]["selected_page_hits"], 320)
-        self.assertEqual(value["virtual_geometric"]["minimum_containment_ppm"], 1_000_000)
+        self.assertEqual(
+            value["virtual_geometric"]["minimum_containment_ppm"], 1_000_000
+        )
         self.assertEqual(value["virtual_geometric"]["perfect_queries"], 32)
         self.assertEqual(value["virtual_geometric"]["failed_gates"], [])
         self.assertEqual(value["virtual_geometric"]["status"], "passed")
         self.assertEqual(len(value["virtual_geometric"]["queries"]), 32)
-        self.assertEqual(
-            value["virtual_geometric"]["queries"][0]["query_ordinal"], 64
-        )
+        self.assertEqual(value["virtual_geometric"]["queries"][0]["query_ordinal"], 64)
         self.assertEqual(
             value["virtual_geometric"]["queries"][0]["candidate_replay_sha256"],
             f"{64:064x}",
@@ -642,6 +656,218 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
         self.assertEqual(value["failed_gates"], [])
         self.assertEqual(value["status"], "passed")
         self.assertEqual(containment_exit_status(payload), 0)
+
+    @staticmethod
+    def global_payloads(results):
+        controls = []
+        treatments = []
+        for ordinal in range(64, 96):
+            treatment = json.loads(results[ordinal])
+            control = json.loads(results[ordinal])
+            virtual = control.pop("virtual_geometric")
+            control["schema_version"] = 5
+            controls.append(
+                {
+                    "candidate_replay_sha256": virtual["candidate_replay_sha256"],
+                    "current": control,
+                }
+            )
+            treatments.append(treatment)
+        return (
+            {
+                "claim_eligible": False,
+                "page_body_reads": 0,
+                "queries": controls,
+                "schema_version": 8,
+                "resources": {
+                    "peak_rss_bytes": 10000000,
+                    "phase_wall_ns": 900,
+                    "phase_cpu_ns": 800,
+                },
+            },
+            {
+                "claim_eligible": False,
+                "page_body_reads": 0,
+                "queries": treatments,
+                "schema_version": 9,
+                "resources": {
+                    "peak_rss_bytes": 20000000,
+                    "phase_wall_ns": 1900,
+                    "phase_cpu_ns": 1800,
+                },
+                "layout_algorithm": "v32-global-balanced-cosine-v1",
+                "page_row_counts": [480] * 1764 + [479] * 320,
+            },
+        )
+
+    @staticmethod
+    def canonical_payload(value):
+        return (
+            json.dumps(
+                value, allow_nan=False, separators=(",", ":"), sort_keys=True
+            ).encode()
+            + b"\n"
+        )
+
+    def test_v32_global_resource_peak_cannot_pass_on_quality_alone(self):
+        # Break: transient child memory excess disappears between watchdog samples.
+        with self.virtual_fixture() as fixture:
+            plan, truth, _commands, results, _governing, _batch = fixture
+            plan = replace(
+                plan, virtual_geometric_pages=False, global_geometric_pages=True
+            )
+            control, treatment = self.global_payloads(results)
+            treatment["resources"]["peak_rss_bytes"] = 3221225472
+            value = json.loads(
+                run_v32_no_page_containment(
+                    plan,
+                    truth,
+                    invoke=lambda command: self.canonical_payload(
+                        control if "--global-replay-control" in command else treatment
+                    ),
+                )
+            )
+            self.assertEqual(value["status"], "failed")
+            self.assertIn("process-tree-memory", value["failed_gates"])
+            self.assertEqual(
+                value["resources"]["treatment"]["peak_rss_bytes"], 3221225472
+            )
+            self.assertEqual(
+                value["resources"]["conservative_peak_rss_bytes"],
+                value["resources"]["controller_peak_rss_bytes"] + 3221225472,
+            )
+
+    def test_v32_global_control_precedes_geometry(self):
+        # Break: costly geometry runs before exact control validation.
+        with self.virtual_fixture() as fixture:
+            plan, truth, _commands, results, _governing, _batch = fixture
+            plan = replace(
+                plan, virtual_geometric_pages=False, global_geometric_pages=True
+            )
+            control, treatment = self.global_payloads(results)
+            calls = []
+
+            def invoke(command):
+                phase = (
+                    "control" if "--global-replay-control" in command else "treatment"
+                )
+                calls.append(phase)
+                return self.canonical_payload(
+                    control if phase == "control" else treatment
+                )
+
+            payload = run_v32_no_page_containment(plan, truth, invoke=invoke)
+            self.assertEqual(calls, ["control", "treatment"])
+            value = json.loads(payload)
+            self.assertEqual(value["status"], "passed")
+            self.assertEqual(value["layout_algorithm"], "v32-global-balanced-cosine-v1")
+            self.assertEqual(value["control"]["selected_page_hits"], 308)
+            self.assertEqual(value["selected_page_hits"], 320)
+
+    def test_v32_global_control_memory_stops_before_treatment(self):
+        # Break: reconstructing after authenticated control already exceeds memory.
+        with self.virtual_fixture() as fixture:
+            plan, truth, _commands, results, _governing, _batch = fixture
+            plan = replace(
+                plan, virtual_geometric_pages=False, global_geometric_pages=True
+            )
+            control, treatment = self.global_payloads(results)
+            control["resources"]["peak_rss_bytes"] = 3221225472
+            calls = []
+
+            def invoke(command):
+                calls.append(command)
+                return self.canonical_payload(
+                    control if "--global-replay-control" in command else treatment
+                )
+
+            value = json.loads(run_v32_no_page_containment(plan, truth, invoke=invoke))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(value["status"], "failed")
+            self.assertEqual(value["failed_gates"], ["process-tree-memory"])
+            self.assertEqual(
+                value["resources"]["control"]["peak_rss_bytes"], 3221225472
+            )
+            self.assertIs(value["treatment_executed"], False)
+
+    def test_v32_global_rejects_control_drift_before_geometry(self):
+        # Break: accepting a coherent byte-authority drift on aggregate equality.
+        with self.virtual_fixture() as fixture:
+            plan, truth, _commands, results, _governing, _batch = fixture
+            plan = replace(
+                plan, virtual_geometric_pages=False, global_geometric_pages=True
+            )
+            control, _treatment = self.global_payloads(results)
+            control["queries"][0]["current"]["page_selections"]["first_distinct"][
+                "pages"
+            ][0]["sha256"] = "c" * 64
+            calls = []
+
+            def invoke(command):
+                calls.append(command)
+                return self.canonical_payload(control)
+
+            with self.assertRaises(ValueError):
+                run_v32_no_page_containment(plan, truth, invoke=invoke)
+            self.assertEqual(len(calls), 1)
+            self.assertIn("--global-replay-control", calls[0])
+
+    def test_v32_global_cross_leaf_ownership_has_no_old_microleaf_veto(self):
+        # Break: rejecting a valid cross-leaf layout using the old leaf-only bound.
+        # Synthetic control leaf identities change; the fixture regenerates only
+        # its governing terminal digest/length so this reaches the layout gate.
+        with self.virtual_fixture(spread_leaves=True) as fixture:
+            plan, truth, _commands, results, _governing, _batch = fixture
+            plan = replace(
+                plan, virtual_geometric_pages=False, global_geometric_pages=True
+            )
+            control, treatment = self.global_payloads(results)
+            payload = run_v32_no_page_containment(
+                plan,
+                truth,
+                invoke=lambda command: self.canonical_payload(
+                    control if "--global-replay-control" in command else treatment
+                ),
+            )
+            value = json.loads(payload)
+            self.assertEqual(
+                value["virtual_geometric"]["maximum_truth_microleaf_count"], 10
+            )
+            self.assertEqual(value["selected_page_hits"], 320)
+            self.assertEqual(value["status"], "passed")
+
+    def test_v32_global_rejects_replay_and_page_map_drift(self):
+        # Break: treating rescored candidates or malformed global ownership as same experiment.
+        with self.virtual_fixture() as fixture:
+            plan, truth, _commands, results, _governing, _batch = fixture
+            plan = replace(
+                plan, virtual_geometric_pages=False, global_geometric_pages=True
+            )
+            for mutation in ("replay", "capacity", "rows", "algorithm"):
+                with self.subTest(mutation=mutation):
+                    control, treatment = self.global_payloads(results)
+                    if mutation == "replay":
+                        treatment["queries"][0]["virtual_geometric"][
+                            "candidate_replay_sha256"
+                        ] = "e" * 64
+                    elif mutation == "capacity":
+                        treatment["page_row_counts"][0] = 481
+                    elif mutation == "rows":
+                        treatment["page_row_counts"][0] = 479
+                    else:
+                        treatment["layout_algorithm"] = "wrong-layout"
+                    with self.assertRaises(ValueError):
+                        run_v32_no_page_containment(
+                            plan,
+                            truth,
+                            invoke=lambda command, control=control, treatment=treatment: (
+                                self.canonical_payload(
+                                    control
+                                    if "--global-replay-control" in command
+                                    else treatment
+                                )
+                            ),
+                        )
 
     def test_v32_virtual_geometric_rejects_governing_terminal_semantic_drift(
         self,
@@ -716,18 +942,14 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
             )
             with (
                 patch(
-                    "scripts.run_v32_no_page_containment."
-                    "V32_GOVERNING_TERMINAL_SHA256",
+                    "scripts.run_v32_no_page_containment.V32_GOVERNING_TERMINAL_SHA256",
                     hashlib.sha256(payload).hexdigest(),
                 ),
                 patch(
-                    "scripts.run_v32_no_page_containment."
-                    "V32_GOVERNING_TERMINAL_BYTES",
+                    "scripts.run_v32_no_page_containment.V32_GOVERNING_TERMINAL_BYTES",
                     len(payload),
                 ),
-                self.assertRaisesRegex(
-                    ValueError, "governing terminal .* differs"
-                ),
+                self.assertRaisesRegex(ValueError, "governing terminal .* differs"),
             ):
                 run_v32_no_page_containment(
                     plan,
@@ -735,7 +957,9 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                     invoke=lambda _command: b"",
                 )
 
-    def test_v32_containment_global_prefix_proof_and_rank_domains_are_strict(self) -> None:
+    def test_v32_containment_global_prefix_proof_and_rank_domains_are_strict(
+        self,
+    ) -> None:
         # Break caught: rooted eligible counts reject a valid global rank, or a
         # global run claims a short prefix without a leaf-limit/code-cap proof.
         with tempfile.TemporaryDirectory() as temporary:
@@ -745,9 +969,7 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                     replace(plan, global_leaf_limit=768), truth
                 )
 
-            rooted = {
-                query: self.diagnostic(query) for query in range(64, 96)
-            }
+            rooted = {query: self.diagnostic(query) for query in range(64, 96)}
             changed = json.loads(rooted[64])
             changed["diagnostics"][0]["global_routing_leaf_rank"] = 3_000
             rooted[64] = (
@@ -817,7 +1039,13 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
         with tempfile.TemporaryDirectory() as temporary:
             plan, truth = self.fixture(Path(temporary))
             plan = replace(plan, leaf_beam=256, global_leaf_limit=768)
-            for stop_reason, leaves_scanned, codes_scanned, next_leaf_rows, page_scanned in (
+            for (
+                stop_reason,
+                leaves_scanned,
+                codes_scanned,
+                next_leaf_rows,
+                page_scanned,
+            ) in (
                 ("leaf-limit", 768, 220_000, None, False),
                 ("scan-budget", 700, 220_000, 50_000, True),
             ):
@@ -866,11 +1094,16 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                     value = json.loads(payload)
                     self.assertEqual(value["losses_by_stage"], {"leaf-frontier": 1})
                     self.assertEqual(value["selected_page_hits"], 319)
-                    self.assertEqual(value["queries"][0]["targets"][-1]["routing_leaf_rank"], leaves_scanned + 1)
+                    self.assertEqual(
+                        value["queries"][0]["targets"][-1]["routing_leaf_rank"],
+                        leaves_scanned + 1,
+                    )
 
                     forged = json.loads(results[64])
                     forged["diagnostics"][-1]["routing_leaf_rank"] = leaves_scanned
-                    forged["diagnostics"][-1]["global_routing_leaf_rank"] = leaves_scanned
+                    forged["diagnostics"][-1]["global_routing_leaf_rank"] = (
+                        leaves_scanned
+                    )
                     results[64] = (
                         json.dumps(
                             forged,
@@ -889,7 +1122,9 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                             ],
                         )
 
-    def test_v32_containment_clamps_leaf_beam_to_the_selected_root_frontier(self) -> None:
+    def test_v32_containment_clamps_leaf_beam_to_the_selected_root_frontier(
+        self,
+    ) -> None:
         # Break caught: the Rust router correctly clamps a wider beam to a
         # smaller selected-root frontier, but the independent reducer rejects
         # that bounded work before it can classify containment.
@@ -953,7 +1188,11 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                 for query in range(64, 96)
             }
             payload = run_v32_no_page_containment(
-                plan, truth, invoke=lambda command: results[int(command[command.index("--query-start") + 1])]
+                plan,
+                truth,
+                invoke=lambda command: results[
+                    int(command[command.index("--query-start") + 1])
+                ],
             )
         value = json.loads(payload)
         self.assertEqual(value["source_rows"], 1_000_000)
@@ -975,7 +1214,9 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
         self.assertEqual(value["failed_gates"], ["perfect-containment"])
         self.assertFalse(value["claim_eligible"])
 
-    def test_v32_containment_preserves_paired_reducer_recoveries_and_losses(self) -> None:
+    def test_v32_containment_preserves_paired_reducer_recoveries_and_losses(
+        self,
+    ) -> None:
         # Break caught: the runner collapses validated per-target evidence to a
         # hit count, so a reciprocal-rank recovery and a different eviction can
         # produce the same aggregate terminal and become indistinguishable.
@@ -1043,13 +1284,13 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
         self.assertEqual(query_76["lost_logicals"], [7_601])
         self.assertEqual(query_76["routing"]["selected_pages"], 16)
         self.assertEqual(
-            query_76["page_selections"]["reciprocal_rank"]["pages"][0][
-                "ordinal"
-            ],
+            query_76["page_selections"]["reciprocal_rank"]["pages"][0]["ordinal"],
             761,
         )
 
-    def test_v32_containment_counts_a_selected_page_after_candidate_pruning(self) -> None:
+    def test_v32_containment_counts_a_selected_page_after_candidate_pruning(
+        self,
+    ) -> None:
         # Break caught: the reducer reports a false miss when another retained
         # row selects the physical page containing a pruned truth row.
         with tempfile.TemporaryDirectory() as temporary:
@@ -1069,7 +1310,9 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                     recovered["diagnostics"][-1]["first_unique_page_rank"] = 9
                     recovered["diagnostics"][-1]["page_in_retained_pool"] = True
                     recovered["diagnostics"][-1]["page_selected"] = True
-                    recovered["diagnostics"][-1]["routing_leaf_rank"] = routing_leaf_rank
+                    recovered["diagnostics"][-1]["routing_leaf_rank"] = (
+                        routing_leaf_rank
+                    )
                     recovered["diagnostics"][-1]["reciprocal_rank_selected"] = (
                         reciprocal_rank_selected
                     )
@@ -1111,9 +1354,13 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                 run_v32_no_page_containment(
                     plan,
                     truth,
-                    invoke=lambda command: changed
-                    if command[command.index("--query-start") + 1] == "64"
-                    else results[int(command[command.index("--query-start") + 1]) - 64],
+                    invoke=lambda command: (
+                        changed
+                        if command[command.index("--query-start") + 1] == "64"
+                        else results[
+                            int(command[command.index("--query-start") + 1]) - 64
+                        ]
+                    ),
                 )
 
             work_drift = json.loads(results[0])
@@ -1126,9 +1373,13 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                 run_v32_no_page_containment(
                     plan,
                     truth,
-                    invoke=lambda command: changed_work
-                    if command[command.index("--query-start") + 1] == "64"
-                    else results[int(command[command.index("--query-start") + 1]) - 64],
+                    invoke=lambda command: (
+                        changed_work
+                        if command[command.index("--query-start") + 1] == "64"
+                        else results[
+                            int(command[command.index("--query-start") + 1]) - 64
+                        ]
+                    ),
                 )
 
             rank_drift = json.loads(results[0])
@@ -1141,9 +1392,13 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
                 run_v32_no_page_containment(
                     plan,
                     truth,
-                    invoke=lambda command: changed_rank
-                    if command[command.index("--query-start") + 1] == "64"
-                    else results[int(command[command.index("--query-start") + 1]) - 64],
+                    invoke=lambda command: (
+                        changed_rank
+                        if command[command.index("--query-start") + 1] == "64"
+                        else results[
+                            int(command[command.index("--query-start") + 1]) - 64
+                        ]
+                    ),
                 )
             drift = V32ContainmentPlan(
                 **{
@@ -1159,7 +1414,9 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
             receipt_value = json.loads(plan.truth_receipt.path.read_bytes())
             receipt_value["query_start"] = 0
             receipt_bytes = (
-                json.dumps(receipt_value, separators=(",", ":"), sort_keys=True).encode()
+                json.dumps(
+                    receipt_value, separators=(",", ":"), sort_keys=True
+                ).encode()
                 + b"\n"
             )
             plan.truth_receipt.path.write_bytes(receipt_bytes)
@@ -1194,7 +1451,9 @@ class V32VirtualGeometricPackingTests(V32NoPageContainmentTests):
             manifest_value = json.loads(plan.manifest.path.read_bytes())
             manifest_value["layout"]["maximum_routing_leaf_rows"] = 1_025
             manifest_bytes = (
-                json.dumps(manifest_value, separators=(",", ":"), sort_keys=True).encode()
+                json.dumps(
+                    manifest_value, separators=(",", ":"), sort_keys=True
+                ).encode()
                 + b"\n"
             )
             plan.manifest.path.write_bytes(manifest_bytes)

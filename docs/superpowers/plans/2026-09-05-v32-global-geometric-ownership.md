@@ -66,6 +66,16 @@ authorize science.
 
 ### Task 3: Authority-first two-phase controller
 
+Implementation checkpoint: explicit control/treatment replay envelopes, control
+byte equality before construction, global ownership counts, and independent
+cross-phase replay equality are implemented. Astra reviewed authority/selection
+and resource handling. Resource refinement preserves Linux high-water evidence,
+conservative parent-plus-max-child accounting, and an early schema10 failure
+receipt before treatment when control already exceeds2GiB. Outer shutdown is
+180 minutes; command cap remains7200 seconds. Strict workspace/all-targets
+Clippy passed after a test-only iterator repair; qualifier V32 tests21/21 passed.
+Scientific execution and source delivery remain separately tracked below.
+
 **Files:** `scripts/run_v32_no_page_containment.py`, its test file, `scripts/run_v30_s3_campaign.py`, its test file, qualifier CLI tests.
 
 **Interfaces:** Add an explicit global-geometry diagnostic mode, not an alias for microleaf-exclusive mode. Control invocation authenticates current bytes before treatment invocation. Treatment receipt contains control records/replay hashes again; controller independently checks exact equality before publishing treatment.

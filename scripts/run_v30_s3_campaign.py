@@ -9,11 +9,15 @@ from dataclasses import dataclass
 
 
 def _digest(value: str) -> bool:
-    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+    return len(value) == 64 and all(
+        character in "0123456789abcdef" for character in value
+    )
 
 
 def _s3(value: str) -> bool:
-    return value.startswith("s3://") and value.count("/") >= 3 and not value.endswith("//")
+    return (
+        value.startswith("s3://") and value.count("/") >= 3 and not value.endswith("//")
+    )
 
 
 @dataclass(frozen=True)
@@ -105,6 +109,7 @@ class V32ContainmentSpotPlan:
     governing_terminal_uri: str | None = None
     governing_terminal_sha256: str | None = None
     governing_terminal_bytes: int | None = None
+    global_geometric_pages: bool = False
 
 
 @dataclass(frozen=True)
@@ -200,13 +205,20 @@ def _validate_evaluation(plan: V30EvaluationPlan) -> None:
             plan.qualifier_binary_sha256,
             plan.qualifier_binary_bytes,
         ),
-        (plan.construction_manifest_uri, plan.construction_manifest_sha256, plan.construction_manifest_bytes),
+        (
+            plan.construction_manifest_uri,
+            plan.construction_manifest_sha256,
+            plan.construction_manifest_bytes,
+        ),
         (plan.query_uri, plan.query_sha256, plan.query_bytes),
         (plan.truth_uri, plan.truth_sha256, plan.truth_bytes),
     )
     if (
         not plan.attempt_id.startswith("v30-")
-        or any(not _s3(uri) or not _digest(digest) or length <= 0 for uri, digest, length in artifacts)
+        or any(
+            not _s3(uri) or not _digest(digest) or length <= 0
+            for uri, digest, length in artifacts
+        )
         or not plan.construction_manifest_uri.endswith("/manifest.json")
         or plan.serving_tier not in {"standard", "express"}
         or plan.source_rows not in {100_000, 9_990_000}
@@ -270,7 +282,7 @@ def _validate_containment(plan: V32ContainmentSpotPlan) -> None:
             and (plan.global_leaf_limit != 768 or plan.leaf_beam != 256)
         )
         or (
-            plan.virtual_geometric_pages
+            (plan.virtual_geometric_pages or plan.global_geometric_pages)
             and governing
             != (
                 "s3://borsuk-bench-453182569524-euc1/research/"
@@ -282,7 +294,19 @@ def _validate_containment(plan: V32ContainmentSpotPlan) -> None:
                 262_537,
             )
         )
-        or (not plan.virtual_geometric_pages and any(item is not None for item in governing))
+        or (
+            not (plan.virtual_geometric_pages or plan.global_geometric_pages)
+            and any(item is not None for item in governing)
+        )
+        or (
+            plan.global_geometric_pages
+            and (
+                plan.virtual_geometric_pages
+                or plan.source_rows != 1_000_000
+                or plan.query_start != 64
+                or plan.global_leaf_limit != 768
+            )
+        )
     ):
         raise ValueError("V32 containment authority differs")
 
@@ -370,7 +394,9 @@ def build_v30_corpus_manifest(source_bytes: bytes, *, expected_rows: int) -> byt
     )
 
 
-def _monitored_command(command: str, *, rss_limit_bytes: int, wall_seconds: int) -> list[str]:
+def _monitored_command(
+    command: str, *, rss_limit_bytes: int, wall_seconds: int
+) -> list[str]:
     if rss_limit_bytes <= 0 or wall_seconds <= 0 or "\n" in command:
         raise ValueError("V30 monitored command differs")
     return [
@@ -382,28 +408,28 @@ def _monitored_command(command: str, *, rss_limit_bytes: int, wall_seconds: int)
         "child=$!",
         "started=$(date +%s)",
         "stop_reason=",
-        "while kill -0 \"$child\" 2>/dev/null; do",
-        "  rss_bytes=$(ps -eo pgid=,rss= | awk -v group=\"$child\" '$1 == group {total += $2} END {printf \"%.0f\", total * 1024}')",
+        'while kill -0 "$child" 2>/dev/null; do',
+        '  rss_bytes=$(ps -eo pgid=,rss= | awk -v group="$child" \'$1 == group {total += $2} END {printf "%.0f", total * 1024}\')',
         "  psi_full_avg10=$(awk '/^full / {for (i=1;i<=NF;i++) if ($i ~ /^avg10=/) {split($i,a,\"=\"); print a[2]}}' /proc/pressure/memory)",
         "  swap_now_kib=$(awk '/^SwapTotal:/ {total=$2} /^SwapFree:/ {free=$2} END {print total-free}' /proc/meminfo)",
         "  swap_bytes=$(( (swap_now_kib - swap_start_kib) * 1024 ))",
         "  (( swap_bytes < 0 )) && swap_bytes=0",
         "  progress=$(( $(date +%s) - started ))",
-        "  printf '{\"progress\":%d,\"psi_full_avg10\":%s,\"rss_bytes\":%d,\"state\":\"running\",\"swap_bytes\":%d}\\n' \"$progress\" \"$psi_full_avg10\" \"$rss_bytes\" \"$swap_bytes\" >\"$root/HEARTBEAT.json\"",
-        "  aws s3api put-object --bucket \"$output_bucket\" --key \"${output_key}HEARTBEAT.json\" --body \"$root/HEARTBEAT.json\" --checksum-algorithm SHA256 >/dev/null",
+        '  printf \'{"progress":%d,"psi_full_avg10":%s,"rss_bytes":%d,"state":"running","swap_bytes":%d}\\n\' "$progress" "$psi_full_avg10" "$rss_bytes" "$swap_bytes" >"$root/HEARTBEAT.json"',
+        '  aws s3api put-object --bucket "$output_bucket" --key "${output_key}HEARTBEAT.json" --body "$root/HEARTBEAT.json" --checksum-algorithm SHA256 >/dev/null',
         "  if (( rss_bytes > rss_limit_bytes || swap_bytes > swap_limit_bytes || progress > wall_seconds )) || awk -v pressure=\"$psi_full_avg10\" 'BEGIN {exit !(pressure > 0.50)}'; then",
         "    stop_reason=resource-stop",
-        "    kill -TERM -- \"-$child\" 2>/dev/null || true",
+        '    kill -TERM -- "-$child" 2>/dev/null || true',
         "    break",
         "  fi",
         "  sleep 30",
         "done",
         "set +e",
-        "wait \"$child\"",
+        'wait "$child"',
         "child_status=$?",
         "set -e",
-        "[[ -z \"$stop_reason\" ]] || exit 75",
-        "(( child_status == 0 )) || exit \"$child_status\"",
+        '[[ -z "$stop_reason" ]] || exit 75',
+        '(( child_status == 0 )) || exit "$child_status"',
     ]
 
 
@@ -455,12 +481,12 @@ def _construction_script(plan: V30ConstructionPlan) -> str:
             f"output_bucket={shlex.quote(output_bucket)}",
             f"output_key={shlex.quote(output_key)}",
             "terminal=failed",
-            "put_once() { aws s3api put-object --bucket \"$output_bucket\" --key \"$output_key$2\" --body \"$1\" --if-none-match '*' --checksum-algorithm SHA256 >/dev/null; }",
-            "finish() { status=$?; trap - EXIT; set +e; if [[ \"$terminal\" != complete ]]; then printf '{\"claim_eligible\":false,\"status\":\"failed\",\"worker_status\":%d}\\n' \"$status\" >\"$root/FAILED.json\"; put_once \"$root/worker.log\" worker.log || true; [[ ! -s \"$root/TERMINAL.json\" ]] || put_once \"$root/TERMINAL.json\" TERMINAL.json || true; put_once \"$root/FAILED.json\" FAILED.json || true; fi; shutdown -h now; }",
+            'put_once() { aws s3api put-object --bucket "$output_bucket" --key "$output_key$2" --body "$1" --if-none-match \'*\' --checksum-algorithm SHA256 >/dev/null; }',
+            'finish() { status=$?; trap - EXIT; set +e; if [[ "$terminal" != complete ]]; then printf \'{"claim_eligible":false,"status":"failed","worker_status":%d}\\n\' "$status" >"$root/FAILED.json"; put_once "$root/worker.log" worker.log || true; [[ ! -s "$root/TERMINAL.json" ]] || put_once "$root/TERMINAL.json" TERMINAL.json || true; put_once "$root/FAILED.json" FAILED.json || true; fi; shutdown -h now; }',
             "trap finish EXIT",
             "dnf install -y gcc gcc-c++ tar zstd",
             "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable",
-            f"aws s3 cp --only-show-errors {shlex.quote(plan.source_archive_uri)} \"$archive\"",
+            f'aws s3 cp --only-show-errors {shlex.quote(plan.source_archive_uri)} "$archive"',
             f'test "$(stat -c %s "$archive")" -eq {plan.source_archive_bytes}',
             f"printf '%s  %s\\n' {plan.source_archive_sha256} \"$archive\" | sha256sum --check --status",
             'tar --zstd -xf "$archive" -C "$source_dir"',
@@ -468,7 +494,9 @@ def _construction_script(plan: V30ConstructionPlan) -> str:
             f'test "$(cat .borsuk-source-commit)" = {plan.source_commit}',
             "/root/.cargo/bin/cargo build --release --locked -p borsuk --example v30_s3_build",
             "install -D -m 0555 target/release/examples/v30_s3_build /opt/borsuk/v30_s3_build",
-            *_monitored_command(command, rss_limit_bytes=192 * 1024**3, wall_seconds=14_400),
+            *_monitored_command(
+                command, rss_limit_bytes=192 * 1024**3, wall_seconds=14_400
+            ),
             'put_once "$root/worker.log" worker.log',
             'put_once "$root/TERMINAL.json" TERMINAL.json',
             "terminal=complete",
@@ -536,11 +564,11 @@ def _evaluation_script(plan: V30EvaluationPlan) -> str:
             f"output_bucket={shlex.quote(output_bucket)}",
             f"output_key={shlex.quote(output_key)}",
             "terminal=failed",
-            "put_once() { aws s3api put-object --bucket \"$output_bucket\" --key \"$output_key$2\" --body \"$1\" --if-none-match '*' --checksum-algorithm SHA256 >/dev/null; }",
-            "finish() { status=$?; trap - EXIT; set +e; if [[ \"$terminal\" != complete ]]; then printf '{\"claim_eligible\":false,\"status\":\"failed\",\"worker_status\":%d}\\n' \"$status\" >\"$root/FAILED.json\"; put_once \"$root/worker.log\" worker.log || true; put_once \"$root/FAILED.json\" FAILED.json || true; fi; shutdown -h now; }",
+            'put_once() { aws s3api put-object --bucket "$output_bucket" --key "$output_key$2" --body "$1" --if-none-match \'*\' --checksum-algorithm SHA256 >/dev/null; }',
+            'finish() { status=$?; trap - EXIT; set +e; if [[ "$terminal" != complete ]]; then printf \'{"claim_eligible":false,"status":"failed","worker_status":%d}\\n\' "$status" >"$root/FAILED.json"; put_once "$root/worker.log" worker.log || true; put_once "$root/FAILED.json" FAILED.json || true; fi; shutdown -h now; }',
             "trap finish EXIT",
             "dnf install -y python3-pip tar zstd",
-            f"aws s3 cp --only-show-errors {shlex.quote(plan.source_archive_uri)} \"$archive\"",
+            f'aws s3 cp --only-show-errors {shlex.quote(plan.source_archive_uri)} "$archive"',
             f'test "$(stat -c %s "$archive")" -eq {plan.source_archive_bytes}',
             f"printf '%s  %s\\n' {plan.source_archive_sha256} \"$archive\" | sha256sum --check --status",
             'tar --zstd -xf "$archive" -C "$source_dir"',
@@ -560,9 +588,9 @@ def _evaluation_script(plan: V30EvaluationPlan) -> str:
             "curl -LsSf https://astral.sh/uv/0.8.17/install.sh | sh",
             "/root/.local/bin/uv venv --python 3.12 /opt/borsuk/venv",
             "/root/.local/bin/uv pip install --python /opt/borsuk/venv/bin/python --requirement scripts/requirements-format-bench.txt",
-            f"aws s3 cp --only-show-errors {shlex.quote(plan.construction_manifest_uri)} \"$root/manifest.json\"",
-            f"aws s3 cp --only-show-errors {shlex.quote(plan.query_uri)} \"$root/test.parquet\"",
-            f"aws s3 cp --only-show-errors {shlex.quote(plan.truth_uri)} \"$root/neighbors.parquet\"",
+            f'aws s3 cp --only-show-errors {shlex.quote(plan.construction_manifest_uri)} "$root/manifest.json"',
+            f'aws s3 cp --only-show-errors {shlex.quote(plan.query_uri)} "$root/test.parquet"',
+            f'aws s3 cp --only-show-errors {shlex.quote(plan.truth_uri)} "$root/neighbors.parquet"',
             f'test "$(stat -c %s "$root/manifest.json")" -eq {plan.construction_manifest_bytes}',
             f"printf '%s  %s\\n' {plan.construction_manifest_sha256} \"$root/manifest.json\" | sha256sum --check --status",
             f'test "$(stat -c %s "$root/test.parquet")" -eq {plan.query_bytes}',
@@ -577,11 +605,11 @@ def _evaluation_script(plan: V30EvaluationPlan) -> str:
             "for item in items: print(item['file'], item['sha256'], item['encoded_bytes'], sep='\\t')",
             "PY",
             "while IFS=$'\\t' read -r file sha size; do",
-            "  [[ \"$file\" != */* && \"$file\" != .* && \"$sha\" =~ ^[0-9a-f]{64}$ && \"$size\" =~ ^[1-9][0-9]*$ ]]",
-            f"  aws s3 cp --only-show-errors {shlex.quote(manifest_prefix)}\"$file\" \"$root/resident/$file\"",
-            "  test \"$(stat -c %s \"$root/resident/$file\")\" -eq \"$size\"",
-            "  printf '%s  %s\\n' \"$sha\" \"$root/resident/$file\" | sha256sum --check --status",
-            "done <\"$root/resident.tsv\"",
+            '  [[ "$file" != */* && "$file" != .* && "$sha" =~ ^[0-9a-f]{64}$ && "$size" =~ ^[1-9][0-9]*$ ]]',
+            f'  aws s3 cp --only-show-errors {shlex.quote(manifest_prefix)}"$file" "$root/resident/$file"',
+            '  test "$(stat -c %s "$root/resident/$file")" -eq "$size"',
+            '  printf \'%s  %s\\n\' "$sha" "$root/resident/$file" | sha256sum --check --status',
+            'done <"$root/resident.tsv"',
             *_monitored_command(
                 command.replace("python3 ", "/opt/borsuk/venv/bin/python ", 1),
                 rss_limit_bytes=3 * 1024**3,
@@ -595,6 +623,7 @@ def _evaluation_script(plan: V30EvaluationPlan) -> str:
 
 
 def _containment_script(plan: V32ContainmentSpotPlan) -> str:
+    geometric = plan.virtual_geometric_pages or plan.global_geometric_pages
     manifest_prefix = plan.construction_manifest_uri.removesuffix("manifest.json")
     output_bucket, output_key = _split_s3(plan.output_prefix)
     command_words = [
@@ -622,10 +651,12 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
     ]
     if plan.global_leaf_limit is not None:
         command_words.extend(["--global-leaf-limit", str(plan.global_leaf_limit)])
-    if plan.virtual_geometric_pages:
+    if geometric:
         command_words.extend(
             [
-                "--virtual-geometric-pages",
+                "--global-geometric-pages"
+                if plan.global_geometric_pages
+                else "--virtual-geometric-pages",
                 "--diagnostic-batch-arrow",
                 "/run/v32/diagnostic-batch.arrow",
                 "--governing-terminal",
@@ -653,7 +684,7 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
         f" --root-beam {plan.root_beam}"
         f" --leaf-beam {plan.leaf_beam}"
     )
-    if plan.virtual_geometric_pages:
+    if geometric:
         command += (
             ' --diagnostic-batch-sha256 "$batch_sha"'
             ' --diagnostic-batch-bytes "$batch_size"'
@@ -665,7 +696,7 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
             "umask 077",
             "export AWS_REGION=eu-central-1",
             "ulimit -c 0",
-            "shutdown --poweroff +120",
+            "shutdown --poweroff +180" if plan.global_geometric_pages else "shutdown --poweroff +120",
             "root=/run/v32",
             'source_dir="$root/source"',
             'archive="$root/source.tar.zst"',
@@ -674,11 +705,11 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
             f"output_bucket={shlex.quote(output_bucket)}",
             f"output_key={shlex.quote(output_key)}",
             "terminal=failed",
-            "put_once() { aws s3api put-object --bucket \"$output_bucket\" --key \"$output_key$2\" --body \"$1\" --if-none-match '*' --checksum-algorithm SHA256 >/dev/null; }",
-            "finish() { status=$?; trap - EXIT; set +e; if [[ \"$terminal\" != complete ]]; then printf '{\"claim_eligible\":false,\"status\":\"failed\",\"worker_status\":%d}\\n' \"$status\" >\"$root/FAILED.json\"; put_once \"$root/worker.log\" worker.log || true; [[ ! -s \"$root/TERMINAL.json\" ]] || put_once \"$root/TERMINAL.json\" TERMINAL.json || true; put_once \"$root/FAILED.json\" FAILED.json || true; fi; shutdown -h now; }",
+            'put_once() { aws s3api put-object --bucket "$output_bucket" --key "$output_key$2" --body "$1" --if-none-match \'*\' --checksum-algorithm SHA256 >/dev/null; }',
+            'finish() { status=$?; trap - EXIT; set +e; if [[ "$terminal" != complete ]]; then printf \'{"claim_eligible":false,"status":"failed","worker_status":%d}\\n\' "$status" >"$root/FAILED.json"; put_once "$root/worker.log" worker.log || true; [[ ! -s "$root/TERMINAL.json" ]] || put_once "$root/TERMINAL.json" TERMINAL.json || true; put_once "$root/FAILED.json" FAILED.json || true; fi; shutdown -h now; }',
             "trap finish EXIT",
             "dnf install -y python3-pip tar zstd",
-            f"aws s3 cp --only-show-errors {shlex.quote(plan.source_archive_uri)} \"$archive\"",
+            f'aws s3 cp --only-show-errors {shlex.quote(plan.source_archive_uri)} "$archive"',
             f'test "$(stat -c %s "$archive")" -eq {plan.source_archive_bytes}',
             f"printf '%s  %s\\n' {plan.source_archive_sha256} \"$archive\" | sha256sum --check --status",
             'tar --zstd -xf "$archive" -C "$source_dir"',
@@ -698,15 +729,15 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
             "curl -LsSf https://astral.sh/uv/0.8.17/install.sh | sh",
             "/root/.local/bin/uv venv --python 3.12 /opt/borsuk/venv",
             "/root/.local/bin/uv pip install --python /opt/borsuk/venv/bin/python --requirement scripts/requirements-format-bench.txt",
-            f"aws s3 cp --only-show-errors {shlex.quote(plan.construction_manifest_uri)} \"$root/manifest.json\"",
-            f"aws s3 cp --only-show-errors {shlex.quote(plan.query_uri)} \"$root/test.parquet\"",
-            f"aws s3 cp --only-show-errors {shlex.quote(plan.truth_uri)} \"$root/neighbors.parquet\"",
-            f"aws s3 cp --only-show-errors {shlex.quote(plan.truth_receipt_uri)} \"$root/truth-receipt.json\"",
+            f'aws s3 cp --only-show-errors {shlex.quote(plan.construction_manifest_uri)} "$root/manifest.json"',
+            f'aws s3 cp --only-show-errors {shlex.quote(plan.query_uri)} "$root/test.parquet"',
+            f'aws s3 cp --only-show-errors {shlex.quote(plan.truth_uri)} "$root/neighbors.parquet"',
+            f'aws s3 cp --only-show-errors {shlex.quote(plan.truth_receipt_uri)} "$root/truth-receipt.json"',
             *(
                 [
-                    f"aws s3 cp --only-show-errors {shlex.quote(plan.governing_terminal_uri)} \"$root/governing-terminal.json\"",
+                    f'aws s3 cp --only-show-errors {shlex.quote(plan.governing_terminal_uri)} "$root/governing-terminal.json"',
                 ]
-                if plan.virtual_geometric_pages
+                if geometric
                 else []
             ),
             f'test "$(stat -c %s "$root/manifest.json")" -eq {plan.construction_manifest_bytes}',
@@ -722,7 +753,7 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
                     f'test "$(stat -c %s "$root/governing-terminal.json")" -eq {plan.governing_terminal_bytes}',
                     f"printf '%s  %s\\n' {plan.governing_terminal_sha256} \"$root/governing-terminal.json\" | sha256sum --check --status",
                 ]
-                if plan.virtual_geometric_pages
+                if geometric
                 else []
             ),
             "python3 - <<'PY' >\"$root/resident.tsv\"",
@@ -735,16 +766,16 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
             "print(logical['file'], logical['sha256'], logical['encoded_bytes'], sep='\\t', file=open('/run/v32/logical.tsv','w'))",
             "PY",
             "while IFS=$'\\t' read -r file sha size; do",
-            "  [[ \"$file\" != */* && \"$file\" != .* && \"$sha\" =~ ^[0-9a-f]{64}$ && \"$size\" =~ ^[1-9][0-9]*$ ]]",
-            f"  aws s3 cp --only-show-errors {shlex.quote(manifest_prefix)}\"$file\" \"$root/resident/$file\"",
-            "  test \"$(stat -c %s \"$root/resident/$file\")\" -eq \"$size\"",
-            "  printf '%s  %s\\n' \"$sha\" \"$root/resident/$file\" | sha256sum --check --status",
-            "done <\"$root/resident.tsv\"",
+            '  [[ "$file" != */* && "$file" != .* && "$sha" =~ ^[0-9a-f]{64}$ && "$size" =~ ^[1-9][0-9]*$ ]]',
+            f'  aws s3 cp --only-show-errors {shlex.quote(manifest_prefix)}"$file" "$root/resident/$file"',
+            '  test "$(stat -c %s "$root/resident/$file")" -eq "$size"',
+            '  printf \'%s  %s\\n\' "$sha" "$root/resident/$file" | sha256sum --check --status',
+            'done <"$root/resident.tsv"',
             "IFS=$'\\t' read -r logical_file logical_sha logical_size <\"$root/logical.tsv\"",
-            "[[ \"$logical_file\" == logical-sources.arrow && \"$logical_sha\" =~ ^[0-9a-f]{64}$ && \"$logical_size\" =~ ^[1-9][0-9]*$ ]]",
-            f"aws s3 cp --only-show-errors {shlex.quote(manifest_prefix)}\"$logical_file\" \"$root/resident/logical-sources.arrow\"",
-            "test \"$(stat -c %s \"$root/resident/logical-sources.arrow\")\" -eq \"$logical_size\"",
-            "printf '%s  %s\\n' \"$logical_sha\" \"$root/resident/logical-sources.arrow\" | sha256sum --check --status",
+            '[[ "$logical_file" == logical-sources.arrow && "$logical_sha" =~ ^[0-9a-f]{64}$ && "$logical_size" =~ ^[1-9][0-9]*$ ]]',
+            f'aws s3 cp --only-show-errors {shlex.quote(manifest_prefix)}"$logical_file" "$root/resident/logical-sources.arrow"',
+            'test "$(stat -c %s "$root/resident/logical-sources.arrow")" -eq "$logical_size"',
+            'printf \'%s  %s\\n\' "$logical_sha" "$root/resident/logical-sources.arrow" | sha256sum --check --status',
             *(
                 [
                     "/opt/borsuk/venv/bin/python - <<'PY'",
@@ -769,10 +800,14 @@ def _containment_script(plan: V32ContainmentSpotPlan) -> str:
                     'batch_sha=$(sha256sum "$root/diagnostic-batch.arrow" | cut -d" " -f1)',
                     'batch_size=$(stat -c %s "$root/diagnostic-batch.arrow")',
                 ]
-                if plan.virtual_geometric_pages
+                if geometric
                 else []
             ),
-            *_monitored_command(command, rss_limit_bytes=3 * 1024**3, wall_seconds=3_600),
+            *_monitored_command(
+                command,
+                rss_limit_bytes=(2 if plan.global_geometric_pages else 3) * 1024**3,
+                wall_seconds=7_200 if plan.global_geometric_pages else 3_600,
+            ),
             'put_once "$root/worker.log" worker.log',
             'put_once "$root/TERMINAL.json" TERMINAL.json',
             "terminal=complete",
@@ -879,7 +914,7 @@ def execute_v30_spot_phase(
         rss_limit_bytes = 3 * 1024**3
     elif isinstance(plan, V32ContainmentSpotPlan):
         specs = build_v32_containment_spot_specs(plan, targets)
-        rss_limit_bytes = 3 * 1024**3
+        rss_limit_bytes = (2 if plan.global_geometric_pages else 3) * 1024**3
     else:
         raise TypeError("V30 Spot plan type differs")
     bucket_name, prefix = _split_s3(plan.output_prefix)
@@ -923,7 +958,9 @@ def execute_v30_spot_phase(
         instance_status = status.get("InstanceStatus", {}).get("Status", "initializing")
         terminal = _optional_s3_bytes(s3_client, bucket_name, prefix + "TERMINAL.json")
         if terminal is None:
-            terminal = _optional_s3_bytes(s3_client, bucket_name, prefix + "FAILED.json")
+            terminal = _optional_s3_bytes(
+                s3_client, bucket_name, prefix + "FAILED.json"
+            )
         heartbeat = (
             None
             if terminal is not None
@@ -1016,9 +1053,11 @@ def monitor_v30_original_attempt(
                     value = json.loads(observation.terminal)
                 except (UnicodeDecodeError, json.JSONDecodeError) as error:
                     raise ValueError("V30 terminal JSON differs") from error
-                if observation.terminal != json.dumps(
-                    value, sort_keys=True, separators=(",", ":")
-                ).encode() + b"\n":
+                if (
+                    observation.terminal
+                    != json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+                    + b"\n"
+                ):
                     raise ValueError("V30 terminal canonical bytes differ")
                 if (
                     type(value) is not dict

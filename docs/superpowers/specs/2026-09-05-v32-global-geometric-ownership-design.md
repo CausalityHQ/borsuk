@@ -57,6 +57,18 @@ for permutation/inverse norm/margins/owners, and2ceil(N/capacity) count bytes:
 overhead still count against measured2GiB total process RSS. Construction is
 serial initially. Scientific execution uses Causality Spot with a7200s cap,
 preserved terminal/pressure stop and no automatic retry after scientific failure.
+The 30-second watchdog samples are liveness/early-stop evidence, not a peak
+measurement. Each serial qualifier phase records Linux VmHWM plus phase wall
+and CPU nanoseconds (phase timing begins after resident-router loading).
+The controller records its own lifetime high-water RSS and conservatively adds
+the larger of the two child high-water values; exceeding2GiB fails the resource
+gate even if quality passes. This is a conservative RSS bound, not a measured
+simultaneous peak or cgroup-memory claim. The outer safety shutdown is180 minutes
+to leave bootstrap/terminal-sync time outside the7200s scientific command cap.
+After exact control-byte verification, an already excessive control-plus-parent
+bound emits a canonical schema10 resource-failure receipt with the authenticated
+control and `treatment_executed=false`; reconstruction is never started. Completed
+treatment receipts use schema7 and preserve both phases' resource evidence.
 
 ## Replay integration
 

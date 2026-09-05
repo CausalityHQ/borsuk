@@ -682,6 +682,92 @@ pub struct V32Router {
     codes: V30CodePlanes,
 }
 
+/// An immutable candidate population captured without a truth or virtual layout.
+#[derive(Clone)]
+#[doc(hidden)]
+pub struct V32CandidateReplay<'a> {
+    router: &'a V32Router,
+    query: [f32; 96],
+    arm: V32SearchArm,
+    details: RoutingDetails,
+}
+
+impl V32CandidateReplay<'_> {
+    /// Bind ordered candidates, routing work and stop metadata, excluding truth.
+    pub fn sha256(&self) -> String {
+        let mut digest = Sha256::new();
+        digest.update(b"borsuk-v32-candidate-replay-v2\0");
+        for value in self.query {
+            digest.update(value.to_bits().to_le_bytes());
+        }
+        for value in [
+            self.arm.root_beam as u64,
+            self.arm.leaf_beam as u64,
+            self.arm.scan_budget,
+            self.arm.candidate_depth as u64,
+            self.arm.page_count as u64,
+        ] {
+            digest.update(value.to_le_bytes());
+        }
+        for list in [&self.details.selected_leaves, &self.details.ranked_leaves] {
+            digest.update((list.len() as u64).to_le_bytes());
+            for leaf in list {
+                digest.update(leaf.to_le_bytes());
+            }
+        }
+        digest.update((self.details.ranked_candidates.len() as u64).to_le_bytes());
+        for candidate in &self.details.ranked_candidates {
+            digest.update(candidate.logical.to_le_bytes());
+            digest.update(candidate.score.to_bits().to_le_bytes());
+        }
+        let work = self.details.selection.work;
+        for value in [
+            work.roots_scored as u64,
+            work.leaves_eligible as u64,
+            work.leaves_scanned as u64,
+            work.query_table_pairs_built as u64,
+            work.peak_query_table_pairs_live as u64,
+            work.codes_scanned,
+            work.candidates_retained as u64,
+            work.pages_considered as u64,
+            work.selected_pages as u64,
+            self.details.total_routing_leaves as u64,
+            self.details.scan_budget,
+        ] {
+            digest.update(value.to_le_bytes());
+        }
+        for value in [
+            self.details.global_leaf_limit.map(|n| n as u64),
+            self.details.next_leaf_rows,
+        ] {
+            digest.update([u8::from(value.is_some())]);
+            digest.update(value.unwrap_or_default().to_le_bytes());
+        }
+        digest.update([match self.details.stop_reason {
+            V32RoutingStopReason::RootGated => 0,
+            V32RoutingStopReason::AllLeaves => 1,
+            V32RoutingStopReason::LeafLimit => 2,
+            V32RoutingStopReason::ScanBudget => 3,
+        }]);
+        format!("{:x}", digest.finalize())
+    }
+
+    /// Join truth onto the captured current-layout selection without rerouting.
+    pub fn diagnose(&self, logicals: &[u64]) -> Result<V32RoutingDiagnostic> {
+        self.router
+            .diagnose_logicals_from_details(&self.query, logicals, self.details.clone())
+    }
+
+    /// Apply virtual first-distinct selection to the already captured population.
+    pub fn reduce_virtual(
+        &self,
+        logicals: &[u64],
+        layout: &V32VirtualPageLayout,
+    ) -> Result<V32VirtualRoutingDiagnostic> {
+        self.router.diagnose_virtual_replay(self, logicals, layout)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct V32VirtualPageLayout {
@@ -1472,26 +1558,40 @@ impl V32Router {
         logicals: &[u64],
         virtual_layout: &V32VirtualPageLayout,
     ) -> Result<V32VirtualRoutingDiagnostic> {
+        self.capture_global_replay(query, arm, leaf_limit)?
+            .reduce_virtual(logicals, virtual_layout)
+    }
+
+    /// Capture query-only routing once for independently authenticated reductions.
+    #[doc(hidden)]
+    pub fn capture_global_replay(
+        &self,
+        query: &[f32; 96],
+        arm: V32SearchArm,
+        leaf_limit: usize,
+    ) -> Result<V32CandidateReplay<'_>> {
+        let details = self.routing_details_global_prefix(query, arm, leaf_limit, &|_| {})?;
+        Ok(V32CandidateReplay {
+            router: self,
+            query: *query,
+            arm,
+            details,
+        })
+    }
+
+    fn diagnose_virtual_replay(
+        &self,
+        replay: &V32CandidateReplay<'_>,
+        logicals: &[u64],
+        virtual_layout: &V32VirtualPageLayout,
+    ) -> Result<V32VirtualRoutingDiagnostic> {
         if virtual_layout.page_owners.len() != self.codes.logical_rows() {
             return Err(invalid("V32 virtual page layout cardinality differs"));
         }
-        let details = self.routing_details_global_prefix(query, arm, leaf_limit, &|_| {})?;
-        let mut replay_digest = Sha256::new();
-        replay_digest.update(b"borsuk-v32-candidate-replay-v1\0");
-        for leaf in &details.selected_leaves {
-            replay_digest.update(leaf.to_le_bytes());
-        }
-        replay_digest.update(b"\0ranked-leaves\0");
-        for leaf in &details.ranked_leaves {
-            replay_digest.update(leaf.to_le_bytes());
-        }
-        replay_digest.update(b"\0candidates\0");
-        for candidate in &details.ranked_candidates {
-            replay_digest.update(candidate.logical.to_le_bytes());
-            replay_digest.update(candidate.score.to_bits().to_le_bytes());
-        }
-        let candidate_replay_sha256 = format!("{:x}", replay_digest.finalize());
-        let current = self.diagnose_logicals_from_details(query, logicals, details.clone())?;
+        let details = &replay.details;
+        let arm = replay.arm;
+        let candidate_replay_sha256 = replay.sha256();
+        let current = replay.diagnose(logicals)?;
         let mut seen = std::collections::BTreeSet::new();
         let mut virtual_pages = Vec::with_capacity(arm.page_count);
         for candidate in &details.ranked_candidates {
@@ -2350,6 +2450,61 @@ mod tests {
         let base = V30PqCodebook::new(V30PqWidth::Base24, vec![0.0; 24 * 256 * 4]).unwrap();
         let high = V30PqCodebook::new(V30PqWidth::High48, vec![0.0; 48 * 256 * 2]).unwrap();
         V32Router::new(hierarchy, base, high, layout, codes).unwrap()
+    }
+
+    #[test]
+    fn v32_global_replay_is_captured_once_before_layout_and_truth() {
+        // Break: candidate capture depends on layout/truth or reductions reroute.
+        let mut router = diagnostic_router();
+        router.hierarchy.leaves[1] = router.hierarchy.leaves[0];
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 1,
+            scan_budget: 65_536,
+            candidate_depth: 60,
+            page_count: 10,
+        };
+        let replay = router.capture_global_replay(&[0.2; 96], arm, 2).unwrap();
+        let control = replay.diagnose(&[0, 31]).unwrap();
+        let hash = replay.sha256();
+        let sources = (0_u64..60).collect::<Vec<_>>();
+        let layout = router
+            .global_geometric_page_layout_with_capacity(&sources, 4)
+            .unwrap();
+        let treatment = replay.reduce_virtual(&[0, 31], &layout).unwrap();
+        assert_eq!(treatment.current, control);
+        assert_eq!(treatment.candidate_replay_sha256, hash);
+        assert_eq!(replay.sha256(), hash);
+        let changed = replay.reduce_virtual(&[4, 59], &layout).unwrap();
+        assert_eq!(changed.virtual_pages, treatment.virtual_pages);
+        assert_eq!(changed.candidate_replay_sha256, hash);
+    }
+
+    #[test]
+    fn v32_global_replay_hash_binds_work_stop_and_order() {
+        // Break: the authority digest omits work or stopping metadata.
+        let router = diagnostic_router();
+        let arm = V32SearchArm {
+            root_beam: 1,
+            leaf_beam: 1,
+            scan_budget: 65_536,
+            candidate_depth: 60,
+            page_count: 10,
+        };
+        let replay = router.capture_global_replay(&[0.2; 96], arm, 2).unwrap();
+        let original = replay.sha256();
+        for mutation in 0..5 {
+            let mut changed = replay.clone();
+            match mutation {
+                0 => changed.details.selection.work.codes_scanned += 1,
+                1 => changed.details.next_leaf_rows = Some(123),
+                2 => changed.details.stop_reason = super::V32RoutingStopReason::ScanBudget,
+                3 => changed.details.ranked_candidates.swap(0, 1),
+                4 => changed.details.ranked_candidates[0].score = 123.0,
+                _ => unreachable!(),
+            }
+            assert_ne!(changed.sha256(), original, "mutation={mutation}");
+        }
     }
 
     #[test]

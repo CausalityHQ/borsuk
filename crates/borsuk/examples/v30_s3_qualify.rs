@@ -55,6 +55,13 @@ struct DiagnosticRequest {
     batch: Option<ArtifactArg>,
     global_leaf_limit: Option<usize>,
     virtual_geometric_pages: bool,
+    global_layout_mode: Option<GlobalLayoutMode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GlobalLayoutMode {
+    Control,
+    Treatment,
 }
 
 #[derive(Debug, Deserialize)]
@@ -768,6 +775,108 @@ fn virtual_geometric_batch_diagnostic_bytes(
     Ok(bytes)
 }
 
+fn global_replay_control_bytes(
+    diagnostics: Vec<(usize, String, V32RoutingDiagnostic)>,
+) -> borsuk::Result<Vec<u8>> {
+    if diagnostics.len() != 32 {
+        return Err(invalid("V32 global control batch cardinality differs"));
+    }
+    let mut queries = Vec::with_capacity(32);
+    for (offset, (ordinal, hash, current)) in diagnostics.into_iter().enumerate() {
+        if ordinal != 64 + offset
+            || !valid_digest(&hash)
+            || current.targets.len() != 10
+            || current.selection.pages.len() != 16
+            || current.selection.work.selected_pages != 16
+        {
+            return Err(invalid("V32 global control batch authority differs"));
+        }
+        let bytes = diagnostic_bytes(ordinal, true, Some(768), current)?;
+        let current: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|_| invalid("V32 global control JSON differs"))?;
+        queries.push(serde_json::json!({"candidate_replay_sha256": hash, "current": current}));
+    }
+    let mut bytes = serde_json::to_vec(&canonical(serde_json::json!({
+        "claim_eligible": false, "page_body_reads": 0, "queries": queries, "schema_version": 8,
+    })))
+    .map_err(|_| invalid("V32 global control serialization differs"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn global_geometric_batch_bytes(
+    diagnostics: Vec<(usize, V32VirtualRoutingDiagnostic)>,
+    counts: &[u16],
+) -> borsuk::Result<Vec<u8>> {
+    if diagnostics.len() != 32
+        || counts.len() != 2084
+        || counts.iter().any(|n| !(1..=480).contains(n))
+        || counts.iter().map(|n| u64::from(*n)).sum::<u64>() != 1_000_000
+    {
+        return Err(invalid("V32 global geometry batch shape differs"));
+    }
+    let layout_hash = diagnostics[0].1.virtual_layout_sha256.clone();
+    for (offset, (ordinal, diagnostic)) in diagnostics.iter().enumerate() {
+        if *ordinal != 64 + offset
+            || diagnostic.virtual_layout_sha256 != layout_hash
+            || diagnostic
+                .virtual_pages
+                .iter()
+                .chain(&diagnostic.virtual_target_pages)
+                .any(|page| *page as usize >= counts.len())
+        {
+            return Err(invalid("V32 global geometry batch authority differs"));
+        }
+    }
+    let bytes = virtual_geometric_batch_diagnostic_bytes(768, diagnostics)?;
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|_| invalid("V32 global geometry JSON differs"))?;
+    value["schema_version"] = serde_json::json!(9);
+    value["layout_algorithm"] = serde_json::json!("v32-global-balanced-cosine-v1");
+    value["page_row_counts"] = serde_json::json!(counts);
+    let mut bytes = serde_json::to_vec(&canonical(value))
+        .map_err(|_| invalid("V32 global geometry serialization differs"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn global_resource_bytes(
+    payload: &[u8],
+    peak_rss_bytes: u64,
+    phase_wall_ns: u64,
+    phase_cpu_ns: u64,
+) -> borsuk::Result<Vec<u8>> {
+    if peak_rss_bytes == 0 || phase_wall_ns == 0 || phase_cpu_ns == 0 {
+        return Err(invalid("V32 global resource evidence is missing"));
+    }
+    let mut value: serde_json::Value = serde_json::from_slice(payload)
+        .map_err(|_| invalid("V32 global resource payload differs"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| invalid("V32 global resource object differs"))?;
+    if !matches!(
+        object
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64),
+        Some(8 | 9)
+    ) || object.contains_key("resources")
+    {
+        return Err(invalid("V32 global resource schema differs"));
+    }
+    object.insert(
+        "resources".into(),
+        serde_json::json!({
+            "peak_rss_bytes": peak_rss_bytes,
+            "phase_wall_ns": phase_wall_ns,
+            "phase_cpu_ns": phase_cpu_ns,
+        }),
+    );
+    let mut bytes = serde_json::to_vec(&canonical(value))
+        .map_err(|_| invalid("V32 global resource serialization differs"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 fn process_cpu_nanoseconds() -> borsuk::Result<u64> {
     let task_root = PathBuf::from("/proc/self/task");
     let tasks = fs::read_dir(&task_root).map_err(|source| BorsukError::Io {
@@ -1206,6 +1315,70 @@ fn execute(args: Args) -> borsuk::Result<Vec<u8>> {
     router.validate_page_locations(&page_locations)?;
     let arm = manifest_arm(&args, &manifest)?;
     if let Some(diagnostic) = args.diagnostic {
+        if let Some(mode) = diagnostic.global_layout_mode {
+            let phase_start = std::time::Instant::now();
+            let cpu_start = process_cpu_nanoseconds()?;
+            let with_resources = |payload: Vec<u8>| {
+                global_resource_bytes(
+                    &payload,
+                    peak_rss_bytes()?,
+                    u64::try_from(phase_start.elapsed().as_nanos())
+                        .map_err(|_| invalid("V32 global phase wall time overflows"))?,
+                    process_cpu_nanoseconds()?
+                        .checked_sub(cpu_start)
+                        .ok_or_else(|| invalid("V32 global phase CPU time regressed"))?,
+                )
+            };
+            if manifest.source_rows != 1_000_000 {
+                return Err(invalid("V32 global diagnostic source shape differs"));
+            }
+            let batch = diagnostic
+                .batch
+                .as_ref()
+                .ok_or_else(|| invalid("V32 global diagnostic batch missing"))?;
+            let requests = read_diagnostic_batch(
+                batch,
+                args.query_start,
+                args.query_count,
+                manifest.source_rows,
+            )?;
+            let queries = read_queries(&args.query, args.query_start, args.query_count)?;
+            let replays = queries
+                .iter()
+                .map(|query| router.capture_global_replay(query, arm, 768))
+                .collect::<borsuk::Result<Vec<_>>>()?;
+            if mode == GlobalLayoutMode::Control {
+                let controls = replays
+                    .iter()
+                    .zip(requests)
+                    .map(|(replay, (ordinal, logicals))| {
+                        Ok((
+                            ordinal as usize,
+                            replay.sha256(),
+                            replay.diagnose(&logicals)?,
+                        ))
+                    })
+                    .collect::<borsuk::Result<Vec<_>>>()?;
+                return with_resources(global_replay_control_bytes(controls)?);
+            }
+            let sources = read_logical_sources(
+                &args.artifact_dir,
+                &manifest.logical_sources,
+                manifest.source_rows,
+            )?;
+            let layout = router.global_geometric_page_layout(&sources)?;
+            let diagnostics = replays
+                .iter()
+                .zip(requests)
+                .map(|(replay, (ordinal, logicals))| {
+                    Ok((ordinal as usize, replay.reduce_virtual(&logicals, &layout)?))
+                })
+                .collect::<borsuk::Result<Vec<_>>>()?;
+            return with_resources(global_geometric_batch_bytes(
+                diagnostics,
+                layout.page_row_counts(),
+            )?);
+        }
         if diagnostic.virtual_geometric_pages {
             let limit = diagnostic
                 .global_leaf_limit
@@ -1371,6 +1544,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
         .ok_or_else(|| argument_error("program is missing"))?;
     let mut execute = false;
     let mut virtual_geometric_pages = false;
+    let mut global_layout_mode = None;
     let mut values = BTreeMap::new();
     while let Some(flag) = arguments.next() {
         if flag == "--execute" {
@@ -1385,6 +1559,17 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
                 return Err(argument_error("duplicate --virtual-geometric-pages"));
             }
             virtual_geometric_pages = true;
+            continue;
+        }
+        if flag == "--global-replay-control" || flag == "--global-geometric-pages" {
+            if global_layout_mode.is_some() {
+                return Err(argument_error("duplicate global layout phase"));
+            }
+            global_layout_mode = Some(if flag == "--global-replay-control" {
+                GlobalLayoutMode::Control
+            } else {
+                GlobalLayoutMode::Treatment
+            });
             continue;
         }
         let name = flag
@@ -1448,7 +1633,10 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
             && diagnostic_logicals.is_none()
             && diagnostic_batch.is_none())
         || diagnostic_logicals.is_some() && diagnostic_batch.is_some()
-        || (virtual_geometric_pages && (global_leaf_limit.is_none() || diagnostic_batch.is_none()))
+        || ((virtual_geometric_pages || global_layout_mode.is_some())
+            && (global_leaf_limit.is_none() || diagnostic_batch.is_none()))
+        || (virtual_geometric_pages && global_layout_mode.is_some())
+        || (global_layout_mode.is_some() && (query_start != 64 || k != 10))
     {
         return Err(argument_error("--global-leaf-limit value differs"));
     }
@@ -1458,6 +1646,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
             batch: None,
             global_leaf_limit,
             virtual_geometric_pages,
+            global_layout_mode,
         })
         .or_else(|| {
             diagnostic_batch.map(|batch| DiagnosticRequest {
@@ -1465,6 +1654,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Args, String> {
                 batch: Some(batch),
                 global_leaf_limit,
                 virtual_geometric_pages,
+                global_layout_mode,
             })
         });
     let local = values.remove("local-page-dir").map(PathBuf::from);
@@ -1639,6 +1829,100 @@ mod tests {
     }
 
     #[test]
+    fn v32_global_layout_resources_preserve_high_water_and_phase_timing() {
+        // Break: final evidence silently substitutes sampled RSS for process HWM.
+        let bytes =
+            super::global_resource_bytes(b"{\"schema_version\":8}\n", 123_456, 999, 555).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["resources"]["peak_rss_bytes"], 123_456);
+        assert_eq!(value["resources"]["phase_wall_ns"], 999);
+        assert_eq!(value["resources"]["phase_cpu_ns"], 555);
+        assert!(super::global_resource_bytes(b"{\"schema_version\":8}\n", 0, 999, 555).is_err());
+        // High memory is retained for a controller rejection, not erased.
+        let bytes =
+            super::global_resource_bytes(b"{\"schema_version\":9}\n", 3_221_225_472, 999, 555)
+                .unwrap();
+        assert!(std::str::from_utf8(&bytes).unwrap().contains("3221225472"));
+    }
+
+    #[test]
+    fn v32_global_layout_cli_requires_explicit_resident_phases() {
+        // Break: global reconstruction starts implicitly or acquires page access.
+        for (flag, mode) in [
+            ("--global-replay-control", super::GlobalLayoutMode::Control),
+            (
+                "--global-geometric-pages",
+                super::GlobalLayoutMode::Treatment,
+            ),
+        ] {
+            let mut values = virtual_batch_arguments();
+            values.pop();
+            values.push(flag.to_owned());
+            let start = values.iter().position(|v| v == "--query-start").unwrap();
+            values[start + 1] = "64".to_owned();
+            let parsed = parse_args(values.clone()).unwrap();
+            assert_eq!(parsed.diagnostic.unwrap().global_layout_mode, Some(mode));
+            for forbidden in [
+                vec![flag],
+                vec!["--virtual-geometric-pages"],
+                vec!["--serving-tier", "standard"],
+                vec!["--local-page-dir", "/tmp/pages"],
+            ] {
+                let mut invalid = values.clone();
+                invalid.extend(forbidden.into_iter().map(str::to_owned));
+                assert!(parse_args(invalid).is_err());
+            }
+            values.push(
+                if flag == "--global-replay-control" {
+                    "--global-geometric-pages"
+                } else {
+                    "--global-replay-control"
+                }
+                .to_owned(),
+            );
+            assert!(parse_args(values).is_err());
+        }
+    }
+
+    #[test]
+    fn v32_global_layout_envelopes_bind_complete_control_and_geometry() {
+        // Break: partial/wrong-order controls or unbounded/inconsistent page map.
+        let fixture = virtual_diagnostic_fixture();
+        let controls = (64..96)
+            .map(|q| (q, "a".repeat(64), fixture.current.clone()))
+            .collect::<Vec<_>>();
+        let bytes = super::global_replay_control_bytes(controls.clone()).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema_version"], 8);
+        assert_eq!(value["queries"].as_array().unwrap().len(), 32);
+        assert_eq!(value["queries"][0]["current"]["query_ordinal"], 64);
+        assert_eq!(value["page_body_reads"], 0);
+        assert!(super::global_replay_control_bytes(controls[..31].to_vec()).is_err());
+        let mut reordered = controls.clone();
+        reordered.swap(0, 1);
+        assert!(super::global_replay_control_bytes(reordered).is_err());
+        let mut bad_digest = controls;
+        bad_digest[0].1 = "not-a-digest".to_owned();
+        assert!(super::global_replay_control_bytes(bad_digest).is_err());
+        let treatments = (64..96).map(|q| (q, fixture.clone())).collect::<Vec<_>>();
+        let mut counts = vec![480_u16; 1764];
+        counts.extend(vec![479; 320]);
+        let bytes = super::global_geometric_batch_bytes(treatments.clone(), &counts).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["schema_version"], 9);
+        assert_eq!(value["layout_algorithm"], "v32-global-balanced-cosine-v1");
+        assert_eq!(value["page_row_counts"].as_array().unwrap().len(), 2084);
+        assert_eq!(
+            value["queries"][0]["virtual_geometric"]["truth_microleaf_count"],
+            10
+        );
+        counts[0] = 481;
+        assert!(super::global_geometric_batch_bytes(treatments.clone(), &counts).is_err());
+        counts[0] = 479;
+        assert!(super::global_geometric_batch_bytes(treatments, &counts).is_err());
+    }
+
+    #[test]
     fn v32_virtual_geometric_qualifier_is_explicit_global_and_page_free() {
         // Break caught: geometric repacking is silently enabled in serving,
         // rooted diagnostics, or any mode with a page-body capability.
@@ -1710,10 +1994,7 @@ mod tests {
         assert_eq!(rows[31], (95, (310_u64..320).collect::<Vec<_>>()));
     }
 
-    #[test]
-    fn v32_virtual_geometric_diagnostic_is_canonical_and_exactly_sixteen_pages() {
-        // Break caught: a treatment result omits its causal page-membership
-        // evidence or reports a partial page selection as a valid comparison.
+    fn virtual_diagnostic_fixture() -> V32VirtualRoutingDiagnostic {
         let identities = (0..16_u32)
             .map(|ordinal| V27PageIdentity {
                 ordinal,
@@ -1752,7 +2033,7 @@ mod tests {
             pages_considered: 16,
             selected_pages: 16,
         };
-        let diagnostic = V32VirtualRoutingDiagnostic {
+        V32VirtualRoutingDiagnostic {
             current: V32RoutingDiagnostic {
                 selection: V32PageSelection {
                     pages: identities.clone(),
@@ -1780,7 +2061,14 @@ mod tests {
             truth_virtual_page_count: 10,
             recovered_logicals: vec![],
             newly_lost_logicals: vec![],
-        };
+        }
+    }
+
+    #[test]
+    fn v32_virtual_geometric_diagnostic_is_canonical_and_exactly_sixteen_pages() {
+        // Break caught: a treatment result omits its causal page-membership
+        // evidence or reports a partial page selection as a valid comparison.
+        let diagnostic = virtual_diagnostic_fixture();
         let bytes = virtual_geometric_diagnostic_bytes(64, true, 768, diagnostic.clone()).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let mut expected = serde_json::to_vec(&canonical(value.clone())).unwrap();
@@ -2200,6 +2488,7 @@ mod tests {
                 batch: None,
                 global_leaf_limit: None,
                 virtual_geometric_pages: false,
+                global_layout_mode: None,
             });
             assert_eq!(
                 manifest_arm(&diagnostic, &manifest).unwrap().scan_budget,

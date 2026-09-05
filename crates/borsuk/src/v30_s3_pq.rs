@@ -1180,11 +1180,10 @@ mod tests {
                 .map(|subquantizer| (subquantizer * 7 % 251) as u8)
                 .collect::<Vec<_>>();
             let reconstructed = reconstruct_v30_code(&book, &code).unwrap();
-            for subquantizer in 0..width.subquantizers() {
+            for (subquantizer, &centroid) in code.iter().enumerate() {
                 for dimension in 0..width.dimensions() {
                     let output = subquantizer * width.dimensions() + dimension;
-                    let expected =
-                        f32::from(code[subquantizer]) / 256.0 + dimension as f32 / 4096.0;
+                    let expected = f32::from(centroid) / 256.0 + dimension as f32 / 4096.0;
                     assert_eq!(reconstructed[output].to_bits(), expected.to_bits());
                 }
             }

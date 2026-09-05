@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import resource
 import subprocess
 import sys
 from argparse import ArgumentParser
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -63,10 +64,13 @@ class V32ContainmentPlan:
     virtual_geometric_pages: bool = False
     diagnostic_batch: LocalArtifact | None = None
     governing_terminal: RegisteredLocalArtifact | None = None
+    global_geometric_pages: bool = False
 
 
 def _digest(value: str) -> bool:
-    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+    return len(value) == 64 and all(
+        character in "0123456789abcdef" for character in value
+    )
 
 
 def _validate_artifact(artifact: LocalArtifact) -> None:
@@ -95,7 +99,9 @@ def _validate_registered_artifact(artifact: RegisteredLocalArtifact) -> None:
         raise ValueError("V32 registered artifact authority differs")
 
 
-def _read_governing_terminal(plan: V32ContainmentPlan) -> tuple[bytes, dict[str, object]]:
+def _read_governing_terminal(
+    plan: V32ContainmentPlan,
+) -> tuple[bytes, dict[str, object]]:
     artifact = plan.governing_terminal
     if artifact is None:
         raise ValueError("V32 governing terminal authority is missing")
@@ -113,7 +119,9 @@ def _read_governing_terminal(plan: V32ContainmentPlan) -> tuple[bytes, dict[str,
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("V32 governing terminal JSON differs") from error
     canonical = (
-        json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+        json.dumps(
+            value, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
         + b"\n"
     )
     outer_keys = {
@@ -225,7 +233,9 @@ def _read_scale_manifest(plan: V32ContainmentPlan) -> tuple[int, int, int, int]:
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("V32 containment manifest JSON differs") from error
     expected = (
-        json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+        json.dumps(
+            value, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
         + b"\n"
     )
     layout = value.get("layout") if type(value) is dict else None
@@ -284,7 +294,12 @@ def _read_scale_manifest(plan: V32ContainmentPlan) -> tuple[int, int, int, int]:
         if plan.global_leaf_limit is not None
         else plan.root_beam * layout["maximum_routing_leaves_per_root"]
     )
-    return maximum_routing_leaf_rows, maximum_leaves_eligible, plan.leaf_beam, scan_budget
+    return (
+        maximum_routing_leaf_rows,
+        maximum_leaves_eligible,
+        plan.leaf_beam,
+        scan_budget,
+    )
 
 
 def _read_truth(
@@ -360,22 +375,40 @@ def _read_truth_receipt(
         manifest = json.loads(plan.manifest.path.read_bytes())
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("V32 containment truth receipt JSON differs") from error
-    expected = json.dumps(
-        receipt, allow_nan=False, separators=(",", ":"), sort_keys=True
-    ).encode() + b"\n"
+    expected = (
+        json.dumps(
+            receipt, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
+        + b"\n"
+    )
     source = manifest.get("source") if type(manifest) is dict else None
     keys = {
-        "claim_eligible", "corpus_manifest_bytes", "corpus_manifest_sha256",
-        "corpus_normalization", "corpus_shards", "distance", "query_bytes",
-        "query_count", "query_normalization", "query_sha256", "query_start",
-        "rank_10_11_tie_queries", "schema", "shards_read", "source_rows",
-        "status", "tie_break", "top_k", "truth_bytes", "truth_id_space",
-        "truth_ids_sha256", "truth_row_semantics", "truth_sha256",
+        "claim_eligible",
+        "corpus_manifest_bytes",
+        "corpus_manifest_sha256",
+        "corpus_normalization",
+        "corpus_shards",
+        "distance",
+        "query_bytes",
+        "query_count",
+        "query_normalization",
+        "query_sha256",
+        "query_start",
+        "rank_10_11_tie_queries",
+        "schema",
+        "shards_read",
+        "source_rows",
+        "status",
+        "tie_break",
+        "top_k",
+        "truth_bytes",
+        "truth_id_space",
+        "truth_ids_sha256",
+        "truth_row_semantics",
+        "truth_sha256",
     }
     truth_ids = b"".join(
-        logical.to_bytes(8, "little", signed=True)
-        for row in truth
-        for logical in row
+        logical.to_bytes(8, "little", signed=True) for row in truth for logical in row
     )
     shards = receipt.get("corpus_shards") if type(receipt) is dict else None
     if (
@@ -477,9 +510,9 @@ def _read_diagnostic_batch(
     expected_logicals = [
         [source_to_logical[source] for source in source_row] for source_row in truth
     ]
-    if ordinals != list(range(plan.query_start, plan.query_start + plan.query_count)) or (
-        logical_rows != expected_logicals
-    ):
+    if ordinals != list(
+        range(plan.query_start, plan.query_start + plan.query_count)
+    ) or (logical_rows != expected_logicals):
         raise ValueError("V32 virtual diagnostic batch binding differs")
 
 
@@ -488,8 +521,11 @@ def _commands(
     truth: tuple[tuple[int, ...], ...],
     source_to_logical: tuple[int, ...],
     leaf_beam: int,
+    *,
+    replay_control: bool = False,
 ) -> tuple[tuple[str, ...], ...]:
-    query_count = plan.query_count if plan.virtual_geometric_pages else 1
+    geometric = plan.virtual_geometric_pages or plan.global_geometric_pages
+    query_count = plan.query_count if geometric else 1
     common = (
         str(plan.qualifier),
         "--execute",
@@ -526,7 +562,11 @@ def _commands(
         else ()
     )
     virtual = ("--virtual-geometric-pages",) if plan.virtual_geometric_pages else ()
-    if plan.virtual_geometric_pages:
+    if plan.global_geometric_pages:
+        virtual = (
+            "--global-replay-control" if replay_control else "--global-geometric-pages",
+        )
+    if geometric:
         batch = plan.diagnostic_batch
         if batch is None:
             raise ValueError("V32 virtual diagnostic batch authority is missing")
@@ -583,7 +623,11 @@ def _diagnostics(
     dict[str, int],
     dict[str, dict[str, object]],
 ]:
-    if type(payload) is not bytes or not payload.endswith(b"\n") or b"\n" in payload[:-1]:
+    if (
+        type(payload) is not bytes
+        or not payload.endswith(b"\n")
+        or b"\n" in payload[:-1]
+    ):
         raise ValueError("V32 containment diagnostic canonical bytes differ")
     value = json.loads(payload)
     expected = (
@@ -682,10 +726,7 @@ def _diagnostics(
                     or item["candidate_rank"] is not None
                 )
             )
-            or (
-                item["stage"] == "page-reducer"
-                and item["candidate_rank"] is None
-            )
+            or (item["stage"] == "page-reducer" and item["candidate_rank"] is None)
             or any(
                 rank is not None and (type(rank) is not int or rank < 0)
                 for rank in optional_ranks
@@ -726,10 +767,11 @@ def _diagnostics(
         or routing["scope"]
         != ("global" if global_leaf_limit is not None else "root-gated")
         or not 1 <= routing["codes_scanned"] <= scan_budget
-        or routing["candidates_retained"]
-        != min(12_288, routing["codes_scanned"])
+        or routing["candidates_retained"] != min(12_288, routing["codes_scanned"])
         or not (
-            1 <= routing["leaves_scanned"] <= min(global_leaf_limit, routing["leaves_eligible"])
+            1
+            <= routing["leaves_scanned"]
+            <= min(global_leaf_limit, routing["leaves_eligible"])
             if global_leaf_limit is not None
             else min(leaf_beam, routing["leaves_eligible"])
             <= routing["leaves_scanned"]
@@ -756,19 +798,30 @@ def _diagnostics(
     ):
         raise ValueError("V32 containment routing work differs")
     if global_leaf_limit is None:
-        if routing["stop_reason"] != "root-gated" or routing["next_leaf_rows"] is not None:
+        if (
+            routing["stop_reason"] != "root-gated"
+            or routing["next_leaf_rows"] is not None
+        ):
             raise ValueError("V32 containment routing stop differs")
     elif routing["stop_reason"] == "all-leaves":
-        if routing["leaves_scanned"] != routing["total_routing_leaves"] or routing["next_leaf_rows"] is not None:
+        if (
+            routing["leaves_scanned"] != routing["total_routing_leaves"]
+            or routing["next_leaf_rows"] is not None
+        ):
             raise ValueError("V32 containment routing stop differs")
     elif routing["stop_reason"] == "leaf-limit":
-        if routing["leaves_scanned"] != min(global_leaf_limit, routing["total_routing_leaves"]) or routing["next_leaf_rows"] is not None:
+        if (
+            routing["leaves_scanned"]
+            != min(global_leaf_limit, routing["total_routing_leaves"])
+            or routing["next_leaf_rows"] is not None
+        ):
             raise ValueError("V32 containment routing stop differs")
     elif routing["stop_reason"] == "scan-budget":
         if (
             type(routing["next_leaf_rows"]) is not int
             or routing["next_leaf_rows"] <= 0
-            or routing["leaves_scanned"] >= min(global_leaf_limit, routing["total_routing_leaves"])
+            or routing["leaves_scanned"]
+            >= min(global_leaf_limit, routing["total_routing_leaves"])
             or routing["codes_scanned"] + routing["next_leaf_rows"] <= scan_budget
         ):
             raise ValueError("V32 containment routing stop differs")
@@ -910,9 +963,12 @@ def _virtual_diagnostics(
     if not payload.endswith(b"\n") or b"\n" in payload[:-1]:
         raise ValueError("V32 virtual diagnostic canonical bytes differ")
     value = json.loads(payload)
-    expected = json.dumps(
-        value, allow_nan=False, separators=(",", ":"), sort_keys=True
-    ).encode() + b"\n"
+    expected = (
+        json.dumps(
+            value, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
+        + b"\n"
+    )
     if (
         payload != expected
         or type(value) is not dict
@@ -922,9 +978,12 @@ def _virtual_diagnostics(
         raise ValueError("V32 virtual diagnostic authority differs")
     virtual = value.pop("virtual_geometric")
     value["schema_version"] = 5
-    base = json.dumps(
-        value, allow_nan=False, separators=(",", ":"), sort_keys=True
-    ).encode() + b"\n"
+    base = (
+        json.dumps(
+            value, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
+        + b"\n"
+    )
     diagnostics, routing, page_selections = _diagnostics(
         base,
         query_ordinal,
@@ -973,8 +1032,7 @@ def _virtual_diagnostics(
     targets = virtual["targets"]
     if any(
         type(target) is not dict
-        or set(target)
-        != {"logical", "page_ordinal", "selected", "selected_at_eight"}
+        or set(target) != {"logical", "page_ordinal", "selected", "selected_at_eight"}
         or type(target["logical"]) is not int
         or type(target["page_ordinal"]) is not int
         or target["page_ordinal"] < 0
@@ -1017,13 +1075,17 @@ def _virtual_batch_payloads(payload: bytes, query_count: int) -> tuple[bytes, ..
         value = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("V32 virtual diagnostic batch JSON differs") from error
-    expected = json.dumps(
-        value, allow_nan=False, separators=(",", ":"), sort_keys=True
-    ).encode() + b"\n"
+    expected = (
+        json.dumps(
+            value, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
+        + b"\n"
+    )
     if (
         payload != expected
         or type(value) is not dict
-        or set(value) != {"claim_eligible", "page_body_reads", "queries", "schema_version"}
+        or set(value)
+        != {"claim_eligible", "page_body_reads", "queries", "schema_version"}
         or value["claim_eligible"] is not False
         or value["page_body_reads"] != 0
         or value["schema_version"] != 7
@@ -1032,10 +1094,123 @@ def _virtual_batch_payloads(payload: bytes, query_count: int) -> tuple[bytes, ..
     ):
         raise ValueError("V32 virtual diagnostic batch authority differs")
     return tuple(
-        json.dumps(query, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+        json.dumps(
+            query, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
         + b"\n"
         for query in value["queries"]
     )
+
+
+def _canonical_bytes(value: object) -> bytes:
+    return (
+        json.dumps(
+            value, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
+        + b"\n"
+    )
+
+
+def _global_envelope(payload: bytes, *, treatment: bool) -> dict[str, object]:
+    value = json.loads(payload)
+    keys = {
+        "claim_eligible",
+        "page_body_reads",
+        "queries",
+        "schema_version",
+        "resources",
+    }
+    if treatment:
+        keys |= {"layout_algorithm", "page_row_counts"}
+    if (
+        type(value) is not dict
+        or set(value) != keys
+        or payload != _canonical_bytes(value)
+        or value["claim_eligible"] is not False
+        or type(value["page_body_reads"]) is not int
+        or value["page_body_reads"] != 0
+        or type(value["schema_version"]) is not int
+        or value["schema_version"] != (9 if treatment else 8)
+        or type(value["queries"]) is not list
+        or len(value["queries"]) != 32
+    ):
+        raise ValueError("V32 global batch authority differs")
+    resources = value["resources"]
+    if (
+        type(resources) is not dict
+        or set(resources) != {"peak_rss_bytes", "phase_wall_ns", "phase_cpu_ns"}
+        or any(type(v) is not int or v <= 0 for v in resources.values())
+    ):
+        raise ValueError("V32 global resource evidence differs")
+    return value
+
+
+def _global_control_payloads(
+    payload: bytes,
+) -> tuple[tuple[bytes, ...], tuple[str, ...]]:
+    value = _global_envelope(payload, treatment=False)
+    currents = []
+    hashes = []
+    for ordinal, query in enumerate(value["queries"], 64):
+        if (
+            type(query) is not dict
+            or set(query) != {"candidate_replay_sha256", "current"}
+            or type(query["candidate_replay_sha256"]) is not str
+            or not _digest(query["candidate_replay_sha256"])
+            or type(query["current"]) is not dict
+            or type(query["current"].get("query_ordinal")) is not int
+            or query["current"]["query_ordinal"] != ordinal
+        ):
+            raise ValueError("V32 global control replay authority differs")
+        currents.append(_canonical_bytes(query["current"]))
+        hashes.append(query["candidate_replay_sha256"])
+    return tuple(currents), tuple(hashes)
+
+
+def _global_treatment_payloads(
+    payload: bytes, hashes: tuple[str, ...]
+) -> tuple[tuple[bytes, ...], list[int]]:
+    value = _global_envelope(payload, treatment=True)
+    counts = value["page_row_counts"]
+    if (
+        value["layout_algorithm"] != "v32-global-balanced-cosine-v1"
+        or type(counts) is not list
+        or len(counts) != 2084
+        or any(type(count) is not int or not 1 <= count <= 480 for count in counts)
+        or sum(counts) != 1_000_000
+    ):
+        raise ValueError("V32 global page map authority differs")
+    payloads = []
+    for ordinal, (query, expected_hash) in enumerate(
+        zip(value["queries"], hashes, strict=True), 64
+    ):
+        if (
+            type(query) is not dict
+            or query.get("query_ordinal") != ordinal
+            or type(query.get("virtual_geometric")) is not dict
+        ):
+            raise ValueError("V32 global treatment query authority differs")
+        virtual = query["virtual_geometric"]
+        if virtual.get("candidate_replay_sha256") != expected_hash:
+            raise ValueError("V32 global candidate replay differs")
+        pages = virtual.get("selected_pages")
+        targets = virtual.get("targets")
+        if (
+            type(pages) is not list
+            or type(targets) is not list
+            or any(
+                type(page) is not int or not 0 <= page < len(counts) for page in pages
+            )
+            or any(
+                type(target) is not dict
+                or type(target.get("page_ordinal")) is not int
+                or not 0 <= target["page_ordinal"] < len(counts)
+                for target in targets
+            )
+        ):
+            raise ValueError("V32 global page reference differs")
+        payloads.append(_canonical_bytes(query))
+    return tuple(payloads), counts
 
 
 def run_v32_no_page_containment(
@@ -1046,6 +1221,15 @@ def run_v32_no_page_containment(
 ) -> bytes:
     """Run and independently reduce the page-free scale containment gate."""
 
+    if plan.global_geometric_pages and (
+        plan.virtual_geometric_pages
+        or plan.source_rows != 1_000_000
+        or plan.query_start != 64
+        or plan.query_count != 32
+        or plan.global_leaf_limit != 768
+    ):
+        raise ValueError("V32 global diagnostic shape differs")
+    geometric = plan.virtual_geometric_pages or plan.global_geometric_pages
     (
         maximum_routing_leaf_rows,
         maximum_leaves_eligible,
@@ -1054,17 +1238,71 @@ def run_v32_no_page_containment(
     ) = _read_scale_manifest(plan)
     truth = _read_truth(plan, truth_bytes)
     source_to_logical = _read_logical_sources(plan)
-    governing_terminal = (
-        _read_governing_terminal(plan) if plan.virtual_geometric_pages else None
-    )
-    if plan.virtual_geometric_pages:
+    governing_terminal = _read_governing_terminal(plan) if geometric else None
+    if geometric:
         _read_diagnostic_batch(plan, truth, source_to_logical)
     commands = _commands(plan, truth, source_to_logical, leaf_beam)
-    payloads = (
-        _virtual_batch_payloads(invoke(commands[0]), plan.query_count)
-        if plan.virtual_geometric_pages
-        else tuple(invoke(command) for command in commands)
-    )
+    global_counts = None
+    if plan.global_geometric_pages:
+        control_command = _commands(
+            plan, truth, source_to_logical, leaf_beam, replay_control=True
+        )[0]
+        control_bytes = invoke(control_command)
+        control_resources = _global_envelope(control_bytes, treatment=False)[
+            "resources"
+        ]
+        control_payloads, replay_hashes = _global_control_payloads(control_bytes)
+        control_plan = replace(
+            plan,
+            global_geometric_pages=False,
+            virtual_geometric_pages=False,
+            diagnostic_batch=None,
+        )
+        control = run_v32_no_page_containment(
+            control_plan,
+            truth_bytes,
+            invoke=lambda command: control_payloads[
+                int(command[command.index("--query-start") + 1]) - 64
+            ],
+        )
+        if governing_terminal is None or control != governing_terminal[0]:
+            raise ValueError("V32 governing terminal preflight replay differs")
+        controller_peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+        control_peak = controller_peak + control_resources["peak_rss_bytes"]
+        if control_peak > 2147483648:
+            return _canonical_bytes(
+                {
+                    "schema_version": 10,
+                    "claim_eligible": False,
+                    "page_body_reads": 0,
+                    "status": "failed",
+                    "failed_gates": ["process-tree-memory"],
+                    "treatment_executed": False,
+                    "layout_algorithm": "v32-global-balanced-cosine-v1",
+                    "governing_terminal_uri": plan.governing_terminal.uri,
+                    "governing_terminal_sha256": plan.governing_terminal.sha256,
+                    "control": json.loads(control),
+                    "resources": {
+                        "control": control_resources,
+                        "controller_peak_rss_bytes": controller_peak,
+                        "conservative_peak_rss_bytes": control_peak,
+                        "memory_limit_bytes": 2147483648,
+                    },
+                }
+            )
+        treatment_bytes = invoke(commands[0])
+        treatment_resources = _global_envelope(treatment_bytes, treatment=True)[
+            "resources"
+        ]
+        payloads, global_counts = _global_treatment_payloads(
+            treatment_bytes, replay_hashes
+        )
+    else:
+        payloads = (
+            _virtual_batch_payloads(invoke(commands[0]), plan.query_count)
+            if geometric
+            else tuple(invoke(command) for command in commands)
+        )
     samples = []
     queries = []
     reciprocal_hits_by_query = []
@@ -1078,10 +1316,12 @@ def run_v32_no_page_containment(
     virtual_lost: list[int] = []
     virtual_queries: list[dict[str, object]] = []
     virtual_layout_sha256: str | None = None
-    for offset, (payload, source_ordinals) in enumerate(zip(payloads, truth, strict=True)):
+    for offset, (payload, source_ordinals) in enumerate(
+        zip(payloads, truth, strict=True)
+    ):
         query_ordinal = plan.query_start + offset
         logicals = tuple(source_to_logical[source] for source in source_ordinals)
-        if plan.virtual_geometric_pages:
+        if geometric:
             if plan.global_leaf_limit is None:
                 raise ValueError("V32 virtual diagnostic global limit is missing")
             diagnostics, routing, page_selections, virtual = _virtual_diagnostics(
@@ -1141,9 +1381,7 @@ def run_v32_no_page_containment(
                 zip(source_ordinals, logicals, strict=True)
             )
         ]
-        reciprocal_hits = sum(
-            item["reciprocal_rank_selected"] for item in targets
-        )
+        reciprocal_hits = sum(item["reciprocal_rank_selected"] for item in targets)
         reciprocal_hits_by_query.append(reciprocal_hits)
         queries.append(
             {
@@ -1211,14 +1449,12 @@ def run_v32_no_page_containment(
         * 1_000_000
         // RECALL_K,
         "maximum_selected_page_bytes": reciprocal_maximum_selected_page_bytes,
-        "perfect_queries": sum(
-            hits == RECALL_K for hits in reciprocal_hits_by_query
-        ),
+        "perfect_queries": sum(hits == RECALL_K for hits in reciprocal_hits_by_query),
         "selected_page_hits": reciprocal_total_hits,
         "status": "passed" if not reciprocal_failed else "failed",
     }
     virtual_geometric = None
-    if plan.virtual_geometric_pages:
+    if geometric:
         if total_hits != 308 or minimum != 700_000 or perfect != 23:
             raise ValueError("V32 virtual diagnostic frozen control differs")
         if reciprocal_total_hits != 298:
@@ -1230,7 +1466,9 @@ def run_v32_no_page_containment(
             virtual_failed.append("perfect-containment")
         if virtual_minimum != 1_000_000:
             virtual_failed.append("minimum-containment")
-        if any(count > 8 for count in virtual_truth_microleaf_counts):
+        if not plan.global_geometric_pages and any(
+            count > 8 for count in virtual_truth_microleaf_counts
+        ):
             virtual_failed.append("microleaf-eight-page-obstruction")
         if any(count > 8 for count in virtual_truth_page_counts):
             virtual_failed.append("virtual-eight-page-obstruction")
@@ -1284,7 +1522,9 @@ def run_v32_no_page_containment(
         "queries": queries,
         "reciprocal_rank": reciprocal_rank,
         "root_beam": plan.root_beam,
-        "routing_scope": "global" if plan.global_leaf_limit is not None else "root-gated",
+        "routing_scope": "global"
+        if plan.global_leaf_limit is not None
+        else "root-gated",
         "samples": samples,
         "schema_version": 4,
         "selected_page_hits": total_hits,
@@ -1335,15 +1575,37 @@ def run_v32_no_page_containment(
             "aggregate_containment_ppm"
         ]
         value["failed_gates"] = virtual_geometric["failed_gates"]
-        value["minimum_containment_ppm"] = virtual_geometric[
-            "minimum_containment_ppm"
-        ]
+        value["minimum_containment_ppm"] = virtual_geometric["minimum_containment_ppm"]
         value["perfect_queries"] = virtual_geometric["perfect_queries"]
         value["selected_page_hits"] = virtual_geometric["selected_page_hits"]
         value["status"] = virtual_geometric["status"]
         value["virtual_geometric"] = virtual_geometric
         value["schema_version"] = 6
-    return json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        if plan.global_geometric_pages:
+            value["schema_version"] = 7
+            value["layout_algorithm"] = "v32-global-balanced-cosine-v1"
+            value["page_row_counts"] = global_counts
+            controller_peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+            conservative_peak = controller_peak + max(
+                control_resources["peak_rss_bytes"],
+                treatment_resources["peak_rss_bytes"],
+            )
+            value["resources"] = {
+                "control": control_resources,
+                "treatment": treatment_resources,
+                "controller_peak_rss_bytes": controller_peak,
+                "conservative_peak_rss_bytes": conservative_peak,
+                "memory_limit_bytes": 2147483648,
+            }
+            if conservative_peak > 2147483648:
+                value["failed_gates"] = [*value["failed_gates"], "process-tree-memory"]
+                value["status"] = "failed"
+    return (
+        json.dumps(
+            value, allow_nan=False, separators=(",", ":"), sort_keys=True
+        ).encode()
+        + b"\n"
+    )
 
 
 def containment_exit_status(payload: bytes) -> int:
@@ -1398,6 +1660,7 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--leaf-beam", type=int, required=True)
     parser.add_argument("--global-leaf-limit", type=int)
     parser.add_argument("--virtual-geometric-pages", action="store_true")
+    parser.add_argument("--global-geometric-pages", action="store_true")
     parser.add_argument("--diagnostic-batch-arrow", type=Path)
     parser.add_argument("--diagnostic-batch-sha256")
     parser.add_argument("--diagnostic-batch-bytes", type=int)
@@ -1425,7 +1688,11 @@ def main(arguments: list[str] | None = None) -> int:
         value is not None for value in terminal_values
     ):
         parser.error("governing terminal authority is incomplete")
-    if args.virtual_geometric_pages and args.governing_terminal is None:
+    if args.virtual_geometric_pages and args.global_geometric_pages:
+        parser.error("geometric modes are mutually exclusive")
+    if (
+        args.virtual_geometric_pages or args.global_geometric_pages
+    ) and args.governing_terminal is None:
         parser.error("virtual geometric pages require a governing terminal")
     plan = V32ContainmentPlan(
         qualifier=args.qualifier,
@@ -1433,17 +1700,13 @@ def main(arguments: list[str] | None = None) -> int:
             args.manifest, args.manifest_sha256, args.manifest_bytes
         ),
         artifact_dir=args.artifact_dir,
-        query=LocalArtifact(
-            args.query_parquet, args.query_sha256, args.query_bytes
-        ),
+        query=LocalArtifact(args.query_parquet, args.query_sha256, args.query_bytes),
         logical_sources=LocalArtifact(
             args.logical_sources_arrow,
             args.logical_sources_sha256,
             args.logical_sources_bytes,
         ),
-        truth=LocalArtifact(
-            args.truth_parquet, args.truth_sha256, args.truth_bytes
-        ),
+        truth=LocalArtifact(args.truth_parquet, args.truth_sha256, args.truth_bytes),
         truth_receipt=LocalArtifact(
             args.truth_receipt,
             args.truth_receipt_sha256,
@@ -1456,6 +1719,7 @@ def main(arguments: list[str] | None = None) -> int:
         leaf_beam=args.leaf_beam,
         global_leaf_limit=args.global_leaf_limit,
         virtual_geometric_pages=args.virtual_geometric_pages,
+        global_geometric_pages=args.global_geometric_pages,
         diagnostic_batch=(
             LocalArtifact(
                 args.diagnostic_batch_arrow,
