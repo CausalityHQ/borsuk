@@ -53,7 +53,9 @@ query/truth roles:
   iterations.
 
 Compare centroid control, the fixed analytic moment estimate, diagonal moment
-estimate, and group three-prototype minimum distance. Also report a same-byte
+estimate, and group three-prototype minimum distance. Rank groups and admit the
+longest prefix whose next complete group remains within 131,072 rows, capped at
+64 groups. Also report a same-byte
 smaller-plain-leaf control when available, so prototype gains are not mislabeled
 as geometry when they are only extra resolution. For every arm emit the complete
 truth-owner rank CDF and cumulative selected rows. The proxy passes to fresh

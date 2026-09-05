@@ -44,7 +44,8 @@ V32 PQ/page kernels, Python controller, causality Spot.
   128 exposed queries, and 1,280 truth-owner identities. Read no exact corpus or
   page body.
 - [ ] Compare centroid, fixed analytic moment, diagonal moment, three-prototype
-  group minimum, and a same-byte smaller-plain-leaf control. Require 1,280/1,280
+  group minimum, and a same-byte smaller-plain-leaf control. Admit the longest
+  complete-group prefix within 131,072 rows, capped at 64. Require 1,280/1,280
   owners and 128/128 perfect queries within 131,072 cumulative rows, with
   p50/p95/max frontier dominance. One miss rejects that arm with no rerun.
 - [ ] Replay 480/240/120/60 logical-row pages from identical candidate order and
