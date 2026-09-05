@@ -1004,7 +1004,7 @@ fn global_resource_bytes(
         object
             .get("schema_version")
             .and_then(serde_json::Value::as_u64),
-        Some(8 | 9)
+        Some(9 | 10)
     ) || object.contains_key("resources")
     {
         return Err(invalid("V32 global resource schema differs"));
@@ -2055,12 +2055,15 @@ mod tests {
     fn v32_global_layout_resources_preserve_high_water_and_phase_timing() {
         // Break: final evidence silently substitutes sampled RSS for process HWM.
         let bytes =
-            super::global_resource_bytes(b"{\"schema_version\":8}\n", 123_456, 999, 555).unwrap();
+            super::global_resource_bytes(b"{\"schema_version\":10}\n", 123_456, 999, 555).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["resources"]["peak_rss_bytes"], 123_456);
         assert_eq!(value["resources"]["phase_wall_ns"], 999);
         assert_eq!(value["resources"]["phase_cpu_ns"], 555);
-        assert!(super::global_resource_bytes(b"{\"schema_version\":8}\n", 0, 999, 555).is_err());
+        assert!(super::global_resource_bytes(b"{\"schema_version\":10}\n", 0, 999, 555).is_err());
+        assert!(
+            super::global_resource_bytes(b"{\"schema_version\":8}\n", 123_456, 999, 555).is_err()
+        );
         // High memory is retained for a controller rejection, not erased.
         let bytes =
             super::global_resource_bytes(b"{\"schema_version\":9}\n", 3_221_225_472, 999, 555)
@@ -2124,7 +2127,16 @@ mod tests {
             high: borsuk::V32PqTableWork::default(),
         };
         let bytes = super::global_replay_control_bytes(controls.clone(), vec![work; 32]).unwrap();
+        let mut expected: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        expected["resources"] = serde_json::json!({
+            "peak_rss_bytes": 123_456, "phase_wall_ns": 999, "phase_cpu_ns": 555,
+        });
+        // Exercise the actual executable's composition, not just its producer:
+        // a stale resource-envelope schema guard must fail this fast test.
+        let bytes = super::global_resource_bytes(&bytes, 123_456, 999, 555).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value, expected);
+        assert!(super::global_resource_bytes(&bytes, 123_456, 999, 555).is_err());
         assert_eq!(value["schema_version"], 10);
         assert_eq!(
             value["queries"][0]["candidate_replay_sha256"],

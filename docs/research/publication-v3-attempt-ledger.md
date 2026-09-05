@@ -3224,3 +3224,66 @@ cohort. Routing CPU and S3 page reads are both material latency contributors;
 remaining recall loss is still page selection, not missing physical execution.
 Ask Astra for the smallest bounded routing-hot-path improvement, retain v3
 truth qualification requirement, and do not launch100M or claim release readiness.
+
+### V32 lazy-PQ CPU comparison: build isolation failure and separate attempt
+
+Source `407a8f74bde00b9cd71a39e0aeb5170110b0f1e4` implements on-demand PQ
+table entries and independently validated work counters. Baseline is
+`941f770f1eaba37103086051c70ca752259f9128`. Both preserve the frozen candidate
+replay and routing semantics; CPU benefit is not implied by correctness tests.
+
+Under `s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/407a8f74bde00b9cd71a39e0aeb5170110b0f1e4/attempts/`,
+`v32-deep-1m-pq-abba-407a8f74-a0001/` failed before measured ABBA. The second
+Cargo build reused the shared target's first executable: both binaries were
+21,944,048B with SHA256
+`7e3a3ee6f41511afb62bf26d8e0c9cadf96572af0a6227329f5525a74c0b42de`.
+Warm-B emitted baseline schema8 rather than current schema10. This is a build
+provenance failure, **not a speed or recall result**. Original `FAILED.json`
+57B SHA256 `30c3ac39b0663134f45c8de79846eaaa84de928c129eece758d4137bbbad88d2`
+and `BUILD.json`823B SHA256
+`ff3a47d0cedc42df3c927d3ec25076b2af7fc8d03b8b41a3908aede102f3464e`
+remain immutable. Original instance `i-06d7e81d039c61b23` is terminated;
+original controller exited1. Neither warm-up is admissible measurement evidence.
+
+Separately registered `v32-deep-1m-pq-abba-407a8f74-a0002/` isolates targets
+`/opt/pq-build-eager` and `/opt/pq-build-lazy`, checks distinct binary hashes,
+and retains schema8/schema10, all32 replay hashes, semantic-current equality
+and PQ-counter validation during the two prescribed warm-ups. A local shell
+generation regression failed on shared target paths and passed with isolated
+paths; it does not substitute for the real remote build. Astra reviewed the
+repair. Source archive remains 8,220,109B SHA256
+`490961d017f6d21f29c1c34b442180aa982825f8ba6e08e1201531a720519d68`.
+
+The new original is Spot c7g.4xlarge in eu-central-1b, instance
+`i-047d35462c0419e30`. Rust1.98.0, identical Cargo.lock and release flags;
+CPU0 affinity; warm-A/warm-B then measured A1/B1/B2/A2. Preregistered promotion
+requires B1<A1, B2<A2 and at least5% aggregate CPU reduction. Timing scope is
+the whole control-diagnostic phase, not routing-only or physical S3 serving.
+Inputs are the same historical-v2-reference 1M cohort64..95; no new quality
+qualification and no page-body GET. Scientific cap900s, whole cap1800s,
+process-group RSS3GiB, full PSI avg10 above0.5 or swap growth256MiB stops the
+original. Preserve terminal/stop evidence and terminate owned compute; do not
+restart in this attempt. No result was inspected at registration.
+
+Attempt a0002 also terminated before measurement, at warm-B. Isolated builds
+produced distinct binaries: eager21,944,048B SHA256
+`7e3a3ee6f41511afb62bf26d8e0c9cadf96572af0a6227329f5525a74c0b42de`,
+lazy21,946,424B SHA256
+`0d92518bd8c0866586967f93209169761ddcf777ace80fb208dac02ea1c2fff7`.
+`BUILD.json`1,204B SHA256
+`0436f9a01e13c4db6f140f3e8f7c4e1e5a7535224d985aabeba709cbf56a6900`
+proves the build-isolation repair. The lazy qualifier exited1 with
+`V32 global resource schema differs`: its producer emitted schema10, but the
+outer resource serializer still allowed only8/9. `FAILED.json` is57B with
+SHA256 `30c3ac39b0663134f45c8de79846eaaa84de928c129eece758d4137bbbad88d2`;
+the original controller exited1 and confirmed `i-047d35462c0419e30` terminated.
+No measured ABBA or speedup claim exists for this attempt.
+
+The focused producer-to-resource-wrapper regression reproduced this exact
+failure locally (one test,0.08s execution). The minimal repair accepts current
+schemas9/10 and rejects retired8; no compatibility reader was added. The test
+checks preservation of the complete query/replay/counter payload, addition of
+the resource object, and rejection of duplicate resources. Five focused tests
+passed in0.22s; the complete23-test example passed in0.23s. Astra independently
+confirmed the missed composition boundary. This is a diagnostic-output repair,
+not a change to PQ scoring, index layout, recall or serving defaults.
