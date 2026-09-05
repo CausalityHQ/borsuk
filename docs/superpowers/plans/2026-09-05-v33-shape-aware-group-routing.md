@@ -38,7 +38,8 @@ V32 PQ/page kernels, Python controller, causality Spot.
 - Create: `crates/borsuk/examples/v33_group_proxy_diagnostic.rs`
 
 - [ ] RED-test leaf residual moment and diagonal-moment arithmetic, exact
-  population-weighted group farthest-first initialization, ten Lloyd iterations,
+  population-weighted group farthest-first initialization with
+  `min(3, parent_count)` representatives, ten Lloyd iterations,
   f16 quantization, ordinal ties, and the freeze-before-query capability boundary.
 - [ ] Authenticate routing metadata, PQ codebooks/codes, the existing 178 groups,
   128 exposed queries, and 1,280 truth-owner identities. Read no exact corpus or

@@ -48,7 +48,8 @@ query/truth roles:
 
 - per-leaf mean squared residual radius;
 - per-leaf diagonal residual variance;
-- exactly three representatives per storage group built from population-weighted
+- up to three representatives per storage group, bounded by its parent count,
+  built from population-weighted
   parent centroids by deterministic farthest-first initialization and ten Lloyd
   iterations.
 
