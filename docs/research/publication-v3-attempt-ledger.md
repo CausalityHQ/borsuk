@@ -3508,3 +3508,84 @@ and completed cell artifacts; terminate the owned instance at terminal. Setup
 and build time are separate from measured query latency. No15ms cold-S3 gate;
 recall, low practical latency, sustained throughput and bounded scaling all
 remain required for eventual release.
+
+### V32 paired selective S3 serving: terminal exact-recall result
+
+The original `v32-deep-1m-serving-pair-28e60e45-a0001` completed on causality
+Spot `i-0e0c12c894daa5d8a`, c7g.4xlarge, eu-central-1b. Controller exited0 and
+confirmed instance termination, without restart. Exact execution source
+`28e60e45d61f1e4e1953366f5581820df8a5954e` adds only the Python historical
+ladder projection/tests after preregistration; its Rust tree is byte-identical
+to registered serving source `a15ba5d772a8420df062d8530b28ede2ad47d736`.
+The projection passed15 Python tests, actual frozen-terminal preflight, Ruff,
+pycompile/diff-check and Astra read-only review before launch. The exact
+corrected-v3 truth files also passed a bounded preflight before compute launch.
+
+Attempt prefix:
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/28e60e45d61f1e4e1953366f5581820df8a5954e/attempts/v32-deep-1m-serving-pair-28e60e45-a0001/`.
+`TERMINAL.json`996,135B SHA256
+`10534cdb6faeaa8763ae48118574189d1be767d9f6e84953044aa83dd8cbed76`.
+Source archive8,253,283B SHA256
+`183f168e9896ccb8b377b9ea9ca725e777a9a3d7b0e872a1686b122550e87f2d`;
+Rust1.98.0 aarch64 release qualifier21,947,992B SHA256
+`5c32d89ea0bbf3d5e99c8fc8c4275918a979b50b5c05fe87fabfd4bb38dd15ef`.
+Exact source, worker, bootstrap and protocol identities are in REGISTRATION;
+BUILD preserves compiler identity. No source/binary changed between cells.
+
+| Cell | Pages | Reranked hits /320 | Minimum hits /10 | Perfect queries /32 | E2E median ms | Empirical p95 ms | Maximum ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A1 | 16 | 302 | 6 | 22 | 131.851682 | 176.167393 | 183.247700 |
+| B1 | 64 | 320 | 10 | 32 | 179.975310 | 224.100390 | 331.154534 |
+| B2 | 64 | 320 | 10 | 32 | 139.570339 | 173.875713 | 276.309966 |
+| A2 | 16 | 302 | 6 | 22 | 84.715535 | 110.782293 | 134.023896 |
+
+These are actual S3 Standard page fetches and exact reranking, not simulated
+latency or page-containment recall. A recall94.375% and B recall100% exactly
+match their frozen containment on this cohort. All same-arm returned source
+IDs and squared distances match exactly across repetitions. Post-terminal
+controller-side validation fetched all four exact batch payloads, checked
+their registered lengths/hashes, reran the independent serving validator
+against the pinned ladder projection and exact v3 truth, and recomputed every
+sample, aggregate and timing statistic. All fields matched the terminal.
+
+| Artifact | Bytes | SHA256 |
+| --- | --- | --- |
+| A1-BATCH.json | 128,214 | `9ad407c9e6c4f631a28812a9ee8496aef8a08637049b85b6b098be0cb005be3f` |
+| B1-BATCH.json | 360,958 | `c123b4925a59323c25dacc6c6e81c6e6869e0a0403aec6740437598f943916f5` |
+| B2-BATCH.json | 360,953 | `3ac1bc3562a3d685f83fbbc13ac3af8599595da11bd07fe66edf960f08be03b2` |
+| A2-BATCH.json | 128,179 | `da45783e8b56daae17443619efcff4e7532994c1bcc84aaeec87d296e1dd9cfb` |
+
+No application page cache; each batch has a fresh client with connections
+reused within the batch. S3 internal state is uncontrolled. The large A1/A2
+and B1/B2 read-latency differences prohibit claiming independent strict-cold
+latency, a stable tail distribution, or attributing all wall-time differences
+to page budget. Both repeats are disclosed, not cherry-picked. CPU0 affinity
+and sequential queries also mean these are not sustainable-QPS measurements.
+
+Median routing wall times A1/B1/B2/A2 are41.359088 /41.786363 /42.842519
+/41.475046ms; page-read medians77.999791 /89.239960 /48.421537 /31.694004ms;
+exact-rerank medians11.890316 /47.035633 /47.253932 /11.919908ms. Phase medians
+do not sum to end-to-end medians. The wider arm visibly quadruples reranking
+work and bytes; this remains an optimization target, not a free recall gain.
+
+Each A batch reads512 logical pages /99,750,912 encoded bytes; each B reads
+2,048 /399,003,648. Per-query bytes are3,117,216 versus12,468,864. Total5,120
+logical page GETs /997,509,120B; wire attempts/retry overhead are not measured.
+Resident setup inputs total32,712,150B. No reference-corpus GETs occurred and
+no full vector corpus was downloaded for serving. Whole worker21,076,439,430ns
+excludes bootstrap/build; qualifier wrapper walls A1/B1/B2/A2 are4,631,048,592
+/6,184,814,382 /5,016,854,025 /3,089,491,744ns and include process setup.
+Maximum reported qualifier RSS98,115,584B. Twelve2s group-monitor samples peak
+at216,580,096B, full PSI avg10=0, swap growth0. `monitor.jsonl`1,060B SHA256
+`94ec4c5901ff7a9f6605d85cf85d5a6b40c7f099bb4c823d478104c7c6181304`;
+sampled group RSS is not an exact high-water mark.
+
+Decision: the explicitly tested64-page arm passes this small-cohort physical
+serving quality check. Preserve claim_eligible=false and no default promotion.
+Next qualify broader independently selected queries and bounded concurrency;
+investigate exact-rerank CPU without changing results; independently measure
+the existing write-encoder optimization. Do not extrapolate perfect general
+recall, sustained throughput or100M/1B memory/scale from this result. The64-page
+arm's fourfold request/byte cost and the cohort's previous ladder exposure
+remain explicit limitations. No additional experiment was started in this
+attempt, and owned compute is terminated.
