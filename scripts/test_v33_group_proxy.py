@@ -1,10 +1,62 @@
 """Contracts for the metadata-only V33 group-prototype falsifier."""
 
 import math
+import tempfile
 import unittest
+from pathlib import Path
 
 
 class GroupProxyTests(unittest.TestCase):
+    def test_driver_cli_requires_each_local_role_once_and_explicit_execution(self):
+        from scripts.run_v33_group_proxy import EXPECTED_DIGESTS, parse_args
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output = str(Path(temporary) / "result.json")
+            values = []
+            for role in EXPECTED_DIGESTS:
+                values.extend(("--" + role.replace("_", "-"), role + ".bin"))
+            values.extend(("--output", output, "--execute-group-proxy"))
+            parsed = parse_args(values)
+            self.assertEqual(parsed.output, output)
+            with self.assertRaises(SystemExit):
+                parse_args(values[:-1])
+            with self.assertRaises(SystemExit):
+                parse_args(values + (values[:2]))
+            with self.assertRaises(SystemExit):
+                parse_args(values + ["--bucket", "forbidden"])
+
+    def test_materializer_binds_dense_groups_to_each_parent_once(self):
+        from scripts.v33_group_proxy import ParentSummary, materialize_group_proxies
+
+        parents = (
+            ParentSummary(0, 10, (0.0, 0.0)),
+            ParentSummary(1, 20, (0.0, 2.0)),
+            ParentSummary(2, 30, (8.0, 0.0)),
+            ParentSummary(3, 40, (8.0, 2.0)),
+        )
+        groups = materialize_group_proxies(
+            ((0, 30, (0, 1)), (1, 70, (2, 3))),
+            parents,
+            prototype_count=3,
+            iterations=10,
+        )
+        self.assertEqual(tuple(group.rows for group in groups), (30, 70))
+        self.assertEqual(tuple(len(group.prototypes) for group in groups), (2, 2))
+        with self.assertRaises(ValueError):
+            materialize_group_proxies(
+                ((0, 30, (0, 1)), (1, 80, (2, 3))),
+                parents,
+                prototype_count=3,
+                iterations=10,
+            )
+        with self.assertRaises(ValueError):
+            materialize_group_proxies(
+                ((0, 30, (0, 1)), (1, 70, (1, 3))),
+                parents,
+                prototype_count=3,
+                iterations=10,
+            )
+
     def test_three_prototypes_are_deterministic_and_population_weighted(self):
         from scripts.v33_group_proxy import ParentSummary, build_group_prototypes
 

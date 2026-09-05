@@ -128,6 +128,53 @@ def build_group_prototypes(parents, *, prototype_count, iterations):
     return tuple(tuple(_f16(value) for value in center) for center in centers)
 
 
+def materialize_group_proxies(groups, parents, *, prototype_count, iterations):
+    """Bind a frozen group partition to parent populations and prototypes."""
+
+    parents = tuple(sorted(parents, key=lambda parent: parent.ordinal))
+    _validate_parents(parents)
+    if tuple(parent.ordinal for parent in parents) != tuple(range(len(parents))):
+        raise ValueError("parent ordinals are not dense")
+    seen = set()
+    materialized = []
+    for expected_ordinal, group in enumerate(groups):
+        ordinal, rows, parent_ordinals = group
+        parent_ordinals = tuple(parent_ordinals)
+        if (
+            type(ordinal) is not int
+            or ordinal != expected_ordinal
+            or type(rows) is not int
+            or rows <= 0
+            or not parent_ordinals
+            or tuple(sorted(parent_ordinals)) != parent_ordinals
+            or any(
+                type(parent) is not int
+                or not 0 <= parent < len(parents)
+                or parent in seen
+                for parent in parent_ordinals
+            )
+        ):
+            raise ValueError("group partition authority differs")
+        members = tuple(parents[parent] for parent in parent_ordinals)
+        if sum(parent.rows for parent in members) != rows:
+            raise ValueError("group population differs")
+        seen.update(parent_ordinals)
+        materialized.append(
+            GroupProxy(
+                ordinal=ordinal,
+                rows=rows,
+                prototypes=build_group_prototypes(
+                    members,
+                    prototype_count=prototype_count,
+                    iterations=iterations,
+                ),
+            )
+        )
+    if seen != set(range(len(parents))):
+        raise ValueError("group partition is not exhaustive")
+    return tuple(materialized)
+
+
 def _validate_groups(groups):
     if not groups:
         raise ValueError("group proxy is empty")
