@@ -3150,3 +3150,77 @@ not proof that any frozen Deep Image truth ID differs. Original replay/page
 parity remains a valid historical regression; new quality qualification must
 use newly authenticated v3 truth, with any v2/v3 differences explicitly reported.
 No additional corpus stream or paid run was performed for this diagnosis.
+
+### Global physical S3 regression registration (941f770f)
+
+Source `941f770f1eaba37103086051c70ca752259f9128` contains the reviewed global
+serving path and strict replay/receipt reductions. Native ARM binary21,941,968B
+SHA256 `8e3f5851c5936241a7650ec1f05355fa5430f630fd2ec8307bc2bafab9af170f`
+was built on Causality Spot `i-0f4c051fa1241b9df`, now confirmed terminated.
+The8,211,075B source archive SHA256 is
+`0016b89acb83b59180ae30e9ab6d07a6bc0d09a4f98f920e2b4666d599ff23f7`.
+Build receipt715B SHA256
+`e98c0f9067d28799766c0ba43479bba4ef8d0e37d77fa972327914e8e69de90e`.
+These are under this source's `authority/` prefix in
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/`.
+An earlier controller failed SDK parameter validation before upload/launch;
+there was no instance and no scientific execution in that failure.
+
+The single registered attempt is
+`v32-deep-1m-global-serving-standard-q64-941f770f-a0001`, Spot
+`i-026812520cbd42922`, r7g.2xlarge, eu-central-1. The immutable REGISTRATION.json
+under this source's `attempts/` path binds worker SHA256
+`f153aa254febd56457efb319f7039d5b92098d5b9ef5fea68397976ff3f33285` (5615B)
+and userdata SHA256
+`7f94ca8e1684f306061ce71eecf8fdd464b009d8c521ebea46b943d736e8e4fa`.
+Original query64..95, global768, scan262144, candidates12288, sixteen original
+pages, k10. This is historical-v2-reference regression, **not new quality
+qualification**. Preserve the arithmetic caveat above, exact replay/page parity,
+raw batch and terminal. No corpus download or index rebuild; compact resident
+PQ/routing artifacts are explicitly part of1M setup, not a1B memory proof.
+
+Maximum512 logical page reads and100,663,296 page payload bytes. One sequential
+batch, shared client/connection reuse, no application page cache; S3 internal
+cache uncontrolled. Report n32 empirical timing, no stable p99/QPS claim,
+transport attempts unmeasured. Worker process-group limit3GiB, PSI full avg10
+stop above0.5, swap-growth cap256MiB, scientific wall1200s, whole wall1800s.
+One original only, no automatic restart; retain terminal/stop evidence and
+terminate compute on every outcome. No result was inspected at registration.
+
+Terminal execution completed; exact quality target did not pass. Terminal
+136,166B SHA256
+`8b4b81ef4a9ed48ac47df08f2d29965704aa1463243553dafb60f69dfafe732f` and raw
+`BATCH.json`127,474B SHA256
+`f09024c379fd8be7e9e670d9b1307fe8e147fe4148ab478739b43abf47c96b43` are preserved
+under the registered attempt prefix. Independently downloaded/authenticated
+raw batch, page-location Parquet and frozen truth (208,787B total); all32 replay
+hashes/ordered physical page selections validate, and independent intersections
+reproduce308/320=962500ppm, minimum700000ppm,23 perfect queries. These exactly
+match the prior resident control, not a new quality improvement. The reciprocal
+rank historical alternative was worse at298/320 and is not a new candidate.
+
+Real S3 Standard end-to-end elapsed ns: empirical p50=152,514,062,
+p95=187,821,992, maximum225,491,858; total5,040,539,415 across32 sequential
+queries. Routing p50=84,530,137ns (total2,706,343,174); page reads
+p50=65,013,999ns (total2,230,584,420); exact rerank p50=3,214,833ns
+(total103,535,075). Process CPU total3,518,316,346ns. Whole qualifier
+5,313,156,706ns includes resident setup; bootstrap/input downloads are outside
+that interval. These are n32 empirical quantiles, not a stable tail estimate,
+sustainable concurrency/QPS result, or controlled cold-server-cache result.
+
+512 logical page reads transferred99,750,912 encoded bytes,3,117,216/query.
+Setup fetched15 authenticated reference/resident objects totaling32,213,566B,
+excluding binary/source/bootstrap dependencies. No vector corpus was downloaded
+for serving. Peak reported **qualifier** RSS87,220,224B is not a complete cgroup
+or controller-plus-child peak. The30s sampled watchdog reported startup
+RSS9,445,376B, PSI0 and swap growth0; the short measured phase does not establish
+an exact whole-group high-water mark or prove the3GiB release memory bound.
+Controller observed terminal at76s and confirmed instance termination. It exited0;
+no restart occurred. At observation, eu-central-1a Spot rate was$0.2922/hour
+for r7g.2xlarge (not a final billed-cost claim).
+
+Disposition: physical global serving parity is established for this frozen
+cohort. Routing CPU and S3 page reads are both material latency contributors;
+remaining recall loss is still page selection, not missing physical execution.
+Ask Astra for the smallest bounded routing-hot-path improvement, retain v3
+truth qualification requirement, and do not launch100M or claim release readiness.
