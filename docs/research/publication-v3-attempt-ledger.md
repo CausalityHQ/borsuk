@@ -3287,3 +3287,70 @@ the resource object, and rejection of duplicate resources. Five focused tests
 passed in0.22s; the complete23-test example passed in0.23s. Astra independently
 confirmed the missed composition boundary. This is a diagnostic-output repair,
 not a change to PQ scoring, index layout, recall or serving defaults.
+
+### V32 lazy-PQ paired CPU result: 49.5573% reduction with exact replay parity
+
+Frozen measured source `76cb7382a28fce8838b3969b39c2cf27bda3b4ab`, archive
+8,223,206B SHA256
+`266292a5c096a6680d0740900b8874c59136d33b0e2c726aad0d92859f349df0`,
+ran one separately registered attempt at
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/76cb7382a28fce8838b3969b39c2cf27bda3b4ab/attempts/v32-deep-1m-pq-abba-76cb7382-a0001/`.
+Source, worker and userdata identities are registered before launch. Both
+sources built in isolated targets on the same c7g.4xlarge Spot instance
+`i-0dad04de919f94b4e`, eu-central-1b, with Rust1.98.0 and identical locked
+dependencies/release flags. Eager binary remains21,944,048B SHA256
+`7e3a3ee6f41511afb62bf26d8e0c9cadf96572af0a6227329f5525a74c0b42de`;
+lazy21,946,368B SHA256
+`5c4319e1fb68811ad4a8cd9364cae388a9fbe7f671fad7d8cfecd98d4c8190b9`.
+
+The original controller exited0, preserved `TERMINAL.json`9,322B SHA256
+`c1f3937d602100f65f312a7ba5ead3639e789e855ab2099de5415e80959d221e`, and
+confirmed instance termination. All six raw warm/measured outputs were separately
+downloaded after terminal, authenticated against the terminal's hashes/lengths,
+and checked against all32 frozen replay hashes. Semantic controls are identical
+across both implementations. Current Python validation independently accepts
+the lazy work counters. No restart occurred.
+
+Measured whole control-diagnostic CPU ns,32 queries per repetition:
+A1=2,819,973,317; B1=1,419,942,402; B2=1,419,945,848; A2=2,809,961,762.
+Both adjacent comparisons improve. Independently recomputed aggregate reduction
+is495,573ppm (49.5573%), exceeding the preregistered50,000ppm minimum. Mean
+CPU/query is87,967,735.609375ns eager versus44,373,253.90625ns lazy.
+Corresponding phase wall ns: A1=2,815,023,366; B1=1,427,692,119;
+B2=1,427,802,218; A2=2,817,025,769. Warm-ups are excluded from these calculations.
+
+Each lazy repetition reports base65,645,049 computed entries/81,078,375 cache
+hits; high16,165,098 computed entries/3,596,358 cache hits; zero eager fallbacks.
+Across32 queries,24,196 parent-table pairs imply445,980,672 entries for the
+full eager table geometry, versus81,810,147 actually evaluated. This geometry
+comparison is derived, whereas lazy work counters and CPU are measured.
+The optimization preserves arithmetic, selected candidates/pages and exact
+replay identity; it does not improve recall by itself.
+
+Inputs are13 named authenticated metadata/reference objects,32,209,070B total;
+no vector corpus or page bodies were downloaded for this CPU diagnostic.
+Peak qualifier RSS across the six invocations93,814,784B. Nine2s watchdog
+samples peaked at232,017,920B for the process group, full PSI avg10=0 and swap
+growth0. `monitor.jsonl`793B SHA256
+`b5c9b17e0d64fbd72a34d1ccfc086db52da68e76642d923a7497a2a95af317eb`.
+Sampled group RSS is not an exact high-water mark. Bootstrap and compilation
+are outside scientific phase timing. This is whole control-diagnostic CPU
+(query reading, capture, hashing, diagnosis and serialization), **not a measured
+49.5573% improvement in end-to-end S3 latency**, routing-only timing, sustainable
+QPS, a cold-S3 result, new quality qualification or100M/1B scalability proof.
+
+Disposition: retain the lazy scorer. Next, evaluate the preregistered16/32/64
+first-distinct-page ladder on a new cohort with corrected-v3 truth, keeping
+candidate generation fixed and reporting exact selected bytes before physical
+serving. Do not tune intermediate budgets on that result or promote64pages as
+a default without measuring its S3 cost/latency/throughput tradeoff.
+
+Separately, commit `c9695615aa6935383970d19623bec796caef498f` validates immutable
+base/high PQ codebooks once per serial preparation pass rather than per row.
+This was **not** part of the measured CPU binary. It adds two borrowed handles,
+no corpus cache or parallel buffers, and retains residual/error validation and
+record order. TDD missing-interface RED preceded implementation; three focused
+tests passed, including complete prepared-record byte equality with the frozen
+encoder. All21 PQ and22 layout tests, targeted strict library/test Clippy, fmt
+and diff-check passed. Astra reviewed it READY. Write throughput benefit is
+unmeasured and requires a separate encoding/preparation benchmark.
