@@ -1759,9 +1759,7 @@ impl V32Router {
                 }
             }
         }
-        if pages.len() != arm.page_count {
-            return Err(invalid("V33 explicit selected page cardinality differs"));
-        }
+        let selected_page_count = pages.len();
         let details = RoutingDetails {
             whole_roots: None,
             pq_work: V32PqEvaluationWork {
@@ -1779,7 +1777,7 @@ impl V32Router {
                     codes_scanned,
                     candidates_retained: candidate_depth,
                     pages_considered: seen.len(),
-                    selected_pages: arm.page_count,
+                    selected_pages: selected_page_count,
                 },
             },
             selected_leaves: leaves.to_vec(),
@@ -4392,6 +4390,18 @@ mod tests {
                 .capture_explicit_leaf_replay(&[0.2; 96], arm, &[2])
                 .is_err()
         );
+        let short = router
+            .capture_explicit_leaf_replay(
+                &[0.2; 96],
+                V32SearchArm {
+                    candidate_depth: 5,
+                    ..arm
+                },
+                &[1],
+            )
+            .unwrap();
+        assert_eq!(short.physical_page_prefix(64).unwrap().len(), 5);
+        assert_eq!(short.details.selection.work.selected_pages, 5);
     }
 
     #[test]

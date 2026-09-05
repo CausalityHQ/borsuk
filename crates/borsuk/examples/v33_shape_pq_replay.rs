@@ -280,6 +280,13 @@ fn truth_page_hits(truth_pages: &[u32], selected_pages: &[u32]) -> usize {
         .count()
 }
 
+fn bounded_page_prefix<T>(pages: &[T], page_count: usize) -> Result<&[T], &'static str> {
+    if !(1..=64).contains(&page_count) {
+        return Err("V33 replay page prefix cap differs");
+    }
+    Ok(&pages[..page_count.min(pages.len())])
+}
+
 #[cfg(test)]
 fn canonical_result(
     _truth_total: usize,
@@ -499,10 +506,7 @@ fn execute(args: &Args) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let mut projections = BTreeMap::new();
         for budget in [16_usize, 32, 48, 64] {
             let first = replay.physical_page_prefix(budget)?;
-            let reciprocal = diagnostic
-                .reciprocal_rank_pages
-                .get(..budget)
-                .ok_or("V33 reciprocal-rank page cardinality differs")?;
+            let reciprocal = bounded_page_prefix(&diagnostic.reciprocal_rank_pages, budget)?;
             let first_value = selected_page_value(&first, &truth_pages)?;
             let reciprocal_value = selected_page_value(reciprocal, &truth_pages)?;
             for (name, value) in [
@@ -604,14 +608,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_result, expected_frontier_inputs, parse_args, parse_frontier,
-        parse_frontier_record, truth_page_hits,
+        bounded_page_prefix, canonical_result, expected_frontier_inputs, parse_args,
+        parse_frontier, parse_frontier_record, truth_page_hits,
     };
 
     #[test]
     fn v33_shape_pq_replay_counts_truth_rows_not_distinct_truth_pages() {
         let selected = [7_u32, 9];
         assert_eq!(truth_page_hits(&[7, 7, 8, 9], &selected), 3);
+    }
+
+    #[test]
+    fn v33_shape_pq_replay_preserves_a_short_candidate_page_pool() {
+        assert_eq!(bounded_page_prefix(&[2_u32, 5], 64).unwrap(), &[2, 5]);
+        assert!(bounded_page_prefix(&[2_u32, 5], 0).is_err());
     }
 
     #[test]
