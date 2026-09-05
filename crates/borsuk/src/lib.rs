@@ -203,6 +203,7 @@ mod v32_code_objects;
 mod v32_global_pages;
 mod v33_group_shape;
 mod v34_rank4;
+mod v34_route;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]
@@ -241,6 +242,10 @@ pub use v34_rank4::{
     V34ServingMemoryProjection, build_v34_rank4_generation, build_v34_rank4_generation_from_v33,
     decode_v34_rank4_arrow, encode_v34_rank4_arrow, project_v34_serving_memory,
     score_v34_rank4_leaf,
+};
+#[doc(hidden)]
+pub use v34_route::{
+    V34GroupStorage, V34RouteBudget, V34RoutePrefix, V34SelectedGroup, exhaustive_v34_route,
 };
 #[allow(
     dead_code,
