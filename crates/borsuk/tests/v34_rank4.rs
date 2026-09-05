@@ -67,6 +67,7 @@ fn v34_rank4_generation_recomputes_authority_and_logical_coverage() {
     assert_eq!(generation.leaves().len(), 2);
     assert_eq!(generation.logical_rows(), 4);
     assert_eq!(generation.group_count(), 2);
+    assert_eq!(generation.group_rows(), &[2, 2]);
 
     assert_eq!(generation.leaves()[0].trace(), 6.5);
     assert_eq!(generation.leaves()[0].trace_square(), 21.25);

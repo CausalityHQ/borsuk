@@ -151,6 +151,8 @@ pub struct V34Rank4Generation {
     leaves: Vec<V34Rank4Leaf>,
     logical_rows: u64,
     group_count: u32,
+    group_rows: Vec<u64>,
+    authority_digest: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +194,15 @@ impl V34Rank4Generation {
     /// Number of dense storage groups.
     pub fn group_count(&self) -> u32 {
         self.group_count
+    }
+
+    /// Logical rows in each dense storage group, cached at authentication.
+    pub fn group_rows(&self) -> &[u64] {
+        &self.group_rows
+    }
+
+    pub(crate) fn authority_digest(&self) -> [u8; 32] {
+        self.authority_digest
     }
 }
 
@@ -481,10 +492,44 @@ pub fn build_v34_rank4_generation(
     if groups.len() != group_count as usize || groups.iter().copied().ne(0..group_count) {
         return Err(invalid("V34 rank-four group coverage differs"));
     }
+    let mut group_rows = vec![0_u64; group_count as usize];
+    for leaf in &leaves {
+        let rows = &mut group_rows[leaf.group_ordinal as usize];
+        *rows = rows
+            .checked_add(u64::from(leaf.population))
+            .ok_or_else(|| invalid("V34 rank-four group rows overflow"))?;
+    }
+    let mut authority = Sha256::new();
+    for leaf in &leaves {
+        authority.update(leaf.leaf_ordinal.to_le_bytes());
+        authority.update(leaf.group_ordinal.to_le_bytes());
+        authority.update(leaf.logical_start.to_le_bytes());
+        authority.update(leaf.population.to_le_bytes());
+        for value in leaf
+            .mean
+            .iter()
+            .chain(leaf.residual_diagonal.iter())
+            .chain(leaf.eigenvalues.iter())
+            .chain(leaf.directions.iter().flatten())
+        {
+            authority.update(value.to_bits().to_le_bytes());
+        }
+        for value in [
+            leaf.population_factor,
+            leaf.trace,
+            leaf.trace_square,
+            leaf.spectral_bound,
+        ] {
+            authority.update(value.to_bits().to_le_bytes());
+        }
+    }
+    let authority_digest = authority.finalize().into();
     Ok(V34Rank4Generation {
         leaves,
         logical_rows,
         group_count,
+        group_rows,
+        authority_digest,
     })
 }
 

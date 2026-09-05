@@ -245,7 +245,8 @@ pub use v34_rank4::{
 };
 #[doc(hidden)]
 pub use v34_route::{
-    V34GroupStorage, V34RouteBudget, V34RoutePrefix, V34SelectedGroup, exhaustive_v34_route,
+    V34GroupStorage, V34RouteBudget, V34RoutePrefix, V34RouteTree, V34SelectedGroup, V34TreeNode,
+    bound_v34_node, build_v34_route_tree, exhaustive_v34_route, hierarchical_v34_route,
 };
 #[allow(
     dead_code,
