@@ -49,7 +49,65 @@ pub(crate) struct V32CodeObject {
     pub(crate) parents: Vec<V32ParentCodes>,
 }
 
+/// Sequential view of a validated, immutably borrowed parent's packed planes.
+pub(crate) struct V32ParentCursor<'a> {
+    parent: &'a V32ParentCodes,
+    range: usize,
+    in_range: u32,
+    local_row: usize,
+    base_offset: usize,
+    high_offset: usize,
+}
+
+impl<'a> Iterator for V32ParentCursor<'a> {
+    type Item = (u64, V30PqWidth, &'a [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let range = self.parent.ranges.get(self.range)?;
+        let logical = range.logical_start + u64::from(self.in_range);
+        let high = self.parent.high_bits[self.local_row / 8] & (1 << (self.local_row % 8)) != 0;
+        // Construction validated all bounds and the immutable borrow keeps
+        // those bounds stable. Each packed-plane offset advances only once.
+        let (width, code) = if high {
+            let start = self.high_offset;
+            self.high_offset += 48;
+            (
+                V30PqWidth::High48,
+                &self.parent.high_codes[start..self.high_offset],
+            )
+        } else {
+            let start = self.base_offset;
+            self.base_offset += 24;
+            (
+                V30PqWidth::Base24,
+                &self.parent.base_codes[start..self.base_offset],
+            )
+        };
+        self.local_row += 1;
+        self.in_range += 1;
+        if self.in_range == range.row_count {
+            self.range += 1;
+            self.in_range = 0;
+        }
+        Some((logical, width, code))
+    }
+}
+
+impl std::iter::FusedIterator for V32ParentCursor<'_> {}
+
 impl V32ParentCodes {
+    pub(crate) fn cursor(&self) -> Result<V32ParentCursor<'_>> {
+        self.validate()?;
+        Ok(V32ParentCursor {
+            parent: self,
+            range: 0,
+            in_range: 0,
+            local_row: 0,
+            base_offset: 0,
+            high_offset: 0,
+        })
+    }
+
     fn rows(&self) -> Result<usize> {
         self.ranges.iter().try_fold(0_usize, |sum, range| {
             sum.checked_add(range.row_count as usize)
@@ -1172,6 +1230,97 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("; "));
+    }
+
+    #[test]
+    fn v32_code_object_cursor_borrows_mixed_gapped_rows() {
+        let parent = parent();
+        let mut cursor = parent.cursor().unwrap();
+        let first = cursor.next().unwrap();
+        assert_eq!(first, (10, V30PqWidth::Base24, &[1_u8; 24][..]));
+        assert_eq!(first.2.as_ptr(), parent.base_codes.as_ptr());
+        let high = cursor.next().unwrap();
+        assert_eq!(high, (11, V30PqWidth::High48, &[2_u8; 48][..]));
+        assert_eq!(high.2.as_ptr(), parent.high_codes.as_ptr());
+        assert_eq!(
+            cursor.next().unwrap(),
+            (20, V30PqWidth::Base24, &[3_u8; 24][..])
+        );
+        assert_eq!(
+            cursor.next().unwrap(),
+            (21, V30PqWidth::High48, &[4_u8; 48][..])
+        );
+        assert!(cursor.next().is_none());
+        assert!(cursor.next().is_none());
+    }
+
+    #[test]
+    fn v32_code_object_cursor_boundaries_and_rejections() {
+        let mut p = parent();
+        p.ranges = vec![
+            V32CodeRange {
+                logical_start: 100,
+                row_count: 3,
+            },
+            V32CodeRange {
+                logical_start: 200,
+                row_count: 6,
+            },
+        ];
+        p.high_bits = vec![0xAA, 0];
+        p.base_codes = [0_u8, 2, 4, 6, 8]
+            .into_iter()
+            .flat_map(|n| [n; 24])
+            .collect();
+        p.high_codes = [1_u8, 3, 5, 7].into_iter().flat_map(|n| [n; 48]).collect();
+        let expected_logical = [100, 101, 102, 200, 201, 202, 203, 204, 205];
+        let rows = p.cursor().unwrap().collect::<Vec<_>>();
+        assert_eq!(rows.len(), 9);
+        for (i, (logical, width, code)) in rows.iter().enumerate() {
+            assert_eq!(*logical, expected_logical[i]);
+            assert_eq!(
+                *width,
+                if i % 2 == 0 {
+                    V30PqWidth::Base24
+                } else {
+                    V30PqWidth::High48
+                }
+            );
+            assert!(code.iter().all(|n| usize::from(*n) == i));
+            assert_eq!(code.len(), if i % 2 == 0 { 24 } else { 48 });
+        }
+        let mut bad = p.clone();
+        bad.ranges.clear();
+        assert!(bad.cursor().is_err());
+        let mut bad = p.clone();
+        bad.base_codes.pop();
+        assert!(bad.cursor().is_err());
+        let mut bad = p.clone();
+        bad.high_bits[1] = 0x80;
+        assert!(bad.cursor().is_err());
+        for high in [false, true] {
+            let mut p = parent();
+            p.ranges = vec![V32CodeRange {
+                logical_start: 100,
+                row_count: 8192,
+            }];
+            p.high_bits = vec![if high { 255 } else { 0 }; 1024];
+            p.base_codes = if high { vec![] } else { vec![3; 8192 * 24] };
+            p.high_codes = if high { vec![7; 8192 * 48] } else { vec![] };
+            let mut cursor = p.cursor().unwrap();
+            assert_eq!(cursor.by_ref().take(8191).count(), 8191);
+            let last = cursor.next().unwrap();
+            assert_eq!(last.0, 8291);
+            assert_eq!(
+                last.2,
+                if high {
+                    &[7_u8; 48][..]
+                } else {
+                    &[3_u8; 24][..]
+                }
+            );
+            assert!(cursor.next().is_none());
+        }
     }
 
     #[test]

@@ -27,7 +27,7 @@
 Private cursor state: borrowed parent, range ordinal, row within range,
 local row, base byte offset, high byte offset. No public fields.
 
-- [ ] Add `v32_code_object_cursor_borrows_mixed_gapped_rows` using the existing literal parent and these assertions:
+- [x] Add `v32_code_object_cursor_borrows_mixed_gapped_rows` using the existing literal parent and these assertions:
 
 ```rust
 let mut cursor = parent.cursor().unwrap();
@@ -41,10 +41,16 @@ assert!(cursor.next().is_none());
 assert!(cursor.next().is_none());
 ```
 
-- [ ] Add `v32_code_object_cursor_boundaries_and_rejections`: literal9-row alternating-width fixture with ranges(100,3),(200,6), bitmap0xAA,0; exact logical values100,101,102,200..205 and per-row byte labels0..8. Check empty ranges/bad packed lengths/padding reject construction, and8192-row all-base/all-high endpoints.
-- [ ] Run `CARGO_BUILD_JOBS=1 rtk proxy cargo test -p borsuk --lib v32_code_object_cursor_ -- --nocapture`; preserve missing cursor RED.
-- [ ] Implement constructor calling `validate()` once and zeroing cursor offsets. `next` reads current range and fidelity bit, borrows24/48 bytes from the matching plane, advances that byte offset and row/range positions, and returns None at exhausted ranges. Do not call random `code`/`logical` helpers per row.
-- [ ] Rerun the exact selector, then the codec selector; scoped fmt/Clippy/diff, review and commit the cursor slice.
+- [x] Add `v32_code_object_cursor_boundaries_and_rejections`: literal9-row alternating-width fixture with ranges(100,3),(200,6), bitmap0xAA,0; exact logical values100,101,102,200..205 and per-row byte labels0..8. Check empty ranges/bad packed lengths/padding reject construction, and8192-row all-base/all-high endpoints.
+- [x] Run `CARGO_BUILD_JOBS=1 rtk proxy cargo test -p borsuk --lib v32_code_object_cursor_ -- --nocapture`; preserve missing cursor RED.
+- [x] Implement constructor calling `validate()` once and zeroing cursor offsets. `next` reads current range and fidelity bit, borrows24/48 bytes from the matching plane, advances that byte offset and row/range positions, and returns None at exhausted ranges. Do not call random `code`/`logical` helpers per row.
+- [x] Rerun the exact selector, then the codec selector; scoped fmt/Clippy/diff, review and commit the cursor slice.
+
+Cursor checkpoint: intended missing-method RED (six E0599 diagnostics), then
+2/2 focused GREEN and10/10 codec GREEN with the separate interchange test
+explicitly ignored. Strict scoped library/test Clippy, fmt, docs and diff
+checks passed. Astra's read-only cursor/plan review reported READY. The
+cursor adds only constant state and borrows original code slices.
 
 ## Task2: Shared parent scorer and equivalence
 

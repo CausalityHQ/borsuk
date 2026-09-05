@@ -7,6 +7,10 @@ and a test-only encoded-object adapter. Preserve routing and candidate
 semantics before adding network scheduling. Duplicating the scoring kernel
 would make equivalence fragile; changing routing at the same time would hide
 which change caused a recall regression. This slice changes neither.
+This is a temporary experimental control, not a compatibility promise.
+Before release, APIs, layouts, routing and construction may be replaced to
+meet read latency, write throughput, recall and scalability jointly. Historical
+evidence stays tied to its original source; no legacy reader is required.
 
 The bounded Arrow codec at8fc2c692 supplies authenticated parent records.
 Add a sequential borrowed cursor so scoring does not repeatedly count bitmap
