@@ -3631,3 +3631,71 @@ Separately, a later multi-core configuration test must explicitly set
 BORSUK_CPU_THREADS and affinity: RAYON_NUM_THREADS does not control BORSUK's
 private pool. Existing parallel reranking must not be reimplemented merely
 because the preceding single-core comparison reported47ms rerank time.
+
+### V32 broader fixed64 falsifier: terminal frontier miss
+
+The original `v32-deep-1m-broader-fixed64-28e60e45-a0001` completed its stopping
+rule on Spot `i-065b696ac07fd16b0`, c7g.4xlarge eu-central-1b. Controller exited0
+and confirmed termination; scientific quality is **failed**, not an execution
+error. The exact preregistered source/binary were reused, with no compilation
+or restart. Windows4096 and5120 passed64; window6144 failed, so7168 was not run.
+
+| Window start | Completed queries |16-page hits /320 |32-page hits /320 |64-page hits /320 |64-page minimum |
+| --- | --- | --- | --- | --- | --- |
+|4096|32|308|318|320|10/10|
+|5120|32|318|320|320|10/10|
+|6144|32|311|319|319|9/10|
+
+Total64-page containment959/960 across96 completed queries, or99.895833...%;
+95/96 queries are perfect. The denominator stops at96 as registered; neither
+128 nor the earlier examined cohort is pooled into it. This is containment,
+not new measured serving recall. Failed-window64-page bytes398,224,344 differ
+from399,003,648 in each earlier window because physical page sizes differ.
+
+The sole missed target belongs to query6160: logical411202, page856, routing
+leaf1711. Its zero-based global leaf rank is1500, owner root52 ranks60, and it
+has no retained-candidate or first-distinct-page rank. Its page is absent from
+both scanned and retained populations. The query stopped at `leaf-limit`:
+768/4141 leaves,186,745/262,144 codes,12,288 retained candidates. Thus more
+physical pages alone cannot recover this miss. Rank1500 requires at least1501
+leaves; the cumulative code cost to reach it is not present in this terminal.
+Do not infer that raising the leaf limit alone suffices under the same budget.
+
+Attempt prefix:
+`s3://borsuk-bench-453182569524-euc1/research/v32-quality-perfect-s3-serving/28e60e45d61f1e4e1953366f5581820df8a5954e/attempts/v32-deep-1m-broader-fixed64-28e60e45-a0001/`.
+`TERMINAL.json`2,438,226B SHA256
+`5313f81f18aaf08fae1dadb80a25207fa497f05435b2e99d7b03a2be0ebc6daa`
+preserves all three complete diagnostic/truth bindings and summaries. Source
+archive SHA256 `183f168e9896ccb8b377b9ea9ca725e777a9a3d7b0e872a1686b122550e87f2d`;
+reused21,947,992B qualifier SHA256
+`5c32d89ea0bbf3d5e99c8fc8c4275918a979b50b5c05fe87fabfd4bb38dd15ef`.
+No source or binary changed between windows. Each `q<start>-RESULT.json`,
+DIAGNOSTIC.json, diagnostic.arrow, truth.parquet and truth-receipt.json is
+preserved under that prefix; terminal fields bind the scientific input/output
+digests. No partial measurements were examined while active.
+
+After terminal, independent local validation authenticated the raw diagnostics,
+query, manifest, logical-source mapping, page registry and v3 truth/receipts,
+reran the existing reader for each window without executing the qualifier,
+and matched every terminal field. The bounded temporary directory was removed
+and absence confirmed. No vector-page GETs were used for this check.
+
+Reference truth read18 frozen shards /1,208,895,456B, streamed without corpus
+persistence; all setup/reference reads totaled1,248,914,876B. No serving page
+reads occurred. Whole worker74,859,647,399ns; individual truth walls21,162,490,765
+/21,162,390,092 /21,060,926,169ns. Diagnostic CPU1,439,939,467 /1,419,913,011
+/1,439,930,301ns for the respective32-query windows. Maximum qualifier RSS
+100,876,288B. Thirty-eight2s monitor samples peak at712,478,720B group RSS,
+full PSI avg10=0, swap growth0; sampled memory is not an exact high-water mark.
+`monitor.jsonl`3,375B SHA256
+`368374b22d5d13527572b0b4e853088d06d521fa598119954677b7b6ee4f8453`.
+
+Decision after Astra failure review: first measure metadata-only cumulative
+ranked-leaf row costs for the completed96 queries. A larger bounded frontier
+may justify an explanatory no-page replay, but not a default change. Do not
+alter page budget, claim perfect general recall, invent a new score without
+evidence, or launch scale/throughput qualification on the failed configuration.
+Recovery on these burned queries would explain the failure, not independently
+qualify it; the unexecuted7168 window remains a prospective check after a new
+configuration is frozen. The separate resident-code memory limitation at1B
+also remains unresolved. Claim eligibility remains false.
