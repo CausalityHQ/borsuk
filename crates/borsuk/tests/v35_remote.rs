@@ -1,13 +1,13 @@
 //! V35 selective remote-read capability and planning contracts.
 
 use borsuk::{
-    V35ArtifactIdentity, V35Dimensions, V35GroupStorage, V35LeafPatchBuildRequest, V35RemoteChunk,
-    V35RemoteDirectoryBinding, V35RemoteDirectoryBlock, V35RemoteFailureKind, V35RemoteRange,
-    V35RemoteRangeResponse, V35RouteBudget, V35RoutePrefix, V35ScannedCandidate, V35SnapshotEntry,
-    V35SnapshotVisibility, V35TransportFailure, V35VersionedRangeReader, build_v35_leaf_patch_arm,
-    build_v35_residual_sq_descriptor, build_v35_routing_generation, build_v35_srht,
-    execute_v35_remote_plan, exhaustive_v35_route, plan_v35_remote_reads,
-    reduce_v35_scanned_candidates, select_v35_exact_pages,
+    V35ArtifactIdentity, V35CandidateAccumulator, V35Dimensions, V35GroupStorage,
+    V35LeafPatchBuildRequest, V35RemoteChunk, V35RemoteDirectoryBinding, V35RemoteDirectoryBlock,
+    V35RemoteFailureKind, V35RemoteRange, V35RemoteRangeResponse, V35RouteBudget, V35RoutePrefix,
+    V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility, V35TransportFailure,
+    V35VersionedRangeReader, build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor,
+    build_v35_routing_generation, build_v35_srht, execute_v35_remote_plan, exhaustive_v35_route,
+    plan_v35_remote_reads, reduce_v35_scanned_candidates, select_v35_exact_pages,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -148,7 +148,7 @@ fn directory_blocks() -> Vec<V35RemoteDirectoryBlock> {
 }
 
 enum ReadStep {
-    Response(V35RemoteRangeResponse),
+    Response(V35RemoteRangeResponse, Vec<u8>),
     Failure(V35TransportFailure),
 }
 
@@ -160,9 +160,14 @@ impl V35VersionedRangeReader for ScriptedRangeReader {
     fn read_range(
         &mut self,
         _range: &V35RemoteRange,
+        destination: &mut [u8],
     ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure> {
         match self.steps.pop_front().expect("one scripted read step") {
-            ReadStep::Response(response) => Ok(response),
+            ReadStep::Response(response, body) => {
+                let written = destination.len().min(body.len());
+                destination[..written].copy_from_slice(&body[..written]);
+                Ok(response)
+            }
             ReadStep::Failure(failure) => Err(failure),
         }
     }
@@ -177,13 +182,14 @@ fn planned_execution() -> borsuk::V35RemotePlan {
     plan_v35_remote_reads(&selected_route(&identities), &blocks).unwrap()
 }
 
-fn response(range: &V35RemoteRange, body: Vec<u8>) -> V35RemoteRangeResponse {
+fn response(range: &V35RemoteRange, body: &[u8]) -> V35RemoteRangeResponse {
     V35RemoteRangeResponse::new(
         range.uri(),
         range.version_id(),
         range.start(),
         range.end(),
-        body,
+        u64::try_from(body.len()).unwrap(),
+        true,
     )
     .unwrap()
 }
@@ -193,16 +199,15 @@ fn v35_remote_execution_authenticates_plan_order_and_accounts_retries() {
     // Break caught: transport can substitute a capability/body, retries are
     // invisible in the receipt, or coalescing loses logical chunk order.
     let plan = planned_execution();
-    let first = response(
-        &plan.ranges()[0],
-        [vec![0x31; 100], vec![0x32; 100]].concat(),
-    );
-    let second = response(&plan.ranges()[1], vec![0x33; 100]);
+    let first_body = [vec![0x31; 100], vec![0x32; 100]].concat();
+    let first = response(&plan.ranges()[0], &first_body);
+    let second_body = vec![0x33; 100];
+    let second = response(&plan.ranges()[1], &second_body);
     let mut reader = ScriptedRangeReader {
         steps: VecDeque::from([
             ReadStep::Failure(V35TransportFailure::retryable(17)),
-            ReadStep::Response(first),
-            ReadStep::Response(second),
+            ReadStep::Response(first, first_body),
+            ReadStep::Response(second, second_body),
         ]),
     };
     let mut delivered = Vec::new();
@@ -231,19 +236,19 @@ fn v35_remote_execution_fails_closed_with_receipt_before_decode() {
     // exhaustion discards the bytes and attempts already spent.
     let cases = [
         (
-            vec![ReadStep::Response(response(
-                &planned_execution().ranges()[0],
-                [vec![0x31; 100], vec![0x30; 100]].concat(),
-            ))],
+            vec![{
+                let body = [vec![0x31; 100], vec![0x30; 100]].concat();
+                ReadStep::Response(response(&planned_execution().ranges()[0], &body), body)
+            }],
             V35RemoteFailureKind::Integrity,
             1,
             200,
         ),
         (
-            vec![ReadStep::Response(response(
-                &planned_execution().ranges()[0],
-                vec![0x31; 199],
-            ))],
+            vec![{
+                let body = vec![0x31; 199];
+                ReadStep::Response(response(&planned_execution().ranges()[0], &body), body)
+            }],
             V35RemoteFailureKind::Length,
             1,
             199,
@@ -559,6 +564,67 @@ fn v35_remote_candidate_heap_filters_visibility_before_bounded_admission() {
             .all(|pair| (pair[0].distance(), pair[0].row_ordinal())
                 <= (pair[1].distance(), pair[1].row_ordinal()))
     );
+}
+
+#[test]
+fn v35_remote_visibility_defaults_untouched_base_rows_to_live() {
+    // Break caught: the bounded delta mutation directory is treated as a
+    // 100M-row allowlist, consuming gigabytes or dropping every untouched row.
+    let visibility = V35SnapshotVisibility::new(
+        [0xa1; 32],
+        vec![
+            V35SnapshotEntry::new(7, 2, true).unwrap(),
+            V35SnapshotEntry::new(8, 1, false).unwrap(),
+        ],
+    )
+    .unwrap();
+    let scanned = [
+        V35ScannedCandidate::new(0.0, 0, 7, 1, 0, None).unwrap(),
+        V35ScannedCandidate::new(1.0, 1, 7, 2, 0, None).unwrap(),
+        V35ScannedCandidate::new(2.0, 2, 8, 1, 0, None).unwrap(),
+        V35ScannedCandidate::new(3.0, 3, 9, 1, 0, None).unwrap(),
+    ];
+    let reduced = reduce_v35_scanned_candidates(&scanned, &visibility).unwrap();
+    assert_eq!(
+        reduced
+            .iter()
+            .map(|candidate| (candidate.id(), candidate.sequence()))
+            .collect::<Vec<_>>(),
+        vec![(7, 2), (9, 1)]
+    );
+}
+
+#[test]
+fn v35_remote_candidate_accumulator_streams_only_the_plans_snapshot() {
+    // Break caught: scan candidates are materialized before reduction or are
+    // reduced against a stale visibility snapshot from another generation.
+    let plan = planned_execution();
+    let visibility =
+        V35SnapshotVisibility::new([0x52; 32], vec![V35SnapshotEntry::new(7, 2, true).unwrap()])
+            .unwrap();
+    let mut accumulator = V35CandidateAccumulator::new(&plan, &visibility).unwrap();
+    for candidate in [
+        V35ScannedCandidate::new(2.0, 2, 9, 1, 4, None).unwrap(),
+        V35ScannedCandidate::new(0.0, 0, 7, 1, 4, None).unwrap(),
+        V35ScannedCandidate::new(1.0, 1, 7, 2, 4, None).unwrap(),
+    ] {
+        accumulator.admit(candidate);
+    }
+    let candidates = accumulator.finish();
+    assert_eq!(candidates.generation_digest(), plan.generation_digest());
+    assert_eq!(candidates.query_digest(), plan.query_digest());
+    assert_eq!(candidates.snapshot_digest(), [0x52; 32]);
+    assert_eq!(
+        candidates
+            .candidates()
+            .iter()
+            .map(|candidate| (candidate.id(), candidate.sequence()))
+            .collect::<Vec<_>>(),
+        vec![(7, 2), (9, 1)]
+    );
+
+    let stale = V35SnapshotVisibility::new([0x53; 32], vec![]).unwrap();
+    assert!(V35CandidateAccumulator::new(&plan, &stale).is_err());
 }
 
 #[test]

@@ -12,7 +12,9 @@ const MAX_ENCODED_CHUNK_BYTES: u64 = MIB;
 const MAX_DECODED_CHUNK_BYTES: u64 = 2 * MIB;
 const MAX_QUERY_WORKSPACE_BYTES: u64 = 32 * MIB;
 const MAX_RETRIES: u8 = 2;
+const MAX_CODE_GETS: u64 = 24;
 const MAX_CANDIDATES: usize = 12_288;
+const MAX_MUTATION_ENTRIES: usize = 1_000_000;
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -66,7 +68,10 @@ pub struct V35SnapshotVisibility {
 impl V35SnapshotVisibility {
     /// Construct a strict ID-ordered visibility snapshot.
     pub fn new(digest: [u8; 32], entries: Vec<V35SnapshotEntry>) -> Result<Self> {
-        if digest == [0; 32] || entries.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+        if digest == [0; 32]
+            || entries.len() > MAX_MUTATION_ENTRIES
+            || entries.windows(2).any(|pair| pair[0].id >= pair[1].id)
+        {
             return Err(invalid("V35 snapshot visibility authority differs"));
         }
         Ok(Self { digest, entries })
@@ -75,8 +80,7 @@ impl V35SnapshotVisibility {
     fn admits(&self, id: u64, sequence: u64) -> bool {
         self.entries
             .binary_search_by_key(&id, |entry| entry.id)
-            .ok()
-            .is_some_and(|position| {
+            .map_or(true, |position| {
                 let entry = self.entries[position];
                 entry.live && entry.sequence == sequence
             })
@@ -199,29 +203,112 @@ pub fn reduce_v35_scanned_candidates(
     let mut heap = Vec::<V35ScannedCandidate>::with_capacity(MAX_CANDIDATES);
     let mut positions = HashMap::<u64, usize>::with_capacity(MAX_CANDIDATES);
     for candidate in scanned.iter().copied() {
-        if !visibility.admits(candidate.id, candidate.sequence) {
-            continue;
-        }
-        if let Some(position) = positions.get(&candidate.id).copied() {
-            if !candidate_order(&candidate, &heap[position]).is_lt() {
-                continue;
-            }
-            heap[position] = candidate;
-            heap_sift_down(&mut heap, &mut positions, position);
-        } else if heap.len() < MAX_CANDIDATES {
-            let position = heap.len();
-            heap.push(candidate);
-            positions.insert(candidate.id, position);
-            heap_sift_up(&mut heap, &mut positions, position);
-        } else if candidate_order(&candidate, &heap[0]).is_lt() {
-            positions.remove(&heap[0].id);
-            heap[0] = candidate;
-            positions.insert(candidate.id, 0);
-            heap_sift_down(&mut heap, &mut positions, 0);
-        }
+        admit_candidate(&mut heap, &mut positions, visibility, candidate);
     }
     heap.sort_by(candidate_order);
     Ok(heap)
+}
+
+fn admit_candidate(
+    heap: &mut Vec<V35ScannedCandidate>,
+    positions: &mut HashMap<u64, usize>,
+    visibility: &V35SnapshotVisibility,
+    candidate: V35ScannedCandidate,
+) {
+    if !visibility.admits(candidate.id, candidate.sequence) {
+        return;
+    }
+    if let Some(position) = positions.get(&candidate.id).copied() {
+        if !candidate_order(&candidate, &heap[position]).is_lt() {
+            return;
+        }
+        heap[position] = candidate;
+        heap_sift_down(heap, positions, position);
+    } else if heap.len() < MAX_CANDIDATES {
+        let position = heap.len();
+        heap.push(candidate);
+        positions.insert(candidate.id, position);
+        heap_sift_up(heap, positions, position);
+    } else if candidate_order(&candidate, &heap[0]).is_lt() {
+        positions.remove(&heap[0].id);
+        heap[0] = candidate;
+        positions.insert(candidate.id, 0);
+        heap_sift_down(heap, positions, 0);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Sorted bounded candidates carrying the query/generation/snapshot authority used to scan them.
+pub struct V35CandidateSet {
+    candidates: Vec<V35ScannedCandidate>,
+    generation_digest: [u8; 32],
+    query_digest: [u8; 32],
+    snapshot_digest: [u8; 32],
+}
+
+impl V35CandidateSet {
+    /// Candidate rows ordered by approximate distance and source ordinal.
+    pub fn candidates(&self) -> &[V35ScannedCandidate] {
+        &self.candidates
+    }
+    /// Routing generation used by the scan.
+    pub fn generation_digest(&self) -> [u8; 32] {
+        self.generation_digest
+    }
+    /// Query identity used by the scan.
+    pub fn query_digest(&self) -> [u8; 32] {
+        self.query_digest
+    }
+    /// Visibility snapshot used before heap admission.
+    pub fn snapshot_digest(&self) -> [u8; 32] {
+        self.snapshot_digest
+    }
+}
+
+/// One streaming bounded candidate heap pinned to the plan's visibility snapshot.
+pub struct V35CandidateAccumulator<'a> {
+    visibility: &'a V35SnapshotVisibility,
+    heap: Vec<V35ScannedCandidate>,
+    positions: HashMap<u64, usize>,
+    generation_digest: [u8; 32],
+    query_digest: [u8; 32],
+}
+
+impl<'a> V35CandidateAccumulator<'a> {
+    /// Admit a streaming accumulator only under the exact plan snapshot.
+    pub fn new(plan: &V35RemotePlan, visibility: &'a V35SnapshotVisibility) -> Result<Self> {
+        if visibility.digest != plan.directory_binding.snapshot_digest {
+            return Err(invalid("V35 candidate visibility snapshot differs"));
+        }
+        Ok(Self {
+            visibility,
+            heap: Vec::with_capacity(MAX_CANDIDATES),
+            positions: HashMap::with_capacity(MAX_CANDIDATES),
+            generation_digest: plan.generation_digest,
+            query_digest: plan.query_digest,
+        })
+    }
+
+    /// Filter and admit one decoded candidate without materializing a scanned-row vector.
+    pub fn admit(&mut self, candidate: V35ScannedCandidate) {
+        admit_candidate(
+            &mut self.heap,
+            &mut self.positions,
+            self.visibility,
+            candidate,
+        );
+    }
+
+    /// Seal the deterministic sorted candidate set and retain all authority bindings.
+    pub fn finish(mut self) -> V35CandidateSet {
+        self.heap.sort_by(candidate_order);
+        V35CandidateSet {
+            candidates: self.heap,
+            generation_digest: self.generation_digest,
+            query_digest: self.query_digest,
+            snapshot_digest: self.visibility.digest,
+        }
+    }
 }
 
 /// Select at most eight coverage-greedy exact primary pages in candidate order.
@@ -564,16 +651,24 @@ pub struct V35RemoteRangeResponse {
     version_id: String,
     start: u64,
     end: u64,
-    body: Vec<u8>,
+    returned_bytes: u64,
+    complete: bool,
 }
 
 impl V35RemoteRangeResponse {
     /// Construct a response. The executor independently checks it against the opaque plan.
-    pub fn new(uri: &str, version_id: &str, start: u64, end: u64, body: Vec<u8>) -> Result<Self> {
+    pub fn new(
+        uri: &str,
+        version_id: &str,
+        start: u64,
+        end: u64,
+        returned_bytes: u64,
+        complete: bool,
+    ) -> Result<Self> {
         if !uri.starts_with("s3://")
             || version_id.is_empty()
             || end <= start
-            || body.len() as u64 > MAX_ENCODED_CHUNK_BYTES + 1
+            || returned_bytes > MAX_ENCODED_CHUNK_BYTES + 1
         {
             return Err(invalid("V35 remote range response differs"));
         }
@@ -582,7 +677,8 @@ impl V35RemoteRangeResponse {
             version_id: version_id.to_owned(),
             start,
             end,
-            body,
+            returned_bytes,
+            complete,
         })
     }
 }
@@ -617,6 +713,7 @@ pub trait V35VersionedRangeReader {
     fn read_range(
         &mut self,
         range: &V35RemoteRange,
+        destination: &mut [u8],
     ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure>;
 }
 
@@ -631,6 +728,8 @@ pub enum V35RemoteFailureKind {
     Integrity,
     /// Transport failed terminally or exhausted its retry allowance.
     Transport,
+    /// A physical GET or byte counter crossed a registered execution ceiling.
+    Budget,
     /// Authenticated bytes could not be decoded by the caller.
     Decode,
 }
@@ -713,6 +812,78 @@ fn execution_failure(
     V35RemoteExecutionFailure { kind, receipt }
 }
 
+fn add_counter(counter: &mut u64, value: u64) -> bool {
+    if let Some(total) = counter.checked_add(value) {
+        *counter = total;
+        true
+    } else {
+        *counter = u64::MAX;
+        false
+    }
+}
+
+fn record_returned_bytes(receipt: &mut V35RemoteReadReceipt, returned: u64, retry: bool) -> bool {
+    let exact = add_counter(&mut receipt.returned_bytes, returned);
+    let retry_exact = !retry || add_counter(&mut receipt.retry_returned_bytes, returned);
+    exact && retry_exact && receipt.returned_bytes <= 8 * MIB
+}
+
+fn validate_remote_plan(plan: &V35RemotePlan) -> Result<()> {
+    if plan.ranges.is_empty()
+        || plan.ranges.len() as u64 > MAX_CODE_GETS
+        || plan.selected_groups == 0
+        || plan.selected_rows == 0
+        || plan.requested_code_bytes == 0
+        || plan.requested_code_bytes > 8 * MIB
+        || plan.generation_digest == [0; 32]
+        || plan.query_digest == [0; 32]
+    {
+        return Err(invalid("V35 remote execution plan differs"));
+    }
+    let mut groups = BTreeSet::new();
+    let mut rows = 0_u64;
+    let mut bytes = 0_u64;
+    for range in &plan.ranges {
+        let range_bytes = range
+            .end
+            .checked_sub(range.start)
+            .ok_or_else(|| invalid("V35 remote execution range differs"))?;
+        if range_bytes == 0 || range_bytes > MAX_ENCODED_CHUNK_BYTES || range.chunks.is_empty() {
+            return Err(invalid("V35 remote execution range differs"));
+        }
+        bytes = bytes
+            .checked_add(range_bytes)
+            .ok_or_else(|| invalid("V35 remote execution bytes overflow"))?;
+        let mut next = range.start;
+        for chunk in &range.chunks {
+            validate_object(&chunk.object)?;
+            if chunk.object.uri != range.uri
+                || chunk.version_id != range.version_id
+                || chunk.offset != next
+            {
+                return Err(invalid("V35 remote execution capability differs"));
+            }
+            next = next
+                .checked_add(chunk.encoded_length)
+                .ok_or_else(|| invalid("V35 remote execution chunk overflows"))?;
+            rows = rows
+                .checked_add(chunk.rows)
+                .ok_or_else(|| invalid("V35 remote execution rows overflow"))?;
+            groups.insert(chunk.group_ordinal);
+        }
+        if next != range.end {
+            return Err(invalid("V35 remote execution range coverage differs"));
+        }
+    }
+    if groups.len() != plan.selected_groups
+        || rows != plan.selected_rows
+        || bytes != plan.requested_code_bytes
+    {
+        return Err(invalid("V35 remote execution totals differ"));
+    }
+    Ok(())
+}
+
 /// Execute an authenticated plan with bounded retries and plan-order chunk delivery.
 pub fn execute_v35_remote_plan<R, F>(
     plan: &V35RemotePlan,
@@ -723,31 +894,54 @@ where
     R: V35VersionedRangeReader,
     F: FnMut(&V35RemoteChunk, &[u8]) -> Result<u64>,
 {
+    if validate_remote_plan(plan).is_err() {
+        return Err(execution_failure(
+            V35RemoteFailureKind::Authority,
+            V35RemoteReadReceipt::default(),
+        ));
+    }
     let mut receipt = V35RemoteReadReceipt {
         unique_logical_bytes: plan.requested_code_bytes,
         ..V35RemoteReadReceipt::default()
     };
+    let mut encoded = Vec::<u8>::new();
     for range in &plan.ranges {
         let requested = range.end - range.start;
+        let requested_usize = usize::try_from(requested)
+            .map_err(|_| execution_failure(V35RemoteFailureKind::Budget, receipt.clone()))?;
+        encoded.resize(requested_usize, 0);
         let mut range_attempt = 0_u64;
         let response = loop {
-            receipt.physical_get_attempts += 1;
-            receipt.requested_bytes += requested;
-            if range_attempt > 0 {
-                receipt.retry_requested_bytes += requested;
+            if receipt.physical_get_attempts == MAX_CODE_GETS {
+                return Err(execution_failure(V35RemoteFailureKind::Transport, receipt));
             }
-            match reader.read_range(range) {
+            receipt.physical_get_attempts += 1;
+            if !add_counter(&mut receipt.requested_bytes, requested) {
+                return Err(execution_failure(V35RemoteFailureKind::Budget, receipt));
+            }
+            if range_attempt > 0 {
+                if !add_counter(&mut receipt.retry_requested_bytes, requested) {
+                    return Err(execution_failure(V35RemoteFailureKind::Budget, receipt));
+                }
+            }
+            match reader.read_range(range, &mut encoded) {
                 Ok(response) => {
-                    receipt.returned_bytes += response.body.len() as u64;
-                    if range_attempt > 0 {
-                        receipt.retry_returned_bytes += response.body.len() as u64;
+                    if !record_returned_bytes(
+                        &mut receipt,
+                        response.returned_bytes,
+                        range_attempt > 0,
+                    ) {
+                        return Err(execution_failure(V35RemoteFailureKind::Budget, receipt));
                     }
                     break response;
                 }
                 Err(failure) => {
-                    receipt.returned_bytes += failure.returned_bytes;
-                    if range_attempt > 0 {
-                        receipt.retry_returned_bytes += failure.returned_bytes;
+                    if !record_returned_bytes(
+                        &mut receipt,
+                        failure.returned_bytes,
+                        range_attempt > 0,
+                    ) {
+                        return Err(execution_failure(V35RemoteFailureKind::Budget, receipt));
                     }
                     if !failure.retryable || range_attempt >= u64::from(MAX_RETRIES) {
                         return Err(execution_failure(V35RemoteFailureKind::Transport, receipt));
@@ -764,7 +958,7 @@ where
         {
             return Err(execution_failure(V35RemoteFailureKind::Authority, receipt));
         }
-        if response.body.len() as u64 != requested {
+        if !response.complete || response.returned_bytes != requested {
             return Err(execution_failure(V35RemoteFailureKind::Length, receipt));
         }
         let mut authenticated = Vec::with_capacity(range.chunks.len());
@@ -777,8 +971,7 @@ where
             let end = start
                 .checked_add(length)
                 .ok_or_else(|| execution_failure(V35RemoteFailureKind::Length, receipt.clone()))?;
-            let bytes = response
-                .body
+            let bytes = encoded
                 .get(start..end)
                 .ok_or_else(|| execution_failure(V35RemoteFailureKind::Length, receipt.clone()))?;
             if format!("{:x}", Sha256::digest(bytes)) != chunk.digest {
@@ -786,14 +979,18 @@ where
             }
             authenticated.push((chunk, bytes));
         }
-        receipt.authenticated_bytes += requested;
+        if !add_counter(&mut receipt.authenticated_bytes, requested) {
+            return Err(execution_failure(V35RemoteFailureKind::Budget, receipt));
+        }
         for (chunk, bytes) in authenticated {
             let decoded = decode(chunk, bytes)
                 .map_err(|_| execution_failure(V35RemoteFailureKind::Decode, receipt.clone()))?;
             if decoded != chunk.decoded_length {
                 return Err(execution_failure(V35RemoteFailureKind::Decode, receipt));
             }
-            receipt.decoded_bytes += decoded;
+            if !add_counter(&mut receipt.decoded_bytes, decoded) {
+                return Err(execution_failure(V35RemoteFailureKind::Budget, receipt));
+            }
         }
     }
     Ok(receipt)
@@ -970,4 +1167,174 @@ pub fn plan_v35_remote_reads(
         generation_digest: route.generation_digest(),
         query_digest: route.query_digest(),
     })
+}
+
+#[cfg(test)]
+mod remote_execution_limit_tests {
+    use super::*;
+
+    struct CountingReader {
+        calls: usize,
+    }
+
+    impl V35VersionedRangeReader for CountingReader {
+        fn read_range(
+            &mut self,
+            range: &V35RemoteRange,
+            destination: &mut [u8],
+        ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure> {
+            self.calls += 1;
+            destination[0] = u8::try_from(self.calls).unwrap();
+            V35RemoteRangeResponse::new(
+                range.uri(),
+                range.version_id(),
+                range.start(),
+                range.end(),
+                1,
+                true,
+            )
+            .map_err(|_| V35TransportFailure::terminal(0))
+        }
+    }
+
+    fn over_get_limit_plan() -> V35RemotePlan {
+        let ranges = (1..=25_u8)
+            .map(|byte| {
+                let body = [byte];
+                let object = V35ArtifactIdentity {
+                    digest: format!("{:x}", Sha256::digest(body)),
+                    digest_algorithm: "sha256".to_owned(),
+                    length: 2,
+                    role: "remote-code-object".to_owned(),
+                    uri: format!("s3://borsuk-index/generations/g01/codes/{byte:02}.arrow"),
+                };
+                let chunk = V35RemoteChunk::new(
+                    u32::from(byte),
+                    u64::from(byte - 1),
+                    1,
+                    object.clone(),
+                    "v01",
+                    0,
+                    1,
+                    1,
+                    format!("{:x}", Sha256::digest(body)),
+                )
+                .unwrap();
+                V35RemoteRange {
+                    uri: object.uri,
+                    version_id: "v01".to_owned(),
+                    start: 0,
+                    end: 1,
+                    chunks: vec![chunk],
+                }
+            })
+            .collect();
+        V35RemotePlan {
+            ranges,
+            selected_groups: 25,
+            selected_rows: 25,
+            requested_code_bytes: 25,
+            directory_binding: V35RemoteDirectoryBinding::new([1; 32], [2; 32], [3; 32]).unwrap(),
+            generation_digest: [4; 32],
+            query_digest: [5; 32],
+        }
+    }
+
+    struct FullRetryReader {
+        calls: usize,
+    }
+
+    impl V35VersionedRangeReader for FullRetryReader {
+        fn read_range(
+            &mut self,
+            range: &V35RemoteRange,
+            destination: &mut [u8],
+        ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure> {
+            self.calls += 1;
+            if self.calls % 2 == 1 {
+                Err(V35TransportFailure::retryable(MIB))
+            } else {
+                destination.fill(0);
+                V35RemoteRangeResponse::new(
+                    range.uri(),
+                    range.version_id(),
+                    range.start(),
+                    range.end(),
+                    MIB,
+                    true,
+                )
+                .map_err(|_| V35TransportFailure::terminal(0))
+            }
+        }
+    }
+
+    fn maximum_byte_plan() -> V35RemotePlan {
+        let chunk_digest = format!("{:x}", Sha256::digest(vec![0; MIB as usize]));
+        let ranges = (0..8_u8)
+            .map(|byte| {
+                let object = V35ArtifactIdentity {
+                    digest: chunk_digest.clone(),
+                    digest_algorithm: "sha256".to_owned(),
+                    length: MIB + 1,
+                    role: "remote-code-object".to_owned(),
+                    uri: format!("s3://borsuk-index/generations/g01/codes/{byte:02}.arrow"),
+                };
+                let chunk = V35RemoteChunk::new(
+                    u32::from(byte),
+                    u64::from(byte),
+                    1,
+                    object.clone(),
+                    "v01",
+                    0,
+                    MIB,
+                    MIB,
+                    chunk_digest.clone(),
+                )
+                .unwrap();
+                V35RemoteRange {
+                    uri: object.uri,
+                    version_id: "v01".to_owned(),
+                    start: 0,
+                    end: MIB,
+                    chunks: vec![chunk],
+                }
+            })
+            .collect();
+        V35RemotePlan {
+            ranges,
+            selected_groups: 8,
+            selected_rows: 8,
+            requested_code_bytes: 8 * MIB,
+            directory_binding: V35RemoteDirectoryBinding::new([1; 32], [2; 32], [3; 32]).unwrap(),
+            generation_digest: [4; 32],
+            query_digest: [5; 32],
+        }
+    }
+
+    #[test]
+    fn v35_remote_execution_rejects_more_than_twenty_four_gets_before_io() {
+        // Break caught: a malformed or future planner turns the documented
+        // hard GET ceiling into a receipt-only observation after remote I/O.
+        let mut reader = CountingReader { calls: 0 };
+        let failure =
+            execute_v35_remote_plan(&over_get_limit_plan(), &mut reader, |_, _| Ok(1)).unwrap_err();
+        assert_eq!(failure.kind(), V35RemoteFailureKind::Authority);
+        assert_eq!(failure.receipt().physical_get_attempts(), 0);
+        assert_eq!(reader.calls, 0);
+    }
+
+    #[test]
+    fn v35_remote_execution_stops_when_retries_exhaust_returned_byte_budget() {
+        // Break caught: retry bodies can silently double the admitted 8-MiB
+        // code scan, or receipt counters wrap instead of terminating.
+        let mut reader = FullRetryReader { calls: 0 };
+        let failure =
+            execute_v35_remote_plan(&maximum_byte_plan(), &mut reader, |_, _| Ok(MIB)).unwrap_err();
+        assert_eq!(failure.kind(), V35RemoteFailureKind::Budget);
+        assert_eq!(failure.receipt().physical_get_attempts(), 9);
+        assert_eq!(failure.receipt().requested_bytes(), 9 * MIB);
+        assert_eq!(failure.receipt().returned_bytes(), 9 * MIB);
+        assert_eq!(failure.receipt().authenticated_bytes(), 4 * MIB);
+        assert_eq!(reader.calls, 9);
+    }
 }

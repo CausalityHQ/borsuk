@@ -276,12 +276,12 @@ pub use v35_projection::{
 };
 #[doc(hidden)]
 pub use v35_remote::{
-    V35RemoteChunk, V35RemoteDirectoryBlock, V35RemoteExecutionFailure, V35RemoteFailureKind,
-    V35RemotePlan, V35RemoteRange, V35RemoteRangeResponse, V35RemoteReadReceipt,
-    V35ResidualSqDescriptor, V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility,
-    V35TransportFailure, V35VersionedRangeReader, build_v35_residual_sq_descriptor,
-    execute_v35_remote_plan, plan_v35_remote_reads, reduce_v35_scanned_candidates,
-    select_v35_exact_pages,
+    V35CandidateAccumulator, V35CandidateSet, V35RemoteChunk, V35RemoteDirectoryBlock,
+    V35RemoteExecutionFailure, V35RemoteFailureKind, V35RemotePlan, V35RemoteRange,
+    V35RemoteRangeResponse, V35RemoteReadReceipt, V35ResidualSqDescriptor, V35ScannedCandidate,
+    V35SnapshotEntry, V35SnapshotVisibility, V35TransportFailure, V35VersionedRangeReader,
+    build_v35_residual_sq_descriptor, execute_v35_remote_plan, plan_v35_remote_reads,
+    reduce_v35_scanned_candidates, select_v35_exact_pages,
 };
 #[doc(hidden)]
 pub use v35_route::{
