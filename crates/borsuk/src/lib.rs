@@ -211,6 +211,7 @@ mod v35_patch;
 mod v35_projection;
 mod v35_remote;
 mod v35_route;
+mod v36_funnel;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]
@@ -320,6 +321,13 @@ pub use v35_route::{
     V35GroupStorage, V35RemoteDirectoryBinding, V35RouteBudget, V35RoutePrefix, V35RouteTree,
     V35SelectedGroup, V35TreeNode, bound_v35_node, build_v35_route_tree, exhaustive_v35_route,
     hierarchical_v35_route, project_v35_route_tree_bytes,
+};
+pub use v36_funnel::{
+    V36ArtifactIdentity, V36ChunkCeiling, V36CoarseCode, V36FineCodec, V36FunnelManifest,
+    V36GeometryArm, V36PrimaryRows, V36RegisteredManifest, V36Replication, V36ResourceLedger,
+    V36ResourceRequest, V36ShapeScore, V36TransportDisposition, V36TransportFragment,
+    V36TransportLimits, V36TransportPlan, V36TransportPosting, plan_v36_transport,
+    project_v36_resources, validate_v36_manifest,
 };
 #[allow(
     dead_code,

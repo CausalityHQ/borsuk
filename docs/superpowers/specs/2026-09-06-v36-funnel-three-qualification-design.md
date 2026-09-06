@@ -245,7 +245,7 @@ deduplicates by source ID. Each arm has one global PQ codebook trained from all
 retained assignments of the registered corpus-only reservoir, ordered by
 `(source_ordinal,owner_posting_ordinal)`. Each residual-PQ subspace initializes
 its 16 centroids by the construction farthest-first rule, runs exactly 20 Lloyd
-iterations, accumulates binary64 in increasing row-ordinal order, rounds
+iterations, accumulates binary64 in increasing source-ordinal order, rounds
 centroids once to binary32, and uses codeword-ordinal ties. Coarse K is
 `{512,1,024,1,536,2,048}` unique rows. Projected-f32
 separates projection/routing loss from coarse-code loss; source-f32 on the
@@ -262,8 +262,9 @@ Fine layouts are constructed without query access and compare complete,
 independently authenticated Arrow IPC chunks whose **encoded** ceilings are
 64, 256, or 512 KiB. A chunk contains one non-null fixed-size-list vector
 column, one non-null u64 dense ordinal, and one non-null u64 source feature ID. Candidate
-chunks are admitted by best candidate order until the 16-GET/8-MiB wave is
-full, then decoded rows are reordered physically. No arbitrary row-range is
+chunks are admitted by best candidate order until the normal 14-GET/7-MiB wave
+is full, while the retry-inclusive hard limit remains 16 GETs/8 MiB; then
+decoded rows are reordered physically. No arbitrary row-range is
 treated as authenticated. Metadata, retries, full encoded bytes, decoded
 capacity, and encoded-plus-decoded overlap are charged.
 
@@ -363,6 +364,16 @@ summaries 128 MiB, all directories 128 MiB, liveness 64 MiB, decoded cache
 are admission caps, not achieved measurements. Delta coarse plus CSR has a
 512-MiB byte cap and recent fine rows have a separate 128-MiB cap; row admission derives from the selected encoded record size
 and measured replication rather than a fixed four-million-row promise.
+
+Before physical Arrow directories exist, the checked ledger uses a
+non-borrowable lower bound: 80 bytes per complete object identity, 16 bytes per
+posting entry, and 16 bytes per fine ordinal interval. Minimum coarse and fine
+object counts are the raw projected payload divided upward by the applicable
+complete-object ceiling. The materialized directory must report at least this
+floor, and its greater measured capacity replaces the floor in resident
+admission. The 80-byte object entry is two binary 32-byte digests plus an exact
+u64 encoded length and u64 object ordinal; URI keys are derived from the
+authenticated generation prefix rather than held as resident strings.
 
 At 100M, raw remote coarse storage before Arrow envelopes is 4.4 GB for the
 44-byte sign control, 4.8 GB for PQ4-32, or 6.4 GB for PQ4-48 at single
