@@ -1150,7 +1150,7 @@ fn exact_page_schema(dimensions: u32, manifest_json: String) -> Result<Arc<Schem
     )))
 }
 
-fn projected_exact_page_decoded_bytes(rows: usize, dimensions: usize) -> Result<u64> {
+pub(crate) fn projected_exact_page_decoded_bytes(rows: usize, dimensions: usize) -> Result<u64> {
     let row_bytes = dimensions
         .checked_mul(4)
         .and_then(|bytes| bytes.checked_add(16))
@@ -1563,23 +1563,58 @@ pub fn build_v35_residual_sq_descriptor(
     rows: &[Vec<f32>],
     bits_per_dimension: u8,
 ) -> Result<V35ResidualSqDescriptor> {
-    let dimensions = rows.first().map_or(0, Vec::len);
-    if rows.is_empty()
+    build_v35_residual_sq_descriptor_rows(rows, bits_per_dimension)
+}
+
+pub(crate) fn build_v35_residual_sq_descriptor_from_slices(
+    rows: &[(u64, &[f32])],
+    bits_per_dimension: u8,
+) -> Result<V35ResidualSqDescriptor> {
+    let encoded_rows = rows.iter().map(|(_, row)| *row).collect::<Vec<_>>();
+    let mut moment_rows = rows.to_vec();
+    moment_rows.sort_by_key(|(source_ordinal, _)| *source_ordinal);
+    if moment_rows.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(invalid("V35 residual SQ source ordinal differs"));
+    }
+    let moment_rows = moment_rows
+        .into_iter()
+        .map(|(_, row)| row)
+        .collect::<Vec<_>>();
+    build_v35_residual_sq_descriptor_views(&moment_rows, &encoded_rows, bits_per_dimension)
+}
+
+fn build_v35_residual_sq_descriptor_rows<R: AsRef<[f32]>>(
+    rows: &[R],
+    bits_per_dimension: u8,
+) -> Result<V35ResidualSqDescriptor> {
+    let rows = rows.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+    build_v35_residual_sq_descriptor_views(&rows, &rows, bits_per_dimension)
+}
+
+fn build_v35_residual_sq_descriptor_views(
+    moment_rows: &[&[f32]],
+    encoded_rows: &[&[f32]],
+    bits_per_dimension: u8,
+) -> Result<V35ResidualSqDescriptor> {
+    let dimensions = encoded_rows.first().map_or(0, |row| row.len());
+    if encoded_rows.is_empty()
+        || encoded_rows.len() != moment_rows.len()
         || dimensions == 0
         || !matches!(bits_per_dimension, 4 | 8)
-        || rows
+        || moment_rows
             .iter()
+            .chain(encoded_rows)
             .any(|row| row.len() != dimensions || row.iter().any(|value| !value.is_finite()))
     {
         return Err(invalid("V35 residual SQ source differs"));
     }
-    let row_count = rows.len() as f64;
+    let row_count = moment_rows.len() as f64;
     let mut center_f16_bits = Vec::with_capacity(dimensions);
     let mut centers = Vec::with_capacity(dimensions);
     let mut scales = Vec::with_capacity(dimensions);
     let levels = (1_u16 << bits_per_dimension) - 1;
     for dimension in 0..dimensions {
-        let mean = rows
+        let mean = moment_rows
             .iter()
             .fold(0.0_f64, |sum, row| sum + f64::from(row[dimension]))
             / row_count;
@@ -1588,7 +1623,7 @@ pub fn build_v35_residual_sq_descriptor(
         if !decoded_center.is_finite() {
             return Err(invalid("V35 residual SQ f16 center differs"));
         }
-        let variance = rows.iter().fold(0.0_f64, |sum, row| {
+        let variance = moment_rows.iter().fold(0.0_f64, |sum, row| {
             let residual = f64::from(row[dimension]) - decoded_center;
             residual.mul_add(residual, sum)
         }) / row_count;
@@ -1611,12 +1646,12 @@ pub fn build_v35_residual_sq_descriptor(
         8 => dimensions,
         _ => unreachable!(),
     };
-    let capacity = rows
+    let capacity = encoded_rows
         .len()
         .checked_mul(bytes_per_row)
         .ok_or_else(|| invalid("V35 residual SQ payload overflows"))?;
     let mut codes = Vec::with_capacity(capacity);
-    for row in rows {
+    for row in encoded_rows {
         if bits_per_dimension == 8 {
             for dimension in 0..dimensions {
                 codes.push(quantize_residual(
@@ -1649,7 +1684,8 @@ pub fn build_v35_residual_sq_descriptor(
         }
     }
     Ok(V35ResidualSqDescriptor {
-        rows: u64::try_from(rows.len()).map_err(|_| invalid("V35 residual SQ rows overflow"))?,
+        rows: u64::try_from(encoded_rows.len())
+            .map_err(|_| invalid("V35 residual SQ rows overflow"))?,
         dimensions: u32::try_from(dimensions)
             .map_err(|_| invalid("V35 residual SQ dimensions overflow"))?,
         bits_per_dimension,

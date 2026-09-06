@@ -1,20 +1,23 @@
 //! V35 bounded streaming writer and immutable-delta contracts.
 
 use arrow_array::{ArrayRef, FixedSizeListArray, Float32Array, RecordBatch, UInt64Array};
+use arrow_ipc::reader::FileReader;
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     Result, V35ArtifactIdentity, V35BuildAuthority, V35BuildBlock, V35BuildBlockSource,
-    V35BuildLeafSink, V35BuildMergeRow, V35BuildMergeSource, V35BuildRow, V35BuildScratchSink,
-    V35BuildStorageGroup, V35BuildStorageGroupAssembler, V35BuildStorageGroupSink, V35Dimensions,
-    V35MortonModel, V35Projection, build_v35_leaf_patch_from_merge_rows, build_v35_scratch_runs,
-    build_v35_srht, decode_v35_build_run_arrow, decode_v35_source_block_parquet,
+    V35BuildEncodedObjectSink, V35BuildLeafSink, V35BuildMergeRow, V35BuildMergeSource,
+    V35BuildObjectTarget, V35BuildRow, V35BuildScratchSink, V35BuildStorageGroup,
+    V35BuildStorageGroupAssembler, V35BuildStorageGroupSink, V35Dimensions, V35ExactPageIdentity,
+    V35MortonModel, V35Projection, build_v35_leaf_patch_from_merge_rows,
+    build_v35_residual_sq_descriptor, build_v35_scratch_runs, build_v35_srht,
+    decode_v35_build_run_arrow, decode_v35_source_block_parquet, encode_v35_build_storage_group,
     merge_v35_build_runs, open_v35_build_run_cursor, project_v35_query_scalar,
     train_v35_morton_model,
 };
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
 use sha2::{Digest, Sha256};
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, io::Cursor, sync::Arc};
 
 fn training_rows() -> Vec<Vec<f32>> {
     (0..256)
@@ -736,4 +739,261 @@ fn v35_build_groups_reject_morton_order_drift() {
     let mut assembler = V35BuildStorageGroupAssembler::new(dimensions, 4, &mut groups).unwrap();
     let rows = vec![grouping_row(1, 384), grouping_row(0, 384)];
     assert!(assembler.write_leaf(rows).is_err());
+}
+
+#[derive(Default)]
+struct EncodedObjectSink {
+    code_objects: Vec<(V35ArtifactIdentity, Vec<u8>)>,
+    pages: Vec<(V35ExactPageIdentity, Vec<u8>)>,
+}
+
+impl V35BuildEncodedObjectSink for EncodedObjectSink {
+    fn code_target(&self, group_ordinal: u32) -> Result<V35BuildObjectTarget> {
+        V35BuildObjectTarget::new(
+            &format!("s3://borsuk-index/generations/g01/codes/group-{group_ordinal:04}.arrow"),
+            "version-01",
+        )
+    }
+
+    fn page_target(&self, page_ordinal: u32) -> Result<V35BuildObjectTarget> {
+        V35BuildObjectTarget::new(
+            &format!("s3://borsuk-index/generations/g01/pages/page-{page_ordinal:04}.parquet"),
+            "version-01",
+        )
+    }
+
+    fn write_code_object(
+        &mut self,
+        identity: V35ArtifactIdentity,
+        _version_id: &str,
+        bytes: &[u8],
+        _decoded_bytes: u64,
+    ) -> Result<()> {
+        self.code_objects.push((identity, bytes.to_vec()));
+        Ok(())
+    }
+
+    fn write_exact_page(&mut self, identity: V35ExactPageIdentity, bytes: &[u8]) -> Result<()> {
+        self.pages.push((identity, bytes.to_vec()));
+        Ok(())
+    }
+}
+
+#[test]
+fn v35_build_encodes_group_as_cross_language_code_pages_and_patches() {
+    // Break caught: final construction clones a corpus-sized source plane,
+    // hard-codes 96D codes, or emits code/page/patch identities out of order.
+    let projection = projection();
+    let model = train_v35_morton_model(&training_rows(), &projection, build_authority(&projection))
+        .unwrap();
+    let mut source = merge_source(&model, &projection);
+    let mut groups = GroupSink::default();
+    let mut assembler =
+        V35BuildStorageGroupAssembler::new(projection.dimensions(), 4, &mut groups).unwrap();
+    merge_v35_build_runs(&model, &mut source, &mut assembler).unwrap();
+    assembler.finish().unwrap();
+    assert_eq!(groups.groups.len(), 1);
+    let group = groups.groups.pop().unwrap();
+    let mut source_order = group.leaves().iter().flatten().collect::<Vec<_>>();
+    assert!(
+        source_order
+            .windows(2)
+            .any(|pair| pair[0].source_ordinal() > pair[1].source_ordinal())
+    );
+    source_order.sort_by_key(|row| row.source_ordinal());
+    let source_order = source_order
+        .into_iter()
+        .map(|row| row.source().to_vec())
+        .collect::<Vec<_>>();
+    let expected_descriptor = build_v35_residual_sq_descriptor(&source_order, 4).unwrap();
+    let mut sink = EncodedObjectSink::default();
+    let receipt = encode_v35_build_storage_group(group, [0x51; 32], 7, 11, &mut sink).unwrap();
+    assert_eq!(receipt.rows(), 600);
+    assert_eq!(receipt.patch_count(), 3);
+    assert_eq!(receipt.page_count(), 3);
+    assert_eq!(receipt.next_leaf_ordinal(), 10);
+    assert_eq!(receipt.next_page_ordinal(), 14);
+    assert_eq!(sink.code_objects.len(), 1);
+    assert_eq!(sink.pages.len(), 3);
+    assert!(sink.code_objects[0].1.starts_with(b"ARROW1"));
+    let reader = FileReader::try_new(Cursor::new(&sink.code_objects[0].1), None).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(
+        reader
+            .schema()
+            .metadata()
+            .get("borsuk.v35.remote-code.manifest")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        manifest["center_f16_bits"],
+        serde_json::json!(expected_descriptor.center_f16_bits())
+    );
+    assert_eq!(
+        manifest["scales_f32_bits"],
+        serde_json::json!(
+            expected_descriptor
+                .scales()
+                .iter()
+                .map(|scale| scale.to_bits())
+                .collect::<Vec<_>>()
+        )
+    );
+    assert!(
+        sink.pages
+            .iter()
+            .all(|(_, bytes)| { bytes.starts_with(b"PAR1") && bytes.ends_with(b"PAR1") })
+    );
+    assert!(receipt.patches().iter().enumerate().all(|(index, patch)| {
+        patch.leaf_ordinal() == 7 + index as u32
+            && patch.group_ordinal() == 0
+            && patch.logical_start() == [0, 256, 512][index]
+    }));
+}
+
+#[derive(Default)]
+struct CollidingTargetSink {
+    writes: usize,
+}
+
+impl V35BuildEncodedObjectSink for CollidingTargetSink {
+    fn code_target(&self, _group_ordinal: u32) -> Result<V35BuildObjectTarget> {
+        V35BuildObjectTarget::new(
+            "s3://borsuk-index/generations/g01/shared.arrow",
+            "version-01",
+        )
+    }
+
+    fn page_target(&self, _page_ordinal: u32) -> Result<V35BuildObjectTarget> {
+        V35BuildObjectTarget::new(
+            "s3://borsuk-index/generations/g01/shared.arrow",
+            "version-01",
+        )
+    }
+
+    fn write_code_object(
+        &mut self,
+        _identity: V35ArtifactIdentity,
+        _version_id: &str,
+        _bytes: &[u8],
+        _decoded_bytes: u64,
+    ) -> Result<()> {
+        self.writes += 1;
+        Ok(())
+    }
+
+    fn write_exact_page(&mut self, _identity: V35ExactPageIdentity, _bytes: &[u8]) -> Result<()> {
+        self.writes += 1;
+        Ok(())
+    }
+}
+
+#[test]
+fn v35_build_encoded_group_preflights_all_targets_before_writing() {
+    // Break caught: a code object is persisted before discovering a colliding
+    // page target, leaving unregistered partial output after deterministic failure.
+    assert!(
+        V35BuildObjectTarget::new(
+            "s3://borsuk-index/generations/g01/codes/group.arrow",
+            "bad/version",
+        )
+        .is_err()
+    );
+    let dimensions = V35Dimensions {
+        source: 384,
+        routing: 64,
+    };
+    let mut groups = GroupSink::default();
+    let mut assembler = V35BuildStorageGroupAssembler::new(dimensions, 4, &mut groups).unwrap();
+    assembler
+        .write_leaf((0..32).map(|row| grouping_row(row, 384)).collect())
+        .unwrap();
+    assembler.finish().unwrap();
+    let mut sink = CollidingTargetSink::default();
+    assert!(
+        encode_v35_build_storage_group(groups.groups.pop().unwrap(), [0x51; 32], 0, 0, &mut sink)
+            .is_err()
+    );
+    assert_eq!(sink.writes, 0);
+
+    let oversized = V35Dimensions {
+        source: 4_096,
+        routing: 64,
+    };
+    let mut groups = GroupSink::default();
+    let mut assembler = V35BuildStorageGroupAssembler::new(oversized, 4, &mut groups).unwrap();
+    assembler
+        .write_leaf((0..256).map(|row| grouping_row(row, 4_096)).collect())
+        .unwrap();
+    assembler.finish().unwrap();
+    let mut sink = EncodedObjectSink::default();
+    assert!(
+        encode_v35_build_storage_group(groups.groups.pop().unwrap(), [0x51; 32], 0, 0, &mut sink)
+            .is_err()
+    );
+    assert!(sink.code_objects.is_empty());
+    assert!(sink.pages.is_empty());
+}
+
+#[test]
+fn v35_build_encoded_group_reduces_sq_moments_in_source_ordinal_order() {
+    // Break caught: Morton row order, rather than stable source order, changes
+    // floating-point SQ centers/scales and therefore the immutable code object.
+    let dimensions = V35Dimensions {
+        source: 384,
+        routing: 64,
+    };
+    let inputs = [
+        (0, 0, 1.0e18_f32),
+        (1, 2, 1.0),
+        (2, 3, 3.0),
+        (3, 1, -1.0e18),
+    ];
+    let rows = inputs
+        .into_iter()
+        .map(|(key, ordinal, value)| {
+            let mut source = vec![0.0; 384];
+            source[0] = value;
+            V35BuildMergeRow::new(key, ordinal, ordinal + 1, 1, source, vec![0.0; 64]).unwrap()
+        })
+        .collect();
+    let mut groups = GroupSink::default();
+    let mut assembler = V35BuildStorageGroupAssembler::new(dimensions, 4, &mut groups).unwrap();
+    assembler.write_leaf(rows).unwrap();
+    assembler.finish().unwrap();
+    let expected_rows = [1.0e18_f32, -1.0e18, 1.0, 3.0]
+        .into_iter()
+        .map(|value| {
+            let mut row = vec![0.0; 384];
+            row[0] = value;
+            row
+        })
+        .collect::<Vec<_>>();
+    let expected = build_v35_residual_sq_descriptor(&expected_rows, 4).unwrap();
+    let mut sink = EncodedObjectSink::default();
+    encode_v35_build_storage_group(groups.groups.pop().unwrap(), [0x51; 32], 0, 0, &mut sink)
+        .unwrap();
+    let reader = FileReader::try_new(Cursor::new(&sink.code_objects[0].1), None).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(
+        reader
+            .schema()
+            .metadata()
+            .get("borsuk.v35.remote-code.manifest")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        manifest["center_f16_bits"],
+        serde_json::json!(expected.center_f16_bits())
+    );
+    assert_eq!(
+        manifest["scales_f32_bits"],
+        serde_json::json!(
+            expected
+                .scales()
+                .iter()
+                .map(|scale| scale.to_bits())
+                .collect::<Vec<_>>()
+        )
+    );
 }

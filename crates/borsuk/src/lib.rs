@@ -261,13 +261,14 @@ pub use v35_authority::{
 };
 #[doc(hidden)]
 pub use v35_build::{
-    V35BuildAuthority, V35BuildBlock, V35BuildBlockSource, V35BuildLeafSink, V35BuildMergeReceipt,
-    V35BuildMergeRow, V35BuildMergeSource, V35BuildRow, V35BuildRun, V35BuildRunBatch,
+    V35BuildAuthority, V35BuildBlock, V35BuildBlockSource, V35BuildEncodedGroupReceipt,
+    V35BuildEncodedObjectSink, V35BuildLeafSink, V35BuildMergeReceipt, V35BuildMergeRow,
+    V35BuildMergeSource, V35BuildObjectTarget, V35BuildRow, V35BuildRun, V35BuildRunBatch,
     V35BuildRunCursor, V35BuildRunRow, V35BuildScratchReceipt, V35BuildScratchSink,
     V35BuildStorageGroup, V35BuildStorageGroupAssembler, V35BuildStorageGroupReceipt,
     V35BuildStorageGroupSink, V35MortonModel, build_v35_scratch_runs, decode_v35_build_run_arrow,
-    decode_v35_source_block_parquet, merge_v35_build_runs, open_v35_build_run_cursor,
-    train_v35_morton_model,
+    decode_v35_source_block_parquet, encode_v35_build_storage_group, merge_v35_build_runs,
+    open_v35_build_run_cursor, train_v35_morton_model,
 };
 #[doc(hidden)]
 pub use v35_patch::{

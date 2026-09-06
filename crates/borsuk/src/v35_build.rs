@@ -24,8 +24,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BorsukError, Result, V35ArtifactIdentity, V35Projection,
+    BorsukError, Result, V35ArtifactIdentity, V35ExactPageIdentity, V35ExactPageRow, V35LeafPatch,
+    V35Projection, V35RemoteCodeRow, build_v35_leaf_patch_from_merge_rows,
+    encode_v35_exact_page_parquet, encode_v35_remote_code_arrow,
     v35_projection::project_v35_source_row_simd,
+    v35_remote::{
+        build_v35_residual_sq_descriptor_from_slices, projected_exact_page_decoded_bytes,
+    },
 };
 
 const MORTON_COORDINATES: usize = 16;
@@ -758,6 +763,8 @@ pub trait V35BuildLeafSink {
 #[derive(Debug, Clone, PartialEq)]
 /// One consecutive group of leaves bounded by its dimension-derived code payload.
 pub struct V35BuildStorageGroup {
+    dimensions: crate::V35Dimensions,
+    bits_per_dimension: u8,
     group_ordinal: u32,
     logical_start: u64,
     code_bytes: u64,
@@ -765,6 +772,16 @@ pub struct V35BuildStorageGroup {
 }
 
 impl V35BuildStorageGroup {
+    /// Authenticated source and routing dimensions.
+    pub fn dimensions(&self) -> crate::V35Dimensions {
+        self.dimensions
+    }
+
+    /// Remote scalar-quantization rate used for grouping.
+    pub fn bits_per_dimension(&self) -> u8 {
+        self.bits_per_dimension
+    }
+
     /// Zero-based group ordinal in global Morton order.
     pub fn group_ordinal(&self) -> u32 {
         self.group_ordinal
@@ -825,6 +842,8 @@ impl V35BuildStorageGroupReceipt {
 /// Streaming adapter from globally ordered leaves to dimension-bound storage groups.
 pub struct V35BuildStorageGroupAssembler<'a, S: V35BuildStorageGroupSink> {
     sink: &'a mut S,
+    dimensions: crate::V35Dimensions,
+    bits_per_dimension: u8,
     source_dimensions: usize,
     projected_dimensions: usize,
     code_bytes_per_row: u64,
@@ -866,6 +885,8 @@ impl<'a, S: V35BuildStorageGroupSink> V35BuildStorageGroupAssembler<'a, S> {
         }
         Ok(Self {
             sink,
+            dimensions,
+            bits_per_dimension,
             source_dimensions,
             projected_dimensions: usize::from(dimensions.routing),
             code_bytes_per_row,
@@ -934,6 +955,8 @@ impl<'a, S: V35BuildStorageGroupSink> V35BuildStorageGroupAssembler<'a, S> {
             return Err(invalid("V35 build storage group is empty"));
         }
         let group = V35BuildStorageGroup {
+            dimensions: self.dimensions,
+            bits_per_dimension: self.bits_per_dimension,
             group_ordinal: self.next_group_ordinal,
             logical_start: self.next_logical_start,
             code_bytes: self.code_bytes,
@@ -1041,6 +1064,225 @@ impl<S: V35BuildStorageGroupSink> V35BuildLeafSink for V35BuildStorageGroupAssem
         self.previous_order = previous;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Pre-authorized immutable object destination supplied by a write-only sink.
+pub struct V35BuildObjectTarget {
+    uri: String,
+    version_id: String,
+}
+
+impl V35BuildObjectTarget {
+    /// Construct one S3 destination without discovery or endpoint authority.
+    pub fn new(uri: &str, version_id: &str) -> Result<Self> {
+        if !uri.starts_with("s3://") || uri.contains("/corpus/") || !is_authority_token(version_id)
+        {
+            return Err(invalid("V35 build object target differs"));
+        }
+        Ok(Self {
+            uri: uri.to_owned(),
+            version_id: version_id.to_owned(),
+        })
+    }
+}
+
+/// Write-only final-object capability without list, read, delete, or endpoint operations.
+pub trait V35BuildEncodedObjectSink {
+    /// Return the registered target for one dense code group.
+    fn code_target(&self, group_ordinal: u32) -> Result<V35BuildObjectTarget>;
+    /// Return the registered target for one dense exact-vector page.
+    fn page_target(&self, page_ordinal: u32) -> Result<V35BuildObjectTarget>;
+    /// Persist one complete authenticated Arrow code object before returning.
+    fn write_code_object(
+        &mut self,
+        identity: V35ArtifactIdentity,
+        version_id: &str,
+        bytes: &[u8],
+        decoded_bytes: u64,
+    ) -> Result<()>;
+    /// Persist one complete authenticated Parquet page before returning.
+    fn write_exact_page(&mut self, identity: V35ExactPageIdentity, bytes: &[u8]) -> Result<()>;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Routing patches and dense ordinal continuation from one encoded storage group.
+pub struct V35BuildEncodedGroupReceipt {
+    rows: u64,
+    patches: Vec<V35LeafPatch>,
+    page_count: u32,
+    next_leaf_ordinal: u32,
+    next_page_ordinal: u32,
+}
+
+impl V35BuildEncodedGroupReceipt {
+    /// Complete source rows encoded once.
+    pub fn rows(&self) -> u64 {
+        self.rows
+    }
+    /// One compact routing patch for every final leaf fragment.
+    pub fn patches(&self) -> &[V35LeafPatch] {
+        &self.patches
+    }
+    /// Exact-vector pages written for this group.
+    pub fn page_count(&self) -> u32 {
+        self.page_count
+    }
+    /// First unused generation-local leaf ordinal.
+    pub fn next_leaf_ordinal(&self) -> u32 {
+        self.next_leaf_ordinal
+    }
+    /// First unused generation-local page ordinal.
+    pub fn next_page_ordinal(&self) -> u32 {
+        self.next_page_ordinal
+    }
+    /// Number of routing patches emitted.
+    pub fn patch_count(&self) -> usize {
+        self.patches.len()
+    }
+}
+
+/// Encode one bounded group into cross-language code/page objects and routing patches.
+pub fn encode_v35_build_storage_group<S: V35BuildEncodedObjectSink>(
+    group: V35BuildStorageGroup,
+    generation_digest: [u8; 32],
+    first_leaf_ordinal: u32,
+    first_page_ordinal: u32,
+    sink: &mut S,
+) -> Result<V35BuildEncodedGroupReceipt> {
+    let row_count = group.row_count();
+    let code_bytes_per_row = u64::from(group.dimensions.source)
+        .checked_mul(u64::from(group.bits_per_dimension))
+        .and_then(|bits| bits.checked_add(7))
+        .map(|bits| bits / 8)
+        .ok_or_else(|| invalid("V35 build encoded group extent overflows"))?;
+    if generation_digest == [0; 32]
+        || group.leaves.is_empty()
+        || row_count == 0
+        || group.code_bytes
+            != row_count
+                .checked_mul(code_bytes_per_row)
+                .ok_or_else(|| invalid("V35 build encoded group extent overflows"))?
+    {
+        return Err(invalid("V35 build encoded group authority differs"));
+    }
+    let page_count = u32::try_from(group.leaves.len())
+        .map_err(|_| invalid("V35 build encoded group page count overflows"))?;
+    let code_target = sink.code_target(group.group_ordinal)?;
+    if !code_target.uri.ends_with(".arrow") {
+        return Err(invalid("V35 build code-object target differs"));
+    }
+    let mut written_uris = std::collections::BTreeSet::from([code_target.uri.clone()]);
+    let mut page_targets = Vec::with_capacity(group.leaves.len());
+    for offset in 0..page_count {
+        let page = first_page_ordinal
+            .checked_add(offset)
+            .ok_or_else(|| invalid("V35 build encoded group page ordinal overflows"))?;
+        let target = sink.page_target(page)?;
+        if !target.uri.ends_with(".parquet") || !written_uris.insert(target.uri.clone()) {
+            return Err(invalid("V35 build page-object target differs"));
+        }
+        page_targets.push(target);
+    }
+    let source_dimensions = usize::try_from(group.dimensions.source)
+        .map_err(|_| invalid("V35 build encoded group dimensions overflow"))?;
+    for leaf in &group.leaves {
+        if projected_exact_page_decoded_bytes(leaf.len(), source_dimensions)? > 4 * 1_048_576 {
+            return Err(invalid("V35 build exact page exceeds decoded admission"));
+        }
+    }
+    let source_rows = group
+        .leaves
+        .iter()
+        .flatten()
+        .map(|row| (row.source_ordinal, row.source.as_slice()))
+        .collect::<Vec<_>>();
+    let descriptor =
+        build_v35_residual_sq_descriptor_from_slices(&source_rows, group.bits_per_dimension)?;
+    drop(source_rows);
+
+    let mut patches = Vec::with_capacity(group.leaves.len());
+    let mut code_rows = Vec::with_capacity(group.row_count() as usize);
+    let mut logical_start = group.logical_start;
+    let mut leaf_ordinal = first_leaf_ordinal;
+    let mut page_ordinal = first_page_ordinal;
+    for leaf in &group.leaves {
+        patches.push(build_v35_leaf_patch_from_merge_rows(
+            leaf,
+            group.dimensions,
+            group.group_ordinal,
+            leaf_ordinal,
+            logical_start,
+        )?);
+        for row in leaf {
+            code_rows.push(V35RemoteCodeRow::new(
+                row.source_ordinal,
+                row.id,
+                row.sequence,
+                page_ordinal,
+                None,
+            )?);
+        }
+        logical_start = logical_start
+            .checked_add(leaf.len() as u64)
+            .ok_or_else(|| invalid("V35 build encoded group logical range overflows"))?;
+        leaf_ordinal = leaf_ordinal
+            .checked_add(1)
+            .ok_or_else(|| invalid("V35 build encoded group leaf ordinal overflows"))?;
+        page_ordinal = page_ordinal
+            .checked_add(1)
+            .ok_or_else(|| invalid("V35 build encoded group page ordinal overflows"))?;
+    }
+    let (code_bytes, decoded_bytes) = encode_v35_remote_code_arrow(
+        group.group_ordinal,
+        group.logical_start,
+        &descriptor,
+        &code_rows,
+    )?;
+    let code_identity = V35ArtifactIdentity {
+        digest: format!("{:x}", Sha256::digest(&code_bytes)),
+        digest_algorithm: "sha256".to_owned(),
+        length: code_bytes.len() as u64,
+        role: "remote-code-object".to_owned(),
+        uri: code_target.uri.clone(),
+    };
+    sink.write_code_object(
+        code_identity,
+        &code_target.version_id,
+        &code_bytes,
+        decoded_bytes,
+    )?;
+    drop(code_bytes);
+    drop(code_rows);
+    drop(descriptor);
+
+    for ((offset, leaf), target) in group.leaves.into_iter().enumerate().zip(page_targets) {
+        let page = first_page_ordinal
+            .checked_add(
+                u32::try_from(offset)
+                    .map_err(|_| invalid("V35 build encoded group page ordinal overflows"))?,
+            )
+            .ok_or_else(|| invalid("V35 build encoded group page ordinal overflows"))?;
+        let rows = leaf
+            .into_iter()
+            .map(|row| V35ExactPageRow::new(row.id, row.sequence, row.source))
+            .collect::<Result<Vec<_>>>()?;
+        let (identity, page_bytes) = encode_v35_exact_page_parquet(
+            page,
+            generation_digest,
+            &target.uri,
+            &target.version_id,
+            &rows,
+        )?;
+        sink.write_exact_page(identity, &page_bytes)?;
+    }
+    Ok(V35BuildEncodedGroupReceipt {
+        rows: row_count,
+        patches,
+        page_count,
+        next_leaf_ordinal: leaf_ordinal,
+        next_page_ordinal: page_ordinal,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
