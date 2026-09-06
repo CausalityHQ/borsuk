@@ -5,10 +5,12 @@ use std::{
 };
 
 use crate::{
-    BorsukError, Result, V35ArtifactIdentity, V35RemoteDirectoryBinding, V35RoutePrefix,
-    simd_control::f32x8, v35_route::v35_artifact_authority_digest,
+    BorsukError, Result, V35ArtifactIdentity, V35ProjectedQuery, V35RemoteDirectoryBinding,
+    V35RoutePrefix, simd_control::f32x8, v35_route::v35_artifact_authority_digest,
 };
-use arrow_array::{Array, RecordBatch, StringArray, UInt32Array, UInt64Array};
+use arrow_array::{
+    Array, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array, UInt64Array,
+};
 use arrow_ipc::{
     MetadataVersion,
     reader::FileReader,
@@ -16,6 +18,7 @@ use arrow_ipc::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use half::f16;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const MIB: u64 = 1_048_576;
@@ -30,6 +33,8 @@ const MAX_MUTATION_ENTRIES: usize = 1_000_000;
 const MAX_DIRECTORY_BLOCK_BYTES: u64 = MIB;
 const MAX_DIRECTORY_CHUNKS: usize = 64;
 const DIRECTORY_FORMAT: &str = "borsuk-v35-remote-directory-block-v1";
+const CODE_FORMAT: &str = "borsuk-v35-remote-code-arrow-v1";
+const CODE_MANIFEST_KEY: &str = "borsuk.v35.remote-code.manifest";
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -44,6 +49,14 @@ fn is_digest(value: &str) -> bool {
 
 fn digest_hex(value: [u8; 32]) -> String {
     value.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Logical identity of the one incompatible V35 Arrow code schema.
+pub fn v35_remote_code_schema_digest() -> [u8; 32] {
+    Sha256::digest(
+        b"borsuk-v35-remote-code-schema-v1\nid:u64\nsequence:u64\nprimary_page:u32\nreplica_page:u32?\ncode:fixed-size-binary\n",
+    )
+    .into()
 }
 
 fn validate_object(identity: &V35ArtifactIdentity) -> Result<()> {
@@ -437,7 +450,7 @@ impl<'a> V35ResidualSqScorer<'a> {
     fn decoded(&self, codes: &[u8], dimension: usize) -> f32 {
         let code = if self.descriptor.bits_per_dimension == 8 {
             codes[dimension]
-        } else if dimension % 2 == 0 {
+        } else if dimension.is_multiple_of(2) {
             codes[dimension / 2] >> 4
         } else {
             codes[dimension / 2] & 0x0f
@@ -481,6 +494,352 @@ impl<'a> V35ResidualSqScorer<'a> {
         }
         Ok(if score == 0.0 { 0.0 } else { score })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Immutable identity, visibility sequence, and exact-page references for one code row.
+pub struct V35RemoteCodeRow {
+    id: u64,
+    sequence: u64,
+    primary_page: u32,
+    replica_page: Option<u32>,
+}
+
+impl V35RemoteCodeRow {
+    /// Construct one row; a replica must differ from its primary page.
+    pub fn new(
+        id: u64,
+        sequence: u64,
+        primary_page: u32,
+        replica_page: Option<u32>,
+    ) -> Result<Self> {
+        if sequence == 0 || replica_page == Some(primary_page) {
+            return Err(invalid("V35 remote code row authority differs"));
+        }
+        Ok(Self {
+            id,
+            sequence,
+            primary_page,
+            replica_page,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V35RemoteCodeManifest {
+    bits_per_dimension: u8,
+    bytes_per_row: u32,
+    center_f16_bits: Vec<u16>,
+    code_schema_sha256: String,
+    dimensions: u32,
+    format: String,
+    group_ordinal: u32,
+    logical_start: u64,
+    rows: u64,
+    scales_f32_bits: Vec<u32>,
+}
+
+fn code_manifest_json(manifest: &V35RemoteCodeManifest) -> Result<String> {
+    serde_json::to_string(manifest)
+        .map_err(|_| invalid("V35 remote code manifest cannot be serialized"))
+}
+
+fn remote_code_schema(bytes_per_row: u32, manifest_json: String) -> Result<Arc<Schema>> {
+    let width =
+        i32::try_from(bytes_per_row).map_err(|_| invalid("V35 remote code row width overflows"))?;
+    Ok(Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("id", DataType::UInt64, false),
+            Field::new("sequence", DataType::UInt64, false),
+            Field::new("primary_page", DataType::UInt32, false),
+            Field::new("replica_page", DataType::UInt32, true),
+            Field::new("code", DataType::FixedSizeBinary(width), false),
+        ],
+        HashMap::from([(CODE_MANIFEST_KEY.to_owned(), manifest_json)]),
+    )))
+}
+
+fn projected_remote_code_decoded_bytes(
+    rows: u64,
+    dimensions: u32,
+    bytes_per_row: u32,
+) -> Result<u64> {
+    let row_bytes = u64::from(bytes_per_row)
+        .checked_add(24)
+        .ok_or_else(|| invalid("V35 remote decoded row bytes overflow"))?;
+    rows.checked_mul(row_bytes)
+        .and_then(|bytes| bytes.checked_add(u64::from(dimensions) * 6))
+        .and_then(|bytes| bytes.checked_add(65_536))
+        .ok_or_else(|| invalid("V35 remote decoded bytes overflow"))
+}
+
+fn validate_remote_code_descriptor(descriptor: &V35ResidualSqDescriptor) -> Result<usize> {
+    let dimensions = usize::try_from(descriptor.dimensions)
+        .map_err(|_| invalid("V35 remote code dimensions overflow"))?;
+    let width = usize::try_from(descriptor.bytes_per_row)
+        .map_err(|_| invalid("V35 remote code row width overflows"))?;
+    let expected_width = match descriptor.bits_per_dimension {
+        4 => dimensions.div_ceil(2),
+        8 => dimensions,
+        _ => return Err(invalid("V35 remote code quantization differs")),
+    };
+    if dimensions == 0
+        || width != expected_width
+        || descriptor.center_f16_bits.len() != dimensions
+        || descriptor.scales.len() != dimensions
+        || descriptor
+            .center_f16_bits
+            .iter()
+            .any(|bits| !f16::from_bits(*bits).to_f32().is_finite())
+        || descriptor
+            .scales
+            .iter()
+            .any(|scale| !scale.is_finite() || *scale < 0.0)
+    {
+        return Err(invalid("V35 remote code descriptor authority differs"));
+    }
+    Ok(width)
+}
+
+/// Encode one independently decodable, uncompressed Arrow code chunk.
+pub fn encode_v35_remote_code_arrow(
+    group_ordinal: u32,
+    logical_start: u64,
+    descriptor: &V35ResidualSqDescriptor,
+    rows: &[V35RemoteCodeRow],
+) -> Result<(Vec<u8>, u64)> {
+    let row_count =
+        u64::try_from(rows.len()).map_err(|_| invalid("V35 remote code rows overflow"))?;
+    let width = validate_remote_code_descriptor(descriptor)?;
+    let encoded_code_bytes = rows
+        .len()
+        .checked_mul(width)
+        .ok_or_else(|| invalid("V35 remote code extent overflows"))?;
+    if rows.is_empty()
+        || descriptor.rows != row_count
+        || descriptor.codes.len() != encoded_code_bytes
+        || rows.windows(2).any(|pair| pair[0].id >= pair[1].id)
+        || logical_start.checked_add(row_count).is_none()
+    {
+        return Err(invalid("V35 remote code chunk authority differs"));
+    }
+    let manifest = V35RemoteCodeManifest {
+        bits_per_dimension: descriptor.bits_per_dimension,
+        bytes_per_row: descriptor.bytes_per_row,
+        center_f16_bits: descriptor.center_f16_bits.clone(),
+        code_schema_sha256: digest_hex(v35_remote_code_schema_digest()),
+        dimensions: descriptor.dimensions,
+        format: CODE_FORMAT.to_owned(),
+        group_ordinal,
+        logical_start,
+        rows: row_count,
+        scales_f32_bits: descriptor
+            .scales
+            .iter()
+            .map(|scale| scale.to_bits())
+            .collect(),
+    };
+    let schema = remote_code_schema(descriptor.bytes_per_row, code_manifest_json(&manifest)?)?;
+    let codes = FixedSizeBinaryArray::try_from_iter(descriptor.codes.chunks_exact(width))?;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt64Array::from(
+                rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                rows.iter().map(|row| row.sequence).collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt32Array::from(
+                rows.iter().map(|row| row.primary_page).collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt32Array::from(
+                rows.iter().map(|row| row.replica_page).collect::<Vec<_>>(),
+            )),
+            Arc::new(codes),
+        ],
+    )?;
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    if bytes.len() as u64 > MAX_ENCODED_CHUNK_BYTES {
+        return Err(invalid("V35 remote code chunk exceeds encoded admission"));
+    }
+    let decoded = projected_remote_code_decoded_bytes(
+        row_count,
+        descriptor.dimensions,
+        descriptor.bytes_per_row,
+    )?;
+    if decoded > MAX_DECODED_CHUNK_BYTES {
+        return Err(invalid("V35 remote code chunk exceeds decoded admission"));
+    }
+    Ok((bytes, decoded))
+}
+
+fn parse_remote_code_manifest(
+    chunk: &V35RemoteChunk,
+    bytes: &[u8],
+) -> Result<(V35ResidualSqDescriptor, Vec<V35RemoteCodeRow>)> {
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.num_batches() != 1 {
+        return Err(invalid("V35 remote code Arrow batch count differs"));
+    }
+    let schema = reader.schema();
+    let metadata = schema.metadata();
+    if metadata.len() != 1 {
+        return Err(invalid("V35 remote code metadata differs"));
+    }
+    let manifest_json = metadata
+        .get(CODE_MANIFEST_KEY)
+        .ok_or_else(|| invalid("V35 remote code manifest is missing"))?;
+    let manifest: V35RemoteCodeManifest = serde_json::from_str(manifest_json)
+        .map_err(|_| invalid("V35 remote code manifest differs"))?;
+    if code_manifest_json(&manifest)? != *manifest_json
+        || manifest.format != CODE_FORMAT
+        || manifest.code_schema_sha256 != digest_hex(v35_remote_code_schema_digest())
+        || manifest.group_ordinal != chunk.group_ordinal
+        || manifest.logical_start != chunk.logical_start
+        || manifest.rows != chunk.rows
+    {
+        return Err(invalid("V35 remote code manifest authority differs"));
+    }
+    let scales = manifest
+        .scales_f32_bits
+        .iter()
+        .map(|bits| f32::from_bits(*bits))
+        .collect::<Vec<_>>();
+    let descriptor_without_codes = V35ResidualSqDescriptor {
+        rows: manifest.rows,
+        dimensions: manifest.dimensions,
+        bits_per_dimension: manifest.bits_per_dimension,
+        bytes_per_row: manifest.bytes_per_row,
+        center_f16_bits: manifest.center_f16_bits,
+        scales,
+        codes: Vec::new(),
+    };
+    let width = validate_remote_code_descriptor(&descriptor_without_codes)?;
+    let projected = projected_remote_code_decoded_bytes(
+        manifest.rows,
+        manifest.dimensions,
+        manifest.bytes_per_row,
+    )?;
+    let expected_schema = remote_code_schema(manifest.bytes_per_row, manifest_json.clone())?;
+    if projected != chunk.decoded_length || schema.as_ref() != expected_schema.as_ref() {
+        return Err(invalid("V35 remote code Arrow schema differs"));
+    }
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| invalid("V35 remote code Arrow batch is missing"))?;
+    if reader.next().is_some() || batch.num_rows() as u64 != manifest.rows {
+        return Err(invalid("V35 remote code Arrow rows differ"));
+    }
+    let ids = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 remote code id column differs"))?;
+    let sequences = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 remote code sequence column differs"))?;
+    let primary_pages = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| invalid("V35 remote code primary-page column differs"))?;
+    let replica_pages = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| invalid("V35 remote code replica-page column differs"))?;
+    let codes = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<FixedSizeBinaryArray>()
+        .ok_or_else(|| invalid("V35 remote code payload column differs"))?;
+    if ids.null_count() != 0
+        || sequences.null_count() != 0
+        || primary_pages.null_count() != 0
+        || codes.null_count() != 0
+        || codes.value_length() != i32::try_from(width).unwrap_or(-1)
+    {
+        return Err(invalid("V35 remote code Arrow nullability differs"));
+    }
+    let mut rows = Vec::with_capacity(batch.num_rows());
+    let mut packed_codes = Vec::with_capacity(
+        batch
+            .num_rows()
+            .checked_mul(width)
+            .ok_or_else(|| invalid("V35 remote code allocation overflows"))?,
+    );
+    for row in 0..batch.num_rows() {
+        rows.push(V35RemoteCodeRow::new(
+            ids.value(row),
+            sequences.value(row),
+            primary_pages.value(row),
+            (!replica_pages.is_null(row)).then(|| replica_pages.value(row)),
+        )?);
+        packed_codes.extend_from_slice(codes.value(row));
+    }
+    if rows.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+        return Err(invalid("V35 remote code row order differs"));
+    }
+    Ok((
+        V35ResidualSqDescriptor {
+            codes: packed_codes,
+            ..descriptor_without_codes
+        },
+        rows,
+    ))
+}
+
+/// Execute fixed-format authenticated Arrow code ranges into a bounded candidate heap.
+pub fn scan_v35_code_ranges<T: V35VersionedRangeTransport>(
+    plan: &V35RemotePlan,
+    query: &V35ProjectedQuery,
+    visibility: &V35SnapshotVisibility,
+    transport: &mut T,
+) -> std::result::Result<(V35CandidateSet, V35RemoteReadReceipt), V35RemoteExecutionFailure> {
+    if plan.query_digest != query.source_digest()
+        || plan.directory_binding.code_schema_digest != v35_remote_code_schema_digest()
+    {
+        return Err(execution_failure(
+            V35RemoteFailureKind::Authority,
+            V35RemoteReadReceipt::default(),
+        ));
+    }
+    let mut candidates = V35CandidateAccumulator::new(plan, visibility).map_err(|_| {
+        execution_failure(
+            V35RemoteFailureKind::Authority,
+            V35RemoteReadReceipt::default(),
+        )
+    })?;
+    let receipt = execute_v35_remote_plan(plan, transport, |chunk, bytes| {
+        let (descriptor, rows) = parse_remote_code_manifest(chunk, bytes)?;
+        let scorer = V35ResidualSqScorer::new(&descriptor, query.source_query())?;
+        for (row, authority) in rows.iter().enumerate() {
+            let row_ordinal = chunk
+                .logical_start
+                .checked_add(row as u64)
+                .ok_or_else(|| invalid("V35 remote code row ordinal overflows"))?;
+            candidates.admit(V35ScannedCandidate::new(
+                f64::from(scorer.score(row as u64)?),
+                row_ordinal,
+                authority.id,
+                authority.sequence,
+                authority.primary_page,
+                authority.replica_page,
+            )?);
+        }
+        Ok(chunk.decoded_length)
+    })?;
+    Ok((candidates.finish(), receipt))
 }
 
 /// Build an exact per-group SQ4 or SQ8 descriptor from a bounded row group.

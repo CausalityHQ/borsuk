@@ -2,14 +2,16 @@
 
 use borsuk::{
     V35ArtifactIdentity, V35CandidateAccumulator, V35Dimensions, V35GroupStorage,
-    V35LeafPatchBuildRequest, V35RemoteChunk, V35RemoteDirectoryBinding, V35RemoteDirectoryBlock,
-    V35RemoteDispatch, V35RemoteFailureKind, V35RemoteRange, V35RemoteRangeResponse,
-    V35ResidualSqScorer, V35RouteBudget, V35RoutePrefix, V35ScannedCandidate, V35SnapshotEntry,
-    V35SnapshotVisibility, V35TransportFailure, V35VersionedRangeTransport,
-    build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor, build_v35_routing_generation,
-    build_v35_srht, decode_v35_remote_directory_arrow, encode_v35_remote_directory_arrow,
-    execute_v35_remote_plan, exhaustive_v35_route, plan_v35_remote_reads, project_v35_query_scalar,
-    reduce_v35_scanned_candidates, select_v35_exact_pages,
+    V35LeafPatchBuildRequest, V35RemoteChunk, V35RemoteCodeRow, V35RemoteDirectoryBinding,
+    V35RemoteDirectoryBlock, V35RemoteDispatch, V35RemoteFailureKind, V35RemoteRange,
+    V35RemoteRangeResponse, V35ResidualSqScorer, V35RouteBudget, V35RoutePrefix,
+    V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility, V35TransportFailure,
+    V35VersionedRangeTransport, build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor,
+    build_v35_routing_generation, build_v35_srht, decode_v35_remote_directory_arrow,
+    encode_v35_remote_code_arrow, encode_v35_remote_directory_arrow, execute_v35_remote_plan,
+    exhaustive_v35_route, plan_v35_remote_reads, project_v35_query_scalar,
+    reduce_v35_scanned_candidates, scan_v35_code_ranges, select_v35_exact_pages,
+    v35_remote_code_schema_digest,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -25,7 +27,8 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 fn binding(byte: u8) -> V35RemoteDirectoryBinding {
-    V35RemoteDirectoryBinding::new([byte; 32], [byte + 1; 32], [byte + 2; 32]).unwrap()
+    V35RemoteDirectoryBinding::new([byte; 32], [byte + 1; 32], v35_remote_code_schema_digest())
+        .unwrap()
 }
 
 fn selected_route(blocks: &[V35ArtifactIdentity]) -> V35RoutePrefix {
@@ -718,6 +721,197 @@ fn v35_remote_residual_sq_scorer_is_simd_bounded_for_every_dimension_and_rate() 
             assert!(V35ResidualSqScorer::new(&descriptor, &query[..dimensions - 1]).is_err());
         }
     }
+}
+
+struct BodyTransport {
+    body: Vec<u8>,
+    dispatches: u64,
+}
+
+impl V35VersionedRangeTransport for BodyTransport {
+    fn dispatch(
+        &mut self,
+        _range: &V35RemoteRange,
+    ) -> std::result::Result<V35RemoteDispatch, V35TransportFailure> {
+        self.dispatches += 1;
+        Ok(V35RemoteDispatch::new(self.dispatches).unwrap())
+    }
+
+    fn complete(
+        &mut self,
+        _dispatch: V35RemoteDispatch,
+        range: &V35RemoteRange,
+        destination: &mut [u8],
+    ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure> {
+        destination.copy_from_slice(&self.body);
+        Ok(response(range, destination))
+    }
+
+    fn cancel(&mut self, _dispatch: V35RemoteDispatch) -> u64 {
+        0
+    }
+}
+
+struct CodeScanFixture {
+    plan: borsuk::V35RemotePlan,
+    query: borsuk::V35ProjectedQuery,
+    visibility: V35SnapshotVisibility,
+    body: Vec<u8>,
+    expected: Vec<(u64, f32)>,
+}
+
+fn code_scan_fixture() -> CodeScanFixture {
+    let dimensions = V35Dimensions {
+        source: 384,
+        routing: 64,
+    };
+    let projection = build_v35_srht(dimensions, 811).unwrap();
+    let source_rows = (0..3)
+        .map(|row| {
+            (0..384)
+                .map(|dimension| ((row * 31 + dimension * 7) % 211) as f32 / 29.0 - 3.0)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let descriptor = build_v35_residual_sq_descriptor(&source_rows, 4).unwrap();
+    let rows = vec![
+        V35RemoteCodeRow::new(10, 1, 2, Some(3)).unwrap(),
+        V35RemoteCodeRow::new(11, 1, 4, None).unwrap(),
+        V35RemoteCodeRow::new(12, 1, 6, Some(7)).unwrap(),
+    ];
+    let (body, decoded_length) = encode_v35_remote_code_arrow(0, 0, &descriptor, &rows).unwrap();
+    let object_bytes = [vec![0; 16], body.clone(), vec![0; 16]].concat();
+    let object = V35ArtifactIdentity {
+        digest: sha256(&object_bytes),
+        digest_algorithm: "sha256".to_owned(),
+        length: object_bytes.len() as u64,
+        role: "remote-code-object".to_owned(),
+        uri: "s3://borsuk-index/generations/g01/codes/code-0000.arrow".to_owned(),
+    };
+    let chunk = V35RemoteChunk::new(
+        0,
+        0,
+        3,
+        object,
+        "version-01",
+        16,
+        body.len() as u64,
+        decoded_length,
+        sha256(&body),
+    )
+    .unwrap();
+    let block = authenticated_directory_block(
+        binding(0x51),
+        vec![chunk],
+        "s3://borsuk-index/generations/g01/directory/group-0000.arrow",
+    );
+    let generation = build_v35_routing_generation(
+        &projection,
+        "deep-image",
+        &digest(0x11),
+        vec![
+            build_v35_leaf_patch_arm(
+                &V35LeafPatchBuildRequest {
+                    assignment_max: 2,
+                    assignment_min: 0,
+                    dimensions,
+                    group_ordinal: 0,
+                    leaf_ordinal: 0,
+                    logical_start: 0,
+                    omitted_energies: vec![0.0; 3],
+                    projected_rows: vec![vec![0.0; 64]; 3],
+                },
+                1,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let source_query = (0..384)
+        .map(|dimension| ((dimension * 11) % 97) as f32 / 23.0 - 2.0)
+        .collect::<Vec<_>>();
+    let query = project_v35_query_scalar(&projection, &source_query).unwrap();
+    let group =
+        V35GroupStorage::new_bound(0, 3, body.len() as u64, binding(0x51), block.identity())
+            .unwrap();
+    let route = exhaustive_v35_route(
+        &generation,
+        &query,
+        &[group],
+        V35RouteBudget::new(1, 3, body.len() as u64).unwrap(),
+    )
+    .unwrap();
+    let plan = plan_v35_remote_reads(&route, &[block]).unwrap();
+    let mut expected = source_rows
+        .iter()
+        .enumerate()
+        .map(|(row, _)| {
+            (
+                10 + row as u64,
+                scalar_residual_sq_score(&descriptor, row, &source_query),
+            )
+        })
+        .collect::<Vec<_>>();
+    expected.sort_by(|left, right| left.1.total_cmp(&right.1).then(left.0.cmp(&right.0)));
+    CodeScanFixture {
+        plan,
+        query,
+        visibility: V35SnapshotVisibility::new([0x52; 32], vec![]).unwrap(),
+        body,
+        expected,
+    }
+}
+
+#[test]
+fn v35_remote_code_scanner_authenticates_arrow_and_streams_simd_candidates() {
+    // Break caught: production delegates decoding/allocation to a callback,
+    // accepts a second query, or materializes every selected row before reduction.
+    let fixture = code_scan_fixture();
+    let mut transport = BodyTransport {
+        body: fixture.body.clone(),
+        dispatches: 0,
+    };
+    let (candidates, receipt) = scan_v35_code_ranges(
+        &fixture.plan,
+        &fixture.query,
+        &fixture.visibility,
+        &mut transport,
+    )
+    .unwrap();
+    assert_eq!(candidates.candidates().len(), fixture.expected.len());
+    for (candidate, (expected_id, expected_distance)) in
+        candidates.candidates().iter().zip(&fixture.expected)
+    {
+        assert_eq!(candidate.id(), *expected_id);
+        let tolerance = 2.0e-5 * expected_distance.abs().max(1.0);
+        assert!((candidate.distance() as f32 - expected_distance).abs() <= tolerance);
+    }
+    assert_eq!(receipt.physical_get_attempts(), 1);
+    assert_eq!(receipt.authenticated_bytes(), fixture.body.len() as u64);
+
+    let projection = build_v35_srht(
+        V35Dimensions {
+            source: 384,
+            routing: 64,
+        },
+        811,
+    )
+    .unwrap();
+    let mismatched = project_v35_query_scalar(&projection, &[1.0; 384]).unwrap();
+    let mut untouched = BodyTransport {
+        body: fixture.body,
+        dispatches: 0,
+    };
+    assert!(
+        scan_v35_code_ranges(
+            &fixture.plan,
+            &mismatched,
+            &fixture.visibility,
+            &mut untouched,
+        )
+        .is_err()
+    );
+    assert_eq!(untouched.dispatches, 0);
 }
 
 #[test]
