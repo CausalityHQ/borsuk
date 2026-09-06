@@ -205,6 +205,7 @@ mod v33_group_shape;
 mod v34_rank4;
 mod v34_route;
 mod v35_authority;
+mod v35_build;
 mod v35_patch;
 mod v35_projection;
 mod v35_remote;
@@ -258,6 +259,8 @@ pub use v35_authority::{
     V35ArtifactIdentity, V35Dimensions, V35GenerationManifest, V35ProjectionArm, V35RemoteCodeRate,
     V35ServingProjection, project_v35_serving_memory, validate_v35_manifest,
 };
+#[doc(hidden)]
+pub use v35_build::{V35MortonModel, train_v35_morton_model};
 #[doc(hidden)]
 pub use v35_patch::{
     V35EqualByteCentroidControl, V35LeafPatch, V35LeafPatchArm, V35LeafPatchBuildRequest,
