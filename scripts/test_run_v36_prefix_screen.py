@@ -23,15 +23,19 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             source_commit="1" * 40,
             source_archive_uri="s3://fixture/v36/source.tar.zst",
             source_archive_sha256="2" * 64,
+            source_archive_blake3="7" * 64,
             source_archive_bytes=8_192,
             binary_uri="s3://fixture/v36/v36_prefix_freeze",
             binary_sha256="3" * 64,
+            binary_blake3="8" * 64,
             binary_bytes=4_096,
             authority_uri="s3://fixture/v36/prefix-authority.json",
             authority_sha256="4" * 64,
+            authority_blake3="9" * 64,
             authority_bytes=2_048,
             source_registry_uri="s3://fixture/v36/source-registry.json",
             source_registry_sha256="5" * 64,
+            source_registry_blake3="a" * 64,
             source_registry_bytes=1_024,
             output_prefix="s3://fixture/v36/prefix-results/",
         )
@@ -119,12 +123,17 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             )
             self.assertEqual(spec["InstanceInitiatedShutdownBehavior"], "terminate")
             script = base64.b64decode(spec["UserData"]).decode()
-            self.assertIn("--max-source-objects 16", script)
-            self.assertIn(f"--max-source-bytes {6 * 1024**3}", script)
-            self.assertIn("--checkpoint-objects 16", script)
-            self.assertIn("--checkpoint-seconds 300", script)
+            self.assertIn("--execution-authority", script)
+            self.assertIn("--scratch", script)
+            self.assertNotIn("--max-source-objects", script)
+            self.assertNotIn("--max-source-bytes", script)
+            self.assertNotIn("--checkpoint-objects", script)
+            self.assertNotIn("--checkpoint-seconds", script)
             self.assertIn(f"test \"$available\" -ge {subject.DISK_PREFLIGHT_BYTES}", script)
-            self.assertIn("--resume-checkpoint", script)
+            self.assertNotIn("--resume-checkpoint", script)
+            self.assertIn("set +e", script)
+            self.assertIn("status=$?", script)
+            self.assertIn("set -e", script)
             self.assertIn("--if-none-match '*'", script)
             self.assertIn("shutdown -h now", script)
             self.assertNotIn("on-demand", script.lower())

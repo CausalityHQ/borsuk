@@ -759,7 +759,8 @@ pub fn validate_v36_prefix_freeze_execution_authority(
 ) -> Result<()> {
     if authority.schema != "borsuk-v36-prefix-freeze-execution-authority-v1"
         || authority.claim_eligible
-        || authority.active_wall_seconds != 43_200
+        || authority.active_wall_seconds == 0
+        || authority.active_wall_seconds > 43_200
         || authority.checkpoint_seconds != 300
         || !authority.attempt_id.starts_with("v36-prefix-screen-")
         || authority.attempt_id.len() > 128

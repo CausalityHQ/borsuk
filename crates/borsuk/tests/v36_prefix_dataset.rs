@@ -368,6 +368,11 @@ fn v36_prefix_dataset_execution_authority_binds_provenance_and_lifecycle() {
     let mut drifted = authority.clone();
     drifted.active_wall_seconds += 1;
     assert!(validate_v36_prefix_freeze_execution_authority(&drifted).is_err());
+    let mut shortened = authority.clone();
+    shortened.active_wall_seconds = 21_600;
+    validate_v36_prefix_freeze_execution_authority(&shortened).unwrap();
+    shortened.active_wall_seconds = 0;
+    assert!(validate_v36_prefix_freeze_execution_authority(&shortened).is_err());
     let mut drifted = authority;
     drifted.output_prefix.pop();
     assert!(validate_v36_prefix_freeze_execution_authority(&drifted).is_err());

@@ -59,15 +59,19 @@ class V36PrefixScreenPlan:
     source_commit: str
     source_archive_uri: str
     source_archive_sha256: str
+    source_archive_blake3: str
     source_archive_bytes: int
     binary_uri: str
     binary_sha256: str
+    binary_blake3: str
     binary_bytes: int
     authority_uri: str
     authority_sha256: str
+    authority_blake3: str
     authority_bytes: int
     source_registry_uri: str
     source_registry_sha256: str
+    source_registry_blake3: str
     source_registry_bytes: int
     output_prefix: str
 
@@ -105,9 +109,13 @@ def build_v36_prefix_screen_plan(**values: Any) -> V36PrefixScreenPlan:
     plan = V36PrefixScreenPlan(**values)
     digest_values = (
         plan.source_archive_sha256,
+        plan.source_archive_blake3,
         plan.binary_sha256,
+        plan.binary_blake3,
         plan.authority_sha256,
+        plan.authority_blake3,
         plan.source_registry_sha256,
+        plan.source_registry_blake3,
     )
     byte_values = (
         plan.source_archive_bytes,
@@ -183,6 +191,24 @@ def _user_data(plan: V36PrefixScreenPlan, *, attempt_ordinal: int) -> str:
     output_bucket, output_key = _s3(plan.output_prefix, prefix=True)
     attempt_prefix = f"{output_key}attempt-{attempt_ordinal:04d}/"
     wall_seconds = _attempt_wall_seconds(attempt_ordinal)
+    execution_authority = canonical_json_bytes(
+        {
+            "active_wall_seconds": wall_seconds,
+            "attempt_id": f"{plan.run_id}-attempt-{attempt_ordinal:04d}",
+            "checkpoint_seconds": CHECKPOINT_SECONDS,
+            "claim_eligible": False,
+            "inputs": [
+                {"blake3": plan.binary_blake3, "encoded_bytes": plan.binary_bytes, "role": "binary", "sha256": plan.binary_sha256, "uri": plan.binary_uri},
+                {"blake3": plan.authority_blake3, "encoded_bytes": plan.authority_bytes, "role": "freeze-authority", "sha256": plan.authority_sha256, "uri": plan.authority_uri},
+                {"blake3": plan.source_archive_blake3, "encoded_bytes": plan.source_archive_bytes, "role": "source-archive", "sha256": plan.source_archive_sha256, "uri": plan.source_archive_uri},
+                {"blake3": plan.source_registry_blake3, "encoded_bytes": plan.source_registry_bytes, "role": "source-registry", "sha256": plan.source_registry_sha256, "uri": plan.source_registry_uri},
+            ],
+            "output_prefix": f"s3://{output_bucket}/{attempt_prefix}",
+            "schema": "borsuk-v36-prefix-freeze-execution-authority-v1",
+            "source_commit": plan.source_commit,
+        }
+    )
+    execution_authority_b64 = base64.b64encode(execution_authority).decode()
     return f"""#!/bin/bash
 set -euo pipefail
 trap 'shutdown -h now' EXIT
@@ -193,6 +219,7 @@ aws s3 cp {quoted['source_archive_uri']} "$root/source.tar.zst" --only-show-erro
 aws s3 cp {quoted['binary_uri']} "$root/v36_prefix_freeze" --only-show-errors
 aws s3 cp {quoted['authority_uri']} "$root/authority.json" --only-show-errors
 aws s3 cp {quoted['source_registry_uri']} "$root/source-registry.json" --only-show-errors
+printf '%s' {shlex.quote(execution_authority_b64)} | base64 -d > "$root/execution-authority.json"
 test "$(stat -c %s "$root/source.tar.zst")" = {plan.source_archive_bytes}
 test "$(sha256sum "$root/source.tar.zst" | cut -d' ' -f1)" = {plan.source_archive_sha256}
 test "$(stat -c %s "$root/v36_prefix_freeze")" = {plan.binary_bytes}
@@ -201,15 +228,17 @@ test "$(stat -c %s "$root/authority.json")" = {plan.authority_bytes}
 test "$(sha256sum "$root/authority.json" | cut -d' ' -f1)" = {plan.authority_sha256}
 test "$(stat -c %s "$root/source-registry.json")" = {plan.source_registry_bytes}
 test "$(sha256sum "$root/source-registry.json" | cut -d' ' -f1)" = {plan.source_registry_sha256}
-aws s3 cp {quoted['output_prefix']}CHECKPOINT.json "$root/checkpoint.json" --only-show-errors || :
 chmod 500 "$root/v36_prefix_freeze"
+mkdir "$root/output" "$root/scratch"
+set +e
 timeout --signal=TERM --kill-after=30 {wall_seconds} "$root/v36_prefix_freeze" \
-  --execute-prefix-freeze --one-source-stream \
+  --execute-prefix-freeze \
+  --execution-authority "$root/execution-authority.json" \
   --authority "$root/authority.json" --source-registry "$root/source-registry.json" \
   --source-archive "$root/source.tar.zst" --output "$root/output" \
-  --max-source-objects {MAX_SOURCE_OBJECTS} --max-source-bytes {MAX_SOURCE_BYTES} \
-  --checkpoint-objects {CHECKPOINT_OBJECTS} --checkpoint-seconds {CHECKPOINT_SECONDS} \
-  --resume-checkpoint "$root/checkpoint.json"
+  --scratch "$root/scratch"
+status=$?
+set -e
 if [[ -f "$root/output/CHECKPOINT.json" ]]; then
   aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(output_key)}CHECKPOINT.json --body "$root/output/CHECKPOINT.json"
 fi
@@ -218,6 +247,7 @@ for marker in INTERRUPTED.json ATTEMPT_COMPLETE.json ATTEMPT_FAILED.json; do
     aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}"$marker" --body "$root/output/$marker" --if-none-match '*'
   fi
 done
+exit "$status"
 """
 
 
