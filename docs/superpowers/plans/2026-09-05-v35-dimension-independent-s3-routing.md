@@ -287,6 +287,11 @@
   ordinals before key permutation; merge never allocates a corpus-sized
   uniqueness set or complete input run.
 
+  At the leaf sink, narrow authenticated f64 projected rows once to canonical
+  f32 patch input, derive assignment bounds from source ordinals, and compute
+  each omitted-energy term with ordered f64
+  `max(0,||source||²-||projected||²)` arithmetic before patch sealing.
+
   Before projecting, sorting, or allocating Arrow columns/output, account for
   owned source-row capacities, the internally projected f64 row staging and
   Morton references, the largest 256-row flattened batch, raw encoded payload,

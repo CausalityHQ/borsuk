@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BorsukError, Result, V35ArtifactIdentity, V35Dimensions, V35Projection, V35ProjectionArm,
+    BorsukError, Result, V35ArtifactIdentity, V35BuildMergeRow, V35Dimensions, V35Projection,
+    V35ProjectionArm,
 };
 
 const COMPONENTS: usize = 6;
@@ -79,7 +80,7 @@ pub struct V35LeafPatchBuildRequest {
     pub logical_start: u64,
     /// Per-row clamped source-space energy omitted by the projection.
     pub omitted_energies: Vec<f64>,
-    /// At-most-256 decoded-f32 projected rows in source ordinal order.
+    /// At-most-256 decoded-f32 projected rows in exact leaf order.
     pub projected_rows: Vec<Vec<f32>>,
 }
 
@@ -891,6 +892,65 @@ pub fn build_v35_leaf_patch(request: &V35LeafPatchBuildRequest) -> Result<V35Lea
         .sqrt(),
         spectral_bound,
         omitted_energy,
+    })
+}
+
+/// Seal one bounded Morton-ordered merge leaf into its routing patch.
+pub fn build_v35_leaf_patch_from_merge_rows(
+    rows: &[V35BuildMergeRow],
+    dimensions: V35Dimensions,
+    group_ordinal: u32,
+    leaf_ordinal: u32,
+    logical_start: u64,
+) -> Result<V35LeafPatch> {
+    if rows.is_empty() || rows.len() > MAX_LEAF_ROWS {
+        return Err(invalid("V35 merged leaf rows differ"));
+    }
+    let source_dimensions = usize::try_from(dimensions.source)
+        .map_err(|_| invalid("V35 merged leaf source dimensions overflow"))?;
+    let projected_dimensions = usize::from(dimensions.routing);
+    let mut assignment_min = u64::MAX;
+    let mut assignment_max = 0;
+    let mut projected_rows = Vec::with_capacity(rows.len());
+    let mut omitted_energies = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.source().len() != source_dimensions || row.projected().len() != projected_dimensions
+        {
+            return Err(invalid("V35 merged leaf dimensions differ"));
+        }
+        assignment_min = assignment_min.min(row.source_ordinal());
+        assignment_max = assignment_max.max(row.source_ordinal());
+        let source_energy = row.source().iter().fold(0.0_f64, |sum, value| {
+            f64::from(*value).mul_add(f64::from(*value), sum)
+        });
+        let projected_energy = row
+            .projected()
+            .iter()
+            .fold(0.0_f64, |sum, value| value.mul_add(*value, sum));
+        let omitted = (source_energy - projected_energy).max(0.0);
+        if !omitted.is_finite() {
+            return Err(invalid("V35 merged leaf omitted energy differs"));
+        }
+        let projected = row
+            .projected()
+            .iter()
+            .map(|value| *value as f32)
+            .collect::<Vec<_>>();
+        if projected.iter().any(|value| !value.is_finite()) {
+            return Err(invalid("V35 merged leaf projected row differs"));
+        }
+        projected_rows.push(projected);
+        omitted_energies.push(omitted);
+    }
+    build_v35_leaf_patch(&V35LeafPatchBuildRequest {
+        assignment_max,
+        assignment_min,
+        dimensions,
+        group_ordinal,
+        leaf_ordinal,
+        logical_start,
+        omitted_energies,
+        projected_rows,
     })
 }
 

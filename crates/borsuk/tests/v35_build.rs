@@ -5,9 +5,10 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     Result, V35ArtifactIdentity, V35BuildAuthority, V35BuildBlock, V35BuildBlockSource,
     V35BuildLeafSink, V35BuildMergeRow, V35BuildMergeSource, V35BuildRow, V35BuildScratchSink,
-    V35Dimensions, V35MortonModel, V35Projection, build_v35_scratch_runs, build_v35_srht,
-    decode_v35_build_run_arrow, decode_v35_source_block_parquet, merge_v35_build_runs,
-    open_v35_build_run_cursor, project_v35_query_scalar, train_v35_morton_model,
+    V35Dimensions, V35MortonModel, V35Projection, build_v35_leaf_patch_from_merge_rows,
+    build_v35_scratch_runs, build_v35_srht, decode_v35_build_run_arrow,
+    decode_v35_source_block_parquet, merge_v35_build_runs, open_v35_build_run_cursor,
+    project_v35_query_scalar, train_v35_morton_model,
 };
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
@@ -579,4 +580,45 @@ fn v35_build_merge_rejects_unbounded_fanin_and_untrusted_rows() {
         runs: (0..33).map(|_| VecDeque::new()).collect(),
     };
     assert!(merge_v35_build_runs(&model, &mut too_many, &mut LeafSink::default()).is_err());
+}
+
+#[test]
+fn v35_build_merge_leaf_seals_authenticated_projection_and_omitted_energy() {
+    // Break caught: construction drops source-space complement energy, seals a
+    // caller projection, or assigns patch bounds from Morton position.
+    let projection = projection();
+    let model = train_v35_morton_model(&training_rows(), &projection, build_authority(&projection))
+        .unwrap();
+    let mut source = merge_source(&model, &projection);
+    let mut sink = LeafSink::default();
+    merge_v35_build_runs(&model, &mut source, &mut sink).unwrap();
+    let rows = &sink.leaves[0];
+    let patch =
+        build_v35_leaf_patch_from_merge_rows(rows, projection.dimensions(), 4, 9, 2_048).unwrap();
+    assert_eq!(patch.leaf_ordinal(), 9);
+    assert_eq!(patch.group_ordinal(), 4);
+    assert_eq!(patch.logical_start(), 2_048);
+    assert_eq!(patch.population(), 256);
+    let expected_bounds = rows.iter().fold((u64::MAX, 0), |(minimum, maximum), row| {
+        (
+            minimum.min(row.source_ordinal()),
+            maximum.max(row.source_ordinal()),
+        )
+    });
+    assert_eq!(patch.assignment_bounds(), expected_bounds);
+    let expected_omitted = rows
+        .iter()
+        .map(|row| {
+            let source_energy = row.source().iter().fold(0.0_f64, |sum, value| {
+                f64::from(*value).mul_add(f64::from(*value), sum)
+            });
+            let projected_energy = row
+                .projected()
+                .iter()
+                .fold(0.0_f64, |sum, value| value.mul_add(*value, sum));
+            (source_energy - projected_energy).max(0.0)
+        })
+        .sum::<f64>()
+        / rows.len() as f64;
+    assert_eq!(patch.omitted_energy(), expected_omitted as f32);
 }

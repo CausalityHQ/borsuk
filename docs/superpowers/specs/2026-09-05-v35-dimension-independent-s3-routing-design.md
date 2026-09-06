@@ -362,6 +362,11 @@ materialized. Construction requires contiguous source ordinals before writing
 scratch, so uniqueness is established upstream of key-order permutation.
 The merge keeps one live leaf accumulator, computes and seals each patch,
 encodes code planes, writes exact-vector pages, and emits assignment runs. Local
+Leaf sealing narrows authenticated f64 routing coordinates to the canonical f32
+patch input exactly once, computes each row's clamped omitted energy as
+`max(0, ||source||²-||projected||²)` in ordered f64 arithmetic, and derives
+assignment bounds from source ordinals rather than Morton positions.
+Local
 builder RSS is capped below 3 GiB with declared 64-MiB buffers; remote scratch may be
 large but is separately prefixed, byte-accounted, lifecycle-tagged, and deleted
 only after terminal publication/receipt. If the sample object must itself be derived, that is a
