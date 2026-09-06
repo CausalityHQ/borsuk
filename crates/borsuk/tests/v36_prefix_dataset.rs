@@ -9,22 +9,24 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     V36ArtifactIdentity, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
-    V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixInputRow,
+    V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixInputRow,
     V36PrefixPopulationAuthority, V36PrefixQualityRole, V36PrefixRankedSourceObject,
     V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, V36PrefixSourceObject,
     bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
-    canonical_v36_prefix_source_registry_bytes, deduplicate_v36_prefix_row_identities,
-    exact_v36_prefix_gt100, load_v36_prefix_freeze_preflight, materialize_v36_prefix_role_parquets,
+    canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_source_registry_bytes,
+    deduplicate_v36_prefix_row_identities, exact_v36_prefix_gt100,
+    load_v36_prefix_freeze_preflight, materialize_v36_prefix_role_parquets,
     rank_v36_prefix_source_objects, scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
     scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
     scan_v36_prefix_source_parquet, select_v36_prefix_roles, v36_prefix_gt100_schema,
     v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
     v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
     validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
-    validate_v36_prefix_input_row, validate_v36_prefix_role_authority,
-    write_v36_prefix_gt100_from_parquets, write_v36_prefix_gt100_parquet,
-    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
+    validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
+    validate_v36_prefix_role_authority, write_v36_prefix_gt100_from_parquets,
+    write_v36_prefix_gt100_parquet, write_v36_prefix_query_parquet,
+    write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -377,6 +379,90 @@ fn v36_prefix_dataset_execution_authority_binds_provenance_and_lifecycle() {
     let mut drifted = authority;
     drifted.output_prefix.pop();
     assert!(validate_v36_prefix_freeze_execution_authority(&drifted).is_err());
+}
+
+#[test]
+fn v36_prefix_dataset_receipt_binds_population_counters_and_all_outputs() {
+    let registry = source_registry();
+    let authority = freeze_authority(&registry);
+    let execution = execution_authority();
+    let population = population(&registry);
+    let outputs = [
+        "population-authority",
+        "source",
+        "development-query",
+        "development-gt100",
+        "validation-query",
+        "validation-gt100",
+        "sealed-holdout-query",
+        "sealed-holdout-gt100",
+        "performance-query",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(ordinal, role)| V36ArtifactIdentity {
+        blake3: format!("{:064x}", ordinal + 31),
+        encoded_bytes: 4_096 + ordinal as u64,
+        role: role.into(),
+        sha256: format!("{:064x}", ordinal + 41),
+        uri: format!("{}{role}", execution.output_prefix),
+    })
+    .collect();
+    let receipt = V36PrefixFreezeReceipt {
+        claim_eligible: false,
+        cutoff_object_ordinal: 1,
+        cutoff_row_offset: 99,
+        distinct_rows_observed: 1_100_000,
+        duplicate_rows: 100_000,
+        execution_authority_sha256: format!(
+            "{:x}",
+            Sha256::digest(
+                canonical_v36_prefix_freeze_execution_authority_bytes(&execution).unwrap()
+            )
+        ),
+        freeze_authority_sha256: format!(
+            "{:x}",
+            Sha256::digest(
+                canonical_v36_prefix_freeze_authority_bytes(&authority, &registry).unwrap()
+            )
+        ),
+        outputs,
+        physical_rows: 1_200_000,
+        population,
+        schema: "borsuk-v36-prefix-freeze-receipt-v1".into(),
+        source_archive_sha256: execution.inputs[2].sha256.clone(),
+        source_registry_sha256: format!(
+            "{:x}",
+            Sha256::digest(
+                canonical_v36_prefix_source_registry_bytes(&authority, &registry).unwrap()
+            )
+        ),
+    };
+    validate_v36_prefix_freeze_receipt(&receipt, &authority, &execution, &registry).unwrap();
+    let bytes =
+        canonical_v36_prefix_freeze_receipt_bytes(&receipt, &authority, &execution, &registry)
+            .unwrap();
+    assert_eq!(bytes.last(), Some(&b'\n'));
+
+    let mut mutations = Vec::new();
+    let mut changed = receipt.clone();
+    changed.duplicate_rows -= 1;
+    mutations.push(changed);
+    let mut changed = receipt.clone();
+    changed.outputs.swap(0, 1);
+    mutations.push(changed);
+    let mut changed = receipt.clone();
+    changed.outputs[0].uri = execution.inputs[0].uri.clone();
+    mutations.push(changed);
+    let mut changed = receipt.clone();
+    changed.execution_authority_sha256 = "f".repeat(64);
+    mutations.push(changed);
+    for mutation in mutations {
+        assert!(
+            validate_v36_prefix_freeze_receipt(&mutation, &authority, &execution, &registry)
+                .is_err()
+        );
+    }
 }
 
 #[test]

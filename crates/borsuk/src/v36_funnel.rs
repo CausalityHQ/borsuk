@@ -361,6 +361,38 @@ pub struct V36PrefixPopulationAuthority {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Canonical transaction receipt for one completed prefix population freeze.
+pub struct V36PrefixFreezeReceipt {
+    /// Diagnostic evidence can never make a release claim.
+    pub claim_eligible: bool,
+    /// Registered source-object ordinal containing the distinct-row cutoff.
+    pub cutoff_object_ordinal: u16,
+    /// Physical row offset of the cutoff within that complete object.
+    pub cutoff_row_offset: u64,
+    /// Distinct IDs observed through the complete cutoff object.
+    pub distinct_rows_observed: u64,
+    /// Physical rows repeating an earlier feature ID.
+    pub duplicate_rows: u64,
+    /// SHA-256 of the exact execution authority bytes.
+    pub execution_authority_sha256: String,
+    /// SHA-256 of the exact pre-freeze authority bytes.
+    pub freeze_authority_sha256: String,
+    /// Ordered complete output artifact identities.
+    pub outputs: Vec<V36ArtifactIdentity>,
+    /// Physical rows observed through the complete cutoff object.
+    pub physical_rows: u64,
+    /// Complete post-freeze semantic population authority.
+    pub population: V36PrefixPopulationAuthority,
+    /// Exact receipt schema marker.
+    pub schema: String,
+    /// SHA-256 of the exact source archive evidence.
+    pub source_archive_sha256: String,
+    /// SHA-256 of the exact complete source registry bytes.
+    pub source_registry_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// Closed manifest for one bounded V36 screen arm.
 pub struct V36PrefixScreenManifest {
     /// Complete role-separated artifacts.
@@ -813,6 +845,108 @@ pub fn canonical_v36_prefix_freeze_execution_authority_bytes(
 ) -> Result<Vec<u8>> {
     validate_v36_prefix_freeze_execution_authority(authority)?;
     canonical_value_bytes(authority)
+}
+
+/// Validate a completed freeze receipt against every immutable input authority.
+pub fn validate_v36_prefix_freeze_receipt(
+    receipt: &V36PrefixFreezeReceipt,
+    authority: &V36PrefixFreezeAuthority,
+    execution: &V36PrefixFreezeExecutionAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<()> {
+    validate_v36_prefix_freeze_authority(authority, source_registry)?;
+    validate_v36_prefix_freeze_execution_authority(execution)?;
+    let expected_population = bind_v36_prefix_population_authority(
+        authority,
+        receipt.population.consumed_objects.clone(),
+        source_registry,
+    )?;
+    let freeze_sha256 = format!(
+        "{:x}",
+        Sha256::digest(canonical_v36_prefix_freeze_authority_bytes(
+            authority,
+            source_registry,
+        )?)
+    );
+    let execution_sha256 = format!(
+        "{:x}",
+        Sha256::digest(canonical_v36_prefix_freeze_execution_authority_bytes(
+            execution,
+        )?)
+    );
+    let registry_sha256 = format!(
+        "{:x}",
+        Sha256::digest(canonical_v36_prefix_source_registry_bytes(
+            authority,
+            source_registry,
+        )?)
+    );
+    let source_archive_sha256 = execution
+        .inputs
+        .iter()
+        .find(|input| input.role == "source-archive")
+        .map(|input| input.sha256.as_str())
+        .ok_or_else(|| invalid("V36 prefix freeze receipt archive differs"))?;
+    if receipt.schema != "borsuk-v36-prefix-freeze-receipt-v1"
+        || receipt.claim_eligible
+        || receipt.population != expected_population
+        || receipt.freeze_authority_sha256 != freeze_sha256
+        || receipt.execution_authority_sha256 != execution_sha256
+        || receipt.source_registry_sha256 != registry_sha256
+        || receipt.source_archive_sha256 != source_archive_sha256
+        || receipt.physical_rows < receipt.distinct_rows_observed
+        || receipt.distinct_rows_observed < authority.distinct_candidates
+        || receipt
+            .physical_rows
+            .checked_sub(receipt.distinct_rows_observed)
+            != Some(receipt.duplicate_rows)
+        || usize::from(receipt.cutoff_object_ordinal) + 1
+            != receipt.population.consumed_objects.len()
+        || receipt.cutoff_row_offset >= receipt.physical_rows
+    {
+        return Err(invalid("V36 prefix freeze receipt differs"));
+    }
+    let expected_roles = [
+        "population-authority",
+        "source",
+        "development-query",
+        "development-gt100",
+        "validation-query",
+        "validation-gt100",
+        "sealed-holdout-query",
+        "sealed-holdout-gt100",
+        "performance-query",
+    ];
+    let mut uris = BTreeSet::new();
+    if receipt.outputs.len() != expected_roles.len()
+        || receipt
+            .outputs
+            .iter()
+            .zip(expected_roles)
+            .any(|(output, role)| {
+                output.role != role
+                    || output.encoded_bytes == 0
+                    || !valid_digest(&output.sha256)
+                    || !valid_digest(&output.blake3)
+                    || !valid_s3_object_uri(&output.uri, false)
+                    || !output.uri.starts_with(&execution.output_prefix)
+                    || !uris.insert(output.uri.as_str())
+            })
+    {
+        return Err(invalid("V36 prefix freeze receipt outputs differ"));
+    }
+    Ok(())
+}
+
+/// Canonical newline JSON for one validated completed freeze receipt.
+pub fn canonical_v36_prefix_freeze_receipt_bytes(
+    receipt: &V36PrefixFreezeReceipt,
+    authority: &V36PrefixFreezeAuthority,
+    execution: &V36PrefixFreezeExecutionAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<Vec<u8>> {
+    validate_v36_prefix_freeze_receipt(receipt, authority, execution, source_registry)?;
+    canonical_value_bytes(receipt)
 }
 
 /// Bind observed complete consumed objects into the post-freeze population receipt.
