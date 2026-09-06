@@ -62,27 +62,41 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
     })
 }
 
+fn exit_code_for_error(error: &borsuk::BorsukError) -> ExitCode {
+    match error {
+        borsuk::BorsukError::V36PrefixSourceInsufficient => ExitCode::from(42),
+        _ => ExitCode::FAILURE,
+    }
+}
+
 fn main() -> ExitCode {
-    let parsed = parse_args(env::args().skip(1));
-    let result = parsed.and_then(|args| {
-        let executable = env::current_exe()
-            .map_err(|error| format!("V36 prefix freezer executable differs: {error}"))?;
-        run_v36_prefix_freeze(V36PrefixFreezeRequest {
-            authority: args.authority,
-            executable,
-            execution_authority: args.execution_authority,
-            source_registry: args.source_registry,
-            source_archive: args.source_archive,
-            output: args.output,
-            scratch: args.scratch,
-        })
-        .map_err(|error| error.to_string())
-    });
-    match result {
+    let args = match parse_args(env::args().skip(1)) {
+        Ok(args) => args,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let executable = match env::current_exe() {
+        Ok(executable) => executable,
+        Err(error) => {
+            eprintln!("V36 prefix freezer executable differs: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match run_v36_prefix_freeze(V36PrefixFreezeRequest {
+        authority: args.authority,
+        executable,
+        execution_authority: args.execution_authority,
+        source_registry: args.source_registry,
+        source_archive: args.source_archive,
+        output: args.output,
+        scratch: args.scratch,
+    }) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
-            ExitCode::FAILURE
+            exit_code_for_error(&error)
         }
     }
 }
@@ -130,5 +144,13 @@ mod tests {
         let mut unknown = valid();
         unknown.extend(["--bucket".into(), "forbidden".into()]);
         assert!(parse_args(unknown).is_err());
+    }
+
+    #[test]
+    fn v36_prefix_freezer_source_insufficiency_has_a_closed_exit_code() {
+        assert_eq!(
+            exit_code_for_error(&borsuk::BorsukError::V36PrefixSourceInsufficient),
+            ExitCode::from(42),
+        );
     }
 }

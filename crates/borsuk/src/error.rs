@@ -8,6 +8,9 @@ pub type Result<T> = std::result::Result<T, BorsukError>;
 /// Errors returned by BORSUK operations.
 #[derive(Debug, thiserror::Error)]
 pub enum BorsukError {
+    /// The bounded V36 source prefix cannot supply the preregistered distinct population.
+    #[error("V36 prefix source is insufficient")]
+    V36PrefixSourceInsufficient,
     /// One immutable asynchronous operation failed for multiple overlapping
     /// callers. Preserve the original classification while sharing ownership.
     #[error(transparent)]
@@ -223,6 +226,7 @@ impl BorsukError {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
+            Self::V36PrefixSourceInsufficient => "v36_prefix_source_insufficient",
             Self::Shared(error) => error.code(),
             Self::DimensionMismatch { .. } => "dimension_mismatch",
             Self::InvalidMetricInput(_) => "invalid_metric_input",

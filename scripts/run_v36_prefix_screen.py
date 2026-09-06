@@ -335,6 +335,9 @@ instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169
 if [[ "$status" = 0 ]]; then
   terminal_status=complete
   terminal_marker=ATTEMPT_COMPLETE.json
+elif [[ "$status" = 42 ]]; then
+  terminal_status=screen-source-insufficient
+  terminal_marker=ATTEMPT_FAILED.json
 elif [[ "$status" = 124 || "$status" = 137 ]]; then
   terminal_status=interrupted
   terminal_marker=INTERRUPTED.json

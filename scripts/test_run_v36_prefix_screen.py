@@ -177,6 +177,17 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         self.assertIn("latest/meta-data/instance-id", script)
         self.assertIn("--if-none-match '*'", script)
 
+    def test_v36_prefix_screen_source_insufficiency_is_terminal_not_retryable(self) -> None:
+        # Break caught: exhausting the registered source prefix is mislabeled
+        # as infrastructure and spends a second or third Spot attempt.
+        script = base64.b64decode(
+            subject.build_v36_prefix_launch_specs(
+                self.plan(), launch_nonce="e" * 32, attempt_ordinal=0
+            )[0]["UserData"]
+        ).decode()
+        self.assertIn('elif [[ "$status" = 42 ]]; then', script)
+        self.assertIn("terminal_status=screen-source-insufficient", script)
+
     def test_v36_prefix_screen_guest_terminal_authenticates_local_outputs(self) -> None:
         # Break caught: user-data publishes a terminal whose identities do not
         # describe the exact locally produced receipt and Parquet artifacts.

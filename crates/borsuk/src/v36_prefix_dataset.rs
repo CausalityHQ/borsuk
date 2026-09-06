@@ -1208,7 +1208,7 @@ where
         }
     }
     let (cutoff_object_ordinal, cutoff_row_offset) =
-        cutoff.ok_or_else(|| invalid("V36 prefix source is insufficient"))?;
+        cutoff.ok_or(BorsukError::V36PrefixSourceInsufficient)?;
     validate_v36_prefix_cutoff_membership(
         &unique_rows,
         consumed_objects.len(),
