@@ -64,6 +64,75 @@ _CAPACITY_ERRORS = {
     "Unsupported",
 }
 
+_GUEST_TERMINAL_PROGRAM = r'''import hashlib
+import json
+import pathlib
+import sys
+
+execution_path, receipt_path, output_path, instance_id, run_id, source_commit, status, terminal_path = sys.argv[1:]
+
+def canonical(value):
+    return json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+
+execution_bytes = pathlib.Path(execution_path).read_bytes()
+execution = json.loads(execution_bytes)
+if canonical(execution) != execution_bytes:
+    raise SystemExit("execution authority is not canonical")
+
+outputs = []
+if status == "complete":
+    receipt_bytes = pathlib.Path(receipt_path).read_bytes()
+    receipt = json.loads(receipt_bytes)
+    if canonical(receipt) != receipt_bytes:
+        raise SystemExit("freeze receipt is not canonical")
+    expected = (
+        ("population-authority", "population-authority.json"),
+        ("source", "source.parquet"),
+        ("development-query", "development-query.parquet"),
+        ("development-gt100", "development-gt100.parquet"),
+        ("validation-query", "validation-query.parquet"),
+        ("validation-gt100", "validation-gt100.parquet"),
+        ("sealed-holdout-query", "sealed-holdout-query.parquet"),
+        ("sealed-holdout-gt100", "sealed-holdout-gt100.parquet"),
+        ("performance-query", "performance-query.parquet"),
+    )
+    identities = receipt.get("outputs")
+    if not isinstance(identities, list) or len(identities) != len(expected):
+        raise SystemExit("freeze receipt outputs differ")
+    for identity, (role, filename) in zip(identities, expected, strict=True):
+        path = pathlib.Path(output_path, filename)
+        payload = path.read_bytes()
+        if (
+            set(identity) != {"blake3", "encoded_bytes", "role", "sha256", "uri"}
+            or identity["role"] != role
+            or identity["encoded_bytes"] != len(payload)
+            or identity["sha256"] != hashlib.sha256(payload).hexdigest()
+            or not identity["uri"].endswith("/" + filename)
+        ):
+            raise SystemExit("freeze output identity differs")
+        outputs.append({key: identity[key] for key in ("encoded_bytes", "role", "sha256", "uri")})
+    outputs.insert(0, {
+        "encoded_bytes": len(receipt_bytes),
+        "role": "freeze-receipt",
+        "sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+        "uri": execution["output_prefix"] + "freeze-receipt.json",
+    })
+
+terminal = {
+    "attempt_id": execution["attempt_id"],
+    "claim_eligible": False,
+    "execution_authority_sha256": hashlib.sha256(execution_bytes).hexdigest(),
+    "inputs": execution["inputs"],
+    "instance_id": instance_id,
+    "outputs": outputs,
+    "run_id": run_id,
+    "schema": "borsuk-v36-prefix-freeze-terminal-v1",
+    "source_commit": source_commit,
+    "status": status,
+}
+pathlib.Path(terminal_path).write_bytes(canonical(terminal))
+'''
+
 
 @dataclasses.dataclass(frozen=True)
 class V36PrefixScreenPlan:
@@ -229,6 +298,7 @@ def _user_data(plan: V36PrefixScreenPlan, *, attempt_ordinal: int) -> str:
         _execution_authority(plan, attempt_ordinal)
     )
     execution_authority_b64 = base64.b64encode(execution_authority).decode()
+    terminal_program_b64 = base64.b64encode(_GUEST_TERMINAL_PROGRAM.encode()).decode()
     return f"""#!/bin/bash
 set -euo pipefail
 trap 'shutdown -h now' EXIT
@@ -240,6 +310,7 @@ aws s3 cp {quoted['binary_uri']} "$root/v36_prefix_freeze" --only-show-errors
 aws s3 cp {quoted['authority_uri']} "$root/authority.json" --only-show-errors
 aws s3 cp {quoted['source_registry_uri']} "$root/source-registry.json" --only-show-errors
 printf '%s' {shlex.quote(execution_authority_b64)} | base64 -d > "$root/execution-authority.json"
+printf '%s' {shlex.quote(terminal_program_b64)} | base64 -d > "$root/write-terminal.py"
 test "$(stat -c %s "$root/source.tar.zst")" = {plan.source_archive_bytes}
 test "$(sha256sum "$root/source.tar.zst" | cut -d' ' -f1)" = {plan.source_archive_sha256}
 test "$(stat -c %s "$root/v36_prefix_freeze")" = {plan.binary_bytes}
@@ -259,14 +330,44 @@ timeout --signal=TERM --kill-after=30 {wall_seconds} "$root/v36_prefix_freeze" \
   --scratch "$root/scratch"
 status=$?
 set -e
-if [[ -f "$root/output/CHECKPOINT.json" ]]; then
-  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(output_key)}CHECKPOINT.json --body "$root/output/CHECKPOINT.json"
+token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)
+instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
+if [[ "$status" = 0 ]]; then
+  terminal_status=complete
+  terminal_marker=ATTEMPT_COMPLETE.json
+elif [[ "$status" = 124 || "$status" = 137 ]]; then
+  terminal_status=interrupted
+  terminal_marker=INTERRUPTED.json
+else
+  terminal_status=infrastructure
+  terminal_marker=ATTEMPT_FAILED.json
 fi
-for marker in INTERRUPTED.json ATTEMPT_COMPLETE.json ATTEMPT_FAILED.json; do
-  if [[ -f "$root/output/$marker" ]]; then
-    aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}"$marker" --body "$root/output/$marker" --if-none-match '*'
-  fi
-done
+python3 "$root/write-terminal.py" \
+  "$root/execution-authority.json" "$root/output/freeze-receipt.json" \
+  "$root/output" "$instance_id" {quoted['run_id']} {quoted['source_commit']} \
+  "$terminal_status" "$root/output/$terminal_marker"
+if [[ -f "$root/output/CHECKPOINT.json" ]]; then
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}CHECKPOINT.json --body "$root/output/CHECKPOINT.json"
+fi
+if [[ "$status" = 0 ]]; then
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}population-authority.json --body "$root/output/population-authority.json" --if-none-match '*'
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}source.parquet --body "$root/output/source.parquet" --if-none-match '*'
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}development-query.parquet --body "$root/output/development-query.parquet" --if-none-match '*'
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}development-gt100.parquet --body "$root/output/development-gt100.parquet" --if-none-match '*'
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}validation-query.parquet --body "$root/output/validation-query.parquet" --if-none-match '*'
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}validation-gt100.parquet --body "$root/output/validation-gt100.parquet" --if-none-match '*'
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}sealed-holdout-query.parquet --body "$root/output/sealed-holdout-query.parquet" --if-none-match '*'
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}sealed-holdout-gt100.parquet --body "$root/output/sealed-holdout-gt100.parquet" --if-none-match '*'
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}performance-query.parquet --body "$root/output/performance-query.parquet" --if-none-match '*'
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}freeze-receipt.json --body "$root/output/freeze-receipt.json" --if-none-match '*'
+fi
+if [[ "$status" = 0 ]]; then
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}ATTEMPT_COMPLETE.json --body "$root/output/ATTEMPT_COMPLETE.json" --if-none-match '*'
+elif [[ "$status" = 124 || "$status" = 137 ]]; then
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}INTERRUPTED.json --body "$root/output/INTERRUPTED.json" --if-none-match '*'
+else
+  aws s3api put-object --bucket {shlex.quote(output_bucket)} --key {shlex.quote(attempt_prefix)}ATTEMPT_FAILED.json --body "$root/output/ATTEMPT_FAILED.json" --if-none-match '*'
+fi
 exit "$status"
 """
 

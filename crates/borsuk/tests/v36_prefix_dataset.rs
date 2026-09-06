@@ -15,9 +15,9 @@ use borsuk::{
     V36PrefixSourceObject, bind_v36_prefix_population_authority,
     canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
-    canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_source_registry_bytes,
-    deduplicate_v36_prefix_row_identities, exact_v36_prefix_gt100,
-    load_v36_prefix_freeze_preflight, materialize_v36_prefix_role_parquets,
+    canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
+    canonical_v36_prefix_source_registry_bytes, deduplicate_v36_prefix_row_identities,
+    exact_v36_prefix_gt100, load_v36_prefix_freeze_preflight, materialize_v36_prefix_role_parquets,
     rank_v36_prefix_source_objects, scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
     scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
     scan_v36_prefix_source_parquet, select_v36_prefix_roles, v36_prefix_gt100_schema,
@@ -389,24 +389,24 @@ fn v36_prefix_dataset_receipt_binds_population_counters_and_all_outputs() {
     let execution = execution_authority();
     let population = population(&registry);
     let outputs = [
-        "population-authority",
-        "source",
-        "development-query",
-        "development-gt100",
-        "validation-query",
-        "validation-gt100",
-        "sealed-holdout-query",
-        "sealed-holdout-gt100",
-        "performance-query",
+        ("population-authority", "population-authority.json"),
+        ("source", "source.parquet"),
+        ("development-query", "development-query.parquet"),
+        ("development-gt100", "development-gt100.parquet"),
+        ("validation-query", "validation-query.parquet"),
+        ("validation-gt100", "validation-gt100.parquet"),
+        ("sealed-holdout-query", "sealed-holdout-query.parquet"),
+        ("sealed-holdout-gt100", "sealed-holdout-gt100.parquet"),
+        ("performance-query", "performance-query.parquet"),
     ]
     .into_iter()
     .enumerate()
-    .map(|(ordinal, role)| V36ArtifactIdentity {
+    .map(|(ordinal, (role, filename))| V36ArtifactIdentity {
         blake3: format!("{:064x}", ordinal + 31),
         encoded_bytes: 4_096 + ordinal as u64,
         role: role.into(),
         sha256: format!("{:064x}", ordinal + 41),
-        uri: format!("{}{role}", execution.output_prefix),
+        uri: format!("{}{filename}", execution.output_prefix),
     })
     .collect();
     let receipt = V36PrefixFreezeReceipt {
@@ -453,6 +453,11 @@ fn v36_prefix_dataset_receipt_binds_population_counters_and_all_outputs() {
     changed.outputs.swap(0, 1);
     mutations.push(changed);
     let mut changed = receipt.clone();
+    let first_uri = changed.outputs[0].uri.clone();
+    changed.outputs[0].uri = changed.outputs[1].uri.clone();
+    changed.outputs[1].uri = first_uri;
+    mutations.push(changed);
+    let mut changed = receipt.clone();
     changed.outputs[0].uri = execution.inputs[0].uri.clone();
     mutations.push(changed);
     let mut changed = receipt.clone();
@@ -464,6 +469,18 @@ fn v36_prefix_dataset_receipt_binds_population_counters_and_all_outputs() {
                 .is_err()
         );
     }
+}
+
+#[test]
+fn v36_prefix_dataset_population_authority_has_canonical_bytes() {
+    let registry = source_registry();
+    let population = population(&registry);
+    let bytes = canonical_v36_prefix_population_authority_bytes(&population, &registry).unwrap();
+    assert_eq!(bytes.last(), Some(&b'\n'));
+    assert_eq!(
+        serde_json::from_slice::<V36PrefixPopulationAuthority>(&bytes).unwrap(),
+        population
+    );
 }
 
 #[test]

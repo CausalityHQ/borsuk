@@ -12,6 +12,8 @@ use arrow_array::{
     UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema};
+use futures_util::StreamExt;
+use object_store::{ObjectStore, ObjectStoreExt, ObjectStoreScheme};
 use parquet::{
     arrow::{ArrowSchemaConverter, ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
     file::properties::WriterProperties,
@@ -22,10 +24,12 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     BorsukError, Result, V36ArtifactIdentity, V36PrefixFreezeAuthority,
-    V36PrefixFreezeExecutionAuthority, V36PrefixPopulationAuthority,
-    V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority,
+    V36PrefixFreezeExecutionAuthority, V36PrefixFreezeReceipt, V36PrefixPopulationAuthority,
+    V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, bind_v36_prefix_population_authority,
     canonical_v36_prefix_freeze_authority_bytes,
-    canonical_v36_prefix_freeze_execution_authority_bytes, validate_v36_prefix_freeze_authority,
+    canonical_v36_prefix_freeze_execution_authority_bytes,
+    canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
+    canonical_v36_prefix_source_registry_bytes, validate_v36_prefix_freeze_authority,
     validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_population_authority,
 };
 
@@ -622,6 +626,335 @@ fn read_file(path: &Path) -> Result<Vec<u8>> {
         path: path.to_owned(),
         source,
     })
+}
+
+fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut temporary = temporary_output(path)?;
+    temporary
+        .write_all(bytes)
+        .map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+    publish_output(temporary, path)
+}
+
+fn acquire_v36_prefix_object(
+    runtime: &tokio::runtime::Runtime,
+    object: &V36PrefixRankedSourceObject,
+    scratch: &Path,
+    ordinal: usize,
+) -> Result<PathBuf> {
+    if ordinal >= 16 || !scratch.is_dir() || object.encoded_bytes == 0 {
+        return Err(invalid("V36 prefix object acquisition request differs"));
+    }
+    digest_bytes(&object.sha256)?;
+    let uri = url::Url::parse(&object.uri)
+        .map_err(|_| invalid("V36 prefix registered object URI differs"))?;
+    let (scheme, location) = ObjectStoreScheme::parse(&uri)
+        .map_err(|_| invalid("V36 prefix registered object URI differs"))?;
+    let store: Box<dyn ObjectStore> = match scheme {
+        ObjectStoreScheme::Http => {
+            let origin = uri.origin().ascii_serialization();
+            Box::new(
+                object_store::http::HttpBuilder::new()
+                    .with_url(origin)
+                    .with_retry(object_store::RetryConfig {
+                        max_retries: 0,
+                        ..Default::default()
+                    })
+                    .with_client_options(
+                        object_store::ClientOptions::new()
+                            .with_allow_http(uri.scheme() == "http")
+                            .with_timeout_disabled()
+                            .with_read_timeout(std::time::Duration::from_secs(120)),
+                    )
+                    .build()?,
+            )
+        }
+        ObjectStoreScheme::Local => object_store::parse_url(&uri)?.0,
+        _ => return Err(invalid("V36 prefix registered object scheme differs")),
+    };
+    let output = scratch.join(format!("source-{ordinal:04}.parquet"));
+    if output.exists() {
+        return Err(invalid("V36 prefix acquired object path already exists"));
+    }
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(scratch).map_err(|source| BorsukError::Io {
+            path: scratch.to_owned(),
+            source,
+        })?;
+    let (encoded_bytes, sha256) = runtime.block_on(async {
+        let result = store.get(&location).await?;
+        if result.meta.size != object.encoded_bytes {
+            return Err(invalid("V36 prefix registered object length differs"));
+        }
+        let mut stream = result.into_stream();
+        let mut encoded_bytes = 0_u64;
+        let mut sha256 = Sha256::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            encoded_bytes = encoded_bytes
+                .checked_add(u64::try_from(chunk.len()).unwrap())
+                .ok_or_else(|| invalid("V36 prefix acquired object length overflows"))?;
+            if encoded_bytes > object.encoded_bytes {
+                return Err(invalid("V36 prefix registered object length differs"));
+            }
+            temporary
+                .write_all(&chunk)
+                .map_err(|source| BorsukError::Io {
+                    path: output.clone(),
+                    source,
+                })?;
+            sha256.update(&chunk);
+        }
+        Ok((encoded_bytes, format!("{:x}", sha256.finalize())))
+    })?;
+    if encoded_bytes != object.encoded_bytes || sha256 != object.sha256 {
+        return Err(invalid("V36 prefix registered object authority differs"));
+    }
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|source| BorsukError::Io {
+            path: output.clone(),
+            source,
+        })?;
+    temporary
+        .persist_noclobber(&output)
+        .map_err(|error| BorsukError::Io {
+            path: output.clone(),
+            source: error.error,
+        })?;
+    Ok(output)
+}
+
+struct V36PrefixAcquiredObjects {
+    paths: Vec<PathBuf>,
+}
+
+impl V36PrefixAcquiredObjects {
+    fn cleanup(mut self) -> Result<()> {
+        while let Some(path) = self.paths.pop() {
+            if let Err(source) = fs::remove_file(&path) {
+                self.paths.push(path.clone());
+                return Err(BorsukError::Io { path, source });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for V36PrefixAcquiredObjects {
+    fn drop(&mut self) {
+        for path in &self.paths {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn output_identity(
+    role: &str,
+    filename: &str,
+    output_prefix: &str,
+    path: &Path,
+) -> Result<V36ArtifactIdentity> {
+    let (encoded_bytes, sha256) = sha256_file(path)?;
+    Ok(V36ArtifactIdentity {
+        blake3: blake3_file(path)?,
+        encoded_bytes,
+        role: role.to_owned(),
+        sha256,
+        uri: format!("{output_prefix}{filename}"),
+    })
+}
+
+/// Execute one complete bounded V36 diagnostic population freeze locally.
+pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
+    let preflight = load_v36_prefix_freeze_preflight(&request)?;
+    let runtime =
+        tokio::runtime::Runtime::new().map_err(|_| invalid("V36 prefix object runtime differs"))?;
+    let mut acquired = V36PrefixAcquiredObjects { paths: Vec::new() };
+    let scan = scan_v36_prefix_object_prefix(
+        &preflight.ranked_objects,
+        usize::from(preflight.authority.object_cap),
+        preflight.authority.source_byte_cap,
+        usize::try_from(preflight.authority.distinct_candidates)
+            .map_err(|_| invalid("V36 prefix distinct row count overflows"))?,
+        |ordinal, object| {
+            let path = acquire_v36_prefix_object(&runtime, object, &request.scratch, ordinal)?;
+            acquired.paths.push(path.clone());
+            Ok(path)
+        },
+    )?;
+    let population = bind_v36_prefix_population_authority(
+        &preflight.authority,
+        scan.consumed_objects.clone(),
+        &preflight.registry,
+    )?;
+    let split = select_v36_prefix_roles(scan.unique_rows, &population, &preflight.registry)?;
+    let paths = materialize_v36_prefix_role_parquets(
+        &acquired.paths,
+        &preflight.ranked_objects[..acquired.paths.len()],
+        &split,
+        &request.scratch,
+        &request.output,
+    )?;
+    let gt_paths = [
+        request.output.join("development-gt100.parquet"),
+        request.output.join("validation-gt100.parquet"),
+        request.output.join("sealed-holdout-gt100.parquet"),
+    ];
+    let gt_jobs = [
+        V36PrefixGtParquetJob {
+            expected_queries: u32::try_from(split.development.len())
+                .map_err(|_| invalid("V36 prefix development count overflows"))?,
+            output: gt_paths[0].clone(),
+            query: paths.development.clone(),
+            role: V36PrefixQualityRole::Development,
+        },
+        V36PrefixGtParquetJob {
+            expected_queries: u32::try_from(split.validation.len())
+                .map_err(|_| invalid("V36 prefix validation count overflows"))?,
+            output: gt_paths[1].clone(),
+            query: paths.validation.clone(),
+            role: V36PrefixQualityRole::Validation,
+        },
+        V36PrefixGtParquetJob {
+            expected_queries: u32::try_from(split.sealed_holdout.len())
+                .map_err(|_| invalid("V36 prefix holdout count overflows"))?,
+            output: gt_paths[2].clone(),
+            query: paths.sealed_holdout.clone(),
+            role: V36PrefixQualityRole::SealedHoldout,
+        },
+    ];
+    let source_feature_ids = split
+        .corpus
+        .iter()
+        .map(|row| row.feature_row_id)
+        .collect::<Vec<_>>();
+    let gt_stats = write_v36_prefix_gt100_roles_from_parquets(
+        &paths.source,
+        &source_feature_ids,
+        &gt_jobs,
+        usize::from(population.workspace_count),
+    )?;
+    if gt_stats.source_scans != 1
+        || gt_stats.source_rows != population.corpus_rows
+        || gt_stats.quality_queries
+            != u32::try_from(
+                split.development.len() + split.validation.len() + split.sealed_holdout.len(),
+            )
+            .map_err(|_| invalid("V36 prefix quality query count overflows"))?
+    {
+        return Err(invalid("V36 prefix exact truth execution differs"));
+    }
+
+    let population_path = request.output.join("population-authority.json");
+    write_atomic_bytes(
+        &population_path,
+        &canonical_v36_prefix_population_authority_bytes(&population, &preflight.registry)?,
+    )?;
+    let artifact_paths = [
+        (
+            "population-authority",
+            "population-authority.json",
+            &population_path,
+        ),
+        ("source", "source.parquet", &paths.source),
+        (
+            "development-query",
+            "development-query.parquet",
+            &paths.development,
+        ),
+        (
+            "development-gt100",
+            "development-gt100.parquet",
+            &gt_paths[0],
+        ),
+        (
+            "validation-query",
+            "validation-query.parquet",
+            &paths.validation,
+        ),
+        ("validation-gt100", "validation-gt100.parquet", &gt_paths[1]),
+        (
+            "sealed-holdout-query",
+            "sealed-holdout-query.parquet",
+            &paths.sealed_holdout,
+        ),
+        (
+            "sealed-holdout-gt100",
+            "sealed-holdout-gt100.parquet",
+            &gt_paths[2],
+        ),
+        (
+            "performance-query",
+            "performance-query.parquet",
+            &paths.performance,
+        ),
+    ];
+    let outputs = artifact_paths
+        .into_iter()
+        .map(|(role, filename, path)| {
+            output_identity(
+                role,
+                filename,
+                &preflight.execution_authority.output_prefix,
+                path,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let receipt = V36PrefixFreezeReceipt {
+        claim_eligible: false,
+        cutoff_object_ordinal: scan.cutoff_object_ordinal,
+        cutoff_row_offset: scan.cutoff_row_offset,
+        distinct_rows_observed: scan.distinct_rows_observed,
+        duplicate_rows: scan.duplicate_rows,
+        execution_authority_sha256: format!(
+            "{:x}",
+            Sha256::digest(canonical_v36_prefix_freeze_execution_authority_bytes(
+                &preflight.execution_authority,
+            )?)
+        ),
+        freeze_authority_sha256: format!(
+            "{:x}",
+            Sha256::digest(canonical_v36_prefix_freeze_authority_bytes(
+                &preflight.authority,
+                &preflight.registry,
+            )?)
+        ),
+        outputs,
+        physical_rows: scan.physical_rows,
+        population,
+        schema: "borsuk-v36-prefix-freeze-receipt-v1".to_owned(),
+        source_archive_sha256: preflight
+            .execution_authority
+            .inputs
+            .iter()
+            .find(|input| input.role == "source-archive")
+            .ok_or_else(|| invalid("V36 prefix source archive authority differs"))?
+            .sha256
+            .clone(),
+        source_registry_sha256: format!(
+            "{:x}",
+            Sha256::digest(canonical_v36_prefix_source_registry_bytes(
+                &preflight.authority,
+                &preflight.registry,
+            )?)
+        ),
+    };
+    write_atomic_bytes(
+        &request.output.join("freeze-receipt.json"),
+        &canonical_v36_prefix_freeze_receipt_bytes(
+            &receipt,
+            &preflight.authority,
+            &preflight.execution_authority,
+            &preflight.registry,
+        )?,
+    )?;
+    acquired.cleanup()?;
+    Ok(())
 }
 
 /// Authenticate every local attempt input before any source-object network access.
@@ -1921,7 +2254,13 @@ mod tests {
         cell::Cell,
         io::{BufWriter, Write},
         rc::Rc,
+        sync::{
+            Arc as StdArc,
+            atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        },
     };
+
+    use axum::{Router, body::Body, http::Response, routing::get};
 
     use super::*;
 
@@ -1965,5 +2304,93 @@ mod tests {
         }
         writer.flush().unwrap();
         assert!(calls.get() <= 16, "underlying writes={}", calls.get());
+    }
+
+    #[test]
+    fn v36_prefix_dataset_acquires_one_complete_authenticated_object() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("registered.bin");
+        fs::write(&source, b"registered object bytes").unwrap();
+        let bytes = fs::read(&source).unwrap();
+        let object = V36PrefixRankedSourceObject {
+            encoded_bytes: bytes.len().try_into().unwrap(),
+            path: "data/registered.parquet".into(),
+            sample_sha256: "1".repeat(64),
+            sha256: format!("{:x}", Sha256::digest(&bytes)),
+            uri: url::Url::from_file_path(&source).unwrap().to_string(),
+        };
+        let scratch = directory.path().join("scratch");
+        fs::create_dir(&scratch).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let acquired = acquire_v36_prefix_object(&runtime, &object, &scratch, 0).unwrap();
+        assert_eq!(fs::read(acquired).unwrap(), bytes);
+
+        let bad_scratch = directory.path().join("bad-scratch");
+        fs::create_dir(&bad_scratch).unwrap();
+        let mut drifted = object;
+        drifted.sha256 = "f".repeat(64);
+        assert!(acquire_v36_prefix_object(&runtime, &drifted, &bad_scratch, 0).is_err());
+        assert!(bad_scratch.read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn v36_prefix_dataset_http_failure_never_resumes_a_partial_object() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let calls = StdArc::new(AtomicUsize::new(0));
+        let handler_calls = StdArc::clone(&calls);
+        let app = Router::new().route(
+            "/object",
+            get(move || {
+                handler_calls.fetch_add(1, AtomicOrdering::SeqCst);
+                async {
+                    Response::builder()
+                        .header("content-length", "64")
+                        .header("etag", "\"registered-etag\"")
+                        .header("last-modified", "Sun, 06 Sep 2026 00:00:00 GMT")
+                        .body(Body::from("partial"))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = runtime
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = runtime.spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let directory = tempfile::tempdir().unwrap();
+        let object = V36PrefixRankedSourceObject {
+            encoded_bytes: 64,
+            path: "data/registered.parquet".into(),
+            sample_sha256: "1".repeat(64),
+            sha256: "2".repeat(64),
+            uri: format!("http://{address}/object"),
+        };
+        assert!(acquire_v36_prefix_object(&runtime, &object, directory.path(), 0).is_err());
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
+        assert!(directory.path().read_dir().unwrap().next().is_none());
+        server.abort();
+    }
+
+    #[test]
+    fn v36_prefix_dataset_checked_cleanup_cannot_report_false_success() {
+        let directory = tempfile::tempdir().unwrap();
+        let acquired = directory.path().join("source-0000.parquet");
+        fs::write(&acquired, b"complete").unwrap();
+        V36PrefixAcquiredObjects {
+            paths: vec![acquired],
+        }
+        .cleanup()
+        .unwrap();
+        assert!(directory.path().read_dir().unwrap().next().is_none());
+
+        let not_a_file = directory.path().join("source-0001.parquet");
+        fs::create_dir(&not_a_file).unwrap();
+        assert!(
+            V36PrefixAcquiredObjects {
+                paths: vec![not_a_file],
+            }
+            .cleanup()
+            .is_err()
+        );
     }
 }

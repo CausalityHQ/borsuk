@@ -6,6 +6,10 @@ import dataclasses
 import hashlib
 import io
 import json
+import pathlib
+import subprocess
+import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -140,6 +144,104 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             self.assertNotIn("on-demand", script.lower())
             self.assertNotIn("/home/", script)
             self.assertNotIn("devbox", script.lower())
+
+    def test_v36_prefix_screen_publishes_artifacts_receipt_then_terminal(self) -> None:
+        # Break caught: successful science is shut down before its artifacts
+        # and authenticated terminal become durable in the attempt prefix.
+        script = base64.b64decode(
+            subject.build_v36_prefix_launch_specs(
+                self.plan(), launch_nonce="f" * 32, attempt_ordinal=0
+            )[0]["UserData"]
+        ).decode()
+        artifacts = (
+            "population-authority.json",
+            "source.parquet",
+            "development-query.parquet",
+            "development-gt100.parquet",
+            "validation-query.parquet",
+            "validation-gt100.parquet",
+            "sealed-holdout-query.parquet",
+            "sealed-holdout-gt100.parquet",
+            "performance-query.parquet",
+        )
+        positions = []
+        for filename in artifacts:
+            needle = f'--body "$root/output/{filename}"'
+            self.assertIn(needle, script)
+            positions.append(script.index(needle))
+        receipt = script.index('--body "$root/output/freeze-receipt.json"')
+        terminal = script.index('--body "$root/output/ATTEMPT_COMPLETE.json"')
+        self.assertLess(max(positions), receipt)
+        self.assertLess(receipt, terminal)
+        self.assertIn("latest/api/token", script)
+        self.assertIn("latest/meta-data/instance-id", script)
+        self.assertIn("--if-none-match '*'", script)
+
+    def test_v36_prefix_screen_guest_terminal_authenticates_local_outputs(self) -> None:
+        # Break caught: user-data publishes a terminal whose identities do not
+        # describe the exact locally produced receipt and Parquet artifacts.
+        plan = self.plan()
+        execution = subject._execution_authority(plan, 0)
+        filenames = (
+            ("population-authority", "population-authority.json"),
+            ("source", "source.parquet"),
+            ("development-query", "development-query.parquet"),
+            ("development-gt100", "development-gt100.parquet"),
+            ("validation-query", "validation-query.parquet"),
+            ("validation-gt100", "validation-gt100.parquet"),
+            ("sealed-holdout-query", "sealed-holdout-query.parquet"),
+            ("sealed-holdout-gt100", "sealed-holdout-gt100.parquet"),
+            ("performance-query", "performance-query.parquet"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            execution_path = root / "execution.json"
+            receipt_path = root / "freeze-receipt.json"
+            terminal_path = root / "ATTEMPT_COMPLETE.json"
+            execution_path.write_bytes(subject.canonical_json_bytes(execution))
+            outputs = []
+            for ordinal, (role, filename) in enumerate(filenames):
+                payload = f"artifact-{ordinal}".encode()
+                (root / filename).write_bytes(payload)
+                outputs.append(
+                    {
+                        "blake3": format(ordinal + 1, "064x"),
+                        "encoded_bytes": len(payload),
+                        "role": role,
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "uri": execution["output_prefix"] + filename,
+                    }
+                )
+            receipt_path.write_bytes(subject.canonical_json_bytes({"outputs": outputs}))
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    subject._GUEST_TERMINAL_PROGRAM,
+                    str(execution_path),
+                    str(receipt_path),
+                    str(root),
+                    "i-fixture",
+                    plan.run_id,
+                    plan.source_commit,
+                    "complete",
+                    str(terminal_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            terminal = json.loads(terminal_path.read_bytes())
+            self.assertEqual(
+                terminal_path.read_bytes(), subject.canonical_json_bytes(terminal)
+            )
+            self.assertEqual(
+                [output["role"] for output in terminal["outputs"]],
+                ["freeze-receipt", *(role for role, _ in filenames)],
+            )
+            self.assertEqual(terminal["instance_id"], "i-fixture")
+            self.assertEqual(terminal["status"], "complete")
 
     def test_v36_prefix_screen_stops_after_three_attempts_and_always_terminates(self) -> None:
         # Break caught: a missing/failed marker polls forever, a fourth paid

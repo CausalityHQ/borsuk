@@ -906,30 +906,30 @@ pub fn validate_v36_prefix_freeze_receipt(
     {
         return Err(invalid("V36 prefix freeze receipt differs"));
     }
-    let expected_roles = [
-        "population-authority",
-        "source",
-        "development-query",
-        "development-gt100",
-        "validation-query",
-        "validation-gt100",
-        "sealed-holdout-query",
-        "sealed-holdout-gt100",
-        "performance-query",
+    let expected_outputs = [
+        ("population-authority", "population-authority.json"),
+        ("source", "source.parquet"),
+        ("development-query", "development-query.parquet"),
+        ("development-gt100", "development-gt100.parquet"),
+        ("validation-query", "validation-query.parquet"),
+        ("validation-gt100", "validation-gt100.parquet"),
+        ("sealed-holdout-query", "sealed-holdout-query.parquet"),
+        ("sealed-holdout-gt100", "sealed-holdout-gt100.parquet"),
+        ("performance-query", "performance-query.parquet"),
     ];
     let mut uris = BTreeSet::new();
-    if receipt.outputs.len() != expected_roles.len()
+    if receipt.outputs.len() != expected_outputs.len()
         || receipt
             .outputs
             .iter()
-            .zip(expected_roles)
-            .any(|(output, role)| {
+            .zip(expected_outputs)
+            .any(|(output, (role, filename))| {
                 output.role != role
                     || output.encoded_bytes == 0
                     || !valid_digest(&output.sha256)
                     || !valid_digest(&output.blake3)
                     || !valid_s3_object_uri(&output.uri, false)
-                    || !output.uri.starts_with(&execution.output_prefix)
+                    || output.uri != format!("{}{filename}", execution.output_prefix)
                     || !uris.insert(output.uri.as_str())
             })
     {
@@ -977,6 +977,15 @@ pub fn bind_v36_prefix_population_authority(
     };
     validate_prefix_population(&population, source_registry)?;
     Ok(population)
+}
+
+/// Canonical newline JSON for one validated post-freeze population authority.
+pub fn canonical_v36_prefix_population_authority_bytes(
+    population: &V36PrefixPopulationAuthority,
+    source_registry: &[V36PrefixRegisteredSourceObject],
+) -> Result<Vec<u8>> {
+    validate_prefix_population(population, source_registry)?;
+    canonical_value_bytes(population)
 }
 
 fn validate_prefix_projection(projection: &V36ProjectionArm) -> Result<()> {

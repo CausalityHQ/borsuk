@@ -33,7 +33,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 futures-util = "0.3"
 half = "2.7"
 nalgebra = "0.33"
-object_store = { version = "0.14", features = ["aws", "azure", "gcp", "fs"] }
+object_store = { version = "0.14", features = ["aws", "azure", "gcp", "fs", "http"] }
 parquet = { version = "58.3", features = ["async", "object_store"] }
 regex = "1"
 rayon = "1.11"
