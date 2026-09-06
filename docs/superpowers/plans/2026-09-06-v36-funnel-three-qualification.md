@@ -6,7 +6,7 @@
 
 **Architecture:** A Rust oracle separates posting geometry, posting score, optional graph traversal, projected-f32 containment, lossy coarse containment, physical fine-chunk admission, and fine-codec recall. A thin Python launcher enforces phase capabilities, immutable artifacts, AWS Spot lifecycle, and outcome-blind stops. The falsifier uses complete authenticated Arrow IPC objects; source, queries, and truth use Parquet; small manifests and receipts use strict canonical newline JSON.
 
-**Tech Stack:** Rust, Arrow IPC, Parquet, serde JSON, SHA-256, BLAKE3, SRHT, residual PQ4, SQ8/f16, AVX2/VNNI, NEON dot-product, Python 3.12, boto3, AWS Spot profile `causality`.
+**Tech Stack:** Rust, Arrow IPC, Parquet, serde JSON, SHA-256, BLAKE3, SRHT, bounded centered principal-subspace iteration, residual PQ4, SQ8/f16, AVX2/VNNI, NEON dot-product, Python 3.12, boto3, AWS Spot profile `causality`.
 
 **Spec:** `docs/superpowers/specs/2026-09-06-v36-funnel-three-qualification-design.md`
 
@@ -19,8 +19,16 @@
 - The normal planner admits at most 14 complete-object GETs/7 MiB per wave; the
   hard envelope including retries and metadata is 16 GETs/8 MiB. An arm cannot
   widen either envelope.
-- Representation freezes on 1M development. Validation may reject but not retune. The complete 10M policy freezes before the 1M holdout opens.
+- Representation freezes once on object-sample-screen development. Screen
+  validation evaluates only that winner and rejection is terminal; its sealed
+  holdout opens once. Full-source 1M/10M only replay the unchanged identity.
 - No production-format or write-lifecycle implementation begins unless one unchanged arm passes 1M and 10M.
+- No full-source materialization or paid qualification cell starts until
+  `docs/superpowers/plans/2026-09-06-v36-prefix-screen.md` reaches its terminal
+  pass decision. That screen uses a distinct diagnostic population and cannot
+  satisfy a full-source qualification gate. Full qualification may select only
+  only the one complete screen-frozen arm and may not reopen a screen-rejected
+  component.
 - Bulk cross-language artifacts are Arrow IPC/Parquet. Compact authority and evidence are canonical JSON with one trailing newline.
 
 ---
@@ -41,7 +49,10 @@
 
 - [x] **Step 2: Register nested membership and evaluation roles**
 
-  Freeze duplicate resolution, query removal, nested 1M/10M/100M membership, 1,000 development/validation/holdout queries, 10,000 performance queries, and binary64 exact GT@100.
+  Freeze duplicate resolution, query removal, nested 1M/10M/100M membership,
+  1,000 development/validation/holdout queries, 10,000 performance queries,
+  and the v1 planned GT output set. Task 2 replaces the unmaterialized v1 GT
+  authority before execution.
 
 - [x] **Step 3: Validate and commit**
 
@@ -50,24 +61,25 @@
 ### Task 1: Authority, Algorithms, and Checked Resource Ledger
 
 **Files:**
-- Create: `crates/borsuk/src/v36_funnel.rs`
+- Modify: `crates/borsuk/src/v36_funnel.rs`
 - Modify: `crates/borsuk/src/lib.rs`
-- Create: `crates/borsuk/tests/v36_funnel_authority.rs`
+- Modify: `crates/borsuk/tests/v36_funnel_authority.rs`
 
 **Interfaces:**
 - Produces `V36GeometryArm`, `V36ShapeScore`, `V36CoarseCode`, `V36FineCodec`, `V36ChunkCeiling`, `V36FunnelManifest`, `V36ResourceLedger`, `validate_v36_manifest`, `project_v36_resources`, and `plan_v36_transport`.
 
-- [ ] **Step 1: Write strict authority REDs**
+- [x] **Step 1: Write strict authority REDs**
 
-  Pin SRHT seed 36 and M192; the ten geometry arms; closure epsilon,
+  Pin baseline SRHT seed 36 and M192; the ten geometry arms; closure epsilon,
   RNG-pruning, and cap-eight identities; B4096/B8192 primary-row semantics;
   the exact generalized V33/V34 shape estimator/equation; projected-f32,
-  sign44, PQ4-48 and PQ4-64 record sizes; K512/1024/1536/2048 unique source
+  sign-code24/record44, PQ4-code32/record48 and PQ4-code48/record64 sizes;
+  K512/1024/1536/2048 unique source
   IDs; 512-KiB coarse fragments; 64/256/512-KiB fine chunks; SQ8/f16/source-f32
   roles; strict schemas; unique role/URI identities; SHA-256/BLAKE3 algorithms;
   no unknown fields; and `claim_eligible=false`.
 
-- [ ] **Step 2: Write checked arithmetic REDs**
+- [x] **Step 2: Write checked arithmetic REDs**
 
   Assert posting counts 245/2,442/24,415 for B4096 and
   123/1,221/12,208 for B8192; exact
@@ -78,25 +90,31 @@
   atomic whole-posting admission; normal 14-GET/7-MiB and hard
   16-GET/8-MiB limits per wave; and explicit excluded-object evidence.
 
-- [ ] **Step 3: Run the focused RED**
+- [x] **Step 3: Run the focused RED**
 
-  Run `CARGO_BUILD_JOBS=1 cargo test -p borsuk --test v36_funnel_authority -- --nocapture`.
+  Baseline authority RED/GREEN was delivered at commit `543295cd`; prefix-
+  screen Task 1 separately adds centered projection and prototype-six
+  identities before this plan resumes.
 
-  Expected: compile failure only at the missing V36 authority, ledger, and planner boundaries.
+  Expected for later mutations: rejection at the exact changed authority,
+  ledger, or planner boundary rather than a missing baseline symbol.
 
-- [ ] **Step 4: Implement the minimal closed boundary**
+- [x] **Step 4: Implement the minimal closed boundary**
 
   Use closed enums and exact constants. Make `plan_v36_transport` count complete encoded object lengths, retries, metadata, decoder capacity, and distinct identities. Reject resource projections above 2 GiB at 1M/10M or 3 GiB at 100M. Do not add runtime scoring or storage I/O.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
-  Run the focused test, scoped strict Clippy, `cargo fmt --all -- --check`, and `git diff --check`. Read the diff for identity/default leaks, then commit only the authority slice.
+  Run the focused test, scoped strict Clippy, `cargo fmt --all -- --check`, and
+  `git diff --check`. Baseline authority and ledger are committed at
+  `543295cde6bdb05d93d34919543bcce4396a9645`; revised screen identities are
+  owned by prefix-screen Task 1.
 
 ### Task 2: Materialize Nested Corpora, Queries, and Exact Truth
 
 **Files:**
-- Create: `scripts/run_v36_dataset_freeze.py`
-- Create: `scripts/test_run_v36_dataset_freeze.py`
+- Modify: `scripts/run_v36_dataset_freeze.py`
+- Modify: `scripts/test_run_v36_dataset_freeze.py`
 - Create: `crates/borsuk/examples/v36_dataset_freeze.rs`
 - Create: `crates/borsuk/tests/v36_dataset_freeze.rs`
 - Create: `docs/research/v36-funnel-dataset-materialization.json`
@@ -113,11 +131,20 @@
   schema, full-stream null/nonfinite/zero rejection, exact row counts,
   query-role separation, distinct source/dense ordinal meanings, and GT tie order by
   `(distance,unsigned_feature_row_id)`. Mutation-test every
-  URI/digest/length/schema/binding.
+  URI/digest/length/schema/binding. Produce the same GT@10 exact/near-duplicate
+  rates, nearest-neighbour distance quantiles, and centered M192 retained-energy
+  diagnostics as the object-sample screen.
 
-- [ ] **Step 2: Write launcher/capability REDs**
+- [ ] **Step 2: Extend launcher/capability REDs**
 
-  Require profile `causality`, Spot, `eu-central-1`, exact source revision, one bounded S3 streaming pass, ephemeral NVMe only, no devbox corpus materialization, 1.9-TB disk preflight, 43,200-second active cap, terminal upload, interruption discard/restart, and immediate instance termination.
+  Require profile `causality`, Spot, `eu-central-1`, exact source revision, one
+  bounded S3 streaming pass, ephemeral NVMe only, no devbox corpus
+  materialization, 1.9-TB disk preflight, 43,200-second active cap, checkpoint
+  upload every 16 complete objects or 300 active seconds, at most three Spot
+  attempts, terminal upload, authenticated resume, and immediate instance
+  termination. The baseline launcher is delivered at
+  `f0ed2281a4052321924ab02ffc1947b52ca27db5`; this step adds REDs for the new
+  durable cadence and three-attempt boundary before changing it.
 
 - [ ] **Step 3: Run focused REDs**
 
@@ -128,13 +155,17 @@
 - [ ] **Step 4: Implement streaming freeze and GT**
 
   Rust owns membership, Parquet validation/writing, source ordinals, and
-  blocked no-FMA binary64 GT. Load all 13,000 query vectors once (about 40 MiB)
+  blocked no-FMA binary64 GT. Load the 3,000 quality queries once (about 9 MiB)
   and scan each source row block once across successive eight-query tiles;
   checkpoint the completed source-row prefix plus all canonical top-100 heaps.
-  Resume at the first incomplete source-row block. Before execution, replace
-  Task 0's planned query-major GT checkpoint with this row-major authority and
-  mutation-test its exact schema; no materialized artifact exists under the old
-  checkpoint. Python authenticates inputs, provisions one Spot cell, monitors
+  Resume at the first incomplete source-row block. Upload an authenticated
+  checkpoint every 16 complete source objects or 300 active seconds, whichever
+  comes first; reject a fourth Spot attempt. Before execution, replace Task 0's
+  planned query-major checkpoint with a v2 row-major authority and explicitly
+  remove `performance-gt100` from its output set, leaving GT only for the 3,000
+  quality queries, and
+  mutation-test its exact schema; no materialized artifact exists under v1.
+  Python authenticates inputs, provisions one Spot cell, monitors
   pressure/progress/cost, syncs terminal artifacts, and terminates compute. No
   scientific math lives in Python.
 
@@ -149,33 +180,36 @@
 ### Task 3: Posting Geometry, Closure, and Shape Oracle
 
 **Files:**
-- Create: `crates/borsuk/src/v36_funnel_geometry.rs`
+- Modify: `crates/borsuk/src/v36_funnel_geometry.rs`
 - Create: `crates/borsuk/tests/v36_funnel_geometry.rs`
 - Create: `crates/borsuk/examples/v36_geometry_oracle.rs`
 
 **Interfaces:**
 - Produces `V36PostingModel`, `V36PostingAssignment`, `V36PostingSummary`, `train_v36_geometry`, `assign_v36_closure`, and `score_v36_postings`.
 
-- [ ] **Step 1: Write deterministic geometry REDs**
+- [ ] **Step 1: Write frozen-arm scale-transfer REDs**
 
-  Cover SRHT parity; the exact super-cell formula and 4/64/512 counts;
-  B256/B4096/B8192 primary semantics; exact posting counts; bounded external
-  runs; hash-ranked reservoir; farthest-first initialization; fixed 25/10
-  Lloyd iterations; binary64 ordinal-ordered reductions; empty-centroid
-  recovery; proportional local posting allocation with mandatory non-empty-run
-  ownership; corpus-only training; exact assignment at 1M/10M; closure inequality,
-  increasing tie order, RNG rejection, cap eight; and byte-identical results
-  across 1/2/4 workers and three block sizes. Assert that the super-cell count
-  never exceeds the row count and that empty construction partitions are not
-  serialized.
+  Consume the prefix-screen module rather than recreating its REDs. Require the
+  exact frozen projection/geometry/score identity, super-cell counts 4/64/512,
+  exact B4096/B8192 posting counts, bounded external runs, corpus-only training,
+  exact assignment at 1M/10M, closure order/cap, and byte-identical results
+  across 1/2/4 workers and three block sizes. Recheck lower-bounded Hamilton
+  allocation and the `[999997,1,1,1]`, `P=123` case at this boundary.
+  Require HNSW for posting counts above 1,024, its exact construction/search
+  identity, 999,000-ppm parity to the exhaustive selected scorer, and checked
+  graph-byte plus score-work projection at the 100M posting count.
 
 - [ ] **Step 2: Write occupancy and construction-stop REDs**
 
   Recompute mean/p50/p95/p99/max replication and primary/stored occupancy. Reject mean replication above 3, primary p99 above 2B, primary max above 4B, stored p99 above 6B, stored max above 8B, arithmetic overflow, projected active time above 12 hours, or cost above the manifest cap.
 
-- [ ] **Step 3: Write shape-score REDs**
+- [ ] **Step 3: Write frozen shape-score replay REDs**
 
-  Freeze centroid, diagonal, rank-two, and rank-four Gaussian lower-tail scoring in an equal 4,736-byte slot. Fit only unique primary rows. Pin regularization, finite checks, eigen/sign convention, scalar/SIMD tolerances, and `(score,posting_ordinal)` ties. Do not label the heuristic a certified ellipsoid.
+  Recompute only the frozen score over globally selected rows. Require its
+  equal 4,736-byte slot, corpus-only fitting, exact initialization/iteration or
+  covariance identity, finite checks, scalar/SIMD tolerances, and
+  `(score,posting_ordinal)` ties. Mutation-test substitution by any non-frozen
+  score.
 
 - [ ] **Step 4: Run RED, implement, and run GREEN**
 
@@ -195,28 +229,34 @@
 
 **Interfaces:**
 - Consumes the frozen 1M development corpus/query/GT.
-- Produces ten geometry-arm curves and fresh-query shape-score curves without coarse-code or fine-code confounding.
+- Produces the frozen geometry/score curve on globally selected rows without
+  coarse-code or fine-code confounding.
 
 - [ ] **Step 1: Write campaign and result REDs**
 
-  Require exact input/binary/arm identities, construction-only and
+  Require the exact prefix-frozen input/binary/arm identity, construction-only and
   evaluation-only capability sandboxes, every logical integer L through
   `min(postings,1,024)`, power-of-two summaries, deterministic canonical
   aggregates, occupancy/work/resource stops, and no validation/holdout access.
+  Before geometry can reject, compare the object-sample and global-1M duplicate
+  rates, nearest-neighbour p10/p50/p90, and centered-energy diagnostics using
+  the spec's exact shift thresholds; a shift returns population-indeterminate.
   This stage reports logical-prefix containment only; physical coarse transport
   is evaluated after Task 5 defines each code layout.
 
-- [ ] **Step 2: Implement thin campaign orchestration**
+- [ ] **Step 2: Implement thin replay orchestration**
 
-  Run all geometry arms in one authenticated construction cell while reusing exact centroid distances across epsilon arms. Evaluation opens only development. Preserve each arm result and causal rejection independently.
+  Replay only the prefix-frozen geometry/score identity on the globally
+  hash-selected 1M corpus. Evaluation opens development only to measure the
+  unchanged arm; it cannot select, substitute, or reopen another arm.
 
 - [ ] **Step 3: Run 1M development on Spot**
 
-  Reject arms at construction gates before query scoring. Require 998,000 ppm
-  logical route and selected-score containment. Compare shapes only for
-  B4096/B8192 at equal slot bytes. Preserve **every** geometry/score survivor
-  for downstream code/layout evaluation; do not choose an early winner. If no
-  survivor passes, record Funnel-3 rejection and stop this plan.
+  Reject the frozen arm at construction gates before query scoring. Require
+  998,000 ppm logical route and selected-score containment. Record its equal-
+  slot score evidence without comparing or selecting another shape. On failure,
+  record Funnel-3 rejection and stop this plan only after population
+  comparability passes; otherwise record population-indeterminate.
 
 - [ ] **Step 4: Validate and commit**
 
@@ -225,8 +265,8 @@
 ### Task 5: Coarse Representation, Unique Heap, and Fine Layout
 
 **Files:**
-- Create: `crates/borsuk/src/v36_funnel_code.rs`
-- Create: `crates/borsuk/src/v36_funnel_fine.rs`
+- Modify: `crates/borsuk/src/v36_funnel_code.rs`
+- Modify: `crates/borsuk/src/v36_funnel_fine.rs`
 - Create: `crates/borsuk/tests/v36_funnel_code.rs`
 - Create: `crates/borsuk/tests/v36_funnel_fine.rs`
 - Modify: `crates/borsuk-fma/src/lib.rs`
@@ -238,12 +278,11 @@
 
 - [ ] **Step 1: Write code-layout and SIMD REDs**
 
-  Pin the exact sign reconstruction/score, residual PQ4 subspaces/codebooks,
-  explicit u64 dense ordinal and u64 source ID, Arrow schemas, farthest-first initialization, exactly 20
-  PQ Lloyd iterations, binary64 row-ordered reductions, empty-codeword
-  recovery, finite/saturation/ties-to-even behavior, source ordering, and
-  scalar/SIMD parity across ties, subnormals, odd tails, saturation, and
-  reversed blocks.
+  Consume the prefix-screen code module and test only the globally selected
+  corpus delta: the exact frozen code identity, owner-relative codebooks,
+  explicit u64 dense ordinal/source ID, complete Arrow schemas, bounded
+  external construction, and scalar/SIMD parity at 1M/10M. Mutation-test any
+  code, K, or kernel substitution.
 
 - [ ] **Step 2: Write unique-heap REDs**
 
@@ -255,14 +294,13 @@
 
 - [ ] **Step 3: Write fine-layout REDs**
 
-  Require complete coarse Arrow fragments ordered by posting/dense ordinal,
-  512-KiB encoded ceilings, exact fragment identities, and atomic whole-posting
-  admission. Require one primary-ordered unreplicated fine plane, interval lookup without
-  a dense locator, complete 64/256/512-KiB authenticated Arrow objects,
-  candidate-order admission before physical reorder, normal 14 GET/7 MiB and
-  hard 16 GET/8 MiB including retries/metadata, strict SQ8/f16/source schemas, exact encoded/decoded
-  overlap, and final source-feature-ID tie order matching GT after ordinal
-  lookup.
+  Consume the prefix-screen fine-object module and require the unchanged local
+  partition, chain, complete-object schema, strict-prefix coarse admission,
+  vote mass/order, SQ8/f16/source-f32 representation, and normal/hard budgets
+  on globally selected 1M/10M rows. Test measured Arrow-envelope shrinkage,
+  candidate scattering, encoded/decoded overlap, and final feature-ID tie
+  order. Mutation-test query-time repacking, range reads, hidden quantization
+  side objects, and any reopened layout.
 
 - [ ] **Step 4: Run focused REDs and implement**
 
@@ -283,7 +321,8 @@
 - Create: `docs/research/v36-funnel-g1-authority.json`
 
 **Interfaces:**
-- Produces serialized route, shape, projected-f32, lossy-coarse, post-I/O, fine-codec, and source-f32 checkpoints plus one frozen arm identity.
+- Produces serialized route, shape, projected-f32, lossy-coarse, post-I/O,
+  fine-codec, and source-f32 checkpoints for the one prefix-frozen arm identity.
 
 - [ ] **Step 1: Write checkpoint/result REDs**
 
@@ -291,24 +330,33 @@
 
 - [ ] **Step 2: Write launcher REDs**
 
-  Prove construction/query/truth/source capabilities are phase-specific; validation requires the exact development winner; holdout requires the validation-passed identity; unknown flags fail closed; RSS/PSI/swap/progress/wall stops are canonical and outcome-blind.
+  Prove construction/query/truth/source capabilities are phase-specific; every
+  phase requires the exact prefix-frozen winner; holdout additionally requires
+  its validation-passed receipt; unknown flags fail closed;
+  RSS/PSI/swap/progress/wall stops are canonical and outcome-blind.
 
 - [ ] **Step 3: Implement the oracle and run development**
 
-  Carry every Task 4 survivor into this matrix. Evaluate projected-f32 on each
-  code layout's physically admitted rows first, then sign/PQ4, then fine
-  layouts, then SQ8/f16 and same-row source-f32. Stop an arm at its first failed
-  causal gate. Development requires 998,000 ppm containment checkpoints, fine
-  loss <=1,000 ppm, and 997,000/800,000 ppm aggregate/minimum recall. Select a
-  winner only after the complete funnel has passed.
+  Replay only the prefix-frozen projection, geometry, score, code, K, layout,
+  and codec. Evaluate projected-f32 on its physically admitted rows first, then
+  its lossy code, fine layout, serving codec, and same-row source-f32. Stop at
+  the first failed causal gate. Development requires 998,000 ppm containment
+  checkpoints, fine loss <=1,000 ppm, and 997,000/800,000 ppm
+  aggregate/minimum recall. Compare the registered population diagnostics
+  before causal classification; a material shift is population-indeterminate,
+  not architecture rejection. No selection occurs in this task.
 
-- [ ] **Step 4: Freeze, validate, and open holdout once**
+- [ ] **Step 4: Validate and open holdout once**
 
-  Select by pass, bytes, GETs, distinct-query CPU p99, RSS, arm ID. Validation cannot retune. On validation pass, open the already-frozen 1M holdout once and require 995,000/800,000 ppm. Do not alter the 10M policy after this point.
+  Validation evaluates only the unchanged arm; rejection terminates the
+  campaign and cannot try another screen candidate. On validation pass, open
+  the 1M holdout once and require 995,000/800,000 ppm. Do not alter the 10M
+  policy after this point.
 
 - [ ] **Step 5: Verify and commit**
 
-  Run affected Rust/Python gates, pinned Ruff, pycompile, scoped strict Clippy, fmt, docs validation, and diff-check. Commit the complete 1M evidence and winner.
+  Run affected Rust/Python gates, pinned Ruff, pycompile, scoped strict Clippy,
+  fmt, docs validation, and diff-check. Commit the complete 1M replay evidence.
 
 ### Task 7: Frozen 10M Scale-Transfer Gate
 
@@ -334,6 +382,9 @@
   upper bound. Undefined frontiers are infinite. Require the upper bound and
   the measured-occupancy/fragment-packing 100M projection to fit 7 MiB and 14
   GETs, leaving the registered hard retry reserve intact.
+  Before accepting that projection, require the registered HNSW scorer to match
+  the exhaustive selected-scorer prefix at 999,000 ppm traversal parity and
+  include its measured graph bytes in the 100M RAM projection.
 
 - [ ] **Step 3: Apply validation and holdout**
 

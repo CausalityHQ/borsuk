@@ -15,6 +15,14 @@ migration path. Sub-second contracts run locally; corpus work runs on bounded
 same-region AWS Spot capacity under profile `causality`. No 100M build starts
 until one frozen arm passes 1M and 10M without retuning.
 
+Before the full-source materialization, a separately named object-sample
+screen uses a frozen, bounded population from query-independent hash-ranked
+complete source objects on same-region Spot/NVMe. It is a cheap
+architecture falsifier, not the V36 qualification corpus and not release
+evidence. It may reject a projection, posting geometry, score, coarse code, or
+fine-object layout, but passing it only authorizes the globally hash-selected
+1M freeze below. The screen never runs on devbox RAM or persistent disk.
+
 ## Evidence and unresolved mechanism
 
 Authenticated results establish both the opportunity and the risk:
@@ -58,7 +66,9 @@ limits are frozen in `docs/research/v36-funnel-dataset-authority.json`.
 
 The source produces nested 1M/10M/100M 768D corpora after removing query rows.
 Development, validation, and holdout contain 1,000 disjoint queries each;
-performance contains 10,000. Exact GT@100 uses binary64 accumulation in source
+performance contains 10,000. Performance vectors are excluded from corpus and
+bound for timing but do not receive GT. Exact GT@100 for the 3,000 quality
+queries uses binary64 accumulation in source
 dimension with no fused multiply-add and orders by
 `(distance,unsigned_feature_row_id)`, matching the frozen dataset authority.
 `feature_row_id` maps explicitly to `source_ordinal`, its zero-based position in
@@ -76,15 +86,33 @@ arm. Reused historical query sets are diagnostic only. Construction receives
 no query or truth capability; serving receives no source-corpus or list-S3
 capability.
 
-The Task 0 registry's `block_queries=8` GT checkpoint is a planned,
-unmaterialized query-major contract and is not executable at 100M within the
-12-hour cell cap. Before materialization, a new authenticated materialization
-manifest supersedes only that checkpoint: all 13,000 query vectors are loaded
-once (about 40 MiB), each source row block is read once, distance work proceeds
-in successive eight-query tiles, and the checkpoint binds the completed
-source-row prefix plus every query's canonical top-100 heap. Resume starts at
+The Task 0 v1 registry's `performance-gt100` output and query-major
+`block_queries=8` GT checkpoint are planned, unmaterialized contracts and are not executable at
+100M within the 12-hour cell cap. Before materialization, a breaking v2
+authority explicitly removes `performance-gt100` from the output set and
+replaces the checkpoint while preserving the source
+and four query-role identities: the 3,000 quality query vectors are
+loaded once (about 9 MiB), each source row block is read once, distance work
+proceeds in successive eight-query tiles, and the checkpoint binds the
+completed source-row prefix plus every quality query's canonical top-100 heap.
+The 10,000 performance vectors remain separately authenticated. Resume starts at
 the first incomplete source-row block. Source membership, query identities,
 distance arithmetic, and GT ordering remain unchanged.
+
+Every object-sample or full-source freeze has at most three Spot attempts.
+After each 16 complete input objects or 300 active seconds, whichever comes
+first, it uploads a canonical authenticated checkpoint containing the completed
+source prefix, immutable dedup-spill run identities and counters, materialized output identities, and every GT
+heap. Resume accepts only the newest fully authenticated checkpoint and starts
+at its first incomplete source object/tile. A third interruption is terminal
+infrastructure failure; it cannot silently buy a fourth cell.
+The object-sample campaign rejects a Spot rate above $3/hour or a $90 total
+campaign projection. The cumulative active-time budget is therefore at most 30
+hours across all attempts at the admitted rate; before every attempt, its
+effective wall cap is the smaller of 43,200 seconds and the remaining dollar
+budget divided by that rate, multiplied by 3,600 seconds/hour. Before a full-source cell, the materialization authority
+must add and validate exact per-hour and per-attempt cost ceilings from the
+then-current Spot and S3 plan; absence of either ceiling forbids launch.
 
 Bulk cross-language data is strict Arrow IPC or Parquet with exact physical
 schema, concrete types, nullability, row count, ordinal semantics, and byte
@@ -92,13 +120,50 @@ identity. Small manifests and receipts are canonical JSON with one trailing
 newline. Publication binds SHA-256; independently fetched objects additionally
 bind BLAKE3. ETag is never treated as a digest.
 
+The bounded screen does not take a path prefix. It orders the 2,298 registered
+complete source objects by
+`(SHA-256("borsuk-v36-screen-object-v1" || utf8(path) || u64le(length)),path)`,
+streams complete objects in that order, keeps the first occurrence of every
+valid feature ID, and stops after the complete object containing the
+1,100,000th distinct row. It may consume at most 16 objects and 6 GiB; hitting
+either cap first is terminal source insufficiency. This object-sampling identity, every consumed object,
+and all bytes are registered before query roles are derived. The screen reports
+GT@10 exact/near-duplicate rates, nearest-neighbour distance quantiles, and the
+centered spectrum energy retained at M192. These diagnostics are repeated on
+the globally selected 1M population; a material shift is
+`population-indeterminate`, not an architecture rejection. Exact duplicates
+have binary64 distance zero; near duplicates have squared L2 at most `1e-6`.
+Compare duplicate rates in ppm, nearest-neighbour squared-L2 p10/p50/p90, and
+retained-energy ppm. A shift is material when either duplicate rate changes by
+more than 20,000 ppm, retained energy changes by more than 20,000 ppm, or a
+nonzero distance quantile changes by more than 10%; a zero/nonzero quantile
+transition is always material.
+
 ## Qualification hypothesis
 
 ### Projection and construction
 
-The smallest falsifier freezes the existing deterministic SRHT projection,
-seed 36, from source dimension to `M=192`. PCA is not an automatic rescue arm.
-The source-f32 metric remains the truth authority. A deterministic corpus-only
+The object-sample screen compares the existing deterministic SRHT projection,
+seed 36, with a bounded-memory **centered** principal subspace, both from source
+dimension to `M=192`. The centered arm subtracts the corpus-only binary64 mean,
+forms the exact 768-by-768 binary64 covariance of the registered geometry
+reservoir, and uses the lockfile-pinned `nalgebra 0.33` single-threaded
+`SymmetricEigen` implementation with contraction disabled. It accepts the
+decomposition only when every eigenpair has relative residual at most `1e-10`
+and the reconstructed covariance has relative Frobenius error at most `1e-10`.
+It orders eigenpairs by descending
+eigenvalue then original coordinate ordinal, fixes every eigenvector sign by
+making its largest-absolute component (ties by coordinate ordinal) positive,
+and reports retained centered second-moment energy at dimensions 64/96/128/192.
+Failure to converge is a terminal numerical failure, not an architectural
+rejection. Both projections are registered before outcomes. Screen
+development selects exactly one complete funnel by the global lexicographic
+rule; screen validation rejection is terminal rather than trying the next
+development arm; sealed holdout opens once only after validation passes.
+Full-source qualification replays that one frozen arm unchanged and may never
+reopen a screen-rejected component. If neither projection survives development,
+Funnel-3 is rejected. The source-f32 metric
+remains the truth authority. A deterministic corpus-only
 reservoir and fixed reductions train
 `min(4,096,next_power_of_two(ceil(rows/262,144)))` super-cell centroids: 4 at
 1M, 64 at 10M, and 512 at 100M. Postings are trained within bounded external
@@ -123,14 +188,15 @@ An empty centroid takes the row farthest from its assigned centroid, breaking
 ties by source ordinal, and that row is removed from its previous accumulation
 before recomputation.
 
-Each non-empty super-cell run receives at least one posting. Initial local
-posting counts are `floor(run_primary_rows/B)`; the remaining postings needed
-to reach `ceil(rows/B)` are assigned by decreasing fractional remainder, then
-super-cell ordinal. If the floor is zero, its mandatory one posting is charged
-before remainder distribution. A checked precondition rejects a requested
-posting count smaller than the number of non-empty super cells. This allocation
-and every local Lloyd artifact are serialized before the exact global primary
-and closure assignment.
+Let `P=ceil(rows/B)` and `R` be the number of non-empty super-cell runs. A
+checked precondition rejects `P<R`. Give every run one posting, then apportion
+the remaining `P-R` postings by Hamilton allocation over run primary-row
+counts: run `i` first receives `floor((P-R)*rows_i/rows)` additional postings,
+and leftovers go by decreasing integer remainder then super-cell ordinal.
+Checked integer arithmetic and a final `sum(postings_i)==P` assertion are
+mandatory. This lower-bounded apportionment, including the skewed
+`[999997,1,1,1]` case, and every local Lloyd artifact are serialized before the
+exact global primary and closure assignment.
 
 Posting size `B` always means target **primary rows**, not stored assignments.
 The exact posting counts are:
@@ -169,13 +235,30 @@ Exhaustive scoring of every posting is the representation authority at 1M and
 10M. Every integer prefix through `min(posting_count,1,024)` is evaluated;
 `{1,2,4,8,16,32,64,128,256,512,1,024}` is the reported summary.
 
-For B4096/B8192 only, compare four posting scores under the same geometry and
+For B4096/B8192 only, compare five posting scores under the same geometry and
 equal 4,736-byte resident summary slot:
 
 1. centroid squared-L2;
 2. diagonal Gaussian lower-tail heuristic;
 3. rank-two Gaussian lower-tail heuristic;
 4. rank-four Gaussian lower-tail heuristic.
+5. six-total-prototype squared-L2, consisting of the posting centroid plus five
+   deterministic sub-prototypes.
+
+The six-total-prototype arm stores exactly six f32[192] vectors, including the
+posting centroid, for 4,608 raw bytes; the remaining 128 bytes in the equal
+slot cover population and fixed metadata. It does not mean one centroid plus
+six additional f32 vectors. Sub-prototypes use deterministic k-means++ seeded
+with ChaCha8 seed 36: the first row is the smallest source ordinal, subsequent
+rows are sampled from the source-ordinal-ordered binary64 cumulative squared-
+distance distribution using the next canonical u64 draw mapped to `[0,total)`,
+and a zero total chooses the smallest unused ordinal. The active sub-prototype
+count is `min(5,primary_rows)`; remaining vector slots repeat the posting
+centroid bit-for-bit and are excluded from the minimum. They then run ten fixed
+Lloyd iterations over unique primary rows with binary64 ordinal-ordered
+reductions and `(distance,prototype_ordinal)` ties. Its query
+score is `min_j ||q-c_j||^2`. This is the equal-byte non-Gaussian control that
+the covariance arms must beat on fresh queries.
 
 These are query-ranking heuristics, not certified enclosing ellipsoids. The
 diagonal/rank-two/rank-four arms use the V33/V34 Gaussian distance-moment
@@ -202,13 +285,16 @@ directions (4,628 raw bytes); every arm is charged the equal 4,736-byte slot.
 The receipt reports used bytes as well as the equal-byte slot. A fresh-query
 pass decides whether shape helps; burned V33 results are context only.
 
-A resident HNSW over posting summaries is considered only after geometry and
-score freeze. Its topology is built by centroid squared-L2; query traversal
+A resident HNSW over posting summaries is mandatory after geometry and score
+freeze whenever posting count exceeds 1,024. Its topology is built by centroid squared-L2; query traversal
 orders candidates by the frozen selected posting score. It uses `M=32`,
 `efConstruction=200`, seed 36, and
 `efSearch=max(L,e)` for `e in {64,128,256,512,1,024}`. It must reproduce the
 exhaustive **selected scorer's** prefix at 999,000 ppm traversal parity. HNSW
-is an accelerator, never the representation authority.
+is an accelerator, never the representation authority. G2 must pass this
+traversal parity at the 10M posting count and project graph bytes plus measured
+summary-score work to the exact 100M posting count before G4 can start; an
+exhaustive 100M summary scan cannot satisfy the decoded-hot gate by assertion.
 
 ### Coarse records and unique-candidate admission
 
@@ -253,23 +339,76 @@ identical final row set separates fine-codec loss.
 
 ### Physical S3 layout and fine rerank
 
-The falsifier uses one shared, unreplicated fine plane in dense primary-row
-order. Each coarse replica carries the dense ordinal. A compact resident
-interval directory maps ordinal ranges to fine chunks, avoiding a 400--800 MB
+The falsifier uses one shared, unreplicated fine plane. Primary dense ordinals
+are assigned in `(primary_posting,local_cluster,local_order,source_ordinal)`
+order. Within each primary posting, projected rows are partitioned with exactly
+`min(primary_rows,ceil(B/64))` centroids initialized by the construction
+farthest-first rule and refined by five Lloyd iterations in the selected
+f32[192] projection space using the same binary64 reductions and empty-centroid
+repair. Rows assigned to each centroid are ordered by
+`(distance_to_centroid,source_ordinal)`, split into consecutive blocks of at
+most 64, then each block is reordered by an exact nearest-neighbour chain:
+smallest source ordinal starts, the nearest unvisited projected row follows,
+and ties use source ordinal. Blocks and chains follow centroid ordinal. This
+costs at most `7*N*ceil(B/64)*192 + N*64*192` distance-component operations for
+`N` primary rows after the occupancy gate: one farthest-first pass per local
+centroid, five Lloyd assignments, one final assignment, and chains of at most
+64 rows. Measured work and the registered
+preflight cap are serialized. These corpus-only local chains make rows that are
+likely to be reranked together physically adjacent. Each coarse replica still carries the explicit
+dense ordinal and u64 source feature ID: object position is not a global row
+identity under replication, fragmentation, or updates. A compact resident
+interval directory maps ordinal ranges to complete fine objects, avoiding a
 per-row locator table.
 
 Fine layouts are constructed without query access and compare complete,
-independently authenticated Arrow IPC chunks whose **encoded** ceilings are
-64, 256, or 512 KiB. A chunk contains one non-null fixed-size-list vector
-column, one non-null u64 dense ordinal, and one non-null u64 source feature ID. Candidate
-chunks are admitted by best candidate order until the normal 14-GET/7-MiB wave
-is full, while the retry-inclusive hard limit remains 16 GETs/8 MiB; then
-decoded rows are reordered physically. No arbitrary row-range is
-treated as authenticated. Metadata, retries, full encoded bytes, decoded
-capacity, and encoded-plus-decoded overlap are charged.
+independently authenticated Arrow IPC objects whose **encoded** ceilings are
+64, 256, or 512 KiB. Microclusters are construction units, not request units:
+they are greedily co-packed in the frozen local order, and query-time ranged
+reads or query-specific repacking are forbidden. An object contains one
+non-null fixed-size-list vector column, one non-null u64 dense ordinal, and one
+non-null u64 source feature ID. Candidate rows vote for their already
+materialized object using a frozen rank-weighted reduction. For zero-based
+candidate rank `r` in a heap of `K` unique rows, the object's vote mass adds
+`K-r`; integer accumulation is checked, and the object's best rank is the
+minimum contributing rank. Complete physical objects, not logical micro-pages,
+are ordered by `(negative_vote_mass,best_candidate_rank,object_ordinal)` and admitted until
+the normal 14-GET/7-MiB wave is full, while the retry-inclusive hard limit
+remains 16 GETs/8 MiB. No arbitrary row-range is treated as authenticated.
+Metadata, retries, full encoded bytes, decoded capacity, and encoded-plus-
+decoded overlap are charged. The causal oracle reports useful candidate rows,
+distinct selected objects, fetched rows, candidate-to-object scattering, and
+truth containment at every complete-object boundary. If 998,000 ppm post-I/O
+containment is unreachable inside 14 complete GETs and 7 MiB, the layout is
+rejected; increasing GETs or bytes is not a rescue.
 
-Serving fine codecs are SQ8 and f16, selected independently. SQ8 stores D bytes
-plus registered per-chunk scale/offset metadata; f16 stores `2D` bytes. The
+The 512-KiB screen starts from these conservative SQ8 packing targets. They
+include `D+16` raw bytes per row and two f32 quantization parameters per source
+dimension, but the builder must still serialize Arrow IPC and reduce the row
+count until the **complete encoded object** is at most 512 KiB.
+
+| Source D | Target rows/object | Raw row+quantization bytes | Rows in 14 objects |
+|---:|---:|---:|---:|
+| 384 | 1,280 | 515,072 | 17,920 |
+| 768 | 640 | 507,904 | 8,960 |
+| 1,536 | 320 | 508,928 | 4,480 |
+| 3,072 | 160 | 518,656 | 2,240 |
+
+These counts prove only arithmetic capacity. The offline oracle must prove that
+the K unique candidates and truth rows concentrate into the admitted complete
+objects. A layout whose candidates occupy more than 14 useful objects fails
+even when their aggregate vector payload is below 7 MiB.
+
+Serving fine codecs are SQ8 and f16, selected independently. Each complete SQ8
+Arrow object is one non-null row containing non-null
+`codes:List<FixedSizeList<u8,D>>`, `dense_ordinals:List<u64>`,
+`source_feature_ids:List<u64>`, `scale:FixedSizeList<f32,D>`, and
+`offset:FixedSizeList<f32,D>`; all list children are non-null, the three row
+lists have equal registered length, and scale/offset are stored once per
+object. Each f16/source-f32 object uses the same one-row nested representation
+without scale/offset and with `f16`/`f32` vector children. Thus SQ8 stores D
+code bytes per row plus exactly two f32 parameters per dimension per object;
+there is no repeated per-row quantization metadata or hidden side object. The
 offline source-f32 control reranks the exact same admitted rows. Selection and
 layout freeze precede codec evaluation.
 
@@ -281,8 +420,10 @@ code. Rows are ordered by `dense_ordinal` and greedily fragmented without
 exceeding 512 KiB encoded. The resident posting directory binds every fragment's URI,
 SHA-256, BLAKE3, length, first ordinal, and row count. The planner visits
 postings by `(posting_score,posting_ordinal)` and admits **all** fragments of a
-posting atomically only if their combined GETs/bytes fit; otherwise it records
-the posting as excluded and continues. Partial postings are never scored. The
+posting atomically only if their combined GETs/bytes fit. At the first posting
+that does not fit, it records that posting and the remaining suffix as excluded
+and stops; it never skips a dense posting to admit lower-ranked work. Partial
+postings are never scored. The
 projected-f32 diagnostic scores the exact rows admitted by a candidate code
 layout using offline projected rows; it does not introduce f32 serving objects.
 
@@ -292,7 +433,7 @@ The serialized checkpoints are:
 
 1. exhaustive route-owner containment;
 2. selected-scorer containment;
-3. graph traversal parity, if graph is enabled;
+3. graph traversal parity when posting count exceeds 1,024;
 4. projected-f32 unique-candidate containment;
 5. lossy coarse-code unique-candidate containment;
 6. post-I/O admitted-row containment;
@@ -300,7 +441,14 @@ The serialized checkpoints are:
 
 Each checkpoint freezes row ordinals before the next stage. Later stages cannot
 change an earlier prefix. Report duplicate scans, unique rows, useful/fetched
-bytes, GETs, excluded chunks, and unreachable frontiers.
+bytes, GETs, excluded objects, candidate-to-object scattering, and unreachable
+frontiers.
+
+Screen development selects exactly one complete arm by the global
+lexicographic rule. Screen validation evaluates only that identity; rejection
+is terminal and cannot advance to another development survivor. Sealed screen
+holdout opens once only after validation passes. Full-source G1/G2 replay that
+identity unchanged; there is no second arm selection.
 
 Development requires 998,000 ppm route, selected-scorer, projected-f32,
 coarse-code, and post-I/O containment; fine-codec loss versus same-row f32 is at
@@ -360,7 +508,9 @@ after eviction count until released.
 
 The initial fixed caps are projection 3 MiB, super centroids 4 MiB, posting
 summaries 128 MiB, all directories 128 MiB, liveness 64 MiB, decoded cache
-256 MiB, sixteen 16-MiB query workspaces, and runtime/headroom 512 MiB. These
+256 MiB, sixteen 32-MiB query workspaces, and runtime/headroom 512 MiB. A
+workspace must stream object decoding and cannot retain more than its 32-MiB
+cap. These
 are admission caps, not achieved measurements. Delta coarse plus CSR has a
 512-MiB byte cap and recent fine rows have a separate 128-MiB cap; row admission derives from the selected encoded record size
 and measured replication rather than a fixed four-million-row promise.
@@ -426,18 +576,26 @@ must meet the holdout recall gates and never return a deleted ID.
 
 ## Execution funnel and decision
 
-1. G0 proves schemas, deterministic arithmetic, capability isolation, bounded
+1. G-1 runs the separately registered bounded 1M hash-object-sample screen on
+   same-region Spot/NVMe. It compares SRHT versus the centered principal
+   subspace, all five registered posting scores, closure geometry, coarse
+   codes, and the actual complete fine-object packer. It stops before the
+   787-GB freeze unless at least one arm reaches every causal containment gate
+   inside the physical 14-GET/7-MiB envelope. It freezes exactly one complete
+   arm after development, validation, and one sealed holdout; passing is
+   diagnostic only.
+2. G0 proves schemas, deterministic arithmetic, capability isolation, bounded
    unique heaps, transport accounting, scalar/SIMD parity, and resource stops.
-2. G1 materializes the registered 1M corpus/GT on same-region Spot, runs the
-   ten geometry arms, shape scores, representation controls, and fine layouts,
-   then freezes one arm on development and evaluates validation/holdout once.
-3. G2 replays the frozen arm at 10M and applies frontier-growth, quality,
+3. G1 materializes the registered 1M corpus/GT on same-region Spot, runs the
+   one screen-frozen projection, geometry, score, representation, and
+   fine-layout arm unchanged across development, validation, and holdout.
+4. G2 replays the frozen arm at 10M and applies frontier-growth, quality,
    construction, RSS, and transport gates before any production format work.
-4. G3 builds the minimal executable S3 query path at 1M/10M and proves offline
+5. G3 builds the minimal executable S3 query path at 1M/10M and proves offline
    equality plus honest hot/shared-cache/cold measurements.
-5. G4 runs three terminal 100M/768D query repetitions on Spot only if G2/G3
+6. G4 runs three terminal 100M/768D query repetitions on Spot only if G2/G3
    pass unchanged.
-6. G5 qualifies saturation and mixed read/write behavior; a later sustained
+7. G5 qualifies saturation and mixed read/write behavior; a later sustained
    gate qualifies base absorption and rebalancing.
 
 If geometry fails route containment, reject or replace the geometry. If the
