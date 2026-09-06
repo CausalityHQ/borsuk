@@ -1,13 +1,16 @@
 use std::{
     cmp::Ordering,
-    collections::{BTreeSet, BinaryHeap, HashSet},
-    fs::{self, File},
-    io::{BufReader, Read},
+    collections::{BTreeSet, BinaryHeap, HashMap, HashSet},
+    fs::{self, File, OpenOptions},
+    io::{BufReader, Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use arrow_array::{Array, FixedSizeListArray, Float32Array, Int64Array, RecordBatch, UInt64Array};
+use arrow_array::{
+    Array, ArrayRef, FixedSizeListArray, Float32Array, Int64Array, RecordBatch, UInt32Array,
+    UInt64Array,
+};
 use arrow_schema::{DataType, Field, Schema};
 use parquet::{
     arrow::{ArrowSchemaConverter, ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
@@ -232,6 +235,21 @@ pub struct V36PrefixObjectPrefixScan {
     pub physical_rows: u64,
     /// First-occurrence identities for the exact requested distinct prefix.
     pub unique_rows: Vec<V36PrefixRowIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Strict role-separated Parquet outputs from one prefix population.
+pub struct V36PrefixRoleParquetPaths {
+    /// Development queries.
+    pub development: PathBuf,
+    /// Performance queries.
+    pub performance: PathBuf,
+    /// Sealed-holdout queries.
+    pub sealed_holdout: PathBuf,
+    /// Canonically ordered corpus.
+    pub source: PathBuf,
+    /// Validation queries.
+    pub validation: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -935,6 +953,247 @@ fn validate_source_batch(
             .ok_or_else(|| invalid("V36 prefix source Parquet row count overflows"))?;
     }
     Ok(())
+}
+
+const MATERIALIZATION_BUCKET_ROWS: usize = 8_192;
+const MATERIALIZATION_RECORD_BYTES: usize = 16 + DIMENSIONS * 4;
+
+fn materialization_rows(split: &V36PrefixRoleSplit) -> [&[V36PrefixRowIdentity]; 5] {
+    [
+        &split.corpus,
+        &split.development,
+        &split.validation,
+        &split.sealed_holdout,
+        &split.performance,
+    ]
+}
+
+fn read_materialization_bucket(path: &Path) -> Result<Vec<(u64, V36PrefixMaterializedRow)>> {
+    let bytes = read_file(path)?;
+    if bytes.is_empty() || bytes.len() % MATERIALIZATION_RECORD_BYTES != 0 {
+        return Err(invalid("V36 prefix materialization spool differs"));
+    }
+    let mut rows = Vec::with_capacity(bytes.len() / MATERIALIZATION_RECORD_BYTES);
+    for record in bytes.as_chunks::<MATERIALIZATION_RECORD_BYTES>().0 {
+        let ordinal = u64::from_le_bytes(record[..8].try_into().unwrap());
+        let feature_row_id = u64::from_le_bytes(record[8..16].try_into().unwrap());
+        let mut embedding = Vec::with_capacity(DIMENSIONS);
+        for component in record[16..].as_chunks::<4>().0 {
+            embedding.push(f32::from_bits(u32::from_le_bytes(*component)));
+        }
+        validate_embedding(&embedding)?;
+        rows.push((
+            ordinal,
+            V36PrefixMaterializedRow {
+                feature_row_id,
+                source_ordinal: Some(ordinal),
+                embedding,
+            },
+        ));
+    }
+    rows.sort_by_key(|(ordinal, _)| *ordinal);
+    Ok(rows)
+}
+
+fn materialized_batch(
+    rows: &[(u64, V36PrefixMaterializedRow)],
+    query: bool,
+) -> Result<RecordBatch> {
+    let ordinals = rows
+        .iter()
+        .map(|(ordinal, _)| u32::try_from(*ordinal))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| invalid("V36 prefix materialization ordinal overflows"))?;
+    let ids = rows
+        .iter()
+        .map(|(_, row)| row.feature_row_id)
+        .collect::<Vec<_>>();
+    let values = rows
+        .iter()
+        .flat_map(|(_, row)| row.embedding.iter().copied())
+        .collect::<Vec<_>>();
+    let embeddings = FixedSizeListArray::try_new(
+        Arc::new(Field::new("item", DataType::Float32, false)),
+        DIMENSIONS as i32,
+        Arc::new(Float32Array::from(values)),
+        None,
+    )?;
+    let mut columns = Vec::<ArrayRef>::new();
+    let schema = if query {
+        columns.push(Arc::new(UInt32Array::from(ordinals)));
+        columns.push(Arc::new(UInt64Array::from(ids)));
+        v36_prefix_query_schema()
+    } else {
+        columns.push(Arc::new(UInt64Array::from(ids)));
+        v36_prefix_source_schema()
+    };
+    columns.push(Arc::new(embeddings));
+    Ok(RecordBatch::try_new(Arc::new(schema), columns)?)
+}
+
+fn write_spooled_output(
+    path: &Path,
+    rows: &[V36PrefixRowIdentity],
+    buckets: &[PathBuf],
+    query: bool,
+) -> Result<()> {
+    let schema = if query {
+        v36_prefix_query_schema()
+    } else {
+        v36_prefix_source_schema()
+    };
+    let mut temporary = temporary_output(path)?;
+    let mut writer = ArrowWriter::try_new(
+        temporary.as_file_mut(),
+        Arc::new(schema),
+        Some(parquet_writer_properties()),
+    )?;
+    let expected = rows
+        .iter()
+        .map(|row| row.feature_row_id)
+        .collect::<Vec<_>>();
+    let mut source_ordinal = 0_usize;
+    let mut query_ordinal = 0_u64;
+    let mut query_ids = BTreeSet::new();
+    for bucket in buckets {
+        let decoded = read_materialization_bucket(bucket)?;
+        let batch = materialized_batch(&decoded, query)?;
+        if query {
+            validate_query_batch(&batch, &mut query_ordinal, &mut query_ids)?;
+        } else {
+            validate_source_batch(&batch, &expected, &mut source_ordinal)?;
+        }
+        writer.write(&batch)?;
+    }
+    if (query && query_ordinal != rows.len() as u64) || (!query && source_ordinal != rows.len()) {
+        return Err(invalid("V36 prefix materialization row count differs"));
+    }
+    writer.close()?;
+    publish_output(temporary, path)
+}
+
+/// Materialize canonical source and query Parquet using bounded ordinal buckets.
+pub fn materialize_v36_prefix_role_parquets(
+    source_paths: &[PathBuf],
+    ranked_objects: &[V36PrefixRankedSourceObject],
+    split: &V36PrefixRoleSplit,
+    scratch: &Path,
+    output: &Path,
+) -> Result<V36PrefixRoleParquetPaths> {
+    if source_paths.len() != ranked_objects.len()
+        || source_paths.is_empty()
+        || !scratch.is_dir()
+        || !output.is_dir()
+    {
+        return Err(invalid("V36 prefix materialization inputs differ"));
+    }
+    let role_rows = materialization_rows(split);
+    if role_rows.iter().any(|rows| rows.is_empty()) {
+        return Err(invalid("V36 prefix materialization role is empty"));
+    }
+    let mut destinations = HashMap::new();
+    for (role, rows) in role_rows.iter().enumerate() {
+        for (ordinal, row) in rows.iter().enumerate() {
+            if (role == 0 && row.source_ordinal != Some(ordinal as u64))
+                || (role != 0 && row.source_ordinal.is_some())
+                || destinations
+                    .insert(
+                        (row.selected_object_ordinal, row.row_offset),
+                        (role, ordinal, row.feature_row_id),
+                    )
+                    .is_some()
+            {
+                return Err(invalid("V36 prefix materialization membership differs"));
+            }
+        }
+    }
+    let mut spool_paths = Vec::new();
+    let mut spools = Vec::new();
+    for (role, rows) in role_rows.iter().enumerate() {
+        let mut role_paths = Vec::new();
+        let mut role_files = Vec::new();
+        for bucket in 0..rows.len().div_ceil(MATERIALIZATION_BUCKET_ROWS) {
+            let path = scratch.join(format!("role-{role}-bucket-{bucket:06}.bin"));
+            let file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|source| BorsukError::Io {
+                    path: path.clone(),
+                    source,
+                })?;
+            role_paths.push(path);
+            role_files.push(file);
+        }
+        spool_paths.push(role_paths);
+        spools.push(role_files);
+    }
+    for (object_ordinal, (path, object)) in source_paths.iter().zip(ranked_objects).enumerate() {
+        scan_v36_prefix_registered_input_parquet(
+            path,
+            object,
+            object_ordinal
+                .try_into()
+                .map_err(|_| invalid("V36 prefix materialization object ordinal overflows"))?,
+            |row| {
+                if let Some((role, ordinal, feature_row_id)) =
+                    destinations.remove(&(row.selected_object_ordinal, row.row_offset))
+                {
+                    if feature_row_id != u64::try_from(row.feature_row_id).unwrap_or(u64::MAX) {
+                        return Err(invalid("V36 prefix materialization feature ID differs"));
+                    }
+                    let file = &mut spools[role][ordinal / MATERIALIZATION_BUCKET_ROWS];
+                    file.write_all(&(ordinal as u64).to_le_bytes())
+                        .and_then(|_| file.write_all(&feature_row_id.to_le_bytes()))
+                        .map_err(|source| BorsukError::Io {
+                            path: spool_paths[role][ordinal / MATERIALIZATION_BUCKET_ROWS].clone(),
+                            source,
+                        })?;
+                    for value in row.embedding {
+                        file.write_all(&value.to_bits().to_le_bytes())
+                            .map_err(|source| BorsukError::Io {
+                                path: spool_paths[role][ordinal / MATERIALIZATION_BUCKET_ROWS]
+                                    .clone(),
+                                source,
+                            })?;
+                    }
+                }
+                Ok(())
+            },
+        )?;
+    }
+    if !destinations.is_empty() {
+        return Err(invalid("V36 prefix materialization row is missing"));
+    }
+    drop(spools);
+    let names = [
+        "source.parquet",
+        "development-query.parquet",
+        "validation-query.parquet",
+        "sealed-holdout-query.parquet",
+        "performance-query.parquet",
+    ];
+    let mut outputs = Vec::new();
+    for (role, (rows, name)) in role_rows.iter().zip(names).enumerate() {
+        let path = output.join(name);
+        write_spooled_output(&path, rows, &spool_paths[role], role != 0)?;
+        outputs.push(path);
+    }
+    for role in spool_paths {
+        for path in role {
+            fs::remove_file(&path).map_err(|source| BorsukError::Io { path, source })?;
+        }
+    }
+    let [source, development, validation, sealed_holdout, performance] = outputs
+        .try_into()
+        .map_err(|_| invalid("V36 prefix materialization outputs differ"))?;
+    Ok(V36PrefixRoleParquetPaths {
+        development,
+        performance,
+        sealed_holdout,
+        source,
+        validation,
+    })
 }
 
 /// Write validated source batches without retaining the complete corpus in RAM.

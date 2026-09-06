@@ -15,15 +15,16 @@ use borsuk::{
     bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, deduplicate_v36_prefix_row_identities,
-    exact_v36_prefix_gt100, load_v36_prefix_freeze_preflight, rank_v36_prefix_source_objects,
-    scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix, scan_v36_prefix_query_parquet,
-    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
-    select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
-    v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
-    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
-    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_input_row,
-    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
-    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
+    exact_v36_prefix_gt100, load_v36_prefix_freeze_preflight, materialize_v36_prefix_role_parquets,
+    rank_v36_prefix_source_objects, scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
+    scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
+    scan_v36_prefix_source_parquet, select_v36_prefix_roles, v36_prefix_gt100_schema,
+    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
+    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
+    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
+    validate_v36_prefix_input_row, validate_v36_prefix_role_authority,
+    write_v36_prefix_gt100_parquet, write_v36_prefix_query_parquet,
+    write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -872,4 +873,66 @@ fn v36_prefix_dataset_scans_complete_cutoff_object_and_records_duplicate_evidenc
         })
         .is_err()
     );
+}
+
+fn identity(
+    feature_row_id: u64,
+    object: u16,
+    row: u64,
+    source: Option<u64>,
+) -> borsuk::V36PrefixRowIdentity {
+    borsuk::V36PrefixRowIdentity {
+        feature_row_id,
+        row_offset: row,
+        selected_object_ordinal: object,
+        source_ordinal: source,
+    }
+}
+
+#[test]
+fn v36_prefix_dataset_materializes_canonical_roles_with_bounded_spools() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first.parquet");
+    let second = directory.path().join("second.parquet");
+    let ranked = vec![
+        write_registered_rows(&first, &[7, 9, 11]),
+        write_registered_rows(&second, &[13, 15, 17]),
+    ];
+    let split = borsuk::V36PrefixRoleSplit {
+        corpus: vec![identity(17, 1, 2, Some(0)), identity(7, 0, 0, Some(1))],
+        development: vec![identity(9, 0, 1, None)],
+        validation: vec![identity(11, 0, 2, None)],
+        sealed_holdout: vec![identity(13, 1, 0, None)],
+        performance: vec![identity(15, 1, 1, None)],
+    };
+    let output = directory.path().join("output");
+    let scratch = directory.path().join("scratch");
+    fs::create_dir(&output).unwrap();
+    fs::create_dir(&scratch).unwrap();
+    let paths =
+        materialize_v36_prefix_role_parquets(&[first, second], &ranked, &split, &scratch, &output)
+            .unwrap();
+
+    let mut source_rows = 0;
+    scan_v36_prefix_source_parquet(&paths.source, &[17, 7], |batch| {
+        source_rows += batch.num_rows();
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(source_rows, 2);
+    for query in [
+        paths.development,
+        paths.validation,
+        paths.sealed_holdout,
+        paths.performance,
+    ] {
+        let mut rows = 0;
+        scan_v36_prefix_query_parquet(&query, 1, |batch| {
+            rows += batch.num_rows();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(rows, 1);
+    }
+    assert!(scratch.read_dir().unwrap().next().is_none());
 }
