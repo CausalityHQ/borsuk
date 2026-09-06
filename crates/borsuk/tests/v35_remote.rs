@@ -14,8 +14,8 @@ use borsuk::{
     encode_v35_page_directory_arrow, encode_v35_page_directory_root_arrow,
     encode_v35_remote_code_arrow, encode_v35_remote_directory_arrow, execute_v35_remote_plan,
     exhaustive_v35_route, plan_v35_remote_reads, project_v35_query_scalar,
-    reduce_v35_scanned_candidates, rerank_v35_exact_pages, scan_v35_code_ranges,
-    select_v35_exact_pages, v35_remote_code_schema_digest,
+    reduce_v35_scanned_candidates, rerank_v35_exact_pages, resolve_v35_exact_pages,
+    scan_v35_code_ranges, select_v35_exact_pages, v35_remote_code_schema_digest,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
@@ -30,13 +30,31 @@ fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+fn digest_bytes(value: &str) -> [u8; 32] {
+    assert_eq!(value.len(), 64);
+    std::array::from_fn(|index| u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).unwrap())
+}
+
 fn binding(byte: u8) -> V35RemoteDirectoryBinding {
     binding_with_snapshot(byte, V35SnapshotVisibility::new(vec![]).unwrap().digest())
 }
 
 fn binding_with_snapshot(byte: u8, snapshot_digest: [u8; 32]) -> V35RemoteDirectoryBinding {
-    V35RemoteDirectoryBinding::new([byte; 32], snapshot_digest, v35_remote_code_schema_digest())
-        .unwrap()
+    binding_with_snapshot_and_page(byte, snapshot_digest, [0x61; 32])
+}
+
+fn binding_with_snapshot_and_page(
+    byte: u8,
+    snapshot_digest: [u8; 32],
+    page_directory_root_digest: [u8; 32],
+) -> V35RemoteDirectoryBinding {
+    V35RemoteDirectoryBinding::new(
+        [byte; 32],
+        page_directory_root_digest,
+        snapshot_digest,
+        v35_remote_code_schema_digest(),
+    )
+    .unwrap()
 }
 
 fn selected_route(blocks: &[V35ArtifactIdentity]) -> V35RoutePrefix {
@@ -220,6 +238,11 @@ fn v35_remote_directory_arrow_authenticates_binding_and_chunks() {
         encode_v35_remote_directory_arrow(directory_binding, &chunks, uri).unwrap();
     assert_eq!(again, bytes);
     assert_eq!(again_identity, identity);
+    let later_generation = binding(0x61);
+    let (generation_neutral, generation_neutral_identity) =
+        encode_v35_remote_directory_arrow(later_generation, &chunks, uri).unwrap();
+    assert_eq!(generation_neutral, bytes);
+    assert_eq!(generation_neutral_identity, identity);
     let decoded = decode_v35_remote_directory_arrow(&bytes, &identity, directory_binding).unwrap();
     assert_eq!(decoded.identity(), &identity);
     assert_eq!(decoded.chunks(), chunks);
@@ -228,7 +251,7 @@ fn v35_remote_directory_arrow_authenticates_binding_and_chunks() {
     let position = corrupt.len() / 2;
     corrupt[position] ^= 1;
     assert!(decode_v35_remote_directory_arrow(&corrupt, &identity, directory_binding).is_err());
-    assert!(decode_v35_remote_directory_arrow(&bytes, &identity, binding(0x61)).is_err());
+    assert!(decode_v35_remote_directory_arrow(&bytes, &identity, later_generation).is_ok());
 }
 
 fn directory_blocks() -> Vec<V35RemoteDirectoryBlock> {
@@ -916,6 +939,10 @@ struct CodeScanFixture {
 }
 
 fn code_scan_fixture() -> CodeScanFixture {
+    code_scan_fixture_with_page_root([0x61; 32])
+}
+
+fn code_scan_fixture_with_page_root(page_directory_root_digest: [u8; 32]) -> CodeScanFixture {
     let dimensions = V35Dimensions {
         source: 384,
         routing: 64,
@@ -934,7 +961,8 @@ fn code_scan_fixture() -> CodeScanFixture {
         V35SnapshotEntry::new(900, 1, false).unwrap(),
     ])
     .unwrap();
-    let code_binding = binding_with_snapshot(0x51, visibility.digest());
+    let code_binding =
+        binding_with_snapshot_and_page(0x51, visibility.digest(), page_directory_root_digest);
     let rows = vec![
         V35RemoteCodeRow::new(91, 10, 1, 2, Some(3)).unwrap(),
         V35RemoteCodeRow::new(3, 11, 1, 4, None).unwrap(),
@@ -1080,11 +1108,9 @@ fn v35_remote_code_scanner_authenticates_arrow_and_streams_simd_candidates() {
 fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_dimension() {
     // Break caught: exact rerank trusts approximate candidates, admits a stale
     // replica/tombstone, accumulates page bodies, or scores routing dimensions.
-    let fixture = code_scan_fixture();
     let mut candidate_rows = Vec::new();
     let mut pages = Vec::new();
     let mut bodies = HashMap::new();
-    let mut expected = Vec::new();
     for page in 0..8_u32 {
         candidate_rows.push(
             V35ScannedCandidate::new(
@@ -1111,11 +1137,36 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
             encode_v35_exact_page_parquet(page, &uri, "version-01", &rows).unwrap();
         bodies.insert(uri, bytes);
         pages.push(identity);
-        expected.push((
-            id,
-            exact_sq(&vec![value; 384], fixture.query.source_query()),
-        ));
     }
+    let (directory_bytes, directory_identity) = encode_v35_page_directory_arrow(
+        0,
+        &pages,
+        "s3://borsuk-index/generations/g01/page-directories/group-0000.arrow",
+    )
+    .unwrap();
+    let directory = decode_v35_page_directory_arrow(
+        &directory_bytes,
+        &directory_identity,
+        "directory-version-01",
+    )
+    .unwrap();
+    let directory_reference = V35PageDirectoryBlockReference::new(&directory).unwrap();
+    let (root_bytes, root_identity) = encode_v35_page_directory_root_arrow(
+        &[directory_reference],
+        "s3://borsuk-index/generations/g01/page-directory.arrow",
+    )
+    .unwrap();
+    let root = decode_v35_page_directory_root_arrow(&root_bytes, &root_identity).unwrap();
+    let fixture = code_scan_fixture_with_page_root(digest_bytes(&root.identity().digest));
+    let mut expected = (0..8_u32)
+        .map(|page| {
+            let value = page as f32 / 7.0 - 0.5;
+            (
+                100 + u64::from(page),
+                exact_sq(&vec![value; 384], fixture.query.source_query()),
+            )
+        })
+        .collect::<Vec<_>>();
     expected.push((50, exact_sq(&vec![0.25; 384], fixture.query.source_query())));
     expected.sort_by(|left, right| left.1.total_cmp(&right.1).then(left.0.cmp(&right.0)));
     expected.truncate(4);
@@ -1125,13 +1176,20 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
         accumulator.admit(candidate);
     }
     let candidates = accumulator.finish();
+    let selection = resolve_v35_exact_pages(
+        &fixture.plan,
+        &candidates,
+        &root,
+        std::slice::from_ref(&directory),
+    )
+    .unwrap();
     let mut transport = PageBodyTransport::new(bodies, 8);
     let result = rerank_v35_exact_pages(
         &fixture.plan,
         &fixture.query,
         &visibility,
         &candidates,
-        &pages,
+        &selection,
         &mut transport,
         4,
     )
@@ -1157,13 +1215,20 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
     let mut one_accumulator = V35CandidateAccumulator::new(&fixture.plan, &visibility).unwrap();
     one_accumulator.admit(candidates.candidates()[0]);
     let one_candidate = one_accumulator.finish();
+    let one_selection = resolve_v35_exact_pages(
+        &fixture.plan,
+        &one_candidate,
+        &root,
+        std::slice::from_ref(&directory),
+    )
+    .unwrap();
     let mut one_page = PageBodyTransport::new(transport.bodies.clone(), 1);
     let sparse = rerank_v35_exact_pages(
         &fixture.plan,
         &fixture.query,
         &visibility,
         &one_candidate,
-        &pages[..1],
+        &one_selection,
         &mut one_page,
         4,
     )
@@ -1171,23 +1236,6 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
     assert_eq!(sparse.pages_read(), 1);
     assert_eq!(sparse.matches().len(), 1);
     assert_eq!(sparse.matches()[0].id(), 100);
-
-    let mut swapped_pages = pages.clone();
-    swapped_pages.swap(0, 1);
-    let mut unauthorized = PageBodyTransport::new(transport.bodies.clone(), 0);
-    assert!(
-        rerank_v35_exact_pages(
-            &fixture.plan,
-            &fixture.query,
-            &visibility,
-            &candidates,
-            &swapped_pages,
-            &mut unauthorized,
-            4,
-        )
-        .is_err()
-    );
-    assert_eq!(unauthorized.dispatched, 0);
 
     let mut corrupt_bodies = transport.bodies.clone();
     corrupt_bodies.get_mut(pages[0].uri()).unwrap()[32] ^= 1;
@@ -1198,7 +1246,7 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
             &fixture.query,
             &visibility,
             &candidates,
-            &pages,
+            &selection,
             &mut corrupt,
             4,
         )
@@ -1227,7 +1275,8 @@ fn v35_remote_page_directory_binds_generation_neutral_exact_pages() {
     let directory_uri = "s3://borsuk-index/attempts/a01/page-directories/group-0000.arrow";
     let (bytes, identity) =
         encode_v35_page_directory_arrow(0, &[page_0, page_1], directory_uri).unwrap();
-    let decoded = decode_v35_page_directory_arrow(&bytes, &identity).unwrap();
+    let decoded =
+        decode_v35_page_directory_arrow(&bytes, &identity, "directory-version-01").unwrap();
     assert_eq!(decoded.group_ordinal(), 0);
     assert_eq!(decoded.first_page_ordinal(), 0);
     assert_eq!(decoded.pages().len(), 2);
@@ -1235,15 +1284,28 @@ fn v35_remote_page_directory_binds_generation_neutral_exact_pages() {
     assert_eq!(decoded.pages()[1].uri(), page_1_uri);
 
     let root_uri = "s3://borsuk-index/attempts/a01/page-directory.arrow";
-    let block_reference =
-        V35PageDirectoryBlockReference::new(&decoded, "directory-version-01").unwrap();
+    let block_reference = V35PageDirectoryBlockReference::new(&decoded).unwrap();
     let (root_bytes, root_identity) =
         encode_v35_page_directory_root_arrow(std::slice::from_ref(&block_reference), root_uri)
             .unwrap();
     let root = decode_v35_page_directory_root_arrow(&root_bytes, &root_identity).unwrap();
     assert_eq!(root.block_count(), 1);
     assert_eq!(root.page_count(), 2);
-    assert!(root.authenticates(&decoded, "directory-version-01"));
+    assert!(root.authenticates(&decoded));
+    let fixture = code_scan_fixture_with_page_root(digest_bytes(&root.identity().digest));
+    let mut accumulator = V35CandidateAccumulator::new(&fixture.plan, &fixture.visibility).unwrap();
+    accumulator.admit(V35ScannedCandidate::new(0.0, 0, 7, 1, 0, None).unwrap());
+    accumulator.admit(V35ScannedCandidate::new(1.0, 1, 8, 1, 1, None).unwrap());
+    let candidates = accumulator.finish();
+    let selected = resolve_v35_exact_pages(
+        &fixture.plan,
+        &candidates,
+        &root,
+        std::slice::from_ref(&decoded),
+    )
+    .unwrap();
+    assert_eq!(selected.pages().len(), 2);
+    assert_eq!(selected.pages()[0].uri(), page_0_uri);
 
     let foreign_page_uri = "s3://borsuk-index/attempts/a02/pages/page-0000.parquet";
     let (foreign_page, _) =
@@ -1254,10 +1316,15 @@ fn v35_remote_page_directory_binds_generation_neutral_exact_pages() {
         "s3://borsuk-index/attempts/a02/page-directories/group-0000.arrow",
     )
     .unwrap();
-    let foreign_block =
-        decode_v35_page_directory_arrow(&foreign_block_bytes, &foreign_block_identity).unwrap();
-    assert!(!root.authenticates(&foreign_block, "directory-version-02"));
+    let foreign_block = decode_v35_page_directory_arrow(
+        &foreign_block_bytes,
+        &foreign_block_identity,
+        "directory-version-02",
+    )
+    .unwrap();
+    assert!(!root.authenticates(&foreign_block));
     assert!(!root.authenticates_identity(foreign_block.identity()));
+    assert!(resolve_v35_exact_pages(&fixture.plan, &candidates, &root, &[foreign_block]).is_err());
 
     let (page_2, _) = encode_v35_exact_page_parquet(
         2,
@@ -1274,7 +1341,7 @@ fn v35_remote_page_directory_binds_generation_neutral_exact_pages() {
     let mut corrupt = bytes;
     let midpoint = corrupt.len() / 2;
     corrupt[midpoint] ^= 1;
-    assert!(decode_v35_page_directory_arrow(&corrupt, &identity).is_err());
+    assert!(decode_v35_page_directory_arrow(&corrupt, &identity, "directory-version-01").is_err());
 
     let mut corrupt_root = root_bytes;
     let root_midpoint = corrupt_root.len() / 2;

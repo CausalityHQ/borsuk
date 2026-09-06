@@ -17,9 +17,10 @@ fn invalid(message: &str) -> BorsukError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Immutable directory-root, snapshot, and code-schema binding for remote routing.
+/// Immutable code/page-directory roots, snapshot, and schema binding for remote routing.
 pub struct V35RemoteDirectoryBinding {
     pub(crate) directory_root_digest: [u8; 32],
+    pub(crate) page_directory_root_digest: [u8; 32],
     pub(crate) snapshot_digest: [u8; 32],
     pub(crate) code_schema_digest: [u8; 32],
 }
@@ -28,14 +29,23 @@ impl V35RemoteDirectoryBinding {
     /// Construct a complete nonzero remote-directory binding.
     pub fn new(
         directory_root_digest: [u8; 32],
+        page_directory_root_digest: [u8; 32],
         snapshot_digest: [u8; 32],
         code_schema_digest: [u8; 32],
     ) -> Result<Self> {
-        if [directory_root_digest, snapshot_digest, code_schema_digest].contains(&[0; 32]) {
+        if [
+            directory_root_digest,
+            page_directory_root_digest,
+            snapshot_digest,
+            code_schema_digest,
+        ]
+        .contains(&[0; 32])
+        {
             return Err(invalid("V35 remote directory binding differs"));
         }
         Ok(Self {
             directory_root_digest,
+            page_directory_root_digest,
             snapshot_digest,
             code_schema_digest,
         })

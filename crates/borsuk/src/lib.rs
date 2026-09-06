@@ -289,7 +289,7 @@ pub use v35_projection::{
 #[doc(hidden)]
 pub use v35_remote::{
     V35CandidateAccumulator, V35CandidateSet, V35ExactPageIdentity, V35ExactPageResponse,
-    V35ExactPageRow, V35ExactPageTransport, V35Match, V35PageDirectoryBlock,
+    V35ExactPageRow, V35ExactPageSelection, V35ExactPageTransport, V35Match, V35PageDirectoryBlock,
     V35PageDirectoryBlockReference, V35PageDirectoryRoot, V35RemoteChunk, V35RemoteCodeRow,
     V35RemoteDirectoryBlock, V35RemoteDispatch, V35RemoteExecutionFailure, V35RemoteFailureKind,
     V35RemotePlan, V35RemoteRange, V35RemoteRangeResponse, V35RemoteReadReceipt,
@@ -301,7 +301,8 @@ pub use v35_remote::{
     encode_v35_page_directory_arrow, encode_v35_page_directory_root_arrow,
     encode_v35_remote_code_arrow, encode_v35_remote_directory_arrow, execute_v35_remote_plan,
     plan_v35_remote_reads, reduce_v35_scanned_candidates, rerank_v35_exact_pages,
-    scan_v35_code_ranges, select_v35_exact_pages, v35_remote_code_schema_digest,
+    resolve_v35_exact_pages, scan_v35_code_ranges, select_v35_exact_pages,
+    v35_remote_code_schema_digest,
 };
 #[doc(hidden)]
 pub use v35_route::{

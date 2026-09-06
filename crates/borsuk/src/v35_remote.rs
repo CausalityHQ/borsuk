@@ -1333,6 +1333,7 @@ pub struct V35PageDirectoryBlock {
     group_ordinal: u32,
     identity: V35ArtifactIdentity,
     pages: Vec<V35ExactPageIdentity>,
+    version_id: String,
 }
 
 impl V35PageDirectoryBlock {
@@ -1423,6 +1424,7 @@ pub fn encode_v35_page_directory_arrow(
 pub fn decode_v35_page_directory_arrow(
     bytes: &[u8],
     registered: &V35ArtifactIdentity,
+    version_id: &str,
 ) -> Result<V35PageDirectoryBlock> {
     if registered.role != "page-directory-block"
         || registered.digest_algorithm != "sha256"
@@ -1432,6 +1434,7 @@ pub fn decode_v35_page_directory_arrow(
         || registered.length > MAX_DIRECTORY_BLOCK_BYTES
         || !registered.uri.starts_with("s3://")
         || registered.uri.contains("/corpus/")
+        || version_id.is_empty()
         || registered.digest != format!("{:x}", Sha256::digest(bytes))
     {
         return Err(invalid("V35 page-directory block identity differs"));
@@ -1530,6 +1533,7 @@ pub fn decode_v35_page_directory_arrow(
         group_ordinal: manifest.group_ordinal,
         identity: registered.clone(),
         pages,
+        version_id: version_id.to_owned(),
     })
 }
 
@@ -1616,10 +1620,7 @@ pub struct V35PageDirectoryBlockReference {
 
 impl V35PageDirectoryBlockReference {
     /// Bind one decoded block to the immutable S3 version returned by its PUT.
-    pub fn new(block: &V35PageDirectoryBlock, version_id: &str) -> Result<Self> {
-        if version_id.is_empty() {
-            return Err(invalid("V35 page-directory block version differs"));
-        }
+    pub fn new(block: &V35PageDirectoryBlock) -> Result<Self> {
         Ok(Self {
             group_ordinal: block.group_ordinal,
             first_page_ordinal: block.pages[0].page_ordinal,
@@ -1627,7 +1628,7 @@ impl V35PageDirectoryBlockReference {
                 .map_err(|_| invalid("V35 page-directory page count overflows"))?,
             dimensions: block.pages[0].dimensions,
             identity: block.identity.clone(),
-            version_id: version_id.to_owned(),
+            version_id: block.version_id.clone(),
         })
     }
 }
@@ -1650,14 +1651,14 @@ impl V35PageDirectoryRoot {
         self.page_count
     }
     /// Whether this root names this exact decoded block and covered interval.
-    pub fn authenticates(&self, block: &V35PageDirectoryBlock, version_id: &str) -> bool {
+    pub fn authenticates(&self, block: &V35PageDirectoryBlock) -> bool {
         self.entries.iter().any(|entry| {
             entry.group_ordinal == block.group_ordinal
                 && entry.first_page_ordinal == block.pages[0].page_ordinal
                 && entry.pages as usize == block.pages.len()
                 && entry.dimensions == block.pages[0].dimensions
                 && entry.identity == block.identity
-                && entry.version_id == version_id
+                && entry.version_id == block.version_id
         })
     }
     /// Whether this root names one exact block identity.
@@ -1668,6 +1669,79 @@ impl V35PageDirectoryRoot {
     pub fn identity(&self) -> &V35ArtifactIdentity {
         &self.identity
     }
+}
+
+fn parse_sha256(digest: &str) -> Result<[u8; 32]> {
+    if !is_digest(digest) {
+        return Err(invalid("V35 SHA-256 authority differs"));
+    }
+    let mut parsed = [0_u8; 32];
+    for (index, byte) in parsed.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&digest[index * 2..index * 2 + 2], 16)
+            .map_err(|_| invalid("V35 SHA-256 authority differs"))?;
+    }
+    Ok(parsed)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Exact pages selected only through the generation-bound page directory.
+pub struct V35ExactPageSelection {
+    page_directory_root_digest: [u8; 32],
+    pages: Vec<V35ExactPageIdentity>,
+}
+
+impl V35ExactPageSelection {
+    /// Directory-authenticated pages in exact selection order.
+    pub fn pages(&self) -> &[V35ExactPageIdentity] {
+        &self.pages
+    }
+}
+
+/// Resolve the frozen candidate-page selection through authenticated directory blocks.
+pub fn resolve_v35_exact_pages(
+    plan: &V35RemotePlan,
+    candidates: &V35CandidateSet,
+    root: &V35PageDirectoryRoot,
+    blocks: &[V35PageDirectoryBlock],
+) -> Result<V35ExactPageSelection> {
+    let selected = select_v35_exact_pages(candidates.candidates());
+    if candidates.generation_digest != plan.generation_digest
+        || candidates.query_digest != plan.query_digest
+        || candidates.snapshot_digest != plan.directory_binding.snapshot_digest
+        || selected.is_empty()
+        || selected.len() > 8
+        || blocks.is_empty()
+        || blocks.len() > 8
+        || parse_sha256(&root.identity.digest)? != plan.directory_binding.page_directory_root_digest
+    {
+        return Err(invalid("V35 exact page selection authority differs"));
+    }
+
+    let mut groups = BTreeSet::new();
+    let mut available = BTreeMap::new();
+    for block in blocks {
+        if !root.authenticates(block) || !groups.insert(block.group_ordinal) {
+            return Err(invalid("V35 exact page directory authority differs"));
+        }
+        for page in &block.pages {
+            if available.insert(page.page_ordinal, page).is_some() {
+                return Err(invalid("V35 exact page directory overlaps"));
+            }
+        }
+    }
+    let pages = selected
+        .iter()
+        .map(|ordinal| {
+            available
+                .get(ordinal)
+                .map(|page| (*page).clone())
+                .ok_or_else(|| invalid("V35 selected exact page is absent"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(V35ExactPageSelection {
+        page_directory_root_digest: plan.directory_binding.page_directory_root_digest,
+        pages,
+    })
 }
 
 /// Encode the compact Arrow root of generation-neutral page-directory blocks.
@@ -1958,14 +2032,16 @@ pub fn rerank_v35_exact_pages<T: V35ExactPageTransport>(
     query: &V35ProjectedQuery,
     visibility: &V35SnapshotVisibility,
     candidates: &V35CandidateSet,
-    pages: &[V35ExactPageIdentity],
+    selection: &V35ExactPageSelection,
     transport: &mut T,
     k: usize,
 ) -> Result<V35SearchResult> {
     let selected = select_v35_exact_pages(candidates.candidates());
+    let pages = selection.pages();
     let dimensions = query.source_query().len();
     if plan.query_digest != query.source_digest()
         || plan.directory_binding.snapshot_digest != visibility.digest
+        || selection.page_directory_root_digest != plan.directory_binding.page_directory_root_digest
         || candidates.generation_digest != plan.generation_digest
         || candidates.query_digest != plan.query_digest
         || candidates.snapshot_digest != visibility.digest
@@ -2355,7 +2431,7 @@ pub struct V35RemoteChunk {
 }
 
 impl V35RemoteChunk {
-    /// Construct a bounded code chunk. Whole-object and non-S3 capabilities are rejected.
+    /// Construct a bounded code chunk; a complete independently decodable bounded object is valid.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         group_ordinal: u32,
@@ -2419,14 +2495,6 @@ fn directory_metadata(
             digest_hex(binding.code_schema_digest),
         ),
         ("format".to_owned(), DIRECTORY_FORMAT.to_owned()),
-        (
-            "root_sha256".to_owned(),
-            digest_hex(binding.directory_root_digest),
-        ),
-        (
-            "snapshot_sha256".to_owned(),
-            digest_hex(binding.snapshot_digest),
-        ),
         ("uri".to_owned(), uri.to_owned()),
     ]);
     let manifest = serde_json::to_string(&manifest)
@@ -3618,7 +3686,8 @@ mod remote_execution_limit_tests {
             selected_groups: 25,
             selected_rows: 25,
             requested_code_bytes: 25,
-            directory_binding: V35RemoteDirectoryBinding::new([1; 32], [2; 32], [3; 32]).unwrap(),
+            directory_binding: V35RemoteDirectoryBinding::new([1; 32], [2; 32], [3; 32], [4; 32])
+                .unwrap(),
             generation_digest: [4; 32],
             query_digest: [5; 32],
         }
@@ -3708,7 +3777,8 @@ mod remote_execution_limit_tests {
             selected_groups: 8,
             selected_rows: 8,
             requested_code_bytes: 8 * MIB,
-            directory_binding: V35RemoteDirectoryBinding::new([1; 32], [2; 32], [3; 32]).unwrap(),
+            directory_binding: V35RemoteDirectoryBinding::new([1; 32], [2; 32], [3; 32], [4; 32])
+                .unwrap(),
             generation_digest: [4; 32],
             query_digest: [5; 32],
         }
