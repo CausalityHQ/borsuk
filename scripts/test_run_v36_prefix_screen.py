@@ -317,6 +317,42 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                         S3(mutation), plan, attempt, expected_instance_id="i-fixture"
                     )
 
+    def test_v36_prefix_screen_terminal_stops_a_running_instance_immediately(self) -> None:
+        # Break caught: completed science keeps a paid instance alive until
+        # guest shutdown instead of letting the controller terminate it.
+        plan = self.plan()
+        ec2 = mock.Mock()
+        ec2.run_instances.return_value = {
+            "Instances": [{"InstanceId": "i-running-complete"}]
+        }
+        ec2.describe_instances.return_value = {
+            "Reservations": [{"Instances": [{"State": {"Name": "running"}}]}]
+        }
+        with (
+            mock.patch.object(
+                subject, "_read_attempt_status", side_effect=[None, "complete"]
+            ) as status,
+            mock.patch.object(
+                subject.time,
+                "sleep",
+                side_effect=AssertionError("controller slept after terminal"),
+            ),
+        ):
+            uri = subject.run_v36_prefix_screen(
+                plan,
+                ec2_client=ec2,
+                s3_client=mock.Mock(),
+                launch_nonce="d" * 32,
+            )
+        self.assertEqual(
+            uri,
+            "s3://fixture/v36/prefix-results/attempt-0000/ATTEMPT_COMPLETE.json",
+        )
+        self.assertEqual(status.call_count, 2)
+        ec2.terminate_instances.assert_called_once_with(
+            InstanceIds=["i-running-complete"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

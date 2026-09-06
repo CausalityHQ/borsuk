@@ -443,6 +443,7 @@ def run_v36_prefix_screen(
         raise ValueError("V36 prefix-screen terminal already exists")
     for attempt_ordinal in range(MAX_ATTEMPTS):
         instance_id: str | None = None
+        status: str | None = None
         try:
             spec = build_v36_prefix_launch_specs(
                 plan,
@@ -463,16 +464,25 @@ def run_v36_prefix_screen(
                 ][0]["Instances"][0]["State"]["Name"]
                 if state in {"shutting-down", "terminated", "stopped", "stopping"}:
                     break
+                status = _read_attempt_status(
+                    s3_client,
+                    plan,
+                    attempt_ordinal,
+                    expected_instance_id=instance_id,
+                )
+                if status is not None:
+                    break
                 time.sleep(15)
         finally:
             if instance_id is not None:
                 ec2_client.terminate_instances(InstanceIds=[instance_id])
-        status = _read_attempt_status(
-            s3_client,
-            plan,
-            attempt_ordinal,
-            expected_instance_id=instance_id,
-        )
+        if status is None:
+            status = _read_attempt_status(
+                s3_client,
+                plan,
+                attempt_ordinal,
+                expected_instance_id=instance_id,
+            )
         if status == "complete":
             bucket, key = _marker_key(plan, attempt_ordinal, "ATTEMPT_COMPLETE.json")
             return f"s3://{bucket}/{key}"
