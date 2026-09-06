@@ -459,3 +459,49 @@ Every standard dataset has CPU/RAM/disk/cache timelines under
 - `recall-*`: recall sweeps;
 - `uncapped-*`: overload ceilings;
 - `normalized-build-*`: corrected angular-index builds.
+
+## V36 ReLAION-Natural scale-transfer authority
+
+V36 uses the immutable Hugging Face revision
+`andropar/relaion2b-natural-embeddings@bfc7465dcf1245bd605d35dcaf5d2177bbc2025a`
+as its 768-dimensional scale-transfer source. The revision contains
+514,367,913 physical rows in 2,298 distinct Parquet LFS objects totaling
+787,439,811,692 encoded bytes. Every source object has a registered LFS
+SHA-256 and length; ETag is not accepted as authority. The ordered
+`path<TAB>sha256<TAB>encoded_bytes<LF>` manifest has SHA-256
+`76ac61cf2821a331419ad40d5eb94d2cdafccccf39af17af1d328b7a2f0bc6c7`.
+The complete registry and deterministic split contract are in
+[`v36-funnel-dataset-authority.json`](v36-funnel-dataset-authority.json).
+
+The dataset card declares CC-BY-4.0 for the derived embeddings and metadata,
+with ReLAION source metadata under Apache-2.0; the underlying third-party
+images are not distributed. V36 consumes only the registered embeddings,
+row IDs, scores, and URLs for internal qualification, retains attribution in
+derived evidence, and does not fetch or redistribute image bodies.
+
+The card's logical schema is `url:string`, `natural_score:f32`,
+`feature_row_id:i64`, and `embedding:fixed-size-list<f32>[768]`. A bounded
+footer inspection of shard 00000 proves that the source physical schema marks
+the four outer fields and the embedding child nullable. V36 therefore does not
+call the source physically non-null: the one-pass materializer must check every
+row for a nonnegative `feature_row_id`, a present 768-element embedding, no
+null child, finite components, and a nonzero norm; any violation rejects the
+entire source revision rather than changing membership. `feature_row_id` is a
+content key and is not unique in the 514,367,913 physical rows. The logical
+corpus therefore keeps exactly the first occurrence in registered shard-path
+and row-offset order before query or scale ranking, then writes a new strict
+non-null Parquet authority. The construction campaign must also
+verify every source footer matches the registered physical schema before using
+its rows. Before that full scan, bounded footer reads must prove zero nulls in
+the `feature_row_id` and embedding leaf columns, and a feature-ID-column-only
+preflight must establish enough distinct IDs for the fixed spill admission.
+`url` and `natural_score` are registered source metadata but are not V36
+membership or vector-quality gates.
+
+Development, validation, sealed holdout, and performance queries are selected
+only by committed domain-separated hashes of the immutable source identity and
+deduplicated `feature_row_id`; they are disjoint and excluded before nested 1M/10M/100M
+source membership is ranked. The same query-vector identities are reused at
+all three scales, but each scale receives independently materialized exact
+GT@100. No query vector, neighbor, label, or outcome participates in corpus
+membership or representation construction.

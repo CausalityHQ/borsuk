@@ -333,3 +333,69 @@ The checked-in
 contains 42 planned cells. Paid execution requires
 both `BORSUK_MATRIX_EXECUTE=1` and `BORSUK_RUN_STANDARD_MATRIX=1`; see
 [reproducibility](reproducibility.md).
+
+## V36 Funnel-3 absolute qualification method
+
+V36 is a breaking, prerelease architecture and is qualified against absolute
+gates rather than a historical executable. Its corpus, membership, query roles,
+metric, host classes, cache, concurrency, repetitions, and storage SDK are
+frozen in
+[`v36-funnel-dataset-authority.json`](v36-funnel-dataset-authority.json).
+Historical V35 results remain causal context only.
+
+The immutable source identity is the SHA-256 of the ordered per-shard
+`path<TAB>sha256<TAB>encoded_bytes<LF>` records. Query roles independently rank
+rows by `SHA-256(role_seed || source_identity || LE64(feature_row_id))`, with
+fixed role priority development, validation, sealed holdout, then performance;
+selected query rows are removed from all corpus scales. Remaining rows rank by
+`SHA-256(source_identity || LE64(feature_row_id))`. The first 1M rows are an
+exact prefix of 10M, which is an exact prefix of 100M. Hash ties break by
+unsigned `feature_row_id`. Because the source repeats content IDs, traversal is
+registered shard-path order then physical row offset, and only the first
+occurrence of each nonnegative ID enters either ranking. Materialized corpus
+rows are written in `(source score, feature_row_id)` order. Any invalid vector
+or negative ID rejects the complete frozen revision; rows are never silently
+skipped.
+
+All SHA-256 scores compare as unsigned big-endian 256-bit integers, equivalently
+lexicographic byte arrays; a prefix bit is counted from the most-significant bit
+of byte zero. Within each query role, `query_ordinal` is the zero-based rank in
+ascending `(query score, feature_row_id)` order.
+
+Each scale uses squared L2 over the exact source f32 vectors. Exact GT@100 first
+converts each source and query component exactly to IEEE-754 binary64, then
+subtracts, multiplies, and adds in dimension order using round-to-nearest-even,
+with no fused contraction and no flush-to-zero or denormals-are-zero mode. It
+orders neighbors by `(binary64 distance, feature_row_id)`. Development may select the fixed
+representation ladder. Validation can reject but cannot retune it. Sealed
+holdout opens once after validation, and performance queries never tune quality.
+Construction has source-only capability; evaluation has query/GT and named
+immutable index-object capabilities but no source, list, or discovery capability.
+
+The source is streamed once in bounded blocks on AWS Spot under profile
+`causality`; the complete 787-GB corpus is never resident in devbox RAM or disk.
+The construction host has encrypted ephemeral NVMe. It spills only deduplicated
+rows whose source hash has its first bit clear, capped at 270,000,000 rows,
+plus the bounded query heaps; after the scan it must contain at least
+100,013,000 eligible IDs or fail. This fixed half-prefix is an execution
+optimization, not a sampling rule: the exact lowest 100M source hashes are
+still selected after removing the 13,000 query IDs.
+Before the full source scan, a feature-ID-column-only pass must prove at least
+200,026,000 distinct valid IDs; otherwise the half-prefix plan is rejected
+without downloading embedding pages. Footer-only preflight also requires zero
+nulls for the ID and embedding leaf columns in every shard.
+After each complete source shard, one conditional checkpoint authenticates the
+manifest-prefix digest, completed candidate-object identities, all four bounded
+query heaps including vectors and canonical locators, validation counters, and
+the next shard ordinal. Resume is permitted only from that complete state;
+otherwise the interrupted materialization restarts at shard zero. Exact GT
+checkpoints every eight completed queries as immutable authenticated objects.
+An interrupted partial block is discarded; completed blocks resume only against
+the identical source/query authority. The 43,200-second cap is per active
+construction/GT process cell and excludes queued Spot time.
+Registered 1M/10M/100M Parquet, query, and GT objects are written to
+same-region S3 with exact SHA-256, lengths, row counts, and schemas. Serving
+uses complete authenticated Arrow IPC objects only. The frozen 256-MiB object
+cache, concurrency 1/16/64, hot-object protocol, 10,000-query shared-cache pass,
+three terminal 100M repetitions, and honest cold-S3 reporting prevent a warm
+compute result from being presented as cold storage latency.
