@@ -664,7 +664,11 @@ fn parquet_writer_properties() -> WriterProperties {
 
 fn validate_parquet_descriptor(actual: &SchemaDescriptor, expected: &Schema) -> Result<()> {
     let expected = ArrowSchemaConverter::new().convert(expected)?;
-    if actual != &expected {
+    // Parquet root-group names are writer metadata (`schema` in PyArrow and
+    // `arrow_schema` in parquet-rs), not a column or logical-type authority.
+    if actual.columns() != expected.columns()
+        || actual.root_schema().get_fields().len() != expected.root_schema().get_fields().len()
+    {
         return Err(invalid("V36 prefix Parquet physical schema differs"));
     }
     Ok(())

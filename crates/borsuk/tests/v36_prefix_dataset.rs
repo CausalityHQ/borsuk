@@ -1069,6 +1069,32 @@ fn v36_prefix_dataset_registered_input_is_authenticated_and_strict() {
     );
 }
 
+#[test]
+fn v36_prefix_dataset_accepts_independent_pyarrow_registered_input() {
+    let bytes = include_bytes!("fixtures/v36_pyarrow_registered_input.parquet");
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("registered.parquet");
+    fs::write(&path, bytes).unwrap();
+    let object = V36PrefixRankedSourceObject {
+        encoded_bytes: bytes.len() as u64,
+        path: "data/registered.parquet".into(),
+        sample_sha256: sample_digest("data/registered.parquet", bytes.len() as u64),
+        sha256: format!("{:x}", Sha256::digest(bytes)),
+        uri: "https://example.invalid/registered.parquet".into(),
+    };
+    let mut rows = Vec::new();
+    assert_eq!(
+        scan_v36_prefix_registered_input_parquet(&path, &object, 0, |row| {
+            rows.push(row);
+            Ok(())
+        })
+        .unwrap(),
+        1
+    );
+    assert_eq!(rows[0].feature_row_id, 7);
+    assert_eq!(rows[0].embedding.len(), DIMENSIONS);
+}
+
 fn write_registered_rows(path: &Path, feature_ids: &[i64]) -> V36PrefixRankedSourceObject {
     let child = Arc::new(Field::new("item", DataType::Float32, true));
     let schema = Arc::new(Schema::new(vec![

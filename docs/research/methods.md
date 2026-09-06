@@ -365,6 +365,17 @@ python3 scripts/run_v36_prefix_screen.py \
   --registry-output docs/research/v36-prefix-source-registry.json
 ```
 
+Registered-source interoperability is independently locked by
+`crates/borsuk/tests/fixtures/v36_pyarrow_registered_input.parquet` (SHA-256
+`4e963d0e40312f7e9fcf539705be290eb56010ca4078b6a01d1abd12a239906f`,
+4,274 bytes), generated through pinned PyArrow rather than parquet-rs. A
+bounded 1,545-byte footer read of the registered PyArrow-12 sample confirms
+root group `schema`, one row group, 223,518 rows, and physical leaf
+`embedding.list.item`. The reader authenticates every authoritative column
+path, physical/logical type, and nullability while deliberately ignoring only
+the non-column root-group label (`schema` in PyArrow, `arrow_schema` in
+parquet-rs).
+
 The immutable source identity is the SHA-256 of the ordered per-shard
 `path<TAB>sha256<TAB>encoded_bytes<LF>` records. Query roles independently rank
 rows by `SHA-256(role_seed || source_identity || LE64(feature_row_id))`, with
