@@ -520,6 +520,53 @@ pub struct V36PrefixCheckpointManifest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Run-scoped compare-and-swap pointer to one immutable checkpoint manifest.
+pub struct V36PrefixCheckpointPointer {
+    /// Diagnostic checkpoint pointers can never make release claims.
+    pub claim_eligible: bool,
+    /// Manifest generation referenced by this pointer.
+    pub generation: u32,
+    /// Exact immutable checkpoint manifest object.
+    pub manifest: V36ArtifactIdentity,
+    /// Attempt that produced the referenced manifest.
+    pub producer_attempt_id: String,
+    /// Zero-based producer ordinal used to fence zombie writers.
+    pub producer_attempt_ordinal: u8,
+    /// Stable campaign run identity.
+    pub run_id: String,
+    /// Exact pointer schema marker.
+    pub schema: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Conditional write required to advance one run-scoped checkpoint pointer.
+pub enum V36PrefixCheckpointPointerCondition {
+    /// Create generation zero only when no pointer exists.
+    Create,
+    /// Replace the authenticated current pointer only at its exact ETag.
+    Replace {
+        /// Current pointer ETag supplied to the conditional write.
+        etag: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Dependency-first immutable publication followed by one pointer CAS.
+pub struct V36PrefixCheckpointPublication {
+    /// Immutable phase dependencies uploaded before the manifest.
+    pub dependencies: Vec<V36ArtifactIdentity>,
+    /// Exact conditional pointer operation.
+    pub condition: V36PrefixCheckpointPointerCondition,
+    /// Content-addressed immutable manifest identity.
+    pub manifest: V36ArtifactIdentity,
+    /// Exact canonical manifest bytes.
+    pub manifest_bytes: Vec<u8>,
+    /// Exact canonical pointer bytes written last.
+    pub pointer_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// Closed manifest for one bounded V36 screen arm.
 pub struct V36PrefixScreenManifest {
     /// Complete role-separated artifacts.
@@ -1294,6 +1341,135 @@ pub fn canonical_v36_prefix_checkpoint_manifest_bytes(
 ) -> Result<Vec<u8>> {
     validate_v36_prefix_checkpoint_manifest(manifest)?;
     canonical_value_bytes(manifest)
+}
+
+/// Canonical newline JSON for one validated run-scoped checkpoint pointer.
+pub fn canonical_v36_prefix_checkpoint_pointer_bytes(
+    context: &V36PrefixCheckpointContext,
+    pointer: &V36PrefixCheckpointPointer,
+) -> Result<Vec<u8>> {
+    if pointer.schema != "borsuk-v36-prefix-checkpoint-pointer-v1"
+        || pointer.claim_eligible
+        || pointer.run_id != context.run_id
+        || pointer.producer_attempt_ordinal >= 3
+        || pointer.producer_attempt_id
+            != format!(
+                "{}-attempt-{:04}",
+                pointer.run_id, pointer.producer_attempt_ordinal
+            )
+        || pointer.manifest.role != "checkpoint-manifest"
+        || !valid_checkpoint_artifact(&pointer.manifest, "checkpoint-manifest")
+        || !pointer.manifest.uri.starts_with(&context.object_prefix)
+    {
+        return Err(invalid("V36 prefix checkpoint pointer differs"));
+    }
+    canonical_value_bytes(pointer)
+}
+
+fn checkpoint_manifest_identity(
+    context: &V36PrefixCheckpointContext,
+    manifest: &V36PrefixCheckpointManifest,
+    bytes: &[u8],
+) -> V36ArtifactIdentity {
+    let sha256 = format!("{:x}", Sha256::digest(bytes));
+    V36ArtifactIdentity {
+        blake3: blake3::hash(bytes).to_hex().to_string(),
+        encoded_bytes: bytes.len() as u64,
+        role: "checkpoint-manifest".to_owned(),
+        sha256: sha256.clone(),
+        uri: format!(
+            "{}{sha256}-checkpoint-{:08}.json",
+            context.object_prefix, manifest.generation
+        ),
+    }
+}
+
+/// Build an immutable dependency-first publication and final run-pointer CAS.
+pub fn plan_v36_prefix_checkpoint_publication(
+    context: &V36PrefixCheckpointContext,
+    manifest: &V36PrefixCheckpointManifest,
+    current_pointer: Option<(&[u8], &str)>,
+) -> Result<V36PrefixCheckpointPublication> {
+    validate_v36_prefix_checkpoint_manifest_with_context(context, manifest)?;
+    let condition = match (manifest.generation, current_pointer) {
+        (0, None) if manifest.previous_checkpoint.is_none() => {
+            V36PrefixCheckpointPointerCondition::Create
+        }
+        (0, _) => return Err(invalid("V36 prefix checkpoint pointer genesis differs")),
+        (_, Some((bytes, etag))) if !etag.is_empty() => {
+            let current: V36PrefixCheckpointPointer = serde_json::from_slice(bytes)
+                .map_err(|_| invalid("V36 prefix current checkpoint pointer JSON differs"))?;
+            if canonical_v36_prefix_checkpoint_pointer_bytes(context, &current)? != bytes
+                || current.generation.checked_add(1) != Some(manifest.generation)
+                || manifest.previous_checkpoint.as_ref() != Some(&current.manifest)
+            {
+                return Err(invalid("V36 prefix current checkpoint pointer differs"));
+            }
+            V36PrefixCheckpointPointerCondition::Replace {
+                etag: etag.to_owned(),
+            }
+        }
+        _ => return Err(invalid("V36 prefix checkpoint current pointer is missing")),
+    };
+
+    let manifest_bytes = canonical_v36_prefix_checkpoint_manifest_bytes(manifest)?;
+    let manifest_identity = checkpoint_manifest_identity(context, manifest, &manifest_bytes);
+    let pointer = V36PrefixCheckpointPointer {
+        claim_eligible: false,
+        generation: manifest.generation,
+        manifest: manifest_identity.clone(),
+        producer_attempt_id: manifest.producer_attempt_id.clone(),
+        producer_attempt_ordinal: manifest.producer_attempt_ordinal,
+        run_id: manifest.run_id.clone(),
+        schema: "borsuk-v36-prefix-checkpoint-pointer-v1".to_owned(),
+    };
+    let pointer_bytes = canonical_v36_prefix_checkpoint_pointer_bytes(context, &pointer)?;
+    let mut dependencies = manifest.population.identity_runs.clone();
+    match &manifest.phase {
+        V36PrefixCheckpointPhase::Population => {}
+        V36PrefixCheckpointPhase::Materialized { artifacts } => dependencies.extend(
+            materialized_artifacts(artifacts)
+                .into_iter()
+                .map(|(artifact, _)| artifact.clone()),
+        ),
+        V36PrefixCheckpointPhase::GroundTruth {
+            heaps,
+            materialized,
+            ..
+        } => {
+            dependencies.extend(
+                materialized_artifacts(materialized)
+                    .into_iter()
+                    .map(|(artifact, _)| artifact.clone()),
+            );
+            dependencies.push(heaps.clone());
+        }
+    }
+    let mut uris = BTreeSet::new();
+    if dependencies
+        .iter()
+        .any(|artifact| !uris.insert(artifact.uri.as_str()))
+    {
+        return Err(invalid("V36 prefix checkpoint dependencies overlap"));
+    }
+    Ok(V36PrefixCheckpointPublication {
+        dependencies,
+        condition,
+        manifest: manifest_identity,
+        manifest_bytes,
+        pointer_bytes,
+    })
+}
+
+/// Resolve an ambiguous pointer write only when the observed bytes equal the intention exactly.
+pub fn validate_v36_prefix_checkpoint_pointer_observation(
+    intended: &[u8],
+    observed: &[u8],
+) -> Result<()> {
+    if intended.is_empty() || intended != observed {
+        return Err(invalid("V36 prefix checkpoint pointer observation differs"));
+    }
+    Ok(())
 }
 
 /// Validate a completed freeze receipt against every immutable input authority.

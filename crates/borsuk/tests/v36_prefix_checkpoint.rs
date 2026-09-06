@@ -7,12 +7,14 @@ use arrow_ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointManifest,
-    V36PrefixCheckpointPhase, V36PrefixIdentityRun, V36PrefixMaterializedArtifacts,
-    V36PrefixPopulationCheckpoint, V36PrefixRegisteredSourceObject, V36PrefixRowIdentity,
-    V36PrefixSourceObject, canonical_v36_prefix_checkpoint_manifest_bytes,
-    decode_v36_prefix_identity_run, encode_v36_prefix_identity_run, restore_v36_prefix_population,
+    V36PrefixCheckpointPhase, V36PrefixCheckpointPointer, V36PrefixCheckpointPointerCondition,
+    V36PrefixIdentityRun, V36PrefixMaterializedArtifacts, V36PrefixPopulationCheckpoint,
+    V36PrefixRegisteredSourceObject, V36PrefixRowIdentity, V36PrefixSourceObject,
+    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
+    decode_v36_prefix_identity_run, encode_v36_prefix_identity_run,
+    plan_v36_prefix_checkpoint_publication, restore_v36_prefix_population,
     validate_v36_prefix_checkpoint_manifest_with_context,
-    validate_v36_prefix_checkpoint_transition,
+    validate_v36_prefix_checkpoint_pointer_observation, validate_v36_prefix_checkpoint_transition,
 };
 use sha2::{Digest, Sha256};
 
@@ -137,6 +139,21 @@ fn materialized_artifacts() -> V36PrefixMaterializedArtifacts {
     }
 }
 
+fn checkpoint_identity(manifest: &V36PrefixCheckpointManifest) -> V36ArtifactIdentity {
+    let bytes = canonical_v36_prefix_checkpoint_manifest_bytes(manifest).unwrap();
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    V36ArtifactIdentity {
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        encoded_bytes: bytes.len().try_into().unwrap(),
+        role: "checkpoint-manifest".into(),
+        sha256: sha256.clone(),
+        uri: format!(
+            "s3://fixture/v36/runs/v36-prefix-screen-fixture/objects/{sha256}-checkpoint-{:08}.json",
+            manifest.generation
+        ),
+    }
+}
+
 #[test]
 fn v36_prefix_checkpoint_population_authority_is_canonical_and_closed() {
     let manifest = population_manifest();
@@ -206,19 +223,9 @@ fn v36_prefix_checkpoint_transition_is_monotonic_across_attempts() {
     let mut previous = population_manifest();
     previous.population.cutoff_object_ordinal = Some(0);
     previous.population.cutoff_row_offset = Some(79);
-    let previous_bytes = canonical_v36_prefix_checkpoint_manifest_bytes(&previous).unwrap();
-    let digest = format!("{:x}", Sha256::digest(&previous_bytes));
     let mut next = previous.clone();
     next.generation = 1;
-    next.previous_checkpoint = Some(V36ArtifactIdentity {
-        blake3: blake3::hash(&previous_bytes).to_hex().to_string(),
-        encoded_bytes: previous_bytes.len().try_into().unwrap(),
-        role: "checkpoint-manifest".into(),
-        sha256: digest.clone(),
-        uri: format!(
-            "s3://fixture/v36/runs/v36-prefix-screen-fixture/objects/{digest}-checkpoint-00000000.json"
-        ),
-    });
+    next.previous_checkpoint = Some(checkpoint_identity(&previous));
     next.producer_attempt_id = "v36-prefix-screen-fixture-attempt-0001".into();
     next.producer_attempt_ordinal = 1;
     next.phase = V36PrefixCheckpointPhase::Materialized {
@@ -243,6 +250,70 @@ fn v36_prefix_checkpoint_transition_is_monotonic_across_attempts() {
     let mut foreign_run = next;
     foreign_run.run_id = "v36-prefix-screen-foreign".into();
     assert!(validate_v36_prefix_checkpoint_transition(&context, &previous, &foreign_run).is_err());
+}
+
+#[test]
+fn v36_prefix_checkpoint_publication_is_dependency_first_and_cas_fenced() {
+    let context = checkpoint_context(80);
+    let mut previous = population_manifest();
+    previous.population.cutoff_object_ordinal = Some(0);
+    previous.population.cutoff_row_offset = Some(79);
+    let previous_identity = checkpoint_identity(&previous);
+    let genesis = plan_v36_prefix_checkpoint_publication(&context, &previous, None).unwrap();
+    assert_eq!(
+        genesis.condition,
+        V36PrefixCheckpointPointerCondition::Create
+    );
+    assert_eq!(genesis.dependencies.len(), 1);
+    let current_pointer = V36PrefixCheckpointPointer {
+        claim_eligible: false,
+        generation: 0,
+        manifest: previous_identity.clone(),
+        producer_attempt_id: previous.producer_attempt_id.clone(),
+        producer_attempt_ordinal: 0,
+        run_id: previous.run_id.clone(),
+        schema: "borsuk-v36-prefix-checkpoint-pointer-v1".into(),
+    };
+    let current_bytes =
+        canonical_v36_prefix_checkpoint_pointer_bytes(&context, &current_pointer).unwrap();
+
+    let mut next = previous.clone();
+    next.generation = 1;
+    next.previous_checkpoint = Some(previous_identity);
+    next.phase = V36PrefixCheckpointPhase::Materialized {
+        artifacts: materialized_artifacts(),
+    };
+    let plan = plan_v36_prefix_checkpoint_publication(
+        &context,
+        &next,
+        Some((&current_bytes, "etag-generation-zero")),
+    )
+    .unwrap();
+    assert_eq!(
+        plan.condition,
+        V36PrefixCheckpointPointerCondition::Replace {
+            etag: "etag-generation-zero".into()
+        }
+    );
+    assert_eq!(plan.dependencies.len(), 7);
+    assert_eq!(plan.dependencies[0].role, "population-identity-run-0000");
+    assert_eq!(plan.dependencies[1].role, "population-authority");
+    assert_eq!(plan.dependencies[6].role, "performance-query");
+    assert_eq!(plan.manifest.role, "checkpoint-manifest");
+    validate_v36_prefix_checkpoint_pointer_observation(&plan.pointer_bytes, &plan.pointer_bytes)
+        .unwrap();
+    let mut changed = plan.pointer_bytes;
+    changed[0] ^= 1;
+    assert!(validate_v36_prefix_checkpoint_pointer_observation(&current_bytes, &changed).is_err());
+
+    assert!(plan_v36_prefix_checkpoint_publication(&context, &next, None).is_err());
+    let mut wrong_pointer = current_pointer;
+    wrong_pointer.manifest.sha256 = "f".repeat(64);
+    let wrong_bytes = serde_json::to_vec(&wrong_pointer).unwrap();
+    assert!(
+        plan_v36_prefix_checkpoint_publication(&context, &next, Some((&wrong_bytes, "etag-wrong")))
+            .is_err()
+    );
 }
 
 #[test]
