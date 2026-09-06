@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import dataclasses
+import datetime
 import hashlib
 import json
 import os
@@ -22,7 +23,7 @@ PROFILE = "causality"
 REGION = "eu-central-1"
 INSTANCE_TYPE = "r8gd.8xlarge"
 ACTIVE_WALL_SECONDS = 43_200
-CONTROLLER_GRACE_SECONDS = 300
+CONTROLLER_GRACE_SECONDS = 1_800
 EPHEMERAL_NVME_BYTES = 1_900_000_000_000
 MAX_SOURCE_OBJECTS = 16
 MAX_SOURCE_BYTES = 6 * 1024**3
@@ -35,6 +36,7 @@ MAX_CHECKPOINT_MANIFEST_BYTES = 8 * 1024**2
 MAX_CHECKPOINT_POINTER_BYTES = 1024**2
 MAX_CHECKPOINT_READY_BYTES = 1024**2
 MAX_TERMINAL_BYTES = 1024**2
+MAX_CONTROLLER_LAUNCH_BYTES = 1024**2
 AWS_CLI_TIMEOUT_SECONDS = 120
 MAX_ATTEMPTS = 3
 SPOT_HOURLY_CAP_MICRO_USD = 3_000_000
@@ -283,7 +285,10 @@ def _put_immutable_s3_bytes(s3_client: Any, uri: str, body: bytes) -> None:
             Body=body,
             IfNoneMatch="*",
         )
-    except Exception:
+    except Exception as error:
+        code = getattr(error, "response", {}).get("Error", {}).get("Code")
+        if code not in {"PreconditionFailed", "ConditionalRequestConflict", "412"}:
+            raise
         observed, _ = _read_s3_bytes(s3_client, uri, len(body))
         if observed != body:
             raise ValueError("V36 checkpoint immutable object differs") from None
@@ -1125,13 +1130,15 @@ def dry_run_v36_prefix_screen(plan: V36PrefixScreenPlan) -> bytes:
 def _attempt_wall_seconds(attempt_ordinal: int) -> int:
     if type(attempt_ordinal) is not int or not 0 <= attempt_ordinal < MAX_ATTEMPTS:
         raise ValueError("V36 prefix-screen attempt ordinal differs")
-    spent_before = attempt_ordinal * (
-        ACTIVE_WALL_SECONDS * SPOT_HOURLY_CAP_MICRO_USD // 3_600
+    campaign_seconds = (
+        CAMPAIGN_CAP_MICRO_USD * 3_600 // SPOT_HOURLY_CAP_MICRO_USD
     )
-    remaining = CAMPAIGN_CAP_MICRO_USD - spent_before
+    spent_seconds_before = attempt_ordinal * (
+        ACTIVE_WALL_SECONDS + CONTROLLER_GRACE_SECONDS
+    )
     return min(
         ACTIVE_WALL_SECONDS,
-        remaining * 3_600 // SPOT_HOURLY_CAP_MICRO_USD,
+        campaign_seconds - spent_seconds_before - CONTROLLER_GRACE_SECONDS,
     )
 
 
@@ -1370,6 +1377,372 @@ def build_v36_prefix_launch_specs(
     return specs
 
 
+def _controller_launch_uri(plan: V36PrefixScreenPlan, attempt_ordinal: int) -> str:
+    if type(attempt_ordinal) is not int or not 0 <= attempt_ordinal < MAX_ATTEMPTS:
+        raise ValueError("V36 prefix-screen attempt ordinal differs")
+    return (
+        f"{plan.output_prefix}controller/"
+        f"attempt-{attempt_ordinal:04d}-launch.json"
+    )
+
+
+def _controller_capacity_uri(plan: V36PrefixScreenPlan, attempt_ordinal: int) -> str:
+    if type(attempt_ordinal) is not int or not 0 <= attempt_ordinal < MAX_ATTEMPTS:
+        raise ValueError("V36 prefix-screen attempt ordinal differs")
+    return (
+        f"{plan.output_prefix}controller/"
+        f"attempt-{attempt_ordinal:04d}-capacity.json"
+    )
+
+
+def _controller_instance_uri(plan: V36PrefixScreenPlan, attempt_ordinal: int) -> str:
+    if type(attempt_ordinal) is not int or not 0 <= attempt_ordinal < MAX_ATTEMPTS:
+        raise ValueError("V36 prefix-screen attempt ordinal differs")
+    return (
+        f"{plan.output_prefix}controller/"
+        f"attempt-{attempt_ordinal:04d}-instance.json"
+    )
+
+
+def write_v36_controller_capacity(
+    s3_client: Any,
+    plan: V36PrefixScreenPlan,
+    launch: dict[str, object],
+) -> None:
+    """Record that one frozen Spot candidate never allocated an instance."""
+
+    attempt_ordinal = launch["attempt_ordinal"]
+    encoded_launch = canonical_json_bytes(launch)
+    value = {
+        "attempt_ordinal": attempt_ordinal,
+        "claim_eligible": False,
+        "launch_sha256": hashlib.sha256(encoded_launch).hexdigest(),
+        "run_id": plan.run_id,
+        "schema": "borsuk-v36-prefix-controller-capacity-v1",
+    }
+    _put_immutable_s3_bytes(
+        s3_client,
+        _controller_capacity_uri(plan, attempt_ordinal),
+        canonical_json_bytes(value),
+    )
+
+
+def read_v36_controller_capacity(
+    s3_client: Any,
+    plan: V36PrefixScreenPlan,
+    attempt_ordinal: int,
+    launch: dict[str, object] | None,
+) -> bool:
+    """Authenticate the optional terminal capacity outcome for one launch."""
+
+    try:
+        encoded, _ = _read_s3_bytes(
+            s3_client,
+            _controller_capacity_uri(plan, attempt_ordinal),
+            MAX_CONTROLLER_LAUNCH_BYTES,
+        )
+    except Exception as error:
+        code = getattr(error, "response", {}).get("Error", {}).get("Code")
+        if code in {"NoSuchKey", "404"}:
+            return False
+        raise
+    try:
+        value = json.loads(encoded)
+    except json.JSONDecodeError as error:
+        raise ValueError("V36 prefix-screen controller capacity differs") from error
+    if (
+        launch is None
+        or type(value) is not dict
+        or set(value)
+        != {
+            "attempt_ordinal",
+            "claim_eligible",
+            "launch_sha256",
+            "run_id",
+            "schema",
+        }
+        or canonical_json_bytes(value) != encoded
+        or type(value.get("attempt_ordinal")) is not int
+        or value["attempt_ordinal"] != attempt_ordinal
+        or value.get("claim_eligible") is not False
+        or value.get("launch_sha256")
+        != hashlib.sha256(canonical_json_bytes(launch)).hexdigest()
+        or value.get("run_id") != plan.run_id
+        or value.get("schema") != "borsuk-v36-prefix-controller-capacity-v1"
+    ):
+        raise ValueError("V36 prefix-screen controller capacity differs")
+    return True
+
+
+def _validate_v36_controller_instance(
+    value: object,
+    encoded: bytes,
+    plan: V36PrefixScreenPlan,
+    attempt_ordinal: int,
+    launch: dict[str, object] | None,
+) -> dict[str, object]:
+    if (
+        launch is None
+        or type(value) is not dict
+        or set(value)
+        != {
+            "attempt_ordinal",
+            "claim_eligible",
+            "controller_deadline_epoch_seconds",
+            "instance_id",
+            "launch_time_epoch_seconds",
+            "launch_sha256",
+            "run_id",
+            "schema",
+        }
+        or canonical_json_bytes(value) != encoded
+        or type(value.get("attempt_ordinal")) is not int
+        or value["attempt_ordinal"] != attempt_ordinal
+        or value.get("claim_eligible") is not False
+        or type(value.get("launch_time_epoch_seconds")) is not int
+        or type(value.get("controller_deadline_epoch_seconds")) is not int
+        or value["controller_deadline_epoch_seconds"]
+        != launch.get("controller_deadline_epoch_seconds")
+        or type(value.get("instance_id")) is not str
+        or _INSTANCE_ID.fullmatch(value["instance_id"]) is None
+        or value.get("launch_sha256")
+        != hashlib.sha256(canonical_json_bytes(launch)).hexdigest()
+        or value.get("run_id") != plan.run_id
+        or value.get("schema") != "borsuk-v36-prefix-controller-instance-v1"
+    ):
+        raise ValueError("V36 prefix-screen controller instance differs")
+    return value
+
+
+def read_v36_controller_instance_if_present(
+    s3_client: Any,
+    plan: V36PrefixScreenPlan,
+    attempt_ordinal: int,
+    launch: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """Authenticate the optional immutable EC2 identity for one launch."""
+
+    try:
+        encoded, _ = _read_s3_bytes(
+            s3_client,
+            _controller_instance_uri(plan, attempt_ordinal),
+            MAX_CONTROLLER_LAUNCH_BYTES,
+        )
+    except Exception as error:
+        code = getattr(error, "response", {}).get("Error", {}).get("Code")
+        if code in {"NoSuchKey", "404"}:
+            return None
+        raise
+    try:
+        value = json.loads(encoded)
+    except json.JSONDecodeError as error:
+        raise ValueError("V36 prefix-screen controller instance differs") from error
+    return _validate_v36_controller_instance(
+        value, encoded, plan, attempt_ordinal, launch
+    )
+
+
+def write_v36_controller_instance(
+    s3_client: Any,
+    plan: V36PrefixScreenPlan,
+    launch: dict[str, object],
+    instance_id: str,
+    launch_time: datetime.datetime,
+) -> dict[str, object]:
+    """Persist the EC2 identity so a restart never launches its replacement."""
+
+    attempt_ordinal = launch["attempt_ordinal"]
+    if (
+        type(launch_time) is not datetime.datetime
+        or launch_time.tzinfo is None
+        or launch_time.utcoffset() != datetime.timedelta(0)
+    ):
+        raise ValueError("V36 prefix-screen controller instance differs")
+    launch_time_epoch_seconds = int(launch_time.timestamp())
+    value = {
+        "attempt_ordinal": attempt_ordinal,
+        "claim_eligible": False,
+        "controller_deadline_epoch_seconds": launch[
+            "controller_deadline_epoch_seconds"
+        ],
+        "instance_id": instance_id,
+        "launch_time_epoch_seconds": launch_time_epoch_seconds,
+        "launch_sha256": hashlib.sha256(canonical_json_bytes(launch)).hexdigest(),
+        "run_id": plan.run_id,
+        "schema": "borsuk-v36-prefix-controller-instance-v1",
+    }
+    encoded = canonical_json_bytes(value)
+    _validate_v36_controller_instance(
+        value, encoded, plan, attempt_ordinal, launch
+    )
+    _put_immutable_s3_bytes(
+        s3_client, _controller_instance_uri(plan, attempt_ordinal), encoded
+    )
+    return value
+
+
+def _reconcile_v36_controller_instance(
+    ec2_client: Any,
+    s3_client: Any,
+    plan: V36PrefixScreenPlan,
+    launch: dict[str, object],
+    *,
+    expected_instance_id: str | None = None,
+) -> dict[str, object] | None:
+    """Recover the EC2 identity after an accepted launch response was lost."""
+
+    token = launch["launch_spec"]["ClientToken"]
+    response = ec2_client.describe_instances(
+        Filters=[{"Name": "client-token", "Values": [token]}]
+    )
+    instances = [
+        instance
+        for reservation in response.get("Reservations", [])
+        for instance in reservation.get("Instances", [])
+    ]
+    if not instances:
+        return None
+    if len(instances) != 1:
+        raise ValueError("V36 prefix-screen controller instance conflict")
+    instance = instances[0]
+    if (
+        type(instance) is not dict
+        or instance.get("ClientToken") != token
+        or type(instance.get("InstanceId")) is not str
+        or _INSTANCE_ID.fullmatch(instance["InstanceId"]) is None
+        or (
+            expected_instance_id is not None
+            and instance["InstanceId"] != expected_instance_id
+        )
+    ):
+        raise ValueError("V36 prefix-screen controller instance differs")
+    return write_v36_controller_instance(
+        s3_client,
+        plan,
+        launch,
+        instance["InstanceId"],
+        instance.get("LaunchTime"),
+    )
+
+
+def _validate_v36_controller_launch(
+    value: object,
+    encoded: bytes,
+    plan: V36PrefixScreenPlan,
+    attempt_ordinal: int,
+) -> dict[str, object]:
+    if (
+        type(value) is not dict
+        or set(value)
+        != {
+            "attempt_ordinal",
+            "claim_eligible",
+            "controller_deadline_epoch_seconds",
+            "execution_authority",
+            "launch_nonce",
+            "launch_spec",
+            "run_id",
+            "schema",
+        }
+        or canonical_json_bytes(value) != encoded
+        or value.get("schema") != "borsuk-v36-prefix-controller-launch-v1"
+        or value.get("claim_eligible") is not False
+        or type(value.get("controller_deadline_epoch_seconds")) is not int
+        or value["controller_deadline_epoch_seconds"] <= 0
+        or value.get("run_id") != plan.run_id
+        or type(value.get("attempt_ordinal")) is not int
+        or value.get("attempt_ordinal") != attempt_ordinal
+        or type(value.get("launch_nonce")) is not str
+        or re.fullmatch(r"[0-9a-f]{32}", value["launch_nonce"]) is None
+        or type(value.get("execution_authority")) is not dict
+    ):
+        raise ValueError("V36 prefix-screen controller launch differs")
+    resume = value["execution_authority"].get("resume")
+    expected_execution = _execution_authority(
+        plan, attempt_ordinal, resume=resume
+    )
+    expected_spec = build_v36_prefix_launch_specs(
+        plan,
+        launch_nonce=value["launch_nonce"],
+        attempt_ordinal=attempt_ordinal,
+        resume=resume,
+    )[attempt_ordinal]
+    if (
+        canonical_json_bytes(value["execution_authority"])
+        != canonical_json_bytes(expected_execution)
+        or canonical_json_bytes(value.get("launch_spec"))
+        != canonical_json_bytes(expected_spec)
+    ):
+        raise ValueError("V36 prefix-screen controller launch differs")
+    return value
+
+
+def load_or_create_v36_controller_launch(
+    s3_client: Any,
+    plan: V36PrefixScreenPlan,
+    attempt_ordinal: int,
+    launch_nonce: str,
+    resume: dict[str, object] | None,
+) -> dict[str, object]:
+    """Persist or reuse the sole immutable launch authority for one attempt."""
+
+    uri = _controller_launch_uri(plan, attempt_ordinal)
+    existing = read_v36_controller_launch_if_present(
+        s3_client, plan, attempt_ordinal
+    )
+    if existing is not None:
+        return existing
+    execution_authority = _execution_authority(
+        plan, attempt_ordinal, resume=resume
+    )
+    value = {
+        "attempt_ordinal": attempt_ordinal,
+        "claim_eligible": False,
+        "controller_deadline_epoch_seconds": int(time.time())
+        + _attempt_wall_seconds(attempt_ordinal)
+        + CONTROLLER_GRACE_SECONDS,
+        "execution_authority": execution_authority,
+        "launch_nonce": launch_nonce,
+        "launch_spec": build_v36_prefix_launch_specs(
+            plan,
+            launch_nonce=launch_nonce,
+            attempt_ordinal=attempt_ordinal,
+            resume=resume,
+        )[attempt_ordinal],
+        "run_id": plan.run_id,
+        "schema": "borsuk-v36-prefix-controller-launch-v1",
+    }
+    encoded = canonical_json_bytes(value)
+    if len(encoded) > MAX_CONTROLLER_LAUNCH_BYTES:
+        raise ValueError("V36 prefix-screen controller launch length differs")
+    _put_immutable_s3_bytes(s3_client, uri, encoded)
+    return value
+
+
+def read_v36_controller_launch_if_present(
+    s3_client: Any,
+    plan: V36PrefixScreenPlan,
+    attempt_ordinal: int,
+) -> dict[str, object] | None:
+    """Read one immutable launch authority without creating it."""
+
+    uri = _controller_launch_uri(plan, attempt_ordinal)
+    try:
+        encoded, _ = _read_s3_bytes(
+            s3_client, uri, MAX_CONTROLLER_LAUNCH_BYTES
+        )
+    except Exception as error:
+        code = getattr(error, "response", {}).get("Error", {}).get("Code")
+        if code in {"NoSuchKey", "404"}:
+            return None
+        raise
+    try:
+        value = json.loads(encoded)
+    except json.JSONDecodeError as error:
+        raise ValueError("V36 prefix-screen controller launch differs") from error
+    return _validate_v36_controller_launch(value, encoded, plan, attempt_ordinal)
+
+
 def _marker_key(plan: V36PrefixScreenPlan, attempt_ordinal: int, marker: str) -> tuple[str, str]:
     bucket, prefix = _s3(plan.output_prefix, prefix=True)
     if marker not in {"ATTEMPT_COMPLETE.json", "ATTEMPT_FAILED.json", "INTERRUPTED.json"}:
@@ -1380,10 +1753,42 @@ def _marker_key(plan: V36PrefixScreenPlan, attempt_ordinal: int, marker: str) ->
 def _terminate_v36_instance(ec2_client: Any, instance_id: str) -> None:
     """Terminate one attempt and prove it can no longer advance its head."""
 
-    ec2_client.terminate_instances(InstanceIds=[instance_id])
+    try:
+        ec2_client.terminate_instances(InstanceIds=[instance_id])
+    except Exception as error:
+        code = getattr(error, "response", {}).get("Error", {}).get("Code")
+        if code == "InvalidInstanceID.NotFound":
+            return
+        raise
     ec2_client.get_waiter("instance_terminated").wait(
         InstanceIds=[instance_id],
         WaiterConfig={"Delay": 5, "MaxAttempts": 60},
+    )
+
+
+def _controller_infrastructure_terminal_bytes(
+    plan: V36PrefixScreenPlan,
+    execution_authority: dict[str, object],
+    instance_id: str,
+) -> bytes:
+    """Create the exact terminal for a producer that died before finalizing."""
+
+    return canonical_json_bytes(
+        {
+            "attempt_id": execution_authority["attempt_id"],
+            "claim_eligible": False,
+            "execution_authority_sha256": hashlib.sha256(
+                canonical_json_bytes(execution_authority)
+            ).hexdigest(),
+            "inputs": execution_authority["inputs"],
+            "instance_id": instance_id,
+            "outputs": [],
+            "resume": execution_authority["resume"],
+            "run_id": plan.run_id,
+            "schema": "borsuk-v36-prefix-freeze-terminal-v2",
+            "source_commit": plan.source_commit,
+            "status": "infrastructure",
+        }
     )
 
 
@@ -1422,7 +1827,11 @@ def _read_attempt_status(
                 raise ValueError("V36 prefix-screen terminal length differs")
             body = response["Body"].read(MAX_TERMINAL_BYTES + 1)
             value = json.loads(body)
-            if expected_resume is not _UNBOUND and value.get("resume") != expected_resume:
+            if (
+                expected_resume is not _UNBOUND
+                and canonical_json_bytes(value.get("resume"))
+                != canonical_json_bytes(expected_resume)
+            ):
                 raise ValueError("V36 prefix-screen terminal authority differs")
             execution_authority = _execution_authority(
                 plan, ordinal, resume=value.get("resume")
@@ -1498,7 +1907,8 @@ def _read_attempt_status(
                 or value.get("attempt_id") != expected_attempt_id
                 or value.get("execution_authority_sha256")
                 != expected_execution_sha256
-                or value.get("inputs") != expected_inputs
+                or canonical_json_bytes(value.get("inputs"))
+                != canonical_json_bytes(expected_inputs)
                 or type(value.get("instance_id")) is not str
                 or _INSTANCE_ID.fullmatch(value["instance_id"]) is None
                 or (
@@ -1530,16 +1940,71 @@ def run_v36_prefix_screen(
 ) -> str:
     """Run at most three bounded Spot attempts and preserve every terminal."""
 
-    resume: dict[str, object] | None = None
+    resume: dict[str, object] | None | object = None
     pointer_uri = f"{plan.output_prefix}checkpoints/runs/{plan.run_id}/latest.json"
     first_attempt = 0
     for ordinal in range(MAX_ATTEMPTS):
-        terminal = _read_attempt_status(
-            s3_client, plan, ordinal, return_terminal=True
+        launch = read_v36_controller_launch_if_present(s3_client, plan, ordinal)
+        capacity = read_v36_controller_capacity(
+            s3_client, plan, ordinal, launch
         )
+        instance = read_v36_controller_instance_if_present(
+            s3_client, plan, ordinal, launch
+        )
+        launched_resume = (
+            _UNBOUND
+            if launch is None
+            else launch["execution_authority"]["resume"]
+        )
+        terminal = _read_attempt_status(
+            s3_client,
+            plan,
+            ordinal,
+            expected_instance_id=(
+                None if instance is None else str(instance["instance_id"])
+            ),
+            expected_resume=launched_resume,
+            return_terminal=True,
+        )
+        if launch is not None and not capacity and instance is None:
+            instance = _reconcile_v36_controller_instance(
+                ec2_client,
+                s3_client,
+                plan,
+                launch,
+                expected_instance_id=(
+                    None
+                    if not isinstance(terminal, dict)
+                    else str(terminal["instance_id"])
+                ),
+            )
+            if (
+                instance is None
+                and terminal is None
+                and time.time() >= launch["controller_deadline_epoch_seconds"]
+            ):
+                raise RuntimeError("V36 prefix-screen unresolved launch deadline")
+        if capacity:
+            if terminal is not None or instance is not None:
+                raise ValueError("V36 prefix-screen capacity terminal conflict")
+            first_attempt = ordinal + 1
+            continue
         if terminal is None:
             first_attempt = ordinal
+            if launch is not None:
+                resume = launch["execution_authority"]["resume"]
+            elif ordinal > 0:
+                head = read_v36_checkpoint_head_if_present(s3_client, pointer_uri)
+                resume = (
+                    None
+                    if head is None
+                    else v36_checkpoint_resume_binding(
+                        plan, ordinal, head[0], head[1]
+                    )
+                )
             break
+        if launch is None:
+            raise ValueError("V36 prefix-screen terminal launch authority differs")
         if not isinstance(terminal, dict):
             raise ValueError("V36 prefix-screen terminal differs")
         _terminate_v36_instance(ec2_client, str(terminal["instance_id"]))
@@ -1550,42 +2015,57 @@ def run_v36_prefix_screen(
         if status == "screen-source-insufficient":
             raise RuntimeError("V36 prefix-screen source is insufficient")
         first_attempt = ordinal + 1
-        if first_attempt < MAX_ATTEMPTS:
-            head = read_v36_checkpoint_head_if_present(s3_client, pointer_uri)
-            resume = (
-                None
-                if head is None
-                else v36_checkpoint_resume_binding(
-                    plan, first_attempt, head[0], head[1]
-                )
-            )
+        resume = _UNBOUND
     for attempt_ordinal in range(first_attempt, MAX_ATTEMPTS):
         instance_id: str | None = None
         status: str | None = None
+        controller_timed_out = False
         try:
-            spec = build_v36_prefix_launch_specs(
-                plan,
-                launch_nonce=launch_nonce,
-                attempt_ordinal=attempt_ordinal,
-                resume=resume,
-            )[attempt_ordinal]
-            try:
-                response = ec2_client.run_instances(**spec)
-            except Exception as error:
-                code = getattr(error, "response", {}).get("Error", {}).get("Code")
-                if code in _CAPACITY_ERRORS:
-                    continue
-                raise
-            instance_id = response["Instances"][0]["InstanceId"]
-            controller_deadline = (
-                time.monotonic()
-                + _attempt_wall_seconds(attempt_ordinal)
-                + CONTROLLER_GRACE_SECONDS
+            if resume is _UNBOUND:
+                raise ValueError("V36 prefix-screen controller resume is unresolved")
+            launch = load_or_create_v36_controller_launch(
+                s3_client, plan, attempt_ordinal, launch_nonce, resume
             )
+            launched_resume = launch["execution_authority"]["resume"]
+            if launched_resume != resume:
+                raise ValueError("V36 prefix-screen controller resume differs")
+            spec = launch["launch_spec"]
+            instance = read_v36_controller_instance_if_present(
+                s3_client, plan, attempt_ordinal, launch
+            )
+            if instance is None:
+                try:
+                    response = ec2_client.run_instances(**spec)
+                except Exception as error:
+                    code = getattr(error, "response", {}).get("Error", {}).get("Code")
+                    if code in _CAPACITY_ERRORS:
+                        write_v36_controller_capacity(s3_client, plan, launch)
+                        continue
+                    raise
+                response_instance = response["Instances"][0]
+                instance_id = response_instance["InstanceId"]
+                instance = write_v36_controller_instance(
+                    s3_client,
+                    plan,
+                    launch,
+                    instance_id,
+                    response_instance["LaunchTime"],
+                )
+            else:
+                instance_id = str(instance["instance_id"])
+            if instance is None:
+                raise ValueError("V36 prefix-screen controller instance missing")
+            controller_deadline = instance["controller_deadline_epoch_seconds"]
             while True:
-                state = ec2_client.describe_instances(InstanceIds=[instance_id])[
-                    "Reservations"
-                ][0]["Instances"][0]["State"]["Name"]
+                try:
+                    state = ec2_client.describe_instances(InstanceIds=[instance_id])[
+                        "Reservations"
+                    ][0]["Instances"][0]["State"]["Name"]
+                except Exception as error:
+                    code = getattr(error, "response", {}).get("Error", {}).get("Code")
+                    if code != "InvalidInstanceID.NotFound":
+                        raise
+                    state = "terminated"
                 if state in {"shutting-down", "terminated", "stopped", "stopping"}:
                     break
                 status = _read_attempt_status(
@@ -1597,15 +2077,30 @@ def run_v36_prefix_screen(
                 )
                 if status is not None:
                     break
-                if time.monotonic() >= controller_deadline:
-                    raise RuntimeError(
-                        f"V36 prefix-screen attempt {attempt_ordinal} controller deadline"
-                    )
+                if time.time() >= controller_deadline:
+                    controller_timed_out = True
+                    break
                 time.sleep(15)
         finally:
             if instance_id is not None:
                 _terminate_v36_instance(ec2_client, instance_id)
         if status is None:
+            status = _read_attempt_status(
+                s3_client,
+                plan,
+                attempt_ordinal,
+                expected_instance_id=instance_id,
+                expected_resume=resume,
+            )
+        if status is None and instance_id is not None:
+            bucket, key = _marker_key(plan, attempt_ordinal, "ATTEMPT_FAILED.json")
+            _put_immutable_s3_bytes(
+                s3_client,
+                f"s3://{bucket}/{key}",
+                _controller_infrastructure_terminal_bytes(
+                    plan, launch["execution_authority"], instance_id
+                ),
+            )
             status = _read_attempt_status(
                 s3_client,
                 plan,
@@ -1620,6 +2115,12 @@ def run_v36_prefix_screen(
             raise RuntimeError("V36 prefix-screen source is insufficient")
         if status is None:
             raise RuntimeError(f"V36 prefix-screen attempt {attempt_ordinal} terminal missing")
+        if controller_timed_out:
+            if status not in {"infrastructure", "interrupted"}:
+                raise ValueError("V36 prefix-screen controller timeout terminal differs")
+            raise RuntimeError(
+                f"V36 prefix-screen attempt {attempt_ordinal} controller deadline"
+            )
         if attempt_ordinal + 1 < MAX_ATTEMPTS:
             head = read_v36_checkpoint_head_if_present(s3_client, pointer_uri)
             resume = (

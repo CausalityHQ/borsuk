@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import dataclasses
+import datetime
 import hashlib
 import io
 import json
@@ -19,6 +20,46 @@ from scripts import run_v36_prefix_screen as subject
 class _AwsError(Exception):
     def __init__(self, code: str) -> None:
         self.response = {"Error": {"Code": code}}
+
+
+def _missing_s3() -> mock.Mock:
+    client = mock.Mock()
+    client.get_object.side_effect = _AwsError("NoSuchKey")
+    client.put_object.return_value = {"ETag": '"fixture"'}
+    return client
+
+
+_LAUNCH_TIME = datetime.datetime(2030, 1, 1, tzinfo=datetime.UTC)
+
+
+def _launch_response(instance_id: str) -> dict[str, object]:
+    return {"Instances": [{"InstanceId": instance_id, "LaunchTime": _LAUNCH_TIME}]}
+
+
+def _described_instance(instance_id: str, client_token: str, state: str) -> dict[str, object]:
+    return {
+        "ClientToken": client_token,
+        "InstanceId": instance_id,
+        "LaunchTime": _LAUNCH_TIME,
+        "State": {"Name": state},
+    }
+
+
+class _MemoryS3:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def get_object(self, *, Key: str, **_values: object) -> dict[str, object]:
+        if Key not in self.objects:
+            raise _AwsError("NoSuchKey")
+        body = self.objects[Key]
+        return {"Body": io.BytesIO(body), "ContentLength": len(body)}
+
+    def put_object(self, *, Key: str, Body: bytes, **values: object) -> dict[str, object]:
+        if values.get("IfNoneMatch") == "*" and Key in self.objects:
+            raise _AwsError("PreconditionFailed")
+        self.objects[Key] = Body
+        return {"ETag": '"stored"'}
 
 
 class V36PrefixScreenLauncherTests(unittest.TestCase):
@@ -57,6 +98,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         self.assertEqual(subject.CHECKPOINT_OBJECTS, 16)
         self.assertEqual(subject.CHECKPOINT_SECONDS, 300)
         self.assertEqual(subject.MAX_ATTEMPTS, 3)
+        self.assertEqual(subject.CONTROLLER_GRACE_SECONDS, 1_800)
         self.assertEqual(subject.SPOT_HOURLY_CAP_MICRO_USD, 3_000_000)
         self.assertEqual(subject.CAMPAIGN_CAP_MICRO_USD, 90_000_000)
         self.assertGreaterEqual(
@@ -67,7 +109,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         )
 
         ec2 = mock.Mock()
-        s3 = mock.Mock()
+        s3 = _missing_s3()
         receipt = subject.dry_run_v36_prefix_screen(self.plan())
         value = json.loads(receipt)
         self.assertEqual(receipt, subject.canonical_json_bytes(value))
@@ -154,6 +196,381 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             self.assertNotIn("on-demand", script.lower())
             self.assertNotIn("/home/", script)
             self.assertNotIn("devbox", script.lower())
+
+    def test_v36_prefix_screen_launch_record_is_immutable_and_restart_reusable(self) -> None:
+        # Break caught: controller restart changes ClientToken/UserData and
+        # creates a second producer for the same attempt and checkpoint head.
+        plan = self.plan()
+
+        class S3:
+            def __init__(self) -> None:
+                self.body: bytes | None = None
+                self.puts = 0
+
+            def get_object(self, **_values: object) -> dict[str, object]:
+                if self.body is None:
+                    raise _AwsError("NoSuchKey")
+                return {
+                    "Body": io.BytesIO(self.body),
+                    "ContentLength": len(self.body),
+                }
+
+            def put_object(self, **values: object) -> dict[str, object]:
+                self.puts += 1
+                self.asserted_condition = values.get("IfNoneMatch")
+                self.body = values["Body"]  # type: ignore[assignment]
+                return {"ETag": '"launch"'}
+
+        s3 = S3()
+        first = subject.load_or_create_v36_controller_launch(
+            s3, plan, 0, "1" * 32, None
+        )
+        second = subject.load_or_create_v36_controller_launch(
+            s3, plan, 0, "2" * 32, None
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(s3.puts, 1)
+        self.assertEqual(s3.asserted_condition, "*")
+        self.assertEqual(first["launch_spec"]["ClientToken"], second["launch_spec"]["ClientToken"])
+        self.assertEqual(first["execution_authority"]["resume"], None)
+        drifted = json.loads(subject.canonical_json_bytes(first))
+        drifted["execution_authority"]["active_wall_seconds"] = 43_200.0
+        with self.assertRaisesRegex(ValueError, "controller launch differs"):
+            subject._validate_v36_controller_launch(
+                drifted,
+                subject.canonical_json_bytes(drifted),
+                plan,
+                0,
+            )
+        mutations = []
+        for field, value in (
+            ("attempt_ordinal", False),
+            ("run_id", "foreign-run"),
+        ):
+            changed = json.loads(subject.canonical_json_bytes(first))
+            changed[field] = value
+            mutations.append(changed)
+        changed = json.loads(subject.canonical_json_bytes(first))
+        changed["launch_spec"]["ClientToken"] = "f" * 64
+        mutations.append(changed)
+        for changed in mutations:
+            with self.subTest(changed=changed):
+                with self.assertRaisesRegex(ValueError, "controller launch differs"):
+                    subject._validate_v36_controller_launch(
+                        changed,
+                        subject.canonical_json_bytes(changed),
+                        plan,
+                        0,
+                    )
+        with self.assertRaisesRegex(ValueError, "controller launch differs"):
+            subject._validate_v36_controller_launch(
+                first,
+                subject.canonical_json_bytes(first).replace(b'"claim_eligible"', b'"claim_eligible" '),
+                plan,
+                0,
+            )
+
+        denied = mock.Mock()
+        denied.get_object.side_effect = _AwsError("AccessDenied")
+        with self.assertRaises(_AwsError):
+            subject.read_v36_controller_launch_if_present(denied, plan, 0)
+        oversized = mock.Mock()
+        oversized.get_object.return_value = {
+            "Body": io.BytesIO(b"{}"),
+            "ContentLength": subject.MAX_CONTROLLER_LAUNCH_BYTES + 1,
+        }
+        with self.assertRaisesRegex(ValueError, "object length differs"):
+            subject.read_v36_controller_launch_if_present(oversized, plan, 0)
+
+        inaccessible = mock.Mock()
+        inaccessible.get_object.side_effect = _AwsError("NoSuchKey")
+        inaccessible.put_object.side_effect = _AwsError("AccessDenied")
+        with self.assertRaises(_AwsError) as denied_write:
+            subject.load_or_create_v36_controller_launch(
+                inaccessible, plan, 0, "3" * 32, None
+            )
+        self.assertEqual(
+            denied_write.exception.response["Error"]["Code"], "AccessDenied"
+        )
+
+    def test_v36_prefix_screen_restart_skips_durable_capacity_rejection(self) -> None:
+        # Break caught: an old capacity-rejected candidate becomes available
+        # after restart and overlaps the already recorded replacement.
+        plan = self.plan()
+
+        class S3:
+            def __init__(self) -> None:
+                self.objects: dict[str, bytes] = {}
+
+            def get_object(self, *, Key: str, **_values: object) -> dict[str, object]:
+                if Key not in self.objects:
+                    raise _AwsError("NoSuchKey")
+                body = self.objects[Key]
+                return {"Body": io.BytesIO(body), "ContentLength": len(body)}
+
+            def put_object(self, *, Key: str, Body: bytes, **_values: object) -> dict[str, object]:
+                if Key in self.objects and self.objects[Key] != Body:
+                    raise _AwsError("PreconditionFailed")
+                self.objects[Key] = Body
+                return {"ETag": '"stored"'}
+
+        s3 = S3()
+        rejected = subject.load_or_create_v36_controller_launch(
+            s3, plan, 0, "1" * 32, None
+        )
+        subject.write_v36_controller_capacity(s3, plan, rejected)
+        replacement = subject.load_or_create_v36_controller_launch(
+            s3, plan, 1, "1" * 32, None
+        )
+        ec2 = mock.Mock()
+        ec2.run_instances.return_value = _launch_response("i-replacement")
+        ec2.describe_instances.return_value = {
+            "Reservations": [{"Instances": [{"State": {"Name": "terminated"}}]}]
+        }
+        with (
+            mock.patch.object(
+                subject,
+                "_read_attempt_status",
+                side_effect=[None, None, "complete"],
+            ),
+            mock.patch.object(
+                subject, "_reconcile_v36_controller_instance", return_value=None
+            ),
+        ):
+            uri = subject.run_v36_prefix_screen(
+                plan,
+                ec2_client=ec2,
+                s3_client=s3,
+                launch_nonce="2" * 32,
+            )
+        self.assertTrue(uri.endswith("attempt-0001/ATTEMPT_COMPLETE.json"))
+        ec2.run_instances.assert_called_once_with(**replacement["launch_spec"])
+
+    def test_v36_prefix_screen_capacity_record_rejects_conflicts_and_drift(self) -> None:
+        plan = self.plan()
+        s3 = _MemoryS3()
+        launch = subject.load_or_create_v36_controller_launch(
+            s3, plan, 0, "1" * 32, None
+        )
+        subject.write_v36_controller_capacity(s3, plan, launch)
+        self.assertTrue(subject.read_v36_controller_capacity(s3, plan, 0, launch))
+        with self.assertRaisesRegex(ValueError, "controller capacity differs"):
+            subject.read_v36_controller_capacity(s3, plan, 0, None)
+
+        key = subject._s3(subject._controller_capacity_uri(plan, 0))[1]
+        value = json.loads(s3.objects[key])
+        value["launch_sha256"] = "f" * 64
+        s3.objects[key] = subject.canonical_json_bytes(value)
+        with self.assertRaisesRegex(ValueError, "controller capacity differs"):
+            subject.read_v36_controller_capacity(s3, plan, 0, launch)
+
+        s3 = _MemoryS3()
+        launch = subject.load_or_create_v36_controller_launch(
+            s3, plan, 0, "1" * 32, None
+        )
+        subject.write_v36_controller_capacity(s3, plan, launch)
+        subject.write_v36_controller_instance(
+            s3, plan, launch, "i-impossible", _LAUNCH_TIME
+        )
+        with self.assertRaisesRegex(ValueError, "capacity terminal conflict"):
+            subject.run_v36_prefix_screen(
+                plan,
+                ec2_client=mock.Mock(),
+                s3_client=s3,
+                launch_nonce="2" * 32,
+            )
+
+    def test_v36_prefix_screen_instance_record_is_immutable_and_restart_reuses_it(self) -> None:
+        # Break caught: after the EC2 response is durably observed, a late
+        # controller restart relies on an expired ClientToken and starts a
+        # second producer for the same attempt ordinal.
+        plan = self.plan()
+        s3 = _MemoryS3()
+        launch = subject.load_or_create_v36_controller_launch(
+            s3, plan, 0, "1" * 32, None
+        )
+        first = subject.write_v36_controller_instance(
+            s3, plan, launch, "i-recorded", _LAUNCH_TIME
+        )
+        second = subject.write_v36_controller_instance(
+            s3, plan, launch, "i-recorded", _LAUNCH_TIME
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(
+            subject.read_v36_controller_instance_if_present(s3, plan, 0, launch),
+            first,
+        )
+        self.assertEqual(
+            first["controller_deadline_epoch_seconds"],
+            launch["controller_deadline_epoch_seconds"],
+        )
+
+        ec2 = mock.Mock()
+        ec2.describe_instances.return_value = {
+            "Reservations": [{"Instances": [{"State": {"Name": "terminated"}}]}]
+        }
+        with mock.patch.object(
+            subject, "_read_attempt_status", side_effect=[None, "complete"]
+        ):
+            uri = subject.run_v36_prefix_screen(
+                plan,
+                ec2_client=ec2,
+                s3_client=s3,
+                launch_nonce="2" * 32,
+            )
+        self.assertTrue(uri.endswith("attempt-0000/ATTEMPT_COMPLETE.json"))
+        ec2.run_instances.assert_not_called()
+        ec2.describe_instances.assert_called_once_with(InstanceIds=["i-recorded"])
+
+        drifted = dict(first)
+        drifted["launch_sha256"] = "f" * 64
+        key = subject._s3(subject._controller_instance_uri(plan, 0))[1]
+        s3.objects[key] = subject.canonical_json_bytes(drifted)
+        with self.assertRaisesRegex(ValueError, "controller instance differs"):
+            subject.read_v36_controller_instance_if_present(s3, plan, 0, launch)
+
+    def test_v36_prefix_screen_lost_launch_response_reconciles_terminal_by_token(self) -> None:
+        # Break caught: EC2 accepted the request and the guest finalized, but
+        # the controller lost the response before persisting the instance ID.
+        plan = self.plan()
+        s3 = _MemoryS3()
+        launch = subject.load_or_create_v36_controller_launch(
+            s3, plan, 0, "1" * 32, None
+        )
+        terminal = subject._controller_infrastructure_terminal_bytes(
+            plan, launch["execution_authority"], "i-response-lost"
+        )
+        bucket, key = subject._marker_key(plan, 0, "ATTEMPT_FAILED.json")
+        s3.put_object(Bucket=bucket, Key=key, Body=terminal, IfNoneMatch="*")
+        token = launch["launch_spec"]["ClientToken"]
+        ec2 = mock.Mock()
+        ec2.describe_instances.return_value = {
+            "Reservations": [
+                {
+                    "Instances": [
+                        _described_instance(
+                            "i-response-lost", str(token), "terminated"
+                        )
+                    ]
+                }
+            ]
+        }
+        ec2.run_instances.side_effect = _AwsError("InsufficientInstanceCapacity")
+        with self.assertRaisesRegex(RuntimeError, "three attempts exhausted"):
+            subject.run_v36_prefix_screen(
+                plan,
+                ec2_client=ec2,
+                s3_client=s3,
+                launch_nonce="2" * 32,
+            )
+        recorded = subject.read_v36_controller_instance_if_present(
+            s3, plan, 0, launch
+        )
+        self.assertEqual(recorded["instance_id"], "i-response-lost")
+        self.assertEqual(
+            ec2.describe_instances.call_args_list[0].kwargs,
+            {"Filters": [{"Name": "client-token", "Values": [token]}]},
+        )
+
+    def test_v36_prefix_screen_stale_instance_termination_is_idempotent(self) -> None:
+        # Break caught: EC2 eventually forgets a terminated instance and a
+        # late restart wedges while trying to terminate it again.
+        ec2 = mock.Mock()
+        ec2.terminate_instances.side_effect = _AwsError("InvalidInstanceID.NotFound")
+        subject._terminate_v36_instance(ec2, "i-stale")
+        ec2.get_waiter.assert_not_called()
+
+    def test_v36_prefix_screen_stale_recorded_instance_gets_durable_terminal(self) -> None:
+        plan = self.plan()
+        s3 = _MemoryS3()
+        launch = subject.load_or_create_v36_controller_launch(
+            s3, plan, 0, "1" * 32, None
+        )
+        subject.write_v36_controller_instance(
+            s3, plan, launch, "i-stale", _LAUNCH_TIME
+        )
+        ec2 = mock.Mock()
+        ec2.describe_instances.side_effect = _AwsError("InvalidInstanceID.NotFound")
+        ec2.terminate_instances.side_effect = _AwsError("InvalidInstanceID.NotFound")
+        ec2.run_instances.side_effect = _AwsError("InsufficientInstanceCapacity")
+        with self.assertRaisesRegex(RuntimeError, "three attempts exhausted"):
+            subject.run_v36_prefix_screen(
+                plan,
+                ec2_client=ec2,
+                s3_client=s3,
+                launch_nonce="2" * 32,
+            )
+        terminal = subject._read_attempt_status(
+            s3,
+            plan,
+            0,
+            expected_instance_id="i-stale",
+            expected_resume=None,
+            return_terminal=True,
+        )
+        self.assertEqual(terminal["status"], "infrastructure")
+
+    def test_v36_prefix_screen_timeout_accepts_guest_interrupted_terminal(self) -> None:
+        # Break caught: the guest publishes its legitimate timeout receipt just
+        # before controller termination, which was misclassified as corruption.
+        plan = self.plan()
+        ec2 = mock.Mock()
+        ec2.run_instances.return_value = _launch_response("i-timeout")
+        ec2.describe_instances.return_value = {
+            "Reservations": [{"Instances": [{"State": {"Name": "running"}}]}]
+        }
+        deadline = (
+            subject._attempt_wall_seconds(0)
+            + subject.CONTROLLER_GRACE_SECONDS
+            + 1
+        )
+        with (
+            mock.patch.object(
+                subject,
+                "_read_attempt_status",
+                side_effect=[None, None, "interrupted"],
+            ),
+            mock.patch.object(subject.time, "time", side_effect=[0.0, deadline]),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "controller deadline"):
+                subject.run_v36_prefix_screen(
+                    plan,
+                    ec2_client=ec2,
+                    s3_client=_missing_s3(),
+                    launch_nonce="3" * 32,
+                )
+
+    def test_v36_prefix_screen_restart_does_not_renew_instance_deadline(self) -> None:
+        plan = self.plan()
+        s3 = _MemoryS3()
+        with mock.patch.object(subject.time, "time", return_value=1_000.0):
+            launch = subject.load_or_create_v36_controller_launch(
+                s3, plan, 0, "1" * 32, None
+            )
+        subject.write_v36_controller_instance(
+            s3, plan, launch, "i-expired", _LAUNCH_TIME
+        )
+        ec2 = mock.Mock()
+        ec2.describe_instances.return_value = {
+            "Reservations": [{"Instances": [{"State": {"Name": "running"}}]}]
+        }
+        ec2.run_instances.side_effect = _AwsError("InsufficientInstanceCapacity")
+        with (
+            mock.patch.object(
+                subject.time,
+                "time",
+                return_value=launch["controller_deadline_epoch_seconds"] + 1,
+            ),
+            self.assertRaisesRegex(RuntimeError, "controller deadline"),
+        ):
+            subject.run_v36_prefix_screen(
+                plan,
+                ec2_client=ec2,
+                s3_client=s3,
+                launch_nonce="2" * 32,
+            )
+        ec2.terminate_instances.assert_called_once_with(InstanceIds=["i-expired"])
+        ec2.run_instances.assert_not_called()
 
     def test_v36_prefix_screen_runs_bound_sidecar_concurrently_and_fails_fast(self) -> None:
         # Break caught: checkpoints remain on ephemeral NVMe until Rust exits,
@@ -295,25 +712,24 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         plan = self.plan()
         ec2 = mock.Mock()
         ec2.run_instances.side_effect = [
-            {"Instances": [{"InstanceId": f"i-attempt-{ordinal}"}]}
-            for ordinal in range(3)
+            _launch_response(f"i-attempt-{ordinal}") for ordinal in range(3)
         ]
         ec2.describe_instances.return_value = {
             "Reservations": [{"Instances": [{"State": {"Name": "terminated"}}]}]
         }
-        s3 = mock.Mock()
+        s3 = _missing_s3()
         with (
             mock.patch.object(subject.time, "sleep"),
             mock.patch.object(
                 subject,
                 "_read_attempt_status",
-                side_effect=[None, "interrupted", "interrupted", None],
+                side_effect=[None, "interrupted", "interrupted", None, "infrastructure"],
             ),
             mock.patch.object(
                 subject, "read_v36_checkpoint_head_if_present", return_value=None
             ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "terminal missing"):
+            with self.assertRaisesRegex(RuntimeError, "three attempts exhausted"):
                 subject.run_v36_prefix_screen(
                     plan,
                     ec2_client=ec2,
@@ -331,8 +747,8 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         plan = self.plan()
         ec2 = mock.Mock()
         ec2.run_instances.side_effect = [
-            {"Instances": [{"InstanceId": "i-first"}]},
-            {"Instances": [{"InstanceId": "i-second"}]},
+            _launch_response("i-first"),
+            _launch_response("i-second"),
         ]
         ec2.describe_instances.return_value = {
             "Reservations": [{"Instances": [{"State": {"Name": "terminated"}}]}]
@@ -376,7 +792,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 subject.run_v36_prefix_screen(
                     plan,
                     ec2_client=ec2,
-                    s3_client=mock.Mock(),
+                    s3_client=_missing_s3(),
                     launch_nonce="6" * 32,
                 ).endswith("attempt-0001/ATTEMPT_COMPLETE.json")
             )
@@ -408,12 +824,11 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             "pointer_uri": f"{plan.output_prefix}checkpoints/runs/{plan.run_id}/latest.json",
         }
         ec2 = mock.Mock()
-        ec2.run_instances.return_value = {
-            "Instances": [{"InstanceId": "i-replacement"}]
-        }
+        ec2.run_instances.return_value = _launch_response("i-replacement")
         ec2.describe_instances.return_value = {
             "Reservations": [{"Instances": [{"State": {"Name": "terminated"}}]}]
         }
+        prior_launch = {"execution_authority": subject._execution_authority(plan, 0)}
         with (
             mock.patch.object(
                 subject,
@@ -424,6 +839,16 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 subject,
                 "read_v36_checkpoint_head_if_present",
                 return_value=(pointer, manifest, "etag"),
+            ),
+            mock.patch.object(
+                subject,
+                "read_v36_controller_launch_if_present",
+                side_effect=[prior_launch, None, None],
+            ),
+            mock.patch.object(
+                subject,
+                "read_v36_controller_instance_if_present",
+                side_effect=[{"instance_id": "i-prior"}, None, None],
             ),
             mock.patch.object(
                 subject, "v36_checkpoint_resume_binding", return_value=binding
@@ -437,7 +862,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             uri = subject.run_v36_prefix_screen(
                 plan,
                 ec2_client=ec2,
-                s3_client=mock.Mock(),
+                s3_client=_missing_s3(),
                 launch_nonce="5" * 32,
             )
         self.assertTrue(uri.endswith("attempt-0001/ATTEMPT_COMPLETE.json"))
@@ -448,16 +873,97 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             {"InstanceIds": ["i-prior"]},
         )
 
+    def test_v36_prefix_screen_restart_recovers_launched_replacement_without_head_read(self) -> None:
+        # Break caught: a running replacement advances latest.json and restart
+        # wrongly treats that new head as the replacement's original resume.
+        plan = self.plan()
+        resume = {
+            "generation": 2,
+            "manifest": {
+                "blake3": "d" * 64,
+                "encoded_bytes": 1_024,
+                "role": "checkpoint-manifest",
+                "sha256": "e" * 64,
+                "uri": f"{plan.output_prefix}checkpoints/objects/{'e' * 64}-checkpoint.json",
+            },
+            "pointer_encoded_bytes": 512,
+            "pointer_sha256": "f" * 64,
+            "pointer_uri": f"{plan.output_prefix}checkpoints/runs/{plan.run_id}/latest.json",
+        }
+        prior_launch = {"execution_authority": subject._execution_authority(plan, 0)}
+        replacement_launch = {
+            "controller_deadline_epoch_seconds": int(_LAUNCH_TIME.timestamp()),
+            "execution_authority": subject._execution_authority(plan, 1, resume=resume),
+            "launch_spec": subject.build_v36_prefix_launch_specs(
+                plan, launch_nonce="4" * 32, attempt_ordinal=1, resume=resume
+            )[1],
+        }
+        ec2 = mock.Mock()
+        ec2.run_instances.return_value = _launch_response("i-replacement")
+        ec2.describe_instances.return_value = {
+            "Reservations": [{"Instances": [{"State": {"Name": "terminated"}}]}]
+        }
+        with (
+            mock.patch.object(
+                subject,
+                "_read_attempt_status",
+                side_effect=[
+                    {"instance_id": "i-prior", "status": "interrupted"},
+                    None,
+                    "complete",
+                ],
+            ),
+            mock.patch.object(
+                subject,
+                "read_v36_controller_launch_if_present",
+                side_effect=[prior_launch, replacement_launch, replacement_launch],
+            ),
+            mock.patch.object(
+                subject,
+                "read_v36_controller_instance_if_present",
+                side_effect=[{"instance_id": "i-prior"}, None, None],
+            ),
+            mock.patch.object(
+                subject,
+                "read_v36_checkpoint_head_if_present",
+                side_effect=AssertionError("running producer owns latest head"),
+            ),
+            mock.patch.object(
+                subject, "_reconcile_v36_controller_instance", return_value=None
+            ),
+            mock.patch.object(
+                subject,
+                "write_v36_controller_instance",
+                return_value={
+                    "controller_deadline_epoch_seconds": int(
+                        _LAUNCH_TIME.timestamp()
+                    )
+                    + subject._attempt_wall_seconds(1)
+                    + subject.CONTROLLER_GRACE_SECONDS,
+                    "instance_id": "i-replacement",
+                },
+            ),
+        ):
+            subject.run_v36_prefix_screen(
+                plan,
+                ec2_client=ec2,
+                s3_client=_missing_s3(),
+                launch_nonce="9" * 32,
+            )
+        ec2.run_instances.assert_called_once_with(**replacement_launch["launch_spec"])
+
     def test_v36_prefix_screen_capacity_fallback_and_cost_projection_are_closed(self) -> None:
         # Break caught: one unavailable zone aborts the screen, or the three
         # admitted wall caps can exceed the exact $90 ceiling at $3/hour.
         self.assertEqual(
             [subject._attempt_wall_seconds(ordinal) for ordinal in range(3)],
-            [43_200, 43_200, 21_600],
+            [43_200, 43_200, 16_200],
         )
         projected_cost = sum(
-            seconds * subject.SPOT_HOURLY_CAP_MICRO_USD // 3_600
-            for seconds in [43_200, 43_200, 21_600]
+            (seconds + subject.CONTROLLER_GRACE_SECONDS)
+            * subject.SPOT_HOURLY_CAP_MICRO_USD
+            // 3_600
+            for seconds in [43_200, 43_200, 16_200]
         )
         self.assertEqual(projected_cost, subject.CAMPAIGN_CAP_MICRO_USD)
 
@@ -465,12 +971,12 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         ec2 = mock.Mock()
         ec2.run_instances.side_effect = [
             _AwsError("InsufficientInstanceCapacity"),
-            {"Instances": [{"InstanceId": "i-capacity-fallback"}]},
+            _launch_response("i-capacity-fallback"),
         ]
         ec2.describe_instances.return_value = {
             "Reservations": [{"Instances": [{"State": {"Name": "terminated"}}]}]
         }
-        s3 = mock.Mock()
+        s3 = _missing_s3()
         with mock.patch.object(
             subject, "_read_attempt_status", side_effect=[None, "complete"]
         ):
@@ -586,6 +1092,11 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         changed_input = json.loads(json.dumps(terminal))
         changed_input["inputs"][0]["sha256"] = "f" * 64
         mutations.append(changed_input)
+        changed_input_type = json.loads(json.dumps(terminal))
+        changed_input_type["inputs"][0]["encoded_bytes"] = float(
+            changed_input_type["inputs"][0]["encoded_bytes"]
+        )
+        mutations.append(changed_input_type)
         changed_output = json.loads(json.dumps(terminal))
         changed_output["outputs"][0]["role"] = "source"
         mutations.append(changed_output)
@@ -595,15 +1106,69 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                     subject._read_attempt_status(
                         S3(mutation), plan, attempt, expected_instance_id="i-fixture"
                     )
+        foreign_resume = dict(terminal)
+        foreign_resume["resume"] = {"generation": 99}
+        with self.assertRaisesRegex(ValueError, "terminal authority differs"):
+            subject._read_attempt_status(
+                S3(foreign_resume),
+                plan,
+                attempt,
+                expected_instance_id="i-fixture",
+                expected_resume=None,
+            )
+
+    def test_v36_prefix_screen_controller_terminal_uses_guest_canonical_contract(self) -> None:
+        # Break caught: the controller synthesizes a terminal which its own
+        # real reader or the guest's canonical contract cannot authenticate.
+        plan = self.plan()
+        execution = subject._execution_authority(plan, 0)
+        expected = subject._controller_infrastructure_terminal_bytes(
+            plan, execution, "i-bootstrap"
+        )
+        s3 = _MemoryS3()
+        bucket, key = subject._marker_key(plan, 0, "ATTEMPT_FAILED.json")
+        s3.put_object(Bucket=bucket, Key=key, Body=expected, IfNoneMatch="*")
+        self.assertEqual(
+            subject._read_attempt_status(
+                s3,
+                plan,
+                0,
+                expected_instance_id="i-bootstrap",
+                expected_resume=None,
+                return_terminal=True,
+            ),
+            json.loads(expected),
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            execution_path = root / "execution.json"
+            terminal_path = root / "terminal.json"
+            execution_path.write_bytes(subject.canonical_json_bytes(execution))
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    subject._GUEST_TERMINAL_PROGRAM,
+                    str(execution_path),
+                    str(root / "unused-receipt.json"),
+                    str(root / "unused-output"),
+                    "i-bootstrap",
+                    plan.run_id,
+                    plan.source_commit,
+                    "infrastructure",
+                    str(terminal_path),
+                ],
+                check=True,
+            )
+            self.assertEqual(terminal_path.read_bytes(), expected)
 
     def test_v36_prefix_screen_terminal_stops_a_running_instance_immediately(self) -> None:
         # Break caught: completed science keeps a paid instance alive until
         # guest shutdown instead of letting the controller terminate it.
         plan = self.plan()
         ec2 = mock.Mock()
-        ec2.run_instances.return_value = {
-            "Instances": [{"InstanceId": "i-running-complete"}]
-        }
+        ec2.run_instances.return_value = _launch_response("i-running-complete")
         ec2.describe_instances.return_value = {
             "Reservations": [{"Instances": [{"State": {"Name": "running"}}]}]
         }
@@ -620,7 +1185,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             uri = subject.run_v36_prefix_screen(
                 plan,
                 ec2_client=ec2,
-                s3_client=mock.Mock(),
+                s3_client=_missing_s3(),
                 launch_nonce="d" * 32,
             )
         self.assertEqual(
@@ -637,9 +1202,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         # timeout and leaves the controller polling a paid instance forever.
         plan = self.plan()
         ec2 = mock.Mock()
-        ec2.run_instances.return_value = {
-            "Instances": [{"InstanceId": "i-running-hung"}]
-        }
+        ec2.run_instances.return_value = _launch_response("i-running-hung")
         ec2.describe_instances.return_value = {
             "Reservations": [{"Instances": [{"State": {"Name": "running"}}]}]
         }
@@ -649,8 +1212,12 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             + 1
         )
         with (
-            mock.patch.object(subject, "_read_attempt_status", return_value=None),
-            mock.patch.object(subject.time, "monotonic", side_effect=[0.0, deadline]),
+            mock.patch.object(
+                subject,
+                "_read_attempt_status",
+                side_effect=[None, None, None, "infrastructure"],
+            ),
+            mock.patch.object(subject.time, "time", side_effect=[0.0, deadline]),
             mock.patch.object(
                 subject.time,
                 "sleep",
@@ -661,7 +1228,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                 subject.run_v36_prefix_screen(
                     plan,
                     ec2_client=ec2,
-                    s3_client=mock.Mock(),
+                    s3_client=_missing_s3(),
                     launch_nonce="e" * 32,
                 )
         ec2.terminate_instances.assert_called_once_with(

@@ -393,6 +393,17 @@ checkpoints every eight completed queries as immutable authenticated objects.
 An interrupted partial block is discarded; completed blocks resume only against
 the identical source/query authority. The 43,200-second cap is per active
 construction/GT process cell and excludes queued Spot time.
+Before `RunInstances`, the controller conditionally writes an immutable launch
+record containing the exact execution authority, user data, client token, and
+resume binding. A definitive capacity rejection, or the returned EC2 instance
+identity, is then written as a separate immutable record bound to that launch.
+Restart reuses those records; it never reconstructs an in-flight attempt from a
+newer checkpoint head, and it terminates and waits for every prior producer
+before reading a head for a new attempt. Conflicting terminal markers or ledger
+records fail closed. Each admitted instance has a 1,800-second bounded
+bootstrap/shutdown allowance. This allowance is reserved inside the $90
+worst-case campaign cap: the three maximum active-process windows are 43,200,
+43,200, and 16,200 seconds, respectively, at the registered $3/hour ceiling.
 Registered 1M/10M/100M Parquet, query, and GT objects are written to
 same-region S3 with exact SHA-256, lengths, row counts, and schemas. Serving
 uses complete authenticated Arrow IPC objects only. The frozen 256-MiB object
