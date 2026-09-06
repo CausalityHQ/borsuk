@@ -6,7 +6,7 @@
 
 **Architecture:** A bounded same-region Spot/NVMe freezer authenticates complete ReLAION objects selected by a query-independent hash and produces role-separated Parquet plus exact GT. Rust then evaluates projection, posting, score, coarse-code, and complete-object admission as sequential causal stages; it never treats logical micro-pages, raw vector bytes, or this diagnostic sample as qualification evidence.
 
-**Tech Stack:** Rust, Arrow IPC, Parquet, serde JSON, SHA-256, BLAKE3, SRHT, bounded centered principal-subspace iteration, residual PQ4, SQ8, AVX2/VNNI, NEON dot-product, Python 3.12, boto3, AWS Spot profile `causality`.
+**Tech Stack:** Rust, Arrow IPC, Parquet, serde JSON, SHA-256, BLAKE3, SRHT, deterministic centered covariance eigendecomposition, residual PQ4, SQ8, AVX2/VNNI, NEON dot-product, Python 3.12, boto3, AWS Spot profile `causality`.
 
 **Spec:** `docs/superpowers/specs/2026-09-06-v36-funnel-three-qualification-design.md`
 
@@ -60,8 +60,9 @@
 
   Add tests named `v36_prefix_projection_identity_is_closed` and
   `v36_prototype_six_fits_the_equal_summary_slot`. Require seed 36 for SRHT;
-  exact mean/reservoir/seed-36/two-iteration/orthogonalization/sign identities
-  for the centered subspace; retained-energy reports at M64/96/128/192; six
+  exact mean/reservoir/covariance, pinned eigensolver, residual/reconstruction,
+  eigenpair order/sign identities for the centered subspace; retained-energy
+  reports at M64/96/128/192; six
   total vectors; 4,608 vector bytes plus 128 metadata bytes; unknown variants,
   seven-vector summaries, and post-result projection substitution rejected.
 
