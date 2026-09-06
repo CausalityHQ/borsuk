@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{BorsukError, Result};
 
-const FORMAT: &str = "borsuk-v35-generation-v1";
+const FORMAT: &str = "borsuk-v35-generation-v2";
 const HARD_LIMIT_BYTES: u64 = 3_221_225_472;
 const TREE_CAP_BYTES: u64 = 32 * 1_048_576;
 const LIVENESS_PLANE_BYTES: u64 = 25_000_000;
@@ -207,6 +207,7 @@ fn validate_manifest_fields(manifest: &V35GenerationManifest) -> Result<()> {
         "retiring-liveness",
         "retiring-projection-basis",
         "retiring-routing",
+        "snapshot-visibility-directory",
     ]);
     let mut roles = BTreeSet::new();
     let mut uris = BTreeSet::new();

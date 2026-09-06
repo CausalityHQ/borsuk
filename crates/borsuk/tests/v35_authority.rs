@@ -34,12 +34,13 @@ fn manifest() -> V35GenerationManifest {
             identity("page-directory", 6),
             identity("active-liveness", 7),
             identity("retiring-liveness", 8),
+            identity("snapshot-visibility-directory", 9),
         ],
         dimensions: V35Dimensions {
             routing: 192,
             source: 3_072,
         },
-        format: "borsuk-v35-generation-v1".to_owned(),
+        format: "borsuk-v35-generation-v2".to_owned(),
         leaf_count: 414_100,
         metric: "squared-l2".to_owned(),
         normalization: "none".to_owned(),
@@ -169,6 +170,22 @@ fn v35_authority_rejects_schema_types_and_identity_drift() {
     assert!(
         validate_v35_manifest(&baseline_bytes[..baseline_bytes.len() - 1], &registered).is_err()
     );
+}
+
+#[test]
+fn v35_authority_requires_visibility_snapshot_in_published_generation() {
+    // Break caught: the manifest publishes routing and liveness objects while
+    // leaving the exact visibility snapshot used by query admission outside
+    // the authenticated generation boundary.
+    let mut value = manifest();
+    let bytes = manifest_bytes(&value);
+    assert!(validate_v35_manifest(&bytes, &registered_manifest(&bytes)).is_ok());
+
+    value
+        .artifacts
+        .retain(|artifact| artifact.role != "snapshot-visibility-directory");
+    let bytes = manifest_bytes(&value);
+    assert!(validate_v35_manifest(&bytes, &registered_manifest(&bytes)).is_err());
 }
 
 #[test]
