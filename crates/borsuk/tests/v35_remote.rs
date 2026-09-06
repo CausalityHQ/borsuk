@@ -2,17 +2,24 @@
 
 use borsuk::{
     V35ArtifactIdentity, V35Dimensions, V35GroupStorage, V35LeafPatchBuildRequest, V35RemoteChunk,
-    V35RemoteDirectoryBinding, V35RemoteDirectoryBlock, V35RouteBudget, V35RoutePrefix,
-    V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility, build_v35_leaf_patch_arm,
+    V35RemoteDirectoryBinding, V35RemoteDirectoryBlock, V35RemoteFailureKind, V35RemoteRange,
+    V35RemoteRangeResponse, V35RouteBudget, V35RoutePrefix, V35ScannedCandidate, V35SnapshotEntry,
+    V35SnapshotVisibility, V35TransportFailure, V35VersionedRangeReader, build_v35_leaf_patch_arm,
     build_v35_residual_sq_descriptor, build_v35_routing_generation, build_v35_srht,
-    exhaustive_v35_route, plan_v35_remote_reads, reduce_v35_scanned_candidates,
-    select_v35_exact_pages,
+    execute_v35_remote_plan, exhaustive_v35_route, plan_v35_remote_reads,
+    reduce_v35_scanned_candidates, select_v35_exact_pages,
 };
+use sha2::{Digest, Sha256};
+use std::collections::VecDeque;
 
 const MIB: u64 = 1_048_576;
 
 fn digest(byte: u8) -> String {
     format!("{byte:02x}").repeat(32)
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn binding(byte: u8) -> V35RemoteDirectoryBinding {
@@ -91,10 +98,32 @@ fn directory_blocks() -> Vec<V35RemoteDirectoryBlock> {
         0x23,
     );
     let chunks = [
-        V35RemoteChunk::new(0, 0, 1, first.clone(), "v01", 64, 100, 192, digest(0x31)).unwrap(),
-        V35RemoteChunk::new(0, 1, 1, first, "v01", 164, 100, 192, digest(0x32)).unwrap(),
-        V35RemoteChunk::new(1, 2, 2, second, "v01", 32, 100, 384, digest(0x33)).unwrap(),
-        V35RemoteChunk::new(2, 4, 2, unselected, "v01", 32, 100, 384, digest(0x34)).unwrap(),
+        V35RemoteChunk::new(
+            0,
+            0,
+            1,
+            first.clone(),
+            "v01",
+            64,
+            100,
+            192,
+            sha256(&[0x31; 100]),
+        )
+        .unwrap(),
+        V35RemoteChunk::new(0, 1, 1, first, "v01", 164, 100, 192, sha256(&[0x32; 100])).unwrap(),
+        V35RemoteChunk::new(1, 2, 2, second, "v01", 32, 100, 384, sha256(&[0x33; 100])).unwrap(),
+        V35RemoteChunk::new(
+            2,
+            4,
+            2,
+            unselected,
+            "v01",
+            32,
+            100,
+            384,
+            sha256(&[0x34; 100]),
+        )
+        .unwrap(),
     ];
     (0..3)
         .map(|group| {
@@ -116,6 +145,137 @@ fn directory_blocks() -> Vec<V35RemoteDirectoryBlock> {
             .unwrap()
         })
         .collect()
+}
+
+enum ReadStep {
+    Response(V35RemoteRangeResponse),
+    Failure(V35TransportFailure),
+}
+
+struct ScriptedRangeReader {
+    steps: VecDeque<ReadStep>,
+}
+
+impl V35VersionedRangeReader for ScriptedRangeReader {
+    fn read_range(
+        &mut self,
+        _range: &V35RemoteRange,
+    ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure> {
+        match self.steps.pop_front().expect("one scripted read step") {
+            ReadStep::Response(response) => Ok(response),
+            ReadStep::Failure(failure) => Err(failure),
+        }
+    }
+}
+
+fn planned_execution() -> borsuk::V35RemotePlan {
+    let blocks = directory_blocks();
+    let identities = blocks
+        .iter()
+        .map(|block| block.identity().clone())
+        .collect::<Vec<_>>();
+    plan_v35_remote_reads(&selected_route(&identities), &blocks).unwrap()
+}
+
+fn response(range: &V35RemoteRange, body: Vec<u8>) -> V35RemoteRangeResponse {
+    V35RemoteRangeResponse::new(
+        range.uri(),
+        range.version_id(),
+        range.start(),
+        range.end(),
+        body,
+    )
+    .unwrap()
+}
+
+#[test]
+fn v35_remote_execution_authenticates_plan_order_and_accounts_retries() {
+    // Break caught: transport can substitute a capability/body, retries are
+    // invisible in the receipt, or coalescing loses logical chunk order.
+    let plan = planned_execution();
+    let first = response(
+        &plan.ranges()[0],
+        [vec![0x31; 100], vec![0x32; 100]].concat(),
+    );
+    let second = response(&plan.ranges()[1], vec![0x33; 100]);
+    let mut reader = ScriptedRangeReader {
+        steps: VecDeque::from([
+            ReadStep::Failure(V35TransportFailure::retryable(17)),
+            ReadStep::Response(first),
+            ReadStep::Response(second),
+        ]),
+    };
+    let mut delivered = Vec::new();
+    let receipt = execute_v35_remote_plan(&plan, &mut reader, |chunk, bytes| {
+        delivered.push((chunk.group_ordinal(), chunk.logical_start(), bytes[0]));
+        Ok(chunk.decoded_length())
+    })
+    .unwrap();
+
+    assert_eq!(delivered, vec![(0, 0, 0x31), (0, 1, 0x32), (1, 2, 0x33)]);
+    assert_eq!(receipt.physical_get_attempts(), 3);
+    assert_eq!(receipt.requested_bytes(), 500);
+    assert_eq!(receipt.returned_bytes(), 317);
+    assert_eq!(receipt.unique_logical_bytes(), 300);
+    assert_eq!(receipt.authenticated_bytes(), 300);
+    assert_eq!(receipt.decoded_bytes(), 768);
+    assert_eq!(receipt.retry_attempts(), 1);
+    assert_eq!(receipt.retry_requested_bytes(), 200);
+    assert_eq!(receipt.retry_returned_bytes(), 200);
+    assert!(reader.steps.is_empty());
+}
+
+#[test]
+fn v35_remote_execution_fails_closed_with_receipt_before_decode() {
+    // Break caught: a short/corrupt body is retried or decoded, or retry
+    // exhaustion discards the bytes and attempts already spent.
+    let cases = [
+        (
+            vec![ReadStep::Response(response(
+                &planned_execution().ranges()[0],
+                [vec![0x31; 100], vec![0x30; 100]].concat(),
+            ))],
+            V35RemoteFailureKind::Integrity,
+            1,
+            200,
+        ),
+        (
+            vec![ReadStep::Response(response(
+                &planned_execution().ranges()[0],
+                vec![0x31; 199],
+            ))],
+            V35RemoteFailureKind::Length,
+            1,
+            199,
+        ),
+        (
+            vec![
+                ReadStep::Failure(V35TransportFailure::retryable(3)),
+                ReadStep::Failure(V35TransportFailure::retryable(5)),
+                ReadStep::Failure(V35TransportFailure::retryable(7)),
+            ],
+            V35RemoteFailureKind::Transport,
+            3,
+            15,
+        ),
+    ];
+    for (steps, expected_kind, attempts, returned) in cases {
+        let plan = planned_execution();
+        let mut reader = ScriptedRangeReader {
+            steps: VecDeque::from(steps),
+        };
+        let mut decoded = false;
+        let failure = execute_v35_remote_plan(&plan, &mut reader, |_, _| {
+            decoded = true;
+            Ok(0)
+        })
+        .unwrap_err();
+        assert_eq!(failure.kind(), expected_kind);
+        assert_eq!(failure.receipt().physical_get_attempts(), attempts);
+        assert_eq!(failure.receipt().returned_bytes(), returned);
+        assert_eq!(failure.receipt().authenticated_bytes(), 0);
+        assert!(!decoded);
+    }
 }
 
 #[test]

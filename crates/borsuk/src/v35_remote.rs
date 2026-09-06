@@ -5,6 +5,7 @@ use crate::{
     v35_route::v35_artifact_authority_digest,
 };
 use half::f16;
+use sha2::{Digest, Sha256};
 
 const MIB: u64 = 1_048_576;
 const MAX_ENCODED_CHUNK_BYTES: u64 = MIB;
@@ -474,6 +475,14 @@ impl V35RemoteChunk {
     pub fn group_ordinal(&self) -> u32 {
         self.group_ordinal
     }
+    /// First logical source row in this independently authenticated chunk.
+    pub fn logical_start(&self) -> u64 {
+        self.logical_start
+    }
+    /// Maximum decoded allocation declared by the chunk envelope.
+    pub fn decoded_length(&self) -> u64 {
+        self.decoded_length
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -522,7 +531,7 @@ pub struct V35RemoteRange {
     version_id: String,
     start: u64,
     end: u64,
-    chunk_count: usize,
+    chunks: Vec<V35RemoteChunk>,
 }
 
 impl V35RemoteRange {
@@ -544,8 +553,250 @@ impl V35RemoteRange {
     }
     /// Independently authenticated chunks contained by this request.
     pub fn chunk_count(&self) -> usize {
-        self.chunk_count
+        self.chunks.len()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// One versioned range response returned by the narrow transport boundary.
+pub struct V35RemoteRangeResponse {
+    uri: String,
+    version_id: String,
+    start: u64,
+    end: u64,
+    body: Vec<u8>,
+}
+
+impl V35RemoteRangeResponse {
+    /// Construct a response. The executor independently checks it against the opaque plan.
+    pub fn new(uri: &str, version_id: &str, start: u64, end: u64, body: Vec<u8>) -> Result<Self> {
+        if !uri.starts_with("s3://")
+            || version_id.is_empty()
+            || end <= start
+            || body.len() as u64 > MAX_ENCODED_CHUNK_BYTES + 1
+        {
+            return Err(invalid("V35 remote range response differs"));
+        }
+        Ok(Self {
+            uri: uri.to_owned(),
+            version_id: version_id.to_owned(),
+            start,
+            end,
+            body,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Transport failure classification plus bytes received before failure.
+pub struct V35TransportFailure {
+    retryable: bool,
+    returned_bytes: u64,
+}
+
+impl V35TransportFailure {
+    /// A timeout, throttle, or transient transport/5xx failure.
+    pub fn retryable(returned_bytes: u64) -> Self {
+        Self {
+            retryable: true,
+            returned_bytes,
+        }
+    }
+    /// A non-retryable transport failure.
+    pub fn terminal(returned_bytes: u64) -> Self {
+        Self {
+            retryable: false,
+            returned_bytes,
+        }
+    }
+}
+
+/// Versioned range-only transport. It has no list, discovery, write, or endpoint surface.
+pub trait V35VersionedRangeReader {
+    /// Read exactly one opaque range capability emitted by the authenticated planner.
+    fn read_range(
+        &mut self,
+        range: &V35RemoteRange,
+    ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Stable terminal class for a remote execution failure.
+pub enum V35RemoteFailureKind {
+    /// Response identity differs from the planned capability.
+    Authority,
+    /// Response length differs from the planned inclusive/exclusive interval.
+    Length,
+    /// An independently registered chunk digest differs.
+    Integrity,
+    /// Transport failed terminally or exhausted its retry allowance.
+    Transport,
+    /// Authenticated bytes could not be decoded by the caller.
+    Decode,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Exact physical and logical byte accounting for one remote execution.
+pub struct V35RemoteReadReceipt {
+    physical_get_attempts: u64,
+    requested_bytes: u64,
+    returned_bytes: u64,
+    unique_logical_bytes: u64,
+    authenticated_bytes: u64,
+    decoded_bytes: u64,
+    retry_attempts: u64,
+    retry_requested_bytes: u64,
+    retry_returned_bytes: u64,
+}
+
+impl V35RemoteReadReceipt {
+    /// Physical range attempts, including retries.
+    pub fn physical_get_attempts(&self) -> u64 {
+        self.physical_get_attempts
+    }
+    /// Bytes requested across all physical attempts.
+    pub fn requested_bytes(&self) -> u64 {
+        self.requested_bytes
+    }
+    /// Bytes returned across successful and failed physical attempts.
+    pub fn returned_bytes(&self) -> u64 {
+        self.returned_bytes
+    }
+    /// Unique planned logical bytes, excluding retries.
+    pub fn unique_logical_bytes(&self) -> u64 {
+        self.unique_logical_bytes
+    }
+    /// Unique bytes authenticated before decoding.
+    pub fn authenticated_bytes(&self) -> u64 {
+        self.authenticated_bytes
+    }
+    /// Bytes reported decoded by the bounded caller callback.
+    pub fn decoded_bytes(&self) -> u64 {
+        self.decoded_bytes
+    }
+    /// Physical attempts after the first attempt for a range.
+    pub fn retry_attempts(&self) -> u64 {
+        self.retry_attempts
+    }
+    /// Bytes requested by retry attempts.
+    pub fn retry_requested_bytes(&self) -> u64 {
+        self.retry_requested_bytes
+    }
+    /// Bytes returned by retry attempts.
+    pub fn retry_returned_bytes(&self) -> u64 {
+        self.retry_returned_bytes
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Failure that preserves the complete receipt accumulated before termination.
+pub struct V35RemoteExecutionFailure {
+    kind: V35RemoteFailureKind,
+    receipt: V35RemoteReadReceipt,
+}
+
+impl V35RemoteExecutionFailure {
+    /// Stable failure class.
+    pub fn kind(&self) -> V35RemoteFailureKind {
+        self.kind
+    }
+    /// Counters accumulated by the original execution.
+    pub fn receipt(&self) -> &V35RemoteReadReceipt {
+        &self.receipt
+    }
+}
+
+fn execution_failure(
+    kind: V35RemoteFailureKind,
+    receipt: V35RemoteReadReceipt,
+) -> V35RemoteExecutionFailure {
+    V35RemoteExecutionFailure { kind, receipt }
+}
+
+/// Execute an authenticated plan with bounded retries and plan-order chunk delivery.
+pub fn execute_v35_remote_plan<R, F>(
+    plan: &V35RemotePlan,
+    reader: &mut R,
+    mut decode: F,
+) -> std::result::Result<V35RemoteReadReceipt, V35RemoteExecutionFailure>
+where
+    R: V35VersionedRangeReader,
+    F: FnMut(&V35RemoteChunk, &[u8]) -> Result<u64>,
+{
+    let mut receipt = V35RemoteReadReceipt {
+        unique_logical_bytes: plan.requested_code_bytes,
+        ..V35RemoteReadReceipt::default()
+    };
+    for range in &plan.ranges {
+        let requested = range.end - range.start;
+        let mut range_attempt = 0_u64;
+        let response = loop {
+            receipt.physical_get_attempts += 1;
+            receipt.requested_bytes += requested;
+            if range_attempt > 0 {
+                receipt.retry_requested_bytes += requested;
+            }
+            match reader.read_range(range) {
+                Ok(response) => {
+                    receipt.returned_bytes += response.body.len() as u64;
+                    if range_attempt > 0 {
+                        receipt.retry_returned_bytes += response.body.len() as u64;
+                    }
+                    break response;
+                }
+                Err(failure) => {
+                    receipt.returned_bytes += failure.returned_bytes;
+                    if range_attempt > 0 {
+                        receipt.retry_returned_bytes += failure.returned_bytes;
+                    }
+                    if !failure.retryable || range_attempt >= u64::from(MAX_RETRIES) {
+                        return Err(execution_failure(V35RemoteFailureKind::Transport, receipt));
+                    }
+                    receipt.retry_attempts += 1;
+                    range_attempt += 1;
+                }
+            }
+        };
+        if response.uri != range.uri
+            || response.version_id != range.version_id
+            || response.start != range.start
+            || response.end != range.end
+        {
+            return Err(execution_failure(V35RemoteFailureKind::Authority, receipt));
+        }
+        if response.body.len() as u64 != requested {
+            return Err(execution_failure(V35RemoteFailureKind::Length, receipt));
+        }
+        let mut authenticated = Vec::with_capacity(range.chunks.len());
+        for chunk in &range.chunks {
+            let relative = chunk.offset - range.start;
+            let start = usize::try_from(relative)
+                .map_err(|_| execution_failure(V35RemoteFailureKind::Length, receipt.clone()))?;
+            let length = usize::try_from(chunk.encoded_length)
+                .map_err(|_| execution_failure(V35RemoteFailureKind::Length, receipt.clone()))?;
+            let end = start
+                .checked_add(length)
+                .ok_or_else(|| execution_failure(V35RemoteFailureKind::Length, receipt.clone()))?;
+            let bytes = response
+                .body
+                .get(start..end)
+                .ok_or_else(|| execution_failure(V35RemoteFailureKind::Length, receipt.clone()))?;
+            if format!("{:x}", Sha256::digest(bytes)) != chunk.digest {
+                return Err(execution_failure(V35RemoteFailureKind::Integrity, receipt));
+            }
+            authenticated.push((chunk, bytes));
+        }
+        receipt.authenticated_bytes += requested;
+        for (chunk, bytes) in authenticated {
+            let decoded = decode(chunk, bytes)
+                .map_err(|_| execution_failure(V35RemoteFailureKind::Decode, receipt.clone()))?;
+            if decoded != chunk.decoded_length {
+                return Err(execution_failure(V35RemoteFailureKind::Decode, receipt));
+            }
+            receipt.decoded_bytes += decoded;
+        }
+    }
+    Ok(receipt)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -696,16 +947,17 @@ pub fn plan_v35_remote_reads(
             && last.uri == chunk.object.uri
             && last.version_id == chunk.version_id
             && last.end == chunk.offset
+            && end - last.start <= MAX_ENCODED_CHUNK_BYTES
         {
             last.end = end;
-            last.chunk_count += 1;
+            last.chunks.push(chunk.clone());
         } else {
             ranges.push(V35RemoteRange {
                 uri: chunk.object.uri.clone(),
                 version_id: chunk.version_id.clone(),
                 start: chunk.offset,
                 end,
-                chunk_count: 1,
+                chunks: vec![chunk.clone()],
             });
         }
     }
