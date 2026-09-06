@@ -16,8 +16,8 @@
 - Source dimension `D`, routing dimension `M`, and remote bits per dimension are independent authenticated fields.
 - Development may choose `M` only from 64, 128, and 192; failure at 192 rejects the representation rather than opening an outcome-triggered wider arm.
 - Exact vectors and full row-code planes stay in S3; a serving process never downloads or persists the corpus.
-- The complete checked 192-wide admission projection is `2,792,129,536 B`, strictly below `3,221,225,472 B`.
-- The 201,326,592-B shared-cache term is fixed at 25,000,000 B of active/retiring one-bit liveness planes, 16,777,216 B of directories, and 159,549,376 B of code/page object data.
+- The complete checked 192-wide admission projection is `2,842,461,184 B`, strictly below `3,221,225,472 B`.
+- The 251,658,240-B shared-cache term is fixed at 25,000,000 B of active/retiring one-bit liveness planes, 67,108,864 B of directories, and 159,549,376 B of code/page object data.
 - Arrow IPC is canonical for resident routing generations, Parquet for bulk vectors/query/truth/evidence, and newline canonical JSON for small manifests and receipts.
 - Query construction/training cannot read queries or truth; holdout is unreadable until the development format is committed.
 - Optimized traversal must be byte-identical to exhaustive scoring of the same decoded V35 representation.
@@ -277,6 +277,13 @@
   Reject a projected peak above 64 MiB, preallocate only the admitted output
   ceiling, and make the writer fail rather than grow beyond it. Record that
   conservative pre-allocation projection in the receipt.
+
+  Bind each Morton model and scratch-run manifest to one strict construction
+  authority containing the build-attempt ID, source ID, source-archive
+  SHA-256, and logical projection checksum. Each scratch run additionally
+  stores the SHA-256 of the exact canonical Morton-model bytes. A run decoder
+  receives the expected model and rejects any attempt/source/projection/model
+  substitution; no self-described or compatibility decode path remains.
 
 - [ ] **Step 5: Implement delta/compaction state machine**
 

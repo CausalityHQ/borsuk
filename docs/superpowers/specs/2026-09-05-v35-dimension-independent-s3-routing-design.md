@@ -166,6 +166,13 @@ preallocated to that admitted ceiling and a bounded writer rejects any attempt
 to grow beyond it; the receipt reports the conservative projected peak rather
 than a post-allocation byte count.
 
+Morton-model and scratch-run Arrow manifests embed one strict construction
+authority: build-attempt ID, source ID, source-archive SHA-256, and logical
+projection checksum. Scratch runs also bind the SHA-256 of the exact canonical
+Morton-model bytes. Readers require the expected model and reject every
+attempt/source/projection/model substitution before exposing a batch; they do
+not trust a run's self-description or retain a predecessor decode path.
+
 The prose arithmetic above is explanatory; the canonical receipt records the
 component vector and checked sum. Tests pin the exact sum
 `2,842,461,184 B`, leaving `378,764,288 B` below 3 GiB. A two-patch 192-wide

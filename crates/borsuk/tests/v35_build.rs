@@ -1,9 +1,9 @@
 //! V35 bounded streaming writer and immutable-delta contracts.
 
 use borsuk::{
-    Result, V35ArtifactIdentity, V35BuildBlock, V35BuildBlockSource, V35BuildRow,
-    V35BuildScratchSink, V35MortonModel, build_v35_scratch_runs, decode_v35_build_run_arrow,
-    open_v35_build_run_cursor, train_v35_morton_model,
+    Result, V35ArtifactIdentity, V35BuildAuthority, V35BuildBlock, V35BuildBlockSource,
+    V35BuildRow, V35BuildScratchSink, V35MortonModel, build_v35_scratch_runs,
+    decode_v35_build_run_arrow, open_v35_build_run_cursor, train_v35_morton_model,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -26,11 +26,21 @@ fn training_rows() -> Vec<Vec<f64>> {
         .collect()
 }
 
+fn build_authority() -> V35BuildAuthority {
+    V35BuildAuthority::new(
+        "attempt-01",
+        "deep-image-100m",
+        &"ab".repeat(32),
+        [0x31; 32],
+    )
+    .unwrap()
+}
+
 #[test]
 fn v35_build_scratch_cursor_authenticates_and_streams_bounded_batches() {
     // Break caught: external merge materializes a complete run, drops payload
     // fields, or loses total `(Morton key,source ordinal)` order at a batch edge.
-    let model = train_v35_morton_model(&training_rows()).unwrap();
+    let model = train_v35_morton_model(&training_rows(), build_authority()).unwrap();
     let rows = (0..520_u64)
         .map(|source_ordinal| {
             let source = (0..384)
@@ -53,7 +63,7 @@ fn v35_build_scratch_cursor_authenticates_and_streams_bounded_batches() {
     let mut scratch = Scratch::default();
     build_v35_scratch_runs(&model, &mut source, &mut scratch).unwrap();
     let (registered, bytes) = &scratch.writes[0];
-    let mut cursor = open_v35_build_run_cursor(bytes, registered).unwrap();
+    let mut cursor = open_v35_build_run_cursor(bytes, registered, &model).unwrap();
     let mut batch_sizes = Vec::new();
     let mut observed = Vec::new();
     while let Some(batch) = cursor.next_batch().unwrap() {
@@ -83,7 +93,7 @@ fn v35_build_morton_model_selects_variance_quantiles_and_msb_interleave() {
     // Break caught: build order depends on queries, coordinate ties select the
     // later dimension, equality crosses a quantile, or Morton bits are LSB-first.
     let rows = training_rows();
-    let model = train_v35_morton_model(&rows).unwrap();
+    let model = train_v35_morton_model(&rows, build_authority()).unwrap();
     assert_eq!(
         model.selected_coordinates(),
         &(0_u16..16).collect::<Vec<_>>()
@@ -145,7 +155,7 @@ impl V35BuildScratchSink for Scratch {
 fn v35_build_streams_ordered_blocks_into_bounded_authenticated_arrow_runs() {
     // Break caught: construction retains the corpus, sorts by ID instead of
     // Morton locality, exceeds 64 MiB, or writes an unauthenticated private format.
-    let model = train_v35_morton_model(&training_rows()).unwrap();
+    let model = train_v35_morton_model(&training_rows(), build_authority()).unwrap();
     let rows = (0..32_u64)
         .map(|source_ordinal| {
             let source = (0..384)
@@ -183,7 +193,7 @@ fn v35_build_streams_ordered_blocks_into_bounded_authenticated_arrow_runs() {
             .sum::<u64>()
     );
     for (run_ordinal, (registered, bytes)) in scratch.writes.iter().enumerate() {
-        let decoded = decode_v35_build_run_arrow(bytes, registered).unwrap();
+        let decoded = decode_v35_build_run_arrow(bytes, registered, &model).unwrap();
         assert_eq!(decoded.run_ordinal(), run_ordinal as u32);
         assert_eq!(decoded.rows().len(), 8);
         assert!(decoded.rows().windows(2).all(|pair| {
@@ -204,7 +214,7 @@ fn v35_build_block_preflights_live_memory_before_encoding() {
     // Break caught: the builder allocates Morton order, flattened Arrow
     // columns, and the complete output before discovering that the block
     // exceeds its 64-MiB live-memory admission.
-    let model = train_v35_morton_model(&training_rows()).unwrap();
+    let model = train_v35_morton_model(&training_rows(), build_authority()).unwrap();
     let small = V35BuildBlock::new(vec![
         V35BuildRow::new(0, 10_000, 1, vec![0.0; 384], vec![0.0; 18]).unwrap(),
     ])
@@ -216,4 +226,60 @@ fn v35_build_block_preflights_live_memory_before_encoding() {
     ])
     .unwrap();
     assert!(oversized.projected_peak_live_bytes(&model).is_err());
+}
+
+#[test]
+fn v35_build_artifacts_bind_source_projection_attempt_and_morton_model() {
+    // Break caught: a valid scratch run can be relabeled across a different
+    // source, projection, model, or construction attempt.
+    let authority = build_authority();
+    let model = train_v35_morton_model(&training_rows(), authority.clone()).unwrap();
+    assert_eq!(model.authority(), &authority);
+    let model_bytes = model.canonical_bytes().unwrap();
+    assert_eq!(
+        V35MortonModel::from_canonical_bytes(&model_bytes)
+            .unwrap()
+            .authority(),
+        &authority
+    );
+
+    let row = V35BuildRow::new(0, 10_000, 1, vec![0.0; 384], vec![0.0; 18]).unwrap();
+    let mut source = Blocks(VecDeque::from([V35BuildBlock::new(vec![row]).unwrap()]));
+    let mut scratch = Scratch::default();
+    build_v35_scratch_runs(&model, &mut source, &mut scratch).unwrap();
+    let (registered, bytes) = &scratch.writes[0];
+    decode_v35_build_run_arrow(bytes, registered, &model).unwrap();
+
+    for changed in [
+        V35BuildAuthority::new(
+            "attempt-02",
+            "deep-image-100m",
+            &"ab".repeat(32),
+            [0x31; 32],
+        )
+        .unwrap(),
+        V35BuildAuthority::new("attempt-01", "other-source", &"ab".repeat(32), [0x31; 32]).unwrap(),
+        V35BuildAuthority::new(
+            "attempt-01",
+            "deep-image-100m",
+            &"ac".repeat(32),
+            [0x31; 32],
+        )
+        .unwrap(),
+        V35BuildAuthority::new(
+            "attempt-01",
+            "deep-image-100m",
+            &"ab".repeat(32),
+            [0x32; 32],
+        )
+        .unwrap(),
+    ] {
+        let changed_model = train_v35_morton_model(&training_rows(), changed).unwrap();
+        assert!(decode_v35_build_run_arrow(bytes, registered, &changed_model).is_err());
+    }
+
+    let mut changed_rows = training_rows();
+    changed_rows[0][0] += 1.0;
+    let changed_model = train_v35_morton_model(&changed_rows, authority).unwrap();
+    assert!(decode_v35_build_run_arrow(bytes, registered, &changed_model).is_err());
 }

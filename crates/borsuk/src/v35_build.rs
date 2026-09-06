@@ -40,16 +40,12 @@ fn invalid(message: &str) -> BorsukError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct V35MortonManifest {
+    authority: V35BuildAuthority,
     format: String,
     source_dimensions: u32,
 }
 
-fn morton_schema(source_dimensions: usize) -> Result<Arc<Schema>> {
-    let manifest = V35MortonManifest {
-        format: MORTON_FORMAT.to_owned(),
-        source_dimensions: u32::try_from(source_dimensions)
-            .map_err(|_| invalid("V35 Morton source dimensions overflow"))?,
-    };
+fn morton_schema(manifest: &V35MortonManifest) -> Result<Arc<Schema>> {
     let manifest = serde_json::to_string(&manifest)
         .map_err(|_| invalid("V35 Morton manifest cannot be serialized"))?;
     Ok(Arc::new(Schema::new_with_metadata(
@@ -68,15 +64,94 @@ fn morton_schema(source_dimensions: usize) -> Result<Arc<Schema>> {
     )))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Immutable source, projection, and attempt binding for V35 construction.
+pub struct V35BuildAuthority {
+    attempt_id: String,
+    projection_checksum_sha256: String,
+    source_archive_sha256: String,
+    source_id: String,
+}
+
+impl V35BuildAuthority {
+    /// Construct one strict query-independent build authority.
+    pub fn new(
+        attempt_id: &str,
+        source_id: &str,
+        source_archive_sha256: &str,
+        projection_checksum: [u8; 32],
+    ) -> Result<Self> {
+        let authority = Self {
+            attempt_id: attempt_id.to_owned(),
+            projection_checksum_sha256: digest_hex(&projection_checksum),
+            source_archive_sha256: source_archive_sha256.to_owned(),
+            source_id: source_id.to_owned(),
+        };
+        validate_build_authority(&authority)?;
+        Ok(authority)
+    }
+
+    /// Unique construction-attempt identity.
+    pub fn attempt_id(&self) -> &str {
+        &self.attempt_id
+    }
+}
+
+fn digest_hex(digest: &[u8; 32]) -> String {
+    digest
+        .iter()
+        .fold(String::with_capacity(64), |mut output, byte| {
+            std::fmt::Write::write_fmt(&mut output, format_args!("{byte:02x}"))
+                .expect("writing to a String cannot fail");
+            output
+        })
+}
+
+fn is_lower_hex_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn is_authority_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn validate_build_authority(authority: &V35BuildAuthority) -> Result<()> {
+    if !is_authority_token(&authority.attempt_id)
+        || !is_authority_token(&authority.source_id)
+        || !is_lower_hex_digest(&authority.source_archive_sha256)
+        || !is_lower_hex_digest(&authority.projection_checksum_sha256)
+        || authority
+            .projection_checksum_sha256
+            .bytes()
+            .all(|byte| byte == b'0')
+    {
+        return Err(invalid("V35 build authority differs"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 /// Frozen sixteen-coordinate quantile model for a 128-bit Morton build key.
 pub struct V35MortonModel {
+    authority: V35BuildAuthority,
     selected_coordinates: Vec<u16>,
     boundaries: Vec<Vec<f64>>,
     source_dimensions: usize,
 }
 
 impl V35MortonModel {
+    /// Exact source, projection, and attempt authority bound into this model.
+    pub fn authority(&self) -> &V35BuildAuthority {
+        &self.authority
+    }
     /// Selected projected coordinates in decreasing population-variance order.
     pub fn selected_coordinates(&self) -> &[u16] {
         &self.selected_coordinates
@@ -116,7 +191,13 @@ impl V35MortonModel {
     /// Encode the model as strict cross-language Arrow IPC.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
         validate_model(self)?;
-        let schema = morton_schema(self.source_dimensions)?;
+        let manifest = V35MortonManifest {
+            authority: self.authority.clone(),
+            format: MORTON_FORMAT.to_owned(),
+            source_dimensions: u32::try_from(self.source_dimensions)
+                .map_err(|_| invalid("V35 Morton source dimensions overflow"))?,
+        };
+        let schema = morton_schema(&manifest)?;
         let values = self
             .boundaries
             .iter()
@@ -162,7 +243,7 @@ impl V35MortonModel {
             || manifest.format != MORTON_FORMAT
             || manifest.source_dimensions < MORTON_COORDINATES as u32
             || reader.num_batches() != 1
-            || schema.as_ref() != morton_schema(manifest.source_dimensions as usize)?.as_ref()
+            || schema.as_ref() != morton_schema(&manifest)?.as_ref()
         {
             return Err(invalid("V35 Morton model Arrow authority differs"));
         }
@@ -204,6 +285,7 @@ impl V35MortonModel {
             .collect::<Vec<_>>();
         let source_dimensions = manifest.source_dimensions as usize;
         let model = Self {
+            authority: manifest.authority,
             selected_coordinates,
             boundaries,
             source_dimensions,
@@ -217,6 +299,7 @@ impl V35MortonModel {
 }
 
 fn validate_model(model: &V35MortonModel) -> Result<()> {
+    validate_build_authority(&model.authority)?;
     let mut unique = model.selected_coordinates.clone();
     unique.sort_unstable();
     unique.dedup();
@@ -240,7 +323,11 @@ fn validate_model(model: &V35MortonModel) -> Result<()> {
 }
 
 /// Train a deterministic query-independent Morton model from projected sample rows.
-pub fn train_v35_morton_model(projected_rows: &[Vec<f64>]) -> Result<V35MortonModel> {
+pub fn train_v35_morton_model(
+    projected_rows: &[Vec<f64>],
+    authority: V35BuildAuthority,
+) -> Result<V35MortonModel> {
+    validate_build_authority(&authority)?;
     let dimensions = projected_rows.first().map_or(0, Vec::len);
     if projected_rows.len() < 256
         || dimensions < MORTON_COORDINATES
@@ -295,6 +382,7 @@ pub fn train_v35_morton_model(projected_rows: &[Vec<f64>]) -> Result<V35MortonMo
         })
         .collect::<Vec<_>>();
     let model = V35MortonModel {
+        authority,
         selected_coordinates,
         boundaries,
         source_dimensions: dimensions,
@@ -418,7 +506,9 @@ impl V35BuildScratchReceipt {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct V35BuildRunManifest {
+    authority: V35BuildAuthority,
     format: String,
+    morton_model_sha256: String,
     projected_dimensions: u32,
     rows: u32,
     run_ordinal: u32,
@@ -580,7 +670,9 @@ fn encode_build_run(
             .then(left.1.source_ordinal.cmp(&right.1.source_ordinal))
     });
     let manifest = V35BuildRunManifest {
+        authority: model.authority.clone(),
         format: BUILD_RUN_FORMAT.to_owned(),
+        morton_model_sha256: format!("{:x}", Sha256::digest(model.canonical_bytes()?)),
         projected_dimensions: projected_dimensions as u32,
         rows: block.rows.len() as u32,
         run_ordinal,
@@ -848,13 +940,17 @@ impl V35BuildRunCursor<'_> {
 pub fn open_v35_build_run_cursor<'a>(
     bytes: &'a [u8],
     registered: &V35ArtifactIdentity,
+    model: &V35MortonModel,
 ) -> Result<V35BuildRunCursor<'a>> {
+    validate_model(model)?;
+    let attempt_path = format!("/scratch/{}/", model.authority.attempt_id);
     if registered.role != "build-scratch-run"
         || registered.digest_algorithm != "sha256"
         || registered.length != bytes.len() as u64
         || registered.digest != format!("{:x}", Sha256::digest(bytes))
         || !registered.uri.starts_with("s3://")
         || !registered.uri.contains("/scratch/")
+        || !registered.uri.contains(&attempt_path)
         || registered.uri.contains("/corpus/")
     {
         return Err(invalid("V35 build scratch identity differs"));
@@ -868,11 +964,15 @@ pub fn open_v35_build_run_cursor<'a>(
         .clone();
     let manifest: V35BuildRunManifest = serde_json::from_str(&manifest_json)
         .map_err(|_| invalid("V35 build run manifest differs"))?;
+    validate_build_authority(&manifest.authority)?;
+    let model_sha256 = format!("{:x}", Sha256::digest(model.canonical_bytes()?));
     if reader.schema().metadata().len() != 1
         || serde_json::to_string(&manifest)
             .map_err(|_| invalid("V35 build run manifest cannot be serialized"))?
             != manifest_json
         || manifest.format != BUILD_RUN_FORMAT
+        || manifest.authority != model.authority
+        || manifest.morton_model_sha256 != model_sha256
         || manifest.rows == 0
         || manifest.source_dimensions == 0
         || manifest.projected_dimensions < MORTON_COORDINATES as u32
@@ -940,8 +1040,9 @@ impl V35BuildRun {
 pub fn decode_v35_build_run_arrow(
     bytes: &[u8],
     registered: &V35ArtifactIdentity,
+    model: &V35MortonModel,
 ) -> Result<V35BuildRun> {
-    let mut cursor = open_v35_build_run_cursor(bytes, registered)?;
+    let mut cursor = open_v35_build_run_cursor(bytes, registered, model)?;
     let run_ordinal = cursor.run_ordinal();
     let mut rows = Vec::new();
     while let Some(batch) = cursor.next_batch()? {
@@ -994,7 +1095,7 @@ pub fn build_v35_scratch_runs<R: V35BuildBlockSource, S: V35BuildScratchSink>(
             projection.encoded_capacity,
         )?;
         let identity = scratch.write_run(receipt.scratch_runs, &bytes)?;
-        decode_v35_build_run_arrow(&bytes, &identity)?;
+        decode_v35_build_run_arrow(&bytes, &identity, model)?;
         receipt.source_rows = receipt
             .source_rows
             .checked_add(block.rows.len() as u64)
