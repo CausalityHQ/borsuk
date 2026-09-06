@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use borsuk::{
     Result, V35ArtifactIdentity, V35ConditionalHeadWrite, V35Dimensions, V35GenerationManifest,
     V35GenerationPublicationSink, V35ProjectionArm, V35PublicationOutcome, V35RemoteCodeRate,
-    V35StoredArtifactIdentity, publish_v35_generation,
+    V35StoredArtifactIdentity, decode_v35_generation_head, publish_v35_generation,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -97,6 +97,7 @@ fn manifest_fixture() -> (Vec<u8>, V35ArtifactIdentity) {
 struct PublicationSink {
     events: Vec<String>,
     head_result: V35ConditionalHeadWrite,
+    head_bytes: Vec<u8>,
     reject_manifest: bool,
 }
 
@@ -125,6 +126,7 @@ impl V35GenerationPublicationSink for PublicationSink {
             "head:{}",
             expected_version.unwrap_or("create-if-absent")
         ));
+        self.head_bytes = bytes.to_vec();
         Ok(self.head_result.clone())
     }
 }
@@ -139,6 +141,7 @@ fn v35_publication_writes_manifest_then_conditionally_publishes_head_once() {
         head_result: V35ConditionalHeadWrite::Committed {
             version_id: "head-version-03".to_owned(),
         },
+        head_bytes: Vec::new(),
         reject_manifest: false,
     };
     let outcome = publish_v35_generation(&bytes, &identity, None, &mut sink).unwrap();
@@ -150,6 +153,9 @@ fn v35_publication_writes_manifest_then_conditionally_publishes_head_once() {
             "head:create-if-absent".to_owned(),
         ]
     );
+    let decoded = decode_v35_generation_head(&sink.head_bytes).unwrap();
+    assert_eq!(decoded.object, identity);
+    assert_eq!(decoded.version_id, "manifest-version-07");
 }
 
 #[test]
@@ -170,6 +176,7 @@ fn v35_publication_preserves_conflict_and_indeterminate_without_retry() {
         let mut sink = PublicationSink {
             events: Vec::new(),
             head_result,
+            head_bytes: Vec::new(),
             reject_manifest: false,
         };
         let outcome =
@@ -181,6 +188,7 @@ fn v35_publication_preserves_conflict_and_indeterminate_without_retry() {
     let mut sink = PublicationSink {
         events: Vec::new(),
         head_result: V35ConditionalHeadWrite::Conflict,
+        head_bytes: Vec::new(),
         reject_manifest: true,
     };
     assert!(publish_v35_generation(&bytes, &identity, None, &mut sink).is_err());
@@ -191,6 +199,7 @@ fn v35_publication_preserves_conflict_and_indeterminate_without_retry() {
         head_result: V35ConditionalHeadWrite::Committed {
             version_id: String::new(),
         },
+        head_bytes: Vec::new(),
         reject_manifest: false,
     };
     assert_eq!(
@@ -198,4 +207,46 @@ fn v35_publication_preserves_conflict_and_indeterminate_without_retry() {
         V35PublicationOutcome::Indeterminate
     );
     assert_eq!(sink.events.len(), 2);
+}
+
+#[test]
+fn v35_generation_head_reader_rejects_schema_identity_and_canonical_drift() {
+    // Break caught: serving accepts a rewritten or malformed head before it
+    // has authenticated the exact immutable manifest capability.
+    let (bytes, identity) = manifest_fixture();
+    let mut sink = PublicationSink {
+        events: Vec::new(),
+        head_result: V35ConditionalHeadWrite::Committed {
+            version_id: "head-version-03".to_owned(),
+        },
+        head_bytes: Vec::new(),
+        reject_manifest: false,
+    };
+    publish_v35_generation(&bytes, &identity, None, &mut sink).unwrap();
+    assert!(decode_v35_generation_head(&sink.head_bytes).is_ok());
+
+    let parsed: Value = serde_json::from_slice(&sink.head_bytes).unwrap();
+    let mut mutations = Vec::new();
+    let mut changed = parsed.clone();
+    changed["format"] = Value::String("borsuk-v35-generation-head-v0".to_owned());
+    mutations.push(changed);
+    let mut changed = parsed.clone();
+    changed["extra"] = Value::Bool(true);
+    mutations.push(changed);
+    let mut changed = parsed.clone();
+    changed["manifest"]["version_id"] = Value::String(String::new());
+    mutations.push(changed);
+    let mut changed = parsed;
+    changed["manifest"]["object"]["role"] = Value::String("page-directory".to_owned());
+    mutations.push(changed);
+
+    for mutation in mutations {
+        let mut mutated = serde_json::to_vec(&canonical(mutation)).unwrap();
+        mutated.push(b'\n');
+        assert!(decode_v35_generation_head(&mutated).is_err());
+    }
+    assert!(decode_v35_generation_head(&sink.head_bytes[..sink.head_bytes.len() - 1]).is_err());
+    let mut noncanonical = b" {".to_vec();
+    noncanonical.extend_from_slice(&sink.head_bytes[1..]);
+    assert!(decode_v35_generation_head(&noncanonical).is_err());
 }

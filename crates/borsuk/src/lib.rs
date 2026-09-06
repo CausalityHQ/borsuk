@@ -275,7 +275,7 @@ pub use v35_build::{
 #[doc(hidden)]
 pub use v35_delta::{
     V35ConditionalHeadWrite, V35GenerationPublicationSink, V35PublicationOutcome,
-    publish_v35_generation,
+    decode_v35_generation_head, publish_v35_generation,
 };
 #[doc(hidden)]
 pub use v35_patch::{

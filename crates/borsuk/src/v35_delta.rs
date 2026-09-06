@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     BorsukError, Result, V35ArtifactIdentity, V35StoredArtifactIdentity, validate_v35_manifest,
@@ -16,6 +16,25 @@ fn invalid(message: &str) -> BorsukError {
 fn validate_version_id(version_id: &str) -> Result<()> {
     if version_id.is_empty() || version_id.len() > VERSION_ID_MAX_BYTES {
         return Err(invalid("V35 object-store version differs"));
+    }
+    Ok(())
+}
+
+fn is_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn validate_manifest_identity(identity: &V35ArtifactIdentity) -> Result<()> {
+    if identity.role != "generation-manifest"
+        || identity.digest_algorithm != "sha256"
+        || !is_digest(&identity.digest)
+        || identity.length == 0
+        || identity.uri.is_empty()
+    {
+        return Err(invalid("V35 generation-head manifest identity differs"));
     }
     Ok(())
 }
@@ -96,10 +115,26 @@ pub enum V35PublicationOutcome {
     Indeterminate,
 }
 
-#[derive(Serialize)]
-struct V35GenerationHead<'a> {
-    format: &'static str,
-    manifest: &'a V35StoredArtifactIdentity,
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct V35GenerationHead {
+    format: String,
+    manifest: V35StoredArtifactIdentity,
+}
+
+/// Authenticate and decode the manifest capability in one canonical V35 head.
+pub fn decode_v35_generation_head(bytes: &[u8]) -> Result<V35StoredArtifactIdentity> {
+    if !bytes.ends_with(b"\n") || bytes.ends_with(b"\n\n") {
+        return Err(invalid("V35 generation head bytes differ"));
+    }
+    let head: V35GenerationHead =
+        serde_json::from_slice(bytes).map_err(|_| invalid("V35 generation head JSON differs"))?;
+    if canonical_json_bytes(&head)? != bytes || head.format != HEAD_FORMAT {
+        return Err(invalid("V35 generation head authority differs"));
+    }
+    validate_manifest_identity(&head.manifest.object)?;
+    validate_version_id(&head.manifest.version_id)?;
+    Ok(head.manifest)
 }
 
 /// Store an authenticated manifest, then attempt its generation-head update once.
@@ -121,8 +156,8 @@ pub fn publish_v35_generation(
         version_id: manifest_version_id,
     };
     let head_bytes = canonical_json_bytes(&V35GenerationHead {
-        format: HEAD_FORMAT,
-        manifest: &manifest,
+        format: HEAD_FORMAT.to_owned(),
+        manifest: manifest.clone(),
     })?;
 
     match sink.compare_and_swap_head(expected_head_version, &head_bytes)? {
