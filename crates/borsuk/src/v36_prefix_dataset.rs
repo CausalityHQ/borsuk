@@ -502,6 +502,21 @@ pub struct V36PrefixObjectPrefixScan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// One durable population boundary emitted after a complete authenticated object.
+pub struct V36PrefixPopulationCommit {
+    /// Cutoff position once the requested distinct prefix has been reached.
+    pub cutoff: Option<(u16, u64)>,
+    /// Distinct IDs observed through this complete object.
+    pub distinct_rows: u64,
+    /// Duplicate physical rows observed through this complete object.
+    pub duplicate_rows: u64,
+    /// Physical rows observed through this complete object.
+    pub physical_rows: u64,
+    /// Complete-object first-occurrence evidence.
+    pub run: V36PrefixIdentityRun,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Strict role-separated Parquet outputs from one prefix population.
 pub struct V36PrefixRoleParquetPaths {
     /// Development queries.
@@ -1395,16 +1410,18 @@ fn blake3_file(path: &Path) -> Result<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-/// Scan authenticated complete objects through a distinct-ID cutoff.
-pub fn scan_v36_prefix_object_prefix<F>(
+/// Scan authenticated objects and emit a durable boundary only after each completes.
+pub fn scan_v36_prefix_object_prefix_checkpointed<F, C>(
     ranked_objects: &[V36PrefixRankedSourceObject],
     object_cap: usize,
     byte_cap: u64,
     distinct_candidates: usize,
     mut acquire: F,
+    mut commit: C,
 ) -> Result<V36PrefixObjectPrefixScan>
 where
     F: FnMut(usize, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
+    C: FnMut(&V36PrefixPopulationCommit) -> Result<()>,
 {
     if object_cap == 0
         || object_cap > 16
@@ -1430,20 +1447,18 @@ where
         let path = acquire(ordinal, object)?;
         let selected_object_ordinal = u16::try_from(ordinal)
             .map_err(|_| invalid("V36 prefix source object ordinal overflows"))?;
+        let mut object_seen = HashSet::new();
+        let mut object_identities = Vec::new();
         let object_rows = scan_v36_prefix_registered_input_parquet(
             &path,
             object,
             selected_object_ordinal,
             |row| {
-                physical_rows = physical_rows
-                    .checked_add(1)
-                    .ok_or_else(|| invalid("V36 prefix physical rows overflow"))?;
                 let identity = validate_v36_prefix_input_row(&row)?;
-                if seen.insert(identity.feature_row_id) && unique_rows.len() < distinct_candidates {
-                    unique_rows.push(identity);
-                    if unique_rows.len() == distinct_candidates {
-                        cutoff = Some((selected_object_ordinal, row.row_offset));
-                    }
+                if !seen.contains(&identity.feature_row_id)
+                    && object_seen.insert(identity.feature_row_id)
+                {
+                    object_identities.push(identity);
                 }
                 Ok(())
             },
@@ -1451,14 +1466,47 @@ where
         if object_rows == 0 {
             return Err(invalid("V36 prefix source object is empty"));
         }
-        consumed_objects.push(crate::V36PrefixSourceObject {
+        let source = crate::V36PrefixSourceObject {
             blake3: blake3_file(&path)?,
             encoded_bytes: object.encoded_bytes,
             path: object.path.clone(),
             sample_sha256: object.sample_sha256.clone(),
             sha256: object.sha256.clone(),
             uri: object.uri.clone(),
-        });
+        };
+        physical_rows = physical_rows
+            .checked_add(object_rows)
+            .ok_or_else(|| invalid("V36 prefix physical rows overflow"))?;
+        for identity in &object_identities {
+            if !seen.insert(identity.feature_row_id) {
+                return Err(invalid("V36 prefix provisional identity commit differs"));
+            }
+            if unique_rows.len() < distinct_candidates {
+                unique_rows.push(identity.clone());
+                if unique_rows.len() == distinct_candidates {
+                    cutoff = Some((selected_object_ordinal, identity.row_offset));
+                }
+            }
+        }
+        consumed_objects.push(source.clone());
+        let distinct_rows = u64::try_from(seen.len()).unwrap_or(u64::MAX);
+        let duplicate_rows = physical_rows
+            .checked_sub(distinct_rows)
+            .ok_or_else(|| invalid("V36 prefix duplicate rows underflow"))?;
+        let boundary = V36PrefixPopulationCommit {
+            cutoff,
+            distinct_rows,
+            duplicate_rows,
+            physical_rows,
+            run: V36PrefixIdentityRun {
+                physical_rows: object_rows,
+                rows: object_identities,
+                selected_object_ordinal,
+                source,
+            },
+        };
+        validate_v36_prefix_identity_run(&boundary.run)?;
+        commit(&boundary)?;
         if cutoff.is_some() {
             break;
         }
@@ -1482,6 +1530,27 @@ where
         physical_rows,
         unique_rows,
     })
+}
+
+/// Scan authenticated complete objects through a distinct-ID cutoff.
+pub fn scan_v36_prefix_object_prefix<F>(
+    ranked_objects: &[V36PrefixRankedSourceObject],
+    object_cap: usize,
+    byte_cap: u64,
+    distinct_candidates: usize,
+    acquire: F,
+) -> Result<V36PrefixObjectPrefixScan>
+where
+    F: FnMut(usize, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
+{
+    scan_v36_prefix_object_prefix_checkpointed(
+        ranked_objects,
+        object_cap,
+        byte_cap,
+        distinct_candidates,
+        acquire,
+        |_| Ok(()),
+    )
 }
 
 /// Exact physical schema of a V36 prefix source table.

@@ -10,15 +10,16 @@ use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     V36ArtifactIdentity, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
     V36PrefixFreezeReceipt, V36PrefixFreezeRequest, V36PrefixGtAccumulator, V36PrefixGtParquetJob,
-    V36PrefixInputRow, V36PrefixPopulationAuthority, V36PrefixQualityRole,
-    V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority,
-    V36PrefixSourceObject, bind_v36_prefix_population_authority,
+    V36PrefixInputRow, V36PrefixPopulationAuthority, V36PrefixPopulationCommit,
+    V36PrefixQualityRole, V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject,
+    V36PrefixRoleAuthority, V36PrefixSourceObject, bind_v36_prefix_population_authority,
     canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
     canonical_v36_prefix_source_registry_bytes, deduplicate_v36_prefix_row_identities,
     exact_v36_prefix_gt100, load_v36_prefix_freeze_preflight, materialize_v36_prefix_role_parquets,
-    rank_v36_prefix_source_objects, scan_v36_prefix_gt100_parquet, scan_v36_prefix_object_prefix,
+    rank_v36_prefix_source_objects, restore_v36_prefix_population, scan_v36_prefix_gt100_parquet,
+    scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
     scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
     scan_v36_prefix_source_parquet, select_v36_prefix_roles, v36_prefix_gt100_schema,
     v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
@@ -1081,6 +1082,67 @@ fn v36_prefix_dataset_scans_complete_cutoff_object_and_records_duplicate_evidenc
         })
         .is_err()
     );
+}
+
+#[test]
+fn v36_prefix_dataset_checkpoints_only_complete_authenticated_objects() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first.parquet");
+    let second = directory.path().join("second.parquet");
+    let ranked = vec![
+        write_registered_rows(&first, &[7, 9]),
+        write_registered_rows(&second, &[7, 11, 13]),
+    ];
+    let paths = [first, second];
+    let mut commits = Vec::<V36PrefixPopulationCommit>::new();
+    let scan = scan_v36_prefix_object_prefix_checkpointed(
+        &ranked,
+        2,
+        ranked.iter().map(|object| object.encoded_bytes).sum(),
+        3,
+        |ordinal, _| Ok(paths[ordinal].clone()),
+        |commit| {
+            commits.push(commit.clone());
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(commits.len(), 2);
+    assert_eq!(commits[0].run.rows.len(), 2);
+    assert_eq!(commits[1].run.rows.len(), 2);
+    assert_eq!(commits[1].distinct_rows, 4);
+    assert_eq!(commits[1].cutoff, Some((1, 1)));
+    assert_eq!(
+        restore_v36_prefix_population(
+            &commits
+                .iter()
+                .map(|commit| commit.run.clone())
+                .collect::<Vec<_>>(),
+            3,
+        )
+        .unwrap(),
+        scan
+    );
+
+    let invalid = directory.path().join("invalid.parquet");
+    let invalid_ranked = vec![ranked[0].clone(), write_registered_rows(&invalid, &[7, -1])];
+    let invalid_paths = [paths[0].clone(), invalid];
+    let mut committed_ordinals = Vec::new();
+    assert!(
+        scan_v36_prefix_object_prefix_checkpointed(
+            &invalid_ranked,
+            2,
+            u64::MAX,
+            3,
+            |ordinal, _| Ok(invalid_paths[ordinal].clone()),
+            |commit| {
+                committed_ordinals.push(commit.run.selected_object_ordinal);
+                Ok(())
+            },
+        )
+        .is_err()
+    );
+    assert_eq!(committed_ordinals, vec![0]);
 }
 
 fn identity(
