@@ -3,15 +3,16 @@
 use std::sync::Arc;
 
 use arrow_array::{
-    ArrayRef, FixedSizeListArray, Float32Array, Float64Array, RecordBatch, UInt16Array,
-    UInt32Array, UInt64Array,
+    ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int64Array, RecordBatch, StringArray,
+    UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     V36PrefixGtAccumulator, V36PrefixInputRow, V36PrefixPopulationAuthority, V36PrefixQualityRole,
-    V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, V36PrefixSourceObject,
-    deduplicate_v36_prefix_row_identities, exact_v36_prefix_gt100, rank_v36_prefix_source_objects,
-    scan_v36_prefix_gt100_parquet, scan_v36_prefix_query_parquet, scan_v36_prefix_source_parquet,
+    V36PrefixRankedSourceObject, V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority,
+    V36PrefixSourceObject, deduplicate_v36_prefix_row_identities, exact_v36_prefix_gt100,
+    rank_v36_prefix_source_objects, scan_v36_prefix_gt100_parquet, scan_v36_prefix_query_parquet,
+    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
     select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
     v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
     validate_v36_prefix_input_row, validate_v36_prefix_role_authority,
@@ -475,4 +476,96 @@ fn v36_prefix_dataset_query_and_gt_parquet_round_trip_is_strict() {
     )
     .unwrap();
     assert!(write_v36_prefix_gt100_parquet(&gt_path, [bad_gt]).is_err());
+}
+
+#[test]
+fn v36_prefix_dataset_registered_input_is_authenticated_and_strict() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("registered.parquet");
+    let child = Arc::new(Field::new("item", DataType::Float32, true));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("url", DataType::Utf8, true),
+        Field::new("natural_score", DataType::Float32, true),
+        Field::new("feature_row_id", DataType::Int64, true),
+        Field::new(
+            "embedding",
+            DataType::FixedSizeList(child.clone(), DIMENSIONS as i32),
+            true,
+        ),
+    ]));
+    let mut values = vec![0.0_f32; 2 * DIMENSIONS];
+    values[0] = 1.0;
+    values[DIMENSIONS + 1] = 1.0;
+    let embeddings = FixedSizeListArray::try_new(
+        child,
+        DIMENSIONS as i32,
+        Arc::new(Float32Array::from(values)),
+        None,
+    )
+    .unwrap();
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(vec![
+                None,
+                Some("https://example.invalid"),
+            ])) as ArrayRef,
+            Arc::new(Float32Array::from(vec![None, Some(0.5)])),
+            Arc::new(Int64Array::from(vec![Some(7), Some(9)])),
+            Arc::new(embeddings),
+        ],
+    )
+    .unwrap();
+    let file = std::fs::File::create(&path).unwrap();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let object = V36PrefixRankedSourceObject {
+        encoded_bytes: bytes.len() as u64,
+        path: "data/registered.parquet".into(),
+        sample_sha256: sample_digest("data/registered.parquet", bytes.len() as u64),
+        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        uri: "https://example.invalid/registered.parquet".into(),
+    };
+    let mut observed = Vec::new();
+    assert_eq!(
+        scan_v36_prefix_registered_input_parquet(&path, &object, 3, |row| {
+            observed.push((
+                row.feature_row_id,
+                row.selected_object_ordinal,
+                row.row_offset,
+            ));
+            Ok(())
+        })
+        .unwrap(),
+        2
+    );
+    assert_eq!(observed, [(7, 3, 0), (9, 3, 1)]);
+    let mut drifted = object.clone();
+    drifted.sha256 = "4".repeat(64);
+    assert!(scan_v36_prefix_registered_input_parquet(&path, &drifted, 3, |_| Ok(())).is_err());
+
+    let null_path = directory.path().join("null-id.parquet");
+    let null_batch = RecordBatch::try_new(
+        batch.schema(),
+        vec![
+            batch.column(0).clone(),
+            batch.column(1).clone(),
+            Arc::new(Int64Array::from(vec![Some(7), None])),
+            batch.column(3).clone(),
+        ],
+    )
+    .unwrap();
+    let file = std::fs::File::create(&null_path).unwrap();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(file, null_batch.schema(), None).unwrap();
+    writer.write(&null_batch).unwrap();
+    writer.close().unwrap();
+    let null_bytes = std::fs::read(&null_path).unwrap();
+    let mut null_object = object;
+    null_object.encoded_bytes = null_bytes.len() as u64;
+    null_object.sha256 = format!("{:x}", Sha256::digest(&null_bytes));
+    assert!(
+        scan_v36_prefix_registered_input_parquet(&null_path, &null_object, 3, |_| Ok(())).is_err()
+    );
 }

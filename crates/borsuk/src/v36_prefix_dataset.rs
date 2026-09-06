@@ -2,11 +2,12 @@ use std::{
     cmp::Ordering,
     collections::{BTreeSet, BinaryHeap},
     fs::File,
+    io::{BufReader, Read},
     path::Path,
     sync::Arc,
 };
 
-use arrow_array::{Array, FixedSizeListArray, Float32Array, RecordBatch, UInt64Array};
+use arrow_array::{Array, FixedSizeListArray, Float32Array, Int64Array, RecordBatch, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use parquet::{
     arrow::{ArrowSchemaConverter, ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
@@ -441,6 +442,136 @@ fn vector_field() -> Field {
         ),
         false,
     )
+}
+
+fn registered_input_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("url", DataType::Utf8, true),
+        Field::new("natural_score", DataType::Float32, true),
+        Field::new("feature_row_id", DataType::Int64, true),
+        Field::new(
+            "embedding",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                DIMENSIONS as i32,
+            ),
+            true,
+        ),
+    ])
+}
+
+fn sha256_file(path: &Path) -> Result<(u64, String)> {
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut bytes = 0_u64;
+    let mut hasher = Sha256::new();
+    loop {
+        let read = reader.read(&mut buffer).map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+        if read == 0 {
+            break;
+        }
+        bytes = bytes
+            .checked_add(u64::try_from(read).unwrap())
+            .ok_or_else(|| invalid("V36 prefix registered object length overflows"))?;
+        hasher.update(&buffer[..read]);
+    }
+    Ok((bytes, format!("{:x}", hasher.finalize())))
+}
+
+/// Authenticate and stream one complete registered raw source object.
+pub fn scan_v36_prefix_registered_input_parquet<F>(
+    path: &Path,
+    object: &V36PrefixRankedSourceObject,
+    selected_object_ordinal: u16,
+    mut consume: F,
+) -> Result<u64>
+where
+    F: FnMut(V36PrefixInputRow) -> Result<()>,
+{
+    digest_bytes(&object.sha256)?;
+    digest_bytes(&object.sample_sha256)?;
+    let mut sample = Sha256::new();
+    sample.update(b"borsuk-v36-screen-object-v1");
+    sample.update(object.path.as_bytes());
+    sample.update(object.encoded_bytes.to_le_bytes());
+    if object.path.is_empty()
+        || object.uri.is_empty()
+        || selected_object_ordinal >= 16
+        || object.sample_sha256 != format!("{:x}", sample.finalize())
+    {
+        return Err(invalid("V36 prefix registered object identity differs"));
+    }
+    let (encoded_bytes, sha256) = sha256_file(path)?;
+    if encoded_bytes != object.encoded_bytes || sha256 != object.sha256 {
+        return Err(invalid("V36 prefix registered object authority differs"));
+    }
+    let file = File::open(path).map_err(|source| BorsukError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let expected_schema = registered_input_schema();
+    validate_parquet_descriptor(builder.parquet_schema(), &expected_schema)?;
+    if builder.schema().as_ref() != &expected_schema {
+        return Err(invalid("V36 prefix registered object schema differs"));
+    }
+    let mut row_offset = 0_u64;
+    for batch in builder.build()? {
+        let batch = batch?;
+        if batch.schema().as_ref() != &expected_schema
+            || batch.num_columns() != 4
+            || batch.num_rows() == 0
+        {
+            return Err(invalid("V36 prefix registered object batch differs"));
+        }
+        let ids = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| invalid("V36 prefix registered object ID column differs"))?;
+        let embeddings = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V36 prefix registered object embedding column differs"))?;
+        let values = embeddings
+            .values()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .ok_or_else(|| invalid("V36 prefix registered object embedding child differs"))?;
+        if ids.null_count() != 0
+            || embeddings.null_count() != 0
+            || values.null_count() != 0
+            || values.len() != batch.num_rows() * DIMENSIONS
+        {
+            return Err(invalid("V36 prefix registered object gated null differs"));
+        }
+        for row in 0..batch.num_rows() {
+            let start = row * DIMENSIONS;
+            let input = V36PrefixInputRow {
+                feature_row_id: ids.value(row),
+                selected_object_ordinal,
+                row_offset,
+                embedding: values.values()[start..start + DIMENSIONS].to_vec(),
+            };
+            validate_v36_prefix_input_row(&input)?;
+            consume(input)?;
+            row_offset = row_offset
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 prefix registered object row count overflows"))?;
+        }
+    }
+    if row_offset == 0 {
+        return Err(invalid("V36 prefix registered object is empty"));
+    }
+    Ok(row_offset)
 }
 
 /// Exact physical schema of a V36 prefix source table.

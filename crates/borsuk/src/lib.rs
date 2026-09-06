@@ -339,11 +339,12 @@ pub use v36_prefix_dataset::{
     V36PrefixQualityRole, V36PrefixQueryRow, V36PrefixRankedSourceObject, V36PrefixRoleSplit,
     V36PrefixRowIdentity, deduplicate_v36_prefix_row_identities, exact_v36_prefix_gt100,
     rank_v36_prefix_source_objects, scan_v36_prefix_gt100_parquet, scan_v36_prefix_query_parquet,
-    scan_v36_prefix_source_parquet, select_v36_prefix_roles, v36_prefix_gt100_schema,
-    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
-    v36_prefix_source_score_sha256, validate_v36_prefix_input_row,
-    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
-    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
+    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
+    select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
+    v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
+    validate_v36_prefix_input_row, validate_v36_prefix_role_authority,
+    write_v36_prefix_gt100_parquet, write_v36_prefix_query_parquet,
+    write_v36_prefix_source_parquet,
 };
 #[allow(
     dead_code,
