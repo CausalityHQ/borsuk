@@ -176,9 +176,7 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         self.assertIn('kill -TERM "$science_pid"', script)
         self.assertIn('sha256sum "$root/sidecar-source/scripts/run_v36_prefix_screen.py"', script)
         self.assertIn('put-object --generate-cli-skeleton input', script)
-        self.assertIn(
-            'if [[ "$sidecar_status" != 0 && "$status" != 0 ]]', script
-        )
+        self.assertIn('if [[ "$sidecar_status" != 0 ]]; then', script)
         self.assertNotIn("CHECKPOINT.json", script)
 
     def test_v36_prefix_screen_publishes_artifacts_receipt_then_terminal(self) -> None:
@@ -934,6 +932,17 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
                     1,
                 )
             publish.assert_called_once_with(root, 0, mock.sentinel.transport)
+
+    def test_v36_checkpoint_sidecar_treats_zombie_producer_as_exited(self) -> None:
+        # Break caught: kill(0) reports a dead-but-unreaped child as live, so
+        # both shell and sidecar wait forever and no terminal can be emitted.
+        with mock.patch.object(
+            subject.pathlib.Path,
+            "read_text",
+            return_value="41 (v36 prefix) Z 1 2 3\n",
+        ), mock.patch.object(subject.os, "kill") as kill:
+            self.assertFalse(subject._pid_alive(41))
+        kill.assert_not_called()
 
     def test_v36_checkpoint_sidecar_cli_has_no_scientific_or_storage_surface(self) -> None:
         # Break caught: the sidecar can alter science, discover storage, or run

@@ -708,6 +708,14 @@ def _pid_alive(pid: int) -> bool:
     if type(pid) is not int or pid <= 1:
         raise ValueError("V36 checkpoint producer PID differs")
     try:
+        stat = pathlib.Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        stat = ""
+    if ") " in stat and stat.rsplit(") ", 1)[1].startswith("Z"):
+        return False
+    try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
@@ -919,7 +927,7 @@ if [[ -z "$status" ]]; then
   status=$?
   wait "$sidecar_pid"
   sidecar_status=$?
-  if [[ "$sidecar_status" != 0 && "$status" != 0 ]]; then
+  if [[ "$sidecar_status" != 0 ]]; then
     status=70
   fi
 fi

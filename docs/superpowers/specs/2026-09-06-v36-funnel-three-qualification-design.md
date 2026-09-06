@@ -119,13 +119,24 @@ This preserves one corpus read rather than performing 375 query-major reads.
 
 Checkpoint dependencies use immutable campaign-scoped content keys so complete
 Parquet outputs are uploaded once and reused across replacement attempts.
-Attempt-scoped pointers and terminals retain producer provenance. Publish all
+One run-scoped newest pointer is the sole checkpoint head; attempt-scoped
+terminals retain producer provenance. The next attempt's execution authority
+binds the exact pointer length/SHA-256, generation, and manifest identity before
+launch. Publish all
 immutable dependencies, then the immutable checkpoint manifest, then replace
 the pointer using `If-None-Match` for generation zero or `If-Match` against the
 previous pointer ETag. Resume accepts only the newest fully authenticated
 pointer, manifest, and dependencies; it never falls back past a corrupt newest
-generation. It rebuilds the dedup set or GT heaps and starts at the first
-incomplete object or source-row block. A third interruption is terminal
+generation. Rust revalidates SHA-256, BLAKE3, Arrow schemas, the consecutive
+object prefix, and every recomputed counter before network acquisition. The
+sidecar starts at checked `generation + 1`; it never infers a generation from a
+directory listing. It rebuilds the dedup set or GT heaps and starts at the first
+incomplete object or source-row block. A population checkpoint carries
+identities rather than embeddings, so a resumed population scan does not replay
+completed objects, while final Parquet materialization reacquires exactly the
+authenticated consumed prefix. It never downloads the full registered corpus.
+The controller confirms the prior instance is terminated before binding and
+launching a replacement. A third interruption is terminal
 infrastructure failure; it cannot silently buy a fourth cell.
 
 The object-sample input authority exists before execution and binds the full

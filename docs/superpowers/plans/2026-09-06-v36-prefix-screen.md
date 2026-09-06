@@ -190,11 +190,33 @@
   scheduling units only: checkpoint GT at a source-row block after every query
   heap has incorporated it, preserving one corpus scan. Publish immutable
   campaign-scoped dependencies before the checkpoint manifest, then replace
-  the attempt pointer with `If-None-Match`/`If-Match`; resume only from complete
+  the run-scoped pointer with `If-None-Match`/`If-Match`; resume only from complete
   registered object or all-query source-block boundaries. Upload every
   authenticated output plus a manifest
   before publishing the terminal. Capture binary exit, timeout, and SIGTERM
   explicitly so `set -e` cannot bypass the terminal path.
+
+  Implement replacement attempts as one authenticated handoff. The controller
+  first confirms the preceding EC2 instance is terminal, reads the one
+  run-scoped head, and binds its pointer length/SHA-256, generation, and
+  manifest identity into the next execution authority. The guest stages only
+  that manifest and its ordered dependency closure. Rust authenticates both
+  digests, canonical JSON, Arrow IPC schemas, producer transition, restored
+  object prefix, cutoff, and all population counters before any source GET.
+  Rust alone chooses fresh versus resume and the next generation; the Python
+  publisher receives that exact generation. A resumed scan downloads only the
+  incomplete suffix. Because population identity runs deliberately omit vector
+  payloads, final role-Parquet materialization reacquires exactly the consumed
+  prefix after selection; this bounded replay is not a second population scan
+  and never expands to the registered full source.
+
+  Test the handoff in narrow layers before any Spot work: manifest/run replay
+  disagreement and corrupt-newest rejection with zero acquisition; partial and
+  cutoff-complete scan resume; full-prefix materialization after suffix-only
+  scan; head-plus-one sidecar publication; a two-attempt interrupted lifecycle;
+  conflicting terminals; and confirmed instance termination before replacement
+  launch. Completion requires both science success and a successful final
+  checkpoint drain.
 
   Mutation-test pointer races, lost acknowledgements, corrupt newest
   generations, cross-object duplicates, duplicate-only objects, a cutoff in the
