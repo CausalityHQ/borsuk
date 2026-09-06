@@ -6,7 +6,8 @@ use borsuk::{
     V35RemoteFailureKind, V35RemoteRange, V35RemoteRangeResponse, V35RouteBudget, V35RoutePrefix,
     V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility, V35TransportFailure,
     V35VersionedRangeReader, build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor,
-    build_v35_routing_generation, build_v35_srht, execute_v35_remote_plan, exhaustive_v35_route,
+    build_v35_routing_generation, build_v35_srht, decode_v35_remote_directory_arrow,
+    encode_v35_remote_directory_arrow, execute_v35_remote_plan, exhaustive_v35_route,
     plan_v35_remote_reads, project_v35_query_scalar, reduce_v35_scanned_candidates,
     select_v35_exact_pages,
 };
@@ -79,6 +80,58 @@ fn object(role: &str, uri: &str, length: u64, byte: u8) -> V35ArtifactIdentity {
     }
 }
 
+fn authenticated_directory_block(
+    binding: V35RemoteDirectoryBinding,
+    chunks: Vec<V35RemoteChunk>,
+    uri: &str,
+) -> V35RemoteDirectoryBlock {
+    let (bytes, identity) = encode_v35_remote_directory_arrow(binding, &chunks, uri).unwrap();
+    decode_v35_remote_directory_arrow(&bytes, &identity, binding).unwrap()
+}
+
+#[test]
+fn v35_remote_directory_arrow_authenticates_binding_and_chunks() {
+    // Break caught: callers can label arbitrary trusted Rust chunks as one
+    // directory root without authenticating a cross-language directory block.
+    let directory_binding = binding(0x51);
+    let payload = object(
+        "remote-code-object",
+        "s3://borsuk-index/generations/g01/codes/code-0000.arrow",
+        256,
+        0x21,
+    );
+    let chunks = vec![
+        V35RemoteChunk::new(
+            0,
+            0,
+            2,
+            payload,
+            "version-01",
+            16,
+            100,
+            192,
+            sha256(&[0x31; 100]),
+        )
+        .unwrap(),
+    ];
+    let uri = "s3://borsuk-index/generations/g01/directory/group-0000.arrow";
+    let (bytes, identity) =
+        encode_v35_remote_directory_arrow(directory_binding, &chunks, uri).unwrap();
+    let (again, again_identity) =
+        encode_v35_remote_directory_arrow(directory_binding, &chunks, uri).unwrap();
+    assert_eq!(again, bytes);
+    assert_eq!(again_identity, identity);
+    let decoded = decode_v35_remote_directory_arrow(&bytes, &identity, directory_binding).unwrap();
+    assert_eq!(decoded.identity(), &identity);
+    assert_eq!(decoded.chunks(), chunks);
+
+    let mut corrupt = bytes.clone();
+    let position = corrupt.len() / 2;
+    corrupt[position] ^= 1;
+    assert!(decode_v35_remote_directory_arrow(&corrupt, &identity, directory_binding).is_err());
+    assert!(decode_v35_remote_directory_arrow(&bytes, &identity, binding(0x61)).is_err());
+}
+
 fn directory_blocks() -> Vec<V35RemoteDirectoryBlock> {
     let first = object(
         "remote-code-object",
@@ -128,22 +181,15 @@ fn directory_blocks() -> Vec<V35RemoteDirectoryBlock> {
     ];
     (0..3)
         .map(|group| {
-            let identity = object(
-                "code-directory-block",
-                &format!("s3://borsuk-index/generations/g01/directory/group-{group:04}.json"),
-                512,
-                0x61 + u8::try_from(group).unwrap(),
-            );
-            V35RemoteDirectoryBlock::new(
+            authenticated_directory_block(
                 binding(0x51),
-                identity,
                 chunks
                     .iter()
                     .filter(|chunk| chunk.group_ordinal() == group)
                     .cloned()
                     .collect(),
+                &format!("s3://borsuk-index/generations/g01/directory/group-{group:04}.arrow"),
             )
-            .unwrap()
         })
         .collect()
 }
@@ -460,12 +506,9 @@ fn v35_remote_plan_rejects_generation_snapshot_and_directory_confusion() {
     let route = selected_route(&identities);
     for position in 0..3 {
         let mut foreign = blocks.clone();
-        foreign[position] = V35RemoteDirectoryBlock::new(
-            binding(0x71),
-            foreign[position].identity().clone(),
-            foreign[position].chunks().to_vec(),
-        )
-        .unwrap();
+        let uri = foreign[position].identity().uri.clone();
+        foreign[position] =
+            authenticated_directory_block(binding(0x71), foreign[position].chunks().to_vec(), &uri);
         assert!(plan_v35_remote_reads(&route, &foreign).is_err());
     }
 }

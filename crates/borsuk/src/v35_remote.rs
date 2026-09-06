@@ -1,9 +1,20 @@
-use std::collections::{BTreeSet, HashMap};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    io::Cursor,
+    sync::Arc,
+};
 
 use crate::{
     BorsukError, Result, V35ArtifactIdentity, V35RemoteDirectoryBinding, V35RoutePrefix,
     v35_route::v35_artifact_authority_digest,
 };
+use arrow_array::{Array, RecordBatch, StringArray, UInt32Array, UInt64Array};
+use arrow_ipc::{
+    MetadataVersion,
+    reader::FileReader,
+    writer::{FileWriter, IpcWriteOptions},
+};
+use arrow_schema::{DataType, Field, Schema};
 use half::f16;
 use sha2::{Digest, Sha256};
 
@@ -15,6 +26,9 @@ const MAX_RETRIES: u8 = 2;
 const MAX_CODE_GETS: u64 = 24;
 const MAX_CANDIDATES: usize = 12_288;
 const MAX_MUTATION_ENTRIES: usize = 1_000_000;
+const MAX_DIRECTORY_BLOCK_BYTES: u64 = MIB;
+const MAX_DIRECTORY_CHUNKS: usize = 64;
+const DIRECTORY_FORMAT: &str = "borsuk-v35-remote-directory-block-v1";
 
 fn invalid(message: &str) -> BorsukError {
     BorsukError::InvalidStorage(message.to_owned())
@@ -25,6 +39,10 @@ fn is_digest(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn digest_hex(value: [u8; 32]) -> String {
+    value.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn validate_object(identity: &V35ArtifactIdentity) -> Result<()> {
@@ -572,6 +590,172 @@ impl V35RemoteChunk {
     }
 }
 
+fn directory_metadata(
+    binding: V35RemoteDirectoryBinding,
+    uri: &str,
+) -> Result<HashMap<String, String>> {
+    let manifest = BTreeMap::from([
+        (
+            "code_schema_sha256".to_owned(),
+            digest_hex(binding.code_schema_digest),
+        ),
+        ("format".to_owned(), DIRECTORY_FORMAT.to_owned()),
+        (
+            "root_sha256".to_owned(),
+            digest_hex(binding.directory_root_digest),
+        ),
+        (
+            "snapshot_sha256".to_owned(),
+            digest_hex(binding.snapshot_digest),
+        ),
+        ("uri".to_owned(), uri.to_owned()),
+    ]);
+    let manifest = serde_json::to_string(&manifest)
+        .map_err(|_| invalid("V35 code-directory manifest cannot be serialized"))?;
+    Ok(HashMap::from([(
+        "borsuk.v35.remote-directory.manifest".to_owned(),
+        manifest,
+    )]))
+}
+
+fn directory_schema(binding: V35RemoteDirectoryBinding, uri: &str) -> Result<Arc<Schema>> {
+    Ok(Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("group_ordinal", DataType::UInt32, false),
+            Field::new("logical_start", DataType::UInt64, false),
+            Field::new("rows", DataType::UInt64, false),
+            Field::new("object_uri", DataType::Utf8, false),
+            Field::new("object_sha256", DataType::Utf8, false),
+            Field::new("object_length", DataType::UInt64, false),
+            Field::new("version_id", DataType::Utf8, false),
+            Field::new("offset", DataType::UInt64, false),
+            Field::new("encoded_length", DataType::UInt64, false),
+            Field::new("decoded_length", DataType::UInt64, false),
+            Field::new("chunk_sha256", DataType::Utf8, false),
+        ],
+        directory_metadata(binding, uri)?,
+    )))
+}
+
+fn validate_directory_chunks(chunks: &[V35RemoteChunk]) -> Result<()> {
+    let group = chunks
+        .first()
+        .map(V35RemoteChunk::group_ordinal)
+        .ok_or_else(|| invalid("V35 code-directory block is empty"))?;
+    if chunks.len() > MAX_DIRECTORY_CHUNKS {
+        return Err(invalid("V35 code-directory block chunk count differs"));
+    }
+    let mut next_logical = chunks[0].logical_start;
+    for chunk in chunks {
+        validate_object(&chunk.object)?;
+        if chunk.group_ordinal != group
+            || chunk.logical_start != next_logical
+            || !is_digest(&chunk.digest)
+        {
+            return Err(invalid("V35 code-directory block chunk authority differs"));
+        }
+        next_logical = next_logical
+            .checked_add(chunk.rows)
+            .ok_or_else(|| invalid("V35 code-directory block rows overflow"))?;
+    }
+    Ok(())
+}
+
+/// Encode one strict, independently authenticated Arrow directory block.
+pub fn encode_v35_remote_directory_arrow(
+    binding: V35RemoteDirectoryBinding,
+    chunks: &[V35RemoteChunk],
+    uri: &str,
+) -> Result<(Vec<u8>, V35ArtifactIdentity)> {
+    if !uri.starts_with("s3://") || uri.contains("/corpus/") {
+        return Err(invalid("V35 code-directory block URI differs"));
+    }
+    validate_directory_chunks(chunks)?;
+    let schema = directory_schema(binding, uri)?;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt32Array::from(
+                chunks
+                    .iter()
+                    .map(|chunk| chunk.group_ordinal)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                chunks
+                    .iter()
+                    .map(|chunk| chunk.logical_start)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                chunks.iter().map(|chunk| chunk.rows).collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                chunks
+                    .iter()
+                    .map(|chunk| chunk.object.uri.as_str())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                chunks
+                    .iter()
+                    .map(|chunk| chunk.object.digest.as_str())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                chunks
+                    .iter()
+                    .map(|chunk| chunk.object.length)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                chunks
+                    .iter()
+                    .map(|chunk| chunk.version_id.as_str())
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                chunks.iter().map(|chunk| chunk.offset).collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                chunks
+                    .iter()
+                    .map(|chunk| chunk.encoded_length)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(UInt64Array::from(
+                chunks
+                    .iter()
+                    .map(|chunk| chunk.decoded_length)
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                chunks
+                    .iter()
+                    .map(|chunk| chunk.digest.as_str())
+                    .collect::<Vec<_>>(),
+            )),
+        ],
+    )?;
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)?;
+    let mut bytes = Vec::new();
+    let mut writer = FileWriter::try_new_with_options(&mut bytes, schema.as_ref(), options)?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    drop(writer);
+    if bytes.len() as u64 > MAX_DIRECTORY_BLOCK_BYTES {
+        return Err(invalid("V35 code-directory block exceeds admission"));
+    }
+    let identity = V35ArtifactIdentity {
+        digest: format!("{:x}", Sha256::digest(&bytes)),
+        digest_algorithm: "sha256".to_owned(),
+        length: bytes.len() as u64,
+        role: "code-directory-block".to_owned(),
+        uri: uri.to_owned(),
+    };
+    Ok((bytes, identity))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// One selectively loaded directory block for a single storage group.
 pub struct V35RemoteDirectoryBlock {
@@ -581,8 +765,7 @@ pub struct V35RemoteDirectoryBlock {
 }
 
 impl V35RemoteDirectoryBlock {
-    /// Bind one nonempty group block to its immutable directory root and snapshot.
-    pub fn new(
+    fn new(
         binding: V35RemoteDirectoryBinding,
         identity: V35ArtifactIdentity,
         chunks: Vec<V35RemoteChunk>,
@@ -609,6 +792,118 @@ impl V35RemoteDirectoryBlock {
     pub fn chunks(&self) -> &[V35RemoteChunk] {
         &self.chunks
     }
+}
+
+/// Authenticate and decode one strict Arrow directory block before planning.
+pub fn decode_v35_remote_directory_arrow(
+    bytes: &[u8],
+    registered: &V35ArtifactIdentity,
+    expected_binding: V35RemoteDirectoryBinding,
+) -> Result<V35RemoteDirectoryBlock> {
+    v35_artifact_authority_digest(registered)?;
+    if bytes.is_empty()
+        || bytes.len() as u64 > MAX_DIRECTORY_BLOCK_BYTES
+        || registered.length != bytes.len() as u64
+        || registered.digest != format!("{:x}", Sha256::digest(bytes))
+    {
+        return Err(invalid("V35 code-directory block identity differs"));
+    }
+    let expected_schema = directory_schema(expected_binding, &registered.uri)?;
+    let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
+    if reader.schema().as_ref() != expected_schema.as_ref() {
+        return Err(invalid("V35 code-directory block Arrow schema differs"));
+    }
+    let batch = reader
+        .next()
+        .ok_or_else(|| invalid("V35 code-directory block Arrow batch is missing"))??;
+    if reader.next().is_some()
+        || batch.num_rows() == 0
+        || batch.num_rows() > MAX_DIRECTORY_CHUNKS
+        || batch
+            .columns()
+            .iter()
+            .any(|column| column.null_count() != 0)
+    {
+        return Err(invalid("V35 code-directory block Arrow batches differ"));
+    }
+    let groups = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| invalid("V35 code-directory block group column differs"))?;
+    let logical_starts = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 code-directory block logical column differs"))?;
+    let rows = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 code-directory block rows column differs"))?;
+    let object_uris = batch
+        .column(3)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 code-directory block object URI column differs"))?;
+    let object_digests = batch
+        .column(4)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 code-directory block object digest column differs"))?;
+    let object_lengths = batch
+        .column(5)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 code-directory block object length column differs"))?;
+    let versions = batch
+        .column(6)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 code-directory block version column differs"))?;
+    let offsets = batch
+        .column(7)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 code-directory block offset column differs"))?;
+    let encoded_lengths = batch
+        .column(8)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 code-directory block encoded column differs"))?;
+    let decoded_lengths = batch
+        .column(9)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid("V35 code-directory block decoded column differs"))?;
+    let chunk_digests = batch
+        .column(10)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| invalid("V35 code-directory block chunk digest column differs"))?;
+
+    let mut chunks = Vec::with_capacity(batch.num_rows());
+    for row in 0..batch.num_rows() {
+        let object = V35ArtifactIdentity {
+            digest: object_digests.value(row).to_owned(),
+            digest_algorithm: "sha256".to_owned(),
+            length: object_lengths.value(row),
+            role: "remote-code-object".to_owned(),
+            uri: object_uris.value(row).to_owned(),
+        };
+        chunks.push(V35RemoteChunk::new(
+            groups.value(row),
+            logical_starts.value(row),
+            rows.value(row),
+            object,
+            versions.value(row),
+            offsets.value(row),
+            encoded_lengths.value(row),
+            decoded_lengths.value(row),
+            chunk_digests.value(row).to_owned(),
+        )?);
+    }
+    V35RemoteDirectoryBlock::new(expected_binding, registered.clone(), chunks)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
