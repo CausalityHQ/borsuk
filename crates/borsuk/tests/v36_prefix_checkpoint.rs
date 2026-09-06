@@ -13,7 +13,7 @@ use borsuk::{
     canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
     decode_v36_prefix_identity_run, encode_v36_prefix_identity_run,
     plan_v36_prefix_checkpoint_publication, restore_v36_prefix_population,
-    validate_v36_prefix_checkpoint_manifest_with_context,
+    restore_v36_prefix_population_state, validate_v36_prefix_checkpoint_manifest_with_context,
     validate_v36_prefix_checkpoint_pointer_observation, validate_v36_prefix_checkpoint_transition,
 };
 use sha2::{Digest, Sha256};
@@ -362,6 +362,30 @@ fn v36_prefix_checkpoint_identity_run_is_strict_arrow_ipc() {
         )
         .unwrap(),
         empty
+    );
+}
+
+#[test]
+fn v36_prefix_checkpoint_population_before_cutoff_is_resumable() {
+    let run = V36PrefixIdentityRun {
+        physical_rows: 3,
+        rows: vec![identity(41, 0, 0), identity(7, 2, 0)],
+        selected_object_ordinal: 0,
+        source: source_object(),
+    };
+    let restored = restore_v36_prefix_population_state(&[run], 4).unwrap();
+    assert_eq!(restored.next_object_ordinal, 1);
+    assert_eq!(restored.physical_rows, 3);
+    assert_eq!(restored.distinct_rows_observed, 2);
+    assert_eq!(restored.duplicate_rows, 1);
+    assert_eq!(restored.cutoff, None);
+    assert_eq!(
+        restored
+            .unique_rows
+            .iter()
+            .map(|row| row.feature_row_id)
+            .collect::<Vec<_>>(),
+        vec![41, 7],
     );
 }
 

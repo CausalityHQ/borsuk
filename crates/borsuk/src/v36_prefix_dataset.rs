@@ -346,6 +346,26 @@ pub fn restore_v36_prefix_population(
     runs: &[V36PrefixIdentityRun],
     distinct_candidates: usize,
 ) -> Result<V36PrefixObjectPrefixScan> {
+    let restored = restore_v36_prefix_population_state(runs, distinct_candidates)?;
+    let (cutoff_object_ordinal, cutoff_row_offset) = restored
+        .cutoff
+        .ok_or(BorsukError::V36PrefixSourceInsufficient)?;
+    Ok(V36PrefixObjectPrefixScan {
+        consumed_objects: restored.consumed_objects,
+        cutoff_object_ordinal,
+        cutoff_row_offset,
+        distinct_rows_observed: restored.distinct_rows_observed,
+        duplicate_rows: restored.duplicate_rows,
+        physical_rows: restored.physical_rows,
+        unique_rows: restored.unique_rows,
+    })
+}
+
+/// Reconstruct resumable population state at a complete source-object boundary.
+pub fn restore_v36_prefix_population_state(
+    runs: &[V36PrefixIdentityRun],
+    distinct_candidates: usize,
+) -> Result<V36PrefixRestoredPopulation> {
     if runs.is_empty() || runs.len() > 16 || distinct_candidates == 0 {
         return Err(invalid("V36 prefix identity-run replay limits differ"));
     }
@@ -381,18 +401,19 @@ pub fn restore_v36_prefix_population(
         }
         consumed_objects.push(run.source.clone());
     }
-    let (cutoff_object_ordinal, cutoff_row_offset) =
-        cutoff.ok_or(BorsukError::V36PrefixSourceInsufficient)?;
     let distinct_rows_observed = u64::try_from(feature_ids.len()).unwrap_or(u64::MAX);
     let duplicate_rows = physical_rows
         .checked_sub(distinct_rows_observed)
         .ok_or_else(|| invalid("V36 prefix identity-run duplicate rows underflow"))?;
-    Ok(V36PrefixObjectPrefixScan {
+    Ok(V36PrefixRestoredPopulation {
         consumed_objects,
-        cutoff_object_ordinal,
-        cutoff_row_offset,
+        cutoff,
         distinct_rows_observed,
         duplicate_rows,
+        next_object_ordinal: runs
+            .len()
+            .try_into()
+            .map_err(|_| invalid("V36 prefix identity-run ordinal overflows"))?,
         physical_rows,
         unique_rows,
     })
@@ -498,6 +519,25 @@ pub struct V36PrefixObjectPrefixScan {
     /// Physical rows scanned across every complete consumed object.
     pub physical_rows: u64,
     /// First-occurrence identities for the exact requested distinct prefix.
+    pub unique_rows: Vec<V36PrefixRowIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Authenticated population progress at any complete source-object boundary.
+pub struct V36PrefixRestoredPopulation {
+    /// Complete source objects incorporated in ranked order.
+    pub consumed_objects: Vec<crate::V36PrefixSourceObject>,
+    /// Registered cutoff, absent while more complete objects are required.
+    pub cutoff: Option<(u16, u64)>,
+    /// Distinct IDs observed through the complete object prefix.
+    pub distinct_rows_observed: u64,
+    /// Duplicate physical rows observed through the complete object prefix.
+    pub duplicate_rows: u64,
+    /// First registered object ordinal not yet incorporated.
+    pub next_object_ordinal: u16,
+    /// Physical rows observed through the complete object prefix.
+    pub physical_rows: u64,
+    /// First occurrences retained up to the requested distinct-row target.
     pub unique_rows: Vec<V36PrefixRowIdentity>,
 }
 
