@@ -17,9 +17,10 @@ use borsuk::{
     scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
     select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
     v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
-    validate_v36_prefix_freeze_authority, validate_v36_prefix_input_row,
-    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
-    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
+    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
+    validate_v36_prefix_input_row, validate_v36_prefix_role_authority,
+    write_v36_prefix_gt100_parquet, write_v36_prefix_query_parquet,
+    write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -292,6 +293,21 @@ fn v36_prefix_dataset_rejects_unfrozen_population_and_role_authority() {
     let mut drifted = authority;
     drifted.ordered_source_manifest_sha256 = "A".repeat(64);
     assert!(select_v36_prefix_roles(rows, &drifted, &registry).is_err());
+}
+
+#[test]
+fn v36_prefix_dataset_allows_complete_duplicate_only_objects_before_the_cutoff() {
+    let rows = vec![
+        validate_v36_prefix_input_row(&input(7, 0, 0)).unwrap(),
+        validate_v36_prefix_input_row(&input(9, 2, 0)).unwrap(),
+    ];
+    validate_v36_prefix_cutoff_membership(&rows, 3, 2).unwrap();
+
+    let mut outside = rows.clone();
+    outside[0].selected_object_ordinal = 3;
+    assert!(validate_v36_prefix_cutoff_membership(&outside, 3, 2).is_err());
+    assert!(validate_v36_prefix_cutoff_membership(&rows, 3, 3).is_err());
+    assert!(validate_v36_prefix_cutoff_membership(&rows, 2, 2).is_err());
 }
 
 #[test]

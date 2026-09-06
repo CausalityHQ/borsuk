@@ -278,6 +278,26 @@ pub fn deduplicate_v36_prefix_row_identities(
     Ok(unique)
 }
 
+/// Validate membership against independently authenticated complete-object evidence.
+pub fn validate_v36_prefix_cutoff_membership(
+    rows: &[V36PrefixRowIdentity],
+    consumed_objects: usize,
+    distinct_candidates: usize,
+) -> Result<()> {
+    if consumed_objects == 0
+        || rows.len() < distinct_candidates
+        || distinct_candidates == 0
+        || rows
+            .iter()
+            .any(|row| usize::from(row.selected_object_ordinal) >= consumed_objects)
+        || usize::from(rows[distinct_candidates - 1].selected_object_ordinal)
+            != consumed_objects - 1
+    {
+        return Err(invalid("V36 prefix consumed-object membership differs"));
+    }
+    Ok(())
+}
+
 fn score(seed: &[u8; 32], source_identity: &[u8; 32], feature_row_id: u64) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(seed);
@@ -362,26 +382,7 @@ pub fn select_v36_prefix_roles(
     let source_identity = digest_bytes(&population.ordered_source_manifest_sha256)?;
     let mut unique = deduplicate_v36_prefix_row_identities(rows)?;
     let consumed_objects = population.consumed_objects.len();
-    let observed_objects = unique
-        .iter()
-        .map(|row| usize::from(row.selected_object_ordinal))
-        .collect::<BTreeSet<_>>();
-    if consumed_objects == 0
-        || observed_objects.len() != consumed_objects
-        || observed_objects.iter().copied().ne(0..consumed_objects)
-        || unique
-            .iter()
-            .any(|row| usize::from(row.selected_object_ordinal) >= consumed_objects)
-    {
-        return Err(invalid("V36 prefix consumed-object membership differs"));
-    }
-    if unique.len() < DISTINCT_CANDIDATES {
-        return Err(invalid("V36 prefix population size differs"));
-    }
-    if usize::from(unique[DISTINCT_CANDIDATES - 1].selected_object_ordinal) != consumed_objects - 1
-    {
-        return Err(invalid("V36 prefix population cutoff object differs"));
-    }
+    validate_v36_prefix_cutoff_membership(&unique, consumed_objects, DISTINCT_CANDIDATES)?;
     unique.truncate(DISTINCT_CANDIDATES);
     let mut remaining = unique;
     let mut selected = Vec::with_capacity(4);
