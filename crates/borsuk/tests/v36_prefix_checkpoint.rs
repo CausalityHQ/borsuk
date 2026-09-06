@@ -9,12 +9,13 @@ use borsuk::{
     V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointManifest,
     V36PrefixCheckpointOutbox, V36PrefixCheckpointPhase, V36PrefixCheckpointPointer,
     V36PrefixCheckpointPointerCondition, V36PrefixIdentityRun, V36PrefixMaterializedArtifacts,
-    V36PrefixPopulationCheckpoint, V36PrefixRegisteredSourceObject, V36PrefixRowIdentity,
-    V36PrefixSourceObject, canonical_v36_prefix_checkpoint_manifest_bytes,
-    canonical_v36_prefix_checkpoint_pointer_bytes, decode_v36_prefix_identity_run,
-    encode_v36_prefix_identity_run, plan_v36_prefix_checkpoint_publication,
-    restore_v36_prefix_population, restore_v36_prefix_population_state,
-    validate_v36_prefix_checkpoint_manifest_with_context,
+    V36PrefixPopulationCheckpoint, V36PrefixPopulationCheckpointHead,
+    V36PrefixPopulationCheckpointWriter, V36PrefixPopulationCommit,
+    V36PrefixRegisteredSourceObject, V36PrefixRowIdentity, V36PrefixSourceObject,
+    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
+    decode_v36_prefix_identity_run, encode_v36_prefix_identity_run,
+    plan_v36_prefix_checkpoint_publication, restore_v36_prefix_population,
+    restore_v36_prefix_population_state, validate_v36_prefix_checkpoint_manifest_with_context,
     validate_v36_prefix_checkpoint_pointer_observation, validate_v36_prefix_checkpoint_transition,
 };
 use sha2::{Digest, Sha256};
@@ -26,7 +27,7 @@ fn artifact(role: &str, filename: &str, byte: char) -> V36ArtifactIdentity {
         encoded_bytes: 1_024,
         role: role.to_owned(),
         sha256: digest.clone(),
-        uri: format!("s3://fixture/v36/runs/v36-prefix-screen-fixture/objects/{digest}-{filename}"),
+        uri: format!("s3://fixture/v36/checkpoints/objects/{digest}-{filename}"),
     }
 }
 
@@ -38,7 +39,7 @@ fn identity_run_artifact(bytes: &[u8], ordinal: u16) -> V36ArtifactIdentity {
         role: format!("population-identity-run-{ordinal:04}"),
         sha256: sha256.clone(),
         uri: format!(
-            "s3://fixture/v36/runs/v36-prefix-screen-fixture/objects/{sha256}-population-identity-run-{ordinal:04}.arrow"
+            "s3://fixture/v36/checkpoints/objects/{sha256}-population-identity-run-{ordinal:04}.arrow"
         ),
     }
 }
@@ -53,8 +54,12 @@ fn identity(feature_row_id: u64, row_offset: u64, ordinal: u16) -> V36PrefixRowI
 }
 
 fn source_object() -> V36PrefixSourceObject {
-    let path = "data/part-0000.parquet";
-    let encoded_bytes = 2_048_u64;
+    source_object_at(0)
+}
+
+fn source_object_at(ordinal: u16) -> V36PrefixSourceObject {
+    let path = format!("data/part-{ordinal:04}.parquet");
+    let encoded_bytes = 2_048_u64 + u64::from(ordinal);
     let mut sample = Sha256::new();
     sample.update(b"borsuk-v36-screen-object-v1");
     sample.update(path.as_bytes());
@@ -62,15 +67,23 @@ fn source_object() -> V36PrefixSourceObject {
     V36PrefixSourceObject {
         blake3: "6".repeat(64),
         encoded_bytes,
-        path: path.into(),
+        path,
         sample_sha256: format!("{:x}", sample.finalize()),
-        sha256: "8".repeat(64),
-        uri: "https://example.invalid/data/part-0000.parquet".into(),
+        sha256: if ordinal == 0 {
+            "8".repeat(64)
+        } else {
+            "7".repeat(64)
+        },
+        uri: format!("https://example.invalid/data/part-{ordinal:04}.parquet"),
     }
 }
 
 fn registered_source() -> V36PrefixRegisteredSourceObject {
-    let source = source_object();
+    registered_source_at(0)
+}
+
+fn registered_source_at(ordinal: u16) -> V36PrefixRegisteredSourceObject {
+    let source = source_object_at(ordinal);
     V36PrefixRegisteredSourceObject {
         encoded_bytes: source.encoded_bytes,
         path: source.path,
@@ -119,7 +132,9 @@ fn checkpoint_context(distinct_candidates: u64) -> V36PrefixCheckpointContext {
         freeze_authority_sha256: "2".repeat(64),
         gt_block_rows: 16,
         object_cap: 16,
-        object_prefix: "s3://fixture/v36/runs/v36-prefix-screen-fixture/objects/".into(),
+        object_prefix: "s3://fixture/v36/checkpoints/objects/".into(),
+        pointer_uri: "s3://fixture/v36/checkpoints/runs/v36-prefix-screen-fixture/latest.json"
+            .into(),
         ranked_objects: vec![registered_source()],
         run_id: "v36-prefix-screen-fixture".into(),
         source_archive_sha256: "3".repeat(64),
@@ -127,6 +142,12 @@ fn checkpoint_context(distinct_candidates: u64) -> V36PrefixCheckpointContext {
         source_commit: "4".repeat(40),
         source_registry_sha256: "5".repeat(64),
     }
+}
+
+fn two_object_checkpoint_context(distinct_candidates: u64) -> V36PrefixCheckpointContext {
+    let mut context = checkpoint_context(distinct_candidates);
+    context.ranked_objects.push(registered_source_at(1));
+    context
 }
 
 fn materialized_artifacts() -> V36PrefixMaterializedArtifacts {
@@ -149,7 +170,7 @@ fn checkpoint_identity(manifest: &V36PrefixCheckpointManifest) -> V36ArtifactIde
         role: "checkpoint-manifest".into(),
         sha256: sha256.clone(),
         uri: format!(
-            "s3://fixture/v36/runs/v36-prefix-screen-fixture/objects/{sha256}-checkpoint-{:08}.json",
+            "s3://fixture/v36/checkpoints/objects/{sha256}-checkpoint-{:08}.json",
             manifest.generation
         ),
     }
@@ -350,6 +371,13 @@ fn v36_prefix_checkpoint_outbox_exposes_only_complete_generations() {
             .is_file()
     );
     assert_eq!(std::fs::read(&ready).unwrap().last(), Some(&b'\n'),);
+    let ready_value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&ready).unwrap()).unwrap();
+    assert_eq!(
+        ready_value["pointer_uri"],
+        "s3://fixture/v36/checkpoints/runs/v36-prefix-screen-fixture/latest.json"
+    );
+    assert!(ready_value["previous_pointer_sha256"].is_null());
 
     let other = directory.path().join("other");
     std::fs::create_dir(&other).unwrap();
@@ -358,6 +386,127 @@ fn v36_prefix_checkpoint_outbox_exposes_only_complete_generations() {
     corrupt[0] ^= 1;
     assert!(outbox.commit(&plan, &[(run_identity, corrupt)]).is_err());
     assert!(other.join("commits").read_dir().unwrap().next().is_none());
+}
+
+#[test]
+fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("outbox");
+    std::fs::create_dir(&root).unwrap();
+    let context = two_object_checkpoint_context(3);
+    let mut writer = V36PrefixPopulationCheckpointWriter::create(
+        &root,
+        context,
+        "1".repeat(64),
+        "v36-prefix-screen-fixture-attempt-0000".into(),
+        0,
+        "i-fixture".into(),
+    )
+    .unwrap();
+    let commit = V36PrefixPopulationCommit {
+        cutoff: None,
+        distinct_rows: 2,
+        duplicate_rows: 98,
+        physical_rows: 100,
+        run: V36PrefixIdentityRun {
+            physical_rows: 100,
+            rows: vec![identity(41, 2, 0), identity(7, 9, 0)],
+            selected_object_ordinal: 0,
+            source: source_object(),
+        },
+    };
+    let ready = writer.commit(&commit).unwrap();
+    assert_eq!(ready.file_name().unwrap(), "generation-00000000.json");
+    assert_eq!(root.join("commits").read_dir().unwrap().count(), 1);
+    assert_eq!(root.join("objects").read_dir().unwrap().count(), 1);
+    assert_eq!(root.join("manifests").read_dir().unwrap().count(), 1);
+    assert_eq!(root.join("pointers").read_dir().unwrap().count(), 1);
+    let ready_value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&ready).unwrap()).unwrap();
+    let previous_identity: V36ArtifactIdentity =
+        serde_json::from_value(ready_value["manifest"].clone()).unwrap();
+    let previous_manifest: V36PrefixCheckpointManifest = serde_json::from_slice(
+        &std::fs::read(
+            root.join("manifests")
+                .join(format!("{}.json", previous_identity.sha256)),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let previous_pointer_bytes = std::fs::read(root.join("pointers").join(format!(
+        "{}.json",
+        ready_value["pointer_sha256"].as_str().unwrap()
+    )))
+    .unwrap();
+    let first_identity = previous_manifest.population.identity_runs[0].clone();
+    let first_bytes = std::fs::read(
+        root.join("objects")
+            .join(format!("{}.blob", first_identity.sha256)),
+    )
+    .unwrap();
+    let resumed_root = directory.path().join("resumed-outbox");
+    std::fs::create_dir(&resumed_root).unwrap();
+    let mut resumed_writer = V36PrefixPopulationCheckpointWriter::resume(
+        &resumed_root,
+        two_object_checkpoint_context(3),
+        "a".repeat(64),
+        "v36-prefix-screen-fixture-attempt-0001".into(),
+        1,
+        "i-replacement".into(),
+        V36PrefixPopulationCheckpointHead {
+            dependencies: vec![(first_identity, first_bytes)],
+            manifest: previous_manifest,
+            pointer_bytes: previous_pointer_bytes,
+        },
+    )
+    .unwrap();
+    let second_ready = resumed_writer
+        .commit(&V36PrefixPopulationCommit {
+            cutoff: Some((1, 4)),
+            distinct_rows: 3,
+            duplicate_rows: 102,
+            physical_rows: 105,
+            run: V36PrefixIdentityRun {
+                physical_rows: 5,
+                rows: vec![identity(99, 4, 1)],
+                selected_object_ordinal: 1,
+                source: source_object_at(1),
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        second_ready.file_name().unwrap(),
+        "generation-00000001.json"
+    );
+    assert_eq!(resumed_root.join("commits").read_dir().unwrap().count(), 1);
+    assert_eq!(resumed_root.join("objects").read_dir().unwrap().count(), 2);
+    let second_ready_value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&second_ready).unwrap()).unwrap();
+    assert!(second_ready_value["previous_pointer_sha256"].is_string());
+
+    let invalid_root = directory.path().join("invalid-outbox");
+    std::fs::create_dir(&invalid_root).unwrap();
+    let mut invalid_writer = V36PrefixPopulationCheckpointWriter::create(
+        &invalid_root,
+        checkpoint_context(100),
+        "1".repeat(64),
+        "v36-prefix-screen-fixture-attempt-0000".into(),
+        0,
+        "i-fixture".into(),
+    )
+    .unwrap();
+    let mut inconsistent = commit;
+    inconsistent.distinct_rows = 80;
+    inconsistent.duplicate_rows = 20;
+    assert!(invalid_writer.commit(&inconsistent).is_err());
+    assert!(
+        invalid_root
+            .join("commits")
+            .read_dir()
+            .unwrap()
+            .next()
+            .is_none()
+    );
 }
 
 #[test]

@@ -501,18 +501,20 @@ test "$(sha256sum "$root/authority.json" | cut -d' ' -f1)" = {plan.authority_sha
 test "$(stat -c %s "$root/source-registry.json")" = {plan.source_registry_bytes}
 test "$(sha256sum "$root/source-registry.json" | cut -d' ' -f1)" = {plan.source_registry_sha256}
 chmod 500 "$root/v36_prefix_freeze"
-mkdir "$root/output" "$root/scratch"
+mkdir "$root/output" "$root/scratch" "$root/checkpoint-outbox"
+chmod 700 "$root/checkpoint-outbox"
+token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)
+instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
 set +e
 timeout --signal=TERM --kill-after=30 {wall_seconds} "$root/v36_prefix_freeze" \
   --execute-prefix-freeze \
   --execution-authority "$root/execution-authority.json" \
   --authority "$root/authority.json" --source-registry "$root/source-registry.json" \
   --source-archive "$root/source.tar.zst" --output "$root/output" \
-  --scratch "$root/scratch"
+  --scratch "$root/scratch" --checkpoint-outbox "$root/checkpoint-outbox" \
+  --producer-instance-id "$instance_id"
 status=$?
 set -e
-token=$(curl -fsS -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token)
-instance_id=$(curl -fsS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
 if [[ "$status" = 0 ]]; then
   terminal_status=complete
   terminal_marker=ATTEMPT_COMPLETE.json

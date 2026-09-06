@@ -468,6 +468,8 @@ pub struct V36PrefixCheckpointContext {
     pub object_cap: u16,
     /// Exact campaign-scoped immutable object prefix.
     pub object_prefix: String,
+    /// One run-scoped compare-and-swap pointer URI.
+    pub pointer_uri: String,
     /// Source registry entries in query-independent registered rank order.
     pub ranked_objects: Vec<V36PrefixRegisteredSourceObject>,
     /// Stable campaign run identity.
@@ -563,6 +565,10 @@ pub struct V36PrefixCheckpointPublication {
     pub manifest_bytes: Vec<u8>,
     /// Exact canonical pointer bytes written last.
     pub pointer_bytes: Vec<u8>,
+    /// One trusted run-scoped conditional pointer destination.
+    pub pointer_uri: String,
+    /// SHA-256 of the exact predecessor pointer bytes, absent at genesis.
+    pub previous_pointer_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1215,6 +1221,10 @@ pub fn validate_v36_prefix_checkpoint_manifest_with_context(
         }
         _ => false,
     };
+    let expected_pointer_uri = context
+        .object_prefix
+        .strip_suffix("objects/")
+        .map(|prefix| format!("{prefix}runs/{}/latest.json", context.run_id));
     if context.run_id != manifest.run_id
         || context.freeze_authority_sha256 != manifest.freeze_authority_sha256
         || context.source_archive_sha256 != manifest.source_archive_sha256
@@ -1231,6 +1241,7 @@ pub fn validate_v36_prefix_checkpoint_manifest_with_context(
         || consumed_bytes > context.source_byte_cap
         || !context.object_prefix.starts_with("s3://")
         || !context.object_prefix.ends_with("/objects/")
+        || expected_pointer_uri.as_deref() != Some(context.pointer_uri.as_str())
         || !structural_artifacts_in_scope
         || !phase_in_scope
         || !cutoff_valid
@@ -1458,6 +1469,9 @@ pub fn plan_v36_prefix_checkpoint_publication(
         manifest: manifest_identity,
         manifest_bytes,
         pointer_bytes,
+        pointer_uri: context.pointer_uri.clone(),
+        previous_pointer_sha256: current_pointer
+            .map(|(bytes, _)| format!("{:x}", Sha256::digest(bytes))),
     })
 }
 

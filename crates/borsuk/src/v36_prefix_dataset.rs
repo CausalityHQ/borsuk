@@ -28,14 +28,18 @@ use rayon::{ThreadPoolBuilder, prelude::*};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BorsukError, Result, V36ArtifactIdentity, V36PrefixCheckpointManifest,
-    V36PrefixCheckpointPointer, V36PrefixCheckpointPublication, V36PrefixFreezeAuthority,
-    V36PrefixFreezeExecutionAuthority, V36PrefixFreezeReceipt, V36PrefixPopulationAuthority,
+    BorsukError, Result, V36ArtifactIdentity, V36PrefixCheckpointContext,
+    V36PrefixCheckpointManifest, V36PrefixCheckpointPhase, V36PrefixCheckpointPointer,
+    V36PrefixCheckpointPublication, V36PrefixFreezeAuthority, V36PrefixFreezeExecutionAuthority,
+    V36PrefixFreezeReceipt, V36PrefixPopulationAuthority, V36PrefixPopulationCheckpoint,
     V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, V36PrefixSourceObject,
-    bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
+    bind_v36_prefix_population_authority, canonical_v36_prefix_checkpoint_manifest_bytes,
+    canonical_v36_prefix_checkpoint_pointer_bytes, canonical_v36_prefix_freeze_authority_bytes,
     canonical_v36_prefix_freeze_execution_authority_bytes,
     canonical_v36_prefix_freeze_receipt_bytes, canonical_v36_prefix_population_authority_bytes,
-    canonical_v36_prefix_source_registry_bytes, validate_v36_prefix_freeze_authority,
+    canonical_v36_prefix_source_registry_bytes, plan_v36_prefix_checkpoint_publication,
+    validate_v36_prefix_checkpoint_manifest_with_context,
+    validate_v36_prefix_checkpoint_transition, validate_v36_prefix_freeze_authority,
     validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_population_authority,
 };
 
@@ -124,6 +128,8 @@ struct V36PrefixCheckpointReady<'a> {
     manifest: &'a V36ArtifactIdentity,
     pointer_encoded_bytes: u64,
     pointer_sha256: String,
+    pointer_uri: &'a str,
+    previous_pointer_sha256: &'a Option<String>,
     schema: &'static str,
 }
 
@@ -248,6 +254,8 @@ impl V36PrefixCheckpointOutbox {
             manifest: &publication.manifest,
             pointer_encoded_bytes: publication.pointer_bytes.len() as u64,
             pointer_sha256,
+            pointer_uri: &publication.pointer_uri,
+            previous_pointer_sha256: &publication.previous_pointer_sha256,
             schema: "borsuk-v36-prefix-checkpoint-outbox-v1",
         };
         let mut ready_bytes = serde_json::to_vec(&ready)
@@ -259,6 +267,284 @@ impl V36PrefixCheckpointOutbox {
             .join(format!("generation-{:08}.json", manifest.generation));
         install_content_addressed(&ready_path, &ready_bytes)?;
         Ok(ready_path)
+    }
+}
+
+#[derive(Debug)]
+/// Stateful producer for crash-atomic complete-object population checkpoints.
+pub struct V36PrefixPopulationCheckpointWriter {
+    context: V36PrefixCheckpointContext,
+    dependencies: Vec<(V36ArtifactIdentity, Vec<u8>)>,
+    execution_authority_sha256: String,
+    outbox: V36PrefixCheckpointOutbox,
+    previous_manifest: Option<V36PrefixCheckpointManifest>,
+    previous_manifest_identity: Option<V36ArtifactIdentity>,
+    previous_pointer_bytes: Option<Vec<u8>>,
+    producer_attempt_id: String,
+    producer_attempt_ordinal: u8,
+    producer_instance_id: String,
+}
+
+#[derive(Debug)]
+/// Fully authenticated local material needed to continue one published head.
+pub struct V36PrefixPopulationCheckpointHead {
+    /// Cumulative identity-run artifacts and their exact local bytes.
+    pub dependencies: Vec<(V36ArtifactIdentity, Vec<u8>)>,
+    /// Newest immutable population manifest.
+    pub manifest: V36PrefixCheckpointManifest,
+    /// Exact canonical pointer bytes naming `manifest`.
+    pub pointer_bytes: Vec<u8>,
+}
+
+impl V36PrefixPopulationCheckpointWriter {
+    /// Create an empty writer bound to one exact attempt and campaign authority.
+    pub fn create(
+        root: &Path,
+        context: V36PrefixCheckpointContext,
+        execution_authority_sha256: String,
+        producer_attempt_id: String,
+        producer_attempt_ordinal: u8,
+        producer_instance_id: String,
+    ) -> Result<Self> {
+        digest_bytes(&execution_authority_sha256)?;
+        if producer_attempt_id
+            != format!("{}-attempt-{producer_attempt_ordinal:04}", context.run_id)
+            || producer_attempt_ordinal >= 3
+            || producer_instance_id.is_empty()
+        {
+            return Err(invalid("V36 population checkpoint producer differs"));
+        }
+        Ok(Self {
+            context,
+            dependencies: Vec::new(),
+            execution_authority_sha256,
+            outbox: V36PrefixCheckpointOutbox::create(root)?,
+            previous_manifest: None,
+            previous_manifest_identity: None,
+            previous_pointer_bytes: None,
+            producer_attempt_id,
+            producer_attempt_ordinal,
+            producer_instance_id,
+        })
+    }
+
+    /// Resume from one fully authenticated published population head.
+    pub fn resume(
+        root: &Path,
+        context: V36PrefixCheckpointContext,
+        execution_authority_sha256: String,
+        producer_attempt_id: String,
+        producer_attempt_ordinal: u8,
+        producer_instance_id: String,
+        head: V36PrefixPopulationCheckpointHead,
+    ) -> Result<Self> {
+        let V36PrefixPopulationCheckpointHead {
+            dependencies,
+            manifest: previous_manifest,
+            pointer_bytes: previous_pointer_bytes,
+        } = head;
+        digest_bytes(&execution_authority_sha256)?;
+        validate_v36_prefix_checkpoint_manifest_with_context(&context, &previous_manifest)?;
+        let pointer: V36PrefixCheckpointPointer =
+            serde_json::from_slice(&previous_pointer_bytes)
+                .map_err(|_| invalid("V36 population checkpoint pointer JSON differs"))?;
+        if canonical_v36_prefix_checkpoint_pointer_bytes(&context, &pointer)?
+            != previous_pointer_bytes
+            || pointer.generation != previous_manifest.generation
+            || pointer.run_id != previous_manifest.run_id
+            || dependencies.len() != previous_manifest.population.identity_runs.len()
+            || dependencies
+                .iter()
+                .zip(&previous_manifest.population.identity_runs)
+                .any(|((identity, bytes), expected)| {
+                    identity != expected
+                        || identity.encoded_bytes != bytes.len() as u64
+                        || identity.sha256 != format!("{:x}", Sha256::digest(bytes))
+                        || identity.blake3 != blake3::hash(bytes).to_hex().as_str()
+                })
+        {
+            return Err(invalid(
+                "V36 population checkpoint resume authority differs",
+            ));
+        }
+        let manifest_bytes = canonical_v36_prefix_checkpoint_manifest_bytes(&previous_manifest)?;
+        if pointer.manifest.encoded_bytes != manifest_bytes.len() as u64
+            || pointer.manifest.sha256 != format!("{:x}", Sha256::digest(&manifest_bytes))
+            || pointer.manifest.blake3 != blake3::hash(&manifest_bytes).to_hex().as_str()
+            || producer_attempt_id
+                != format!("{}-attempt-{producer_attempt_ordinal:04}", context.run_id)
+            || producer_attempt_ordinal >= 3
+            || producer_attempt_ordinal < previous_manifest.producer_attempt_ordinal
+            || producer_instance_id.is_empty()
+        {
+            return Err(invalid(
+                "V36 population checkpoint resume authority differs",
+            ));
+        }
+        Ok(Self {
+            context,
+            dependencies,
+            execution_authority_sha256,
+            outbox: V36PrefixCheckpointOutbox::create(root)?,
+            previous_manifest: Some(previous_manifest),
+            previous_manifest_identity: Some(pointer.manifest),
+            previous_pointer_bytes: Some(previous_pointer_bytes),
+            producer_attempt_id,
+            producer_attempt_ordinal,
+            producer_instance_id,
+        })
+    }
+
+    /// Commit one complete authenticated source-object boundary.
+    pub fn commit(&mut self, boundary: &V36PrefixPopulationCommit) -> Result<PathBuf> {
+        let ordinal = self.dependencies.len();
+        let previous_population = self
+            .previous_manifest
+            .as_ref()
+            .map(|manifest| &manifest.population);
+        if usize::from(boundary.run.selected_object_ordinal) != ordinal
+            || previous_population
+                .is_some_and(|population| population.cutoff_object_ordinal.is_some())
+            || self
+                .context
+                .ranked_objects
+                .get(ordinal)
+                .is_none_or(|registered| {
+                    registered.path != boundary.run.source.path
+                        || registered.uri != boundary.run.source.uri
+                        || registered.sha256 != boundary.run.source.sha256
+                        || registered.encoded_bytes != boundary.run.source.encoded_bytes
+                })
+        {
+            return Err(invalid("V36 population checkpoint object differs"));
+        }
+        let bytes = encode_v36_prefix_identity_run(&boundary.run)?;
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let identity = V36ArtifactIdentity {
+            blake3: blake3::hash(&bytes).to_hex().to_string(),
+            encoded_bytes: bytes.len().try_into().unwrap_or(u64::MAX),
+            role: format!("population-identity-run-{ordinal:04}"),
+            sha256: sha256.clone(),
+            uri: format!(
+                "{}{sha256}-population-identity-run-{ordinal:04}.arrow",
+                self.context.object_prefix
+            ),
+        };
+        let mut consumed_objects = self
+            .previous_manifest
+            .as_ref()
+            .map_or_else(Vec::new, |manifest| {
+                manifest.population.consumed_objects.clone()
+            });
+        consumed_objects.push(boundary.run.source.clone());
+        let mut identity_runs = self
+            .previous_manifest
+            .as_ref()
+            .map_or_else(Vec::new, |manifest| {
+                manifest.population.identity_runs.clone()
+            });
+        identity_runs.push(identity.clone());
+        let generation = self.previous_manifest.as_ref().map_or(Ok(0), |manifest| {
+            manifest
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| invalid("V36 population checkpoint generation overflows"))
+        })?;
+        let previous_distinct =
+            previous_population.map_or(0, |population| population.distinct_rows);
+        let previous_physical =
+            previous_population.map_or(0, |population| population.physical_rows);
+        let distinct_rows = previous_distinct
+            .checked_add(
+                boundary
+                    .run
+                    .rows
+                    .len()
+                    .try_into()
+                    .map_err(|_| invalid("V36 population checkpoint distinct rows overflow"))?,
+            )
+            .ok_or_else(|| invalid("V36 population checkpoint distinct rows overflow"))?;
+        let physical_rows = previous_physical
+            .checked_add(boundary.run.physical_rows)
+            .ok_or_else(|| invalid("V36 population checkpoint physical rows overflow"))?;
+        let duplicate_rows = physical_rows
+            .checked_sub(distinct_rows)
+            .ok_or_else(|| invalid("V36 population checkpoint duplicate rows underflow"))?;
+        let cutoff = if previous_distinct < self.context.distinct_candidates
+            && distinct_rows >= self.context.distinct_candidates
+        {
+            let local_index = self
+                .context
+                .distinct_candidates
+                .checked_sub(previous_distinct)
+                .and_then(|count| count.checked_sub(1))
+                .and_then(|index| usize::try_from(index).ok())
+                .ok_or_else(|| invalid("V36 population checkpoint cutoff overflows"))?;
+            Some((
+                boundary.run.selected_object_ordinal,
+                boundary
+                    .run
+                    .rows
+                    .get(local_index)
+                    .ok_or_else(|| invalid("V36 population checkpoint cutoff differs"))?
+                    .row_offset,
+            ))
+        } else {
+            None
+        };
+        if boundary.distinct_rows != distinct_rows
+            || boundary.duplicate_rows != duplicate_rows
+            || boundary.physical_rows != physical_rows
+            || boundary.cutoff != cutoff
+        {
+            return Err(invalid("V36 population checkpoint accounting differs"));
+        }
+        let manifest = V36PrefixCheckpointManifest {
+            claim_eligible: false,
+            execution_authority_sha256: self.execution_authority_sha256.clone(),
+            freeze_authority_sha256: self.context.freeze_authority_sha256.clone(),
+            generation,
+            phase: V36PrefixCheckpointPhase::Population,
+            population: V36PrefixPopulationCheckpoint {
+                consumed_objects,
+                cutoff_object_ordinal: cutoff.map(|position| position.0),
+                cutoff_row_offset: cutoff.map(|position| position.1),
+                distinct_rows,
+                duplicate_rows,
+                identity_runs,
+                next_object_ordinal: boundary
+                    .run
+                    .selected_object_ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| invalid("V36 population checkpoint ordinal overflows"))?,
+                physical_rows,
+            },
+            previous_checkpoint: self.previous_manifest_identity.clone(),
+            producer_attempt_id: self.producer_attempt_id.clone(),
+            producer_attempt_ordinal: self.producer_attempt_ordinal,
+            producer_instance_id: self.producer_instance_id.clone(),
+            schema: "borsuk-v36-prefix-freeze-checkpoint-v1".to_owned(),
+            run_id: self.context.run_id.clone(),
+            source_archive_sha256: self.context.source_archive_sha256.clone(),
+            source_commit: self.context.source_commit.clone(),
+            source_registry_sha256: self.context.source_registry_sha256.clone(),
+        };
+        if let Some(previous) = &self.previous_manifest {
+            validate_v36_prefix_checkpoint_transition(&self.context, previous, &manifest)?;
+        }
+        let publication = plan_v36_prefix_checkpoint_publication(
+            &self.context,
+            &manifest,
+            self.previous_pointer_bytes
+                .as_deref()
+                .map(|pointer| (pointer, "local-predecessor")),
+        )?;
+        self.dependencies.push((identity, bytes));
+        let ready = self.outbox.commit(&publication, &self.dependencies)?;
+        self.previous_manifest = Some(manifest);
+        self.previous_manifest_identity = Some(publication.manifest.clone());
+        self.previous_pointer_bytes = Some(publication.pointer_bytes);
+        Ok(ready)
     }
 }
 
@@ -664,12 +950,16 @@ pub struct V36PrefixRankedSourceObject {
 pub struct V36PrefixFreezeRequest {
     /// Pre-freeze scientific authority path.
     pub authority: PathBuf,
+    /// Empty private directory used for crash-atomic checkpoint handoff.
+    pub checkpoint_outbox: PathBuf,
     /// Executable whose exact bytes are bound by the attempt authority.
     pub executable: PathBuf,
     /// Attempt lifecycle and provenance authority path.
     pub execution_authority: PathBuf,
     /// Empty output directory owned by this attempt.
     pub output: PathBuf,
+    /// Exact EC2 instance producing this attempt's checkpoints.
+    pub producer_instance_id: String,
     /// Empty encrypted scratch directory owned by this attempt.
     pub scratch: PathBuf,
     /// Exact source-code archive evidence path.
@@ -683,8 +973,12 @@ pub struct V36PrefixFreezeRequest {
 pub struct V36PrefixFreezePreflight {
     /// Validated pre-freeze scientific authority.
     pub authority: V36PrefixFreezeAuthority,
+    /// Trusted campaign authority used for every population checkpoint.
+    pub checkpoint_context: V36PrefixCheckpointContext,
     /// Validated lifecycle and provenance authority.
     pub execution_authority: V36PrefixFreezeExecutionAuthority,
+    /// Zero-based attempt ordinal parsed from the exact attempt identity.
+    pub producer_attempt_ordinal: u8,
     /// Complete source registry in its canonical encoded order.
     pub registry: Vec<V36PrefixRegisteredSourceObject>,
     /// Query-independently ranked complete objects.
@@ -1274,10 +1568,24 @@ fn output_identity(
 /// Execute one complete bounded V36 diagnostic population freeze locally.
 pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
     let preflight = load_v36_prefix_freeze_preflight(&request)?;
+    let execution_authority_sha256 = format!(
+        "{:x}",
+        Sha256::digest(canonical_v36_prefix_freeze_execution_authority_bytes(
+            &preflight.execution_authority,
+        )?)
+    );
+    let mut checkpoint_writer = V36PrefixPopulationCheckpointWriter::create(
+        &request.checkpoint_outbox,
+        preflight.checkpoint_context.clone(),
+        execution_authority_sha256,
+        preflight.execution_authority.attempt_id.clone(),
+        preflight.producer_attempt_ordinal,
+        request.producer_instance_id.clone(),
+    )?;
     let runtime =
         tokio::runtime::Runtime::new().map_err(|_| invalid("V36 prefix object runtime differs"))?;
     let mut acquired = V36PrefixAcquiredObjects { paths: Vec::new() };
-    let scan = scan_v36_prefix_object_prefix(
+    let scan = scan_v36_prefix_object_prefix_checkpointed(
         &preflight.ranked_objects,
         usize::from(preflight.authority.object_cap),
         preflight.authority.source_byte_cap,
@@ -1287,6 +1595,10 @@ pub fn run_v36_prefix_freeze(request: V36PrefixFreezeRequest) -> Result<()> {
             let path = acquire_v36_prefix_object(&runtime, object, &request.scratch, ordinal)?;
             acquired.paths.push(path.clone());
             Ok(path)
+        },
+        |boundary| {
+            checkpoint_writer.commit(boundary)?;
+            Ok(())
         },
     )?;
     let population = bind_v36_prefix_population_authority(
@@ -1464,13 +1776,31 @@ pub fn load_v36_prefix_freeze_preflight(
     request: &V36PrefixFreezeRequest,
 ) -> Result<V36PrefixFreezePreflight> {
     if request.output == request.scratch
+        || request.output == request.checkpoint_outbox
+        || request.scratch == request.checkpoint_outbox
         || !request.output.is_dir()
         || !request.scratch.is_dir()
+        || !request.checkpoint_outbox.is_dir()
+        || !request.producer_instance_id.starts_with("i-")
+        || request.producer_instance_id.len() <= 2
+        || !request
+            .producer_instance_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         || request
             .output
             .read_dir()
             .map_err(|source| BorsukError::Io {
                 path: request.output.clone(),
+                source,
+            })?
+            .next()
+            .is_some()
+        || request
+            .checkpoint_outbox
+            .read_dir()
+            .map_err(|source| BorsukError::Io {
+                path: request.checkpoint_outbox.clone(),
                 source,
             })?
             .next()
@@ -1523,9 +1853,53 @@ pub fn load_v36_prefix_freeze_preflight(
         return Err(invalid("V36 prefix local authority bytes differ"));
     }
     let ranked_objects = rank_v36_prefix_source_objects(&authority, &registry)?;
+    let (run_id, attempt_text) = execution_authority
+        .attempt_id
+        .rsplit_once("-attempt-")
+        .ok_or_else(|| invalid("V36 prefix attempt identity differs"))?;
+    let producer_attempt_ordinal = attempt_text
+        .parse::<u8>()
+        .map_err(|_| invalid("V36 prefix attempt ordinal differs"))?;
+    if attempt_text.len() != 4
+        || execution_authority.attempt_id
+            != format!("{run_id}-attempt-{producer_attempt_ordinal:04}")
+    {
+        return Err(invalid("V36 prefix attempt identity differs"));
+    }
+    let attempt_suffix = format!("attempt-{producer_attempt_ordinal:04}/");
+    let campaign_prefix = execution_authority
+        .output_prefix
+        .strip_suffix(&attempt_suffix)
+        .ok_or_else(|| invalid("V36 prefix checkpoint campaign prefix differs"))?;
+    let source_archive_sha256 = input("source-archive")?.sha256.clone();
+    let checkpoint_context = V36PrefixCheckpointContext {
+        corpus_rows: authority.corpus_rows,
+        distinct_candidates: authority.distinct_candidates,
+        freeze_authority_sha256: format!("{:x}", Sha256::digest(&authority_bytes)),
+        gt_block_rows: PARQUET_ROW_GROUP_ROWS as u64,
+        object_cap: authority.object_cap,
+        object_prefix: format!("{campaign_prefix}checkpoints/objects/"),
+        pointer_uri: format!("{campaign_prefix}checkpoints/runs/{run_id}/latest.json"),
+        ranked_objects: ranked_objects
+            .iter()
+            .map(|object| V36PrefixRegisteredSourceObject {
+                encoded_bytes: object.encoded_bytes,
+                path: object.path.clone(),
+                sha256: object.sha256.clone(),
+                uri: object.uri.clone(),
+            })
+            .collect(),
+        run_id: run_id.to_owned(),
+        source_archive_sha256,
+        source_byte_cap: authority.source_byte_cap,
+        source_commit: execution_authority.source_commit.clone(),
+        source_registry_sha256: format!("{:x}", Sha256::digest(&registry_bytes)),
+    };
     Ok(V36PrefixFreezePreflight {
         authority,
+        checkpoint_context,
         execution_authority,
+        producer_attempt_ordinal,
         registry,
         ranked_objects,
     })
@@ -1684,6 +2058,22 @@ where
             })
     {
         return Err(invalid("V36 prefix restored source authority differs"));
+    }
+    if let Some((cutoff_object_ordinal, cutoff_row_offset)) = restored.cutoff {
+        validate_v36_prefix_cutoff_membership(
+            &restored.unique_rows,
+            restored.consumed_objects.len(),
+            distinct_candidates,
+        )?;
+        return Ok(V36PrefixObjectPrefixScan {
+            consumed_objects: restored.consumed_objects,
+            cutoff_object_ordinal,
+            cutoff_row_offset,
+            distinct_rows_observed: restored.distinct_rows_observed,
+            duplicate_rows: restored.duplicate_rows,
+            physical_rows: restored.physical_rows,
+            unique_rows: restored.unique_rows,
+        });
     }
     let mut consumed_objects = restored.consumed_objects;
     let mut seen = restored

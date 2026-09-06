@@ -540,16 +540,42 @@ fn v36_prefix_dataset_preflight_authenticates_every_local_input_before_network()
     .unwrap();
     let request = V36PrefixFreezeRequest {
         authority: authority_path,
+        checkpoint_outbox: directory.path().join("outbox"),
         executable: binary_path,
         execution_authority: execution_path,
         output,
+        producer_instance_id: "i-fixture".into(),
         scratch,
         source_archive: archive_path.clone(),
         source_registry: registry_path,
     };
+    fs::create_dir(&request.checkpoint_outbox).unwrap();
     let preflight = load_v36_prefix_freeze_preflight(&request).unwrap();
     assert_eq!(preflight.ranked_objects.len(), registry.len());
     assert_eq!(preflight.authority.object_cap, 16);
+    assert_eq!(preflight.producer_attempt_ordinal, 1);
+    assert_eq!(preflight.checkpoint_context.run_id, "v36-prefix-screen-r01");
+    assert_eq!(
+        preflight.checkpoint_context.object_prefix,
+        "s3://fixture/v36/output/checkpoints/objects/"
+    );
+    assert_eq!(
+        preflight.checkpoint_context.pointer_uri,
+        "s3://fixture/v36/output/checkpoints/runs/v36-prefix-screen-r01/latest.json"
+    );
+    assert_eq!(
+        preflight.checkpoint_context.ranked_objects,
+        preflight
+            .ranked_objects
+            .iter()
+            .map(|object| V36PrefixRegisteredSourceObject {
+                encoded_bytes: object.encoded_bytes,
+                path: object.path.clone(),
+                sha256: object.sha256.clone(),
+                uri: object.uri.clone(),
+            })
+            .collect::<Vec<_>>()
+    );
 
     fs::write(&archive_path, b"mutated archive evidence").unwrap();
     assert!(load_v36_prefix_freeze_preflight(&request).is_err());
@@ -1150,14 +1176,25 @@ fn v36_prefix_dataset_resume_matches_uninterrupted_complete_object_scan() {
     let directory = tempfile::tempdir().unwrap();
     let first = directory.path().join("first.parquet");
     let second = directory.path().join("second.parquet");
+    let third = directory.path().join("third.parquet");
     let ranked = vec![
         write_registered_rows(&first, &[7, 9]),
         write_registered_rows(&second, &[7, 11, 13]),
+        write_registered_rows(&third, &[15]),
     ];
-    let paths = [first, second];
-    let uninterrupted = scan_v36_prefix_object_prefix(&ranked, 2, u64::MAX, 3, |ordinal, _| {
-        Ok(paths[ordinal].clone())
-    })
+    let paths = [first, second, third];
+    let mut uninterrupted_commits = Vec::new();
+    let uninterrupted = scan_v36_prefix_object_prefix_checkpointed(
+        &ranked,
+        3,
+        u64::MAX,
+        3,
+        |ordinal, _| Ok(paths[ordinal].clone()),
+        |commit| {
+            uninterrupted_commits.push(commit.clone());
+            Ok(())
+        },
+    )
     .unwrap();
 
     let mut first_commits = Vec::new();
@@ -1182,7 +1219,7 @@ fn v36_prefix_dataset_resume_matches_uninterrupted_complete_object_scan() {
     let mut acquired = Vec::new();
     let resumed = scan_v36_prefix_object_prefix_resumed(
         &ranked,
-        2,
+        3,
         u64::MAX,
         3,
         &prior_runs,
@@ -1195,6 +1232,27 @@ fn v36_prefix_dataset_resume_matches_uninterrupted_complete_object_scan() {
     .unwrap();
     assert_eq!(acquired, vec![1]);
     assert_eq!(resumed, uninterrupted);
+
+    let complete_runs = uninterrupted_commits
+        .iter()
+        .map(|commit| commit.run.clone())
+        .collect::<Vec<_>>();
+    let mut acquired_after_cutoff = Vec::new();
+    let resumed_complete = scan_v36_prefix_object_prefix_resumed(
+        &ranked,
+        3,
+        u64::MAX,
+        3,
+        &complete_runs,
+        |ordinal, _| {
+            acquired_after_cutoff.push(ordinal);
+            Ok(paths[ordinal].clone())
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert!(acquired_after_cutoff.is_empty());
+    assert_eq!(resumed_complete, uninterrupted);
 }
 
 fn identity(

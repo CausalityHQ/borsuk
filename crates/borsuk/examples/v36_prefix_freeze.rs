@@ -7,7 +7,9 @@ use borsuk::{V36PrefixFreezeRequest, run_v36_prefix_freeze};
 #[derive(Debug, PartialEq, Eq)]
 struct Args {
     authority: PathBuf,
+    checkpoint_outbox: PathBuf,
     execution_authority: PathBuf,
+    producer_instance_id: String,
     source_registry: PathBuf,
     source_archive: PathBuf,
     output: PathBuf,
@@ -29,6 +31,8 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
                 | "--source-archive"
                 | "--output"
                 | "--scratch"
+                | "--checkpoint-outbox"
+                | "--producer-instance-id"
         ) || fields.contains_key(&flag)
         {
             return Err("V36 prefix freezer argument differs".into());
@@ -44,7 +48,9 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
             .ok_or_else(|| format!("V36 prefix freezer {flag} is missing"))
     };
     let authority = take("--authority")?.into();
+    let checkpoint_outbox = take("--checkpoint-outbox")?.into();
     let execution_authority = take("--execution-authority")?.into();
+    let producer_instance_id = take("--producer-instance-id")?;
     let source_registry = take("--source-registry")?.into();
     let source_archive = take("--source-archive")?.into();
     let output = take("--output")?.into();
@@ -54,7 +60,9 @@ fn parse_args(values: impl IntoIterator<Item = String>) -> Result<Args, String> 
     }
     Ok(Args {
         authority,
+        checkpoint_outbox,
         execution_authority,
+        producer_instance_id,
         source_registry,
         source_archive,
         output,
@@ -86,11 +94,13 @@ fn main() -> ExitCode {
     };
     match run_v36_prefix_freeze(V36PrefixFreezeRequest {
         authority: args.authority,
+        checkpoint_outbox: args.checkpoint_outbox,
         executable,
         execution_authority: args.execution_authority,
         source_registry: args.source_registry,
         source_archive: args.source_archive,
         output: args.output,
+        producer_instance_id: args.producer_instance_id,
         scratch: args.scratch,
     }) {
         Ok(()) => ExitCode::SUCCESS,
@@ -120,6 +130,10 @@ mod tests {
             "output",
             "--scratch",
             "scratch",
+            "--checkpoint-outbox",
+            "outbox",
+            "--producer-instance-id",
+            "i-fixture",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -134,6 +148,8 @@ mod tests {
             PathBuf::from("execution-authority.json")
         );
         assert_eq!(parsed.scratch, PathBuf::from("scratch"));
+        assert_eq!(parsed.checkpoint_outbox, PathBuf::from("outbox"));
+        assert_eq!(parsed.producer_instance_id, "i-fixture");
 
         let mut missing = valid();
         missing.drain(2..4);

@@ -352,6 +352,7 @@ pub use v36_prefix_dataset::{
     V36PrefixCheckpointOutbox, V36PrefixFreezePreflight, V36PrefixFreezeRequest,
     V36PrefixGtAccumulator, V36PrefixGtNeighbor, V36PrefixGtParquetJob, V36PrefixGtRunStats,
     V36PrefixIdentityRun, V36PrefixInputRow, V36PrefixMaterializedRow, V36PrefixObjectPrefixScan,
+    V36PrefixPopulationCheckpointHead, V36PrefixPopulationCheckpointWriter,
     V36PrefixPopulationCommit, V36PrefixQualityRole, V36PrefixQueryRow,
     V36PrefixRankedSourceObject, V36PrefixRestoredPopulation, V36PrefixRoleParquetPaths,
     V36PrefixRoleSplit, V36PrefixRowIdentity, decode_v36_prefix_identity_run,
