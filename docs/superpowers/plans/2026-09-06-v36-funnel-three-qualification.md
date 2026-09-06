@@ -2,29 +2,30 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a causal, fail-fast oracle and staged qualification harness that accepts or rejects the V36 Funnel-3 architecture before any production-format rewrite.
+**Goal:** Causally qualify or reject a dimension-independent, S3-native posting funnel at 1M and 10M before implementing a breaking production format or spending on 100M.
 
-**Architecture:** A Rust oracle freezes traversal, route, coarse-code, transport-pruned fine-prefix, fine-rerank, and offline f32-control checkpoints over authenticated Arrow/Parquet artifacts. A small Python launcher enforces capability separation, sealed development/validation/holdout phases, resource stops, canonical receipts, and later AWS Spot lifecycle without placing scientific math in Python.
+**Architecture:** A Rust oracle separates posting geometry, posting score, optional graph traversal, projected-f32 containment, lossy coarse containment, physical fine-chunk admission, and fine-codec recall. A thin Python launcher enforces phase capabilities, immutable artifacts, AWS Spot lifecycle, and outcome-blind stops. The falsifier uses complete authenticated Arrow IPC objects; source, queries, and truth use Parquet; small manifests and receipts use strict canonical newline JSON.
 
-**Tech Stack:** Rust, Arrow IPC, Parquet, serde JSON, BLAKE3, SHA-256, AVX2/VNNI, NEON dot-product, Python 3.12 orchestration, boto3 only in later AWS phases.
+**Tech Stack:** Rust, Arrow IPC, Parquet, serde JSON, SHA-256, BLAKE3, SRHT, residual PQ4, SQ8/f16, AVX2/VNNI, NEON dot-product, Python 3.12, boto3, AWS Spot profile `causality`.
 
 **Spec:** `docs/superpowers/specs/2026-09-06-v36-funnel-three-qualification-design.md`
 
 ## Global Constraints
 
-- BORSUK is pre-release: use a breaking V36 format and add no compatibility reader, alias, or migration path.
-- Construction cannot access queries or truth; serving cannot access source-corpus objects or list S3.
-- Bulk cross-language artifacts are strict Arrow IPC or Parquet; compact manifests and receipts are canonical newline JSON.
-- Local scientific stages precede AWS; AWS uses profile `causality` and Spot by default.
-- Local gates are narrow and serial with `CARGO_BUILD_JOBS=1`; run the full workspace gate once only after the complete diff is stable.
-- No arm reaches 100M until the unchanged G1-selected
-  assignment/coarse-code/fine-codec representation passes G1, G2, and G3.
-  L/K are diagnostic prefix curves under one fixed capacity policy, not new
-  representation arms.
+- BORSUK is pre-release: V36 is breaking and has no legacy reader, alias, or migration path.
+- Construction cannot access queries/truth; serving cannot access source objects or list S3.
+- Local gates are narrow and serial with `CARGO_BUILD_JOBS=1`; corpus work runs only on bounded same-region Spot/NVMe.
+- Every stage preserves the original terminal or canonical stop receipt. No silent retry or overlapping duplicate is allowed.
+- The normal planner admits at most 14 complete-object GETs/7 MiB per wave; the
+  hard envelope including retries and metadata is 16 GETs/8 MiB. An arm cannot
+  widen either envelope.
+- Representation freezes on 1M development. Validation may reject but not retune. The complete 10M policy freezes before the 1M holdout opens.
+- No production-format or write-lifecycle implementation begins unless one unchanged arm passes 1M and 10M.
+- Bulk cross-language artifacts are Arrow IPC/Parquet. Compact authority and evidence are canonical JSON with one trailing newline.
 
 ---
 
-### Task 0: Freeze Real Scale Corpus and Absolute Baseline Contract
+### Task 0: Frozen Dataset Authority
 
 **Files:**
 - Modify: `docs/research/standard-datasets.md`
@@ -32,28 +33,21 @@
 - Create: `docs/research/v36-funnel-dataset-authority.json`
 
 **Interfaces:**
-- Consumes: immutable metadata for `andropar/relaion2b-natural-embeddings`.
-- Produces: exact hash-nested 1M/10M/100M 768D source identities, separate
-  development/validation/holdout/performance splits and GT@100 at each scale,
-  and an absolute V36 baseline manifest.
+- Produces the exact ReLAION source revision/object manifest, duplicate-ID rule, nested scale membership, query roles, GT contract, instance/cost limits, and artifact schemas.
 
-- [ ] **Step 1: Verify dataset availability and license without bulk download**
+- [x] **Step 1: Register immutable source metadata**
 
-  Record the immutable dataset revision, license text, 768-dimensional non-null f32 vector schema, `feature_row_id` semantics, shard URIs, lengths, and cryptographic digests. Fail this task if any object lacks stable byte authority or the embedding-use license is incompatible.
+  Freeze revision `bfc7465dcf1245bd605d35dcaf5d2177bbc2025a`, 514,367,913 rows, 2,298 objects, 787,439,811,692 bytes, and ordered-manifest SHA-256 `76ac61cf2821a331419ad40d5eb94d2cdafccccf39af17af1d328b7a2f0bc6c7`.
 
-- [ ] **Step 2: Freeze nested scale and query membership**
+- [x] **Step 2: Register nested membership and evaluation roles**
 
-  Use increasing `SHA-256(source_identity || little_endian(feature_row_id))` for nested source membership after excluding query rows selected by a committed counter-based hash seed. Freeze one development/validation/holdout/performance query-vector identity shared across 1M, 10M, and 100M, with separate exact GT at each scale: 1,000 queries in each quality role and 10,000 in the performance role.
+  Freeze duplicate resolution, query removal, nested 1M/10M/100M membership, 1,000 development/validation/holdout queries, 10,000 performance queries, and binary64 exact GT@100.
 
-- [ ] **Step 3: Define absolute execution authority**
+- [x] **Step 3: Validate and commit**
 
-  Bind source/query/GT objects, instance family, region, cache size, concurrency, SDK, and repetitions to V36. Historical V35 evidence is context only and cannot substitute for a same-data executable.
+  Research-doc validation and diff checks passed at commit `9a1beeaf999df4d496e62bf77eb1fb887f3edbd2`.
 
-- [ ] **Step 4: Validate and commit dataset authority**
-
-  Run the research-doc validator and `git diff --check`, then commit the two existing research docs plus the authority JSON. Do not begin Task 1 unless this task is GREEN.
-
-### Task 1: Qualification Authority and Checked Budgets
+### Task 1: Authority, Algorithms, and Checked Resource Ledger
 
 **Files:**
 - Create: `crates/borsuk/src/v36_funnel.rs`
@@ -61,278 +55,327 @@
 - Create: `crates/borsuk/tests/v36_funnel_authority.rs`
 
 **Interfaces:**
-- Consumes: the authenticated 192-dimensional projection algorithm and canonical JSON helpers, re-expressed in V36 identities rather than legacy serialized types.
-- Produces: `V36FunnelArm`, `V36FunnelManifest`, `V36FunnelBudget`, `validate_v36_funnel_manifest`, and `project_v36_funnel_budget`.
+- Produces `V36GeometryArm`, `V36ShapeScore`, `V36CoarseCode`, `V36FineCodec`, `V36ChunkCeiling`, `V36FunnelManifest`, `V36ResourceLedger`, `validate_v36_manifest`, `project_v36_resources`, and `plan_v36_transport`.
 
-- [ ] **Step 1: Write authority and arithmetic REDs**
+- [ ] **Step 1: Write strict authority REDs**
 
-  Test exact arms and ladders, unique role/URI identities, concrete digest algorithms, strict schemas, no unknown fields, checked overflow, 100M projected resident bytes below 3 GiB, coarse bytes for one/two assignments including the explicit u64 row ordinal, and fine lower bounds for D384/768/1536/3072 at 1,024/1,536/2,048 rows. Require one shared transport planner to count distinct complete-object identities, actual encoded lengths, retries, decoder capacity, and excluded candidates under 16 GETs/8 MiB per wave. Pin `claim_eligible=false` for G0–G3 receipts.
+  Pin SRHT seed 36 and M192; the ten geometry arms; closure epsilon,
+  RNG-pruning, and cap-eight identities; B4096/B8192 primary-row semantics;
+  the exact generalized V33/V34 shape estimator/equation; projected-f32,
+  sign44, PQ4-48 and PQ4-64 record sizes; K512/1024/1536/2048 unique source
+  IDs; 512-KiB coarse fragments; 64/256/512-KiB fine chunks; SQ8/f16/source-f32
+  roles; strict schemas; unique role/URI identities; SHA-256/BLAKE3 algorithms;
+  no unknown fields; and `claim_eligible=false`.
 
-- [ ] **Step 2: Run the focused RED**
+- [ ] **Step 2: Write checked arithmetic REDs**
 
-  Run: `CARGO_BUILD_JOBS=1 cargo test -p borsuk --test v36_funnel_authority -- --nocapture`
+  Assert posting counts 245/2,442/24,415 for B4096 and
+  123/1,221/12,208 for B8192; exact
+  single/mean-two/mean-three/cap-eight coarse projections; no dense row
+  locator or unchanged-base ID table; interval-directory and mutation-overlay
+  arithmetic; every resident allocation and encoded/decoded overlap;
+  byte-based delta admission; a 128-MiB recent-fine arena; checked overflow;
+  atomic whole-posting admission; normal 14-GET/7-MiB and hard
+  16-GET/8-MiB limits per wave; and explicit excluded-object evidence.
 
-  Expected: compile failure only at the missing V36 types and functions.
+- [ ] **Step 3: Run the focused RED**
 
-- [ ] **Step 3: Implement the minimal typed boundary**
+  Run `CARGO_BUILD_JOBS=1 cargo test -p borsuk --test v36_funnel_authority -- --nocapture`.
 
-  Use closed enums for assignment, code, fine codec, and phase. Reject any arm outside the spec matrix. Compute every byte with checked integer arithmetic; require remote coarse bytes `rows * (code_bytes + 8) * assignments` for explicit row ordinals. Treat `fine_rows * (D + 8)` for SQ8, `fine_rows * 2D` for f16, and `fine_rows * 4D` for f32 only as raw lower bounds; serving admission uses complete encoded Arrow object lengths and decoder capacities.
+  Expected: compile failure only at the missing V36 authority, ledger, and planner boundaries.
 
-- [ ] **Step 4: Run GREEN and static gates**
+- [ ] **Step 4: Implement the minimal closed boundary**
 
-  Run the focused test, scoped Clippy, `cargo fmt --all -- --check`, and `git diff --check`.
+  Use closed enums and exact constants. Make `plan_v36_transport` count complete encoded object lengths, retries, metadata, decoder capacity, and distinct identities. Reject resource projections above 2 GiB at 1M/10M or 3 GiB at 100M. Do not add runtime scoring or storage I/O.
 
-- [ ] **Step 5: Commit the authority slice**
+- [ ] **Step 5: Verify and commit**
 
-  Commit `v36_funnel.rs`, its export, and authority tests after a read-only diff review.
+  Run the focused test, scoped strict Clippy, `cargo fmt --all -- --check`, and `git diff --check`. Read the diff for identity/default leaks, then commit only the authority slice.
 
-### Task 2: Deterministic Leaf Assignment and Orthogonal-Spill Control
+### Task 2: Materialize Nested Corpora, Queries, and Exact Truth
 
 **Files:**
-- Create: `crates/borsuk/src/v36_funnel_build.rs`
-- Create: `crates/borsuk/tests/v36_funnel_build.rs`
+- Create: `scripts/run_v36_dataset_freeze.py`
+- Create: `scripts/test_run_v36_dataset_freeze.py`
+- Create: `crates/borsuk/examples/v36_dataset_freeze.rs`
+- Create: `crates/borsuk/tests/v36_dataset_freeze.rs`
+- Create: `docs/research/v36-funnel-dataset-materialization.json`
 
 **Interfaces:**
-- Consumes: authenticated projected corpus blocks and `V36FunnelArm`.
-- Produces: `V36LeafModel`, `V36Assignment`, `train_v36_leaf_model`, and `assign_v36_rows`.
+- Consumes the Task 0 source registry.
+- Produces authenticated 1M/10M/100M source Parquet, four query-role Parquets,
+  source-ordinal mapping, exact GT@100, and construction/performance receipts.
 
-- [ ] **Step 1: Write construction REDs**
+- [ ] **Step 1: Write membership and schema REDs**
 
-  Require `ceil(rows/256)` primary leaves; `min(4,096,next_power_of_two(ceil(leaf_count/64)))` coarse cells; exact 1M/10M/100M counts; a `min(rows,1_048_576)` deterministic reservoir; 25 coarse and 10 local fixed Lloyd iterations; increasing-row f64 reductions; leaf-ordinal ties; primary search over all leaves in the two nearest coarse cells and orthogonal-spill selection over the next eight; primary occupancy near 256 and double-assignment occupancy near 512; no query/truth role; bounded block liveness; exact construction work counters; and identical artifacts across block sizes and worker counts. Pin coarse-object order to `(coarse_cell_ordinal,leaf_ordinal)`, greedy complete-object packing at 512 KiB, and useful/fetched-byte accounting.
+  Test the first-occurrence duplicate rule, query exclusion before ranking,
+  nested SHA membership, source-ordinal mapping, non-null f32[768] physical
+  schema, full-stream null/nonfinite/zero rejection, exact row counts,
+  query-role separation, distinct source/dense ordinal meanings, and GT tie order by
+  `(distance,unsigned_feature_row_id)`. Mutation-test every
+  URI/digest/length/schema/binding.
 
-- [ ] **Step 2: Run the focused RED**
+- [ ] **Step 2: Write launcher/capability REDs**
 
-  Run: `CARGO_BUILD_JOBS=1 cargo test -p borsuk --test v36_funnel_build -- --nocapture`
+  Require profile `causality`, Spot, `eu-central-1`, exact source revision, one bounded S3 streaming pass, ephemeral NVMe only, no devbox corpus materialization, 1.9-TB disk preflight, 43,200-second active cap, terminal upload, interruption discard/restart, and immediate instance termination.
 
-  Expected: missing construction boundary only.
+- [ ] **Step 3: Run focused REDs**
 
-- [ ] **Step 3: Implement streaming training and assignment**
+  Run the Rust test, then `python3 -m unittest scripts.test_run_v36_dataset_freeze`.
 
-  Train coarse cells from a deterministic bounded reservoir, stream one external partition by coarse cell, then train local leaves one coarse run at a time. Retain only one bounded run window and registered accumulators, emit Arrow leaf summaries plus sorted assignment runs, and externally merge by `(leaf,row_ordinal,assignment_role)`. Permit a logical leaf to span multiple independently authenticated 512-KiB coarse objects in the fixed order; record all identities in its directory and charge all of them to the planner. A resident global `rows * leaves` Lloyd matrix is forbidden.
+  Expected: missing dataset freezer and launcher boundaries only.
 
-- [ ] **Step 4: Run GREEN and determinism gates**
+- [ ] **Step 4: Implement streaming freeze and GT**
 
-  Compare 1/2/4 workers and at least three input block sizes byte-for-byte; run scoped Clippy, fmt, and diff-check.
+  Rust owns membership, Parquet validation/writing, source ordinals, and
+  blocked no-FMA binary64 GT. Load all 13,000 query vectors once (about 40 MiB)
+  and scan each source row block once across successive eight-query tiles;
+  checkpoint the completed source-row prefix plus all canonical top-100 heaps.
+  Resume at the first incomplete source-row block. Before execution, replace
+  Task 0's planned query-major GT checkpoint with this row-major authority and
+  mutation-test its exact schema; no materialized artifact exists under the old
+  checkpoint. Python authenticates inputs, provisions one Spot cell, monitors
+  pressure/progress/cost, syncs terminal artifacts, and terminates compute. No
+  scientific math lives in Python.
 
-- [ ] **Step 5: Commit the construction slice**
+- [ ] **Step 5: Run dry-run, then one bounded Spot materialization**
 
-  Commit only construction code/tests and exports.
+  Preserve the exact dry-run command/cost/bytes. On approval already granted by the standing goal, launch one original cell. Publish artifacts only after all counts, hashes, nested membership, and GT relations validate. An interrupted cell is discarded and restarted from its last authenticated construction checkpoint.
 
-### Task 3: Dimension-Independent Coarse Code Arms
+- [ ] **Step 6: Verify and commit evidence**
+
+  Run focused Rust/Python gates, pinned Ruff, py_compile, docs validator, fmt, and diff-check. Commit code plus completed registry identities; terminate the instance before pushing.
+
+### Task 3: Posting Geometry, Closure, and Shape Oracle
+
+**Files:**
+- Create: `crates/borsuk/src/v36_funnel_geometry.rs`
+- Create: `crates/borsuk/tests/v36_funnel_geometry.rs`
+- Create: `crates/borsuk/examples/v36_geometry_oracle.rs`
+
+**Interfaces:**
+- Produces `V36PostingModel`, `V36PostingAssignment`, `V36PostingSummary`, `train_v36_geometry`, `assign_v36_closure`, and `score_v36_postings`.
+
+- [ ] **Step 1: Write deterministic geometry REDs**
+
+  Cover SRHT parity; the exact super-cell formula and 4/64/512 counts;
+  B256/B4096/B8192 primary semantics; exact posting counts; bounded external
+  runs; hash-ranked reservoir; farthest-first initialization; fixed 25/10
+  Lloyd iterations; binary64 ordinal-ordered reductions; empty-centroid
+  recovery; proportional local posting allocation with mandatory non-empty-run
+  ownership; corpus-only training; exact assignment at 1M/10M; closure inequality,
+  increasing tie order, RNG rejection, cap eight; and byte-identical results
+  across 1/2/4 workers and three block sizes. Assert that the super-cell count
+  never exceeds the row count and that empty construction partitions are not
+  serialized.
+
+- [ ] **Step 2: Write occupancy and construction-stop REDs**
+
+  Recompute mean/p50/p95/p99/max replication and primary/stored occupancy. Reject mean replication above 3, primary p99 above 2B, primary max above 4B, stored p99 above 6B, stored max above 8B, arithmetic overflow, projected active time above 12 hours, or cost above the manifest cap.
+
+- [ ] **Step 3: Write shape-score REDs**
+
+  Freeze centroid, diagonal, rank-two, and rank-four Gaussian lower-tail scoring in an equal 4,736-byte slot. Fit only unique primary rows. Pin regularization, finite checks, eigen/sign convention, scalar/SIMD tolerances, and `(score,posting_ordinal)` ties. Do not label the heuristic a certified ellipsoid.
+
+- [ ] **Step 4: Run RED, implement, and run GREEN**
+
+  Run `CARGO_BUILD_JOBS=1 cargo test -p borsuk --test v36_funnel_geometry -- --nocapture`. Implement only the typed streaming oracle, rerun it, then scoped Clippy/fmt/diff-check.
+
+- [ ] **Step 5: Commit the geometry oracle**
+
+  Commit code/tests/example only after a read-only numeric and capability audit.
+
+### Task 4: Execute the 1M Geometry/Shape Falsifier
+
+**Files:**
+- Create: `scripts/run_v36_geometry_campaign.py`
+- Create: `scripts/test_run_v36_geometry_campaign.py`
+- Create: `docs/research/v36-funnel-g1-geometry-authority.json`
+- Modify: `docs/research/publication-v3-attempt-ledger.md`
+
+**Interfaces:**
+- Consumes the frozen 1M development corpus/query/GT.
+- Produces ten geometry-arm curves and fresh-query shape-score curves without coarse-code or fine-code confounding.
+
+- [ ] **Step 1: Write campaign and result REDs**
+
+  Require exact input/binary/arm identities, construction-only and
+  evaluation-only capability sandboxes, every logical integer L through
+  `min(postings,1,024)`, power-of-two summaries, deterministic canonical
+  aggregates, occupancy/work/resource stops, and no validation/holdout access.
+  This stage reports logical-prefix containment only; physical coarse transport
+  is evaluated after Task 5 defines each code layout.
+
+- [ ] **Step 2: Implement thin campaign orchestration**
+
+  Run all geometry arms in one authenticated construction cell while reusing exact centroid distances across epsilon arms. Evaluation opens only development. Preserve each arm result and causal rejection independently.
+
+- [ ] **Step 3: Run 1M development on Spot**
+
+  Reject arms at construction gates before query scoring. Require 998,000 ppm
+  logical route and selected-score containment. Compare shapes only for
+  B4096/B8192 at equal slot bytes. Preserve **every** geometry/score survivor
+  for downstream code/layout evaluation; do not choose an early winner. If no
+  survivor passes, record Funnel-3 rejection and stop this plan.
+
+- [ ] **Step 4: Validate and commit**
+
+  Validate result recomputation, docs, and diff; commit/push the immutable geometry evidence. Do not implement codecs on failure.
+
+### Task 5: Coarse Representation, Unique Heap, and Fine Layout
 
 **Files:**
 - Create: `crates/borsuk/src/v36_funnel_code.rs`
+- Create: `crates/borsuk/src/v36_funnel_fine.rs`
 - Create: `crates/borsuk/tests/v36_funnel_code.rs`
+- Create: `crates/borsuk/tests/v36_funnel_fine.rs`
 - Modify: `crates/borsuk-fma/src/lib.rs`
 
 **Interfaces:**
-- Consumes: 192-dimensional projected rows and authenticated training ordinals.
-- Produces: `V36CoarseCodebook`, `V36CoarsePlane`, `train_v36_coarse_code`, `encode_v36_coarse_rows`, and scalar/SIMD ADC functions.
+- Produces projected-f32, sign-code24/record44, PQ4-code32/record48, and
+  PQ4-code48/record64 scorers; unique live-ID admission; the fine interval
+  directory; complete Arrow chunk layouts; and SQ8/f16/source-f32 rerankers.
 
-- [ ] **Step 1: Write codec and SIMD REDs**
+- [ ] **Step 1: Write code-layout and SIMD REDs**
 
-  Cover exact 24/32/48-byte layouts, complete logical checksums, Arrow schemas, saturation, finite inputs, ties-to-even, odd tails, shuffled blocks, scalar/SIMD equality, bounded 1,024/1,536/2,048-entry heaps, and no allocation proportional to corpus rows.
+  Pin the exact sign reconstruction/score, residual PQ4 subspaces/codebooks,
+  explicit u64 dense ordinal and u64 source ID, Arrow schemas, farthest-first initialization, exactly 20
+  PQ Lloyd iterations, binary64 row-ordered reductions, empty-codeword
+  recovery, finite/saturation/ties-to-even behavior, source ordering, and
+  scalar/SIMD parity across ties, subnormals, odd tails, saturation, and
+  reversed blocks.
 
-- [ ] **Step 2: Run the focused RED**
+- [ ] **Step 2: Write unique-heap REDs**
 
-  Run: `CARGO_BUILD_JOBS=1 cargo test -p borsuk --test v36_funnel_code -- --nocapture`
+  Require duplicate and visibility filtering during admission, K unique source
+  IDs, deterministic best-score replacement, bounded ID-position storage, no
+  allocation proportional to corpus rows, and counters for every scanned
+  duplicate. Base records carry source ID; mutation tests prove an overlay
+  replacement/tombstone suppresses the base candidate before it consumes K.
 
-  Expected: missing code and kernel boundaries only.
+- [ ] **Step 3: Write fine-layout REDs**
 
-- [ ] **Step 3: Implement scalar authority and native kernels**
+  Require complete coarse Arrow fragments ordered by posting/dense ordinal,
+  512-KiB encoded ceilings, exact fragment identities, and atomic whole-posting
+  admission. Require one primary-ordered unreplicated fine plane, interval lookup without
+  a dense locator, complete 64/256/512-KiB authenticated Arrow objects,
+  candidate-order admission before physical reorder, normal 14 GET/7 MiB and
+  hard 16 GET/8 MiB including retries/metadata, strict SQ8/f16/source schemas, exact encoded/decoded
+  overlap, and final source-feature-ID tie order matching GT after ordinal
+  lookup.
 
-  Implement the 24-byte sign control and 32/48-byte anisotropic PQ4 plus an explicit u64 row ordinal for every assignment. Use 16-entry shuffle LUTs for PQ4 and exact `(distance,row_ordinal)` heap order. Native kernels live in the existing unsafe-permitted kernel crate; the main crate remains unsafe-free.
+- [ ] **Step 4: Run focused REDs and implement**
 
-- [ ] **Step 4: Run GREEN, differential, and lint gates**
+  Run the code test and fine test separately. Implement scalar authorities first, native kernels second, then chunk planning/rerank. The main crate stays unsafe-free; native unsafe remains confined to the kernel crate.
 
-  Require all ladder arms and adversarial numeric families to match their scalar authority, then scoped Clippy, fmt, and diff-check.
+- [ ] **Step 5: Run GREEN and commit**
 
-- [ ] **Step 5: Commit the coarse-code slice**
+  Run both focused gates, scalar/SIMD differentials, scoped strict Clippy, fmt, and diff-check. Commit the coherent representation/layout slice.
 
-  Commit code, kernels, tests, and exports together.
-
-### Task 4: Fine Chunk Rerank
-
-**Files:**
-- Create: `crates/borsuk/src/v36_funnel_fine.rs`
-- Create: `crates/borsuk/tests/v36_funnel_fine.rs`
-
-**Interfaces:**
-- Consumes: bounded coarse heap, resident leaf/chunk directory, and registered fine Arrow IPC objects.
-- Produces: `V36FineChunkPlan`, `plan_v36_fine_chunks`, `rerank_v36_sq8`, `rerank_v36_f16`, and `rerank_v36_f32_control`.
-
-- [ ] **Step 1: Write fine-tier REDs**
-
-  Require row-ID deduplication before capacity, a frozen `(distance,row_ordinal)` fine prefix before physical ordering, a separate post-I/O containment checkpoint, limits of 1,024/1,536/2,048 rows and 16 complete independently authenticated Arrow IPC files totaling at most 8 MiB, strict physical schema, SQ8 scale/offset binding, exact object/decoder-capacity accounting, scalar/SIMD equality, and an offline f32 control on the identical prefix exempt only from serving I/O caps.
-
-- [ ] **Step 2: Run the focused RED**
-
-  Run: `CARGO_BUILD_JOBS=1 cargo test -p borsuk --test v36_funnel_fine -- --nocapture`
-
-  Expected: missing fine-chunk/rerank boundary only.
-
-- [ ] **Step 3: Implement bounded planning and rerank**
-
-  Deduplicate and select by `(distance,row_ordinal)`, admit registered chunks in that order until the GET/byte cap, freeze the admitted rows, and only then reorder by `(chunk,row_ordinal)` for decode. Use int8/i32 kernels for SQ8 and fixed-order controls for f16/f32.
-
-- [ ] **Step 4: Run GREEN and resource gates**
-
-  Assert exact GET/range/byte counters and no unselected object access; run scoped Clippy, fmt, and diff-check.
-
-- [ ] **Step 5: Commit the fine-tier slice**
-
-  Commit implementation and tests.
-
-### Task 5: Six-Checkpoint Offline Oracle
+### Task 6: Complete 1M Causal Oracle and Freeze
 
 **Files:**
 - Create: `crates/borsuk/src/v36_funnel_eval.rs`
-- Create: `crates/borsuk/examples/v36_funnel_oracle.rs`
 - Create: `crates/borsuk/tests/v36_funnel_eval.rs`
-
-**Interfaces:**
-- Consumes: authenticated model, assignment, coarse plane, fine Arrow chunks, query Parquet, and GT@100.
-- Produces: `V36FunnelCheckpoint`, `V36FunnelResult`, `evaluate_v36_funnel`, and canonical result bytes.
-
-- [ ] **Step 1: Write causal checkpoint REDs**
-
-  Freeze route-owner containment before coarse scoring, coarse containment before I/O pruning, post-I/O fine-prefix containment before decode, fine-codec recall next, and same-row-set offline f32 recall last. Mutation-test every aggregate, ordinal list, arm identity, gate, and causal classification. A stage may read only capabilities admitted by its phase.
-
-- [ ] **Step 2: Run the focused RED**
-
-  Run: `CARGO_BUILD_JOBS=1 cargo test -p borsuk --test v36_funnel_eval -- --nocapture`
-
-  Expected: missing evaluator/result boundary only.
-
-- [ ] **Step 3: Implement evaluation and canonical serialization**
-
-  Recompute every per-query hit/containment/recall metric and aggregate during serialization. Emit separate `routing-rejected`, `coarse-code-rejected`, `fine-layout-rejected`, `fine-codec-rejected`, `executable-path-required`, and `qualified-for-g2` outcomes; never call containment recall.
-
-- [ ] **Step 4: Run GREEN and affected Rust gates**
-
-  Run evaluator, authority, build, code, and fine tests serially; then scoped Clippy, fmt, and diff-check.
-
-- [ ] **Step 5: Commit the oracle slice**
-
-  Commit the library evaluator, thin example, tests, and exports.
-
-### Task 6: Capability-Separated Launcher and Dataset Freeze
-
-**Files:**
+- Create: `crates/borsuk/examples/v36_funnel_oracle.rs`
 - Create: `scripts/run_v36_funnel_oracle.py`
 - Create: `scripts/test_run_v36_funnel_oracle.py`
-- Create: `scripts/run_v36_funnel_campaign.py`
-- Create: `scripts/test_run_v36_funnel_campaign.py`
-- Modify: `docs/research/standard-datasets.md`
-- Modify: `docs/research/methods.md`
-
-**Interfaces:**
-- Consumes: local registered artifacts and the release-built oracle binary.
-- Produces: construction receipt, development result, validation result, sealed-holdout result, and terminal receipt.
-
-- [ ] **Step 1: Write launcher REDs**
-
-  Use subprocess tests to prove construction cannot open query/truth paths, evaluation cannot open source paths, validation requires a development-selected arm, holdout requires that exact validation-passed arm, every input has exact URI/digest/length, unknown flags fail closed, and pressure/timeout stops emit canonical outcome-blind receipts. Campaign dry-run tests require profile `causality`, Spot by default, same-region objects, explicit cost/wall caps, terminal-receipt upload, interrupted-cell discard, and immediate termination.
-
-- [ ] **Step 2: Run the focused RED**
-
-  Run: `python3 -m unittest scripts.test_run_v36_funnel_oracle`
-
-  Expected: missing launcher boundary only.
-
-- [ ] **Step 3: Implement the thin launcher**
-
-  Use explicit file descriptors/capability roots, a single child process group, 2 GiB RSS stop, memory PSI full avg10 stop at 0.5, any swap-growth stop, progress timeout, and an external 7,200-second wall cap. The campaign wrapper streams bounded S3 inputs to ephemeral NVMe on same-region Spot and terminates the instance after syncing its receipt. The Python layer authenticates and orchestrates; Rust performs all scientific scoring.
-
-- [ ] **Step 4: Materialize registered splits and validate authority**
-
-  Consume Task 0's registered membership rule in one bounded, same-region AWS Spot construction cell. Stream the immutable 514M source once in bounded blocks directly from S3, retain no complete corpus on local disk or in RAM, and write the hash-nested 1M/10M/100M Parquet shards plus scale-specific query/GT artifacts back to S3. Pin a dry-run byte/work/cost projection and reject above its registered cap before launch. Record exact URIs, SHA-256, lengths, dimensions, row counts, split seeds, instance/interruption identities, and licensing. Generate GT@100 by a separately authenticated blocked f32 scan in the same bounded campaign. Neither validation nor holdout is opened during development.
-
-- [ ] **Step 5: Run GREEN and static gates**
-
-  Run both complete launcher test files, pinned Ruff, py_compile, docs validator, and diff-check.
-
-- [ ] **Step 6: Commit launcher and registry slice**
-
-  Commit the launcher, tests, and registry/method entries.
-
-### Task 7: G1 Spot 1M Causal Matrix
-
-**Files:**
-- Modify: `docs/research/publication-v3-attempt-ledger.md`
 - Create: `docs/research/v36-funnel-g1-authority.json`
 
 **Interfaces:**
-- Consumes: release oracle, four frozen 1M corpora, and development/validation/holdout capabilities.
-- Produces: authenticated per-arm development results, one validation result, and one sealed holdout result.
+- Produces serialized route, shape, projected-f32, lossy-coarse, post-I/O, fine-codec, and source-f32 checkpoints plus one frozen arm identity.
 
-- [ ] **Step 1: Run sub-second preflight**
+- [ ] **Step 1: Write checkpoint/result REDs**
 
-  Validate all authorities, projected work, disk/RAM headroom, scalar/SIMD parity, and exact arm count without opening scientific artifacts.
+  Mutation-test every ordinal prefix, aggregate, gate, arm identity, transport counter, classification, and cross-object binding. Serializer independently recomputes all metrics. A later checkpoint cannot change an earlier row set.
 
-- [ ] **Step 2: Execute development arms with early stops**
+- [ ] **Step 2: Write launcher REDs**
 
-  On same-region Spot, sweep the full diagnostic L/K curves through the identical transport planner. Executable evaluation always uses the longest deterministic prefix fitting each wave's fixed object/byte cap and records each dimension/codec raw-capacity ceiling plus useful/fetched bytes. Stop an assignment arm if route containment misses 998,000 ppm inside that envelope; stop a code arm below 998,000 ppm at the consumed K; reject the layout below 998,000 ppm after fine-chunk admission; reject each fine codec independently if loss versus same-row-set offline f32 exceeds 1,000 ppm. Preserve every terminal result and terminate compute after sync.
+  Prove construction/query/truth/source capabilities are phase-specific; validation requires the exact development winner; holdout requires the validation-passed identity; unknown flags fail closed; RSS/PSI/swap/progress/wall stops are canonical and outcome-blind.
 
-- [ ] **Step 3: Freeze winner, validate, then open holdout once**
+- [ ] **Step 3: Implement the oracle and run development**
 
-  Require development recall at least 997,000 ppm aggregate and 800,000 ppm minimum; the 2,000-ppm margin applies only to aggregate recall because per-query recall@10 is quantized by 100,000 ppm. Do not add it to traversal or containment thresholds. Apply the exact lexicographic selection rule and serialize the representation winner identity. Evaluate validation once without retuning; only on pass evaluate all 1,000 holdout queries once. Holdout requires 995,000 ppm aggregate and 800,000 ppm minimum recall; failure rejects the architecture.
+  Carry every Task 4 survivor into this matrix. Evaluate projected-f32 on each
+  code layout's physically admitted rows first, then sign/PQ4, then fine
+  layouts, then SQ8/f16 and same-row source-f32. Stop an arm at its first failed
+  causal gate. Development requires 998,000 ppm containment checkpoints, fine
+  loss <=1,000 ppm, and 997,000/800,000 ppm aggregate/minimum recall. Select a
+  winner only after the complete funnel has passed.
 
-- [ ] **Step 4: Validate evidence and commit**
+- [ ] **Step 4: Freeze, validate, and open holdout once**
 
-  Run docs validator and diff-check, commit only the ledger and canonical authority result, and fast-forward push.
+  Select by pass, bytes, GETs, distinct-query CPU p99, RSS, arm ID. Validation cannot retune. On validation pass, open the already-frozen 1M holdout once and require 995,000/800,000 ppm. Do not alter the 10M policy after this point.
 
-### Task 8: G2 Executable 1M Path
+- [ ] **Step 5: Verify and commit**
+
+  Run affected Rust/Python gates, pinned Ruff, pycompile, scoped strict Clippy, fmt, docs validation, and diff-check. Commit the complete 1M evidence and winner.
+
+### Task 7: Frozen 10M Scale-Transfer Gate
+
+**Files:**
+- Create: `docs/research/v36-funnel-g2-authority.json`
+- Modify: `scripts/run_v36_funnel_oracle.py`
+- Modify: `scripts/test_run_v36_funnel_oracle.py`
+- Modify: `docs/research/publication-v3-attempt-ledger.md`
+
+**Interfaces:**
+- Replays the unchanged winner and diagnostic prefixes at 10M.
+
+- [ ] **Step 1: Stage authority/preflight REDs**
+
+  Pin the 10M source/query/GT, measured posting occupancy/packing, exact work/disk/RAM/cost, 12-hour construction cap, 7,200-second measurement cap, and canonical stop receipt. Undefined frontier projections are infinite failures.
+
+- [ ] **Step 2: Run one Spot construction/evaluation campaign**
+
+  Replay every distinct cumulative complete-object byte boundary through 7 MiB
+  with the 14-GET normal cap, plus frozen L/K/chunk diagnostics, without
+  changing representation. Compute `C1`, `C10`,
+  `Chat100=C10*C10/C1`, and the seed-36 10,000-resample paired one-sided 99%
+  upper bound. Undefined frontiers are infinite. Require the upper bound and
+  the measured-occupancy/fragment-packing 100M projection to fit 7 MiB and 14
+  GETs, leaving the registered hard retry reserve intact.
+
+- [ ] **Step 3: Apply validation and holdout**
+
+  Require the complete 10M quality, construction, RSS, and transport gates on validation. Only then open 10M holdout once and require 995,000/800,000 ppm. No post-result adjustment is permitted.
+
+- [ ] **Step 4: Validate and commit evidence**
+
+  Commit the terminal result and ledger. On failure, record architecture rejection and do not implement the production format.
+
+### Task 8: Minimal Executable S3 Query Path
 
 **Files:**
 - Create: `crates/borsuk/src/v36_funnel_query.rs`
 - Create: `crates/borsuk/tests/v36_funnel_query.rs`
-- Create: `scripts/run_v36_funnel_g2.py`
-- Create: `scripts/test_run_v36_funnel_g2.py`
+- Create: `scripts/run_v36_funnel_query.py`
+- Create: `scripts/test_run_v36_funnel_query.py`
 
 **Interfaces:**
-- Consumes: unchanged G1 winner and a bounded range-reader with no list/discovery API.
-- Produces: query results and counters for recall, GETs, bytes, latency, and RSS.
+- Consumes the frozen 1M/10M arm and complete named-object reader with no list/discovery API.
+- Produces offline-identical results and honest compute/hot/shared-cache/cold counters.
 
-- [ ] **Step 1: Write query and transport REDs**
+- [ ] **Step 1: Write storage/query REDs**
 
-  Require identical local/S3-mock results, at most 32 complete-object GETs and 16 MiB, actual HTTP byte accounting, no unselected object access, exact retry accounting, immutable object identity, bounded buffers, and truthful warm/cold labels.
+  Require identical local/S3-mock ordinals, no unselected access, two
+  sequential waves, normal <=14 complete GETs/7 MiB and hard <=16 GETs/8 MiB
+  each, exact retries and HTTP bytes, `transport-indeterminate` classification
+  beyond the reserve, exact digest before decode, bounded buffers/workspaces,
+  and queueing-inclusive latency.
 
-- [ ] **Step 2: Implement the executable path**
+- [ ] **Step 2: Implement the breaking query path**
 
-  Use at most 16 concurrent coarse-group reads followed by at most 16 complete fine Arrow IPC objects. Authenticate BLAKE3 before decoding and SHA-256 at publication boundaries. Measure compute on all performance queries. Measure hot-object p99 on the first 32 registered performance queries by warming each query's own bounded working set before its 1,024 warmups and 10,000 timed executions; use the 10,000-query second pass for realistic shared-cache behavior. Replay holdout only for offline/executable equality. Never download or persist the corpus.
+  Read only registered complete Arrow objects. Use the interval directory, unique heap, fixed workspace pool, and selected SIMD kernels. Do not add arbitrary range authentication or legacy storage aliases.
 
-- [ ] **Step 3: Run 1M G2**
+- [ ] **Step 3: Measure 1M and 10M**
 
-  Run every real-data dimension band admitted by G1. Require recall gates, warm cached p99 at most 15 ms, RSS at most 2 GiB, and the arm's registered GET/byte cap. Report cold S3 separately without a 15 ms promise. Mark any synthetic-only band unqualified rather than promoting it through another band's result.
+  Require offline/executable equality, decoded-hot p99 <=15 ms, <=2 GiB RSS, and transport gates. Report hot-object QPS, 10,000-distinct-query shared-cache QPS/hit rate, and cold S3 percentiles separately. Cold S3 has no 15-ms promise.
 
 - [ ] **Step 4: Verify and commit**
 
-  Run affected tests, strict scoped Clippy, full Python discovery, fmt, docs validation, and diff-check; commit/push the coherent G2 slice.
+  Run affected tests, strict scoped Clippy, full dependency-complete Python discovery, fmt, docs validation, and diff-check once. Commit code and evidence together.
 
-### Task 9: G3 10M Promotion Gate
-
-**Files:**
-- Modify: `docs/research/publication-v3-attempt-ledger.md`
-- Create: `docs/research/v36-funnel-g3-authority.json`
-
-**Interfaces:**
-- Consumes: unchanged G2 implementation and arm.
-- Produces: authenticated 10M frontier-growth result.
-
-- [ ] **Step 1: Preflight exact projected work**
-
-  Pin separate 10M development/validation/holdout/performance identities and GT, rows, leaf counts, expected objects, GET/byte maxima, scratch lifecycle, RSS/PSI/swap stops, and terminal output before execution.
-
-- [ ] **Step 2: Run 10M once per registered repetition**
-
-  Replay every L/K diagnostic through the identical transport planner without selecting a new representation. Compute exact integer-prefix `L*` on the same preregistered development query vectors with scale-specific GT. Require `L*(10M) <= 1.6 * L*(1M)`. Compute `Lhat100 = L10^2/L1` and its paired, seed-36, 10,000-resample nearest-rank one-sided 99% bootstrap bound; require that bound to fit the coarse GET/byte envelope. Apply every 10M executable gate to validation without retuning; only then open the 10M holdout once and require 995,000 ppm aggregate and 800,000 ppm minimum recall. Stop immediately on the first failed promotion gate.
-
-- [ ] **Step 3: Validate and commit evidence**
-
-  Preserve immutable results, update the ledger, validate docs/diff, and commit/push. Do not launch G4 on failure.
-
-### Task 10: V36 Delta, Publication, and Compaction Lifecycle
+### Task 9: Delta Publication and Sustained Lifecycle
 
 **Files:**
 - Create: `crates/borsuk/src/v36_funnel_delta.rs`
@@ -340,58 +383,62 @@
 - Modify: `crates/borsuk/src/lib.rs`
 
 **Interfaces:**
-- Consumes: authenticated V36 generation/chunk manifest, mutation Arrow batches, and conditional object sink.
-- Produces: `V36DeltaManifest`, `V36SnapshotVisibility`, `seal_v36_delta`, `publish_v36_delta`, and `compact_v36_generation`.
+- Produces a process-wide byte-bounded active buffer, immutable microsegments,
+  conditional publication, visibility state, bounded delta arena/CSR,
+  128-MiB recent-fine arena, continuous fine coalescer, and compaction receipts.
 
 - [ ] **Step 1: Write lifecycle REDs**
 
-  Port the already-verified V35 latest-wins/base-horizon/run-range authority into breaking V36 identities, then require one process-wide buffer and microsegment sealing/publication every 250 ms or at codec byte capacity, insert/replace/delete visibility, conditional publication conflict and indeterminate-outcome receipts, bounded scratch, chunk sharing, reader-safe reclamation, and checked write-amplification counters. Preserve the exact G1-selected SQ8 or f16 codec for pending and sealed rows. Reserve 32 MiB and derive the checked active row cap as `min(65_536, floor(224 MiB/(fine_row_bytes+120)))`; prove the D3072 caps of 65,536 SQ8 or 37,496 f16 rows. Query nodes ingest immutable published coarse slices into one resident append-only delta arena plus a checked CSR leaf-to-row directory capped at 64 MB for four million double assignments; queries score only selected-leaf delta rows. Cap G5 at 4,000,000 stored mutation entries, route base/pending/delta together, and charge delta fine objects to the same 16-GET/8-MiB fine wave. The three registered compactions coalesce only delta coarse metadata/tombstones/duplicate IDs and share existing fine objects; base absorption is forbidden in G5. Define mutation truth by exact f32 scan of the live snapshot sequence. Mutation-test stale updates, uncovered live rows, later tombstones, 4M-entry admission, codec drift, byte/timer seals, retries, and interrupted compaction.
+  Require latest-wins insert/replace/delete visibility, timer/byte seals,
+  selected-codec preservation, conditional `HEAD`, retry/indeterminate
+  receipts, reader-safe reclamation, old/new generation overlap, byte-based
+  delta admission, same-wave fine objects, and exact write amplification. Pin a
+  byte-bounded changed-ID overlay `(source_id,latest_sequence,live,current_delta_ordinal)`;
+  prove unchanged base IDs need no resident entry, replacements/tombstones
+  suppress base rows before K, and delta records bind their sequence. Require
+  published fine rows to enter the recent-fine arena, coalesce by owner posting
+  every five seconds or 64 MiB, atomically switch to authenticated chunks, stop
+  before 128 MiB, and charge microsegment plus coalesced bytes to amplification.
 
-- [ ] **Step 2: Run the focused RED**
+- [ ] **Step 2: Write long-lived rebalancing REDs**
 
-  Run: `CARGO_BUILD_JOBS=1 cargo test -p borsuk --test v36_funnel_delta -- --nocapture`
+  Separate short delta coalescing from base absorption. Require bounded split/reassignment work, immutable fine-chunk sharing where valid, no lost live row, exact snapshot truth, and a terminal stop when skew or replication exceeds the frozen gates.
 
-  Expected: missing V36 lifecycle symbols only.
+- [ ] **Step 3: Implement minimal lifecycle and run GREEN**
 
-- [ ] **Step 3: Implement the minimal lifecycle**
+  Reuse algorithms but no V35 serialized type. Run focused lifecycle/query tests, scoped strict Clippy, fmt, and diff-check.
 
-  Reuse algorithms, not V35 serialized types. Emit immutable V36 delta routing/coarse/fine microsegments, one complete visibility directory, conditional `HEAD`, and outcome-blind terminal receipts. Seal the shared buffer on timer or checked codec capacity. Compact only delta metadata/coarse slices and share fine objects.
+- [ ] **Step 4: Commit lifecycle**
 
-- [ ] **Step 4: Run GREEN and lifecycle static gates**
+  Commit only after a read-only concurrency, durability, and byte-accounting review.
 
-  Run the focused test, query regressions, scoped Clippy, fmt, and diff-check.
-
-- [ ] **Step 5: Commit the lifecycle slice**
-
-  Commit V36 lifecycle code/tests/exports before any write campaign.
-
-### Task 11: G4/G5 AWS Spot Qualification
+### Task 10: 100M Query and Write Qualification
 
 **Files:**
-- Modify: `scripts/run_v36_funnel_campaign.py`
-- Modify: `scripts/test_run_v36_funnel_campaign.py`
+- Create: `scripts/run_v36_funnel_campaign.py`
+- Create: `scripts/test_run_v36_funnel_campaign.py`
+- Create: `docs/research/v36-funnel-g4-g5-authority.json`
 - Modify: `docs/research/publication-v3-attempt-ledger.md`
 
 **Interfaces:**
-- Consumes: exact G3 source/implementation/arm identities and the verified Task 10 V36 lifecycle.
-- Produces: three terminal 100M query repetitions and three write/compaction repetitions.
+- Produces three terminal 100M read repetitions, saturation/mixed-write results, and sustained-rebalancing evidence.
 
-- [ ] **Step 1: Write campaign lifecycle REDs**
+- [ ] **Step 1: Write campaign dry-run REDs**
 
-  Require AWS profile `causality`, Spot request by default, same-region S3, exact source commit and binary digest, terminal receipt upload, interrupted-cell discard/restart, immediate instance termination, cost cap, and no idle retention.
+  Require profile `causality`, same-region Spot by default, exact commit/binary/input/arm identities, instance candidates, complete object/GET/byte projections, committed cost/wall caps, terminal upload, interruption discard/restart, and immediate termination.
 
-- [ ] **Step 2: Run campaign dry-run GREEN**
+- [ ] **Step 2: Execute G4 only after a GREEN dry run**
 
-  The dry-run prints exact instance candidates, regions, object authorities, commands, expected bytes/GETs, cost envelope, stop rules, and cleanup without creating infrastructure.
+  Run three terminal repetitions of the unchanged 100M/768D arm. Require 995,000/800,000 ppm holdout recall, <3 GiB RSS, and the two-wave transport cap. Require <=15 ms p99 and >=3,000 QPS only on decoded-hot concurrency 64; report concurrency 1/16/64 and honest distinct-query/cold S3 metrics.
 
-- [ ] **Step 3: Execute G4 after explicit preflight record**
+- [ ] **Step 3: Execute saturation and mixed G5**
 
-  Run three terminal V36 query repetitions on the registered 100M/768D source/query/GT, host, cache, and concurrency. Open the sealed 100M holdout once and require 995,000 ppm aggregate and 800,000 ppm minimum recall. Require RSS below 3 GiB and the 32-GET/16-MiB cap. On the first 32 performance queries require per-query hot-object compute p99 at most 15 ms and at least 3,000 hot-object QPS at concurrency 64. Report concurrency 1/16/64 and the separate 10,000-distinct-query shared-cache/cold metrics without applying the hot QPS gate or relabelling cold S3 as a 15-ms result. Preserve every metric, instance identity, interruption history, and cost.
+  Measure 5k/10k/20k/40k mutations/s for 60 seconds each and require >=20k with zero rejects and visibility p99 <=1 s. Restore the frozen base, then measure ten minutes at 5k accepted mutations/s, eight writers, 64 readers, and 70/20/10 insert/replace/delete. Require read p99 <=110% baseline, complete write amplification <=3.0, recall gates at every registered snapshot, and no deleted result.
 
-- [ ] **Step 4: Execute G5 only after G4 passes**
+- [ ] **Step 4: Execute sustained rebalancing gate**
 
-  First measure no-reader saturation at fixed 5k/10k/20k/40k offered-rate steps for 60 seconds each; capacity is the highest zero-rejection step whose visibility p99 is at most one second, and V36 must reach at least 20,000 mutations/s. Discard the saturation cell and restore the exact frozen base. Then, after a two-minute warmup, run 10 minutes at 5,000 accepted mutations/s with eight writers, 64 concurrent readers, and the fixed 70/20/10 mix through delta-only compactions at minutes 3, 6, and 9. Enforce visibility, complete-byte amplification, and concurrent-read gates. The preflight accounts for every initial fine/coarse, visibility, retry, arena, and compaction byte and must project amplification below 3.0. At warmup end, every measured minute, and immediately before/after each compaction, block a snapshot and run exact f32 GT@10 for the fixed 1,000 mutation queries; require 995,000 ppm aggregate, 800,000 ppm minimum, and no deleted result at every pending/sealed/compacted snapshot.
+  Run a separately budgeted long-lived skew/absorption cell long enough to force posting splits and base absorption. Require bounded replication/occupancy, no visibility gap, no unbounded resident growth, and the same query/write gates. Short G5 compaction alone cannot qualify this behavior.
 
-- [ ] **Step 5: Final verification and decision**
+- [ ] **Step 5: Final assurance and decision**
 
-  Run one locked workspace/all-targets test, strict workspace/all-targets Clippy, full dependency-complete Python discovery, fmt, docs validation, and diff-check. Commit all terminal evidence. Only then write the breaking production-format plan or record Funnel-3 rejection.
+  After the complete diff is stable, run one locked workspace/all-targets test, strict workspace/all-targets Clippy, full dependency-complete Python discovery, fmt, docs validation, and diff-check. Commit all terminal evidence. Freeze the breaking release format only if every gate passes; otherwise record the causal rejection and start a new architecture spec.
