@@ -215,8 +215,10 @@ for SQ8, u64 source ordinals, u64 row IDs, u64 sequences,
 and u32 primary/replica page ordinals in structure-of-arrays order. The source
 ordinal is persisted independently of Morton-layout position and is the exact
 distance-tie authority across construction, compaction, and query. Query ADC
-decodes `center-4*sigma+code*scale` in architecture-specific SIMD, sums squared
-differences in increasing-dimension scalar authority order, and keeps at most the best 12,288
+decodes `center-4*sigma+code*scale` in architecture-specific eight-wide SIMD,
+accumulates eight lane-strided f32 sums without fusion, reduces lanes exactly
+from zero through seven, then adds the ordered scalar tail without fusion. This
+registered reduction is bit-identical on the scalar-control backend and keeps at most the best 12,288
 rows by `(distance,row_ordinal)`. The complete returned code-object budget is
 8 MiB, including headers, centers, IDs, sequences, page references, and chunk
 envelopes. Thus row work shrinks as `D` or rate grows; packed SQ4 payload alone

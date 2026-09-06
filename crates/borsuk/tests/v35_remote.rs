@@ -662,7 +662,7 @@ fn v35_remote_sq4_and_sq8_use_f16_centers_group_sigma_and_source_order() {
     assert_eq!(sq8.codes(), &[96, 96, 96, 0, 159, 159, 159, 0]);
 }
 
-fn scalar_residual_sq_score(
+fn registered_residual_sq_score(
     descriptor: &borsuk::V35ResidualSqDescriptor,
     row: usize,
     query: &[f32],
@@ -674,24 +674,33 @@ fn scalar_residual_sq_score(
     } else {
         255.0
     };
-    query
-        .iter()
-        .enumerate()
-        .map(|(dimension, query)| {
-            let code = if descriptor.bits_per_dimension() == 8 {
-                codes[dimension]
-            } else if dimension % 2 == 0 {
-                codes[dimension / 2] >> 4
-            } else {
-                codes[dimension / 2] & 0x0f
-            };
-            let center = half::f16::from_bits(descriptor.center_f16_bits()[dimension]).to_f32();
-            let scale = descriptor.scales()[dimension];
-            let decoded = center - levels * scale / 2.0 + f32::from(code) * scale;
-            let delta = *query - decoded;
-            delta * delta
-        })
-        .sum()
+    let decoded_delta = |dimension: usize| {
+        let code = if descriptor.bits_per_dimension() == 8 {
+            codes[dimension]
+        } else if dimension.is_multiple_of(2) {
+            codes[dimension / 2] >> 4
+        } else {
+            codes[dimension / 2] & 0x0f
+        };
+        let center = half::f16::from_bits(descriptor.center_f16_bits()[dimension]).to_f32();
+        let scale = descriptor.scales()[dimension];
+        let decoded = center - levels * scale / 2.0 + f32::from(code) * scale;
+        query[dimension] - decoded
+    };
+    let bulk = query.len() / 8 * 8;
+    let mut lanes = [0.0_f32; 8];
+    for base in (0..bulk).step_by(8) {
+        for (lane, sum) in lanes.iter_mut().enumerate() {
+            let delta = decoded_delta(base + lane);
+            *sum += delta * delta;
+        }
+    }
+    let mut score = lanes.into_iter().fold(0.0_f32, |sum, value| sum + value);
+    for dimension in bulk..query.len() {
+        let delta = decoded_delta(dimension);
+        score += delta * delta;
+    }
+    score
 }
 
 fn exact_sq(left: &[f32], right: &[f32]) -> f64 {
@@ -721,9 +730,8 @@ fn v35_remote_residual_sq_scorer_is_simd_bounded_for_every_dimension_and_rate() 
             let scorer = V35ResidualSqScorer::new(&descriptor, &query).unwrap();
             for row in 0..rows.len() {
                 let simd = scorer.score(row as u64).unwrap();
-                let scalar = scalar_residual_sq_score(&descriptor, row, &query);
-                let tolerance = 2.0e-5 * scalar.abs().max(1.0);
-                assert!((simd - scalar).abs() <= tolerance);
+                let registered = registered_residual_sq_score(&descriptor, row, &query);
+                assert_eq!(simd.to_bits(), registered.to_bits());
             }
             assert!(scorer.score(rows.len() as u64).is_err());
             assert!(V35ResidualSqScorer::new(&descriptor, &query[..dimensions - 1]).is_err());
@@ -857,7 +865,7 @@ fn code_scan_fixture() -> CodeScanFixture {
             (
                 rows[row].id(),
                 rows[row].source_ordinal(),
-                scalar_residual_sq_score(&descriptor, row, &source_query),
+                registered_residual_sq_score(&descriptor, row, &source_query),
             )
         })
         .collect::<Vec<_>>();

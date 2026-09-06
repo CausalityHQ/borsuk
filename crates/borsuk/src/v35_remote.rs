@@ -492,10 +492,13 @@ impl<'a> V35ResidualSqScorer<'a> {
             let delta = f32x8::from(query) - f32x8::from(decoded);
             accumulator += delta * delta;
         }
-        let mut score = accumulator.reduce_add();
+        let mut score = accumulator
+            .to_array()
+            .into_iter()
+            .fold(0.0_f32, |sum, value| sum + value);
         for dimension in bulk..dimensions {
             let delta = self.query[dimension] - self.decoded(codes, dimension);
-            score = delta.mul_add(delta, score);
+            score += delta * delta;
         }
         if !score.is_finite() {
             return Err(invalid("V35 residual SQ score is nonfinite"));
