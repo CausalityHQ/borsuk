@@ -1200,6 +1200,22 @@ pub fn project_v35_query_simd(
     query: &[f32],
 ) -> Result<V35ProjectedQuery> {
     let query = validate_query(projection, query)?;
+    let (coordinates, backend) = project_v35_source_row_simd(projection, query)?;
+    Ok(V35ProjectedQuery {
+        complement_energy: complement_energy(query, &coordinates),
+        coordinates,
+        backend,
+        source_query: query.to_vec(),
+        source_digest: source_query_digest(projection, query),
+        projection_checksum: projection.checksum,
+    })
+}
+
+pub(crate) fn project_v35_source_row_simd(
+    projection: &V35Projection,
+    source: &[f32],
+) -> Result<(Vec<f64>, V35ProjectionBackend)> {
+    let query = validate_query(projection, source)?;
     let routing = usize::from(projection.dimensions.routing);
     let mut coordinates = vec![0.0_f64; routing];
     let kernel =
@@ -1219,12 +1235,5 @@ pub fn project_v35_query_simd(
             *value = 0.0;
         }
     });
-    Ok(V35ProjectedQuery {
-        complement_energy: complement_energy(query, &coordinates),
-        coordinates,
-        backend,
-        source_query: query.to_vec(),
-        source_digest: source_query_digest(projection, query),
-        projection_checksum: projection.checksum,
-    })
+    Ok((coordinates, backend))
 }

@@ -247,7 +247,7 @@
 
 - [ ] **Step 1: Write streaming-bound REDs**
 
-  Use a reader that panics if more than two registered blocks are alive. Require deterministic outputs across block sizes/workers, sample selection of the sixteen highest-variance projected coordinates with coordinate ties, 255 f64 quantile boundaries per selected coordinate, equality-to-lower-bucket, and a 128-bit most-significant-bit-first Morton interleave. Require `(key,source ordinal)` ordering, at-most-256-row leaves, and storage groups capped by both 8-MiB final encoded bytes and 64-MiB live builder bytes including source/projected rows, IDs, references, moments, and allocator capacity. After all descriptors and envelopes, require every nonterminal group to contain at least `ceil(8 MiB / 24) == 349_526` code bytes and target at most `8 MiB / 16 == 524_288` code bytes; only the terminal group may be smaller. This makes every legal 8-MiB route executable under the hard 24-GET ceiling. Require bounded multi-batch S3 scratch runs with 64-MiB local buffers, exact source ordinals, no query/truth access, no corpus materialization, and complete scratch/final digest/length binding.
+  Use a reader that panics if more than two registered blocks are alive. Source blocks expose only source ordinal, ID, sequence, and the full-dimensional f32 vector; projected coordinates are not a caller input. Require the builder to bind the authenticated projection checksum and derive projected rows internally through the fused SIMD kernel. Require deterministic outputs across block sizes/workers, sample selection of the sixteen highest-variance projected coordinates with coordinate ties, 255 f64 quantile boundaries per selected coordinate, equality-to-lower-bucket, and a 128-bit most-significant-bit-first Morton interleave. Require `(key,source ordinal)` ordering, at-most-256-row leaves, and storage groups capped by both 8-MiB final encoded bytes and 64-MiB live builder bytes including source rows, internally projected rows, IDs, references, moments, and allocator capacity. After all descriptors and envelopes, require every nonterminal group to contain at least `ceil(8 MiB / 24) == 349_526` code bytes and target at most `8 MiB / 16 == 524_288` code bytes; only the terminal group may be smaller. This makes every legal 8-MiB route executable under the hard 24-GET ceiling. Require bounded multi-batch S3 scratch runs with 64-MiB local buffers, exact source ordinals, no query/truth access, no corpus materialization, and complete scratch/final digest/length binding.
 
 - [ ] **Step 2: Write delta semantics REDs**
 
@@ -269,11 +269,12 @@
 
 - [ ] **Step 4: Implement bounded construction**
 
-  Project registered source blocks, emit `(key,source ordinal,projected row,source row)` scratch runs, and merge them with a preregistered bounded fan-in in exact order. Authenticate complete scratch objects before semantic use, expose only at-most-256-row streaming cursors, and report every merge pass and byte written; loading a complete run per input is forbidden. Create at-most-256-row leaves and capped consecutive storage groups, build the Task 5 per-group SQ4/SQ8 descriptors from one bounded group buffer, and emit immutable code/vector objects and assignment directories. Publish only after all content digests are known. Keep one bounded block per worker, one leaf accumulator, one at-most-64-MiB group buffer, and declared 64-MiB merge buffers; lifecycle-tag and clean only registered scratch objects after terminal publication.
+  Accept only registered full-dimensional source blocks plus the authenticated projection. Validate its logical checksum against construction authority, derive every projected row internally through the fused SIMD kernel, emit `(key,source ordinal,projected row,source row)` scratch runs, and merge them with a preregistered bounded fan-in in exact order. Authenticate complete scratch objects before semantic use, expose only at-most-256-row streaming cursors, and report every merge pass and byte written; loading a complete run per input is forbidden. Create at-most-256-row leaves and capped consecutive storage groups, build the Task 5 per-group SQ4/SQ8 descriptors from one bounded group buffer, and emit immutable code/vector objects and assignment directories. Publish only after all content digests are known. Keep one bounded block per worker, one leaf accumulator, one at-most-64-MiB group buffer, and declared 64-MiB merge buffers; lifecycle-tag and clean only registered scratch objects after terminal publication.
 
-  Before sorting or allocating Arrow columns/output, project each scratch block
-  from owned row capacities, sort references, its largest 256-row flattened
-  batch, raw encoded payload, a 65,536-B file envelope, and 16,384 B per batch.
+  Before projecting, sorting, or allocating Arrow columns/output, account for
+  owned source-row capacities, the internally projected f64 row staging and
+  Morton references, the largest 256-row flattened batch, raw encoded payload,
+  a 65,536-B file envelope, and 16,384 B per batch.
   Reject a projected peak above 64 MiB, preallocate only the admitted output
   ceiling, and make the writer fail rather than grow beyond it. Record that
   conservative pre-allocation projection in the receipt.
@@ -283,7 +284,8 @@
   SHA-256, and logical projection checksum. Each scratch run additionally
   stores the SHA-256 of the exact canonical Morton-model bytes. A run decoder
   receives the expected model and rejects any attempt/source/projection/model
-  substitution; no self-described or compatibility decode path remains.
+  substitution. Use breaking Morton-model and build-run v2 markers and retain
+  no v1, self-described, or compatibility decode path.
 
 - [ ] **Step 5: Implement delta/compaction state machine**
 

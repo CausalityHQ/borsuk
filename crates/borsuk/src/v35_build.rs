@@ -20,13 +20,16 @@ use arrow_schema::{DataType, Field, Schema};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{BorsukError, Result, V35ArtifactIdentity};
+use crate::{
+    BorsukError, Result, V35ArtifactIdentity, V35Projection,
+    v35_projection::project_v35_source_row_simd,
+};
 
 const MORTON_COORDINATES: usize = 16;
 const MORTON_BOUNDARIES: usize = 255;
-const MORTON_FORMAT: &str = "borsuk-v35-morton-model-arrow-v1";
+const MORTON_FORMAT: &str = "borsuk-v35-morton-model-arrow-v2";
 const MORTON_METADATA_KEY: &str = "borsuk.v35.morton-model.manifest";
-const BUILD_RUN_FORMAT: &str = "borsuk-v35-build-scratch-arrow-v1";
+const BUILD_RUN_FORMAT: &str = "borsuk-v35-build-scratch-arrow-v2";
 const BUILD_RUN_METADATA_KEY: &str = "borsuk.v35.build-run.manifest";
 const MAX_BUILD_RUN_BATCH_ROWS: usize = 256;
 const MAX_BUILDER_BYTES: u64 = 64 * 1_048_576;
@@ -42,7 +45,7 @@ fn invalid(message: &str) -> BorsukError {
 struct V35MortonManifest {
     authority: V35BuildAuthority,
     format: String,
-    source_dimensions: u32,
+    projected_dimensions: u32,
 }
 
 fn morton_schema(manifest: &V35MortonManifest) -> Result<Arc<Schema>> {
@@ -138,13 +141,26 @@ fn validate_build_authority(authority: &V35BuildAuthority) -> Result<()> {
     Ok(())
 }
 
+fn validate_projection_authority(
+    authority: &V35BuildAuthority,
+    projection: &V35Projection,
+) -> Result<()> {
+    if authority.projection_checksum_sha256 != digest_hex(&projection.checksum())
+        || projection.dimensions().source == 0
+        || usize::from(projection.dimensions().routing) < MORTON_COORDINATES
+    {
+        return Err(invalid("V35 build projection authority differs"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 /// Frozen sixteen-coordinate quantile model for a 128-bit Morton build key.
 pub struct V35MortonModel {
     authority: V35BuildAuthority,
     selected_coordinates: Vec<u16>,
     boundaries: Vec<Vec<f64>>,
-    source_dimensions: usize,
+    projected_dimensions: usize,
 }
 
 impl V35MortonModel {
@@ -164,7 +180,7 @@ impl V35MortonModel {
 
     /// Compute the exact most-significant-bit-first interleaved Morton key.
     pub fn key(&self, projected_row: &[f64]) -> Result<u128> {
-        if projected_row.len() != self.source_dimensions
+        if projected_row.len() != self.projected_dimensions
             || projected_row.iter().any(|value| !value.is_finite())
         {
             return Err(invalid("V35 Morton source row differs"));
@@ -194,8 +210,8 @@ impl V35MortonModel {
         let manifest = V35MortonManifest {
             authority: self.authority.clone(),
             format: MORTON_FORMAT.to_owned(),
-            source_dimensions: u32::try_from(self.source_dimensions)
-                .map_err(|_| invalid("V35 Morton source dimensions overflow"))?,
+            projected_dimensions: u32::try_from(self.projected_dimensions)
+                .map_err(|_| invalid("V35 Morton projected dimensions overflow"))?,
         };
         let schema = morton_schema(&manifest)?;
         let values = self
@@ -241,7 +257,7 @@ impl V35MortonModel {
                 .map_err(|_| invalid("V35 Morton manifest cannot be serialized"))?
                 != *manifest_json
             || manifest.format != MORTON_FORMAT
-            || manifest.source_dimensions < MORTON_COORDINATES as u32
+            || manifest.projected_dimensions < MORTON_COORDINATES as u32
             || reader.num_batches() != 1
             || schema.as_ref() != morton_schema(&manifest)?.as_ref()
         {
@@ -283,12 +299,12 @@ impl V35MortonModel {
             .iter()
             .map(|row| row.to_vec())
             .collect::<Vec<_>>();
-        let source_dimensions = manifest.source_dimensions as usize;
+        let projected_dimensions = manifest.projected_dimensions as usize;
         let model = Self {
             authority: manifest.authority,
             selected_coordinates,
             boundaries,
-            source_dimensions,
+            projected_dimensions,
         };
         validate_model(&model)?;
         if model.canonical_bytes()? != bytes {
@@ -306,11 +322,11 @@ fn validate_model(model: &V35MortonModel) -> Result<()> {
     if model.selected_coordinates.len() != MORTON_COORDINATES
         || unique.len() != MORTON_COORDINATES
         || model.boundaries.len() != MORTON_COORDINATES
-        || model.source_dimensions < MORTON_COORDINATES
+        || model.projected_dimensions < MORTON_COORDINATES
         || model
             .selected_coordinates
             .iter()
-            .any(|coordinate| usize::from(*coordinate) >= model.source_dimensions)
+            .any(|coordinate| usize::from(*coordinate) >= model.projected_dimensions)
         || model.boundaries.iter().any(|boundaries| {
             boundaries.len() != MORTON_BOUNDARIES
                 || boundaries.iter().any(|value| !value.is_finite())
@@ -322,15 +338,29 @@ fn validate_model(model: &V35MortonModel) -> Result<()> {
     Ok(())
 }
 
-/// Train a deterministic query-independent Morton model from projected sample rows.
+/// Train a deterministic query-independent Morton model from source sample rows.
 pub fn train_v35_morton_model(
-    projected_rows: &[Vec<f64>],
+    source_rows: &[Vec<f32>],
+    projection: &V35Projection,
     authority: V35BuildAuthority,
 ) -> Result<V35MortonModel> {
     validate_build_authority(&authority)?;
+    validate_projection_authority(&authority, projection)?;
+    let source_dimensions = usize::try_from(projection.dimensions().source)
+        .map_err(|_| invalid("V35 projection source dimensions overflow"))?;
+    if source_rows.len() < 256
+        || source_rows
+            .iter()
+            .any(|row| row.len() != source_dimensions || row.iter().any(|value| !value.is_finite()))
+    {
+        return Err(invalid("V35 Morton training sample differs"));
+    }
+    let projected_rows = source_rows
+        .iter()
+        .map(|row| project_v35_source_row_simd(projection, row).map(|(coordinates, _)| coordinates))
+        .collect::<Result<Vec<_>>>()?;
     let dimensions = projected_rows.first().map_or(0, Vec::len);
-    if projected_rows.len() < 256
-        || dimensions < MORTON_COORDINATES
+    if dimensions < MORTON_COORDINATES
         || dimensions > usize::from(u16::MAX) + 1
         || projected_rows
             .iter()
@@ -385,7 +415,7 @@ pub fn train_v35_morton_model(
         authority,
         selected_coordinates,
         boundaries,
-        source_dimensions: dimensions,
+        projected_dimensions: dimensions,
     };
     validate_model(&model)?;
     Ok(model)
@@ -398,24 +428,12 @@ pub struct V35BuildRow {
     id: u64,
     sequence: u64,
     source: Vec<f32>,
-    projected: Vec<f64>,
 }
 
 impl V35BuildRow {
-    /// Construct one finite source/projected row with immutable identity.
-    pub fn new(
-        source_ordinal: u64,
-        id: u64,
-        sequence: u64,
-        source: Vec<f32>,
-        projected: Vec<f64>,
-    ) -> Result<Self> {
-        if sequence == 0
-            || source.is_empty()
-            || projected.len() < MORTON_COORDINATES
-            || source.iter().any(|value| !value.is_finite())
-            || projected.iter().any(|value| !value.is_finite())
-        {
+    /// Construct one finite source row with immutable identity.
+    pub fn new(source_ordinal: u64, id: u64, sequence: u64, source: Vec<f32>) -> Result<Self> {
+        if sequence == 0 || source.is_empty() || source.iter().any(|value| !value.is_finite()) {
             return Err(invalid("V35 build row authority differs"));
         }
         Ok(Self {
@@ -423,7 +441,6 @@ impl V35BuildRow {
             id,
             sequence,
             source,
-            projected,
         })
     }
 }
@@ -438,15 +455,12 @@ impl V35BuildBlock {
     /// Construct one dimension-consistent source-ordinal-ordered block.
     pub fn new(rows: Vec<V35BuildRow>) -> Result<Self> {
         let source_dimensions = rows.first().map_or(0, |row| row.source.len());
-        let projected_dimensions = rows.first().map_or(0, |row| row.projected.len());
         if rows.is_empty()
             || rows.windows(2).any(|pair| {
                 pair[0].source_ordinal >= pair[1].source_ordinal
                     || (pair[0].id, pair[0].sequence) == (pair[1].id, pair[1].sequence)
             })
-            || rows.iter().any(|row| {
-                row.source.len() != source_dimensions || row.projected.len() != projected_dimensions
-            })
+            || rows.iter().any(|row| row.source.len() != source_dimensions)
         {
             return Err(invalid("V35 build block authority differs"));
         }
@@ -454,12 +468,16 @@ impl V35BuildBlock {
     }
 
     /// Project and admit the complete peak before sorting or Arrow allocation.
-    pub fn projected_peak_live_bytes(&self, model: &V35MortonModel) -> Result<u64> {
-        let projection = project_build_block_live_bytes(self, model)?;
-        if projection.peak_live_bytes > MAX_BUILDER_BYTES {
+    pub fn projected_peak_live_bytes(
+        &self,
+        model: &V35MortonModel,
+        projection: &V35Projection,
+    ) -> Result<u64> {
+        let memory = project_build_block_live_bytes(self, model, projection)?;
+        if memory.peak_live_bytes > MAX_BUILDER_BYTES {
             return Err(invalid("V35 build live memory exceeds admission"));
         }
-        Ok(projection.peak_live_bytes)
+        Ok(memory.peak_live_bytes)
     }
 }
 
@@ -558,20 +576,29 @@ struct V35BuildBlockMemoryProjection {
 fn project_build_block_live_bytes(
     block: &V35BuildBlock,
     model: &V35MortonModel,
+    projection: &V35Projection,
 ) -> Result<V35BuildBlockMemoryProjection> {
-    if block.rows[0].projected.len() != model.source_dimensions {
+    validate_projection_authority(&model.authority, projection)?;
+    let source_dimensions = usize::try_from(projection.dimensions().source)
+        .map_err(|_| invalid("V35 projection source dimensions overflow"))?;
+    let projected_dimensions = usize::from(projection.dimensions().routing);
+    if projected_dimensions != model.projected_dimensions
+        || block
+            .rows
+            .iter()
+            .any(|row| row.source.len() != source_dimensions)
+    {
         return Err(invalid("V35 build projection/model dimensions differ"));
     }
     let row_storage = block.rows.iter().try_fold(0_usize, |total, row| {
         total
             .checked_add(size_of::<V35BuildRow>())
             .and_then(|bytes| bytes.checked_add(row.source.capacity().checked_mul(4)?))
-            .and_then(|bytes| bytes.checked_add(row.projected.capacity().checked_mul(8)?))
     });
     let encoded_payload = block.rows.iter().try_fold(0_usize, |total, row| {
         total
             .checked_add(row.source.len().checked_mul(4)?)
-            .and_then(|bytes| bytes.checked_add(row.projected.len().checked_mul(8)?))
+            .and_then(|bytes| bytes.checked_add(projected_dimensions.checked_mul(8)?))
             .and_then(|bytes| bytes.checked_add(40))
     });
     let maximum_batch_payload = block
@@ -581,7 +608,7 @@ fn project_build_block_live_bytes(
             let payload = rows.iter().try_fold(0_usize, |total, row| {
                 total
                     .checked_add(row.source.len().checked_mul(4)?)
-                    .and_then(|bytes| bytes.checked_add(row.projected.len().checked_mul(8)?))
+                    .and_then(|bytes| bytes.checked_add(projected_dimensions.checked_mul(8)?))
                     .and_then(|bytes| bytes.checked_add(40))
             });
             payload.map(|payload| maximum.max(payload))
@@ -592,13 +619,13 @@ fn project_build_block_live_bytes(
         .and_then(|bytes| bytes.checked_add(BUILD_RUN_FILE_OVERHEAD_BYTES))
         .and_then(|bytes| bytes.checked_add(batches.checked_mul(BUILD_RUN_BATCH_OVERHEAD_BYTES)?))
         .ok_or_else(|| invalid("V35 build encoded capacity overflow"))?;
-    let ordered_capacity = block
+    let projected_capacity = block
         .rows
         .len()
-        .checked_mul(size_of::<(u128, &V35BuildRow)>())
-        .ok_or_else(|| invalid("V35 build order capacity overflow"))?;
+        .checked_mul(size_of::<V35ProjectedBuildRow<'static>>() + projected_dimensions * 8)
+        .ok_or_else(|| invalid("V35 build projection capacity overflow"))?;
     let peak_live_bytes = row_storage
-        .and_then(|bytes| bytes.checked_add(ordered_capacity))
+        .and_then(|bytes| bytes.checked_add(projected_capacity))
         .and_then(|bytes| bytes.checked_add(maximum_batch_payload))
         .and_then(|bytes| bytes.checked_add(encoded_capacity))
         .and_then(|bytes| u64::try_from(bytes).ok())
@@ -607,6 +634,12 @@ fn project_build_block_live_bytes(
         encoded_capacity,
         peak_live_bytes,
     })
+}
+
+struct V35ProjectedBuildRow<'a> {
+    key: u128,
+    row: &'a V35BuildRow,
+    projected: Vec<f64>,
 }
 
 struct V35BoundedBuildRunWriter {
@@ -650,24 +683,34 @@ impl Write for V35BoundedBuildRunWriter {
 
 fn encode_build_run(
     model: &V35MortonModel,
+    projection: &V35Projection,
     run_ordinal: u32,
     block: &V35BuildBlock,
     encoded_capacity: usize,
 ) -> Result<Vec<u8>> {
     let source_dimensions = block.rows[0].source.len();
-    let projected_dimensions = block.rows[0].projected.len();
-    if projected_dimensions != model.source_dimensions {
+    let projected_dimensions = usize::from(projection.dimensions().routing);
+    if source_dimensions != usize::try_from(projection.dimensions().source).unwrap_or(usize::MAX)
+        || projected_dimensions != model.projected_dimensions
+    {
         return Err(invalid("V35 build projection/model dimensions differ"));
     }
     let mut ordered = block
         .rows
         .iter()
-        .map(|row| Ok((model.key(&row.projected)?, row)))
+        .map(|row| {
+            let (projected, _) = project_v35_source_row_simd(projection, &row.source)?;
+            Ok(V35ProjectedBuildRow {
+                key: model.key(&projected)?,
+                row,
+                projected,
+            })
+        })
         .collect::<Result<Vec<_>>>()?;
     ordered.sort_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then(left.1.source_ordinal.cmp(&right.1.source_ordinal))
+        left.key
+            .cmp(&right.key)
+            .then(left.row.source_ordinal.cmp(&right.row.source_ordinal))
     });
     let manifest = V35BuildRunManifest {
         authority: model.authority.clone(),
@@ -684,14 +727,14 @@ fn encode_build_run(
     let mut writer = FileWriter::try_new_with_options(&mut output, schema.as_ref(), options)?;
     for rows in ordered.chunks(MAX_BUILD_RUN_BATCH_ROWS) {
         let keys =
-            FixedSizeBinaryArray::try_from_iter(rows.iter().map(|(key, _)| key.to_be_bytes()))?;
+            FixedSizeBinaryArray::try_from_iter(rows.iter().map(|row| row.key.to_be_bytes()))?;
         let source_values = rows
             .iter()
-            .flat_map(|(_, row)| row.source.iter().copied())
+            .flat_map(|row| row.row.source.iter().copied())
             .collect::<Vec<_>>();
         let projected_values = rows
             .iter()
-            .flat_map(|(_, row)| row.projected.iter().copied())
+            .flat_map(|row| row.projected.iter().copied())
             .collect::<Vec<_>>();
         let source = FixedSizeListArray::try_new(
             Arc::new(Field::new("element", DataType::Float32, false)),
@@ -711,14 +754,14 @@ fn encode_build_run(
                 Arc::new(keys),
                 Arc::new(UInt64Array::from(
                     rows.iter()
-                        .map(|(_, row)| row.source_ordinal)
+                        .map(|row| row.row.source_ordinal)
                         .collect::<Vec<_>>(),
                 )),
                 Arc::new(UInt64Array::from(
-                    rows.iter().map(|(_, row)| row.id).collect::<Vec<_>>(),
+                    rows.iter().map(|row| row.row.id).collect::<Vec<_>>(),
                 )),
                 Arc::new(UInt64Array::from(
-                    rows.iter().map(|(_, row)| row.sequence).collect::<Vec<_>>(),
+                    rows.iter().map(|row| row.row.sequence).collect::<Vec<_>>(),
                 )),
                 Arc::new(source),
                 Arc::new(projected),
@@ -1062,6 +1105,7 @@ pub fn decode_v35_build_run_arrow(
 /// Stream ordered source blocks into bounded authenticated external-sort runs.
 pub fn build_v35_scratch_runs<R: V35BuildBlockSource, S: V35BuildScratchSink>(
     model: &V35MortonModel,
+    projection: &V35Projection,
     source: &mut R,
     scratch: &mut S,
 ) -> Result<V35BuildScratchReceipt> {
@@ -1084,15 +1128,16 @@ pub fn build_v35_scratch_runs<R: V35BuildBlockSource, S: V35BuildScratchSink>(
             return Err(invalid("V35 build source block order differs"));
         }
         previous_source_ordinal = block.rows.last().map(|row| row.source_ordinal);
-        let projection = project_build_block_live_bytes(&block, model)?;
-        if projection.peak_live_bytes > MAX_BUILDER_BYTES {
+        let memory = project_build_block_live_bytes(&block, model, projection)?;
+        if memory.peak_live_bytes > MAX_BUILDER_BYTES {
             return Err(invalid("V35 build live memory exceeds admission"));
         }
         let bytes = encode_build_run(
             model,
+            projection,
             receipt.scratch_runs,
             &block,
-            projection.encoded_capacity,
+            memory.encoded_capacity,
         )?;
         let identity = scratch.write_run(receipt.scratch_runs, &bytes)?;
         decode_v35_build_run_arrow(&bytes, &identity, model)?;
@@ -1108,9 +1153,8 @@ pub fn build_v35_scratch_runs<R: V35BuildBlockSource, S: V35BuildScratchSink>(
             .scratch_bytes
             .checked_add(bytes.len() as u64)
             .ok_or_else(|| invalid("V35 build scratch bytes overflow"))?;
-        receipt.peak_live_builder_bytes = receipt
-            .peak_live_builder_bytes
-            .max(projection.peak_live_bytes);
+        receipt.peak_live_builder_bytes =
+            receipt.peak_live_builder_bytes.max(memory.peak_live_bytes);
     }
     if receipt.source_rows == 0 {
         return Err(invalid("V35 build source is empty"));

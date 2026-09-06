@@ -159,9 +159,14 @@ a second live leaf to one worker still fails before allocation.
 
 Each external-sort source block is admitted before Morton ordering, Arrow
 column flattening, or output allocation. Its checked 64-MiB projection includes
-the owned row/vector capacities, one `(Morton key,row reference)` per row, the
-largest 256-row flattened batch, the complete raw encoded payload, a 65,536-B
-file envelope, and 16,384 B per record batch. The Arrow output buffer is
+the owned source-row/vector capacities, one internally projected f64 routing
+vector plus `(Morton key,row reference)` staging entry per row, the largest
+256-row flattened batch, the complete raw encoded payload, a 65,536-B file
+envelope, and 16,384 B per record batch. Source readers cannot supply or label
+projected coordinates: construction accepts the authenticated projection,
+checks its logical checksum against construction authority, and derives every
+projected row through the registered fused SIMD kernel before Morton sorting.
+The Arrow output buffer is
 preallocated to that admitted ceiling and a bounded writer rejects any attempt
 to grow beyond it; the receipt reports the conservative projected peak rather
 than a post-allocation byte count.
@@ -172,6 +177,8 @@ projection checksum. Scratch runs also bind the SHA-256 of the exact canonical
 Morton-model bytes. Readers require the expected model and reject every
 attempt/source/projection/model substitution before exposing a batch; they do
 not trust a run's self-description or retain a predecessor decode path.
+Both use breaking v2 format markers introduced by internal projection; there
+is no v1 compatibility decoder.
 
 The prose arithmetic above is explanatory; the canonical receipt records the
 component vector and checked sum. Tests pin the exact sum
