@@ -7,13 +7,14 @@ use arrow_ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow_schema::{DataType, Field, Schema};
 use borsuk::{
     V36ArtifactIdentity, V36PrefixCheckpointContext, V36PrefixCheckpointManifest,
-    V36PrefixCheckpointPhase, V36PrefixCheckpointPointer, V36PrefixCheckpointPointerCondition,
-    V36PrefixIdentityRun, V36PrefixMaterializedArtifacts, V36PrefixPopulationCheckpoint,
-    V36PrefixRegisteredSourceObject, V36PrefixRowIdentity, V36PrefixSourceObject,
-    canonical_v36_prefix_checkpoint_manifest_bytes, canonical_v36_prefix_checkpoint_pointer_bytes,
-    decode_v36_prefix_identity_run, encode_v36_prefix_identity_run,
-    plan_v36_prefix_checkpoint_publication, restore_v36_prefix_population,
-    restore_v36_prefix_population_state, validate_v36_prefix_checkpoint_manifest_with_context,
+    V36PrefixCheckpointOutbox, V36PrefixCheckpointPhase, V36PrefixCheckpointPointer,
+    V36PrefixCheckpointPointerCondition, V36PrefixIdentityRun, V36PrefixMaterializedArtifacts,
+    V36PrefixPopulationCheckpoint, V36PrefixRegisteredSourceObject, V36PrefixRowIdentity,
+    V36PrefixSourceObject, canonical_v36_prefix_checkpoint_manifest_bytes,
+    canonical_v36_prefix_checkpoint_pointer_bytes, decode_v36_prefix_identity_run,
+    encode_v36_prefix_identity_run, plan_v36_prefix_checkpoint_publication,
+    restore_v36_prefix_population, restore_v36_prefix_population_state,
+    validate_v36_prefix_checkpoint_manifest_with_context,
     validate_v36_prefix_checkpoint_pointer_observation, validate_v36_prefix_checkpoint_transition,
 };
 use sha2::{Digest, Sha256};
@@ -314,6 +315,49 @@ fn v36_prefix_checkpoint_publication_is_dependency_first_and_cas_fenced() {
         plan_v36_prefix_checkpoint_publication(&context, &next, Some((&wrong_bytes, "etag-wrong")))
             .is_err()
     );
+}
+
+#[test]
+fn v36_prefix_checkpoint_outbox_exposes_only_complete_generations() {
+    let run = V36PrefixIdentityRun {
+        physical_rows: 100,
+        rows: vec![identity(41, 2, 0), identity(7, 9, 0)],
+        selected_object_ordinal: 0,
+        source: source_object(),
+    };
+    let run_bytes = encode_v36_prefix_identity_run(&run).unwrap();
+    let run_identity = identity_run_artifact(&run_bytes, 0);
+    let mut manifest = population_manifest();
+    manifest.population.identity_runs = vec![run_identity.clone()];
+    let plan =
+        plan_v36_prefix_checkpoint_publication(&checkpoint_context(100), &manifest, None).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("outbox");
+    std::fs::create_dir(&root).unwrap();
+    let outbox = V36PrefixCheckpointOutbox::create(&root).unwrap();
+    let ready = outbox
+        .commit(&plan, &[(run_identity.clone(), run_bytes.clone())])
+        .unwrap();
+    assert_eq!(ready.file_name().unwrap(), "generation-00000000.json");
+    assert!(
+        root.join("objects")
+            .join(format!("{}.blob", run_identity.sha256))
+            .is_file()
+    );
+    assert!(
+        root.join("manifests")
+            .join(format!("{}.json", plan.manifest.sha256))
+            .is_file()
+    );
+    assert_eq!(std::fs::read(&ready).unwrap().last(), Some(&b'\n'),);
+
+    let other = directory.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    let outbox = V36PrefixCheckpointOutbox::create(&other).unwrap();
+    let mut corrupt = run_bytes;
+    corrupt[0] ^= 1;
+    assert!(outbox.commit(&plan, &[(run_identity, corrupt)]).is_err());
+    assert!(other.join("commits").read_dir().unwrap().next().is_none());
 }
 
 #[test]

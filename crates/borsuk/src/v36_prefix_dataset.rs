@@ -28,7 +28,8 @@ use rayon::{ThreadPoolBuilder, prelude::*};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BorsukError, Result, V36ArtifactIdentity, V36PrefixFreezeAuthority,
+    BorsukError, Result, V36ArtifactIdentity, V36PrefixCheckpointManifest,
+    V36PrefixCheckpointPointer, V36PrefixCheckpointPublication, V36PrefixFreezeAuthority,
     V36PrefixFreezeExecutionAuthority, V36PrefixFreezeReceipt, V36PrefixPopulationAuthority,
     V36PrefixRegisteredSourceObject, V36PrefixRoleAuthority, V36PrefixSourceObject,
     bind_v36_prefix_population_authority, canonical_v36_prefix_freeze_authority_bytes,
@@ -72,6 +73,193 @@ fn publish_output(temporary: tempfile::NamedTempFile, path: &Path) -> Result<()>
         source: error.error,
     })?;
     Ok(())
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })
+}
+
+fn install_content_addressed(path: &Path, bytes: &[u8]) -> Result<()> {
+    if path.exists() {
+        if read_file(path)? == bytes {
+            return Ok(());
+        }
+        return Err(invalid("V36 checkpoint outbox object conflicts"));
+    }
+    let mut temporary = temporary_output(path)?;
+    temporary
+        .write_all(bytes)
+        .map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|source| BorsukError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+    temporary
+        .persist_noclobber(path)
+        .map_err(|error| BorsukError::Io {
+            path: path.to_owned(),
+            source: error.error,
+        })?;
+    sync_directory(
+        path.parent()
+            .ok_or_else(|| invalid("V36 checkpoint outbox parent is missing"))?,
+    )
+}
+
+#[derive(serde::Serialize)]
+struct V36PrefixCheckpointReady<'a> {
+    dependencies: &'a [V36ArtifactIdentity],
+    generation: u32,
+    manifest: &'a V36ArtifactIdentity,
+    pointer_encoded_bytes: u64,
+    pointer_sha256: String,
+    schema: &'static str,
+}
+
+#[derive(Debug)]
+/// Private durable filesystem bridge from Rust science to the S3 supervisor.
+pub struct V36PrefixCheckpointOutbox {
+    root: PathBuf,
+}
+
+impl V36PrefixCheckpointOutbox {
+    /// Create one empty private outbox and its fixed subdirectories.
+    pub fn create(root: &Path) -> Result<Self> {
+        let metadata = fs::symlink_metadata(root).map_err(|source| BorsukError::Io {
+            path: root.to_owned(),
+            source,
+        })?;
+        if !metadata.file_type().is_dir()
+            || metadata.file_type().is_symlink()
+            || root
+                .read_dir()
+                .map_err(|source| BorsukError::Io {
+                    path: root.to_owned(),
+                    source,
+                })?
+                .next()
+                .is_some()
+        {
+            return Err(invalid("V36 checkpoint outbox root differs"));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(root, fs::Permissions::from_mode(0o700)).map_err(|source| {
+                BorsukError::Io {
+                    path: root.to_owned(),
+                    source,
+                }
+            })?;
+        }
+        for child in ["objects", "manifests", "pointers", "commits"] {
+            fs::create_dir(root.join(child)).map_err(|source| BorsukError::Io {
+                path: root.join(child),
+                source,
+            })?;
+        }
+        sync_directory(root)?;
+        Ok(Self {
+            root: root.to_owned(),
+        })
+    }
+
+    /// Commit one already validated publication, exposing its descriptor last.
+    pub fn commit(
+        &self,
+        publication: &V36PrefixCheckpointPublication,
+        dependencies: &[(V36ArtifactIdentity, Vec<u8>)],
+    ) -> Result<PathBuf> {
+        if dependencies.len() != publication.dependencies.len()
+            || dependencies
+                .iter()
+                .zip(&publication.dependencies)
+                .any(|((identity, _), expected)| identity != expected)
+        {
+            return Err(invalid("V36 checkpoint outbox dependencies differ"));
+        }
+        for (identity, bytes) in dependencies {
+            if identity.encoded_bytes != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+                || identity.sha256 != format!("{:x}", Sha256::digest(bytes))
+                || identity.blake3 != blake3::hash(bytes).to_hex().as_str()
+            {
+                return Err(invalid(
+                    "V36 checkpoint outbox dependency authority differs",
+                ));
+            }
+        }
+        let manifest: V36PrefixCheckpointManifest =
+            serde_json::from_slice(&publication.manifest_bytes)
+                .map_err(|_| invalid("V36 checkpoint outbox manifest JSON differs"))?;
+        let pointer: V36PrefixCheckpointPointer =
+            serde_json::from_slice(&publication.pointer_bytes)
+                .map_err(|_| invalid("V36 checkpoint outbox pointer JSON differs"))?;
+        if publication.manifest.encoded_bytes
+            != u64::try_from(publication.manifest_bytes.len()).unwrap_or(u64::MAX)
+            || publication.manifest.sha256
+                != format!("{:x}", Sha256::digest(&publication.manifest_bytes))
+            || publication.manifest.blake3
+                != blake3::hash(&publication.manifest_bytes).to_hex().as_str()
+            || manifest.generation != pointer.generation
+            || pointer.manifest != publication.manifest
+        {
+            return Err(invalid(
+                "V36 checkpoint outbox publication authority differs",
+            ));
+        }
+        for (identity, bytes) in dependencies {
+            install_content_addressed(
+                &self
+                    .root
+                    .join("objects")
+                    .join(format!("{}.blob", identity.sha256)),
+                bytes,
+            )?;
+        }
+        install_content_addressed(
+            &self
+                .root
+                .join("manifests")
+                .join(format!("{}.json", publication.manifest.sha256)),
+            &publication.manifest_bytes,
+        )?;
+        let pointer_sha256 = format!("{:x}", Sha256::digest(&publication.pointer_bytes));
+        install_content_addressed(
+            &self
+                .root
+                .join("pointers")
+                .join(format!("{pointer_sha256}.json")),
+            &publication.pointer_bytes,
+        )?;
+        let ready = V36PrefixCheckpointReady {
+            dependencies: &publication.dependencies,
+            generation: manifest.generation,
+            manifest: &publication.manifest,
+            pointer_encoded_bytes: publication.pointer_bytes.len() as u64,
+            pointer_sha256,
+            schema: "borsuk-v36-prefix-checkpoint-outbox-v1",
+        };
+        let mut ready_bytes = serde_json::to_vec(&ready)
+            .map_err(|_| invalid("V36 checkpoint outbox commit JSON differs"))?;
+        ready_bytes.push(b'\n');
+        let ready_path = self
+            .root
+            .join("commits")
+            .join(format!("generation-{:08}.json", manifest.generation));
+        install_content_addressed(&ready_path, &ready_bytes)?;
+        Ok(ready_path)
+    }
 }
 
 fn parquet_writer_properties() -> WriterProperties {
