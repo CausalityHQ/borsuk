@@ -74,7 +74,7 @@ import sys
 execution_path, receipt_path, output_path, instance_id, run_id, source_commit, status, terminal_path = sys.argv[1:]
 
 def canonical(value):
-    return json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+    return json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
 
 execution_bytes = pathlib.Path(execution_path).read_bytes()
 execution = json.loads(execution_bytes)
@@ -183,7 +183,13 @@ def canonical_json_bytes(value: object) -> bytes:
     """Serialize compact sorted JSON with exactly one trailing newline."""
 
     return (
-        json.dumps(value, allow_nan=False, separators=(",", ":"), sort_keys=True).encode()
+        json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
         + b"\n"
     )
 

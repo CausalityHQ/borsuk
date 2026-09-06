@@ -112,6 +112,15 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
             )
         self.assertEqual(stdout.buffer if hasattr(stdout, "buffer") else stdout.getvalue(), receipt.decode())
 
+    def test_v36_prefix_screen_canonical_json_matches_rust_utf8(self) -> None:
+        # Break caught: Python escapes non-ASCII source paths while serde_json
+        # writes UTF-8, making one authority fail cross-language authentication.
+        self.assertEqual(
+            subject.canonical_json_bytes({"uri": "s3://fixture/π.parquet"}),
+            b'{"uri":"s3://fixture/\xcf\x80.parquet"}\n',
+        )
+        self.assertIn("ensure_ascii=False", subject._GUEST_TERMINAL_PROGRAM)
+
     def test_v36_prefix_screen_specs_close_cost_disk_and_checkpoint_bounds(self) -> None:
         # Break caught: launch user-data widens source/cost/disk limits, omits
         # authenticated checkpoints, or acquires a persistent/devbox corpus.
