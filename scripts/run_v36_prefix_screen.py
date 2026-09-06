@@ -43,6 +43,18 @@ SPOT_TARGETS = (
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _GIT = re.compile(r"[0-9a-f]{40}\Z")
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_INSTANCE_ID = re.compile(r"i-[A-Za-z0-9-]+\Z")
+_COMPLETE_OUTPUT_ROLES = {
+    "population-authority",
+    "source",
+    "development-query",
+    "development-gt100",
+    "validation-query",
+    "validation-gt100",
+    "sealed-holdout-query",
+    "sealed-holdout-gt100",
+    "performance-query",
+}
 _CAPACITY_ERRORS = {
     "InsufficientInstanceCapacity",
     "InsufficientFreeAddressesInSubnet",
@@ -183,6 +195,26 @@ def _attempt_wall_seconds(attempt_ordinal: int) -> int:
     )
 
 
+def _execution_authority(
+    plan: V36PrefixScreenPlan, attempt_ordinal: int
+) -> dict[str, object]:
+    output_bucket, output_key = _s3(plan.output_prefix, prefix=True)
+    attempt_prefix = f"{output_key}attempt-{attempt_ordinal:04d}/"
+    return {
+        "active_wall_seconds": _attempt_wall_seconds(attempt_ordinal),
+        "attempt_id": f"{plan.run_id}-attempt-{attempt_ordinal:04d}",
+        "checkpoint_seconds": CHECKPOINT_SECONDS,
+        "claim_eligible": False,
+        "inputs": [
+            {"blake3": plan.binary_blake3, "encoded_bytes": plan.binary_bytes, "role": "binary", "sha256": plan.binary_sha256, "uri": plan.binary_uri},
+            {"blake3": plan.authority_blake3, "encoded_bytes": plan.authority_bytes, "role": "freeze-authority", "sha256": plan.authority_sha256, "uri": plan.authority_uri},
+            {"blake3": plan.source_archive_blake3, "encoded_bytes": plan.source_archive_bytes, "role": "source-archive", "sha256": plan.source_archive_sha256, "uri": plan.source_archive_uri},
+            {"blake3": plan.source_registry_blake3, "encoded_bytes": plan.source_registry_bytes, "role": "source-registry", "sha256": plan.source_registry_sha256, "uri": plan.source_registry_uri},
+        ],
+        "output_prefix": f"s3://{output_bucket}/{attempt_prefix}",
+        "schema": "borsuk-v36-prefix-freeze-execution-authority-v1",
+        "source_commit": plan.source_commit,
+    }
 def _user_data(plan: V36PrefixScreenPlan, *, attempt_ordinal: int) -> str:
     quoted = {
         field.name: shlex.quote(str(getattr(plan, field.name)))
@@ -192,21 +224,7 @@ def _user_data(plan: V36PrefixScreenPlan, *, attempt_ordinal: int) -> str:
     attempt_prefix = f"{output_key}attempt-{attempt_ordinal:04d}/"
     wall_seconds = _attempt_wall_seconds(attempt_ordinal)
     execution_authority = canonical_json_bytes(
-        {
-            "active_wall_seconds": wall_seconds,
-            "attempt_id": f"{plan.run_id}-attempt-{attempt_ordinal:04d}",
-            "checkpoint_seconds": CHECKPOINT_SECONDS,
-            "claim_eligible": False,
-            "inputs": [
-                {"blake3": plan.binary_blake3, "encoded_bytes": plan.binary_bytes, "role": "binary", "sha256": plan.binary_sha256, "uri": plan.binary_uri},
-                {"blake3": plan.authority_blake3, "encoded_bytes": plan.authority_bytes, "role": "freeze-authority", "sha256": plan.authority_sha256, "uri": plan.authority_uri},
-                {"blake3": plan.source_archive_blake3, "encoded_bytes": plan.source_archive_bytes, "role": "source-archive", "sha256": plan.source_archive_sha256, "uri": plan.source_archive_uri},
-                {"blake3": plan.source_registry_blake3, "encoded_bytes": plan.source_registry_bytes, "role": "source-registry", "sha256": plan.source_registry_sha256, "uri": plan.source_registry_uri},
-            ],
-            "output_prefix": f"s3://{output_bucket}/{attempt_prefix}",
-            "schema": "borsuk-v36-prefix-freeze-execution-authority-v1",
-            "source_commit": plan.source_commit,
-        }
+        _execution_authority(plan, attempt_ordinal)
     )
     execution_authority_b64 = base64.b64encode(execution_authority).decode()
     return f"""#!/bin/bash
@@ -298,16 +316,20 @@ def _marker_key(plan: V36PrefixScreenPlan, attempt_ordinal: int, marker: str) ->
 
 
 def _read_attempt_status(
-    s3_client: Any, plan: V36PrefixScreenPlan, attempt_ordinal: int | None = None
+    s3_client: Any,
+    plan: V36PrefixScreenPlan,
+    attempt_ordinal: int | None = None,
+    *,
+    expected_instance_id: str | None = None,
 ) -> str | None:
     """Read one authenticated terminal status, or prove it absent."""
 
     ordinals = range(MAX_ATTEMPTS) if attempt_ordinal is None else (attempt_ordinal,)
     for ordinal in ordinals:
-        for marker, status in (
-            ("ATTEMPT_COMPLETE.json", "complete"),
-            ("ATTEMPT_FAILED.json", "failed"),
-            ("INTERRUPTED.json", "interrupted"),
+        for marker, statuses in (
+            ("ATTEMPT_COMPLETE.json", {"complete"}),
+            ("ATTEMPT_FAILED.json", {"infrastructure", "screen-source-insufficient"}),
+            ("INTERRUPTED.json", {"interrupted"}),
         ):
             bucket, key = _marker_key(plan, ordinal, marker)
             try:
@@ -319,12 +341,89 @@ def _read_attempt_status(
                 raise
             body = response["Body"].read()
             value = json.loads(body)
+            execution_authority = _execution_authority(plan, ordinal)
+            expected_attempt_id = execution_authority["attempt_id"]
+            expected_inputs = execution_authority["inputs"]
+            expected_execution_sha256 = hashlib.sha256(
+                canonical_json_bytes(execution_authority)
+            ).hexdigest()
+            expected_output_bucket, expected_output_prefix = _s3(
+                str(execution_authority["output_prefix"]), prefix=True
+            )
+            status = value.get("status")
+            outputs = value.get("outputs")
+            output_roles: set[str] = set()
+            output_uris: set[str] = set()
+            outputs_valid = type(outputs) is list
+            if outputs_valid:
+                for output in outputs:
+                    if type(output) is not dict or set(output) != {
+                        "encoded_bytes",
+                        "role",
+                        "sha256",
+                        "uri",
+                    }:
+                        outputs_valid = False
+                        break
+                    role = output["role"]
+                    uri = output["uri"]
+                    try:
+                        bucket, key = _s3(uri)
+                    except (TypeError, ValueError):
+                        outputs_valid = False
+                        break
+                    if (
+                        type(role) is not str
+                        or role not in _COMPLETE_OUTPUT_ROLES
+                        or role in output_roles
+                        or uri in output_uris
+                        or type(output["encoded_bytes"]) is not int
+                        or output["encoded_bytes"] <= 0
+                        or type(output["sha256"]) is not str
+                        or _SHA256.fullmatch(output["sha256"]) is None
+                        or bucket != expected_output_bucket
+                        or not key.startswith(expected_output_prefix)
+                    ):
+                        outputs_valid = False
+                        break
+                    output_roles.add(role)
+                    output_uris.add(uri)
             if (
                 response.get("ContentLength") != len(body)
+                or type(value) is not dict
                 or canonical_json_bytes(value) != body
-                or value.get("status") != status
+                or set(value) != {
+                    "attempt_id",
+                    "claim_eligible",
+                    "execution_authority_sha256",
+                    "inputs",
+                    "instance_id",
+                    "outputs",
+                    "run_id",
+                    "schema",
+                    "source_commit",
+                    "status",
+                }
+                or status not in statuses
                 or value.get("run_id") != plan.run_id
                 or value.get("source_commit") != plan.source_commit
+                or value.get("schema") != "borsuk-v36-prefix-freeze-terminal-v1"
+                or value.get("claim_eligible") is not False
+                or value.get("attempt_id") != expected_attempt_id
+                or value.get("execution_authority_sha256")
+                != expected_execution_sha256
+                or value.get("inputs") != expected_inputs
+                or type(value.get("instance_id")) is not str
+                or _INSTANCE_ID.fullmatch(value["instance_id"]) is None
+                or (
+                    expected_instance_id is not None
+                    and value["instance_id"] != expected_instance_id
+                )
+                or not outputs_valid
+                or (
+                    status == "complete"
+                    and output_roles != _COMPLETE_OUTPUT_ROLES
+                )
             ):
                 raise ValueError("V36 prefix-screen terminal authority differs")
             return status
@@ -368,12 +467,17 @@ def run_v36_prefix_screen(
         finally:
             if instance_id is not None:
                 ec2_client.terminate_instances(InstanceIds=[instance_id])
-        status = _read_attempt_status(s3_client, plan, attempt_ordinal)
+        status = _read_attempt_status(
+            s3_client,
+            plan,
+            attempt_ordinal,
+            expected_instance_id=instance_id,
+        )
         if status == "complete":
             bucket, key = _marker_key(plan, attempt_ordinal, "ATTEMPT_COMPLETE.json")
             return f"s3://{bucket}/{key}"
-        if status == "failed":
-            raise RuntimeError(f"V36 prefix-screen attempt {attempt_ordinal} failed")
+        if status == "screen-source-insufficient":
+            raise RuntimeError("V36 prefix-screen source is insufficient")
         if status is None:
             raise RuntimeError(f"V36 prefix-screen attempt {attempt_ordinal} terminal missing")
     raise RuntimeError("V36 prefix-screen three attempts exhausted")

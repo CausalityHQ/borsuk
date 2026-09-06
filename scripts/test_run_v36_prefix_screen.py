@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import dataclasses
+import hashlib
 import io
 import json
 import unittest
@@ -218,6 +219,103 @@ class V36PrefixScreenLauncherTests(unittest.TestCase):
         ec2.terminate_instances.assert_called_once_with(
             InstanceIds=["i-capacity-fallback"]
         )
+
+    def test_v36_prefix_screen_terminal_binds_attempt_inputs_and_outputs(self) -> None:
+        # Break caught: a tiny marker with the same run/commit is accepted as
+        # proof for a different binary, authority, instance, or output set.
+        plan = self.plan()
+        attempt = 0
+        execution_authority = {
+            "active_wall_seconds": subject._attempt_wall_seconds(attempt),
+            "attempt_id": f"{plan.run_id}-attempt-{attempt:04d}",
+            "checkpoint_seconds": subject.CHECKPOINT_SECONDS,
+            "claim_eligible": False,
+            "inputs": [
+                {"blake3": plan.binary_blake3, "encoded_bytes": plan.binary_bytes, "role": "binary", "sha256": plan.binary_sha256, "uri": plan.binary_uri},
+                {"blake3": plan.authority_blake3, "encoded_bytes": plan.authority_bytes, "role": "freeze-authority", "sha256": plan.authority_sha256, "uri": plan.authority_uri},
+                {"blake3": plan.source_archive_blake3, "encoded_bytes": plan.source_archive_bytes, "role": "source-archive", "sha256": plan.source_archive_sha256, "uri": plan.source_archive_uri},
+                {"blake3": plan.source_registry_blake3, "encoded_bytes": plan.source_registry_bytes, "role": "source-registry", "sha256": plan.source_registry_sha256, "uri": plan.source_registry_uri},
+            ],
+            "output_prefix": "s3://fixture/v36/prefix-results/attempt-0000/",
+            "schema": "borsuk-v36-prefix-freeze-execution-authority-v1",
+            "source_commit": plan.source_commit,
+        }
+        outputs = [
+            {
+                "encoded_bytes": 1_000 + ordinal,
+                "role": role,
+                "sha256": format(ordinal + 11, "064x"),
+                "uri": f"s3://fixture/v36/prefix-results/attempt-0000/{role}",
+            }
+            for ordinal, role in enumerate(
+                (
+                    "population-authority",
+                    "source",
+                    "development-query",
+                    "development-gt100",
+                    "validation-query",
+                    "validation-gt100",
+                    "sealed-holdout-query",
+                    "sealed-holdout-gt100",
+                    "performance-query",
+                )
+            )
+        ]
+        terminal = {
+            "attempt_id": execution_authority["attempt_id"],
+            "claim_eligible": False,
+            "execution_authority_sha256": hashlib.sha256(
+                subject.canonical_json_bytes(execution_authority)
+            ).hexdigest(),
+            "inputs": execution_authority["inputs"],
+            "instance_id": "i-fixture",
+            "outputs": outputs,
+            "run_id": plan.run_id,
+            "schema": "borsuk-v36-prefix-freeze-terminal-v1",
+            "source_commit": plan.source_commit,
+            "status": "complete",
+        }
+
+        class S3:
+            def __init__(self, value: object) -> None:
+                self.value = value
+
+            def get_object(self, **_kwargs: object) -> dict[str, object]:
+                body = subject.canonical_json_bytes(self.value)
+                return {"Body": io.BytesIO(body), "ContentLength": len(body)}
+
+        self.assertEqual(
+            subject._read_attempt_status(
+                S3(terminal), plan, attempt, expected_instance_id="i-fixture"
+            ),
+            "complete",
+        )
+        mutations = []
+        for field in (
+            "attempt_id",
+            "claim_eligible",
+            "execution_authority_sha256",
+            "inputs",
+            "instance_id",
+            "outputs",
+            "schema",
+            "status",
+        ):
+            changed = dict(terminal)
+            changed.pop(field)
+            mutations.append(changed)
+        changed_input = json.loads(json.dumps(terminal))
+        changed_input["inputs"][0]["sha256"] = "f" * 64
+        mutations.append(changed_input)
+        changed_output = json.loads(json.dumps(terminal))
+        changed_output["outputs"][0]["role"] = "source"
+        mutations.append(changed_output)
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                with self.assertRaisesRegex(ValueError, "terminal authority differs"):
+                    subject._read_attempt_status(
+                        S3(mutation), plan, attempt, expected_instance_id="i-fixture"
+                    )
 
 
 if __name__ == "__main__":
