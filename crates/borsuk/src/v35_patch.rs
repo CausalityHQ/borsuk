@@ -114,6 +114,17 @@ pub struct V35LeafPatchArm {
     encoded_bytes: usize,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct V35RoutePatchSummary {
+    pub mean: Vec<f64>,
+    pub omitted_energy: f32,
+    pub population: u32,
+    pub population_factor: f64,
+    pub spectral_bound: f64,
+    pub trace: f64,
+    pub trace_square: f64,
+}
+
 impl V35LeafPatchArm {
     /// Number of independently scored patches.
     pub fn patch_count(&self) -> usize {
@@ -128,6 +139,36 @@ impl V35LeafPatchArm {
     /// Sum of patch populations; equal to the parent leaf population.
     pub fn total_population(&self) -> u32 {
         self.patches.iter().map(V35LeafPatch::population).sum()
+    }
+
+    pub(crate) fn route_group_ordinal(&self) -> Result<u32> {
+        let first = self
+            .patches
+            .first()
+            .ok_or_else(|| invalid("V35 patch arm is empty"))?;
+        if self
+            .patches
+            .iter()
+            .any(|patch| patch.group_ordinal != first.group_ordinal)
+        {
+            return Err(invalid("V35 patch arm group differs"));
+        }
+        Ok(first.group_ordinal)
+    }
+
+    pub(crate) fn route_patch_summaries(&self) -> Vec<V35RoutePatchSummary> {
+        self.patches
+            .iter()
+            .map(|patch| V35RoutePatchSummary {
+                mean: decode_i8(&patch.mean_codes, patch.mean_scale),
+                omitted_energy: patch.omitted_energy,
+                population: patch.population,
+                population_factor: patch.population_factor,
+                spectral_bound: patch.spectral_bound,
+                trace: patch.trace,
+                trace_square: patch.trace_square,
+            })
+            .collect()
     }
 }
 
@@ -166,6 +207,8 @@ pub struct V35RoutingGeneration {
     patches_per_leaf: u8,
     leaf_count: usize,
     resident_numeric_bytes: usize,
+    route_authority_digest: [u8; 32],
+    route_group_rows: Vec<u64>,
     storage: V35RoutingGenerationStorage,
 }
 
@@ -218,6 +261,91 @@ impl V35RoutingGeneration {
                 batch.num_rows() == self.leaf_count * usize::from(self.patches_per_leaf)
             }
             V35RoutingGenerationStorage::Construction(_) => false,
+        }
+    }
+
+    pub(crate) fn route_authority_digest(&self) -> [u8; 32] {
+        self.route_authority_digest
+    }
+
+    pub(crate) fn route_group_rows(&self) -> &[u64] {
+        &self.route_group_rows
+    }
+
+    pub(crate) fn route_group_ordinal(&self, leaf: usize) -> Result<u32> {
+        match &self.storage {
+            V35RoutingGenerationStorage::Construction(arms) => arms
+                .get(leaf)
+                .ok_or_else(|| invalid("V35 route leaf differs"))?
+                .route_group_ordinal(),
+            V35RoutingGenerationStorage::Serving(batch) => {
+                let row = leaf
+                    .checked_mul(usize::from(self.patches_per_leaf))
+                    .ok_or_else(|| invalid("V35 route row overflows"))?;
+                batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<UInt32Array>()
+                    .filter(|_| leaf < self.leaf_count)
+                    .map(|column| column.value(row))
+                    .ok_or_else(|| invalid("V35 route group differs"))
+            }
+        }
+    }
+
+    pub(crate) fn route_score_leaf(&self, leaf: usize, query: &[f64], omitted: f64) -> Result<f64> {
+        match &self.storage {
+            V35RoutingGenerationStorage::Construction(arms) => score_v35_leaf_patch_arm(
+                arms.get(leaf)
+                    .ok_or_else(|| invalid("V35 route leaf differs"))?,
+                query,
+                omitted,
+            ),
+            V35RoutingGenerationStorage::Serving(batch) => {
+                let start = leaf
+                    .checked_mul(usize::from(self.patches_per_leaf))
+                    .filter(|_| leaf < self.leaf_count)
+                    .ok_or_else(|| invalid("V35 route row overflows"))?;
+                (start..start + usize::from(self.patches_per_leaf)).try_fold(
+                    f64::INFINITY,
+                    |best, row| {
+                        Ok(best.min(score_v35_leaf_patch(
+                            &serving_patch(batch, row, self.dimensions)?,
+                            query,
+                            omitted,
+                        )?))
+                    },
+                )
+            }
+        }
+    }
+
+    pub(crate) fn route_patch_summaries(&self, leaf: usize) -> Result<Vec<V35RoutePatchSummary>> {
+        match &self.storage {
+            V35RoutingGenerationStorage::Construction(arms) => arms
+                .get(leaf)
+                .map(V35LeafPatchArm::route_patch_summaries)
+                .ok_or_else(|| invalid("V35 route leaf differs")),
+            V35RoutingGenerationStorage::Serving(batch) => {
+                let start = leaf
+                    .checked_mul(usize::from(self.patches_per_leaf))
+                    .filter(|_| leaf < self.leaf_count)
+                    .ok_or_else(|| invalid("V35 route row overflows"))?;
+                (start..start + usize::from(self.patches_per_leaf))
+                    .map(|row| {
+                        let patch = serving_patch(batch, row, self.dimensions)?;
+                        Ok(V35RoutePatchSummary {
+                            mean: decode_i8(&patch.mean_codes, patch.mean_scale),
+                            omitted_energy: patch.omitted_energy,
+                            population: patch.population,
+                            population_factor: patch.population_factor,
+                            spectral_bound: patch.spectral_bound,
+                            trace: patch.trace,
+                            trace_square: patch.trace_square,
+                        })
+                    })
+                    .collect()
+            }
         }
     }
 }
@@ -1021,6 +1149,76 @@ fn checksum_hex(checksum: [u8; 32]) -> String {
     checksum.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn update_patch_authority(hasher: &mut Sha256, patch: &V35LeafPatch) {
+    hasher.update(patch.assignment_max.to_le_bytes());
+    hasher.update(patch.assignment_min.to_le_bytes());
+    hasher.update(patch.dimensions.source.to_le_bytes());
+    hasher.update(patch.dimensions.routing.to_le_bytes());
+    hasher.update(patch.group_ordinal.to_le_bytes());
+    hasher.update(patch.leaf_ordinal.to_le_bytes());
+    hasher.update(patch.logical_start.to_le_bytes());
+    hasher.update(patch.population.to_le_bytes());
+    hasher.update(
+        patch
+            .mean_codes
+            .iter()
+            .map(|value| *value as u8)
+            .collect::<Vec<_>>(),
+    );
+    hasher.update(patch.mean_scale.to_bits().to_le_bytes());
+    hasher.update(&patch.residual_codes);
+    hasher.update(patch.residual_scale.to_bits().to_le_bytes());
+    hasher.update(
+        patch
+            .direction_codes
+            .iter()
+            .map(|value| *value as u8)
+            .collect::<Vec<_>>(),
+    );
+    for value in patch.direction_scales {
+        hasher.update(value.to_bits().to_le_bytes());
+    }
+    for value in patch.weights {
+        hasher.update(value.to_bits().to_le_bytes());
+    }
+    for value in [
+        patch.trace,
+        patch.trace_square,
+        patch.population_factor,
+        patch.spectral_bound,
+    ] {
+        hasher.update(value.to_bits().to_le_bytes());
+    }
+    hasher.update(patch.omitted_energy.to_bits().to_le_bytes());
+}
+
+fn route_authority_digest<'a>(patches: impl IntoIterator<Item = &'a V35LeafPatch>) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"borsuk-v35-route-leaf-authority-v1\0");
+    for patch in patches {
+        update_patch_authority(&mut hasher, patch);
+    }
+    hasher.finalize().into()
+}
+
+fn route_group_rows_from_arms(arms: &[V35LeafPatchArm]) -> Result<Vec<u64>> {
+    let mut rows = Vec::<u64>::new();
+    for arm in arms {
+        let group = usize::try_from(arm.route_group_ordinal()?)
+            .map_err(|_| invalid("V35 routing group ordinal overflows"))?;
+        if group > rows.len() {
+            return Err(invalid("V35 routing group ordinals are not dense"));
+        }
+        if group == rows.len() {
+            rows.push(0);
+        }
+        rows[group] = rows[group]
+            .checked_add(u64::from(arm.total_population()))
+            .ok_or_else(|| invalid("V35 routing group rows overflow"))?;
+    }
+    Ok(rows)
+}
+
 fn validate_patch_payload(patch: &V35LeafPatch) -> Result<()> {
     let routing = usize::from(patch.dimensions.routing);
     if !matches!(patch.dimensions.routing, 64 | 128 | 192)
@@ -1090,7 +1288,9 @@ fn validate_generation(generation: &V35RoutingGeneration) -> Result<()> {
     let V35RoutingGenerationStorage::Construction(leaves) = &generation.storage else {
         return Ok(());
     };
-    if leaves.len() != generation.leaf_count {
+    if leaves.len() != generation.leaf_count
+        || route_group_rows_from_arms(leaves)? != generation.route_group_rows
+    {
         return Err(invalid("V35 routing generation leaf count differs"));
     }
     let mut previous_group = None::<u32>;
@@ -1137,6 +1337,9 @@ pub fn build_v35_routing_generation(
         .first()
         .and_then(|arm| u8::try_from(arm.patch_count()).ok())
         .ok_or_else(|| invalid("V35 routing generation is empty"))?;
+    let route_authority_digest =
+        route_authority_digest(leaves.iter().flat_map(|arm| arm.patches.iter()));
+    let route_group_rows = route_group_rows_from_arms(&leaves)?;
     let generation = V35RoutingGeneration {
         dimensions: projection.dimensions(),
         projection_arm: projection.arm(),
@@ -1149,6 +1352,8 @@ pub fn build_v35_routing_generation(
         patches_per_leaf,
         leaf_count: leaves.len(),
         resident_numeric_bytes: leaves.iter().map(V35LeafPatchArm::encoded_bytes).sum(),
+        route_authority_digest,
+        route_group_rows,
         storage: V35RoutingGenerationStorage::Construction(leaves),
     };
     validate_generation(&generation)?;
@@ -1437,6 +1642,74 @@ fn list_f32<const N: usize>(list: &FixedSizeListArray, row: usize) -> Result<[f3
         .to_vec()
         .try_into()
         .map_err(|_| invalid("V35 routing float list differs"))
+}
+
+fn serving_patch(
+    batch: &RecordBatch,
+    row: usize,
+    dimensions: V35Dimensions,
+) -> Result<V35LeafPatch> {
+    let u32_at = |column: usize| {
+        batch
+            .column(column)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .map(|array| array.value(row))
+            .ok_or_else(|| invalid("V35 routing integer differs"))
+    };
+    let u64_at = |column: usize| {
+        batch
+            .column(column)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .map(|array| array.value(row))
+            .ok_or_else(|| invalid("V35 routing integer differs"))
+    };
+    let f32_at = |column: usize| {
+        batch
+            .column(column)
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .map(|array| array.value(row))
+            .ok_or_else(|| invalid("V35 routing scalar differs"))
+    };
+    let f64_at = |column: usize| {
+        batch
+            .column(column)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .map(|array| array.value(row))
+            .ok_or_else(|| invalid("V35 routing scalar differs"))
+    };
+    let list_at = |column: usize| {
+        batch
+            .column(column)
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .ok_or_else(|| invalid("V35 routing list differs"))
+    };
+    let routing = usize::from(dimensions.routing);
+    Ok(V35LeafPatch {
+        assignment_max: u64_at(5)?,
+        assignment_min: u64_at(4)?,
+        dimensions,
+        group_ordinal: u32_at(1)?,
+        leaf_ordinal: u32_at(0)?,
+        logical_start: u64_at(2)?,
+        population: u32_at(3)?,
+        mean_codes: list_i8(list_at(6)?, row, routing)?,
+        mean_scale: f32_at(7)?,
+        residual_codes: list_u8(list_at(8)?, row, routing)?,
+        residual_scale: f32_at(9)?,
+        direction_codes: list_i8(list_at(10)?, row, COMPONENTS * routing)?,
+        direction_scales: list_f32(list_at(11)?, row)?,
+        weights: list_f32(list_at(12)?, row)?,
+        trace: f64_at(13)?,
+        trace_square: f64_at(14)?,
+        population_factor: f64_at(15)?,
+        spectral_bound: f64_at(16)?,
+        omitted_energy: f32_at(17)?,
+    })
 }
 
 fn validate_generation_ipc_field(field: arrow_ipc::Field<'_>, expected: &Field) -> Result<()> {
@@ -1940,6 +2213,9 @@ pub fn decode_v35_generation_arrow(
     let routing = usize::from(manifest.dimensions.routing);
     let mut previous_group = None::<u32>;
     let mut expected_logical_start = 0_u64;
+    let mut route_hasher = Sha256::new();
+    let mut route_group_rows = Vec::<u64>::new();
+    route_hasher.update(b"borsuk-v35-route-leaf-authority-v1\0");
     for row in 0..batch.num_rows() {
         let patches_per_leaf = usize::from(manifest.patches_per_leaf);
         let expected_leaf = row / patches_per_leaf;
@@ -1973,6 +2249,17 @@ pub fn decode_v35_generation_arrow(
                 .checked_add(u64::from(population))
                 .ok_or_else(|| invalid("V35 routing generation logical interval overflows"))?;
             previous_group = Some(group_ordinals.value(row));
+            let group = usize::try_from(group_ordinals.value(row))
+                .map_err(|_| invalid("V35 routing group ordinal overflows"))?;
+            if group > route_group_rows.len() {
+                return Err(invalid("V35 routing group ordinals are not dense"));
+            }
+            if group == route_group_rows.len() {
+                route_group_rows.push(0);
+            }
+            route_group_rows[group] = route_group_rows[group]
+                .checked_add(u64::from(population))
+                .ok_or_else(|| invalid("V35 routing group rows overflow"))?;
             if logical_starts
                 .value(row)
                 .checked_add(u64::from(population))
@@ -2003,7 +2290,9 @@ pub fn decode_v35_generation_arrow(
             omitted_energy: omitted_energies.value(row),
         };
         validate_patch_payload(&patch)?;
+        update_patch_authority(&mut route_hasher, &patch);
     }
+    let route_authority_digest = route_hasher.finalize().into();
     let generation = V35RoutingGeneration {
         dimensions: manifest.dimensions,
         projection_arm: manifest.projection_arm,
@@ -2017,6 +2306,8 @@ pub fn decode_v35_generation_arrow(
         leaf_count: usize::try_from(manifest.leaf_count)
             .map_err(|_| invalid("V35 routing generation leaf count overflows"))?,
         resident_numeric_bytes: numeric_bytes,
+        route_authority_digest,
+        route_group_rows,
         storage: V35RoutingGenerationStorage::Serving(batch),
     };
     validate_generation(&generation)?;

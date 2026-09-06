@@ -166,29 +166,29 @@
 - Consumes: authenticated `V35RoutingGeneration`, projected query, group storage descriptors, and fixed budgets.
 - Produces: `V35RouteTree`, `V35RouteBudget`, `V35RoutePrefix`, `build_v35_route_tree`, `exhaustive_v35_route`, and `hierarchical_v35_route`.
 
-- [ ] **Step 1: Write exhaustive admission REDs**
+- [x] **Step 1: Write exhaustive admission REDs**
 
   Pin minimum patch score per group, `(score,group,leaf)` total order, complete-prefix group/row/code-byte budgets, exact first overflow, checked sums, and no group skipping. Candidate and page caps are later deterministic stages and cannot retroactively change this prefix.
 
-- [ ] **Step 2: Write tree/bound REDs**
+- [x] **Step 2: Write tree/bound REDs**
 
   Freeze deterministic 16-way construction in projected space. Pin the node layout to at most `M+128` bytes with an int8 center plus f32 scale, and pin `69_905*320 == 22_369_600` bytes at `M=192`; include decoded-center quantization error in the outward radius. Test every node bound against all descendant decoded scores for random, tie, singular, subnormal, huge-finite, quantization-boundary, repeated-mean, one/two-patch, and complement-energy cases.
 
-- [ ] **Step 3: Write optimized/exhaustive differential REDs**
+- [x] **Step 3: Write optimized/exhaustive differential REDs**
 
   For each `M` in `{64,128,192}`, require byte-identical optimized-versus-exhaustive selected groups, scores, rows, bytes, first overflow, and object identities. Different `M` values are separate representations and need not match each other. Cover exact ties, reversed leaf input, early all-group completion, worst-case no pruning, and mutated generation/tree digest rejection.
 
-- [ ] **Step 4: Run RED**
+- [x] **Step 4: Run RED**
 
   Run: `cargo test -p borsuk --test v35_route -- --nocapture`
 
   Expected: V35 route symbols missing, with V34 tests unaffected.
 
-- [ ] **Step 5: Implement without compatibility dispatch**
+- [x] **Step 5: Implement without compatibility dispatch**
 
   Port only the mathematical tree/traversal pattern, parameterized by authenticated `M`; do not port V34's f32 node representation. Quantize each node center once, enlarge its radius by the exact decoded-center error, and validate every cached bound from decoded bytes. Keep a V35-specific format and digest; do not add a V34/V35 runtime alias. Cache group row totals at generation construction, return immediately after all groups are admitted, and expand ambiguous bounds.
 
-- [ ] **Step 6: Run GREEN and commit**
+- [x] **Step 6: Run GREEN and commit**
 
   Run V35 route tests, V34 route regressions, affected Clippy, fmt, and diff-check; commit/push.
 

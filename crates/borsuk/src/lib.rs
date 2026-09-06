@@ -207,6 +207,7 @@ mod v34_route;
 mod v35_authority;
 mod v35_patch;
 mod v35_projection;
+mod v35_route;
 pub use v27_s3_search::{V27Match, V27PageStore, V27SearchIndex, V27SearchResult, V27SearchWork};
 pub use v27_s3_search::{V27PageSelection, V27Router, V27RoutingWork, V27SearchArm};
 #[doc(hidden)]
@@ -271,6 +272,12 @@ pub use v35_projection::{
     V35ProjectionLimits, V35ProjectionSampleSource, V35ProjectionTrainingSpec, build_v35_srht,
     decode_v35_projection_arrow, encode_v35_projection_arrow, project_v35_query_scalar,
     project_v35_query_simd, train_v35_pca,
+};
+#[doc(hidden)]
+pub use v35_route::{
+    V35GroupStorage, V35RouteBudget, V35RoutePrefix, V35RouteTree, V35SelectedGroup, V35TreeNode,
+    bound_v35_node, build_v35_route_tree, exhaustive_v35_route, hierarchical_v35_route,
+    project_v35_route_tree_bytes,
 };
 #[allow(
     dead_code,
