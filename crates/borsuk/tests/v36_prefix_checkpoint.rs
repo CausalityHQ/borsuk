@@ -444,6 +444,36 @@ fn v36_prefix_checkpoint_population_writer_commits_one_complete_object_generatio
             .join(format!("{}.blob", first_identity.sha256)),
     )
     .unwrap();
+    let inconsistent_root = directory.path().join("inconsistent-resume-outbox");
+    std::fs::create_dir(&inconsistent_root).unwrap();
+    let mut inconsistent_manifest = previous_manifest.clone();
+    inconsistent_manifest.population.distinct_rows -= 1;
+    inconsistent_manifest.population.duplicate_rows += 1;
+    let inconsistent_identity = checkpoint_identity(&inconsistent_manifest);
+    let mut inconsistent_pointer: V36PrefixCheckpointPointer =
+        serde_json::from_slice(&previous_pointer_bytes).unwrap();
+    inconsistent_pointer.manifest = inconsistent_identity;
+    let inconsistent_pointer_bytes = canonical_v36_prefix_checkpoint_pointer_bytes(
+        &two_object_checkpoint_context(3),
+        &inconsistent_pointer,
+    )
+    .unwrap();
+    assert!(
+        V36PrefixPopulationCheckpointWriter::resume(
+            &inconsistent_root,
+            two_object_checkpoint_context(3),
+            "a".repeat(64),
+            "v36-prefix-screen-fixture-attempt-0001".into(),
+            1,
+            "i-replacement".into(),
+            V36PrefixPopulationCheckpointHead {
+                dependencies: vec![(first_identity.clone(), first_bytes.clone())],
+                manifest: inconsistent_manifest,
+                pointer_bytes: inconsistent_pointer_bytes,
+            },
+        )
+        .is_err()
+    );
     let resumed_root = directory.path().join("resumed-outbox");
     std::fs::create_dir(&resumed_root).unwrap();
     let mut resumed_writer = V36PrefixPopulationCheckpointWriter::resume(

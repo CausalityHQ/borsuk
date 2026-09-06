@@ -352,6 +352,12 @@ impl V36PrefixPopulationCheckpointWriter {
             != previous_pointer_bytes
             || pointer.generation != previous_manifest.generation
             || pointer.run_id != previous_manifest.run_id
+            || pointer.producer_attempt_id != previous_manifest.producer_attempt_id
+            || pointer.producer_attempt_ordinal != previous_manifest.producer_attempt_ordinal
+            || !matches!(
+                &previous_manifest.phase,
+                V36PrefixCheckpointPhase::Population
+            )
             || dependencies.len() != previous_manifest.population.identity_runs.len()
             || dependencies
                 .iter()
@@ -366,6 +372,38 @@ impl V36PrefixPopulationCheckpointWriter {
             return Err(invalid(
                 "V36 population checkpoint resume authority differs",
             ));
+        }
+        let runs = dependencies
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (identity, bytes))| {
+                let selected_object_ordinal = u16::try_from(ordinal)
+                    .map_err(|_| invalid("V36 population checkpoint ordinal overflows"))?;
+                let source = previous_manifest
+                    .population
+                    .consumed_objects
+                    .get(ordinal)
+                    .ok_or_else(|| invalid("V36 population checkpoint resume state differs"))?;
+                decode_v36_prefix_identity_run(bytes, identity, source, selected_object_ordinal)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let restored = restore_v36_prefix_population_state(
+            &runs,
+            usize::try_from(context.distinct_candidates)
+                .map_err(|_| invalid("V36 population checkpoint row count overflows"))?,
+        )?;
+        let expected_cutoff = previous_manifest
+            .population
+            .cutoff_object_ordinal
+            .zip(previous_manifest.population.cutoff_row_offset);
+        if restored.consumed_objects != previous_manifest.population.consumed_objects
+            || restored.cutoff != expected_cutoff
+            || restored.distinct_rows_observed != previous_manifest.population.distinct_rows
+            || restored.duplicate_rows != previous_manifest.population.duplicate_rows
+            || restored.next_object_ordinal != previous_manifest.population.next_object_ordinal
+            || restored.physical_rows != previous_manifest.population.physical_rows
+        {
+            return Err(invalid("V36 population checkpoint resume state differs"));
         }
         let manifest_bytes = canonical_v36_prefix_checkpoint_manifest_bytes(&previous_manifest)?;
         if pointer.manifest.encoded_bytes != manifest_bytes.len() as u64
