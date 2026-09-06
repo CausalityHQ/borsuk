@@ -897,6 +897,21 @@ fn v35_build_encodes_group_as_cross_language_code_pages_and_patches() {
         receipt.code_directory().code_bytes()
     );
     assert!(code_root.authenticates(&decoded_code_directory));
+    let code_root_digest: [u8; 32] = std::array::from_fn(|index| {
+        u8::from_str_radix(&code_root.identity().digest[index * 2..index * 2 + 2], 16).unwrap()
+    });
+    let bound_groups = code_root
+        .bind_groups(
+            V35RemoteDirectoryBinding::new(
+                code_root_digest,
+                [2; 32],
+                [3; 32],
+                borsuk::v35_remote_code_schema_digest(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(bound_groups.len(), 1);
     let mut wrong_code_root_identity = code_root_identity.clone();
     wrong_code_root_identity.digest.replace_range(0..2, "ff");
     assert!(

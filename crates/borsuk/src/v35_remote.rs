@@ -5,8 +5,9 @@ use std::{
 };
 
 use crate::{
-    BorsukError, Result, V35ArtifactIdentity, V35ProjectedQuery, V35RemoteDirectoryBinding,
-    V35RoutePrefix, simd_control::f32x8, v35_route::v35_artifact_authority_digest,
+    BorsukError, Result, V35ArtifactIdentity, V35GroupStorage, V35ProjectedQuery,
+    V35RemoteDirectoryBinding, V35RoutePrefix, simd_control::f32x8,
+    v35_route::v35_artifact_authority_digest,
 };
 use arrow_array::{
     Array, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, RecordBatch,
@@ -2930,6 +2931,26 @@ impl V35CodeDirectoryRoot {
     /// Complete root identity pinned by the generation manifest.
     pub fn identity(&self) -> &V35ArtifactIdentity {
         &self.identity
+    }
+    /// Derive dense group storage only from this authenticated root.
+    pub fn bind_groups(&self, binding: V35RemoteDirectoryBinding) -> Result<Vec<V35GroupStorage>> {
+        if parse_sha256(&self.identity.digest)? != binding.directory_root_digest
+            || binding.code_schema_digest != v35_remote_code_schema_digest()
+        {
+            return Err(invalid("V35 code-directory root binding differs"));
+        }
+        self.entries
+            .iter()
+            .map(|entry| {
+                V35GroupStorage::new_bound(
+                    entry.group_ordinal,
+                    entry.rows,
+                    entry.code_bytes,
+                    binding,
+                    &entry.identity,
+                )
+            })
+            .collect()
     }
 }
 
