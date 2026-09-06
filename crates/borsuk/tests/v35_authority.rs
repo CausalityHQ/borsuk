@@ -104,7 +104,7 @@ fn v35_authority_accepts_dimension_independent_remote_storage() {
     let projection = project_v35_serving_memory(&manifest()).unwrap();
     assert_eq!(projection.remote_sq4_payload_bytes, 153_600_000_000);
     assert_eq!(projection.object_data_cache_bytes, 159_549_376);
-    assert_eq!(projection.admission_budget_bytes, 2_792_129_536);
+    assert_eq!(projection.admission_budget_bytes, 2_842_461_184);
     assert_eq!(projection.hard_limit_bytes, 3_221_225_472);
 }
 
@@ -181,9 +181,9 @@ fn v35_authority_projects_every_resident_generation_and_overflow() {
     assert_eq!(projection.active_and_retiring_tree_bytes, 67_108_864);
     assert_eq!(projection.active_and_retiring_basis_bytes, 4_718_592);
     assert_eq!(projection.liveness_plane_bytes, 25_000_000);
-    assert_eq!(projection.directory_bytes, 16_777_216);
+    assert_eq!(projection.directory_bytes, 67_108_864);
     assert_eq!(projection.object_data_cache_bytes, 159_549_376);
-    assert_eq!(projection.shared_cache_bytes, 201_326_592);
+    assert_eq!(projection.shared_cache_bytes, 251_658_240);
     assert_eq!(projection.delta_bytes, 67_108_864);
     assert_eq!(projection.delta_mutation_directory_bytes, 32_000_000);
     assert_eq!(projection.delta_posting_reference_bytes, 16_000_000);
@@ -194,10 +194,10 @@ fn v35_authority_projects_every_resident_generation_and_overflow() {
     assert_eq!(projection.runtime_bytes, 268_435_456);
     assert_eq!(projection.query_workspace_bytes, 536_870_912);
     assert_eq!(projection.unallocated_headroom_bytes, 268_435_456);
-    assert_eq!(projection.admission_budget_bytes, 2_792_129_536);
+    assert_eq!(projection.admission_budget_bytes, 2_842_461_184);
     assert_eq!(
         projection.hard_limit_bytes - projection.admission_budget_bytes,
-        429_095_936
+        378_764_288
     );
 
     for (routing, bytes_per_leaf, leaves) in [
@@ -221,7 +221,7 @@ fn v35_authority_projects_every_resident_generation_and_overflow() {
 
     let mut limit_crossing = manifest();
     limit_crossing.dimensions.routing = 128;
-    limit_crossing.leaf_count = 785_066;
+    limit_crossing.leaf_count = 763_221;
     assert!(project_v35_serving_memory(&limit_crossing).is_ok());
     limit_crossing.leaf_count += 1;
     assert!(project_v35_serving_memory(&limit_crossing).is_err());

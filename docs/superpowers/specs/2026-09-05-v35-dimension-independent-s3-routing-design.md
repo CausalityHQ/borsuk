@@ -141,10 +141,10 @@ The fixed projection for 414,100 leaves is `8*M + 128` bytes per one-patch leaf:
 The projection matrix is at most `3072*192*4 = 2,359,296 B` in the ordinary
 ladder. Tree state is capped at 32 MiB per generation. The checked 192-wide
 admission budget is 1,378,124,800 B for active and retiring leaves, 67,108,864
-B for both trees, 4,718,592 B for two bases, 201,326,592 B shared caches,
+B for both trees, 4,718,592 B for two bases, 251,658,240 B shared caches,
 67,108,864 B for the admitted delta state,
 268,435,456 B runtime/allocator, 536,870,912 B for sixteen query workspaces,
-and 268,435,456 B unallocated headroom: `2,792,129,536 B`. The manifest
+and 268,435,456 B unallocated headroom: `2,842,461,184 B`. The manifest
 computes every term with checked integer arithmetic and rejects a total at or
 above `3,221,225,472 B`.
 
@@ -159,14 +159,17 @@ a second live leaf to one worker still fails before allocation.
 
 The prose arithmetic above is explanatory; the canonical receipt records the
 component vector and checked sum. Tests pin the exact sum
-`2,792,129,536 B`, leaving `429,095,936 B` below 3 GiB. A two-patch 192-wide
+`2,842,461,184 B`, leaving `378,764,288 B` below 3 GiB. A two-patch 192-wide
 arm must supply its own complete projection and is expected to fail unless leaf
 count or bytes are reduced; it receives no implicit memory exception.
 
-The 201,326,592-B shared-cache term is not an undifferentiated object cache.
+The 251,658,240-B shared-cache term is not an undifferentiated object cache.
 It contains exactly 25,000,000 B for one-bit active and retiring base-row
-liveness planes, 16,777,216 B for immutable chunk/page directories, and
-159,549,376 B for code/page object data. Liveness is an immutable, chunked,
+liveness planes, 67,108,864 B for immutable chunk/page directory roots and
+cached blocks, and 159,549,376 B for code/page object data. Directory roots
+contain bounded group summaries and identities for selectively fetched blocks;
+they never materialize one heap object or URI string per corpus row or page.
+Liveness is an immutable, chunked,
 snapshot-bound plane. Replacement and delete publication changes that plane
 and the bounded mutation directory; it does not rewrite full base code or
 vector pages. Both candidate admission and exact-page reranking consult the
@@ -216,18 +219,24 @@ rows by `(distance,row_ordinal)`. The complete returned code-object budget is
 8 MiB, including headers, centers, IDs, sequences, page references, and chunk
 envelopes. Thus row work shrinks as `D` or rate grows; packed SQ4 payload alone
 fits at most 43,690/21,845/10,922/5,461 rows at
-384/768/1,536/3,072D before envelope charges. The frozen reducer takes the first eight distinct
-primary/replica pages in that candidate order and reranks their vectors in full
-source dimension. Sixteen- and 32-page results are diagnostic frontier points,
+384/768/1,536/3,072D before envelope charges. The frozen reducer walks candidates
+in `(distance,row_ordinal)` order. If either authenticated page reference is
+already selected the row is covered; otherwise it selects the primary page. It
+stops after eight distinct pages and reranks their vectors in full source
+dimension. A replica is an alternate existing page reference for availability,
+not a second mandatory vector copy. Sixteen- and 32-page results are diagnostic frontier points,
 not fallback release winners.
 
 Every row decoded from an exact page is checked against the same snapshot
 mutation directory before it can enter the exact top-k. Page selection does not
 authorize stale, tombstoned, or shadowed rows to reappear during reranking.
 
-The query path fetches only selected complete code chunks or coalesced byte
-ranges, retains the bounded candidate heap, then fetches selected exact-vector
-pages/ranges for reranking. Every rangeable object has a manifest of
+The query path authenticates a bounded directory root, selectively fetches only
+the directory blocks named by the route prefix, fetches only selected complete
+code chunks or gap-free coalesced byte ranges, retains the bounded candidate
+heap, then fetches selected exact-vector pages/ranges for reranking. Route,
+directory, query, generation, source dimension, code rate, and visibility
+snapshot digests are cross-bound before any data GET. Every rangeable object has a manifest of
 independently SHA-256-authenticated chunks; a response must match the registered
 bucket, key, version ID, interval, length, and chunk digest before decoding.
 Whole-file digests remain publication authority but do not authenticate an
@@ -240,11 +249,15 @@ Chunks are at most 1 MiB encoded and 2 MiB decoded. Exact-vector pages contain
 at most 256 rows and are at most 4 MiB encoded and 4 MiB decoded at the maximum
 qualified dimension. Authentication precedes decoding, so one query reserves
 3 MiB for one complete at-most-1-MiB encoded chunk and at most 2 MiB of decoded
-blocks; no second chunk may coexist. One query owns at most 32 MiB: 4 MiB
+blocks; no second decoded chunk may coexist. One query owns at most 32 MiB: 4 MiB
 traversal/score state, 3 MiB code buffers, 1 MiB for the 12,288-candidate heap
 and page set, 8 MiB sequential page buffers, 1 MiB query/result state, and
-15 MiB allocator and SDK headroom. Code buffers are released before exact-page fetch; pages are
-decoded and reranked one at a time, never accumulated eight at once. Every
+15 MiB allocator and SDK headroom. Planned code ranges may be dispatched
+concurrently within that 15-MiB in-flight allowance, but are delivered in plan
+order into the single owned code buffer. The eight selected page objects are one
+bounded request wave; their response chunks remain charged to SDK headroom and
+pages are authenticated, decoded, reranked, and released sequentially rather
+than accumulated. Code buffers are released before exact-page decode. Every
 maximum is a manifest field validated before query admission.
 
 ## Search and hierarchy
@@ -290,8 +303,10 @@ bits against 255 sample-derived f32 quantile boundaries, with equality assigned
 to the lower bucket; the key is their most-significant-bit-first Morton
 interleave. Bounded S3 scratch runs store
 `(key,source_ordinal,projected_row,source_row)` and merge in
-`(key,source_ordinal)` order. Consecutive runs of at most 256 rows form leaves;
-consecutive leaves form storage groups under both the 8-MiB encoded-object cap
+`(key,source_ordinal)` order. Consecutive runs of at most 256 rows form leaves.
+Consecutive leaves form storage groups targeting between one-sixteenth and
+one-sixty-fourth of the 8-MiB query code budget after descriptor/envelope
+charges, under both the 8-MiB encoded-object cap
 and a 64-MiB builder-buffer cap including source/projected rows, IDs,
 references, moments, and allocator capacity. This
 one layout is reused by one-patch, two-patch, and equal-byte-centroid controls

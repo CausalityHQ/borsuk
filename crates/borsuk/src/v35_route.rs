@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::BinaryHeap};
 
-use crate::{BorsukError, Result, V35Dimensions, V35RoutingGeneration};
+use crate::{BorsukError, Result, V35ArtifactIdentity, V35Dimensions, V35RoutingGeneration};
 use sha2::{Digest, Sha256};
 
 const MAX_GROUPS: u32 = 64;
@@ -14,11 +14,66 @@ fn invalid(message: &str) -> BorsukError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Immutable directory-root, snapshot, and code-schema binding for remote routing.
+pub struct V35RemoteDirectoryBinding {
+    pub(crate) directory_root_digest: [u8; 32],
+    pub(crate) snapshot_digest: [u8; 32],
+    pub(crate) code_schema_digest: [u8; 32],
+}
+
+impl V35RemoteDirectoryBinding {
+    /// Construct a complete nonzero remote-directory binding.
+    pub fn new(
+        directory_root_digest: [u8; 32],
+        snapshot_digest: [u8; 32],
+        code_schema_digest: [u8; 32],
+    ) -> Result<Self> {
+        if [directory_root_digest, snapshot_digest, code_schema_digest].contains(&[0; 32]) {
+            return Err(invalid("V35 remote directory binding differs"));
+        }
+        Ok(Self {
+            directory_root_digest,
+            snapshot_digest,
+            code_schema_digest,
+        })
+    }
+}
+
+pub(crate) fn v35_artifact_authority_digest(identity: &V35ArtifactIdentity) -> Result<[u8; 32]> {
+    if identity.role != "code-directory-block"
+        || identity.digest_algorithm != "sha256"
+        || identity.digest.len() != 64
+        || !identity
+            .digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || identity.length == 0
+        || !identity.uri.starts_with("s3://")
+    {
+        return Err(invalid("V35 code-directory block authority differs"));
+    }
+    let mut hasher = Sha256::new();
+    for value in [
+        identity.role.as_bytes(),
+        identity.digest_algorithm.as_bytes(),
+        identity.digest.as_bytes(),
+        identity.uri.as_bytes(),
+    ] {
+        hasher.update((value.len() as u64).to_le_bytes());
+        hasher.update(value);
+    }
+    hasher.update(identity.length.to_le_bytes());
+    Ok(hasher.finalize().into())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Immutable row and byte authority for one dense remote-code group.
 pub struct V35GroupStorage {
     group_ordinal: u32,
     rows: u64,
     code_bytes: u64,
+    remote_binding: Option<V35RemoteDirectoryBinding>,
+    pub(crate) directory_block_authority_digest: [u8; 32],
 }
 
 impl V35GroupStorage {
@@ -31,6 +86,28 @@ impl V35GroupStorage {
             group_ordinal,
             rows,
             code_bytes,
+            remote_binding: None,
+            directory_block_authority_digest: [0; 32],
+        })
+    }
+
+    /// Construct group storage derived from one authenticated directory-root entry.
+    pub fn new_bound(
+        group_ordinal: u32,
+        rows: u64,
+        code_bytes: u64,
+        remote_binding: V35RemoteDirectoryBinding,
+        directory_block: &V35ArtifactIdentity,
+    ) -> Result<Self> {
+        if rows == 0 || code_bytes == 0 {
+            return Err(invalid("V35 group storage authority differs"));
+        }
+        Ok(Self {
+            group_ordinal,
+            rows,
+            code_bytes,
+            remote_binding: Some(remote_binding),
+            directory_block_authority_digest: v35_artifact_authority_digest(directory_block)?,
         })
     }
 }
@@ -84,6 +161,17 @@ impl V35SelectedGroup {
     pub fn leaf_ordinal(self) -> u32 {
         self.leaf_ordinal
     }
+    /// Authenticated logical rows in the complete selected group.
+    pub fn rows(self) -> u64 {
+        self.storage.rows
+    }
+    /// Authenticated encoded code bytes in the complete selected group.
+    pub fn code_bytes(self) -> u64 {
+        self.storage.code_bytes
+    }
+    pub(crate) fn directory_block_authority_digest(self) -> [u8; 32] {
+        self.storage.directory_block_authority_digest
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -95,6 +183,9 @@ pub struct V35RoutePrefix {
     selected_code_bytes: u64,
     exact_leaf_evaluations: usize,
     bound_evaluations: usize,
+    generation_digest: [u8; 32],
+    query_digest: [u8; 32],
+    remote_binding: Option<V35RemoteDirectoryBinding>,
 }
 
 impl V35RoutePrefix {
@@ -122,6 +213,25 @@ impl V35RoutePrefix {
     pub fn bound_evaluations(&self) -> usize {
         self.bound_evaluations
     }
+    pub(crate) fn generation_digest(&self) -> [u8; 32] {
+        self.generation_digest
+    }
+    pub(crate) fn query_digest(&self) -> [u8; 32] {
+        self.query_digest
+    }
+    pub(crate) fn remote_binding(&self) -> Option<V35RemoteDirectoryBinding> {
+        self.remote_binding
+    }
+}
+
+fn route_query_digest(query: &[f64], omitted: f64) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update((query.len() as u64).to_le_bytes());
+    for value in query {
+        hasher.update(value.to_bits().to_le_bytes());
+    }
+    hasher.update(omitted.to_bits().to_le_bytes());
+    hasher.finalize().into()
 }
 
 fn validate_query(generation: &V35RoutingGeneration, query: &[f64], omitted: f64) -> Result<()> {
@@ -149,6 +259,13 @@ fn validate_groups(generation: &V35RoutingGeneration, groups: &[V35GroupStorage]
         })
     {
         return Err(invalid("V35 route group storage differs"));
+    }
+    let binding = groups.first().and_then(|group| group.remote_binding);
+    if groups.iter().any(|group| {
+        group.remote_binding != binding
+            || group.remote_binding.is_some() != (group.directory_block_authority_digest != [0; 32])
+    }) {
+        return Err(invalid("V35 route remote binding differs"));
     }
     Ok(())
 }
@@ -198,6 +315,9 @@ fn admit_prefix(
     budget: V35RouteBudget,
     exact_leaf_evaluations: usize,
     bound_evaluations: usize,
+    generation_digest: [u8; 32],
+    query_digest: [u8; 32],
+    remote_binding: Option<V35RemoteDirectoryBinding>,
 ) -> Result<V35RoutePrefix> {
     let mut selected_groups = Vec::new();
     let mut selected_rows = 0_u64;
@@ -224,6 +344,9 @@ fn admit_prefix(
         selected_code_bytes,
         exact_leaf_evaluations,
         bound_evaluations,
+        generation_digest,
+        query_digest,
+        remote_binding,
     })
 }
 
@@ -242,6 +365,9 @@ pub fn exhaustive_v35_route(
         budget,
         generation.leaf_count(),
         0,
+        generation.route_authority_digest(),
+        route_query_digest(query, omitted),
+        groups.first().and_then(|group| group.remote_binding),
     )
 }
 
@@ -827,6 +953,9 @@ pub fn hierarchical_v35_route(
     }
     validate_query(generation, query, omitted)?;
     validate_groups(generation, groups)?;
+    let generation_digest = generation.route_authority_digest();
+    let query_digest = route_query_digest(query, omitted);
+    let remote_binding = groups.first().and_then(|group| group.remote_binding);
     let mut nodes = BinaryHeap::new();
     nodes.push(NodeCandidate {
         bound: bound_v35_node(tree, 0, query, omitted)?,
@@ -878,6 +1007,9 @@ pub fn hierarchical_v35_route(
                     selected_code_bytes,
                     exact_leaf_evaluations,
                     bound_evaluations,
+                    generation_digest,
+                    query_digest,
+                    remote_binding,
                 });
             }
             selected_rows = next_rows.ok_or_else(|| invalid("V35 route rows overflow"))?;
@@ -891,6 +1023,9 @@ pub fn hierarchical_v35_route(
                     selected_code_bytes,
                     exact_leaf_evaluations,
                     bound_evaluations,
+                    generation_digest,
+                    query_digest,
+                    remote_binding,
                 });
             }
             continue;
@@ -903,6 +1038,9 @@ pub fn hierarchical_v35_route(
                 selected_code_bytes,
                 exact_leaf_evaluations,
                 bound_evaluations,
+                generation_digest,
+                query_digest,
+                remote_binding,
             });
         };
         let node = tree

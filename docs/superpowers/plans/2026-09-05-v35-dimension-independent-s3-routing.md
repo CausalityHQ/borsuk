@@ -200,22 +200,24 @@
 - Modify: `crates/borsuk/src/lib.rs`
 
 **Interfaces:**
-- Consumes: `V35RoutePrefix`, immutable object directory, range-capable object reader, and query.
+- Consumes: a generation/query/directory/snapshot-bound `V35RoutePrefix`, bounded authenticated
+  directory root plus selected directory blocks, a range-capable object reader, pinned visibility
+  snapshot, and query.
 - Produces: `V35ResidualSqDescriptor`, `V35RemotePlan`, `V35Candidate`, `V35SearchResult`, `build_v35_residual_sq_descriptor`, `plan_v35_remote_reads`, `scan_v35_code_ranges`, and `rerank_v35_exact_pages`.
 
-- [ ] **Step 1: Write capability and planning REDs**
+- [x] **Step 1: Write capability and planning REDs**
 
-  Require selected-role-only GET/range authorization, coalescing only contiguous independently authenticated chunks in one versioned object, exact interval/digest and requested/returned byte counters, bounded retries, candidate heap cap, first-distinct exact pages, and rejection of an unselected object, whole-code-plane request, corpus path, endpoint override, or persisted page body. Pin one query workspace to 32 MiB: 4 MiB route state, 3 MiB code buffers so one authenticated encoded chunk and its decoded blocks may coexist, 1 MiB candidate/page state, 8 MiB sequential encoded/decoded page buffers, 1 MiB query/result state, and 15 MiB allocator/SDK headroom. Reject chunks above 1 MiB encoded/2 MiB decoded and pages above 256 rows or 4 MiB encoded/decoded.
+  Require selected-role-only GET/range authorization, coalescing only exactly contiguous independently authenticated chunks in one versioned object, exact interval/digest and per-attempt requested/returned/retry byte counters, bounded retries, candidate heap cap, the frozen coverage-greedy first-eight exact-page rule, and rejection of an unselected object, whole-code-plane request across one or many ranges, corpus path, endpoint override, or persisted page body. Bind the route to the generation, query, directory root, code schema, and pinned visibility snapshot before any GET; independently reconcile selected group rows and all envelope-inclusive code bytes. Pin one query workspace to 32 MiB: 4 MiB route state, 3 MiB code buffers so one authenticated encoded chunk and its decoded blocks may coexist, 1 MiB candidate/page state, 8 MiB sequential encoded/decoded page buffers, 1 MiB query/result state, and 15 MiB allocator/SDK headroom. Permit concurrent request dispatch only inside the SDK allowance; deliver code chunks in plan order and authenticate/decode/release one at a time, and fetch pages as one bounded eight-wide wave while decoding/releasing sequentially. Reject chunks above 1 MiB encoded/2 MiB decoded and pages above 256 rows or 4 MiB encoded/decoded. Require a hard code-GET ceiling of 24 and a build-time group target between one-sixteenth and one-sixty-fourth of the 8-MiB query budget after descriptor/envelope charges.
 
-- [ ] **Step 2: Write remote code-rate REDs**
+- [x] **Step 2: Write remote code-rate REDs**
 
-  Pin per-group affine residual SQ4/SQ8: increasing-row f64 mean rounded to f16, population sigma computed relative to that decoded f16 center, `scale=8*sigma/(2^bits-1)`, center plus/minus four-sigma saturation, zero-sigma code zero, SQ4 high-nibble-first, and SQ8 source-order bytes. Pin SQ4 packed-code payload arithmetic before envelopes at 19.2/38.4/76.8/153.6 GB for 100M rows at 384/768/1536/3072D and exact doubling for SQ8. Separately account for odd-dimension padding, per-group f16 centers/f32 scales, u64 IDs/sequences, u32 primary/replica pages, chunk manifests, and object envelopes. Require bytes-per-row to agree with registered rate and `D`.
+  Pin per-group affine residual SQ4/SQ8: increasing-row f64 mean rounded to finite f16, population RMS residual computed relative to that decoded f16 center, decoded f32 `scale=8*sigma/(2^bits-1)`, literal serving decode `center - (2^bits-1)*scale/2 + code*scale`, round-to-nearest ties-to-even, center plus/minus four-sigma saturation, scale-underflow rejection, zero-sigma code zero, SQ4 high-nibble-first, and SQ8 source-order bytes. Pin SQ4 packed-code payload arithmetic before envelopes at 19.2/38.4/76.8/153.6 GB for 100M rows at 384/768/1536/3072D and exact doubling for SQ8. Separately account for odd-dimension padding, per-group f16 centers/f32 scales, u64 IDs/sequences, u32 primary/replica pages, chunk manifests, and object envelopes. Require bytes-per-row to agree with registered rate and `D`.
 
   Pin the total returned code-object budget to 8 MiB including every envelope. Before envelopes, SQ4 admits at most 43,690/21,845/10,922/5,461 rows at 384/768/1536/3072D; SQ8 admits half as many. The candidate heap is `min(12_288,scanned_rows)`.
 
 - [ ] **Step 3: Write deterministic candidate/rerank REDs**
 
-  Use in-memory range fixtures to require scalar/SIMD source-order ADC equality against the decoded group center/scale, including saturation and zero variance; a 12,288-row heap tied by source ordinal; first eight distinct primary/replica pages; snapshot visibility both before candidate-heap admission and for every row decoded from an exact page; ID deduplication by greatest sequence before final top-k; full-dimensional exact distance; and no read outside the plan. Include a page with a tombstone, an old replacement whose live group is unselected, and duplicate primary/replica copies.
+  Use independently decodable Arrow IPC code chunks and Parquet exact-vector pages in in-memory range fixtures to require scalar/SIMD source-order ADC equality against the decoded group center/scale, including saturation and zero variance; a 12,288-row heap tied by source ordinal; coverage-greedy first eight distinct pages; snapshot visibility both before candidate-heap admission and for every row decoded from an exact page; ID deduplication by greatest sequence before final top-k; full-dimensional exact distance; and no read outside the plan. Include a page with a tombstone, an old replacement whose live group is unselected, duplicate primary/replica copies, swapped authentic group/page bindings, short/long/corrupt bodies, retry exhaustion, and inclusive/exclusive range boundaries. Result receipts separate unique logical, requested, returned, authenticated, decoded, cache, and retry bytes and remain available on failure.
 
 - [ ] **Step 4: Run RED**
 
@@ -225,7 +227,7 @@
 
 - [ ] **Step 5: Implement minimal reader-independent core**
 
-  Define a narrow versioned range-reader trait with no list/discovery method. Authenticate each registered chunk before decoding, stream structure-of-arrays blocks directly into the bounded heap, release buffers, fetch only the first eight selected exact pages, and expose complete work/network counters.
+  Define a narrow versioned range-reader trait with no list/discovery method and no arbitrary path or endpoint input. It accepts the complete opaque plan so transport can pipeline, but yields bounded chunks in deterministic plan order into caller-owned storage. Authenticate each registered Arrow IPC chunk before decoding, stream structure-of-arrays blocks directly into the bounded heap, release buffers, fetch only the coverage-greedy first eight selected Parquet pages, and expose complete work/network counters. Include the code-chunk and page codecs here so Task 6 cannot redefine the serving format.
 
 - [ ] **Step 6: Run GREEN and commit**
 
