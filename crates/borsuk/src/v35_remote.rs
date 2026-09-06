@@ -2501,14 +2501,11 @@ impl V35RemoteChunk {
     }
 }
 
-fn directory_metadata(
-    binding: V35RemoteDirectoryBinding,
-    uri: &str,
-) -> Result<HashMap<String, String>> {
+fn directory_metadata(uri: &str) -> Result<HashMap<String, String>> {
     let manifest = BTreeMap::from([
         (
             "code_schema_sha256".to_owned(),
-            digest_hex(binding.code_schema_digest),
+            digest_hex(v35_remote_code_schema_digest()),
         ),
         ("format".to_owned(), DIRECTORY_FORMAT.to_owned()),
         ("uri".to_owned(), uri.to_owned()),
@@ -2521,7 +2518,7 @@ fn directory_metadata(
     )]))
 }
 
-fn directory_schema(binding: V35RemoteDirectoryBinding, uri: &str) -> Result<Arc<Schema>> {
+fn directory_schema(uri: &str) -> Result<Arc<Schema>> {
     Ok(Arc::new(Schema::new_with_metadata(
         vec![
             Field::new("group_ordinal", DataType::UInt32, false),
@@ -2536,7 +2533,7 @@ fn directory_schema(binding: V35RemoteDirectoryBinding, uri: &str) -> Result<Arc
             Field::new("decoded_length", DataType::UInt64, false),
             Field::new("chunk_sha256", DataType::Utf8, false),
         ],
-        directory_metadata(binding, uri)?,
+        directory_metadata(uri)?,
     )))
 }
 
@@ -2566,7 +2563,6 @@ fn validate_directory_chunks(chunks: &[V35RemoteChunk]) -> Result<()> {
 
 /// Encode one strict, independently authenticated Arrow directory block.
 pub fn encode_v35_remote_directory_arrow(
-    binding: V35RemoteDirectoryBinding,
     chunks: &[V35RemoteChunk],
     uri: &str,
 ) -> Result<(Vec<u8>, V35ArtifactIdentity)> {
@@ -2574,7 +2570,7 @@ pub fn encode_v35_remote_directory_arrow(
         return Err(invalid("V35 code-directory block URI differs"));
     }
     validate_directory_chunks(chunks)?;
-    let schema = directory_schema(binding, uri)?;
+    let schema = directory_schema(uri)?;
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
@@ -2665,6 +2661,7 @@ pub struct V35RemoteDirectoryBlock {
     binding: V35RemoteDirectoryBinding,
     identity: V35ArtifactIdentity,
     chunks: Vec<V35RemoteChunk>,
+    version_id: String,
 }
 
 impl V35RemoteDirectoryBlock {
@@ -2672,19 +2669,21 @@ impl V35RemoteDirectoryBlock {
         binding: V35RemoteDirectoryBinding,
         identity: V35ArtifactIdentity,
         chunks: Vec<V35RemoteChunk>,
+        version_id: &str,
     ) -> Result<Self> {
         v35_artifact_authority_digest(&identity)?;
         let group = chunks
             .first()
             .map(V35RemoteChunk::group_ordinal)
             .ok_or_else(|| invalid("V35 code-directory block is empty"))?;
-        if chunks.iter().any(|chunk| chunk.group_ordinal != group) {
+        if version_id.is_empty() || chunks.iter().any(|chunk| chunk.group_ordinal != group) {
             return Err(invalid("V35 code-directory block group differs"));
         }
         Ok(Self {
             binding,
             identity,
             chunks,
+            version_id: version_id.to_owned(),
         })
     }
     /// Registered complete identity for this selectively loaded block.
@@ -2697,10 +2696,80 @@ impl V35RemoteDirectoryBlock {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Bounded reference to one generation-neutral code-directory block.
+pub struct V35CodeDirectoryBlockReference {
+    group_ordinal: u32,
+    logical_start: u64,
+    rows: u64,
+    code_bytes: u64,
+    identity: V35ArtifactIdentity,
+    version_id: String,
+}
+
+impl V35CodeDirectoryBlockReference {
+    /// Derive one compact reference from an authenticated decoded block.
+    pub fn new(block: &V35RemoteDirectoryBlock) -> Result<Self> {
+        Self::from_encoded(&block.chunks, block.identity.clone(), &block.version_id)
+    }
+
+    pub(crate) fn from_encoded(
+        chunks: &[V35RemoteChunk],
+        identity: V35ArtifactIdentity,
+        version_id: &str,
+    ) -> Result<Self> {
+        validate_directory_chunks(chunks)?;
+        v35_artifact_authority_digest(&identity)?;
+        if version_id.is_empty() {
+            return Err(invalid("V35 code-directory block version differs"));
+        }
+        let first = chunks
+            .first()
+            .ok_or_else(|| invalid("V35 code-directory block is empty"))?;
+        let rows = chunks.iter().try_fold(0_u64, |sum, chunk| {
+            sum.checked_add(chunk.rows)
+                .ok_or_else(|| invalid("V35 code-directory rows overflow"))
+        })?;
+        let code_bytes = chunks.iter().try_fold(0_u64, |sum, chunk| {
+            sum.checked_add(chunk.encoded_length)
+                .ok_or_else(|| invalid("V35 code-directory bytes overflow"))
+        })?;
+        Ok(Self {
+            group_ordinal: first.group_ordinal,
+            logical_start: first.logical_start,
+            rows,
+            code_bytes,
+            identity,
+            version_id: version_id.to_owned(),
+        })
+    }
+    /// Dense storage-group ordinal.
+    pub fn group_ordinal(&self) -> u32 {
+        self.group_ordinal
+    }
+    /// First logical row covered by this block.
+    pub fn logical_start(&self) -> u64 {
+        self.logical_start
+    }
+    /// Complete logical row count.
+    pub fn rows(&self) -> u64 {
+        self.rows
+    }
+    /// Complete selected code bytes represented by this block.
+    pub fn code_bytes(&self) -> u64 {
+        self.code_bytes
+    }
+    /// Complete immutable block identity.
+    pub fn identity(&self) -> &V35ArtifactIdentity {
+        &self.identity
+    }
+}
+
 /// Authenticate and decode one strict Arrow directory block before planning.
 pub fn decode_v35_remote_directory_arrow(
     bytes: &[u8],
     registered: &V35ArtifactIdentity,
+    version_id: &str,
     expected_binding: V35RemoteDirectoryBinding,
 ) -> Result<V35RemoteDirectoryBlock> {
     v35_artifact_authority_digest(registered)?;
@@ -2711,7 +2780,12 @@ pub fn decode_v35_remote_directory_arrow(
     {
         return Err(invalid("V35 code-directory block identity differs"));
     }
-    let expected_schema = directory_schema(expected_binding, &registered.uri)?;
+    if version_id.is_empty()
+        || expected_binding.code_schema_digest != v35_remote_code_schema_digest()
+    {
+        return Err(invalid("V35 code-directory block binding differs"));
+    }
+    let expected_schema = directory_schema(&registered.uri)?;
     let mut reader = FileReader::try_new(Cursor::new(bytes), None)?;
     if reader.schema().as_ref() != expected_schema.as_ref() {
         return Err(invalid("V35 code-directory block Arrow schema differs"));
@@ -2806,7 +2880,7 @@ pub fn decode_v35_remote_directory_arrow(
             chunk_digests.value(row).to_owned(),
         )?);
     }
-    V35RemoteDirectoryBlock::new(expected_binding, registered.clone(), chunks)
+    V35RemoteDirectoryBlock::new(expected_binding, registered.clone(), chunks, version_id)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

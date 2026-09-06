@@ -202,8 +202,8 @@ fn authenticated_directory_block(
     chunks: Vec<V35RemoteChunk>,
     uri: &str,
 ) -> V35RemoteDirectoryBlock {
-    let (bytes, identity) = encode_v35_remote_directory_arrow(binding, &chunks, uri).unwrap();
-    decode_v35_remote_directory_arrow(&bytes, &identity, binding).unwrap()
+    let (bytes, identity) = encode_v35_remote_directory_arrow(&chunks, uri).unwrap();
+    decode_v35_remote_directory_arrow(&bytes, &identity, "directory-version-01", binding).unwrap()
 }
 
 #[test]
@@ -232,26 +232,42 @@ fn v35_remote_directory_arrow_authenticates_binding_and_chunks() {
         .unwrap(),
     ];
     let uri = "s3://borsuk-index/generations/g01/directory/group-0000.arrow";
-    let (bytes, identity) =
-        encode_v35_remote_directory_arrow(directory_binding, &chunks, uri).unwrap();
-    let (again, again_identity) =
-        encode_v35_remote_directory_arrow(directory_binding, &chunks, uri).unwrap();
+    let (bytes, identity) = encode_v35_remote_directory_arrow(&chunks, uri).unwrap();
+    let (again, again_identity) = encode_v35_remote_directory_arrow(&chunks, uri).unwrap();
     assert_eq!(again, bytes);
     assert_eq!(again_identity, identity);
     let later_generation = binding(0x61);
-    let (generation_neutral, generation_neutral_identity) =
-        encode_v35_remote_directory_arrow(later_generation, &chunks, uri).unwrap();
-    assert_eq!(generation_neutral, bytes);
-    assert_eq!(generation_neutral_identity, identity);
-    let decoded = decode_v35_remote_directory_arrow(&bytes, &identity, directory_binding).unwrap();
+    let decoded = decode_v35_remote_directory_arrow(
+        &bytes,
+        &identity,
+        "directory-version-01",
+        directory_binding,
+    )
+    .unwrap();
     assert_eq!(decoded.identity(), &identity);
     assert_eq!(decoded.chunks(), chunks);
 
     let mut corrupt = bytes.clone();
     let position = corrupt.len() / 2;
     corrupt[position] ^= 1;
-    assert!(decode_v35_remote_directory_arrow(&corrupt, &identity, directory_binding).is_err());
-    assert!(decode_v35_remote_directory_arrow(&bytes, &identity, later_generation).is_ok());
+    assert!(
+        decode_v35_remote_directory_arrow(
+            &corrupt,
+            &identity,
+            "directory-version-01",
+            directory_binding,
+        )
+        .is_err()
+    );
+    assert!(
+        decode_v35_remote_directory_arrow(
+            &bytes,
+            &identity,
+            "directory-version-02",
+            later_generation,
+        )
+        .is_ok()
+    );
 }
 
 fn directory_blocks() -> Vec<V35RemoteDirectoryBlock> {

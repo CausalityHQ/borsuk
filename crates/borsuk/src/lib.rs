@@ -288,14 +288,14 @@ pub use v35_projection::{
 };
 #[doc(hidden)]
 pub use v35_remote::{
-    V35CandidateAccumulator, V35CandidateSet, V35ExactPageIdentity, V35ExactPageResponse,
-    V35ExactPageRow, V35ExactPageSelection, V35ExactPageTransport, V35Match, V35PageDirectoryBlock,
-    V35PageDirectoryBlockReference, V35PageDirectoryRoot, V35RemoteChunk, V35RemoteCodeRow,
-    V35RemoteDirectoryBlock, V35RemoteDispatch, V35RemoteExecutionFailure, V35RemoteFailureKind,
-    V35RemotePlan, V35RemoteRange, V35RemoteRangeResponse, V35RemoteReadReceipt,
-    V35ResidualSqDescriptor, V35ResidualSqScorer, V35ScannedCandidate, V35SearchResult,
-    V35SnapshotEntry, V35SnapshotVisibility, V35TransportFailure, V35VersionedRangeTransport,
-    build_v35_residual_sq_descriptor, decode_v35_page_directory_arrow,
+    V35CandidateAccumulator, V35CandidateSet, V35CodeDirectoryBlockReference, V35ExactPageIdentity,
+    V35ExactPageResponse, V35ExactPageRow, V35ExactPageSelection, V35ExactPageTransport, V35Match,
+    V35PageDirectoryBlock, V35PageDirectoryBlockReference, V35PageDirectoryRoot, V35RemoteChunk,
+    V35RemoteCodeRow, V35RemoteDirectoryBlock, V35RemoteDispatch, V35RemoteExecutionFailure,
+    V35RemoteFailureKind, V35RemotePlan, V35RemoteRange, V35RemoteRangeResponse,
+    V35RemoteReadReceipt, V35ResidualSqDescriptor, V35ResidualSqScorer, V35ScannedCandidate,
+    V35SearchResult, V35SnapshotEntry, V35SnapshotVisibility, V35TransportFailure,
+    V35VersionedRangeTransport, build_v35_residual_sq_descriptor, decode_v35_page_directory_arrow,
     decode_v35_page_directory_root_arrow, decode_v35_remote_directory_arrow,
     decode_v35_snapshot_visibility_arrow, encode_v35_exact_page_parquet,
     encode_v35_page_directory_arrow, encode_v35_page_directory_root_arrow,

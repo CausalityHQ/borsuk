@@ -8,11 +8,11 @@ use borsuk::{
     V35BuildEncodedObjectSink, V35BuildLeafSink, V35BuildMergeRow, V35BuildMergeSource,
     V35BuildObjectTarget, V35BuildRow, V35BuildScratchSink, V35BuildStorageGroup,
     V35BuildStorageGroupAssembler, V35BuildStorageGroupSink, V35Dimensions, V35ExactPageIdentity,
-    V35MortonModel, V35Projection, build_v35_leaf_patch_from_merge_rows,
+    V35MortonModel, V35Projection, V35RemoteDirectoryBinding, build_v35_leaf_patch_from_merge_rows,
     build_v35_residual_sq_descriptor, build_v35_scratch_runs, build_v35_srht,
-    decode_v35_build_run_arrow, decode_v35_page_directory_arrow, decode_v35_source_block_parquet,
-    encode_v35_build_storage_group, merge_v35_build_runs, open_v35_build_run_cursor,
-    project_v35_query_scalar, train_v35_morton_model,
+    decode_v35_build_run_arrow, decode_v35_page_directory_arrow, decode_v35_remote_directory_arrow,
+    decode_v35_source_block_parquet, encode_v35_build_storage_group, merge_v35_build_runs,
+    open_v35_build_run_cursor, project_v35_query_scalar, train_v35_morton_model,
 };
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
@@ -744,6 +744,7 @@ fn v35_build_groups_reject_morton_order_drift() {
 #[derive(Default)]
 struct EncodedObjectSink {
     code_objects: Vec<(V35ArtifactIdentity, Vec<u8>)>,
+    code_directories: Vec<(V35ArtifactIdentity, String, Vec<u8>)>,
     pages: Vec<(V35ExactPageIdentity, Vec<u8>)>,
     page_directories: Vec<(V35ArtifactIdentity, String, Vec<u8>)>,
 }
@@ -772,6 +773,15 @@ impl V35BuildEncodedObjectSink for EncodedObjectSink {
         )
     }
 
+    fn code_directory_target(&self, group_ordinal: u32) -> Result<V35BuildObjectTarget> {
+        V35BuildObjectTarget::new(
+            &format!(
+                "s3://borsuk-index/generations/g01/code-directories/group-{group_ordinal:04}.arrow"
+            ),
+            "directory-version-01",
+        )
+    }
+
     fn write_code_object(
         &mut self,
         identity: V35ArtifactIdentity,
@@ -795,6 +805,17 @@ impl V35BuildEncodedObjectSink for EncodedObjectSink {
         bytes: &[u8],
     ) -> Result<()> {
         self.page_directories
+            .push((identity, version_id.to_owned(), bytes.to_vec()));
+        Ok(())
+    }
+
+    fn write_code_directory(
+        &mut self,
+        identity: V35ArtifactIdentity,
+        version_id: &str,
+        bytes: &[u8],
+    ) -> Result<()> {
+        self.code_directories
             .push((identity, version_id.to_owned(), bytes.to_vec()));
         Ok(())
     }
@@ -835,11 +856,33 @@ fn v35_build_encodes_group_as_cross_language_code_pages_and_patches() {
     assert_eq!(receipt.next_leaf_ordinal(), 10);
     assert_eq!(receipt.next_page_ordinal(), 14);
     assert_eq!(sink.code_objects.len(), 1);
+    assert_eq!(sink.code_directories.len(), 1);
     assert_eq!(sink.pages.len(), 3);
     assert_eq!(sink.page_directories.len(), 1);
     assert_eq!(receipt.page_directory().group_ordinal(), 0);
     assert_eq!(receipt.page_directory().first_page_ordinal(), 11);
     assert_eq!(receipt.page_directory().page_count(), 3);
+    assert_eq!(receipt.code_directory().group_ordinal(), 0);
+    assert_eq!(receipt.code_directory().logical_start(), 0);
+    assert_eq!(receipt.code_directory().rows(), 600);
+    assert_eq!(
+        receipt.code_directory().identity(),
+        &sink.code_directories[0].0
+    );
+    let decoded_code_directory = decode_v35_remote_directory_arrow(
+        &sink.code_directories[0].2,
+        &sink.code_directories[0].0,
+        &sink.code_directories[0].1,
+        V35RemoteDirectoryBinding::new(
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            borsuk::v35_remote_code_schema_digest(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(decoded_code_directory.chunks().len(), 1);
     assert_eq!(
         receipt.page_directory().identity(),
         &sink.page_directories[0].0
@@ -921,6 +964,13 @@ impl V35BuildEncodedObjectSink for CollidingTargetSink {
         )
     }
 
+    fn code_directory_target(&self, _group_ordinal: u32) -> Result<V35BuildObjectTarget> {
+        V35BuildObjectTarget::new(
+            "s3://borsuk-index/generations/g01/code-directories/group-0000.arrow",
+            "directory-version-01",
+        )
+    }
+
     fn write_code_object(
         &mut self,
         _identity: V35ArtifactIdentity,
@@ -938,6 +988,16 @@ impl V35BuildEncodedObjectSink for CollidingTargetSink {
     }
 
     fn write_page_directory(
+        &mut self,
+        _identity: V35ArtifactIdentity,
+        _version_id: &str,
+        _bytes: &[u8],
+    ) -> Result<()> {
+        self.writes += 1;
+        Ok(())
+    }
+
+    fn write_code_directory(
         &mut self,
         _identity: V35ArtifactIdentity,
         _version_id: &str,
