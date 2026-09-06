@@ -928,12 +928,12 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
     // replica/tombstone, accumulates page bodies, or scores routing dimensions.
     let fixture = code_scan_fixture();
     let generation = fixture.plan.generation_digest();
-    let mut candidates = Vec::new();
+    let mut candidate_rows = Vec::new();
     let mut pages = Vec::new();
     let mut bodies = HashMap::new();
     let mut expected = Vec::new();
     for page in 0..8_u32 {
-        candidates.push(
+        candidate_rows.push(
             V35ScannedCandidate::new(
                 f64::from(page),
                 u64::from(page),
@@ -974,7 +974,12 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
         ],
     )
     .unwrap();
-    let mut transport = PageBodyTransport::new(bodies);
+    let mut accumulator = V35CandidateAccumulator::new(&fixture.plan, &visibility).unwrap();
+    for candidate in candidate_rows {
+        accumulator.admit(candidate);
+    }
+    let candidates = accumulator.finish();
+    let mut transport = PageBodyTransport::new(bodies, 8);
     let result = rerank_v35_exact_pages(
         &fixture.plan,
         &fixture.query,
@@ -1003,9 +1008,44 @@ fn v35_remote_exact_pages_authenticate_visibility_deduplicate_and_rerank_full_di
             .unwrap()
     );
 
+    let mut one_accumulator = V35CandidateAccumulator::new(&fixture.plan, &visibility).unwrap();
+    one_accumulator.admit(candidates.candidates()[0]);
+    let one_candidate = one_accumulator.finish();
+    let mut one_page = PageBodyTransport::new(transport.bodies.clone(), 1);
+    let sparse = rerank_v35_exact_pages(
+        &fixture.plan,
+        &fixture.query,
+        &visibility,
+        &one_candidate,
+        &pages[..1],
+        &mut one_page,
+        4,
+    )
+    .unwrap();
+    assert_eq!(sparse.pages_read(), 1);
+    assert_eq!(sparse.matches().len(), 1);
+    assert_eq!(sparse.matches()[0].id(), 100);
+
+    let mut swapped_pages = pages.clone();
+    swapped_pages.swap(0, 1);
+    let mut unauthorized = PageBodyTransport::new(transport.bodies.clone(), 0);
+    assert!(
+        rerank_v35_exact_pages(
+            &fixture.plan,
+            &fixture.query,
+            &visibility,
+            &candidates,
+            &swapped_pages,
+            &mut unauthorized,
+            4,
+        )
+        .is_err()
+    );
+    assert_eq!(unauthorized.dispatched, 0);
+
     let mut corrupt_bodies = transport.bodies.clone();
     corrupt_bodies.get_mut(pages[0].uri()).unwrap()[32] ^= 1;
-    let mut corrupt = PageBodyTransport::new(corrupt_bodies);
+    let mut corrupt = PageBodyTransport::new(corrupt_bodies, 8);
     assert!(
         rerank_v35_exact_pages(
             &fixture.plan,
@@ -1029,16 +1069,18 @@ struct PageBodyTransport {
     completed: usize,
     maximum_destination_bytes: u64,
     canceled: usize,
+    expected_dispatches: usize,
 }
 
 impl PageBodyTransport {
-    fn new(bodies: HashMap<String, Vec<u8>>) -> Self {
+    fn new(bodies: HashMap<String, Vec<u8>>, expected_dispatches: usize) -> Self {
         Self {
             bodies,
             dispatched: 0,
             completed: 0,
             maximum_destination_bytes: 0,
             canceled: 0,
+            expected_dispatches,
         }
     }
 }
@@ -1058,7 +1100,7 @@ impl V35ExactPageTransport for PageBodyTransport {
         page: &borsuk::V35ExactPageIdentity,
         destination: &mut [u8],
     ) -> std::result::Result<V35ExactPageResponse, V35TransportFailure> {
-        if self.dispatched != 8 {
+        if self.dispatched != self.expected_dispatches {
             return Err(V35TransportFailure::terminal(0));
         }
         let body = self

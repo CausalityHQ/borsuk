@@ -1156,20 +1156,45 @@ pub fn rerank_v35_exact_pages<T: V35ExactPageTransport>(
     plan: &V35RemotePlan,
     query: &V35ProjectedQuery,
     visibility: &V35SnapshotVisibility,
-    candidates: &[V35ScannedCandidate],
+    candidates: &V35CandidateSet,
     pages: &[V35ExactPageIdentity],
     transport: &mut T,
     k: usize,
 ) -> Result<V35SearchResult> {
-    let selected = select_v35_exact_pages(candidates);
+    let selected = select_v35_exact_pages(candidates.candidates());
+    let dimensions = query.source_query().len();
     if plan.query_digest != query.source_digest()
         || plan.directory_binding.snapshot_digest != visibility.digest
-        || selected.len() != 8
+        || candidates.generation_digest != plan.generation_digest
+        || candidates.query_digest != plan.query_digest
+        || candidates.snapshot_digest != visibility.digest
+        || selected.is_empty()
         || pages.len() != selected.len()
         || k == 0
         || k > MAX_CANDIDATES
     {
         return Err(invalid("V35 exact rerank authority differs"));
+    }
+    let mut page_objects = BTreeSet::new();
+    for (expected_page, identity) in selected.iter().zip(pages) {
+        if identity.page_ordinal != *expected_page
+            || identity.generation_digest != plan.generation_digest
+            || identity.dimensions as usize != dimensions
+            || identity.rows == 0
+            || identity.rows > 256
+            || identity.decoded_length > 4 * MIB
+            || identity.object.role != "exact-vector-page"
+            || identity.object.digest_algorithm != "sha256"
+            || !is_digest(&identity.object.digest)
+            || identity.object.length == 0
+            || identity.object.length > 4 * MIB
+            || identity.version_id.is_empty()
+            || !identity.object.uri.starts_with("s3://")
+            || identity.object.uri.contains("/corpus/")
+            || !page_objects.insert((identity.object.uri.as_str(), identity.version_id.as_str()))
+        {
+            return Err(invalid("V35 exact page authority differs before dispatch"));
+        }
     }
     let mut pending = Vec::with_capacity(pages.len());
     for page in pages {
@@ -1183,7 +1208,6 @@ pub fn rerank_v35_exact_pages<T: V35ExactPageTransport>(
             }
         }
     }
-    let dimensions = query.source_query().len();
     let mut best = BTreeMap::<u64, (u64, f64)>::new();
     let mut decoded_rows = 0_usize;
     let mut body = Vec::new();
@@ -1223,101 +1247,114 @@ pub fn rerank_v35_exact_pages<T: V35ExactPageTransport>(
             }
             return Err(invalid("V35 exact page identity differs"));
         }
-        let builder =
-            ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::copy_from_slice(&body))?;
-        let manifest_json = builder
-            .schema()
-            .metadata()
-            .get(PAGE_MANIFEST_KEY)
-            .ok_or_else(|| invalid("V35 exact page manifest is missing"))?;
-        if builder.schema().metadata().len() != 1 {
-            return Err(invalid("V35 exact page metadata differs"));
-        }
-        let manifest: V35ExactPageManifest = serde_json::from_str(manifest_json)
-            .map_err(|_| invalid("V35 exact page manifest differs"))?;
-        if exact_page_manifest_json(&manifest)? != *manifest_json
-            || manifest.format != PAGE_FORMAT
-            || manifest.generation_sha256 != digest_hex(plan.generation_digest)
-            || manifest.page_ordinal != *expected_page
-            || manifest.dimensions as usize != dimensions
-            || manifest.rows != identity.rows
-            || builder.schema().as_ref()
-                != exact_page_schema(manifest.dimensions, manifest_json.clone())?.as_ref()
-        {
-            return Err(invalid("V35 exact page schema authority differs"));
-        }
-        let mut reader = builder.with_batch_size(256).build()?;
-        let mut page_rows = 0_usize;
-        for batch in &mut reader {
-            let batch = batch?;
-            let ids = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| invalid("V35 exact page id column differs"))?;
-            let sequences = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| invalid("V35 exact page sequence column differs"))?;
-            let vectors = batch
-                .column(2)
-                .as_any()
-                .downcast_ref::<FixedSizeListArray>()
-                .ok_or_else(|| invalid("V35 exact page vector column differs"))?;
-            let values = vectors
-                .values()
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .ok_or_else(|| invalid("V35 exact page vector values differ"))?;
-            if ids.null_count() != 0
-                || sequences.null_count() != 0
-                || vectors.null_count() != 0
-                || values.null_count() != 0
-                || vectors.value_length() as usize != dimensions
-            {
-                return Err(invalid("V35 exact page nullability differs"));
+        let page_result = (|| -> Result<usize> {
+            let builder =
+                ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::copy_from_slice(&body))?;
+            let manifest_json = builder
+                .schema()
+                .metadata()
+                .get(PAGE_MANIFEST_KEY)
+                .ok_or_else(|| invalid("V35 exact page manifest is missing"))?;
+            if builder.schema().metadata().len() != 1 {
+                return Err(invalid("V35 exact page metadata differs"));
             }
-            for row in 0..batch.num_rows() {
-                let id = ids.value(row);
-                let sequence = sequences.value(row);
-                let start = row * dimensions;
-                let vector = &values.values()[start..start + dimensions];
-                if sequence == 0 || vector.iter().any(|value| !value.is_finite()) {
-                    return Err(invalid("V35 exact page row authority differs"));
+            let manifest: V35ExactPageManifest = serde_json::from_str(manifest_json)
+                .map_err(|_| invalid("V35 exact page manifest differs"))?;
+            if exact_page_manifest_json(&manifest)? != *manifest_json
+                || manifest.format != PAGE_FORMAT
+                || manifest.generation_sha256 != digest_hex(plan.generation_digest)
+                || manifest.page_ordinal != *expected_page
+                || manifest.dimensions as usize != dimensions
+                || manifest.rows != identity.rows
+                || builder.schema().as_ref()
+                    != exact_page_schema(manifest.dimensions, manifest_json.clone())?.as_ref()
+            {
+                return Err(invalid("V35 exact page schema authority differs"));
+            }
+            let mut reader = builder.with_batch_size(256).build()?;
+            let mut page_rows = 0_usize;
+            for batch in &mut reader {
+                let batch = batch?;
+                let ids = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| invalid("V35 exact page id column differs"))?;
+                let sequences = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| invalid("V35 exact page sequence column differs"))?;
+                let vectors = batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .ok_or_else(|| invalid("V35 exact page vector column differs"))?;
+                let values = vectors
+                    .values()
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .ok_or_else(|| invalid("V35 exact page vector values differ"))?;
+                if ids.null_count() != 0
+                    || sequences.null_count() != 0
+                    || vectors.null_count() != 0
+                    || values.null_count() != 0
+                    || vectors.value_length() as usize != dimensions
+                {
+                    return Err(invalid("V35 exact page nullability differs"));
                 }
-                if visibility.admits(id, sequence) {
-                    let distance = exact_squared_distance(vector, query.source_query())?;
-                    match best.get(&id).copied() {
-                        None => {
-                            best.insert(id, (sequence, distance));
-                        }
-                        Some((old_sequence, _)) if sequence > old_sequence => {
-                            best.insert(id, (sequence, distance));
-                        }
-                        Some((old_sequence, old_distance)) if sequence == old_sequence => {
-                            if distance.to_bits() != old_distance.to_bits() {
-                                return Err(invalid("V35 exact replica vector differs"));
+                for row in 0..batch.num_rows() {
+                    let id = ids.value(row);
+                    let sequence = sequences.value(row);
+                    let start = row * dimensions;
+                    let vector = &values.values()[start..start + dimensions];
+                    if sequence == 0 || vector.iter().any(|value| !value.is_finite()) {
+                        return Err(invalid("V35 exact page row authority differs"));
+                    }
+                    if visibility.admits(id, sequence) {
+                        let distance = exact_squared_distance(vector, query.source_query())?;
+                        match best.get(&id).copied() {
+                            None => {
+                                best.insert(id, (sequence, distance));
                             }
+                            Some((old_sequence, _)) if sequence > old_sequence => {
+                                best.insert(id, (sequence, distance));
+                            }
+                            Some((old_sequence, old_distance)) if sequence == old_sequence => {
+                                if distance.to_bits() != old_distance.to_bits() {
+                                    return Err(invalid("V35 exact replica vector differs"));
+                                }
+                            }
+                            Some(_) => {}
                         }
-                        Some(_) => {}
                     }
                 }
+                page_rows = page_rows
+                    .checked_add(batch.num_rows())
+                    .ok_or_else(|| invalid("V35 exact page rows overflow"))?;
             }
-            page_rows = page_rows
-                .checked_add(batch.num_rows())
-                .ok_or_else(|| invalid("V35 exact page rows overflow"))?;
-        }
-        if page_rows != usize::from(identity.rows)
-            || projected_exact_page_decoded_bytes(page_rows, dimensions)? != identity.decoded_length
-        {
-            return Err(invalid("V35 exact page decoded extent differs"));
-        }
+            if page_rows != usize::from(identity.rows)
+                || projected_exact_page_decoded_bytes(page_rows, dimensions)?
+                    != identity.decoded_length
+            {
+                return Err(invalid("V35 exact page decoded extent differs"));
+            }
+            Ok(page_rows)
+        })();
+        let page_rows = match page_result {
+            Ok(page_rows) => page_rows,
+            Err(error) => {
+                for dispatch in pending.iter().skip(index + 1).copied() {
+                    transport.cancel(dispatch);
+                }
+                return Err(error);
+            }
+        };
         decoded_rows = decoded_rows
             .checked_add(page_rows)
             .ok_or_else(|| invalid("V35 exact rerank rows overflow"))?;
     }
-    if decoded_rows > 8 * 256 || best.len() < k {
+    if decoded_rows > 8 * 256 {
         return Err(invalid("V35 exact rerank work differs"));
     }
     let unique_visible_rows = best.len();
