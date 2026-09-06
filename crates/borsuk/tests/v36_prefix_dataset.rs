@@ -20,15 +20,15 @@ use borsuk::{
     exact_v36_prefix_gt100, load_v36_prefix_freeze_preflight, materialize_v36_prefix_role_parquets,
     rank_v36_prefix_source_objects, restore_v36_prefix_population, scan_v36_prefix_gt100_parquet,
     scan_v36_prefix_object_prefix, scan_v36_prefix_object_prefix_checkpointed,
-    scan_v36_prefix_query_parquet, scan_v36_prefix_registered_input_parquet,
-    scan_v36_prefix_source_parquet, select_v36_prefix_roles, v36_prefix_gt100_schema,
-    v36_prefix_query_schema, v36_prefix_query_score_sha256, v36_prefix_source_schema,
-    v36_prefix_source_score_sha256, validate_v36_prefix_cutoff_membership,
-    validate_v36_prefix_freeze_authority, validate_v36_prefix_freeze_execution_authority,
-    validate_v36_prefix_freeze_receipt, validate_v36_prefix_input_row,
-    validate_v36_prefix_role_authority, write_v36_prefix_gt100_parquet,
-    write_v36_prefix_gt100_roles_from_parquets, write_v36_prefix_query_parquet,
-    write_v36_prefix_source_parquet,
+    scan_v36_prefix_object_prefix_resumed, scan_v36_prefix_query_parquet,
+    scan_v36_prefix_registered_input_parquet, scan_v36_prefix_source_parquet,
+    select_v36_prefix_roles, v36_prefix_gt100_schema, v36_prefix_query_schema,
+    v36_prefix_query_score_sha256, v36_prefix_source_schema, v36_prefix_source_score_sha256,
+    validate_v36_prefix_cutoff_membership, validate_v36_prefix_freeze_authority,
+    validate_v36_prefix_freeze_execution_authority, validate_v36_prefix_freeze_receipt,
+    validate_v36_prefix_input_row, validate_v36_prefix_role_authority,
+    write_v36_prefix_gt100_parquet, write_v36_prefix_gt100_roles_from_parquets,
+    write_v36_prefix_query_parquet, write_v36_prefix_source_parquet,
 };
 use sha2::{Digest, Sha256};
 
@@ -1143,6 +1143,58 @@ fn v36_prefix_dataset_checkpoints_only_complete_authenticated_objects() {
         .is_err()
     );
     assert_eq!(committed_ordinals, vec![0]);
+}
+
+#[test]
+fn v36_prefix_dataset_resume_matches_uninterrupted_complete_object_scan() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first.parquet");
+    let second = directory.path().join("second.parquet");
+    let ranked = vec![
+        write_registered_rows(&first, &[7, 9]),
+        write_registered_rows(&second, &[7, 11, 13]),
+    ];
+    let paths = [first, second];
+    let uninterrupted = scan_v36_prefix_object_prefix(&ranked, 2, u64::MAX, 3, |ordinal, _| {
+        Ok(paths[ordinal].clone())
+    })
+    .unwrap();
+
+    let mut first_commits = Vec::new();
+    assert!(
+        scan_v36_prefix_object_prefix_checkpointed(
+            &ranked,
+            1,
+            u64::MAX,
+            3,
+            |ordinal, _| Ok(paths[ordinal].clone()),
+            |commit| {
+                first_commits.push(commit.clone());
+                Ok(())
+            },
+        )
+        .is_err()
+    );
+    let prior_runs = first_commits
+        .iter()
+        .map(|commit| commit.run.clone())
+        .collect::<Vec<_>>();
+    let mut acquired = Vec::new();
+    let resumed = scan_v36_prefix_object_prefix_resumed(
+        &ranked,
+        2,
+        u64::MAX,
+        3,
+        &prior_runs,
+        |ordinal, _| {
+            acquired.push(ordinal);
+            Ok(paths[ordinal].clone())
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(acquired, vec![1]);
+    assert_eq!(resumed, uninterrupted);
 }
 
 fn identity(

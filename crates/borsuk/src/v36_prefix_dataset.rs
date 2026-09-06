@@ -1450,12 +1450,12 @@ fn blake3_file(path: &Path) -> Result<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-/// Scan authenticated objects and emit a durable boundary only after each completes.
-pub fn scan_v36_prefix_object_prefix_checkpointed<F, C>(
+fn scan_v36_prefix_object_prefix_from_state<F, C>(
     ranked_objects: &[V36PrefixRankedSourceObject],
     object_cap: usize,
     byte_cap: u64,
     distinct_candidates: usize,
+    restored: Option<V36PrefixRestoredPopulation>,
     mut acquire: F,
     mut commit: C,
 ) -> Result<V36PrefixObjectPrefixScan>
@@ -1471,13 +1471,57 @@ where
     {
         return Err(invalid("V36 prefix source scan limits differ"));
     }
-    let mut consumed_objects = Vec::new();
-    let mut seen = HashSet::with_capacity(distinct_candidates);
-    let mut unique_rows = Vec::with_capacity(distinct_candidates);
-    let mut physical_rows = 0_u64;
-    let mut encoded_bytes = 0_u64;
-    let mut cutoff = None;
-    for (ordinal, object) in ranked_objects.iter().take(object_cap).enumerate() {
+    let restored = restored.unwrap_or(V36PrefixRestoredPopulation {
+        consumed_objects: Vec::new(),
+        cutoff: None,
+        distinct_rows_observed: 0,
+        duplicate_rows: 0,
+        next_object_ordinal: 0,
+        physical_rows: 0,
+        unique_rows: Vec::new(),
+    });
+    let start = usize::from(restored.next_object_ordinal);
+    if start > object_cap
+        || start > ranked_objects.len()
+        || restored
+            .consumed_objects
+            .iter()
+            .zip(ranked_objects)
+            .any(|(source, ranked)| {
+                source.encoded_bytes != ranked.encoded_bytes
+                    || source.path != ranked.path
+                    || source.sample_sha256 != ranked.sample_sha256
+                    || source.sha256 != ranked.sha256
+                    || source.uri != ranked.uri
+            })
+    {
+        return Err(invalid("V36 prefix restored source authority differs"));
+    }
+    let mut consumed_objects = restored.consumed_objects;
+    let mut seen = restored
+        .unique_rows
+        .iter()
+        .map(|row| row.feature_row_id)
+        .collect::<HashSet<_>>();
+    if seen.len() != restored.unique_rows.len()
+        || u64::try_from(seen.len()).unwrap_or(u64::MAX) != restored.distinct_rows_observed
+    {
+        return Err(invalid("V36 prefix restored identity authority differs"));
+    }
+    let mut unique_rows = restored.unique_rows;
+    let mut physical_rows = restored.physical_rows;
+    let mut encoded_bytes = consumed_objects.iter().try_fold(0_u64, |total, object| {
+        total
+            .checked_add(object.encoded_bytes)
+            .ok_or_else(|| invalid("V36 prefix source scan bytes overflow"))
+    })?;
+    let mut cutoff = restored.cutoff;
+    for (ordinal, object) in ranked_objects
+        .iter()
+        .enumerate()
+        .take(object_cap)
+        .skip(start)
+    {
         encoded_bytes = encoded_bytes
             .checked_add(object.encoded_bytes)
             .ok_or_else(|| invalid("V36 prefix source scan bytes overflow"))?;
@@ -1570,6 +1614,56 @@ where
         physical_rows,
         unique_rows,
     })
+}
+
+/// Scan authenticated objects and emit a durable boundary only after each completes.
+pub fn scan_v36_prefix_object_prefix_checkpointed<F, C>(
+    ranked_objects: &[V36PrefixRankedSourceObject],
+    object_cap: usize,
+    byte_cap: u64,
+    distinct_candidates: usize,
+    acquire: F,
+    commit: C,
+) -> Result<V36PrefixObjectPrefixScan>
+where
+    F: FnMut(usize, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
+    C: FnMut(&V36PrefixPopulationCommit) -> Result<()>,
+{
+    scan_v36_prefix_object_prefix_from_state(
+        ranked_objects,
+        object_cap,
+        byte_cap,
+        distinct_candidates,
+        None,
+        acquire,
+        commit,
+    )
+}
+
+/// Resume a source scan strictly after an authenticated complete-object prefix.
+pub fn scan_v36_prefix_object_prefix_resumed<F, C>(
+    ranked_objects: &[V36PrefixRankedSourceObject],
+    object_cap: usize,
+    byte_cap: u64,
+    distinct_candidates: usize,
+    prior_runs: &[V36PrefixIdentityRun],
+    acquire: F,
+    commit: C,
+) -> Result<V36PrefixObjectPrefixScan>
+where
+    F: FnMut(usize, &V36PrefixRankedSourceObject) -> Result<PathBuf>,
+    C: FnMut(&V36PrefixPopulationCommit) -> Result<()>,
+{
+    let restored = restore_v36_prefix_population_state(prior_runs, distinct_candidates)?;
+    scan_v36_prefix_object_prefix_from_state(
+        ranked_objects,
+        object_cap,
+        byte_cap,
+        distinct_candidates,
+        Some(restored),
+        acquire,
+        commit,
+    )
 }
 
 /// Scan authenticated complete objects through a distinct-ID cutoff.
