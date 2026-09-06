@@ -3,13 +3,13 @@
 use borsuk::{
     V35ArtifactIdentity, V35CandidateAccumulator, V35Dimensions, V35GroupStorage,
     V35LeafPatchBuildRequest, V35RemoteChunk, V35RemoteDirectoryBinding, V35RemoteDirectoryBlock,
-    V35RemoteFailureKind, V35RemoteRange, V35RemoteRangeResponse, V35RouteBudget, V35RoutePrefix,
-    V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility, V35TransportFailure,
-    V35VersionedRangeReader, build_v35_leaf_patch_arm, build_v35_residual_sq_descriptor,
-    build_v35_routing_generation, build_v35_srht, decode_v35_remote_directory_arrow,
-    encode_v35_remote_directory_arrow, execute_v35_remote_plan, exhaustive_v35_route,
-    plan_v35_remote_reads, project_v35_query_scalar, reduce_v35_scanned_candidates,
-    select_v35_exact_pages,
+    V35RemoteDispatch, V35RemoteFailureKind, V35RemoteRange, V35RemoteRangeResponse,
+    V35RouteBudget, V35RoutePrefix, V35ScannedCandidate, V35SnapshotEntry, V35SnapshotVisibility,
+    V35TransportFailure, V35VersionedRangeTransport, build_v35_leaf_patch_arm,
+    build_v35_residual_sq_descriptor, build_v35_routing_generation, build_v35_srht,
+    decode_v35_remote_directory_arrow, encode_v35_remote_directory_arrow, execute_v35_remote_plan,
+    exhaustive_v35_route, plan_v35_remote_reads, project_v35_query_scalar,
+    reduce_v35_scanned_candidates, select_v35_exact_pages,
 };
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
@@ -201,11 +201,58 @@ enum ReadStep {
 
 struct ScriptedRangeReader {
     steps: VecDeque<ReadStep>,
+    next_ticket: u64,
 }
 
-impl V35VersionedRangeReader for ScriptedRangeReader {
-    fn read_range(
+struct PipelinedTransport {
+    events: Vec<String>,
+    next_ticket: u64,
+}
+
+impl V35VersionedRangeTransport for PipelinedTransport {
+    fn dispatch(
         &mut self,
+        range: &V35RemoteRange,
+    ) -> std::result::Result<V35RemoteDispatch, V35TransportFailure> {
+        self.events.push(format!("dispatch:{}", range.start()));
+        let ticket = V35RemoteDispatch::new(self.next_ticket).unwrap();
+        self.next_ticket += 1;
+        Ok(ticket)
+    }
+
+    fn complete(
+        &mut self,
+        _dispatch: V35RemoteDispatch,
+        range: &V35RemoteRange,
+        destination: &mut [u8],
+    ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure> {
+        self.events.push(format!("complete:{}", range.start()));
+        let fill = if range.start() == 64 { 0x31 } else { 0x33 };
+        destination.fill(fill);
+        if range.start() == 64 {
+            destination[100..].fill(0x32);
+        }
+        Ok(response(range, destination))
+    }
+
+    fn cancel(&mut self, _dispatch: V35RemoteDispatch) -> u64 {
+        0
+    }
+}
+
+impl V35VersionedRangeTransport for ScriptedRangeReader {
+    fn dispatch(
+        &mut self,
+        _range: &V35RemoteRange,
+    ) -> std::result::Result<V35RemoteDispatch, V35TransportFailure> {
+        let dispatch = V35RemoteDispatch::new(self.next_ticket).unwrap();
+        self.next_ticket += 1;
+        Ok(dispatch)
+    }
+
+    fn complete(
+        &mut self,
+        _dispatch: V35RemoteDispatch,
         _range: &V35RemoteRange,
         destination: &mut [u8],
     ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure> {
@@ -217,6 +264,39 @@ impl V35VersionedRangeReader for ScriptedRangeReader {
             }
             ReadStep::Failure(failure) => Err(failure),
         }
+    }
+
+    fn cancel(&mut self, _dispatch: V35RemoteDispatch) -> u64 {
+        0
+    }
+}
+
+struct CancellationTransport {
+    next_ticket: u64,
+}
+
+impl V35VersionedRangeTransport for CancellationTransport {
+    fn dispatch(
+        &mut self,
+        _range: &V35RemoteRange,
+    ) -> std::result::Result<V35RemoteDispatch, V35TransportFailure> {
+        let dispatch = V35RemoteDispatch::new(self.next_ticket).unwrap();
+        self.next_ticket += 1;
+        Ok(dispatch)
+    }
+
+    fn complete(
+        &mut self,
+        _dispatch: V35RemoteDispatch,
+        range: &V35RemoteRange,
+        destination: &mut [u8],
+    ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure> {
+        destination.fill(0x30);
+        Ok(response(range, destination))
+    }
+
+    fn cancel(&mut self, _dispatch: V35RemoteDispatch) -> u64 {
+        17
     }
 }
 
@@ -256,6 +336,7 @@ fn v35_remote_execution_authenticates_plan_order_and_accounts_retries() {
             ReadStep::Response(first, first_body),
             ReadStep::Response(second, second_body),
         ]),
+        next_ticket: 1,
     };
     let mut delivered = Vec::new();
     let receipt = execute_v35_remote_plan(&plan, &mut reader, |chunk, bytes| {
@@ -278,6 +359,42 @@ fn v35_remote_execution_authenticates_plan_order_and_accounts_retries() {
 }
 
 #[test]
+fn v35_remote_execution_pipelines_dispatch_but_completes_in_plan_order() {
+    // Break caught: the executor serializes S3 request latency, or retains
+    // concurrent bodies and delivers whichever request happens to finish first.
+    let plan = planned_execution();
+    let mut transport = PipelinedTransport {
+        events: Vec::new(),
+        next_ticket: 1,
+    };
+    let mut delivered = Vec::new();
+    let receipt = execute_v35_remote_plan(&plan, &mut transport, |chunk, _| {
+        delivered.push(chunk.logical_start());
+        Ok(chunk.decoded_length())
+    })
+    .unwrap();
+    assert_eq!(
+        transport.events,
+        ["dispatch:64", "dispatch:32", "complete:64", "complete:32"]
+    );
+    assert_eq!(delivered, [0, 1, 2]);
+    assert_eq!(receipt.physical_get_attempts(), 2);
+}
+
+#[test]
+fn v35_remote_execution_accounts_bytes_drained_from_cancelled_dispatches() {
+    // Break caught: a failed early range cancels already-dispatched S3 work,
+    // but bytes received while draining disappear from the terminal receipt.
+    let plan = planned_execution();
+    let mut transport = CancellationTransport { next_ticket: 1 };
+    let failure = execute_v35_remote_plan(&plan, &mut transport, |_, _| Ok(0)).unwrap_err();
+    assert_eq!(failure.kind(), V35RemoteFailureKind::Integrity);
+    assert_eq!(failure.receipt().physical_get_attempts(), 2);
+    assert_eq!(failure.receipt().returned_bytes(), 217);
+    assert_eq!(failure.receipt().authenticated_bytes(), 0);
+}
+
+#[test]
 fn v35_remote_execution_fails_closed_with_receipt_before_decode() {
     // Break caught: a short/corrupt body is retried or decoded, or retry
     // exhaustion discards the bytes and attempts already spent.
@@ -288,7 +405,7 @@ fn v35_remote_execution_fails_closed_with_receipt_before_decode() {
                 ReadStep::Response(response(&planned_execution().ranges()[0], &body), body)
             }],
             V35RemoteFailureKind::Integrity,
-            1,
+            2,
             200,
         ),
         (
@@ -297,7 +414,7 @@ fn v35_remote_execution_fails_closed_with_receipt_before_decode() {
                 ReadStep::Response(response(&planned_execution().ranges()[0], &body), body)
             }],
             V35RemoteFailureKind::Length,
-            1,
+            2,
             199,
         ),
         (
@@ -307,7 +424,7 @@ fn v35_remote_execution_fails_closed_with_receipt_before_decode() {
                 ReadStep::Failure(V35TransportFailure::retryable(7)),
             ],
             V35RemoteFailureKind::Transport,
-            3,
+            4,
             15,
         ),
     ];
@@ -315,6 +432,7 @@ fn v35_remote_execution_fails_closed_with_receipt_before_decode() {
         let plan = planned_execution();
         let mut reader = ScriptedRangeReader {
             steps: VecDeque::from(steps),
+            next_ticket: 1,
         };
         let mut decoded = false;
         let failure = execute_v35_remote_plan(&plan, &mut reader, |_, _| {

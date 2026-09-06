@@ -24,6 +24,7 @@ const MAX_DECODED_CHUNK_BYTES: u64 = 2 * MIB;
 const MAX_QUERY_WORKSPACE_BYTES: u64 = 32 * MIB;
 const MAX_RETRIES: u8 = 2;
 const MAX_CODE_GETS: u64 = 24;
+const DISPATCH_WINDOW: usize = 4;
 const MAX_CANDIDATES: usize = 12_288;
 const MAX_MUTATION_ENTRIES: usize = 1_000_000;
 const MAX_DIRECTORY_BLOCK_BYTES: u64 = MIB;
@@ -1002,14 +1003,45 @@ impl V35TransportFailure {
     }
 }
 
-/// Versioned range-only transport. It has no list, discovery, write, or endpoint surface.
-pub trait V35VersionedRangeReader {
-    /// Read exactly one opaque range capability emitted by the authenticated planner.
-    fn read_range(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Fixed-size handle for one dispatched range request; it never owns response bytes.
+pub struct V35RemoteDispatch {
+    id: u64,
+}
+
+impl V35RemoteDispatch {
+    /// Construct a nonzero transport-local dispatch handle.
+    pub fn new(id: u64) -> Result<Self> {
+        if id == 0 {
+            return Err(invalid("V35 remote dispatch handle differs"));
+        }
+        Ok(Self { id })
+    }
+
+    /// Transport-local handle identity.
+    pub fn id(self) -> u64 {
+        self.id
+    }
+}
+
+/// Version-pinned range transport with fixed-size handles and caller-owned bodies.
+pub trait V35VersionedRangeTransport {
+    /// Dispatch one opaque range capability without returning body bytes.
+    fn dispatch(
         &mut self,
+        range: &V35RemoteRange,
+    ) -> std::result::Result<V35RemoteDispatch, V35TransportFailure>;
+
+    /// Complete one prior dispatch into the exact caller-owned range buffer.
+    fn complete(
+        &mut self,
+        dispatch: V35RemoteDispatch,
         range: &V35RemoteRange,
         destination: &mut [u8],
     ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure>;
+
+    /// Cancel or drain one outstanding dispatch and report bytes already received.
+    fn cancel(&mut self, dispatch: V35RemoteDispatch) -> u64;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1179,14 +1211,107 @@ fn validate_remote_plan(plan: &V35RemotePlan) -> Result<()> {
     Ok(())
 }
 
-/// Execute an authenticated plan with bounded retries and plan-order chunk delivery.
-pub fn execute_v35_remote_plan<R, F>(
+fn cancel_dispatches<T: V35VersionedRangeTransport>(
+    transport: &mut T,
+    pending: &mut [Option<V35RemoteDispatch>],
+    attempts: &[u64],
+    receipt: &mut V35RemoteReadReceipt,
+) -> bool {
+    let mut within_budget = true;
+    for (index, dispatch) in pending.iter_mut().enumerate() {
+        if let Some(dispatch) = dispatch.take() {
+            within_budget &=
+                record_returned_bytes(receipt, transport.cancel(dispatch), attempts[index] > 0);
+        }
+    }
+    within_budget
+}
+
+fn abort_execution<T: V35VersionedRangeTransport>(
+    kind: V35RemoteFailureKind,
+    transport: &mut T,
+    pending: &mut [Option<V35RemoteDispatch>],
+    attempts: &[u64],
+    mut receipt: V35RemoteReadReceipt,
+) -> V35RemoteExecutionFailure {
+    let within_budget = cancel_dispatches(transport, pending, attempts, &mut receipt);
+    execution_failure(
+        if within_budget {
+            kind
+        } else {
+            V35RemoteFailureKind::Budget
+        },
+        receipt,
+    )
+}
+
+fn abort_failure<T: V35VersionedRangeTransport>(
+    transport: &mut T,
+    pending: &mut [Option<V35RemoteDispatch>],
+    attempts: &[u64],
+    failure: V35RemoteExecutionFailure,
+) -> V35RemoteExecutionFailure {
+    abort_execution(failure.kind, transport, pending, attempts, failure.receipt)
+}
+
+fn dispatch_range<T: V35VersionedRangeTransport>(
+    transport: &mut T,
+    range: &V35RemoteRange,
+    attempt: &mut u64,
+    receipt: &mut V35RemoteReadReceipt,
+) -> std::result::Result<V35RemoteDispatch, V35RemoteExecutionFailure> {
+    let requested = range.end - range.start;
+    loop {
+        if receipt.physical_get_attempts == MAX_CODE_GETS {
+            return Err(execution_failure(
+                V35RemoteFailureKind::Budget,
+                receipt.clone(),
+            ));
+        }
+        receipt.physical_get_attempts += 1;
+        if !add_counter(&mut receipt.requested_bytes, requested)
+            || (*attempt > 0 && !add_counter(&mut receipt.retry_requested_bytes, requested))
+        {
+            return Err(execution_failure(
+                V35RemoteFailureKind::Budget,
+                receipt.clone(),
+            ));
+        }
+        match transport.dispatch(range) {
+            Ok(dispatch) => return Ok(dispatch),
+            Err(failure) => {
+                if !record_returned_bytes(receipt, failure.returned_bytes, *attempt > 0) {
+                    return Err(execution_failure(
+                        V35RemoteFailureKind::Budget,
+                        receipt.clone(),
+                    ));
+                }
+                if !failure.retryable || *attempt >= u64::from(MAX_RETRIES) {
+                    return Err(execution_failure(
+                        V35RemoteFailureKind::Transport,
+                        receipt.clone(),
+                    ));
+                }
+                if !add_counter(&mut receipt.retry_attempts, 1) {
+                    return Err(execution_failure(
+                        V35RemoteFailureKind::Budget,
+                        receipt.clone(),
+                    ));
+                }
+                *attempt += 1;
+            }
+        }
+    }
+}
+
+/// Execute an authenticated plan with pipelined dispatch and plan-order delivery.
+pub fn execute_v35_remote_plan<T, F>(
     plan: &V35RemotePlan,
-    reader: &mut R,
+    transport: &mut T,
     mut decode: F,
 ) -> std::result::Result<V35RemoteReadReceipt, V35RemoteExecutionFailure>
 where
-    R: V35VersionedRangeReader,
+    T: V35VersionedRangeTransport,
     F: FnMut(&V35RemoteChunk, &[u8]) -> Result<u64>,
 {
     if validate_remote_plan(plan).is_err() {
@@ -1199,34 +1324,56 @@ where
         unique_logical_bytes: plan.requested_code_bytes,
         ..V35RemoteReadReceipt::default()
     };
+    let mut attempts = vec![0_u64; plan.ranges.len()];
+    let mut pending = vec![None; plan.ranges.len()];
+    for index in 0..plan.ranges.len().min(DISPATCH_WINDOW) {
+        match dispatch_range(
+            transport,
+            &plan.ranges[index],
+            &mut attempts[index],
+            &mut receipt,
+        ) {
+            Ok(dispatch) => pending[index] = Some(dispatch),
+            Err(failure) => {
+                return Err(abort_failure(transport, &mut pending, &attempts, failure));
+            }
+        }
+    }
     let mut encoded = Vec::<u8>::new();
-    for range in &plan.ranges {
+    for index in 0..plan.ranges.len() {
+        let range = &plan.ranges[index];
         let requested = range.end - range.start;
-        let requested_usize = usize::try_from(requested)
-            .map_err(|_| execution_failure(V35RemoteFailureKind::Budget, receipt.clone()))?;
+        let requested_usize = match usize::try_from(requested) {
+            Ok(value) => value,
+            Err(_) => {
+                return Err(abort_execution(
+                    V35RemoteFailureKind::Budget,
+                    transport,
+                    &mut pending,
+                    &attempts,
+                    receipt,
+                ));
+            }
+        };
         encoded.resize(requested_usize, 0);
-        let mut range_attempt = 0_u64;
+        let mut dispatch = pending[index]
+            .take()
+            .expect("validated dispatch window covers current range");
         let response = loop {
-            if receipt.physical_get_attempts == MAX_CODE_GETS {
-                return Err(execution_failure(V35RemoteFailureKind::Transport, receipt));
-            }
-            receipt.physical_get_attempts += 1;
-            if !add_counter(&mut receipt.requested_bytes, requested) {
-                return Err(execution_failure(V35RemoteFailureKind::Budget, receipt));
-            }
-            if range_attempt > 0 {
-                if !add_counter(&mut receipt.retry_requested_bytes, requested) {
-                    return Err(execution_failure(V35RemoteFailureKind::Budget, receipt));
-                }
-            }
-            match reader.read_range(range, &mut encoded) {
+            match transport.complete(dispatch, range, &mut encoded) {
                 Ok(response) => {
                     if !record_returned_bytes(
                         &mut receipt,
                         response.returned_bytes,
-                        range_attempt > 0,
+                        attempts[index] > 0,
                     ) {
-                        return Err(execution_failure(V35RemoteFailureKind::Budget, receipt));
+                        return Err(abort_execution(
+                            V35RemoteFailureKind::Budget,
+                            transport,
+                            &mut pending,
+                            &attempts,
+                            receipt,
+                        ));
                     }
                     break response;
                 }
@@ -1234,15 +1381,41 @@ where
                     if !record_returned_bytes(
                         &mut receipt,
                         failure.returned_bytes,
-                        range_attempt > 0,
+                        attempts[index] > 0,
                     ) {
-                        return Err(execution_failure(V35RemoteFailureKind::Budget, receipt));
+                        return Err(abort_execution(
+                            V35RemoteFailureKind::Budget,
+                            transport,
+                            &mut pending,
+                            &attempts,
+                            receipt,
+                        ));
                     }
-                    if !failure.retryable || range_attempt >= u64::from(MAX_RETRIES) {
-                        return Err(execution_failure(V35RemoteFailureKind::Transport, receipt));
+                    if !failure.retryable || attempts[index] >= u64::from(MAX_RETRIES) {
+                        return Err(abort_execution(
+                            V35RemoteFailureKind::Transport,
+                            transport,
+                            &mut pending,
+                            &attempts,
+                            receipt,
+                        ));
                     }
-                    receipt.retry_attempts += 1;
-                    range_attempt += 1;
+                    if !add_counter(&mut receipt.retry_attempts, 1) {
+                        return Err(abort_execution(
+                            V35RemoteFailureKind::Budget,
+                            transport,
+                            &mut pending,
+                            &attempts,
+                            receipt,
+                        ));
+                    }
+                    attempts[index] += 1;
+                    match dispatch_range(transport, range, &mut attempts[index], &mut receipt) {
+                        Ok(retry) => dispatch = retry,
+                        Err(failure) => {
+                            return Err(abort_failure(transport, &mut pending, &attempts, failure));
+                        }
+                    }
                 }
             }
         };
@@ -1251,40 +1424,126 @@ where
             || response.start != range.start
             || response.end != range.end
         {
-            return Err(execution_failure(V35RemoteFailureKind::Authority, receipt));
+            return Err(abort_execution(
+                V35RemoteFailureKind::Authority,
+                transport,
+                &mut pending,
+                &attempts,
+                receipt,
+            ));
         }
         if !response.complete || response.returned_bytes != requested {
-            return Err(execution_failure(V35RemoteFailureKind::Length, receipt));
+            return Err(abort_execution(
+                V35RemoteFailureKind::Length,
+                transport,
+                &mut pending,
+                &attempts,
+                receipt,
+            ));
         }
         let mut authenticated = Vec::with_capacity(range.chunks.len());
         for chunk in &range.chunks {
             let relative = chunk.offset - range.start;
-            let start = usize::try_from(relative)
-                .map_err(|_| execution_failure(V35RemoteFailureKind::Length, receipt.clone()))?;
-            let length = usize::try_from(chunk.encoded_length)
-                .map_err(|_| execution_failure(V35RemoteFailureKind::Length, receipt.clone()))?;
-            let end = start
-                .checked_add(length)
-                .ok_or_else(|| execution_failure(V35RemoteFailureKind::Length, receipt.clone()))?;
-            let bytes = encoded
-                .get(start..end)
-                .ok_or_else(|| execution_failure(V35RemoteFailureKind::Length, receipt.clone()))?;
+            let Ok(start) = usize::try_from(relative) else {
+                return Err(abort_execution(
+                    V35RemoteFailureKind::Length,
+                    transport,
+                    &mut pending,
+                    &attempts,
+                    receipt,
+                ));
+            };
+            let Ok(length) = usize::try_from(chunk.encoded_length) else {
+                return Err(abort_execution(
+                    V35RemoteFailureKind::Length,
+                    transport,
+                    &mut pending,
+                    &attempts,
+                    receipt,
+                ));
+            };
+            let Some(end) = start.checked_add(length) else {
+                return Err(abort_execution(
+                    V35RemoteFailureKind::Length,
+                    transport,
+                    &mut pending,
+                    &attempts,
+                    receipt,
+                ));
+            };
+            let Some(bytes) = encoded.get(start..end) else {
+                return Err(abort_execution(
+                    V35RemoteFailureKind::Length,
+                    transport,
+                    &mut pending,
+                    &attempts,
+                    receipt,
+                ));
+            };
             if format!("{:x}", Sha256::digest(bytes)) != chunk.digest {
-                return Err(execution_failure(V35RemoteFailureKind::Integrity, receipt));
+                return Err(abort_execution(
+                    V35RemoteFailureKind::Integrity,
+                    transport,
+                    &mut pending,
+                    &attempts,
+                    receipt,
+                ));
             }
             authenticated.push((chunk, bytes));
         }
         if !add_counter(&mut receipt.authenticated_bytes, requested) {
-            return Err(execution_failure(V35RemoteFailureKind::Budget, receipt));
+            return Err(abort_execution(
+                V35RemoteFailureKind::Budget,
+                transport,
+                &mut pending,
+                &attempts,
+                receipt,
+            ));
         }
         for (chunk, bytes) in authenticated {
-            let decoded = decode(chunk, bytes)
-                .map_err(|_| execution_failure(V35RemoteFailureKind::Decode, receipt.clone()))?;
+            let decoded = match decode(chunk, bytes) {
+                Ok(decoded) => decoded,
+                Err(_) => {
+                    return Err(abort_execution(
+                        V35RemoteFailureKind::Decode,
+                        transport,
+                        &mut pending,
+                        &attempts,
+                        receipt,
+                    ));
+                }
+            };
             if decoded != chunk.decoded_length {
-                return Err(execution_failure(V35RemoteFailureKind::Decode, receipt));
+                return Err(abort_execution(
+                    V35RemoteFailureKind::Decode,
+                    transport,
+                    &mut pending,
+                    &attempts,
+                    receipt,
+                ));
             }
             if !add_counter(&mut receipt.decoded_bytes, decoded) {
-                return Err(execution_failure(V35RemoteFailureKind::Budget, receipt));
+                return Err(abort_execution(
+                    V35RemoteFailureKind::Budget,
+                    transport,
+                    &mut pending,
+                    &attempts,
+                    receipt,
+                ));
+            }
+        }
+        let next = index + DISPATCH_WINDOW;
+        if next < plan.ranges.len() {
+            match dispatch_range(
+                transport,
+                &plan.ranges[next],
+                &mut attempts[next],
+                &mut receipt,
+            ) {
+                Ok(dispatch) => pending[next] = Some(dispatch),
+                Err(failure) => {
+                    return Err(abort_failure(transport, &mut pending, &attempts, failure));
+                }
             }
         }
     }
@@ -1472,13 +1731,21 @@ mod remote_execution_limit_tests {
         calls: usize,
     }
 
-    impl V35VersionedRangeReader for CountingReader {
-        fn read_range(
+    impl V35VersionedRangeTransport for CountingReader {
+        fn dispatch(
             &mut self,
+            _range: &V35RemoteRange,
+        ) -> std::result::Result<V35RemoteDispatch, V35TransportFailure> {
+            self.calls += 1;
+            V35RemoteDispatch::new(self.calls as u64).map_err(|_| V35TransportFailure::terminal(0))
+        }
+
+        fn complete(
+            &mut self,
+            _dispatch: V35RemoteDispatch,
             range: &V35RemoteRange,
             destination: &mut [u8],
         ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure> {
-            self.calls += 1;
             destination[0] = u8::try_from(self.calls).unwrap();
             V35RemoteRangeResponse::new(
                 range.uri(),
@@ -1489,6 +1756,10 @@ mod remote_execution_limit_tests {
                 true,
             )
             .map_err(|_| V35TransportFailure::terminal(0))
+        }
+
+        fn cancel(&mut self, _dispatch: V35RemoteDispatch) -> u64 {
+            0
         }
     }
 
@@ -1537,16 +1808,31 @@ mod remote_execution_limit_tests {
 
     struct FullRetryReader {
         calls: usize,
+        attempts: HashMap<String, u64>,
+        failing_dispatches: BTreeSet<u64>,
     }
 
-    impl V35VersionedRangeReader for FullRetryReader {
-        fn read_range(
+    impl V35VersionedRangeTransport for FullRetryReader {
+        fn dispatch(
             &mut self,
+            range: &V35RemoteRange,
+        ) -> std::result::Result<V35RemoteDispatch, V35TransportFailure> {
+            self.calls += 1;
+            let count = self.attempts.entry(range.uri.clone()).or_default();
+            if *count == 0 {
+                self.failing_dispatches.insert(self.calls as u64);
+            }
+            *count += 1;
+            V35RemoteDispatch::new(self.calls as u64).map_err(|_| V35TransportFailure::terminal(0))
+        }
+
+        fn complete(
+            &mut self,
+            dispatch: V35RemoteDispatch,
             range: &V35RemoteRange,
             destination: &mut [u8],
         ) -> std::result::Result<V35RemoteRangeResponse, V35TransportFailure> {
-            self.calls += 1;
-            if self.calls % 2 == 1 {
+            if self.failing_dispatches.remove(&dispatch.id()) {
                 Err(V35TransportFailure::retryable(MIB))
             } else {
                 destination.fill(0);
@@ -1560,6 +1846,10 @@ mod remote_execution_limit_tests {
                 )
                 .map_err(|_| V35TransportFailure::terminal(0))
             }
+        }
+
+        fn cancel(&mut self, _dispatch: V35RemoteDispatch) -> u64 {
+            0
         }
     }
 
@@ -1622,14 +1912,18 @@ mod remote_execution_limit_tests {
     fn v35_remote_execution_stops_when_retries_exhaust_returned_byte_budget() {
         // Break caught: retry bodies can silently double the admitted 8-MiB
         // code scan, or receipt counters wrap instead of terminating.
-        let mut reader = FullRetryReader { calls: 0 };
+        let mut reader = FullRetryReader {
+            calls: 0,
+            attempts: HashMap::new(),
+            failing_dispatches: BTreeSet::new(),
+        };
         let failure =
             execute_v35_remote_plan(&maximum_byte_plan(), &mut reader, |_, _| Ok(MIB)).unwrap_err();
         assert_eq!(failure.kind(), V35RemoteFailureKind::Budget);
-        assert_eq!(failure.receipt().physical_get_attempts(), 9);
-        assert_eq!(failure.receipt().requested_bytes(), 9 * MIB);
+        assert_eq!(failure.receipt().physical_get_attempts(), 12);
+        assert_eq!(failure.receipt().requested_bytes(), 12 * MIB);
         assert_eq!(failure.receipt().returned_bytes(), 9 * MIB);
         assert_eq!(failure.receipt().authenticated_bytes(), 4 * MIB);
-        assert_eq!(reader.calls, 9);
+        assert_eq!(reader.calls, 12);
     }
 }
